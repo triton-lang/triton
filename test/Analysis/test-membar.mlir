@@ -1086,24 +1086,21 @@ tt.func @default_region_cfg(%arg0: tensor<1xi64>, %arg1: i1) {
   tt.return
 }
 
-// The barrier at every warp_yield also covers a write after the op, on the path
-// through the region that has no barrier of its own.
-// CHECK-LABEL: @warp_yield_is_a_sync_point
-tt.func @warp_yield_is_a_sync_point(%arg0: tensor<1xi64>) {
-  // CHECK-NEXT: local_alloc
-  %0 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
-  // CHECK-NEXT: warp_specialize
+// A `ttg.warp_return` lowers to the same CTA-wide barrier as `ttg.warp_yield`,
+// so a wait at the end of a partition region does not need one of its own.
+// CHECK-LABEL: @async_wait_before_warp_return
+tt.func @async_wait_before_warp_return() {
   ttg.warp_specialize()
-  // CHECK-NEXT: default
   default {
-    // CHECK-NEXT: local_load
-    ttg.local_load %0 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
-    // CHECK-NEXT: warp_yield
     ttg.warp_yield
-  // CHECK-NEXT: () -> ()
+  }
+  // CHECK: partition0
+  partition0() num_warps(4) {
+    // CHECK: ttg.async_wait
+    // CHECK-NEXT: ttg.warp_return
+    ttg.async_wait {num = 0 : i32}
+    ttg.warp_return
   } : () -> ()
-  // CHECK-NEXT: local_store
-  ttg.local_store %arg0, %0 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
   tt.return
 }
 

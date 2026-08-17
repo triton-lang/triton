@@ -177,7 +177,6 @@ static triton::BarrierStages getLocalBarrierStages(Operation *op,
   // write and read phases. Other barrier-like operations behave as a barrier
   // immediately before the operation.
   stages.betweenMemoryEffects = hasScratchBarrier;
-
   stages.beforeMemoryEffects = containsLocalBarrier(op);
   return stages;
 }
