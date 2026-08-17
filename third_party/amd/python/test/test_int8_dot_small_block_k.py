@@ -12,6 +12,7 @@ if not is_hip():
 
 @pytest.mark.parametrize("block_k", [1, 2, 3, 4])
 def test_int8_dot_small_block_k(block_k, device):
+
     @triton.jit
     def kernel(a, b, c, K, BLOCK_K: tl.constexpr, PAD_K: tl.constexpr):
         offs_m = tl.arange(0, 32)
@@ -22,8 +23,8 @@ def test_int8_dot_small_block_k(block_k, device):
         k_mask = offs_k < BLOCK_K
         acc = tl.zeros((32, 32), dtype=tl.int32)
         for _ in range(0, K, BLOCK_K):
-            acc = tl.dot(tl.load(a_ptrs, mask=k_mask[None, :], other=0),
-                         tl.load(b_ptrs, mask=k_mask[:, None], other=0), acc, out_dtype=tl.int32)
+            acc = tl.dot(tl.load(a_ptrs, mask=k_mask[None, :], other=0), tl.load(b_ptrs, mask=k_mask[:, None], other=0),
+                         acc, out_dtype=tl.int32)
             a_ptrs += BLOCK_K
             b_ptrs += BLOCK_K * 32
         tl.store(c + offs_m[:, None] * 32 + offs_n[None, :], acc)
