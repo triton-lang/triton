@@ -14,6 +14,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
   // CHECK: nvvm.barrier
   // CHECK-NEXT: llvm.cond_br %[[P1]]
   // CHECK: %[[E:.+]] = nvvm.elect.sync -> i1
+  // CHECK: %[[MASK:.+]] = llvm.mlir.constant(32767 : i32) : i32
+  // CHECK: %[[BASE:.+]] = llvm.and %{{.*}}, %[[MASK]] : i32
+  // CHECK: %[[LOW:.+]] = llvm.add %{{.*}}, %[[BASE]] : i32
+  // CHECK: %[[WORDS:.+]] = llvm.insertelement %[[LOW]], %{{.*}}[%{{.*}} : i32] : vector<2xi32>
+  // CHECK: %[[DESCWORDS:.+]] = llvm.insertelement %{{.*}}, %[[WORDS]][%{{.*}} : i32] : vector<2xi32>
+  // CHECK: %[[DESC:.+]] = llvm.bitcast %[[DESCWORDS]] : vector<2xi32> to i64
   // CHECK-COUNT-8: @$5 tcgen05.mma.cta_group::1.kind::f16 [ $0 + 0 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %{{.+}}, %{{.+}}, %{{.+}}, %{{.+}}, %{{.+}}, %[[E]]
   // CHECK-NEXT: %[[PRED:.+]] = llvm.and %arg6, %[[E]]
   // CHECK: @$0 tcgen05.commit.cta_group::1.mbarrier::arrive::one.shared::cluster.b64 [$1];", "b,r" %[[PRED]]

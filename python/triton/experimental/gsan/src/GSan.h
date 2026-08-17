@@ -128,7 +128,7 @@ struct MBarrierPublishedClock {
 static_assert(sizeof(MBarrierPublishedClock) == 4);
 
 struct MBarrierPhaseState {
-  // One-based generation tag. Zero denotes an unused phase slot.
+  // One-based generation tag. The initially completed phase 1 has tag zero.
   uint32_t generation;
   uint32_t complete;
   MBarrierPublishedClock clocks[kMaxClusterCTAs];
