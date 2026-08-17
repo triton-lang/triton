@@ -355,12 +355,12 @@ int gsanEnsureInit() {
   auto *root = &alloc->treeRoot;
   root->virtualAddress = gsan::getRealBaseAddress(reserveBase);
 
-  // Choose size so that both shadow memory and real memory definitely fit in
-  // the address reservation
-  auto shadowSize = gsan::kReserveSize / 2;
-  auto realSize = gsan::kShadowMemGranularityBytes *
-                  (shadowSize / sizeof(gsan::ShadowCell));
-  realSize = std::min(gsan::kReserveSize / 2, realSize);
+  // Fit both real memory and its corresponding shadow in the reservation.
+  auto shadowSize = root->virtualAddress - reserveBase;
+  auto realRegionSize = gsan::kReserveSize - shadowSize;
+  auto realSize =
+      std::min(realRegionSize, gsan::kShadowMemGranularityBytes *
+                                   (shadowSize / sizeof(gsan::ShadowCell)));
   realSize = roundDownToPowerOfTwo(realSize);
   root->size = realSize;
   root->maxFreeBlockSize = realSize;

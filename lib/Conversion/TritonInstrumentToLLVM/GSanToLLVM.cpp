@@ -317,9 +317,6 @@ unsigned getTensorAccessVecSize(OpT op,
     return contiguity;
 
   auto maskAlign = axisInfoAnalysis.getMaskAlignment(op.getMask());
-  if (bytesPerElem < kGSanShadowGranularityBytes) {
-    maskAlign = std::max(maskAlign, kGSanShadowGranularityBytes / bytesPerElem);
-  }
   return std::min(contiguity, maskAlign);
 }
 
@@ -542,8 +539,7 @@ public:
         axisInfoAnalysis(&axisInfoAnalysis) {}
 
   unsigned getVecSize(tti::ExperimentalGSanAtomicTensorAccessOp op) const {
-    // GSan tracks conflicts at shadow-cell granularity, so atomics may only be
-    // coalesced while they still fit inside a single shadow cell.
+    // Atomic accesses may only be coalesced within a single shadow cell.
     return getTensorAccessVecSize(op, *axisInfoAnalysis,
                                   /*keepWithinSingleShadowCell=*/true);
   }

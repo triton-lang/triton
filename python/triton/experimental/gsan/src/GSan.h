@@ -53,11 +53,12 @@ static_assert(static_cast<int>(AtomicScope::MAX_VALUE) == 3);
 struct alignas(4) ShadowCell {
   static constexpr int kReadClockSize = 4;
   ScalarClock readClocks[kReadClockSize];
-  ScalarClock writeClock;
+  ScalarClock writeClocks[kShadowMemGranularityBytes];
+  uint8_t readMasks[kReadClockSize];
   uint16_t numReads;
   uint16_t lock;
 };
-static_assert(sizeof(ShadowCell) == 24);
+static_assert(sizeof(ShadowCell) == 40);
 static_assert(alignof(ShadowCell) == 4);
 
 struct GlobalState {
@@ -105,7 +106,10 @@ struct AtomicEventState {
   ThreadState *threadState;
   ShadowCell *cells[kMaxAtomicShadowCells];
   uint8_t numCells;
+  uint8_t masks[kMaxAtomicShadowCells];
 };
+static_assert(sizeof(AtomicEventState) == 40,
+              "atomic access masks must fit the LLVM event state's padding");
 
 static constexpr int kMaxClusterCTAs = 16;
 static constexpr int kClusterBarrierScratchBytes = 128;
@@ -169,7 +173,7 @@ inline GSAN_HOST_DEVICE GlobalState *getGlobalState(ThreadState *threadState) {
 }
 
 inline GSAN_HOST_DEVICE uintptr_t getRealBaseAddress(uintptr_t reserveBase) {
-  return reserveBase + kReserveSize / 2;
+  return reserveBase + 3 * kReserveSize / 4;
 }
 
 inline GSAN_HOST_DEVICE uintptr_t getReserveBaseFromAddress(uintptr_t addr) {

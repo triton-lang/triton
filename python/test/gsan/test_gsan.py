@@ -132,6 +132,174 @@ def test_load_store_updates_shadow(with_gsan):
     assert cell1.num_reads == 1
 
 
+@triton.jit
+def _disjoint_subword_access_kernel(ptr, scratch_ptr, counter_ptr, ACCESS: tl.constexpr):
+    pid = tl.program_id(0)
+    if pid == 0:
+        if ACCESS == "war":
+            value = tl.load(ptr)
+            tl.store(scratch_ptr, value)
+        else:
+            tl.store(ptr, 1.0)
+        tl.atomic_add(counter_ptr, 1, sem="relaxed")
+    else:
+        atomic_poll(counter_ptr, 1)
+        if ACCESS == "raw":
+            value = tl.load(ptr + 1)
+            tl.store(scratch_ptr + 1, value)
+        else:
+            tl.store(ptr + 1, 2.0)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e5m2])
+@pytest.mark.parametrize("access", ["raw", "war", "waw"])
+def test_disjoint_subword_accesses_do_not_race(with_gsan, capfd, dtype, access):
+    target = torch.zeros(4, dtype=dtype, device="cuda")
+    scratch = torch.zeros_like(target)
+    counter = torch.zeros(1, dtype=torch.int32, device="cuda")
+
+    _disjoint_subword_access_kernel[(2, )](target, scratch, counter, ACCESS=access, num_warps=1)
+    torch.cuda.synchronize()
+
+    assert target[0].item() == (0 if access == "war" else 1)
+    assert target[1].item() == (0 if access == "raw" else 2)
+    _assert_no_gsan_runtime_output(capfd)
+
+
+@gluon.jit
+def _masked_disjoint_subword_access_kernel(ptr, scratch_ptr, counter_ptr, ACCESS: tl.constexpr):
+    layout: gl.constexpr = gl.BlockedLayout([4], [32], [1], [0])
+    pid = gl.program_id(0)
+    offsets = gl.arange(0, 128, layout=layout)
+    mask = offsets == pid
+    if pid == 0:
+        if ACCESS == "war":
+            values = gl.load(ptr + offsets, mask=mask)
+            gl.store(scratch_ptr + offsets, values, mask=mask)
+        else:
+            gl.store(ptr + offsets, 1.0, mask=mask)
+        gl.atomic_add(counter_ptr, 1, sem="relaxed")
+    else:
+        gl.atomic_poll(counter_ptr, 1, sem="relaxed", scope="gpu")
+        if ACCESS == "raw":
+            values = gl.load(ptr + offsets, mask=mask)
+            gl.store(scratch_ptr + offsets, values, mask=mask)
+        else:
+            gl.store(ptr + offsets, 2.0, mask=mask)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e5m2])
+@pytest.mark.parametrize("access", ["raw", "war", "waw"])
+def test_masked_disjoint_subword_accesses_do_not_race(with_gsan, capfd, dtype, access):
+    target = torch.zeros(4, dtype=dtype, device="cuda")
+    scratch = torch.zeros_like(target)
+    counter = torch.zeros(1, dtype=torch.int32, device="cuda")
+
+    _masked_disjoint_subword_access_kernel[(2, )](target, scratch, counter, ACCESS=access, num_warps=1)
+    torch.cuda.synchronize()
+
+    assert target[0].item() == (0 if access == "war" else 1)
+    assert target[1].item() == (0 if access == "raw" else 2)
+    _assert_no_gsan_runtime_output(capfd)
+
+
+@triton.jit
+def _ordered_subword_read_kernel(ptr, scratch_ptr, flag_ptr, ready_ptr):
+    pid = tl.program_id(0)
+    if pid == 0:
+        first = tl.load(ptr)
+        tl.store(scratch_ptr, first)
+        tl.atomic_xchg(flag_ptr, 1, sem="release", scope="gpu")
+        second = tl.load(ptr + 1)
+        tl.store(scratch_ptr + 1, second)
+        tl.atomic_add(ready_ptr, 1, sem="relaxed")
+    else:
+        atomic_poll(flag_ptr, 1, sem="acquire", scope="gpu")
+        atomic_poll(ready_ptr, 1)
+        tl.store(ptr, 3.0)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e5m2])
+def test_ordered_subword_read_is_not_invalidated_by_disjoint_read(with_gsan, capfd, dtype):
+    target = torch.zeros(4, dtype=dtype, device="cuda")
+    scratch = torch.zeros_like(target)
+    flag = torch.zeros(1, dtype=torch.int32, device="cuda")
+    ready = torch.zeros(1, dtype=torch.int32, device="cuda")
+
+    _ordered_subword_read_kernel[(2, )](target, scratch, flag, ready, num_warps=1)
+    torch.cuda.synchronize()
+
+    assert target[0].item() == 3
+    assert target[1].item() == 0
+    _assert_no_gsan_runtime_output(capfd)
+
+
+@triton.jit
+def _mixed_width_release_chain_kernel(payload_ptr, flags_ptr, wide_flags_ptr, ready_ptr, out_ptr):
+    pid = tl.program_id(0)
+    if pid < 2:
+        tl.store(payload_ptr + pid, 10 + pid)
+        tl.atomic_xchg(flags_ptr + pid, 1, sem="release", scope="gpu")
+        tl.atomic_add(ready_ptr, 1, sem="relaxed")
+    elif pid == 2:
+        atomic_poll(ready_ptr, 2)
+        tl.atomic_add(wide_flags_ptr, 1, sem="release", scope="gpu")
+    else:
+        atomic_poll(wide_flags_ptr, 4294967298, sem="acquire", scope="gpu")
+        first = tl.load(payload_ptr)
+        second = tl.load(payload_ptr + 1)
+        tl.store(out_ptr, first)
+        tl.store(out_ptr + 1, second)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+def test_mixed_width_atomic_release_synchronizes_all_overlapping_writers(with_gsan, capfd):
+    payload = torch.zeros(2, dtype=torch.int32, device="cuda")
+    flags = torch.zeros(2, dtype=torch.int32, device="cuda")
+    wide_flags = flags.view(torch.int64)
+    ready = torch.zeros(1, dtype=torch.int32, device="cuda")
+    out = torch.full_like(payload, -1)
+
+    _mixed_width_release_chain_kernel[(4, )](payload, flags, wide_flags, ready, out, num_warps=1)
+    torch.cuda.synchronize()
+
+    torch.testing.assert_close(out, torch.tensor([10, 11], dtype=torch.int32, device="cuda"))
+    _assert_no_gsan_runtime_output(capfd)
+
+
+@triton.jit
+def _disjoint_subword_atomic_kernel(ptr, counter_ptr, ATOMIC_FIRST: tl.constexpr):
+    pid = tl.program_id(0)
+    if pid == 0:
+        if ATOMIC_FIRST:
+            tl.atomic_add(ptr, 1, sem="relaxed", scope="gpu")
+        else:
+            tl.store(ptr, 1)
+        tl.atomic_add(counter_ptr, 1, sem="relaxed")
+    else:
+        atomic_poll(counter_ptr, 1)
+        if ATOMIC_FIRST:
+            tl.store(ptr + 1, 2)
+        else:
+            tl.atomic_add(ptr + 1, 2, sem="relaxed", scope="gpu")
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("atomic_first", [False, True])
+def test_disjoint_subword_atomic_and_non_atomic_accesses_do_not_race(with_gsan, capfd, atomic_first):
+    target = torch.zeros(2, dtype=torch.float16, device="cuda")
+    counter = torch.zeros(1, dtype=torch.int32, device="cuda")
+
+    _disjoint_subword_atomic_kernel[(2, )](target, counter, ATOMIC_FIRST=atomic_first, num_warps=1)
+    torch.cuda.synchronize()
+
+    torch.testing.assert_close(target, torch.tensor([1, 2], dtype=torch.float16, device="cuda"))
+    _assert_no_gsan_runtime_output(capfd)
+
+
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 def test_cuda_graph_capture_is_rejected(with_gsan):
     target = torch.zeros(1, dtype=torch.int32, device="cuda")
