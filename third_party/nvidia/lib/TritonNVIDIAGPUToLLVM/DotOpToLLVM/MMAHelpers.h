@@ -153,7 +153,7 @@ public:
     if (failed(desc))
       return failure();
 
-    Value baseb128 = b.zext(i64_ty, b.and_(baseSrcb128, b.i32_val(0x7FFF)));
+    Value baseb128 = b.and_(baseSrcb128, b.i32_val(0x7FFF));
     return DotOpMmaSmemLoader{*desc, baseb128, ll};
   }
 
@@ -175,11 +175,12 @@ public:
     uint32_t mask = (desc.swizzlingByteWidth >> 4) - 1;
     currDesc.matrixBaseOffset = (smemByteOffsetb8 / 128) & mask;
     int32_t smemByteOffsetb128 = smemByteOffsetb8 >> 4;
-    Value descValBase =
-        tb.int_val(64, currDesc.descriptor + smemByteOffsetb128);
+    uint64_t descBits = currDesc.descriptor + smemByteOffsetb128;
     // Add the base address to the descriptor
-    Value descVal = tb.add(descValBase, baseb128);
-    return descVal;
+    Value low = tb.add(tb.i32_val(uint32_t(descBits)), baseb128);
+    Value high = tb.i32_val(descBits >> 32);
+    Value descWords = packLLVector(loc, {low, high}, rewriter);
+    return tb.bitcast(descWords, i64_ty);
   }
   MemDescOperand memLoad(int a, int b, ConversionPatternRewriter &rewriter,
                          Location loc) const override {
