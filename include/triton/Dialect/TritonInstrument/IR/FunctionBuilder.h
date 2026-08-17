@@ -165,24 +165,26 @@ public:
                                    Value pred, MemType memType,
                                    Operation *insertPoint, Value effectCTAs);
   // trackVisibleAccesses: snapshot the available read and write visibility
-  // frontiers into their independent barrier tracking tables.
+  // frontiers into their independent tracking tables for the barrier's current
+  // phase.
   void createTrackVisibleAccessesCall(ImplicitLocOpBuilder &b, Value mbar,
                                       int thread, Value pred, MemType memType,
                                       Operation *insertPoint, Value barrierCTAs,
                                       Value readBufferMask = nullptr);
-  // trackBarrierWriteForBuffer: mark a specific buffer as tracked by a
-  // barrier in the write-tracking table.
+  // trackBarrierWriteForBuffer: mark a specific buffer as tracked by the
+  // barrier's current phase in the write-tracking table.
   void createTrackBarrierWriteForBufferCall(ImplicitLocOpBuilder &b, Value mbar,
                                             Value bufferMask, Value pred,
                                             MemType memType,
                                             Operation *insertPoint,
                                             Value barrierCTAs,
                                             Value effectCTAs);
-  // transferVisibleAccesses: transfer the barrier's independently tracked
-  // write and read visibility to all threads in threadMask.
+  // transferVisibleAccesses: transfer the requested barrier phase's
+  // independently tracked write and read visibility to all threads in
+  // threadMask.
   void createTransferVisibleAccessesCall(ImplicitLocOpBuilder &b, Value mbar,
-                                         uint64_t threadMask, Value pred,
-                                         MemType memType,
+                                         Value phase, uint64_t threadMask,
+                                         Value pred, MemType memType,
                                          Operation *insertPoint);
   // verifyWriteVisibility: ensure the thread either sees the latest write or no
   // other thread is writing the buffer.
@@ -232,7 +234,7 @@ public:
                                     bool cluster, Value pred,
                                     Operation *insertPoint);
   // trackProxyAccesses: snapshot the current base thread's packed generic
-  // access/fence frontier into a barrier tracking row.
+  // access/fence frontier into the barrier's current phase tracking row.
   void createTrackProxyAccessesCall(ImplicitLocOpBuilder &b, Value mbar,
                                     int thread, Value pred,
                                     Operation *insertPoint, Value barrierCTAs);
@@ -243,10 +245,10 @@ public:
   void createTrackProxyAccessesForBufferCall(
       ImplicitLocOpBuilder &b, Value mbar, Value bufferMask, int thread,
       Value pred, Operation *insertPoint, Value barrierCTAs, Value effectCTAs);
-  // completeBarrierWait: merge the barrier's available proxy frontier and
-  // clear the issuing base thread's waiting flag and phase.
+  // completeBarrierWait: merge the requested barrier phase's proxy frontier
+  // and clear the issuing base thread's waiting flag and phase.
   void createCompleteBarrierWaitCall(ImplicitLocOpBuilder &b, Value mbar,
-                                     int thread, Value pred,
+                                     Value phase, int thread, Value pred,
                                      Operation *insertPoint);
   // verifyProxyAccess: assert that every generic-proxy access visible to the
   // issuing base thread has crossed fence.proxy.async.
