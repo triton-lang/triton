@@ -348,10 +348,10 @@ struct FpToFpOpConversion
 
   explicit FpToFpOpConversion(LLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                              int computeCapability,
+                              int computeCapability, int ptxVersion,
                               PatternBenefit benefit = patternBenefitDefault)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
-        computeCapability(computeCapability) {}
+        computeCapability(computeCapability), ptxVersion(ptxVersion) {}
 
   static Value convertFp16ToFp32(Location loc,
                                  ConversionPatternRewriter &rewriter,
@@ -419,7 +419,8 @@ struct FpToFpOpConversion
     auto undefRounding = static_cast<RoundingMode>(-1);
 
     // Blackwell and newer can convert packed BF16/FP8 values directly.
-    bool hasPackedBf16 = computeCapability >= 100;
+    // Require PTX 9.2 to support both directions.
+    bool hasPackedBf16 = computeCapability >= 100 && ptxVersion >= 92;
 
     DenseMap<std::tuple<TypeID, TypeID, RoundingMode>, Fp8ConversionDesc>
         srcMap = {
@@ -560,6 +561,7 @@ struct FpToFpOpConversion
 
 private:
   int computeCapability;
+  int ptxVersion;
 };
 
 struct FDivOpConversion
@@ -921,7 +923,8 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, benefit);
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
-                                   computeCapability, benefit);
+                                   computeCapability,
+                                   targetInfo.getPtxVersion(), benefit);
   patterns.add<PackedArithOpConversion>(typeConverter, benefit);
 
   // ExpOpConversionApprox will try using ex2.approx if the input type is

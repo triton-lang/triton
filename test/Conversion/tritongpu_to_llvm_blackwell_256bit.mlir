@@ -1,6 +1,7 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=88' -cse | FileCheck --check-prefix=BW256 %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=88' -cse | FileCheck --check-prefixes=BW256,FP8,LEGACY %s
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=103 ptx-version=88' -cse | FileCheck --check-prefix=SM103 %s
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' -cse | FileCheck --check-prefixes=PRE_BW,FP8,LEGACY %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=91' -cse | FileCheck --check-prefixes=FP8,LEGACY %s
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=92' -cse | FileCheck --check-prefixes=FP8,PACKED %s
 
 // Test 256-bit global load with 8x f32 (v8.b32) on Blackwell
@@ -92,8 +93,8 @@ module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num
 
 // -----
 
-// Blackwell uses native packed BF16/FP8 conversions in both directions.
-// Pre-Blackwell targets retain their existing paths.
+// Blackwell uses native packed BF16/FP8 conversions in both directions with PTX 9.2.
+// Pre-Blackwell targets and older PTX versions retain their existing paths.
 #blocked_fp8 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // FP8-LABEL: @bf16_to_fp8e4
