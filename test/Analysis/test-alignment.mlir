@@ -15,6 +15,42 @@ tt.func @cast() {
 
 // -----
 
+tt.func @integer_cast_constants() {
+  %minus_one = arith.constant -1 : i8
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = 255}}
+  %unsigned = arith.extui %minus_one : i8 to i32
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = -1}}
+  %signed = arith.extsi %minus_one : i8 to i32
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = -1}}
+  %narrow = arith.trunci %unsigned : i32 to i8
+  %true = arith.constant true
+  // expected-remark @below {{constant_value = 1}}
+  %unsigned_bool = arith.extui %true : i1 to i32
+  // expected-remark @below {{constant_value = -1}}
+  %signed_bool = arith.extsi %true : i1 to i32
+  %splat = arith.constant dense<256> : tensor<4xi16>
+  // Truncation to zero improves the known divisibility.
+  // expected-remark @below {{contiguity = [1], divisibility = [4611686018427387904], constancy = [4], constant_value = 0}}
+  %zero = arith.trunci %splat : tensor<4xi16> to tensor<4xi8>
+  tt.return
+}
+
+// -----
+
+tt.func @wide_integer_cast_constants() {
+  %minus_one = arith.constant -1 : i64
+  // expected-remark @below {{constant_value = -1}}
+  %signed = arith.extsi %minus_one : i64 to i128
+  // A positive 2^64 - 1 does not fit AxisInfo's signed constant field.
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %unsigned = arith.extui %minus_one : i64 to i128
+  // expected-remark @below {{constant_value = -1}}
+  %narrow = arith.trunci %signed : i128 to i8
+  tt.return
+}
+
+// -----
+
 tt.func @bitcast_pointer_element_width(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i1> {tt.divisibility = 16 : i32}) {
   %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
   %base = tt.splat %arg0 : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>

@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/bit.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -135,7 +136,47 @@ protected:
 };
 
 template <typename OpTy>
-class CastOpAxisInfoVisitor final : public AxisInfoVisitorImpl<OpTy> {
+class IntegerCastOpAxisInfoVisitor final : public AxisInfoVisitorImpl<OpTy> {
+public:
+  using AxisInfoVisitorImpl<OpTy>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(OpTy op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    AxisInfo info = operands[0]->getValue();
+    auto constant = info.getConstantValue();
+    if (!constant)
+      return info;
+
+    unsigned srcWidth =
+        getElementTypeOrSelf(op.getIn().getType()).getIntOrFloatBitWidth();
+    unsigned dstWidth =
+        getElementTypeOrSelf(op.getType()).getIntOrFloatBitWidth();
+    // Recover the source bits before applying the cast's signedness.
+    APInt value =
+        APInt(64, static_cast<uint64_t>(*constant)).sextOrTrunc(srcWidth);
+    if constexpr (std::is_same_v<OpTy, arith::ExtUIOp>)
+      value = value.zext(dstWidth);
+    else if constexpr (std::is_same_v<OpTy, arith::ExtSIOp>)
+      value = value.sext(dstWidth);
+    else {
+      static_assert(std::is_same_v<OpTy, arith::TruncIOp>);
+      value = value.trunc(dstWidth);
+    }
+
+    // Divisibility is capped at kMaxDivisor, so the low 64 bits suffice even
+    // when the converted constant does not fit in int64_t.
+    int64_t divisibility =
+        highestPowOf2Divisor(value.sextOrTrunc(64).getSExtValue());
+    // The lattice cannot represent every constant wider than 64 bits.
+    return AxisInfo(info.getContiguity(),
+                    AxisInfo::DimVectorT(info.getRank(), divisibility),
+                    info.getConstancy(), value.trySExtValue());
+  }
+};
+
+template <typename OpTy>
+class IdentityOpAxisInfoVisitor final : public AxisInfoVisitorImpl<OpTy> {
 public:
   using AxisInfoVisitorImpl<OpTy>::AxisInfoVisitorImpl;
 
@@ -1206,12 +1247,12 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
   // in the process of a PartialConversion, where UnrealizedConversionCast
   // may exist
   visitors.append<UnrealizedConversionCastOpAxisInfoVisitor>();
-  visitors.append<CastOpAxisInfoVisitor<arith::ExtSIOp>,
-                  CastOpAxisInfoVisitor<arith::ExtUIOp>,
-                  CastOpAxisInfoVisitor<arith::TruncIOp>,
-                  CastOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
+  visitors.append<IntegerCastOpAxisInfoVisitor<arith::ExtSIOp>,
+                  IntegerCastOpAxisInfoVisitor<arith::ExtUIOp>,
+                  IntegerCastOpAxisInfoVisitor<arith::TruncIOp>,
+                  IdentityOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
                   BitcastOpAxisInfoVisitor,
-                  CastOpAxisInfoVisitor<triton::gluon::SetAutoLayoutOp>>();
+                  IdentityOpAxisInfoVisitor<triton::gluon::SetAutoLayoutOp>>();
   visitors.append<MakeRangeOpAxisInfoVisitor>();
   visitors.append<PoisonOpAxisInfoVisitor>();
   visitors.append<ConstantOpAxisInfoVisitor>();
