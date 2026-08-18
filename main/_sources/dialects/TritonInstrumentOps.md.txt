@@ -309,18 +309,19 @@ Interfaces: `AtomicOpInterface`
 
 
 
-### `tti.experimental_gsan_atomic_tensor_access` (triton::instrument::ExperimentalGSanAtomicTensorAccessOp)
+### `tti.experimental_gsan_atomic_tensordesc_access` (triton::instrument::ExperimentalGSanAtomicTensorDescAccessOp)
 
-_Instrument a tensor atomic access for GSan_
+_Instrument an atomic TMA descriptor access for GSan_
 
 Syntax:
 
 ```
-operation ::= `tti.experimental_gsan_atomic_tensor_access` $sem `,` $scope `,` $ptr (`,` $mask^)? attr-dict `:` type($ptr)
+operation ::= `tti.experimental_gsan_atomic_tensordesc_access` $desc `[` $coords `]` `,` $sem `,` $scope attr-dict `:`
+              qualified(type($desc))
 ```
 
-Emits runtime instrumentation for a tensor pointer access whose individual
-elements are atomic read-modify-write operations.
+Passes a native tensor descriptor and coordinates to the GSan runtime for
+atomic instrumentation with the specified memory semantics and scope.
 
 #### Attributes:
 
@@ -334,8 +335,8 @@ elements are atomic read-modify-write operations.
 
 | Operand | Description |
 | :-----: | ----------- |
-| `ptr` | ptr or ranked tensor of ptr values |
-| `mask` | 1-bit signless integer or ranked tensor of 1-bit signless integer values |
+| `desc` | tensor descriptor type |
+| `coords` | variadic of 32-bit signless integer |
 
 
 
@@ -402,6 +403,38 @@ operation ::= `tti.experimental_gsan_grid_dependency_wait` attr-dict
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
 Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory, MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+
+
+### `tti.experimental_gsan_indexed_tensordesc_access` (triton::instrument::ExperimentalGSanIndexedTensorDescAccessOp)
+
+_Instrument an indexed TMA gather or scatter for GSan_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_gsan_indexed_tensordesc_access` $desc `[` $indices `,` $offset `]` `,` $isStore (`,` $pred^)? attr-dict
+              `:` qualified(type($desc)) `,` type($indices)
+```
+
+Passes a native tensor descriptor and its row indices directly to the GSan
+runtime, which checks row and column bounds before updating shadow memory.
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>isStore</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `desc` | tensor descriptor type |
+| `indices` | ranked tensor of 32-bit signless integer values |
+| `offset` | 32-bit signless integer |
+| `pred` | 1-bit signless integer |
 
 
 
@@ -609,36 +642,36 @@ optional mask are consumed by the GSan runtime.
 
 
 
-### `tti.experimental_gsan_tensordesc_info` (triton::instrument::ExperimentalGSanTensorDescInfoOp)
+### `tti.experimental_gsan_tensordesc_access` (triton::instrument::ExperimentalGSanTensorDescAccessOp)
 
-_Decode GSan descriptor metadata from a native tensor descriptor_
+_Instrument a TMA tensor descriptor access for GSan_
 
 Syntax:
 
 ```
-operation ::= `tti.experimental_gsan_tensordesc_info` $desc attr-dict `:` qualified(type($desc)) `->` type($result)
+operation ::= `tti.experimental_gsan_tensordesc_access` $desc `[` $coords `]` `,` $isStore (`,` $pred^)? attr-dict `:`
+              qualified(type($desc))
 ```
 
-Decodes a native tensor descriptor into the underlying
-base pointer, shape and stride values.
+Passes the native tensor descriptor and its coordinates directly to the
+GSan runtime, which decodes the descriptor and iterates over the tile.
 
-Traits: `AlwaysSpeculatableImplTrait`
+Traits: `AttrSizedOperandSegments`
 
-Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+#### Attributes:
 
-Effects: `MemoryEffects::Effect{}`
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>isStore</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+</table>
 
 #### Operands:
 
 | Operand | Description |
 | :-----: | ----------- |
 | `desc` | tensor descriptor type |
-
-#### Results:
-
-| Result | Description |
-| :----: | ----------- |
-| `result` | variadic of any non-token type |
+| `coords` | variadic of 32-bit signless integer |
+| `pred` | 1-bit signless integer |
 
 
 
