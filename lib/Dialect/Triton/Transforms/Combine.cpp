@@ -292,6 +292,152 @@ using CombineDotAddFPattern = CombineDotAddPattern<DotOp, arith::AddFOp>;
 using CombineDotScaledAddFPattern =
     CombineDotAddPattern<DotScaledOp, arith::AddFOp>;
 
+// Return the value of p val if it is statically known to be a float
+// constant
+static std::optional<llvm::APFloat> getSplatFloatConstant(Value val) {
+  if (auto splatOp = val.getDefiningOp<SplatOp>())
+    val = splatOp.getSrc();
+  Attribute attr;
+  if (!matchPattern(val, m_Constant(&attr)))
+    return std::nullopt;
+  if (auto denseAttr = dyn_cast<DenseElementsAttr>(attr)) {
+    if (!denseAttr.isSplat())
+      return std::nullopt;
+    attr = denseAttr.getSplatValue<Attribute>();
+  }
+  if (auto floatAttr = dyn_cast_or_null<FloatAttr>(attr))
+    return floatAttr.getValue();
+  return std::nullopt;
+}
+
+
+//   truncf(maxnumf(extf(x), c)) => maxnumf(x, c_narrow)
+template <typename OpTy>
+class CombineTruncMinMaxExtPattern
+    : public mlir::OpRewritePattern<arith::TruncFOp> {
+private:
+  // A wide operand expressible in the narrow type: either the source of an
+  // extf from that type, or a constant that converts to it exactly.
+  struct NarrowOperand {
+    Value val;
+    std::optional<llvm::APFloat> cst;
+  };
+
+  static std::optional<NarrowOperand> matchNarrowOperand(Value operand,
+                                                         Type narrowTy) {
+    if (auto extOp = operand.getDefiningOp<arith::ExtFOp>()) {
+      if (extOp.getIn().getType() != narrowTy)
+        return std::nullopt;
+      return NarrowOperand{extOp.getIn(), std::nullopt};
+    }
+    auto cVal = getSplatFloatConstant(operand);
+    if (!cVal || cVal->isNaN())
+      return std::nullopt;
+    auto elemTy = cast<FloatType>(getElementTypeOrSelf(narrowTy));
+    bool losesInfo = false;
+    if (cVal->convert(elemTy.getFloatSemantics(),
+                      llvm::APFloat::rmNearestTiesToEven,
+                      &losesInfo) != llvm::APFloat::opOK ||
+        losesInfo)
+      return std::nullopt;
+    return NarrowOperand{Value(), *cVal};
+  }
+
+public:
+  using OpRewritePattern<arith::TruncFOp>::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(arith::TruncFOp truncOp,
+                  mlir::PatternRewriter &rewriter) const override {
+    // The fold produces exactly representable values, but stay conservative
+    // with explicit rounding modes.
+    if (truncOp.getRoundingmode())
+      return failure();
+    auto innerOp = truncOp.getIn().getDefiningOp<OpTy>();
+    if (!innerOp || !innerOp->hasOneUse())
+      return failure();
+    Type narrowTy = truncOp.getType();
+    Type elemTy = getElementTypeOrSelf(narrowTy);
+    if (!elemTy.isF16() && !elemTy.isBF16() && !elemTy.isF32())
+      return failure();
+    auto lhs = matchNarrowOperand(innerOp.getLhs(), narrowTy);
+    auto rhs = matchNarrowOperand(innerOp.getRhs(), narrowTy);
+    if (!lhs || !rhs)
+      return failure();
+    // Both operands constant is the arith folder's job.
+    if (!lhs->val && !rhs->val)
+      return failure();
+    auto materialize = [&](NarrowOperand &operand) -> Value {
+      if (operand.val)
+        return operand.val;
+      Attribute attr = FloatAttr::get(elemTy, *operand.cst);
+      if (auto shapedTy = dyn_cast<ShapedType>(narrowTy))
+        attr = DenseElementsAttr::get(shapedTy, attr);
+      return arith::ConstantOp::create(rewriter, truncOp.getLoc(),
+                                       cast<TypedAttr>(attr));
+    };
+    rewriter.replaceOpWithNewOp<OpTy>(truncOp, materialize(*lhs),
+                                      materialize(*rhs));
+    return success();
+  }
+};
+
+using CombineTruncMaxNumFExtPattern =
+    CombineTruncMinMaxExtPattern<arith::MaxNumFOp>;
+using CombineTruncMinNumFExtPattern =
+    CombineTruncMinMaxExtPattern<arith::MinNumFOp>;
+using CombineTruncMaximumFExtPattern =
+    CombineTruncMinMaxExtPattern<arith::MaximumFOp>;
+using CombineTruncMinimumFExtPattern =
+    CombineTruncMinMaxExtPattern<arith::MinimumFOp>;
+
+//   truncf(divf(extf(x), c)) => mulf(x, 1/c)
+class CombineTruncDivPow2Pattern
+    : public mlir::OpRewritePattern<arith::TruncFOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(arith::TruncFOp truncOp,
+                  mlir::PatternRewriter &rewriter) const override {
+    // Only the default (round-to-nearest-even) truncation rounds like mulf.
+    if (truncOp.getRoundingmode())
+      return failure();
+    auto divOp = truncOp.getIn().getDefiningOp<arith::DivFOp>();
+    if (!divOp || !divOp->hasOneUse())
+      return failure();
+    auto extOp = divOp.getLhs().getDefiningOp<arith::ExtFOp>();
+    if (!extOp)
+      return failure();
+    Value x = extOp.getIn();
+
+    if (x.getType() != truncOp.getType())
+      return failure();
+    Type elemTy = getElementTypeOrSelf(x.getType());
+    if (!elemTy.isF16() && !elemTy.isBF16() && !elemTy.isF32())
+      return failure();
+    auto divisor = getSplatFloatConstant(divOp.getRhs());
+    if (!divisor)
+      return failure();
+    llvm::APFloat recip(divisor->getSemantics());
+    if (!divisor->getExactInverse(&recip))
+      return failure();
+    bool losesInfo = false;
+    if (recip.convert(cast<FloatType>(elemTy).getFloatSemantics(),
+                      llvm::APFloat::rmNearestTiesToEven,
+                      &losesInfo) != llvm::APFloat::opOK ||
+        losesInfo)
+      return failure();
+    Attribute recipAttr = FloatAttr::get(elemTy, recip);
+    if (auto shapedTy = dyn_cast<ShapedType>(truncOp.getType()))
+      recipAttr = DenseElementsAttr::get(shapedTy, recipAttr);
+    auto cst = arith::ConstantOp::create(rewriter, truncOp.getLoc(),
+                                         cast<TypedAttr>(recipAttr));
+    rewriter.replaceOpWithNewOp<arith::MulFOp>(truncOp, x, cst);
+    return success();
+  }
+};
+
 } // anonymous namespace
 
 class CombineOpsPass : public impl::TritonCombineOpsBase<CombineOpsPass> {
@@ -305,6 +451,10 @@ public:
     patterns.add<CombineDotAddFPattern>(context);
     patterns.add<CombineDotScaledAddFPattern>(context);
     patterns.add<CombineSelectMaskedLoadPattern>(context);
+    patterns.add<CombineTruncMaxNumFExtPattern, CombineTruncMinNumFExtPattern,
+                 CombineTruncMaximumFExtPattern, CombineTruncMinimumFExtPattern>(
+        context);
+    patterns.add<CombineTruncDivPow2Pattern>(context);
     patterns.add<CombineAddPtrPattern>(context);
     patterns.add<CombineBroadcastMulReducePattern>(context);
     patterns.add<CombineReshapeReducePatterns>(context);

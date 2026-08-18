@@ -568,3 +568,59 @@ tt.func @test_combine_broadcast_mul_reduce_higher_rank(%arg0: tensor<32x16x4xf32
     }) : (tensor<32x16x32x4xf32>) -> tensor<32x32x4xf32>
     tt.return %5 : tensor<32x32x4xf32>
 }
+
+// CHECK-LABEL: @test_combine_trunc_ext_roundtrip
+tt.func @test_combine_trunc_ext_roundtrip(%arg0: tensor<8xf16>) -> (tensor<8xf16>, tensor<8xf16>, tensor<8xf16>) {
+    %zero = arith.constant dense<0.0> : tensor<8xf32>
+    %one = arith.constant dense<1.0> : tensor<8xf32>
+    %two = arith.constant dense<2.0> : tensor<8xf32>
+
+    // The shape the frontend emits for tl.maximum(x_f16, 0.0) stored as f16.
+    // CHECK: %[[max:.*]] = arith.maxnumf %arg0, %{{.*}} : tensor<8xf16>
+    %e0 = arith.extf %arg0 : tensor<8xf16> to tensor<8xf32>
+    %m0 = arith.maxnumf %e0, %zero : tensor<8xf32>
+    %max = arith.truncf %m0 : tensor<8xf32> to tensor<8xf16>
+
+    // CHECK: %[[min:.*]] = arith.minnumf %arg0, %{{.*}} : tensor<8xf16>
+    %e1 = arith.extf %arg0 : tensor<8xf16> to tensor<8xf32>
+    %m1 = arith.minnumf %e1, %one : tensor<8xf32>
+    %min = arith.truncf %m1 : tensor<8xf32> to tensor<8xf16>
+
+    // Division by a power of two has an exact reciprocal.
+    // CHECK: %[[div:.*]] = arith.mulf %arg0, %{{.*}} : tensor<8xf16>
+    %e2 = arith.extf %arg0 : tensor<8xf16> to tensor<8xf32>
+    %d0 = arith.divf %e2, %two : tensor<8xf32>
+    %div = arith.truncf %d0 : tensor<8xf32> to tensor<8xf16>
+
+    // CHECK: tt.return %[[max]], %[[min]], %[[div]]
+    tt.return %max, %min, %div : tensor<8xf16>, tensor<8xf16>, tensor<8xf16>
+}
+
+// CHECK-LABEL: @test_combine_trunc_ext_roundtrip_fail
+// CHECK-NOT: arith.maxnumf {{.*}} : tensor<8xf16>
+// CHECK-NOT: arith.mulf
+tt.func @test_combine_trunc_ext_roundtrip_fail(%arg0: tensor<8xf16>) -> (tensor<8xf16>, tensor<8xf16>, tensor<8xf32>, tensor<8xf16>) {
+    %tenth = arith.constant dense<1.000000e-01> : tensor<8xf32>
+    %zero = arith.constant dense<0.0> : tensor<8xf32>
+    %three = arith.constant dense<3.0> : tensor<8xf32>
+
+    // 0.1 is not exactly representable in f16 — folding would change the
+    // max threshold.
+    %e0 = arith.extf %arg0 : tensor<8xf16> to tensor<8xf32>
+    %m0 = arith.maxnumf %e0, %tenth : tensor<8xf32>
+    %r0 = arith.truncf %m0 : tensor<8xf32> to tensor<8xf16>
+
+    // The wide max has a second user — the f32 value is live.
+    %e1 = arith.extf %arg0 : tensor<8xf16> to tensor<8xf32>
+    %m1 = arith.maxnumf %e1, %zero : tensor<8xf32>
+    %r1 = arith.truncf %m1 : tensor<8xf32> to tensor<8xf16>
+    %r2 = arith.addf %m1, %e1 : tensor<8xf32>
+
+    // 1/3 is not exact — must stay a division.
+    %e2 = arith.extf %arg0 : tensor<8xf16> to tensor<8xf32>
+    %d0 = arith.divf %e2, %three : tensor<8xf32>
+    %r3 = arith.truncf %d0 : tensor<8xf32> to tensor<8xf16>
+
+    // CHECK: tt.return
+    tt.return %r0, %r1, %r2, %r3 : tensor<8xf16>, tensor<8xf16>, tensor<8xf32>, tensor<8xf16>
+}
