@@ -94,11 +94,11 @@ private:
   // Fill common buffer operation arguments.
   void fillCommonArgs(Type type, Value rsrcDesc, Value vOffsetElems, Value pred,
                       CacheModifier cm, bool isBufferLoad,
-                      SmallVector<Value> &args);
+                      SmallVector<Value> &args, int32_t &aux);
 
   // Fill buffer atomics arguments
   void fillCommonArgsAtomics(Type type, Value rsrcDesc, Value vOffsetElems,
-                             Value pred, bool hasUsers,
+                             Value pred, bool hasUsers, int32_t &aux,
                              SmallVector<Value> &args);
 
   // Given a type, the buffer type can be either the same type
