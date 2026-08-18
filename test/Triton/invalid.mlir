@@ -575,6 +575,50 @@ module {
 
 // -----
 
+module {
+  tt.func @dot_scaled_single_nvfp4_scale(
+    %a: tensor<1x8xi8>,
+    %b: tensor<8x1xi8>,
+    %a_scale: tensor<1x1xf8E4M3FN>,
+    %b_scale: tensor<1x1xf8E4M3FN>) -> tensor<1x1xf32> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<1x1xf32>
+    %result = tt.dot_scaled %a scale %a_scale, %b scale %b_scale, %cst lhs = e2m1 rhs = e2m1 {fastMath = false, lhs_k_pack = true, rhs_k_pack = true} : tensor<1x8xi8>, tensor<1x1xf8E4M3FN> * tensor<8x1xi8>, tensor<1x1xf8E4M3FN> -> tensor<1x1xf32>
+    tt.return %result : tensor<1x1xf32>
+  }
+}
+
+// -----
+
+module {
+  tt.func @dot_scaled_zero_scale_k(
+    %a: tensor<1x8xi8>,
+    %b: tensor<8x1xi8>,
+    %a_scale: tensor<1x0xf8E4M3FN>,
+    %b_scale: tensor<1x1xf8E4M3FN>) -> tensor<1x1xf32> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<1x1xf32>
+    // expected-error @below {{scale K dimension must be positive and divide operand K dimension; got scale K dimension 0 and operand K dimension 16}}
+    %result = tt.dot_scaled %a scale %a_scale, %b scale %b_scale, %cst lhs = e2m1 rhs = e2m1 {fastMath = false, lhs_k_pack = true, rhs_k_pack = true} : tensor<1x8xi8>, tensor<1x0xf8E4M3FN> * tensor<8x1xi8>, tensor<1x1xf8E4M3FN> -> tensor<1x1xf32>
+    tt.return %result : tensor<1x1xf32>
+  }
+}
+
+// -----
+
+module {
+  tt.func @dot_scaled_non_divisible_scale_k(
+    %a: tensor<1x32xf8E4M3FN>,
+    %b: tensor<32x1xf8E4M3FN>,
+    %a_scale: tensor<1x64xi8>,
+    %b_scale: tensor<1x64xi8>) -> tensor<1x1xf32> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<1x1xf32>
+    // expected-error @below {{scale K dimension must be positive and divide operand K dimension; got scale K dimension 64 and operand K dimension 32}}
+    %result = tt.dot_scaled %a scale %a_scale, %b scale %b_scale, %cst lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<1x32xf8E4M3FN>, tensor<1x64xi8> * tensor<32x1xf8E4M3FN>, tensor<1x64xi8> -> tensor<1x1xf32>
+    tt.return %result : tensor<1x1xf32>
+  }
+}
+
+// -----
+
 tt.func @unsplat_invalid(%arg0: tensor<128xf32>) {
   // expected-error @below {{source tensor must have exactly one element}}
   %0 = tt.unsplat %arg0 : tensor<128xf32>

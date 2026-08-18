@@ -389,14 +389,21 @@ LogicalResult deduceScaleFactor(ArrayRef<int64_t> lhsShape,
                                  bool kPack) -> int32_t {
     if (!scaleShape)
       return 0;
-    if (llvm::product_of(*scaleShape) == 1)
-      return 0;
 
     int64_t unpackFactor = (format == ScaleDotElemType::E2M1 && kPack) ? 2 : 1;
     int64_t kdim = operandShape[opIdx == 0 ? operandShape.size() - 1
                                            : operandShape.size() - 2] *
                    unpackFactor;
-    int32_t scaleFactor = kdim / (*scaleShape)[scaleShape->size() - 1];
+    int64_t scaleK = scaleShape->back();
+    if (scaleK <= 0 || kdim % scaleK != 0) {
+      std::ostringstream oss;
+      oss << "scale K dimension must be positive and divide operand K "
+             "dimension; got scale K dimension "
+          << scaleK << " and operand K dimension " << kdim;
+      errMsg = oss.str();
+      return 0;
+    }
+    int32_t scaleFactor = kdim / scaleK;
     if (scaleFactor != 16 && scaleFactor != 32) {
       std::ostringstream oss;
       oss << "scale factor must be 16 or 32. Got " << scaleFactor;
