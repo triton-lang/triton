@@ -16,7 +16,7 @@ def is_x_scale_swizzled(precision_config):
 def is_blackwell_mx_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype):
     return (target_info.cuda_capability_geq(10, 0) and precision_config is not None
             and precision_config.a_mx_scale is not None and precision_config.a_microblock_size == int(MXFP_BLOCK_SIZE)
-            and precision_config.b_mx_scale is None and precision_config.c_mx_scale is None and lhs_dtype.bitwidth <= 8
+            and precision_config.b_mx_scale is None and lhs_dtype.bitwidth <= 8
             and rhs_dtype in [FP16, BF16])
 
 
@@ -79,7 +79,8 @@ def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_d
         min_block_k = 32 if is_persistent or lhs_width != 16 or rhs_width != 16 else 16
         block_k = max(min_block_k, min(triton.next_power_of_2(k), block_k))
     if (is_persistent and k is not None and k >= 256
-            and is_blackwell_mx_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype)):
+            and is_blackwell_mx_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype)
+            and precision_config.c_mx_scale is None):
         block_k = max(block_k, 256)
     if precision_config is not None and precision_config.b_mx_scale is not None:
         if has_native_mxfp and is_persistent:
