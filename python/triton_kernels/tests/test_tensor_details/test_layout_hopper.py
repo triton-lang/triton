@@ -1,6 +1,6 @@
 import pytest
 from torch._subclasses import fake_tensor
-from triton_kernels.tensor import wrap_torch_tensor, convert_layout, FP4
+from triton_kernels.tensor import wrap_torch_tensor, convert_layout, empty, FP4
 from triton_kernels.tensor_details.layout import HopperMXScaleLayout, HopperMXValueLayout, StridedLayout
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp
 from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
@@ -74,19 +74,30 @@ def test_mxfp4_value_storage_shape_matches_swizzle():
     assert torch.equal(transformation.unswizzle_data(swizzled), x)
 
 
-@pytest.mark.parametrize("shape", ZERO_SIZED_SHAPES)
+@pytest.mark.parametrize(("shape", "major_dim"),
+                         [(shape[:-1] + (2 * shape[-1], ), -1) for shape in ZERO_SIZED_SHAPES] + [
+                             ((1, 0), -1),
+                             ((3, 0), -1),
+                             ((0, 4, 3), -2),
+                             ((2, 0, 6, 8), -1),
+                         ])
 @pytest.mark.parametrize("mx_axis", [-2, -1])
 @pytest.mark.parametrize("mma_version", [2, 3])
 @pytest.mark.parametrize("device", ["cpu", "meta", "cuda"])
-def test_mxfp4_value_zero_sized_roundtrip(shape, mx_axis, mma_version, device):
-    x = torch.empty(shape, dtype=torch.uint8, device=device)
-    src = wrap_torch_tensor(x, dtype=FP4)
+def test_mxfp4_value_zero_sized_roundtrip(shape, major_dim, mx_axis, mma_version, device):
+    src_layout = StridedLayout(major_dim)
+    src = empty(shape, dtype=FP4, device=device, layout=src_layout)
     layout = HopperMXValueLayout(mx_axis=mx_axis, mma_version=mma_version)
+    transformation = layout.make_transformation(list(shape), True)
 
     swizzled = convert_layout(src, layout)
-    roundtrip = convert_layout(swizzled, src.storage.layout)
+    canonical = transformation.unswizzle_data(swizzled.data)
+    roundtrip = convert_layout(swizzled, src_layout)
 
-    assert roundtrip.storage.data.shape == x.shape
+    assert src.shape == swizzled.shape == roundtrip.shape == list(shape)
+    assert list(swizzled.data.shape) == transformation.storage_shape
+    assert canonical.shape == (*shape[:-1], shape[-1] // 2)
+    assert roundtrip.data.shape == src.data.shape
 
 
 @pytest.mark.parametrize("mx_axis", [-2, -1])
@@ -178,7 +189,7 @@ def test_mxfp4_scale_roundtrip(shape, mx_axis, num_warps):
 @pytest.mark.parametrize("shape", ZERO_SIZED_SHAPES)
 @pytest.mark.parametrize("mx_axis", [-2, -1])
 @pytest.mark.parametrize("num_warps", [4, 8])
-@pytest.mark.parametrize("device", ["cpu", "meta"])
+@pytest.mark.parametrize("device", ["cpu", "meta", "cuda"])
 def test_mxfp4_scale_zero_sized_roundtrip(shape, mx_axis, num_warps, device):
     x = torch.empty(shape, dtype=torch.uint8, device=device)
     src = wrap_torch_tensor(x)

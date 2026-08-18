@@ -28,6 +28,7 @@ from triton_kernels.tensor_details.layout import (
     HopperMXValueLayout,
     StridedLayout,
 )
+from triton_kernels.tensor_details.layout_details.torch_utils import repack
 
 
 @pytest.mark.parametrize("dtype", [
@@ -132,6 +133,60 @@ def test_strided_layout_rejects_odd_fp4_packing_dim(major_dim):
 
     with pytest.raises(ValueError):
         StridedLayout(major_dim).storage_shape(shape, True)
+
+
+@pytest.mark.parametrize(("shape", "src_dim", "dst_dim"), [(shape, src_dim, dst_dim)
+                                                           for shape in [(1, 0), (0, 3, 5)]
+                                                           for src_dim in range(-len(shape), 0)
+                                                           for dst_dim in range(-len(shape), 0)])
+@pytest.mark.parametrize("device", ["cpu", "meta", "cuda"])
+def test_strided_layout_empty_fp4(shape, src_dim, dst_dim, device):
+    src_layout = StridedLayout(src_dim)
+    dst_layout = StridedLayout(dst_dim)
+    src_shape, dst_shape = list(shape), list(shape)
+    src_shape[src_dim] //= 2
+    dst_shape[dst_dim] //= 2
+    src = empty(shape, dtype=FP4, device=device, layout=src_layout)
+
+    canonical = src_layout.make_transformation(list(shape), True).unswizzle_data(src.data)
+    converted = convert_layout(src, dst_layout)
+    roundtrip = convert_layout(converted, src_layout)
+
+    assert src.shape == converted.shape == roundtrip.shape == list(shape)
+    assert list(src.data.shape) == src_layout.storage_shape(list(shape), True) == src_shape
+    assert list(converted.data.shape) == dst_layout.storage_shape(list(shape), True) == dst_shape
+    assert canonical.shape == (*shape[:-1], shape[-1] // 2)
+    assert roundtrip.data.shape == src.data.shape
+    if src_dim == dst_dim:
+        assert converted is src
+
+
+@pytest.mark.parametrize("device", ["cpu", "meta", "cuda"])
+def test_repack_empty_fp4(device):
+    data = torch.empty((3, 0), dtype=torch.uint8, device=device)
+    out = torch.empty((1, 0), dtype=torch.uint8, device=device)
+
+    assert repack(data, -1, -2, True).shape == (1, 0)
+    assert repack(data, -1, -2, True, out=out) is out
+    assert repack(data, -1, -1, True, out=out) is out
+    assert repack(data, -1, -1, True) is data
+    with pytest.raises(RuntimeError):
+        repack(data, -1, -2, True, out=torch.empty((1, 2), dtype=torch.uint8, device=device))
+
+
+@pytest.mark.parametrize("device", ["cpu", "meta", "cuda"])
+def test_convert_layout_empty_fp4_sliced_view(device):
+    data = torch.empty((6, 6), dtype=torch.uint8, device=device)[:0, ::2]
+    src_layout = StridedLayout(-1)
+    src = wrap_torch_tensor(data, dtype=FP4, shape=[0, 6], layout=src_layout)
+
+    assert convert_layout(src, src_layout) is src
+    converted = convert_layout(src, StridedLayout(-2))
+    roundtrip = convert_layout(converted, src_layout)
+
+    assert converted.shape == roundtrip.shape == [0, 6]
+    assert converted.data.shape == (0, 6)
+    assert roundtrip.data.shape == data.shape
 
 
 @pytest.mark.parametrize(

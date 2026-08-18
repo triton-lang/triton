@@ -9,7 +9,7 @@ from triton_kernels.tensor_details.layout import (
     StridedLayout,
 )
 from triton_kernels.tensor_details.dtype import FP4
-from triton_kernels.tensor import make_ragged_tensor_metadata, make_ragged_tensor_metadata_torch, wrap_torch_tensor, convert_layout
+from triton_kernels.tensor import make_ragged_tensor_metadata, make_ragged_tensor_metadata_torch, wrap_torch_tensor, convert_layout, empty
 
 # ------------------------------------------------------------
 # Torch tests
@@ -30,7 +30,7 @@ def test_act_scale_storage_preservation():
 
 @pytest.mark.parametrize("shape", ZERO_SIZED_SHAPES)
 @pytest.mark.parametrize("layout", [BlackwellMXScaleLayout(), BlackwellActMXScaleLayout(None)])
-@pytest.mark.parametrize("device", ["cpu", "meta"])
+@pytest.mark.parametrize("device", ["cpu", "meta", "cuda"])
 def test_scale_zero_sized_roundtrip(shape, layout, device):
     x = torch.empty(shape, dtype=torch.uint8, device=device)
     src = wrap_torch_tensor(x)
@@ -41,17 +41,34 @@ def test_scale_zero_sized_roundtrip(shape, layout, device):
     assert roundtrip.storage.data.shape == x.shape
 
 
-@pytest.mark.parametrize("shape", ZERO_SIZED_SHAPES)
-@pytest.mark.parametrize("layout", [BlackwellMXValueLayout(), BlackwellMX4ValueShuffledLayout()])
+@pytest.mark.parametrize(("shape", "major_dim"),
+                         [(shape[:-1] + (2 * shape[-1], ), -1) for shape in ZERO_SIZED_SHAPES] + [
+                             ((1, 0), -1),
+                             ((3, 0), -1),
+                             ((0, 4, 3), -2),
+                             ((2, 0, 6, 8), -1),
+                         ])
+@pytest.mark.parametrize("layouts", [
+    (BlackwellMXValueLayout(), ),
+    (BlackwellMX4ValueShuffledLayout(), BlackwellMX4ValueShuffledLayout(block_k=256, block_n=128)),
+])
 @pytest.mark.parametrize("device", ["cpu", "meta", "cuda"])
-def test_value_zero_sized_roundtrip(shape, layout, device):
-    x = torch.empty(shape, dtype=torch.uint8, device=device)
-    src = wrap_torch_tensor(x, dtype=FP4)
+def test_value_zero_sized_roundtrip(shape, major_dim, layouts, device):
+    src_layout = StridedLayout(major_dim)
+    src = empty(shape, dtype=FP4, device=device, layout=src_layout)
 
-    swizzled = convert_layout(src, layout)
-    roundtrip = convert_layout(swizzled, src.storage.layout)
+    converted = src
+    for layout in layouts:
+        converted = convert_layout(converted, layout)
+        transformation = layout.make_transformation(list(shape), True)
+        canonical = transformation.unswizzle_data(converted.data)
+        assert converted.shape == list(shape)
+        assert list(converted.data.shape) == transformation.storage_shape
+        assert canonical.shape == (*shape[:-1], shape[-1] // 2)
+    roundtrip = convert_layout(converted, src_layout)
 
-    assert roundtrip.storage.data.shape == x.shape
+    assert src.shape == roundtrip.shape == list(shape)
+    assert roundtrip.data.shape == src.data.shape
 
 
 @pytest.mark.parametrize("k", [1, 3])
@@ -166,7 +183,7 @@ def test_mxfp4_value_shuffled_peak_allocation(inverse):
 
 
 @pytest.mark.parametrize(("slice_sizes", "shape"), [([0], (0, 64)), ([2, 0], (2, 0))])
-@pytest.mark.parametrize("device", ["cpu", "meta"])
+@pytest.mark.parametrize("device", ["cpu", "meta", "cuda"])
 def test_act_scale_zero_sized_ragged_roundtrip(slice_sizes, shape, device):
     metadata = make_ragged_tensor_metadata_torch(torch.tensor(slice_sizes, dtype=torch.int32), shape[0])
     x = torch.empty(shape, device=device)

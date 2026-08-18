@@ -185,7 +185,7 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         data = repack(data, self.mx_axis, -1, self.is_fp4)
         data = data[..., :self.K, :self.N // 2]
         data = data.contiguous()
-        return data
+        return data.view(*self.leading_shape, self.K, self.N // 2)
 
 
 def right_shift_unsigned(x, shift):
