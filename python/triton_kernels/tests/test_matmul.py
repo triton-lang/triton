@@ -200,6 +200,10 @@ def _build_test_op_cases():
     # nvfp4 x dense
     test_cases.append(Case(128, 128, 128, "plain", "nvfp4_e2m1", "bfloat16", "bfloat16"))
     test_cases.append(Case(128, 128, 128, "plain", "nvfp4_e2m1_fiber", "bfloat16", "bfloat16"))
+    test_cases.extend([
+        Case(256, 256, 128, "ragged", "nvfp4_e2m1", rhs_dtype, "bfloat16", a_hbm_swizzling=True)
+        for rhs_dtype in ("bfloat16", "float16")
+    ])
     # mxfloat x mxfloat
     test_cases.extend([
         Case(16, 256, 256, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1"),
