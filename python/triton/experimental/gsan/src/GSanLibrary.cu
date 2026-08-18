@@ -459,12 +459,18 @@ GSAN_DEVICE void incrementThreadEpoch(ThreadState *state, Location loc) {
   state->clockBufferDirty = 1;
 }
 
-GSAN_DEVICE bool mergeVectorClock(ThreadState *state, const epoch_t *snapshot) {
+// A publisher that has not advanced its local epoch can only transfer its
+// completed epochs. All other entries retain their usual acquire semantics.
+GSAN_DEVICE bool mergeVectorClock(ThreadState *state, const epoch_t *snapshot,
+                                  thread_id_t incompleteThread = kMaxThreads) {
   bool changed = false;
   auto *globals = getGlobalState(state);
   for (int i = 0; i < globals->numThreads; ++i) {
-    if (state->vectorClock[i] < snapshot[i]) {
-      state->vectorClock[i] = snapshot[i];
+    auto epoch = snapshot[i];
+    if (i == incompleteThread && epoch != 0)
+      --epoch;
+    if (state->vectorClock[i] < epoch) {
+      state->vectorClock[i] = epoch;
       changed = true;
     }
   }
@@ -524,6 +530,18 @@ GSAN_DEVICE epoch_t publishClusterClock(ThreadState *state, Location loc) {
   // local epoch so later accesses are distinct from the published snapshot.
   epoch_t token = publishCurrentVectorClock(state, loc);
   incrementThreadEpoch(state, loc);
+  rwLockReleaseWrite(state->lock);
+  return token;
+}
+
+GSAN_DEVICE epoch_t publishMBarrierClock(ThreadState *state, Location loc) {
+  rwLockAcquireWrite(state->lock);
+  // Mbarriers are frequent in shared/TMEM pipelines. Do not consume an epoch
+  // for each arrival: publish an immutable snapshot and let the waiter exclude
+  // this thread's still-open epoch. Imported clocks remain fully transferable.
+  // Reusing the ordinary snapshot cache also avoids filling the clock buffer
+  // when repeated arrivals have no new ordering to publish.
+  epoch_t token = publishCurrentVectorClock(state, loc);
   rwLockReleaseWrite(state->lock);
   return token;
 }
@@ -682,7 +700,7 @@ GSAN_DEVICE void recordMBarrierArrival(GlobalState *globals, void *scratch,
   MBarrierPublishedClock published = {};
   if (publishClock) {
     auto *threadState = getThreadState(globals);
-    published = {threadState->threadId, publishClusterClock(threadState, loc)};
+    published = {threadState->threadId, publishMBarrierClock(threadState, loc)};
   }
   auto *table = reinterpret_cast<MBarrierTable *>(scratch);
   for (uint32_t ownerRank = 0; ownerRank < kMaxClusterCTAs; ++ownerRank) {
@@ -741,7 +759,11 @@ GSAN_DEVICE void acquireMBarrierPhase(GlobalState *globals, void *scratch,
     auto *publisher = getThreadStateById(globals, published.threadId);
     const epoch_t *snapshot =
         getClockBufferSlot(publisher, published.token, loc);
-    mergeVectorClock(threadState, snapshot);
+    // The publisher did not advance its epoch. Acquiring that epoch would
+    // incorrectly order its post-arrival accesses as well as earlier ones.
+    // Only its completed epochs, and ordering imported from other threads,
+    // are covered by this deliberately weaker mbarrier model.
+    mergeVectorClock(threadState, snapshot, published.threadId);
   }
   rwLockReleaseWrite(threadState->lock);
 }
