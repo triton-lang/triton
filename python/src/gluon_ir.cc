@@ -221,8 +221,7 @@ std::vector<llvm::ValueTypeFromRangeType<R>> toStdVector(R &&range) {
   return {range.begin(), range.end()};
 }
 
-py::object layoutToGluon(Attribute layout, bool isRubin = false,
-                         llvm::ArrayRef<int64_t> shape = {}) {
+py::object layoutToGluon(Attribute layout, bool isRubin = false) {
   static GluonLayouts layouts;
   if (auto blocked = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
     auto cgaBases = getCgaLayoutBases(blocked.getCGALayout());
@@ -341,14 +340,6 @@ py::object layoutToGluon(Attribute layout, bool isRubin = false,
         std::vector<unsigned>{tmem.getBlockM(), tmem.getBlockN()},
         tmem.getColStride(), getCgaLayoutBases(tmem.getCGALayout()),
         tmem.getTwoCTAs(), tmem.getFp4Padded());
-  }
-
-  // A distributed layout not matched above (e.g. out-of-tree) still has a
-  // LinearLayout form. When the caller passed the tensor shape, expose it as
-  // one instead of failing.
-  if (!shape.empty()) {
-    if (auto dist = dyn_cast<ttg::DistributedEncodingTrait>(layout))
-      return layoutToGluon(ttg::toLinearEncoding(dist, shape), isRubin);
   }
 
   throw py::value_error("Unhandled encoding encountered");
@@ -646,8 +637,7 @@ void init_gluon_ir(py::module_ &m) {
            [](GluonOpBuilder &self, Value tensor) -> py::object {
              auto ty = dyn_cast<RankedTensorType>(tensor.getType());
              check(ty.getEncoding(), "expected a tensor with an encoding");
-             return layoutToGluon(ty.getEncoding(), self.isRubin(),
-                                  ty.getShape());
+             return layoutToGluon(ty.getEncoding(), self.isRubin());
            })
       .def("get_gluon_layout_from_memdesc",
            [](GluonOpBuilder &self, Value memdesc) -> py::object {
