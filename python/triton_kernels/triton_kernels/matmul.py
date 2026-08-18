@@ -149,13 +149,6 @@ def get_swap_xw(precision_config, opt_flags, lhs_dtype, rhs_dtype):
         return opt_flags.swap_xw
     return opt_flags_nvidia.compute_swap_xw(precision_config, opt_flags.block_m, opt_flags.is_persistent, lhs_dtype, rhs_dtype)
 
-def _resolve_tma_override(name, can_use_tma, override):
-    if override is None:
-        return can_use_tma
-    if override and not can_use_tma:
-        raise InapplicableConstraint(f"{name}=True is not supported for this matmul")
-    return override
-
 # ---------------------
 # Allocation
 # ---------------------
@@ -566,7 +559,8 @@ def matmul(a, b, bias,
             or matmul_fused_activation.specs.reduction_n == 1
         )
     )
-    c_has_tma = _resolve_tma_override("use_output_tma", c_has_tma, opt_flags.use_output_tma)
+    if opt_flags.use_output_tma is not None:
+        c_has_tma = opt_flags.use_output_tma
     c_logical_block_n = opt_flags.block_n // opt_flags.epilogue_subtile // matmul_fused_activation.specs.reduction_n
     c_tma_block_n = c_logical_block_n // precision_config.c_value_pack_factor
     out_tile_n = opt_flags.block_n // matmul_fused_activation.specs.reduction_n

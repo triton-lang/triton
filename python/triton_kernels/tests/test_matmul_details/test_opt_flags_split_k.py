@@ -6,7 +6,7 @@ import types
 import torch
 
 import triton_kernels.matmul_details.opt_flags as opt_flags
-from triton_kernels.matmul import FusedActivation, PrecisionConfig, init_allocation, _resolve_tma_override
+from triton_kernels.matmul import FusedActivation, PrecisionConfig, init_allocation
 from triton_kernels.tensor_details.dtype import BF16, FP16, FP32
 
 class _DummyPrecisionConfig:
@@ -216,14 +216,6 @@ def test_make_default_opt_flags_nvidia_output_tma_constraint(monkeypatch):
     )
 
     assert flags.use_output_tma is False
-
-
-def test_resolve_tma_override():
-    assert _resolve_tma_override("use_output_tma", True, None) is True
-    assert _resolve_tma_override("use_output_tma", True, False) is False
-    assert _resolve_tma_override("use_output_tma", True, True) is True
-    with pytest.raises(opt_flags.InapplicableConstraint):
-        _resolve_tma_override("use_output_tma", False, True)
 
 
 def test_split_k_uses_intermediate_out_dtype(monkeypatch):
