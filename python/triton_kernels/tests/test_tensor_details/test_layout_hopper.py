@@ -83,8 +83,8 @@ def test_mxfp4_value_storage_shape_matches_swizzle():
 @pytest.mark.parametrize("mma_version", [2, 3])
 @pytest.mark.parametrize("device", ["cpu", "meta", "cuda"])
 def test_mxfp4_value_zero_sized_roundtrip(shape, mx_axis, mma_version, device):
-    if device == "cuda" and not is_cuda():
-        pytest.skip("Only supported on cuda")
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("GPU unavailable")
     x = torch.empty(shape, dtype=torch.uint8, device=device)
     src = wrap_torch_tensor(x, dtype=FP4)
     layout = HopperMXValueLayout(mx_axis=mx_axis, mma_version=mma_version)
