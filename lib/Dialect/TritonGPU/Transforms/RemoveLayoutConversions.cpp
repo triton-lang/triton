@@ -131,7 +131,7 @@ public:
   bool backwardRematerialization(ConvertLayoutOp convertOp,
                                  bool disableRematSplitting);
 
-  // TODO: Merge the three hoistConvert*(); functions as they are duplicate code
+  void runHoistConvertPass(std::function<bool(ConvertLayoutOp)> tryHoist);
   void hoistConvertDotOperand();
   void hoistConvertOnTopOfExtOrBroadcast(bool disableRematSplitting);
   void hoistConvertIntoConditionals();
@@ -383,11 +383,29 @@ void LayoutPropagation::resolveConflicts() {
     Attribute encoding = *info.encodings.begin();
     bool isLoadOrStore =
         op && isa<LoadOp, StoreOp, AtomicRMWOp, AtomicCASOp>(op);
+    bool foundPreferred = false;
     for (Attribute e : info.encodings) {
       if ((isLoadOrStore && isa<BlockedEncodingAttr>(e)) ||
           (!isLoadOrStore && isa<MmaEncodingTrait>(e))) {
         encoding = e;
+        foundPreferred = true;
         break;
+      }
+    }
+    // Otherwise the choice above is just insertion order. Prefer the candidate
+    // needing the fewest registers per thread: a layout degenerate along lane
+    // or warp replicates elements and multiplies the instructions emitted.
+    if (!foundPreferred) {
+      if (auto tensorType = dyn_cast<RankedTensorType>(it.first.getType())) {
+        ArrayRef<int64_t> shape = tensorType.getShape();
+        unsigned bestElems = getTotalElemsPerThread(encoding, shape);
+        for (Attribute e : info.encodings) {
+          unsigned elems = getTotalElemsPerThread(e, shape);
+          if (elems < bestElems) {
+            bestElems = elems;
+            encoding = e;
+          }
+        }
       }
     }
     info.encodings.clear();
@@ -961,14 +979,13 @@ bool LayoutRematerialization::backwardRematerialization(
   return changed;
 }
 
-void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
-    bool disableRematSplitting) {
-  // Go through each ConvertLayoutOp.
+void LayoutRematerialization::runHoistConvertPass(
+    std::function<bool(ConvertLayoutOp)> tryHoist) {
   SmallVector<ConvertLayoutOp> convertOps;
   funcOp.walk(
       [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
   for (ConvertLayoutOp convertOp : convertOps) {
-    if (!hoistConvertOnTopOfExtOrBroadcast(convertOp, disableRematSplitting)) {
+    if (!tryHoist(convertOp)) {
       // If the conversion didn't get removed, consider it for reuse in future
       // backward slices.
       addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
@@ -977,19 +994,17 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   }
 }
 
+void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
+    bool disableRematSplitting) {
+  runHoistConvertPass([&](ConvertLayoutOp convertOp) {
+    return hoistConvertOnTopOfExtOrBroadcast(convertOp, disableRematSplitting);
+  });
+}
+
 void LayoutRematerialization::hoistConvertIntoConditionals() {
-  // Go through each ConvertLayoutOp.
-  SmallVector<ConvertLayoutOp> convertOps;
-  funcOp.walk(
-      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
-  for (ConvertLayoutOp convertOp : convertOps) {
-    if (!hoistConvertIntoConditionals(convertOp)) {
-      // If the conversion didn't get removed, consider it for reuse in future
-      // backward slices.
-      addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
-                    convertOp.getResult());
-    }
-  }
+  runHoistConvertPass([&](ConvertLayoutOp convertOp) {
+    return hoistConvertIntoConditionals(convertOp);
+  });
 }
 
 static bool isExpensiveMathOp(Operation *op) {
@@ -1243,18 +1258,9 @@ bool LayoutRematerialization::backwardRematerialization(
 }
 
 void LayoutRematerialization::hoistConvertDotOperand() {
-  // Go through each ConvertLayoutOp.
-  SmallVector<ConvertLayoutOp> convertOps;
-  funcOp.walk(
-      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
-  for (ConvertLayoutOp convertOp : convertOps) {
-    if (!hoistConvertDotOperand(convertOp)) {
-      // If the conversion didn't get removed, consider it for reuse in future
-      // backward slices.
-      addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
-                    convertOp.getResult());
-    }
-  }
+  runHoistConvertPass([&](ConvertLayoutOp convertOp) {
+    return hoistConvertDotOperand(convertOp);
+  });
 }
 
 bool LayoutRematerialization::hoistConvertDotOperand(
@@ -1584,7 +1590,6 @@ bool backwardRematerialization(ModuleOp module, bool disableRematSplitting) {
 }
 
 void hoistConvert(ModuleOp module, bool disableRematSplitting) {
-  SmallVector<ConvertLayoutOp> convertOps;
   module.walk([&](FuncOp funcOp) {
     LayoutRematerialization(funcOp).hoistConvertOnTopOfExtOrBroadcast(
         disableRematSplitting);

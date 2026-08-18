@@ -182,6 +182,23 @@ class CUDABackend(BaseBackend):
         return f"cuda:{capability}"
 
     def __init__(self, target: GPUTarget) -> None:
+        arch = target.arch
+        if not isinstance(arch, int):
+            try:
+                arch = int(arch)
+            except ValueError:
+                raise ValueError(f"CUDA backend expects a numeric arch, got '{target.arch}'")
+
+        warp_size = target.warp_size
+        if not isinstance(warp_size, int):
+            try:
+                warp_size = int(warp_size)
+            except ValueError:
+                raise ValueError(f"CUDA backend expects a numeric warp_size, got '{target.warp_size}'")
+
+        if arch is not target.arch or warp_size is not target.warp_size:
+            target = GPUTarget(target.backend, arch, warp_size)
+
         super().__init__(target)
         self.binary_ext = "cubin"
 
