@@ -208,6 +208,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_publish_cluster_visibility{{.*}}_I0
     ttng.cluster_barrier
 
+    // CHECK: ttg.warp_specialize
+    // CHECK-SAME: tti.disable_setmaxregister
     ttg.warp_specialize(%buf) attributes {actualRegisters = array<i32: 32, 32, 32>, allocation.offset = 4096 : i32, requestedRegisters = array<i32: 32, 32>, warpGroupStartIds = array<i32: 4, 5>}
     default {
       // The default region is thread 0, but its cluster barrier is still
