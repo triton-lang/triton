@@ -994,18 +994,19 @@ private:
     tti::ExperimentalLockReleaseOp::create(wb, lock, pred);
     tti::createAssertInThread(wb, ok,
                               "Deadlock detected while waiting on an mbarrier");
-    // Post-wait: transfer visible writes and reads to all peer threads,
-    // and clear waiting for this barrier.
+    // Post-wait: transfer the waited phase's visible writes and reads to all
+    // peer threads, and clear waiting for this barrier.
     assert(!auxData.barriers.empty() &&
            "barrier descriptors must exist when instrumenting wait");
     wb.setInsertionPointAfter(op);
     tti::ExperimentalLockAcquireOp::create(wb, lock, pred);
     for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
       funcBuilder.createTransferVisibleAccessesCall(
-          wb, alloc, getThreadPeersMask(thread, auxData.threadLayout), pred,
-          memType, op);
+          wb, alloc, phase, getThreadPeersMask(thread, auxData.threadLayout),
+          pred, memType, op);
     }
-    funcBuilder.createCompleteBarrierWaitCall(wb, alloc, baseThread, pred, op);
+    funcBuilder.createCompleteBarrierWaitCall(wb, alloc, phase, baseThread,
+                                              pred, op);
     tti::ExperimentalLockReleaseOp::create(wb, lock, pred);
   }
 
