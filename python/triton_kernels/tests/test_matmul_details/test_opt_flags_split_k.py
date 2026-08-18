@@ -167,7 +167,7 @@ def test_make_default_opt_flags_nvidia_swap_xw_constraint(monkeypatch, swap_xw):
     assert seen["swap_xw"] is swap_xw
 
 
-@pytest.mark.parametrize("group_m", [2, 4, 8, 16, 32, 64])
+@pytest.mark.parametrize("group_m", [None, 2, 4, 8, 16, 32, 64])
 def test_make_default_opt_flags_nvidia_group_m_constraint(monkeypatch, group_m):
     setup_nvidia(monkeypatch)
     flags = opt_flags.make_default_opt_flags_nvidia(
@@ -190,7 +190,7 @@ def test_make_default_opt_flags_nvidia_group_m_constraint(monkeypatch, group_m):
         torch.float32,
     )
 
-    assert flags.group_m == group_m
+    assert flags.group_m == (8 if group_m is None else group_m)
 
 
 def test_make_default_opt_flags_nvidia_output_tma_constraint(monkeypatch):
