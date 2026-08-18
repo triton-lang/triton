@@ -281,6 +281,7 @@ class CUDABackend(BaseBackend):
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
+        passes.ttir.add_loop_unswitch(pm)
         passes.ttir.add_loop_unroll(pm)
         pm.run(mod, 'make_ttir')
         return mod
