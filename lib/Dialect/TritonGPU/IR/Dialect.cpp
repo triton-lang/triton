@@ -549,16 +549,6 @@ static SmallVector<unsigned> orderPerDimImpl(const LinearLayout &ll,
   return order.takeVector();
 }
 
-bool isLegalCatEncoding(CatOp cat, Attribute targetEncoding) {
-  // Cat lowering concatenates the operands' unique register values. So the
-  // number of unique register values in the result must be equal to those in
-  // the operands.
-  int64_t operandRegs = getUniqueElemsPerThread(cat.getLhs().getType()) * 2;
-  int64_t resultRegs =
-      getUniqueElemsPerThread(targetEncoding, cat.getType().getShape());
-  return resultRegs == operandRegs;
-}
-
 static LogicalResult
 verifyLayoutOrder(function_ref<InFlightDiagnostic()> emitError,
                   ArrayRef<unsigned> order) {
@@ -3258,19 +3248,6 @@ struct TritonGPUInferLayoutInterface
 
       if (bLL != resLL.resizeOutDim(mDim, 1))
         return op->emitError("Incompatible CGA layout for operand 1");
-    }
-    return success();
-  }
-
-  LogicalResult verifyCatOpEncodingCompatibility(Operation *op) const override {
-    auto cat = cast<CatOp>(op);
-    int64_t operandRegs = getUniqueElemsPerThread(cat.getLhs().getType()) * 2;
-    int64_t resultRegs = getUniqueElemsPerThread(cat.getType());
-    if (resultRegs != operandRegs) {
-      return op->emitError("tt.cat result encoding requires ")
-             << resultRegs
-             << " non-broadcast register values, but operands provide "
-             << operandRegs;
     }
     return success();
   }

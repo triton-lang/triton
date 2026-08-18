@@ -80,6 +80,53 @@ def test_copy_kernel(layout, XBLOCK):
     torch.testing.assert_close(out, inp)
 
 
+@gluon.jit(noinline=True)
+def _noinline_convert_layout_scratch(input, output):
+    src_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    dst_layout: ttgl.constexpr = ttgl.SliceLayout(1, ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0]))
+    src_offsets = ttgl.arange(0, 128, layout=src_layout)
+    dst_offsets = ttgl.arange(0, 128, layout=dst_layout)
+    values = ttgl.load(input + src_offsets)
+    ttgl.store(output + dst_offsets, ttgl.convert_layout(values, dst_layout))
+
+
+@gluon.jit(noinline=True)
+def _noinline_forward_convert_layout_scratch(input, output):
+    _noinline_convert_layout_scratch(input, output)
+
+
+@gluon.jit
+def _noinline_shared_allocation_call_kernel(input, output, sentinel_output, NESTED: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
+    offsets = ttgl.arange(0, 128, layout=layout)
+    sentinel = offsets + 4096
+    caller_allocation = ttgl.allocate_shared_memory(ttgl.int32, [128], shared_layout, sentinel)
+
+    if NESTED:
+        _noinline_forward_convert_layout_scratch(input, output)
+    else:
+        _noinline_convert_layout_scratch(input, output)
+
+    ttgl.store(sentinel_output + offsets, caller_allocation.load(layout))
+
+
+@pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
+@pytest.mark.parametrize("NESTED", [False, True], ids=["direct", "nested"])
+def test_noinline_call_preserves_live_shared_allocation(NESTED, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = ""
+    values = torch.arange(128, device="cuda", dtype=torch.int32) * 3 + 7
+    output = torch.empty_like(values)
+    sentinel_output = torch.empty_like(values)
+
+    compiled = _noinline_shared_allocation_call_kernel[(1, )](values, output, sentinel_output, NESTED, num_warps=4)
+
+    assert compiled.metadata.shared >= 2 * values.numel() * values.element_size()
+    assert compiled.asm["ttgir"].count("noinline = true") >= 1 + int(NESTED)
+    torch.testing.assert_close(output, values)
+    torch.testing.assert_close(sentinel_output, torch.arange(128, device="cuda", dtype=torch.int32) + 4096)
+
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_copy_kernel_multi_cta():
     XBLOCK = 2048
@@ -215,6 +262,21 @@ def tma_kernel(desc):
     alloc._keep_alive()
 
 
+@gluon.jit(noinline=True)
+def noinline_tma_store(desc, alloc):
+    tma.async_store(desc, [0, 0], alloc)
+    tma.store_wait(0)
+
+
+@gluon.jit
+def noinline_tma_kernel(desc):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
+    value = ttgl.full(desc.block_shape, 0, desc.dtype, layout)
+    alloc = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout, value)
+    noinline_tma_store(desc, alloc)
+    alloc._keep_alive()
+
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_tma():
     out = torch.ones((16, 16), dtype=torch.float16, device="cuda")
@@ -228,6 +290,18 @@ def test_tma():
 
     desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(out, [16, 16], layout)
     tma_kernel[(1, )](desc)
+    torch.testing.assert_close(out, torch.zeros_like(out))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_proxy_fence_noinline_tma_store():
+    out = torch.ones((16, 16), dtype=torch.float16, device="cuda")
+    layout = ttgl.NVMMASharedLayout(32, 16, rank=2)
+    desc = TensorDescriptor.from_tensor(out, [16, 16], layout)
+
+    compiled = noinline_tma_kernel[(1, )](desc)
+    assert "tt.call" in compiled.asm["ttgir"]
+    assert "fence.proxy.async.shared::cta" in compiled.asm["ptx"]
     torch.testing.assert_close(out, torch.zeros_like(out))
 
 

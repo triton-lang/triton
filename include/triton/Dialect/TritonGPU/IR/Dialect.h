@@ -342,9 +342,6 @@ SmallVector<unsigned> getMatrixOrder(unsigned rank, bool rowMajor);
 SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank,
                                             bool kContig);
 
-// Return true if \p cat would be valid with result encoding \p targetEncoding.
-bool isLegalCatEncoding(CatOp cat, Attribute targetEncoding);
-
 // Return true if a view between the two types cannot be implemented as a no-op.
 bool isExpensiveView(ArrayRef<int64_t> srcShape, Attribute srcEncoding,
                      ArrayRef<int64_t> dstShape, Attribute dstEncoding);

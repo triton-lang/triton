@@ -32,6 +32,36 @@ def _run_consan_subprocess(test_name, *args, timeout=120):
 
 
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.parametrize(
+    ("mode", "message"),
+    [
+        ("store", None),
+        ("reinitialize", None),
+        ("read", "Shared memory reused before barrier invalidation"),
+        ("atomic", "Shared memory reused before barrier invalidation"),
+        ("use-after-store", "Barrier used before initialization or after invalidation"),
+        ("partial", "Barrier used before initialization or after invalidation"),
+    ],
+)
+def test_barrier_storage_lifetime(mode, message):
+    stderr = _run_consan_subprocess("barrier_storage_lifetime", mode)
+    if message is None:
+        assert not stderr, stderr
+    else:
+        assert message in stderr, stderr
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.parametrize("wait", [False, True])
+def test_barrier_storage_pending_completion(wait):
+    stderr = _run_consan_subprocess("barrier_storage_pending_completion", wait)
+    if wait:
+        assert not stderr, stderr
+    else:
+        assert "Buffer being accessed has outstanding reads" in stderr, stderr
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_ws_store_wait_load(FAILURE):
     """

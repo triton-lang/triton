@@ -215,13 +215,6 @@ uint32_t getMemDescStorageOffset(ttg::MemDescType ty, unsigned index) {
                             ty);
 }
 
-bool isUsedAsBarrier(Value v) {
-  return llvm::any_of(v.getUsers(), [&](Operation *user) {
-    auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(user);
-    return barrierOp && llvm::is_contained(barrierOp.getBarriers(), v);
-  });
-}
-
 struct MemDescSubsliceOffsets {
   uint32_t byteOffset = 0;
   uint32_t partitionOffset = 0;
@@ -280,15 +273,6 @@ getMemDescSubsliceUnpaddedOffsets(ttg::MemDescSubsliceOp op) {
                                 partitionOffset, blockOffset};
 }
 
-triton::BufferRegionAnalysis::RegionType getRegionType(Value v) {
-  if (isUsedAsBarrier(v))
-    return triton::BufferRegionAnalysis::RegionType::BARRIER;
-  return isa<ttng::TensorMemorySpaceAttr>(
-             cast<ttg::MemDescType>(v.getType()).getMemorySpace())
-             ? triton::BufferRegionAnalysis::RegionType::TENSOR_MEMORY
-             : triton::BufferRegionAnalysis::RegionType::SHARED_MEMORY;
-}
-
 } // namespace
 
 namespace mlir::triton {
@@ -328,6 +312,20 @@ AddressSet AddressSet::translated(uint32_t delta) const {
   AddressSet result;
   for (uint32_t address : addresses)
     result.set(address + delta);
+  return result;
+}
+
+BufferRegionView
+BufferRegionView::translated(uint32_t offset,
+                             uint32_t newAllocationFrame) const {
+  BufferRegionView result = *this;
+  result.region.baseOffset += offset;
+  for (auto &[cta, addresses] : result.region.ctaAddresses)
+    addresses = addresses.translated(offset);
+  result.storageBase += offset;
+  for (uint32_t &base : result.partitionBases)
+    base += offset;
+  result.allocationFrame = newAllocationFrame;
   return result;
 }
 
@@ -504,6 +502,28 @@ LogicalResult BufferRegionAnalysis::initialize(Operation *top) {
   return success();
 }
 
+SmallVector<BufferRegionAccess>
+BufferRegionAnalysis::getAccessRegions(Value value) {
+  const RegionInfo &info = getRegionInfo(value);
+  if (info.kind != RegionInfo::Kind::Exact || info.views.empty())
+    return {std::nullopt};
+  SmallVector<BufferRegionAccess> accesses;
+  for (const BufferRegionView &view : info.views)
+    accesses.push_back(view);
+  return accesses;
+}
+
+BufferRegionAccess BufferRegionAnalysis::translateToCallsite(
+    BufferRegionAccess view, CallOpInterface call, FunctionOpInterface caller,
+    FunctionOpInterface callee) const {
+  uint32_t calleeFrame = getOperationId(callee.getOperation());
+  if (!view || view->allocationFrame != calleeFrame)
+    return view;
+  auto offset = call->getAttrOfType<IntegerAttr>("allocation.offset");
+  return view->translated(offset ? offset.getInt() : 0,
+                          getOperationId(caller.getOperation()));
+}
+
 LogicalResult BufferRegionAnalysis::visitOperation(
     Operation *op,
     llvm::ArrayRef<const dataflow::Lattice<RegionInfo> *> operands,
@@ -627,13 +647,21 @@ LogicalResult BufferRegionAnalysis::visitOperation(
 void BufferRegionAnalysis::calculateUsedBufferRegions(Operation *op) {
   op->walk([&](Operation *op) {
     for (const MemoryAccess &access : getMemoryAccesses(op)) {
-      RegionType regionType = getRegionType(access.value);
       const RegionInfo &regionInfo =
           getLatticeElement(access.value)->getValue();
-      if (regionInfo.isUnknown())
-        usedUnknownBufferRegions[regionType] = true;
-      for (const BufferRegionView &view : regionInfo.views)
-        usedBufferRegions[regionType].insert(view.region);
+      auto addRegions = [&](RegionType regionType) {
+        if (regionInfo.isUnknown())
+          usedUnknownBufferRegions[regionType] = true;
+        for (const BufferRegionView &view : regionInfo.views)
+          usedBufferRegions[regionType].insert(view.region);
+      };
+
+      bool isTensorMemory = isa<ttng::TensorMemorySpaceAttr>(
+          cast<ttg::MemDescType>(access.value.getType()).getMemorySpace());
+      addRegions(isTensorMemory ? TENSOR_MEMORY : SHARED_MEMORY);
+      if (auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(op))
+        if (llvm::is_contained(barrierOp.getBarriers(), access.value))
+          addRegions(BARRIER);
     }
   });
 }

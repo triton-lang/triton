@@ -134,6 +134,7 @@ class CUDAOptions:
     arch: str = None
     instrumentation_mode: str = ""
     fpsan_homomorphic_casts: bool = False
+    min_shared_mem: Optional[int] = None
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -181,6 +182,23 @@ class CUDABackend(BaseBackend):
         return f"cuda:{capability}"
 
     def __init__(self, target: GPUTarget) -> None:
+        arch = target.arch
+        if not isinstance(arch, int):
+            try:
+                arch = int(arch)
+            except ValueError:
+                raise ValueError(f"CUDA backend expects a numeric arch, got '{target.arch}'")
+
+        warp_size = target.warp_size
+        if not isinstance(warp_size, int):
+            try:
+                warp_size = int(warp_size)
+            except ValueError:
+                raise ValueError(f"CUDA backend expects a numeric warp_size, got '{target.warp_size}'")
+
+        if arch is not target.arch or warp_size is not target.warp_size:
+            target = GPUTarget(target.backend, arch, warp_size)
+
         super().__init__(target)
         self.binary_ext = "cubin"
 
@@ -214,6 +232,12 @@ class CUDABackend(BaseBackend):
 
         if "enable_fp_fusion" not in args:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
+
+        if "gsan" in args.get("instrumentation_mode", ""):
+            from triton.runtime.driver import driver
+            device = driver.active.get_current_device()
+            device_max = driver.active.utils.get_device_properties(device)["max_shared_mem"]
+            args["min_shared_mem"] = max(args.get("min_shared_mem", 0), device_max)
 
         args["max_num_imprecise_acc_default"] = 2**30 if capability == 90 else 0
 
@@ -281,6 +305,7 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
         passes.ttgpuir.add_accelerate_matmul(pm)
+        nvidia.passes.ttnvgpuir.add_check_matmul_two_cta(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
         nvidia.passes.ttnvgpuir.add_optimize_descriptor_encoding(pm)
@@ -333,6 +358,7 @@ class CUDABackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         nvidia.passes.ttnvgpuir.add_fence_insertion(pm, capability)
         nvidia.passes.ttnvgpuir.add_lower_mma(pm)
+        nvidia.passes.ttnvgpuir.add_hoist_mbarrier_lifecycle(pm, capability)
         passes.common.add_sccp(pm)
         passes.common.add_cse(pm)
         passes.common.add_canonicalizer(pm)
@@ -360,6 +386,7 @@ class CUDABackend(BaseBackend):
         passes.ttir.add_loop_aware_cse(pm)
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
+        nvidia.passes.ttnvgpuir.add_check_matmul_two_cta(pm)
 
         if "fpsan" in options.instrumentation_mode:
             passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
@@ -393,7 +420,6 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_prepare_consan_captures(pm, "nvidia")
         nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
-        nvidia.passes.ttnvgpuir.add_check_matmul_two_cta(pm)
         # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
         if CUDABackend.instrumentation:
             CUDABackend.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
@@ -401,6 +427,8 @@ class CUDABackend(BaseBackend):
         nvidia.passes.ttnvgpuir.add_tmem_barrier_insertion(pm)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version, "consan" in options.instrumentation_mode)
         nvidia.passes.ttnvgpuir.add_initialize_ws_cluster_barriers(pm, capability, ptx_version)
+        if options.min_shared_mem is not None:
+            nvidia.passes.ttgpuir.add_set_minimum_shared_memory(pm, options.min_shared_mem)
         passes.ttgpuir.add_canonicalize_llvm_ir(pm)
         passes.common.add_cse(pm)
         nvidia.passes.ttnvgpuir.add_warp_specialize_to_llvm(pm)
