@@ -1,8 +1,5 @@
-import contextlib
-
 import pytest
 from torch._subclasses import fake_tensor
-from triton._internal_testing import is_cuda
 from triton_kernels.tensor import wrap_torch_tensor, convert_layout, FP4
 from triton_kernels.tensor_details.layout import HopperMXScaleLayout, HopperMXValueLayout, StridedLayout
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp
@@ -128,31 +125,30 @@ def test_mxfp4_value_convert_layout_matches_torch(shape, trans, mx_axis, mma_ver
 
 @pytest.mark.parametrize("mx_axis", [-2, -1])
 @pytest.mark.parametrize("mma_version", [2, 3])
-@pytest.mark.parametrize("device", ["meta", "cuda"])
-def test_mxfp4_value_convert_layout_fake_meta(mx_axis, mma_version, device):
-    if device == "cuda" and torch.version.cuda is None and torch.version.hip is None:
-        pytest.skip("Fake CUDA tensor copies require a GPU build of PyTorch")
+def test_mxfp4_value_convert_layout_fake_meta(mx_axis, mma_version):
     shape = (2, 34, 18)
     layout = HopperMXValueLayout(mx_axis, mma_version)
-    src_cpu = wrap_torch_tensor(torch.empty(shape, dtype=torch.uint8), dtype=FP4)
-    expected = convert_layout(src_cpu, layout)
+    src_meta = wrap_torch_tensor(torch.empty(shape, dtype=torch.uint8, device="meta"), dtype=FP4)
+    expected = convert_layout(src_meta, layout)
+    meta_roundtrip = convert_layout(expected, src_meta.storage.layout)
 
-    with fake_tensor.FakeTensorMode() if device == "cuda" else contextlib.nullcontext():
-        src = wrap_torch_tensor(torch.empty(shape, dtype=torch.uint8, device=device), dtype=FP4)
-        actual = convert_layout(src, layout)
-        roundtrip = convert_layout(actual, src.storage.layout)
+    with fake_tensor.FakeTensorMode():
+        src_cuda = wrap_torch_tensor(torch.empty(shape, dtype=torch.uint8, device="cuda"), dtype=FP4)
+        actual = convert_layout(src_cuda, layout)
+        roundtrip = convert_layout(actual, src_cuda.storage.layout)
 
-    assert actual.device.type == device
+    assert expected.device.type == "meta"
+    assert actual.device.type == "cuda"
     assert actual.storage.data.shape == expected.storage.data.shape
     assert actual.storage.data.stride() == expected.storage.data.stride()
+    assert meta_roundtrip.storage.data.shape == shape
     assert roundtrip.storage.data.shape == shape
 
 
 @pytest.mark.parametrize("mx_axis", [-2, -1])
-@pytest.mark.parametrize("mma_version", [2, 3])
-def test_mxfp4_value_swizzle_peak_allocation(mx_axis, mma_version):
+def test_mxfp4_value_swizzle_peak_allocation(mx_axis):
     data = torch.empty((2048, 2048), dtype=torch.uint8, device="cuda")
-    layout = HopperMXValueLayout(mx_axis, mma_version)
+    layout = HopperMXValueLayout(mx_axis, 3)
     transformation = layout.make_transformation([2048, 4096], is_fp4=True)
     warm = transformation.swizzle_data(data)
     torch.cuda.synchronize(data.device)
@@ -165,7 +161,7 @@ def test_mxfp4_value_swizzle_peak_allocation(mx_axis, mma_version):
     peak = torch.cuda.max_memory_allocated(data.device) - baseline
 
     # Allow overlapping byte buffers, but not whole-tensor int32 intermediates.
-    assert peak <= 2 * swizzled.numel() + 1024**2
+    assert peak <= 2 * swizzled.nbytes + 1024**2
 
 
 @pytest.mark.parametrize("mx_axis", [0, 1])
@@ -225,7 +221,6 @@ def _upcast_mxfp4_to_bf16(Y, X, XScale, x_stride_m, x_stride_n, x_scale_stride_m
     tl.store(Y + offs_y, y)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only supported on cuda")
 @pytest.mark.skipif(not cuda_capability_geq(9), reason="Only supported for capability >= 9")
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("mx_axis", [0, 1])

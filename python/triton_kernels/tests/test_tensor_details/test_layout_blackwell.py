@@ -1,5 +1,6 @@
 import pytest
 import torch
+from torch._subclasses import fake_tensor
 from triton_kernels.tensor_details.layout import (
     BlackwellActMXScaleLayout,
     BlackwellMX4ValueShuffledLayout,
@@ -42,7 +43,7 @@ def test_scale_zero_sized_roundtrip(shape, layout, device):
 
 @pytest.mark.parametrize("shape", ZERO_SIZED_SHAPES)
 @pytest.mark.parametrize("layout", [BlackwellMXValueLayout(), BlackwellMX4ValueShuffledLayout()])
-@pytest.mark.parametrize("device", ["cpu", "meta"])
+@pytest.mark.parametrize("device", ["cpu", "meta", "cuda"])
 def test_value_zero_sized_roundtrip(shape, layout, device):
     x = torch.empty(shape, dtype=torch.uint8, device=device)
     src = wrap_torch_tensor(x, dtype=FP4)
@@ -51,6 +52,117 @@ def test_value_zero_sized_roundtrip(shape, layout, device):
     roundtrip = convert_layout(swizzled, src.storage.layout)
 
     assert roundtrip.storage.data.shape == x.shape
+
+
+@pytest.mark.parametrize("k", [1, 3])
+def test_mxfp4_value_shuffled_rejects_odd_k(k):
+    src = wrap_torch_tensor(torch.empty((k, 32), dtype=torch.uint8, device="cuda"), dtype=FP4)
+    with pytest.raises(ValueError, match="packing dimension -2 must have an even size"):
+        convert_layout(src, BlackwellMX4ValueShuffledLayout())
+
+
+def test_mxfp4_value_shuffled_retile_rejects_odd_n():
+    shape = [2, 3]
+    layout = BlackwellMX4ValueShuffledLayout(block_n=128)
+    data = torch.full(layout.storage_shape(shape, True), 0x11, dtype=torch.uint8, device="cuda")
+    src = wrap_torch_tensor(data, dtype=FP4, shape=shape, layout=layout)
+    with pytest.raises(ValueError, match="packing dimension -1 must have an even size"):
+        convert_layout(src, BlackwellMX4ValueShuffledLayout())
+
+
+@pytest.mark.parametrize("shape", [(256, 256), (258, 129), (2, 66, 33), (2, 3, 130, 65)])
+@pytest.mark.parametrize("block_k", [128, 256])
+@pytest.mark.parametrize("block_n", [128, 256])
+@pytest.mark.parametrize("step", [1, 2])
+def test_mxfp4_value_shuffled_matches_torch(shape, block_k, block_n, step):
+    input_shape = tuple(step * size for size in shape[:-1]) + shape[-1:]
+    data_cpu = torch.randint(0, 256, input_shape, dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
+    data_cuda = data_cpu.cuda()
+    index = (slice(step - 1, None, step), ) * (len(shape) - 1) + (slice(None), )
+    data_cpu, data_cuda = data_cpu[index], data_cuda[index]
+    logical_shape = list(data_cpu.shape)
+    logical_shape[-1] *= 2
+    layout = BlackwellMX4ValueShuffledLayout(block_k, block_n)
+    transformation = layout.make_transformation(logical_shape, is_fp4=True)
+
+    swizzled_cpu = transformation.swizzle_data(data_cpu)
+    swizzled_cuda = transformation.swizzle_data(data_cuda)
+
+    assert swizzled_cuda.is_contiguous()
+    assert torch.equal(swizzled_cuda.cpu(), swizzled_cpu)
+    if step == 2:
+        swizzled_cpu = torch.stack((swizzled_cpu, swizzled_cpu), dim=-1)[..., 1]
+        swizzled_cuda = torch.stack((swizzled_cuda, swizzled_cuda), dim=-1)[..., 1]
+    restored_cpu = transformation.unswizzle_data(swizzled_cpu)
+    restored_cuda = transformation.unswizzle_data(swizzled_cuda)
+    assert restored_cuda.is_contiguous()
+    assert torch.equal(restored_cuda.cpu(), restored_cpu)
+    assert torch.equal(restored_cpu, data_cpu)
+
+
+@pytest.mark.parametrize("shape", [(256, 128), (2, 258, 65)])
+def test_mxfp4_value_shuffled_convert_layout_matches_torch(shape):
+    data_cpu = torch.randint(0, 256, shape, dtype=torch.uint8)
+    data_cuda = data_cpu.cuda()
+    data_cpu, data_cuda = data_cpu.mT, data_cuda.mT
+    src_cpu = wrap_torch_tensor(data_cpu, dtype=FP4)
+    src_cuda = wrap_torch_tensor(data_cuda, dtype=FP4)
+    layout = BlackwellMX4ValueShuffledLayout()
+
+    expected = convert_layout(src_cpu, layout)
+    actual = convert_layout(src_cuda, layout)
+    roundtrip = convert_layout(actual, src_cuda.storage.layout)
+
+    assert actual.storage.data.is_contiguous()
+    assert torch.equal(actual.storage.data.cpu(), expected.storage.data)
+    assert torch.equal(roundtrip.storage.data, data_cuda)
+
+
+@pytest.mark.parametrize("block_k", [128, 256])
+@pytest.mark.parametrize("block_n", [128, 256])
+def test_mxfp4_value_shuffled_fake_meta(block_k, block_n):
+    shape = (2, 3, 130, 65)
+    layout = BlackwellMX4ValueShuffledLayout(block_k, block_n)
+    src_meta = wrap_torch_tensor(torch.empty(shape, dtype=torch.uint8, device="meta"), dtype=FP4)
+    expected = convert_layout(src_meta, layout)
+    meta_roundtrip = convert_layout(expected, src_meta.storage.layout)
+
+    with fake_tensor.FakeTensorMode():
+        src_cuda = wrap_torch_tensor(torch.empty(shape, dtype=torch.uint8, device="cuda"), dtype=FP4)
+        actual = convert_layout(src_cuda, layout)
+        roundtrip = convert_layout(actual, src_cuda.storage.layout)
+
+    assert expected.device.type == "meta"
+    assert actual.device.type == "cuda"
+    assert actual.storage.data.shape == expected.storage.data.shape
+    assert expected.storage.data.is_contiguous()
+    assert actual.storage.data.is_contiguous()
+    assert meta_roundtrip.storage.data.shape == shape
+    assert roundtrip.storage.data.shape == shape
+
+
+@pytest.mark.parametrize("inverse", [False, True])
+def test_mxfp4_value_shuffled_peak_allocation(inverse):
+    data = torch.empty((2048, 2048), dtype=torch.uint8, device="cuda")
+    layout = BlackwellMX4ValueShuffledLayout()
+    transformation = layout.make_transformation([2048, 4096], is_fp4=True)
+    if inverse:
+        data = transformation.swizzle_data(data)
+        convert = transformation.unswizzle_data
+    else:
+        convert = transformation.swizzle_data
+    warm = convert(data)
+    torch.cuda.synchronize(data.device)
+    del warm
+    baseline = torch.cuda.memory_allocated(data.device)
+    torch.cuda.reset_peak_memory_stats(data.device)
+
+    actual = convert(data)
+    torch.cuda.synchronize(data.device)
+    peak = torch.cuda.max_memory_allocated(data.device) - baseline
+
+    # Shuffling should allocate its output, not another whole weight tensor.
+    assert peak <= actual.nbytes + 1024**2
 
 
 @pytest.mark.parametrize(("slice_sizes", "shape"), [([0], (0, 64)), ([2, 0], (2, 0))])
