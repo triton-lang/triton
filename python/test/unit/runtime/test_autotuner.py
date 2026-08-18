@@ -309,6 +309,61 @@ def test_prune_configs_fractional_top_k_after_early_prune():
     assert benchmarked == [1, 2, 3]
 
 
+def _autotuner_for_top_k(top_k, n_configs=4):
+    class Kernel:
+
+        def __init__(self):
+            self.fn = lambda: None
+
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': 16 * (i + 1)}) for i in range(n_configs)]
+
+    def perf_model(*args, **kwargs):
+        return kwargs['BLOCK_SIZE']
+
+    return triton.runtime.Autotuner(
+        Kernel(),
+        arg_names=[],
+        configs=configs,
+        key=[],
+        reset_to_zero=None,
+        restore_value=None,
+        prune_configs_by={
+            'perf_model': perf_model,
+            'top_k': top_k,
+        },
+    )
+
+
+@pytest.mark.parametrize("top_k,exc", [
+    (0, ValueError),
+    (-1, ValueError),
+    (0.0, ValueError),
+    (-0.25, ValueError),
+    (1.5, ValueError),
+    (float("nan"), ValueError),
+    (float("inf"), ValueError),
+    (float("-inf"), ValueError),
+    (True, TypeError),
+    (False, TypeError),
+])
+def test_prune_configs_rejects_invalid_top_k(top_k, exc):
+    with pytest.raises(exc, match="top_k"):
+        _autotuner_for_top_k(top_k)
+
+
+@pytest.mark.parametrize("top_k,expected", [
+    (2, [16, 32]),
+    (0.5, [16, 32]),
+    (1.0, [16, 32, 48, 64]),
+    (0.1, [16]),
+])
+def test_prune_configs_accepts_valid_top_k(top_k, expected):
+    tuner = _autotuner_for_top_k(top_k)
+    tuner.nargs = {}
+    pruned = tuner.prune_configs({})
+    assert [config.kwargs['BLOCK_SIZE'] for config in pruned] == expected
+
+
 def test_config_ir_override_changes_disk_cache_key():
     # Autotuner derives persisted result-cache keys from Config.__str__().
     first = triton.Config(kwargs={"BLOCK_SIZE": 32}, ir_override="first.ttir")

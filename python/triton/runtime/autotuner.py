@@ -16,6 +16,21 @@ from .cache import get_cache_manager, triton_key
 from triton._C.libtriton import get_cache_invalidating_env_vars
 
 
+def _validate_top_k(top_k):
+    """Accept a positive integer count or a fractional float in (0.0, 1.0].
+
+    ``bool`` is a subclass of ``int`` and must not be treated as a count.
+    """
+    if isinstance(top_k, bool) or not isinstance(top_k, (int, float)):
+        raise TypeError("prune_configs_by['top_k'] must be a positive integer or a float in (0.0, 1.0]")
+    if isinstance(top_k, float):
+        if not 0.0 < top_k <= 1.0:
+            raise ValueError("prune_configs_by['top_k'] must be a positive integer or a float in (0.0, 1.0]")
+    elif top_k <= 0:
+        raise ValueError("prune_configs_by['top_k'] must be a positive integer or a float in (0.0, 1.0]")
+    return top_k
+
+
 class Autotuner(KernelInterface):
 
     def __init__(self, fn, arg_names, configs, key, reset_to_zero, restore_value, pre_hook=None, post_hook=None,
@@ -24,7 +39,7 @@ class Autotuner(KernelInterface):
         """
         :param prune_configs_by: a dict of functions that are used to prune configs, fields:
             'perf_model': performance model used to predicate running time with different configs, returns running time
-            'top_k': number of configs to bench
+            'top_k': number of configs to bench (positive int) or fraction in (0.0, 1.0]
             'early_config_prune': a function used to prune configs. It should have the signature
                 `prune_configs_by( configs: List[triton.Config], named_args: Dict[str, Any], **kwargs: Dict[str, Any]) -> List[triton.Config]:`
                 and return pruned configs. It should return at least one config.
@@ -86,7 +101,8 @@ class Autotuner(KernelInterface):
         self.early_config_prune = None
         if prune_configs_by:
             self.perf_model = prune_configs_by.get("perf_model", self.perf_model)
-            self.configs_top_k = prune_configs_by.get("top_k", self.configs_top_k)
+            if "top_k" in prune_configs_by:
+                self.configs_top_k = _validate_top_k(prune_configs_by["top_k"])
             self.early_config_prune = prune_configs_by.get("early_config_prune", self.early_config_prune)
 
         self.fn = fn
@@ -289,16 +305,13 @@ class Autotuner(KernelInterface):
                 raise AutotunerError(
                     "No valid autotuner configs after pruning. `early_config_prune` should return at least one config.")
         if self.perf_model:
-            top_k = self.configs_top_k
-            if isinstance(top_k, float) and top_k <= 1.0:
+            top_k = _validate_top_k(self.configs_top_k)
+            if isinstance(top_k, float):
                 # Keep at least one config: a small fraction over a small config
                 # set rounds down to zero, which would prune everything and crash
                 # the later min() on an empty set. early_config_prune already
                 # guarantees at least one config; mirror that here.
                 top_k = max(1, int(len(pruned_configs) * top_k))
-            elif not isinstance(top_k, int):
-                # Slice index must be an integer
-                raise TypeError("Error while pruning configs, top_k must be either 1) a float <= 1.0 or 2) an int")
 
             if len(pruned_configs) > top_k:
                 est_timing = {
@@ -439,7 +452,7 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
     :type key: list[str]
     :param prune_configs_by: a dict of functions that are used to prune configs, fields:
         'perf_model': performance model used to predicate running time with different configs, returns running time
-        'top_k': number of configs to bench
+        'top_k': number of configs to bench (positive int) or fraction in (0.0, 1.0]
         'early_config_prune': a function used to prune configs. It should have the signature
                 `prune_configs_by( configs: List[triton.Config], named_args: Dict[str, Any], **kwargs: Dict[str, Any]) -> List[triton.Config]:`
                 and return pruned configs. It should return at least one config.
