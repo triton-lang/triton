@@ -36,35 +36,57 @@ unsigned getIntegerBitWidth(Type type) {
 
 // Keep constants exact on defined executions. Generic operation folders can
 // refine poison, so check the integer operations' poison-producing flags here.
-ConstantInt
-evaluateConstant(Operation *operation,
-                 ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) {
-  if (operation->getNumResults() != 1)
-    return std::nullopt;
-  unsigned resultWidth = getIntegerBitWidth(operation->getResult(0).getType());
-  if (!resultWidth)
-    return std::nullopt;
-  auto getOperand = [&](unsigned i) -> const APInt * {
-    if (i >= operands.size())
-      return nullptr;
-    const auto &constant = operands[i]->getValue().getConstantValue();
+class ConstantEvaluator {
+public:
+  ConstantEvaluator(Operation *operation,
+                    ArrayRef<const dataflow::Lattice<AxisInfo> *> operands)
+      : operation(operation), operands(operands),
+        resultWidth(operation->getNumResults() == 1
+                        ? getIntegerBitWidth(operation->getResult(0).getType())
+                        : 0) {
+    assert(operands.size() == operation->getNumOperands());
+  }
+
+  ConstantInt run() const {
+    if (!resultWidth)
+      return std::nullopt;
+
+    return llvm::TypeSwitch<Operation *, ConstantInt>(operation)
+        .Case<arith::ConstantOp, arith::ExtSIOp, arith::ExtUIOp,
+              arith::TruncIOp, arith::AddIOp, arith::SubIOp, arith::MulIOp,
+              arith::DivSIOp, arith::DivUIOp, arith::RemSIOp, arith::RemUIOp,
+              arith::AndIOp, arith::OrIOp, arith::XOrIOp, arith::ShLIOp,
+              arith::ShRSIOp, arith::ShRUIOp, arith::MinSIOp, arith::MaxSIOp,
+              arith::MinUIOp, arith::MaxUIOp, arith::CmpIOp, arith::SelectOp>(
+            [&](auto op) { return evaluate(op); })
+        .Default([](Operation *) -> ConstantInt { return std::nullopt; });
+  }
+
+private:
+  const APInt *constantOperand(unsigned index) const {
+    assert(index < operands.size());
+    const auto &constant = operands[index]->getValue().getConstantValue();
     assert((!constant ||
             constant->getBitWidth() ==
-                getIntegerBitWidth(operation->getOperand(i).getType())) &&
+                getIntegerBitWidth(operation->getOperand(index).getType())) &&
            "constant width must match the operand type");
     return constant ? &*constant : nullptr;
-  };
-  const APInt *lhs = getOperand(0);
-  const APInt *rhs = getOperand(1);
-  auto binary = [&](auto &&evaluate) -> ConstantInt {
+  }
+
+  template <typename Fn> ConstantInt evaluateBinary(Fn &&fn) const {
+    const APInt *lhs = constantOperand(0);
+    const APInt *rhs = constantOperand(1);
     if (!lhs || !rhs || lhs->getBitWidth() != rhs->getBitWidth())
       return std::nullopt;
-    return evaluate(*lhs, *rhs);
-  };
+    return fn(*lhs, *rhs);
+  }
+
   using OverflowOp = APInt (APInt::*)(const APInt &, bool &) const;
-  auto overflowing = [&](auto op, OverflowOp signedOp,
-                         OverflowOp unsignedOp) -> ConstantInt {
-    return binary([&](const APInt &a, const APInt &b) -> ConstantInt {
+
+  template <typename OpTy>
+  ConstantInt evaluateOverflowing(OpTy op, OverflowOp signedOp,
+                                  OverflowOp unsignedOp) const {
+    return evaluateBinary([&](const APInt &a, const APInt &b) -> ConstantInt {
       bool overflow;
       APInt result = (a.*unsignedOp)(b, overflow);
       if (op.hasNoUnsignedWrap() && overflow)
@@ -76,121 +98,179 @@ evaluateConstant(Operation *operation,
       }
       return result;
     });
-  };
+  }
 
-  return llvm::TypeSwitch<Operation *, ConstantInt>(operation)
-      .Case<arith::ConstantOp>([](auto op) -> ConstantInt {
-        APInt value;
-        if (matchPattern(op.getValue(), m_ConstantInt(&value)))
-          return value;
+  template <typename OpTy> ConstantInt evaluateDivision(OpTy op) const {
+    return evaluateBinary([&](const APInt &a, const APInt &b) -> ConstantInt {
+      if (b.isZero())
         return std::nullopt;
-      })
-      .Case<arith::AddIOp>([&](auto op) {
-        return overflowing(op, &APInt::sadd_ov, &APInt::uadd_ov);
-      })
-      .Case<arith::SubIOp>([&](auto op) {
-        return overflowing(op, &APInt::ssub_ov, &APInt::usub_ov);
-      })
-      .Case<arith::MulIOp>([&](auto op) -> ConstantInt {
-        if ((lhs && lhs->isZero()) || (rhs && rhs->isZero()))
-          return APInt(resultWidth, 0);
-        return overflowing(op, &APInt::smul_ov, &APInt::umul_ov);
-      })
-      .Case<arith::DivSIOp, arith::DivUIOp>([&](auto op) {
-        return binary([&](const APInt &a, const APInt &b) -> ConstantInt {
-          if (b.isZero())
-            return std::nullopt;
-          if constexpr (std::is_same_v<decltype(op), arith::DivSIOp>) {
-            bool overflow;
-            APInt result = a.sdiv_ov(b, overflow);
-            if (overflow || (op.getIsExact() && !a.srem(b).isZero()))
-              return std::nullopt;
-            return result;
-          } else {
-            if (op.getIsExact() && !a.urem(b).isZero())
-              return std::nullopt;
-            return a.udiv(b);
-          }
-        });
-      })
-      .Case<arith::RemSIOp, arith::RemUIOp>([&](auto op) -> ConstantInt {
-        // lhs % 1 = 0; signed remainder by -1 is also zero.
-        if (rhs &&
-            (rhs->isOne() || (isa<arith::RemSIOp>(op) && rhs->isAllOnes())))
-          return APInt(resultWidth, 0);
-        return binary([&](const APInt &a, const APInt &b) -> ConstantInt {
-          if (b.isZero())
-            return std::nullopt;
-          if constexpr (std::is_same_v<decltype(op), arith::RemSIOp>)
-            return a.srem(b);
-          else
-            return a.urem(b);
-        });
-      })
-      .Case<arith::AndIOp>([&](auto) {
-        return binary([](const APInt &a, const APInt &b) { return a & b; });
-      })
-      .Case<arith::OrIOp>([&](auto) {
-        return binary([](const APInt &a, const APInt &b) { return a | b; });
-      })
-      .Case<arith::XOrIOp>([&](auto) {
-        return binary([](const APInt &a, const APInt &b) { return a ^ b; });
-      })
-      .Case<arith::ShLIOp>([&](auto op) -> ConstantInt {
-        if (!lhs || !rhs || rhs->uge(lhs->getBitWidth()))
+      if constexpr (std::is_same_v<OpTy, arith::DivSIOp>) {
+        bool overflow;
+        APInt result = a.sdiv_ov(b, overflow);
+        if (overflow || (op.getIsExact() && !a.srem(b).isZero()))
           return std::nullopt;
-        return overflowing(op, &APInt::sshl_ov, &APInt::ushl_ov);
-      })
-      .Case<arith::ShRSIOp, arith::ShRUIOp>([&](auto op) {
-        return binary([&](const APInt &a, const APInt &b) -> ConstantInt {
-          if (b.uge(a.getBitWidth()))
-            return std::nullopt;
-          unsigned shift = b.getZExtValue();
-          if (op.getIsExact() && a.countr_zero() < shift)
-            return std::nullopt;
-          if constexpr (std::is_same_v<decltype(op), arith::ShRSIOp>)
-            return a.ashr(shift);
-          else
-            return a.lshr(shift);
-        });
-      })
-      .Case<arith::MinSIOp>([&](auto) { return binary(llvm::APIntOps::smin); })
-      .Case<arith::MaxSIOp>([&](auto) { return binary(llvm::APIntOps::smax); })
-      .Case<arith::MinUIOp>([&](auto) { return binary(llvm::APIntOps::umin); })
-      .Case<arith::MaxUIOp>([&](auto) { return binary(llvm::APIntOps::umax); })
-      .Case<arith::CmpIOp>([&](auto op) {
-        return binary([&](const APInt &a, const APInt &b) {
-          return APInt(1, arith::applyCmpPredicate(op.getPredicate(), a, b));
-        });
-      })
-      .Case<arith::ExtSIOp>([&](auto) -> ConstantInt {
-        return lhs ? ConstantInt(lhs->sext(resultWidth)) : std::nullopt;
-      })
-      .Case<arith::ExtUIOp>([&](auto op) -> ConstantInt {
-        if (!lhs || (op.getNonNeg() && lhs->isNegative()))
+        return result;
+      } else {
+        if (op.getIsExact() && !a.urem(b).isZero())
           return std::nullopt;
-        return lhs->zext(resultWidth);
-      })
-      .Case<arith::TruncIOp>([&](auto op) -> ConstantInt {
-        if (!lhs || (op.hasNoUnsignedWrap() && !lhs->isIntN(resultWidth)) ||
-            (op.hasNoSignedWrap() && !lhs->isSignedIntN(resultWidth)))
-          return std::nullopt;
-        return lhs->trunc(resultWidth);
-      })
-      .Case<arith::SelectOp>([&](auto) -> ConstantInt {
-        const APInt *falseValue = getOperand(2);
-        if (lhs) {
-          const APInt *selected = lhs->isZero() ? falseValue : rhs;
-          return selected ? ConstantInt(*selected) : std::nullopt;
-        }
-        if (rhs && falseValue &&
-            rhs->getBitWidth() == falseValue->getBitWidth() &&
-            *rhs == *falseValue)
-          return *rhs;
+        return a.udiv(b);
+      }
+    });
+  }
+
+  template <typename OpTy> ConstantInt evaluateRemainder(OpTy op) const {
+    const APInt *rhs = constantOperand(1);
+    // lhs % 1 = 0; signed remainder by -1 is also zero.
+    if (rhs && (rhs->isOne() || (isa<arith::RemSIOp>(op) && rhs->isAllOnes())))
+      return APInt(resultWidth, 0);
+    return evaluateBinary([&](const APInt &a, const APInt &b) -> ConstantInt {
+      if (b.isZero())
         return std::nullopt;
-      })
-      .Default([](Operation *) -> ConstantInt { return std::nullopt; });
-}
+      if constexpr (std::is_same_v<OpTy, arith::RemSIOp>)
+        return a.srem(b);
+      else
+        return a.urem(b);
+    });
+  }
+
+  template <typename OpTy> ConstantInt evaluateRightShift(OpTy op) const {
+    return evaluateBinary([&](const APInt &a, const APInt &b) -> ConstantInt {
+      if (b.uge(a.getBitWidth()))
+        return std::nullopt;
+      unsigned shift = b.getZExtValue();
+      if (op.getIsExact() && a.countr_zero() < shift)
+        return std::nullopt;
+      if constexpr (std::is_same_v<OpTy, arith::ShRSIOp>)
+        return a.ashr(shift);
+      else
+        return a.lshr(shift);
+    });
+  }
+
+  ConstantInt evaluate(arith::ConstantOp op) const {
+    APInt value;
+    if (matchPattern(op.getValue(), m_ConstantInt(&value)))
+      return value;
+    return std::nullopt;
+  }
+
+  ConstantInt evaluate(arith::ExtSIOp) const {
+    const APInt *value = constantOperand(0);
+    return value ? ConstantInt(value->sext(resultWidth)) : std::nullopt;
+  }
+
+  ConstantInt evaluate(arith::ExtUIOp op) const {
+    const APInt *value = constantOperand(0);
+    if (!value || (op.getNonNeg() && value->isNegative()))
+      return std::nullopt;
+    return value->zext(resultWidth);
+  }
+
+  ConstantInt evaluate(arith::TruncIOp op) const {
+    const APInt *value = constantOperand(0);
+    if (!value || (op.hasNoUnsignedWrap() && !value->isIntN(resultWidth)) ||
+        (op.hasNoSignedWrap() && !value->isSignedIntN(resultWidth)))
+      return std::nullopt;
+    return value->trunc(resultWidth);
+  }
+
+  ConstantInt evaluate(arith::AddIOp op) const {
+    return evaluateOverflowing(op, &APInt::sadd_ov, &APInt::uadd_ov);
+  }
+
+  ConstantInt evaluate(arith::SubIOp op) const {
+    return evaluateOverflowing(op, &APInt::ssub_ov, &APInt::usub_ov);
+  }
+
+  ConstantInt evaluate(arith::MulIOp op) const {
+    const APInt *lhs = constantOperand(0);
+    const APInt *rhs = constantOperand(1);
+    if ((lhs && lhs->isZero()) || (rhs && rhs->isZero()))
+      return APInt(resultWidth, 0);
+    return evaluateOverflowing(op, &APInt::smul_ov, &APInt::umul_ov);
+  }
+
+  ConstantInt evaluate(arith::DivSIOp op) const { return evaluateDivision(op); }
+
+  ConstantInt evaluate(arith::DivUIOp op) const { return evaluateDivision(op); }
+
+  ConstantInt evaluate(arith::RemSIOp op) const {
+    return evaluateRemainder(op);
+  }
+
+  ConstantInt evaluate(arith::RemUIOp op) const {
+    return evaluateRemainder(op);
+  }
+
+  ConstantInt evaluate(arith::AndIOp) const {
+    return evaluateBinary([](const APInt &a, const APInt &b) { return a & b; });
+  }
+
+  ConstantInt evaluate(arith::OrIOp) const {
+    return evaluateBinary([](const APInt &a, const APInt &b) { return a | b; });
+  }
+
+  ConstantInt evaluate(arith::XOrIOp) const {
+    return evaluateBinary([](const APInt &a, const APInt &b) { return a ^ b; });
+  }
+
+  ConstantInt evaluate(arith::ShLIOp op) const {
+    const APInt *lhs = constantOperand(0);
+    const APInt *rhs = constantOperand(1);
+    if (!lhs || !rhs || rhs->uge(lhs->getBitWidth()))
+      return std::nullopt;
+    return evaluateOverflowing(op, &APInt::sshl_ov, &APInt::ushl_ov);
+  }
+
+  ConstantInt evaluate(arith::ShRSIOp op) const {
+    return evaluateRightShift(op);
+  }
+
+  ConstantInt evaluate(arith::ShRUIOp op) const {
+    return evaluateRightShift(op);
+  }
+
+  ConstantInt evaluate(arith::MinSIOp) const {
+    return evaluateBinary(llvm::APIntOps::smin);
+  }
+
+  ConstantInt evaluate(arith::MaxSIOp) const {
+    return evaluateBinary(llvm::APIntOps::smax);
+  }
+
+  ConstantInt evaluate(arith::MinUIOp) const {
+    return evaluateBinary(llvm::APIntOps::umin);
+  }
+
+  ConstantInt evaluate(arith::MaxUIOp) const {
+    return evaluateBinary(llvm::APIntOps::umax);
+  }
+
+  ConstantInt evaluate(arith::CmpIOp op) const {
+    return evaluateBinary([&](const APInt &a, const APInt &b) {
+      return APInt(1, arith::applyCmpPredicate(op.getPredicate(), a, b));
+    });
+  }
+
+  ConstantInt evaluate(arith::SelectOp) const {
+    const APInt *condition = constantOperand(0);
+    const APInt *trueValue = constantOperand(1);
+    const APInt *falseValue = constantOperand(2);
+    if (condition) {
+      const APInt *selected = condition->isZero() ? falseValue : trueValue;
+      return selected ? ConstantInt(*selected) : std::nullopt;
+    }
+    if (trueValue && falseValue &&
+        trueValue->getBitWidth() == falseValue->getBitWidth() &&
+        *trueValue == *falseValue)
+      return *trueValue;
+    return std::nullopt;
+  }
+
+  Operation *operation;
+  ArrayRef<const dataflow::Lattice<AxisInfo> *> operands;
+  unsigned resultWidth;
+};
 
 template <typename... Args> int64_t gcd(int64_t a, int64_t b, Args... args) {
   if (a == 0)
@@ -1196,7 +1276,7 @@ LogicalResult AxisInfoAnalysis::visitOperation(
     if (op->getValue().getRank() == 0)
       return success();
   AxisInfo curr;
-  if (ConstantInt constant = evaluateConstant(op, operands))
+  if (ConstantInt constant = ConstantEvaluator(op, operands).run())
     curr = AxisInfo::getConstantValueState(op->getResult(0).getType(),
                                            std::move(*constant));
   else {
