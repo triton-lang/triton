@@ -310,6 +310,7 @@ def test_prune_configs_fractional_top_k_after_early_prune():
 
 
 def _autotuner_for_top_k(top_k, n_configs=4):
+
     class Kernel:
 
         def __init__(self):
