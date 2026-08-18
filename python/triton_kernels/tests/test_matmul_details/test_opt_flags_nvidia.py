@@ -151,6 +151,36 @@ def test_matmul_hopper_mxfp4_rhs_packed_n_padding(device, n):
     assert_close(expected, actual, maxtol=3e-2, rmstol=None)
 
 
+@pytest.mark.parametrize("n", [258, 3200])
+@pytest.mark.parametrize("is_persistent", [False, True])
+def test_matmul_hopper_mxfp4_fp16_preserves_activations(device, n, is_persistent):
+    if device != "cuda" or not is_cuda() or torch.cuda.get_device_capability()[0] != 9:
+        pytest.skip("requires Hopper")
+
+    m, k = 128, 256
+    a = (1 + (torch.arange(k, dtype=torch.float32, device=device) + 1) / 256).to(torch.float16).repeat(m, 1)
+    columns = torch.arange(n, device=device)
+    rows = columns % k
+    # Repeated identity columns: FP4 code 2 is exactly one, with E8M0 scale 127.
+    weight_val = torch.zeros((n, k // 2), dtype=torch.uint8, device=device)
+    weight_val[columns, rows // 2] = (2 << (4 * (rows % 2))).to(torch.uint8)
+    weight_scale = torch.full((n, k // 32), 127, dtype=torch.uint8, device=device)
+    b = convert_layout(wrap_torch_tensor(weight_val.T, dtype=FP4), layout.HopperMXValueLayout(-2, 3))
+    b_scale = convert_layout(wrap_torch_tensor(weight_scale.T), layout.HopperMXScaleLayout(-2, 8))
+    precision_config = PrecisionConfig(
+        b_mx_scale=b_scale,
+        b_microblock_size=MXFP_BLOCK_SIZE.value,
+        out_dtype=a.dtype,
+    )
+
+    with scoped_opt_flags_constraints(
+            dict(is_persistent=is_persistent, block_m=128, block_n=256, num_warps=8, split_k=1)):
+        actual = matmul(a, b, None, precision_config=precision_config)
+
+    # Casting the activations to BF16 would lose the odd 1/256 steps.
+    assert torch.equal(actual, a[:, rows])
+
+
 @pytest.mark.parametrize("n, expected", [(64, 128), (200, 256)])
 def test_compute_block_n_blackwell_scale_aligns_to_128(n, expected):
     precision_config = PrecisionConfig(

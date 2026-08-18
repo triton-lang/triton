@@ -105,14 +105,14 @@ def test_mxfp4_scale_zero_sized_roundtrip(shape, mx_axis, num_warps, device):
 # Triton tests
 # ------------------------------------------------------------
 
-# ------------------ upcast mxfp4 to bf16 --------------------
+# --------------------- upcast mxfp4 ------------------------
 
 
 @triton.jit
-def _upcast_mxfp4_to_bf16(Y, X, XScale, x_stride_m, x_stride_n, x_scale_stride_m, x_scale_stride_n, y_stride_m,
-                          y_stride_n, X_BLOCK_M: tl.constexpr, X_BLOCK_N: tl.constexpr, Y_BLOCK_M: tl.constexpr,
-                          Y_BLOCK_N: tl.constexpr, SCALE_BLOCK_M: tl.constexpr, SCALE_BLOCK_N: tl.constexpr,
-                          mx_axis: tl.constexpr):
+def _upcast_mxfp4_hopper_kernel(Y, X, XScale, x_stride_m, x_stride_n, x_scale_stride_m, x_scale_stride_n, y_stride_m,
+                                y_stride_n, X_BLOCK_M: tl.constexpr, X_BLOCK_N: tl.constexpr, Y_BLOCK_M: tl.constexpr,
+                                Y_BLOCK_N: tl.constexpr, SCALE_BLOCK_M: tl.constexpr, SCALE_BLOCK_N: tl.constexpr,
+                                mx_axis: tl.constexpr):
     offs_m_val = tl.arange(0, X_BLOCK_M)
     offs_n_val = tl.arange(0, X_BLOCK_N)
     offs_m_scale = tl.arange(0, SCALE_BLOCK_M)
@@ -132,6 +132,23 @@ def _upcast_mxfp4_to_bf16(Y, X, XScale, x_stride_m, x_stride_n, x_scale_stride_m
     tl.store(Y + offs_y, y)
 
 
+def _upcast_mxfp4_hopper(values, scales, dtype, mx_axis, num_warps):
+    shape = list(values.shape)
+    shape[mx_axis] *= 2
+    values = convert_layout(wrap_torch_tensor(values, dtype=FP4),
+                            HopperMXValueLayout(mx_axis=mx_axis - 2, mma_version=3))
+    scales = convert_layout(wrap_torch_tensor(scales), HopperMXScaleLayout(mx_axis=mx_axis - 2, num_warps=num_warps))
+    out = torch.empty(shape, dtype=dtype, device=values.device)
+    scale_block = [s // 32 if i == mx_axis else s for i, s in enumerate(shape)]
+    scale_block = scales.storage.layout.swizzle_block_shape(scale_block)
+    value_block = [s // 2 if i == mx_axis else s for i, s in enumerate(shape)]
+    value_block = values.storage.layout.swizzle_block_shape(value_block)
+    _upcast_mxfp4_hopper_kernel[(1, )](out, values.storage.data, scales.storage.data, *values.storage.data.stride(),
+                                       *scales.storage.data.stride(), *out.stride(), *value_block, *shape, *scale_block,
+                                       mx_axis=mx_axis, num_warps=num_warps)
+    return out
+
+
 @pytest.mark.skipif(not is_cuda(), reason="Only supported on cuda")
 @pytest.mark.skipif(not cuda_capability_geq(9), reason="Only supported for capability >= 9")
 @pytest.mark.parametrize("num_warps", [4, 8])
@@ -144,20 +161,27 @@ def test_upcast_mxfp4_to_bf16(num_warps, mx_axis):
     x = torch.randn(shape, dtype=torch.bfloat16, device="cuda")
     x_fp4_val, x_fp4_scale = downcast_to_mxfp(x, torch.uint8, axis=mx_axis)
     x_bf16 = upcast_from_mxfp(x_fp4_val, x_fp4_scale, x.dtype, axis=mx_axis)
-    x_fp4_val = wrap_torch_tensor(x_fp4_val, dtype=FP4)
-    x_fp4_scale = wrap_torch_tensor(x_fp4_scale)
-    x_fp4_val = convert_layout(x_fp4_val, HopperMXValueLayout(mx_axis=mx_axis - 2, mma_version=3))
-    x_fp4_scale = convert_layout(x_fp4_scale, HopperMXScaleLayout(mx_axis=mx_axis - 2, num_warps=num_warps))
-    y = torch.empty_like(x_bf16)
-    scale_block = [s // 32 if i == mx_axis else s for i, s in enumerate(shape)]
-    scale_block = x_fp4_scale.storage.layout.swizzle_block_shape(scale_block)
-    value_block = [s // 2 if i == mx_axis else s for i, s in enumerate(shape)]
-    value_block = x_fp4_val.storage.layout.swizzle_block_shape(value_block)
-    _upcast_mxfp4_to_bf16[(1, )](
-        y, x_fp4_val.storage.data, x_fp4_scale.storage.data,  #
-        x_fp4_val.storage.data.stride(0), x_fp4_val.storage.data.stride(1),  #
-        x_fp4_scale.storage.data.stride(0), x_fp4_scale.storage.data.stride(1),  #
-        y.stride(0), y.stride(1),  #
-        *value_block, *shape,  #
-        *scale_block, mx_axis=mx_axis, num_warps=num_warps)
-    assert (y == x_bf16).all()
+    actual = _upcast_mxfp4_hopper(x_fp4_val, x_fp4_scale, x.dtype, mx_axis, num_warps)
+    assert torch.equal(actual, x_bf16)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Only supported on cuda")
+@pytest.mark.skipif(not cuda_capability_geq(9), reason="Only supported for capability >= 9")
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("mx_axis", [0, 1])
+@pytest.mark.parametrize("packed, scale", [(0x11, 143), (0x00, 143), (0x77, 102), (0x77, 101), (0x55, 142)])
+@pytest.mark.parametrize("sign", [0, 0x88])
+def test_upcast_mxfp4_hopper_fp16_range(num_warps, mx_axis, packed, scale, sign):
+    packed |= sign
+    values = torch.full((32 * num_warps, 32), packed, dtype=torch.uint8, device="cuda")
+    scales = torch.full((32 * num_warps, 2), scale, dtype=torch.uint8, device="cuda")
+    if mx_axis == 0:
+        values, scales = values.T, scales.T
+
+    actual = _upcast_mxfp4_hopper(values, scales, torch.float16, mx_axis, num_warps)
+
+    # Apply E8M0 in float64 before rounding the final value to FP16.
+    magnitude = (0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0)[packed & 7]
+    expected = torch.tensor(-magnitude if packed & 8 else magnitude, dtype=torch.float64)
+    expected = (expected * 2.0**(scale - 127)).to(torch.float16)
+    assert torch.equal(actual.cpu().view(torch.int16), expected.view(torch.int16).expand(actual.shape))
