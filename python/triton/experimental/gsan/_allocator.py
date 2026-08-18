@@ -91,17 +91,28 @@ def freeze_config() -> None:
     _load_gsan_module().freeze_config()
 
 
+def has_live_allocations() -> bool:
+    """Return whether the GSan allocation reserve has outstanding allocations.
+
+    This includes memory retained by caching allocators. The query does not
+    initialize GSan runtime state or freeze its configuration.
+    """
+    return _load_gsan_module().has_live_allocations()
+
+
 def reset() -> None:
-    """Reset GSan runtime state after all GSan allocations have been released."""
+    """Reset GSan runtime state after all GSan allocations have been released.
+
+    Runs garbage collection if allocations remain. If any are still live,
+    raises ``AssertionError`` without resetting the runtime or stream clocks.
+    """
     from . import _stream_sync
 
     module = _load_gsan_module()
-    _stream_sync._reset_caches()
-    try:
-        module.reset()
-    except AssertionError:
+    if module.has_live_allocations():
         gc.collect()
-        module.reset()
+    module.reset()
+    _stream_sync._reset_caches()
 
 
 def create_mem_pool():

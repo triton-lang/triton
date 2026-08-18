@@ -7,7 +7,7 @@ import torch
 import triton
 
 from triton._internal_testing import is_cuda, run_in_process
-from triton.experimental.gsan import ShareableHandleType, configure, create_mem_pool, freeze_config, reset
+from triton.experimental.gsan import ShareableHandleType, configure, create_mem_pool, freeze_config, has_live_allocations, reset
 from triton.experimental.gsan import _stream_sync
 from triton.experimental.gsan._allocator import (
     export_allocation_handles,
@@ -77,13 +77,53 @@ def _run_allocator_freezes_config_check() -> None:
         gsan_free(ptr, device, 0, 0)
 
 
-def _run_reset_rejects_live_allocations_check() -> None:
+def _run_has_live_allocations_check() -> None:
+    assert has_live_allocations() is False
+    configure(rng_seed=12345)
     device = torch.cuda.current_device()
     ptr = gsan_malloc(1, device)
     try:
-        with pytest.raises(AssertionError, match="GSan allocations are still live"):
-            reset()
+        assert has_live_allocations() is True
     finally:
+        gsan_free(ptr, device)
+    assert has_live_allocations() is False
+
+
+def _run_reset_rejects_live_allocations_check() -> None:
+    device = torch.cuda.current_device()
+    stream = torch.cuda.current_stream().cuda_stream
+    ptr = gsan_malloc(4, device)
+    target = uint8_cuda_tensor_from_ptr(ptr, 4, device).view(torch.int32)
+    try:
+        with triton.knobs.compilation.scope():
+            triton.knobs.compilation.instrumentation_mode = "gsan"
+            store_one_i32[(1, )](target, num_warps=1)
+            torch.cuda.synchronize()
+
+            stream_state = _stream_sync._launch_stream_state(device, stream)
+            runtime_layout = _stream_sync._runtime_state_layout(get_device_rank(device), device)
+            clocks_before = stream_state.clocks.cpu()
+            shadow_before = shadow_tensor_for(target).cpu()
+            thread_id = shadow_cell_from_address(ptr).write_clock.thread_id
+            thread_state_before = thread_state_from_smid(thread_id)
+            assert stream_state.next_kernel_id == 1
+
+            with pytest.raises(AssertionError, match="GSan allocations are still live"):
+                reset()
+
+            assert has_live_allocations() is True
+            assert _stream_sync._launch_stream_state(device, stream) is stream_state
+            assert _stream_sync._runtime_state_layout(get_device_rank(device), device) is runtime_layout
+            assert stream_state.next_kernel_id == 1
+            assert torch.equal(stream_state.clocks.cpu(), clocks_before)
+            assert torch.equal(shadow_tensor_for(target).cpu(), shadow_before)
+            assert thread_state_from_smid(thread_id).vector_clock == thread_state_before.vector_clock
+
+            store_one_i32[(1, )](target, num_warps=1)
+            torch.cuda.synchronize()
+            assert stream_state.next_kernel_id == 2
+    finally:
+        del target
         gsan_free(ptr, device)
 
     reset()
@@ -322,6 +362,12 @@ def test_freeze_config_rejects_later_changes():
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
 def test_allocator_initialization_rejects_later_config():
     result = run_in_process(_run_allocator_freezes_config_check)
+    assert result.exc is None
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_has_live_allocations():
+    result = run_in_process(_run_has_live_allocations_check)
     assert result.exc is None
 
 

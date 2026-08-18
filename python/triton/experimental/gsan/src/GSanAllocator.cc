@@ -125,6 +125,11 @@ static AllocatorState *alloc = nullptr;
 static GSanConfig config;
 static std::mutex mut;
 
+bool hasLiveAllocations() {
+  return alloc != nullptr &&
+         alloc->treeRoot.maxFreeBlockSize != alloc->treeRoot.size;
+}
+
 CUmemAllocationHandleType getRequestedShareableHandleType() {
   if (config.shareableHandleTypeConfigured)
     return config.shareableHandleType;
@@ -1306,6 +1311,12 @@ PyObject *pyFreezeConfig([[maybe_unused]] PyObject *self, PyObject *const *args,
   Py_RETURN_NONE;
 }
 
+PyObject *pyHasLiveAllocations([[maybe_unused]] PyObject *self,
+                               [[maybe_unused]] PyObject *args) {
+  std::lock_guard lg(mut);
+  return PyBool_FromLong(hasLiveAllocations());
+}
+
 PyObject *pyReset([[maybe_unused]] PyObject *self, PyObject *const *args,
                   Py_ssize_t nargs) {
   if (nargs != 0) {
@@ -1319,7 +1330,7 @@ PyObject *pyReset([[maybe_unused]] PyObject *self, PyObject *const *args,
   if (alloc == nullptr)
     Py_RETURN_NONE;
 
-  if (alloc->treeRoot.maxFreeBlockSize != alloc->treeRoot.size) {
+  if (hasLiveAllocations()) {
     PyErr_SetString(PyExc_AssertionError,
                     "cannot reset GSan while GSan allocations are still live");
     return nullptr;
@@ -1676,6 +1687,9 @@ PyMethodDef kGSanAllocatorMethods[] = {
      "Configure GSan topology and runtime tuning fields."},
     {"freeze_config", reinterpret_cast<PyCFunction>(pyFreezeConfig),
      METH_FASTCALL, "Prevent later changes to the GSan allocator config."},
+    {"has_live_allocations",
+     reinterpret_cast<PyCFunction>(pyHasLiveAllocations), METH_NOARGS,
+     "Return whether the GSan allocation reserve has live allocations."},
     {"reset", reinterpret_cast<PyCFunction>(pyReset), METH_FASTCALL,
      "Reset GSan runtime state when there are no live allocations."},
     {"get_reserve_pointer", reinterpret_cast<PyCFunction>(pyGetReservePointer),
