@@ -826,6 +826,9 @@ private:
             b, baseThread, info->cluster, hooks.getIssuerCTAPred(b, op), op);
       }
       if (auto wsOp = dyn_cast<ttg::WarpSpecializeOp>(op)) {
+        // ConSan helpers can exceed the partition register budgets and make
+        // PTXAS-generated dynamic register allocation deadlock.
+        wsOp->setAttr("tti.disable_setmaxregister", b.getUnitAttr());
         funcBuilder.createSetActiveMaskCall(b, getActiveMask(wsOp), op);
         auto partitionRegions = wsOp.getNonEmptyPartitionRegions();
         if (!partitionRegions.empty()) {
