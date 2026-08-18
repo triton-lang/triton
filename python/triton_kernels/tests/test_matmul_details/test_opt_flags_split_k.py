@@ -193,14 +193,8 @@ def test_make_default_opt_flags_nvidia_group_m_constraint(monkeypatch, group_m):
     assert flags.group_m == group_m
 
 
-def test_make_default_opt_flags_nvidia_execution_constraints(monkeypatch):
+def test_make_default_opt_flags_nvidia_output_tma_constraint(monkeypatch):
     setup_nvidia(monkeypatch)
-    constraints = {
-        "use_output_tma": False,
-        "occupancy_target": 2,
-        "flatten_loops": False,
-        "maxnreg": 192,
-    }
     flags = opt_flags.make_default_opt_flags_nvidia(
         torch.float16,
         torch.float16,
@@ -217,16 +211,11 @@ def test_make_default_opt_flags_nvidia_execution_constraints(monkeypatch):
         0,
         False,
         False,
-        constraints,
+        {"use_output_tma": False},
         torch.float32,
     )
 
     assert flags.use_output_tma is False
-    assert flags.occupancy_target == 2
-    assert flags.flatten_loops is False
-    assert flags.maxnreg == 192
-    assert flags.target_kernel_kwargs["FLATTEN_LOOPS"] is False
-    assert flags.target_kernel_kwargs["maxnreg"] == 192
 
 
 def test_resolve_tma_override():

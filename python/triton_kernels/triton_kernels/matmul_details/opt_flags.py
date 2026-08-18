@@ -37,8 +37,6 @@ class OptFlags:
     clc: bool = False
     swap_xw: bool | None = None
     use_output_tma: bool | None = None
-    flatten_loops: bool = True
-    maxnreg: int | None = None
 
 
 def max_allowable_mn(
@@ -224,7 +222,7 @@ def make_default_opt_flags_nvidia(
     mx_block_size=None,
     epilogue_reduction_n=1,
 ):
-    constraints_supported = {"block_m", "block_n", "block_k", "split_k", "is_persistent", "clc", "epilogue_subtile", "num_stages", "idle_sms", "max_allowable_mn", "num_warps", "disable_mx4_block_swap", "swap_xw", "group_m", "use_output_tma", "occupancy_target", "flatten_loops", "maxnreg"}
+    constraints_supported = {"block_m", "block_n", "block_k", "split_k", "is_persistent", "clc", "epilogue_subtile", "num_stages", "idle_sms", "max_allowable_mn", "num_warps", "disable_mx4_block_swap", "swap_xw", "group_m", "use_output_tma"}
     unsupported = set(constraints.keys()) - constraints_supported
     assert not unsupported, f"Given unsupported constraint: {unsupported}"
     is_large_ragged_nvfp4 = (
@@ -397,15 +395,13 @@ def make_default_opt_flags_nvidia(
 
     # Occupancy target and maxnreg (for Hopper)
     is_hopper_scale = isinstance(b_mx_scale_layout, HopperMXScaleLayout)
-    occupancy_target = constraints.get("occupancy_target")
-    if occupancy_target is None:
-        occupancy_target = 1
-        if is_hopper_scale:
-            occupancy_target = 16 // num_warps
-            if precision_config.a_mx_scale is not None and precision_config.c_mx_scale is not None:
-                # Hopper MXFP4 RHS plus MX input/output needs more than the
-                # 128-register cap implied by the default occupancy target.
-                occupancy_target = 1
+    occupancy_target = 1
+    if is_hopper_scale:
+        occupancy_target = 16 // num_warps
+        if precision_config.a_mx_scale is not None and precision_config.c_mx_scale is not None:
+            # Hopper MXFP4 RHS plus MX input/output needs more than the
+            # 128-register cap implied by the default occupancy target.
+            occupancy_target = 1
     threads_per_warp = 32
     reg_per_sm = 64 * 1024
     max_reg_per_thread = 256
@@ -415,12 +411,6 @@ def make_default_opt_flags_nvidia(
         maxnreg = min(max_reg_per_thread, maxnreg)
     else:
         maxnreg = None
-    if constraints.get("maxnreg") is not None:
-        maxnreg = constraints["maxnreg"]
-    flatten_loops = constraints.get("flatten_loops")
-    if flatten_loops is None:
-        flatten_loops = not is_hopper_scale
-
     if constraints.get("epilogue_subtile", None) is not None:
         subtiles_to_check = [constraints["epilogue_subtile"]]
     elif is_large_ragged_nvfp4:
@@ -469,14 +459,12 @@ def make_default_opt_flags_nvidia(
         target_kernel_kwargs=dict(
             maxnreg=maxnreg,
             # For some reason, overlapping the epilogue is slower for hopper bf16 x mxfp4
-            FLATTEN_LOOPS=flatten_loops,
+            FLATTEN_LOOPS=not is_hopper_scale,
         ),
         idle_sms=constraints.get("idle_sms", _get_idle_sms()),
         occupancy_target=occupancy_target,
         swap_xw=swap_xw,
         use_output_tma=constraints.get("use_output_tma"),
-        flatten_loops=flatten_loops,
-        maxnreg=maxnreg,
     )
     # check constraints
     all_constraints_satisfied(ret, constraints)
