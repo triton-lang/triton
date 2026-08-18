@@ -40,7 +40,6 @@ def test_mxfp4_value_roundtrip(shape, trans, mx_axis, mma_version):
     assert (res == x).all()
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only supported on cuda")
 @pytest.mark.parametrize("shape", [(64, 128), (130, 66), (2, 34, 18), (2, 3, 66, 34)])
 @pytest.mark.parametrize("step", [1, 2])
 @pytest.mark.parametrize("trans", [False, True])
@@ -105,7 +104,6 @@ def test_mxfp4_value_convert_layout_roundtrip(mx_axis):
     assert torch.equal(roundtrip.storage.data, x)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only supported on cuda")
 @pytest.mark.parametrize("shape", [(64, 64), (2, 34, 18)])
 @pytest.mark.parametrize("trans", [False, True])
 @pytest.mark.parametrize("mx_axis", [-2, -1])
@@ -150,7 +148,6 @@ def test_mxfp4_value_convert_layout_fake_meta(mx_axis, mma_version, device):
     assert roundtrip.storage.data.shape == shape
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only supported on cuda")
 @pytest.mark.parametrize("mx_axis", [-2, -1])
 @pytest.mark.parametrize("mma_version", [2, 3])
 def test_mxfp4_value_swizzle_peak_allocation(mx_axis, mma_version):
