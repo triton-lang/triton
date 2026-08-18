@@ -65,9 +65,10 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
 #smem_lut = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:107"} {
   // CHECK-LABEL: @tc_gen5_mma_lut
-  // CHECK: llvm.mlir.constant(70403120693248 : i64)
+  // CHECK: llvm.mlir.constant(16777216 : i32)
+  // CHECK: llvm.mlir.constant(16392 : i32)
   // CHECK: tcgen05.mma.cta_group::1.kind::f8f6f4.collector::b::fill.decompress::lut::b
-  // CHECK: llvm.mlir.constant(9077602375434240 : i64)
+  // CHECK: llvm.mlir.constant(2113544 : i32)
   // CHECK: tcgen05.mma.cta_group::1.kind::f8f6f4.collector::b::lastuse.decompress::lut::b
   tt.func @tc_gen5_mma_lut(
       %a: !ttg.memdesc<128x128xf8E4M3FN, #shared_lut_a, #smem_lut>,
@@ -92,12 +93,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #smem_lut_k256 = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:107"} {
   // CHECK-LABEL: @tc_gen5_mma_lut_k256
-  // CHECK: llvm.mlir.constant(70403120693248 : i64)
-  // CHECK: llvm.mlir.constant(9077602375434240 : i64)
+  // CHECK: llvm.mlir.constant(16777216 : i32)
+  // CHECK: llvm.mlir.constant(16392 : i32)
+  // CHECK: tcgen05.mma.cta_group::1.kind::f8f6f4.collector::b::fill.decompress::lut::b
+  // CHECK: llvm.mlir.constant(2113544 : i32)
+  // CHECK: tcgen05.mma.cta_group::1.kind::f8f6f4.collector::b::lastuse.decompress::lut::b
   // The second pair starts 48 packed-K rows after the first pair. With N=256,
   // this advances the descriptor by 48 * 256 / 16 = 768 units.
-  // CHECK: llvm.mlir.constant(70403120694016 : i64)
-  // CHECK: llvm.mlir.constant(9077602375435008 : i64)
+  // CHECK: llvm.mlir.constant(16777984 : i32)
+  // CHECK: tcgen05.mma.cta_group::1.kind::f8f6f4.collector::b::fill.decompress::lut::b
+  // CHECK: tcgen05.mma.cta_group::1.kind::f8f6f4.collector::b::lastuse.decompress::lut::b
   tt.func @tc_gen5_mma_lut_k256(
       %a: !ttg.memdesc<128x256xf8E4M3FN, #shared_lut_a_k256, #smem_lut_k256>,
       %b: !ttg.memdesc<96x256xi8, #shared_lut_b_k256, #smem_lut_k256>,
@@ -309,11 +314,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // where 8x16B core matrices are tiled in the N-major ordering. Thus, descriptor strides
   // are unaffected by the K extent.
   // The first instruction pair is the padded-B path.
-  // CHECK: llvm.mlir.constant([[$B0C:-?[0-9]+]] : i64) : i64
-  // CHECK: llvm.mlir.constant([[$B1C:-?[0-9]+]] : i64) : i64
+  // CHECK: llvm.mlir.constant([[$BLOW:16777216]] : i32) : i32
+  // CHECK: llvm.mlir.constant([[$B0HIGH:16392]] : i32) : i32
+  // CHECK: tcgen05.mma.cta_group::1.kind::f8f6f4.collector::b::fill.decompress::lut::b
+  // CHECK: llvm.mlir.constant([[$B1HIGH:2113544]] : i32) : i32
+  // CHECK: tcgen05.mma.cta_group::1.kind::f8f6f4.collector::b::lastuse.decompress::lut::b
   // The packed-B path must construct the same two descriptors.
-  // CHECK: llvm.mlir.constant([[$B0C]] : i64) : i64
-  // CHECK: llvm.mlir.constant([[$B1C]] : i64) : i64
+  // CHECK: llvm.mlir.constant([[$BLOW]] : i32) : i32
+  // CHECK: llvm.mlir.constant([[$B0HIGH]] : i32) : i32
+  // CHECK: tcgen05.mma.cta_group::1.kind::f8f6f4.collector::b::fill.decompress::lut::b
+  // CHECK: llvm.mlir.constant([[$B1HIGH]] : i32) : i32
+  // CHECK: tcgen05.mma.cta_group::1.kind::f8f6f4.collector::b::lastuse.decompress::lut::b
   tt.func @tc_gen5_mma_lut_nonpow2_b_descriptor_equiv(
       %a: !ttg.memdesc<128x128xf8E4M3FN, #shared_a_nonpow2, #smem>,
       %b_padded: !ttg.memdesc<48x256xi8, #shared_b_nonpow2, #smem, 64x256>,
