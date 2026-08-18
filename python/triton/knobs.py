@@ -555,9 +555,7 @@ class proton_knobs(base_knobs):
     rocprofiler_sdk_library: env_opt_str = env_opt_str("TRITON_ROCPROFILER_SDK_LIBRARY")
     roctracer_lib_path: env_opt_str = env_opt_str("TRITON_ROCTRACER_LIB_PATH")
     roctracer_library: env_opt_str = env_opt_str("TRITON_ROCTRACER_LIBRARY")
-    # Legacy full-path override.
     roctx_lib_path: env_opt_str = env_opt_str("TRITON_ROCTX_LIB_PATH")
-    # Preferred library name or full-path override.
     roctx_library: env_str = env_str("TRITON_ROCTX_LIBRARY", "libroctx64.so")
     profile_buffer_size: env_int = env_int("TRITON_PROFILE_BUFFER_SIZE", 64 * 1024 * 1024)
     profile_metric_buffer_size: env_int = env_int("TRITON_PROFILE_METRIC_BUFFER_SIZE", 64 * 1024 * 1024)
