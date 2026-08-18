@@ -1084,6 +1084,11 @@ class TritonSemantic(Generic[TensorTy]):
         target = driver.active.get_current_target()
         return (target.backend == "cuda" and target.arch >= 90)
 
+    def _has_tma_scatter(self, ):
+        # Consumer Blackwell (sm_12x) implements TMA `gather4` but not `scatter4`.
+        target = driver.active.get_current_target()
+        return not (target.backend == "cuda" and target.arch // 10 == 12)
+
     def _descriptor_atomic_min_max_supported(self, dtype):
         assert dtype in {tl.uint32, tl.int32, tl.uint64, tl.int64, tl.float16, tl.bfloat16}, "Unsupported dtype"
         if dtype in {tl.float16, tl.bfloat16}:
@@ -1154,6 +1159,13 @@ class TritonSemantic(Generic[TensorTy]):
     def descriptor_scatter(self, desc, value: TensorTy, x_offsets, y_offset) -> TensorTy:
         assert isinstance(desc, tl.tensor_descriptor_base), \
             f"expected a tensor descriptor, got {type(desc).__name__}"
+
+        # Validate target support. TMA scatter lowers to `tile::scatter4`, which consumer
+        # Blackwell does not implement; without this check the failure surfaces as an
+        # internal ptxas error late in compilation.
+        assert self._has_tma_scatter(), \
+            "TMA scatter is not supported on consumer Blackwell (sm_12x). " \
+            "TMA gather is supported on this architecture; use regular stores instead."
 
         # Validate descriptor.
         assert len(desc.block_shape) == 2, f"descriptor must be 2D, but got {desc.block_shape}"
