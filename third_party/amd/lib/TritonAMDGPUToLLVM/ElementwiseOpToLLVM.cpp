@@ -70,9 +70,69 @@ struct FDivOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
+    // Approximate f32 division is opt-in via the `arcp` fast-math flag (set by
+    // `tl.fdiv`). The default `arith.divf` (e.g. the `/` operator) keeps the
+    // IEEE-compliant lowering: replacing all f32 divisions with the
+    // approximate sequence broke numerics upstream in PyTorch and was
+    // reverted (see https://github.com/pytorch/pytorch/issues/154215).
+    if (!elemTy.isF32() ||
+        !bitEnumContainsAny(op.getFastmath(), arith::FastMathFlags::arcp))
+      return {LLVM::FDivOp::create(rewriter, loc, elemTy, operands[0][0],
+                                   operands[0][1])};
 
-    return {LLVM::FDivOp::create(rewriter, loc, elemTy, operands[0][0],
-                                 operands[0][1])};
+    // Fast, approximate f32 division, following the AMDGPU fdiv lowering in
+    // LLVM's AMDGPULegalizerInfo::legalizeFDIV32. It uses the same building
+    // blocks as the NVIDIA backend's `div.full.f32` path:
+    //
+    //   den_s = div.scale.f32(lhs, rhs, false)  // scale denominator
+    //   num_s = div.scale.f32(lhs, rhs, true)   // scale numerator
+    //   rcp   = rcp.f32(den_s)
+    //   q0    = num_s * rcp
+    //   e     = num_s - den_s * q0              // residual
+    //   q1    = q0 + e * rcp                    // one Newton-Raphson step
+    //   q2    = div.fmas.f32(0, 0, q1, scale)   // rescale correction
+    //   res   = div.fixup.f32(q2, rhs, lhs)     // edge-case fixup
+    //
+    // The single Newton-Raphson refinement keeps the error close to the
+    // `div.full.f32` bound (<= 2 ULP) instead of the cruder one-shot
+    // `rcp * x` approximation.
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Value &lhs = operands[0][0];
+    Value &rhs = operands[0][1];
+    auto ctx = rewriter.getContext();
+    Type divScaleResType = struct_ty({elemTy, i1_ty});
+
+    auto denominatorScaleOp = LLVM::createLLVMIntrinsicCallOp(
+        rewriter, loc, "llvm.amdgcn.div.scale.f32", divScaleResType,
+        {lhs, rhs, b.false_val()});
+    Value denominatorScaled = b.extract_val(denominatorScaleOp.getResult(0), 0);
+    auto numeratorScaleOp = LLVM::createLLVMIntrinsicCallOp(
+        rewriter, loc, "llvm.amdgcn.div.scale.f32", divScaleResType,
+        {lhs, rhs, b.true_val()});
+    Value numeratorScaled = b.extract_val(numeratorScaleOp.getResult(0), 0);
+    Value scaleFlag = b.extract_val(numeratorScaleOp.getResult(0), 1);
+
+    Value rcp =
+        LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.rcp.f32",
+                                        elemTy, {denominatorScaled})
+            .getResult(0);
+
+    Value approxDiv = b.fmul(numeratorScaled, rcp);
+    Value residual =
+        b.fma(b.neg(denominatorScaled), approxDiv, numeratorScaled);
+    Value refinedDiv = b.fma(residual, rcp, approxDiv);
+
+    // `div.fmas.f32` applies the scale correction recorded by `div.scale.f32`
+    // to the refined quotient.
+    auto fmas = LLVM::createLLVMIntrinsicCallOp(
+                    rewriter, loc, "llvm.amdgcn.div.fmas.f32", elemTy,
+                    {b.f32_val(0), b.f32_val(0), refinedDiv, scaleFlag})
+                    .getResult(0);
+
+    return {LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
+                                            "llvm.amdgcn.div.fixup.f32", elemTy,
+                                            {fmas, rhs, lhs})
+                .getResult(0)};
   }
 };
 

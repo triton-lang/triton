@@ -1258,6 +1258,44 @@ def test_aggregate_replace_ir():
     anchor(state.vals)
 
 
+@filecheck_test
+@triton.jit
+def test_fdiv_fast_math_flag():
+    # tl.fdiv (ieee_rounding=False) is the fast path: it is marked with the
+    # `arcp` fast-math flag so backends may lower it to an approximate
+    # division (e.g. div.full.f32 on NVIDIA, div.scale + rcp + fixup on AMD).
+    # CHECK-LABEL: test_fdiv_fast_math_flag
+    # CHECK: arith.divf {{.*}} fastmath<arcp> : tensor<16xf32>
+    x = tl.full((16, ), 1.0, tl.float32)
+    y = tl.full((16, ), 2.0, tl.float32)
+    tl.fdiv(x, y)
+
+
+@filecheck_test
+@triton.jit
+def test_truediv_no_fast_math_flag():
+    # The `/` operator keeps the unflagged arith.divf, which stays
+    # IEEE-compliant on AMD (see pytorch/pytorch#154215).
+    # CHECK-LABEL: test_truediv_no_fast_math_flag
+    # CHECK: arith.divf {{.*}} : tensor<16xf32>
+    # CHECK-NOT: fastmath
+    x = tl.full((16, ), 1.0, tl.float32)
+    y = tl.full((16, ), 2.0, tl.float32)
+    x / y
+
+
+@filecheck_test
+@triton.jit
+def test_fdiv_ieee_rounding_flag():
+    # tl.fdiv(..., ieee_rounding=True) lowers to tt.precise_divf, which stays
+    # IEEE-compliant on every backend.
+    # CHECK-LABEL: test_fdiv_ieee_rounding_flag
+    # CHECK: tt.precise_divf {{.*}} : tensor<16xf32>
+    x = tl.full((16, ), 1.0, tl.float32)
+    y = tl.full((16, ), 2.0, tl.float32)
+    tl.fdiv(x, y, ieee_rounding=True)
+
+
 def test_dot_fp16_accumulator():
 
     @triton.jit

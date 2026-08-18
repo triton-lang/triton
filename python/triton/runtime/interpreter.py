@@ -575,6 +575,9 @@ class InterpreterBuilder:
     create_fadd = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.add)
     create_fmul = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.multiply)
     create_fdiv = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.divide)
+    # `tl.fdiv` fast path: the interpreter keeps the exact division, since the
+    # `arcp` fast-math flag is only a codegen hint for GPU backends.
+    create_fast_fdiv = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.divide)
     create_frem = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.fmod)
     create_fsub = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.subtract)
     create_fneg = lambda self, input: self.unary_op(input, np.negative)

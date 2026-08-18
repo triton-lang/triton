@@ -1295,6 +1295,16 @@ void init_triton_ir(py::module_ &m) {
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return self.create<arith::DivFOp>(lhs, rhs);
            })
+      .def("create_fast_fdiv",
+           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
+             // `arcp` (allow reciprocal) is the LLVM fast-math flag that
+             // permits replacing division with multiplication by a
+             // reciprocal, i.e. a fast, approximate division. Backends that
+             // keep IEEE-compliant division for `arith.divf` by default (e.g.
+             // AMD) can use this flag to opt into the approximate lowering.
+             return self.create<arith::DivFOp>(lhs, rhs,
+                                               arith::FastMathFlags::arcp);
+           })
       .def("create_frem",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return self.create<arith::RemFOp>(lhs, rhs);
