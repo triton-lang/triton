@@ -130,25 +130,93 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 16}>
 #shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#tmem_n64 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+#tmem_m64 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:107"} {
   // CHECK-LABEL: @tc_gen5_mma_breuse
-  // Both operands can be reused; retain the Rubin B-reuse schedule.
+  // Only B can be reused; retain the Rubin B-reuse schedule.
   // CHECK-NOT: collector::a
   // CHECK: tcgen05.mma.cta_group::1.kind::f16.collector::b::fill
   // CHECK: tcgen05.mma.cta_group::1.kind::f16.collector::b::lastuse
-  // CHECK-NOT: collector::a
-  tt.func @tc_gen5_mma_breuse(%a: !ttg.memdesc<256x128xf16, #shared, #ttg.shared_memory>,
-                       %b: !ttg.memdesc<128x256xf16, #shared1, #ttg.shared_memory>,
-                       %c: !ttg.memdesc<256x256xf32, #tmem, #ttng.tensor_memory, mutable>,
+  // CHECK-NOT: tcgen05.mma
+  tt.func @tc_gen5_mma_breuse(%a: !ttg.memdesc<256x16xf16, #shared, #ttg.shared_memory>,
+                       %b: !ttg.memdesc<16x128xf16, #shared1, #ttg.shared_memory>,
+                       %c: !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>,
                        %useAcc: i1,
                        %pred: i1,
                        %barrier: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>,
                        %barrierPred: i1) {
     ttng.tc_gen5_mma %a, %b, %c, %useAcc, %pred, %barrier[%barrierPred] {is_async} :
-       !ttg.memdesc<256x128xf16, #shared, #ttg.shared_memory>,
-       !ttg.memdesc<128x256xf16, #shared1, #ttg.shared_memory>,
-       !ttg.memdesc<256x256xf32, #tmem, #ttng.tensor_memory, mutable>,
+       !ttg.memdesc<256x16xf16, #shared, #ttg.shared_memory>,
+       !ttg.memdesc<16x128xf16, #shared1, #ttg.shared_memory>,
+       !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>,
        !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>
+    tt.return
+  }
+
+  // CHECK-LABEL: @tc_gen5_mma_ab_reuse_b_major
+  // Equal-sized A and B tiles retain B-major traversal. Reverse M at the N
+  // boundary to keep A as well, without changing any accumulator's K order.
+  // CHECK: %[[BM_BASE:.+]] = llvm.ptrtoint %arg2 : !llvm.ptr<3> to i32
+  // CHECK: %[[BM_E:.+]] = nvvm.elect.sync -> i1
+  // CHECK: kind::f16.collector::b::fill [ $0 + 0 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %[[BM_BASE]], %[[BM_A0:[^,]+]], %[[BM_B0:[^,]+]], %{{[^,]+}}, %arg3, %[[BM_E]]
+  // CHECK: kind::f16.collector::a::fill.collector::b::lastuse [ $0 + 128 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %[[BM_BASE]], %[[BM_A1:[^,]+]], %[[BM_B0]], %{{[^,]+}}, %arg3, %[[BM_E]]
+  // CHECK: kind::f16.collector::a::lastuse.collector::b::fill [ $0 + 384 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %[[BM_BASE]], %[[BM_A1]], %[[BM_B1:[^,]+]], %{{[^,]+}}, %arg3, %[[BM_E]]
+  // CHECK: kind::f16.collector::b::lastuse [ $0 + 256 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %[[BM_BASE]], %[[BM_A0]], %[[BM_B1]], %{{[^,]+}}, %arg3, %[[BM_E]]
+  // CHECK: %[[BM_TRUE:.+]] = llvm.mlir.constant(true) : i1
+  // CHECK: kind::f16.collector::b::fill [ $0 + 0 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %[[BM_BASE]], %[[BM_A2:[^,]+]], %[[BM_B2:[^,]+]], %{{[^,]+}}, %[[BM_TRUE]], %[[BM_E]]
+  // CHECK: kind::f16.collector::a::fill.collector::b::lastuse [ $0 + 128 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %[[BM_BASE]], %[[BM_A3:[^,]+]], %[[BM_B2]], %{{[^,]+}}, %[[BM_TRUE]], %[[BM_E]]
+  // CHECK: kind::f16.collector::a::lastuse.collector::b::fill [ $0 + 384 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %[[BM_BASE]], %[[BM_A3]], %[[BM_B3:[^,]+]], %{{[^,]+}}, %[[BM_TRUE]], %[[BM_E]]
+  // CHECK: kind::f16.collector::b::lastuse [ $0 + 256 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %[[BM_BASE]], %[[BM_A2]], %[[BM_B3]], %{{[^,]+}}, %[[BM_TRUE]], %[[BM_E]]
+  // CHECK-NOT: tcgen05.mma
+  tt.func @tc_gen5_mma_ab_reuse_b_major(
+      %a: !ttg.memdesc<256x32xf16, #shared, #ttg.shared_memory>,
+      %b: !ttg.memdesc<32x256xf16, #shared1, #ttg.shared_memory>,
+      %c: !ttg.memdesc<256x256xf32, #tmem, #ttng.tensor_memory, mutable>,
+      %useAcc: i1, %pred: i1) {
+    ttng.tc_gen5_mma %a, %b, %c, %useAcc, %pred :
+      !ttg.memdesc<256x32xf16, #shared, #ttg.shared_memory>,
+      !ttg.memdesc<32x256xf16, #shared1, #ttg.shared_memory>,
+      !ttg.memdesc<256x256xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @tc_gen5_mma_ab_reuse_a_major
+  // A is twice as large as B, so traverse N first and reuse B at the turn.
+  // CHECK: %[[AM_BASE:.+]] = llvm.ptrtoint %arg2 : !llvm.ptr<3> to i32
+  // CHECK: kind::f16.collector::a::fill [ $0 + 0 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %[[AM_BASE]], %[[AM_A0:[^,]+]], %{{[^,]+}},
+  // CHECK: kind::f16.collector::a::lastuse.collector::b::fill [ $0 + 128 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %[[AM_BASE]], %[[AM_A0]], %[[AM_B1:[^,]+]],
+  // CHECK: kind::f16.collector::a::fill.collector::b::lastuse [ $0 + 192 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %[[AM_BASE]], %[[AM_A1:[^,]+]], %[[AM_B1]],
+  // CHECK: kind::f16.collector::a::lastuse [ $0 + 64 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %[[AM_BASE]], %[[AM_A1]],
+  // CHECK-NOT: tcgen05.mma
+  tt.func @tc_gen5_mma_ab_reuse_a_major(
+      %a: !ttg.memdesc<256x16xf16, #shared, #ttg.shared_memory>,
+      %b: !ttg.memdesc<16x128xf16, #shared1, #ttg.shared_memory>,
+      %c: !ttg.memdesc<256x128xf32, #tmem_n64, #ttng.tensor_memory, mutable>,
+      %useAcc: i1, %pred: i1) {
+    ttng.tc_gen5_mma %a, %b, %c, %useAcc, %pred :
+      !ttg.memdesc<256x16xf16, #shared, #ttg.shared_memory>,
+      !ttg.memdesc<16x128xf16, #shared1, #ttg.shared_memory>,
+      !ttg.memdesc<256x128xf32, #tmem_n64, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @tc_gen5_mma_m64_no_reuse
+  // Neither collector is eligible across the half-datapath M=64 tiles.
+  // CHECK: kind::f16 [ $0 + 0 ]
+  // CHECK: kind::f16 [ $0 + 64 ]
+  // CHECK: kind::f16 [ $0 + 1048576 ]
+  // CHECK: kind::f16 [ $0 + 1048640 ]
+  // CHECK-NOT: tcgen05.mma
+  tt.func @tc_gen5_mma_m64_no_reuse(
+      %a: !ttg.memdesc<128x16xf16, #shared, #ttg.shared_memory>,
+      %b: !ttg.memdesc<16x128xf16, #shared1, #ttg.shared_memory>,
+      %c: !ttg.memdesc<128x128xf32, #tmem_m64, #ttng.tensor_memory, mutable>,
+      %useAcc: i1, %pred: i1) {
+    ttng.tc_gen5_mma %a, %b, %c, %useAcc, %pred :
+      !ttg.memdesc<128x16xf16, #shared, #ttg.shared_memory>,
+      !ttg.memdesc<16x128xf16, #shared1, #ttg.shared_memory>,
+      !ttg.memdesc<128x128xf32, #tmem_m64, #ttng.tensor_memory, mutable>
     tt.return
   }
 }
@@ -205,24 +273,32 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107"} {
-  // CHECK-LABEL: @tc_gen5_mma_block_scale_breuse
-  // CHECK: tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.block32.collector::b::fill
-  // CHECK: tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.block32.collector::b::lastuse
-  tt.func @tc_gen5_mma_block_scale_breuse(%a: !ttg.memdesc<256x64xf8E4M3FN, #shared, #ttg.shared_memory>,
-                       %b: !ttg.memdesc<32x128xi8, #shared1, #ttg.shared_memory>,
-                       %c: !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+  // CHECK-LABEL: @tc_gen5_mma_block_scale_ab_reuse
+  // FP8 A takes twice the bytes of packed FP4 B, despite equal M/N tile sizes.
+  // CHECK: kind::mxf8f6f4.block_scale.block32.collector::a::fill [ $0 + 0 ]
+  // CHECK-SAME: "r,l,l,r,r,r,b,b" %{{[^,]+}}, %{{[^,]+}}, %{{[^,]+}}, %[[SC_ID:[^,]+]], %[[SC_A0:[^,]+]], %[[SC_B0:[^,]+]],
+  // CHECK: kind::mxf8f6f4.block_scale.block32.collector::a::lastuse.collector::b::fill [ $0 + 256 ]
+  // CHECK-SAME: "r,l,l,r,r,r,b,b" %{{[^,]+}}, %{{[^,]+}}, %{{[^,]+}}, %[[SC_ID]], %[[SC_A0]], %[[SC_B1:[^,]+]],
+  // CHECK: kind::mxf8f6f4.block_scale.block32.collector::a::fill.collector::b::lastuse [ $0 + 384 ]
+  // CHECK-SAME: "r,l,l,r,r,r,b,b" %{{[^,]+}}, %{{[^,]+}}, %{{[^,]+}}, %[[SC_ID]], %[[SC_A1:[^,]+]], %[[SC_B1]],
+  // CHECK: kind::mxf8f6f4.block_scale.block32.collector::a::lastuse [ $0 + 128 ]
+  // CHECK-SAME: "r,l,l,r,r,r,b,b" %{{[^,]+}}, %{{[^,]+}}, %{{[^,]+}}, %[[SC_ID]], %[[SC_A1]], %[[SC_B0]],
+  // CHECK-NOT: tcgen05.mma
+  tt.func @tc_gen5_mma_block_scale_ab_reuse(%a: !ttg.memdesc<256x64xf8E4M3FN, #shared, #ttg.shared_memory>,
+                       %b: !ttg.memdesc<32x256xi8, #shared1, #ttg.shared_memory>,
+                       %c: !ttg.memdesc<256x256xf32, #tmem, #ttng.tensor_memory, mutable>,
                        %scale_a: !ttg.memdesc<256x2xi8, #tmem_scales, #ttng.tensor_memory>,
-                       %scale_b: !ttg.memdesc<128x2xi8, #tmem_scales, #ttng.tensor_memory>,
+                       %scale_b: !ttg.memdesc<256x2xi8, #tmem_scales, #ttng.tensor_memory>,
                        %useAcc: i1,
                        %pred: i1,
                        %barrier: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>,
                        %barrierPred: i1) {
     ttng.tc_gen5_mma_scaled %a, %b, %c, %scale_a, %scale_b, %useAcc, %pred lhs = e4m3 rhs = e2m1, %barrier[%barrierPred] {is_async} :
     !ttg.memdesc<256x64xf8E4M3FN, #shared, #ttg.shared_memory>,
-    !ttg.memdesc<32x128xi8, #shared1, #ttg.shared_memory>,
-    !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+    !ttg.memdesc<32x256xi8, #shared1, #ttg.shared_memory>,
+    !ttg.memdesc<256x256xf32, #tmem, #ttng.tensor_memory, mutable>,
     !ttg.memdesc<256x2xi8, #tmem_scales, #ttng.tensor_memory>,
-    !ttg.memdesc<128x2xi8, #tmem_scales, #ttng.tensor_memory>,
+    !ttg.memdesc<256x2xi8, #tmem_scales, #ttng.tensor_memory>,
     !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>
     tt.return
   }

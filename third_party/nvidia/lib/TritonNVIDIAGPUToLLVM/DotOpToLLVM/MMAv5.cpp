@@ -89,6 +89,18 @@ bool isTransposed(Value operand) {
   return attrs->transposed;
 }
 
+bool isFp4Padded(MemDescType operand) {
+  // An fp4Padded TMEM descriptor keeps the packed Mx(K/2)xi8 shape. Allocate
+  // two physical columns per packed K coordinate so each logical FP4 element
+  // occupies one byte in TMEM.
+  if (auto tmemLayout =
+          dyn_cast<ttng::TensorMemoryEncodingAttr>(operand.getEncoding()))
+    return tmemLayout.getFp4Padded();
+  auto attrs = ttng::getNvmmaSmemAttrs(operand);
+  assert(attrs && "expected MMAv5 shared operand to have NVMMA SMEM attrs");
+  return attrs->fp4Padded;
+}
+
 static int getScaleFactor(Type scaleType, int blockK) {
   auto shapedType = cast<ShapedType>(scaleType);
   int64_t scaleCols = shapedType.getShape().back();
@@ -455,6 +467,8 @@ void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
 // scaled dot.
 struct DotConversion {
   struct InstDesc {
+    // For 2CTA mode, the M dimension in the instruction descriptor must be
+    // doubled to match the hardware's expectation for cta_group::2 operations.
     unsigned mmaSizeM;
     unsigned mmaSizeN;
     struct {
@@ -469,11 +483,7 @@ struct DotConversion {
   using GetInstOperandsFn =
       std::function<MMAInstOperands(const InstDesc &, int, int, int)>;
 
-  struct {
-    unsigned M;
-    unsigned N;
-    unsigned K;
-  } shape;
+  unsigned blockK;
   int mmaSizeK;
   int numBitsPerElementA;
   int numBitsPerElementB;
@@ -531,7 +541,13 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   Value baseB =
       getOffsetedBase(loadedB, bTensorTy, &typeConverter, rewriter, loc);
 
-  auto [M, N, K] = op.shape;
+  // Use per-CTA shape to correctly handle 2-CTA mode. getBlockM/N() returns
+  // the full block shape (e.g., 256 for 2-CTA), but we need the per-CTA shape
+  // (e.g., 128) to compute the correct number of MMA repetitions.
+  SmallVector<int64_t> dstPerCTA = triton::gpu::getShapePerCTA(dTensorTy);
+  unsigned M = dstPerCTA[0];
+  unsigned N = dstPerCTA[1];
+  unsigned K = op.blockK;
 
   auto tensorMemAttr =
       cast<ttng::TensorMemoryEncodingAttr>(dTensorTy.getEncoding());
@@ -593,21 +609,29 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
                                 "float32 operands in shared memory");
   }
 
-  DotConversion::InstDesc desc{
-      mmaSizeM, mmaSizeN, {numRepM, numRepN, numRepK}, transA, transB};
+  // mmaSizeM/N is the per-cta size M/N, while the 2CTA instruction expects
+  // the 2CTA size mmaSize is always 64 / 128 so we double it for 2CTA
+  assert(mmaSizeM == 64 || mmaSizeM == 128);
+  DotConversion::InstDesc desc{twoCTAs ? mmaSizeM * 2 : mmaSizeM,
+                               mmaSizeN,
+                               {numRepM, numRepN, numRepK},
+                               transA,
+                               transB};
 
   // B reuse requires M = 128 for 1CTA or 256 for 2CTA, which corresponds to
   // the condition mmaSizeM == 128 here
   bool reuseB =
       numRepM == 2 && mmaSizeM == 128 && targetFeatures.supportsReuseB();
-  // Keep one A tile in the collector across the N tiles. Interleaving N
-  // inside K preserves the accumulation order and the first-K useD flag for
-  // every destination tile. Reuse is opportunistic, so A remains live until
-  // the whole MMA operation completes, just as on the non-reuse path.
+  // With A-only reuse, keep one A tile in the collector across the N tiles.
+  // Interleaving N inside K preserves the accumulation order and the first-K
+  // useD flag for every destination tile. Reuse is opportunistic, so A remains
+  // live until the whole MMA operation completes, just as on the non-reuse
+  // path. The same lifetime rule applies to B when both collectors are used.
   // M=64 uses half the datapath and can interleave N tiles across TMEM lane
   // alignments 0 and 16. A collector cannot be reused across that change.
-  bool reuseA = !reuseB && mmaSizeM == 128 && numRepN > 1 &&
-                targetFeatures.supportsReuseA();
+  bool reuseA =
+      mmaSizeM == 128 && numRepN > 1 && targetFeatures.supportsReuseA();
+  bool reuseBoth = reuseA && reuseB;
 
   // Dimensions are M, N, K. Keep the original traversal when neither
   // collector is used, and put the reused operand's other dimension innermost.
@@ -615,12 +639,32 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   std::array<int, 3> order = reuseB   ? std::array{1, 2, 0}
                              : reuseA ? std::array{0, 2, 1}
                                       : std::array{0, 1, 2};
+  if (reuseBoth) {
+    // Keep the more expensive source tile across the inner sweep, and reuse
+    // the other source at each turn. Count physical storage: FP4 can be packed
+    // or byte-padded, and FP6 also occupies byte-sized containers. There is no
+    // measured SMEM-versus-TMEM weighting here; equal sizes retain B priority.
+    auto storageBits = [](MemDescType ty, int logicalBits) {
+      return logicalBits == 4 && !isFp4Padded(ty)
+                 ? 4u
+                 : std::max<unsigned>(8, ty.getElementTypeBitWidth());
+    };
+    uint64_t aTileBits = uint64_t(aOperandShape[0]) * aOperandShape[1] *
+                         storageBits(aTensorTy, op.numBitsPerElementA);
+    uint64_t bTileBits = uint64_t(bOperandShape[0]) * bOperandShape[1] *
+                         storageBits(bTensorTy, op.numBitsPerElementB);
+    order = aTileBits > bTileBits ? std::array{2, 0, 1} : std::array{2, 1, 0};
+  }
   auto getIndices = [&](int64_t index) {
     std::array<int, 3> indices;
     for (int dim : llvm::reverse(order)) {
       indices[dim] = index % numReps[dim];
       index /= numReps[dim];
     }
+    // With both collectors, K is outermost and each M/N sweep reverses
+    // direction. Adjacent sweeps then share one operand at their boundary.
+    if (reuseBoth && indices[order[1]] % 2)
+      indices[order[2]] = numReps[order[2]] - 1 - indices[order[2]];
     return indices;
   };
 
@@ -696,10 +740,7 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
     llvm_unreachable("Unsupported type.");
   }
 
-  SmallVector<int64_t> dstPerCTA = triton::gpu::getShapePerCTA(dTensorTy);
-  dot.shape.M = dstPerCTA[0];
-  dot.shape.N = dstPerCTA[1];
-  dot.shape.K = aTensorTy.getDimSize(1);
+  dot.blockK = aTensorTy.getDimSize(1);
   dot.mmaSizeK = 256 / aTensorTy.getElementTypeBitWidth();
 
   auto tensorMemAttr =
@@ -719,13 +760,8 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
 
   dot.getInstOperands = [&](const DotConversion::InstDesc &desc, int, int,
                             int) -> MMAInstOperands {
-    // mmaSizeM/N is the per-cta size M/N, while the 2CTA instruction expects
-    // the 2CTA size mmaSize is always 64 / 128 so we double it for 2CTA
-    auto mmaSizeM = twoCTAs ? desc.mmaSizeM * 2 : desc.mmaSizeM;
-    auto mmaSizeN = desc.mmaSizeN;
-    assert(desc.mmaSizeM == 64 || desc.mmaSizeM == 128);
-    return {createInstDescriptor(rewriter, op, mmaSizeM, mmaSizeN, desc.transA,
-                                 desc.transB, dot.mmaSizeK),
+    return {createInstDescriptor(rewriter, op, desc.mmaSizeM, desc.mmaSizeN,
+                                 desc.transA, desc.transB, dot.mmaSizeK),
             {},
             {}};
   };
@@ -767,18 +803,6 @@ int getScaleFactorColsPerSet(mxfpKind kind, ttng::TCGen5MMAScaledOp op,
     llvm_unreachable("Unsupported mxfp kind.");
   }
 };
-
-bool isFp4Padded(MemDescType operand) {
-  // An fp4Padded TMEM descriptor keeps the packed Mx(K/2)xi8 shape. Allocate
-  // two physical columns per packed K coordinate so each logical FP4 element
-  // occupies one byte in TMEM.
-  if (auto tmemLayout =
-          dyn_cast<ttng::TensorMemoryEncodingAttr>(operand.getEncoding()))
-    return tmemLayout.getFp4Padded();
-  auto attrs = ttng::getNvmmaSmemAttrs(operand);
-  assert(attrs && "expected MMAv5 shared operand to have NVMMA SMEM attrs");
-  return attrs->fp4Padded;
-}
 
 int linearizeScaleBlockIdx(Value scale, int mnIdx, int wordIdx, int numRepMn,
                            int numRepKWords) {
@@ -825,13 +849,7 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
   unsigned mmaSizeM = tensorMemAttr.getBlockM();
   unsigned mmaSizeN = tensorMemAttr.getBlockN();
 
-  // Use per-CTA shape to correctly handle 2-CTA mode. getBlockM/N() returns
-  // the full block shape (e.g., 256 for 2-CTA), but we need the per-CTA shape
-  // (e.g., 128) to compute the correct number of MMA repetitions.
-  SmallVector<int64_t> dstPerCTA = triton::gpu::getShapePerCTA(dTensorTy);
-  dot.shape.M = dstPerCTA[0];
-  dot.shape.N = dstPerCTA[1];
-  dot.shape.K = blockK; // K is not split across CTAs
+  dot.blockK = blockK; // K is not split across CTAs
 
   bool hasFp4PaddedOperand = isFp4Padded(aTensorTy) || isFp4Padded(bTensorTy);
 
@@ -856,13 +874,13 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
   Value baseScaleB = tb.ptrtoint(i32_ty, adaptor.getBScale());
   bool twoCTAs = ttng::getModuleTwoCTAs(op);
   SmallVector<Value> commitDescs = op.getCompletionDescs();
+  int mmasPerScaleWord =
+      4 / getScaleFactorColsPerSet(mxfpInstKind, op, dot.mmaSizeK);
 
   dot.getInstOperands = [&](const DotConversion::InstDesc &desc, int m, int n,
                             int k) -> MMAInstOperands {
     auto [numRepM, numRepN, numRepK] = desc.repShape;
-    int scaleFactorColsPerSet =
-        getScaleFactorColsPerSet(mxfpInstKind, op, dot.mmaSizeK);
-    int numRepKWords = ceil<int>(numRepK, 4 / scaleFactorColsPerSet);
+    int numRepKWords = ceil<int>(numRepK, mmasPerScaleWord);
     int numColPerScaleBlockA = ceil<int>(
         ttng::getTmemAllocSizes(cast<MemDescType>(op.getAScale().getType()))
             .numCols,
@@ -872,8 +890,8 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
             .numCols,
         numRepN * numRepKWords);
     numColPerScaleBlockB = std::max(numColPerScaleBlockB, 2);
-    int subWordIdx = k % (4 / scaleFactorColsPerSet);
-    int wordIdx = k / (4 / scaleFactorColsPerSet);
+    int subWordIdx = k % mmasPerScaleWord;
+    int wordIdx = k / mmasPerScaleWord;
     int scaleIdxA = linearizeScaleBlockIdx(op.getAScale(), m, wordIdx, numRepM,
                                            numRepKWords);
     int scaleIdxB = linearizeScaleBlockIdx(op.getBScale(), n, wordIdx, numRepN,
@@ -883,16 +901,13 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
     Value scaleB =
         tb.add(baseScaleB, tb.i32_val(scaleIdxB * numColPerScaleBlockB));
     Value instDescriptor;
-    // For 2CTA mode, the M dimension in the instruction descriptor must be
-    // doubled to match the hardware's expectation for cta_group::2 operations.
-    int mmaM = twoCTAs ? desc.mmaSizeM * 2 : desc.mmaSizeM;
     if (mxfpInstKind == mxfpKind::mxf8f6f4) {
       instDescriptor = createScaleInstDescriptorFp8(
-          rewriter, op, mmaM, desc.mmaSizeN, desc.transA, desc.transB,
+          rewriter, op, desc.mmaSizeM, desc.mmaSizeN, desc.transA, desc.transB,
           subWordIdx, subWordIdx, dot.mmaSizeK);
     } else {
       instDescriptor = createScaleInstDescriptorFp4(
-          rewriter, op, mmaM, desc.mmaSizeN, desc.transA, desc.transB,
+          rewriter, op, desc.mmaSizeM, desc.mmaSizeN, desc.transA, desc.transB,
           subWordIdx, subWordIdx, mxfpInstKind, blockK, dot.mmaSizeK);
     }
 

@@ -1153,6 +1153,33 @@ def test_tcgen05_mma_collector_a(M, N):
     torch.testing.assert_close(out, a.float() @ b.float(), atol=0, rtol=0)
 
 
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
+@pytest.mark.parametrize("N,BLOCK_N,expected", [
+    pytest.param(128, 128, [("", "fill"), ("", "lastuse")], id="b-only"),
+    pytest.param(256, 128, [("", "fill"), ("fill", "lastuse"), ("lastuse", "fill"), ("", "lastuse")], id="b-major"),
+    pytest.param(128, 64, [("fill", ""), ("lastuse", "fill"), ("fill", "lastuse"), ("lastuse", "")], id="a-major"),
+])
+def test_tcgen05_mma_collector_ab(N, BLOCK_N, expected):
+    M, K = 256, 32
+    layout = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+    acc_layout = TensorMemoryLayout([128, BLOCK_N], col_stride=1)
+    shared_a = ttgl.NVMMASharedLayout.get_default_for([M, K], ttgl.float16)
+    shared_b = ttgl.NVMMASharedLayout.get_default_for([K, N], ttgl.float16)
+
+    torch.manual_seed(0)
+    a = torch.randint(-3, 4, (M, K), device="cuda").to(torch.float16)
+    b = torch.randint(-3, 4, (K, N), device="cuda").to(torch.float16)
+    out = torch.empty((M, N), device="cuda", dtype=torch.float32)
+    compiled = mma_kernel[(1, )](a, b, out, M, N, K, layout, layout, (), acc_layout, shared_a, shared_b, ttgl.float32,
+                                 False, True, num_warps=4)
+
+    collectors = re.findall(
+        r"tcgen05\.mma\.cta_group::1\.kind::f16(?:\.collector::a::(\w+))?(?:\.collector::b::(\w+))?\s",
+        compiled.asm["ptx"])
+    assert collectors == expected * (K // 16)
+    torch.testing.assert_close(out, a.float() @ b.float(), atol=0, rtol=0)
+
+
 @gluon.jit
 def warpgroup_mma_wait_multi_warpgroup_kernel(a_ptr, b0_ptr, b1_ptr, out_ptr, D: ttgl.constexpr, NBLK: ttgl.constexpr,
                                               WG: ttgl.constexpr):
