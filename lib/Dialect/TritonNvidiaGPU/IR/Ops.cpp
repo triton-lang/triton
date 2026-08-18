@@ -716,7 +716,7 @@ static LogicalResult verifyAsyncTMALoadOp(Operation *op,
       toLinearLayout(barrier.getType()).getFreeVariableMasks().lookup(block);
   auto shape =
       dropPipeliningDim(resultType.getShape(), resultType.getEncoding());
-  auto allocation = toLinearLayout(resultType);
+  auto allocation = toLinearLayoutWithPow2Shape(resultType);
   for (auto [bit, basis] : llvm::enumerate(allocation.getBases().lookup(block)))
     for (auto [component, size] : llvm::zip_equal(basis, shape))
       if (component >= size && (bit || barrierMask > 1))
@@ -735,7 +735,7 @@ static LogicalResult verifyAsyncTMAStoreOp(Operation *op,
   if (isFp4Padded(srcEnc))
     return op->emitOpError("does not support fp4_padded operands");
   auto shape = dropPipeliningDim(srcType.getShape(), srcEnc);
-  auto allocation = toLinearLayout(srcType);
+  auto allocation = toLinearLayoutWithPow2Shape(srcType);
   auto block = StringAttr::get(op->getContext(), "block");
   for (const auto &basis : allocation.getBases().lookup(block))
     for (auto [component, size] : llvm::zip_equal(basis, shape))

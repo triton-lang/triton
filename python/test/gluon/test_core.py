@@ -232,6 +232,35 @@ def test_tma():
 
 
 @gluon.jit
+def tma_non_power_of_two_copy_kernel(in_desc, out_desc):
+    smem = ttgl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout)
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    mbarrier.expect(bar, in_desc.nbytes_per_cta)
+    tma.async_load(in_desc, [0, 0, 0, 0, 0], bar, smem)
+    mbarrier.wait(bar, phase=0, deps=[smem])
+    mbarrier.invalidate(bar)
+    tma.async_store(out_desc, [0, 0, 0, 0, 0], smem)
+    tma.store_wait(0)
+    smem._keep_alive()
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_tma_non_power_of_two_shape():
+    # The three core matrices represent a fully packed K=128 LUT operand:
+    # 128 * 3 bits / 8 bits per byte = 48 bytes = 3 * 16-byte core matrices.
+    block_shape = [1, 1, 3, 32, 128]
+    inp = torch.randint(0, 256, block_shape, dtype=torch.uint8, device="cuda")
+    out = torch.empty_like(inp)
+    layout = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5)
+    in_desc = TensorDescriptor.from_tensor(inp, block_shape, layout)
+    out_desc = TensorDescriptor.from_tensor(out, block_shape, layout)
+
+    tma_non_power_of_two_copy_kernel[(1, )](in_desc, out_desc, num_warps=4)
+    torch.testing.assert_close(out, inp, atol=0, rtol=0)
+
+
+@gluon.jit
 def tma_im2col_kernel(in_desc, out_desc, MULTICAST: ttgl.constexpr):
     smem = ttgl.allocate_shared_memory(in_desc.dtype, in_desc.block_shape, in_desc.layout)
     bar = mbarrier.allocate_mbarrier()
@@ -2188,9 +2217,9 @@ def _mma_lut_kernel(
         k = k_iter * BLOCK_K
         lut_block_k = k_iter * (BLOCK_K // 128)
         mbarrier.expect(tma_bar, a_desc.nbytes_per_cta + b_desc_tma.nbytes_per_cta + lut_desc.nbytes_per_cta)
-        tma.async_copy_global_to_shared(a_desc, [off_m, k], tma_bar, a_smem)
-        tma.async_copy_global_to_shared(b_desc_tma, [block_n, k_iter, 0, 0, 0], tma_bar, b_smem)
-        tma.async_copy_global_to_shared(
+        tma.async_load(a_desc, [off_m, k], tma_bar, a_smem)
+        tma.async_load(b_desc_tma, [block_n, k_iter, 0, 0, 0], tma_bar, b_smem)
+        tma.async_load(
             lut_desc,
             [lut_block_n, lut_block_k, 0, 0],
             tma_bar,
@@ -2222,7 +2251,7 @@ def _mma_lut_kernel(
     c_smem = ttgl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
     c_smem.store(acc)
     fence_async_shared()
-    tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
+    tma.async_store(c_desc, [off_m, off_n], c_smem)
     tma.store_wait(pendings=0)
 
 
@@ -6021,7 +6050,7 @@ def _mma_scaled_lut_kernel(
     c_smem = ttgl.allocate_shared_memory(c_desc.dtype, c_desc.block_type.shape, c_desc.layout)
     c_smem.store(acc)
     fence_async_shared()
-    tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
+    tma.async_store(c_desc, [off_m, off_n], c_smem)
     tma.store_wait(0)
 
 

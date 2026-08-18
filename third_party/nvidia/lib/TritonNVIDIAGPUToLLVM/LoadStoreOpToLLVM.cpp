@@ -1286,7 +1286,7 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
 
   auto msgToPackedOffset =
       getMsgToPackedOffsetLayout(srcTy, ttg::TMAMode::Tiled);
-  auto smemLayout = ttg::toLinearLayout(srcTy);
+  auto smemLayout = ttg::toLinearLayoutWithPow2Shape(srcTy);
   auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
   auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, srcTy);
 
