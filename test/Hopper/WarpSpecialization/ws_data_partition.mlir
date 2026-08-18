@@ -151,3 +151,37 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// CHECK-LABEL: @if_result_backward_slice
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 256, 16]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @if_result_backward_slice(%arg0: !tt.ptr<f16>, %arg1: tensor<64x256xf16, #blocked1>) {
+    %true = arith.constant true
+    %cst = arith.constant {async_task_id = array<i32: 1, 2>} dense<0.000000e+00> : tensor<128x256xf32, #mma>
+    %ptr = tt.splat %arg0 {async_task_id = array<i32: 0>} : !tt.ptr<f16> -> tensor<128x64x!tt.ptr<f16>, #blocked>
+    // CHECK: %[[#LOAD1:]] = tt.load {{.*}} : tensor<64x64x!tt.ptr<f16>
+    // CHECK: %[[#LOAD2:]] = tt.load {{.*}} : tensor<64x64x!tt.ptr<f16>
+    %load = tt.load %ptr {async_task_id = array<i32: 0>} : tensor<128x64x!tt.ptr<f16>, #blocked>
+    // CHECK: %[[#ALLOC1:]] = ttg.local_alloc %[[#LOAD1]]
+    // CHECK: %[[#ALLOC2:]] = ttg.local_alloc %[[#LOAD2]]
+    %alloc = ttg.local_alloc %load {async_task_id = array<i32: 1, 2>} : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+    // CHECK: scf.if {{.*}} -> (!ttg.memdesc<64x64xf16
+    // CHECK: scf.if {{.*}} -> (!ttg.memdesc<64x64xf16
+    %maybe_alloc = scf.if %true -> (!ttg.memdesc<128x64xf16, #shared, #smem>) {
+      scf.yield {async_task_id = array<i32: 1, 2>} %alloc : !ttg.memdesc<128x64xf16, #shared, #smem>
+    } else {
+      scf.yield {async_task_id = array<i32: 1, 2>} %alloc : !ttg.memdesc<128x64xf16, #shared, #smem>
+    }
+    %rhs = ttg.local_alloc %arg1 {async_task_id = array<i32: 1, 2>} : (tensor<64x256xf16, #blocked1>) -> !ttg.memdesc<64x256xf16, #shared, #smem>
+    // CHECK: ttng.warp_group_dot {{.*}} : !ttg.memdesc<64x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<64x256xf32, #mma>
+    // CHECK: ttng.warp_group_dot {{.*}} : !ttg.memdesc<64x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<64x256xf32, #mma>
+    %dot = ttng.warp_group_dot %maybe_alloc, %rhs, %cst {async_task_id = array<i32: 1, 2>, inputPrecision = 0 : i32} : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<128x256xf32, #mma>
+    tt.return
+  }
+}
