@@ -229,6 +229,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       const size_t nWords = std::max<size_t>(1, totalWidth / width);
       const size_t wordNElems = width / valueElemNBits;
       const size_t movWidth = width < 16 ? 16 : width;
+      assert(movWidth <= 64 && "load words must be at most 64 bits");
       assert(wordNElems * nWords * numVecs == numElems);
 
       PTXBuilder ptxBuilder;
@@ -253,7 +254,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       if (other) {
         for (size_t ii = 0; ii < nWords; ++ii) {
           PTXInstr::Operand *opr{};
-          if (otherConstInt && movWidth <= 64) {
+          if (otherConstInt) {
             // Pack the declared element bits into their physical slots.
             APInt bits = otherConstInt->zextOrTrunc(valueElemNBits);
             APInt packed = APInt::getSplat(movWidth, bits);
