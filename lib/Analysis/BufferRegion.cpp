@@ -20,6 +20,16 @@ using namespace mlir;
 
 namespace {
 // TODO: move to Utility.cpp/unify with TritonInstrument/Utility.cpp
+triton::LinearLayout getMemDescLinearLayout(ttg::MemDescType ty) {
+  if (ttg::isPaddedEncoding(ty.getEncoding()))
+    return ttg::paddedLinearLayout(ty);
+  auto shape =
+      ttg::dropPipeliningDim(ty.getAllocShape(), ty.getEncoding());
+  if (!ttg::isPositivePowerOfTwoShape(shape))
+    return ttg::toLinearLayoutWithPow2Shape(ty);
+  return ttg::toLinearLayout(ty);
+}
+
 FailureOr<SmallVector<uint32_t, 2>> getAllocationOffsets(ttg::LocalAllocOp op) {
   auto offsetAttr = op->getAttr("allocation.offset");
   if (!offsetAttr) {
@@ -113,7 +123,7 @@ MemDescFootprint getMemDescAddresses(
     }
     return footprint;
   }
-  triton::LinearLayout layout = ttg::toLinearLayoutIgnoringPadding(ty);
+  triton::LinearLayout layout = getMemDescLinearLayout(ty);
   triton::LinearLayout inverse = layout.pseudoinvert();
   MLIRContext *ctx = ty.getContext();
   SmallVector<StringAttr> dims = triton::standardOutDimNames(ctx, ty.getRank());
@@ -160,9 +170,11 @@ MemDescFootprint getMemDescAddresses(
     uint32_t block = 0;
   };
   SmallVector<PhysicalBasis> bases;
+  SmallVector<unsigned> basisCounts;
   bool hasCTAAddressVariation = false;
   for (auto [dim, dimSize] : llvm::zip_equal(dims, shape)) {
-    unsigned numBits = llvm::Log2_64(dimSize);
+    unsigned numBits = llvm::Log2_64_Ceil(dimSize);
+    basisCounts.push_back(numBits);
     for (unsigned bit = 0; bit < numBits; ++bit) {
       auto basis = [&, dim = dim](StringAttr name) {
         return inverse.hasOutDim(name)
@@ -187,18 +199,41 @@ MemDescFootprint getMemDescAddresses(
     return footprint;
   }
 
-  PhysicalBasis physical;
-  for (uint64_t index = 0; index < numPoints; ++index) {
-    if (index != 0) {
-      const PhysicalBasis &basis = bases[llvm::countr_zero(index)];
-      physical.offset ^= basis.offset;
-      physical.row ^= basis.row;
-      physical.col ^= basis.col;
-      physical.partition ^= basis.partition;
-      physical.block ^= basis.block;
+  auto applyBasis = [](PhysicalBasis &physical, const PhysicalBasis &basis) {
+    physical.offset ^= basis.offset;
+    physical.row ^= basis.row;
+    physical.col ^= basis.col;
+    physical.partition ^= basis.partition;
+    physical.block ^= basis.block;
+  };
+
+  if (ttg::isPositivePowerOfTwoShape(shape)) {
+    PhysicalBasis physical;
+    for (uint64_t index = 0; index < numPoints; ++index) {
+      if (index != 0)
+        applyBasis(physical, bases[llvm::countr_zero(index)]);
+      addPhysicalAddress(physical.offset, physical.row, physical.col,
+                         physical.partition, physical.block);
     }
-    addPhysicalAddress(physical.offset, physical.row, physical.col,
-                       physical.partition, physical.block);
+  } else {
+    // A flattened Gray-code traversal only describes power-of-two boxes.
+    // Enumerate logical coordinates for a non-power-of-two memdesc and apply
+    // the corresponding inverse-layout bases explicitly.
+    for (uint64_t index = 0; index < numPoints; ++index) {
+      uint64_t remaining = index;
+      unsigned basisStart = 0;
+      PhysicalBasis physical;
+      for (auto [dimSize, numBits] : llvm::zip_equal(shape, basisCounts)) {
+        uint64_t coordinate = remaining % dimSize;
+        remaining /= dimSize;
+        for (unsigned bit = 0; bit < numBits; ++bit)
+          if (coordinate & (uint64_t{1} << bit))
+            applyBasis(physical, bases[basisStart + bit]);
+        basisStart += numBits;
+      }
+      addPhysicalAddress(physical.offset, physical.row, physical.col,
+                         physical.partition, physical.block);
+    }
   }
   return footprint;
 }
@@ -231,7 +266,7 @@ getMemDescSubsliceUnpaddedOffsets(ttg::MemDescSubsliceOp op) {
   Attribute encoding = srcTy.getEncoding();
   auto layoutOffsets = ttg::dropPipeliningDim(offsets, encoding);
   auto layoutRank = layoutOffsets.size();
-  mlir::triton::LinearLayout layout = ttg::toLinearLayoutIgnoringPadding(srcTy);
+  mlir::triton::LinearLayout layout = getMemDescLinearLayout(srcTy);
 
   MLIRContext *ctx = op->getContext();
   SmallVector<StringAttr> dimNames =

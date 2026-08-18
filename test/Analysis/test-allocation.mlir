@@ -14,6 +14,7 @@
 #A_SHARED_1D = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [0]}>
 #A_SHARED_T = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [0, 1]}>
 #A_SHARED_HOLEY = #ttg.shared_linear<{offset = [[0, 1], [0, 0], [1, 0], [2, 0]], block = []}, alignment = 16>
+#LUTB_SHARED_NONPOW2 = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [16, 0], [32, 0]]}, alignment = 16>
 #B_SHARED = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
 #C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
 #A_DOT = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth = 2}>
@@ -1024,6 +1025,24 @@ tt.func @nvmma_alignment(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f
 tt.func @holey_shared_allocation() {
   // expected-remark @below {{offset = 0, size = 64}}
   %alloc = ttg.local_alloc : () -> !ttg.memdesc<4x2xi32, #A_SHARED_HOLEY, #ttg.shared_memory, mutable>
+  tt.return
+}
+
+// The LinearLayout uses the normalized 64x256 shape, but the logical LUTB
+// allocation remains fully packed at 48x256 bytes.
+// expected-remark @below {{nonpow2_shared_allocation}}
+// expected-remark @below {{size = 12288}}
+tt.func @nonpow2_shared_allocation() {
+  // expected-remark @below {{offset = 0, size = 12288}}
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<48x256xi8, #LUTB_SHARED_NONPOW2, #ttg.shared_memory, mutable>
+  tt.return
+}
+
+// expected-remark @below {{nonpow2_shared_multibuffer_allocation}}
+// expected-remark @below {{size = 24576}}
+tt.func @nonpow2_shared_multibuffer_allocation() {
+  // expected-remark @below {{offset = 0, size = 24576}}
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<2x48x256xi8, #LUTB_SHARED_NONPOW2, #ttg.shared_memory, mutable>
   tt.return
 }
 

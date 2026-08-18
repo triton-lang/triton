@@ -475,11 +475,24 @@ int64_t getAllocationElems(Attribute encoding, ArrayRef<int64_t> shape,
     allocShape = shape;
   auto layoutShape = dropPipeliningDim(shape, encoding);
   auto allocationShape = dropPipeliningDim(allocShape, encoding);
-  auto physicalShape = normalizeShapeToPowerOf2(allocationShape);
-  auto layout = toLinearLayoutIgnoringPadding(physicalShape, encoding);
+  auto normalizedShape = normalizeShapeToPowerOf2(allocationShape);
+  auto layout = toLinearLayoutIgnoringPadding(normalizedShape, encoding);
   auto offsetDim = StringAttr::get(encoding.getContext(), "offset");
+  int64_t allocationElems = layout.getInDimSize(offsetDim);
+  if (!llvm::equal(allocationShape, normalizedShape)) {
+    auto allocationShapePerCTA = getShapePerCTA(encoding, allocationShape);
+    auto normalizedShapePerCTA = getShapePerCTA(encoding, normalizedShape);
+    for (auto [logicalSize, normalizedSize] :
+         llvm::zip_equal(allocationShapePerCTA, normalizedShapePerCTA)) {
+      if (logicalSize == normalizedSize)
+        continue;
+      assert(allocationElems % normalizedSize == 0 &&
+             "normalized dimension must divide the allocation footprint");
+      allocationElems = allocationElems / normalizedSize * logicalSize;
+    }
+  }
   int64_t stages = product<int64_t>(shape.drop_back(layoutShape.size()));
-  int64_t elems = stages * layout.getInDimSize(offsetDim);
+  int64_t elems = stages * allocationElems;
   if (layoutShape != allocationShape) {
     auto logicalDims = llvm::to_vector(layout.getOutDimNames());
     LinearLayout identity = LinearLayout::empty();
@@ -490,7 +503,7 @@ int64_t getAllocationElems(Attribute encoding, ArrayRef<int64_t> shape,
                         ~getInputBasisMask(layout, offsetDim, logicalDims);
     int64_t viewElems =
         (getOutputBasisMask(view, logicalDims, offsetDim) | zeroMask) + 1;
-    elems = (stages - 1) * layout.getInDimSize(offsetDim) + viewElems;
+    elems = (stages - 1) * allocationElems + viewElems;
   }
   if (auto partitioned = dyn_cast<PartitionedSharedEncodingAttr>(encoding))
     elems *= partitioned.getNumPartitions();
