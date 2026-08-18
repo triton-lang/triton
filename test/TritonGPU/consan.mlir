@@ -2502,14 +2502,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return %incoming : !ttg.memdesc<16xi32, #nested_shared, #nested_smem, mutable>
   }
 
-  // An otherwise unsupported function that is unreachable from the public
-  // entrypoint does not constrain the entrypoint's call summary.
-  tt.func private @unreachable_unsupported_callee() {
-    %unused = ttg.local_alloc {allocation.offset = 0 : i32}
-        : () -> !ttg.memdesc<16xi32, #nested_shared, #nested_smem, mutable>
-    tt.return
-  }
-
   // CHECK-LABEL: tt.func public @nested_scratch_and_descriptor_forwarding
   tt.func public @nested_scratch_and_descriptor_forwarding(
       %value: tensor<128xi32, #nested_src>, %global: !tt.ptr<i32>) {

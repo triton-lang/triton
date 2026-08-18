@@ -5,6 +5,7 @@
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Transforms/Passes.h"
+#include "triton/Analysis/Allocation.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
@@ -15,7 +16,6 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/Sys/GetEnv.h"
-#include "llvm/ADT/DenseSet.h"
 
 namespace mlir {
 namespace triton {
@@ -781,9 +781,11 @@ public:
       return failure();
     }
     entryPoint = publicFuncs.front();
-    SmallVector<tt::FuncOp> reachableFunctions;
-    if (failed(collectReachableFunctions(reachableFunctions)) ||
-        failed(validateNonEntryFunctions(reachableFunctions)))
+    if (entryPoint.isExternal()) {
+      entryPoint.emitError("ConSan entrypoint must have a function body");
+      return failure();
+    }
+    if (failed(validateNonEntryFunctions()))
       return failure();
 
     tti::FunctionBuilder funcBuilder(module, auxData);
@@ -800,40 +802,6 @@ public:
   }
 
 private:
-  LogicalResult
-  collectReachableFunctions(SmallVectorImpl<tt::FuncOp> &reachableFunctions) {
-    if (entryPoint.isExternal()) {
-      entryPoint.emitError("ConSan entrypoint must have a function body");
-      return failure();
-    }
-
-    SymbolTableCollection symbolTable;
-    DenseSet<Operation *> visited;
-    SmallVector<tt::FuncOp> worklist{entryPoint};
-    visited.insert(entryPoint.getOperation());
-
-    while (!worklist.empty()) {
-      tt::FuncOp func = worklist.pop_back_val();
-      reachableFunctions.push_back(func);
-      WalkResult result = func.walk([&](CallOpInterface call) -> WalkResult {
-        Operation *resolved = call.resolveCallableInTable(&symbolTable);
-        tt::FuncOp callee = dyn_cast_or_null<tt::FuncOp>(resolved);
-        if (!callee || callee.isExternal()) {
-          call->emitError("ConSan cannot summarize an unresolved or external "
-                          "callee in function @")
-              << func.getName();
-          return WalkResult::interrupt();
-        }
-        if (visited.insert(callee.getOperation()).second)
-          worklist.push_back(callee);
-        return WalkResult::advance();
-      });
-      if (result.wasInterrupted())
-        return failure();
-    }
-    return success();
-  }
-
   bool isCTALocalScratch(Operation *op) const {
     if (!op->hasAttr("allocation.size") || ttg::lookupNumCTAs(op) == 1)
       return true;
@@ -843,36 +811,42 @@ private:
       RankedTensorType dstType = convert.getType();
       if (!srcType.getEncoding() || !dstType.getEncoding())
         return false;
-      StringAttr block = StringAttr::get(op->getContext(), "block");
-      return invertAndComposeBlockLocal(ttg::toLinearLayout(srcType),
-                                        ttg::toLinearLayout(dstType))
-          .isIdentityOnOutDim(block);
-    }
-
-    if (auto reduce = dyn_cast<tt::ReduceOp>(op)) {
+    } else if (auto reduce = dyn_cast<tt::ReduceOp>(op)) {
       SmallVector<RankedTensorType> inputs = reduce.getInputTypes();
       if (inputs.empty() || !inputs.front().getEncoding())
         return false;
       SmallVector<unsigned> splits =
           ttg::getCTASplitNum(inputs.front().getEncoding());
       unsigned axis = reduce.getAxis();
-      return axis < splits.size() && splits[axis] == 1;
+      if (axis >= splits.size())
+        return false;
+    } else {
+      return true;
     }
-
-    return true;
+    return !tt::hasCrossCTAScratch(op);
   }
 
   // Non-entry bodies are not instrumented. Their compiler-owned shared memory
   // is covered by the virtual frame on each call, but SSA-visible memory and
   // sanitizer state transitions cannot be represented by that summary.
-  LogicalResult
-  validateNonEntryFunctions(ArrayRef<tt::FuncOp> reachableFunctions) {
+  LogicalResult validateNonEntryFunctions() {
+    SymbolTableCollection symbolTable;
     AuxDataMap emptyAuxData;
-    for (tt::FuncOp func : reachableFunctions) {
-      if (func == entryPoint)
-        continue;
+    for (tt::FuncOp func : module.getOps<tt::FuncOp>()) {
       WalkResult result = func.walk([&](Operation *op) -> WalkResult {
         if (op == func.getOperation())
+          return WalkResult::advance();
+        if (auto call = dyn_cast<CallOpInterface>(op)) {
+          Operation *resolved = call.resolveCallableInTable(&symbolTable);
+          tt::FuncOp callee = dyn_cast_or_null<tt::FuncOp>(resolved);
+          if (!callee || callee.isExternal()) {
+            call->emitError("ConSan cannot summarize an unresolved or external "
+                            "callee in function @")
+                << func.getName();
+            return WalkResult::interrupt();
+          }
+        }
+        if (func == entryPoint)
           return WalkResult::advance();
         if (op->hasAttr("allocation.size") &&
             failed(getConSanMemEffectsOpInfo(hooks, op)))

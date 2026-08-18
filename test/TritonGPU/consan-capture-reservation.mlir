@@ -7,8 +7,6 @@
 // RUN: not triton-opt %t/private-amd-cluster-arrive.mlir -allow-unregistered-dialect -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/private-amd-cluster-arrive.mlir --check-prefix=AMD-ARRIVE
 // RUN: not triton-opt %t/private-amd-cluster-wait.mlir -allow-unregistered-dialect -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/private-amd-cluster-wait.mlir --check-prefix=AMD-WAIT
 // RUN: not triton-opt %t/private-cross-cta-scratch.mlir -allow-unregistered-dialect -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/private-cross-cta-scratch.mlir --check-prefix=CROSS-CTA
-// RUN: not triton-opt %t/scratch-missing-offset.mlir -allow-unregistered-dialect -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/scratch-missing-offset.mlir --check-prefix=SCRATCH-MISSING-OFFSET
-// RUN: not triton-opt %t/scratch-invalid.mlir -allow-unregistered-dialect -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/scratch-invalid.mlir --check-prefix=SCRATCH-INVALID
 
 //--- missing.mlir
 
@@ -130,36 +128,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   tt.func public @entry(%value: tensor<8x32xi32, #cross_src>) {
     tt.call @private_cross_cta_conversion(%value) {allocation.offset = 0 : i32, allocation.size = 512 : i32}
         : (tensor<8x32xi32, #cross_src>) -> ()
-    tt.return
-  }
-}
-
-//--- scratch-missing-offset.mlir
-
-#src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-#dst_parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
-#dst = #ttg.slice<{dim = 1, parent = #dst_parent}>
-
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 512 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {
-  tt.func public @scratch_missing_offset(%value: tensor<128xi32, #src>) {
-    // SCRATCH-MISSING-OFFSET: compiler scratch metadata requires integer allocation.offset and allocation.size attributes
-    %converted = ttg.convert_layout %value {allocation.size = 512 : i32}
-        : tensor<128xi32, #src> -> tensor<128xi32, #dst>
-    tt.return
-  }
-}
-
-//--- scratch-invalid.mlir
-
-#src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-#dst_parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
-#dst = #ttg.slice<{dim = 1, parent = #dst_parent}>
-
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 512 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {
-  tt.func public @scratch_invalid(%value: tensor<128xi32, #src>) {
-    // SCRATCH-INVALID: invalid compiler scratch allocation metadata: offset 16777215, size 2
-    %converted = ttg.convert_layout %value {allocation.offset = 16777215 : i32, allocation.size = 2 : i32}
-        : tensor<128xi32, #src> -> tensor<128xi32, #dst>
     tt.return
   }
 }

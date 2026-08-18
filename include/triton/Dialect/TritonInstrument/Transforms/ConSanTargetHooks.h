@@ -6,7 +6,6 @@
 #include "triton/Analysis/BufferRegion.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
-#include "llvm/ADT/APInt.h"
 #include <functional>
 #include <memory>
 #include <optional>
@@ -216,46 +215,13 @@ public:
 inline FailureOr<std::optional<MemEffectsOpInfo>>
 getConSanMemEffectsOpInfo(const ConSanTargetHooks &hooks, Operation *op) {
   std::optional<MemEffectsOpInfo> info = hooks.getMemEffectsOpInfo(op);
-  Attribute rawSize = op->getAttr("allocation.size");
-  if (!rawSize)
+  auto sizeAttr = op->getAttrOfType<IntegerAttr>("allocation.size");
+  if (!sizeAttr)
     return info;
 
-  auto size = dyn_cast<IntegerAttr>(rawSize);
-  auto offset = dyn_cast_or_null<IntegerAttr>(op->getAttr("allocation.offset"));
-  if (!size || !offset || !size.getType().isSignlessInteger() ||
-      !offset.getType().isSignlessInteger()) {
-    op->emitError("compiler scratch metadata requires integer "
-                  "allocation.offset and allocation.size attributes");
-    return failure();
-  }
-
-  constexpr uint64_t maxSharedMemorySize = uint64_t{1} << 24;
-  const llvm::APInt &offsetValue = offset.getValue();
-  const llvm::APInt &sizeValue = size.getValue();
-  bool valid = !offsetValue.isNegative() && !sizeValue.isNegative() &&
-               !sizeValue.isZero() && offsetValue.ule(maxSharedMemorySize) &&
-               sizeValue.ule(maxSharedMemorySize);
-  if (valid) {
-    uint64_t unsignedOffset = offsetValue.getZExtValue();
-    uint64_t unsignedSize = sizeValue.getZExtValue();
-    valid = unsignedSize <= maxSharedMemorySize - unsignedOffset;
-  }
-  if (!valid) {
-    InFlightDiagnostic diagnostic =
-        op->emitError("invalid compiler scratch allocation metadata: offset ");
-    if (offsetValue.getBitWidth() <= 64)
-      diagnostic << offset.getInt();
-    else
-      diagnostic << offset;
-    diagnostic << ", size ";
-    if (sizeValue.getBitWidth() <= 64)
-      diagnostic << size.getInt();
-    else
-      diagnostic << size;
-    diagnostic << "; the interval must be non-empty and fit in the "
-                  "24-bit shared-memory address space";
-    return failure();
-  }
+  uint32_t offset =
+      op->getAttrOfType<IntegerAttr>("allocation.offset").getInt();
+  uint32_t size = sizeAttr.getInt();
 
   if (!info)
     info.emplace();
@@ -271,10 +237,7 @@ getConSanMemEffectsOpInfo(const ConSanTargetHooks &hooks, Operation *op) {
   // conservative read/write summary for compiler-owned scratch.
   StringRef name = isa<CallOpInterface>(op) ? "Callee scratch" : "Scratch";
   info->operandEffects.emplace_back(
-      RW::Write,
-      MemEffectsOpInfo::Effects::StaticSharedBuffer{
-          static_cast<uint32_t>(offsetValue.getZExtValue()),
-          static_cast<uint32_t>(sizeValue.getZExtValue())},
+      RW::Write, MemEffectsOpInfo::Effects::StaticSharedBuffer{offset, size},
       name.str());
   return info;
 }

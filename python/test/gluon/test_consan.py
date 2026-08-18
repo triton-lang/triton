@@ -3825,12 +3825,12 @@ def test_barrier_underflow(device, run_wrapper, monkeypatch, num_ctas):
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
-@pytest.mark.parametrize("ASYNC", [False, True], ids=["generic", "async-copy"])
+@pytest.mark.parametrize("ACCESS", ["generic", "async-copy", "convert-layout"])
 @pytest.mark.parametrize("INVALIDATE", [False, True], ids=["live", "invalidated"])
-def test_payload_reuse_requires_barrier_invalidation(ASYNC, INVALIDATE, device, run_wrapper, monkeypatch):
+def test_payload_reuse_requires_barrier_invalidation(ACCESS, INVALIDATE, device, run_wrapper, monkeypatch):
     if run_wrapper and not INVALIDATE:
         result = run_in_process(test_payload_reuse_requires_barrier_invalidation,
-                                (ASYNC, INVALIDATE, device, False, monkeypatch))
+                                (ACCESS, INVALIDATE, device, False, monkeypatch))
         assert_expected_cuda_failure(result.exc)
         assert "Shared memory reused before barrier invalidation" in result.driver_stderr_output
         return
@@ -3840,7 +3840,7 @@ def test_payload_reuse_requires_barrier_invalidation(ASYNC, INVALIDATE, device, 
     knobs.refresh_knobs()
 
     @gluon.jit
-    def kernel(source, output, ASYNC: ttgl.constexpr, INVALIDATE: ttgl.constexpr):
+    def kernel(source, output, ACCESS: ttgl.constexpr, INVALIDATE: ttgl.constexpr):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
         smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
         barrier = mbarrier.allocate_mbarrier()
@@ -3849,22 +3849,28 @@ def test_payload_reuse_requires_barrier_invalidation(ASYNC, INVALIDATE, device, 
             mbarrier.invalidate(barrier)
 
         offsets = ttgl.arange(0, XBLOCK, layout=layout)
-        if ASYNC:
+        if ACCESS == "async-copy":
             smem = ttgl.allocate_shared_memory(ttgl.int32, [XBLOCK], smem_layout)
             ampere.async_copy.async_load(smem, source + offsets)
             ampere.async_copy.commit_group()
             ampere.async_copy.wait_group(0)
+        elif ACCESS == "convert-layout":
+            dst_layout: ttgl.constexpr = ttgl.SliceLayout(1, ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0]))
+            dst_offsets = ttgl.arange(0, XBLOCK, layout=dst_layout)
+            values = ttgl.load(source + offsets)
+            ttgl.store(output + dst_offsets, ttgl.convert_layout(values, dst_layout))
         else:
             values = ttgl.full([XBLOCK], 7, ttgl.int32, layout)
             smem = ttgl.allocate_shared_memory(ttgl.int32, [XBLOCK], smem_layout, values)
-        ttgl.store(output + offsets, smem.load(layout))
+        if ACCESS != "convert-layout":
+            ttgl.store(output + offsets, smem.load(layout))
 
     source = torch.arange(XBLOCK.value, device=device, dtype=torch.int32)
     output = torch.empty_like(source)
-    compiled = kernel.warmup(source, output, ASYNC=ASYNC, INVALIDATE=INVALIDATE, grid=(1, ), num_warps=4, num_ctas=1)
+    compiled = kernel.warmup(source, output, ACCESS=ACCESS, INVALIDATE=INVALIDATE, grid=(1, ), num_warps=4, num_ctas=1)
     assert compiled.metadata.shared == XBLOCK.value * source.element_size()
-    kernel[(1, )](source, output, ASYNC=ASYNC, INVALIDATE=INVALIDATE, num_warps=4, num_ctas=1)
-    expected = source if ASYNC else torch.full_like(source, 7)
+    kernel[(1, )](source, output, ACCESS=ACCESS, INVALIDATE=INVALIDATE, num_warps=4, num_ctas=1)
+    expected = torch.full_like(source, 7) if ACCESS == "generic" else source
     torch.testing.assert_close(output, expected)
 
 
