@@ -18,9 +18,10 @@ class _FakeCudaTensorMode(TorchFunctionMode):
     _STORAGE_STRIDE = 1 << 20
 
     def __init__(self):
-        from torch._subclasses.fake_tensor import FakeTensorMode
+        from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
 
         self.fake_mode = FakeTensorMode(allow_fallback_kernels=False, allow_non_fake_inputs=True)
+        self.fake_tensor_type = FakeTensor
         self.storage_pointers = weakref.WeakKeyDictionary()
         self.next_storage_pointer = self._STORAGE_STRIDE + self._STORAGE_ALIGNMENT
 
@@ -39,7 +40,8 @@ class _FakeCudaTensorMode(TorchFunctionMode):
             self.fake_mode.__exit__(exc_type, exc_value, traceback)
 
     def __torch_function__(self, func, types, args=(), kwargs=None):
-        if getattr(func, "__name__", "") == "data_ptr":
+        name = getattr(func, "__name__", "")
+        if name == "data_ptr":
             tensor = args[0]
             storage = tensor.untyped_storage()
             pointer = self.storage_pointers.get(storage)
@@ -48,13 +50,28 @@ class _FakeCudaTensorMode(TorchFunctionMode):
                 self.next_storage_pointer += self._STORAGE_STRIDE
                 self.storage_pointers[storage] = pointer
             return pointer + tensor.storage_offset() * tensor.element_size()
+        is_fake = any(isinstance(argument, self.fake_tensor_type) for argument in args)
+        if name in ("allclose", "equal") and is_fake:
+            return True
+        if name == "__bool__" and is_fake and args[0].dtype == torch.bool:
+            return getattr(args[0], "_triton_warmup_truth", True)
+        if name in ("all", "any") and is_fake:
+            result = func(*args, **(kwargs or {}))
+            if isinstance(result, torch.Tensor) and result.numel() == 1:
+                result._triton_warmup_truth = name == "all"
+            return result
         return func(*args, **(kwargs or {}))
 
 
 @contextmanager
 def compile_warmup_only(dispatcher=None):
     """Capture launch specializations without GPU allocations or kernel execution."""
+    from torch._subclasses.fake_tensor import FakeTensor
     from triton._internal_testing import _COMPILE_WARMUP_ACTIVE
+
+    def fake_assert_close(*args, **kwargs):
+        if not any(isinstance(value, FakeTensor) for value in args):
+            previous_assert_close(*args, **kwargs)
 
     def dispatch(kernel, grid, *args, **kwargs):
         if dispatcher is None:
@@ -65,14 +82,17 @@ def compile_warmup_only(dispatcher=None):
         warnings.filterwarnings("ignore", message="Accessing the data pointer of FakeTensor.*")
         with _FakeCudaTensorMode():
             previous_getitem = triton.KernelInterface.__getitem__
+            previous_assert_close = torch.testing.assert_close
             triton.KernelInterface.__getitem__ = lambda kernel, grid: lambda *args, **kwargs: dispatch(
                 kernel, grid, *args, **kwargs)
+            torch.testing.assert_close = fake_assert_close
             active_token = _COMPILE_WARMUP_ACTIVE.set(True)
             try:
                 yield
             finally:
                 _COMPILE_WARMUP_ACTIVE.reset(active_token)
                 triton.KernelInterface.__getitem__ = previous_getitem
+                torch.testing.assert_close = previous_assert_close
 
 
 @contextmanager
@@ -109,7 +129,7 @@ class CompilationTrace:
             "cache_hit": cache_hit,
             "duration_us": times.total,
             "worker": os.environ.get("PYTEST_XDIST_WORKER", "main"),
-            "gpu": os.environ.get("CUDA_VISIBLE_DEVICES"),
+            "gpu": os.environ.get("HIP_VISIBLE_DEVICES" if torch.version.hip else "CUDA_VISIBLE_DEVICES"),
             "compiler_worker": os.environ.get("TRITON_WARMUP_COMPILER_WORKER"),
             "cache_dir": triton.knobs.cache.dir,
         }
@@ -130,14 +150,15 @@ def pytest_xdist_setupnodes(config, specs):
     if not requested:
         return
 
-    visible = os.environ.get("TRITON_TEST_VISIBLE_GPUS", os.environ.get("CUDA_VISIBLE_DEVICES"))
+    visibility_variable = "HIP_VISIBLE_DEVICES" if torch.version.hip else "CUDA_VISIBLE_DEVICES"
+    visible = os.environ.get("TRITON_TEST_VISIBLE_GPUS", os.environ.get(visibility_variable))
     if visible:
         devices = [device.strip() for device in visible.split(",") if device.strip()]
     else:
         devices = [str(index) for index in range(int(requested))]
 
     for index, spec in enumerate(specs):
-        spec.env["CUDA_VISIBLE_DEVICES"] = devices[index % int(requested)]
+        spec.env[visibility_variable] = devices[index % int(requested)]
 
 
 def _cache_phase_for_item(item):
@@ -160,6 +181,7 @@ def pytest_collection_modifyitems(config, items):
 
     selected = []
     deselected = []
+    target = None
     capability = None
     for item in items:
         marker = item.get_closest_marker("enable_warmup")
@@ -169,15 +191,20 @@ def pytest_collection_modifyitems(config, items):
             continue
         minimum = marker.kwargs.get("min_capability")
         if minimum is not None:
-            if capability is None:
-                capability = torch.cuda.get_device_capability()[0]
-            if capability < minimum:
-                deselected.append(item)
-                continue
+            if target is None:
+                target = triton.runtime.driver.active.get_current_target()
+            if target.backend == "cuda":
+                if capability is None:
+                    capability = torch.cuda.get_device_capability()[0]
+                if capability < minimum:
+                    deselected.append(item)
+                    continue
         selected.append(item)
     if deselected:
         config.hook.pytest_deselected(items=deselected)
-    items[:] = selected
+    selected.sort(key=lambda item: item.get_closest_marker("enable_warmup").kwargs.get("priority", 0), reverse=True)
+    capture_workers = int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "1"))
+    items[:] = [item for worker in range(capture_workers) for item in selected[worker::capture_workers]]
 
 
 @pytest.fixture(scope="session", autouse=True)

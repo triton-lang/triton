@@ -65,7 +65,6 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
     SWIZZLE_K: int = 4
 
     def __post_init__(self):
-        assert len(self.shape) in [2, 3]
         added_leading_batch_dim = False
         if len(self.shape) == 2:
             B, M, K = 1, *self.shape
@@ -105,7 +104,7 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
         if self.mode == "batched":
             # value of padding on left, right, top, bottom
             data = torch.nn.functional.pad(data, (0, self.K_pad - self.K, 0, self.M_pad - self.M))
-        elif data.numel():
+        else:
             # Objective is to pad the number of rows in each slice to be multiple of ALIGN_M
             data = pad_segments_triton(
                 data,
@@ -133,9 +132,6 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
             return data
 
         # ragged path: map padded blocks back into the original ragged rows
-        assert self.B == 1, "ragged scale layout only supports 2D input"
-        if not data.numel():
-            return data.reshape(self.M, self.K)
         data = unpad_segments_triton(
             data.squeeze(0),
             self.ragged_metadata,
@@ -306,13 +302,15 @@ def pad_segments_triton(data, ragged_metadata, block_size_to_align, M_pad, K, K_
         K: input width
         K_pad: padded number of columns
     """
+    padded_data = torch.empty(M_pad, K_pad, device=data.device, dtype=data.dtype)
+    padded_data.fill_(0.0)
+    if not padded_data.numel():
+        return padded_data
+
     slice_sizes = ragged_metadata.slice_sizes
     slice_offs = ragged_metadata.slice_offs
     block_offs = ragged_metadata.block_offs(block_size_to_align)
     block_schedule = ragged_metadata.block_schedule(block_size_to_align)
-
-    padded_data = torch.empty(M_pad, K_pad, device=data.device, dtype=data.dtype)
-    padded_data.fill_(0.0)
 
     # strides (in elements, not bytes)
     stride_in_m, stride_in_n = data.stride()
@@ -401,14 +399,16 @@ def unpad_segments_kernel(
 
 
 def unpad_segments_triton(padded_data, ragged_metadata, block_size_to_align, M, K, K_pad):
+    # output tensor with exact ragged rows/cols
+    data = torch.empty(M, K, device=padded_data.device, dtype=padded_data.dtype)
+    data.fill_(0.0)
+    if not data.numel():
+        return data
+
     slice_sizes = ragged_metadata.slice_sizes
     slice_offs = ragged_metadata.slice_offs
     block_offs = ragged_metadata.block_offs(block_size_to_align)
     block_schedule = ragged_metadata.block_schedule(block_size_to_align)
-
-    # output tensor with exact ragged rows/cols
-    data = torch.empty(M, K, device=padded_data.device, dtype=padded_data.dtype)
-    data.fill_(0.0)
 
     stride_pad_m, stride_pad_n = padded_data.stride()
     stride_out_m, stride_out_n = data.stride()

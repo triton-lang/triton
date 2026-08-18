@@ -352,6 +352,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     tt.return
   }
 
+  // expected-remark @below {{All Shared Regions: [8192, 8]}}
   // expected-remark @below {{All Barrier Regions: [8192, 8]}}
   tt.func private @print_all_regions() attributes {test.print_all_used_regions} {
     tt.return
@@ -372,6 +373,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     tt.return
   }
 
+  // expected-remark @below {{All Shared Regions: [8192, 8], [8200, 8]}}
   // expected-remark @below {{All Barrier Regions: [8192, 8], [8200, 8]}}
   tt.func private @print_all_regions() attributes {test.print_all_used_regions} {
     tt.return
@@ -391,6 +393,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     tt.return
   }
 
+  // expected-remark @below {{All Shared Regions: [8192, 8]}}
   // expected-remark @below {{All Barrier Regions: [8192, 8]}}
   tt.func private @print_all_regions() attributes {test.print_all_used_regions} {
     tt.return

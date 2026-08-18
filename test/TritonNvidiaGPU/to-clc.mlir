@@ -89,6 +89,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: tt.func public @marked_for
+  tt.func public @marked_for(%out: !tt.ptr<i32>) {
+    // CHECK: scf.while
+    // CHECK: ttng.clc_try_cancel_sync
+    // CHECK-NEXT: ttg.local_alloc
+    %pid = tt.get_program_id x : i32
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    // CHECK: scf.for
+    // CHECK: } {tt.warp_specialize}
+    scf.for %i = %c0 to %c1 step %c1 {
+      %ptr = tt.addptr %out, %pid : !tt.ptr<i32>, i32
+      tt.store %ptr, %pid : !tt.ptr<i32>
+    } {tt.warp_specialize}
+    // CHECK: ttng.clc_load_result
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
   // CHECK-LABEL: tt.func public @no_pid
   tt.func public @no_pid(%out: !tt.ptr<i32>) {
     // CHECK: scf.while

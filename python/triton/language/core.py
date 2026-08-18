@@ -16,7 +16,7 @@ import inspect
 from .._C.libtriton import ir
 from .._utils import TRITON_MAX_TENSOR_NUMEL, validate_block_shape, get_primitive_bitwidth, _tuple_create
 
-T = TypeVar('T')
+T = TypeVar('T', bound=Callable)
 
 TRITON_BUILTIN = "__triton_builtin__"
 
@@ -33,7 +33,6 @@ def must_use_result(x, s=True):
 
 def builtin(fn: T) -> T:
     """Mark a function as a builtin."""
-    assert callable(fn)
 
     @wraps(fn)
     def wrapper(*args, **kwargs):
@@ -61,7 +60,6 @@ def _tensor_member_fn(fn: T) -> T:
     Unfortunately you still need to add a type stub to the body of class tensor
     in order for pytype to know about it.
     """
-    assert callable(fn)
     orig_sig = inspect.signature(fn)
     # Does fn take args other than _semantic, _generator, and the tensor itself?
     has_args = len(orig_sig.parameters.keys() - {"_semantic", "_generator"}) > 1
@@ -1207,7 +1205,13 @@ class tensor(base_value):
     def exp(self) -> tensor:
         ...
 
+    def exp2(self) -> tensor:
+        ...
+
     def log(self) -> tensor:
+        ...
+
+    def log2(self) -> tensor:
         ...
 
     def cos(self) -> tensor:
@@ -1219,10 +1223,22 @@ class tensor(base_value):
     def sqrt(self) -> tensor:
         ...
 
+    def sqrt_rn(self) -> tensor:
+        ...
+
     def rsqrt(self) -> tensor:
         ...
 
     def abs(self) -> tensor:
+        ...
+
+    def erf(self) -> tensor:
+        ...
+
+    def floor(self) -> tensor:
+        ...
+
+    def ceil(self) -> tensor:
         ...
 
     def reduce(self, axis, combine_fn, keep_dims=False) -> tensor:
@@ -1979,16 +1995,11 @@ def cat(input, other, can_reorder=False, dim=0, _semantic=None):
     :type input: Tensor
     :param other: The second input tensor.
     :type other: Tensor
-    :param can_reorder: Compiler hint. If true, the compiler is
-        allowed to reorder elements while concatenating inputs.  Only use if the
-        order does not matter (e.g., result is only used in reduction ops).
+    :param can_reorder: Ignored.
     :type can_reorder: bool
-    :param dim: The dimension to concatenate along (used when can_reorder is False).
+    :param dim: The dimension to concatenate along.
     :type dim: int
     """
-    if can_reorder:
-        return _semantic.cat(input, other, can_reorder)
-
     rank = len(input.shape)
     assert rank == len(other.shape), f"tensors must have the same rank, got {rank} and {len(other.shape)}"
     dim = _wrap_axis(_unwrap_if_constexpr(dim), rank)

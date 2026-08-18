@@ -24,22 +24,88 @@ def alloc_fn(size, alignment, stream):
 set_profile_allocator(alloc_fn)
 
 
+def barrier_storage_lifetime():
+    mode = sys.argv[2]
+
+    @gluon.jit
+    def kernel(MODE: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0])
+        barrier_layout: ttgl.constexpr = ttgl.amd.cdna5.mbarrier.MBarrierLayout()
+        storage = ttgl.allocate_shared_memory(ttgl.int32, [2], shared_layout)
+        barrier = storage.reinterpret(ttgl.int64, [1], barrier_layout)
+        ttgl.amd.cdna5.mbarrier.init(barrier, count=128)
+
+        if MODE == "read":
+            storage.load(layout)
+        elif MODE == "atomic":
+            indices = ttgl.full([2], 0, ttgl.int32, layout)
+            values = ttgl.full([2], 1, ttgl.int32, layout)
+            storage.atomic_scatter_add(values, indices, axis=0)
+        elif MODE == "reinitialize":
+            ttgl.amd.cdna5.mbarrier.init(barrier, count=128)
+            ttgl.amd.cdna5.mbarrier.arrive(barrier, count=1)
+            ttgl.amd.cdna5.mbarrier.wait(barrier, phase=0)
+        else:
+            values = ttgl.full([2], 7, ttgl.int32, layout)
+            if MODE == "partial":
+                storage.slice(1, 1).store(ttgl.full([1], 7, ttgl.int32, layout))
+            else:
+                storage.store(values)
+            if MODE == "use-after-store" or MODE == "partial":
+                ttgl.amd.cdna5.mbarrier.arrive(barrier, count=1)
+            else:
+                storage.load(layout)
+
+    kernel[(1, )](MODE=mode, num_warps=4)
+
+
+def barrier_storage_pending_completion():
+    wait = sys.argv[2] == "True"
+
+    @gluon.jit
+    def kernel(input_ptr, WAIT: ttgl.constexpr):
+        num_warps: ttgl.constexpr = 4
+        block: ttgl.constexpr = 32
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+        barrier_layout: ttgl.constexpr = ttgl.amd.cdna5.mbarrier.MBarrierLayout()
+        desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(
+            base=input_ptr,
+            shape=(block, block),
+            strides=(block, 1),
+            block_shape=(block, block),
+            layout=shared_layout,
+        )
+        payload = ttgl.allocate_shared_memory(ttgl.float16, [block, block], shared_layout)
+        storage = ttgl.allocate_shared_memory(ttgl.int32, [2], barrier_layout)
+        barrier = storage.reinterpret(ttgl.int64, [1], barrier_layout)
+        ttgl.amd.cdna5.mbarrier.init(barrier, count=num_warps)
+        ttgl.amd.cdna5.tdm.async_load(desc, [0, 0], payload, mbarrier=barrier)
+        if WAIT:
+            ttgl.amd.cdna5.mbarrier.wait(barrier, phase=0)
+        storage.store(ttgl.full([2], 7, ttgl.int32, layout))
+
+    data = torch.randn((32, 32), dtype=torch.float16, device="cuda")
+    kernel[(1, )](data, WAIT=wait, num_warps=4)
+
+
 def deadlock_two_partitions():
 
     @gluon.jit
     def ws_default(bar):
-        ttgl.amd.gfx1250.mbarrier.wait(bar.index(0), phase=0)
+        ttgl.amd.cdna5.mbarrier.wait(bar.index(0), phase=0)
 
     @gluon.jit
     def ws_1(bar):
-        ttgl.amd.gfx1250.mbarrier.wait(bar.index(1), phase=0)
+        ttgl.amd.cdna5.mbarrier.wait(bar.index(1), phase=0)
 
     @gluon.jit
     def kernel():
         WARP_SIZE: ttgl.constexpr = 32
-        bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
-        ttgl.amd.gfx1250.mbarrier.init(bar.index(0), count=4 * WARP_SIZE)
-        ttgl.amd.gfx1250.mbarrier.init(bar.index(1), count=4 * WARP_SIZE)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
+        ttgl.amd.cdna5.mbarrier.init(bar.index(0), count=4 * WARP_SIZE)
+        ttgl.amd.cdna5.mbarrier.init(bar.index(1), count=4 * WARP_SIZE)
         ttgl.warp_specialize([
             (ws_default, (bar, )),
             (ws_1, (bar, )),
@@ -53,11 +119,11 @@ def deadlock_overarrival():
     @gluon.jit
     def kernel():
         WARP_SIZE: ttgl.constexpr = 32
-        bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
-        ttgl.amd.gfx1250.mbarrier.init(bar.index(0), count=4 * WARP_SIZE)
-        ttgl.amd.gfx1250.mbarrier.arrive(bar.index(0), count=1)
-        ttgl.amd.gfx1250.mbarrier.arrive(bar.index(0), count=1)
-        ttgl.amd.gfx1250.mbarrier.wait(bar.index(0), phase=0)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
+        ttgl.amd.cdna5.mbarrier.init(bar.index(0), count=4 * WARP_SIZE)
+        ttgl.amd.cdna5.mbarrier.arrive(bar.index(0), count=1)
+        ttgl.amd.cdna5.mbarrier.arrive(bar.index(0), count=1)
+        ttgl.amd.cdna5.mbarrier.wait(bar.index(0), phase=0)
 
     kernel[(1, )](num_warps=4)
 
@@ -66,20 +132,20 @@ def deadlock_underarrival():
 
     @gluon.jit
     def ws_default(bar):
-        ttgl.amd.gfx1250.mbarrier.arrive(bar.index(1), count=1)
-        ttgl.amd.gfx1250.mbarrier.wait(bar.index(0), phase=0)
+        ttgl.amd.cdna5.mbarrier.arrive(bar.index(1), count=1)
+        ttgl.amd.cdna5.mbarrier.wait(bar.index(0), phase=0)
 
     @gluon.jit
     def ws_1(bar):
-        ttgl.amd.gfx1250.mbarrier.arrive(bar.index(0), count=1)
-        ttgl.amd.gfx1250.mbarrier.wait(bar.index(1), phase=0)
+        ttgl.amd.cdna5.mbarrier.arrive(bar.index(0), count=1)
+        ttgl.amd.cdna5.mbarrier.wait(bar.index(1), phase=0)
 
     @gluon.jit
     def kernel():
         WARP_SIZE: ttgl.constexpr = 32
-        bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
-        ttgl.amd.gfx1250.mbarrier.init(bar.index(0), count=8 * WARP_SIZE)
-        ttgl.amd.gfx1250.mbarrier.init(bar.index(1), count=8 * WARP_SIZE)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
+        ttgl.amd.cdna5.mbarrier.init(bar.index(0), count=8 * WARP_SIZE)
+        ttgl.amd.cdna5.mbarrier.init(bar.index(1), count=8 * WARP_SIZE)
         ttgl.warp_specialize([
             (ws_default, (bar, )),
             (ws_1, (bar, )),
@@ -92,19 +158,19 @@ def deadlock_different_phases():
 
     @gluon.jit
     def ws_default(bar):
-        ttgl.amd.gfx1250.mbarrier.wait(bar.index(0), phase=0)
-        ttgl.amd.gfx1250.mbarrier.arrive(bar.index(0), count=1)
+        ttgl.amd.cdna5.mbarrier.wait(bar.index(0), phase=0)
+        ttgl.amd.cdna5.mbarrier.arrive(bar.index(0), count=1)
 
     @gluon.jit
     def ws_1(bar):
-        ttgl.amd.gfx1250.mbarrier.wait(bar.index(0), phase=1)
+        ttgl.amd.cdna5.mbarrier.wait(bar.index(0), phase=1)
 
     @gluon.jit
     def kernel():
         WARP_SIZE: ttgl.constexpr = 32
-        bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
-        ttgl.amd.gfx1250.mbarrier.init(bar.index(0), count=4 * WARP_SIZE)
-        ttgl.amd.gfx1250.mbarrier.arrive(bar.index(0), count=1)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
+        ttgl.amd.cdna5.mbarrier.init(bar.index(0), count=4 * WARP_SIZE)
+        ttgl.amd.cdna5.mbarrier.arrive(bar.index(0), count=1)
         ttgl.warp_specialize([
             (ws_default, (bar, )),
             (ws_1, (bar, )),
@@ -117,19 +183,19 @@ def barrier_underflow():
 
     @gluon.jit
     def ws_default(bar):
-        ttgl.amd.gfx1250.mbarrier.arrive(bar.index(1), count=3)
-        ttgl.amd.gfx1250.mbarrier.wait(bar.index(0), phase=0)
+        ttgl.amd.cdna5.mbarrier.arrive(bar.index(1), count=3)
+        ttgl.amd.cdna5.mbarrier.wait(bar.index(0), phase=0)
 
     @gluon.jit
     def ws_1(bar):
-        ttgl.amd.gfx1250.mbarrier.wait(bar.index(1), phase=0)
+        ttgl.amd.cdna5.mbarrier.wait(bar.index(1), phase=0)
 
     @gluon.jit
     def kernel():
         WARP_SIZE: ttgl.constexpr = 32
-        bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
-        ttgl.amd.gfx1250.mbarrier.init(bar.index(0), count=4 * WARP_SIZE)
-        ttgl.amd.gfx1250.mbarrier.init(bar.index(1), count=4 * WARP_SIZE)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
+        ttgl.amd.cdna5.mbarrier.init(bar.index(0), count=4 * WARP_SIZE)
+        ttgl.amd.cdna5.mbarrier.init(bar.index(1), count=4 * WARP_SIZE)
         ttgl.warp_specialize([
             (ws_default, (bar, )),
             (ws_1, (bar, )),
@@ -151,13 +217,13 @@ def aliasing_shared_visibility():
         SIZE_N: ttgl.constexpr = XBLOCK_C * 2 if OVERLAP else XBLOCK_C
         vals = ttgl.full([XBLOCK_C, SIZE_N], 42.0, ttgl.float16, blocked_layout)
         alias0.store(vals)
-        ttgl.amd.gfx1250.mbarrier.arrive(bar.index(0), count=1)
+        ttgl.amd.cdna5.mbarrier.arrive(bar.index(0), count=1)
 
     @gluon.jit
     def reader(alias1: ttgl.constexpr, dummy: ttgl.constexpr, bar: ttgl.constexpr, MISSING_BAR: ttgl.constexpr,
                blocked_layout: ttgl.constexpr):
         if not MISSING_BAR:
-            ttgl.amd.gfx1250.mbarrier.wait(bar.index(0), phase=0)
+            ttgl.amd.cdna5.mbarrier.wait(bar.index(0), phase=0)
         val = alias1.load(blocked_layout)
         dummy.store(val)
 
@@ -169,8 +235,8 @@ def aliasing_shared_visibility():
                                                             warps_per_cta=[4, 1], order=[0, 1])
         smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK_C, XBLOCK_C * 2], smem_layout)
         smem2 = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK_C, XBLOCK_C], smem_layout)
-        bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
-        ttgl.amd.gfx1250.mbarrier.init(bar.index(0), count=4 * WARP_SIZE)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
+        ttgl.amd.cdna5.mbarrier.init(bar.index(0), count=4 * WARP_SIZE)
         alias0 = smem if OVERLAP else smem.slice(0, XBLOCK_C, dim=1)
         alias1 = smem.slice(XBLOCK_C, XBLOCK_C, dim=1)
         ttgl.warp_specialize([
@@ -188,23 +254,23 @@ def ws_two_loads_two_bars():
     @gluon.jit
     def ws_default(smem, bar, MISSING_BAR: ttgl.constexpr, layout: ttgl.constexpr):
         val = smem.index(0).load(layout)
-        ttgl.amd.gfx1250.mbarrier.arrive(bar.index(0), count=1)
+        ttgl.amd.cdna5.mbarrier.arrive(bar.index(0), count=1)
         smem.index(1).store(val)
 
     @gluon.jit
     def ws_1(smem, bar, MISSING_BAR: ttgl.constexpr, layout: ttgl.constexpr):
         val = smem.index(0).load(layout)
-        ttgl.amd.gfx1250.mbarrier.arrive(bar.index(1), count=1)
+        ttgl.amd.cdna5.mbarrier.arrive(bar.index(1), count=1)
         smem.index(2).store(val)
 
     @gluon.jit
     def ws_2(smem, bar, MISSING_BAR: ttgl.constexpr, layout: ttgl.constexpr):
         if MISSING_BAR != "1":
-            ttgl.amd.gfx1250.mbarrier.wait(bar.index(0), phase=0)
+            ttgl.amd.cdna5.mbarrier.wait(bar.index(0), phase=0)
         if MISSING_BAR != "2":
-            ttgl.amd.gfx1250.mbarrier.wait(bar.index(1), phase=0)
+            ttgl.amd.cdna5.mbarrier.wait(bar.index(1), phase=0)
         smem.index(0).store(ttgl.arange(0, XBLOCK_C, layout).to(ttgl.float16))
-        ttgl.amd.gfx1250.mbarrier.arrive(bar.index(2), count=1)
+        ttgl.amd.cdna5.mbarrier.arrive(bar.index(2), count=1)
 
     @gluon.jit
     def kernel(output, MISSING_BAR: ttgl.constexpr):
@@ -213,15 +279,15 @@ def ws_two_loads_two_bars():
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32],
                                                             warps_per_cta=[4], order=[0])
         smem = ttgl.allocate_shared_memory(ttgl.float16, [3, XBLOCK_C], smem_layout)
-        bar = ttgl.allocate_shared_memory(ttgl.int64, [3, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [3, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
         for i in range(3):
-            ttgl.amd.gfx1250.mbarrier.init(bar.index(i), count=4 * WARP_SIZE)
+            ttgl.amd.cdna5.mbarrier.init(bar.index(i), count=4 * WARP_SIZE)
         ttgl.warp_specialize([
             (ws_default, (smem, bar, MISSING_BAR, blocked_layout)),
             (ws_1, (smem, bar, MISSING_BAR, blocked_layout)),
             (ws_2, (smem, bar, MISSING_BAR, blocked_layout)),
         ], [4, 4])
-        ttgl.amd.gfx1250.mbarrier.wait(bar.index(2), phase=0)
+        ttgl.amd.cdna5.mbarrier.wait(bar.index(2), phase=0)
         val = smem.index(0).load(blocked_layout)
         output_ptrs = output + ttgl.arange(0, XBLOCK_C, blocked_layout)
         ttgl.store(output_ptrs, val)
@@ -237,21 +303,21 @@ def ws_two_loads_one_bar():
     @gluon.jit
     def ws_default(smem, bar, layout: ttgl.constexpr):
         val = smem.index(0).load(layout)
-        ttgl.amd.gfx1250.mbarrier.arrive(bar.index(0), count=1)
+        ttgl.amd.cdna5.mbarrier.arrive(bar.index(0), count=1)
         smem.index(1).store(val)
 
     @gluon.jit
     def ws_1(smem, bar, layout: ttgl.constexpr):
         val = smem.index(0).load(layout)
-        ttgl.amd.gfx1250.mbarrier.arrive(bar.index(0), count=1)
+        ttgl.amd.cdna5.mbarrier.arrive(bar.index(0), count=1)
         smem.index(2).store(val)
 
     @gluon.jit
     def ws_2(smem, bar, FAILURE: ttgl.constexpr, layout: ttgl.constexpr):
         if not FAILURE:
-            ttgl.amd.gfx1250.mbarrier.wait(bar.index(0), phase=0)
+            ttgl.amd.cdna5.mbarrier.wait(bar.index(0), phase=0)
         smem.index(0).store(ttgl.arange(0, XBLOCK_C, layout).to(ttgl.float16))
-        ttgl.amd.gfx1250.mbarrier.arrive(bar.index(1), count=1)
+        ttgl.amd.cdna5.mbarrier.arrive(bar.index(1), count=1)
 
     @gluon.jit
     def kernel(output, FAILURE: ttgl.constexpr):
@@ -260,15 +326,15 @@ def ws_two_loads_one_bar():
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32],
                                                             warps_per_cta=[4], order=[0])
         smem = ttgl.allocate_shared_memory(ttgl.float16, [3, XBLOCK_C], smem_layout)
-        bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
-        ttgl.amd.gfx1250.mbarrier.init(bar.index(0), count=2 * 4 * WARP_SIZE)
-        ttgl.amd.gfx1250.mbarrier.init(bar.index(1), count=4 * WARP_SIZE)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
+        ttgl.amd.cdna5.mbarrier.init(bar.index(0), count=2 * 4 * WARP_SIZE)
+        ttgl.amd.cdna5.mbarrier.init(bar.index(1), count=4 * WARP_SIZE)
         ttgl.warp_specialize([
             (ws_default, (smem, bar, blocked_layout)),
             (ws_1, (smem, bar, blocked_layout)),
             (ws_2, (smem, bar, FAILURE, blocked_layout)),
         ], [4, 4])
-        ttgl.amd.gfx1250.mbarrier.wait(bar.index(1), phase=0)
+        ttgl.amd.cdna5.mbarrier.wait(bar.index(1), phase=0)
         val = smem.index(0).load(blocked_layout)
         output_ptrs = output + ttgl.arange(0, XBLOCK_C, blocked_layout)
         ttgl.store(output_ptrs, val)
@@ -286,10 +352,10 @@ def ws_two_loads_two_bars_loop():
         acc = ttgl.zeros([XBLOCK_C], ttgl.float16, layout)
         phase = 0
         for _ in range(10):
-            ttgl.amd.gfx1250.mbarrier.wait(bar.index(2), phase=phase)
+            ttgl.amd.cdna5.mbarrier.wait(bar.index(2), phase=phase)
             phase = (phase + 1) % 2
             val = smem.index(0).load(layout)
-            ttgl.amd.gfx1250.mbarrier.arrive(bar.index(0), count=1)
+            ttgl.amd.cdna5.mbarrier.arrive(bar.index(0), count=1)
             acc = acc + val
         smem.index(1).store(acc)
 
@@ -298,10 +364,10 @@ def ws_two_loads_two_bars_loop():
         acc = ttgl.zeros([XBLOCK_C], ttgl.float16, layout)
         phase = 0
         for _ in range(10):
-            ttgl.amd.gfx1250.mbarrier.wait(bar.index(3), phase=phase)
+            ttgl.amd.cdna5.mbarrier.wait(bar.index(3), phase=phase)
             phase = (phase + 1) % 2
             val = smem.index(0).load(layout)
-            ttgl.amd.gfx1250.mbarrier.arrive(bar.index(1), count=1)
+            ttgl.amd.cdna5.mbarrier.arrive(bar.index(1), count=1)
             acc = acc + val
         smem.index(2).store(acc)
 
@@ -310,13 +376,13 @@ def ws_two_loads_two_bars_loop():
         phase = 0
         for _ in range(10):
             if MISSING_BAR != "0":
-                ttgl.amd.gfx1250.mbarrier.wait(bar.index(0), phase=phase)
+                ttgl.amd.cdna5.mbarrier.wait(bar.index(0), phase=phase)
             if MISSING_BAR != "1":
-                ttgl.amd.gfx1250.mbarrier.wait(bar.index(1), phase=phase)
+                ttgl.amd.cdna5.mbarrier.wait(bar.index(1), phase=phase)
             phase = (phase + 1) % 2
             smem.index(0).store(ttgl.arange(0, XBLOCK_C, layout).to(ttgl.float16))
-            ttgl.amd.gfx1250.mbarrier.arrive(bar.index(2), count=1)
-            ttgl.amd.gfx1250.mbarrier.arrive(bar.index(3), count=1)
+            ttgl.amd.cdna5.mbarrier.arrive(bar.index(2), count=1)
+            ttgl.amd.cdna5.mbarrier.arrive(bar.index(3), count=1)
 
     @gluon.jit
     def kernel(output, MISSING_BAR: ttgl.constexpr):
@@ -325,11 +391,11 @@ def ws_two_loads_two_bars_loop():
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32],
                                                             warps_per_cta=[4], order=[0])
         smem = ttgl.allocate_shared_memory(ttgl.float16, [3, XBLOCK_C], smem_layout)
-        bar = ttgl.allocate_shared_memory(ttgl.int64, [4, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [4, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
         for i in range(4):
-            ttgl.amd.gfx1250.mbarrier.init(bar.index(i), count=4 * WARP_SIZE)
-        ttgl.amd.gfx1250.mbarrier.arrive(bar.index(2), count=1)
-        ttgl.amd.gfx1250.mbarrier.arrive(bar.index(3), count=1)
+            ttgl.amd.cdna5.mbarrier.init(bar.index(i), count=4 * WARP_SIZE)
+        ttgl.amd.cdna5.mbarrier.arrive(bar.index(2), count=1)
+        ttgl.amd.cdna5.mbarrier.arrive(bar.index(3), count=1)
         ttgl.warp_specialize([
             (ws_default, (smem, bar, MISSING_BAR, blocked_layout)),
             (ws_1, (smem, bar, MISSING_BAR, blocked_layout)),
@@ -348,23 +414,23 @@ def ws_load_ordering():
     def ws_default(smem, bar, FAILURE: ttgl.constexpr, layout: ttgl.constexpr):
         phase = 0
         for _ in range(10):
-            ttgl.amd.gfx1250.mbarrier.wait(bar.index(2), phase=phase)
+            ttgl.amd.cdna5.mbarrier.wait(bar.index(2), phase=phase)
             phase = (phase + 1) % 2
             smem.index(0).store(ttgl.arange(0, XBLOCK_C, layout).to(ttgl.float16))
-            ttgl.amd.gfx1250.mbarrier.arrive(bar.index(0), count=1)
+            ttgl.amd.cdna5.mbarrier.arrive(bar.index(0), count=1)
             smem.index(1).store(ttgl.arange(0, XBLOCK_C, layout).to(ttgl.float16))
-            ttgl.amd.gfx1250.mbarrier.arrive(bar.index(1), count=1)
+            ttgl.amd.cdna5.mbarrier.arrive(bar.index(1), count=1)
 
     @gluon.jit
     def ws_1(smem, bar, FAILURE: ttgl.constexpr, layout: ttgl.constexpr):
         acc = ttgl.zeros([XBLOCK_C], ttgl.float16, layout)
         phase = 0
         for _ in range(10):
-            ttgl.amd.gfx1250.mbarrier.wait(bar.index(0), phase=phase)
+            ttgl.amd.cdna5.mbarrier.wait(bar.index(0), phase=phase)
             val = smem.index(1 if FAILURE else 0).load(layout)
-            ttgl.amd.gfx1250.mbarrier.wait(bar.index(1), phase=phase)
+            ttgl.amd.cdna5.mbarrier.wait(bar.index(1), phase=phase)
             phase = (phase + 1) % 2
-            ttgl.amd.gfx1250.mbarrier.arrive(bar.index(2), count=1)
+            ttgl.amd.cdna5.mbarrier.arrive(bar.index(2), count=1)
             acc = acc + val
         smem.index(2).store(acc)
 
@@ -375,10 +441,10 @@ def ws_load_ordering():
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32],
                                                             warps_per_cta=[4], order=[0])
         smem = ttgl.allocate_shared_memory(ttgl.float16, [3, XBLOCK_C], smem_layout)
-        bar = ttgl.allocate_shared_memory(ttgl.int64, [3, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [3, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
         for i in range(3):
-            ttgl.amd.gfx1250.mbarrier.init(bar.index(i), count=4 * WARP_SIZE)
-        ttgl.amd.gfx1250.mbarrier.arrive(bar.index(2), count=1)
+            ttgl.amd.cdna5.mbarrier.init(bar.index(i), count=4 * WARP_SIZE)
+        ttgl.amd.cdna5.mbarrier.arrive(bar.index(2), count=1)
         ttgl.warp_specialize([
             (ws_default, (smem, bar, FAILURE, blocked_layout)),
             (ws_1, (smem, bar, FAILURE, blocked_layout)),
@@ -395,23 +461,23 @@ def ws_different_warp_sizes():
     @gluon.jit
     def ws_default(smem, bar, MISSING_BAR: ttgl.constexpr, layout: ttgl.constexpr):
         val = smem.index(0).load(layout)
-        ttgl.amd.gfx1250.mbarrier.arrive(bar.index(0), count=1)
+        ttgl.amd.cdna5.mbarrier.arrive(bar.index(0), count=1)
         smem.index(1).store(val)
 
     @gluon.jit
     def ws_1(smem, bar, MISSING_BAR: ttgl.constexpr, layout: ttgl.constexpr):
         val = smem.index(0).load(layout)
-        ttgl.amd.gfx1250.mbarrier.arrive(bar.index(1), count=1)
+        ttgl.amd.cdna5.mbarrier.arrive(bar.index(1), count=1)
         smem.index(2).store(val)
 
     @gluon.jit
     def ws_2(smem, bar, MISSING_BAR: ttgl.constexpr, layout: ttgl.constexpr):
         if MISSING_BAR != "1":
-            ttgl.amd.gfx1250.mbarrier.wait(bar.index(0), phase=0)
+            ttgl.amd.cdna5.mbarrier.wait(bar.index(0), phase=0)
         if MISSING_BAR != "2":
-            ttgl.amd.gfx1250.mbarrier.wait(bar.index(1), phase=0)
+            ttgl.amd.cdna5.mbarrier.wait(bar.index(1), phase=0)
         smem.index(0).store(ttgl.arange(0, XBLOCK_C, layout).to(ttgl.float16))
-        ttgl.amd.gfx1250.mbarrier.arrive(bar.index(2), count=1)
+        ttgl.amd.cdna5.mbarrier.arrive(bar.index(2), count=1)
 
     @gluon.jit
     def kernel(output, MISSING_BAR: ttgl.constexpr):
@@ -424,16 +490,16 @@ def ws_different_warp_sizes():
         layout_8: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[8],
                                                       order=[0])
         smem = ttgl.allocate_shared_memory(ttgl.float16, [3, XBLOCK_C], smem_layout)
-        bar = ttgl.allocate_shared_memory(ttgl.int64, [3, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
-        ttgl.amd.gfx1250.mbarrier.init(bar.index(0), count=4 * WARP_SIZE)
-        ttgl.amd.gfx1250.mbarrier.init(bar.index(1), count=2 * WARP_SIZE)
-        ttgl.amd.gfx1250.mbarrier.init(bar.index(2), count=8 * WARP_SIZE)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [3, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
+        ttgl.amd.cdna5.mbarrier.init(bar.index(0), count=4 * WARP_SIZE)
+        ttgl.amd.cdna5.mbarrier.init(bar.index(1), count=2 * WARP_SIZE)
+        ttgl.amd.cdna5.mbarrier.init(bar.index(2), count=8 * WARP_SIZE)
         ttgl.warp_specialize([
             (ws_default, (smem, bar, MISSING_BAR, layout_4)),
             (ws_1, (smem, bar, MISSING_BAR, layout_2)),
             (ws_2, (smem, bar, MISSING_BAR, layout_8)),
         ], [2, 8])
-        ttgl.amd.gfx1250.mbarrier.wait(bar.index(2), phase=0)
+        ttgl.amd.cdna5.mbarrier.wait(bar.index(2), phase=0)
         val = smem.index(0).load(layout_4)
         output_ptrs = output + ttgl.arange(0, XBLOCK_C, layout_4)
         ttgl.store(output_ptrs, val)
@@ -453,19 +519,19 @@ def async_tdm_kernel():
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[32, 1],
                                                             warps_per_cta=[4, 1], order=[1, 0])
 
-        desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=input_ptr, shape=(XBLOCK_C, XBLOCK_C),
-                                                           strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
-                                                           layout=smem_layout)
+        desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=input_ptr, shape=(XBLOCK_C, XBLOCK_C),
+                                                         strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
+                                                         layout=smem_layout)
         smem = ttgl.allocate_shared_memory(ttgl.float16, shape=desc.block_shape, layout=desc.layout)
-        bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
-        ttgl.amd.gfx1250.mbarrier.init(bar.index(0), count=NUM_WARPS)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
+        ttgl.amd.cdna5.mbarrier.init(bar.index(0), count=NUM_WARPS)
 
-        ttgl.amd.gfx1250.tdm.async_load(desc, [0, 0], smem, mbarrier=bar.index(0))
+        ttgl.amd.cdna5.tdm.async_load(desc, [0, 0], smem, mbarrier=bar.index(0))
         if not FAILURE:
-            ttgl.amd.gfx1250.mbarrier.wait(bar.index(0), phase=0)
+            ttgl.amd.cdna5.mbarrier.wait(bar.index(0), phase=0)
         val = smem.load(blocked_layout)
         if FAILURE:
-            ttgl.amd.gfx1250.mbarrier.wait(bar.index(0), phase=0)
+            ttgl.amd.cdna5.mbarrier.wait(bar.index(0), phase=0)
 
         out_m = ttgl.arange(0, XBLOCK_C, ttgl.SliceLayout(1, blocked_layout))[:, None]
         out_n = ttgl.arange(0, XBLOCK_C, ttgl.SliceLayout(0, blocked_layout))[None, :]
@@ -490,26 +556,26 @@ def async_tdm_kernel_2bufs_1bar():
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[32, 1],
                                                             warps_per_cta=[4, 1], order=[1, 0])
 
-        a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(XBLOCK_C, XBLOCK_C),
-                                                             strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
-                                                             layout=smem_layout)
-        b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=b_ptr, shape=(XBLOCK_C, XBLOCK_C),
-                                                             strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
-                                                             layout=smem_layout)
+        a_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=a_ptr, shape=(XBLOCK_C, XBLOCK_C),
+                                                           strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
+                                                           layout=smem_layout)
+        b_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=b_ptr, shape=(XBLOCK_C, XBLOCK_C),
+                                                           strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
+                                                           layout=smem_layout)
         a_smem = ttgl.allocate_shared_memory(ttgl.float16, shape=a_desc.block_shape, layout=a_desc.layout)
         b_smem = ttgl.allocate_shared_memory(ttgl.float16, shape=b_desc.block_shape, layout=b_desc.layout)
-        bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
         # 2 TDM loads x NUM_WARPS per-warp arrivals = 2*NUM_WARPS total
-        ttgl.amd.gfx1250.mbarrier.init(bar.index(0), count=2 * NUM_WARPS)
+        ttgl.amd.cdna5.mbarrier.init(bar.index(0), count=2 * NUM_WARPS)
 
-        ttgl.amd.gfx1250.tdm.async_load(a_desc, [0, 0], a_smem, mbarrier=bar.index(0))
-        ttgl.amd.gfx1250.tdm.async_load(b_desc, [0, 0], b_smem, mbarrier=bar.index(0))
+        ttgl.amd.cdna5.tdm.async_load(a_desc, [0, 0], a_smem, mbarrier=bar.index(0))
+        ttgl.amd.cdna5.tdm.async_load(b_desc, [0, 0], b_smem, mbarrier=bar.index(0))
         if not FAILURE:
-            ttgl.amd.gfx1250.mbarrier.wait(bar.index(0), phase=0)
+            ttgl.amd.cdna5.mbarrier.wait(bar.index(0), phase=0)
         val = a_smem.load(blocked_layout)
         val = val + b_smem.load(blocked_layout)
         if FAILURE:
-            ttgl.amd.gfx1250.mbarrier.wait(bar.index(0), phase=0)
+            ttgl.amd.cdna5.mbarrier.wait(bar.index(0), phase=0)
 
         out_m = ttgl.arange(0, XBLOCK_C, ttgl.SliceLayout(1, blocked_layout))[:, None]
         out_n = ttgl.arange(0, XBLOCK_C, ttgl.SliceLayout(0, blocked_layout))[None, :]
@@ -533,20 +599,20 @@ def tdm_interleave_kernel():
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[32, 1],
                                                             warps_per_cta=[4, 1], order=[1, 0])
 
-        desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=input_ptr, shape=(XBLOCK_C, XBLOCK_C),
-                                                           strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
-                                                           layout=smem_layout)
+        desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=input_ptr, shape=(XBLOCK_C, XBLOCK_C),
+                                                         strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
+                                                         layout=smem_layout)
         smem = ttgl.allocate_shared_memory(ttgl.float16, [2] + list(desc.block_shape), desc.layout)
-        bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
-        ttgl.amd.gfx1250.mbarrier.init(bar.index(0), count=NUM_WARPS)
-        ttgl.amd.gfx1250.mbarrier.init(bar.index(1), count=NUM_WARPS)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
+        ttgl.amd.cdna5.mbarrier.init(bar.index(0), count=NUM_WARPS)
+        ttgl.amd.cdna5.mbarrier.init(bar.index(1), count=NUM_WARPS)
 
-        ttgl.amd.gfx1250.tdm.async_load(desc, [0, 0], smem.index(0), mbarrier=bar.index(0))
-        ttgl.amd.gfx1250.tdm.async_load(desc, [0, 0], smem.index(1), mbarrier=bar.index(1))
+        ttgl.amd.cdna5.tdm.async_load(desc, [0, 0], smem.index(0), mbarrier=bar.index(0))
+        ttgl.amd.cdna5.tdm.async_load(desc, [0, 0], smem.index(1), mbarrier=bar.index(1))
 
-        ttgl.amd.gfx1250.mbarrier.wait(bar.index(0), phase=0)
+        ttgl.amd.cdna5.mbarrier.wait(bar.index(0), phase=0)
         if not FAILURE:
-            ttgl.amd.gfx1250.mbarrier.wait(bar.index(1), phase=0)
+            ttgl.amd.cdna5.mbarrier.wait(bar.index(1), phase=0)
 
         out_m = ttgl.arange(0, XBLOCK_C, ttgl.SliceLayout(1, blocked_layout))[:, None]
         out_n = ttgl.arange(0, XBLOCK_C, ttgl.SliceLayout(0, blocked_layout))[None, :]
@@ -554,11 +620,11 @@ def tdm_interleave_kernel():
         ttgl.store(out_ptr, smem.index(0).load(blocked_layout))
         ttgl.store(out_ptr, smem.index(1).load(blocked_layout))
 
-        out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=input_ptr, shape=(XBLOCK_C, XBLOCK_C),
-                                                               strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
-                                                               layout=smem_layout)
-        ttgl.amd.gfx1250.tdm.async_store(out_desc, [0, 0], smem.index(0))
-        ttgl.amd.gfx1250.tdm.async_wait(0)
+        out_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=input_ptr, shape=(XBLOCK_C, XBLOCK_C),
+                                                             strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
+                                                             layout=smem_layout)
+        ttgl.amd.cdna5.tdm.async_store(out_desc, [0, 0], smem.index(0))
+        ttgl.amd.cdna5.tdm.async_wait(0)
 
     input_t = torch.randn((XBLOCK, XBLOCK), dtype=torch.float16).cuda()
     output = torch.empty((XBLOCK, XBLOCK), dtype=torch.float16).cuda()
@@ -578,16 +644,16 @@ def async_copy_kernel():
         offs_m = ttgl.arange(0, XBLOCK_C, layout=ttgl.SliceLayout(dim=1, parent=blocked_layout))[:, None]
         offs_n = ttgl.arange(0, XBLOCK_C, layout=ttgl.SliceLayout(dim=0, parent=blocked_layout))[None, :]
         offs = offs_m * XBLOCK_C + offs_n
-        ttgl.amd.gfx1250.async_copy.global_to_shared(smem.index(0), input_ptr + offs)
-        ttgl.amd.gfx1250.async_copy.commit_group()
+        ttgl.amd.cdna5.async_copy.global_to_shared(smem.index(0), input_ptr + offs)
+        ttgl.amd.cdna5.async_copy.commit_group()
 
-        ttgl.amd.gfx1250.async_copy.global_to_shared(smem.index(1), input_ptr + offs)
-        ttgl.amd.gfx1250.async_copy.commit_group()
-        ttgl.amd.gfx1250.async_copy.wait_group(2 if FAILURE else 1)
+        ttgl.amd.cdna5.async_copy.global_to_shared(smem.index(1), input_ptr + offs)
+        ttgl.amd.cdna5.async_copy.commit_group()
+        ttgl.amd.cdna5.async_copy.wait_group(2 if FAILURE else 1)
 
-        ttgl.amd.gfx1250.async_copy.global_to_shared(smem.index(0), input_ptr + offs)
-        ttgl.amd.gfx1250.async_copy.commit_group()
-        ttgl.amd.gfx1250.async_copy.wait_group(0)
+        ttgl.amd.cdna5.async_copy.global_to_shared(smem.index(0), input_ptr + offs)
+        ttgl.amd.cdna5.async_copy.commit_group()
+        ttgl.amd.cdna5.async_copy.wait_group(0)
 
     input_t = torch.randn((XBLOCK, XBLOCK), dtype=torch.float16).cuda()
     kernel[(1, )](input_t, FAILURE=FAILURE, num_warps=4)
@@ -605,16 +671,16 @@ def tdm_store_kernel():
         smem = ttgl.allocate_shared_memory(ttgl.float16, [2, XBLOCK_C, XBLOCK_C], smem_layout)
         val = ttgl.full([XBLOCK_C, XBLOCK_C], 42, ttgl.float16, blocked_layout)
 
-        out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=output_ptr, shape=(XBLOCK_C, XBLOCK_C),
-                                                               strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
-                                                               layout=smem_layout)
+        out_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=output_ptr, shape=(XBLOCK_C, XBLOCK_C),
+                                                             strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
+                                                             layout=smem_layout)
 
-        ttgl.amd.gfx1250.tdm.async_store(out_desc, [0, 0], smem.index(0))
-        ttgl.amd.gfx1250.tdm.async_store(out_desc, [0, 0], smem.index(1))
-        ttgl.amd.gfx1250.tdm.async_wait(1)
+        ttgl.amd.cdna5.tdm.async_store(out_desc, [0, 0], smem.index(0))
+        ttgl.amd.cdna5.tdm.async_store(out_desc, [0, 0], smem.index(1))
+        ttgl.amd.cdna5.tdm.async_wait(1)
         smem.index(0).store(val)
         if not FAILURE:
-            ttgl.amd.gfx1250.tdm.async_wait(0)
+            ttgl.amd.cdna5.tdm.async_wait(0)
         smem.index(1).store(val)
 
     output = torch.empty((XBLOCK, XBLOCK), dtype=torch.float16).cuda()
@@ -631,17 +697,17 @@ def tdm_load_no_barrier_kernel():
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[32, 1],
                                                             warps_per_cta=[4, 1], order=[1, 0])
 
-        desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=input_ptr, shape=(XBLOCK_C, XBLOCK_C),
-                                                           strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
-                                                           layout=smem_layout)
+        desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=input_ptr, shape=(XBLOCK_C, XBLOCK_C),
+                                                         strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
+                                                         layout=smem_layout)
         smem = ttgl.allocate_shared_memory(ttgl.float16, shape=desc.block_shape, layout=desc.layout)
 
-        ttgl.amd.gfx1250.tdm.async_load(desc, [0, 0], smem)
+        ttgl.amd.cdna5.tdm.async_load(desc, [0, 0], smem)
         if not FAILURE:
-            ttgl.amd.gfx1250.tdm.async_wait(0)
+            ttgl.amd.cdna5.tdm.async_wait(0)
         val = smem.load(blocked_layout)
         if FAILURE:
-            ttgl.amd.gfx1250.tdm.async_wait(0)
+            ttgl.amd.cdna5.tdm.async_wait(0)
 
         out_m = ttgl.arange(0, XBLOCK_C, ttgl.SliceLayout(1, blocked_layout))[:, None]
         out_n = ttgl.arange(0, XBLOCK_C, ttgl.SliceLayout(0, blocked_layout))[None, :]
@@ -663,21 +729,21 @@ def tdm_load_store_combined_kernel():
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[32, 1],
                                                             warps_per_cta=[4, 1], order=[1, 0])
 
-        in_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=input_ptr, shape=(XBLOCK_C, XBLOCK_C),
-                                                              strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
-                                                              layout=smem_layout)
-        out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=output_ptr, shape=(XBLOCK_C, XBLOCK_C),
-                                                               strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
-                                                               layout=smem_layout)
+        in_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=input_ptr, shape=(XBLOCK_C, XBLOCK_C),
+                                                            strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
+                                                            layout=smem_layout)
+        out_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=output_ptr, shape=(XBLOCK_C, XBLOCK_C),
+                                                             strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
+                                                             layout=smem_layout)
         smem = ttgl.allocate_shared_memory(ttgl.float16, shape=in_desc.block_shape, layout=in_desc.layout)
 
-        ttgl.amd.gfx1250.tdm.async_load(in_desc, [0, 0], smem)
-        ttgl.amd.gfx1250.tdm.async_store(out_desc, [0, 0], smem)
+        ttgl.amd.cdna5.tdm.async_load(in_desc, [0, 0], smem)
+        ttgl.amd.cdna5.tdm.async_store(out_desc, [0, 0], smem)
         if not FAILURE:
-            ttgl.amd.gfx1250.tdm.async_wait(0)
+            ttgl.amd.cdna5.tdm.async_wait(0)
         val = smem.load(blocked_layout)
         if FAILURE:
-            ttgl.amd.gfx1250.tdm.async_wait(0)
+            ttgl.amd.cdna5.tdm.async_wait(0)
 
         out_m = ttgl.arange(0, XBLOCK_C, ttgl.SliceLayout(1, blocked_layout))[:, None]
         out_n = ttgl.arange(0, XBLOCK_C, ttgl.SliceLayout(0, blocked_layout))[None, :]
@@ -699,22 +765,22 @@ def tdm_two_bufs_one_wait_kernel():
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[32, 1],
                                                             warps_per_cta=[4, 1], order=[1, 0])
 
-        a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(XBLOCK_C, XBLOCK_C),
-                                                             strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
-                                                             layout=smem_layout)
-        b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=b_ptr, shape=(XBLOCK_C, XBLOCK_C),
-                                                             strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
-                                                             layout=smem_layout)
+        a_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=a_ptr, shape=(XBLOCK_C, XBLOCK_C),
+                                                           strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
+                                                           layout=smem_layout)
+        b_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=b_ptr, shape=(XBLOCK_C, XBLOCK_C),
+                                                           strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
+                                                           layout=smem_layout)
         a_smem = ttgl.allocate_shared_memory(ttgl.float16, shape=a_desc.block_shape, layout=a_desc.layout)
         b_smem = ttgl.allocate_shared_memory(ttgl.float16, shape=b_desc.block_shape, layout=b_desc.layout)
 
-        ttgl.amd.gfx1250.tdm.async_load(a_desc, [0, 0], a_smem)
-        ttgl.amd.gfx1250.tdm.async_load(b_desc, [0, 0], b_smem)
+        ttgl.amd.cdna5.tdm.async_load(a_desc, [0, 0], a_smem)
+        ttgl.amd.cdna5.tdm.async_load(b_desc, [0, 0], b_smem)
         if not FAILURE:
-            ttgl.amd.gfx1250.tdm.async_wait(1)
+            ttgl.amd.cdna5.tdm.async_wait(1)
         val = a_smem.load(blocked_layout)
         if FAILURE:
-            ttgl.amd.gfx1250.tdm.async_wait(0)
+            ttgl.amd.cdna5.tdm.async_wait(0)
 
         out_m = ttgl.arange(0, XBLOCK_C, ttgl.SliceLayout(1, blocked_layout))[:, None]
         out_n = ttgl.arange(0, XBLOCK_C, ttgl.SliceLayout(0, blocked_layout))[None, :]
@@ -734,15 +800,15 @@ def ws_store_wait_load_failure():
     @gluon.jit
     def ws_consumer(smem, ready_bar, done_bar, FAILURE: ttgl.constexpr, layout: ttgl.constexpr):
         if not FAILURE:
-            ttgl.amd.gfx1250.mbarrier.wait(ready_bar, phase=0)
+            ttgl.amd.cdna5.mbarrier.wait(ready_bar, phase=0)
         val = smem.index(0).load(layout)
         smem.index(1).store(val)
-        ttgl.amd.gfx1250.mbarrier.arrive(done_bar, count=1)
+        ttgl.amd.cdna5.mbarrier.arrive(done_bar, count=1)
 
     @gluon.jit
     def ws_producer(smem, ready_bar, XBLOCK: ttgl.constexpr, layout: ttgl.constexpr):
         smem.index(0).store(ttgl.arange(0, XBLOCK, layout).to(ttgl.float16))
-        ttgl.amd.gfx1250.mbarrier.arrive(ready_bar, count=1)
+        ttgl.amd.cdna5.mbarrier.arrive(ready_bar, count=1)
 
     @gluon.jit
     def kernel(output, FAILURE: ttgl.constexpr):
@@ -751,16 +817,16 @@ def ws_store_wait_load_failure():
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32],
                                                             warps_per_cta=[4], order=[0])
         smem = ttgl.allocate_shared_memory(ttgl.float16, [2, XBLOCK_C], smem_layout)
-        bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
         for i in range(2):
-            ttgl.amd.gfx1250.mbarrier.init(bar.index(i), count=4 * WARP_SIZE)
+            ttgl.amd.cdna5.mbarrier.init(bar.index(i), count=4 * WARP_SIZE)
         ready_bar = bar.index(0)
         done_bar = bar.index(1)
         ttgl.warp_specialize([
             (ws_consumer, (smem, ready_bar, done_bar, FAILURE, blocked_layout)),
             (ws_producer, (smem, ready_bar, XBLOCK_C, blocked_layout)),
         ], [4])
-        ttgl.amd.gfx1250.mbarrier.wait(done_bar, phase=0)
+        ttgl.amd.cdna5.mbarrier.wait(done_bar, phase=0)
         val = smem.index(1).load(blocked_layout)
         output_ptrs = output + ttgl.arange(0, XBLOCK_C, blocked_layout)
         ttgl.store(output_ptrs, val)
@@ -776,14 +842,14 @@ def ws_load_wait_store_failure():
     @gluon.jit
     def ws_default(smem, bar, FAILURE: ttgl.constexpr, layout: ttgl.constexpr):
         if not FAILURE:
-            ttgl.amd.gfx1250.mbarrier.wait(bar.index(0), phase=0)
+            ttgl.amd.cdna5.mbarrier.wait(bar.index(0), phase=0)
         smem.index(0).store(ttgl.arange(0, XBLOCK_C, layout).to(ttgl.float16))
-        ttgl.amd.gfx1250.mbarrier.arrive(bar.index(1), count=1)
+        ttgl.amd.cdna5.mbarrier.arrive(bar.index(1), count=1)
 
     @gluon.jit
     def ws_1(smem, bar, FAILURE: ttgl.constexpr, layout: ttgl.constexpr):
         val = smem.index(0).load(layout)
-        ttgl.amd.gfx1250.mbarrier.arrive(bar.index(0), count=1)
+        ttgl.amd.cdna5.mbarrier.arrive(bar.index(0), count=1)
         smem.index(1).store(val)
 
     @gluon.jit
@@ -793,14 +859,14 @@ def ws_load_wait_store_failure():
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32],
                                                             warps_per_cta=[4], order=[0])
         smem = ttgl.allocate_shared_memory(ttgl.float16, [2, XBLOCK_C], smem_layout)
-        bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
         for i in range(2):
-            ttgl.amd.gfx1250.mbarrier.init(bar.index(i), count=4 * WARP_SIZE)
+            ttgl.amd.cdna5.mbarrier.init(bar.index(i), count=4 * WARP_SIZE)
         ttgl.warp_specialize([
             (ws_default, (smem, bar, FAILURE, blocked_layout)),
             (ws_1, (smem, bar, FAILURE, blocked_layout)),
         ], [4])
-        ttgl.amd.gfx1250.mbarrier.wait(bar.index(1), phase=0)
+        ttgl.amd.cdna5.mbarrier.wait(bar.index(1), phase=0)
         val = smem.index(0).load(blocked_layout)
         output_ptrs = output + ttgl.arange(0, XBLOCK_C, blocked_layout)
         ttgl.store(output_ptrs, val)
@@ -815,16 +881,16 @@ def tdm_cross_partition_kernel():
 
     @gluon.jit
     def ws_default(desc, smem, sync_bar, FAILURE: ttgl.constexpr):
-        ttgl.amd.gfx1250.tdm.async_load(desc, [0, 0], smem)
+        ttgl.amd.cdna5.tdm.async_load(desc, [0, 0], smem)
         if not FAILURE:
-            ttgl.amd.gfx1250.tdm.async_wait(0)
-        ttgl.amd.gfx1250.mbarrier.arrive(sync_bar, count=1)
+            ttgl.amd.cdna5.tdm.async_wait(0)
+        ttgl.amd.cdna5.mbarrier.arrive(sync_bar, count=1)
 
     @gluon.jit
     def ws_1(desc, smem, sync_bar, FAILURE: ttgl.constexpr):
-        ttgl.amd.gfx1250.mbarrier.wait(sync_bar, phase=0)
-        ttgl.amd.gfx1250.tdm.async_load(desc, [0, 0], smem)
-        ttgl.amd.gfx1250.tdm.async_wait(0)
+        ttgl.amd.cdna5.mbarrier.wait(sync_bar, phase=0)
+        ttgl.amd.cdna5.tdm.async_load(desc, [0, 0], smem)
+        ttgl.amd.cdna5.tdm.async_wait(0)
 
     @gluon.jit
     def kernel(input_ptr, FAILURE: ttgl.constexpr):
@@ -832,12 +898,12 @@ def tdm_cross_partition_kernel():
         NUM_WARPS: ttgl.constexpr = 4
         smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
 
-        desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=input_ptr, shape=(XBLOCK_C, XBLOCK_C),
-                                                           strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
-                                                           layout=smem_layout)
+        desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=input_ptr, shape=(XBLOCK_C, XBLOCK_C),
+                                                         strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
+                                                         layout=smem_layout)
         smem = ttgl.allocate_shared_memory(ttgl.float16, shape=desc.block_shape, layout=desc.layout)
-        sync_bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
-        ttgl.amd.gfx1250.mbarrier.init(sync_bar.index(0), count=NUM_WARPS * WARP_SIZE)
+        sync_bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
+        ttgl.amd.cdna5.mbarrier.init(sync_bar.index(0), count=NUM_WARPS * WARP_SIZE)
 
         ttgl.warp_specialize([
             (ws_default, (desc, smem, sync_bar.index(0), FAILURE)),
@@ -854,16 +920,16 @@ def tdm_cross_partition_load_store_kernel():
 
     @gluon.jit
     def ws_default(in_desc, smem, sync_bar, FAILURE: ttgl.constexpr):
-        ttgl.amd.gfx1250.tdm.async_load(in_desc, [0, 0], smem)
+        ttgl.amd.cdna5.tdm.async_load(in_desc, [0, 0], smem)
         if not FAILURE:
-            ttgl.amd.gfx1250.tdm.async_wait(0)
-        ttgl.amd.gfx1250.mbarrier.arrive(sync_bar, count=1)
+            ttgl.amd.cdna5.tdm.async_wait(0)
+        ttgl.amd.cdna5.mbarrier.arrive(sync_bar, count=1)
 
     @gluon.jit
     def ws_1(out_desc, smem, sync_bar, FAILURE: ttgl.constexpr):
-        ttgl.amd.gfx1250.mbarrier.wait(sync_bar, phase=0)
-        ttgl.amd.gfx1250.tdm.async_store(out_desc, [0, 0], smem)
-        ttgl.amd.gfx1250.tdm.async_wait(0)
+        ttgl.amd.cdna5.mbarrier.wait(sync_bar, phase=0)
+        ttgl.amd.cdna5.tdm.async_store(out_desc, [0, 0], smem)
+        ttgl.amd.cdna5.tdm.async_wait(0)
 
     @gluon.jit
     def kernel(input_ptr, output_ptr, FAILURE: ttgl.constexpr):
@@ -871,15 +937,15 @@ def tdm_cross_partition_load_store_kernel():
         NUM_WARPS: ttgl.constexpr = 4
         smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
 
-        in_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=input_ptr, shape=(XBLOCK_C, XBLOCK_C),
-                                                              strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
-                                                              layout=smem_layout)
-        out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=output_ptr, shape=(XBLOCK_C, XBLOCK_C),
-                                                               strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
-                                                               layout=smem_layout)
+        in_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=input_ptr, shape=(XBLOCK_C, XBLOCK_C),
+                                                            strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
+                                                            layout=smem_layout)
+        out_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=output_ptr, shape=(XBLOCK_C, XBLOCK_C),
+                                                             strides=(XBLOCK_C, 1), block_shape=(XBLOCK_C, XBLOCK_C),
+                                                             layout=smem_layout)
         smem = ttgl.allocate_shared_memory(ttgl.float16, shape=in_desc.block_shape, layout=in_desc.layout)
-        sync_bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], ttgl.amd.gfx1250.mbarrier.MBarrierLayout())
-        ttgl.amd.gfx1250.mbarrier.init(sync_bar.index(0), count=NUM_WARPS * WARP_SIZE)
+        sync_bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], ttgl.amd.cdna5.mbarrier.MBarrierLayout())
+        ttgl.amd.cdna5.mbarrier.init(sync_bar.index(0), count=NUM_WARPS * WARP_SIZE)
 
         ttgl.warp_specialize([
             (ws_default, (in_desc, smem, sync_bar.index(0), FAILURE)),
@@ -906,4 +972,6 @@ if __name__ == "__main__":
         "tdm_two_bufs_one_wait_kernel": tdm_two_bufs_one_wait_kernel, "tdm_cross_partition_kernel":
         tdm_cross_partition_kernel, "tdm_cross_partition_load_store_kernel": tdm_cross_partition_load_store_kernel
     }
+    tests["barrier_storage_lifetime"] = barrier_storage_lifetime
+    tests["barrier_storage_pending_completion"] = barrier_storage_pending_completion
     tests[sys.argv[1]]()

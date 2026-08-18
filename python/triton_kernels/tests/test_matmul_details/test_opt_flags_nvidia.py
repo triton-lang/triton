@@ -13,6 +13,7 @@ from triton_kernels.tensor import FP4, UINT8, Storage, Tensor, convert_layout, m
 from triton_kernels.tensor_details import layout
 from triton_kernels.tensor_details.layout import BlackwellMX4ValueShuffledLayout
 from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, BlackwellMXScaleLayout
+from triton_kernels.tensor_details.ragged_tensor import make_ragged_tensor_metadata_torch
 from triton_kernels.testing import assert_close
 
 
@@ -204,6 +205,12 @@ def test_compute_block_n_blackwell_scale_aligns_to_128(n, expected):
     assert block_n == block_n_tma == expected
 
 
+def test_compute_num_warps_uses_two_warp_floor():
+    precision_config = PrecisionConfig()
+    assert opt_flags_nvidia.compute_num_warps(16, 256, False, precision_config, {}) == 2
+    assert opt_flags_nvidia.compute_num_warps(16, 256, False, precision_config, {"num_warps": 1}) == 1
+
+
 def test_matmul_blackwell_scale_small_n(device):
     if device != "cuda" or not torch.cuda.is_available():
         pytest.skip("requires CUDA")
@@ -222,6 +229,45 @@ def test_matmul_blackwell_scale_small_n(device):
     tri_y = matmul(a, b, None, precision_config=precision_config)
     ref_y = matmul_torch(a.to(torch.bfloat16), b, None, precision_config=precision_config)
     assert_close(ref_y, tri_y, maxtol=3e-2, rmstol=None)
+
+
+@pytest.mark.parametrize("split_k", [1, 2])
+def test_matmul_clc(device, split_k):
+    if device != "cuda" or not torch.cuda.is_available() or not is_cuda():
+        pytest.skip("requires CUDA")
+    if torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("requires Blackwell or newer")
+
+    torch.manual_seed(0)
+    m, n, k = 4096, 1024, 128
+    a = torch.randn((m, k), device=device, dtype=torch.bfloat16)
+    b = torch.randn((k, n), device=device, dtype=torch.bfloat16)
+    with scoped_opt_flags_constraints({
+            "clc": True,
+            "block_m": 128,
+            "block_n": 128,
+            "block_k": 64,
+            "split_k": split_k,
+    }):
+        tri_y = matmul(a, b, None)
+
+    ref_y = matmul_torch(a, b, None, precision_config=PrecisionConfig())
+    assert_close(ref_y, tri_y, maxtol=3e-2, rmstol=None)
+
+
+def test_matmul_clc_rejects_ragged_m_grid(device):
+    if device != "cuda" or not torch.cuda.is_available() or not is_cuda():
+        pytest.skip("requires CUDA")
+    if torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("requires Blackwell or newer")
+
+    slice_sizes = torch.tensor([64, 0, 64], dtype=torch.int32, device=device)
+    metadata = make_ragged_tensor_metadata_torch(slice_sizes, 128)
+    a = torch.randn((128, 64), device=device, dtype=torch.bfloat16)
+    b = torch.randn((3, 64, 128), device=device, dtype=torch.bfloat16)
+    with scoped_opt_flags_constraints({"clc": True}):
+        with pytest.raises(InapplicableConstraint, match="host-known grid"):
+            matmul(a, b, None, a_ragged_metadata=metadata)
 
 
 def test_matmul_blackwell_shuffled_mxfp4_weight(device):

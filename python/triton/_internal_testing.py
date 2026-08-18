@@ -1,7 +1,6 @@
 import importlib
 import multiprocessing
 import os
-import queue
 import re
 import tempfile
 import numpy as np
@@ -12,10 +11,12 @@ import triton.language as tl
 from triton import knobs
 from typing import Optional, Set, Union
 from dataclasses import dataclass
+from contextlib import contextmanager
 from contextvars import ContextVar
 import pytest
 
 from numpy.random import RandomState
+from triton.backends import backends
 from triton.runtime.jit import TensorWrapper, reinterpret, type_canonicalisation_dict
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
@@ -29,6 +30,7 @@ torch_float8_dtypes = ['float8_e4m3fn', 'float8_e5m2']
 torch_dtypes = ['bool'] + int_dtypes + ['uint8'] + float_dtypes + ['bfloat16']
 tma_dtypes = sorted(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"})
 _COMPILE_WARMUP_ACTIVE = ContextVar("triton_compile_warmup_active", default=False)
+_PROCESS_POOL = None
 
 
 def is_interpreter():
@@ -37,20 +39,6 @@ def is_interpreter():
 
 def is_compile_warmup():
     return _COMPILE_WARMUP_ACTIVE.get()
-
-
-def rand(*shape, **kwargs):
-    return (torch.empty if is_compile_warmup() else torch.rand)(*shape, **kwargs)
-
-
-def randn(*shape, **kwargs):
-    return (torch.empty if is_compile_warmup() else torch.randn)(*shape, **kwargs)
-
-
-def randint(low, high, size, **kwargs):
-    if is_compile_warmup():
-        return torch.empty(size, dtype=kwargs.get("dtype", torch.int64), device=kwargs.get("device"))
-    return torch.randint(low, high, size, **kwargs)
 
 
 def random_int(low, high, *, warmup_value=None, **kwargs):
@@ -65,17 +53,10 @@ def random_float(*, warmup_value=0.5, **kwargs):
     return float(torch.rand((), **kwargs).item())
 
 
-def reference_tensor(value, dtype):
-    return torch.empty_like(value.data, dtype=dtype) if is_compile_warmup() else value.to(dtype)
-
-
-def assert_close(*args, **kwargs):
-    if not is_compile_warmup():
-        torch.testing.assert_close(*args, **kwargs)
-
-
 def get_current_target():
     if is_interpreter():
+        return None
+    if not any(backend.driver.is_active() for backend in backends.values()):
         return None
     return triton.runtime.driver.active.get_current_target()
 
@@ -326,8 +307,8 @@ def _call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_list
     return exc
 
 
-def _run_in_process_worker(client_fn, q, args, kwargs, env, stderr_file, compilation_listener):
-    q.put(_call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_listener))
+def _run_in_process_worker(client_fn, result_pipe, args, kwargs, env, stderr_file, compilation_listener):
+    result_pipe.send(_call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_listener))
 
 
 def _run_in_replenishing_process_worker(task_pipe, preload_module, triton_key):
@@ -415,28 +396,63 @@ class ReplenishingProcessPool:
         return ProcessResult(exc, stderr)
 
 
+@contextmanager
+def use_process_pool(preload_module):
+    global _PROCESS_POOL
+
+    pool = ReplenishingProcessPool(preload_module)
+    pool.start()
+    _PROCESS_POOL = pool
+    try:
+        yield pool
+    finally:
+        pool.close()
+        _PROCESS_POOL = None
+
+
 def run_in_process(client_fn, args=(), kwargs=None, env=None):
+    if is_compile_warmup() or os.environ.get("DISABLE_SUBPROCESS"):
+        return client_fn(*args, **(kwargs or {}))
+    if _PROCESS_POOL is not None:
+        return _PROCESS_POOL.run(client_fn, args, kwargs, env)
     if kwargs is None:
         kwargs = {}
 
     ctx = multiprocessing.get_context("forkserver")
-    q = ctx.Queue()
+    result_pipe, child_pipe = ctx.Pipe(duplex=False)
     with tempfile.TemporaryDirectory() as tmpdir:
         stderr_file = os.path.join(tmpdir, "err.log")
         process = ctx.Process(
             target=_run_in_process_worker,
-            args=(client_fn, q, args, kwargs, env, stderr_file, knobs.compilation.listener),
+            args=(client_fn, child_pipe, args, kwargs, env, stderr_file, knobs.compilation.listener),
         )
         process.start()
-        process.join()
+        child_pipe.close()
+        timeout = os.environ.get("TRITON_TEST_PROCESS_TIMEOUT")
+        timeout = None if timeout is None else float(timeout)
+        if not result_pipe.poll(timeout):
+            process.kill()
+            process.join()
+            result_pipe.close()
+            raise TimeoutError(f"test subprocess {client_fn.__name__} exceeded its {timeout}-second timeout")
+        try:
+            exc = result_pipe.recv()
+        except EOFError:
+            process.join()
+            with open(stderr_file, "r") as f:
+                stderr = f.read()
+            print(stderr, file=sys.stderr)
+            raise RuntimeError(
+                f"child process exited with code {process.exitcode} without returning a result") from None
+        finally:
+            result_pipe.close()
+        process.join(timeout)
+        if process.is_alive():
+            process.kill()
+            process.join()
+            raise TimeoutError(f"test subprocess {client_fn.__name__} exceeded its {timeout}-second timeout")
         with open(stderr_file, "r") as f:
             stderr = f.read()
-    exc = None
-    try:
-        exc = q.get(timeout=1)
-    except queue.Empty:
-        print(stderr, file=sys.stderr)
-        raise RuntimeError(f"child process exited with code {process.exitcode} without returning a result") from None
     return ProcessResult(exc, stderr)
 
 
