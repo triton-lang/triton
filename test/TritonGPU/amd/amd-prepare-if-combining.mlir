@@ -122,6 +122,44 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// CHECK-LABEL: region_capture_between_ifs
+//       CHECK: %[[FIRST:.+]] = scf.if
+//       CHECK: %[[LOOP:.+]] = scf.for
+//       CHECK: %[[SECOND:.+]] = scf.if
+// CANON-LABEL: region_capture_between_ifs
+//       CANON: %[[FIRST:.+]] = scf.if
+//       CANON: %[[LOOP:.+]] = scf.for
+//       CANON: %[[SECOND:.+]] = scf.if
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @region_capture_between_ifs(%cond: i1, %a: i32) -> i32 {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c4 = arith.constant 4 : index
+    %first = scf.if %cond -> i32 {
+      %add = arith.addi %a, %a : i32
+      scf.yield %add : i32
+    } else {
+      %sub = arith.subi %a, %a : i32
+      scf.yield %sub : i32
+    }
+    %loop = scf.for %i = %c0 to %c4 step %c1 iter_args(%acc = %a) -> i32 {
+      %add = arith.addi %acc, %first : i32
+      scf.yield %add : i32
+    }
+    %second = scf.if %cond -> i32 {
+      %add = arith.addi %loop, %a : i32
+      scf.yield %add : i32
+    } else {
+      %sub = arith.subi %loop, %a : i32
+      scf.yield %sub : i32
+    }
+    %result = arith.addi %first, %second : i32
+    tt.return %result : i32
+  }
+}
+
+// -----
+
 // CHECK-LABEL: sibling_ifs_with_nested_if
 //       CHECK: %[[LOAD:.+]] = ttg.local_load
 //  CHECK-NEXT: tt.trans %[[LOAD]]
