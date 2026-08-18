@@ -394,8 +394,8 @@ def make_default_opt_flags_nvidia(
         num_warps = max(num_warps, 8)
 
     # Occupancy target and maxnreg (for Hopper)
-    is_hopper_scale = isinstance(b_mx_scale_layout, HopperMXScaleLayout)
     occupancy_target = 1
+    is_hopper_scale = isinstance(b_mx_scale_layout, HopperMXScaleLayout)
     if is_hopper_scale:
         occupancy_target = 16 // num_warps
         if precision_config.a_mx_scale is not None and precision_config.c_mx_scale is not None:
@@ -411,6 +411,7 @@ def make_default_opt_flags_nvidia(
         maxnreg = min(max_reg_per_thread, maxnreg)
     else:
         maxnreg = None
+
     if constraints.get("epilogue_subtile", None) is not None:
         subtiles_to_check = [constraints["epilogue_subtile"]]
     elif is_large_ragged_nvfp4:
@@ -420,7 +421,8 @@ def make_default_opt_flags_nvidia(
     num_stages = -1
     for ep in subtiles_to_check:
         ns = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, epilogue_subtile=ep,
-                                                 occupancy_target=occupancy_target, swap_xw=swap_xw,
+                                                 occupancy_target=occupancy_target,
+                                                 swap_xw=swap_xw,
                                                  w_transpose=w_transpose)
         if ns > num_stages:
             epilogue_subtile, num_stages = ep, ns

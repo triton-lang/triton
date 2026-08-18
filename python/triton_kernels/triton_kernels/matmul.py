@@ -549,7 +549,7 @@ def matmul(a, b, bias,
     if a_has_tma and precision_config.allow_tf32 and a.storage.data.dtype == torch.float32:
         a_tensor_or_tma.round_f32_to_tf32 = True
     # create tma descriptor for y
-    can_use_output_tma = (
+    c_has_tma = (
         opt_flags.is_persistent and (scatter_indx is None or has_scatter_tma)
         and is_tma_compliant(c)
         and (
@@ -566,7 +566,7 @@ def matmul(a, b, bias,
             or matmul_fused_activation.specs.reduction_n == 1
         )
     )
-    c_has_tma = _resolve_tma_override("use_output_tma", can_use_output_tma, opt_flags.use_output_tma)
+    c_has_tma = _resolve_tma_override("use_output_tma", c_has_tma, opt_flags.use_output_tma)
     c_logical_block_n = opt_flags.block_n // opt_flags.epilogue_subtile // matmul_fused_activation.specs.reduction_n
     c_tma_block_n = c_logical_block_n // precision_config.c_value_pack_factor
     out_tile_n = opt_flags.block_n // matmul_fused_activation.specs.reduction_n
