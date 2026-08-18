@@ -1025,8 +1025,13 @@ class MockTensor:
         self.shape = shape
 
     def stride(self):
+        if not self.shape:
+            return ()
+
         strides = [1]
-        for size in self.shape[1:]:
+        for size in reversed(self.shape[1:]):
+            sym_max = getattr(size, "__sym_max__", None)
+            size = sym_max(1) if sym_max is not None else max(size, 1)
             strides.append(strides[-1] * size)
         return tuple(reversed(strides))
 
