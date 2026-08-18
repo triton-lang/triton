@@ -136,6 +136,7 @@ def compute_num_stages(
     *,
     epilogue_subtile,
     occupancy_target,
+    swap_xw=None,
     w_transpose=False,
 ):
     if precision_config.max_num_imprecise_acc is not None:
@@ -193,7 +194,9 @@ def compute_num_stages(
         # pipelined layout conversion before store of the accumulator
         # note: layout conversion has some padding
         epilogue_smem = int((block_m + 4) * acc_block_n * acc_size)
-        if compute_swap_xw(precision_config, block_m, is_persistent, lhs_dtype, rhs_dtype):
+        if swap_xw is None:
+            swap_xw = compute_swap_xw(precision_config, block_m, is_persistent, lhs_dtype, rhs_dtype)
+        if swap_xw:
             # The fp32 accumulator stays in TMEM for the Blackwell SWAP_XW
             # persistent path. Fused reductions such as swiglu still need smem
             # for the unreduced output tile before the narrower TMA-store tile.
