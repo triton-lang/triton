@@ -176,7 +176,8 @@ def _build_test_op_cases():
         for shape in [odd_shape2, even_shape] for swizzle in [False, True]
     ])
     test_cases.extend([
-        Case(64, 256, 32, "plain", dtype, "mxfloat4_e2m1", b_hbm_swizzling=True)
+        Case(*shape, "plain", dtype, "mxfloat4_e2m1", b_hbm_swizzling=True)
+        for shape in [(64, 256, 32), (128, 258, 1504), (128, 3200, 256)]
         for dtype in ["bfloat16", "float16"]
     ])
     test_cases.append(Case(128, 128, 128, "plain", "bfloat16", "nvfp4_e2m1"))
@@ -636,6 +637,9 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         maxtol, rmstol = 6e-1, 4e-2
     elif c_dtype.has_mx_scale:
         maxtol, rmstol = 4e-1, 4e-2
+    elif is_hopper() and b_hbm_swizzling and act_dtype_str == "float16" and weight_dtype_str == "mxfloat4_e2m1":
+        # Native FP16 inputs must not lose their mantissa bits to a BF16 cast.
+        maxtol, rmstol = 2e-3, 5e-4
     elif b_dtype.is_mxfloat4:
         maxtol, rmstol = 3e-2, None
     elif c_dtype.torch_dtype == torch.float64:
