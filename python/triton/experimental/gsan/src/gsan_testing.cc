@@ -206,7 +206,7 @@ inline uintptr_t roundUp(uintptr_t ptr, uintptr_t align) {
 }
 
 size_t threadStateStrideBytes(uint16_t numThreads, uint16_t clockBufferSize) {
-  auto clocksPerThread = static_cast<size_t>(1) + clockBufferSize;
+  auto clocksPerThread = static_cast<size_t>(1) + 2 * clockBufferSize;
   auto clockWords = static_cast<size_t>(numThreads) * clocksPerThread;
   return kThreadStateSize + sizeof(gsan::epoch_t) * clockWords;
 }

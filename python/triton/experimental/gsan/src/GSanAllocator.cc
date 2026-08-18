@@ -489,8 +489,8 @@ CUresult ensureRuntimeStateMapped(int device) {
   auto numThreads = config.numThreads;
   assert(numThreads <= gsan::kMaxThreads);
   auto clockSizeBytes = sizeof(gsan::epoch_t) * config.numThreads;
-  // 1 local clock + the circular clock buffer
-  auto clocksPerThread = 1 + config.clockBufferSize;
+  // 1 local clock + separate atomic-release and cluster-barrier buffers.
+  auto clocksPerThread = 1 + 2 * config.clockBufferSize;
   auto perSMStateSize =
       sizeof(gsan::ThreadState) + clockSizeBytes * clocksPerThread;
   perSMStateSize = roundUp(perSMStateSize, alignof(gsan::ThreadState));
@@ -1401,7 +1401,8 @@ PyObject *pyGetRuntimeStateLayout([[maybe_unused]] PyObject *self,
               alignof(gsan::ThreadState));
   size_t threadStateStride =
       sizeof(gsan::ThreadState) +
-      sizeof(gsan::epoch_t) * config.numThreads * (1 + config.clockBufferSize);
+      sizeof(gsan::epoch_t) * config.numThreads *
+          (1 + 2 * config.clockBufferSize);
   threadStateStride = roundUp(threadStateStride, alignof(gsan::ThreadState));
 
   return Py_BuildValue(

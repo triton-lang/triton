@@ -36,6 +36,8 @@ namespace gsan {
 namespace {
 static constexpr uint32_t kWriterFlag = 1u << 31;
 static constexpr epoch_t kMaxEpoch = static_cast<epoch_t>(~0u);
+static constexpr epoch_t kCompactEpochPeriod =
+    static_cast<compact_epoch_t>(~0u);
 static constexpr uint16_t kMaxUint16 = static_cast<uint16_t>(~0u);
 
 enum class AtomicSem : uint8_t {
@@ -104,7 +106,7 @@ GSAN_DEVICE void syncThreads(uint32_t barrierId, uint32_t numThreads) {
 }
 
 GSAN_DEVICE uintptr_t getThreadStateStrideBytes(GlobalState *globals) {
-  auto clocksPerThread = 1u + globals->clockBufferSize;
+  auto clocksPerThread = 1u + 2u * globals->clockBufferSize;
   return sizeof(ThreadState) +
          sizeof(epoch_t) * globals->numThreads * clocksPerThread;
 }
@@ -146,10 +148,35 @@ GSAN_DEVICE epoch_t *getClockBufferBase(ThreadState *state) {
   return state->vectorClock + globals->numThreads;
 }
 
-GSAN_DEVICE epoch_t *getClockBufferSlot(ThreadState *state, epoch_t token,
+GSAN_DEVICE epoch_t *getClusterClockBufferBase(ThreadState *state) {
+  auto *globals = getGlobalState(state);
+  return getClockBufferBase(state) +
+         globals->clockBufferSize * globals->numThreads;
+}
+
+GSAN_DEVICE compact_epoch_t compactEpoch(epoch_t epoch) {
+  return static_cast<compact_epoch_t>((epoch - 1) % kCompactEpochPeriod + 1);
+}
+
+GSAN_DEVICE epoch_t expandCompactEpoch(compact_epoch_t compact, epoch_t latest,
+                                       Location loc) {
+  assert_msg(loc, compact != 0, "Invalid GSan clock token");
+  assert_msg(loc, latest != 0, "Future GSan clock token");
+  epoch_t generation = (latest - 1) / kCompactEpochPeriod;
+  epoch_t expanded = generation * kCompactEpochPeriod + compact;
+  if (expanded > latest) {
+    assert_msg(loc, generation != 0, "Future GSan clock token");
+    expanded -= kCompactEpochPeriod;
+  }
+  return expanded;
+}
+
+GSAN_DEVICE epoch_t *getClockBufferSlot(ThreadState *state,
+                                        compact_epoch_t compactToken,
                                         Location loc) {
+  epoch_t token =
+      expandCompactEpoch(compactToken, state->clockBufferHead, loc);
   assert_msg(loc, token != 0, "Invalid GSan clock token");
-  assert_msg(loc, token <= state->clockBufferHead, "Future GSan clock token");
   auto *globals = getGlobalState(state);
   assert_msg(loc, state->clockBufferHead - token < globals->clockBufferSize,
              "GSan clock buffer token overwritten");
@@ -157,10 +184,26 @@ GSAN_DEVICE epoch_t *getClockBufferSlot(ThreadState *state, epoch_t token,
   return getClockBufferBase(state) + slot * globals->numThreads;
 }
 
-GSAN_DEVICE epoch_t publishClockBuffer(ThreadState *state, Location loc) {
+GSAN_DEVICE epoch_t *getClusterClockBufferSlot(ThreadState *state,
+                                               compact_epoch_t compactToken,
+                                               Location loc) {
+  epoch_t token =
+      expandCompactEpoch(compactToken, state->clusterClockBufferHead, loc);
+  auto *globals = getGlobalState(state);
+  assert_msg(loc, state->clusterClockBufferHead - token < globals->clockBufferSize,
+             "GSan cluster clock buffer token overwritten");
+  uint32_t slot = token % globals->clockBufferSize;
+  return getClusterClockBufferBase(state) + slot * globals->numThreads;
+}
+
+GSAN_DEVICE compact_epoch_t publishClockBuffer(ThreadState *state,
+                                              Location loc) {
   auto *globals = getGlobalState(state);
   uint32_t nextHead = state->clockBufferHead + 1;
-  assert_msg(loc, nextHead <= kMaxEpoch, "GSan clock buffer token overflowed");
+  // Atomic-release tokens can outlive a compact-token generation. Keep their
+  // identities unambiguous instead of acquiring an unrelated later snapshot.
+  assert_msg(loc, nextHead <= kCompactEpochPeriod,
+             "GSan clock buffer token overflowed");
   epoch_t *slot =
       getClockBufferBase(state) +
       ((nextHead - 1) % globals->clockBufferSize) * globals->numThreads;
@@ -168,7 +211,7 @@ GSAN_DEVICE epoch_t publishClockBuffer(ThreadState *state, Location loc) {
     slot[i] = state->vectorClock[i];
   state->clockBufferHead = nextHead;
   state->clockBufferDirty = 0;
-  return static_cast<epoch_t>(nextHead);
+  return compactEpoch(nextHead);
 }
 
 GSAN_DEVICE AtomicSem decodeAtomicSem(uint32_t sem) {
@@ -317,6 +360,7 @@ GSAN_DEVICE void initThread(GlobalState *globals, uint32_t *streamClocks,
       state->clockBufferDirty = 0;
       state->gdcWaitCalled = 0;
       state->clockBufferHead = 0;
+      state->clusterClockBufferHead = 0;
       state->threadId = getDeviceThreadId(globals, getSmId());
       __scoped_atomic_store_n(&state->globals, globals, __ATOMIC_RELEASE,
                               __MEMORY_SCOPE_DEVICE);
@@ -383,31 +427,32 @@ GSAN_DEVICE void releaseShadow(ShadowCell *cell) {
                           __MEMORY_SCOPE_SYSTEM);
 }
 
-GSAN_DEVICE epoch_t appendClockBufferSnapshot(ThreadState *state,
-                                              const epoch_t *snapshot,
-                                              Location loc) {
+GSAN_DEVICE compact_epoch_t appendClockBufferSnapshot(ThreadState *state,
+                                                      const epoch_t *snapshot,
+                                                      Location loc) {
   auto *globals = getGlobalState(state);
   assert_msg(loc, globals->clockBufferSize != 0,
              "GSan clock buffer size must be non-zero");
   uint32_t curHead = state->clockBufferHead;
   uint32_t nextHead = curHead + 1;
-  assert_msg(loc, nextHead <= kMaxEpoch, "GSan clock buffer token overflowed");
+  assert_msg(loc, nextHead <= kCompactEpochPeriod,
+             "GSan clock buffer token overflowed");
   epoch_t *slot = getClockBufferBase(state) +
                   (nextHead % globals->clockBufferSize) * globals->numThreads;
   for (int i = 0; i < globals->numThreads; ++i)
     slot[i] = snapshot[i];
   state->clockBufferHead = nextHead;
-  return static_cast<epoch_t>(nextHead);
+  return compactEpoch(nextHead);
 }
 
-GSAN_DEVICE epoch_t publishCurrentVectorClock(ThreadState *state,
-                                              Location loc) {
+GSAN_DEVICE compact_epoch_t publishCurrentVectorClock(ThreadState *state,
+                                                       Location loc) {
   if (state->clockBufferDirty) {
     auto token = appendClockBufferSnapshot(state, state->vectorClock, loc);
     state->clockBufferDirty = 0;
     return token;
   }
-  return state->clockBufferHead;
+  return compactEpoch(state->clockBufferHead);
 }
 
 GSAN_DEVICE const epoch_t *getSnapshotForWrite(ThreadState *state,
@@ -419,14 +464,15 @@ GSAN_DEVICE const epoch_t *getSnapshotForWrite(ThreadState *state,
   return getClockBufferSlot(writerState, write.epoch, loc);
 }
 
-GSAN_DEVICE epoch_t publishCurrentVectorClockWithPriorRelease(
+GSAN_DEVICE compact_epoch_t publishCurrentVectorClockWithPriorRelease(
     ThreadState *state, const ScalarClock &previousWrite, Location loc) {
   const auto *previousSnapshot = getSnapshotForWrite(state, previousWrite, loc);
   auto *globals = getGlobalState(state);
   assert_msg(loc, globals->clockBufferSize != 0,
              "GSan clock buffer size must be non-zero");
   uint32_t nextHead = state->clockBufferHead + 1;
-  assert_msg(loc, nextHead <= kMaxEpoch, "GSan clock buffer token overflowed");
+  assert_msg(loc, nextHead <= kCompactEpochPeriod,
+             "GSan clock buffer token overflowed");
   auto *slot = getClockBufferBase(state) +
                (nextHead % globals->clockBufferSize) * globals->numThreads;
   for (int i = 0; i < globals->numThreads; ++i) {
@@ -438,12 +484,11 @@ GSAN_DEVICE epoch_t publishCurrentVectorClockWithPriorRelease(
   // The joined snapshot extends the release sequence without acquiring the
   // prior writer into this thread's vector clock.
   state->clockBufferDirty = 1;
-  return static_cast<epoch_t>(nextHead);
+  return compactEpoch(nextHead);
 }
 
-GSAN_DEVICE epoch_t propagateClockBufferSnapshot(ThreadState *state,
-                                                 const ScalarClock &write,
-                                                 Location loc) {
+GSAN_DEVICE compact_epoch_t propagateClockBufferSnapshot(
+    ThreadState *state, const ScalarClock &write, Location loc) {
   auto *snapshot = getSnapshotForWrite(state, write, loc);
   assert_msg(loc, snapshot != nullptr, "Invalid GSan propagated clock token");
   auto token = appendClockBufferSnapshot(state, snapshot, loc);
@@ -489,7 +534,16 @@ GSAN_DEVICE bool clockHappensBefore(ThreadState *state,
     return true;
   if (const epoch_t *snapshot = getSnapshotForWrite(state, clock, loc))
     return dominatesSnapshot(state, snapshot);
-  return state->vectorClock[clock.threadId] >= clock.epoch;
+  auto *publisher =
+      getThreadStateById(getGlobalState(state), clock.threadId);
+  // The publisher's current epoch is an upper bound on the recorded access.
+  // If an old shadow entry spans multiple compact generations, reconstruction
+  // can report a conservative race but cannot invent a happens-before edge.
+  epoch_t publisherEpoch = __scoped_atomic_load_n(
+      &publisher->vectorClock[clock.threadId], __ATOMIC_RELAXED,
+      __MEMORY_SCOPE_SYSTEM);
+  epoch_t recordedEpoch = expandCompactEpoch(clock.epoch, publisherEpoch, loc);
+  return state->vectorClock[clock.threadId] >= recordedEpoch;
 }
 
 GSAN_DEVICE void assertOrderedOrCompatible(ThreadState *state,
@@ -518,11 +572,21 @@ GSAN_DEVICE void maybeMergeAcquire(ThreadState *state, AtomicScope currentScope,
   mergeVectorClock(state, snapshot);
 }
 
-GSAN_DEVICE epoch_t publishClusterClock(ThreadState *state, Location loc) {
+GSAN_DEVICE compact_epoch_t publishClusterClock(ThreadState *state,
+                                                Location loc) {
   rwLockAcquireWrite(state->lock);
+  auto *globals = getGlobalState(state);
+  epoch_t nextHead = state->clusterClockBufferHead + 1;
+  assert_msg(loc, nextHead != 0,
+             "GSan cluster clock buffer token overflowed");
+  epoch_t *slot = getClusterClockBufferBase(state) +
+                  (nextHead % globals->clockBufferSize) * globals->numThreads;
+  for (int i = 0; i < globals->numThreads; ++i)
+    slot[i] = state->vectorClock[i];
+  state->clusterClockBufferHead = nextHead;
   // Match a release atomic: publish the pre-barrier clock, then advance the
   // local epoch so later accesses are distinct from the published snapshot.
-  epoch_t token = publishCurrentVectorClock(state, loc);
+  compact_epoch_t token = compactEpoch(nextHead);
   incrementThreadEpoch(state, loc);
   rwLockReleaseWrite(state->lock);
   return token;
@@ -539,7 +603,7 @@ GSAN_DEVICE void acquireClusterClocks(const ClusterBarrierState *barrier,
       continue;
     auto *participant = getThreadStateById(globals, threadId);
     const epoch_t *snapshot =
-        getClockBufferSlot(participant, barrier->tokens[ctaRank], loc);
+        getClusterClockBufferSlot(participant, barrier->tokens[ctaRank], loc);
     mergeVectorClock(state, snapshot);
   }
   rwLockReleaseWrite(state->lock);
@@ -585,7 +649,7 @@ GSAN_DEVICE void synchronizeClusterBarrier(GlobalState *globals, void *scratch,
                                 __MEMORY_SCOPE_DEVICE) == generation) {
   }
 
-  epoch_t token = publishClusterClock(state, loc);
+  compact_epoch_t token = publishClusterClock(state, loc);
   clusterLockAcquire(barrier->lock);
   barrier->tokens[ctaRank] = token;
   uint32_t publication = barrier->publicationCount + 1;
@@ -679,6 +743,10 @@ GSAN_DEVICE void recordMBarrierArrival(GlobalState *globals, void *scratch,
              "Invalid GSan mbarrier source CTA rank");
   assert_msg(loc, recipientMask != 0,
              "GSan mbarrier arrival has no recipients");
+  // A CTA already observes its own vector clock. Publishing an arrival that
+  // targets only the issuing CTA consumes an epoch and a snapshot without
+  // establishing any additional happens-before relationship.
+  publishClock = publishClock && (recipientMask & ~(1u << sourceRank)) != 0;
   MBarrierPublishedClock published = {};
   if (publishClock) {
     auto *threadState = getThreadState(globals);
@@ -740,7 +808,7 @@ GSAN_DEVICE void acquireMBarrierPhase(GlobalState *globals, void *scratch,
       continue;
     auto *publisher = getThreadStateById(globals, published.threadId);
     const epoch_t *snapshot =
-        getClockBufferSlot(publisher, published.token, loc);
+        getClusterClockBufferSlot(publisher, published.token, loc);
     mergeVectorClock(threadState, snapshot);
   }
   rwLockReleaseWrite(threadState->lock);
@@ -748,11 +816,12 @@ GSAN_DEVICE void acquireMBarrierPhase(GlobalState *globals, void *scratch,
 
 GSAN_DEVICE ScalarClock makeScalarClock(ThreadState *state, AtomicScope scope) {
   auto tid = state->threadId;
-  return ScalarClock{state->vectorClock[tid], tid, scope, false};
+  return ScalarClock{compactEpoch(state->vectorClock[tid]), tid, scope, false};
 }
 
 GSAN_DEVICE ScalarClock makePublishedClock(ThreadState *state,
-                                           AtomicScope scope, epoch_t token) {
+                                           AtomicScope scope,
+                                           compact_epoch_t token) {
   return ScalarClock{token, state->threadId, scope, true};
 }
 
@@ -1178,7 +1247,7 @@ GSAN_DEVICE void endAtomicAccess(AtomicEventState *event, bool pred,
     auto previousWrite = event->cells[0]->writeClock;
     ScalarClock newWriteClock;
     if (hasRelease(sem)) {
-      epoch_t token;
+      compact_epoch_t token;
       if (canAccumulateReleaseRmw(state, scope, previousWrite))
         token = publishCurrentVectorClockWithPriorRelease(state, previousWrite,
                                                           loc);
