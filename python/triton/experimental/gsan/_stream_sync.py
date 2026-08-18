@@ -39,6 +39,14 @@ def _runtime_state_layout(runtime_state_device: int, access_device: int) -> _Run
     )
 
 
+@functools.cache
+def _clock_mem_pool(device: int):
+    import torch
+
+    with torch.cuda.device(device):
+        return torch.cuda.MemPool()
+
+
 @functools.lru_cache()
 def _launch_stream_state(device: int, stream: int) -> _LaunchStreamState:
     import torch
@@ -46,7 +54,8 @@ def _launch_stream_state(device: int, stream: int) -> _LaunchStreamState:
     layout = _runtime_state_layout(get_device_rank(device), device)
     cuda_stream = torch.cuda.ExternalStream(stream, device=device) if stream else torch.cuda.default_stream(device)
     with torch.cuda.device(device), torch.cuda.stream(cuda_stream):
-        clocks = torch.zeros((3, layout.num_threads), dtype=torch.int32, device=device)
+        with torch.cuda.use_mem_pool(_clock_mem_pool(device)):
+            clocks = torch.zeros((3, layout.num_threads), dtype=torch.int32, device=device)
     return _LaunchStreamState(clocks=clocks)
 
 

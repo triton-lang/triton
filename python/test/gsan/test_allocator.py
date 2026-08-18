@@ -173,6 +173,28 @@ def _run_reset_releases_cached_pool_clocks_check(num_pools: int) -> None:
     reset()
 
 
+def _run_launch_stream_clocks_use_private_pool_check() -> None:
+    device = torch.cuda.current_device()
+    pool = create_mem_pool()
+    stream = torch.cuda.Stream()
+    with torch.cuda.stream(stream), torch.cuda.use_mem_pool(pool):
+        before = torch.empty(1, device=device)
+        clocks, kernel_id = _stream_sync.get_launch_stream_clock(device, stream.cuda_stream)
+        after = torch.empty(1, device=device)
+    stream.synchronize()
+
+    reserve_begin = get_reserve_pointer()
+    reserve_end = reserve_begin + get_reserve_size()
+    assert reserve_begin <= before.data_ptr() < reserve_end
+    assert not reserve_begin <= clocks.data_ptr() < reserve_end
+    assert reserve_begin <= after.data_ptr() < reserve_end
+    assert kernel_id == 0
+    assert torch.count_nonzero(clocks).item() == 0
+
+    del before, after, clocks, pool
+    reset()
+
+
 def _run_export_import_fabric_handles_check(explicit_config: bool) -> None:
     device = torch.cuda.current_device()
     configure(
@@ -325,6 +347,12 @@ def test_reset_reinitializes_runtime_state():
 @pytest.mark.parametrize("num_pools", [1, 2])
 def test_reset_releases_cached_pool_clocks(num_pools):
     result = run_in_process(_run_reset_releases_cached_pool_clocks_check, args=(num_pools, ))
+    assert result.exc is None
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_launch_stream_clocks_use_private_pool():
+    result = run_in_process(_run_launch_stream_clocks_use_private_pool_check)
     assert result.exc is None
 
 
