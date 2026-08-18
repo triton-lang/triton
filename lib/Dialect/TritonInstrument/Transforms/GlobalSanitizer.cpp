@@ -17,7 +17,6 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 
-#include <algorithm>
 #include <optional>
 
 namespace mlir::triton::instrument {
@@ -42,274 +41,28 @@ static constexpr int64_t kGSanClusterBarrierScratchBytes = 128;
 static constexpr int64_t kGSanMBarrierTableHeaderBytes = 16;
 static constexpr int64_t kGSanMBarrierRecordBytes = 176;
 
-struct DescriptorInfo {
-  Value base;
-  SmallVector<Value> shape;
-  SmallVector<Value> strides;
-};
-
-static void setTMAPtrAxisHints(OpBuilder &builder, Value ptr) {
-  auto ptrTy = cast<RankedTensorType>(ptr.getType());
-
-  Operation *def = ptr.getDefiningOp();
-  if (!def)
-    return;
-
-  auto rank = ptrTy.getRank();
-  SmallVector<int32_t> contiguity(rank, 1);
-  contiguity.back() = ptrTy.getShape().back();
-  SmallVector<int32_t> divisibility(rank, 1);
-  divisibility.back() = 16;
-  auto attrTy = RankedTensorType::get({rank}, builder.getI32Type());
-  def->setDiscardableAttr("tt.contiguity",
-                          DenseIntElementsAttr::get(attrTy, contiguity));
-  def->setDiscardableAttr("tt.divisibility",
-                          DenseIntElementsAttr::get(attrTy, divisibility));
-}
-
-static Value castToI64(OpBuilder &builder, Location loc, Value value) {
-  if (value.getType().isInteger(64))
-    return value;
-  return builder.createOrFold<arith::ExtSIOp>(loc, builder.getI64Type(), value);
-}
-
-static SmallVector<Value> castToI64(OpBuilder &builder, Location loc,
-                                    ValueRange values) {
-  SmallVector<Value> result;
-  result.reserve(values.size());
-  for (Value value : values)
-    result.push_back(castToI64(builder, loc, value));
-  return result;
-}
-
-static ttg::BlockedEncodingAttr
-getInstrumentationEncoding(OpBuilder &builder, ArrayRef<int64_t> shape,
-                           Type elemType) {
-  int numWarps = ttg::lookupNumWarps(builder.getInsertionBlock()->getParent());
-  int threadsPerWarp = ttg::lookupThreadsPerWarp(builder);
-  int numCTAs = ttg::lookupNumCTAs(builder.getInsertionBlock()->getParentOp());
-  auto base = ttg::getDefaultBlockedEncoding(builder.getContext(), shape,
-                                             numWarps, threadsPerWarp, numCTAs);
-  SmallVector<unsigned> order = llvm::to_vector(base.getOrder());
-  SmallVector<unsigned> warpsPerCTA = llvm::to_vector(base.getWarpsPerCTA());
-  SmallVector<unsigned> sizePerThread(shape.size(), 1);
-  unsigned elemBits = elemType.getIntOrFloatBitWidth();
-  unsigned maxElems = std::max(128u / elemBits, 1u);
-  if (!order.empty()) {
-    unsigned dim = order.front();
-    // Distribute last dim to maximize contiguity within a thread
-    if (order.size() > 1 && warpsPerCTA[dim] > 1) {
-      warpsPerCTA[order[1]] *= warpsPerCTA[dim];
-      warpsPerCTA[dim] = 1;
-    }
-
-    auto threadsOnDim = base.getThreadsPerWarp()[dim] * warpsPerCTA[dim];
-    auto numUniqueElems = ceil(static_cast<unsigned>(shape[dim]), threadsOnDim);
-    sizePerThread[dim] = std::min(maxElems, numUniqueElems);
-  }
-  return ttg::BlockedEncodingAttr::get(builder.getContext(), sizePerThread,
-                                       base.getThreadsPerWarp(), warpsPerCTA,
-                                       order, base.getCGALayout());
-}
-
-static DescriptorInfo getDescriptorInfo(Value desc, OpBuilder &builder) {
-  if (!isa<tt::TensorDescType>(desc.getType())) {
-    std::string msg;
-    llvm::raw_string_ostream stream(msg);
-    stream << "GSan: Unsupported descriptor type" << desc.getType();
-    llvm::report_fatal_error(msg.c_str());
-  }
-  auto descTy = cast<tt::TensorDescType>(desc.getType());
-
-  auto elemTy = descTy.getSignlessBlockType().getElementType();
-  auto basePtrTy = tt::getPointerType(elemTy);
-  unsigned rank = descTy.getShape().size();
-  SmallVector<Type> resultTypes;
-  resultTypes.reserve(1 + 2 * rank);
-  resultTypes.push_back(basePtrTy);
-  resultTypes.append(rank, builder.getI64Type());
-  resultTypes.append(rank, builder.getI64Type());
-
-  auto info = ExperimentalGSanTensorDescInfoOp::create(builder, desc.getLoc(),
-                                                       resultTypes, desc);
-  auto results = info->getResults();
-
-  DescriptorInfo descriptorInfo;
-  descriptorInfo.base = results.front();
-  descriptorInfo.shape.assign(results.begin() + 1, results.begin() + 1 + rank);
-  descriptorInfo.strides.assign(results.begin() + 1 + rank, results.end());
-  return descriptorInfo;
-}
-
-static Value createExpandedOffsetRange(OpBuilder &builder, Location loc,
-                                       RankedTensorType fullI64Type,
-                                       Value offset, unsigned dim) {
-  int64_t dimSize = fullI64Type.getShape()[dim];
-
-  auto sliceI32Type = getSlicedTensorType(fullI64Type, {static_cast<int>(dim)},
-                                          builder.getI32Type());
-  auto sliceI64Type = getSlicedTensorType(fullI64Type, {static_cast<int>(dim)},
-                                          builder.getI64Type());
-
-  Value range = tt::MakeRangeOp::create(builder, loc, sliceI32Type, 0, dimSize);
-  Value rangeI64 = arith::ExtSIOp::create(builder, loc, sliceI64Type, range);
-  Value offsetI64 = castToI64(builder, loc, offset);
-  Value offsetSplat =
-      tt::SplatOp::create(builder, loc, sliceI64Type, offsetI64);
-  Value result =
-      arith::AddIOp::create(builder, loc, sliceI64Type, offsetSplat, rangeI64);
-  return reshapeAndBroadcast(builder, loc, result, {static_cast<int>(dim)},
-                             fullI64Type);
-}
-
-static Value convertAndBroadcast(OpBuilder &builder, Location loc, Value tensor,
-                                 int dim, RankedTensorType dstType) {
-  auto tensorType = cast<RankedTensorType>(tensor.getType());
-  auto sliceType =
-      getSlicedTensorType(dstType, {dim}, tensorType.getElementType());
-  tensor = ttg::ConvertLayoutOp::create(builder, loc, sliceType, tensor);
-  return reshapeAndBroadcast(builder, loc, tensor, {dim}, dstType);
-}
-
-static Value createMaskFromRanges(OpBuilder &builder, Location loc,
-                                  const DescriptorInfo &desc,
-                                  ArrayRef<Value> offsetRanges,
-                                  RankedTensorType fullI64Type) {
-  auto maskType = RankedTensorType::get(
-      fullI64Type.getShape(), builder.getI1Type(), fullI64Type.getEncoding());
-  Value zero = createConstIntTensor(builder, loc, 0, fullI64Type,
-                                    /*isSigned=*/true);
-
-  Value mask;
-  for (auto [dim, offsets] : llvm::enumerate(offsetRanges)) {
-    Value upperBound =
-        tt::SplatOp::create(builder, loc, fullI64Type, desc.shape[dim]);
-    Value lower = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::sge,
-                                        offsets, zero);
-    Value upper = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::slt,
-                                        offsets, upperBound);
-    Value dimMask = arith::AndIOp::create(builder, loc, lower, upper);
-    dimMask = cast<RankedTensorType>(dimMask.getType()) == maskType
-                  ? dimMask
-                  : tt::BroadcastOp::create(builder, loc, maskType, dimMask);
-    mask = mask ? arith::AndIOp::create(builder, loc, mask, dimMask) : dimMask;
-  }
-  return mask;
-}
-
-static Value createPtrFromRanges(OpBuilder &builder, Location loc,
-                                 const DescriptorInfo &desc,
-                                 ArrayRef<Value> offsetRanges,
-                                 RankedTensorType fullI64Type) {
-  auto ptrTensorType = RankedTensorType::get(
-      fullI64Type.getShape(), desc.base.getType(), fullI64Type.getEncoding());
-  Value ptr = tt::SplatOp::create(builder, loc, ptrTensorType, desc.base);
-  for (auto [dim, offsets] : llvm::enumerate(offsetRanges)) {
-    Value stride =
-        tt::SplatOp::create(builder, loc, fullI64Type, desc.strides[dim]);
-    Value offsetWithStride =
-        arith::MulIOp::create(builder, loc, fullI64Type, offsets, stride);
-    ptr = tt::AddPtrOp::create(builder, loc, ptrTensorType, ptr,
-                               offsetWithStride);
-  }
-  return ptr;
-}
-
-static std::pair<Value, Value>
-createTiledAccess(OpBuilder &builder, Location loc, const DescriptorInfo &desc,
-                  ArrayRef<int64_t> blockShape, ValueRange offsets,
-                  std::optional<Value> pred) {
-  auto encoding = getInstrumentationEncoding(
-      builder, blockShape,
-      cast<tt::PointerType>(desc.base.getType()).getPointeeType());
-  auto fullI64Type =
-      RankedTensorType::get(blockShape, builder.getI64Type(), encoding);
-
-  SmallVector<Value> offsetRanges;
-  offsetRanges.reserve(offsets.size());
-  for (auto [dim, offset] : llvm::enumerate(offsets)) {
-    offsetRanges.push_back(
-        createExpandedOffsetRange(builder, loc, fullI64Type, offset, dim));
-  }
-
-  Value ptr =
-      createPtrFromRanges(builder, loc, desc, offsetRanges, fullI64Type);
-  Value mask =
-      createMaskFromRanges(builder, loc, desc, offsetRanges, fullI64Type);
-  if (pred) {
-    auto maskType = cast<RankedTensorType>(mask.getType());
-    Value predTensor = tt::SplatOp::create(builder, loc, maskType, *pred);
-    mask = arith::AndIOp::create(builder, loc, mask, predTensor);
-  }
-  setTMAPtrAxisHints(builder, ptr);
-  return std::make_pair(ptr, mask);
-}
-
-static std::pair<Value, Value> createGatherScatterAccess(
-    OpBuilder &builder, Location loc, const DescriptorInfo &desc,
-    ArrayRef<int64_t> blockShape, Value xOffsets, Value yOffset) {
-  auto encoding = getInstrumentationEncoding(
-      builder, blockShape,
-      cast<tt::PointerType>(desc.base.getType()).getPointeeType());
-  auto fullI64Type =
-      RankedTensorType::get(blockShape, builder.getI64Type(), encoding);
-
-  auto xOffsetsTy = cast<RankedTensorType>(xOffsets.getType());
-  auto xOffsetsI64Ty = RankedTensorType::get(
-      xOffsetsTy.getShape(), builder.getI64Type(), xOffsetsTy.getEncoding());
-  Value xOffsetsI64 =
-      arith::ExtSIOp::create(builder, loc, xOffsetsI64Ty, xOffsets);
-  Value xRange =
-      convertAndBroadcast(builder, loc, xOffsetsI64, /*dim=*/0, fullI64Type);
-  Value yRange =
-      createExpandedOffsetRange(builder, loc, fullI64Type, yOffset, /*dim=*/1);
-  SmallVector<Value> offsetRanges = {xRange, yRange};
-  auto ptrs =
-      createPtrFromRanges(builder, loc, desc, offsetRanges, fullI64Type);
-  auto mask =
-      createMaskFromRanges(builder, loc, desc, offsetRanges, fullI64Type);
-  setTMAPtrAxisHints(builder, ptrs);
-  return std::make_pair(ptrs, mask);
-}
-
 static void instrumentAsyncTMALoad(ttng::AsyncTMACopyGlobalToLocalOp op) {
   if (isa<ttng::TensorDescIm2ColType>(op.getDesc().getType()))
     return;
 
   OpBuilder builder(op);
-  auto desc = getDescriptorInfo(op.getDesc(), builder);
-  auto blockShape = op.getDesc().getType().getShape();
-
-  auto offsets = castToI64(builder, op.getLoc(), op.getCoord());
-  auto access = createTiledAccess(builder, op.getLoc(), desc, blockShape,
-                                  offsets, op.getPred());
-  ExperimentalGSanTensorAccessOp::create(builder, op.getLoc(), access.first,
-                                         access.second, /*isStore=*/false);
+  ExperimentalGSanTensorDescAccessOp::create(builder, op.getLoc(), op.getDesc(),
+                                             op.getCoord(), op.getPred(),
+                                             /*isStore=*/false);
 }
 
 static void instrumentAsyncTMAStore(Operation *op, Value descValue,
                                     ValueRange coords) {
   OpBuilder builder(op);
-  auto desc = getDescriptorInfo(descValue, builder);
-  auto blockShape = cast<tt::TensorDescType>(descValue.getType()).getShape();
-
-  auto offsets = castToI64(builder, op->getLoc(), coords);
-  auto access = createTiledAccess(builder, op->getLoc(), desc, blockShape,
-                                  offsets, std::nullopt);
-  ExperimentalGSanTensorAccessOp::create(builder, op->getLoc(), access.first,
-                                         access.second, /*isStore=*/true);
+  ExperimentalGSanTensorDescAccessOp::create(builder, op->getLoc(), descValue,
+                                             coords, /*pred=*/Value{},
+                                             /*isStore=*/true);
 }
 
 static void instrumentAsyncTMAReduce(ttng::AsyncTMAReduceOp op) {
   OpBuilder builder(op);
-  auto desc = getDescriptorInfo(op.getDesc(), builder);
-  auto blockShape = op.getDesc().getType().getShape();
-
-  auto offsets = castToI64(builder, op.getLoc(), op.getCoord());
-  auto access = createTiledAccess(builder, op.getLoc(), desc, blockShape,
-                                  offsets, std::nullopt);
-  ExperimentalGSanAtomicTensorAccessOp::create(
-      builder, op.getLoc(), access.first, access.second, MemSemantic::RELAXED,
+  ExperimentalGSanAtomicTensorDescAccessOp::create(
+      builder, op.getLoc(), op.getDesc(), op.getCoord(), MemSemantic::RELAXED,
       MemSyncScope::GPU);
 }
 
@@ -327,29 +80,16 @@ static void instrumentAtomicPoll(tt::AtomicPollOp op) {
 
 static void instrumentAsyncTMAGather(ttng::AsyncTMAGatherOp op) {
   OpBuilder builder(op);
-  auto desc = getDescriptorInfo(op.getDesc(), builder);
-
-  auto access = createGatherScatterAccess(builder, op.getLoc(), desc,
-                                          op.getResult().getType().getShape(),
-                                          op.getXOffsets(), op.getYOffset());
-  auto maskType = cast<RankedTensorType>(access.second.getType());
-  Value predTensor =
-      tt::SplatOp::create(builder, op.getLoc(), maskType, op.getPred());
-  Value mask =
-      arith::AndIOp::create(builder, op.getLoc(), access.second, predTensor);
-  ExperimentalGSanTensorAccessOp::create(builder, op.getLoc(), access.first,
-                                         mask, /*isStore=*/false);
+  ExperimentalGSanIndexedTensorDescAccessOp::create(
+      builder, op.getLoc(), op.getDesc(), op.getXOffsets(), op.getYOffset(),
+      op.getPred(), /*isStore=*/false);
 }
 
 static void instrumentAsyncTMAScatter(ttng::AsyncTMAScatterOp op) {
   OpBuilder builder(op);
-  auto desc = getDescriptorInfo(op.getDesc(), builder);
-
-  auto access = createGatherScatterAccess(builder, op.getLoc(), desc,
-                                          op.getSrc().getType().getShape(),
-                                          op.getXOffsets(), op.getYOffset());
-  ExperimentalGSanTensorAccessOp::create(builder, op.getLoc(), access.first,
-                                         access.second, /*isStore=*/true);
+  ExperimentalGSanIndexedTensorDescAccessOp::create(
+      builder, op.getLoc(), op.getDesc(), op.getXOffsets(), op.getYOffset(),
+      /*pred=*/Value{}, /*isStore=*/true);
 }
 
 static Value getValueForOp(Operation *op, Value value) {

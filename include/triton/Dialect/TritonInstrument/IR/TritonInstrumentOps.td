@@ -234,17 +234,50 @@ def TTI_ExperimentalGSanMBarrierWaitOp
   }];
 }
 
-def TTI_ExperimentalGSanTensorDescInfoOp
-    : TTI_Op<"experimental_gsan_tensordesc_info", [Pure]> {
-  let summary = "Decode GSan descriptor metadata from a native tensor descriptor";
+def TTI_ExperimentalGSanTensorDescAccessOp
+    : TTI_Op<"experimental_gsan_tensordesc_access",
+             [AttrSizedOperandSegments]> {
+  let summary = "Instrument a TMA tensor descriptor access for GSan";
   let description = [{
-    Decodes a native tensor descriptor into the underlying
-    base pointer, shape and stride values.
+    Passes the native tensor descriptor and its coordinates directly to the
+    GSan runtime, which decodes the descriptor and iterates over the tile.
   }];
-  let arguments = (ins TT_AnyTensorDescType:$desc);
-  let results = (outs Variadic<AnyType>:$result);
+  let arguments = (ins TT_AnyTensorDescType:$desc, Variadic<I32>:$coords,
+                   Optional<I1>:$pred, BoolAttr:$isStore);
   let assemblyFormat = [{
-    $desc attr-dict `:` qualified(type($desc)) `->` type($result)
+    $desc `[` $coords `]` `,` $isStore (`,` $pred^)? attr-dict `:`
+    qualified(type($desc))
+  }];
+}
+
+def TTI_ExperimentalGSanIndexedTensorDescAccessOp
+    : TTI_Op<"experimental_gsan_indexed_tensordesc_access"> {
+  let summary = "Instrument an indexed TMA gather or scatter for GSan";
+  let description = [{
+    Passes a native tensor descriptor and its row indices directly to the GSan
+    runtime, which checks row and column bounds before updating shadow memory.
+  }];
+  let arguments = (ins TT_AnyTensorDescType:$desc,
+                   RankedTensorOf<[I32]>:$indices, I32:$offset,
+                   Optional<I1>:$pred, BoolAttr:$isStore);
+  let assemblyFormat = [{
+    $desc `[` $indices `,` $offset `]` `,` $isStore (`,` $pred^)? attr-dict
+    `:` qualified(type($desc)) `,` type($indices)
+  }];
+}
+
+def TTI_ExperimentalGSanAtomicTensorDescAccessOp
+    : TTI_Op<"experimental_gsan_atomic_tensordesc_access"> {
+  let summary = "Instrument an atomic TMA descriptor access for GSan";
+  let description = [{
+    Passes a native tensor descriptor and coordinates to the GSan runtime for
+    atomic instrumentation with the specified memory semantics and scope.
+  }];
+  let arguments = (ins TT_AnyTensorDescType:$desc, Variadic<I32>:$coords,
+                   TT_MemSemanticAttr:$sem, TT_MemSyncScopeAttr:$scope);
+  let assemblyFormat = [{
+    $desc `[` $coords `]` `,` $sem `,` $scope attr-dict `:`
+    qualified(type($desc))
   }];
 }
 
@@ -262,23 +295,6 @@ def TTI_ExperimentalGSanTensorAccessOp
                    Optional<TT_BoolLike>:$mask, BoolAttr:$isStore);
   let assemblyFormat = [{
     $ptr `,` $isStore (`,` $mask^)? attr-dict `:` type($ptr)
-  }];
-}
-
-def TTI_ExperimentalGSanAtomicTensorAccessOp
-    : TTI_Op<"experimental_gsan_atomic_tensor_access",
-             [TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
-                             "getI1SameShape(getPointeeType($_self))",
-                             "($_op.getOperands().size() <= 1) || std::equal_to<>()">]> {
-  let summary = "Instrument a tensor atomic access for GSan";
-  let description = [{
-    Emits runtime instrumentation for a tensor pointer access whose individual
-    elements are atomic read-modify-write operations.
-  }];
-  let arguments = (ins Arg<TT_PtrLike, "", [MemWrite<GlobalMemory>, MemRead<GlobalMemory>]>:$ptr,
-                   Optional<TT_BoolLike>:$mask, TT_MemSemanticAttr:$sem, TT_MemSyncScopeAttr:$scope);
-  let assemblyFormat = [{
-    $sem `,` $scope `,` $ptr (`,` $mask^)? attr-dict `:` type($ptr)
   }];
 }
 
