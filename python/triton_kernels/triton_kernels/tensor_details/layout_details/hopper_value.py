@@ -1,4 +1,5 @@
 import torch
+from torch._subclasses.fake_tensor import is_fake
 import triton
 import triton.language as tl
 from dataclasses import dataclass
@@ -159,13 +160,13 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         assert data.shape[-2] == init_shape[-2] // 4
         assert data.shape[-1] == init_shape[-1] * 4
         # twiddle the bits
-        data = _pack_bits(data, self.mx_axis)
+        data = _convert_bits(data, inverse=False)
         data = self._maybe_mT(data)
         return self._validate_storage_shape(data)
 
     def unswizzle_data(self, data):
         data = self._maybe_mT(data)
-        data = _unpack_bits(data, self.mx_axis)
+        data = _convert_bits(data, inverse=True)
         *batch, M, K = data.shape
         # We have two times the elements if we already upcasted to bfloat16
         mult = 2 if data.dtype == torch.bfloat16 else 1
@@ -211,7 +212,7 @@ def _compress_fourth(x):
     return ((x & 0x8) << 11) | ((x & 0x6) << 9) | ((x & 0x1) << 13)
 
 
-def _pack_bits(x: torch.Tensor, mx_axis: int):
+def _pack_bits(x: torch.Tensor):
     x = x.contiguous()
     x = x.reshape(x.shape[:-1] + (x.shape[-1] // 4, 4))
     ret = _compress_fp4(x[..., 0]) | (_compress_fp4(x[..., 0] >> 4) << 16)
@@ -246,7 +247,7 @@ def _bf16x2_to_fp4e2m1x2(x):
     return ret_lo | (ret_hi << 4)
 
 
-def _unpack_bits(x, mx_axis: int):
+def _unpack_bits(x):
     x = x.view(torch.int32)
     m = 0b10000001110000001000000111000000
     a = (x << 1) & 0b10000000000000001000000000000000
@@ -257,6 +258,55 @@ def _unpack_bits(x, mx_axis: int):
     x = x.flatten(-2, -1)
     x = _bf16x2_to_fp4e2m1x2(x)
     return x
+
+
+@triton.jit
+def _compress_fp4x2_triton(x, FOURTH: tl.constexpr):
+    # Put the two nibbles in separate bf16 lanes before interleaving them.
+    x = (x & 0xF) | ((x & 0xF0) << 12)
+    if FOURTH:
+        return ((x & 0x00080008) << 11) | ((x & 0x00060006) << 9) | ((x & 0x00010001) << 13)
+    return ((x & 0x00080008) << 12) | ((x & 0x00070007) << 6)
+
+
+@triton.jit
+def _bf16x2_to_fp4e2m1x2_triton(x):
+    x = ((x >> 12) & 0x00080008) | ((x >> 6) & 0x00070007)
+    return (x & 0xF) | ((x >> 12) & 0xF0)
+
+
+@triton.jit
+def _convert_bits_kernel(X, Y, N, INVERSE: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    offsets = tl.program_id(0).to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < N
+    # Byte loads also support contiguous views with unaligned storage offsets.
+    a = tl.load(X + 4 * offsets, mask, other=0).to(tl.uint32)
+    b = tl.load(X + 4 * offsets + 1, mask, other=0).to(tl.uint32)
+    c = tl.load(X + 4 * offsets + 2, mask, other=0).to(tl.uint32)
+    d = tl.load(X + 4 * offsets + 3, mask, other=0).to(tl.uint32)
+    if INVERSE:
+        x = a | (b << 8) | (c << 16) | (d << 24)
+        fourth = ((x << 1) & 0x80008000) | ((x >> 3) & 0x01800180) | ((x >> 7) & 0x00400040)
+        ret = (_bf16x2_to_fp4e2m1x2_triton(x) | (_bf16x2_to_fp4e2m1x2_triton(x << 3) << 8)
+               | (_bf16x2_to_fp4e2m1x2_triton(x << 6) << 16)
+               | (_bf16x2_to_fp4e2m1x2_triton(fourth) << 24))
+    else:
+        ret = (_compress_fp4x2_triton(a, False) | (_compress_fp4x2_triton(b, False) >> 3)
+               | (_compress_fp4x2_triton(c, False) >> 6) | _compress_fp4x2_triton(d, True))
+    tl.store(Y + offsets, ret, mask)
+
+
+def _convert_bits(x: torch.Tensor, inverse: bool) -> torch.Tensor:
+    """Avoid full-size integer temporaries when re-encoding CUDA values."""
+    if x.device.type != "cuda" or x.dtype != torch.uint8 or is_fake(x):
+        return _unpack_bits(x) if inverse else _pack_bits(x)
+    x = x.contiguous()
+    shape = (*x.shape[:-1], x.shape[-1] // 4)
+    x = x.reshape(*shape, 4)
+    out = torch.empty(shape, dtype=torch.int32, device=x.device)
+    block_size = 1024
+    _convert_bits_kernel[(triton.cdiv(out.numel(), block_size), )](x, out, out.numel(), inverse, BLOCK_SIZE=block_size)
+    return out.view(torch.uint8)
 
 
 # -----------------------------------------------------------------------
