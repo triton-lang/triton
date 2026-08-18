@@ -6,7 +6,7 @@ import types
 import torch
 
 import triton_kernels.matmul_details.opt_flags as opt_flags
-from triton_kernels.matmul import FusedActivation, PrecisionConfig, init_allocation
+from triton_kernels.matmul import FusedActivation, PrecisionConfig, init_allocation, _resolve_tma_override
 from triton_kernels.tensor_details.dtype import BF16, FP16, FP32
 
 class _DummyPrecisionConfig:
@@ -131,6 +131,110 @@ def test_make_default_opt_flags_nvidia_split_k_constraint(monkeypatch):
     )
 
     assert flags.split_k == 3
+
+
+@pytest.mark.parametrize("swap_xw", [None, False, True])
+def test_make_default_opt_flags_nvidia_swap_xw_constraint(monkeypatch, swap_xw):
+    setup_nvidia(monkeypatch)
+    seen = {}
+
+    def capture_num_stages(*args, **kwargs):
+        seen["swap_xw"] = kwargs["swap_xw"]
+        return 2
+
+    monkeypatch.setattr(opt_flags.opt_flags_nvidia, "compute_num_stages", capture_num_stages)
+    flags = opt_flags.make_default_opt_flags_nvidia(
+        torch.float16,
+        torch.float16,
+        torch.float16,
+        _DummyPrecisionConfig(),
+        4,
+        256,
+        128,
+        64,
+        None,
+        False,
+        False,
+        False,
+        0,
+        False,
+        False,
+        {"swap_xw": swap_xw},
+        torch.float32,
+    )
+
+    assert flags.swap_xw is swap_xw
+    assert seen["swap_xw"] is swap_xw
+
+
+@pytest.mark.parametrize("group_m", [2, 4, 8, 16, 32, 64])
+def test_make_default_opt_flags_nvidia_group_m_constraint(monkeypatch, group_m):
+    setup_nvidia(monkeypatch)
+    flags = opt_flags.make_default_opt_flags_nvidia(
+        torch.float16,
+        torch.float16,
+        torch.float16,
+        _DummyPrecisionConfig(),
+        4,
+        256,
+        128,
+        64,
+        None,
+        False,
+        False,
+        False,
+        0,
+        False,
+        False,
+        {"group_m": group_m},
+        torch.float32,
+    )
+
+    assert flags.group_m == group_m
+
+
+def test_make_default_opt_flags_nvidia_execution_constraints(monkeypatch):
+    setup_nvidia(monkeypatch)
+    constraints = {
+        "use_output_tma": False,
+        "occupancy_target": 2,
+        "flatten_loops": False,
+        "maxnreg": 192,
+    }
+    flags = opt_flags.make_default_opt_flags_nvidia(
+        torch.float16,
+        torch.float16,
+        torch.float16,
+        _DummyPrecisionConfig(),
+        4,
+        256,
+        128,
+        64,
+        None,
+        False,
+        False,
+        False,
+        0,
+        False,
+        False,
+        constraints,
+        torch.float32,
+    )
+
+    assert flags.use_output_tma is False
+    assert flags.occupancy_target == 2
+    assert flags.flatten_loops is False
+    assert flags.maxnreg == 192
+    assert flags.target_kernel_kwargs["FLATTEN_LOOPS"] is False
+    assert flags.target_kernel_kwargs["maxnreg"] == 192
+
+
+def test_resolve_tma_override():
+    assert _resolve_tma_override("use_output_tma", True, None) is True
+    assert _resolve_tma_override("use_output_tma", True, False) is False
+    assert _resolve_tma_override("use_output_tma", True, True) is True
+    with pytest.raises(opt_flags.InapplicableConstraint):
+        _resolve_tma_override("use_output_tma", False, True)
 
 
 def test_split_k_uses_intermediate_out_dtype(monkeypatch):
