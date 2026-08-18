@@ -165,7 +165,6 @@ def test_upcast_mxfp4_to_bf16(num_warps, mx_axis):
     assert torch.equal(actual, x_bf16)
 
 
-@pytest.mark.skipif(not is_cuda(), reason="Only supported on cuda")
 @pytest.mark.skipif(not cuda_capability_geq(9), reason="Only supported for capability >= 9")
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("mx_axis", [0, 1])
