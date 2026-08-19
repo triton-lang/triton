@@ -1326,29 +1326,54 @@ Type TCGen5CommitOp::getPredicateOperandTypeLike() {
 
 // -- TCGen5MMAScaledOp --
 
-static Type getScaledMMAOperandType(Type elementType,
-                                    ScaleDotElemType scaleType) {
+static FailureOr<Type>
+getAndVerifyScaledMMAOperandType(Operation *op, StringRef operandName,
+                                 Type elementType, ScaleDotElemType scaleType) {
   MLIRContext *ctx = elementType.getContext();
-  if (isa<FloatType>(elementType))
-    return elementType;
+  Type scaledType;
   switch (scaleType) {
   case ScaleDotElemType::E4M3:
-    return Float8E4M3FNType::get(ctx);
+    scaledType = Float8E4M3FNType::get(ctx);
+    break;
   case ScaleDotElemType::E5M2:
-    return Float8E5M2Type::get(ctx);
+    scaledType = Float8E5M2Type::get(ctx);
+    break;
   case ScaleDotElemType::E2M3:
-    return Float6E2M3FNType::get(ctx);
+    scaledType = Float6E2M3FNType::get(ctx);
+    break;
   case ScaleDotElemType::E3M2:
-    return Float6E3M2FNType::get(ctx);
+    scaledType = Float6E3M2FNType::get(ctx);
+    break;
   case ScaleDotElemType::E2M1:
-    return Float4E2M1FNType::get(ctx);
+    scaledType = Float4E2M1FNType::get(ctx);
+    break;
   case ScaleDotElemType::BF16:
-    return BFloat16Type::get(ctx);
   case ScaleDotElemType::FP16:
-    return Float16Type::get(ctx);
+    // PTX tcgen05.mma with block scaling only supports FP8, FP6, and FP4
+    // element formats. FP16 and BF16 use the unscaled kind::f16 variant.
+    op->emitOpError() << operandName << " operand format "
+                      << (scaleType == ScaleDotElemType::BF16 ? "bf16" : "fp16")
+                      << " is not supported by scaled MMA";
+    return failure();
   }
-  llvm_unreachable("Unsupported type.");
-};
+
+  // An i8 operand is raw storage whose logical format is carried by the
+  // attribute. Otherwise, a typed floating-point operand must encode the same
+  // format. E2M1 is always packed two elements per i8 storage element.
+  bool isRawStorage = elementType.isInteger(8);
+  bool isMatchingTypedStorage =
+      scaleType != ScaleDotElemType::E2M1 && elementType == scaledType;
+  if (!isRawStorage && !isMatchingTypedStorage) {
+    Type expectedStorageType = scaleType == ScaleDotElemType::E2M1
+                                   ? Type(IntegerType::get(ctx, 8))
+                                   : scaledType;
+    op->emitOpError() << operandName << " operand dtype " << elementType
+                      << " does not match its scaled MMA format (expected "
+                      << expectedStorageType << ")";
+    return failure();
+  }
+  return scaledType;
+}
 
 static LogicalResult verifyScaledLHSOperand(Operation *op, Type elementType,
                                             TensorMemoryEncodingAttr encoding,
@@ -1414,12 +1439,16 @@ LogicalResult TCGen5MMAScaledOp::verify() {
     if (failed(verifyCompletionBarrierLayout(getOperation(), barrier)))
       return failure();
   }
-  Type atype =
-      getScaledMMAOperandType(getA().getType().getElementType(), getAType());
-  Type btype =
-      getScaledMMAOperandType(getB().getType().getElementType(), getBType());
+  FailureOr<Type> atype = getAndVerifyScaledMMAOperandType(
+      getOperation(), "LHS", getA().getType().getElementType(), getAType());
+  if (failed(atype))
+    return failure();
+  FailureOr<Type> btype = getAndVerifyScaledMMAOperandType(
+      getOperation(), "RHS", getB().getType().getElementType(), getBType());
+  if (failed(btype))
+    return failure();
   Type dtype = getD().getType().getElementType();
-  if (failed(verifyMMADType(*this, atype, btype, dtype)))
+  if (failed(verifyMMADType(*this, *atype, *btype, dtype)))
     return failure();
   auto enc = dyn_cast<TensorMemoryEncodingAttr>(getD().getType().getEncoding());
   if (!enc) {

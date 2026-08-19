@@ -544,8 +544,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #load_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
 
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
-#shared_T = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
+#shared_T = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 8}>
 #shared_scales = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [4, 3, 2, 1, 0]}>
 
 #smem = #ttg.shared_memory
@@ -555,8 +555,8 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
 
 // CHECK-LABEL: @scaled_mma_with_loads
 tt.func public @scaled_mma_with_loads(
-  %A_shared: !ttg.memdesc<128x128xf16, #shared, #smem>,
-  %B_desc: !tt.tensordesc<128x128xf16, #shared>,
+  %A_shared: !ttg.memdesc<128x128xf8E5M2, #shared, #smem>,
+  %B_desc: !tt.tensordesc<128x128xf8E5M2, #shared>,
   %A_scale_shared: !ttg.memdesc<1x2x32x4x4xi8, #shared_scales, #smem>,
   %B_scale_shared: !ttg.memdesc<1x2x32x4x4xi8, #shared_scales, #smem>,
   %n_tiles: i32
@@ -580,15 +580,15 @@ tt.func public @scaled_mma_with_loads(
     // canonicalization while still requiring the scaled MMA token result to
     // propagate the dependency to tmem_load.
     // CHECK-COUNT-2: ttg.partition = array<i32: 2>
-    %B = tt.descriptor_load %B_desc[%i, %c0_i32] : !tt.tensordesc<128x128xf16, #shared> -> tensor<128x128xf16, #load_blocked>
-    %B_shared = ttg.local_alloc %B : (tensor<128x128xf16, #load_blocked>) -> !ttg.memdesc<128x128xf16, #shared, #smem>
+    %B = tt.descriptor_load %B_desc[%i, %c0_i32] : !tt.tensordesc<128x128xf8E5M2, #shared> -> tensor<128x128xf8E5M2, #load_blocked>
+    %B_shared = ttg.local_alloc %B : (tensor<128x128xf8E5M2, #load_blocked>) -> !ttg.memdesc<128x128xf8E5M2, #shared, #smem>
 
     // Compute partition: tc_gen5_mma_scaled should get partition 1
     // just like tc_gen5_mma does in the existing tests.
     // CHECK: ttg.memdesc_trans {{.*}} {order = array<i32: 1, 0>, ttg.partition = array<i32: 1>}
-    %B_trans = ttg.memdesc_trans %B_shared {order = array<i32: 1, 0>} : !ttg.memdesc<128x128xf16, #shared, #smem> -> !ttg.memdesc<128x128xf16, #shared_T, #smem>
+    %B_trans = ttg.memdesc_trans %B_shared {order = array<i32: 1, 0>} : !ttg.memdesc<128x128xf8E5M2, #shared, #smem> -> !ttg.memdesc<128x128xf8E5M2, #shared_T, #smem>
     // CHECK: ttng.tc_gen5_mma_scaled {{.*}} {ttg.partition = array<i32: 1>}
-    %mma_tok = ttng.tc_gen5_mma_scaled %A_shared, %B_trans, %iter_acc_tmem[%iter_acc_tok], %A_scale_shared, %B_scale_shared, %true, %true lhs = e5m2 rhs = e5m2 : !ttg.memdesc<128x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf16, #shared_T, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<1x2x32x4x4xi8, #shared_scales, #smem>, !ttg.memdesc<1x2x32x4x4xi8, #shared_scales, #smem>
+    %mma_tok = ttng.tc_gen5_mma_scaled %A_shared, %B_trans, %iter_acc_tmem[%iter_acc_tok], %A_scale_shared, %B_scale_shared, %true, %true lhs = e5m2 rhs = e5m2 : !ttg.memdesc<128x128xf8E5M2, #shared, #smem>, !ttg.memdesc<128x128xf8E5M2, #shared_T, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<1x2x32x4x4xi8, #shared_scales, #smem>, !ttg.memdesc<1x2x32x4x4xi8, #shared_scales, #smem>
 
     // Data partition: tmem_load should get partition 0
     // CHECK-COUNT-2: ttg.partition = array<i32: 0>
