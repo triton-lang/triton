@@ -39,7 +39,9 @@ else
     test -f "${rocm_sdk_root}/include/hip/hip_runtime.h"
     test -f "${rocm_sdk_root}/include/rocprofiler-sdk/fwd.h"
     test -x "${rocm_sdk_root}/bin/hipcc"
-    ln -s "${rocm_sdk_root}/bin/hipcc" /usr/local/bin/hipcc
+    # rocm-sdk-devel installs the public hipcc launcher on PATH.
+    command -v hipcc
+    hipcc --version
     python3 - <<'PY'
 import importlib.metadata
 import os
