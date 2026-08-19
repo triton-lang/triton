@@ -304,7 +304,9 @@ def _convert_bits(x: torch.Tensor, inverse: bool) -> torch.Tensor:
     x = x.reshape(*shape, 4)
     out = torch.empty(shape, dtype=torch.int32, device=x.device)
     block_size = 1024
-    _convert_bits_kernel[(triton.cdiv(out.numel(), block_size), )](x, out, out.numel(), inverse, BLOCK_SIZE=block_size)
+    with torch.cuda.device(x.device):
+        _convert_bits_kernel[(triton.cdiv(out.numel(), block_size), )](x, out, out.numel(), inverse,
+                                                                       BLOCK_SIZE=block_size)
     return out.view(torch.uint8)
 
 

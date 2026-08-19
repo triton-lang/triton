@@ -213,6 +213,33 @@ def test_convert_layout_converts_different_parameterized_layout(storage_shape, l
     assert convert_layout(converted, different_layout) is not converted
 
 
+@pytest.mark.parametrize("layout", [HopperMXValueLayout(-2, 3), BlackwellMX4ValueShuffledLayout()])
+@pytest.mark.parametrize("inverse", [False, True])
+def test_convert_layout_uses_input_device(layout, inverse):
+    if torch.cuda.device_count() < 2:
+        pytest.skip("requires two CUDA devices")
+
+    data = torch.arange(2 * 258 * 257, dtype=torch.int32, device="cpu").to(torch.uint8).reshape(2, 258, 257)
+    canonical = wrap_torch_tensor(data, dtype=FP4, shape=[2, 258, 514])
+    source = convert_layout(canonical, layout) if inverse else canonical
+    destination = StridedLayout() if inverse else layout
+    expected = convert_layout(source, destination)
+
+    stream = torch.cuda.Stream(device=1)
+    with torch.cuda.stream(stream), torch.cuda.device(0):
+        source_cuda = wrap_torch_tensor(source.storage.data.to("cuda:1"), dtype=FP4, shape=source.shape,
+                                        layout=source.storage.layout)
+        actual = convert_layout(source_cuda, destination)
+
+        assert torch.cuda.current_device() == 0
+        assert torch.cuda.current_stream(1) == stream
+        assert actual.device == torch.device("cuda:1")
+        assert actual.shape == expected.shape
+        assert actual.storage.data.stride() == expected.storage.data.stride()
+        stream.synchronize()
+        assert torch.equal(actual.storage.data.cpu(), expected.storage.data)
+
+
 @pytest.mark.parametrize("n_slices", [1, 7, 33, 911, 1025])
 def test_make_ragged_tensor_metadata(n_slices):
     torch.manual_seed(0)

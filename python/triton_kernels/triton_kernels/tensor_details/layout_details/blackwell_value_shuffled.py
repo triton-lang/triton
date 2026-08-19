@@ -118,20 +118,21 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
         grid_k = triton.cdiv(K_packed if inverse else K_pad, block_k)
         grid_n = triton.cdiv(2 * N_packed if inverse else N_pad, 2 * block_n)
         # Keep indexing divisors valid even when the launch grid is empty.
-        _convert_shuffled_mxfp4[(E * grid_k * grid_n, )](
-            canonical,
-            shuffled,
-            tuple(canonical_shape),
-            tuple(storage_shape),
-            canonical.stride(),
-            shuffled.stride(),
-            GRID_K=max(grid_k, 1),
-            GRID_N=max(grid_n, 1),
-            INVERSE=inverse,
-            BLOCK_K=block_k,
-            BLOCK_N=block_n,
-            num_warps=4,
-        )
+        with torch.cuda.device(data.device):
+            _convert_shuffled_mxfp4[(E * grid_k * grid_n, )](
+                canonical,
+                shuffled,
+                tuple(canonical_shape),
+                tuple(storage_shape),
+                canonical.stride(),
+                shuffled.stride(),
+                GRID_K=max(grid_k, 1),
+                GRID_N=max(grid_n, 1),
+                INVERSE=inverse,
+                BLOCK_K=block_k,
+                BLOCK_N=block_n,
+                num_warps=4,
+            )
         return out
 
     def _swizzle_data_torch(self, data: torch.Tensor) -> torch.Tensor:
