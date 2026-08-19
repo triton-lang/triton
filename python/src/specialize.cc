@@ -54,6 +54,7 @@ static PyObject *u64_str = nullptr;
 static PyObject *fp32_str = nullptr;
 static PyObject *u1_str = nullptr;
 static PyObject *D_str = nullptr;
+static PyObject *E_str = nullptr;
 static PyObject *constexpr_str = nullptr;
 static PyObject *empty_str = nullptr;
 static PyObject *nvTmaDesc_str = nullptr;
@@ -125,6 +126,7 @@ void init_interned_strings() {
   fp32_str = intern_from_string("fp32");
   u1_str = intern_from_string("u1");
   D_str = intern_from_string("D");
+  E_str = intern_from_string("E");
   constexpr_str = intern_from_string("constexpr");
   empty_str = intern_from_string("");
   nvTmaDesc_str = intern_from_string("nvTmaDesc");
@@ -382,7 +384,11 @@ std::pair<py::object, py::object> handle_tensor(PyObject *backend,
     if (PyErr_Occurred())
       return {};
 
-    auto key_obj = (align && ((data_ptr & 15) == 0)) ? D_str : empty_str;
+    // "E" marks 32-byte alignment (Blackwell 256-bit access), "D" 16-byte.
+    auto key_obj = !align                     ? empty_str
+                   : ((data_ptr & 31) == 0)   ? E_str
+                   : ((data_ptr & 15) == 0)   ? D_str
+                                              : empty_str;
     key = from_borrowed_ref(key_obj);
   } else {
     PyObject *args[3] = {backend, arg, align ? Py_True : Py_False};

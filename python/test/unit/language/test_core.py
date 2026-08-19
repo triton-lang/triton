@@ -4948,7 +4948,12 @@ def test_vectorization(N, num_ctas, device):
 
     ptx = pgm.asm["ptx"]
     if N % 16 == 0:
-        assert "ld.global.v4.b32" in ptx
+        # Blackwell (sm_100+) vectorizes a 32-byte-aligned contiguous access to
+        # 256 bits (v8.b32); earlier architectures use 128 bits (v4.b32).
+        if torch.cuda.get_device_capability()[0] >= 10:
+            assert "ld.global.v8.b32" in ptx or "ld.global.v4.b32" in ptx
+        else:
+            assert "ld.global.v4.b32" in ptx
     else:
         assert "ld.global.b32" in ptx
     torch.testing.assert_close(dst[:N], src[:N], atol=1e-6, rtol=0)
@@ -4976,7 +4981,11 @@ def test_vectorization_hints(has_hints, device):
 
     ptx = pgm.asm["ptx"]
     if has_hints:
-        assert "ld.global.v4.b32" in ptx
+        # Blackwell (sm_100+) widens a 32-byte-aligned hinted access to v8.b32.
+        if torch.cuda.get_device_capability()[0] >= 10:
+            assert "ld.global.v8.b32" in ptx or "ld.global.v4.b32" in ptx
+        else:
+            assert "ld.global.v4.b32" in ptx
     else:
         assert "ld.global.v4.b32" not in ptx
 

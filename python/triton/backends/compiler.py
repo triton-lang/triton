@@ -75,7 +75,9 @@ class BaseBackend(metaclass=ABCMeta):
     def parse_attr(desc):
         assert isinstance(desc, str)
         ret = []
-        if "D" in desc:
+        if "E" in desc:
+            ret += [["tt.divisibility", 32]]
+        elif "D" in desc:
             ret += [["tt.divisibility", 16]]
         return ret
 
@@ -87,6 +89,9 @@ class BaseBackend(metaclass=ABCMeta):
 
     @staticmethod
     def get_tensor_specialization(arg, **kwargs):
-        if arg.data_ptr() % 16 == 0 and kwargs.get("align", False):
-            return "D"
+        if kwargs.get("align", False):
+            if arg.data_ptr() % 32 == 0:
+                return "E"
+            if arg.data_ptr() % 16 == 0:
+                return "D"
         return ""

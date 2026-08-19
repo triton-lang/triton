@@ -312,3 +312,46 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// Blackwell (sm_100+) can vectorize a 32-byte-aligned contiguous access to 256
+// bits (8x f32), so coalescing should pick sizePerThread = 8.
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:120", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK: [[layout_256:#.*]] = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+  // CHECK-LABEL: @coalesce_256_blackwell
+  tt.func @coalesce_256_blackwell(%arg0: !tt.ptr<f32> {tt.divisibility = 32 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 32 : i32}) {
+    %0 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %2 = tt.addptr %1, %0 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    // CHECK: tt.load {{.*}} tensor<1024x!tt.ptr<f32>, [[layout_256]]>
+    %3 = tt.load %2 : tensor<1024x!tt.ptr<f32>, #blocked>
+    %4 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %5 = tt.addptr %4, %0 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    // CHECK: tt.store {{.*}} tensor<1024x!tt.ptr<f32>, [[layout_256]]>
+    tt.store %5, %3 : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// Pre-Blackwell (sm_90) stays at 128 bits (4x f32) for the same access.
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK: [[layout_128:#.*]] = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+  // CHECK-LABEL: @coalesce_128_hopper
+  tt.func @coalesce_128_hopper(%arg0: !tt.ptr<f32> {tt.divisibility = 32 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 32 : i32}) {
+    %0 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %2 = tt.addptr %1, %0 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    // CHECK: tt.load {{.*}} tensor<1024x!tt.ptr<f32>, [[layout_128]]>
+    %3 = tt.load %2 : tensor<1024x!tt.ptr<f32>, #blocked>
+    %4 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %5 = tt.addptr %4, %0 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    // CHECK: tt.store {{.*}} tensor<1024x!tt.ptr<f32>, [[layout_128]]>
+    tt.store %5, %3 : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}

@@ -164,7 +164,30 @@ static unsigned getMaxElementsPerThread(Operation *op) {
   Value val = getMemAccessPtr(op);
   auto ty = cast<RankedTensorType>(val.getType());
   unsigned elemNumBits = getElementBitWidth(ty);
-  unsigned maxElementsPerThread = 128 / elemNumBits;
+
+  // Plain global loads/stores can be up to 128 bits per thread on all targets,
+  // and up to 256 bits on Blackwell (sm_100+), which has v8.b32 / v4.b64 global
+  // access. TTGIR exposes the target architecture but not the PTX version, so we
+  // widen the *candidate* vector size based on the arch alone; the PTX-version
+  // half of the gate (and the actual v8/v4.b64 instruction selection) is applied
+  // later in the load/store lowering, and the alignment/contiguity terms in
+  // getNumElementsPerThread ensure a wider vector is only chosen for
+  // sufficiently-aligned, contiguous accesses. Without this, the Blackwell
+  // 256-bit path is unreachable because coalescing never produces a layout
+  // wider than 128 bits.
+  unsigned maxAccessBits = 128;
+  if (isa<triton::LoadOp, triton::StoreOp>(op)) {
+    auto moduleOp = op->getParentOfType<ModuleOp>();
+    auto targetAttr = moduleOp
+                          ? moduleOp->getAttrOfType<StringAttr>(
+                                triton::gpu::AttrTargetName)
+                          : nullptr;
+    if (targetAttr && targetAttr.getValue().starts_with("cuda:") &&
+        getNVIDIAComputeCapability(moduleOp) >= 100)
+      maxAccessBits = 256;
+  }
+  unsigned maxElementsPerThread = maxAccessBits / elemNumBits;
+
   // Some atomic lowerings are narrower than a plain store. TTGIR currently
   // exposes the target architecture but not the PTX version, so we only cap
   // cases that are unambiguous from the available target metadata and the
