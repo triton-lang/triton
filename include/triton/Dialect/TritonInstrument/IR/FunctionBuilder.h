@@ -122,16 +122,26 @@ public:
   void createVerifyBarrierInitializedCall(ImplicitLocOpBuilder &b, Value mbar,
                                           Value pred, Operation *insertPoint,
                                           Value recipientCTAs);
+  // verifyBarrierMemoryAvailable: reject ordinary shared-memory accesses that
+  // overlap initialized barrier storage.
+  void createVerifyBarrierMemoryAvailableCall(ImplicitLocOpBuilder &b,
+                                              Value barrierCTAs, Value pred,
+                                              Operation *insertPoint);
   // initBarrierState: Initialize the tracked barrier state to phase 0 and set
   // both the initial and current arrival counts. A zero state denotes an
   // invalidated/uninitialized barrier.
   void createInitBarrierStateCall(ImplicitLocOpBuilder &b, Value mbar,
                                   int count, Value pred,
                                   Operation *insertPoint);
-  // invalidateBarrierState: clear the tracked barrier lifecycle state and any
-  // waiting bits for the barrier.
+  // invalidateBarrierState: verify the barrier is initialized with no active
+  // waiters, then clear its lifecycle state, waiting bits, and saved frontiers.
   void createInvalidateBarrierStateCall(ImplicitLocOpBuilder &b, Value mbar,
                                         Value pred, Operation *insertPoint);
+  // invalidateBarrierStorage: clear an active barrier overwritten by an
+  // ordinary store, including its saved visibility frontiers.
+  void createInvalidateBarrierStorageCall(ImplicitLocOpBuilder &b,
+                                          Value barrierCTAs, Value pred,
+                                          Operation *insertPoint);
   // verifyAndUpdateBarrierState: Validate barrier initialization, an arrive
   // count, and a tx-count delta using one snapshot of the tracked barrier
   // state. Preserve independent initialization and underflow assertions and
@@ -148,41 +158,33 @@ public:
                                         Value pred, MemType memType,
                                         Operation *insertPoint,
                                         Value effectCTAs);
-  // setReadVisibility: add the threads set in threadMask to the buffer's read
-  // visibility bitmask.
+  // setReadVisibility: record the actual reader in the visibility columns of
+  // each observer, including any synthetic peers.
   void createSetReadVisibilityCall(ImplicitLocOpBuilder &b, Value bufferMask,
-                                   uint64_t threadMask, Value pred,
-                                   MemType memType, Operation *insertPoint,
-                                   Value effectCTAs);
+                                   int reader, uint64_t observerMask,
+                                   Value pred, MemType memType,
+                                   Operation *insertPoint, Value effectCTAs);
   // trackVisibleAccesses: snapshot the available read and write visibility
-  // frontiers into their independent barrier tracking tables.
+  // frontiers into their independent tracking tables for the barrier's current
+  // phase.
   void createTrackVisibleAccessesCall(ImplicitLocOpBuilder &b, Value mbar,
                                       int thread, Value pred, MemType memType,
-                                      Operation *insertPoint,
-                                      Value barrierCTAs);
-  // trackBarrierWriteForBuffer: mark a specific buffer as tracked by a
-  // barrier in the write-tracking table.
+                                      Operation *insertPoint, Value barrierCTAs,
+                                      Value readBufferMask = nullptr);
+  // trackBarrierWriteForBuffer: mark a specific buffer as tracked by the
+  // barrier's current phase in the write-tracking table.
   void createTrackBarrierWriteForBufferCall(ImplicitLocOpBuilder &b, Value mbar,
                                             Value bufferMask, Value pred,
                                             MemType memType,
                                             Operation *insertPoint,
                                             Value barrierCTAs,
                                             Value effectCTAs);
-  // clearBarrierWriteTracking: clear all write tracking associated with the
-  // given barrier row.
-  void createClearBarrierWriteTrackingCall(ImplicitLocOpBuilder &b, Value mbar,
-                                           Value pred, MemType memType,
-                                           Operation *insertPoint);
-  // clearBarrierReadTracking: clear all read tracking associated with the
-  // given barrier row.
-  void createClearBarrierReadTrackingCall(ImplicitLocOpBuilder &b, Value mbar,
-                                          Value pred, MemType memType,
-                                          Operation *insertPoint);
-  // transferVisibleAccesses: transfer the barrier's independently tracked
-  // write and read visibility to all threads in threadMask.
+  // transferVisibleAccesses: transfer the requested barrier phase's
+  // independently tracked write and read visibility to all threads in
+  // threadMask.
   void createTransferVisibleAccessesCall(ImplicitLocOpBuilder &b, Value mbar,
-                                         uint64_t threadMask, Value pred,
-                                         MemType memType,
+                                         Value phase, uint64_t threadMask,
+                                         Value pred, MemType memType,
                                          Operation *insertPoint);
   // verifyWriteVisibility: ensure the thread either sees the latest write or no
   // other thread is writing the buffer.
@@ -207,6 +209,11 @@ public:
   void createCopyReadVisibilityCall(ImplicitLocOpBuilder &b, int sourceThread,
                                     uint64_t destMask, Value pred,
                                     MemType memType, Operation *insertPoint);
+  // publishCTAVisibility: make read, write, and shared-memory proxy visibility
+  // observed by sourceMask visible to destMask in the current CTA.
+  void createPublishCTAVisibilityCall(ImplicitLocOpBuilder &b,
+                                      uint64_t sourceMask, uint64_t destMask,
+                                      MemType memType, Operation *insertPoint);
   // publishClusterVisibility: after a non-relaxed cluster barrier, make the
   // participating threads' synchronous facts visible across the cluster. A
   // top-level barrier includes every thread; a warp-specialized barrier is
@@ -227,7 +234,7 @@ public:
                                     bool cluster, Value pred,
                                     Operation *insertPoint);
   // trackProxyAccesses: snapshot the current base thread's packed generic
-  // access/fence frontier into a barrier tracking row.
+  // access/fence frontier into the barrier's current phase tracking row.
   void createTrackProxyAccessesCall(ImplicitLocOpBuilder &b, Value mbar,
                                     int thread, Value pred,
                                     Operation *insertPoint, Value barrierCTAs);
@@ -238,16 +245,11 @@ public:
   void createTrackProxyAccessesForBufferCall(
       ImplicitLocOpBuilder &b, Value mbar, Value bufferMask, int thread,
       Value pred, Operation *insertPoint, Value barrierCTAs, Value effectCTAs);
-  // completeBarrierWait: merge the barrier's available proxy frontier and
-  // clear the issuing base thread's waiting flag and phase.
+  // completeBarrierWait: merge the requested barrier phase's proxy frontier
+  // and clear the issuing base thread's waiting flag and phase.
   void createCompleteBarrierWaitCall(ImplicitLocOpBuilder &b, Value mbar,
-                                     int thread, Value pred,
+                                     Value phase, int thread, Value pred,
                                      Operation *insertPoint);
-  // clearBarrierProxyAccessTracking: clear packed proxy state associated with
-  // an invalidated barrier.
-  void createClearBarrierProxyAccessTrackingCall(ImplicitLocOpBuilder &b,
-                                                 Value mbar, Value pred,
-                                                 Operation *insertPoint);
   // verifyProxyAccess: assert that every generic-proxy access visible to the
   // issuing base thread has crossed fence.proxy.async.
   void createVerifyProxyAccessCall(ImplicitLocOpBuilder &b, Value bufferMask,
@@ -311,6 +313,15 @@ public:
       bool excludeSelf = false);
 
 private:
+  void createInvalidateBarrierStateCallImpl(ImplicitLocOpBuilder &b,
+                                            Value selectedBarriers, Value pred,
+                                            Operation *insertPoint,
+                                            bool allowUninitialized);
+
+  void createClearBarrierStorageTrackingCall(ImplicitLocOpBuilder &b,
+                                             Value selectedBarriers, Value pred,
+                                             Operation *insertPoint);
+
   void createClearOutstandingCommitsTransferCall(
       ImplicitLocOpBuilder &b, int thread, uint64_t transferThreadMask,
       int outstandingNum, Value pred, CommitKind::Kind commitKind,

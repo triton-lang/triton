@@ -1,7 +1,7 @@
 import torch
 import triton
 from triton_kernels import target_info
-from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
+from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 from triton_kernels.tensor import FP4, FP16, FP32, BF16, Tensor
 from triton_kernels.tensor_details.layout import HopperMXScaleLayout
 from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, BlackwellMXScaleLayout
@@ -17,6 +17,13 @@ def is_blackwell_mx_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype):
     return (target_info.cuda_capability_geq(10, 0) and precision_config is not None
             and precision_config.a_mx_scale is not None and precision_config.a_microblock_size == int(MXFP_BLOCK_SIZE)
             and precision_config.b_mx_scale is None and precision_config.c_mx_scale is None and lhs_dtype.bitwidth <= 8
+            and rhs_dtype in [FP16, BF16])
+
+
+def is_blackwell_nvfp4_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype):
+    return (target_info.cuda_capability_geq(10, 0) and precision_config is not None
+            and precision_config.a_mx_scale is not None and precision_config.a_microblock_size == int(NVFP_BLOCK_SIZE)
+            and precision_config.b_mx_scale is None and precision_config.c_mx_scale is None and lhs_dtype == FP4
             and rhs_dtype in [FP16, BF16])
 
 
@@ -116,7 +123,7 @@ def compute_num_warps(block_m, block_n, is_persistent: bool, precision_config, c
     num_warps = constraints.get("num_warps", None)
     if num_warps is not None:
         return num_warps
-    return max(block_m * block_n // 4096, 4 if is_persistent else 1)
+    return max(block_m * block_n // 4096, 4 if is_persistent else 2)
 
 
 def compute_num_stages(
@@ -136,6 +143,7 @@ def compute_num_stages(
     *,
     epilogue_subtile,
     occupancy_target,
+    swap_xw=None,
     w_transpose=False,
 ):
     if precision_config.max_num_imprecise_acc is not None:
@@ -193,7 +201,9 @@ def compute_num_stages(
         # pipelined layout conversion before store of the accumulator
         # note: layout conversion has some padding
         epilogue_smem = int((block_m + 4) * acc_block_n * acc_size)
-        if compute_swap_xw(precision_config, block_m, is_persistent, lhs_dtype, rhs_dtype):
+        if swap_xw is None:
+            swap_xw = compute_swap_xw(precision_config, block_m, is_persistent, lhs_dtype, rhs_dtype)
+        if swap_xw:
             # The fp32 accumulator stays in TMEM for the Blackwell SWAP_XW
             # persistent path. Fused reductions such as swiglu still need smem
             # for the unreduced output tile before the narrower TMA-store tile.

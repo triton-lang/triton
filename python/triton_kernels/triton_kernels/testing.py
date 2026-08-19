@@ -4,12 +4,14 @@ import os
 import subprocess
 import sys
 import torch
+import triton
+import triton.language as tl
+from triton.language.random import philox
 from triton._internal_testing import is_compile_warmup
 from triton_kernels.numerics import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
 from triton_kernels.tensor import convert_layout as _convert_layout, wrap_torch_tensor, FP4, make_ragged_tensor_metadata
 from triton_kernels.tensor_details.layout import BlackwellMXScaleLayout
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
-import itertools
 from dataclasses import replace
 
 
@@ -209,6 +211,40 @@ def compute_actual_scale(x, dtype, per_batch_scale=False):
 # --- create tensor ---
 
 
+@triton.jit(do_not_specialize=["seed", "offset", "rows", "cols", "row_blocks", "col_blocks", "num_elements"])
+def _random_block_signs(output, seed: tl.uint64, offset: tl.uint64, rows: tl.int32, cols: tl.int32,
+                        row_blocks: tl.int32, col_blocks: tl.int32, block_size: tl.constexpr, num_elements: tl.int32,
+                        TILE_SIZE: tl.constexpr):
+    indices = tl.program_id(0) * TILE_SIZE + tl.arange(0, TILE_SIZE)
+    block = indices // block_size
+    lane = indices % block_size
+    row_block = (block // col_blocks) % row_blocks
+    col_block = block % col_blocks
+    random_count = tl.maximum(tl.minimum(block_size, rows - row_block * block_size),
+                              tl.minimum(block_size, cols - col_block * block_size))
+    counter = offset // 4 + block.to(tl.uint64)
+    value, _, _, _ = philox(seed, counter.to(tl.uint32), (counter >> 32).to(tl.uint32), lane.to(tl.uint32),
+                            tl.zeros_like(lane).to(tl.uint32))
+    tl.store(output + indices, tl.where(lane < random_count, value & 1, 0).to(tl.int64), mask=indices < num_elements)
+
+
+def _make_random_block_signs(x, batch_size, rows, cols, row_blocks, col_blocks, block_size):
+    signs = torch.empty((batch_size, row_blocks, col_blocks, block_size), device=x.device, dtype=torch.int64)
+    warming = is_compile_warmup()
+    if warming:
+        seed, offset = 0, 0
+    else:
+        index = x.device.index if x.device.index is not None else torch.cuda.current_device()
+        generator = torch.cuda.default_generators[index]
+        seed, offset = generator.initial_seed(), generator.get_offset()
+
+    _random_block_signs[(triton.cdiv(signs.numel(), 512), )](signs, seed, offset, rows, cols, row_blocks, col_blocks,
+                                                             block_size, signs.numel(), TILE_SIZE=512)
+    if not warming:
+        generator.set_offset(offset + 4 * batch_size * row_blocks * col_blocks)
+    return signs
+
+
 def normalize_blocks(x, BLOCK_SIZE=None):
     if BLOCK_SIZE is None:
         BLOCK_SIZE = int(MXFP_BLOCK_SIZE)
@@ -224,15 +260,7 @@ def normalize_blocks(x, BLOCK_SIZE=None):
     blocks = padded.view(batch_size, row_blocks, BLOCK_SIZE, col_blocks, BLOCK_SIZE).permute(0, 1, 3, 2, 4)
 
     block_maxima = blocks.abs().amax(dim=(-2, -1))
-    random_signs = []
-    for _, row_start, col_start in itertools.product(range(batch_size), range(0, rows, BLOCK_SIZE),
-                                                     range(0, cols, BLOCK_SIZE)):
-        count = max(min(BLOCK_SIZE, rows - row_start), min(BLOCK_SIZE, cols - col_start))
-        signs = torch.randint(0, 2, (count, ), device=x.device)
-        if count < BLOCK_SIZE:
-            signs = torch.nn.functional.pad(signs, (0, BLOCK_SIZE - count))
-        random_signs.append(signs)
-    signs = torch.stack(random_signs).view(batch_size, row_blocks, col_blocks, BLOCK_SIZE) * 2 - 1
+    signs = _make_random_block_signs(x, batch_size, rows, cols, row_blocks, col_blocks, BLOCK_SIZE) * 2 - 1
 
     block_heights = (rows - torch.arange(row_blocks, device=x.device) * BLOCK_SIZE).clamp(max=BLOCK_SIZE)
     block_widths = (cols - torch.arange(col_blocks, device=x.device) * BLOCK_SIZE).clamp(max=BLOCK_SIZE)
@@ -253,7 +281,13 @@ def normalize_blocks(x, BLOCK_SIZE=None):
 
 def alloc_rand(shape, device, dtype, requires_grad=False):
     if is_compile_warmup():
-        return torch.empty(shape, device=device, dtype=dtype, requires_grad=requires_grad)
+        result = torch.empty(shape, device=device, dtype=dtype, requires_grad=requires_grad)
+        if dtype.itemsize != 1 and result.numel():
+            batch_size, rows, cols = (1, *result.shape) if result.ndim == 2 else result.shape
+            block_size = int(MXFP_BLOCK_SIZE)
+            _make_random_block_signs(result, batch_size, rows, cols, triton.cdiv(rows, block_size),
+                                     triton.cdiv(cols, block_size), block_size)
+        return result
     if dtype.itemsize == 1:
         tmp = 2**-(torch.randint(4, 8, shape, device=device, dtype=torch.float16))
         return tmp.to(dtype).requires_grad_(requires_grad)

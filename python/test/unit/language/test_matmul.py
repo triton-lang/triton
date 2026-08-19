@@ -779,7 +779,7 @@ def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A
                                                     num_stages=1, **kernel_kwargs)
     triton_out = triton_out.to(torch.float32)
     torch.testing.assert_close(torch_out, triton_out, atol=2e-5, rtol=1e-4)
-    if is_hip_cdna4() and preshuffle:
+    if is_hip_cdna4() and preshuffle and not is_compile_warmup():
         assert "ds_read_u8" not in k.asm["amdgcn"]
         if mfma_nonkdim == 16:
             assert "tilesPerWarp = [2, 2]" in k.asm["ttgir"]
@@ -1061,6 +1061,8 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
             pytest.skip("fp8e4nv not supported on Ampere or older")
         if BLOCK_N == 256 and BLOCK_K == 256 and torch.cuda.get_device_capability()[0] < 9:
             pytest.skip("Insufficient SMEM Ampere or older")
+        if (torch.cuda.get_device_capability()[0] == 12 and not pack_along_k and BLOCK_N == 256 and BLOCK_K == 256):
+            pytest.skip("Decomposed SM12 MN-packed config requires too much shared memory")
         if not (with_a_scale and with_b_scale):
             pytest.skip("None aScale/bScale is only tested on AMD backend for now")
     elif is_hip():
@@ -1122,7 +1124,8 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
     if is_hip_gfx1250() and not pack_along_k:
         assert "ds_load_tr4_b64" in k.asm["amdgcn"]
     torch.testing.assert_close(ref_out, output, atol=1e-3, rtol=1e-3)
-    nvfp4_fallback = BLOCK_M < 128
+    sm12_mn_packed_fallback = (is_cuda() and torch.cuda.get_device_capability()[0] == 12 and not pack_along_k)
+    nvfp4_fallback = BLOCK_M < 128 or sm12_mn_packed_fallback
     if is_cuda() and torch.cuda.get_device_capability()[0] in (10, 12) and not nvfp4_fallback:
         ptx = k.asm["ptx"]
         if pack_along_k:
@@ -1386,8 +1389,11 @@ def test_batched_mxfp(BATCH_SIZE, BLOCK_BATCH_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, N
 
     if K % BLOCK_K != 0:
         pytest.skip("Kernel requires shapes aligned by K dimension")
-    if is_cuda() and torch.cuda.get_device_capability()[0] < 10:
-        pytest.skip("Requires compute capability >= 10")
+    if is_cuda():
+        if torch.cuda.get_device_capability()[0] < 10:
+            pytest.skip("Requires compute capability >= 10")
+        if torch.cuda.get_device_capability()[0] == 12 and BLOCK_BATCH_SIZE > 1 and NUM_STAGES > 1:
+            pytest.skip("Config requires too much shared memory")
     elif is_hip():
         if not (is_hip_cdna4() or is_hip_gfx1250()):
             pytest.skip("Scaled mxfp8 matmul is only natively supported on CDNA4 and above")

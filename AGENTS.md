@@ -11,3 +11,7 @@
 
 ## C++ Guidelines
 - In C++, never put side-effecting code in `assert`. Assertions may be compiled out, so perform mutations and other required computation before the assertion and assert only the resulting condition. This guideline does not apply to Python `assert` statements.
+
+## Lowering Guidelines
+- Triton IR uses fixed-width integer types, not MLIR's `index` type. Do not report missing `index` support as a Triton bug.
+- Lowerings must inspect only the operation they lower. Do not inspect other operations or follow loop-carried values; perform cross-operation reasoning in a separate analysis or transformation pass.

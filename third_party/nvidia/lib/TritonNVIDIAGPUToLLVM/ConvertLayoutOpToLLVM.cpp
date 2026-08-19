@@ -171,6 +171,7 @@ struct ConvertLayoutOpSwizzlingConversion
       SmallVector<StringAttr> outDims = {kOffset};
       return cvt.sublayout(inDims, outDims);
     };
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
     for (int i = 0; i < nReps; ++i) {
       if (i > 0)
         emitBarrier();
@@ -179,10 +180,12 @@ struct ConvertLayoutOpSwizzlingConversion
       // Store
       // idxSrc 0: st.shared, idxSrc 1: stmatrix, idxSrc 2: stmatrix.trans
       if (idxSrc == 0) {
-        lowerLdStShared(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
-                        /*paddingShifts=*/{}, affineOffset,
-                        maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
-                        /*maskSpanAffineBlock=*/0, rewriter, targetInfo);
+        lowerLdSt(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
+                  /*paddingShifts=*/{}, affineOffset, maskSpanAffineOffset,
+                  /*affineBlockOffset=*/Value(), /*maskSpanAffineBlock=*/0,
+                  laneId, warpId, rewriter, targetInfo,
+                  /*maybeMaxVecElems=*/{},
+                  makeSharedStoreEmitter(targetInfo, b.true_val()));
       } else {
         assert(idxSrc == 1 || idxSrc == 2);
         bool transpose = idxSrc == 2;
@@ -197,10 +200,11 @@ struct ConvertLayoutOpSwizzlingConversion
       SmallVector<Value> tileOutVals;
       // idxDst 0: ld.shared, idxDst 1: ldmatrix, idxDst 2: ldmatrix.trans
       if (idxDst == 0) {
-        tileOutVals = lowerLdStShared(
+        tileOutVals = lowerLdSt(
             loc, ctx, loadCvt, {}, llvmElemTy, smemBase, /*paddingShifts=*/{},
             affineOffset, maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
-            /*maskSpanAffineBlock=*/0, rewriter, targetInfo);
+            /*maskSpanAffineBlock=*/0, laneId, warpId, rewriter, targetInfo,
+            /*maybeMaxVecElems=*/{}, makeSharedLoadEmitter(targetInfo));
       } else {
         assert(idxDst == 1 || idxDst == 2);
         bool transpose = idxDst == 2;

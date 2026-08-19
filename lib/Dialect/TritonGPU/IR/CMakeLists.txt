@@ -2,6 +2,7 @@ add_triton_library(TritonGPUIR
   Dialect.cpp
   LinearLayoutConversions.cpp
   Ops.cpp
+  Partitioning.cpp
   Types.cpp
   Traits.cpp
 

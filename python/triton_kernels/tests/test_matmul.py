@@ -200,6 +200,10 @@ def _build_test_op_cases():
     # nvfp4 x dense
     test_cases.append(Case(128, 128, 128, "plain", "nvfp4_e2m1", "bfloat16", "bfloat16"))
     test_cases.append(Case(128, 128, 128, "plain", "nvfp4_e2m1_fiber", "bfloat16", "bfloat16"))
+    test_cases.extend([
+        Case(256, 256, 128, "ragged", "nvfp4_e2m1", rhs_dtype, "bfloat16", a_hbm_swizzling=True)
+        for rhs_dtype in ("bfloat16", "float16")
+    ])
     # mxfloat x mxfloat
     test_cases.extend([
         Case(16, 256, 256, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1"),
@@ -308,7 +312,7 @@ def _build_test_op_cases():
 @pytest.mark.parametrize("do_gamma", [False,True])
 @pytest.mark.parametrize("is_persistent", [False,True])
 @pytest.mark.parametrize("num_warps", [4, 8] if is_hopper() else [None])
-@pytest.mark.enable_warmup
+@pytest.mark.enable_warmup(priority=2)
 def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, is_persistent, num_warps, n_slices,
             mode, act_dtype_str, weight_dtype_str, output_dtype_str, block_m, b_hbm_swizzling, shuffle_mxfp4_w_layout, a_hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             a_transpose, b_transpose, c_transpose,
