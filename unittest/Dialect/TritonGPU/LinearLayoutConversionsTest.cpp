@@ -367,7 +367,7 @@ TEST_F(LinearLayoutConversionsTest, Blocked4D) {
                                    {3, 2, 1, 0}));
   EXPECT_EQ(ll, LinearLayout(
                     {
-                        {S("register"), {{0, 0, 0, 0}, {0, 0, 0, 0}}},
+                        {S("register"), {}},
                         {S("lane"),
                          {{0, 0, 0, 0},
                           {0, 0, 0, 0},

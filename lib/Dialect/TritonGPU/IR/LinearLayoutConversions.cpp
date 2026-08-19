@@ -871,7 +871,8 @@ BlockedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
       identityStandardND(S("lane"), getThreadsPerWarp(), order) *
       identityStandardND(S("warp"), getWarpsPerCTA(), order);
 
-  return combineCtaCgaWithShape(ctaLayout, getCGALayout(), shape);
+  return combineCtaCgaWithShape(ctaLayout, getCGALayout(), shape)
+      .removeZeroBasesAlongDim(S("register"));
 }
 
 LinearLayout fmaDotToLinearLayout(DotOperandEncodingAttr operandLayout,
