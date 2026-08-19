@@ -143,25 +143,22 @@ print(f"TheRock ROCm packages: {len(installed)} at version {expected}")
 PY
 fi
 
-# Verify PyTorch agrees with the selected ROCm distribution. TheRock runtime
-# selection itself is handled by rocm_sdk in Triton and Proton; pre-TheRock
-# configurations use the single system installation under /opt/rocm.
+# Verify that pip installed the exact configured PyTorch build and that it has
+# HIP support. torch.version.hip is the HIP toolchain/API version, which is not
+# necessarily the same version scheme as the enclosing ROCm distribution.
 python3 - <<'PY'
+import importlib.metadata
 import os
-import re
 import torch
 
-expected = os.environ["ROCM_VERSION"]
-actual = torch.version.hip
-expected_major_minor = re.match(r"^[0-9]+\.[0-9]+", expected)
-actual_major_minor = re.match(r"^[0-9]+\.[0-9]+", actual or "")
-if (
-    expected_major_minor is None
-    or actual_major_minor is None
-    or expected_major_minor.group() != actual_major_minor.group()
-):
-    raise SystemExit(f"PyTorch reports ROCm {actual}, expected {expected}")
-print(f"PyTorch ROCm: {actual}")
+expected = os.environ["PYTORCH_VERSION"]
+actual = importlib.metadata.version("torch")
+if actual != expected:
+    raise SystemExit(f"installed torch=={actual}, expected torch=={expected}")
+if torch.version.hip is None:
+    raise SystemExit("the configured PyTorch build has no HIP support")
+print(f"PyTorch: {actual}")
+print(f"PyTorch HIP toolchain: {torch.version.hip}")
 PY
 
 # Confirm the image does not retain a packaged Triton, which would shadow
