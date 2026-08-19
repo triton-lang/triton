@@ -44,22 +44,18 @@ import torch
 def repack(data: torch.Tensor, old_dim: int, new_dim: int, is_fp4: bool, out=None) -> torch.Tensor:
     old_dim %= data.ndim
     new_dim %= data.ndim
-    needs_repack = is_fp4 and old_dim != new_dim
-    if needs_repack and data.dtype.is_floating_point:
+    if (not is_fp4) or (old_dim == new_dim):
+        if out is not None:
+            out.copy_(data)
+            return out
+        return data
+    if data.dtype.is_floating_point:
         raise TypeError(f"Expected integer dtype for bitwise ops, got {data.dtype}")
+    out_shape = list(data.shape)
+    out_shape[old_dim] *= 2
+    out_shape[new_dim] //= 2
     if out is None:
-        if not needs_repack:
-            return data
-        out_shape = list(data.shape)
-        out_shape[old_dim] *= 2
-        out_shape[new_dim] //= 2
         out = torch.empty(out_shape, dtype=data.dtype, device=data.device)
-    # Empty tensors have no nibble pairs, even when their odd extents differ.
-    if data.numel() == 0 and out.numel() == 0:
-        return out
-    if not needs_repack:
-        out.copy_(data)
-        return out
 
     def _idx(ndim: int, dim: int, sl: slice):
         idx = [slice(None)] * ndim

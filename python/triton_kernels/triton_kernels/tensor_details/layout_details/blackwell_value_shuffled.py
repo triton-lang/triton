@@ -70,7 +70,7 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
     def storage_shape(self) -> list[int]:
         if not self.is_fp4:
             raise ValueError("BlackwellMX4ValueShuffledLayout only supports fp4 values")
-        if self.shape[-2] % 2 and 0 not in self.shape:
+        if self.shape[-2] % 2:
             raise ValueError(f"FP4 packing dimension -2 must have an even size, got {self.shape[-2]}")
         E = math.prod(self.shape[:-2])
         K_packed = self.shape[-2] // 2
@@ -104,7 +104,7 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
     def _convert_data(self, data: torch.Tensor, inverse: bool) -> torch.Tensor:
         storage_shape = self.storage_shape
         # The canonical intermediate packs N, while shuffled storage packs K.
-        if self.shape[-1] % 2 and 0 not in self.shape:
+        if self.shape[-1] % 2:
             raise ValueError(f"FP4 packing dimension -1 must have an even size, got {self.shape[-1]}")
         if data.device.type != "cuda" or data.dtype != torch.uint8 or is_fake(data):
             return self._unswizzle_data_torch(data) if inverse else self._swizzle_data_torch(data)
@@ -174,6 +174,7 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
         Input layout: [E, num_tiles_k, num_tiles_n, tile_n, tile_k_packed]
         """
         E = data.shape[0]
+        leading_shape = self.shape[:-2]
         # Recover original shape from self.shape (the logical shape passed to convert_layout)
         orig_K_packed = self.shape[-2] // 2
         orig_N = self.shape[-1]
@@ -194,7 +195,9 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
         # Trim padding back to original shape
         data = data[:, :orig_K_packed, :orig_N].contiguous()
         data = repack(data, -2, -1, True)
-        return data.reshape(*self.shape[:-1], self.shape[-1] // 2)
+        if not leading_shape:
+            return data.squeeze(0)
+        return data.reshape(*leading_shape, data.shape[-2], data.shape[-1])
 
 
 @triton.jit

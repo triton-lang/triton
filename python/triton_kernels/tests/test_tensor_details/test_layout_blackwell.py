@@ -42,12 +42,7 @@ def test_scale_zero_sized_roundtrip(shape, layout, device):
 
 
 @pytest.mark.parametrize(("shape", "major_dim"),
-                         [(shape[:-1] + (2 * shape[-1], ), -1) for shape in ZERO_SIZED_SHAPES] + [
-                             ((1, 0), -1),
-                             ((3, 0), -1),
-                             ((0, 4, 3), -2),
-                             ((2, 0, 6, 8), -1),
-                         ])
+                         [(shape[:-1] + (2 * shape[-1], ), -1) for shape in ZERO_SIZED_SHAPES] + [((2, 0, 6, 8), -2)])
 @pytest.mark.parametrize("layouts", [
     (BlackwellMXValueLayout(), ),
     (BlackwellMX4ValueShuffledLayout(), BlackwellMX4ValueShuffledLayout(block_k=256, block_n=128)),
@@ -72,14 +67,16 @@ def test_value_zero_sized_roundtrip(shape, major_dim, layouts, device):
 
 
 @pytest.mark.parametrize("k", [1, 3])
-def test_mxfp4_value_shuffled_rejects_odd_k(k):
-    src = wrap_torch_tensor(torch.empty((k, 32), dtype=torch.uint8, device="cuda"), dtype=FP4)
+@pytest.mark.parametrize("n", [0, 64])
+def test_mxfp4_value_shuffled_rejects_odd_k(k, n):
+    src = empty((k, n), dtype=FP4, device="cuda")
     with pytest.raises(ValueError, match="packing dimension -2 must have an even size"):
         convert_layout(src, BlackwellMX4ValueShuffledLayout())
 
 
-def test_mxfp4_value_shuffled_retile_rejects_odd_n():
-    shape = [2, 3]
+@pytest.mark.parametrize("k", [0, 2])
+def test_mxfp4_value_shuffled_retile_rejects_odd_n(k):
+    shape = [k, 3]
     layout = BlackwellMX4ValueShuffledLayout(block_n=128)
     data = torch.full(layout.storage_shape(shape, True), 0x11, dtype=torch.uint8, device="cuda")
     src = wrap_torch_tensor(data, dtype=FP4, shape=shape, layout=layout)

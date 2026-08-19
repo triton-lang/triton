@@ -75,12 +75,7 @@ def test_mxfp4_value_storage_shape_matches_swizzle():
 
 
 @pytest.mark.parametrize(("shape", "major_dim"),
-                         [(shape[:-1] + (2 * shape[-1], ), -1) for shape in ZERO_SIZED_SHAPES] + [
-                             ((1, 0), -1),
-                             ((3, 0), -1),
-                             ((0, 4, 3), -2),
-                             ((2, 0, 6, 8), -1),
-                         ])
+                         [(shape[:-1] + (2 * shape[-1], ), -1) for shape in ZERO_SIZED_SHAPES] + [((2, 0, 6, 8), -2)])
 @pytest.mark.parametrize("mx_axis", [-2, -1])
 @pytest.mark.parametrize("mma_version", [2, 3])
 @pytest.mark.parametrize("device", ["cpu", "meta", "cuda"])
