@@ -532,6 +532,12 @@ class amd_knobs(base_knobs):
 
     scalarize_packed_fops: env_bool = env_bool("AMDGCN_SCALARIZE_PACKED_FOPS")
 
+    # When the default scheduling strategy makes the register allocator spill
+    # inside a loop, try alternative strategies and keep the one a cost model
+    # scores cheapest. Kernels that do not spill are unaffected.
+    use_spill_cost_model: env_bool = env_bool("TRITON_HIP_USE_SPILL_COST_MODEL", True)
+    dump_spill_cost_model: env_bool = env_bool("TRITON_HIP_DUMP_SPILL_COST_MODEL", False)
+
     # Path to dump MIR files for debugging/analysis
     dump_mir: env_opt_str = env_opt_str("TRITON_DUMP_MIR")
     # Path to externally-provided MIR files to use instead of generated ones
