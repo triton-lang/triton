@@ -26,6 +26,10 @@ namespace mlir::triton::AMD {
 //      # Requires ttg.barrier but filter will prevent it
 //     %4 = AsyncCopyGlobalToLocal %ptr_2 %tile_a
 //     scf.yield
+// 2) Do not create barriers between two async loads. They are ordered by
+// ttg.async_wait, not by barriers, so the barrier membar requests when it
+// cannot prove their destination slices disjoint (e.g. dynamically indexed
+// tiles in a pipelined loop) synchronizes nothing.
 bool membarFilter(Operation *op1, Operation *op2, bool op1IsRead,
                   bool op2IsRead, Allocation *allocation);
 } // namespace mlir::triton::AMD

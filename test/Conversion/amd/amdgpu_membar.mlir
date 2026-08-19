@@ -451,3 +451,52 @@ tt.func @must_barrier_remsi_loop_carried_future_disjoint_cf(%cst: tensor<128x128
   tt.return
 }
 }
+
+// -----
+
+#AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// Two async loads need no barrier between them. Dynamic slice indices, so
+// membar cannot prove the tiles disjoint and only the filter applies.
+// CHECK-LABEL: no_barrier_between_async_loads
+tt.func @no_barrier_between_async_loads(%A: !tt.ptr<f16>, %i: i32, %j: i32) {
+  %offset = arith.constant dense<0> : tensor<128x32xi32, #AL>
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<2x128x32xf16, #shared, #smem, mutable>
+  %tile_a = ttg.memdesc_index %alloc[%i] : !ttg.memdesc<2x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  %tile_b = ttg.memdesc_index %alloc[%j] : !ttg.memdesc<2x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  // CHECK: amdg.buffer_load_to_local
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: amdg.buffer_load_to_local
+  %async_a = amdg.buffer_load_to_local %A[%offset] into %tile_a : !tt.ptr<f16>[tensor<128x32xi32, #AL>] -> <128x32xf16, #shared, #smem, mutable>
+  %async_b = amdg.buffer_load_to_local %A[%offset] into %tile_b : !tt.ptr<f16>[tensor<128x32xi32, #AL>] -> <128x32xf16, #shared, #smem, mutable>
+  // CHECK: tt.return
+  tt.return
+}
+}
+
+// -----
+
+#AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// Same for ttg.async_copy_global_to_local.
+// CHECK-LABEL: no_barrier_between_async_copies
+tt.func @no_barrier_between_async_copies(%A: !tt.ptr<f16>, %i: i32, %j: i32) {
+  %a_ptr = tt.splat %A : !tt.ptr<f16> -> tensor<128x32x!tt.ptr<f16>, #AL>
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<2x128x32xf16, #shared, #smem, mutable>
+  %tile_a = ttg.memdesc_index %alloc[%i] : !ttg.memdesc<2x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  %tile_b = ttg.memdesc_index %alloc[%j] : !ttg.memdesc<2x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  // CHECK: ttg.async_copy_global_to_local
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttg.async_copy_global_to_local
+  %async_a = ttg.async_copy_global_to_local %a_ptr, %tile_a : tensor<128x32x!tt.ptr<f16>, #AL> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  %async_b = ttg.async_copy_global_to_local %a_ptr, %tile_b : tensor<128x32x!tt.ptr<f16>, #AL> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
+  // CHECK: tt.return
+  tt.return
+}
+}

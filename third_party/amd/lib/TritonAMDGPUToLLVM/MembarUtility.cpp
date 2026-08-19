@@ -13,7 +13,7 @@ bool filterAsyncLocalLoadsDependencies(Operation *op1, Operation *op2,
   auto isAsyncLoad = [](Operation *op) {
     return llvm::isa<triton::gpu::AsyncCopyGlobalToLocalOp,
                      triton::amdgpu::BufferLoadToLocalOp,
-                     triton::amdgpu::AsyncTDMCopyLocalToGlobalOp>(op);
+                     triton::amdgpu::AsyncTDMCopyGlobalToLocalOp>(op);
   };
   auto isLocalLoadWithAsyncWaitToken = [](Operation *op) {
     auto localLoad = llvm::dyn_cast<triton::gpu::LocalLoadOp>(op);
@@ -29,9 +29,13 @@ bool filterAsyncLocalLoadsDependencies(Operation *op1, Operation *op2,
         .Default([](Operation *) { return Value(); });
   };
 
-  // Early return if neither or both operands are an AsyncLoad
-  if (isAsyncLoad(op1) == isAsyncLoad(op2)) {
+  // Early return if neither operands are an AsyncLoad
+  if (!isAsyncLoad(op1) && !isAsyncLoad(op2)) {
     return false;
+  }
+  // Filter if both operands are an AsyncLoad
+  if (isAsyncLoad(op1) && isAsyncLoad(op2)) {
+    return true;
   }
 
   Value op1Memdesc = getMemdescValue(op1);
