@@ -2,16 +2,6 @@
 
 set -euxo pipefail
 
-# TheRock apt package names and versioned /opt/rocm/core directory use only
-# the ROCm major/minor version, while ROCM_VERSION retains the full release
-# or nightly version. Extract the required package and directory suffix.
-if [[ "${ROCM_VERSION}" =~ ^([0-9]+\.[0-9]+) ]]; then
-    rocm_major_minor="${BASH_REMATCH[1]}"
-else
-    echo "ROCM_VERSION must begin with a major.minor version: ${ROCM_VERSION}" >&2
-    exit 1
-fi
-
 case "${ROCM_RELEASE_TYPE}" in
     pre-therock)
         rocm_repo_url="https://repo.radeon.com/rocm/apt/${ROCM_REPO_DIRECTORY}"
@@ -23,39 +13,20 @@ case "${ROCM_RELEASE_TYPE}" in
             rocm-libs
         )
         ;;
-    nightlies)
-        # Nightly repository directories are named DATE-BUILD_ID. Validate
-        # that convention here so a bad argument reports clearly instead
-        # of only producing a failed repository download.
-        if [[ ! "${ROCM_REPO_DIRECTORY}" =~ ^[0-9]{8}-[0-9]+$ ]]; then
-            echo "Invalid nightly ROCm repository directory: ${ROCM_REPO_DIRECTORY}" >&2
+    nightlies | prereleases | stable)
+        # TheRock PyTorch wheels depend on a matching wheel-based ROCm
+        # runtime. install-python-packages.sh installs that runtime together
+        # with its devel and device packages. Installing TheRock APT packages
+        # here as well would put two ROCm distributions in the image.
+        if dpkg-query -W 'amdrocm*' 'rocm-*' 2>/dev/null; then
+            echo "TheRock images must not contain APT ROCm packages" >&2
             exit 1
         fi
-        rocm_repo_url="https://rocm.nightlies.amd.com/packages-multi-arch/deb/${ROCM_REPO_DIRECTORY}"
-        rocm_source_options="arch=amd64 trusted=yes"
-        rocm_distribution="stable"
-        rocm_packages=(
-            "amdrocm${rocm_major_minor}"
-            "amdrocm-core-sdk${rocm_major_minor}"
-        )
-        ;;
-    prereleases)
-        rocm_repo_url="https://rocm.prereleases.amd.com/packages-multi-arch/ubuntu2404"
-        rocm_gpg_url="https://rocm.prereleases.amd.com/packages/gpg/rocm.gpg"
-        rocm_distribution="stable"
-        rocm_packages=(
-            "amdrocm${rocm_major_minor}"
-            "amdrocm-core-sdk${rocm_major_minor}"
-        )
-        ;;
-    stable)
-        rocm_repo_url="https://repo.amd.com/rocm/packages-multi-arch/ubuntu2404"
-        rocm_gpg_url="https://repo.amd.com/rocm/packages/gpg/rocm.gpg"
-        rocm_distribution="stable"
-        rocm_packages=(
-            "amdrocm${rocm_major_minor}"
-            "amdrocm-core-sdk${rocm_major_minor}"
-        )
+        if [ -e /opt/rocm ]; then
+            echo "TheRock images must not inherit a system ROCm installation" >&2
+            exit 1
+        fi
+        exit 0
         ;;
     *)
         echo "Unsupported ROCM_RELEASE_TYPE: ${ROCM_RELEASE_TYPE}" >&2
@@ -63,14 +34,10 @@ case "${ROCM_RELEASE_TYPE}" in
         ;;
 esac
 
-# Signed release repositories provide a key URL. Nightly repositories use
-# trusted=yes instead, so they intentionally skip key installation.
-if [ -n "${rocm_gpg_url:-}" ]; then
-    mkdir -p /etc/apt/keyrings
-    curl -fsSL --connect-timeout 30 --retry 3 --retry-delay 5 "${rocm_gpg_url}" |
-        gpg --dearmor -o /etc/apt/keyrings/amdrocm.gpg
-    rocm_source_options="arch=amd64 signed-by=/etc/apt/keyrings/amdrocm.gpg"
-fi
+mkdir -p /etc/apt/keyrings
+curl -fsSL --connect-timeout 30 --retry 3 --retry-delay 5 "${rocm_gpg_url}" |
+    gpg --dearmor -o /etc/apt/keyrings/amdrocm.gpg
+rocm_source_options="arch=amd64 signed-by=/etc/apt/keyrings/amdrocm.gpg"
 
 echo "deb [${rocm_source_options}] ${rocm_repo_url} ${rocm_distribution} main" > /etc/apt/sources.list.d/rocm.list
 
@@ -89,21 +56,12 @@ apt-get update
 apt-get install -y --no-install-recommends "${rocm_packages[@]}"
 rm -rf /var/lib/apt/lists/*
 
-# TheRock packages install into a versioned core directory. Replace the
-# complete set of conventional paths together so /opt/rocm cannot combine
-# directories from different ROCm installations.
-if [ "${ROCM_RELEASE_TYPE}" != "pre-therock" ]; then
-    core_dir="/opt/rocm/core-${rocm_major_minor}"
-    core_subdirs=(bin lib include libexec share)
-
-    for subdir in "${core_subdirs[@]}"; do
-        test -d "${core_dir}/${subdir}"
-    done
-    for subdir in "${core_subdirs[@]}"; do
-        rm -rf "/opt/rocm/${subdir}"
-        ln -s "${core_dir}/${subdir}" "/opt/rocm/${subdir}"
-    done
-fi
+# Make the one system ROCm installation available without setting global
+# loader variables that would interfere with TheRock configurations.
+echo "/opt/rocm/lib" > /etc/ld.so.conf.d/rocm.conf
+echo "/opt/rocm/lib64" >> /etc/ld.so.conf.d/rocm.conf
+ldconfig
+ln -s /opt/rocm/bin/hipcc /usr/local/bin/hipcc
 
 # Check the SDK layout expected by later Triton builds.
 test -d /opt/rocm/bin

@@ -24,10 +24,6 @@ LABEL org.triton-lang.image.pytorch.version="${PYTORCH_VERSION}"
 LABEL org.triton-lang.image.gpu-targets="${PYTORCH_GPU_TARGETS}"
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV ROCM_PATH=/opt/rocm
-ENV PATH=/opt/rocm/bin:${PATH}
-ENV LD_LIBRARY_PATH=/opt/rocm/lib:/opt/rocm/lib64
-ENV TRITON_ROCPROFILER_SDK_LIB_PATH=/opt/rocm/profiler-lib
 ENV CC=/usr/bin/clang
 ENV CXX=/usr/bin/clang++
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
