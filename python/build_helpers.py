@@ -290,14 +290,17 @@ def _validate_sha256(archive_path, url, expected_sha256):
 
 
 def _download_and_extract(url, download_dir, label, archives_path, expected_sha256=None):
+    keep_archive = check_env_flag("TRITON_CACHE_DEPENDENCY_DOWNLOADS")
     archive_path = _get_archive_path(archives_path, url)
-    _download_file(url, archive_path, f"downloading {label}")
+    if not (keep_archive and os.path.exists(archive_path)):
+        _download_file(url, archive_path, f"downloading {label}")
     _validate_sha256(archive_path, url, expected_sha256)
     with contextlib.suppress(Exception):
         shutil.rmtree(download_dir)
     os.makedirs(download_dir, exist_ok=True)
     _extract_archive(archive_path, download_dir)
-    os.remove(archive_path)
+    if not keep_archive:
+        os.remove(archive_path)
 
 
 def update_symlink(link_path, source_path):
@@ -693,7 +696,7 @@ def main(argv=None):
         download_and_copy_dependencies(helper_args)
     elif parsed_args.command == "write_thirdparty_cmake_vars":
         write_thirdparty_cmake_vars(output=parsed_args.output, packages=parsed_args.packages, helper_args=helper_args)
-    if os.path.exists(helper_args.archives_path):
+    if os.path.exists(helper_args.archives_path) and not check_env_flag("TRITON_CACHE_DEPENDENCY_DOWNLOADS"):
         shutil.rmtree(helper_args.archives_path)
 
 

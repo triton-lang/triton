@@ -1,7 +1,7 @@
 import torch
 import triton
 from triton_kernels import target_info
-from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
+from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 from triton_kernels.tensor import FP4, FP16, FP32, BF16, Tensor
 from triton_kernels.tensor_details.layout import HopperMXScaleLayout
 from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, BlackwellMXScaleLayout
@@ -17,6 +17,13 @@ def is_blackwell_mx_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype):
     return (target_info.cuda_capability_geq(10, 0) and precision_config is not None
             and precision_config.a_mx_scale is not None and precision_config.a_microblock_size == int(MXFP_BLOCK_SIZE)
             and precision_config.b_mx_scale is None and precision_config.c_mx_scale is None and lhs_dtype.bitwidth <= 8
+            and rhs_dtype in [FP16, BF16])
+
+
+def is_blackwell_nvfp4_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype):
+    return (target_info.cuda_capability_geq(10, 0) and precision_config is not None
+            and precision_config.a_mx_scale is not None and precision_config.a_microblock_size == int(NVFP_BLOCK_SIZE)
+            and precision_config.b_mx_scale is None and precision_config.c_mx_scale is None and lhs_dtype == FP4
             and rhs_dtype in [FP16, BF16])
 
 
