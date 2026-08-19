@@ -25,6 +25,7 @@
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/Utils/IndexingUtils.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -348,7 +349,10 @@ struct DotOpMFMAConversionHelper {
     int numVecInKBase = numRepK * kWidth / kBase;
 
     auto dstElemTy = dTensorTy.getElementType();
-    auto fc = unpackTensorElements(loc, loadedC, rewriter, op.getC().getType());
+    auto accumulatorLayout =
+        getMatrixInstructionLayout(dTensorTy, {int64_t(mDim), int64_t(nDim)});
+    auto fc = broadcastAs(unpackUniqueTensorElements(loc, loadedC, rewriter),
+                          accumulatorLayout);
     SmallVector<int64_t> fcStrides =
         computeStrides({numRepB, numRepM, numRepN, elemsPerVec});
 
@@ -411,6 +415,7 @@ struct DotOpMFMAConversionHelper {
       setPrioOp->moveAfter(firstMfma.getDefiningOp());
 
     const size_t mmaCount = numRepB * numRepM * numRepN * numVecInKBase;
+    fc = actionRemoveBroadcastedRegs(accumulatorLayout).apply(fc);
     packAndReplaceResult(op, fc, maybeMfmaIntrinsic, dstElemTy, elemTyA,
                          mmaCount);
 
@@ -480,7 +485,14 @@ struct DotOpMFMAConversionHelper {
       int kBase, RankedTensorType tensorType, Type type, bool allowXF32,
       bool preserveBF16, bool isConstantScale = false) const {
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
-    auto elems = unpackTensorElements(loc, value, rewriter, tensorType);
+    auto elems = unpackUniqueTensorElements(loc, value, rewriter);
+    if (auto dot = dyn_cast<DotOperandEncodingAttr>(tensorType.getEncoding())) {
+      auto instructionShape =
+          mfmaLayout.getInstrShapeForOperand(dot.getKWidth(), dot.getOpIdx());
+      auto instructionLayout =
+          getMatrixInstructionLayout(tensorType, instructionShape);
+      elems = broadcastAs(elems, instructionLayout);
+    }
     // number of kBase-element vectors
     int numVecInKBase = kRepInKWidth * kWidth / kBase;
     if (numVecInKBase == 0) {
@@ -728,7 +740,10 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     }
 
     auto dstElemTy = dTensorTy.getElementType();
-    auto fc = unpackTensorElements(loc, loadedC, rewriter, op.getC().getType());
+    auto accumulatorLayout =
+        getMatrixInstructionLayout(dTensorTy, {int64_t(mDim), int64_t(nDim)});
+    auto fc = broadcastAs(unpackUniqueTensorElements(loc, loadedC, rewriter),
+                          accumulatorLayout);
 
     unsigned warpSize = triton::gpu::lookupThreadsPerWarp(rewriter);
     // compute number of output elements that each thread holds for one MFMA
@@ -844,6 +859,7 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
 
     const size_t mmaCount =
         numRepB * numRepM * numRepN * numRepK * aKWidth / aKBase;
+    fc = actionRemoveBroadcastedRegs(accumulatorLayout).apply(fc);
     packAndReplaceResult(op, fc, maybeMfmaIntrinsic, dstElemTy, elemTyA,
                          mmaCount);
 

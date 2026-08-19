@@ -653,6 +653,14 @@ class LinearDistributedEncoding<string name, string attrMnemonic,
 
   let parameters = (ins LinearLayoutParam:$linearLayout);
 
+  let builders = [
+    AttrBuilder<(ins "LinearLayout":$linearLayout), [{
+      return $_get($_ctxt, linearLayout.removeZeroBasesAlongDim(
+                               StringAttr::get($_ctxt, "register")));
+    }]>
+  ];
+  let skipDefaultBuilders = 1;
+
   code extraLinearDistributedDeclaration = [{
     unsigned getRank() const { return getLinearLayout().getNumOutDims(); }
   }];
@@ -678,6 +686,7 @@ def LinearEncodingAttr
       non-swizzled, i.e. have at most one non-zero output component (the
       basis either moves along a single output dim, or is a broadcast/zero
       basis).
+    - Register basis vectors are nonzero.
     - After removing broadcast bases the layout must be bijective.
 
     GenericLinearEncodingAttr relaxes the above in two ways:
@@ -722,7 +731,8 @@ def GenericLinearEncodingAttr
 
     Register, lane, and block bases must still be non-swizzled (at most one
     non-zero output component per basis vector), which preserves existing
-    within-thread, within-warp, and CGA lowering paths.
+    within-thread, within-warp, and CGA lowering paths. Register basis vectors
+    are nonzero.
   }];
 
   let extraClassDeclaration = extraLinearDistributedDeclaration;

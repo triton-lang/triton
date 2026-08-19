@@ -1389,6 +1389,8 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
   for (auto dim : ret.getOutDimNames()) {
     assert(ret.getOutDimSize(dim) == labeledShape[dim]);
   }
+  if (ret.hasInDim(S("register")))
+    ret = ret.removeZeroBasesAlongDim(S("register"));
   return ret;
 }
 

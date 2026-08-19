@@ -218,10 +218,17 @@ Value getOperandVals(ConversionPatternRewriter &rewriter,
   int nonKRepeat = nonKDim / nonKTileDim;
   int kPerSubtile = kBase / nonKRepeat;
   int validKPerSubTile = validK / nonKRepeat;
+  // Register layouts omit broadcast bases, so repeat compact scales within
+  // their subtile instead of reading into the next subtile.
+  int storedKPerSubtile =
+      isScale ? std::min<int64_t>(kPerSubtile, tensorType.getShape().back())
+              : kPerSubtile;
 
   for (int k = 0; k < kBase; ++k) {
     int subTilePos = k % kPerSubtile;
-    Value elem = (subTilePos < validKPerSubTile) ? elems[startReg + k] : zero;
+    int registerIdx = startReg + k / kPerSubtile * storedKPerSubtile +
+                      subTilePos % storedKPerSubtile;
+    Value elem = (subTilePos < validKPerSubTile) ? elems[registerIdx] : zero;
     rawElems = tb.insert_element(vecTy, rawElems, elem, tb.i32_val(k));
   }
 

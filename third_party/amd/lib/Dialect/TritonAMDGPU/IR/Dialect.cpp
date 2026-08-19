@@ -534,9 +534,6 @@ InThreadTransposeOp::deduceOutputLayout(ArrayRef<int64_t> shape,
   for (int baseIdx = 0; baseIdx < regBasesTransposed; ++baseIdx)
     regBase.second[baseIdx] =
         inThreadTransposedTile.getBasis(regDimName, baseIdx);
-  int regBasesInTile = llvm::Log2_32(product(srcEncoding.getSizePerThread()));
-  for (int baseIdx = regBasesTransposed; baseIdx < regBasesInTile; ++baseIdx)
-    llvm::for_each(regBase.second[baseIdx], [](int32_t &val) { val = 0; });
 
   LinearLayout transposedLL(bases, SmallVector<StringAttr>(outDimNames));
   return transposedLL;

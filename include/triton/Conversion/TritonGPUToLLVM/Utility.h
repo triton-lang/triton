@@ -691,6 +691,10 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
                SharedMemoryObject smemObj, RewriterBase &rewriter,
                const TargetInfoBase &targetInfo, LowerLdStCallback lowerInst);
 
+// Recover register broadcasts required by an instruction's matrix tile.
+LinearLayout getMatrixInstructionLayout(RankedTensorType type,
+                                        ArrayRef<int64_t> instructionShape);
+
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
                                     RewriterBase &rewriter);
 

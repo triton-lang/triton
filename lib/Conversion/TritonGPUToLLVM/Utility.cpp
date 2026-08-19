@@ -1028,6 +1028,23 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
                    rewriter, targetInfo, maybeMaxVecElems, lowerInst);
 }
 
+LinearLayout getMatrixInstructionLayout(RankedTensorType type,
+                                        ArrayRef<int64_t> instructionShape) {
+  auto shape = llvm::to_vector(type.getShape());
+  auto ctaSplitNum = triton::gpu::getCTASplitNum(type.getEncoding());
+  int rank = shape.size();
+  for (int i = 0; i < 2; ++i)
+    shape[rank - 2 + i] = std::max(
+        shape[rank - 2 + i], instructionShape[i] * ctaSplitNum[rank - 2 + i]);
+
+  auto layout = triton::gpu::toLinearLayout(shape, type.getEncoding());
+  llvm::SmallDenseMap<StringAttr, int64_t> actualShape;
+  for (auto [dim, size] :
+       llvm::zip(layout.getOutDimNames(), triton::gpu::getShapePerCTA(type)))
+    actualShape[dim] = size;
+  return ensureLayoutNotLargerThan(layout, actualShape);
+}
+
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
                                     RewriterBase &rewriter) {
   assert(bool(llvmStruct) && "can not unpack null values");

@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/SmallVector.h"
 
 using namespace mlir;
@@ -19,15 +20,16 @@ namespace {
 using ValueTableV2 = std::map<std::array<int, 3>, Value>;
 
 SmallVector<Value> loadC(Value tensor, Value llTensor, Location loc,
-                         ConversionPatternRewriter &rewriter) {
+                         ConversionPatternRewriter &rewriter,
+                         const LinearLayout &instructionLayout) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto tensorTy = cast<RankedTensorType>(tensor.getType());
-  size_t fcSize = triton::gpu::getTotalElemsPerThread(tensor.getType());
 
   assert(isa<NvidiaMmaEncodingAttr>(tensorTy.getEncoding()) &&
          "Currently, we only support $c with a mma layout.");
-  auto elems = unpackTensorElements(loc, llTensor, rewriter, tensorTy);
-  assert(elems.size() == fcSize);
+  auto elems = broadcastAs(unpackUniqueTensorElements(loc, llTensor, rewriter),
+                           instructionLayout);
+  size_t fcSize = elems.size();
 
   auto numMmaRets = tensorTy.getElementType().getIntOrFloatBitWidth() / 8;
   assert(numMmaRets == 8 || numMmaRets == 4 || numMmaRets == 2);
@@ -75,11 +77,23 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     ConversionPatternRewriter &rewriter, Value value, int batch, int repOuter,
     int repK, RankedTensorType type, const NumRegisters &numRegisters) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto elems = unpackTensorElements(loc, value, rewriter, type);
   auto eltTy = typeConverter->convertType(type.getElementType());
+  auto bitwidth = eltTy.getIntOrFloatBitWidth();
+  auto dot = cast<DotOperandEncodingAttr>(type.getEncoding());
+  auto mma = cast<NvidiaMmaEncodingAttr>(dot.getParent());
+  auto instrShape = mma.getInstrShape();
+  auto instrM = instrShape[instrShape.size() - 2];
+  int64_t instrK = std::max<int64_t>(256 / bitwidth,
+                                     dot.getKWidth() * (instrM == 8 ? 4 : 8));
+  SmallVector<int64_t> operandShape =
+      dot.getOpIdx() == 0 ? SmallVector<int64_t>{instrM, instrK}
+                          : SmallVector<int64_t>{instrK, instrShape.back()};
+  auto instructionLayout = getMatrixInstructionLayout(type, operandShape);
+  auto elems = broadcastAs(unpackUniqueTensorElements(loc, value, rewriter),
+                           instructionLayout);
+
   int offset{};
   ValueTableV2 vals;
-  auto bitwidth = eltTy.getIntOrFloatBitWidth();
   auto numElemsPerVec = std::max(32 / bitwidth, 1u);
   auto vecTy = vec_ty(eltTy, numElemsPerVec);
 
@@ -97,7 +111,6 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     offset += numElemsPerVec;
   };
 
-  auto dot = cast<DotOperandEncodingAttr>(type.getEncoding());
   auto kWidth = dot.getKWidth();
   auto largeK = bitwidth * kWidth > std::max(32u, bitwidth);
 
@@ -716,13 +729,18 @@ LogicalResult convertMMAImpl(
          mlir::isa<DotOperandEncodingAttr>(bType.getEncoding()) &&
          "Both $a and %b should be DotOperand layout.");
 
-  Value cOperand = op->getOperand(2);
-  auto fc = loadC(cOperand, llvmC, loc, rewriter);
-
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   auto aTensorTy = cast<RankedTensorType>(op.getA().getType());
   auto bTensorTy = cast<RankedTensorType>(op.getB().getType());
   auto dTensorTy = cast<RankedTensorType>(op.getD().getType());
+  auto mma = cast<NvidiaMmaEncodingAttr>(dTensorTy.getEncoding());
+  auto instrShape = mma.getInstrShape();
+  auto accumulatorLayout = getMatrixInstructionLayout(
+      dTensorTy,
+      {int64_t(instrShape[instrShape.size() - 2]), int64_t(instrShape.back())});
+
+  Value cOperand = op->getOperand(2);
+  auto fc = loadC(cOperand, llvmC, loc, rewriter, accumulatorLayout);
 
   auto aShapePerCTA = triton::gpu::getShapePerCTA(aTensorTy);
   auto bShapePerCTA = triton::gpu::getShapePerCTA(bTensorTy);
@@ -764,10 +782,7 @@ LogicalResult convertMMAImpl(
   auto numMmaRets = bitwidthRet == 64 ? 2 : bitwidthRet / 8;
   int numCPackedElem = bitwidthRet == 64 ? 1 : 4 / numMmaRets;
 
-  auto rank = dTensorTy.getRank();
-  auto elemsPerThread = triton::gpu::getElemsPerThread(dTensorTy);
-  auto batchOffset =
-      elemsPerThread[rank - 2] * elemsPerThread[rank - 1] / numCPackedElem;
+  auto batchOffset = fc.size() / repBatch;
   auto callMma = [&](unsigned b, unsigned m, unsigned n, unsigned k) {
     PTXBuilder builder;
     auto &mma = *builder.create(mmaInstruction);
@@ -808,6 +823,7 @@ LogicalResult convertMMAImpl(
               : tb.bitcast(fc[i], resElemTy);
     }
   }
+  results = actionRemoveBroadcastedRegs(accumulatorLayout).apply(results);
   Value res =
       packTensorElements(loc, typeConverter, results, rewriter, dTensorTy);
 
