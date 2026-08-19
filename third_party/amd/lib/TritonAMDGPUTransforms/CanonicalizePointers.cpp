@@ -453,6 +453,14 @@ static const std::string kSCFElseRewrittenAttr =
 static const std::string kSCFIfOpYieldFatPtrOffsets =
     kPtrCanonPrefix + "scf-if-yield-fatptr-offsets__";
 
+/// Hints (see getHintAttrNames) read off the `tt.addptr` directly defining a
+/// pointer-like operand, keyed by (consuming op, operand index).
+/// collectMemOpHints builds this before the conversion runs; it is read-only
+/// from then on, which is what lets the hints describe the shape the consuming
+/// op originally asked for rather than whatever the pointer chain ends up with.
+using MemOpHints =
+    DenseMap<std::pair<Operation *, unsigned>, SmallVector<NamedAttribute>>;
+
 /// This struct is basically a thin wrapper over DenseMap<fatPtr, fatPtrAttrs>
 /// where fatPtr == (base, offset) and fatPtrAttrs is itself a map of (name,
 /// attribute).
@@ -560,25 +568,63 @@ void FatPointers::collectFatPointerAttributes(const KeyT &k) {
     pointerAttrs[k]->attributes[baseAttr.getName()] = baseAttr.getValue();
 }
 
-static ArrayRef<StringRef> getPropagatedAttrNames() {
+static ArrayRef<StringRef> getHintAttrNames() {
   static constexpr StringRef names[] = {"tt.divisibility", "tt.contiguity",
                                         "tt.constancy"};
   return names;
 }
 
-// The attributes carry one entry per tensor dimension and AxisInfoAnalysis
-// reads them back indexed by the op's rank. An attribute whose length disagrees
-// with the destination pointer rank would produce an inconsistent AxisInfo
-// (reading out of bounds), so only propagate an attr when its rank matches the
-// target; attributes outside getPropagatedAttrNames have no per-dimension data
-// and are always safe.
-static bool attrRankMatchesTarget(StringRef name, Attribute attr,
-                                  int64_t targetRank) {
-  if (!llvm::is_contained(getPropagatedAttrNames(), name))
-    return true;
+// AxisInfoAnalysis reads hints indexed by the rank of the op carrying it,
+// so a hint whose length disagrees with the pointer it annotates would produce
+// an inconsistent AxisInfo. Such a hint should be dropped.
+static bool hintRankMatches(Attribute attr, int64_t rank) {
   if (auto dense = dyn_cast<DenseElementsAttr>(attr))
-    return dense.getNumElements() == targetRank;
-  return targetRank == 1;
+    return dense.getNumElements() == rank;
+  return rank == 1;
+}
+
+// Collect into `memOpHints` the hints found on the `tt.addptr` that directly
+// defines each pointer-like operand in `func`, keyed by the op consuming that
+// operand and the operand index, so that reattachMemOpHints can put them back
+// once the pointer feeding it has been rebuilt.
+static void collectMemOpHints(tt::FuncOp func, MemOpHints &memOpHints) {
+  func.walk([&](Operation *op) {
+    for (auto [idx, operand] : llvm::enumerate(op->getOperands())) {
+      auto addPtrOp = operand.getDefiningOp<tt::AddPtrOp>();
+      if (!addPtrOp)
+        continue;
+      auto ptrTy = dyn_cast<RankedTensorType>(addPtrOp.getType());
+      int64_t rank = ptrTy ? ptrTy.getRank() : 1;
+      SmallVector<NamedAttribute> hints = tt::filterDiscardableAttrs(
+          addPtrOp.getOperation(), getHintAttrNames());
+      llvm::erase_if(hints, [&](const NamedAttribute &hint) {
+        return !hintRankMatches(hint.getValue(), rank);
+      });
+      if (!hints.empty())
+        memOpHints[{op, static_cast<unsigned>(idx)}] = std::move(hints);
+    }
+  });
+}
+
+// Re-apply the hints recorded (in memOpHints) for the `tt.addptr` op.
+static void reattachMemOpHints(const MemOpHints &memOpHints,
+                               const FatPointers::FatPtrAttrs &fatPtrAttrs,
+                               Operation *op, unsigned operandIdx,
+                               Value newPtr) {
+  // The large-tensor path already carries hints, by moving them onto the scalar
+  // base pointer bump it creates. The small-tensor path never builds that bump,
+  // since it keeps the offset as a tensor and defers materialization to here,
+  // so it has no attachment point to reuse. Hence this.
+  if (!fatPtrAttrs.isSmallTensor)
+    return;
+  auto it = memOpHints.find({op, operandIdx});
+  if (it == memOpHints.end())
+    return;
+  auto addPtrOp = newPtr.getDefiningOp<tt::AddPtrOp>();
+  if (!addPtrOp)
+    return;
+  for (const NamedAttribute &hint : it->second)
+    addPtrOp->setDiscardableAttr(hint.getName(), hint.getValue());
 }
 
 Value createTensorPointer(RewriterBase &rewriter, Value basePtr, Value offset,
@@ -591,8 +637,7 @@ Value createTensorPointer(RewriterBase &rewriter, Value basePtr, Value offset,
     auto addPtrOp =
         tt::AddPtrOp::create(rewriter, loc, basePtr.getType(), basePtr, offset);
     for (const auto &attribute : fatPtrAttrs.attributes)
-      if (attrRankMatchesTarget(attribute.first, attribute.second, /*rank=*/1))
-        addPtrOp->setAttr(attribute.first, attribute.second);
+      addPtrOp->setAttr(attribute.first, attribute.second);
     return addPtrOp.getResult();
   }
 
@@ -614,9 +659,7 @@ Value createTensorPointer(RewriterBase &rewriter, Value basePtr, Value offset,
       tt::AddPtrOp::create(rewriter, loc, tensorPtrType, tensorPtr, offset);
 
   for (const auto &attribute : fatPtrAttrs.attributes)
-    if (attrRankMatchesTarget(attribute.first, attribute.second,
-                              tensorType.getRank()))
-      addPtrOp->setAttr(attribute.first, attribute.second);
+    addPtrOp->setAttr(attribute.first, attribute.second);
   return addPtrOp.getResult();
 }
 
@@ -647,10 +690,11 @@ struct PointerCanonicalizationPattern : ConversionPattern {
   PointerCanonicalizationPattern(MLIRContext *context,
                                  llvm::SetVector<Operation *> &opsToRewrite,
                                  FatPointers &fatPtrs,
+                                 const MemOpHints &memOpHints,
                                  llvm::SmallPtrSet<Block *, 8> &convertedBlocks,
                                  PatternBenefit benefit = 1)
       : ConversionPattern(SourceOp::getOperationName(), benefit, context),
-        fatPtrs(fatPtrs), opToRewrite(opsToRewrite),
+        fatPtrs(fatPtrs), memOpHints(memOpHints), opToRewrite(opsToRewrite),
         convertedBlocks(convertedBlocks) {}
 
   LogicalResult
@@ -669,6 +713,7 @@ struct PointerCanonicalizationPattern : ConversionPattern {
                    ConversionPatternRewriter &rewriter) const = 0;
 
   FatPointers &fatPtrs;
+  const MemOpHints &memOpHints;
   llvm::SetVector<Operation *> &opToRewrite;
   llvm::SmallPtrSet<Block *, 8> &convertedBlocks;
 };
@@ -783,8 +828,8 @@ public:
       return rewriteSmallTensorPtr(addPtrOp, adaptor, rewriter);
 
     // Query all discardable attributes that we want to preserve
-    SmallVector<NamedAttribute> propagatedAttrs = tt::filterDiscardableAttrs(
-        addPtrOp.getOperation(), getPropagatedAttrNames());
+    SmallVector<NamedAttribute> propagatedAttrs =
+        tt::filterDiscardableAttrs(addPtrOp.getOperation(), getHintAttrNames());
     auto currPtrTy = llvm::dyn_cast<RankedTensorType>(addPtrOp.getType());
     int currPtrRank = currPtrTy ? currPtrTy.getRank() : 1;
     auto doSetDiscardableAttrs = [&](tt::AddPtrOp newAddPtrOp) {
@@ -891,10 +936,6 @@ private:
     rewriter.setInsertionPoint(addPtrOp);
 
     const auto &oldAttr = fatPtrs.at({fatPtrBase, fatPtrOffset});
-
-    // Query all discardable attributes that we want to preserve
-    SmallVector<NamedAttribute> propagatedAttrs = tt::filterDiscardableAttrs(
-        addPtrOp.getOperation(), getPropagatedAttrNames());
 
     LDBG("smal-tensor addPtr: " << addPtrOp);
     LDBG("   - isSmallTensor: " << oldAttr.isSmallTensor);
@@ -1065,16 +1106,6 @@ private:
     auto nextFatPtr = std::pair{fatPtrBase, newOffset};
     fatPtrs[nextFatPtr] = oldAttr;
     fatPtrs[nextFatPtr].canNarrow = false;
-    // Add the attributes we want to preserve into the table. They
-    // are attached to the op later, in createTensorPointer. An attribute
-    // from a previous addptr describes the pointer before this addptr's
-    // offset operand was folded in, which can break it (a 16-byte aligned
-    // pointer plus a runtime offset is no longer 16-byte aligned), so erase
-    // those attributes instead of merging into them.
-    for (StringRef name : getPropagatedAttrNames())
-      fatPtrs[nextFatPtr].attributes.erase(name);
-    for (const NamedAttribute &attr : propagatedAttrs)
-      fatPtrs[nextFatPtr].attributes[attr.getName().strref()] = attr.getValue();
 
     return success();
   }
@@ -1736,8 +1767,10 @@ public:
     const FatPointers::FatPtrAttrs &fatPtrAttrs =
         this->fatPtrs.at({fatPtrBase, fatPtrOffset});
     SmallVector<Value> operands = op->getOperands();
-    operands[PtrLikeIdx] = createTensorPointer(
-        rewriter, fatPtrBase, fatPtrOffset, curLoc, fatPtrAttrs);
+    Value newPtr = createTensorPointer(rewriter, fatPtrBase, fatPtrOffset,
+                                       curLoc, fatPtrAttrs);
+    reattachMemOpHints(this->memOpHints, fatPtrAttrs, op, PtrLikeIdx, newPtr);
+    operands[PtrLikeIdx] = newPtr;
 
     if (op->getNumResults())
       rewriter.replaceOpWithNewOp<SourceOp>(
@@ -2050,6 +2083,10 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
     return;
 
   FatPointers fatPrs;
+  // Must run before the rewrites start replacing the tt.addptr ops.
+  MemOpHints memOpHints;
+  collectMemOpHints(func, memOpHints);
+
   PatternRewriter rewriter(&getContext());
   // Convert tt.func; %1 = unrealize_cast(%arg0: tt.ptr, c0: i32) -> tt.ptr
   InitFuncPtrArgs pat(&getContext(), fatPrs, enableLargeTensorPtrCanon);
@@ -2134,7 +2171,7 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
       ConvertExpandDims, ConvertReshape, ConvertSCFYieldOp, ConvertSCFIfOp,
       ConvertSCFConditionOp, ConvertSCFWhileOp, ConvertCFCondBranch,
       ConvertCFBranch, ConvertArithSelectOp, ConvertReturnOp>(
-      patterns.getContext(), opsToRewrite, fatPrs, convertedBlocks);
+      patterns.getContext(), opsToRewrite, fatPrs, memOpHints, convertedBlocks);
   if (failed(applyPartialConversion(func, target, std::move(patterns), config)))
     return signalPassFailure();
 
@@ -2143,7 +2180,7 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   target.addIllegalOp<UnrealizedConversionCastOp>();
   patterns.clear();
   patterns.add<ConvertUnimplementedOpUnrealizedCasts>(
-      patterns.getContext(), opsToRewrite, fatPrs, convertedBlocks);
+      patterns.getContext(), opsToRewrite, fatPrs, memOpHints, convertedBlocks);
   if (failed(applyPartialConversion(func, target, std::move(patterns), config)))
     return signalPassFailure();
 
