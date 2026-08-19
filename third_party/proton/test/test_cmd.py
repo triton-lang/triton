@@ -20,6 +20,13 @@ def clean_rocprofiler_env():
     return env
 
 
+def test_configure_runtime_without_therock(monkeypatch):
+    from triton.profiler import _rocm
+
+    monkeypatch.setattr(_rocm, "find_therock_rocm_libraries", lambda: None)
+    assert _rocm.configure_runtime() is None
+
+
 def test_therock_runtime_library_variables():
     try:
         import rocm_sdk

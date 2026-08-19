@@ -85,6 +85,8 @@ def _load_hsa_runtime():
 def configure_runtime():
     """Select and preload one coherent ROCm runtime before loading Proton."""
     libraries = find_therock_rocm_libraries()
+    if libraries is None:
+        return None
     explicit_overrides = _set_therock_runtime_environment(libraries)
     hsa_handle = _load_hsa_runtime()
     _preload_therock_runtime(explicit_overrides)
