@@ -91,6 +91,12 @@ jobs:
         run: ccache --print-stats
       - name: Run lit tests
         run: make test-lit
+      - name: Check ConSan attention performance
+        if: ${{ matrix.config.runner_type == 'nvidia-gb200' }}
+        timeout-minutes: 8
+        env:
+          PYTEST_ADDOPTS: ""
+        run: python3 -m pytest -n 0 -s -vv python/test/microbenchmark/test_consan_performance.py
       - name: Warm Triton compile cache
         timeout-minutes: 10
         run: |
