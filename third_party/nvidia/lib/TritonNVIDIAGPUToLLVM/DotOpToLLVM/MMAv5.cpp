@@ -666,10 +666,11 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   // path. The same lifetime rule applies to B when both collectors are used.
   // M=64 uses half the datapath and can interleave N tiles across TMEM lane
   // alignments 0 and 16. A collector cannot be reused across that change.
-  bool reuseA = mmaSizeM == 128 && numRepN > 1 &&
-                targetFeatures.supportsReuseA();
+  bool reuseA =
+      mmaSizeM == 128 && numRepN > 1 && targetFeatures.supportsReuseA();
   assert(!(reuseA && op.decompressB) &&
-         "Combining reuse A and LUTB is currently not supported, due to LUTB requiring N = 256.");
+         "Combining reuse A and LUTB is currently not supported, due to LUTB "
+         "requiring N = 256.");
   bool reuseBoth = reuseA && reuseB;
 
   // Dimensions are M, N, K. Keep the original traversal when neither
