@@ -7,7 +7,7 @@ import triton
 import triton.language as tl
 
 from .base import Layout, LayoutTransformation
-from .torch_utils import repack
+from .torch_utils import is_compile_warmup, repack
 
 
 # ------------------- Blackwell MX4 Value Shuffled Layout -------------------
@@ -106,7 +106,7 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
         # The canonical intermediate packs N, while shuffled storage packs K.
         if self.shape[-1] % 2:
             raise ValueError(f"FP4 packing dimension -1 must have an even size, got {self.shape[-1]}")
-        if data.device.type != "cuda" or data.dtype != torch.uint8 or is_fake(data):
+        if data.device.type != "cuda" or data.dtype != torch.uint8 or (is_fake(data) and not is_compile_warmup()):
             return self._unswizzle_data_torch(data) if inverse else self._swizzle_data_torch(data)
 
         canonical_shape = [*self.shape[:-1], self.shape[-1] // 2]

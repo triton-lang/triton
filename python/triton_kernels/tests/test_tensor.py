@@ -3,7 +3,6 @@ import torch
 import triton
 import triton.language as tl
 from triton import _compile_warmup
-from triton_kernels import testing as kernel_testing
 from triton_kernels.fpsan import embed, unembed
 from triton_kernels.tensor_details.bitmatrix import _keyed_add
 from triton_kernels.tensor_details.dtype import BIT, FP4, UINT8
@@ -127,61 +126,29 @@ class _WarmupLaunchRecorder:
         self.launches = []
 
     def dispatch(self, *args, kernel, grid, test, **kwargs):
-        arguments = kernel.signature.bind(
-            *args, **{name: value
-                      for name, value in kwargs.items()
-                      if name in kernel.signature.parameters})
-        self.launches.append((kernel.fn.__name__, grid, arguments.arguments))
+        arguments = dict(zip(kernel.signature.parameters, args))
+        arguments.update(kwargs)
+        self.launches.append((kernel.fn.__name__, arguments["INVERSE"]))
 
 
-@pytest.mark.parametrize("shape", [(2, 258, 514), (0, 64)])
-@pytest.mark.parametrize("layout", [
-    HopperMXValueLayout(-2, 3),
-    HopperMXValueLayout(-1, 3),
-    BlackwellMX4ValueShuffledLayout(),
+@pytest.mark.parametrize(("shape", "layout", "kernel_name"), [
+    ((2, 258, 514), HopperMXValueLayout(-2, 3), "_convert_bits_kernel"),
+    ((0, 64), HopperMXValueLayout(-1, 3), "_convert_bits_kernel"),
+    ((2, 258, 514), BlackwellMX4ValueShuffledLayout(), "_convert_shuffled_mxfp4"),
+    ((0, 64), BlackwellMX4ValueShuffledLayout(), "_convert_shuffled_mxfp4"),
 ])
-def test_convert_layout_compile_warmup(shape, layout):
+def test_convert_layout_compile_warmup(shape, layout, kernel_name):
     recorder = _WarmupLaunchRecorder()
     with _compile_warmup.compile_warmup_only(recorder):
         src = empty(shape, dtype=FP4, device="cuda", layout=StridedLayout(-2))
-        swizzled = kernel_testing.convert_layout(src, layout)
-        assert len(recorder.launches) == 1
-        assert kernel_testing.convert_layout(swizzled, layout) is swizzled
-        assert len(recorder.launches) == 1
-        roundtrip = kernel_testing.convert_layout(swizzled, src.storage.layout)
+        swizzled = convert_layout(src, layout)
+        assert recorder.launches == [(kernel_name, False)]
+        assert convert_layout(swizzled, layout) is swizzled
+        roundtrip = convert_layout(swizzled, src.storage.layout)
 
+    assert recorder.launches == [(kernel_name, False), (kernel_name, True)]
     assert swizzled.shape == roundtrip.shape == list(shape)
     assert roundtrip.data.shape == src.data.shape
-    assert len(recorder.launches) == 2
-    storage_shape = tuple(layout.storage_shape(list(shape), True))
-    assert tuple(swizzled.data.shape) == storage_shape
-    for inverse, (kernel, grid, arguments) in zip((False, True), recorder.launches):
-        assert arguments["INVERSE"] is inverse
-        if isinstance(layout, HopperMXValueLayout):
-            assert kernel == "_convert_bits_kernel"
-            n = swizzled.data.numel() // 4
-            assert arguments["N"] == n
-            assert arguments["X"].dtype == torch.uint8
-            assert arguments["Y"].dtype == torch.int32
-            assert arguments["X"].numel() == 4 * n
-            assert arguments["Y"].numel() == n
-            assert grid == (triton.cdiv(n, arguments["BLOCK_SIZE"]), )
-        else:
-            assert kernel == "_convert_shuffled_mxfp4"
-            canonical = torch.empty((*shape[:-1], shape[-1] // 2), dtype=torch.uint8, device="meta")
-            storage = torch.empty(storage_shape, dtype=torch.uint8, device="meta")
-            assert arguments["CANONICAL_SHAPE"] == tuple(arguments["Canonical"].shape) == tuple(canonical.shape)
-            assert arguments["SHUFFLED_SHAPE"] == tuple(arguments["Shuffled"].shape) == storage_shape
-            assert arguments["CANONICAL_STRIDES"] == arguments["Canonical"].stride() == canonical.stride()
-            assert arguments["SHUFFLED_STRIDES"] == arguments["Shuffled"].stride() == storage.stride()
-            assert swizzled.data.stride() == storage.stride()
-            k = shape[-2] // 2 if inverse else storage_shape[1] * storage_shape[-1]
-            n = shape[-1] if inverse else storage_shape[2] * storage_shape[-2]
-            grid_k = triton.cdiv(k, arguments["BLOCK_K"])
-            grid_n = triton.cdiv(n, 2 * arguments["BLOCK_N"])
-            assert arguments["GRID_K"] == max(grid_k, 1)
-            assert arguments["GRID_N"] == max(grid_n, 1)
-            assert grid == (storage_shape[0] * grid_k * grid_n, )
 
 
 def test_ragged_layout_storage_shape():

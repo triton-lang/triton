@@ -8,6 +8,7 @@ import threading
 import re
 import textwrap
 from collections import defaultdict
+from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Callable, Concatenate, Generic, Iterable, Optional, ParamSpec, TYPE_CHECKING, TypeVar, overload, Dict, Any, Tuple
@@ -30,6 +31,14 @@ T = TypeVar("T")
 P = ParamSpec("P")
 R = TypeVar("R")
 U = TypeVar("U")
+
+_COMPILE_WARMUP_ACTIVE = ContextVar("triton_compile_warmup_active", default=False)
+
+
+def is_compile_warmup() -> bool:
+    """Whether kernel launches are being captured without execution."""
+    return _COMPILE_WARMUP_ACTIVE.get()
+
 
 # -----------------------------------------------------------------------------
 # Dependencies Finder

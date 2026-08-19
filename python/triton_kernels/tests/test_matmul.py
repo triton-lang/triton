@@ -15,7 +15,7 @@ from triton_kernels.matmul import apply_precision, matmul_set_idle_sms, matmul, 
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp8_fn, quantize_nvfp4_fn, downcast_to_mxfp_torch, upcast_from_mxfp_torch, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 # testing utilities
-from triton_kernels.testing import assert_close, make_random_tensor, convert_layout as convert_layout_warmup
+from triton_kernels.testing import assert_close, make_random_tensor
 # target-specific utilities
 from triton_kernels.target_info import is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_gfx1250
 from triton_kernels.swiglu import swiglu, swiglu_fn
@@ -592,10 +592,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         ) if c_dtype.is_nvfp4 else precision_opt
     )
     if is_compile_warmup():
-        if reference_precision.a_mx_scale is not None:
-            reference_a = convert_layout_warmup(reference_a, layout.StridedLayout(-1))
-        if reference_precision.b_mx_scale is not None:
-            reference_b = convert_layout_warmup(reference_b, layout.StridedLayout(-2))
         apply_precision(reference_a, reference_b, reference_precision)
         reference_dtype = (torch.float32 if c_dtype.is_nvfp4 or inner_expt_opt is not None
                            else torch.bfloat16 if a_dtype.has_mx_scale else a_dtype.torch_dtype)
