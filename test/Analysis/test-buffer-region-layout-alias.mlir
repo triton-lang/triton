@@ -670,6 +670,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
+// A non-power-of-two memdesc uses a power-of-two LinearLayout, but its exact
+// footprint must contain only the logical coordinates. A flattened Gray-code
+// prefix for the normalized 64x256 layout misses byte 2048 and incorrectly
+// includes byte 12288, the first byte past the packed 48x256 allocation.
+#nonpow2 = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [16, 0], [32, 0]]}, alignment = 16>
+#byte = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: nonpow2_a_footprint vs nonpow2_a_footprint: alias=true
+// CHECK: nonpow2_a_footprint vs nonpow2_b_valid_byte: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=false
+// CHECK: nonpow2_a_footprint vs nonpow2_c_past_end: alias=false, lhs_contains_rhs=false, rhs_contains_lhs=false
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 12289 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  tt.func public @non_power_of_two_exact_footprint() {
+    %buffer = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<48x256xi8, #nonpow2, #smem, mutable>
+    %valid_byte = ttg.local_alloc {allocation.offset = 2048 : i32} : () -> !ttg.memdesc<1xi8, #byte, #smem, mutable>
+    %past_end = ttg.local_alloc {allocation.offset = 12288 : i32} : () -> !ttg.memdesc<1xi8, #byte, #smem, mutable>
+    %0 = ttg.local_load %buffer {test.region_name = "nonpow2_a_footprint"} : !ttg.memdesc<48x256xi8, #nonpow2, #smem, mutable> -> tensor<48x256xi8>
+    %1 = ttg.local_load %valid_byte {test.region_name = "nonpow2_b_valid_byte"} : !ttg.memdesc<1xi8, #byte, #smem, mutable> -> tensor<1xi8>
+    %2 = ttg.local_load %past_end {test.region_name = "nonpow2_c_past_end"} : !ttg.memdesc<1xi8, #byte, #smem, mutable> -> tensor<1xi8>
+    tt.return
+  }
+}
+
+// -----
+
 // A warp-group wait forwards each memory descriptor without accessing or
 // replacing the allocation it keeps alive.
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
