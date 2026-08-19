@@ -1306,7 +1306,7 @@ bool LayoutRematerialization::hoistConvertDotOperand(
   // threads We do views and elementwise pure ops for now
   auto noDataMovement = [](Operation *op) {
     return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
-           isa<BroadcastOp, Fp4ToFpOp, ConvertLayoutOp, UpcastFpOpInterface>(
+           isa<BroadcastOp, Fp4ToFpOp, ConvertLayoutOp, CastFpOpInterface>(
                op) ||
            isView(op);
   };

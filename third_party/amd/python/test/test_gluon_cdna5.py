@@ -343,6 +343,109 @@ def test_runtime_scaled_upcast_fp8_non_broadcast_block16():
     torch.testing.assert_close(y.cpu(), y_ref, atol=0, rtol=0)
 
 
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.parametrize("dtype,ttgl_dtype,in_suffix", [
+    (torch.float16, ttgl.float16, "f16"),
+    (torch.bfloat16, ttgl.bfloat16, "bf16"),
+    (torch.float32, ttgl.float32, "f32"),
+], ids=lambda v: getattr(v, "__name__", str(v)))
+@pytest.mark.parametrize("BLOCK_K", [64, 128, 256], ids=lambda v: f"BLOCK_K{v}")
+def test_runtime_scaled_downcast_fp4(dtype, ttgl_dtype, in_suffix, BLOCK_K):
+    # Inverse of test_runtime_scaled_upcast_fp4 (compact scale): pack unpacked
+    # high-precision values back to fp4 through the gfx1250 pk8 instruction.
+
+    @gluon.jit
+    def scaled_downcast_fp4_kernel(x_ptr, scale_ptr, y_ptr, BLOCK_M: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
+                                   SCALE_FACTOR: ttgl.constexpr):
+        compact_layout: ttgl.constexpr = ttgl.BlockedLayout([1, BLOCK_K // SCALE_FACTOR], [8, 4], [4, 1], [1, 0])
+        unpacked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 4], [4, 1], [1, 0])
+
+        # `input` is the unpacked tile (twice as wide as the packed output).
+        offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, unpacked_layout))
+        offs_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, unpacked_layout))
+        x = ttgl.load(x_ptr + offs_m[:, None] * BLOCK_K + offs_k[None, :])
+
+        scale_k: ttgl.constexpr = BLOCK_K // SCALE_FACTOR
+        offs_scale_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, compact_layout))
+        offs_scale_k = ttgl.arange(0, scale_k, layout=ttgl.SliceLayout(0, compact_layout))
+        scale = ttgl.load(scale_ptr + offs_scale_m[:, None] * scale_k + offs_scale_k[None, :])
+
+        y = ttgl.amd.cdna5.scaled_downcast(x, scale, "e2m1", axis=1)
+        out_layout: ttgl.constexpr = y.type.layout
+        offs_out_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, out_layout))
+        offs_out_k = ttgl.arange(0, BLOCK_K // 2, layout=ttgl.SliceLayout(0, out_layout))
+        ttgl.store(y_ptr + offs_out_m[:, None] * (BLOCK_K // 2) + offs_out_k[None, :], y)
+
+    BLOCK_M = 16
+    SCALE_FACTOR = 32
+    torch.manual_seed(42)
+
+    # `packed` is the fp4 answer; `unpacked_ref` its per-element float values.
+    packed, unpacked_ref = create_mxfp_operand(0, BLOCK_M, BLOCK_K, "e2m1")
+    scale, scale_ref = create_mxfp_scale(0, BLOCK_M, BLOCK_K, "e8m0", SCALE_FACTOR)
+    # input = answer * scale, so downcast(input / scale) recovers the fp4 bytes.
+    x = (unpacked_ref * scale_ref).to(dtype).contiguous()
+    y = torch.empty((BLOCK_M, BLOCK_K // 2), dtype=torch.uint8, device="cuda")
+
+    pgm = scaled_downcast_fp4_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, SCALE_FACTOR, num_warps=4)
+
+    assert f"v_cvt_scalef32_pk8_fp4_{in_suffix}" in pgm.asm["amdgcn"]
+    torch.testing.assert_close(y.cpu(), packed, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
+@pytest.mark.parametrize("fp8_dtype", ["e4m3", "e5m2"])
+@pytest.mark.parametrize("dtype,ttgl_dtype,in_suffix", [
+    (torch.float16, ttgl.float16, "f16"),
+    (torch.bfloat16, ttgl.bfloat16, "bf16"),
+    (torch.float32, ttgl.float32, "f32"),
+], ids=lambda v: getattr(v, "__name__", str(v)))
+def test_runtime_scaled_downcast_fp8(fp8_dtype, dtype, ttgl_dtype, in_suffix):
+    # Cover the eight v_cvt_scalef32_pk8 fp8 downcast instructions:
+    # {f16,bf16,f32} input x {fp8 (e4m3), bf8 (e5m2)} output.
+    # fp8 downcast is elementwise, but the scale is compact along `axis` (one
+    # E8M0 byte per SCALE_FACTOR values), so the 8 values of each pk8 group
+    # share a single scale.
+    torch_fp8 = {"e4m3": torch.float8_e4m3fn, "e5m2": torch.float8_e5m2}[fp8_dtype]
+    out_mnemonic = {"e4m3": "fp8", "e5m2": "bf8"}[fp8_dtype]
+
+    @gluon.jit
+    def scaled_downcast_fp8_kernel(x_ptr, scale_ptr, y_ptr, BLOCK_M: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
+                                   SCALE_FACTOR: ttgl.constexpr, FORMAT: ttgl.constexpr):
+        compact_layout: ttgl.constexpr = ttgl.BlockedLayout([1, BLOCK_K // SCALE_FACTOR], [8, 4], [4, 1], [1, 0])
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 4], [4, 1], [1, 0])
+
+        offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, layout))
+        offs_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, layout))
+        x = ttgl.load(x_ptr + offs_m[:, None] * BLOCK_K + offs_k[None, :])
+
+        scale_k: ttgl.constexpr = BLOCK_K // SCALE_FACTOR
+        offs_scale_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, compact_layout))
+        offs_scale_k = ttgl.arange(0, scale_k, layout=ttgl.SliceLayout(0, compact_layout))
+        scale = ttgl.load(scale_ptr + offs_scale_m[:, None] * scale_k + offs_scale_k[None, :])
+
+        y = ttgl.amd.cdna5.scaled_downcast(x, scale, FORMAT, axis=1)
+        ttgl.store(y_ptr + offs_m[:, None] * BLOCK_K + offs_k[None, :], y)
+
+    BLOCK_M = 16
+    BLOCK_K = 64
+    SCALE_FACTOR = 32
+    torch.manual_seed(42)
+
+    # `v` is the fp8 answer bytes; `v_ref` its float values.
+    v, v_ref = create_mxfp_operand(0, BLOCK_M, BLOCK_K, fp8_dtype)
+    scale, scale_ref = create_mxfp_scale(0, BLOCK_M, BLOCK_K, "e8m0", SCALE_FACTOR)
+    # input = answer * scale, so downcast(input / scale) recovers the fp8 bytes.
+    x = (v_ref * scale_ref).to(dtype).contiguous()
+    y = torch.empty((BLOCK_M, BLOCK_K), dtype=torch_fp8, device="cuda")
+
+    pgm = scaled_downcast_fp8_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, SCALE_FACTOR, fp8_dtype,
+                                            num_warps=4)
+
+    assert f"v_cvt_scalef32_pk8_{out_mnemonic}_{in_suffix}" in pgm.asm["amdgcn"]
+    torch.testing.assert_close(y.view(torch.uint8).cpu(), v, atol=0, rtol=0)
+
+
 @pytest.mark.parametrize("a_dtype,b_dtype,k_dim", get_test_gemm_variants())
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N,BLOCK_K", get_test_gemm_block_mnk())
 @pytest.mark.parametrize("M,N,K", get_test_gemm_shapes())
