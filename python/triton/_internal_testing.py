@@ -12,13 +12,12 @@ from triton import knobs
 from typing import Optional, Set, Union
 from dataclasses import dataclass
 from contextlib import contextmanager
+from contextvars import ContextVar
 import pytest
 
 from numpy.random import RandomState
 from triton.backends import backends
 from triton.runtime.jit import TensorWrapper, reinterpret, type_canonicalisation_dict
-from triton.runtime.jit import _COMPILE_WARMUP_ACTIVE as _COMPILE_WARMUP_ACTIVE
-from triton.runtime.jit import is_compile_warmup
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
 uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
@@ -30,11 +29,16 @@ dtypes_with_bfloat16 = dtypes + ['bfloat16']
 torch_float8_dtypes = ['float8_e4m3fn', 'float8_e5m2']
 torch_dtypes = ['bool'] + int_dtypes + ['uint8'] + float_dtypes + ['bfloat16']
 tma_dtypes = sorted(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"})
+_COMPILE_WARMUP_ACTIVE = ContextVar("triton_compile_warmup_active", default=False)
 _PROCESS_POOL = None
 
 
 def is_interpreter():
     return os.environ.get('TRITON_INTERPRET', '0') == '1'
+
+
+def is_compile_warmup():
+    return _COMPILE_WARMUP_ACTIVE.get()
 
 
 def random_int(low, high, *, warmup_value=None, **kwargs):

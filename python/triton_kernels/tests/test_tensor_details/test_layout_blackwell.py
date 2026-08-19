@@ -1,6 +1,5 @@
 import pytest
 import torch
-from torch._subclasses import fake_tensor
 from triton_kernels.tensor_details.layout import (
     BlackwellActMXScaleLayout,
     BlackwellMX4ValueShuffledLayout,
@@ -130,29 +129,6 @@ def test_mxfp4_value_shuffled_convert_layout_matches_torch(shape):
     assert actual.storage.data.is_contiguous()
     assert torch.equal(actual.storage.data.cpu(), expected.storage.data)
     assert torch.equal(roundtrip.storage.data, data_cuda)
-
-
-@pytest.mark.parametrize("block_k", [128, 256])
-@pytest.mark.parametrize("block_n", [128, 256])
-def test_mxfp4_value_shuffled_fake_meta(block_k, block_n):
-    shape = (2, 3, 130, 65)
-    layout = BlackwellMX4ValueShuffledLayout(block_k, block_n)
-    src_meta = wrap_torch_tensor(torch.empty(shape, dtype=torch.uint8, device="meta"), dtype=FP4)
-    expected = convert_layout(src_meta, layout)
-    meta_roundtrip = convert_layout(expected, src_meta.storage.layout)
-
-    with fake_tensor.FakeTensorMode():
-        src_cuda = wrap_torch_tensor(torch.empty(shape, dtype=torch.uint8, device="cuda"), dtype=FP4)
-        actual = convert_layout(src_cuda, layout)
-        roundtrip = convert_layout(actual, src_cuda.storage.layout)
-
-    assert expected.device.type == "meta"
-    assert actual.device.type == "cuda"
-    assert actual.storage.data.shape == expected.storage.data.shape
-    assert expected.storage.data.is_contiguous()
-    assert actual.storage.data.is_contiguous()
-    assert meta_roundtrip.storage.data.shape == shape
-    assert roundtrip.storage.data.shape == shape
 
 
 @pytest.mark.parametrize("inverse", [False, True])

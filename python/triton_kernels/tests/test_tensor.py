@@ -2,7 +2,6 @@ import pytest
 import torch
 import triton
 import triton.language as tl
-from triton import _compile_warmup
 from triton_kernels.fpsan import embed, unembed
 from triton_kernels.tensor_details.bitmatrix import _keyed_add
 from triton_kernels.tensor_details.dtype import BIT, FP4, UINT8
@@ -117,38 +116,6 @@ def test_layout_storage_shape_matches_conversion(logical_shape, is_fp4, layout, 
 
     assert layout.storage_shape(list(logical_shape), is_fp4) == storage_shape
     assert list(converted.storage.data.shape) == storage_shape
-
-
-class _WarmupLaunchRecorder:
-    current_test = "test_convert_layout_compile_warmup"
-
-    def __init__(self):
-        self.launches = []
-
-    def dispatch(self, *args, kernel, grid, test, **kwargs):
-        arguments = dict(zip(kernel.signature.parameters, args))
-        arguments.update(kwargs)
-        self.launches.append((kernel.fn.__name__, arguments["INVERSE"]))
-
-
-@pytest.mark.parametrize(("shape", "layout", "kernel_name"), [
-    ((2, 258, 514), HopperMXValueLayout(-2, 3), "_convert_bits_kernel"),
-    ((0, 64), HopperMXValueLayout(-1, 3), "_convert_bits_kernel"),
-    ((2, 258, 514), BlackwellMX4ValueShuffledLayout(), "_convert_shuffled_mxfp4"),
-    ((0, 64), BlackwellMX4ValueShuffledLayout(), "_convert_shuffled_mxfp4"),
-])
-def test_convert_layout_compile_warmup(shape, layout, kernel_name):
-    recorder = _WarmupLaunchRecorder()
-    with _compile_warmup.compile_warmup_only(recorder):
-        src = empty(shape, dtype=FP4, device="cuda", layout=StridedLayout(-2))
-        swizzled = convert_layout(src, layout)
-        assert recorder.launches == [(kernel_name, False)]
-        assert convert_layout(swizzled, layout) is swizzled
-        roundtrip = convert_layout(swizzled, src.storage.layout)
-
-    assert recorder.launches == [(kernel_name, False), (kernel_name, True)]
-    assert swizzled.shape == roundtrip.shape == list(shape)
-    assert roundtrip.data.shape == src.data.shape
 
 
 def test_ragged_layout_storage_shape():

@@ -1,15 +1,5 @@
 import torch
 
-try:
-    from triton.runtime.jit import is_compile_warmup as is_compile_warmup
-except ImportError:
-    # Older compilers keep this state in their testing module, which probes the
-    # GPU driver at import time. Only load it when a fake CUDA tensor needs it.
-    def is_compile_warmup() -> bool:
-        from triton import _internal_testing
-        return _internal_testing.is_compile_warmup()
-
-
 # def unpack(data: torch.Tensor, dim: int, is_fp4: bool):
 #     if not is_fp4:
 #         return data

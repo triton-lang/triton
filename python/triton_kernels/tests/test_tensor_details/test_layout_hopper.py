@@ -1,5 +1,4 @@
 import pytest
-from torch._subclasses import fake_tensor
 from triton_kernels.tensor import wrap_torch_tensor, convert_layout, empty, FP4
 from triton_kernels.tensor_details.layout import HopperMXScaleLayout, HopperMXValueLayout, StridedLayout
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp
@@ -127,28 +126,6 @@ def test_mxfp4_value_convert_layout_matches_torch(shape, trans, mx_axis, mma_ver
     assert actual.storage.data.stride() == expected.storage.data.stride()
     assert torch.equal(actual.storage.data.cpu(), expected.storage.data)
     assert torch.equal(roundtrip.storage.data, data_cuda)
-
-
-@pytest.mark.parametrize("mx_axis", [-2, -1])
-@pytest.mark.parametrize("mma_version", [2, 3])
-def test_mxfp4_value_convert_layout_fake_meta(mx_axis, mma_version):
-    shape = (2, 34, 18)
-    layout = HopperMXValueLayout(mx_axis, mma_version)
-    src_meta = wrap_torch_tensor(torch.empty(shape, dtype=torch.uint8, device="meta"), dtype=FP4)
-    expected = convert_layout(src_meta, layout)
-    meta_roundtrip = convert_layout(expected, src_meta.storage.layout)
-
-    with fake_tensor.FakeTensorMode():
-        src_cuda = wrap_torch_tensor(torch.empty(shape, dtype=torch.uint8, device="cuda"), dtype=FP4)
-        actual = convert_layout(src_cuda, layout)
-        roundtrip = convert_layout(actual, src_cuda.storage.layout)
-
-    assert expected.device.type == "meta"
-    assert actual.device.type == "cuda"
-    assert actual.storage.data.shape == expected.storage.data.shape
-    assert actual.storage.data.stride() == expected.storage.data.stride()
-    assert meta_roundtrip.storage.data.shape == shape
-    assert roundtrip.storage.data.shape == shape
 
 
 @pytest.mark.parametrize("mx_axis", [-2, -1])
