@@ -41,6 +41,11 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
       To get ideal performance, it is recommended to use 128 bits per element.
     * Writes to ``dest`` must be coalesced.
     * If ``dest`` is swizzled, it can only be swizzled within a warp boundary.
+    * If a ``mask`` is present it must be aligned to the load's vector width: each
+      group of (size per thread) consecutive mask values must be identical. The
+      copy transfers each lane's whole vector in a single transaction, so a mask
+      whose true/false boundary cannot be proven vector-aligned forces
+      per-element vectorization and fails to lower.
 
     Args:
         dest (shared_memory_descriptor): Destination shared memory descriptor.
@@ -101,6 +106,11 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
       To get ideal performance, it is recommended to use 128 bits per element.
     * Writes to ``dest`` must be coalesced.
     * If ``dest`` is swizzled, it can only be swizzled within a warp boundary.
+    * If a ``mask`` is present it must be aligned to the load's vector width: each
+      group of (size per thread) consecutive mask values must be identical. The
+      copy transfers each lane's whole vector in a single transaction, so a mask
+      whose true/false boundary cannot be proven vector-aligned forces
+      per-element vectorization and fails to lower.
 
     Args:
         dest (shared_memory_descriptor): Destination shared memory descriptor.
