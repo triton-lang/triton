@@ -23,8 +23,7 @@ namespace {
 triton::LinearLayout getMemDescLinearLayout(ttg::MemDescType ty) {
   if (ttg::isPaddedEncoding(ty.getEncoding()))
     return ttg::paddedLinearLayout(ty);
-  auto shape =
-      ttg::dropPipeliningDim(ty.getAllocShape(), ty.getEncoding());
+  auto shape = ttg::dropPipeliningDim(ty.getAllocShape(), ty.getEncoding());
   if (!ttg::isPositivePowerOfTwoShape(shape))
     return ttg::toLinearLayoutWithPow2Shape(ty);
   return ttg::toLinearLayout(ty);

@@ -2416,6 +2416,7 @@ def test_tcgen05_lutb(BLOCK_M, BLOCK_K, two_ctas):
     if two_ctas and BLOCK_M != 256:
         pytest.skip("2CTA coverage uses BLOCK_M=256")
 
+    torch.manual_seed(0)
     k = 4096
     n = 4096
     m = 4096

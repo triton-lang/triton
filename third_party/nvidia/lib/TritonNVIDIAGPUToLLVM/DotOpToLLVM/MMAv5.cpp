@@ -657,9 +657,8 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
 
   // B reuse requires M = 128 for 1CTA or 256 for 2CTA, which corresponds to
   // the condition mmaSizeM == 128 here
-  bool reuseB = op.decompressB ||
-                (numRepM == 2 && mmaSizeM == 128 &&
-                 targetFeatures.supportsReuseB());
+  bool reuseB = op.decompressB || (numRepM == 2 && mmaSizeM == 128 &&
+                                   targetFeatures.supportsReuseB());
   // With A-only reuse, keep one A tile in the collector across the N tiles.
   // Interleaving N inside K preserves the accumulation order and the first-K
   // useD flag for every destination tile. Reuse is opportunistic, so A remains
@@ -667,8 +666,10 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   // path. The same lifetime rule applies to B when both collectors are used.
   // M=64 uses half the datapath and can interleave N tiles across TMEM lane
   // alignments 0 and 16. A collector cannot be reused across that change.
-  bool reuseA = !op.decompressB && mmaSizeM == 128 && numRepN > 1 &&
+  bool reuseA = mmaSizeM == 128 && numRepN > 1 &&
                 targetFeatures.supportsReuseA();
+  assert(!(reuseA && op.decompressB) &&
+         "Combining reuse A and LUTB is currently not supported, due to LUTB requiring N = 256.");
   bool reuseBoth = reuseA && reuseB;
 
   // Dimensions are M, N, K. Keep the original traversal when neither
@@ -717,6 +718,10 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
     auto getReuse = [&](bool enabled, int dim) {
       if (!enabled)
         return CollectorAction::None;
+      // Check whether `other` uses the same collector payload as the current
+      // instruction. Normally this requires the same M/N tile and K tile.
+      // LUTB loads one 48-byte B segment for each pair of K tiles, so adjacent
+      // K tiles with the same k / 2 reuse that segment from the B collector.
       auto matches = [&](const std::array<int, 3> &other) {
         if (indices[dim] != other[dim])
           return false;
