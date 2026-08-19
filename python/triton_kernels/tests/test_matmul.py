@@ -283,6 +283,13 @@ def _build_test_op_cases():
         Case(*shape, mode, "mxfloat8_e4m3fn", "mxfloat4_e2m1", a_hbm_swizzling=True, b_hbm_swizzling=True, split_k=split_k, swiglu_opts=(1.1, 7))
      for shape in [odd_shape2, even_shape] for mode in ["ragged", "batched"] for split_k in [1, 5]
     ])
+    # MXFP8 lhs x dense rhs needs TMEM headroom even with fused MX output.
+    test_cases.extend([
+        Case(32, 256, 128, "plain", "mxfloat8_e4m3fn", rhs_dtype, "mxfloat8_e4m3fn",
+             a_hbm_swizzling=True, c_hbm_swizzling=c_hbm_swizzling, swiglu_opts=(1.702, 7.0))
+        for rhs_dtype in ["bfloat16", "float16"]
+        for c_hbm_swizzling in [False, True]
+    ])
     # swiglu together with nvfp4 downcast epilogue
     test_cases.extend([
         Case(*shape, mode, "bfloat16", "bfloat16", "nvfp4_e2m1", swiglu_opts=(1.1, 7.0))
