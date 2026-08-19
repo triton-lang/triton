@@ -1286,7 +1286,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // expected-remark@+1 {{arg 2: unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
   tt.func @histo_nonneg(%arg0: !tt.ptr<bf16>, %arg1: !tt.ptr<bf16>, %arg2 : tensor<256xi32>) {
-    // expected-remark@+2 {{unsigned : [0, 4294967295] signed : [0, -1]}}
+    // expected-remark@+2 {{unsigned : [0, 2147483647] signed : [0, 2147483647]}}
     // expected-remark@+1 {{non-neg}}
     %0 = tt.histogram %arg2 : tensor<256xi32> -> tensor<8xi32>
     %1 = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32>
