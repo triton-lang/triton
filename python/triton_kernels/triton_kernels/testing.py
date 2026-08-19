@@ -10,7 +10,8 @@ from triton.language.random import philox
 from triton._internal_testing import is_compile_warmup
 from triton_kernels.numerics import MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
 from triton_kernels.tensor import convert_layout as _convert_layout, wrap_torch_tensor, FP4, make_ragged_tensor_metadata
-from triton_kernels.tensor_details.layout import BlackwellMXScaleLayout
+from triton_kernels.tensor_details.layout import BlackwellMX4ValueShuffledLayout, BlackwellMXScaleLayout, HopperMXValueLayout
+from triton_kernels.tensor_details.layout_details.hopper_value import convert_bits_triton
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 from dataclasses import replace
 
@@ -374,14 +375,44 @@ class _WarmupTensorProxy:
         return getattr(self.tensor, name)
 
 
+def _warmup_hopper_bits(data, layout, inverse):
+    data = data.mT if layout.mx_axis == -2 else data
+    data = convert_bits_triton(data, inverse)
+    return data.mT if layout.mx_axis == -2 else data
+
+
 def convert_layout(tensor, layout, **layout_transformation_kwargs):
     converted = _convert_layout(tensor, layout, **layout_transformation_kwargs)
     if not is_compile_warmup() or converted is tensor:
         return converted
 
     data = tensor.storage.data
-    if (not isinstance(layout, BlackwellMXScaleLayout) or data.device.type in ["cpu", "meta"]
-            or data.dtype.itemsize != 1 or not converted.storage.data.numel()):
+    if data.device.type != "cuda":
+        return converted
+
+    source_layout = tensor.storage.layout
+    value_layouts = (HopperMXValueLayout, BlackwellMX4ValueShuffledLayout)
+    if isinstance(source_layout, value_layouts) or isinstance(layout, value_layouts):
+        source = source_layout.make_transformation(tensor.shape, tensor.dtype == FP4)
+        if isinstance(source_layout, HopperMXValueLayout) and data.dtype == torch.uint8:
+            _warmup_hopper_bits(data, source_layout, inverse=True)
+        if isinstance(source_layout, BlackwellMX4ValueShuffledLayout) and data.dtype == torch.uint8:
+            canonical = source.unswizzle_data(_WarmupTensorProxy(data))
+        else:
+            canonical = source.unswizzle_data(data)
+
+        if canonical.dtype == torch.uint8 and isinstance(layout, value_layouts):
+            if isinstance(layout, HopperMXValueLayout):
+                # The bit kernel sees the same padded byte shape before and after encoding.
+                data = _warmup_hopper_bits(converted.storage.data, layout, inverse=False)
+            else:
+                transformation = layout.make_transformation(tensor.shape, tensor.dtype == FP4,
+                                                            **layout_transformation_kwargs)
+                data = transformation.swizzle_data(_WarmupTensorProxy(canonical))
+            return replace(converted, storage=replace(converted.storage, data=data))
+
+    if (not isinstance(layout, BlackwellMXScaleLayout) or data.dtype.itemsize != 1
+            or not converted.storage.data.numel()):
         return converted
 
     transformation = layout.make_transformation(tensor.shape, tensor.dtype == FP4, **layout_transformation_kwargs)

@@ -300,6 +300,11 @@ def _convert_bits(x: torch.Tensor, inverse: bool) -> torch.Tensor:
     """Avoid full-size integer temporaries when re-encoding CUDA values."""
     if x.device.type != "cuda" or x.dtype != torch.uint8 or is_fake(x):
         return _unpack_bits(x) if inverse else _pack_bits(x)
+    return convert_bits_triton(x, inverse)
+
+
+def convert_bits_triton(x: torch.Tensor, inverse: bool) -> torch.Tensor:
+    """Launch the bit conversion, including during compile-only warmup."""
     x = x.contiguous()
     shape = (*x.shape[:-1], x.shape[-1] // 4)
     x = x.reshape(*shape, 4)
