@@ -16,10 +16,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
-#include <iostream>
-#include <limits>
 #include <map>
-#include <optional>
 #include <stdexcept>
 #include <thread>
 #include <unordered_map>
@@ -161,22 +158,7 @@ protected:
       scopeStack.pop_back();
     }
 
-    void captureGraphNode(GraphState &graphState, uint64_t nodeId) {
-      if (!profiler.isOpInProgress())
-        return;
-
-      std::optional<GraphState::MetricNodeState> metricNodeState;
-      if (isMetricKernelLaunching) {
-        auto metricKernelLaunchInfo = metricKernelLaunchInfoQueue.front();
-        metricKernelLaunchInfoQueue.pop_front();
-        metricNodeState.emplace(GraphState::MetricNodeState{
-            metricKernelLaunchInfo.seqId, metricKernelLaunchInfo.metricId,
-            metricKernelLaunchInfo.numWords});
-      }
-      graphState.recordNode(nodeId, scopeStack.back().name,
-                            std::move(metricNodeState), profiler.dataSet,
-                            isApiExternOp);
-    }
+    void captureGraphNode(GraphState &graphState, uint64_t nodeId);
   };
 
   struct Correlation {
@@ -277,68 +259,10 @@ protected:
     virtual void doFlush() = 0;
     virtual void doStop() = 0;
 
-    template <typename GraphExecIdT, typename ContainerT>
     size_t prepareGraphLaunch(
-        ThreadSafeMap<GraphExecIdT, GraphState, ContainerT> &graphStates,
-        GraphExecIdT graphExecId, size_t externId,
-        const GraphLaunchOptions &options) {
-      auto graphStateRef = graphStates.find(graphExecId);
-      if (!graphStateRef) {
-        auto &missingGraphState = graphStates[graphExecId];
-        if (!missingGraphState.captureStatusChecked) {
-          missingGraphState.captureStatusChecked = true;
-          std::cerr
-              << "[PROTON] Cannot find graph for graphExecId: " << graphExecId
-              << ", and it may cause memory leak. To avoid this problem, "
-                 "please start profiling before the graph is created."
-              << std::endl;
-        }
-        return std::numeric_limits<size_t>::max();
-      }
-
-      auto &graphState = graphStateRef->get();
-      if (graphState.captureStatusChecked)
-        return std::numeric_limits<size_t>::max();
-
-      using Clock = std::chrono::steady_clock;
-      auto t0 = decltype(Clock::now()){};
-      if (options.timingEnabled)
-        t0 = Clock::now();
-
-      ExternIdState *externIdState = nullptr;
-      if (!threadState.dataToEntry.empty()) {
-        externIdState = &profiler.correlation.externIdToState[externId];
-        graphState.buildLaunchEntries(threadState.dataToEntry,
-                                      externIdState->dataToGraphEntry);
-        externIdState->nodeIdToState = &graphState.nodeIdToState;
-      }
-
-      if (options.timingEnabled) {
-        auto t1 = Clock::now();
-        auto elapsed =
-            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                .count();
-        std::cerr << "[PROTON] Graph launch call path time: " << elapsed
-                  << " us for graphExecId: " << graphExecId << std::endl;
-        t0 = Clock::now();
-      }
-
-      graphState.queueMetrics(
-          profiler.pendingGraphPool.get(),
-          externIdState ? &externIdState->dataToGraphEntry : nullptr,
-          options.flushMetricBuffer);
-
-      if (options.timingEnabled) {
-        auto t1 = Clock::now();
-        auto elapsed =
-            std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0)
-                .count();
-        std::cerr << "[PROTON] Graph launch metric time: " << elapsed
-                  << " us for graphExecId: " << graphExecId << std::endl;
-      }
-
-      return graphState.nodeIdToState.size();
-    }
+        ThreadSafeMap<uint64_t, GraphState> &graphStates,
+        uint64_t graphExecId, size_t externId,
+        const GraphLaunchOptions &options);
 
     void
     doAddMetrics(size_t scopeId,

@@ -338,7 +338,7 @@ struct CuptiProfiler::CuptiProfilerPimpl
   CUpti_SubscriberHandle subscriber{};
   CuptiPCSampling pcSampling;
 
-  ThreadSafeMap<uint32_t, GraphState> graphStates;
+  ThreadSafeMap<uint64_t, GraphState> graphStates;
 
 private:
   void handleGraphResourceCallbacks(CuptiProfiler &profiler,
