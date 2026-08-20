@@ -357,7 +357,7 @@ static Value createCurrentCTAMask(OpBuilder &b, Location loc,
 
 Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
                                     Value tensor, RankedTensorType tensorType,
-                                    bool currentCTAOnly) {
+                                    bool currentCTAOnly, Value storeMask) {
   if (currentCTAOnly) {
     assert(tensorType.getRank() >= 1 &&
            "expected currentCTAOnly tensor to have a leading CTA dimension");
@@ -365,14 +365,18 @@ Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
     assert(tensorType.getShape()[0] == numCTAs &&
            "expected leading dimension to match numCTAs");
     if (numCTAs > 1) {
-      Value oldTensor = createLoadScratchMemory(b, loc, alloc, tensorType);
       Value currentCTAMask = createCurrentCTAMask(b, loc, tensorType);
-      tensor =
-          arith::SelectOp::create(b, loc, currentCTAMask, tensor, oldTensor);
+      if (storeMask) {
+        storeMask = arith::AndIOp::create(b, loc, storeMask, currentCTAMask);
+      } else {
+        Value oldTensor = createLoadScratchMemory(b, loc, alloc, tensorType);
+        tensor =
+            arith::SelectOp::create(b, loc, currentCTAMask, tensor, oldTensor);
+      }
     }
   }
   auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType);
-  return StoreOp::create(b, loc, ptrTensor, tensor, Value(),
+  return StoreOp::create(b, loc, ptrTensor, tensor, storeMask,
                          CacheModifier::NONE, EvictionPolicy::NORMAL,
                          /*ignore_cta=*/true);
 }
@@ -576,13 +580,14 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
         writeTracking[iMemType].insert(
             entryRegion,
             createZeroInitStateTensor(
-                b, {numCTAs, numBufs, numCTAs, numBarriers}, 8, fb));
+                b, {numCTAs, numBufs, numCTAs, numBarriers, 2}, 8, fb));
         passValueToWarpSpecialize(writeTracking[iMemType].at(entryRegion),
                                   writeTracking[iMemType]);
         readTracking[iMemType].insert(
             entryRegion,
             createZeroInitStateTensor(
-                b, {numCTAs, numBufs, numCTAs, numBarriers, numCTAs}, 64, fb));
+                b, {numCTAs, numBufs, numCTAs, numBarriers, numCTAs, 2}, 64,
+                fb));
         passValueToWarpSpecialize(readTracking[iMemType].at(entryRegion),
                                   readTracking[iMemType]);
       }
@@ -594,7 +599,7 @@ LogicalResult AuxDataMap::populateAndPassToWarpSpecialize(
       proxyAccessTracking.insert(
           entryRegion,
           createZeroInitStateTensor(
-              b, {numCTAs, numBufs, numCTAs, numBarriers, numCTAs}, 64, fb));
+              b, {numCTAs, numBufs, numCTAs, numBarriers, numCTAs, 2}, 64, fb));
       passValueToWarpSpecialize(proxyAccessTracking.at(entryRegion),
                                 proxyAccessTracking);
     }

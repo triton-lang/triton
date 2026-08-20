@@ -3319,6 +3319,27 @@ def test_histogram_mask(M, N, device):
     assert (z_torch == z).all()
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("M, N", [[1024, 64], [4096, 128]])
+def test_histogram_compare_mask(M, N, device):
+
+    @triton.jit
+    def histogram_kernel(x_ptr, out_ptr, M: tl.constexpr, N: tl.constexpr):
+        offsets = tl.arange(0, M)
+        x = tl.load(x_ptr + offsets)
+        hist = tl.histogram(x, N)
+        bins = tl.arange(0, N)
+        mask = hist > 0
+        tl.store(out_ptr + bins, hist, mask=mask)
+
+    torch.manual_seed(17)
+    x = torch.randint(0, N, (M, ), device=device, dtype=torch.int32)
+    out = torch.zeros(N, dtype=torch.int32, device=device)
+    ref = torch.histc(x.float(), bins=N, min=0, max=N - 1).to(torch.int32)
+    histogram_kernel[(1, )](x, out, M=M, N=N)
+    assert (out == ref).all(), f"expected {ref}, got {out}"
+
+
 @pytest.mark.parametrize("M, N", [(1, 64), (2, 32), (4, 16), (8, 8), (16, 4), (32, 2), (64, 1)])
 def test_scan_1d(M, N, device):
 
@@ -7388,7 +7409,7 @@ def test_libdevice_rint(dtype_str, device):
     x0_np = np.random.uniform(iinfo32.min, iinfo32.max + 1, size)
     x1_np = np.random.uniform(iinfo64.min, iinfo64.max + 1, size)
     x2_np = np.array([-2.5, -1.5, -0.5, -0., 0., 0.5, 1.5, 2.5, float("inf"), -float("inf"), float("nan")])
-    x_np = np.concatenate((x0_np, x1_np, x2_np))
+    x_np = np.concatenate((x0_np, x1_np, x2_np)).astype(dtype_str)
     x_tri = to_triton(x_np, device=device, dst_type=dtype_str)
 
     @triton.jit

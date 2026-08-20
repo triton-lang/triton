@@ -17,10 +17,45 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_load
   tt.func @basic_load(%a_ptr_init : tensor<256x!tt.ptr<f32>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf32, #blocked0>) {
     // CHECK: llvm.inline_asm
-    // CHECK-SAME: mov.u32 $0, $1;
-    // CHECK-SAME: @$3 ld.global.b32 { $0 }, [ $2 + 0 ];", "=r,r,l,b"
+    // CHECK-SAME: @$3 ld.global.b32 { $0 }, [ $2 + 0 ];", "=r,0,l,b"
     // CHECK: llvm.inline_asm
     %1 = tt.load %a_ptr_init, %cst, %cst_0 : tensor<256x!tt.ptr<f32>, #blocked0>
+    tt.return
+  }
+
+  // CHECK-LABEL: masked_scalar_i32_constant_fallbacks
+  tt.func @masked_scalar_i32_constant_fallbacks(%ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>, %mask: i1, %fallback: i32) {
+    %zero = arith.constant 0 : i32
+    %one = arith.constant 1 : i32
+    %minus_one = arith.constant -1 : i32
+    %byte = arith.constant -1 : i8
+    %extended = arith.extui %byte : i8 to i32
+    %max = arith.maxui %minus_one, %one : i32
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: mov.u32 $0, 0x0;\0A\09@$2 ld.global.b32 { $0 }, [ $1 + 0 ];", "=r,l,b"
+    %literal = tt.load %ptr, %mask, %zero : !tt.ptr<i32>
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: mov.u32 $0, 0xff;\0A\09@$2 ld.global.b32 { $0 }, [ $1 + 0 ];", "=r,l,b"
+    %casted = tt.load %ptr, %mask, %extended : !tt.ptr<i32>
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: mov.u32 $0, 0xffffffff;\0A\09@$2 ld.global.b32 { $0 }, [ $1 + 0 ];", "=r,l,b"
+    %computed = tt.load %ptr, %mask, %max : !tt.ptr<i32>
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: @$3 ld.global.b32 { $0 }, [ $2 + 0 ];", "=r,0,l,b"
+    %dynamic = tt.load %ptr, %mask, %fallback : !tt.ptr<i32>
+    %xor = arith.xori %literal, %casted : i32
+    %xor2 = arith.xori %xor, %computed : i32
+    %value = arith.xori %xor2, %dynamic : i32
+    tt.store %out, %value : !tt.ptr<i32>
+    tt.return
+  }
+
+  // CHECK-LABEL: masked_scalar_i64
+  tt.func @masked_scalar_i64(%ptr: !tt.ptr<i64>, %out: !tt.ptr<i64>, %mask: i1, %fallback: i64) {
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: @$3 ld.global.b64 { $0 }, [ $2 + 0 ];", "=l,0,l,b"
+    %value = tt.load %ptr, %mask, %fallback : !tt.ptr<i64>
+    tt.store %out, %value : !tt.ptr<i64>
     tt.return
   }
 }
@@ -120,9 +155,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @load_with_l2_cache_hint(%a_ptr_init : tensor<256x!tt.ptr<f32>, #blocked0>, %cst : tensor<256xi1, #blocked0>, %cst_0 : tensor<256xf32, #blocked0>) {
     // The cache policy register is created once (hoisted out of the vectorization loop).
     // CHECK: llvm.inline_asm asm_dialect = att {{.*}} "mov.u64 $0, 0x0;\0A\09createpolicy.fractional.L2::evict_first.b64 $0, 1.0;"
-    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att {{.*}} "mov.u32 $0, $1;\0A\09@$4 ld.global.L1::evict_first.L2::cache_hint.b32 { $0 }, [ $2 + 0 ], $3;"
+    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att {{.*}} "@$4 ld.global.L1::evict_first.L2::cache_hint.b32 { $0 }, [ $2 + 0 ], $3;", "=r,0,l,l,b"
     // CHECK-NOT: createpolicy
-    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att {{.*}} "mov.u32 $0, $1;\0A\09@$4 ld.global.L1::evict_first.L2::cache_hint.b32 { $0 }, [ $2 + 0 ], $3;"
+    // CHECK: llvm.inline_asm has_side_effects asm_dialect = att {{.*}} "@$4 ld.global.L1::evict_first.L2::cache_hint.b32 { $0 }, [ $2 + 0 ], $3;", "=r,0,l,l,b"
       %1 = tt.load %a_ptr_init, %cst, %cst_0 evictionPolicy = evict_first : tensor<256x!tt.ptr<f32>, #blocked0>
       tt.return
   }
@@ -227,10 +262,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     %mask = arith.cmpi slt, %offsets, %bounds : tensor<1x128xi32, #blocked2d>
     %other = tt.splat %fallback : f8E4M3FN -> tensor<1x128xf8E4M3FN, #blocked2d>
     // CHECK: llvm.inline_asm
-    // CHECK-SAME: mov.u32 $0, $1;
-    // CHECK-SAME: ld.global.b32
+    // CHECK-SAME: @$3 ld.global.b32 { $0 }, [ $2 + 0 ];", "=r,0,l,b"
     %values = tt.load %ptrs, %mask, %other : tensor<1x128x!tt.ptr<f8E4M3FN>, #blocked2d>
     tt.store %ptrs, %values, %mask : tensor<1x128x!tt.ptr<f8E4M3FN>, #blocked2d>
+    tt.return
+  }
+
+  // CHECK-LABEL: masked_four_byte_i8
+  tt.func @masked_four_byte_i8(%ptr: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %bound: i32 {tt.divisibility = 4 : i32}, %fallback: i8) {
+    %offsets = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked0>
+    %base = tt.splat %ptr : !tt.ptr<i8> -> tensor<128x!tt.ptr<i8>, #blocked0>
+    %ptrs = tt.addptr %base, %offsets : tensor<128x!tt.ptr<i8>, #blocked0>, tensor<128xi32, #blocked0>
+    %bounds = tt.splat %bound : i32 -> tensor<128xi32, #blocked0>
+    %mask = arith.cmpi slt, %offsets, %bounds : tensor<128xi32, #blocked0>
+    %other = tt.splat %fallback : i8 -> tensor<128xi8, #blocked0>
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: @$3 ld.global.b32 { $0 }, [ $2 + 0 ];", "=r,0,l,b"
+    %dynamic = tt.load %ptrs, %mask, %other : tensor<128x!tt.ptr<i8>, #blocked0>
+    %negative = arith.constant dense<-128> : tensor<128xi8, #blocked0>
+    %one = arith.constant dense<1> : tensor<128xi8, #blocked0>
+    %splat = arith.maxui %negative, %one : tensor<128xi8, #blocked0>
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: mov.u32 $0, 0x80808080;\0A\09@$2 ld.global.b32 { $0 }, [ $1 + 0 ];", "=r,l,b"
+    %constant = tt.load %ptrs, %mask, %splat : tensor<128x!tt.ptr<i8>, #blocked0>
+    %values = arith.xori %dynamic, %constant : tensor<128xi8, #blocked0>
+    tt.store %ptrs, %values, %mask : tensor<128x!tt.ptr<i8>, #blocked0>
     tt.return
   }
 

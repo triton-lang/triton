@@ -14,6 +14,8 @@
 namespace gsan {
 
 using size_t = __SIZE_TYPE__;
+using int16_t = __INT16_TYPE__;
+using int64_t = __INT64_TYPE__;
 using uint8_t = __UINT8_TYPE__;
 using uint16_t = __UINT16_TYPE__;
 using uint32_t = __UINT32_TYPE__;
@@ -122,6 +124,8 @@ struct alignas(16) ClusterBarrierState {
 static_assert(sizeof(ClusterBarrierState) <= kClusterBarrierScratchBytes);
 
 struct MBarrierPublishedClock {
+  // An immutable snapshot whose publisher has not advanced its epoch. A wait
+  // must exclude that thread's current epoch when acquiring the snapshot.
   thread_id_t threadId;
   epoch_t token;
 };

@@ -1081,9 +1081,28 @@ tt.func @default_region_cfg(%arg0: tensor<1xi64>, %arg1: i1) {
     ttg.warp_yield
   // CHECK-NEXT: () -> ()
   } : () -> ()
-  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: local_store
   ttg.local_store %arg0, %0 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
+  tt.return
+}
+
+// `hasSyncPointBeforeMemoryEffect` normally inserts a barrier after a wait, so
+// that the reads it releases are ordered against what follows. Here the wait is
+// the last operation of a partition region, and the `ttg.warp_return` that ends
+// it already lowers to a CTA-wide barrier, so no second one is needed.
+// CHECK-LABEL: @async_wait_before_warp_return
+tt.func @async_wait_before_warp_return() {
+  ttg.warp_specialize()
+  default {
+    ttg.warp_yield
+  }
+  // CHECK: partition0
+  partition0() num_warps(4) {
+    // CHECK: ttg.async_wait
+    // CHECK-NEXT: ttg.warp_return
+    ttg.async_wait {num = 0 : i32}
+    ttg.warp_return
+  } : () -> ()
   tt.return
 }
 

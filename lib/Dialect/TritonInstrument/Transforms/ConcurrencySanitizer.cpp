@@ -826,6 +826,9 @@ private:
             b, baseThread, info->cluster, hooks.getIssuerCTAPred(b, op), op);
       }
       if (auto wsOp = dyn_cast<ttg::WarpSpecializeOp>(op)) {
+        // ConSan helpers can exceed the partition register budgets and make
+        // PTXAS-generated dynamic register allocation deadlock.
+        wsOp->setAttr("tti.disable_setmaxregister", b.getUnitAttr());
         funcBuilder.createSetActiveMaskCall(b, getActiveMask(wsOp), op);
         auto partitionRegions = wsOp.getNonEmptyPartitionRegions();
         if (!partitionRegions.empty()) {
@@ -994,18 +997,19 @@ private:
     tti::ExperimentalLockReleaseOp::create(wb, lock, pred);
     tti::createAssertInThread(wb, ok,
                               "Deadlock detected while waiting on an mbarrier");
-    // Post-wait: transfer visible writes and reads to all peer threads,
-    // and clear waiting for this barrier.
+    // Post-wait: transfer the waited phase's visible writes and reads to all
+    // peer threads, and clear waiting for this barrier.
     assert(!auxData.barriers.empty() &&
            "barrier descriptors must exist when instrumenting wait");
     wb.setInsertionPointAfter(op);
     tti::ExperimentalLockAcquireOp::create(wb, lock, pred);
     for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
       funcBuilder.createTransferVisibleAccessesCall(
-          wb, alloc, getThreadPeersMask(thread, auxData.threadLayout), pred,
-          memType, op);
+          wb, alloc, phase, getThreadPeersMask(thread, auxData.threadLayout),
+          pred, memType, op);
     }
-    funcBuilder.createCompleteBarrierWaitCall(wb, alloc, baseThread, pred, op);
+    funcBuilder.createCompleteBarrierWaitCall(wb, alloc, phase, baseThread,
+                                              pred, op);
     tti::ExperimentalLockReleaseOp::create(wb, lock, pred);
   }
 
