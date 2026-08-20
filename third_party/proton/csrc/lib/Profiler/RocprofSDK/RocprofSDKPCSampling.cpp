@@ -217,22 +217,20 @@ void RocprofSDKPCSampling::configure(rocprofiler_buffer_tracing_cb_t callback) {
     return;
   }
 
-  std::stringstream failureDetails;
-  size_t failedConfigCount = 0;
-  size_t unsupportedConfigCount = 0;
-
   for (auto &agent : agentsWithPCSampling) {
     auto *picked = pickPCSamplingConfig(agent.configs, requestedMethod);
     if (!picked) {
-      failureDetails << " agent " << agent.agentId.handle;
-      if (requestedMethod)
-        failureDetails
-            << " does not support PROTON_ROCPROFILER_PC_SAMPLING_METHOD='"
-            << methodStr << "';";
-      else
-        failureDetails << " has no supported PC sampling method;";
-      ++failedConfigCount;
-      continue;
+      pcSamplingConfigurationFailureReason =
+          "agent " + std::to_string(agent.agentId.handle);
+      if (requestedMethod) {
+        pcSamplingConfigurationFailureReason +=
+            " does not support PROTON_ROCPROFILER_PC_SAMPLING_METHOD='" +
+            methodStr + "'";
+      } else {
+        pcSamplingConfigurationFailureReason +=
+            " has no supported PC sampling method";
+      }
+      return;
     }
 
     auto interval = pcSamplingInterval;
@@ -259,36 +257,22 @@ void RocprofSDKPCSampling::configure(rocprofiler_buffer_tracing_cb_t callback) {
       rocprofiler::assignCallbackThread<true>(pcSamplingBuffer,
                                               pcSamplingThread);
       pcSamplingBuffers.push_back(pcSamplingBuffer);
-      pcSamplingServiceConfigured = true;
     } else {
-      failureDetails << " agent " << agent.agentId.handle
-                     << " status=" << rocprofilerStatusName(cfgStatus) << "("
-                     << cfgStatus << ");";
-      ++failedConfigCount;
-      if (cfgStatus == ROCPROFILER_STATUS_ERROR_NOT_AVAILABLE)
-        ++unsupportedConfigCount;
-    }
-    if (cfgStatus != ROCPROFILER_STATUS_SUCCESS &&
-        cfgStatus != ROCPROFILER_STATUS_ERROR_NOT_AVAILABLE) {
-      std::cerr << "[PROTON] PC sampling configuration failed on agent "
-                << agent.agentId.handle << " status=" << cfgStatus << std::endl;
+      if (cfgStatus == ROCPROFILER_STATUS_ERROR_NOT_AVAILABLE) {
+        pcSamplingConfigurationFailureReason =
+            "rocprofiler-sdk PC sampling service is not available for agent ";
+      } else {
+        pcSamplingConfigurationFailureReason =
+            "rocprofiler-sdk failed to configure PC sampling for agent ";
+      }
+      pcSamplingConfigurationFailureReason +=
+          std::to_string(agent.agentId.handle) +
+          " with status=" + rocprofilerStatusName(cfgStatus) + "(" +
+          std::to_string(static_cast<int>(cfgStatus)) + ")";
+      return;
     }
   }
-
-  if (!pcSamplingServiceConfigured) {
-    // NOT_AVAILABLE is the expected result for unsupported agents; distinguish
-    // that case from unexpected SDK failures while configuring the service.
-    if (failedConfigCount == unsupportedConfigCount) {
-      pcSamplingConfigurationFailureReason =
-          "rocprofiler-sdk PC sampling service is not available for the "
-          "visible AMD GPU agents.";
-    } else {
-      pcSamplingConfigurationFailureReason =
-          "rocprofiler-sdk failed to configure PC sampling for the visible AMD "
-          "GPU agents.";
-    }
-    pcSamplingConfigurationFailureReason += failureDetails.str();
-  }
+  pcSamplingServiceConfigured = true;
 }
 
 void RocprofSDKPCSampling::warnIfInvalidInterval() {
