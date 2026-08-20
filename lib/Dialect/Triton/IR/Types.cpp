@@ -160,10 +160,9 @@ Type getPointerTypeSameShape(Type type) {
   }
 }
 
-Type getPointerTypeToElement(Type type) {
-  Type elementType = getElementTypeOrSelf(type);
-  PointerType ptrType = PointerType::get(elementType, 1);
-  return ptrType;
+bool elementTypeMatchesPointee(Type valueTy, Type ptrTy) {
+  auto ptrType = dyn_cast<PointerType>(ptrTy);
+  return ptrType && getElementTypeOrSelf(valueTy) == ptrType.getPointeeType();
 }
 
 // upstream Triton only uses address space 1 for Pointer Type

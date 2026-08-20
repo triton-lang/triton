@@ -749,6 +749,27 @@ LogicalResult BufferLoadToLocalOp::verify() {
   return emitError() << "BufferLoadToLocal unsupported on target architecture";
 }
 
+// A buffer write's scalar base must be global memory (address space 1). This
+// invariant was previously enforced implicitly by base-type inference.
+static LogicalResult verifyBufferWriteBase(Operation *op, Value ptr) {
+  constexpr int kGlobalAddressSpace = 1;
+  if (triton::getAddressSpace(ptr.getType()) != kGlobalAddressSpace)
+    return op->emitOpError("buffer writes require a global address space base");
+  return success();
+}
+
+LogicalResult BufferStoreOp::verify() {
+  return verifyBufferWriteBase(getOperation(), getPtr());
+}
+
+LogicalResult BufferAtomicRMWOp::verify() {
+  return verifyBufferWriteBase(getOperation(), getPtr());
+}
+
+LogicalResult BufferAtomicCASOp::verify() {
+  return verifyBufferWriteBase(getOperation(), getPtr());
+}
+
 LogicalResult LocalLoadPackedTransposedOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getType();
