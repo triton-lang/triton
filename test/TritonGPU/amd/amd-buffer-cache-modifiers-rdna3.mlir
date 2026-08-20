@@ -19,7 +19,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   tt.func @buffer_load_cg(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %offset: tensor<128xi32, #blocked> {tt.divisibility = 16 : i32}) {
     // .cg load on RDNA3.5: aux = 1 (GLC)
     // CHECK: rocdl.raw.ptr.buffer.load {{.*}}, {{.*}}, {{.*}}, 1
-    %ret = amdg.buffer_load %arg0[%offset] cacheModifier = cg : tensor<128xf32, #blocked>
+    %ret = amdg.buffer_load %arg0[%offset] cacheModifier = cg : <f32> -> tensor<128xf32, #blocked>
     tt.return
   }
 }
@@ -33,7 +33,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   tt.func @buffer_load_cs(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %offset: tensor<128xi32, #blocked> {tt.divisibility = 16 : i32}) {
     // .cs load on RDNA3.5: aux = 7 (GLC|SLC|DLC)
     // CHECK: rocdl.raw.ptr.buffer.load {{.*}}, {{.*}}, {{.*}}, 7
-    %ret = amdg.buffer_load %arg0[%offset] cacheModifier = cs : tensor<128xf32, #blocked>
+    %ret = amdg.buffer_load %arg0[%offset] cacheModifier = cs : <f32> -> tensor<128xf32, #blocked>
     tt.return
   }
 }
@@ -47,7 +47,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   tt.func @buffer_load_cv(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %offset: tensor<128xi32, #blocked> {tt.divisibility = 16 : i32}) {
     // .cv load on RDNA3.5: aux = 7 (GLC|SLC|DLC)
     // CHECK: rocdl.raw.ptr.buffer.load {{.*}}, {{.*}}, {{.*}}, 7
-    %ret = amdg.buffer_load %arg0[%offset] cacheModifier = cv : tensor<128xf32, #blocked>
+    %ret = amdg.buffer_load %arg0[%offset] cacheModifier = cv : <f32> -> tensor<128xf32, #blocked>
     tt.return
   }
 }
@@ -62,7 +62,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %c256_i32 = arith.constant 256 : i32
     // .cs store on RDNA3.5: aux = 7 (GLC|SLC|DLC)
     // CHECK: rocdl.raw.ptr.buffer.store {{.*}}, {{.*}}, {{.*}}, {{.*}}, 7
-    amdg.buffer_store %value, %arg0[%offset] cacheModifier = cs stride = %c256_i32 : tensor<128xf32, #blocked>
+    amdg.buffer_store %value, %arg0[%offset] cacheModifier = cs stride = %c256_i32 : <f32> -> tensor<128xf32, #blocked>
     tt.return
   }
 }
@@ -77,7 +77,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %c256_i32 = arith.constant 256 : i32
     // .wt store on RDNA3.5: aux = 7 (GLC|SLC|DLC)
     // CHECK: rocdl.raw.ptr.buffer.store {{.*}}, {{.*}}, {{.*}}, {{.*}}, 7
-    amdg.buffer_store %value, %arg0[%offset] cacheModifier = wt stride = %c256_i32 : tensor<128xf32, #blocked>
+    amdg.buffer_store %value, %arg0[%offset] cacheModifier = wt stride = %c256_i32 : <f32> -> tensor<128xf32, #blocked>
     tt.return
   }
 }

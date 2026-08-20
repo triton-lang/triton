@@ -177,11 +177,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // Scalar load should produce a regular llvm.load, not a cluster load
     // CHECK: llvm.load %{{.*}} : !llvm.ptr<1> -> vector<1xi16>
     %1 = tt.load %arg1 : !tt.ptr<i16>
-    %2 = amdg.buffer_load %arg2[%0] : tensor<128xi32, #blocked>
+    %2 = amdg.buffer_load %arg2[%0] : <i32> -> tensor<128xi32, #blocked>
     %3 = arith.extsi %1 : i16 to i32
     %4 = tt.splat %3 : i32 -> tensor<128xi32, #blocked>
     %5 = arith.ori %4, %2 : tensor<128xi32, #blocked>
-    amdg.buffer_store %5, %arg0[%0] : tensor<128xi32, #blocked>
+    amdg.buffer_store %5, %arg0[%0] : <i32> -> tensor<128xi32, #blocked>
     tt.return
   }
 }
