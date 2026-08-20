@@ -295,8 +295,9 @@ def _call_in_process(client_fn, args, kwargs, env, stderr_file, compilation_list
         knobs.compilation.listener = compilation_listener
         try:
             client_fn(*args, **kwargs)
-            # Raise any CUDA errors
-            torch.cuda.synchronize()
+            if is_cuda():
+                # Raise any CUDA errors
+                torch.cuda.synchronize()
         except Exception as e:
             exc = e
         finally:
