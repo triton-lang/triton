@@ -23,6 +23,9 @@
 
 namespace proton {
 
+extern template GPUProfiler<RoctracerProfiler>::ThreadState
+    GPUProfiler<RoctracerProfiler>::threadState;
+
 namespace {
 
 class DeviceInfo : public Singleton<DeviceInfo> {

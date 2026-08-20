@@ -44,6 +44,9 @@
 
 namespace proton {
 
+extern template GPUProfiler<RocprofSDKProfiler>::ThreadState
+    GPUProfiler<RocprofSDKProfiler>::threadState;
+
 namespace {
 
 constexpr size_t BufferSize = 64 * 1024 * 1024;

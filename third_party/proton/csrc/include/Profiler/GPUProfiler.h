@@ -256,8 +256,7 @@ protected:
     }
   };
 
-  inline static thread_local ThreadState threadState{
-      ConcreteProfilerT::instance()};
+  static thread_local ThreadState threadState;
 
   std::unique_ptr<MetricBuffer> metricBuffer;
   std::unique_ptr<PendingGraphPool> pendingGraphPool;

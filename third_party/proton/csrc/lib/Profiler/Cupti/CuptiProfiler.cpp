@@ -29,6 +29,9 @@
 
 namespace proton {
 
+extern template GPUProfiler<CuptiProfiler>::ThreadState
+    GPUProfiler<CuptiProfiler>::threadState;
+
 namespace {
 
 std::unique_ptr<Metric>
