@@ -1871,19 +1871,34 @@ class TritonSemantic(Generic[TensorTy]):
             return [self._convert_elem_to_ir_value(elem, require_i64) for elem in list_like]
         return [self._convert_elem_to_ir_value(list_like, require_i64)]
 
-    def _iisan_check_tensor_descriptor_stride_alignment(self, strides: List[TensorTy], elem_size: int,
-                                                        stride_sources: List) -> None:
-        # Gluon TMA ops emit similar alignment checks when instrumentation_mode=iisan.
+    def _check_tensor_descriptor_alignment_static(self, strides: List[TensorTy], elem_size: int) -> None:
+        # Reject statically-known strides that aren't 16-byte aligned per TMA requirement.
+        # Shared by the `tl` and `gluon` `make_tensor_descriptor` builders.
+        for stride in strides[:-1]:
+            static_stride = tl._unwrap_if_constexpr(stride)
+            if isinstance(static_stride, int) and (static_stride * elem_size) % 16 != 0:
+                raise ValueError(
+                    f"Tensor descriptor strides must be 16-byte aligned, but got a stride of "
+                    f"{static_stride} * {elem_size} = {static_stride * elem_size} bytes")
+
+    def _iisan_check_tensor_descriptor_alignment(self, base: TensorTy, strides: List[TensorTy], elem_size: int,
+                                                 stride_sources: List) -> None:
+        # Emit device-side alignment asserts under instrumentation_mode=iisan for the values the
+        # static check can't see: the base pointer and any dynamic (runtime) strides.
         align_bytes = self.make_scalar(16, tl.int64)
         zero = self.make_scalar(0, tl.int64)
         elem_bytes = self.make_scalar(elem_size, tl.int64)
+
+        base_addr = self.cast(base, tl.int64)
+        base_rem = self.mod(base_addr, align_bytes)
+        self.device_assert(self.equal(base_rem, zero), "Tensor descriptor base pointer must be 16-byte aligned", None)
+
         for source, stride in zip(stride_sources[:-1], strides[:-1]):
             if isinstance(tl._unwrap_if_constexpr(source), int):
                 continue
             byte_stride = self.mul(stride, elem_bytes, sanitize_overflow=False)
             rem = self.mod(byte_stride, align_bytes)
-            is_aligned = self.equal(rem, zero)
-            self.device_assert(is_aligned, "Tensor descriptor strides must be 16-byte aligned", None)
+            self.device_assert(self.equal(rem, zero), "Tensor descriptor strides must be 16-byte aligned", None)
 
     def make_tensor_descriptor(self, base: TensorTy, shape: List[TensorTy], strides: List[TensorTy],
                                block_shape: List[tl.constexpr], padding_option: str = "zero") -> tl.tensor_descriptor:
@@ -1906,19 +1921,14 @@ class TritonSemantic(Generic[TensorTy]):
         if last_stride != 1:
             raise ValueError(f"Tensor descriptor last dim must be 1 but got {last_stride}")
 
-        for stride in strides[:-1]:
-            static_stride = tl._unwrap_if_constexpr(stride)
-            if isinstance(static_stride, int) and (static_stride * elem_size) % 16 != 0:
-                raise ValueError(
-                    f"Tensor descriptor strides must be 16-byte aligned, but got a stride of {static_stride} * {elem_size} = {static_stride * elem_size} bytes"
-                )
+        self._check_tensor_descriptor_alignment_static(strides, elem_size)
 
         stride_sources = strides
         shape = [self.make_scalar(x, tl.int32) for x in shape]
         strides = [self.make_scalar(tl._unwrap_if_constexpr(x), tl.int64) for x in strides]
 
         if getattr(self.builder.options, "enable_iisan", False):
-            self._iisan_check_tensor_descriptor_stride_alignment(strides, elem_size, stride_sources)
+            self._iisan_check_tensor_descriptor_alignment(base, strides, elem_size, stride_sources)
 
         # Check whether `block_shape` is static
         block_shape = tl._unwrap_shape(block_shape)
