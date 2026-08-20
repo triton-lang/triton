@@ -9,8 +9,12 @@
 #define GET_TYPEDEF_CLASSES
 #include "triton/Dialect/Triton/IR/TypeInterfaces.h.inc"
 
-#include "triton/Dialect/Triton/IR/OpsEnums.h.inc" // required by `Types.h.inc`
+// clang-format off
+// TypesEnums.h.inc must precede Types.h.inc: the generated PointerType
+// declarations reference PtrAddrSpace.
+#include "triton/Dialect/Triton/IR/TypesEnums.h.inc"
 #include "triton/Dialect/Triton/IR/Types.h.inc"
+// clang-format on
 
 namespace mlir {
 

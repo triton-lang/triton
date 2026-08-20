@@ -49,18 +49,6 @@ def TT_PaddingOptionAttr : I32EnumAttr<
     let cppNamespace = "::mlir::triton";
 }
 
-// Case values mirror the LLVM address spaces:
-//   Global (1): NVPTXAS ADDRESS_SPACE_GLOBAL  / AMDGPUAS GLOBAL_ADDRESS
-//   Flat   (0): NVPTXAS ADDRESS_SPACE_GENERIC / AMDGPUAS FLAT_ADDRESS
-def TT_PtrAddrSpaceAttr : I32EnumAttr<
-    "PtrAddrSpace", "",
-    [
-        I32EnumAttrCase<"Global", 1, "global">,
-        I32EnumAttrCase<"Flat", 0, "flat">,
-    ]> {
-    let cppNamespace = "::mlir::triton";
-}
-
 // atomic
 def TT_AtomicRMWAttr : I32EnumAttr<
     "RMWOp", "",
