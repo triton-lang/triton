@@ -765,6 +765,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 8], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:120", "ttg.threads-per-warp" = 32 : i32} {
+  // Verify that on SM_120 a plain fp8 tt.dot is rewritten into tt.dot_scaled
+  // with unit scales (E8M0 127 == 1.0) so it uses the full-rate block-scaled
+  // MMA instead of the half-rate plain fp8 MMA.
   // CHECK-LABEL: sm120_fp8_dot
   tt.func public @sm120_fp8_dot(%arg0: tensor<128x256xf32, #blocked>, %arg1: tensor<128x128x!tt.ptr<f8E4M3FN>, #blocked1>, %arg2: tensor<128x256x!tt.ptr<f8E4M3FN>, #blocked2>, %arg3: tensor<128x128xi1, #blocked1>, %arg4: tensor<128x256xi1, #blocked2>) -> tensor<128x256xf32, #blocked> {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf8E4M3FN, #blocked2>
@@ -773,9 +776,130 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %1 = tt.load %arg2, %arg4, %cst : tensor<128x256x!tt.ptr<f8E4M3FN>, #blocked2>
     %2 = ttg.convert_layout %0 : tensor<128x128xf8E4M3FN, #blocked1> -> tensor<128x128xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
     %3 = ttg.convert_layout %1 : tensor<128x256xf8E4M3FN, #blocked2> -> tensor<128x256xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
-    // CHECK: {{.*}} = tt.dot {{.*}} tensor<128x128xf8E4M3FN
+    // CHECK-DAG: arith.constant dense<127> : tensor<128x4xi8
+    // CHECK-DAG: arith.constant dense<127> : tensor<256x4xi8
+    // CHECK: tt.dot_scaled {{.*}} lhs = e4m3 rhs = e4m3
+    // CHECK-NOT: tt.dot %
     %4 = tt.dot %2, %3, %arg0, inputPrecision = tf32 : tensor<128x128xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x256xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x256xf32, #blocked>
     tt.return %4 : tensor<128x256xf32, #blocked>
+  }
+}
+
+// -----
+
+// Verify that on SM_120 an fp8 tt.dot with mixed fp8 element types is also
+// rewritten into a unit-scale tt.dot_scaled.
+
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:120", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: sm120_fp8_dot_mixed
+  tt.func public @sm120_fp8_dot_mixed(%arg0: tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %arg1: tensor<128x256xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<128x256xf32, #blocked> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #blocked>
+    // CHECK: tt.dot_scaled {{.*}} lhs = e5m2 rhs = e4m3
+    %0 = tt.dot %arg0, %arg1, %cst : tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x256xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x256xf32, #blocked>
+    tt.return %0 : tensor<128x256xf32, #blocked>
+  }
+}
+
+// -----
+
+// Verify that on SM_120 an fp8 tt.dot with an f16 accumulator keeps the plain
+// fp8 MMA path; the block-scaled MMA only supports f32 accumulators.
+
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:120", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: sm120_fp8_dot_f16_acc
+  tt.func public @sm120_fp8_dot_f16_acc(%arg0: tensor<128x128xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %arg1: tensor<128x256xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<128x256xf16, #blocked> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf16, #blocked>
+    // CHECK-NOT: tt.dot_scaled
+    // CHECK: tt.dot %
+    %0 = tt.dot %arg0, %arg1, %cst : tensor<128x128xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x256xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x256xf16, #blocked>
+    tt.return %0 : tensor<128x256xf16, #blocked>
+  }
+}
+
+// -----
+
+// Verify that on SM_120 an fp8 tt.dot with K smaller than the 32-element
+// scale group keeps the plain fp8 MMA path.
+
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:120", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: sm120_fp8_dot_small_k
+  tt.func public @sm120_fp8_dot_small_k(%arg0: tensor<128x16xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %arg1: tensor<16x256xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<128x256xf32, #blocked> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #blocked>
+    // CHECK-NOT: tt.dot_scaled
+    // CHECK: tt.dot %
+    %0 = tt.dot %arg0, %arg1, %cst : tensor<128x16xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<16x256xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x256xf32, #blocked>
+    tt.return %0 : tensor<128x256xf32, #blocked>
+  }
+}
+
+// -----
+
+// Verify that on SM_120 an fp8 tt.dot whose M dimension is not a multiple of
+// the m16n8k32 tile keeps the plain fp8 MMA path.
+
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:120", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: sm120_fp8_dot_unaligned_m
+  tt.func public @sm120_fp8_dot_unaligned_m(%arg0: tensor<8x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %arg1: tensor<64x128xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<8x128xf32, #blocked> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<8x128xf32, #blocked>
+    // CHECK-NOT: tt.dot_scaled
+    // CHECK: tt.dot %
+    %0 = tt.dot %arg0, %arg1, %cst : tensor<8x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x128xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<8x128xf32, #blocked>
+    tt.return %0 : tensor<8x128xf32, #blocked>
+  }
+}
+
+// -----
+
+// Verify that on SM_120 an fp8 tt.dot whose operand is unpacked from fp4 data
+// keeps the plain fp8 MMA path: BlockedToMMA picks a wider kWidth for such
+// operands (via computeOrigBitWidth), which the block-scaled path would lose.
+
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
+#blocked_pack = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:120", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: sm120_fp8_dot_packed_operand
+  tt.func public @sm120_fp8_dot_packed_operand(%arg0: tensor<128x32xi8, #blocked_pack>, %arg1: tensor<64x128xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<128x128xf32, #blocked> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    %0 = ttg.fp4_to_fp %arg0 {axis = 1 : i32} : tensor<128x32xi8, #blocked_pack> -> tensor<128x64xbf16, #blocked_pack>
+    %1 = tt.fp_to_fp %0, rounding = rtne : tensor<128x64xbf16, #blocked_pack> -> tensor<128x64xf8E4M3FN, #blocked_pack>
+    %2 = ttg.convert_layout %1 : tensor<128x64xf8E4M3FN, #blocked_pack> -> tensor<128x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    // CHECK-NOT: tt.dot_scaled
+    // CHECK: tt.dot {{.*}} kWidth = 8
+    %3 = tt.dot %2, %arg1, %cst : tensor<128x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x128xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x128xf32, #blocked>
+    tt.return %3 : tensor<128x128xf32, #blocked>
+  }
+}
+
+// -----
+
+// The packed-operand walk stops at block arguments (computeOrigBitWidth uses
+// omitBlockArguments), so a loop-carried fp8 operand takes the block-scaled
+// path. This matches BlockedToMMA, which uses the same walk and would pick
+// the same kWidth = 4 for this dot. If computeOrigBitWidth learns to look
+// through block arguments, both paths change together and this test should be
+// updated.
+
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
+#blocked_pack = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:120", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: sm120_fp8_dot_packed_operand_loop
+  tt.func public @sm120_fp8_dot_packed_operand_loop(%arg0: tensor<128x32xi8, #blocked_pack>, %arg1: tensor<64x128xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>, %arg2: i32) -> tensor<128x128xf32, #blocked> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    %0 = ttg.fp4_to_fp %arg0 {axis = 1 : i32} : tensor<128x32xi8, #blocked_pack> -> tensor<128x64xbf16, #blocked_pack>
+    %1 = tt.fp_to_fp %0, rounding = rtne : tensor<128x64xbf16, #blocked_pack> -> tensor<128x64xf8E4M3FN, #blocked_pack>
+    // CHECK: tt.dot_scaled
+    %2:2 = scf.for %i = %c0_i32 to %arg2 step %c1_i32 iter_args(%acc = %cst, %a = %1) -> (tensor<128x128xf32, #blocked>, tensor<128x64xf8E4M3FN, #blocked_pack>) : i32 {
+      %3 = ttg.convert_layout %a : tensor<128x64xf8E4M3FN, #blocked_pack> -> tensor<128x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+      %4 = tt.dot %3, %arg1, %acc : tensor<128x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x128xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x128xf32, #blocked>
+      scf.yield %4, %a : tensor<128x128xf32, #blocked>, tensor<128x64xf8E4M3FN, #blocked_pack>
+    }
+    tt.return %2#0 : tensor<128x128xf32, #blocked>
   }
 }
 

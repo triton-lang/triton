@@ -707,6 +707,101 @@ public:
   }
 };
 
+// Whether the native sm120 block-scaled MMA path implemented by
+// ScaledBlockedToMMA is available. Shared by ScaledBlockedToMMA and
+// SM120FP8DotToDotScaled so that their applicability cannot drift apart: if
+// the former stopped matching while the latter still fired, the created
+// tt.dot_scaled would be decomposed into an upcast + f16 dot, which is slower
+// than the plain fp8 MMA.
+static bool sm120SupportsNativeScaledDot(int computeCapability,
+                                         PatternRewriter &rewriter) {
+  return computeCapability / 10 == 12 && lookupNumCTAs(rewriter) == 1;
+}
+
+// On consumer Blackwell (sm120), the plain fp8 MMA (kind::f8f6f4) runs at
+// half the throughput of the block-scaled MXFP8 MMA
+// (kind::mxf8f6f4.block_scale). Rewrite fp8 tt.dot into tt.dot_scaled with
+// all scales set to 1.0 (E8M0 value 127) so that ScaledBlockedToMMA lowers it
+// to the full-rate instruction. Scaling by 1.0 is exact, so the result is
+// bit-identical to the plain fp8 MMA.
+class SM120FP8DotToDotScaled : public mlir::OpRewritePattern<triton::DotOp> {
+  int computeCapability;
+
+public:
+  SM120FP8DotToDotScaled(mlir::MLIRContext *context, int computeCapability,
+                         int benefit)
+      : mlir::OpRewritePattern<triton::DotOp>(context, benefit),
+        computeCapability(computeCapability) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(triton::DotOp dotOp,
+                  mlir::PatternRewriter &rewriter) const override {
+    if (computeCapability / 10 != 12)
+      return failure();
+    RankedTensorType retType = dotOp.getType();
+    if (!retType.getEncoding() ||
+        mlir::isa<NvidiaMmaEncodingAttr>(retType.getEncoding()))
+      return failure();
+    // The sm120 block-scaled MMA lowering only supports rank-2 dots with an
+    // f32 accumulator.
+    if (retType.getRank() != 2 || !retType.getElementType().isF32())
+      return failure();
+    auto toScaleDotElemType = [](Type type) -> std::optional<ScaleDotElemType> {
+      if (llvm::isa<Float8E4M3FNType>(type))
+        return ScaleDotElemType::E4M3;
+      if (llvm::isa<Float8E5M2Type>(type))
+        return ScaleDotElemType::E5M2;
+      return std::nullopt;
+    };
+    auto aElemType =
+        toScaleDotElemType(dotOp.getA().getType().getElementType());
+    auto bElemType =
+        toScaleDotElemType(dotOp.getB().getType().getElementType());
+    if (!aElemType || !bElemType)
+      return failure();
+    // Each E8M0 scale covers 32 fp8 elements along K, and the scale layout
+    // assumes full m16n8k32 tiles. Smaller dots keep the plain fp8 MMA.
+    constexpr int64_t kScaleGroupSize = 32;
+    int64_t kDim = dotOp.getA().getType().getShape().back();
+    if (retType.getShape()[0] % 16 != 0 || retType.getShape()[1] % 8 != 0 ||
+        kDim % kScaleGroupSize != 0)
+      return failure();
+    if (!sm120SupportsNativeScaledDot(computeCapability, rewriter))
+      return failure();
+    // BlockedToMMA picks the dot operand kWidth from the width of the
+    // originating loads; ScaledBlockedToMMA always uses the fp8 element
+    // width. Keep dots whose operands come from narrower (packed) loads on
+    // the plain path so they do not lose the wider kWidth.
+    if (std::min(computeOrigBitWidth(dotOp.getA()),
+                 computeOrigBitWidth(dotOp.getB())) < 8)
+      return failure();
+
+    MLIRContext *ctx = dotOp.getContext();
+    Location loc = dotOp.getLoc();
+    int numWarps = lookupNumWarps(dotOp);
+    int threadsPerWarp = lookupThreadsPerWarp(rewriter);
+    // E8M0 encodes 2^(x - 127), so 127 is exactly 1.0.
+    auto createUnitScale = [&](int64_t mnDim) -> Value {
+      SmallVector<int64_t> scaleShape{mnDim, kDim / kScaleGroupSize};
+      auto encoding = getDefaultBlockedEncoding(ctx, scaleShape, numWarps,
+                                                threadsPerWarp, /*numCTAs=*/1);
+      auto scaleType =
+          RankedTensorType::get(scaleShape, rewriter.getI8Type(), encoding);
+      return arith::ConstantOp::create(
+          rewriter, loc, scaleType,
+          DenseElementsAttr::get(scaleType, APInt(8, 127)));
+    };
+    Value aScale = createUnitScale(retType.getShape()[0]);
+    Value bScale = createUnitScale(retType.getShape()[1]);
+    // The scales are finite constants, so NaN propagation is irrelevant and
+    // fastMath is safe.
+    rewriter.replaceOpWithNewOp<DotScaledOp>(
+        dotOp, retType, dotOp.getA(), dotOp.getB(), dotOp.getC(), aScale,
+        bScale, *aElemType, *bElemType, /*fastMath=*/true);
+    return success();
+  }
+};
+
 class ScaledBlockedToMMA : public mlir::OpRewritePattern<triton::DotScaledOp> {
   int computeCapability;
 
@@ -719,13 +814,8 @@ public:
   mlir::LogicalResult
   matchAndRewrite(triton::DotScaledOp dotOp,
                   mlir::PatternRewriter &rewriter) const override {
-    if (computeCapability / 10 != 12)
+    if (!sm120SupportsNativeScaledDot(computeCapability, rewriter))
       return failure();
-
-    auto numCTAs = lookupNumCTAs(rewriter);
-    if (numCTAs != 1) {
-      return failure();
-    }
     // Skip if any scale is missing. This pattern requires both scales.
     if (!dotOp.getAScale() || !dotOp.getBScale())
       return failure();
@@ -1100,6 +1190,8 @@ public:
     constexpr int benefitSM120 = 10;
 
     patterns.add<BlockedToMMA>(context, computeCapability, benefitDefault);
+    patterns.add<SM120FP8DotToDotScaled>(context, computeCapability,
+                                         benefitSM120);
     patterns.add<ScaledBlockedToMMA>(context, computeCapability, benefitSM120);
     populateDecomposeScaledBlockedPatterns(patterns, benefitDefault);
     patterns.add<BlockedToMMAv5, ScaledBlockedToMMAv5>(

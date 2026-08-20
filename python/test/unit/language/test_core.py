@@ -4094,7 +4094,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             assert 'wgmma.mma_async.sync.aligned' in ptx or\
                 'mma.sync.aligned.m16n8k32.row.col.satfinite.s32.s8.s8.s32' in ptx
     elif in_dtype == "float8e5" and out_dtype == tl.float32:
-        if capability[0] == 9 and M >= 64 and N >= 8:
+        if capability[0] == 12 and M % 16 == 0 and N % 8 == 0 and K % 32 == 0:
+            # sm120 fp8 dots use the full-rate block-scaled MMA with unit scales
+            assert 'mma.sync.aligned.m16n8k32.row.col.kind::mxf8f6f4.block_scale.scale_vec::1X' in ptx
+        elif capability[0] == 9 and M >= 64 and N >= 8:
             assert 'wgmma.mma_async.sync.aligned.m64n128k32.f32.e5m2.e5m2' in ptx
         elif capability[0] >= 8 and M < 64:
             if capability == (8, 9) or capability[0] == 12:
@@ -4102,7 +4105,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             else:
                 assert 'mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32' in ptx
     elif in_dtype == "float8e4nv" and out_dtype == tl.float32:
-        if capability[0] == 9 and M >= 64 and N >= 8:
+        if capability[0] == 12 and M % 16 == 0 and N % 8 == 0 and K % 32 == 0:
+            # sm120 fp8 dots use the full-rate block-scaled MMA with unit scales
+            assert 'mma.sync.aligned.m16n8k32.row.col.kind::mxf8f6f4.block_scale.scale_vec::1X' in ptx
+        elif capability[0] == 9 and M >= 64 and N >= 8:
             assert 'wgmma.mma_async.sync.aligned.m64n128k32.f32.e4m3.e4m3' in ptx
     if is_tcgen5 and epilogue == 'softmax' and M >= 128:
         # check that there is no shared memory exchange in the softmax

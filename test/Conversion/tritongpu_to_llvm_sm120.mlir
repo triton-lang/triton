@@ -27,4 +27,25 @@ module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num
     tt.store %out_ptrs, %d, %zero : tensor<128x128x!tt.ptr<f32>, #blocked>
     tt.return
   }
+
+  // A plain fp8 tt.dot must be rewritten to use the full-rate block-scaled
+  // MMA with unit scales instead of the half-rate plain fp8 MMA.
+  // CHECK-LABEL: @sm120_fp8_dot_block_scaled
+  // CHECK: mma.sync.aligned.m16n8k32.row.col.kind::mxf8f6f4.block_scale.scale_vec::1X
+  // CHECK-NOT: mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32
+  tt.func public @sm120_fp8_dot_block_scaled(
+    %a: tensor<128x32xf8E4M3FN, #blocked_k>,
+    %b: tensor<32x128xf8E4M3FN, #blocked>,
+    %out: !tt.ptr<f32>
+  ){
+    %c = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    %a_d = ttg.convert_layout %a : tensor<128x32xf8E4M3FN, #blocked_k> -> tensor<128x32xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %b_d = ttg.convert_layout %b : tensor<32x128xf8E4M3FN, #blocked> -> tensor<32x128xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %d = tt.dot %a_d, %b_d, %c : tensor<128x32xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x128xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x128xf32, #blocked>
+    %out_splat = tt.splat %out : !tt.ptr<f32> -> tensor<128x1x!tt.ptr<f32>, #blocked>
+    %out_ptrs = tt.broadcast %out_splat : tensor<128x1x!tt.ptr<f32>, #blocked> -> tensor<128x128x!tt.ptr<f32>, #blocked>
+    %zero = arith.constant dense<0> : tensor<128x128xi1, #blocked>
+    tt.store %out_ptrs, %d, %zero : tensor<128x128x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
 }
