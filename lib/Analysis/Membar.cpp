@@ -251,10 +251,23 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   if (isa<triton::CallOp>(op)) {
     // Inter-function dependencies
     auto callOpInterface = dyn_cast<CallOpInterface>(op);
+    auto callBufferId = allocation.getBufferId(op);
+    if (callBufferId != Allocation::InvalidBufferId) {
+      // The callee's exit summary does not include its first memory effect.
+      // Model the call frame write only for checking incoming caller effects;
+      // the callee exit summary below remains the call's outgoing state.
+      BlockInfo callEntryInfo;
+      auto callInterval = allocation.getAllocatedInterval(callBufferId);
+      callEntryInfo.syncWriteSlices[AllocationSlice(callInterval)].insert(op);
+      if (blockInfo->isIntersected(callEntryInfo, filter, &allocation)) {
+        builder->setInsertionPoint(op);
+        insertBarrier(op, builder);
+        blockInfo->sync();
+      }
+    }
     if (auto callee =
             dyn_cast<FunctionOpInterface>(callOpInterface.resolveCallable())) {
       auto calleeBlockInfo = funcMap->lookup(callee);
-      auto callBufferId = allocation.getBufferId(op);
       size_t callOffset = 0;
       if (callBufferId != Allocation::InvalidBufferId)
         callOffset = allocation.getAllocatedInterval(callBufferId).start();

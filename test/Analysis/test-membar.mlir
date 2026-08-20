@@ -1488,6 +1488,36 @@ module attributes {ttg.target = "cuda:90", "ttg.num-warps" = 4 : i32} {
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // The caller's conversion leaves a pending shared-memory read. The callee
+  // starts with a conversion that writes the same call frame, so a barrier is
+  // required immediately before the call.
+  // CHECK-LABEL: @caller_pending_read_then_call
+  // CHECK: ttg.convert_layout
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: tt.call @callee_writes_first
+  tt.func private @callee_writes_first() -> tensor<128x32xf16, #blockedCallDst> {
+    %cst = arith.constant dense<0.0> : tensor<128x32xf16, #blockedCallSrc>
+    %cvt = ttg.convert_layout %cst : tensor<128x32xf16, #blockedCallSrc> -> tensor<128x32xf16, #blockedCallDst>
+    tt.return %cvt : tensor<128x32xf16, #blockedCallDst>
+  }
+
+  tt.func @caller_pending_read_then_call() -> tensor<128x32xf16, #blockedCallDst> {
+    %cst = arith.constant dense<0.0> : tensor<128x32xf16, #blockedCallSrc>
+    %cvt = ttg.convert_layout %cst : tensor<128x32xf16, #blockedCallSrc> -> tensor<128x32xf16, #blockedCallDst>
+    %call = tt.call @callee_writes_first() : () -> tensor<128x32xf16, #blockedCallDst>
+    %sum = arith.addf %call, %cvt : tensor<128x32xf16, #blockedCallDst>
+    tt.return %sum : tensor<128x32xf16, #blockedCallDst>
+  }
+}
+
+// -----
+
+#blockedCallSrc = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#mmaCall = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+#blockedCallDst = #ttg.dot_op<{opIdx = 0, parent = #mmaCall, kWidth = 2}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func private @callee_call_offset_membar() -> tensor<128x32xf16, #blockedCallDst> {
     %cst = arith.constant dense<0.0> : tensor<128x32xf16, #blockedCallSrc>
     %cvt = ttg.convert_layout %cst : tensor<128x32xf16, #blockedCallSrc> -> tensor<128x32xf16, #blockedCallDst>
