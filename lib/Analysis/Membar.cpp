@@ -208,18 +208,21 @@ static bool hasSyncPointBeforeMemoryEffect(Operation *op,
 }
 
 void MembarAnalysis::updateSuccessor(Operation *terminator, Block *successor,
-                                     BlockInfo *blockInfo) {
-  if (bufferIndexAnalysis.isBackedgeSuccessor(terminator, successor))
-    bufferIndexAnalysis.invalidateBufferIndices(*blockInfo);
+                                     MembarInfo *blockInfo) {
+  if (bufferIndexAnalysis.isBackedgeSuccessor(terminator, successor)) {
+    bufferIndexAnalysis.invalidateBufferIndices(blockInfo->pending);
+    bufferIndexAnalysis.invalidateBufferIndices(blockInfo->entry);
+  }
 }
 
-void MembarAnalysis::updateExitState(BlockInfo *blockInfo) {
+void MembarAnalysis::updateExitState(MembarInfo *blockInfo) {
   // Function summaries are reused at every call site, so per-function SSA
   // index identity is no longer meaningful.
-  bufferIndexAnalysis.invalidateBufferIndices(*blockInfo);
+  bufferIndexAnalysis.invalidateBufferIndices(blockInfo->pending);
+  bufferIndexAnalysis.invalidateBufferIndices(blockInfo->entry);
 }
 
-void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
+void MembarAnalysis::update(Operation *op, MembarInfo *blockInfo,
                             FuncMapT *funcMap, OpBuilder *builder) {
   // A later CTA-wide synchronization can also synchronize this wait, provided
   // no memory is accessed before reaching it.
@@ -251,17 +254,26 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   BlockInfo curBlockInfo;
   auto scratchBufferId = getScratchBufferId(op, &allocation);
   if (isa<triton::CallOp>(op)) {
-    // Inter-function dependencies
-    auto callOpInterface = dyn_cast<CallOpInterface>(op);
-    if (auto callee =
-            dyn_cast<FunctionOpInterface>(callOpInterface.resolveCallable())) {
-      auto calleeBlockInfo = funcMap->lookup(callee);
+    auto call = cast<CallOpInterface>(op);
+    if (auto callee = dyn_cast<FunctionOpInterface>(call.resolveCallable())) {
+      MembarInfo calleeInfo = funcMap->lookup(callee);
       auto callBufferId = allocation.getBufferId(op);
       size_t callOffset = 0;
       if (callBufferId != Allocation::InvalidBufferId)
         callOffset = allocation.getAllocatedInterval(callBufferId).start();
-      curBlockInfo = translateBlockInfoToCallsite(calleeBlockInfo, callOffset);
+      calleeInfo.pending =
+          translateBlockInfoToCallsite(calleeInfo.pending, callOffset);
+      calleeInfo.entry =
+          translateBlockInfoToCallsite(calleeInfo.entry, callOffset);
+      if (blockInfo->pending.isIntersected(calleeInfo.entry, filter,
+                                           &allocation)) {
+        builder->setInsertionPoint(op);
+        insertBarrier(op, builder);
+        blockInfo->sync();
+      }
+      blockInfo->applyCallSummary(calleeInfo);
     }
+    return;
   } else {
     // Intra-function dependencies
     if (auto memoryEffectOpInterface = dyn_cast<MemoryEffectOpInterface>(op)) {
@@ -305,7 +317,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     auto scratchSlice = AllocationSlice(interval);
     curBlockInfo.syncWriteSlices[scratchSlice].insert(op);
     auto insertCTABarrier =
-        blockInfo->isIntersected(curBlockInfo, filter, &allocation);
+        blockInfo->pending.isIntersected(curBlockInfo, filter, &allocation);
     if (insertCTABarrier) {
       builder->setInsertionPoint(op);
       insertBarrier(op, builder);
@@ -316,23 +328,37 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     if (barrierStages.betweenMemoryEffects) {
       // The internal barrier synchronizes all incoming effects. Do not carry
       // them past the operation; only effects after the barrier are outgoing.
-      blockInfo->join(curBlockInfo);
+      blockInfo->addEffects(curBlockInfo);
       blockInfo->sync();
       curBlockInfo.sync();
     }
     curBlockInfo.syncReadSlices[scratchSlice].insert(op);
-  } else if (blockInfo->isIntersected(curBlockInfo, filter, &allocation)) {
+  } else if (blockInfo->pending.isIntersected(curBlockInfo, filter,
+                                              &allocation)) {
     builder->setInsertionPoint(op);
     insertBarrier(op, builder);
     blockInfo->sync();
   }
   // Update the region info, even if barrier is inserted, we have to maintain
   // the current op's read/write buffers.
-  blockInfo->join(curBlockInfo);
+  blockInfo->addEffects(curBlockInfo);
 
   if (barrierStages.afterMemoryEffects) {
     // Model a trailing local barrier after handling the operation's effects.
     blockInfo->sync();
   }
+}
+
+void ModuleMembarAnalysis::run() {
+  triton::CallGraph<MembarInfo> callGraph(moduleAllocation.getModuleOp());
+  triton::CallGraph<MembarInfo>::FuncDataMapT summaries;
+  callGraph.walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
+      [](CallOpInterface, FunctionOpInterface) {},
+      [&](FunctionOpInterface function) {
+        if (!summaries.try_emplace(function).second)
+          return;
+        auto &allocation = *moduleAllocation.getFuncData(function);
+        MembarAnalysis(allocation, filter).run(function, summaries);
+      });
 }
 } // namespace mlir

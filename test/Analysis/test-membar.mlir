@@ -1534,6 +1534,67 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttg.local_dealloc %buf : !ttg.memdesc<65536xi8, #sharedLarge, #smem, mutable>
     tt.return %sum : tensor<128x32xf16, #blockedCallDst>
   }
+
+  tt.func private @callee_writes_first() -> tensor<128x32xf16, #blockedCallDst> {
+    %cst = arith.constant dense<0.0> : tensor<128x32xf16, #blockedCallSrc>
+    %cvt = ttg.convert_layout %cst : tensor<128x32xf16, #blockedCallSrc> -> tensor<128x32xf16, #blockedCallDst>
+    tt.return %cvt : tensor<128x32xf16, #blockedCallDst>
+  }
+
+  // The caller's conversion leaves a pending shared-memory read. The callee
+  // starts with a conversion that writes the same call frame, so a barrier is
+  // required immediately before the call.
+  // CHECK-LABEL: @caller_pending_read_then_call
+  // CHECK: ttg.convert_layout
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: tt.call @callee_writes_first
+  tt.func @caller_pending_read_then_call() -> tensor<128x32xf16, #blockedCallDst> {
+    %cst = arith.constant dense<0.0> : tensor<128x32xf16, #blockedCallSrc>
+    %cvt = ttg.convert_layout %cst : tensor<128x32xf16, #blockedCallSrc> -> tensor<128x32xf16, #blockedCallDst>
+    %call = tt.call @callee_writes_first() : () -> tensor<128x32xf16, #blockedCallDst>
+    %sum = arith.addf %call, %cvt : tensor<128x32xf16, #blockedCallDst>
+    tt.return %sum : tensor<128x32xf16, #blockedCallDst>
+  }
+
+  tt.func private @callee_writes_then_barrier() -> tensor<128x32xf16, #blockedCallDst> {
+    %cst = arith.constant dense<0.0> : tensor<128x32xf16, #blockedCallSrc>
+    %cvt = ttg.convert_layout %cst : tensor<128x32xf16, #blockedCallSrc> -> tensor<128x32xf16, #blockedCallDst>
+    ttg.barrier local
+    tt.return %cvt : tensor<128x32xf16, #blockedCallDst>
+  }
+
+  // A trailing callee barrier cannot order the callee's first write against
+  // the caller's access before the call.
+  // CHECK-LABEL: @caller_pending_read_then_callee_trailing_barrier
+  // CHECK: ttg.convert_layout
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: tt.call @callee_writes_then_barrier
+  tt.func @caller_pending_read_then_callee_trailing_barrier() -> tensor<128x32xf16, #blockedCallDst> {
+    %cst = arith.constant dense<0.0> : tensor<128x32xf16, #blockedCallSrc>
+    %cvt = ttg.convert_layout %cst : tensor<128x32xf16, #blockedCallSrc> -> tensor<128x32xf16, #blockedCallDst>
+    %call = tt.call @callee_writes_then_barrier() : () -> tensor<128x32xf16, #blockedCallDst>
+    %sum = arith.addf %call, %cvt : tensor<128x32xf16, #blockedCallDst>
+    tt.return %sum : tensor<128x32xf16, #blockedCallDst>
+  }
+
+  tt.func private @callee_barrier_then_writes() -> tensor<128x32xf16, #blockedCallDst> {
+    ttg.barrier local
+    %cst = arith.constant dense<0.0> : tensor<128x32xf16, #blockedCallSrc>
+    %cvt = ttg.convert_layout %cst : tensor<128x32xf16, #blockedCallSrc> -> tensor<128x32xf16, #blockedCallDst>
+    tt.return %cvt : tensor<128x32xf16, #blockedCallDst>
+  }
+
+  // A leading callee barrier synchronizes the caller's pending access.
+  // CHECK-LABEL: @callee_entry_barrier_covers_caller
+  // CHECK: ttg.convert_layout
+  // CHECK-NEXT: tt.call @callee_barrier_then_writes
+  tt.func @callee_entry_barrier_covers_caller() -> tensor<128x32xf16, #blockedCallDst> {
+    %cst = arith.constant dense<0.0> : tensor<128x32xf16, #blockedCallSrc>
+    %cvt = ttg.convert_layout %cst : tensor<128x32xf16, #blockedCallSrc> -> tensor<128x32xf16, #blockedCallDst>
+    %call = tt.call @callee_barrier_then_writes() : () -> tensor<128x32xf16, #blockedCallDst>
+    %sum = arith.addf %call, %cvt : tensor<128x32xf16, #blockedCallDst>
+    tt.return %sum : tensor<128x32xf16, #blockedCallDst>
+  }
 }
 
 // -----

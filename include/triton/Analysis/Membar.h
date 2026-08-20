@@ -193,6 +193,43 @@ private:
   }
 };
 
+struct MembarInfo {
+  BlockInfo pending;
+  BlockInfo entry;
+  bool allPathsSynced = false;
+
+  MembarInfo &join(const MembarInfo &other) {
+    pending.join(other.pending);
+    entry.join(other.entry);
+    allPathsSynced &= other.allPathsSynced;
+    return *this;
+  }
+
+  void addEffects(const BlockInfo &effects) {
+    if (!allPathsSynced)
+      entry.join(effects);
+    pending.join(effects);
+  }
+
+  void sync() {
+    pending.sync();
+    allPathsSynced = true;
+  }
+
+  void applyCallSummary(const MembarInfo &callee) {
+    if (!allPathsSynced)
+      entry.join(callee.entry);
+    if (callee.allPathsSynced)
+      sync();
+    pending.join(callee.pending);
+  }
+
+  bool operator==(const MembarInfo &other) const {
+    return pending == other.pending && entry == other.entry &&
+           allPathsSynced == other.allPathsSynced;
+  }
+};
+
 inline BlockInfo translateBlockInfoToCallsite(const BlockInfo &calleeBlockInfo,
                                               size_t callOffset) {
   BlockInfo translatedBlockInfo;
@@ -233,7 +270,7 @@ protected:
   MembarFilterFn filter;
 };
 
-class MembarAnalysis : public MembarOrFenceAnalysis {
+class MembarAnalysis : public triton::PostOrderFunctionAnalysis<MembarInfo> {
 public:
   /// Creates a new Membar analysis that generates the shared memory barrier
   /// in the following circumstances:
@@ -249,22 +286,24 @@ public:
   /// it is considered as the problem of the operation itself but not the membar
   /// analysis.
   MembarAnalysis(Allocation &allocation, MembarFilterFn filter)
-      : MembarOrFenceAnalysis(allocation, std::move(filter)),
+      : allocation(allocation), filter(std::move(filter)),
         bufferIndexAnalysis(
             cast<FunctionOpInterface>(allocation.getOperation())) {}
 
 private:
   /// Updates the BlockInfo operation based on the operation.
-  void update(Operation *operation, BlockInfo *blockInfo, FuncMapT *funcMap,
+  void update(Operation *operation, MembarInfo *blockInfo, FuncMapT *funcMap,
               OpBuilder *builder) override;
 
   void updateSuccessor(Operation *terminator, Block *successor,
-                       BlockInfo *blockInfo) override;
+                       MembarInfo *blockInfo) override;
 
-  void updateExitState(BlockInfo *blockInfo) override;
+  void updateExitState(MembarInfo *blockInfo) override;
 
   void insertBarrier(Operation *operation, OpBuilder *builder);
 
+  Allocation &allocation;
+  MembarFilterFn filter;
   BufferIndexAnalysis bufferIndexAnalysis;
 };
 
@@ -299,7 +338,20 @@ private:
   MembarFilterFn filter;
 };
 
-using ModuleMembarAnalysis = ModuleMembarOrFenceAnalysis<MembarAnalysis>;
+/// Inserts shared-memory barriers across a module. Function summaries retain
+/// entry-prefix and pending exit states for calls.
+class ModuleMembarAnalysis {
+public:
+  ModuleMembarAnalysis(ModuleAllocation &moduleAllocation,
+                       MembarFilterFn filter = nullptr)
+      : moduleAllocation(moduleAllocation), filter(std::move(filter)) {}
+
+  void run();
+
+private:
+  ModuleAllocation &moduleAllocation;
+  MembarFilterFn filter;
+};
 
 } // namespace mlir
 
