@@ -255,7 +255,7 @@ private:
   void tryReleaseCodeObject(uint64_t codeObjectId);
 
   // Set when rocprofiler_force_configure successfully configures the service
-  // for at least one GPU agent.
+  // for every visible GPU agent reported by rocprofiler-sdk.
   bool pcSamplingServiceConfigured{false};
   bool pcSamplingStarted{false};
   bool intervalWarningEmitted{false};
