@@ -318,9 +318,8 @@ void RocprofSDKPCSampling::recordKernelSymbol(
   });
 }
 
-void RocprofSDKPCSampling::start(bool pcSamplingModeEnabled) {
-  if (pcSamplingModeEnabled && pcSamplingServiceConfigured &&
-      !pcSamplingStarted) {
+void RocprofSDKPCSampling::start() {
+  if (pcSamplingServiceConfigured && !pcSamplingStarted) {
     rocprofiler::startContext<true>(pcSamplingContext);
     pcSamplingStarted = true;
   }
@@ -544,10 +543,8 @@ void RocprofSDKPCSampling::warnIfInvalidInterval() {}
 void RocprofSDKPCSampling::warnIfSourceLocationsUnavailable() {}
 
 void RocprofSDKPCSampling::recordCodeObjectLoad(
-    const rocprofiler_callback_tracing_code_object_load_data_t &load,
-    bool pcSamplingModeEnabled) {
+    const rocprofiler_callback_tracing_code_object_load_data_t &load) {
   (void)load;
-  (void)pcSamplingModeEnabled;
 }
 
 void RocprofSDKPCSampling::recordCodeObjectUnload(uint64_t codeObjectId) {
@@ -560,9 +557,7 @@ void RocprofSDKPCSampling::recordKernelSymbol(
   (void)symbol;
 }
 
-void RocprofSDKPCSampling::start(bool pcSamplingModeEnabled) {
-  (void)pcSamplingModeEnabled;
-}
+void RocprofSDKPCSampling::start() {}
 
 void RocprofSDKPCSampling::stop() {}
 

@@ -63,7 +63,7 @@ public:
   }
   bool isStarted() const { return pcSamplingStarted; }
 
-  void start(bool pcSamplingModeEnabled);
+  void start();
   // Checked variants surface SDK failures during normal session stop/flush.
   void stop();
   void flushBuffers();
@@ -75,8 +75,7 @@ public:
   void warnIfSourceLocationsUnavailable();
 
   void recordCodeObjectLoad(
-      const rocprofiler_callback_tracing_code_object_load_data_t &load,
-      bool pcSamplingModeEnabled);
+      const rocprofiler_callback_tracing_code_object_load_data_t &load);
   void recordCodeObjectUnload(uint64_t codeObjectId);
   void recordKernelSymbol(
       const rocprofiler_callback_tracing_code_object_kernel_symbol_register_data_t
