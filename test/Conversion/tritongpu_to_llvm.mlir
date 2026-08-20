@@ -3025,9 +3025,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
 
 // CHECK-LABEL: @reinterpret_tensor_descriptor
-tt.func private @reinterpret_tensor_descriptor(%arg0: !tt.ptr<i8, "flat">) -> !tt.tensordesc<128x64xf16, #shared> {
+tt.func private @reinterpret_tensor_descriptor(%arg0: !tt.ptr<i8, "descriptor">) -> !tt.tensordesc<128x64xf16, #shared> {
   // CHECK-NEXT: llvm.addrspacecast %arg0 : !llvm.ptr to !llvm.ptr
-  %0 = ttng.reinterpret_tensor_descriptor %arg0 : !tt.ptr<i8, "flat"> to !tt.tensordesc<128x64xf16, #shared>
+  %0 = ttng.reinterpret_tensor_descriptor %arg0 : !tt.ptr<i8, "descriptor"> to !tt.tensordesc<128x64xf16, #shared>
   tt.return %0 : !tt.tensordesc<128x64xf16, #shared>
 }
 

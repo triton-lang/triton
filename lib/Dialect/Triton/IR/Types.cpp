@@ -64,7 +64,7 @@ void TensorDescType::print(AsmPrinter &printer) const {
 }
 
 // Format: !tt.ptr<f32>            (defaults to the "global" address space)
-//         !tt.ptr<f32, "flat">
+//         !tt.ptr<f32, "descriptor">
 Type PointerType::parse(AsmParser &parser) {
   Location loc = parser.getEncodedSourceLoc(parser.getCurrentLocation());
   if (parser.parseLess())

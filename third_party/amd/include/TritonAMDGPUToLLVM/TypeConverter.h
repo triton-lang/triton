@@ -27,7 +27,7 @@ public:
       switch (type.getAddressSpace()) {
       case triton::PtrAddrSpace::Global:
         return LLVM::LLVMPointerType::get(ctx, llvm::AMDGPUAS::GLOBAL_ADDRESS);
-      case triton::PtrAddrSpace::Flat:
+      case triton::PtrAddrSpace::Descriptor:
         return LLVM::LLVMPointerType::get(ctx, llvm::AMDGPUAS::FLAT_ADDRESS);
       }
       llvm_unreachable("unknown PtrAddrSpace");

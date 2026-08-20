@@ -73,7 +73,7 @@ unsigned TargetInfo::getPtrAddressSpace(triton::PtrAddrSpace space) const {
   switch (space) {
   case triton::PtrAddrSpace::Global:
     return llvm::NVPTXAS::ADDRESS_SPACE_GLOBAL;
-  case triton::PtrAddrSpace::Flat:
+  case triton::PtrAddrSpace::Descriptor:
     return llvm::NVPTXAS::ADDRESS_SPACE_GENERIC;
   }
   llvm_unreachable("unknown PtrAddrSpace");

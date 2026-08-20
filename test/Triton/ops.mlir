@@ -287,8 +287,8 @@ tt.func @unsplat(%arg0: tensor<1x1xf32>) -> f32 {
 }
 
 // CHECK-LABEL: @ptr_addr_space
-tt.func @ptr_addr_space(%arg0: !tt.ptr<i8, "flat">, %arg1: !tt.ptr<f32>) {
-  // CHECK-SAME: %arg0: !tt.ptr<i8, "flat">
+tt.func @ptr_addr_space(%arg0: !tt.ptr<i8, "descriptor">, %arg1: !tt.ptr<f32>) {
+  // CHECK-SAME: %arg0: !tt.ptr<i8, "descriptor">
   // CHECK-SAME: %arg1: !tt.ptr<f32>
   tt.return
 }

@@ -26,7 +26,7 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
     case triton::PtrAddrSpace::Global:
       return LLVM::LLVMPointerType::get(ctx,
                                         llvm::NVPTXAS::ADDRESS_SPACE_GLOBAL);
-    case triton::PtrAddrSpace::Flat:
+    case triton::PtrAddrSpace::Descriptor:
       return LLVM::LLVMPointerType::get(ctx,
                                         llvm::NVPTXAS::ADDRESS_SPACE_GENERIC);
     }

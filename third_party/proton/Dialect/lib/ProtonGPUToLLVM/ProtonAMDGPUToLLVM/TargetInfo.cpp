@@ -220,7 +220,7 @@ unsigned TargetInfo::getPtrAddressSpace(triton::PtrAddrSpace space) const {
   switch (space) {
   case triton::PtrAddrSpace::Global:
     return llvm::AMDGPUAS::GLOBAL_ADDRESS;
-  case triton::PtrAddrSpace::Flat:
+  case triton::PtrAddrSpace::Descriptor:
     return llvm::AMDGPUAS::FLAT_ADDRESS;
   }
   llvm_unreachable("unknown PtrAddrSpace");
