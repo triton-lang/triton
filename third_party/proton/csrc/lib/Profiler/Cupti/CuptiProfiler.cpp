@@ -29,10 +29,6 @@
 
 namespace proton {
 
-template <>
-thread_local GPUProfiler<CuptiProfiler>::ThreadState
-    GPUProfiler<CuptiProfiler>::threadState(CuptiProfiler::instance());
-
 namespace {
 
 std::unique_ptr<Metric>
@@ -58,9 +54,9 @@ struct ActivityCompletion {
 };
 
 ActivityCompletion processActivityKernel(
-    CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
-    CuptiProfiler::ExternIdToStateMap &externIdToState,
-    std::map<uint64_t, std::reference_wrapper<CuptiProfiler::ExternIdState>>
+    CorrIdToExternIdMap &corrIdToExternId,
+    ExternIdToStateMap &externIdToState,
+    std::map<uint64_t, std::reference_wrapper<ExternIdState>>
         &externIdToStateCache,
     DataPhases &dataPhases, CUpti_Activity *activity) {
   // Support CUDA >= 11.0
@@ -78,7 +74,7 @@ ActivityCompletion processActivityKernel(
     bool isMissingName = false;
     DataToEntryMap dataToEntry;
     externIdToState.withRead(externId,
-                             [&](const CuptiProfiler::ExternIdState &state) {
+                             [&](const ExternIdState &state) {
                                isMissingName = state.isMissingName;
                                dataToEntry = state.dataToEntry;
                              });
@@ -114,7 +110,7 @@ ActivityCompletion processActivityKernel(
     // --- CUPTI thread ---
     // - corrId -> numNodes
     auto iter = externIdToStateCache.find(externId);
-    CuptiProfiler::ExternIdState *state = nullptr;
+    ExternIdState *state = nullptr;
     if (iter != externIdToStateCache.end()) {
       state = &iter->second.get();
     } else {
@@ -173,9 +169,9 @@ ActivityCompletion processActivityKernel(
 }
 
 ActivityCompletion processActivity(
-    CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
-    CuptiProfiler::ExternIdToStateMap &externIdToState,
-    std::map<uint64_t, std::reference_wrapper<CuptiProfiler::ExternIdState>>
+    CorrIdToExternIdMap &corrIdToExternId,
+    ExternIdToStateMap &externIdToState,
+    std::map<uint64_t, std::reference_wrapper<ExternIdState>>
         &externIdToStateCache,
     DataPhases &dataPhases, CUpti_Activity *activity) {
   switch (activity->kind) {
@@ -384,7 +380,7 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
   DataPhases dataPhases;
   CUptiResult status;
   CUpti_Activity *activity = nullptr;
-  std::map<uint64_t, std::reference_wrapper<CuptiProfiler::ExternIdState>>
+  std::map<uint64_t, std::reference_wrapper<ExternIdState>>
       externIdToStateCache;
   do {
     status = cupti::activityGetNextRecord<false>(buffer, validSize, &activity);
@@ -542,12 +538,10 @@ void CuptiProfiler::CuptiProfilerPimpl::handleApiEnterLaunchCallbacks(
             ->hGraph;
     uint32_t graphExecId = 0;
     cupti::getGraphExecId<true>(graphExec, &graphExecId);
-    static const bool timingEnabled =
-        getBoolEnv("PROTON_GRAPH_LAUNCH_TIMING", false);
-    const GraphLaunchOptions options{
-        /*flushMetricBuffer=*/callbackData->context != nullptr, timingEnabled};
-    numNodes =
-        prepareGraphLaunch(graphStates, graphExecId, scope.scopeId, options);
+    numNodes = detail::prepareGraphLaunch(
+        graphStates, graphExecId, scope.scopeId, dataToEntry,
+        profiler.correlation.externIdToState, profiler.pendingGraphPool.get(),
+        /*flushMetricBuffer=*/callbackData->context != nullptr);
   }
 
   if (dataToEntry.empty()) // Profiler is deactivated

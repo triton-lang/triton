@@ -17,6 +17,7 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <optional>
 #include <stdexcept>
 #include <thread>
 #include <unordered_map>
@@ -27,10 +28,28 @@ namespace proton {
 using DataPhases = std::map<Data *, std::pair</*start_phase=*/size_t,
                                               /*end_phase=*/size_t>>;
 
-struct GraphLaunchOptions {
-  bool flushMetricBuffer{true};
-  bool timingEnabled{false};
+using CorrIdToExternIdMap =
+    ThreadSafeMap</*correlation_id=*/uint64_t, /*extern_id=*/size_t,
+                  std::unordered_map<uint64_t, size_t>>;
+
+struct ExternIdState {
+  // ----non-graph launch fields----
+  DataToEntryMap dataToEntry;
+  // Sometimes the kernel name cannot be retrieved in application threads
+  // for reasons like uninitialize CUDA context.
+  bool isMissingName{true};
+  // ----graph launch fields----
+  // For graph launches, the launch correlation id fans out into multiple
+  // kernel activity records. We track the expected fanout here and keep
+  // updating it when we have processed each kernel activity record.
+  size_t numNodes{1};
+  DataToEntryMap dataToGraphEntry;
+  GraphState::NodeIdToStateMap *nodeIdToState{nullptr};
 };
+
+using ExternIdToStateMap =
+    ThreadSafeMap<size_t, ExternIdState,
+                  std::unordered_map<size_t, ExternIdState>>;
 
 namespace detail {
 
@@ -48,6 +67,12 @@ void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
 
 int64_t
 computeTimestampOffsetNs(const std::function<void(uint64_t *)> &getTimestamp);
+
+size_t prepareGraphLaunch(
+    ThreadSafeMap<uint64_t, GraphState> &graphStates, uint64_t graphExecId,
+    size_t externId, const DataToEntryMap &dataToEntry,
+    ExternIdToStateMap &externIdToState, PendingGraphPool *pendingGraphPool,
+    bool flushMetricBuffer);
 } // namespace detail
 
 // Singleton<ConcreteProfilerT>: Each concrete GPU profiler, e.g.,
@@ -60,29 +85,6 @@ class GPUProfiler : public Profiler,
 public:
   GPUProfiler() = default;
   virtual ~GPUProfiler() = default;
-
-  using CorrIdToExternIdMap =
-      ThreadSafeMap</*correlation_id=*/uint64_t, /*extern_id=*/size_t,
-                    std::unordered_map<uint64_t, size_t>>;
-
-  struct ExternIdState {
-    // ----non-graph launch fields----
-    DataToEntryMap dataToEntry;
-    // Sometimes the kernel name cannot be retrieved in application threads
-    // for reasons like uninitialize CUDA context.
-    bool isMissingName{true};
-    // ----graph launch fields----
-    // For graph launches, the launch correlation id fans out into multiple
-    // kernel activity records. We track the expected fanout here and keep
-    // updating it when we have processed each kernel activity record.
-    size_t numNodes{1};
-    DataToEntryMap dataToGraphEntry;
-    GraphState::NodeIdToStateMap *nodeIdToState{nullptr};
-  };
-
-  using ExternIdToStateMap =
-      ThreadSafeMap<size_t, ExternIdState,
-                    std::unordered_map<size_t, ExternIdState>>;
 
 protected:
   // OpInterface
@@ -158,7 +160,22 @@ protected:
       scopeStack.pop_back();
     }
 
-    void captureGraphNode(GraphState &graphState, uint64_t nodeId);
+    void captureGraphNode(GraphState &graphState, uint64_t nodeId) {
+      if (!profiler.isOpInProgress())
+        return;
+
+      std::optional<GraphState::MetricNodeState> metricNodeState;
+      if (isMetricKernelLaunching) {
+        auto metricKernelLaunchInfo = metricKernelLaunchInfoQueue.front();
+        metricKernelLaunchInfoQueue.pop_front();
+        metricNodeState.emplace(GraphState::MetricNodeState{
+            metricKernelLaunchInfo.seqId, metricKernelLaunchInfo.metricId,
+            metricKernelLaunchInfo.numWords});
+      }
+      graphState.recordNode(nodeId, scopeStack.back().name,
+                            std::move(metricNodeState), profiler.dataSet,
+                            isApiExternOp);
+    }
   };
 
   struct Correlation {
@@ -238,7 +255,8 @@ protected:
     }
   };
 
-  static thread_local ThreadState threadState;
+  inline static thread_local ThreadState threadState{
+      ConcreteProfilerT::instance()};
 
   std::unique_ptr<MetricBuffer> metricBuffer;
   std::unique_ptr<PendingGraphPool> pendingGraphPool;
@@ -258,11 +276,6 @@ protected:
     virtual void doStart() = 0;
     virtual void doFlush() = 0;
     virtual void doStop() = 0;
-
-    size_t prepareGraphLaunch(
-        ThreadSafeMap<uint64_t, GraphState> &graphStates,
-        uint64_t graphExecId, size_t externId,
-        const GraphLaunchOptions &options);
 
     void
     doAddMetrics(size_t scopeId,

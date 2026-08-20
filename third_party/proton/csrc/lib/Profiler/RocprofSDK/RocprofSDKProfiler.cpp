@@ -44,11 +44,6 @@
 
 namespace proton {
 
-template <>
-thread_local GPUProfiler<RocprofSDKProfiler>::ThreadState
-    GPUProfiler<RocprofSDKProfiler>::threadState(
-        RocprofSDKProfiler::instance());
-
 namespace {
 
 constexpr size_t BufferSize = 64 * 1024 * 1024;
@@ -444,8 +439,8 @@ private:
 
 bool processKernelRecord(
     RocprofSDKProfiler &profiler,
-    RocprofSDKProfiler::CorrIdToExternIdMap &corrIdToExternId,
-    RocprofSDKProfiler::ExternIdToStateMap &externIdToState,
+    CorrIdToExternIdMap &corrIdToExternId,
+    ExternIdToStateMap &externIdToState,
     KernelPhaseTracker &phaseTracker, DataPhases &dataPhases,
     const std::string &kernelName,
     const rocprofiler_buffer_tracing_kernel_dispatch_record_t *record,
@@ -461,7 +456,7 @@ bool processKernelRecord(
   DataToEntryMap dataToEntry;
   bool isMissingName = true;
   if (!externIdToState.withRead(
-          externId, [&](const RocprofSDKProfiler::ExternIdState &state) {
+          externId, [&](const ExternIdState &state) {
             dataToEntry = state.dataToEntry;
             isMissingName = state.isMissingName;
           })) {
@@ -484,7 +479,7 @@ bool processKernelRecord(
 
   bool complete = false;
   externIdToState.withWrite(externId,
-                            [&](RocprofSDKProfiler::ExternIdState &state) {
+                            [&](ExternIdState &state) {
                               --state.numNodes;
                               complete = state.numNodes == 0;
                             });
@@ -497,7 +492,7 @@ bool processKernelRecord(
 
 #if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
 void processGraphKernelRecord(
-    RocprofSDKProfiler::ExternIdToStateMap &externIdToState,
+    ExternIdToStateMap &externIdToState,
     KernelPhaseTracker &phaseTracker, DataPhases &dataPhases,
     const std::string &kernelName,
     const rocprofiler_buffer_tracing_kernel_dispatch_record_t *record,
@@ -557,7 +552,7 @@ void processGraphKernelRecord(
                         dataPhases);
   bool complete = false;
   externIdToState.withWrite(externId,
-                            [&](RocprofSDKProfiler::ExternIdState &state) {
+                            [&](ExternIdState &state) {
                               --state.numNodes;
                               complete = state.numNodes == 0;
                             });
@@ -884,12 +879,10 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback(
     auto externId = threadState.scopeStack.back().scopeId;
     auto &profiler = threadState.profiler;
     auto &dataToEntry = threadState.dataToEntry;
-    static const bool timingEnabled =
-        getBoolEnv("PROTON_GRAPH_LAUNCH_TIMING", false);
-    const GraphLaunchOptions options{/*flushMetricBuffer=*/true,
-                                     timingEnabled};
-    size_t numNodes = prepareGraphLaunch(
-        impl->graphStates, graphExecId, externId, options);
+    size_t numNodes = detail::prepareGraphLaunch(
+        impl->graphStates, graphExecId, externId, dataToEntry,
+        profiler.correlation.externIdToState, profiler.pendingGraphPool.get(),
+        /*flushMetricBuffer=*/true);
     if (!dataToEntry.empty()) {
       auto &scope = threadState.scopeStack.back();
       profiler.correlation.correlate(record.correlation_id.internal, externId,
@@ -923,7 +916,7 @@ int RocprofSDKProfiler::RocprofSDKProfilerPimpl::graphNodeCorrelationCallback(
   auto &profiler = threadState.profiler;
   auto *impl = static_cast<RocprofSDKProfilerPimpl *>(profiler.pImpl.get());
   profiler.correlation.externIdToState.withRead(
-      externId, [&](const RocprofSDKProfiler::ExternIdState &state) {
+      externId, [&](const ExternIdState &state) {
         impl->kernelPhaseTracker.record(
             state.nodeIdToState ? state.dataToGraphEntry : state.dataToEntry);
       });
