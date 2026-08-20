@@ -91,7 +91,7 @@ jobs:
         run: ccache --print-stats
       - name: Run lit tests
         run: make test-lit
-      - name: Check ConSan attention performance
+      - name: Check ConSan performance
         if: ${{ matrix.config.runner_type == 'nvidia-gb200' }}
         timeout-minutes: 8
         env:
