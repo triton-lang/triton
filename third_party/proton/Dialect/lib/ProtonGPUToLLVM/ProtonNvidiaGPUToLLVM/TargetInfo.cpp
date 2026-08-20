@@ -72,6 +72,8 @@ int TargetInfo::getAddressSpace(Attribute addressSpace) const {
 unsigned TargetInfo::getPtrAddressSpace(triton::PtrAddrSpace space) const {
   switch (space) {
   case triton::PtrAddrSpace::Global:
+  // Constant is AMD-specific; map to global here.
+  case triton::PtrAddrSpace::Constant:
     return llvm::NVPTXAS::ADDRESS_SPACE_GLOBAL;
   case triton::PtrAddrSpace::Descriptor:
     return llvm::NVPTXAS::ADDRESS_SPACE_GENERIC;
