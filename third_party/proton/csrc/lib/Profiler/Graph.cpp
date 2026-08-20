@@ -30,6 +30,7 @@ void GraphState::recordNode(uint64_t nodeId, const std::string &name,
   }
 
   for (auto *data : dataSet) {
+    capturedData.insert(data);
     auto currentContexts = data->getContexts();
     std::vector<Context> contexts;
     contexts.emplace_back(captureTag);
@@ -52,7 +53,6 @@ void GraphState::recordNode(uint64_t nodeId, const std::string &name,
       auto staticEntry =
           data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
       nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);
-      dataToEntryIdToNodeStates[data][staticEntry.id].insert(&nodeState);
       auto flexibleMetricEntry = data->addOp(
           Data::kVirtualPhase, Data::kRootEntryId, flexibleMetricEntryContexts);
       metricNodeIdToState.at(nodeId).dataToEntryId.insert_or_assign(
@@ -62,7 +62,6 @@ void GraphState::recordNode(uint64_t nodeId, const std::string &name,
       auto staticEntry =
           data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
       nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);
-      dataToEntryIdToNodeStates[data][staticEntry.id].insert(&nodeState);
     }
   }
 }
@@ -70,7 +69,7 @@ void GraphState::recordNode(uint64_t nodeId, const std::string &name,
 void GraphState::buildLaunchEntries(const DataToEntryMap &dataToEntry,
                                     DataToEntryMap &dataToGraphEntry) const {
   for (const auto &[data, entry] : dataToEntry) {
-    if (dataToEntryIdToNodeStates.find(data) == dataToEntryIdToNodeStates.end())
+    if (capturedData.find(data) == capturedData.end())
       // This data object was not enabled during graph capture.
       continue;
     dataToGraphEntry.insert({data, entry});

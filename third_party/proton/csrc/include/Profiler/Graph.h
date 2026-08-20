@@ -64,11 +64,8 @@ struct GraphState {
     }
   };
   using NodeIdToStateMap = std::map<uint64_t, NodeState>;
-  // Precomputed per-Data launch links maintained on graph node
-  // create/clone/destroy callbacks.
-  // data -> (static_entry_id -> graph-node metadata pointers)
-  std::map<Data *, std::unordered_map<size_t, std::set<NodeState *>>>
-      dataToEntryIdToNodeStates;
+  // Data objects that were active for at least one node during graph capture.
+  std::set<Data *> capturedData;
   // Mapping from node id to node state, has to be ordered based on node id
   // which is the order of node creation.
   NodeIdToStateMap nodeIdToState;

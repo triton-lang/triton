@@ -317,7 +317,7 @@ struct CuptiProfiler::CuptiProfilerPimpl
     profiler.pendingGraphPool =
         std::make_unique<PendingGraphPool>(profiler.metricBuffer.get());
   }
-  virtual ~CuptiProfilerPimpl() = default;
+  ~CuptiProfilerPimpl() override = default;
 
   void doStart() override;
   void doFlush() override;
@@ -457,9 +457,8 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
           originalGraphState.nodeIdToState[originalNodeId];
       auto &nodeState = graphState.nodeIdToState[nodeId];
       nodeState.nodeId = nodeId;
-      for (const auto &[data, entryId] : nodeState.dataToEntryId) {
-        graphState.dataToEntryIdToNodeStates[data][entryId].insert(&nodeState);
-      }
+      for (const auto &dataToEntryId : nodeState.dataToEntryId)
+        graphState.capturedData.insert(dataToEntryId.first);
       auto originalMetricNodeIt =
           originalGraphState.metricNodeIdToState.find(originalNodeId);
       if (originalMetricNodeIt !=
@@ -629,10 +628,9 @@ void CuptiProfiler::CuptiProfilerPimpl::doStart() {
     setNvtxCallbacks(subscriber, /*enable=*/true);
   }
 
-  if (!profiler.isTimestampCalibrated) {
+  if (!profiler.timestampOffsetNs) {
     profiler.timestampOffsetNs =
         detail::computeTimestampOffsetNs(cupti::getTimestamp<true>);
-    profiler.isTimestampCalibrated = true;
   }
 }
 

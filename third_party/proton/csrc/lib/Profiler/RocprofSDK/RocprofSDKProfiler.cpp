@@ -575,7 +575,7 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
     profiler.pendingGraphPool =
         std::make_unique<PendingGraphPool>(profiler.metricBuffer.get());
   }
-  virtual ~RocprofSDKProfilerPimpl() = default;
+  ~RocprofSDKProfilerPimpl() override = default;
 
   void doStart() override;
   void doFlush() override;
@@ -1275,10 +1275,9 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStart() {
       registerRoctxCallback(true);
   }
 
-  if (!profiler.isTimestampCalibrated) {
+  if (!profiler.timestampOffsetNs) {
     profiler.timestampOffsetNs =
         detail::computeTimestampOffsetNs(rocprofiler::getTimestamp<true>);
-    profiler.isTimestampCalibrated = true;
   }
 }
 

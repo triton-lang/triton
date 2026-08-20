@@ -1,5 +1,7 @@
 #include "Profiler/GPUProfiler.h"
 #include "Profiler/Graph.h"
+#include "Utility/Atomic.h"
+#include "Utility/Env.h"
 #include "Utility/Errors.h"
 
 #include <algorithm>
@@ -8,8 +10,66 @@
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <thread>
 
 namespace proton {
+
+void GPUCorrelation::submit(uint64_t numTasks, uint64_t correlationId) {
+  atomicMax(maxSubmittedCorrelationId, correlationId);
+  numSubmittedTasks.fetch_add(numTasks);
+}
+
+void GPUCorrelation::complete(uint64_t numTasks, uint64_t correlationId) {
+  atomicMax(maxCompletedCorrelationId, correlationId);
+  numCompletedTasks.fetch_add(numTasks);
+}
+
+void GPUCorrelation::complete(uint64_t correlationId) {
+  atomicMax(maxCompletedCorrelationId, correlationId);
+}
+
+void GPUCorrelation::correlate(uint64_t correlationId, size_t externId,
+                               size_t numNodes, bool isMissingName,
+                               const DataToEntryMap &dataToEntry) {
+  corrIdToExternId.insert(correlationId, externId);
+  externIdToState.upsert(externId, [&](ExternIdState &state) {
+    state.numNodes = numNodes;
+    state.dataToEntry = dataToEntry;
+    state.isMissingName = isMissingName;
+  });
+}
+
+void GPUCorrelation::flush(uint64_t maxRetries, uint64_t sleepUs,
+                           const std::function<void()> &flushFn) {
+  flushFn();
+  auto submittedTasks = numSubmittedTasks.load();
+  auto completedTasks = numCompletedTasks.load();
+  auto submittedCorrelationId = maxSubmittedCorrelationId.load();
+  auto completedCorrelationId = maxCompletedCorrelationId.load();
+  auto retries = maxRetries;
+  // The task count is precise when available. The maximum correlation ID is a
+  // best-effort fallback because kernels on different streams can finish out
+  // of order.
+  while ((completedTasks < submittedTasks ||
+          completedCorrelationId < submittedCorrelationId) &&
+         retries > 0) {
+    std::this_thread::sleep_for(std::chrono::microseconds(sleepUs));
+    flushFn();
+    completedTasks = numCompletedTasks.load();
+    completedCorrelationId = maxCompletedCorrelationId.load();
+    --retries;
+  }
+}
+
+void GPUCorrelation::clear() {
+  corrIdToExternId.clear();
+  externIdToState.clear();
+  numCompletedTasks.store(0);
+  numSubmittedTasks.store(0);
+  maxCompletedCorrelationId.store(0);
+  maxSubmittedCorrelationId.store(0);
+}
+
 namespace detail {
 
 namespace {

@@ -6,21 +6,19 @@
 #include "Profiler.h"
 #include "Profiler/Graph.h"
 #include "Session/Session.h"
-#include "Utility/Atomic.h"
-#include "Utility/Env.h"
 #include "Utility/Map.h"
-#include "Utility/Table.h"
 
 #include <atomic>
-#include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
-#include <stdexcept>
-#include <thread>
+#include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace proton {
@@ -50,6 +48,29 @@ struct ExternIdState {
 using ExternIdToStateMap =
     ThreadSafeMap<size_t, ExternIdState,
                   std::unordered_map<size_t, ExternIdState>>;
+
+class GPUCorrelation {
+public:
+  void submit(uint64_t numTasks,
+              uint64_t correlationId = Scope::DummyScopeId);
+  void complete(uint64_t numTasks, uint64_t correlationId);
+  void complete(uint64_t correlationId);
+  void correlate(uint64_t correlationId, size_t externId, size_t numNodes,
+                 bool isMissingName, const DataToEntryMap &dataToEntry);
+  void flush(uint64_t maxRetries, uint64_t sleepUs,
+             const std::function<void()> &flushFn);
+  void clear();
+
+  // These maps are consumed directly by backend-specific activity processors.
+  CorrIdToExternIdMap corrIdToExternId;
+  ExternIdToStateMap externIdToState;
+
+private:
+  std::atomic<uint64_t> numSubmittedTasks{0};
+  std::atomic<uint64_t> numCompletedTasks{0};
+  std::atomic<uint64_t> maxSubmittedCorrelationId{0};
+  std::atomic<uint64_t> maxCompletedCorrelationId{0};
+};
 
 namespace detail {
 
@@ -85,7 +106,11 @@ class GPUProfiler : public Profiler,
                     public Singleton<ConcreteProfilerT> {
 public:
   GPUProfiler() = default;
-  virtual ~GPUProfiler() = default;
+  ~GPUProfiler() override = default;
+
+  int64_t getTimestampOffsetNs() const override final {
+    return timestampOffsetNs.value_or(0);
+  }
 
 protected:
   // OpInterface
@@ -97,7 +122,7 @@ protected:
     }
   }
 
-  void stopOp(const Scope &scope) override {
+  void stopOp(const Scope &) override {
     this->threadState.scopeStack.pop_back();
     threadState.dataToEntry.clear();
   }
@@ -109,10 +134,10 @@ protected:
   }
 
   // Profiler
-  virtual void doStart() override { pImpl->doStart(); }
-  virtual void doFlush() override { pImpl->doFlush(); }
-  virtual void doStop() override { pImpl->doStop(); }
-  virtual void addMetrics(
+  void doStart() override { pImpl->doStart(); }
+  void doFlush() override { pImpl->doFlush(); }
+  void doStop() override { pImpl->doStop(); }
+  void addMetrics(
       size_t scopeId,
       const std::map<std::string, MetricValueType> &scalarMetrics,
       const std::map<std::string, TensorMetric> &tensorMetrics) override {
@@ -133,7 +158,7 @@ protected:
       size_t numWords{};
     };
     std::deque<MetricKernelLaunchInfo> metricKernelLaunchInfoQueue;
-    ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
+    explicit ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
     void enterOp(const Scope &scope) {
       if (profiler.isOpInProgress()) // Already in a triton op
@@ -163,89 +188,14 @@ protected:
 
   };
 
-  struct Correlation {
-    std::atomic<uint64_t> numSubmittedTasks{0};
-    std::atomic<uint64_t> numCompletedTasks{0};
-    std::atomic<uint64_t> maxSubmittedCorrelationId{0};
-    std::atomic<uint64_t> maxCompletedCorrelationId{0};
-    // Mapping from a native profiler correlation id to an external id.
-    CorrIdToExternIdMap corrIdToExternId;
-    // Mapping from an external id to graph-node states
-    ExternIdToStateMap externIdToState;
-
-    Correlation() = default;
-
-    void submit(size_t numTasks, uint64_t correlationId = Scope::DummyScopeId) {
-      atomicMax(maxSubmittedCorrelationId, correlationId);
-      numSubmittedTasks.fetch_add(numTasks);
-    }
-
-    void complete(uint64_t numTasks, uint64_t correlationId) {
-      atomicMax(maxCompletedCorrelationId, correlationId);
-      numCompletedTasks.fetch_add(numTasks);
-    }
-
-    void complete(uint64_t correlationId) {
-      atomicMax(maxCompletedCorrelationId, correlationId);
-    }
-
-    // Correlate the correlationId with the last externId
-    void correlate(uint64_t correlationId, size_t externId, size_t numNodes,
-                   bool isMissingName, const DataToEntryMap &dataToEntry) {
-      corrIdToExternId.insert(correlationId, externId);
-      externIdToState.upsert(externId, [&](ExternIdState &state) {
-        state.numNodes = numNodes;
-        state.dataToEntry = dataToEntry;
-        state.isMissingName = isMissingName;
-      });
-    }
-
-    template <typename FlushFnT>
-    void flush(uint64_t maxRetries, uint64_t sleepUs, FlushFnT &&flushFn) {
-      flushFn();
-      auto submittedTasks = numSubmittedTasks.load();
-      auto completedTasks = numCompletedTasks.load();
-      auto submittedCorrelationId = maxSubmittedCorrelationId.load();
-      auto completedCorrelationId = maxCompletedCorrelationId.load();
-      auto retries = maxRetries;
-      // We check two conditions here:
-      // 1. The number of completed tasks meets or exceeds the number of
-      // submitted tasks.
-      //    This is the precise condition, but it is not always available — for
-      //    example, when profiling starts after CUDA graph capture, the node
-      //    count may be unavailable.
-      // 2. The maximum completed correlation ID meets or exceeds the maximum
-      // submitted correlation ID.
-      //    This is a best-effort heuristic, since kernels launched across
-      //    multiple streams may complete out of order, making the completed
-      //    correlation ID non-monotonic.
-      while ((completedTasks < submittedTasks ||
-              completedCorrelationId < submittedCorrelationId) &&
-             retries > 0) {
-        std::this_thread::sleep_for(std::chrono::microseconds(sleepUs));
-        flushFn();
-        completedTasks = numCompletedTasks.load();
-        completedCorrelationId = maxCompletedCorrelationId.load();
-        --retries;
-      }
-    }
-
-    void clear() {
-      corrIdToExternId.clear();
-      externIdToState.clear();
-      numCompletedTasks.store(0);
-      numSubmittedTasks.store(0);
-      maxCompletedCorrelationId.store(0);
-      maxSubmittedCorrelationId.store(0);
-    }
-  };
-
   static thread_local ThreadState threadState;
 
   std::unique_ptr<MetricBuffer> metricBuffer;
   std::unique_ptr<PendingGraphPool> pendingGraphPool;
 
-  Correlation correlation;
+  GPUCorrelation correlation;
+
+  std::optional<int64_t> timestampOffsetNs;
 
   // Use the pimpl idiom to hide the implementation details. This lets us avoid
   // including the cupti header from this header. The cupti header and the
@@ -253,7 +203,7 @@ protected:
   // those headers only within cpp files.
   class GPUProfilerPimplInterface {
   public:
-    GPUProfilerPimplInterface(ConcreteProfilerT &profiler)
+    explicit GPUProfilerPimplInterface(ConcreteProfilerT &profiler)
         : profiler(profiler) {}
     virtual ~GPUProfilerPimplInterface() = default;
 

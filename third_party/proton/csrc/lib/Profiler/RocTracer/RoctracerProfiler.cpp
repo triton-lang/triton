@@ -254,7 +254,7 @@ struct RoctracerProfiler::RoctracerProfilerPimpl
         getIntEnv("TRITON_PROFILE_METRIC_BUFFER_SIZE", 64 * 1024 * 1024),
         runtime);
   }
-  virtual ~RoctracerProfilerPimpl() = default;
+  ~RoctracerProfilerPimpl() override = default;
 
   void doStart() override;
   void doFlush() override;
@@ -463,10 +463,9 @@ void RoctracerProfiler::RoctracerProfilerPimpl::doStart() {
   roctracer::enableDomainActivity<true>(ACTIVITY_DOMAIN_HIP_OPS);
   roctracer::start();
 
-  if (!profiler.isTimestampCalibrated) {
+  if (!profiler.timestampOffsetNs) {
     profiler.timestampOffsetNs =
         detail::computeTimestampOffsetNs(roctracer::getTimestamp<true>);
-    profiler.isTimestampCalibrated = true;
   }
 }
 
