@@ -285,10 +285,6 @@ void flushDataPhasesImpl(const bool periodicFlushEnabled,
   }
 }
 
-} // namespace detail
-
-namespace detail {
-
 size_t prepareGraphLaunch(
     ThreadSafeMap<uint64_t, GraphState> &graphStates, uint64_t graphExecId,
     size_t externId, const DataToEntryMap &dataToEntry,
@@ -351,5 +347,4 @@ size_t prepareGraphLaunch(
 }
 
 } // namespace detail
-
 } // namespace proton
