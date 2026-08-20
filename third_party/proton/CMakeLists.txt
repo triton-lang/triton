@@ -50,19 +50,15 @@ else()
   message(STATUS "Proton ROCProfiler-SDK PC sampling: disabled")
 endif()
 
-set(_PROTON_ROCPROFILER_SDK_LINK_PATHS "")
-foreach(_path IN ITEMS
-    "${TRITON_ROCPROFILER_SDK_DEVEL_LIB_PATH}")
-  if(_path)
-    list(APPEND _PROTON_ROCPROFILER_SDK_LINK_PATHS "${_path}")
-  endif()
-endforeach()
+get_filename_component(_PROTON_ROCM_ROOT "${ROCM_INCLUDE_DIR}" DIRECTORY)
 
 find_library(PROTON_AMD_COMGR_LIBRARY
   NAMES amd_comgr
-  HINTS ${_PROTON_ROCPROFILER_SDK_LINK_PATHS}
+  HINTS "${_PROTON_ROCM_ROOT}/lib"
   NO_DEFAULT_PATH)
-find_library(PROTON_DW_LIBRARY NAMES dw)
+find_library(PROTON_DW_LIBRARY
+  NAMES dw
+  HINTS "${_PROTON_ROCM_ROOT}/lib/rocm_sysdeps/lib")
 
 unset(PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE CACHE)
 set(PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE OFF)
