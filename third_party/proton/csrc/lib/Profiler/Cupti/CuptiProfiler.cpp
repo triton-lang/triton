@@ -53,12 +53,12 @@ struct ActivityCompletion {
   bool countsAsTask{};
 };
 
-ActivityCompletion processActivityKernel(
-    CorrIdToExternIdMap &corrIdToExternId,
-    ExternIdToStateMap &externIdToState,
-    std::map<uint64_t, std::reference_wrapper<ExternIdState>>
-        &externIdToStateCache,
-    DataPhases &dataPhases, CUpti_Activity *activity) {
+ActivityCompletion
+processActivityKernel(CorrIdToExternIdMap &corrIdToExternId,
+                      ExternIdToStateMap &externIdToState,
+                      std::map<uint64_t, std::reference_wrapper<ExternIdState>>
+                          &externIdToStateCache,
+                      DataPhases &dataPhases, CUpti_Activity *activity) {
   // Support CUDA >= 11.0
   auto *kernel = reinterpret_cast<CUpti_ActivityKernel5 *>(activity);
   auto correlationId = kernel->correlationId;
@@ -73,11 +73,10 @@ ActivityCompletion processActivityKernel(
     // Non-graph kernels
     bool isMissingName = false;
     DataToEntryMap dataToEntry;
-    externIdToState.withRead(externId,
-                             [&](const ExternIdState &state) {
-                               isMissingName = state.isMissingName;
-                               dataToEntry = state.dataToEntry;
-                             });
+    externIdToState.withRead(externId, [&](const ExternIdState &state) {
+      isMissingName = state.isMissingName;
+      dataToEntry = state.dataToEntry;
+    });
     if (!isMissingName) {
       for (auto &[data, entry] : dataToEntry) {
         if (auto kernelMetric = convertKernelActivityToMetric(activity)) {
@@ -168,12 +167,12 @@ ActivityCompletion processActivityKernel(
   }
 }
 
-ActivityCompletion processActivity(
-    CorrIdToExternIdMap &corrIdToExternId,
-    ExternIdToStateMap &externIdToState,
-    std::map<uint64_t, std::reference_wrapper<ExternIdState>>
-        &externIdToStateCache,
-    DataPhases &dataPhases, CUpti_Activity *activity) {
+ActivityCompletion
+processActivity(CorrIdToExternIdMap &corrIdToExternId,
+                ExternIdToStateMap &externIdToState,
+                std::map<uint64_t, std::reference_wrapper<ExternIdState>>
+                    &externIdToStateCache,
+                DataPhases &dataPhases, CUpti_Activity *activity) {
   switch (activity->kind) {
   case CUPTI_ACTIVITY_KIND_KERNEL:
   case CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL: {

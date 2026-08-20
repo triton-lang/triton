@@ -11,10 +11,10 @@
 
 namespace proton {
 
-void GraphState::recordNode(
-    uint64_t nodeId, const std::string &name,
-    std::optional<MetricNodeState> metricNodeState,
-    const std::set<Data *> &dataSet, bool isApiExternOp) {
+void GraphState::recordNode(uint64_t nodeId, const std::string &name,
+                            std::optional<MetricNodeState> metricNodeState,
+                            const std::set<Data *> &dataSet,
+                            bool isApiExternOp) {
   auto &nodeState = nodeIdToState[nodeId];
   nodeState.nodeId = nodeId;
   if (name.empty())
@@ -23,8 +23,7 @@ void GraphState::recordNode(
   const bool isMetricKernelNode = metricNodeState.has_value();
   if (isMetricKernelNode) {
     nodeState.status.setMetricNode();
-    metricNodeIdToState.insert_or_assign(nodeId,
-                                         std::move(*metricNodeState));
+    metricNodeIdToState.insert_or_assign(nodeId, std::move(*metricNodeState));
     const auto &storedMetricNodeState = metricNodeIdToState.at(nodeId);
     metricSeqIdToNodeId.insert_or_assign(storedMetricNodeState.seqId, nodeId);
     numMetricWords += storedMetricNodeState.numWords;
@@ -71,8 +70,7 @@ void GraphState::recordNode(
 void GraphState::buildLaunchEntries(const DataToEntryMap &dataToEntry,
                                     DataToEntryMap &dataToGraphEntry) const {
   for (const auto &[data, entry] : dataToEntry) {
-    if (dataToEntryIdToNodeStates.find(data) ==
-        dataToEntryIdToNodeStates.end())
+    if (dataToEntryIdToNodeStates.find(data) == dataToEntryIdToNodeStates.end())
       // This data object was not enabled during graph capture.
       continue;
     dataToGraphEntry.insert({data, entry});

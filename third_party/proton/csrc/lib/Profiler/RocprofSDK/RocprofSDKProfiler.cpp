@@ -438,11 +438,9 @@ private:
 };
 
 bool processKernelRecord(
-    RocprofSDKProfiler &profiler,
-    CorrIdToExternIdMap &corrIdToExternId,
-    ExternIdToStateMap &externIdToState,
-    KernelPhaseTracker &phaseTracker, DataPhases &dataPhases,
-    const std::string &kernelName,
+    RocprofSDKProfiler &profiler, CorrIdToExternIdMap &corrIdToExternId,
+    ExternIdToStateMap &externIdToState, KernelPhaseTracker &phaseTracker,
+    DataPhases &dataPhases, const std::string &kernelName,
     const rocprofiler_buffer_tracing_kernel_dispatch_record_t *record,
     uint64_t streamId) {
   auto externId = Scope::DummyScopeId;
@@ -455,11 +453,10 @@ bool processKernelRecord(
 
   DataToEntryMap dataToEntry;
   bool isMissingName = true;
-  if (!externIdToState.withRead(
-          externId, [&](const ExternIdState &state) {
-            dataToEntry = state.dataToEntry;
-            isMissingName = state.isMissingName;
-          })) {
+  if (!externIdToState.withRead(externId, [&](const ExternIdState &state) {
+        dataToEntry = state.dataToEntry;
+        isMissingName = state.isMissingName;
+      })) {
     corrIdToExternId.erase(record->correlation_id.internal);
     return true;
   }
@@ -478,11 +475,10 @@ bool processKernelRecord(
   phaseTracker.complete(dataToEntry, dataPhases);
 
   bool complete = false;
-  externIdToState.withWrite(externId,
-                            [&](ExternIdState &state) {
-                              --state.numNodes;
-                              complete = state.numNodes == 0;
-                            });
+  externIdToState.withWrite(externId, [&](ExternIdState &state) {
+    --state.numNodes;
+    complete = state.numNodes == 0;
+  });
   if (complete) {
     corrIdToExternId.erase(record->correlation_id.internal);
     externIdToState.erase(externId);
@@ -492,9 +488,8 @@ bool processKernelRecord(
 
 #if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
 void processGraphKernelRecord(
-    ExternIdToStateMap &externIdToState,
-    KernelPhaseTracker &phaseTracker, DataPhases &dataPhases,
-    const std::string &kernelName,
+    ExternIdToStateMap &externIdToState, KernelPhaseTracker &phaseTracker,
+    DataPhases &dataPhases, const std::string &kernelName,
     const rocprofiler_buffer_tracing_kernel_dispatch_record_t *record,
     const GraphDispatchCorrelation &graphCorrelation, uint64_t streamId) {
   // Graph kernels:
@@ -551,11 +546,10 @@ void processGraphKernelRecord(
                                       : externState.dataToEntry,
                         dataPhases);
   bool complete = false;
-  externIdToState.withWrite(externId,
-                            [&](ExternIdState &state) {
-                              --state.numNodes;
-                              complete = state.numNodes == 0;
-                            });
+  externIdToState.withWrite(externId, [&](ExternIdState &state) {
+    --state.numNodes;
+    complete = state.numNodes == 0;
+  });
   if (complete)
     externIdToState.erase(externId);
 }

@@ -285,11 +285,12 @@ void flushDataPhasesImpl(const bool periodicFlushEnabled,
   }
 }
 
-size_t prepareGraphLaunch(
-    ThreadSafeMap<uint64_t, GraphState> &graphStates, uint64_t graphExecId,
-    size_t externId, const DataToEntryMap &dataToEntry,
-    ExternIdToStateMap &externIdToState, PendingGraphPool *pendingGraphPool,
-    bool flushMetricBuffer) {
+size_t prepareGraphLaunch(ThreadSafeMap<uint64_t, GraphState> &graphStates,
+                          uint64_t graphExecId, size_t externId,
+                          const DataToEntryMap &dataToEntry,
+                          ExternIdToStateMap &externIdToState,
+                          PendingGraphPool *pendingGraphPool,
+                          bool flushMetricBuffer) {
   static const bool timingEnabled =
       getBoolEnv("PROTON_GRAPH_LAUNCH_TIMING", false);
   auto graphStateRef = graphStates.find(graphExecId);
@@ -317,8 +318,7 @@ size_t prepareGraphLaunch(
   DataToEntryMap *dataToGraphEntry = nullptr;
   if (!dataToEntry.empty()) {
     auto &externIdState = externIdToState[externId];
-    graphState.buildLaunchEntries(dataToEntry,
-                                  externIdState.dataToGraphEntry);
+    graphState.buildLaunchEntries(dataToEntry, externIdState.dataToGraphEntry);
     externIdState.nodeIdToState = &graphState.nodeIdToState;
     dataToGraphEntry = &externIdState.dataToGraphEntry;
   }

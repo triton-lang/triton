@@ -88,8 +88,7 @@ convertActivityToMetric(const roctracer_record_t *activity) {
 }
 
 void processActivityKernel(
-    CorrIdToExternIdMap &corrIdToExternId,
-    ExternIdToStateMap &externIdToState,
+    CorrIdToExternIdMap &corrIdToExternId, ExternIdToStateMap &externIdToState,
     ThreadSafeMap<uint64_t, bool, std::unordered_map<uint64_t, bool>>
         &corrIdToIsHipGraph,
     DataPhases &dataPhases, size_t externId,
@@ -139,8 +138,7 @@ void processActivityKernel(
 }
 
 void processActivity(
-    CorrIdToExternIdMap &corrIdToExternId,
-    ExternIdToStateMap &externIdToState,
+    CorrIdToExternIdMap &corrIdToExternId, ExternIdToStateMap &externIdToState,
     ThreadSafeMap<uint64_t, bool, std::unordered_map<uint64_t, bool>>
         &corrIdToIsHipGraph,
     DataPhases &dataPhases, size_t parentId, const roctracer_record_t *record) {

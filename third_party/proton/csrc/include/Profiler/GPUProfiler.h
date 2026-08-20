@@ -68,11 +68,12 @@ void setPeriodicFlushingMode(bool &periodicFlushingEnabled,
 int64_t
 computeTimestampOffsetNs(const std::function<void(uint64_t *)> &getTimestamp);
 
-size_t prepareGraphLaunch(
-    ThreadSafeMap<uint64_t, GraphState> &graphStates, uint64_t graphExecId,
-    size_t externId, const DataToEntryMap &dataToEntry,
-    ExternIdToStateMap &externIdToState, PendingGraphPool *pendingGraphPool,
-    bool flushMetricBuffer);
+size_t prepareGraphLaunch(ThreadSafeMap<uint64_t, GraphState> &graphStates,
+                          uint64_t graphExecId, size_t externId,
+                          const DataToEntryMap &dataToEntry,
+                          ExternIdToStateMap &externIdToState,
+                          PendingGraphPool *pendingGraphPool,
+                          bool flushMetricBuffer);
 } // namespace detail
 
 // Singleton<ConcreteProfilerT>: Each concrete GPU profiler, e.g.,
