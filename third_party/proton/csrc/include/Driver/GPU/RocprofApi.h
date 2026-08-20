@@ -22,6 +22,7 @@ struct ExternLibRocprofiler : public ExternLibBase {
   static constexpr const char *name = "librocprofiler-sdk.so";
   static constexpr const char *symbolName = "rocprofiler_is_initialized";
   static constexpr const char *pathEnv = "TRITON_ROCPROFILER_SDK_LIB_PATH";
+  static constexpr const char *libraryEnv = "TRITON_ROCPROFILER_SDK_LIBRARY";
   static constexpr RetType success = ROCPROFILER_STATUS_SUCCESS;
   static inline void *lib = nullptr;
 };
