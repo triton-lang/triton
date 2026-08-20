@@ -55,8 +55,7 @@ RocprofSDKPCSampling::parseSourceLocationComment(
 }
 
 void RocprofSDKPCSampling::recordCodeObjectLoad(
-    const rocprofiler_callback_tracing_code_object_load_data_t &load,
-    bool pcSamplingModeEnabled) {
+    const rocprofiler_callback_tracing_code_object_load_data_t &load) {
   if (load.code_object_id == ROCPROFILER_CODE_OBJECT_ID_NONE)
     return;
 
@@ -66,13 +65,11 @@ void RocprofSDKPCSampling::recordCodeObjectLoad(
   info.loadDelta = load.load_delta;
 
 #if PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE
-  if (pcSamplingModeEnabled) {
-    if (load.storage_type == ROCPROFILER_CODE_OBJECT_STORAGE_TYPE_MEMORY) {
-      if (load.memory_base != 0 && load.memory_size != 0 &&
-          load.memory_size <= MaxCodeObjectImageSize) {
-        const auto *base = reinterpret_cast<const char *>(load.memory_base);
-        info.image.assign(base, base + load.memory_size);
-      }
+  if (load.storage_type == ROCPROFILER_CODE_OBJECT_STORAGE_TYPE_MEMORY) {
+    if (load.memory_base != 0 && load.memory_size != 0 &&
+        load.memory_size <= MaxCodeObjectImageSize) {
+      const auto *base = reinterpret_cast<const char *>(load.memory_base);
+      info.image.assign(base, base + load.memory_size);
     }
   }
 #endif

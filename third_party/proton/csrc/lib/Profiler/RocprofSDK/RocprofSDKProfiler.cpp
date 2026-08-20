@@ -1083,12 +1083,13 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::codeObjectCallback(
     return;
 
   if (record.operation == ROCPROFILER_CODE_OBJECT_LOAD) {
+    if (!impl->pcSamplingModeEnabled)
+      return;
     auto *payload =
         static_cast<rocprofiler_callback_tracing_code_object_load_data_t *>(
             record.payload);
     if (record.phase == ROCPROFILER_CALLBACK_PHASE_LOAD)
-      impl->pcSampling.recordCodeObjectLoad(*payload,
-                                            impl->pcSamplingModeEnabled);
+      impl->pcSampling.recordCodeObjectLoad(*payload);
     else if (record.phase == ROCPROFILER_CALLBACK_PHASE_UNLOAD)
       impl->pcSampling.recordCodeObjectUnload(payload->code_object_id);
     return;
@@ -1101,7 +1102,8 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::codeObjectCallback(
         rocprofiler_callback_tracing_code_object_kernel_symbol_register_data_t
             *>(record.payload);
     impl->setKernelName(payload->kernel_id, payload->kernel_name);
-    impl->pcSampling.recordKernelSymbol(*payload);
+    if (impl->pcSamplingModeEnabled)
+      impl->pcSampling.recordKernelSymbol(*payload);
   }
 }
 
@@ -1147,10 +1149,11 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
       if (graphCorrelation != nullptr)
         graphExternId = graphCorrelation->externId;
 #endif
-      impl->pcSampling.recordTarget(
-          record->dispatch_info.dispatch_id, record->correlation_id.internal,
-          record->dispatch_info.kernel_id, graphExternId,
-          correlation.corrIdToExternId, correlation.externIdToState);
+      if (impl->pcSamplingModeEnabled)
+        impl->pcSampling.recordTarget(
+            record->dispatch_info.dispatch_id, record->correlation_id.internal,
+            record->dispatch_info.kernel_id, graphExternId,
+            correlation.corrIdToExternId, correlation.externIdToState);
 #if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
       if (graphCorrelation != nullptr) {
         // For now, it's only graph dispatch records that carry external
@@ -1378,7 +1381,8 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStart() {
       state.profilingStarted = true;
     }
     state.profilingActive.store(true, std::memory_order_relaxed);
-    pcSampling.start(pcSamplingModeEnabled);
+    if (pcSamplingModeEnabled)
+      pcSampling.start();
     bool nvtx = getBoolEnv("TRITON_ENABLE_NVTX", true);
     state.nvtxEnabled.store(nvtx, std::memory_order_relaxed);
     if (nvtx)
@@ -1400,8 +1404,10 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doFlush() {
       /*maxRetries=*/100, /*sleepUs=*/10,
       [&state]() { rocprofiler::flushBuffer<true>(state.kernelBuffer); });
   profiler.pendingGraphPool->flushAll();
-  pcSampling.flushBuffers();
-  pcSampling.flushAccum();
+  if (pcSamplingModeEnabled) {
+    pcSampling.flushBuffers();
+    pcSampling.flushAccum();
+  }
 }
 
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStop() {
@@ -1411,7 +1417,8 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStop() {
   registerRoctxCallback(false);
   {
     std::lock_guard<std::mutex> lock(state.mutex);
-    pcSampling.stop();
+    if (pcSamplingModeEnabled)
+      pcSampling.stop();
   }
   corrIdToStreamId.clear();
   kernelPhaseTracker.clear();
