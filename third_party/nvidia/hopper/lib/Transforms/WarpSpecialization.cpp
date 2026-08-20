@@ -44,6 +44,21 @@ public:
     if (numWarps != 4)
       return;
 
+    // Producer can only be lowered for TMA loads today, see
+    // processProducerCommitOp() in WSLowerToken.cpp, which reports a fatal
+    // error for any other token load type.
+    // so bail out here and let the regular software pipeliner handle the loop
+    // instead of aborting the compiler.
+    bool hasNonTMATensorLoad = false;
+    for (scf::ForOp forOp : loops) {
+      forOp.walk([&](triton::LoadOp loadOp) {
+        if (isa<RankedTensorType>(loadOp.getType()))
+          hasNonTMATensorLoad = true;
+      });
+    }
+    if (hasNonTMATensorLoad)
+      return;
+
     // FIXME: skip warpspec if there is else block. Need to improve
     // CodePartitioning to correctly handle channels in else block.
     bool hasElse = false;
