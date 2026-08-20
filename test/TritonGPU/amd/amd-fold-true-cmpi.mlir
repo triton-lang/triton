@@ -248,3 +248,23 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[TRUE:.*]] = arith.constant dense<true> : tensor<32xi1>
 // CHECK:           tt.return %[[TRUE]] : tensor<32xi1>
 // CHECK:         }
+
+// -----
+
+// Comparison on tt.histogram result should NOT be folded.
+// histogram returns [0, INT_MAX], so sgt against 0 is indeterminate.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @dontfoldhistogramcmpi(%arg0: tensor<1024xi32>) -> tensor<64xi1> {
+    %c0 = arith.constant dense<0> : tensor<64xi32>
+    %hist = tt.histogram %arg0 : tensor<1024xi32> -> tensor<64xi32>
+    %cmp = arith.cmpi sgt, %hist, %c0 : tensor<64xi32>
+    tt.return %cmp : tensor<64xi1>
+  }
+}
+
+// CHECK-LABEL:   tt.func @dontfoldhistogramcmpi
+// CHECK-NOT:       arith.constant dense<true>
+// CHECK-NOT:       arith.constant dense<false>
+// CHECK:           tt.histogram
+// CHECK:           arith.cmpi sgt
+// CHECK:         }

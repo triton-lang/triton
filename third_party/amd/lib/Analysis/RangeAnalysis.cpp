@@ -160,8 +160,8 @@ void inferResultRangesMaxNonNegSigned(Operation *op,
     auto bitWidth =
         mlir::ConstantIntRanges::getStorageBitwidth(result.getType());
     setResultRange(result, ConstantIntRanges::fromSigned(
-                               APInt::getZero(bitWidth).sext(bitWidth),
-                               APInt::getMaxValue(bitWidth).sext(bitWidth)));
+                               APInt::getZero(bitWidth),
+                               APInt::getSignedMaxValue(bitWidth)));
   }
 }
 
