@@ -1598,6 +1598,74 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
+#dot_a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#dot_b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+module attributes {"ttg.target" = "cuda:70", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: llvm.func @fmadot_rhs_register_order
+  tt.func @fmadot_rhs_register_order(
+      %a: tensor<1x2xf32, #dot_a>,
+      %b: tensor<2x2xf32, #dot_b>,
+      %c: tensor<1x2xf32, #blocked>) {
+    // Each output column consumes adjacent K values from B's LLVM struct.
+    // CHECK-DAG: [[FMA_C0:%.*]] = llvm.extractvalue %arg2[0]
+    // CHECK-DAG: [[FMA_C1:%.*]] = llvm.extractvalue %arg2[1]
+    // CHECK-DAG: [[FMA_A0:%.*]] = llvm.extractvalue %arg0[0]
+    // CHECK-DAG: [[FMA_A1:%.*]] = llvm.extractvalue %arg0[1]
+    // CHECK-DAG: [[FMA_B0:%.*]] = llvm.extractvalue %arg1[0]
+    // CHECK-DAG: [[FMA_B1:%.*]] = llvm.extractvalue %arg1[1]
+    // CHECK-DAG: [[FMA_B2:%.*]] = llvm.extractvalue %arg1[2]
+    // CHECK-DAG: [[FMA_B3:%.*]] = llvm.extractvalue %arg1[3]
+    // CHECK: [[FMA_R0:%.*]] = llvm.intr.fmuladd([[FMA_A0]], [[FMA_B0]], [[FMA_C0]])
+    // CHECK: [[FMA_R1:%.*]] = llvm.intr.fmuladd([[FMA_A1]], [[FMA_B1]], [[FMA_R0]])
+    // CHECK: [[FMA_R2:%.*]] = llvm.intr.fmuladd([[FMA_A0]], [[FMA_B2]], [[FMA_C1]])
+    // CHECK: llvm.intr.fmuladd([[FMA_A1]], [[FMA_B3]], [[FMA_R2]])
+    %d = tt.dot %a, %b, %c, inputPrecision = ieee :
+        tensor<1x2xf32, #dot_a> * tensor<2x2xf32, #dot_b> -> tensor<1x2xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [0, 1]}>
+#dot_a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#dot_b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+module attributes {"ttg.target" = "cuda:70", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: llvm.func @fmadot_lhs_register_order
+  tt.func @fmadot_lhs_register_order(
+      %a: tensor<2x2xf32, #dot_a>,
+      %b: tensor<2x2xf32, #dot_b>,
+      %c: tensor<2x2xf32, #blocked>) {
+    // Each output row consumes adjacent K values from A's LLVM struct.
+    // CHECK-DAG: [[LHS_C0:%.*]] = llvm.extractvalue %arg2[0]
+    // CHECK-DAG: [[LHS_C1:%.*]] = llvm.extractvalue %arg2[1]
+    // CHECK-DAG: [[LHS_C2:%.*]] = llvm.extractvalue %arg2[2]
+    // CHECK-DAG: [[LHS_C3:%.*]] = llvm.extractvalue %arg2[3]
+    // CHECK-DAG: [[LHS_A0:%.*]] = llvm.extractvalue %arg0[0]
+    // CHECK-DAG: [[LHS_A1:%.*]] = llvm.extractvalue %arg0[1]
+    // CHECK-DAG: [[LHS_A2:%.*]] = llvm.extractvalue %arg0[2]
+    // CHECK-DAG: [[LHS_A3:%.*]] = llvm.extractvalue %arg0[3]
+    // CHECK-DAG: [[LHS_B0:%.*]] = llvm.extractvalue %arg1[0]
+    // CHECK-DAG: [[LHS_B1:%.*]] = llvm.extractvalue %arg1[1]
+    // CHECK-DAG: [[LHS_B2:%.*]] = llvm.extractvalue %arg1[2]
+    // CHECK-DAG: [[LHS_B3:%.*]] = llvm.extractvalue %arg1[3]
+    // CHECK: [[LHS_R00:%.*]] = llvm.intr.fmuladd([[LHS_A0]], [[LHS_B0]], [[LHS_C0]])
+    // CHECK: llvm.intr.fmuladd([[LHS_A1]], [[LHS_B1]], [[LHS_R00]])
+    // CHECK: [[LHS_R01:%.*]] = llvm.intr.fmuladd([[LHS_A0]], [[LHS_B2]], [[LHS_C2]])
+    // CHECK: llvm.intr.fmuladd([[LHS_A1]], [[LHS_B3]], [[LHS_R01]])
+    // CHECK: [[LHS_R10:%.*]] = llvm.intr.fmuladd([[LHS_A2]], [[LHS_B0]], [[LHS_C1]])
+    // CHECK: llvm.intr.fmuladd([[LHS_A3]], [[LHS_B1]], [[LHS_R10]])
+    // CHECK: [[LHS_R11:%.*]] = llvm.intr.fmuladd([[LHS_A2]], [[LHS_B2]], [[LHS_C3]])
+    // CHECK: llvm.intr.fmuladd([[LHS_A3]], [[LHS_B3]], [[LHS_R11]])
+    %d = tt.dot %a, %b, %c, inputPrecision = ieee :
+        tensor<2x2xf32, #dot_a> * tensor<2x2xf32, #dot_b> -> tensor<2x2xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #dot_operand_a = #ttg.dot_op<{opIdx=0, parent=#blocked}>

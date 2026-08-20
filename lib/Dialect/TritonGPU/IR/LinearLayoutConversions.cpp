@@ -880,10 +880,11 @@ LinearLayout fmaDotToLinearLayout(DotOperandEncodingAttr operandLayout,
   auto blocked = cast<BlockedEncodingAttr>(operandLayout.getParent());
   MLIRContext *ctx = operandLayout.getContext();
 
-  // TODO: introduce registerOrder or use getDefaultOrder(operandLayout)
-  // Currently this order is used in legacy converter, because we do not
-  // have access to full dot operand layout, only parent part.
-  auto regOrder = blocked.getOrder();
+  // Keep K contiguous in registers for both operands. The thread and warp
+  // orders still come from the result layout because they describe which
+  // thread owns each non-K element.
+  auto regOrder = getOrderForDotOperand(operandLayout.getOpIdx(), rank,
+                                        /*kContig=*/true);
   auto threadOrder = blocked.getOrder();
   auto warpOrder = blocked.getOrder();
   auto repOrder = blocked.getRepOrder();
