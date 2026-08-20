@@ -212,7 +212,7 @@ public:
   virtual bool barrierWritesInvalidate() const { return false; }
 };
 
-inline FailureOr<std::optional<MemEffectsOpInfo>>
+inline std::optional<MemEffectsOpInfo>
 getConSanMemEffectsOpInfo(const ConSanTargetHooks &hooks, Operation *op) {
   std::optional<MemEffectsOpInfo> info = hooks.getMemEffectsOpInfo(op);
   auto sizeAttr = op->getAttrOfType<IntegerAttr>("allocation.size");
@@ -227,12 +227,10 @@ getConSanMemEffectsOpInfo(const ConSanTargetHooks &hooks, Operation *op) {
     info.emplace();
   if (info->trackingKind == MemEffectsOpInfo::TrackingKind::None)
     info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
-  if (info->trackingKind != MemEffectsOpInfo::TrackingKind::Barrier ||
-      info->implicitCommit) {
-    op->emitError("compiler scratch cannot be combined with "
-                  "asynchronous operation effect tracking");
-    return failure();
-  }
+  assert(info->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier &&
+         !info->implicitCommit &&
+         "compiler scratch cannot be combined with asynchronous operation "
+         "effect tracking");
   // A ConSan write performs both read- and write-conflict checks, so it is the
   // conservative read/write summary for compiler-owned scratch.
   StringRef name = isa<CallOpInterface>(op) ? "Callee scratch" : "Scratch";

@@ -772,7 +772,7 @@ public:
     SmallVector<tt::FuncOp> publicFuncs =
         llvm::to_vector(llvm::make_filter_range(
             module.getOps<tt::FuncOp>(),
-            [](tt::FuncOp func) { return func.isPublic(); }));
+            [](tt::FuncOp func) { return tt::isKernel(func); }));
     if (publicFuncs.size() != 1) {
       module.emitError(
           "ConSan requires exactly one public entrypoint function; "
@@ -803,26 +803,14 @@ public:
 
 private:
   bool isCTALocalScratch(Operation *op) const {
-    if (!op->hasAttr("allocation.size") || ttg::lookupNumCTAs(op) == 1)
+    if (!op->hasAttr("allocation.size"))
       return true;
 
-    if (auto convert = dyn_cast<ttg::ConvertLayoutOp>(op)) {
-      RankedTensorType srcType = convert.getSrc().getType();
-      RankedTensorType dstType = convert.getType();
-      if (!srcType.getEncoding() || !dstType.getEncoding())
-        return false;
-    } else if (auto reduce = dyn_cast<tt::ReduceOp>(op)) {
-      SmallVector<RankedTensorType> inputs = reduce.getInputTypes();
-      if (inputs.empty() || !inputs.front().getEncoding())
-        return false;
-      SmallVector<unsigned> splits =
-          ttg::getCTASplitNum(inputs.front().getEncoding());
-      unsigned axis = reduce.getAxis();
-      if (axis >= splits.size())
-        return false;
-    } else {
-      return true;
-    }
+    // NVIDIA broadcasts scalar atomic results; AMD executes them in each CTA.
+    if (isa<tt::AtomicRMWOp, tt::AtomicCASOp>(op) &&
+        !isa<RankedTensorType>(op->getResult(0).getType()))
+      return !hooks.hasUnsummarizableCalleeState(op);
+
     return !tt::hasCrossCTAScratch(op);
   }
 
@@ -848,9 +836,6 @@ private:
         }
         if (func == entryPoint)
           return WalkResult::advance();
-        if (op->hasAttr("allocation.size") &&
-            failed(getConSanMemEffectsOpInfo(hooks, op)))
-          return WalkResult::interrupt();
         if (isa<CallOpInterface>(op))
           return WalkResult::advance();
 
@@ -1168,10 +1153,8 @@ private:
                                      int thread,
                                      tti::FunctionBuilder &funcBuilder) {
     int baseThread = getBaseThread(thread, auxData.threadLayout);
-    auto opInfoOr = getConSanMemEffectsOpInfo(hooks, op);
-    if (failed(opInfoOr))
-      return failure();
-    const std::optional<MemEffectsOpInfo> &opInfo = *opInfoOr;
+    std::optional<MemEffectsOpInfo> opInfo =
+        getConSanMemEffectsOpInfo(hooks, op);
     for (const MemoryAccess &access :
          getMemoryAccesses(op, ttg::SharedKind::Barrier)) {
       if (opInfo && llvm::any_of(opInfo->barriers, [&](const auto &barrier) {

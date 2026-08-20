@@ -1345,6 +1345,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32, ttg.shared = 4 : i32, ttg.target = "hip:gfx1250", ttg.tensor_memory_size = 0 : i32} {
+  // CHECK-LABEL: tt.func private @amd_scalar_atomic_callee
+  // CHECK: tt.atomic_rmw
+  tt.func private @amd_scalar_atomic_callee(%ptr: !tt.ptr<i32>) -> i32 {
+    %one = arith.constant 1 : i32
+    %old = tt.atomic_rmw add, relaxed, gpu, %ptr, %one
+        {allocation.offset = 0 : i32, allocation.size = 4 : i32}
+        : (!tt.ptr<i32>, i32) -> i32
+    tt.return %old : i32
+  }
+
   // CHECK-LABEL: @amd_scalar_atomic_scratch_stays_cta_local
   tt.func public @amd_scalar_atomic_scratch_stays_cta_local(
       %ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>) {
@@ -1365,6 +1375,10 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
         {allocation.offset = 0 : i32, allocation.size = 4 : i32}
         : (!tt.ptr<i32>, i32) -> i32
     tt.store %out, %old : !tt.ptr<i32>
+    // CHECK: tt.call @amd_scalar_atomic_callee
+    %callee = tt.call @amd_scalar_atomic_callee(%ptr)
+        {allocation.offset = 0 : i32, allocation.size = 4 : i32}
+        : (!tt.ptr<i32>) -> i32
     amdg.cluster_barrier_arrive
     amdg.cluster_barrier_wait
     tt.return

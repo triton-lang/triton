@@ -703,16 +703,13 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
   };
   SmallVector<BufferRegion> staticSharedRegions;
   unsigned numCTAs = lookupNumCTAs(module);
-  WalkResult result = entryPoint.walk([&](Operation *op) -> WalkResult {
+  entryPoint.walk([&](Operation *op) {
     for (const MemoryAccess &access : getMemoryAccesses(op))
       collectCandidates(access.value);
 
-    auto infoOr = getConSanMemEffectsOpInfo(hooks, op);
-    if (failed(infoOr))
-      return WalkResult::interrupt();
-    const auto &info = *infoOr;
+    auto info = getConSanMemEffectsOpInfo(hooks, op);
     if (!info)
-      return WalkResult::advance();
+      return;
     if (info->trackingKind == MemEffectsOpInfo::TrackingKind::CommitCount &&
         info->commitKind == CommitKind::AsyncCp)
       hasAsyncCopyReads |= llvm::any_of(
@@ -725,10 +722,7 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
               std::get_if<MemEffectsOpInfo::Effects::StaticSharedBuffer>(
                   &effect.buffer))
         staticSharedRegions.push_back(buffer->getRegion(numCTAs));
-    return WalkResult::advance();
   });
-  if (result.wasInterrupted())
-    return failure();
 
   analysis->calculateUsedBufferRegions(entryPoint);
   barrierRegions = analysis->getAllUsedBufferRegions(
