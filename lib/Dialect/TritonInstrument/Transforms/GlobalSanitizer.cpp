@@ -346,7 +346,7 @@ static void instrumentClusterBarrierEquivalents(ModuleOp module) {
     Location loc = points.front().op->getLoc();
     Block &entry = group->front();
     OpBuilder initBuilder(&entry, entry.begin());
-    Type ptrTy = tt::PointerType::get(initBuilder.getI8Type(), 1);
+    Type ptrTy = tt::PointerType::get(initBuilder.getI8Type());
     Value scratch = createThirdPartyScratchAlloc(
         initBuilder, loc, ptrTy, kGSanClusterBarrierScratchBytes,
         /*alignment=*/16, /*sharedClusterState=*/true);
@@ -372,8 +372,8 @@ public:
   void runOnOperation() override {
     ModuleOp module = getOperation();
     OpBuilder builder(module);
-    Type gsanStatePtrTy = tt::PointerType::get(builder.getI8Type(), 1);
-    Type streamClockPtrTy = tt::PointerType::get(builder.getI32Type(), 1);
+    Type gsanStatePtrTy = tt::PointerType::get(builder.getI8Type());
+    Type streamClockPtrTy = tt::PointerType::get(builder.getI32Type());
     Type kernelIdTy = builder.getI64Type();
     auto launchPdl = module->getAttrOfType<IntegerAttr>("tti.gsan_launch_pdl");
     bool acquireStreamClock = !launchPdl || launchPdl.getInt() == 0;

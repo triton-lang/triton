@@ -1332,10 +1332,10 @@ class TritonSemantic(Generic[TensorTy]):
 
         i_type = tl.int32 if sca_ty == tl.float32 else tl.int64
         i_val = self.bitcast(val, i_type)
-        i_ptr = self.bitcast(ptr, tl.pointer_type(i_type, 1))
+        i_ptr = self.bitcast(ptr, tl.pointer_type(i_type))
         ui_type = tl.uint32 if sca_ty == tl.float32 else tl.uint64
         ui_val = self.bitcast(val, ui_type)
-        ui_ptr = self.bitcast(ptr, tl.pointer_type(ui_type, 1))
+        ui_ptr = self.bitcast(ptr, tl.pointer_type(ui_type))
         neg = self._signbit(val)
         pos = self.not_(neg)
         pos_ret = self.tensor(
@@ -1370,10 +1370,10 @@ class TritonSemantic(Generic[TensorTy]):
 
         i_type = tl.int32 if sca_ty == tl.float32 else tl.int64
         i_val = self.bitcast(val, i_type)
-        i_ptr = self.bitcast(ptr, tl.pointer_type(i_type, 1))
+        i_ptr = self.bitcast(ptr, tl.pointer_type(i_type))
         ui_type = tl.uint32 if sca_ty == tl.float32 else tl.uint64
         ui_val = self.bitcast(val, ui_type)
-        ui_ptr = self.bitcast(ptr, tl.pointer_type(ui_type, 1))
+        ui_ptr = self.bitcast(ptr, tl.pointer_type(ui_type))
         neg = self._signbit(val)
         pos = self.not_(neg)
         pos_ret = self.tensor(

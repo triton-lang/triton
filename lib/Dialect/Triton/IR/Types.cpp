@@ -62,6 +62,8 @@ void TensorDescType::print(AsmPrinter &printer) const {
   printer << ">";
 }
 
+// Format: !tt.ptr<f32>            (defaults to the "global" address space)
+//         !tt.ptr<f32, "flat">
 Type PointerType::parse(AsmParser &parser) {
   Location loc = parser.getEncodedSourceLoc(parser.getCurrentLocation());
   if (parser.parseLess())
@@ -71,10 +73,18 @@ Type PointerType::parse(AsmParser &parser) {
   if (parser.parseType(pointeeType))
     return Type();
 
-  int addressSpace = 1;
+  PtrAddrSpace addressSpace = PtrAddrSpace::Global;
   if (succeeded(parser.parseOptionalComma())) {
-    if (parser.parseInteger(addressSpace))
+    std::string name;
+    if (parser.parseString(&name))
       return Type();
+    std::optional<PtrAddrSpace> symbolized = symbolizePtrAddrSpace(name);
+    if (!symbolized) {
+      parser.emitError(parser.getCurrentLocation())
+          << "invalid pointer address space '" << name << "'";
+      return Type();
+    }
+    addressSpace = *symbolized;
   }
 
   if (parser.parseGreater())
@@ -84,11 +94,10 @@ Type PointerType::parse(AsmParser &parser) {
 }
 
 void PointerType::print(AsmPrinter &printer) const {
-  if (getAddressSpace() == 1) {
-    printer << "<" << getPointeeType() << ">";
-  } else {
-    printer << "<" << getPointeeType() << ", " << getAddressSpace() << ">";
-  }
+  printer << "<" << getPointeeType();
+  if (getAddressSpace() != PtrAddrSpace::Global)
+    printer << ", \"" << stringifyPtrAddrSpace(getAddressSpace()) << "\"";
+  printer << ">";
 }
 
 LogicalResult
@@ -104,7 +113,7 @@ TensorDescType::verify(function_ref<InFlightDiagnostic()> emitError,
 }
 
 LogicalResult PointerType::verify(function_ref<InFlightDiagnostic()> emitError,
-                                  Type pointeeType, int addressSpace) {
+                                  Type pointeeType, PtrAddrSpace addressSpace) {
   if (!pointeeType.isIntOrFloat())
     return emitError()
            << "pointer types must point to integer or floating-point types";
@@ -153,10 +162,10 @@ Type getI32SameShape(Type type) {
 Type getPointerTypeSameShape(Type type) {
   if (auto tensorTy = dyn_cast<RankedTensorType>(type)) {
     Type elementType = tensorTy.getElementType();
-    PointerType ptrType = PointerType::get(elementType, 1);
+    PointerType ptrType = PointerType::get(elementType);
     return tensorTy.clone(ptrType);
   } else {
-    return PointerType::get(type, 1);
+    return PointerType::get(type);
   }
 }
 
@@ -165,15 +174,14 @@ bool elementTypeMatchesPointee(Type valueTy, Type ptrTy) {
   return ptrType && getElementTypeOrSelf(valueTy) == ptrType.getPointeeType();
 }
 
-// upstream Triton only uses address space 1 for Pointer Type
-Type getPointerType(Type type, int addressSpace) {
+Type getPointerType(Type type, PtrAddrSpace addressSpace) {
   return PointerType::get(type, addressSpace);
 }
 
-int getAddressSpace(Type type) {
+PtrAddrSpace getAddressSpace(Type type) {
   if (auto ptrType = dyn_cast<PointerType>(type))
     return ptrType.getAddressSpace();
-  return 1;
+  return PtrAddrSpace::Global;
 }
 
 } // namespace triton

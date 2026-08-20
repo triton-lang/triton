@@ -1081,8 +1081,14 @@ void init_triton_ir(py::module_ &m) {
              return self.getBuilder().getF64Type();
            })
       .def("get_ptr_ty",
-           [](TritonOpBuilder &self, Type &type, int addrSpace) -> Type {
-             return PointerType::get(type, addrSpace);
+           [](TritonOpBuilder &self, Type &type,
+              const std::string &addrSpace) -> Type {
+             std::optional<PtrAddrSpace> symbolized =
+                 symbolizePtrAddrSpace(addrSpace);
+             if (!symbolized)
+               throw std::invalid_argument("invalid pointer address space '" +
+                                           addrSpace + "'");
+             return PointerType::get(type, *symbolized);
            })
       .def("get_block_ty",
            [](TritonOpBuilder &self, Type &elementType,

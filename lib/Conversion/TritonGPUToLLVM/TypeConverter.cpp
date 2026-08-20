@@ -3,6 +3,7 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/Support/NVPTXAddrSpace.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -21,7 +22,15 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
     const TargetInfoBase &targetInfo, const DataLayoutAnalysis *analysis)
     : LLVMTypeConverter(ctx, options, analysis) {
   addConversion([ctx](triton::PointerType type) -> std::optional<Type> {
-    return LLVM::LLVMPointerType::get(ctx, type.getAddressSpace());
+    switch (type.getAddressSpace()) {
+    case triton::PtrAddrSpace::Global:
+      return LLVM::LLVMPointerType::get(ctx,
+                                        llvm::NVPTXAS::ADDRESS_SPACE_GLOBAL);
+    case triton::PtrAddrSpace::Flat:
+      return LLVM::LLVMPointerType::get(ctx,
+                                        llvm::NVPTXAS::ADDRESS_SPACE_GENERIC);
+    }
+    llvm_unreachable("unknown PtrAddrSpace");
   });
   addConversion([ctx](TensorDescType type) -> std::optional<Type> {
     return LLVM::LLVMPointerType::get(ctx, 0);

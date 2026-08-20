@@ -9,6 +9,7 @@
 #define GET_TYPEDEF_CLASSES
 #include "triton/Dialect/Triton/IR/TypeInterfaces.h.inc"
 
+#include "triton/Dialect/Triton/IR/OpsEnums.h.inc" // required by `Types.h.inc`
 #include "triton/Dialect/Triton/IR/Types.h.inc"
 
 namespace mlir {
@@ -19,9 +20,10 @@ unsigned getPointeeBitWidth(Type type);
 
 Type getPointeeType(Type type);
 
-Type getPointerType(Type type, int addressSpace = 1);
+Type getPointerType(Type type,
+                    PtrAddrSpace addressSpace = PtrAddrSpace::Global);
 
-int getAddressSpace(Type type);
+PtrAddrSpace getAddressSpace(Type type);
 
 Type getI1SameShape(Type type);
 
