@@ -437,32 +437,28 @@ void RocprofSDKPCSampling::flushAccum() {
     state.flushingCodeObjectIds.insert(snapshotCodeObjectIds.begin(),
                                        snapshotCodeObjectIds.end());
   });
+  std::unordered_map<uint64_t, PCSamplingTarget> snapshotTargets;
+  metadataState.withLock([&](MetadataState &state) {
+    snapshotTargets.swap(state.dispatchTargets);
+  });
   if (snapshot.empty())
     return;
 
   std::unordered_map<uint64_t, PCSamplingAccum> unresolvedAccum;
-  std::unordered_set<uint64_t> consumedDispatchIds;
 
   for (auto &[key, accum] : snapshot) {
     const auto dispatchId = key.dispatchId;
     const auto codeObjectId = key.codeObjectId;
     const auto pcOffset = key.pcOffset;
-    PCSamplingTarget target;
+    auto found = snapshotTargets.find(dispatchId);
+    if (found == snapshotTargets.end())
+      continue;
+    const auto &target = found->second;
     std::optional<SourceLocation> sourceLocation;
-    bool hasTarget = metadataState.withLock([&](MetadataState &state) {
-      auto found = state.dispatchTargets.find(dispatchId);
-      if (found == state.dispatchTargets.end())
-        return false;
-      target = found->second;
+    metadataState.withLock([&](MetadataState &state) {
       sourceLocation =
           resolveSourceLocationLocked(state, codeObjectId, pcOffset, target);
-      return true;
     });
-
-    if (!hasTarget) {
-      continue;
-    }
-    consumedDispatchIds.insert(dispatchId);
 
     if (!sourceLocation) {
       auto &unresolved = unresolvedAccum[dispatchId];
@@ -485,17 +481,10 @@ void RocprofSDKPCSampling::flushAccum() {
   }
 
   for (auto &[dispatchId, accum] : unresolvedAccum) {
-    const auto currentDispatchId = dispatchId;
-    PCSamplingTarget target;
-    bool hasTarget = metadataState.withLock([&](MetadataState &state) {
-      auto found = state.dispatchTargets.find(currentDispatchId);
-      if (found == state.dispatchTargets.end())
-        return false;
-      target = found->second;
-      return true;
-    });
-    if (!hasTarget)
+    auto found = snapshotTargets.find(dispatchId);
+    if (found == snapshotTargets.end())
       continue;
+    const auto &target = found->second;
 
     for (auto &[data, entry] : target.dataToEntry) {
       auto pcEntry = entry;
@@ -505,11 +494,6 @@ void RocprofSDKPCSampling::flushAccum() {
       pcEntry.upsertMetric(makePCSamplingMetric(accum));
     }
   }
-
-  metadataState.withLock([&](MetadataState &state) {
-    for (auto dispatchId : consumedDispatchIds)
-      state.dispatchTargets.erase(dispatchId);
-  });
 
   samplingState.withLock([&](SamplingState &state) {
     for (auto codeObjectId : snapshotCodeObjectIds)
