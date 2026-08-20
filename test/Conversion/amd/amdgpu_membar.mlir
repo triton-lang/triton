@@ -500,3 +500,80 @@ tt.func @no_barrier_between_async_copies(%A: !tt.ptr<f16>, %i: i32, %j: i32) {
   tt.return
 }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+// A TDM copy is an async load too, so the LocalLoad synced via async_tdm_wait
+// does not need a barrier against the following copy into the same buffer.
+// Only the barrier belonging to the wait remains.
+// CHECK-LABEL: tdm_copy_after_synced_local_load
+tt.func @tdm_copy_after_synced_local_load(%desc: !tt.tensordesc<64x64xf16, #shared>) {
+  %buf = ttg.local_alloc : () -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+  %tok_a = amdg.async_tdm_copy_global_to_local %desc into %buf : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: amdg.async_tdm_wait
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NOT: ttg.barrier local
+  %wait = amdg.async_tdm_wait %tok_a {num = 0 : i32}
+  %val = ttg.local_load %buf token %wait : !ttg.memdesc<64x64xf16, #shared, #smem, mutable> -> tensor<64x64xf16, #blocked>
+  %tok_b = amdg.async_tdm_copy_global_to_local %desc into %buf : !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+  // CHECK: tt.return
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+// Same for a fused TDM copy. It writes to several destinations and the
+// LocalLoad reads the second one, so all of them have to be considered.
+// CHECK-LABEL: tdm_fused_copy_after_synced_local_load
+tt.func @tdm_fused_copy_after_synced_local_load(%desc0: !tt.tensordesc<64x64xf16, #shared>, %desc1: !tt.tensordesc<64x64xf16, #shared>) {
+  %dst0 = ttg.local_alloc : () -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+  %dst1 = ttg.local_alloc : () -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+  %tok_a = amdg.async_tdm_fused_copy_global_to_local %desc0, %desc1 into %dst0, %dst1 {warp_used_hints = array<i32: 3, 12>} : !tt.tensordesc<64x64xf16, #shared>, !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>, !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: amdg.async_tdm_wait
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NOT: ttg.barrier local
+  %wait = amdg.async_tdm_wait %tok_a {num = 0 : i32}
+  %val = ttg.local_load %dst1 token %wait : !ttg.memdesc<64x64xf16, #shared, #smem, mutable> -> tensor<64x64xf16, #blocked>
+  %tok_b = amdg.async_tdm_fused_copy_global_to_local %desc0, %desc1 into %dst0, %dst1 {warp_used_hints = array<i32: 3, 12>} : !tt.tensordesc<64x64xf16, #shared>, !tt.tensordesc<64x64xf16, #shared> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>, !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+  // CHECK: tt.return
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#idx_parent = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+// Same for a TDM gather.
+// CHECK-LABEL: tdm_gather_after_synced_local_load
+tt.func @tdm_gather_after_synced_local_load(%desc: !tt.tensordesc<64x128xf16>, %rows: tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_parent}>>) {
+  %buf = ttg.local_alloc : () -> !ttg.memdesc<256x128xf16, #shared, #smem, mutable>
+  %tok_a = amdg.async_tdm_gather %desc[%rows] to %buf : tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_parent}>>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: amdg.async_tdm_wait
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NOT: ttg.barrier local
+  %wait = amdg.async_tdm_wait %tok_a {num = 0 : i32}
+  %val = ttg.local_load %buf token %wait : !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> tensor<256x128xf16, #blocked>
+  %tok_b = amdg.async_tdm_gather %desc[%rows] to %buf : tensor<64xi32, #ttg.slice<{dim = 0, parent = #idx_parent}>>, !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !tt.tensordesc<64x128xf16>
+  // CHECK: tt.return
+  tt.return
+}
+}

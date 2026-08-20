@@ -7,26 +7,36 @@
 
 namespace mlir::triton::AMD {
 namespace {
-// Returns true if one of the operands is a LocalLoad synced via AsyncWait.
+// Returns true if
+// 1) one is LocalLoad synced via AsyncWait.
+// 2) both are AsyncLoad
 bool filterAsyncLocalLoadsDependencies(Operation *op1, Operation *op2,
                                        Allocation *allocation) {
   auto isAsyncLoad = [](Operation *op) {
-    return llvm::isa<triton::gpu::AsyncCopyGlobalToLocalOp,
-                     triton::amdgpu::BufferLoadToLocalOp,
-                     triton::amdgpu::AsyncTDMCopyGlobalToLocalOp>(op);
+    return op->hasTrait<mlir::OpTrait::GlobalToLocalCopyTrait>();
   };
   auto isLocalLoadWithAsyncWaitToken = [](Operation *op) {
     auto localLoad = llvm::dyn_cast<triton::gpu::LocalLoadOp>(op);
     return localLoad && isSyncedViaAsyncWait(localLoad);
   };
-  auto getMemdescValue = [](Operation *op) -> Value {
-    return llvm::TypeSwitch<Operation *, Value>(op)
+  // Returns the local memory operands an op reads from or writes to. Fused TDM
+  // copies write to several destinations, hence the vector.
+  auto getMemdescValues = [](Operation *op) -> SmallVector<Value> {
+    return llvm::TypeSwitch<Operation *, SmallVector<Value>>(op)
         .Case<triton::amdgpu::BufferLoadToLocalOp>(
-            [](auto op) { return op.getDest(); })
-        .Case<triton::gpu::AsyncCopyGlobalToLocalOp>(
-            [](auto op) { return op.getResult(); })
-        .Case<triton::gpu::LocalLoadOp>([](auto op) { return op.getSrc(); })
-        .Default([](Operation *) { return Value(); });
+            [](auto op) -> SmallVector<Value> { return {op.getDest()}; })
+        .Case<triton::gpu::AsyncCopyGlobalToLocalOp,
+              triton::amdgpu::AsyncTDMCopyGlobalToLocalOp>(
+            [](auto op) -> SmallVector<Value> { return {op.getResult()}; })
+        .Case<triton::amdgpu::AsyncTDMFusedCopyGlobalToLocalOp>(
+            [](auto op) -> SmallVector<Value> {
+              return llvm::to_vector(op.getDests());
+            })
+        .Case<triton::amdgpu::AsyncTDMGatherOp>(
+            [](auto op) -> SmallVector<Value> { return {op.getDst()}; })
+        .Case<triton::gpu::LocalLoadOp>(
+            [](auto op) -> SmallVector<Value> { return {op.getSrc()}; })
+        .Default([](Operation *) { return SmallVector<Value>{}; });
   };
 
   // Early return if neither operands are an AsyncLoad
@@ -38,12 +48,21 @@ bool filterAsyncLocalLoadsDependencies(Operation *op1, Operation *op2,
     return true;
   }
 
-  Value op1Memdesc = getMemdescValue(op1);
-  Value op2Memdesc = getMemdescValue(op2);
-  if (!op1Memdesc || !op2Memdesc)
+  SmallVector<Value> op1Memdescs = getMemdescValues(op1);
+  SmallVector<Value> op2Memdescs = getMemdescValues(op2);
+  if (op1Memdescs.empty() || op2Memdescs.empty())
     return false;
-  auto op1BufferIds = allocation->getAllBufferIdsWithAliases(op1Memdesc);
-  auto op2BufferIds = allocation->getAllBufferIdsWithAliases(op2Memdesc);
+
+  auto collectBufferIds = [&](ArrayRef<Value> memdescs) {
+    Allocation::BufferIdSetT bufferIds;
+    for (Value memdesc : memdescs) {
+      auto ids = allocation->getAllBufferIdsWithAliases(memdesc);
+      bufferIds.insert(ids.begin(), ids.end());
+    }
+    return bufferIds;
+  };
+  auto op1BufferIds = collectBufferIds(op1Memdescs);
+  auto op2BufferIds = collectBufferIds(op2Memdescs);
 
   // Check if operations access the same buffer
   bool sameBuffer = llvm::any_of(
