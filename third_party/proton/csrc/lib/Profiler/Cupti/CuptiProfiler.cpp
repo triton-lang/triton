@@ -29,8 +29,9 @@
 
 namespace proton {
 
-extern template GPUProfiler<CuptiProfiler>::ThreadState
-    GPUProfiler<CuptiProfiler>::threadState;
+template <>
+thread_local GPUProfiler<CuptiProfiler>::ThreadState
+    GPUProfiler<CuptiProfiler>::threadState(CuptiProfiler::instance());
 
 namespace {
 

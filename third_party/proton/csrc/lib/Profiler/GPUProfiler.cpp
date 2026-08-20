@@ -1,8 +1,5 @@
 #include "Profiler/GPUProfiler.h"
-#include "Profiler/Cupti/CuptiProfiler.h"
 #include "Profiler/Graph.h"
-#include "Profiler/Roctracer/RoctracerProfiler.h"
-#include "Profiler/RocprofSDK/RocprofSDKProfiler.h"
 #include "Utility/Errors.h"
 
 #include <algorithm>
@@ -350,16 +347,5 @@ size_t prepareGraphLaunch(ThreadSafeMap<uint64_t, GraphState> &graphStates,
 }
 
 } // namespace detail
-
-template <typename ConcreteProfilerT>
-thread_local typename GPUProfiler<ConcreteProfilerT>::ThreadState
-    GPUProfiler<ConcreteProfilerT>::threadState{ConcreteProfilerT::instance()};
-
-template GPUProfiler<CuptiProfiler>::ThreadState
-    GPUProfiler<CuptiProfiler>::threadState;
-template GPUProfiler<RoctracerProfiler>::ThreadState
-    GPUProfiler<RoctracerProfiler>::threadState;
-template GPUProfiler<RocprofSDKProfiler>::ThreadState
-    GPUProfiler<RocprofSDKProfiler>::threadState;
 
 } // namespace proton

@@ -44,8 +44,10 @@
 
 namespace proton {
 
-extern template GPUProfiler<RocprofSDKProfiler>::ThreadState
-    GPUProfiler<RocprofSDKProfiler>::threadState;
+template <>
+thread_local GPUProfiler<RocprofSDKProfiler>::ThreadState
+    GPUProfiler<RocprofSDKProfiler>::threadState(
+        RocprofSDKProfiler::instance());
 
 namespace {
 
