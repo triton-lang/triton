@@ -445,8 +445,14 @@ def make_tensor_descriptor(
     if last_stride != 1:
         raise ValueError(f"Tensor descriptor last dim must be 1 but got {last_stride}")
 
+    _semantic._check_tensor_descriptor_alignment_static(strides, elem_size)
+
+    stride_sources = strides
     shape = [_semantic.make_scalar(x, ttgl.int32) for x in shape]
     strides = [_semantic.make_scalar(ttgl._unwrap_if_constexpr(x), ttgl.int64) for x in strides]
+
+    if _semantic.builder.options.enable_iisan:
+        _semantic._iisan_check_tensor_descriptor_alignment(base, strides, elem_size, stride_sources)
 
     # Check whether `block_shape` is static
     block_shape = ttgl._unwrap_shape(block_shape)
