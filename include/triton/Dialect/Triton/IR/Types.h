@@ -29,7 +29,7 @@ Type getI32SameShape(Type type);
 
 Type getPointerTypeSameShape(Type type);
 
-Type getPointerTypeToElement(Type type);
+bool elementTypeMatchesPointee(Type valueTy, Type ptrTy);
 
 } // namespace triton
 
