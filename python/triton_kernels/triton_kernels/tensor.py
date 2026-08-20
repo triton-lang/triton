@@ -241,13 +241,9 @@ def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwarg
     shape = list(tensor.shape)
     if not layout_transformation_kwargs and tensor.storage.layout.can_preserve_storage_as(layout, len(shape)):
         return tensor
-    # convert `tensor` into canonical form
-    transformation = tensor.storage.layout.make_transformation(shape, tensor.dtype == FP4)
-    canonical_data = transformation.unswizzle_data(tensor.storage.data)
-    # convert canonical form to `layout`
-    transformation = layout.make_transformation(shape, tensor.dtype == FP4, **layout_transformation_kwargs)
-    # print("convert layout ", torch.cuda.memory_summary(0, abbreviated=True))
-    new_data = transformation.swizzle_data(canonical_data)
+    source = tensor.storage.layout.make_transformation(shape, tensor.dtype == FP4)
+    destination = layout.make_transformation(shape, tensor.dtype == FP4, **layout_transformation_kwargs)
+    new_data = source.convert_data(tensor.storage.data, destination)
     return Tensor(Storage(new_data, layout), shape=list(tensor.shape), dtype=tensor.dtype)
 
 

@@ -215,14 +215,16 @@ def test_convert_layout_converts_different_parameterized_layout(storage_shape, l
 
 @pytest.mark.parametrize("layout", [HopperMXValueLayout(-2, 3), BlackwellMX4ValueShuffledLayout()])
 @pytest.mark.parametrize("inverse", [False, True])
-def test_convert_layout_uses_input_device(layout, inverse):
+@pytest.mark.parametrize("major_dim", [-2, -1])
+def test_convert_layout_uses_input_device(layout, inverse, major_dim):
     if torch.cuda.device_count() < 2:
         pytest.skip("requires two CUDA devices")
 
     data = torch.arange(2 * 258 * 257, dtype=torch.int32, device="cpu").to(torch.uint8).reshape(2, 258, 257)
     canonical = wrap_torch_tensor(data, dtype=FP4, shape=[2, 258, 514])
+    canonical = convert_layout(canonical, StridedLayout(major_dim))
     source = convert_layout(canonical, layout) if inverse else canonical
-    destination = StridedLayout() if inverse else layout
+    destination = canonical.storage.layout if inverse else layout
     expected = convert_layout(source, destination)
 
     stream = torch.cuda.Stream(device=1)
