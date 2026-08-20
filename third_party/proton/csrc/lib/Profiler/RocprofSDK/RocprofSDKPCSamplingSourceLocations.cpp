@@ -119,8 +119,7 @@ void RocprofSDKPCSampling::recordCodeObjectUnload(uint64_t codeObjectId) {
       info->second.unloaded = true;
     clearSourceLocationCacheLocked(state, codeObjectId);
   });
-  if (!pcSamplingStarted)
-    tryReleaseCodeObject(codeObjectId);
+  tryReleaseCodeObject(codeObjectId);
 }
 
 std::optional<RocprofSDKPCSampling::SourceLocation>
