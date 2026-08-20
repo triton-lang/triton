@@ -124,6 +124,7 @@ def unflatten_ir_values(handles: List[ir.value], types: List[base_type]):
 
 
 _condition_types = {bool, int, type(None)}  # Python types accepted for conditionals inside kernels
+_max_recursive_elif_chain = 64
 
 
 class enter_sub_region:
@@ -1000,6 +1001,127 @@ class CodeGenerator(ast.NodeVisitor):
         for name, new_value in zip(names, new_values):
             self.set_value(name, new_value)
 
+    @staticmethod
+    def _get_elif_chain(node):
+        chain = [node]
+        while len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If):
+            node = node.orelse[0]
+            chain.append(node)
+        return chain
+
+    def visit_if_long_elif_chain(self, cond, chain):
+        """Lower a long if/elif chain without recursing through its else arms."""
+        with enter_sub_region(self) as sr:
+            liveins, _ = sr
+            current_cond = cond
+            current_liveins = liveins
+            current_pending_annotations = self.pending_annotations.copy()
+            current_block = self.builder.get_insertion_block()
+            branch_values = []
+            index = 0
+
+            while True:
+                node = chain[index]
+                then_block = self.builder.create_block()
+                else_block = self.builder.create_block()
+                self.builder.set_insertion_point_to_end(current_block)
+                self.builder.create_cond_branch(current_cond.handle, then_block, else_block)
+
+                self.builder.set_insertion_point_to_start(then_block)
+                self.lscope = current_liveins.copy()
+                self.local_defs = {}
+                self.pending_annotations = current_pending_annotations.copy()
+                self.visit_compound_statement(node.body)
+                branch_values.append((self.builder.get_insertion_block(), self.lscope.copy()))
+
+                self.builder.set_insertion_point_to_start(else_block)
+                self.lscope = current_liveins.copy()
+                self.local_defs = {}
+                self.pending_annotations = current_pending_annotations.copy()
+
+                while True:
+                    index += 1
+                    if index == len(chain):
+                        self.visit_compound_statement(chain[-1].orelse)
+                        branch_values.append((self.builder.get_insertion_block(), self.lscope.copy()))
+                        break
+
+                    node = chain[index]
+                    current_cond = self.visit(node.test)
+                    if _is_triton_tensor(current_cond):
+                        if _is_non_scalar_tensor(current_cond):
+                            raise self._unsupported(node,
+                                                    "Boolean value of Tensor with more than one value is ambiguous")
+                        if current_cond.type.is_block():
+                            warnings.warn(
+                                "If conditional called with multidimensional Tensor instead of scalar; please use "
+                                '"if (%s).item()" instead' % ast.unparse(node.test))
+                            current_cond = language.core._unsplat(current_cond, _semantic=self.semantic,
+                                                                  _generator=self)
+                        current_cond = current_cond.to(language.int1, _semantic=self.semantic)
+                        current_liveins = self.lscope.copy()
+                        current_pending_annotations = self.pending_annotations.copy()
+                        current_block = self.builder.get_insertion_block()
+                        break
+
+                    current_cond = _unwrap_if_constexpr(current_cond)
+                    if type(current_cond) not in _condition_types:
+                        raise self._unsupported(
+                            node,
+                            "`if` conditionals can only accept values of type {{{}}}, not objects of type {}".format(
+                                ', '.join(_.__name__ for _ in _condition_types),
+                                type(current_cond).__name__))
+                    if current_cond:
+                        self.visit_compound_statement(node.body)
+                        branch_values.append((self.builder.get_insertion_block(), self.lscope.copy()))
+                        index = len(chain)
+                        break
+
+                if index == len(chain):
+                    break
+
+            names = []
+            for name, value in liveins.items():
+                if not _is_triton_value(value):
+                    continue
+                handles = [flatten_values_to_ir([values[name]]) for _, values in branch_values]
+                if all(branch_handles == handles[0] for branch_handles in handles[1:]):
+                    continue
+                for _, values in branch_values:
+                    branch_value = values[name]
+                    type_equal = type(branch_value) == type(value)  # noqa: E721
+                    assert type_equal and branch_value.type == value.type, \
+                        f'initial value for `{name}` is of type {value}, but a branch redefines it as {branch_value}'
+                names.append(name)
+
+            common_names = set.intersection(*(set(values) for _, values in branch_values))
+            for name in sorted(common_names - liveins.keys()):
+                values = [branch_scope[name] for _, branch_scope in branch_values]
+                first_value = values[0]
+                for value in values[1:]:
+                    type_equal = type(value) == type(first_value)  # noqa: E721
+                    assert type_equal and value.type == first_value.type, \
+                        f'Mismatched type for {name} between branches ({first_value.type} and {value.type})'
+                names.append(name)
+
+            endif_block = self.builder.create_block()
+            result_types = [branch_values[0][1][name].type for name in names]
+            first_handles = flatten_values_to_ir(branch_values[0][1][name] for name in names)
+            for handle in first_handles:
+                endif_block.add_argument(handle.get_type())
+
+            for block, values in branch_values:
+                self.builder.set_insertion_point_to_end(block)
+                assert not block.has_terminator(), f"{block}"
+                handles = flatten_values_to_ir(values[name] for name in names)
+                self.builder.create_branch(endif_block, handles)
+
+        self.builder.set_insertion_point_to_start(endif_block)
+        result_handles = [endif_block.arg(i) for i in range(len(first_handles))]
+        new_values = unflatten_ir_values(result_handles, result_types)
+        for name, new_value in zip(names, new_values):
+            self.set_value(name, new_value)
+
     # TODO: refactor
     def visit_if_scf(self, cond, node):
         with enter_sub_region(self) as sr:
@@ -1054,7 +1176,11 @@ class CodeGenerator(ast.NodeVisitor):
                         node, "Cannot have `return` statements inside `while` or `for` statements in triton.")
                 self.visit_if_top_level(cond, node)
             else:
-                self.visit_if_scf(cond, node)
+                elif_chain = self._get_elif_chain(node)
+                if len(elif_chain) > _max_recursive_elif_chain and not self.scf_stack:
+                    self.visit_if_long_elif_chain(cond, elif_chain)
+                else:
+                    self.visit_if_scf(cond, node)
         else:
             cond = _unwrap_if_constexpr(cond)
             # not isinstance - we insist the real thing, no subclasses and no ducks
