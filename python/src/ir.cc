@@ -32,6 +32,7 @@
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Transforms/LocationSnapshot.h"
 
+#include "plugin_registration.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -55,6 +56,10 @@ using namespace triton;
 namespace tt = triton;
 namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
+
+// Plugins whose dialects should be registered in `load_dialects`. Populated by
+// `extendTritonWith` when a Triton extension is loaded.
+static std::vector<mlir::triton::plugin::TritonPlugin> plugins;
 
 // Function to parse a comma-separated string into a vector of C-style strings
 llvm::SmallVector<const char *, 3>
@@ -336,24 +341,6 @@ void init_triton_ir(py::module_ &m) {
 
   py::class_<SourceMgrDiagnosticHandler>(m, "source_mgr_diag")
       .def(py::init<llvm::SourceMgr &, MLIRContext *>());
-
-  static std::vector<mlir::triton::plugin::TritonPlugin> plugins;
-  m.def(
-      "extend_dialects_with",
-      [](const std::string &libPath) {
-        // Load the plugin library.
-        auto pluginOrErr = mlir::triton::plugin::TritonPlugin::load(libPath);
-        if (!pluginOrErr) {
-          std::string errMsg = llvm::toString(pluginOrErr.takeError());
-          throw std::runtime_error(errMsg);
-        }
-        auto plugin = std::move(*pluginOrErr);
-
-        // Store the plugin for later (i.e., `load_dialects`)
-        plugins.push_back(std::move(plugin));
-      },
-      "Given a path to a Triton extension, register any dialects to be loaded "
-      "in `load_dialects`.");
 
   m.def("load_dialects", [](MLIRContext &context) {
     DialectRegistry registry;
@@ -1907,36 +1894,6 @@ void init_triton_ir(py::module_ &m) {
                                                   paddingOption);
            });
 
-  // Add an `extend_with` static method that dynamically loads a plugin and
-  // registers its custom operations as builder methods.
-  auto builderPtr =
-      std::make_shared<py::class_<TritonOpBuilder>>(TritonOpBuilderBinding);
-  TritonOpBuilderBinding.def_static(
-      "extend_with",
-      [builderPtr](const std::string &path) {
-        // Load the plugin library.
-        auto pluginOrErr = mlir::triton::plugin::TritonPlugin::load(path);
-        if (!pluginOrErr) {
-          std::string errMsg = llvm::toString(pluginOrErr.takeError());
-          throw std::runtime_error(errMsg);
-        }
-        auto plugin = std::move(*pluginOrErr);
-
-        // Extend the builder class with the ops defined in the plugin.
-        py::gil_scoped_acquire acquire;
-        for (const auto &op : plugin.listOps()) {
-          std::string wrapped = std::string("create_") + op.name;
-          builderPtr->def(wrapped.c_str(),
-                          [op](TritonOpBuilder &self, std::vector<Value> args) {
-                            args.insert(args.begin(), Value());
-                            op.addOp(self, args);
-                            return args[0];
-                          });
-        }
-      },
-      "Given a path to a Triton extension, load it and create builder methods "
-      "for each operation.");
-
   py::class_<PassManager>(m, "pass_manager")
       .def(py::init<MLIRContext *>())
       .def("enable_debug",
@@ -2043,6 +2000,68 @@ void init_triton_ir(py::module_ &m) {
               throw std::runtime_error("PassManager::run failed");
           },
           py::call_guard<py::gil_scoped_release>());
+}
+
+// Top-level `libtriton.extend_with(path)`: load a Triton extension once and
+// register all of its dialects, custom operations, and passes.
+//
+// All registration is contained here rather than dispersed across translation
+// units. We reach the relevant Python objects by walking the top-level module
+// tree (`m`) via `py::getattr` at call time -- when the interpreter is
+// guaranteed alive -- so that no nanobind Python handle is cached in a C++
+// static (a static handle would be destroyed after `Py_Finalize`, causing a
+// use-after-free `Py_DECREF` at process teardown).
+//
+// Because the walk depends on the module structure, a change to that structure
+// (e.g. renaming `ir.builder`) will raise an `AttributeError` here; this is
+// intentionally guarded by a test (see `test_extend_with.py`).
+void extendTritonWith(py::module_ m, const std::string &path) {
+  // Load the plugin library.
+  auto pluginOrErr = mlir::triton::plugin::TritonPlugin::load(path);
+  if (!pluginOrErr) {
+    std::string errMsg = llvm::toString(pluginOrErr.takeError());
+    throw std::runtime_error(errMsg);
+  }
+  auto plugin = std::move(*pluginOrErr);
+
+  // Append the plugin's contributions in each place, holding the GIL. The
+  // plugin is loaded permanently (see `TritonPlugin::load`), so the operation
+  // and pass callbacks remain valid even though only the dialect plugins are
+  // retained (for later `load_dialects`).
+  py::gil_scoped_acquire acquire;
+
+  // Register the plugin's custom operations as `create_<op>` methods on the
+  // `ir.builder` class.
+  auto builderClass = py::borrow<py::class_<TritonOpBuilder>>(
+      py::getattr(py::getattr(m, "ir"), "builder"));
+  for (const auto &op : plugin.listOps()) {
+    std::string wrapped = std::string("create_") + op.name;
+    builderClass.def(wrapped.c_str(), [op](TritonOpBuilder &self,
+                                           std::vector<mlir::Value> args) {
+      args.insert(args.begin(), mlir::Value());
+      op.addOp(self, args);
+      return args[0];
+    });
+  }
+
+  // Register the plugin's passes as `add_<pass>` functions in a per-plugin
+  // `passes.<plugin_name>` submodule.
+  auto passesModule = py::borrow<py::module_>(py::getattr(m, "passes"));
+  std::string submoduleName = plugin.getPluginName().str();
+  std::replace(submoduleName.begin(), submoduleName.end(), '-', '_');
+  auto pluginPasses = passesModule.def_submodule(submoduleName.c_str());
+  for (const auto &pass : plugin.listPasses()) {
+    std::string wrapped = std::string("add_") + pass.name;
+    pluginPasses.def(
+        wrapped.c_str(),
+        [pass](mlir::PassManager &pm, std::vector<std::string> args) {
+          pass.addPass(&pm, args);
+        },
+        py::arg("pm"), py::arg("args") = std::vector<std::string>());
+  }
+
+  // Retain the plugin so `load_dialects` can register its dialects later.
+  plugins.push_back(std::move(plugin));
 }
 
 namespace {
