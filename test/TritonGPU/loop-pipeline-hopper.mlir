@@ -1021,7 +1021,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 #nvmma_64 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
 #nvmma_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @mmav3_fp8_row_major_rhs(%arg0: !tt.ptr<i8, 0> {tt.nv_tma_desc = 1 : i32}, %arg1: !tt.ptr<i8, 0> {tt.nv_tma_desc = 1 : i32}, %arg2: !tt.ptr<i8, 0> {tt.nv_tma_desc = 1 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}) {
+  tt.func public @mmav3_fp8_row_major_rhs(%arg0: !tt.ptr<i8, "flat"> {tt.nv_tma_desc = 1 : i32}, %arg1: !tt.ptr<i8, "flat"> {tt.nv_tma_desc = 1 : i32}, %arg2: !tt.ptr<i8, "flat"> {tt.nv_tma_desc = 1 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}) {
     // CHECK-LABEL: mmav3_fp8_row_major_rhs
     // The col-major RHS SMEM encoding in the input, created by accelerate-matmul, should be overwritten by the row-major TMA layout.
     // Note that this "overwriting" makes the program invalid after SWP, since warp_group_dot does not support row-major fp8 RHS.
@@ -1044,8 +1044,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %6 = arith.muli %4, %c64_i32 : i32
     %7 = arith.addi %arg5, %c63_i32 : i32
     %8 = arith.divsi %7, %c64_i32 : i32
-    %9 = ttng.reinterpret_tensor_descriptor %arg0 : !tt.ptr<i8, 0> to !tt.tensordesc<128x64xf8E4M3FN, #shared>
-    %10 = ttng.reinterpret_tensor_descriptor %arg1 : !tt.ptr<i8, 0> to !tt.tensordesc<64x64xf8E4M3FN, #shared>
+    %9 = ttng.reinterpret_tensor_descriptor %arg0 : !tt.ptr<i8, "flat"> to !tt.tensordesc<128x64xf8E4M3FN, #shared>
+    %10 = ttng.reinterpret_tensor_descriptor %arg1 : !tt.ptr<i8, "flat"> to !tt.tensordesc<64x64xf8E4M3FN, #shared>
     %true = arith.constant true
     %false = arith.constant false
     %11:2 = scf.for %arg6 = %c0_i32 to %8 step %c1_i32 iter_args(%arg7 = %cst, %arg8 = %c0_i32) -> (tensor<128x64xf32, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 64, 32]}>>, i32)  : i32 {
@@ -1058,7 +1058,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
       scf.yield %18, %19 : tensor<128x64xf32, #mma>, i32
     }
     %12 = ttg.convert_layout %11#0 : tensor<128x64xf32, #mma> -> tensor<128x64xf32, #blocked>
-    %13 = ttng.reinterpret_tensor_descriptor %arg2 : !tt.ptr<i8, 0> to !tt.tensordesc<128x64xf32, #nvmma_128>
+    %13 = ttng.reinterpret_tensor_descriptor %arg2 : !tt.ptr<i8, "flat"> to !tt.tensordesc<128x64xf32, #nvmma_128>
     tt.descriptor_store %13[%5, %6], %12 : !tt.tensordesc<128x64xf32, #nvmma_128>, tensor<128x64xf32, #blocked>
     tt.return
   }

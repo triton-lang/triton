@@ -279,15 +279,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #shared2 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 8}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @_fbgemm_grouped_gemm_fp8_rowwise_ws(%arg0: !tt.ptr<i8, 0> {tt.nv_tma_desc = 1 : i32}, %arg1: i32, %arg2: !tt.ptr<i8, 0> {tt.nv_tma_desc = 1 : i32}, %arg3: !tt.ptr<i8, 0> {tt.nv_tma_desc = 1 : i32}) {
+  tt.func public @_fbgemm_grouped_gemm_fp8_rowwise_ws(%arg0: !tt.ptr<i8, "flat"> {tt.nv_tma_desc = 1 : i32}, %arg1: i32, %arg2: !tt.ptr<i8, "flat"> {tt.nv_tma_desc = 1 : i32}, %arg3: !tt.ptr<i8, "flat"> {tt.nv_tma_desc = 1 : i32}) {
     %c0_i32 = arith.constant {async_task_id = array<i32: 0, 1, 2>} 0 : i32
     %c2048_i32 = arith.constant {async_task_id = array<i32: 0, 1, 2>} 2048 : i32
     %c64_i32 = arith.constant {async_task_id = array<i32: 0, 1, 2>} 64 : i32
     %cst = arith.constant {async_task_id = array<i32: 0, 1, 2>} dense<0.000000e+00> : tensor<64x128xf32, #mma>
     %0 = tt.get_program_id x {async_task_id = array<i32: 0, 1, 2>} : i32
-    %1 = ttng.reinterpret_tensor_descriptor %arg0 {async_task_id = array<i32: 0>} : !tt.ptr<i8, 0> to !tt.tensordesc<64x64xf8E4M3FN, #shared>
-    %2 = ttng.reinterpret_tensor_descriptor %arg2 {async_task_id = array<i32: 0>} : !tt.ptr<i8, 0> to !tt.tensordesc<128x64xf8E4M3FN, #shared>
-    %3 = ttng.reinterpret_tensor_descriptor %arg3 {async_task_id = array<i32: 0>} : !tt.ptr<i8, 0> to !tt.tensordesc<128xf32, #shared1>
+    %1 = ttng.reinterpret_tensor_descriptor %arg0 {async_task_id = array<i32: 0>} : !tt.ptr<i8, "flat"> to !tt.tensordesc<64x64xf8E4M3FN, #shared>
+    %2 = ttng.reinterpret_tensor_descriptor %arg2 {async_task_id = array<i32: 0>} : !tt.ptr<i8, "flat"> to !tt.tensordesc<128x64xf8E4M3FN, #shared>
+    %3 = ttng.reinterpret_tensor_descriptor %arg3 {async_task_id = array<i32: 0>} : !tt.ptr<i8, "flat"> to !tt.tensordesc<128xf32, #shared1>
     scf.for %arg4 = %0 to %arg1 step %c64_i32  : i32 {
       %4 = arith.muli %arg4, %c2048_i32 {async_task_id = array<i32: 0>} : i32
       %5 = scf.for %arg5 = %c0_i32 to %c2048_i32 step %c64_i32 iter_args(%arg6 = %cst) -> (tensor<64x128xf32, #mma>)  : i32 {

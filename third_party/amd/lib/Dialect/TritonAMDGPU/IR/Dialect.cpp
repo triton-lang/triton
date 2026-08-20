@@ -751,8 +751,7 @@ LogicalResult BufferLoadToLocalOp::verify() {
 
 // A buffer write's scalar base must be global memory (address space 1).
 static LogicalResult verifyBufferWriteBase(Operation *op, Value ptr) {
-  constexpr int kGlobalAddressSpace = 1;
-  if (triton::getAddressSpace(ptr.getType()) != kGlobalAddressSpace)
+  if (triton::getAddressSpace(ptr.getType()) != triton::PtrAddrSpace::Global)
     return op->emitOpError("buffer writes require a global address space base");
   return success();
 }
