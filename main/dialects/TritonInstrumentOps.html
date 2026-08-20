@@ -823,7 +823,9 @@ runtime, which checks row and column bounds before updating shadow memory.</p>
 </div>
 <p>Records an arrival for every mbarrier targeted by the corresponding
 hardware operation. When <code class="docutils literal notranslate"><span class="pre">publishClock</span></code> is true, the issuing CTA’s vector
-clock is also published as a release. A false value records only phase
+clock is also published without advancing its local epoch. Waiters acquire
+the issuing CTA’s completed epochs and its imported clocks, but not its
+current epoch. A false value records only phase
 progress for asynchronous completion signals that provide no generic
 memory ordering. <code class="docutils literal notranslate"><span class="pre">multicastMasks</span></code> contains CTA-id broadcast masks whose
 recipient bitsets are unioned. When <code class="docutils literal notranslate"><span class="pre">multicast</span></code> is false, the arrival
@@ -909,7 +911,7 @@ This operation is internal to GSan instrumentation.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tti.experimental_gsan_mbarrier_table_init` $scratch `,` $capacity attr-dict `:` type($scratch)
 </pre></div>
 </div>
-<p>Initializes gsan’t internal mbarrier table, used to sequence memory accesses
+<p>Initializes GSan’s internal mbarrier table, used to sequence memory accesses
 through cluster mbarriers. This operation is internal to GSan instrumentation.</p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
@@ -944,7 +946,9 @@ through cluster mbarriers. This operation is internal to GSan instrumentation.</
               qualified(type($barrier))
 </pre></div>
 </div>
-<p>Acquires the release clocks published to the completed mbarrier phase.
+<p>Acquires the clocks published to the completed mbarrier phase, excluding
+each publisher’s current epoch. Global-memory handoffs that rely solely on
+an mbarrier may therefore be conservatively reported as races.
 This operation is internal to GSan instrumentation.</p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory,</span> <span class="pre">MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
