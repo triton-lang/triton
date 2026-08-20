@@ -432,7 +432,18 @@ void CuptiProfiler::CuptiProfilerPimpl::handleGraphResourceCallbacks(
         return;
       }
       auto &graphState = graphStates[graphId];
-      threadState.captureGraphNode(graphState, nodeId);
+      std::optional<GraphState::MetricNodeState> metricNodeState;
+      if (threadState.isMetricKernelLaunching) {
+        auto metricKernelLaunchInfo =
+            threadState.metricKernelLaunchInfoQueue.front();
+        threadState.metricKernelLaunchInfoQueue.pop_front();
+        metricNodeState.emplace(GraphState::MetricNodeState{
+            metricKernelLaunchInfo.seqId, metricKernelLaunchInfo.metricId,
+            metricKernelLaunchInfo.numWords});
+      }
+      graphState.recordNode(nodeId, threadState.scopeStack.back().name,
+                            std::move(metricNodeState), profiler.dataSet,
+                            threadState.isApiExternOp);
     } else { // CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED
       // When a graph is cloned under the stream capture mode, graphId is the
       // same as the graphExecId to be created

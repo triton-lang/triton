@@ -161,22 +161,6 @@ protected:
       scopeStack.pop_back();
     }
 
-    void captureGraphNode(GraphState &graphState, uint64_t nodeId) {
-      if (!profiler.isOpInProgress())
-        return;
-
-      std::optional<GraphState::MetricNodeState> metricNodeState;
-      if (isMetricKernelLaunching) {
-        auto metricKernelLaunchInfo = metricKernelLaunchInfoQueue.front();
-        metricKernelLaunchInfoQueue.pop_front();
-        metricNodeState.emplace(GraphState::MetricNodeState{
-            metricKernelLaunchInfo.seqId, metricKernelLaunchInfo.metricId,
-            metricKernelLaunchInfo.numWords});
-      }
-      graphState.recordNode(nodeId, scopeStack.back().name,
-                            std::move(metricNodeState), profiler.dataSet,
-                            isApiExternOp);
-    }
   };
 
   struct Correlation {

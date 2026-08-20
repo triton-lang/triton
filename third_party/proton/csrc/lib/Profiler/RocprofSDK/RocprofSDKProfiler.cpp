@@ -721,7 +721,18 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleCapturedKernelEnter() {
   auto &profiler = threadState.profiler;
   if (profiler.isOpInProgress()) {
     const auto nodeId = streamCaptureGraphState.nodeIdToState.size();
-    threadState.captureGraphNode(streamCaptureGraphState, nodeId);
+    std::optional<GraphState::MetricNodeState> metricNodeState;
+    if (threadState.isMetricKernelLaunching) {
+      auto metricKernelLaunchInfo =
+          threadState.metricKernelLaunchInfoQueue.front();
+      threadState.metricKernelLaunchInfoQueue.pop_front();
+      metricNodeState.emplace(GraphState::MetricNodeState{
+          metricKernelLaunchInfo.seqId, metricKernelLaunchInfo.metricId,
+          metricKernelLaunchInfo.numWords});
+    }
+    streamCaptureGraphState.recordNode(
+        nodeId, threadState.scopeStack.back().name, std::move(metricNodeState),
+        profiler.dataSet, threadState.isApiExternOp);
   }
 }
 #endif
