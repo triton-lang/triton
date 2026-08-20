@@ -589,7 +589,7 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
 // COMMON:    %[[VAR_0:.*]] = arith.constant dense<0> : tensor<256x256xi64, #blocked>
 // COMMON:    %[[VAR_1:.*]] = amdg.extract_slice %[[VAR_0]] [0, 0] : tensor<256x256xi64, #blocked> to tensor<128x256xi64, #blocked>
 // COMMON:    %[[VAR_2:.*]] = arith.trunci %[[VAR_1]] : tensor<128x256xi64, #blocked> to tensor<128x256xi32, #blocked>
-// COMMON:    %[[VAR_3:.*]] = amdg.buffer_load %[[ARG_0]][%[[VAR_2]]] : <f32> -> tensor<128x256xf32, #blocked>
+// COMMON:    %[[VAR_3:.*]] = amdg.buffer_load %[[ARG_0]][%[[VAR_2]]] : !tt.ptr<f32> -> tensor<128x256xf32, #blocked>
 // COMMON:    tt.return %[[VAR_3]] : tensor<128x256xf32, #blocked>
 // COMMON:  }
 
@@ -627,8 +627,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // COMMON: test_contiguity_set
 // COMMON: scf.for
 // COMMON: %[[OFFSET:.*]] = arith.addi
-// COMMON: amdg.buffer_load %{{.*}}[%[[OFFSET]]] {contiguity = 8 : i32} : <f16> -> tensor<128x64xf16, #blocked>
-// COMMON: amdg.buffer_store %{{.*}}[%[[OFFSET]]] {contiguity = 8 : i32} : <f16> -> tensor<128x64xf16, #blocked>
+// COMMON: amdg.buffer_load %{{.*}}[%[[OFFSET]]] {contiguity = 8 : i32} : !tt.ptr<f16> -> tensor<128x64xf16, #blocked>
+// COMMON: amdg.buffer_store %{{.*}}[%[[OFFSET]]] {contiguity = 8 : i32} : !tt.ptr<f16> -> tensor<128x64xf16, #blocked>
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 

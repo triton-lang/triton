@@ -1160,7 +1160,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_verify_read_visibility
     // CHECK: tt.call @__triton_consan_stage_access_for_commit
     // CHECK: amdg.buffer_load_to_local
-    %token = amdg.buffer_load_to_local %ptr[%offsets] into %buffer : <f32>[tensor<32x64xi32, #blocked>] -> <32x64xf32, #shared, #smem, mutable>
+    %token = amdg.buffer_load_to_local %ptr[%offsets] into %buffer : !tt.ptr<f32>[tensor<32x64xi32, #blocked>] -> <32x64xf32, #shared, #smem, mutable>
     // CHECK: tt.call @__triton_consan_commit_accesses
     // CHECK: ttg.async_commit_group
     %group = ttg.async_commit_group tokens %token

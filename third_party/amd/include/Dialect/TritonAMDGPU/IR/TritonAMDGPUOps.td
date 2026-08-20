@@ -304,7 +304,7 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       $ptr `[` $offsets `]` (`,` $mask^)? (`,` $other^)?
       oilist(`cacheModifier` `=` $cache)
       (`stride` `=` $stride^)?
-      attr-dict `:` type($ptr) `->` type($result)
+      attr-dict `:` qualified(type($ptr)) `->` type($result)
     }];
 }
 
@@ -347,7 +347,7 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
     let assemblyFormat = [{
       $ptr `[` $offsets `]` (`mask` `=` $mask^)? (`other` `=` $other^)? (`stride` `=` $stride^)?
       oilist(`cacheModifier` `=` $cache) `into` $dest
-      attr-dict `:` type($ptr) `[` type($offsets) `]` type($other) `->` type($dest)
+      attr-dict `:` qualified(type($ptr)) `[` type($offsets) `]` type($other) `->` type($dest)
     }];
 }
 
@@ -399,7 +399,7 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
     let assemblyFormat = [{
         $atomic_rmw_op `,` $sem `,` $scope `,` $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
         (`stride` `=` $stride^)?
-        attr-dict `:` type($ptr) `->` type($result)
+        attr-dict `:` qualified(type($ptr)) `->` type($result)
     }];
 }
 
@@ -442,7 +442,7 @@ def BufferAtomicCASOp : TT_AMDGPU_Op<"buffer_atomic_cas", [
     let assemblyFormat = [{
         $sem `,` $scope `,` $cmp `,` $val `,` $ptr `[` $offsets `]`
         (`stride` `=` $stride^)?
-        attr-dict `:` type($ptr) `->` type($result)
+        attr-dict `:` qualified(type($ptr)) `->` type($result)
     }];
 }
 
@@ -493,7 +493,7 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
       $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
       oilist(`cacheModifier` `=` $cache)
       (`stride` `=` $stride^)?
-      attr-dict `:` type($ptr) `->` type($value)
+      attr-dict `:` qualified(type($ptr)) `->` type($value)
     }];
 }
 

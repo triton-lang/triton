@@ -21,7 +21,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
     // There should be a single acquire fence after all of the atomics
     // CHECK: llvm.fence syncscope("agent") acquire
-    %ret = amdg.buffer_atomic_rmw fadd, acq_rel, gpu, %values, %arg0[%offset] : <f32> -> tensor<128xf32, #blocked>
+    %ret = amdg.buffer_atomic_rmw fadd, acq_rel, gpu, %values, %arg0[%offset] : !tt.ptr<f32> -> tensor<128xf32, #blocked>
     tt.return
   }
 }
@@ -50,10 +50,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: rocdl.raw.ptr.buffer.atomic.cmpswap {{.*}}, 17 : i32
     // CHECK: rocdl.raw.ptr.buffer.atomic.cmpswap {{.*}}, 17 : i32
     // CHECK: llvm.fence syncscope("agent") acquire
-    %4 = amdg.buffer_atomic_cas acq_rel, gpu, %cmp, %val, %scalar_ptr[%offsets] : <i32> -> tensor<256xi32, #blocked>
+    %4 = amdg.buffer_atomic_cas acq_rel, gpu, %cmp, %val, %scalar_ptr[%offsets] : !tt.ptr<i32> -> tensor<256xi32, #blocked>
 
     %5 = tt.addptr %arg1, %1 : !tt.ptr<i32>, i32
-    amdg.buffer_store %4, %5[%offsets] : <i32> -> tensor<256xi32, #blocked>
+    amdg.buffer_store %4, %5[%offsets] : !tt.ptr<i32> -> tensor<256xi32, #blocked>
     tt.return
   }
 }
@@ -79,7 +79,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.fadd"({{.*}}) : (vector<2xbf16>, !llvm.ptr<8>, i32, i32, i32) -> vector<2xbf16>
 
     // CHECK: llvm.fence syncscope("agent") acquire
-    %ret = amdg.buffer_atomic_rmw fadd, acq_rel, gpu, %values, %arg0[%offsets] : <bf16> -> tensor<64xbf16, #blocked>
+    %ret = amdg.buffer_atomic_rmw fadd, acq_rel, gpu, %values, %arg0[%offsets] : !tt.ptr<bf16> -> tensor<64xbf16, #blocked>
     tt.return
   }
 }
