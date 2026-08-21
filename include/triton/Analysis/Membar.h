@@ -199,13 +199,12 @@ struct MembarInfo {
   /// Buffers accessed since the most recent synchronization.
   BlockInfo pending;
 
-  /// Buffers reachable from function entry before the first synchronization.
+  /// Buffers reachable from the basic block entry
   BlockInfo entry;
 
-  /// Whether every path from function entry has synchronized.
+  /// Whether every path to this basic block has synchronized.
   bool allPathsSynced = false;
 
-  /// Merge states reaching the same control-flow point.
   MembarInfo &join(const MembarInfo &other) {
     pending.join(other.pending);
     entry.join(other.entry);
@@ -213,21 +212,17 @@ struct MembarInfo {
     return *this;
   }
 
-  /// Add a BlockInfo to the pending state and, while an unsynchronized entry
-  /// path remains, to the entry state.
   void addBlockInfo(const BlockInfo &blockInfo) {
     if (!allPathsSynced)
       entry.join(blockInfo);
     pending.join(blockInfo);
   }
 
-  /// Clear the pending state and close every current entry path.
   void sync() {
     pending.sync();
     allPathsSynced = true;
   }
 
-  /// Compose a callee summary into the caller state.
   void applyCallSummary(const MembarInfo &callee) {
     if (!allPathsSynced)
       entry.join(callee.entry);
