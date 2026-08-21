@@ -24,6 +24,45 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#blockedCallSrc = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
+#blockedCallDst = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @cluster_entry_c
+  // CHECK: ttg.convert_layout
+  // CHECK-NEXT: ttng.cluster_barrier
+  tt.func private @cluster_entry_c() {
+    %cst = arith.constant dense<0.0> : tensor<256x128xf16, #blockedCallSrc>
+    %cvt = ttg.convert_layout %cst : tensor<256x128xf16, #blockedCallSrc> -> tensor<256x128xf16, #blockedCallDst>
+    ttng.cluster_barrier
+    tt.return
+  }
+
+  // CHECK-LABEL: @cluster_entry_b
+  // CHECK-NOT: ttng.cluster_barrier
+  // CHECK: tt.call @cluster_entry_c
+  tt.func private @cluster_entry_b() {
+    tt.call @cluster_entry_c() : () -> ()
+    tt.return
+  }
+
+  // CHECK-LABEL: @cluster_entry_a
+  // CHECK-NOT: ttng.cluster_barrier
+  // CHECK: tt.call @cluster_entry_b
+  // CHECK: ttg.convert_layout
+  // CHECK-NEXT: ttng.cluster_barrier
+  // CHECK-NEXT: tt.call @cluster_entry_b
+  tt.func @cluster_entry_a() {
+    tt.call @cluster_entry_b() : () -> ()
+    %cst = arith.constant dense<0.0> : tensor<256x128xf16, #blockedCallSrc>
+    %cvt = ttg.convert_layout %cst : tensor<256x128xf16, #blockedCallSrc> -> tensor<256x128xf16, #blockedCallDst>
+    tt.call @cluster_entry_b() : () -> ()
+    tt.return
+  }
+}
+
+// -----
+
 #barrierEncPartial = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 #smem = #ttg.shared_memory
 

@@ -269,18 +269,6 @@ bool containsLocalBarrier(Operation *op);
 // Shared Memory Barrier Analysis
 //===----------------------------------------------------------------------===//
 
-// Common class to analyze membar and fence placement.
-class MembarOrFenceAnalysis
-    : public triton::PostOrderFunctionAnalysis<BlockInfo> {
-public:
-  MembarOrFenceAnalysis(Allocation &allocation, MembarFilterFn filter)
-      : allocation(allocation), filter(std::move(filter)) {}
-
-protected:
-  Allocation &allocation;
-  MembarFilterFn filter;
-};
-
 class MembarAnalysis : public triton::PostOrderFunctionAnalysis<MembarInfo> {
 public:
   /// Creates a new Membar analysis that generates the shared memory barrier
@@ -313,40 +301,12 @@ private:
 
   void insertBarrier(Operation *operation, OpBuilder *builder);
 
+protected:
   Allocation &allocation;
   MembarFilterFn filter;
-  BufferIndexAnalysis bufferIndexAnalysis;
-};
-
-/// Postorder traversal on the callgraph to insert membar instructions
-/// of each function.
-/// Each function maintains a BlockInfo map that includes all potential buffers
-/// after returning. This way users do not have to explicitly insert membars
-/// before and after function calls, but might be a bit conservative.
-template <typename AnalysisT>
-class ModuleMembarOrFenceAnalysis : public triton::CallGraph<BlockInfo> {
-public:
-  ModuleMembarOrFenceAnalysis(ModuleAllocation &moduleAllocation,
-                              MembarFilterFn filter = nullptr)
-      : triton::CallGraph<BlockInfo>(moduleAllocation.getModuleOp()),
-        moduleAllocation(moduleAllocation), filter(std::move(filter)) {}
-
-  void run() {
-    walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
-        // Pre-order walk callback
-        [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
-        // Post-order walk callback
-        [&](FunctionOpInterface funcOp) {
-          auto &allocation = *moduleAllocation.getFuncData(funcOp);
-          if (!funcMap.try_emplace(funcOp).second)
-            return;
-          AnalysisT(allocation, filter).run(funcOp, funcMap);
-        });
-  }
 
 private:
-  ModuleAllocation &moduleAllocation;
-  MembarFilterFn filter;
+  BufferIndexAnalysis bufferIndexAnalysis;
 };
 
 /// Inserts shared-memory barriers across a module. Function summaries retain
@@ -358,6 +318,19 @@ public:
       : moduleAllocation(moduleAllocation), filter(std::move(filter)) {}
 
   void run();
+
+  template <typename AnalysisT> void runAnalysis() {
+    triton::CallGraph<MembarInfo> callGraph(moduleAllocation.getModuleOp());
+    triton::CallGraph<MembarInfo>::FuncDataMapT summaries;
+    callGraph.walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
+        [](CallOpInterface, FunctionOpInterface) {},
+        [&](FunctionOpInterface function) {
+          if (!summaries.try_emplace(function).second)
+            return;
+          auto &allocation = *moduleAllocation.getFuncData(function);
+          AnalysisT(allocation, filter).run(function, summaries);
+        });
+  }
 
 private:
   ModuleAllocation &moduleAllocation;
