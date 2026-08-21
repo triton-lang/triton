@@ -1,13 +1,56 @@
+from types import SimpleNamespace
+
 import pytest
 import torch
 
 from triton_kernels.matmul_details._common import _matmul_flops_and_bytes_from_slices, matmul_launch_metadata
+from triton_kernels.matmul_details._common import make_matmul_repr
 from triton_kernels.proton_opts import launch_metadata_allow_sync, set_launch_metadata_allow_sync
 
 
 class _Kernel:
     name = "_p_matmul_test"
     num_stages = 4
+
+
+def _matmul_name(signature):
+    constants = {
+        "stride_y_n": 1,
+        "stride_x_k": 1,
+        "stride_w_n": 1,
+        "BLOCK_M": 128,
+        "BLOCK_N": 256,
+        "BLOCK_K": 128,
+        "SPLIT_K": 1,
+    }
+    specialization = SimpleNamespace(signature=signature, constants=constants)
+    return make_matmul_repr("_matmul", [0, 1, 2])(specialization)
+
+
+@pytest.mark.parametrize(
+    ("signature", "expected_dtypes"),
+    [
+        ({"Y": "*bf16", "X": "*u8", "W": "*bf16", "XMxScale": "*u8"}, "bf16xmxfp4xbf16"),
+        (
+            {"Y": "*bf16", "X": "*u8", "W": "*bf16", "XMxScale": "tensordesc<u8[128,4]>"},
+            "bf16xmxfp4xbf16",
+        ),
+        ({"Y": "*bf16", "X": "*u8", "W": "*bf16", "XMxScale": "*fp8e4nv"}, "bf16xnvfp4xbf16"),
+        (
+            {"Y": "*bf16", "X": "*u8", "W": "*bf16", "XMxScale": "tensordesc<fp8e4nv[128,4]>"},
+            "bf16xnvfp4xbf16",
+        ),
+        (
+            {"Y": "*bf16", "X": "*u8", "W": "*u8", "XMxScale": "*fp8e4nv", "WMxScale": "*fp8e4nv"},
+            "bf16xnvfp4xnvfp4",
+        ),
+        ({"Y": "*u8", "X": "*bf16", "W": "*bf16", "YActualScale": "*fp8e4nv"}, "nvfp4xbf16xbf16"),
+        ({"Y": "*bf16", "X": "*fp8e4nv", "W": "*fp16"}, "bf16xfp8e4nvxfp16"),
+    ],
+)
+def test_matmul_repr_names_operand_dtypes(signature, expected_dtypes):
+    name = _matmul_name(signature)
+    assert name == f"_matmul_NNN_{expected_dtypes}_128x256x128x1"
 
 
 def _old_flops_and_bytes(args, M, N, K, X, Y, W, slice_sizes, nbits, batch_size):

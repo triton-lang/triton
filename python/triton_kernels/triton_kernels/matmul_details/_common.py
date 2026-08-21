@@ -231,18 +231,20 @@ def make_matmul_repr(base_name, order):
         reorder = lambda L: [L[i] for i in order]
         layout = lambda stride: "N" if stride in constants else "T"
 
-        def convert_dtype(dtype):
+        def convert_dtype(i):
+            dtype = signature[i]
             if "tensordesc" in dtype:
-                ret = convert_dtype(dtype.split("<")[1].split("[")[0])
-                return ret
-            elif "u8" in dtype:
-                return "mxfp4"
+                dtype = dtype.split("<")[1].split("[")[0]
             elif dtype[0] == "*":
-                return dtype[1:]
-            else:
-                return dtype
+                dtype = dtype[1:]
 
-        dtypes = "x".join([convert_dtype(f"{signature[i]}") for i in reorder(["Y", "X", "W"])])
+            if "u8" in dtype:
+                scale_name = "YActualScale" if i == "Y" else f"{i}MxScale"
+                scale = signature[scale_name]
+                return "nvfp4" if "fp8e4nv" in scale else "mxfp4"
+            return dtype
+
+        dtypes = "x".join([convert_dtype(i) for i in reorder(["Y", "X", "W"])])
         layouts = "".join([f"{layout(i)}" for i in reorder(["stride_y_n", "stride_x_k", "stride_w_n"])])
         blocks = "x".join([f"{constants[i]}" for i in ["BLOCK_M", "BLOCK_N", "BLOCK_K", "SPLIT_K"]])
         suffix = "_acc" if "OutAcc" in signature and "OutAcc" not in constants else ""

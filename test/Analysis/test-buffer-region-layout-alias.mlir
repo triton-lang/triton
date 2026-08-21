@@ -604,7 +604,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32, "ttg.total-num-warps" = 4 : i32} {
   tt.func public @amd_buffer_load_to_local_alias(%ptr: !tt.ptr<f32>, %offsets: tensor<32x64xi32, #blocked>) {
     %buffer = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x64xf32, #shared, #smem, mutable>
-    %token = amdg.buffer_load_to_local %ptr[%offsets] into %buffer {test.region_name = "amd_direct_a_buffer_load"} : <f32>[tensor<32x64xi32, #blocked>] -> <32x64xf32, #shared, #smem, mutable>
+    %token = amdg.buffer_load_to_local %ptr[%offsets] into %buffer {test.region_name = "amd_direct_a_buffer_load"} : !tt.ptr<f32>[tensor<32x64xi32, #blocked>] -> <32x64xf32, #shared, #smem, mutable>
     %value = ttg.local_load %buffer {test.region_name = "amd_direct_b_local_load"} : !ttg.memdesc<32x64xf32, #shared, #smem, mutable> -> tensor<32x64xf32, #blocked>
     tt.return
   }

@@ -167,7 +167,7 @@ def TTI_ExperimentalGSanMBarrierTableInitOp
              [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "Initialize GSan mbarrier release state";
   let description = [{
-    Initializes gsan't internal mbarrier table, used to sequence memory accesses
+    Initializes GSan's internal mbarrier table, used to sequence memory accesses
     through cluster mbarriers. This operation is internal to GSan instrumentation.
   }];
   let arguments = (ins TT_Ptr:$scratch, I32Attr:$capacity);
@@ -199,7 +199,9 @@ def TTI_ExperimentalGSanMBarrierArriveOp
   let description = [{
     Records an arrival for every mbarrier targeted by the corresponding
     hardware operation. When `publishClock` is true, the issuing CTA's vector
-    clock is also published as a release. A false value records only phase
+    clock is also published without advancing its local epoch. Waiters acquire
+    the issuing CTA's completed epochs and its imported clocks, but not its
+    current epoch. A false value records only phase
     progress for asynchronous completion signals that provide no generic
     memory ordering. `multicastMasks` contains CTA-id broadcast masks whose
     recipient bitsets are unioned. When `multicast` is false, the arrival
@@ -223,7 +225,9 @@ def TTI_ExperimentalGSanMBarrierWaitOp
                              MemWrite<GlobalMemory>]>]> {
   let summary = "Acquire GSan clocks after an mbarrier wait";
   let description = [{
-    Acquires the release clocks published to the completed mbarrier phase.
+    Acquires the clocks published to the completed mbarrier phase, excluding
+    each publisher's current epoch. Global-memory handoffs that rely solely on
+    an mbarrier may therefore be conservatively reported as races.
     This operation is internal to GSan instrumentation.
   }];
   let arguments = (ins TT_Ptr:$scratch, TTG_MemDescType:$barrier,

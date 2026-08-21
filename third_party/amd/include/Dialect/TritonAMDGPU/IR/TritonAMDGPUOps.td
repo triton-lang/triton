@@ -265,7 +265,7 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
   AttrSizedOperandSegments,
   BufferOpInterface,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
-  TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
+  TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "$_self", "::mlir::triton::elementTypeMatchesPointee">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"result and mask have the same shape", "result", "mask", "getI1SameShape($_self)",
                  "(cast<BufferLoadOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
@@ -304,7 +304,7 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       $ptr `[` $offsets `]` (`,` $mask^)? (`,` $other^)?
       oilist(`cacheModifier` `=` $cache)
       (`stride` `=` $stride^)?
-      attr-dict `:` type($result)
+      attr-dict `:` qualified(type($ptr)) `->` type($result)
     }];
 }
 
@@ -316,7 +316,7 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
   AttrSizedOperandSegments,
   BufferOpInterface,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
-  TypesMatchWith<"dest element type matches pointee type of ptr", "dest", "ptr", "getPointerTypeToElement($_self)">,
+  TypesMatchWith<"dest element type matches pointee type of ptr", "dest", "ptr", "$_self", "::mlir::triton::elementTypeMatchesPointee">,
   TypesMatchWith<"infer mask shape from offsets",
                  "offsets", "mask", "getI1SameShape($_self)",
                  "(cast<BufferLoadToLocalOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
@@ -347,7 +347,7 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
     let assemblyFormat = [{
       $ptr `[` $offsets `]` (`mask` `=` $mask^)? (`other` `=` $other^)? (`stride` `=` $stride^)?
       oilist(`cacheModifier` `=` $cache) `into` $dest
-      attr-dict `:` type($ptr) `[` type($offsets) `]` type($other) `->` type($dest)
+      attr-dict `:` qualified(type($ptr)) `[` type($offsets) `]` type($other) `->` type($dest)
     }];
 }
 
@@ -361,11 +361,11 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
   BufferOpInterface,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
   TypesMatchWith<"result element type matches the value type", "result", "value", "$_self">,
-  TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
+  TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "$_self", "::mlir::triton::elementTypeMatchesPointee">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"result and mask have the same shape", "result", "mask", "getI1SameShape($_self)",
                  "(cast<BufferAtomicRMWOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
-  TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "getPointerTypeToElement($_self)">,
+  TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "$_self", "::mlir::triton::elementTypeMatchesPointee">,
   TypesMatchWith<"value and offsets have the same shape", "value", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"value and mask have the same shape", "value", "mask", "getI1SameShape($_self)",
                  "(cast<BufferAtomicRMWOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
@@ -394,10 +394,12 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
     );
     let results = (outs TT_Tensor:$result);
 
+    let hasVerifier = 1;
+
     let assemblyFormat = [{
         $atomic_rmw_op `,` $sem `,` $scope `,` $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
         (`stride` `=` $stride^)?
-        attr-dict `:` type($result)
+        attr-dict `:` qualified(type($ptr)) `->` type($result)
     }];
 }
 
@@ -409,7 +411,7 @@ def BufferAtomicCASOp : TT_AMDGPU_Op<"buffer_atomic_cas", [
   BufferOpInterface,
   TypesMatchWith<"result element type matches the val type", "result", "val", "$_self">,
   TypesMatchWith<"result element type matches the cmp type", "result", "cmp", "$_self">,
-  TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
+  TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "$_self", "::mlir::triton::elementTypeMatchesPointee">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"val and offsets have the same shape", "val", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"val and cmp have the same shape", "val", "cmp", "$_self">,
@@ -435,10 +437,12 @@ def BufferAtomicCASOp : TT_AMDGPU_Op<"buffer_atomic_cas", [
     );
     let results = (outs TT_Tensor:$result);
 
+    let hasVerifier = 1;
+
     let assemblyFormat = [{
         $sem `,` $scope `,` $cmp `,` $val `,` $ptr `[` $offsets `]`
         (`stride` `=` $stride^)?
-        attr-dict `:` type($result)
+        attr-dict `:` qualified(type($ptr)) `->` type($result)
     }];
 }
 
@@ -451,7 +455,7 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
   SameLoadStoreOperandsEncoding,
   BufferOpInterface,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
-  TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "getPointerTypeToElement($_self)">,
+  TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "$_self", "::mlir::triton::elementTypeMatchesPointee">,
   TypesMatchWith<"value and offsets have the same shape", "value", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"value and mask have the same shape", "value", "mask", "getI1SameShape($_self)",
                  "(cast<BufferStoreOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
@@ -483,11 +487,13 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
       DefaultValuedAttr<I32Attr, "1">:$contiguity
     );
 
+    let hasVerifier = 1;
+
     let assemblyFormat = [{
       $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
       oilist(`cacheModifier` `=` $cache)
       (`stride` `=` $stride^)?
-      attr-dict `:` type($value)
+      attr-dict `:` qualified(type($ptr)) `->` type($value)
     }];
 }
 
