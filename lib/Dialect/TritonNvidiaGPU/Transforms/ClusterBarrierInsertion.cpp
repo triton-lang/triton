@@ -375,13 +375,26 @@ void ClusterBarrierAnalysis::update(Operation *op, MembarInfo *membarInfo,
       ttng::ClusterBarrierOp::create(*builder, op->getLoc());
     }
 
-    // Clear prior distributed dependencies if we have inserted a cluster
-    // barrier, or if the scratch op itself performs a cluster-level sync.
     bool hasClusterSync = isDistributedMultiCTAOp(op, /*isRead=*/true);
-    if (insertClusterBarrierNeeded)
+    if (insertClusterBarrierNeeded) {
+      // The inserted barrier precedes the current operation, so it clears only
+      // incoming state. Keep curBlockInfo because all of the operation's
+      // scratch effects occur after the barrier.
+      // For example:
+      //   pending = R(scratch), curBlockInfo = W(scratch)
+      //   cluster_barrier
+      //   pending = {},          curBlockInfo = W(scratch)
       membarInfo->sync();
+    }
 
     if (hasClusterSync) {
+      // A distributed scratch operation synchronizes between its write and
+      // read phases. Record the write before clearing the state, then retain
+      // only the read as an outgoing effect.
+      // For example:
+      //   addBlockInfo records W(scratch)
+      //   internal cluster sync clears W(scratch)
+      //   the insertion below records R(scratch)
       membarInfo->addBlockInfo(curBlockInfo);
       membarInfo->sync();
       curBlockInfo.sync();

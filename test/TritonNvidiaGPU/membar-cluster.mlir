@@ -269,6 +269,46 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 
+// -----
+
+#blockedRetain = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
+#sliceRetain0 = #ttg.slice<{dim = 0, parent = #blockedRetain}>
+#sliceRetain1 = #ttg.slice<{dim = 1, parent = #blockedRetain}>
+#sharedRetain = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32, CGALayout = [[0, 0]]}>
+#tmemRetain = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[0, 0]]>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // The cross-CTA reduction leaves a distributed scratch read pending and
+  // forces a cluster barrier before the non-cross-CTA reduction. That barrier
+  // is before the second reduction, so its scratch effects must remain pending
+  // and force another cluster barrier before the two-CTA tmem copy that reuses
+  // the same shared-memory offset.
+  // CHECK-LABEL: @retain_scratch_effects_after_inserted_cluster_barrier
+  // CHECK: "tt.reduce"{{.*}}axis = 1
+  // CHECK: ttng.cluster_barrier
+  // CHECK: "tt.reduce"{{.*}}axis = 0
+  // CHECK: ttng.cluster_barrier
+  // CHECK-NEXT: ttng.tmem_copy
+  tt.func @retain_scratch_effects_after_inserted_cluster_barrier(%input: tensor<256x128xf16, #blockedRetain>) {
+    %cross = "tt.reduce"(%input) ({
+    ^bb0(%lhs: f16, %rhs: f16):
+      %add = arith.addf %lhs, %rhs : f16
+      tt.reduce.return %add : f16
+    }) {axis = 1 : i32} : (tensor<256x128xf16, #blockedRetain>) -> tensor<256xf16, #sliceRetain1>
+
+    %local = "tt.reduce"(%input) ({
+    ^bb0(%lhs: f16, %rhs: f16):
+      %add = arith.addf %lhs, %rhs : f16
+      tt.reduce.return %add : f16
+    }) {axis = 0 : i32} : (tensor<256x128xf16, #blockedRetain>) -> tensor<128xf16, #sliceRetain0>
+
+    %src = ttg.local_alloc : () -> !ttg.memdesc<128x128xf32, #sharedRetain, #smem, mutable>
+    %dst = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmemRetain, #ttng.tensor_memory, mutable>
+    ttng.tmem_copy %src, %dst : !ttg.memdesc<128x128xf32, #sharedRetain, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmemRetain, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
 
 // -----
 
