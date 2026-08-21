@@ -109,6 +109,58 @@ module {
 
 // -----
 
+module {
+  tt.func public @scatter(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg1: i32, %arg2: i32, %arg3: tensor<32xi32>, %arg4: tensor<32x128xbf16>) {
+    %c1_i64 = arith.constant 1 : i64
+    %c256_i64 = arith.constant 256 : i64
+    %c256_i32 = arith.constant 256 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %0 = tt.make_tensor_descriptor %arg0, [%c256_i32, %c128_i32], [%c256_i64, %c1_i64] {order = array<i32: 0>} : <bf16>, <1x128xbf16>
+    tt.descriptor_scatter %0[%arg3, %c8_i32], %arg4 : !tt.tensordesc<1x128xbf16>, tensor<32xi32>, i32, tensor<32x128xbf16>
+    tt.return
+  }
+}
+
+// CHECK-LABEL: @scatter
+// CHECK-SAME: %[[ARG0:[^:]*]]
+// CHECK-SAME: %[[ARG1:[^:]*]]
+// CHECK-SAME: %[[ARG2:[^:]*]]
+// CHECK-SAME: %[[ARG3:[^:]*]]
+// CHECK-SAME: %[[ARG4:[^:]*]]
+// CHECK-DAG: %[[CST:.*]] = arith.constant dense<128> : tensor<1x128xi64>
+// CHECK-DAG: %[[CST0:.*]] = arith.constant dense<0> : tensor<1x128xi64>
+// CHECK-DAG: %[[CST1:.*]] = arith.constant dense<0> : tensor<32x1xi64>
+// CHECK-DAG: %[[CST2:.*]] = arith.constant dense<256> : tensor<32x1xi64>
+// CHECK-DAG: %[[CST3:.*]] = arith.constant dense<8> : tensor<128xi64>
+
+// CHECK-DAG: %[[VAL0:.*]] = tt.reshape %[[ARG3]] : tensor<32xi32> -> tensor<32x1xi32>
+// CHECK-DAG: %[[VAL1:.*]] = arith.extsi %[[VAL0]] : tensor<32x1xi32> to tensor<32x1xi64>
+// CHECK-DAG: %[[VAL2:.*]] = tt.make_range {end = 128 : i32, start = 0 : i32}
+// CHECK-DAG: %[[VAL3:.*]] = arith.extsi %[[VAL2]] :
+// CHECK-DAG: %[[VAL4:.*]] = arith.addi %[[VAL3]], %[[CST3]] : tensor<128xi64>
+// CHECK-DAG: %[[VAL5:.*]] = tt.reshape %[[VAL4]] : tensor<128xi64> -> tensor<1x128xi64>
+// CHECK-DAG: %[[VAL6:.*]] = tt.splat %[[ARG0]] :
+// CHECK-DAG: %[[VAL7:.*]] = arith.muli %[[VAL1]], %[[CST2]] : tensor<32x1xi64>
+// CHECK-DAG: %[[VAL8:.*]] = tt.broadcast %[[VAL7]] : tensor<32x1xi64> -> tensor<32x128xi64>
+// CHECK-DAG: %[[VAL9:.*]] = tt.addptr %[[VAL6]], %[[VAL8]] :
+// CHECK-DAG: %[[VAL10:.*]] = tt.broadcast %[[VAL5]] : tensor<1x128xi64> -> tensor<32x128xi64>
+// CHECK-DAG: %[[VAL11:.*]] = tt.addptr %[[VAL9]], %[[VAL10]] :
+
+// CHECK-DAG: %[[VAL12:.*]] = arith.cmpi sge, %[[VAL1]], %[[CST1]]
+// CHECK-DAG: %[[VAL13:.*]] = arith.cmpi slt, %[[VAL1]], %[[CST2]]
+// CHECK-DAG: %[[VAL14:.*]] = arith.andi %[[VAL12]], %[[VAL13]]
+// CHECK-DAG: %[[VAL15:.*]] = tt.broadcast %[[VAL14]] : tensor<32x1xi1> -> tensor<32x128xi1>
+// CHECK-DAG: %[[VAL16:.*]] = arith.cmpi sge, %[[VAL5]], %[[CST0]]
+// CHECK-DAG: %[[VAL17:.*]] = arith.cmpi slt, %[[VAL5]], %[[CST]]
+// CHECK-DAG: %[[VAL18:.*]] = arith.andi %[[VAL16]], %[[VAL17]]
+// CHECK-DAG: %[[VAL19:.*]] = tt.broadcast %[[VAL18]] : tensor<1x128xi1> -> tensor<32x128xi1>
+// CHECK-DAG: %[[VAL20:.*]] = arith.andi %[[VAL15]], %[[VAL19]]
+
+// CHECK: tt.store %[[VAL11]], %[[ARG4]], %[[VAL20]]
+
+// -----
+
 #loc2 = loc("rewrite-tensor-descriptor-to-pointer.mlir":147:28)
 module {
   tt.func public @callee(%tensordesc: !tt.tensordesc<128x128xf32> loc("tensordesc"(#loc2))) -> !tt.tensordesc<128x128xf32> {

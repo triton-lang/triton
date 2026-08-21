@@ -145,6 +145,8 @@ class PrecisionConfig:
 def get_swap_xw(precision_config, opt_flags, lhs_dtype, rhs_dtype):
     if triton.runtime.driver.active.get_current_target().backend != "cuda":
         return False
+    if opt_flags.swap_xw is not None:
+        return opt_flags.swap_xw
     return opt_flags_nvidia.compute_swap_xw(precision_config, opt_flags.block_m, opt_flags.is_persistent, lhs_dtype, rhs_dtype)
 
 # ---------------------
@@ -557,6 +559,8 @@ def matmul(a, b, bias,
             or matmul_fused_activation.specs.reduction_n == 1
         )
     )
+    if opt_flags.use_output_tma is not None:
+        c_has_tma = opt_flags.use_output_tma
     c_logical_block_n = opt_flags.block_n // opt_flags.epilogue_subtile // matmul_fused_activation.specs.reduction_n
     c_tma_block_n = c_logical_block_n // precision_config.c_value_pack_factor
     out_tile_n = opt_flags.block_n // matmul_fused_activation.specs.reduction_n

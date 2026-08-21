@@ -733,6 +733,10 @@ void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
                                   bool emitBarrierAfter, RewriterBase &rewriter,
                                   const TargetInfoBase &targetInfo);
 
+/// Whether atomic result broadcast barrier is sufficient for acquire ordering.
+/// Must run after scratch allocation.
+bool atomicResultHasOrderingBarrier(Operation *op);
+
 Value broadcastScalarAtomicResult(Operation *op, Type valueElemTy,
                                   Value resultVal,
                                   ConversionPatternRewriter &rewriter,

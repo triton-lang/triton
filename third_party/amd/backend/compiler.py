@@ -137,6 +137,13 @@ class HIPBackend(BaseBackend):
         return target.backend == 'hip'
 
     def __init__(self, target: GPUTarget) -> None:
+        if not isinstance(target.warp_size, int):
+            try:
+                warp_size = int(target.warp_size)
+            except ValueError:
+                raise ValueError(f"HIP backend expects a numeric warp_size, got '{target.warp_size}'")
+            target = GPUTarget(target.backend, target.arch, warp_size)
+
         super().__init__(target)
         assert isinstance(target.arch, str)
         self.binary_ext = "hsaco"
@@ -537,6 +544,8 @@ class HIPBackend(BaseBackend):
         metadata["name"] = names[0]
         # llvm -> hsaco
         flags = []
+        if options.arch in ["gfx942", "gfx950"]:
+            flags.append("amdgpu-use-amdgpu-trackers")
         if is_expert_scheduling_enabled(options.arch):
             flags.append("amdgpu-expert-scheduling-mode")
         features = ''

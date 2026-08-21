@@ -440,6 +440,41 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
             test_broadcast=(op != "%"), x_low=x_low, x_high=x_high, filter_y=filter_y, test_scalar=not skip_scalar_test)
 
 
+def test_bfloat16_mul_rounds_to_nearest_even(device):
+    # A bf16 multiply has to round to nearest even. Hardware multiply-accumulate
+    # instructions that write a bf16 result may truncate instead, which is off by
+    # up to 1 ulp on every multiply.
+    check_type_supported("bfloat16", device)
+
+    @triton.jit
+    def kernel(Z, X, Y, SIZE: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        z = tl.load(X + off) * tl.load(Y + off)
+        tl.store(Z + off, z)
+
+    SIZE = 4096
+    rs = RandomState(17)
+
+    def rand_bf16():
+        # Exponents are kept in a narrow band so that every product is normal and
+        # the reference below rounds exactly once.
+        sign = rs.randint(0, 2, SIZE).astype(np.uint16) << 15
+        exponent = rs.randint(112, 142, SIZE).astype(np.uint16) << 7
+        mantissa = rs.randint(0, 128, SIZE).astype(np.uint16)
+        bits = (sign | exponent | mantissa).view(np.int16)
+        return torch.from_numpy(bits).to(device).view(torch.bfloat16)
+
+    x = rand_bf16()
+    y = rand_bf16()
+    z = torch.empty_like(x)
+    kernel[(1, )](z, x, y, SIZE=SIZE)
+
+    # The fp32 product of two bf16 values is exact, so this is a single
+    # correctly rounded step.
+    z_ref = (x.float() * y.float()).to(torch.bfloat16)
+    torch.testing.assert_close(z, z_ref, atol=0, rtol=0)
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("op", ['+', '-'])
 def test_int1_bin_op_wraparound(op, device):
@@ -1953,7 +1988,7 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
                     reason="num_ctas > 1 requires NVIDIA SM90+ (Hopper)")
-@pytest.mark.skipif(is_sm12x(), reason="scalar multi-CTA atomic_cas is not supported on sm120 (consumer Blackwell)")
+@pytest.mark.skipif(is_sm12x(), reason="scalar multi-CTA atomic_cas is not supported on sm12x (consumer Blackwell)")
 def test_scalar_atomic_cas_multicta_result(device):
 
     @triton.jit
@@ -2257,8 +2292,7 @@ def test_cat(dtype_str, num_warps, can_reorder, device):
     z = torch.zeros((256, ), dtype=getattr(torch, dtype_str), device=device)
     kernel[(1, )](x, y, z, N=128, num_warps=num_warps, CAN_REORDER=can_reorder)
     assert z.sum() == z_ref.sum()
-    if not can_reorder:
-        torch.testing.assert_close(z, z_ref, atol=0, rtol=0)
+    torch.testing.assert_close(z, z_ref, atol=0, rtol=0)
     # check if there's no duplicate value in z
     assert z.unique().size(0) == z.size(0)
 
@@ -3285,6 +3319,27 @@ def test_histogram_mask(M, N, device):
     assert (z_torch == z).all()
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("M, N", [[1024, 64], [4096, 128]])
+def test_histogram_compare_mask(M, N, device):
+
+    @triton.jit
+    def histogram_kernel(x_ptr, out_ptr, M: tl.constexpr, N: tl.constexpr):
+        offsets = tl.arange(0, M)
+        x = tl.load(x_ptr + offsets)
+        hist = tl.histogram(x, N)
+        bins = tl.arange(0, N)
+        mask = hist > 0
+        tl.store(out_ptr + bins, hist, mask=mask)
+
+    torch.manual_seed(17)
+    x = torch.randint(0, N, (M, ), device=device, dtype=torch.int32)
+    out = torch.zeros(N, dtype=torch.int32, device=device)
+    ref = torch.histc(x.float(), bins=N, min=0, max=N - 1).to(torch.int32)
+    histogram_kernel[(1, )](x, out, M=M, N=N)
+    assert (out == ref).all(), f"expected {ref}, got {out}"
+
+
 @pytest.mark.parametrize("M, N", [(1, 64), (2, 32), (4, 16), (8, 8), (16, 4), (32, 2), (64, 1)])
 def test_scan_1d(M, N, device):
 
@@ -4042,7 +4097,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         if capability[0] == 9 and M >= 64 and N >= 8:
             assert 'wgmma.mma_async.sync.aligned.m64n128k32.f32.e5m2.e5m2' in ptx
         elif capability[0] >= 8 and M < 64:
-            assert 'mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32' in ptx
+            if capability == (8, 9) or capability[0] == 12:
+                assert 'mma.sync.aligned.m16n8k32.row.col.f32.e5m2.e5m2.f32' in ptx
+            else:
+                assert 'mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32' in ptx
     elif in_dtype == "float8e4nv" and out_dtype == tl.float32:
         if capability[0] == 9 and M >= 64 and N >= 8:
             assert 'wgmma.mma_async.sync.aligned.m64n128k32.f32.e4m3.e4m3' in ptx
@@ -7383,7 +7441,7 @@ def test_libdevice_rint(dtype_str, device):
     x0_np = np.random.uniform(iinfo32.min, iinfo32.max + 1, size)
     x1_np = np.random.uniform(iinfo64.min, iinfo64.max + 1, size)
     x2_np = np.array([-2.5, -1.5, -0.5, -0., 0., 0.5, 1.5, 2.5, float("inf"), -float("inf"), float("nan")])
-    x_np = np.concatenate((x0_np, x1_np, x2_np))
+    x_np = np.concatenate((x0_np, x1_np, x2_np)).astype(dtype_str)
     x_tri = to_triton(x_np, device=device, dst_type=dtype_str)
 
     @triton.jit

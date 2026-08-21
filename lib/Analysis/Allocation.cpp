@@ -146,6 +146,32 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   return 0;
 }
 
+bool hasCrossCTAScratch(Operation *op) {
+  if (gpu::lookupNumCTAs(op) == 1)
+    return false;
+  if (auto cvt = dyn_cast<gpu::ConvertLayoutOp>(op)) {
+    auto block = StringAttr::get(op->getContext(), "block");
+    return !isCvtDimSync(gpu::toLinearLayout(cvt.getSrc().getType()),
+                         gpu::toLinearLayout(cvt.getType()), block);
+  }
+  if (auto reduce = dyn_cast<ReduceOp>(op))
+    return !ReduceOpHelper(reduce).isReduceWithinCTA();
+  if (auto poll = dyn_cast<AtomicPollOp>(op))
+    return poll.getTimeout() && !poll.getResult().use_empty();
+  if (isa<AtomicOpInterface, gpu::LocalAtomicScatterRMWOp>(op)) {
+    Value result = op->getResult(0);
+    if (result.use_empty())
+      return false;
+    auto resultTy = dyn_cast<RankedTensorType>(result.getType());
+    if (!resultTy)
+      return true;
+    auto block = StringAttr::get(op->getContext(), "block");
+    return gpu::toLinearLayout(resultTy).getFreeVariableMasks().lookup(block) !=
+           0;
+  }
+  return false;
+}
+
 class AllocationAnalysis {
 public:
   AllocationAnalysis(Operation *operation,

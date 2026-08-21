@@ -67,7 +67,11 @@ tt.func private @reduce_linear_layout(%arg0: tensor<32x2xi32, #linear>) -> tenso
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
 // CHECK-LABEL: @bf16_mulf
 tt.func private @bf16_mulf(%arg0: tensor<64xbf16, #blocked>, %arg1: tensor<64xbf16, #blocked>) -> tensor<64xbf16, #blocked> {
-  // CHECK-COUNT-2: llvm.call_intrinsic "llvm.amdgcn.fdot2.bf16.bf16"
+  // v_dot2_bf16_bf16 truncates the bf16 result, so the multiply has to go
+  // through fp32 and round to nearest even explicitly.
+  // CHECK-NOT: llvm.amdgcn.fdot2.bf16.bf16
+  // CHECK-COUNT-2: llvm.fmul {{.*}} : f32
+  // CHECK-NOT: llvm.amdgcn.fdot2.bf16.bf16
   %0 = arith.mulf %arg0, %arg1 : tensor<64xbf16, #blocked>
   tt.return %0 : tensor<64xbf16, #blocked>
 }

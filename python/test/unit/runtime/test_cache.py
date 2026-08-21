@@ -1,6 +1,7 @@
 import expecttest
 import importlib.util
 import itertools
+import multiprocessing
 import os
 import re
 import gc
@@ -1128,9 +1129,11 @@ def test_module_load_unload(device, fresh_knobs):
 
     # we should hit the kernel unload call to decrese the counter from 1 to 0
     counter = 1
+    owner_pid = os.getpid()
 
     def kernel_unload(*args, **kwargs):
         nonlocal counter
+        assert os.getpid() == owner_pid
         counter -= 1
 
     # turn off python garbage collector, so the callback is not called
@@ -1144,6 +1147,14 @@ def test_module_load_unload(device, fresh_knobs):
 
     assert counter == 1
     assert pre_compile.module is not None
+
+    if "fork" in multiprocessing.get_all_start_methods():
+        child = multiprocessing.get_context("fork").Process(target=pre_compile.__del__)
+        child.start()
+        child.join()
+        assert child.exitcode == 0
+        assert counter == 1
+
     pre_compile.__del__()
 
     assert counter == 0
