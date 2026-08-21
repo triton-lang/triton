@@ -158,6 +158,9 @@ struct ScaledUpcastFp4OpPattern
         }
       }
     } else {
+      if (!upcastOp.getScale().getType().getElementType().isBF16())
+        return upcastOp.emitOpError("software lowering requires a BF16 scale");
+
       auto groupScaleReg =
           computeFp4GroupScaleRegisters(upcastOp, inputVals.size());
       // Software emulation: upcast fp4 via LUT, then multiply by scale.
