@@ -94,6 +94,17 @@ public:
     return nullptr;
   }
 
+  SmallVector<Operation *>
+  createInitClusterBarrier(ImplicitLocOpBuilder &b) const override {
+    auto arrive = ttag::ClusterBarrierArriveOp::create(b, b.getLoc());
+    auto wait = ttag::ClusterBarrierWaitOp::create(b, b.getLoc());
+    return {arrive.getOperation(), wait.getOperation()};
+  }
+
+  bool hasUnsummarizableCalleeState(Operation *op) const override {
+    return isa<ttag::ClusterBarrierArriveOp, ttag::ClusterBarrierWaitOp>(op);
+  }
+
   std::optional<MemEffectsOpInfo>
   getMemEffectsOpInfo(Operation *op) const override {
     bool isAsyncCopy =

@@ -325,6 +325,11 @@ bool TargetFeatures::supportsHwScaledUpcast() const {
          getISAFamily() == ISAFamily::GFX1250;
 }
 
+bool TargetFeatures::supportsHwScaledDowncast() const {
+  return getISAFamily() == ISAFamily::CDNA4 ||
+         getISAFamily() == ISAFamily::GFX1250;
+}
+
 bool TargetFeatures::supportBitwidth16Elementwise() const { return true; }
 
 bool TargetFeatures::supportBitwidth32Elementwise() const {

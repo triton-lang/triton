@@ -16,7 +16,7 @@ void attachAllocationSizeAndOffsetAttr(ModuleOp mod,
       if (oBufferId != Allocation::InvalidBufferId) {
         int offset = funcAllocation->getOffset(oBufferId);
         op->setAttr("allocation.offset", IntegerAttr::get(i32Ty, offset));
-        if (!funcAllocation->isVirtualBuffer(oBufferId)) {
+        if (!isa<FunctionOpInterface>(op)) {
           int size = funcAllocation->getAllocatedSize(oBufferId);
           op->setAttr("allocation.size", IntegerAttr::get(i32Ty, size));
         }

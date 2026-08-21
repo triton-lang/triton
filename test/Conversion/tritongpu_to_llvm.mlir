@@ -27,20 +27,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @masked_scalar_i32_constant_fallbacks(%ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>, %mask: i1, %fallback: i32) {
     %zero = arith.constant 0 : i32
     %one = arith.constant 1 : i32
+    %minus_one = arith.constant -1 : i32
     %byte = arith.constant -1 : i8
     %extended = arith.extui %byte : i8 to i32
-    %max = arith.maxui %extended, %one : i32
+    %max = arith.maxui %minus_one, %one : i32
     // CHECK: llvm.inline_asm
-    // CHECK-SAME: mov.u32 $0, $1;\0A\09@$3 ld.global.b32 { $0 }, [ $2 + 0 ];", "=r,r,l,b"
+    // CHECK-SAME: mov.u32 $0, 0x0;\0A\09@$2 ld.global.b32 { $0 }, [ $1 + 0 ];", "=r,l,b"
     %literal = tt.load %ptr, %mask, %zero : !tt.ptr<i32>
     // CHECK: llvm.inline_asm
-    // CHECK-SAME: mov.u32 $0, $1;\0A\09@$3 ld.global.b32 { $0 }, [ $2 + 0 ];", "=r,r,l,b"
+    // CHECK-SAME: mov.u32 $0, 0xff;\0A\09@$2 ld.global.b32 { $0 }, [ $1 + 0 ];", "=r,l,b"
+    %casted = tt.load %ptr, %mask, %extended : !tt.ptr<i32>
+    // CHECK: llvm.inline_asm
+    // CHECK-SAME: mov.u32 $0, 0xffffffff;\0A\09@$2 ld.global.b32 { $0 }, [ $1 + 0 ];", "=r,l,b"
     %computed = tt.load %ptr, %mask, %max : !tt.ptr<i32>
     // CHECK: llvm.inline_asm
     // CHECK-SAME: @$3 ld.global.b32 { $0 }, [ $2 + 0 ];", "=r,0,l,b"
     %dynamic = tt.load %ptr, %mask, %fallback : !tt.ptr<i32>
-    %xor = arith.xori %literal, %computed : i32
-    %value = arith.xori %xor, %dynamic : i32
+    %xor = arith.xori %literal, %casted : i32
+    %xor2 = arith.xori %xor, %computed : i32
+    %value = arith.xori %xor2, %dynamic : i32
     tt.store %out, %value : !tt.ptr<i32>
     tt.return
   }
@@ -274,9 +279,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     // CHECK: llvm.inline_asm
     // CHECK-SAME: @$3 ld.global.b32 { $0 }, [ $2 + 0 ];", "=r,0,l,b"
     %dynamic = tt.load %ptrs, %mask, %other : tensor<128x!tt.ptr<i8>, #blocked0>
-    %splat = arith.constant dense<7> : tensor<128xi8, #blocked0>
+    %negative = arith.constant dense<-128> : tensor<128xi8, #blocked0>
+    %one = arith.constant dense<1> : tensor<128xi8, #blocked0>
+    %splat = arith.maxui %negative, %one : tensor<128xi8, #blocked0>
     // CHECK: llvm.inline_asm
-    // CHECK-SAME: mov.u32 $0, 0x7070707;\0A\09@$2 ld.global.b32 { $0 }, [ $1 + 0 ];", "=r,l,b"
+    // CHECK-SAME: mov.u32 $0, 0x80808080;\0A\09@$2 ld.global.b32 { $0 }, [ $1 + 0 ];", "=r,l,b"
     %constant = tt.load %ptrs, %mask, %splat : tensor<128x!tt.ptr<i8>, #blocked0>
     %values = arith.xori %dynamic, %constant : tensor<128xi8, #blocked0>
     tt.store %ptrs, %values, %mask : tensor<128x!tt.ptr<i8>, #blocked0>
@@ -3018,9 +3025,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
 
 // CHECK-LABEL: @reinterpret_tensor_descriptor
-tt.func private @reinterpret_tensor_descriptor(%arg0: !tt.ptr<i8, 0>) -> !tt.tensordesc<128x64xf16, #shared> {
+tt.func private @reinterpret_tensor_descriptor(%arg0: !tt.ptr<i8, "descriptor">) -> !tt.tensordesc<128x64xf16, #shared> {
   // CHECK-NEXT: llvm.addrspacecast %arg0 : !llvm.ptr to !llvm.ptr
-  %0 = ttng.reinterpret_tensor_descriptor %arg0 : !tt.ptr<i8, 0> to !tt.tensordesc<128x64xf16, #shared>
+  %0 = ttng.reinterpret_tensor_descriptor %arg0 : !tt.ptr<i8, "descriptor"> to !tt.tensordesc<128x64xf16, #shared>
   tt.return %0 : !tt.tensordesc<128x64xf16, #shared>
 }
 

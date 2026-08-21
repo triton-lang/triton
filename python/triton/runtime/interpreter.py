@@ -247,7 +247,8 @@ def _erf(x):
 def _umulhi_64(a, b):
     # Numpy does not support 128-bit multiplication
     # So we have to implement it manually
-    return (int(a) * int(b)) >> 64
+    mask = (1 << 64) - 1
+    return ((int(a) & mask) * (int(b) & mask)) >> 64
 
 
 def _e8m0_to_f32(scale):
@@ -642,15 +643,20 @@ class InterpreterBuilder:
         return self.binary_op(lhs, rhs, np.right_shift)
 
     def create_umulhi(self, lhs, rhs):
+        # umulhi multiplies the operands as unsigned integers, so signed inputs
+        # take part through their bit pattern: reinterpret them at their own
+        # width before widening, and reinterpret the high half back at the end.
         dtype = lhs.data.dtype
+        unsigned_dtype = getattr(np, f"uint{dtype.itemsize * 8}")
         if dtype == np.int64 or dtype == np.uint64:
-            return TensorHandle(np_umulhi_u64(lhs.data, rhs.data), lhs.dtype.scalar)
+            ret_data = np_umulhi_u64(lhs.data, rhs.data)
         else:
             compute_dtype = getattr(np, f"uint{dtype.itemsize * 8 * 2}")
-            lhs_data = lhs.data.astype(compute_dtype)
-            rhs_data = rhs.data.astype(compute_dtype)
+            lhs_data = lhs.data.view(unsigned_dtype).astype(compute_dtype)
+            rhs_data = rhs.data.view(unsigned_dtype).astype(compute_dtype)
             ret_data = np.multiply(lhs_data, rhs_data) >> (dtype.itemsize * 8)
-            return TensorHandle(ret_data.astype(dtype), lhs.dtype.scalar)
+            ret_data = ret_data.astype(unsigned_dtype)
+        return TensorHandle(ret_data.view(dtype), lhs.dtype.scalar)
 
     # ternary functions
     def ternary_op(self, lhs, rhs, other, op):
@@ -891,7 +897,9 @@ class InterpreterBuilder:
 
     def get_all_ones_value(self, type):
         np_type = _get_np_dtype(type)
-        if "int" in np_type.name:
+        if np.issubdtype(np_type, np.unsignedinteger):
+            return TensorHandle(np.full(1, np.iinfo(np_type).max, dtype=np_type), type.scalar)
+        elif np.issubdtype(np_type, np.signedinteger):
             return TensorHandle(np.full(1, -1, dtype=np_type), type.scalar)
         elif np_type == np.bool_:
             return TensorHandle(np.full(1, True, dtype=np_type), type.scalar)

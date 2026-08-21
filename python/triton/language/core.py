@@ -676,7 +676,7 @@ _DtypeClass = dtype
 
 class pointer_type(dtype):
 
-    def __init__(self, element_ty: dtype, address_space: int = 1, const: bool = False):
+    def __init__(self, element_ty: dtype, address_space: str = "global", const: bool = False):
         element_ty = _unwrap_if_constexpr(element_ty)
         if not isinstance(element_ty, dtype):
             raise TypeError(f'element_ty has type `{type(element_ty).__name__}`; expected `dtype`.')
@@ -686,7 +686,9 @@ class pointer_type(dtype):
         self.name = f'pointer<{element_ty}>' if not const else f'const_pointer<{element_ty}>'
 
     def to_ir(self, builder: ir.builder) -> ir.pointer_type:
-        return builder.get_ptr_ty(self.element_ty.to_ir(builder), self.address_space)
+        # const pointers live in the constant address space.
+        address_space = "constant" if self.const else self.address_space
+        return builder.get_ptr_ty(self.element_ty.to_ir(builder), address_space)
 
     def __str__(self):
         return self.name

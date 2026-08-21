@@ -9,6 +9,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
+#include "llvm/Support/AMDGPUAddrSpace.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -20,6 +21,20 @@ public:
                                   const TargetInfoBase &targetInfo,
                                   const DataLayoutAnalysis *analysis = nullptr)
       : TritonGPUToLLVMTypeConverter(ctx, options, targetInfo, analysis) {
+    // Override the base conversion (last registration wins) with the AMDGPU
+    // address spaces.
+    addConversion([ctx](triton::PointerType type) -> std::optional<Type> {
+      switch (type.getAddressSpace()) {
+      case triton::PtrAddrSpace::Global:
+        return LLVM::LLVMPointerType::get(ctx, llvm::AMDGPUAS::GLOBAL_ADDRESS);
+      case triton::PtrAddrSpace::Descriptor:
+        return LLVM::LLVMPointerType::get(ctx, llvm::AMDGPUAS::FLAT_ADDRESS);
+      case triton::PtrAddrSpace::Constant:
+        return LLVM::LLVMPointerType::get(ctx,
+                                          llvm::AMDGPUAS::CONSTANT_ADDRESS);
+      }
+      llvm_unreachable("unknown PtrAddrSpace");
+    });
     addConversion([&](TensorDescType type) -> std::optional<Type> {
       return convertTensorDescType(type);
     });

@@ -16,6 +16,10 @@ set(LLVM_TARGET_DEFINITIONS TritonTypes.td)
 mlir_tablegen(Types.h.inc -gen-typedef-decls)
 mlir_tablegen(Types.cpp.inc -gen-typedef-defs)
 
+set(LLVM_TARGET_DEFINITIONS TritonTypeEnums.td)
+mlir_tablegen(TypesEnums.h.inc -gen-enum-decls)
+mlir_tablegen(TypesEnums.cpp.inc -gen-enum-defs)
+
 set(LLVM_TARGET_DEFINITIONS TritonInterfaces.td)
 mlir_tablegen(AttrInterfaces.h.inc -gen-attr-interface-decls)
 mlir_tablegen(AttrInterfaces.cpp.inc -gen-attr-interface-defs)

@@ -572,7 +572,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // CHECK: llvm.align = 64
   // CHECK: llvm.byval = !llvm.array<128 x i8>
   // CHECK: nvvm.grid_constant
-  tt.func @byval_tma_desc(%desc: !tt.ptr<i8, 0> {tt.nv_tma_desc = 1 : i32}) {
+  tt.func @byval_tma_desc(%desc: !tt.ptr<i8, "descriptor"> {tt.nv_tma_desc = 1 : i32}) {
     tt.return
   }
 }

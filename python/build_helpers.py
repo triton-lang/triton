@@ -73,6 +73,41 @@ def check_env_flag(name: str, default: str = "") -> bool:
     return os.getenv(name, default).upper() in ["ON", "1", "YES", "TRUE", "Y"]
 
 
+def find_therock_rocm_include_dir() -> Optional[str]:
+    """Find the ROCm include directory from a TheRock Python installation.
+
+    `rocm-sdk path --root` is the public CLI for locating the expanded devel
+    package. It also initializes that package on first use, so callers do not
+    need to run `rocm-sdk init` separately.
+    """
+    rocm_sdk = Path(sys.executable).with_name("rocm-sdk")
+    if not rocm_sdk.is_file():
+        rocm_sdk = shutil.which("rocm-sdk")
+    if rocm_sdk is None:
+        return None
+    try:
+        # Run the caller venv's rocm-sdk entry point in isolated mode so pip's
+        # temporary PEP 517 import path cannot shadow its installed packages.
+        root = subprocess.check_output(
+            [sys.executable, "-I", str(rocm_sdk), "path", "--root"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    if not root:
+        return None
+
+    include_dir = Path(root) / "include"
+    required_headers = [
+        include_dir / "hip" / "hip_runtime.h",
+        include_dir / "rocprofiler-sdk" / "fwd.h",
+    ]
+    if not all(header.is_file() for header in required_headers):
+        return None
+    return str(include_dir)
+
+
 def _normalize_optional_path(value: str) -> Optional[str]:
     normalized = _normalize_optional(value)
     if normalized is None:
@@ -255,14 +290,17 @@ def _validate_sha256(archive_path, url, expected_sha256):
 
 
 def _download_and_extract(url, download_dir, label, archives_path, expected_sha256=None):
+    keep_archive = check_env_flag("TRITON_CACHE_DEPENDENCY_DOWNLOADS")
     archive_path = _get_archive_path(archives_path, url)
-    _download_file(url, archive_path, f"downloading {label}")
+    if not (keep_archive and os.path.exists(archive_path)):
+        _download_file(url, archive_path, f"downloading {label}")
     _validate_sha256(archive_path, url, expected_sha256)
     with contextlib.suppress(Exception):
         shutil.rmtree(download_dir)
     os.makedirs(download_dir, exist_ok=True)
     _extract_archive(archive_path, download_dir)
-    os.remove(archive_path)
+    if not keep_archive:
+        os.remove(archive_path)
 
 
 def update_symlink(link_path, source_path):
@@ -658,7 +696,7 @@ def main(argv=None):
         download_and_copy_dependencies(helper_args)
     elif parsed_args.command == "write_thirdparty_cmake_vars":
         write_thirdparty_cmake_vars(output=parsed_args.output, packages=parsed_args.packages, helper_args=helper_args)
-    if os.path.exists(helper_args.archives_path):
+    if os.path.exists(helper_args.archives_path) and not check_env_flag("TRITON_CACHE_DEPENDENCY_DOWNLOADS"):
         shutil.rmtree(helper_args.archives_path)
 
 
