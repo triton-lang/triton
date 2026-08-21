@@ -3,15 +3,15 @@ import pytest
 import triton
 from triton.experimental import gluon
 import triton.experimental.gluon.language as gl
-from triton.experimental.gluon.language.amd.gfx1250 import tdm
-from triton.experimental.gluon.language.amd.gfx1250 import async_copy as cp
+from triton.experimental.gluon.language.amd.cdna5 import tdm
+from triton.experimental.gluon.language.amd.cdna5 import async_copy as cp
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 
 # Handle imports for both pytest (module context) and direct execution
 try:
-    from .gfx1250_utils import static_profile, composition
+    from .cdna5_utils import static_profile, composition
 except ImportError:
-    from gfx1250_utils import static_profile, composition
+    from cdna5_utils import static_profile, composition
 
 
 @gluon.jit
@@ -182,7 +182,7 @@ class MXFPGEMMConfig:
             # conflicts.
             SLICE_M = BLOCK_M // NUM_SUBTILES_M
             SLICE_N = BLOCK_N // NUM_SUBTILES_N
-            shared_a, shared_b, WMMA_LAYOUT = gl.amd.gfx1250.make_partitioned_dot_layouts(
+            shared_a, shared_b, WMMA_LAYOUT = gl.amd.cdna5.make_partitioned_dot_layouts(
                 LAYOUT_BLOCK_M, LAYOUT_BLOCK_N, padded_a, padded_b, NUM_WARPS, [INSTR_M, 16, 128], a_transposed=False,
                 b_transposed=TRANSPOSE_B, slice_m=SLICE_M, slice_n=SLICE_N)
             # The packed (fp4) WMMA layout shares the partition-aware warp/register
@@ -204,11 +204,11 @@ class MXFPGEMMConfig:
             gl.DotOperandLayout(operand_index=1, parent=WMMA_LAYOUT_PACKED if DTYPE_B == "e2m1" else WMMA_LAYOUT,
                                 k_width=16))
         self.layout_a_scale = gl.constexpr(
-            gl.amd.gfx1250.get_wmma_scale_layout(self.dot_layout_a,
-                                                 [BLOCK_M // NUM_SUBTILES_M, BLOCK_K_SCALE // NUM_SUBTILES_K]))
+            gl.amd.cdna5.get_wmma_scale_layout(self.dot_layout_a,
+                                               [BLOCK_M // NUM_SUBTILES_M, BLOCK_K_SCALE // NUM_SUBTILES_K]))
         self.layout_b_scale = gl.constexpr(
-            gl.amd.gfx1250.get_wmma_scale_layout(self.dot_layout_b,
-                                                 [BLOCK_N // NUM_SUBTILES_N, BLOCK_K_SCALE // NUM_SUBTILES_K]))
+            gl.amd.cdna5.get_wmma_scale_layout(self.dot_layout_b,
+                                               [BLOCK_N // NUM_SUBTILES_N, BLOCK_K_SCALE // NUM_SUBTILES_K]))
         self.acc_layout = gl.constexpr(WMMA_LAYOUT)
 
         self.shared_layout_a_scale = gl.constexpr(
@@ -287,9 +287,9 @@ class MXFPGEMMProgramBase:
                 slot = phase % cfg.NUM_BUFFERS
             else:
                 slot = load_idx % cfg.NUM_BUFFERS
-            gl.amd.gfx1250.tdm.async_load(a_scale_desc, [0, 0], self.a_scale_buffer.index(slot), pred=pred)
-            a_scale_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(a_scale_desc,
-                                                                       add_offsets=[0, cfg.BLOCK_K_SCALE_PRESHUFFLED])
+            gl.amd.cdna5.tdm.async_load(a_scale_desc, [0, 0], self.a_scale_buffer.index(slot), pred=pred)
+            a_scale_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(a_scale_desc,
+                                                                     add_offsets=[0, cfg.BLOCK_K_SCALE_PRESHUFFLED])
         return a_scale_desc
 
     @gluon.jit
@@ -299,9 +299,9 @@ class MXFPGEMMProgramBase:
             slot = phase % cfg.NUM_BUFFERS
         else:
             slot = load_idx % cfg.NUM_BUFFERS
-        gl.amd.gfx1250.tdm.async_load(b_scale_desc, [0, 0], self.b_scale_buffer.index(slot), pred=pred)
-        b_scale_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(b_scale_desc,
-                                                                   add_offsets=[0, cfg.BLOCK_K_SCALE_PRESHUFFLED])
+        gl.amd.cdna5.tdm.async_load(b_scale_desc, [0, 0], self.b_scale_buffer.index(slot), pred=pred)
+        b_scale_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b_scale_desc,
+                                                                 add_offsets=[0, cfg.BLOCK_K_SCALE_PRESHUFFLED])
         return b_scale_desc
 
     @gluon.jit
@@ -312,8 +312,8 @@ class MXFPGEMMProgramBase:
             slot = phase % cfg.NUM_BUFFERS
         else:
             slot = load_idx % cfg.NUM_BUFFERS
-        gl.amd.gfx1250.tdm.async_load(a_desc, [0, 0], self.a_buffer.index(slot), pred=pred)
-        return gl.amd.gfx1250.tdm.update_tensor_descriptor(a_desc, add_offsets=[0, BLOCK_K])
+        gl.amd.cdna5.tdm.async_load(a_desc, [0, 0], self.a_buffer.index(slot), pred=pred)
+        return gl.amd.cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[0, BLOCK_K])
 
     @gluon.jit
     def issue_load_b_data(self, b_desc, load_idx, pred=1, phase=None):
@@ -323,11 +323,11 @@ class MXFPGEMMProgramBase:
             slot = phase % cfg.NUM_BUFFERS
         else:
             slot = load_idx % cfg.NUM_BUFFERS
-        gl.amd.gfx1250.tdm.async_load(b_desc, [0, 0], self.b_buffer.index(slot), pred=pred)
+        gl.amd.cdna5.tdm.async_load(b_desc, [0, 0], self.b_buffer.index(slot), pred=pred)
         if cfg.TRANSPOSE_B:
-            b_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(b_desc, add_offsets=[0, BLOCK_K])
+            b_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b_desc, add_offsets=[0, BLOCK_K])
         else:
-            b_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(b_desc, add_offsets=[BLOCK_K, 0])
+            b_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b_desc, add_offsets=[BLOCK_K, 0])
         return b_desc
 
     @gluon.jit
@@ -338,7 +338,7 @@ class MXFPGEMMProgramBase:
 
         prefetch_iteration = load_idx + distance
         BLOCK_K_PACKED_A: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_A
-        gl.amd.gfx1250.tdm.prefetch(self.a_desc, [0, prefetch_iteration * BLOCK_K_PACKED_A], pred=pred)
+        gl.amd.cdna5.tdm.prefetch(self.a_desc, [0, prefetch_iteration * BLOCK_K_PACKED_A], pred=pred)
 
     @gluon.jit
     def issue_l2_prefetch_b(self, distance: gl.constexpr, load_idx, pred=True):
@@ -349,9 +349,9 @@ class MXFPGEMMProgramBase:
         prefetch_iteration = load_idx + distance
         BLOCK_K_PACKED_B: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_B
         if cfg.TRANSPOSE_B:
-            gl.amd.gfx1250.tdm.prefetch(self.b_desc, [0, prefetch_iteration * BLOCK_K_PACKED_B], pred=pred)
+            gl.amd.cdna5.tdm.prefetch(self.b_desc, [0, prefetch_iteration * BLOCK_K_PACKED_B], pred=pred)
         else:
-            gl.amd.gfx1250.tdm.prefetch(self.b_desc, [prefetch_iteration * BLOCK_K_PACKED_B, 0], pred=pred)
+            gl.amd.cdna5.tdm.prefetch(self.b_desc, [prefetch_iteration * BLOCK_K_PACKED_B, 0], pred=pred)
 
     @gluon.jit
     def issue_l2_prefetch_a_scale(self, distance: gl.constexpr, load_idx, pred=True):
@@ -362,8 +362,8 @@ class MXFPGEMMProgramBase:
         if not cfg.ASYNC_COPY_SCALE:
             if cfg.WITH_A_SCALE:
                 prefetch_iteration = load_idx + distance
-                gl.amd.gfx1250.tdm.prefetch(self.a_scale_desc, [0, prefetch_iteration * cfg.BLOCK_K_SCALE_PRESHUFFLED],
-                                            pred=pred)
+                gl.amd.cdna5.tdm.prefetch(self.a_scale_desc, [0, prefetch_iteration * cfg.BLOCK_K_SCALE_PRESHUFFLED],
+                                          pred=pred)
 
     @gluon.jit
     def issue_l2_prefetch_b_scale(self, distance: gl.constexpr, load_idx, pred=True):
@@ -373,8 +373,8 @@ class MXFPGEMMProgramBase:
 
         if not cfg.ASYNC_COPY_SCALE:
             prefetch_iteration = load_idx + distance
-            gl.amd.gfx1250.tdm.prefetch(self.b_scale_desc, [0, prefetch_iteration * cfg.BLOCK_K_SCALE_PRESHUFFLED],
-                                        pred=pred)
+            gl.amd.cdna5.tdm.prefetch(self.b_scale_desc, [0, prefetch_iteration * cfg.BLOCK_K_SCALE_PRESHUFFLED],
+                                      pred=pred)
 
     @gluon.jit
     def issue_l2_prefetches_scale(self, distance: gl.constexpr, load_idx, pred=True):
@@ -445,8 +445,8 @@ def apply_activation_and_store(cfg, accumulator, c_desc, off_m, off_n):
     BLOCK_N_STORE: gl.constexpr = cfg.BLOCK_N // (2 if cfg.ACTIVATION == "swiglu" else 1)
     acc_buffer = gl.allocate_shared_memory(output.dtype, [cfg.BLOCK_M, BLOCK_N_STORE], c_desc.layout)
     acc_buffer.store(output)
-    gl.amd.gfx1250.tdm.async_store(c_desc, [off_m, off_n], acc_buffer)
-    gl.amd.gfx1250.tdm.async_wait(0)
+    gl.amd.cdna5.tdm.async_store(c_desc, [off_m, off_n], acc_buffer)
+    gl.amd.cdna5.tdm.async_wait(0)
 
 
 @composition
@@ -552,12 +552,12 @@ class MXFPGEMMPipelinedProgram:
             self.issue_l2_prefetches(cfg.L2_PREFETCH_DISTANCE, load_idx)
             load_idx = load_idx + 1
 
-            gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 1) * self.cfg.NUM_LOADS_IN_BATCH)
+            gl.amd.cdna5.tdm.async_wait((cfg.NUM_BUFFERS - 1) * self.cfg.NUM_LOADS_IN_BATCH)
 
             a, b, scale_a, scale_b = self.issue_local_loads(wmma_idx, self.a_buffer, self.b_buffer, self.a_scale_buffer,
                                                             self.b_scale_buffer)
             wmma_idx += 1
-            accumulator = gl.amd.gfx1250.wmma_scaled(a, scale_a, cfg.DTYPE_A, b, scale_b, cfg.DTYPE_B, accumulator)
+            accumulator = gl.amd.cdna5.wmma_scaled(a, scale_a, cfg.DTYPE_A, b, scale_b, cfg.DTYPE_B, accumulator)
 
         apply_activation_and_store(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
 
@@ -585,7 +585,7 @@ class MXFPGEMMPipelinedProgram:
 
         accumulator = gl.zeros((cfg.BLOCK_M, cfg.BLOCK_N), dtype=gl.float32, layout=self.cfg.acc_layout)
         loop_ub = gl.cdiv(K, cfg.BLOCK_K) - (cfg.NUM_BUFFERS - 1)
-        gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 2) * self.cfg.NUM_LOADS_IN_BATCH)
+        gl.amd.cdna5.tdm.async_wait((cfg.NUM_BUFFERS - 2) * self.cfg.NUM_LOADS_IN_BATCH)
         gl.assume(loop_ub >= 0)
         for _ in range(0, loop_ub):
             with gl.amd.warp_pipeline_stage("tdm+lds", priority=1):
@@ -599,19 +599,19 @@ class MXFPGEMMPipelinedProgram:
                 a_desc = self.issue_load_a_data(a_desc, load_idx, phase=phase)
                 b_desc = self.issue_load_b_data(b_desc, load_idx, phase=phase)
 
-            gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 2) * self.cfg.NUM_LOADS_IN_BATCH)
+            gl.amd.cdna5.tdm.async_wait((cfg.NUM_BUFFERS - 2) * self.cfg.NUM_LOADS_IN_BATCH)
             with gl.amd.warp_pipeline_stage("wmma", priority=0):
                 self.issue_l2_prefetches(cfg.L2_PREFETCH_DISTANCE, load_idx)
                 load_idx = load_idx + 1
-                accumulator = gl.amd.gfx1250.wmma_scaled(a, scale_a, cfg.DTYPE_A, b, scale_b, cfg.DTYPE_B, accumulator)
+                accumulator = gl.amd.cdna5.wmma_scaled(a, scale_a, cfg.DTYPE_A, b, scale_b, cfg.DTYPE_B, accumulator)
 
         # epilogue
         for i in gl.static_range(cfg.NUM_BUFFERS - 1):
-            gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 2 - i) * self.cfg.NUM_LOADS_IN_BATCH)
+            gl.amd.cdna5.tdm.async_wait((cfg.NUM_BUFFERS - 2 - i) * self.cfg.NUM_LOADS_IN_BATCH)
             a, b, scale_a, scale_b = self.issue_local_loads(wmma_idx, self.a_buffer, self.b_buffer, self.a_scale_buffer,
                                                             self.b_scale_buffer)
             wmma_idx += 1
-            accumulator = gl.amd.gfx1250.wmma_scaled(a, scale_a, cfg.DTYPE_A, b, scale_b, cfg.DTYPE_B, accumulator)
+            accumulator = gl.amd.cdna5.wmma_scaled(a, scale_a, cfg.DTYPE_A, b, scale_b, cfg.DTYPE_B, accumulator)
 
         apply_activation_and_store(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
 
@@ -747,7 +747,7 @@ class MXFPGEMMSliceKProgram:
             b_desc = self.issue_load_b_data(b_desc, load_idx)
             load_idx = load_idx + 1
 
-        gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 2) * cfg.NUM_LOADS_IN_BATCH)
+        gl.amd.cdna5.tdm.async_wait((cfg.NUM_BUFFERS - 2) * cfg.NUM_LOADS_IN_BATCH)
         a0, b0, scale_a0, scale_b0 = self.issue_subtile_local_loads(wmma_idx, 0, self.a_buffer, self.b_buffer,
                                                                     self.a_scale_buffer, self.b_scale_buffer)
 
@@ -756,7 +756,7 @@ class MXFPGEMMSliceKProgram:
         gl.assume(main_iters >= 0)
         for _ in range(0, main_iters):
             # iter i
-            accumulator = gl.amd.gfx1250.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b0, scale_b0, cfg.DTYPE_B, accumulator)
+            accumulator = gl.amd.cdna5.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b0, scale_b0, cfg.DTYPE_B, accumulator)
 
             a1, b1, scale_a1, scale_b1 = self.issue_subtile_local_loads(wmma_idx, 1, self.a_buffer, self.b_buffer,
                                                                         self.a_scale_buffer, self.b_scale_buffer)
@@ -770,22 +770,22 @@ class MXFPGEMMSliceKProgram:
             self.issue_l2_prefetches(cfg.L2_PREFETCH_DISTANCE, load_idx)
             load_idx = load_idx + 1
 
-            accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
+            accumulator = gl.amd.cdna5.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
 
-            gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 2) * cfg.NUM_LOADS_IN_BATCH)
+            gl.amd.cdna5.tdm.async_wait((cfg.NUM_BUFFERS - 2) * cfg.NUM_LOADS_IN_BATCH)
             a0, b0, scale_a0, scale_b0 = self.issue_subtile_local_loads(wmma_idx, 0, self.a_buffer, self.b_buffer,
                                                                         self.a_scale_buffer, self.b_scale_buffer)
 
         for i in gl.static_range(cfg.NUM_BUFFERS - 1):
             if i > 0:
-                gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 2 - i) * cfg.NUM_LOADS_IN_BATCH)
+                gl.amd.cdna5.tdm.async_wait((cfg.NUM_BUFFERS - 2 - i) * cfg.NUM_LOADS_IN_BATCH)
                 a0, b0, scale_a0, scale_b0 = self.issue_subtile_local_loads(wmma_idx, 0, self.a_buffer, self.b_buffer,
                                                                             self.a_scale_buffer, self.b_scale_buffer)
-            accumulator = gl.amd.gfx1250.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b0, scale_b0, cfg.DTYPE_B, accumulator)
+            accumulator = gl.amd.cdna5.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b0, scale_b0, cfg.DTYPE_B, accumulator)
             a1, b1, scale_a1, scale_b1 = self.issue_subtile_local_loads(wmma_idx, 1, self.a_buffer, self.b_buffer,
                                                                         self.a_scale_buffer, self.b_scale_buffer)
             wmma_idx += 1
-            accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
+            accumulator = gl.amd.cdna5.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
 
         apply_activation_and_store(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
 
@@ -816,13 +816,13 @@ class MXFPGEMMSliceKProgram:
         loop_ub = gl.cdiv(K, cfg.BLOCK_K) - (cfg.NUM_BUFFERS - 1)
         gl.assume(loop_ub >= 0)
         # wait for the first prefetch
-        gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 2) * self.cfg.NUM_LOADS_IN_BATCH)
+        gl.amd.cdna5.tdm.async_wait((cfg.NUM_BUFFERS - 2) * self.cfg.NUM_LOADS_IN_BATCH)
         for _ in range(0, loop_ub):
             with gl.amd.warp_pipeline_stage("lds0", priority=1):
                 a0, b0, scale_a0, scale_b0 = self.issue_subtile_local_loads(wmma_idx, 0, self.a_buffer, self.b_buffer,
                                                                             self.a_scale_buffer, self.b_scale_buffer)
 
-            gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 3) * self.cfg.NUM_LOADS_IN_BATCH)
+            gl.amd.cdna5.tdm.async_wait((cfg.NUM_BUFFERS - 3) * self.cfg.NUM_LOADS_IN_BATCH)
             with gl.amd.warp_pipeline_stage("tdm+wmma+lds1", priority=0):
                 phase = wmma_idx + cfg.NUM_BUFFERS - 1
                 if cfg.WITH_A_SCALE:
@@ -832,24 +832,24 @@ class MXFPGEMMSliceKProgram:
                 b_desc = self.issue_load_b_data(b_desc, load_idx, phase=phase)
                 self.issue_l2_prefetches(cfg.L2_PREFETCH_DISTANCE, load_idx)
                 load_idx = load_idx + 1
-                accumulator = gl.amd.gfx1250.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b0, scale_b0, cfg.DTYPE_B,
-                                                         accumulator)
+                accumulator = gl.amd.cdna5.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b0, scale_b0, cfg.DTYPE_B,
+                                                       accumulator)
                 a1, b1, scale_a1, scale_b1 = self.issue_subtile_local_loads(wmma_idx, 1, self.a_buffer, self.b_buffer,
                                                                             self.a_scale_buffer, self.b_scale_buffer)
                 wmma_idx += 1
-                accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B,
-                                                         accumulator)
+                accumulator = gl.amd.cdna5.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B,
+                                                       accumulator)
 
         # epilogue
         for i in gl.static_range(cfg.NUM_BUFFERS - 1):
-            gl.amd.gfx1250.tdm.async_wait((cfg.NUM_BUFFERS - 1 - i) * self.cfg.NUM_LOADS_IN_BATCH)
+            gl.amd.cdna5.tdm.async_wait((cfg.NUM_BUFFERS - 1 - i) * self.cfg.NUM_LOADS_IN_BATCH)
             a0, b0, scale_a0, scale_b0 = self.issue_subtile_local_loads(wmma_idx, 0, self.a_buffer, self.b_buffer,
                                                                         self.a_scale_buffer, self.b_scale_buffer)
-            accumulator = gl.amd.gfx1250.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b0, scale_b0, cfg.DTYPE_B, accumulator)
+            accumulator = gl.amd.cdna5.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b0, scale_b0, cfg.DTYPE_B, accumulator)
 
             a1, b1, scale_a1, scale_b1 = self.issue_subtile_local_loads(wmma_idx, 1, self.a_buffer, self.b_buffer,
                                                                         self.a_scale_buffer, self.b_scale_buffer)
-            accumulator = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
+            accumulator = gl.amd.cdna5.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b1, scale_b1, cfg.DTYPE_B, accumulator)
             wmma_idx += 1
 
         apply_activation_and_store(self.cfg, accumulator, self.c_desc, self.c_off_m, self.c_off_n)
@@ -988,20 +988,20 @@ class MXFPGEMMSliceNKProgram:
             if cfg.ASYNC_COPY_SCALE:
                 a_scale_desc.issue_async_load(load_idx, a_scale_buffer_slice, pred=pred)
             else:
-                gl.amd.gfx1250.tdm.async_load(a_scale_desc, [0, 0],  #
-                                              a_scale_buffer_slice, pred=pred)
-                a_scale_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(
-                    a_scale_desc, add_offsets=[0, cfg.BLOCK_K_SCALE_PRESHUFFLED])
+                gl.amd.cdna5.tdm.async_load(a_scale_desc, [0, 0],  #
+                                            a_scale_buffer_slice, pred=pred)
+                a_scale_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(a_scale_desc,
+                                                                         add_offsets=[0, cfg.BLOCK_K_SCALE_PRESHUFFLED])
         return a_scale_desc
 
     @gluon.jit
     def issue_load_a_data(self, a_desc, load_idx, pred=1):
         cfg = self.cfg
         BLOCK_K: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_A
-        gl.amd.gfx1250.tdm.async_load(a_desc, [0, 0],  #
-                                      self.a_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
-                                      pred=pred)
-        return gl.amd.gfx1250.tdm.update_tensor_descriptor(a_desc, add_offsets=[0, BLOCK_K])
+        gl.amd.cdna5.tdm.async_load(a_desc, [0, 0],  #
+                                    self.a_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
+                                    pred=pred)
+        return gl.amd.cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[0, BLOCK_K])
 
     @gluon.jit
     def issue_load_b_scale(self, b_scale_desc, load_idx, pred=1):
@@ -1010,33 +1010,33 @@ class MXFPGEMMSliceNKProgram:
         if cfg.ASYNC_COPY_SCALE:
             b_scale_desc.issue_async_load(load_idx, b_scale_buffer_slice, pred=pred)
         else:
-            gl.amd.gfx1250.tdm.async_load(b_scale_desc, [0, 0],  #
-                                          b_scale_buffer_slice, pred=pred)
-            b_scale_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(b_scale_desc,
-                                                                       add_offsets=[0, cfg.BLOCK_K_SCALE_PRESHUFFLED])
+            gl.amd.cdna5.tdm.async_load(b_scale_desc, [0, 0],  #
+                                        b_scale_buffer_slice, pred=pred)
+            b_scale_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b_scale_desc,
+                                                                     add_offsets=[0, cfg.BLOCK_K_SCALE_PRESHUFFLED])
         return b_scale_desc
 
     @gluon.jit
     def issue_load_b_data(self, b_desc, load_idx, pred=1):
         cfg = self.cfg
         BLOCK_K: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_B
-        gl.amd.gfx1250.tdm.async_load(b_desc, [0, 0],  #
-                                      self.b_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
-                                      pred=pred)
+        gl.amd.cdna5.tdm.async_load(b_desc, [0, 0],  #
+                                    self.b_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
+                                    pred=pred)
         if cfg.TRANSPOSE_B:
-            b_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(b_desc, add_offsets=[0, BLOCK_K])
+            b_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b_desc, add_offsets=[0, BLOCK_K])
         else:
-            b_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(b_desc, add_offsets=[BLOCK_K, 0])
+            b_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b_desc, add_offsets=[BLOCK_K, 0])
         return b_desc
 
     @gluon.jit
     def async_wait(self, waitcnt: int):
         cfg = self.cfg
         if cfg.ASYNC_COPY_SCALE:
-            gl.amd.gfx1250.tdm.async_wait(waitcnt)
+            gl.amd.cdna5.tdm.async_wait(waitcnt)
             cp.wait_group(waitcnt if cfg.WITH_A_SCALE else (waitcnt // 2))
         else:
-            gl.amd.gfx1250.tdm.async_wait((waitcnt * 2) if cfg.WITH_A_SCALE else (waitcnt + waitcnt // 2))
+            gl.amd.cdna5.tdm.async_wait((waitcnt * 2) if cfg.WITH_A_SCALE else (waitcnt + waitcnt // 2))
 
     @gluon.jit
     def pipeline(self, K):
@@ -1076,7 +1076,7 @@ class MXFPGEMMSliceNKProgram:
         gl.assume(loop_ub >= cfg.NUM_BUFFERS)
         for i in range(0, loop_ub):
             # iter i
-            c0 = gl.amd.gfx1250.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b00, scale_b00, cfg.DTYPE_B, c0)
+            c0 = gl.amd.cdna5.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b00, scale_b00, cfg.DTYPE_B, c0)
             b01, scale_b01 = self.issue_local_load_b(wmma_idx, 0, 1, self.b_buffer, self.b_scale_buffer)
 
             pred_prefetch = i - epilogue_lb
@@ -1085,17 +1085,17 @@ class MXFPGEMMSliceNKProgram:
             load_idx = load_idx + 1
 
             # iter i
-            c1 = gl.amd.gfx1250.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b01, scale_b01, cfg.DTYPE_B, c1)
+            c1 = gl.amd.cdna5.wmma_scaled(a0, scale_a0, cfg.DTYPE_A, b01, scale_b01, cfg.DTYPE_B, c1)
             a1, scale_a1 = self.issue_local_load_a(wmma_idx, 1, self.a_buffer, self.a_scale_buffer)
             b10, scale_b10 = self.issue_local_load_b(wmma_idx, 1, 0, self.b_buffer, self.b_scale_buffer)
 
             # iter i
-            c0 = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b10, scale_b10, cfg.DTYPE_B, c0)
+            c0 = gl.amd.cdna5.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b10, scale_b10, cfg.DTYPE_B, c0)
             b11, scale_b11 = self.issue_local_load_b(wmma_idx, 1, 1, self.b_buffer, self.b_scale_buffer)
 
             # iter i
             wmma_idx += 1
-            c1 = gl.amd.gfx1250.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b11, scale_b11, cfg.DTYPE_B, c1)
+            c1 = gl.amd.cdna5.wmma_scaled(a1, scale_a1, cfg.DTYPE_A, b11, scale_b11, cfg.DTYPE_B, c1)
 
             # iter i + NUM_BUFFERS - 1
             pred_load = i + 1 - epilogue_lb
@@ -1251,20 +1251,20 @@ class MXFPGEMMSliceMNKProgram:
             if cfg.ASYNC_COPY_SCALE:
                 a_scale_desc.issue_async_load(load_idx, a_scale_buffer_slice, pred=pred)
             else:
-                gl.amd.gfx1250.tdm.async_load(a_scale_desc, [0, 0],  #
-                                              a_scale_buffer_slice, pred=pred, warp_used_hint=cfg.TDM_WARP_USED_HINT_A)
-                a_scale_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(
-                    a_scale_desc, add_offsets=[0, cfg.BLOCK_K_SCALE_PRESHUFFLED])
+                gl.amd.cdna5.tdm.async_load(a_scale_desc, [0, 0],  #
+                                            a_scale_buffer_slice, pred=pred, warp_used_hint=cfg.TDM_WARP_USED_HINT_A)
+                a_scale_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(a_scale_desc,
+                                                                         add_offsets=[0, cfg.BLOCK_K_SCALE_PRESHUFFLED])
         return a_scale_desc
 
     @gluon.jit
     def issue_load_a_data(self, a_desc, load_idx, pred=1):
         cfg = self.cfg
         BLOCK_K: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_A
-        gl.amd.gfx1250.tdm.async_load(a_desc, [0, 0],  #
-                                      self.a_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
-                                      pred=pred, warp_used_hint=cfg.TDM_WARP_USED_HINT_A)
-        return gl.amd.gfx1250.tdm.update_tensor_descriptor(a_desc, add_offsets=[0, BLOCK_K])
+        gl.amd.cdna5.tdm.async_load(a_desc, [0, 0],  #
+                                    self.a_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
+                                    pred=pred, warp_used_hint=cfg.TDM_WARP_USED_HINT_A)
+        return gl.amd.cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[0, BLOCK_K])
 
     @gluon.jit
     def issue_load_b_scale(self, b_scale_desc, load_idx, pred=1):
@@ -1273,23 +1273,23 @@ class MXFPGEMMSliceMNKProgram:
         if cfg.ASYNC_COPY_SCALE:
             b_scale_desc.issue_async_load(load_idx, b_scale_buffer_slice, pred=pred)
         else:
-            gl.amd.gfx1250.tdm.async_load(b_scale_desc, [0, 0],  #
-                                          b_scale_buffer_slice, pred=pred, warp_used_hint=cfg.TDM_WARP_USED_HINT_B)
-            b_scale_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(b_scale_desc,
-                                                                       add_offsets=[0, cfg.BLOCK_K_SCALE_PRESHUFFLED])
+            gl.amd.cdna5.tdm.async_load(b_scale_desc, [0, 0],  #
+                                        b_scale_buffer_slice, pred=pred, warp_used_hint=cfg.TDM_WARP_USED_HINT_B)
+            b_scale_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b_scale_desc,
+                                                                     add_offsets=[0, cfg.BLOCK_K_SCALE_PRESHUFFLED])
         return b_scale_desc
 
     @gluon.jit
     def issue_load_b_data(self, b_desc, load_idx, pred=1):
         cfg = self.cfg
         BLOCK_K: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_B
-        gl.amd.gfx1250.tdm.async_load(b_desc, [0, 0],  #
-                                      self.b_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
-                                      pred=pred, warp_used_hint=cfg.TDM_WARP_USED_HINT_B)
+        gl.amd.cdna5.tdm.async_load(b_desc, [0, 0],  #
+                                    self.b_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
+                                    pred=pred, warp_used_hint=cfg.TDM_WARP_USED_HINT_B)
         if cfg.TRANSPOSE_B:
-            b_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(b_desc, add_offsets=[0, BLOCK_K])
+            b_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b_desc, add_offsets=[0, BLOCK_K])
         else:
-            b_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(b_desc, add_offsets=[BLOCK_K, 0])
+            b_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b_desc, add_offsets=[BLOCK_K, 0])
         return b_desc
 
     @gluon.jit
@@ -1299,16 +1299,16 @@ class MXFPGEMMSliceMNKProgram:
             if not cfg.ASYNC_COPY_SCALE and cfg.TDM_WARP_USED_HINT_A:
                 a_dest = self.a_scale_buffer.index(load_idx % cfg.NUM_BUFFERS)
                 b_dest = self.b_scale_buffer.index(load_idx % cfg.NUM_BUFFERS)
-                a_scale_load_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(a_scale_desc, add_offsets=[0, 0],
-                                                                                pred=pred, clamp_bounds=True)
-                b_scale_load_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(b_scale_desc, add_offsets=[0, 0],
-                                                                                pred=pred, clamp_bounds=True)
-                gl.amd.gfx1250.tdm.async_load_fused([(a_scale_load_desc, a_dest, cfg.TDM_WARP_USED_HINT_A),
-                                                     (b_scale_load_desc, b_dest, cfg.TDM_WARP_USED_HINT_B)])
-                a_scale_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(
-                    a_scale_desc, add_offsets=[0, cfg.BLOCK_K_SCALE_PRESHUFFLED])
-                b_scale_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(
-                    b_scale_desc, add_offsets=[0, cfg.BLOCK_K_SCALE_PRESHUFFLED])
+                a_scale_load_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(a_scale_desc, add_offsets=[0, 0],
+                                                                              pred=pred, clamp_bounds=True)
+                b_scale_load_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b_scale_desc, add_offsets=[0, 0],
+                                                                              pred=pred, clamp_bounds=True)
+                gl.amd.cdna5.tdm.async_load_fused([(a_scale_load_desc, a_dest, cfg.TDM_WARP_USED_HINT_A),
+                                                   (b_scale_load_desc, b_dest, cfg.TDM_WARP_USED_HINT_B)])
+                a_scale_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(a_scale_desc,
+                                                                         add_offsets=[0, cfg.BLOCK_K_SCALE_PRESHUFFLED])
+                b_scale_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b_scale_desc,
+                                                                         add_offsets=[0, cfg.BLOCK_K_SCALE_PRESHUFFLED])
                 return a_scale_desc, b_scale_desc
             a_scale_desc = self.issue_load_a_scale(a_scale_desc, load_idx, pred=pred)
         b_scale_desc = self.issue_load_b_scale(b_scale_desc, load_idx, pred=pred)
@@ -1324,17 +1324,17 @@ class MXFPGEMMSliceMNKProgram:
             BLOCK_K_B: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_B
             a_dest = self.a_buffer.index(load_idx % cfg.NUM_BUFFERS)
             b_dest = self.b_buffer.index(load_idx % cfg.NUM_BUFFERS)
-            a_load_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(a_desc, add_offsets=[0, 0], pred=pred,
-                                                                      clamp_bounds=True)
-            b_load_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(b_desc, add_offsets=[0, 0], pred=pred,
-                                                                      clamp_bounds=True)
-            gl.amd.gfx1250.tdm.async_load_fused([(a_load_desc, a_dest, cfg.TDM_WARP_USED_HINT_A),
-                                                 (b_load_desc, b_dest, cfg.TDM_WARP_USED_HINT_B)])
-            a_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(a_desc, add_offsets=[0, BLOCK_K_A])
+            a_load_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[0, 0], pred=pred,
+                                                                    clamp_bounds=True)
+            b_load_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b_desc, add_offsets=[0, 0], pred=pred,
+                                                                    clamp_bounds=True)
+            gl.amd.cdna5.tdm.async_load_fused([(a_load_desc, a_dest, cfg.TDM_WARP_USED_HINT_A),
+                                               (b_load_desc, b_dest, cfg.TDM_WARP_USED_HINT_B)])
+            a_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[0, BLOCK_K_A])
             if cfg.TRANSPOSE_B:
-                b_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(b_desc, add_offsets=[0, BLOCK_K_B])
+                b_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b_desc, add_offsets=[0, BLOCK_K_B])
             else:
-                b_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(b_desc, add_offsets=[BLOCK_K_B, 0])
+                b_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b_desc, add_offsets=[BLOCK_K_B, 0])
         else:
             a_desc = self.issue_load_a_data(a_desc, load_idx, pred=pred)
             b_desc = self.issue_load_b_data(b_desc, load_idx, pred=pred)
@@ -1348,10 +1348,10 @@ class MXFPGEMMSliceMNKProgram:
         DATA_OPS: gl.constexpr = 1 if cfg.TDM_WARP_USED_HINT_A else 2
         SCALE_OPS: gl.constexpr = 1 if cfg.WITH_A_SCALE and cfg.TDM_WARP_USED_HINT_A else (2 if cfg.WITH_A_SCALE else 1)
         if cfg.ASYNC_COPY_SCALE:
-            gl.amd.gfx1250.tdm.async_wait(waitcnt * DATA_OPS // 2)
+            gl.amd.cdna5.tdm.async_wait(waitcnt * DATA_OPS // 2)
             cp.wait_group(waitcnt if cfg.WITH_A_SCALE else (waitcnt // 2))
         else:
-            gl.amd.gfx1250.tdm.async_wait(waitcnt * (DATA_OPS + SCALE_OPS) // 2)
+            gl.amd.cdna5.tdm.async_wait(waitcnt * (DATA_OPS + SCALE_OPS) // 2)
 
     @gluon.jit
     def pipeline(self, K):
@@ -1392,7 +1392,7 @@ class MXFPGEMMSliceMNKProgram:
         epilogue_lb = loop_ub - (cfg.NUM_BUFFERS - 1)
         gl.assume(loop_ub >= cfg.NUM_BUFFERS)
         for i in range(0, loop_ub):
-            c00 = gl.amd.gfx1250.wmma_scaled(a00, scale_a00, cfg.DTYPE_A, b00, scale_b00, cfg.DTYPE_B, c00)
+            c00 = gl.amd.cdna5.wmma_scaled(a00, scale_a00, cfg.DTYPE_A, b00, scale_b00, cfg.DTYPE_B, c00)
 
             pred_prefetch = i - epilogue_lb
             pred_prefetch = ((pred_prefetch >> 31) & 1).to(gl.int1)
@@ -1401,28 +1401,28 @@ class MXFPGEMMSliceMNKProgram:
 
             self.issue_l2_prefetches_scale(cfg.L2_PREFETCH_DISTANCE, load_idx, pred=pred_prefetch)
 
-            c01 = gl.amd.gfx1250.wmma_scaled(a00, scale_a00, cfg.DTYPE_A, b01, scale_b01, cfg.DTYPE_B, c01)
+            c01 = gl.amd.cdna5.wmma_scaled(a00, scale_a00, cfg.DTYPE_A, b01, scale_b01, cfg.DTYPE_B, c01)
             a10, scale_a10 = self.issue_local_load_a(wmma_idx, 1, 0, self.a_buffer, self.a_scale_buffer)
 
             self.issue_l2_prefetches_data(cfg.L2_PREFETCH_DISTANCE, load_idx, pred=pred_prefetch)
             load_idx = load_idx + 1
 
-            c10 = gl.amd.gfx1250.wmma_scaled(a10, scale_a10, cfg.DTYPE_A, b00, scale_b00, cfg.DTYPE_B, c10)
+            c10 = gl.amd.cdna5.wmma_scaled(a10, scale_a10, cfg.DTYPE_A, b00, scale_b00, cfg.DTYPE_B, c10)
             b10, scale_b10 = self.issue_local_load_b(wmma_idx, 1, 0, self.b_buffer, self.b_scale_buffer)
 
-            c11 = gl.amd.gfx1250.wmma_scaled(a10, scale_a10, cfg.DTYPE_A, b01, scale_b01, cfg.DTYPE_B, c11)
+            c11 = gl.amd.cdna5.wmma_scaled(a10, scale_a10, cfg.DTYPE_A, b01, scale_b01, cfg.DTYPE_B, c11)
             a01, scale_a01 = self.issue_local_load_a(wmma_idx, 0, 1, self.a_buffer, self.a_scale_buffer)
 
-            c00 = gl.amd.gfx1250.wmma_scaled(a01, scale_a01, cfg.DTYPE_A, b10, scale_b10, cfg.DTYPE_B, c00)
+            c00 = gl.amd.cdna5.wmma_scaled(a01, scale_a01, cfg.DTYPE_A, b10, scale_b10, cfg.DTYPE_B, c00)
             b11, scale_b11 = self.issue_local_load_b(wmma_idx, 1, 1, self.b_buffer, self.b_scale_buffer)
 
-            c01 = gl.amd.gfx1250.wmma_scaled(a01, scale_a01, cfg.DTYPE_A, b11, scale_b11, cfg.DTYPE_B, c01)
+            c01 = gl.amd.cdna5.wmma_scaled(a01, scale_a01, cfg.DTYPE_A, b11, scale_b11, cfg.DTYPE_B, c01)
             a11, scale_a11 = self.issue_local_load_a(wmma_idx, 1, 1, self.a_buffer, self.a_scale_buffer)
             wmma_idx += 1
 
-            c10 = gl.amd.gfx1250.wmma_scaled(a11, scale_a11, cfg.DTYPE_A, b10, scale_b10, cfg.DTYPE_B, c10)
+            c10 = gl.amd.cdna5.wmma_scaled(a11, scale_a11, cfg.DTYPE_A, b10, scale_b10, cfg.DTYPE_B, c10)
 
-            c11 = gl.amd.gfx1250.wmma_scaled(a11, scale_a11, cfg.DTYPE_A, b11, scale_b11, cfg.DTYPE_B, c11)
+            c11 = gl.amd.cdna5.wmma_scaled(a11, scale_a11, cfg.DTYPE_A, b11, scale_b11, cfg.DTYPE_B, c11)
 
             pred_load = i + 1 - epilogue_lb
             pred_load = (pred_load >> 31) & 1
@@ -1610,10 +1610,10 @@ class MXFPGEMMSliceMNKTDMSplitProgram:
             if cfg.ASYNC_COPY_SCALE:
                 a_scale_desc.issue_async_load(load_idx, a_scale_buffer_slice, pred=pred)
             else:
-                gl.amd.gfx1250.tdm.async_load(a_scale_desc, [0, 0],  #
-                                              a_scale_buffer_slice, pred=pred, warp_used_hint=cfg.TDM_WARP_USED_HINT_A)
-                a_scale_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(
-                    a_scale_desc, add_offsets=[0, cfg.BLOCK_K_SCALE_PRESHUFFLED])
+                gl.amd.cdna5.tdm.async_load(a_scale_desc, [0, 0],  #
+                                            a_scale_buffer_slice, pred=pred, warp_used_hint=cfg.TDM_WARP_USED_HINT_A)
+                a_scale_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(a_scale_desc,
+                                                                         add_offsets=[0, cfg.BLOCK_K_SCALE_PRESHUFFLED])
         return a_scale_desc
 
     @gluon.jit
@@ -1623,10 +1623,10 @@ class MXFPGEMMSliceMNKTDMSplitProgram:
         if cfg.ASYNC_COPY_SCALE:
             b_scale_desc.issue_async_load(load_idx, b_scale_buffer_slice, pred=pred)
         else:
-            gl.amd.gfx1250.tdm.async_load(b_scale_desc, [0, 0],  #
-                                          b_scale_buffer_slice, pred=pred, warp_used_hint=cfg.TDM_WARP_USED_HINT_B)
-            b_scale_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(b_scale_desc,
-                                                                       add_offsets=[0, cfg.BLOCK_K_SCALE_PRESHUFFLED])
+            gl.amd.cdna5.tdm.async_load(b_scale_desc, [0, 0],  #
+                                        b_scale_buffer_slice, pred=pred, warp_used_hint=cfg.TDM_WARP_USED_HINT_B)
+            b_scale_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b_scale_desc,
+                                                                     add_offsets=[0, cfg.BLOCK_K_SCALE_PRESHUFFLED])
         return b_scale_desc
 
     @gluon.jit
@@ -1637,10 +1637,10 @@ class MXFPGEMMSliceMNKTDMSplitProgram:
             a_buffer = self.a0_buffer
         else:
             a_buffer = self.a1_buffer
-        gl.amd.gfx1250.tdm.async_load(a_desc, [0, 0],  #
-                                      a_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
-                                      pred=pred, warp_used_hint=cfg.TDM_WARP_USED_HINT_A)
-        return gl.amd.gfx1250.tdm.update_tensor_descriptor(a_desc, add_offsets=[0, BLOCK_K])
+        gl.amd.cdna5.tdm.async_load(a_desc, [0, 0],  #
+                                    a_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
+                                    pred=pred, warp_used_hint=cfg.TDM_WARP_USED_HINT_A)
+        return gl.amd.cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[0, BLOCK_K])
 
     @gluon.jit
     def issue_load_b_data(self, b_desc, load_idx, half: gl.constexpr, pred=1):
@@ -1650,13 +1650,13 @@ class MXFPGEMMSliceMNKTDMSplitProgram:
             b_buffer = self.b0_buffer
         else:
             b_buffer = self.b1_buffer
-        gl.amd.gfx1250.tdm.async_load(b_desc, [0, 0],  #
-                                      b_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
-                                      pred=pred, warp_used_hint=cfg.TDM_WARP_USED_HINT_B)
+        gl.amd.cdna5.tdm.async_load(b_desc, [0, 0],  #
+                                    b_buffer.index(load_idx % cfg.NUM_BUFFERS),  #
+                                    pred=pred, warp_used_hint=cfg.TDM_WARP_USED_HINT_B)
         if cfg.TRANSPOSE_B:
-            b_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(b_desc, add_offsets=[0, BLOCK_K])
+            b_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b_desc, add_offsets=[0, BLOCK_K])
         else:
-            b_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(b_desc, add_offsets=[BLOCK_K, 0])
+            b_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b_desc, add_offsets=[BLOCK_K, 0])
         return b_desc
 
     @gluon.jit
@@ -1666,16 +1666,16 @@ class MXFPGEMMSliceMNKTDMSplitProgram:
             if not cfg.ASYNC_COPY_SCALE and cfg.TDM_WARP_USED_HINT_A:
                 a_dest = self.a_scale_buffer.index(load_idx % cfg.NUM_BUFFERS)
                 b_dest = self.b_scale_buffer.index(load_idx % cfg.NUM_BUFFERS)
-                a_scale_load_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(a_scale_desc, add_offsets=[0, 0],
-                                                                                pred=pred, clamp_bounds=True)
-                b_scale_load_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(b_scale_desc, add_offsets=[0, 0],
-                                                                                pred=pred, clamp_bounds=True)
-                gl.amd.gfx1250.tdm.async_load_fused([(a_scale_load_desc, a_dest, cfg.TDM_WARP_USED_HINT_A),
-                                                     (b_scale_load_desc, b_dest, cfg.TDM_WARP_USED_HINT_B)])
-                a_scale_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(
-                    a_scale_desc, add_offsets=[0, cfg.BLOCK_K_SCALE_PRESHUFFLED])
-                b_scale_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(
-                    b_scale_desc, add_offsets=[0, cfg.BLOCK_K_SCALE_PRESHUFFLED])
+                a_scale_load_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(a_scale_desc, add_offsets=[0, 0],
+                                                                              pred=pred, clamp_bounds=True)
+                b_scale_load_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b_scale_desc, add_offsets=[0, 0],
+                                                                              pred=pred, clamp_bounds=True)
+                gl.amd.cdna5.tdm.async_load_fused([(a_scale_load_desc, a_dest, cfg.TDM_WARP_USED_HINT_A),
+                                                   (b_scale_load_desc, b_dest, cfg.TDM_WARP_USED_HINT_B)])
+                a_scale_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(a_scale_desc,
+                                                                         add_offsets=[0, cfg.BLOCK_K_SCALE_PRESHUFFLED])
+                b_scale_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b_scale_desc,
+                                                                         add_offsets=[0, cfg.BLOCK_K_SCALE_PRESHUFFLED])
                 return a_scale_desc, b_scale_desc
             a_scale_desc = self.issue_load_a_scale(a_scale_desc, load_idx, pred=pred)
         b_scale_desc = self.issue_load_b_scale(b_scale_desc, load_idx, pred=pred)
@@ -1695,26 +1695,26 @@ class MXFPGEMMSliceMNKTDMSplitProgram:
             a1_dest = self.a1_buffer.index(load_idx % cfg.NUM_BUFFERS)
             b0_dest = self.b0_buffer.index(load_idx % cfg.NUM_BUFFERS)
             b1_dest = self.b1_buffer.index(load_idx % cfg.NUM_BUFFERS)
-            a0_load_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(a0_desc, add_offsets=[0, 0], pred=pred,
-                                                                       clamp_bounds=True)
-            b0_load_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(b0_desc, add_offsets=[0, 0], pred=pred,
-                                                                       clamp_bounds=True)
-            a1_load_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(a1_desc, add_offsets=[0, 0], pred=pred,
-                                                                       clamp_bounds=True)
-            b1_load_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(b1_desc, add_offsets=[0, 0], pred=pred,
-                                                                       clamp_bounds=True)
-            gl.amd.gfx1250.tdm.async_load_fused([(a0_load_desc, a0_dest, cfg.TDM_WARP_USED_HINT_A),
-                                                 (b0_load_desc, b0_dest, cfg.TDM_WARP_USED_HINT_B)])
-            gl.amd.gfx1250.tdm.async_load_fused([(a1_load_desc, a1_dest, cfg.TDM_WARP_USED_HINT_A),
-                                                 (b1_load_desc, b1_dest, cfg.TDM_WARP_USED_HINT_B)])
-            a0_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(a0_desc, add_offsets=[0, BLOCK_K_A])
-            a1_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(a1_desc, add_offsets=[0, BLOCK_K_A])
+            a0_load_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(a0_desc, add_offsets=[0, 0], pred=pred,
+                                                                     clamp_bounds=True)
+            b0_load_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b0_desc, add_offsets=[0, 0], pred=pred,
+                                                                     clamp_bounds=True)
+            a1_load_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(a1_desc, add_offsets=[0, 0], pred=pred,
+                                                                     clamp_bounds=True)
+            b1_load_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b1_desc, add_offsets=[0, 0], pred=pred,
+                                                                     clamp_bounds=True)
+            gl.amd.cdna5.tdm.async_load_fused([(a0_load_desc, a0_dest, cfg.TDM_WARP_USED_HINT_A),
+                                               (b0_load_desc, b0_dest, cfg.TDM_WARP_USED_HINT_B)])
+            gl.amd.cdna5.tdm.async_load_fused([(a1_load_desc, a1_dest, cfg.TDM_WARP_USED_HINT_A),
+                                               (b1_load_desc, b1_dest, cfg.TDM_WARP_USED_HINT_B)])
+            a0_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(a0_desc, add_offsets=[0, BLOCK_K_A])
+            a1_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(a1_desc, add_offsets=[0, BLOCK_K_A])
             if cfg.TRANSPOSE_B:
-                b0_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(b0_desc, add_offsets=[0, BLOCK_K_B])
-                b1_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(b1_desc, add_offsets=[0, BLOCK_K_B])
+                b0_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b0_desc, add_offsets=[0, BLOCK_K_B])
+                b1_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b1_desc, add_offsets=[0, BLOCK_K_B])
             else:
-                b0_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(b0_desc, add_offsets=[BLOCK_K_B, 0])
-                b1_desc = gl.amd.gfx1250.tdm.update_tensor_descriptor(b1_desc, add_offsets=[BLOCK_K_B, 0])
+                b0_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b0_desc, add_offsets=[BLOCK_K_B, 0])
+                b1_desc = gl.amd.cdna5.tdm.update_tensor_descriptor(b1_desc, add_offsets=[BLOCK_K_B, 0])
         else:
             # Interleave the four half-loads a0, b0, a1, b1 so that A and B halves
             # alternate on the TDM in-order queue.
@@ -1731,8 +1731,8 @@ class MXFPGEMMSliceMNKTDMSplitProgram:
             return
         prefetch_iteration = load_idx + distance
         BLOCK_K_PACKED_A: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_A
-        gl.amd.gfx1250.tdm.prefetch(self.a0_desc, [0, prefetch_iteration * BLOCK_K_PACKED_A], pred=pred)
-        gl.amd.gfx1250.tdm.prefetch(self.a1_desc, [0, prefetch_iteration * BLOCK_K_PACKED_A], pred=pred)
+        gl.amd.cdna5.tdm.prefetch(self.a0_desc, [0, prefetch_iteration * BLOCK_K_PACKED_A], pred=pred)
+        gl.amd.cdna5.tdm.prefetch(self.a1_desc, [0, prefetch_iteration * BLOCK_K_PACKED_A], pred=pred)
 
     @gluon.jit
     def issue_l2_prefetch_b(self, distance: gl.constexpr, load_idx, pred=True):
@@ -1742,11 +1742,11 @@ class MXFPGEMMSliceMNKTDMSplitProgram:
         prefetch_iteration = load_idx + distance
         BLOCK_K_PACKED_B: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_B
         if cfg.TRANSPOSE_B:
-            gl.amd.gfx1250.tdm.prefetch(self.b0_desc, [0, prefetch_iteration * BLOCK_K_PACKED_B], pred=pred)
-            gl.amd.gfx1250.tdm.prefetch(self.b1_desc, [0, prefetch_iteration * BLOCK_K_PACKED_B], pred=pred)
+            gl.amd.cdna5.tdm.prefetch(self.b0_desc, [0, prefetch_iteration * BLOCK_K_PACKED_B], pred=pred)
+            gl.amd.cdna5.tdm.prefetch(self.b1_desc, [0, prefetch_iteration * BLOCK_K_PACKED_B], pred=pred)
         else:
-            gl.amd.gfx1250.tdm.prefetch(self.b0_desc, [prefetch_iteration * BLOCK_K_PACKED_B, 0], pred=pred)
-            gl.amd.gfx1250.tdm.prefetch(self.b1_desc, [prefetch_iteration * BLOCK_K_PACKED_B, 0], pred=pred)
+            gl.amd.cdna5.tdm.prefetch(self.b0_desc, [prefetch_iteration * BLOCK_K_PACKED_B, 0], pred=pred)
+            gl.amd.cdna5.tdm.prefetch(self.b1_desc, [prefetch_iteration * BLOCK_K_PACKED_B, 0], pred=pred)
 
     @gluon.jit
     def issue_l2_prefetches_data(self, distance: gl.constexpr, load_idx, pred=True):
@@ -1761,10 +1761,10 @@ class MXFPGEMMSliceMNKTDMSplitProgram:
         DATA_OPS: gl.constexpr = 2 if cfg.TDM_WARP_USED_HINT_A else 4
         SCALE_OPS: gl.constexpr = 1 if cfg.WITH_A_SCALE and cfg.TDM_WARP_USED_HINT_A else (2 if cfg.WITH_A_SCALE else 1)
         if cfg.ASYNC_COPY_SCALE:
-            gl.amd.gfx1250.tdm.async_wait(waitcnt * DATA_OPS // 2)
+            gl.amd.cdna5.tdm.async_wait(waitcnt * DATA_OPS // 2)
             cp.wait_group(waitcnt if cfg.WITH_A_SCALE else (waitcnt // 2))
         else:
-            gl.amd.gfx1250.tdm.async_wait(waitcnt * (DATA_OPS + SCALE_OPS) // 2)
+            gl.amd.cdna5.tdm.async_wait(waitcnt * (DATA_OPS + SCALE_OPS) // 2)
 
     @gluon.jit
     def pipeline(self, K):
@@ -1807,7 +1807,7 @@ class MXFPGEMMSliceMNKTDMSplitProgram:
         epilogue_lb = loop_ub - (cfg.NUM_BUFFERS - 1)
         gl.assume(loop_ub >= cfg.NUM_BUFFERS)
         for i in range(0, loop_ub):
-            c00 = gl.amd.gfx1250.wmma_scaled(a00, scale_a00, cfg.DTYPE_A, b00, scale_b00, cfg.DTYPE_B, c00)
+            c00 = gl.amd.cdna5.wmma_scaled(a00, scale_a00, cfg.DTYPE_A, b00, scale_b00, cfg.DTYPE_B, c00)
 
             pred_prefetch = i - epilogue_lb
             pred_prefetch = ((pred_prefetch >> 31) & 1).to(gl.int1)
@@ -1816,28 +1816,28 @@ class MXFPGEMMSliceMNKTDMSplitProgram:
 
             self.issue_l2_prefetches_scale(cfg.L2_PREFETCH_DISTANCE, load_idx, pred=pred_prefetch)
 
-            c01 = gl.amd.gfx1250.wmma_scaled(a00, scale_a00, cfg.DTYPE_A, b01, scale_b01, cfg.DTYPE_B, c01)
+            c01 = gl.amd.cdna5.wmma_scaled(a00, scale_a00, cfg.DTYPE_A, b01, scale_b01, cfg.DTYPE_B, c01)
             a10, scale_a10 = self.issue_local_load_a(wmma_idx, 1, 0, self.a_scale_buffer)
 
             self.issue_l2_prefetches_data(cfg.L2_PREFETCH_DISTANCE, load_idx, pred=pred_prefetch)
             load_idx = load_idx + 1
 
-            c10 = gl.amd.gfx1250.wmma_scaled(a10, scale_a10, cfg.DTYPE_A, b00, scale_b00, cfg.DTYPE_B, c10)
+            c10 = gl.amd.cdna5.wmma_scaled(a10, scale_a10, cfg.DTYPE_A, b00, scale_b00, cfg.DTYPE_B, c10)
             b10, scale_b10 = self.issue_local_load_b(wmma_idx, 1, 0, self.b_scale_buffer)
 
-            c11 = gl.amd.gfx1250.wmma_scaled(a10, scale_a10, cfg.DTYPE_A, b01, scale_b01, cfg.DTYPE_B, c11)
+            c11 = gl.amd.cdna5.wmma_scaled(a10, scale_a10, cfg.DTYPE_A, b01, scale_b01, cfg.DTYPE_B, c11)
             a01, scale_a01 = self.issue_local_load_a(wmma_idx, 0, 1, self.a_scale_buffer)
 
-            c00 = gl.amd.gfx1250.wmma_scaled(a01, scale_a01, cfg.DTYPE_A, b10, scale_b10, cfg.DTYPE_B, c00)
+            c00 = gl.amd.cdna5.wmma_scaled(a01, scale_a01, cfg.DTYPE_A, b10, scale_b10, cfg.DTYPE_B, c00)
             b11, scale_b11 = self.issue_local_load_b(wmma_idx, 1, 1, self.b_scale_buffer)
 
-            c01 = gl.amd.gfx1250.wmma_scaled(a01, scale_a01, cfg.DTYPE_A, b11, scale_b11, cfg.DTYPE_B, c01)
+            c01 = gl.amd.cdna5.wmma_scaled(a01, scale_a01, cfg.DTYPE_A, b11, scale_b11, cfg.DTYPE_B, c01)
             a11, scale_a11 = self.issue_local_load_a(wmma_idx, 1, 1, self.a_scale_buffer)
             wmma_idx += 1
 
-            c10 = gl.amd.gfx1250.wmma_scaled(a11, scale_a11, cfg.DTYPE_A, b10, scale_b10, cfg.DTYPE_B, c10)
+            c10 = gl.amd.cdna5.wmma_scaled(a11, scale_a11, cfg.DTYPE_A, b10, scale_b10, cfg.DTYPE_B, c10)
 
-            c11 = gl.amd.gfx1250.wmma_scaled(a11, scale_a11, cfg.DTYPE_A, b11, scale_b11, cfg.DTYPE_B, c11)
+            c11 = gl.amd.cdna5.wmma_scaled(a11, scale_a11, cfg.DTYPE_A, b11, scale_b11, cfg.DTYPE_B, c11)
 
             pred_load = i + 1 - epilogue_lb
             pred_load = (pred_load >> 31) & 1
@@ -1869,27 +1869,26 @@ def create_tensor_descriptor(cfg: MXFPGEMMConfig, a_ptr, a_offs, b_ptr, b_offs, 
         a_desc = gl.constexpr(0)
         b_desc = gl.constexpr(0)
     else:
-        a_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr + a_offs,  #
-                                                           shape=(M, K // cfg.DIV_FACTOR_A),  #
-                                                           strides=(stride_am, stride_ak),  #
-                                                           block_shape=(cfg.BLOCK_M,
-                                                                        cfg.BLOCK_K // cfg.DIV_FACTOR_A),  #
-                                                           layout=cfg.shared_layout_a)
+        a_desc = gl.amd.cdna5.tdm.make_tensor_descriptor(base=a_ptr + a_offs,  #
+                                                         shape=(M, K // cfg.DIV_FACTOR_A),  #
+                                                         strides=(stride_am, stride_ak),  #
+                                                         block_shape=(cfg.BLOCK_M, cfg.BLOCK_K // cfg.DIV_FACTOR_A),  #
+                                                         layout=cfg.shared_layout_a)
 
         if cfg.TRANSPOSE_B:
-            b_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(
-                base=b_ptr + b_offs,  #
-                shape=(N, K // cfg.DIV_FACTOR_B),  #
-                strides=(stride_bn, stride_bk),  #
-                block_shape=(cfg.BLOCK_N, cfg.BLOCK_K // cfg.DIV_FACTOR_B),  #
-                layout=cfg.shared_layout_b)
+            b_desc = gl.amd.cdna5.tdm.make_tensor_descriptor(base=b_ptr + b_offs,  #
+                                                             shape=(N, K // cfg.DIV_FACTOR_B),  #
+                                                             strides=(stride_bn, stride_bk),  #
+                                                             block_shape=(cfg.BLOCK_N,
+                                                                          cfg.BLOCK_K // cfg.DIV_FACTOR_B),  #
+                                                             layout=cfg.shared_layout_b)
         else:
-            b_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(
-                base=b_ptr + b_offs,  #
-                shape=(K // cfg.DIV_FACTOR_B, N),  #
-                strides=(stride_bk, stride_bn),  #
-                block_shape=(cfg.BLOCK_K // cfg.DIV_FACTOR_B, cfg.BLOCK_N),  #
-                layout=cfg.shared_layout_b)
+            b_desc = gl.amd.cdna5.tdm.make_tensor_descriptor(base=b_ptr + b_offs,  #
+                                                             shape=(K // cfg.DIV_FACTOR_B, N),  #
+                                                             strides=(stride_bk, stride_bn),  #
+                                                             block_shape=(cfg.BLOCK_K // cfg.DIV_FACTOR_B,
+                                                                          cfg.BLOCK_N),  #
+                                                             layout=cfg.shared_layout_b)
 
     if cfg.ASYNC_COPY_SCALE:
         if cfg.WITH_A_SCALE:
@@ -1905,14 +1904,14 @@ def create_tensor_descriptor(cfg: MXFPGEMMConfig, a_ptr, a_offs, b_ptr, b_offs, 
             a_scale_base = a_scale_ptr + a_scale_offs
         else:
             a_scale_base = b_scale_ptr + b_scale_offs
-        a_scale_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(
+        a_scale_desc = gl.amd.cdna5.tdm.make_tensor_descriptor(
             base=a_scale_base,  #
             shape=(M // PRESHUFFLE_FACTOR, K // SCALE_BLOCK * PRESHUFFLE_FACTOR),  #
             strides=(stride_scale, 1),  #
             block_shape=(cfg.BLOCK_M_PRESHUFFLED, cfg.BLOCK_K_SCALE_PRESHUFFLED),  #
             layout=cfg.shared_layout_a_scale)
 
-        b_scale_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(
+        b_scale_desc = gl.amd.cdna5.tdm.make_tensor_descriptor(
             base=b_scale_ptr + b_scale_offs,  #
             shape=(N // PRESHUFFLE_FACTOR, K // SCALE_BLOCK * PRESHUFFLE_FACTOR),  #
             strides=(stride_scale, 1),  #
@@ -1930,39 +1929,39 @@ def create_split_data_tensor_descriptor(cfg: MXFPGEMMConfig, a_ptr, a_offs, b_pt
     BLOCK_K_PACKED_A: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_A
     BLOCK_K_PACKED_B: gl.constexpr = cfg.BLOCK_K // cfg.DIV_FACTOR_B
 
-    a0_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr + a_offs,  #
-                                                        shape=(M, K // cfg.DIV_FACTOR_A),  #
-                                                        strides=(stride_am, stride_ak),  #
-                                                        block_shape=(HALF_M, BLOCK_K_PACKED_A),  #
-                                                        layout=cfg.shared_layout_a)
-    a1_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr + a_offs + HALF_M * stride_am,  #
-                                                        shape=(M, K // cfg.DIV_FACTOR_A),  #
-                                                        strides=(stride_am, stride_ak),  #
-                                                        block_shape=(HALF_M, BLOCK_K_PACKED_A),  #
-                                                        layout=cfg.shared_layout_a)
+    a0_desc = gl.amd.cdna5.tdm.make_tensor_descriptor(base=a_ptr + a_offs,  #
+                                                      shape=(M, K // cfg.DIV_FACTOR_A),  #
+                                                      strides=(stride_am, stride_ak),  #
+                                                      block_shape=(HALF_M, BLOCK_K_PACKED_A),  #
+                                                      layout=cfg.shared_layout_a)
+    a1_desc = gl.amd.cdna5.tdm.make_tensor_descriptor(base=a_ptr + a_offs + HALF_M * stride_am,  #
+                                                      shape=(M, K // cfg.DIV_FACTOR_A),  #
+                                                      strides=(stride_am, stride_ak),  #
+                                                      block_shape=(HALF_M, BLOCK_K_PACKED_A),  #
+                                                      layout=cfg.shared_layout_a)
 
     if cfg.TRANSPOSE_B:
-        b0_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(base=b_ptr + b_offs,  #
-                                                            shape=(N, K // cfg.DIV_FACTOR_B),  #
-                                                            strides=(stride_bn, stride_bk),  #
-                                                            block_shape=(HALF_N, BLOCK_K_PACKED_B),  #
-                                                            layout=cfg.shared_layout_b)
-        b1_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(base=b_ptr + b_offs + HALF_N * stride_bn,  #
-                                                            shape=(N, K // cfg.DIV_FACTOR_B),  #
-                                                            strides=(stride_bn, stride_bk),  #
-                                                            block_shape=(HALF_N, BLOCK_K_PACKED_B),  #
-                                                            layout=cfg.shared_layout_b)
+        b0_desc = gl.amd.cdna5.tdm.make_tensor_descriptor(base=b_ptr + b_offs,  #
+                                                          shape=(N, K // cfg.DIV_FACTOR_B),  #
+                                                          strides=(stride_bn, stride_bk),  #
+                                                          block_shape=(HALF_N, BLOCK_K_PACKED_B),  #
+                                                          layout=cfg.shared_layout_b)
+        b1_desc = gl.amd.cdna5.tdm.make_tensor_descriptor(base=b_ptr + b_offs + HALF_N * stride_bn,  #
+                                                          shape=(N, K // cfg.DIV_FACTOR_B),  #
+                                                          strides=(stride_bn, stride_bk),  #
+                                                          block_shape=(HALF_N, BLOCK_K_PACKED_B),  #
+                                                          layout=cfg.shared_layout_b)
     else:
-        b0_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(base=b_ptr + b_offs,  #
-                                                            shape=(K // cfg.DIV_FACTOR_B, N),  #
-                                                            strides=(stride_bk, stride_bn),  #
-                                                            block_shape=(BLOCK_K_PACKED_B, HALF_N),  #
-                                                            layout=cfg.shared_layout_b)
-        b1_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(base=b_ptr + b_offs + HALF_N * stride_bn,  #
-                                                            shape=(K // cfg.DIV_FACTOR_B, N),  #
-                                                            strides=(stride_bk, stride_bn),  #
-                                                            block_shape=(BLOCK_K_PACKED_B, HALF_N),  #
-                                                            layout=cfg.shared_layout_b)
+        b0_desc = gl.amd.cdna5.tdm.make_tensor_descriptor(base=b_ptr + b_offs,  #
+                                                          shape=(K // cfg.DIV_FACTOR_B, N),  #
+                                                          strides=(stride_bk, stride_bn),  #
+                                                          block_shape=(BLOCK_K_PACKED_B, HALF_N),  #
+                                                          layout=cfg.shared_layout_b)
+        b1_desc = gl.amd.cdna5.tdm.make_tensor_descriptor(base=b_ptr + b_offs + HALF_N * stride_bn,  #
+                                                          shape=(K // cfg.DIV_FACTOR_B, N),  #
+                                                          strides=(stride_bk, stride_bn),  #
+                                                          block_shape=(BLOCK_K_PACKED_B, HALF_N),  #
+                                                          layout=cfg.shared_layout_b)
 
     return a0_desc, a1_desc, b0_desc, b1_desc
 
@@ -2034,8 +2033,8 @@ def mxgemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K, 
                                                                           stride_bn, stride_scale)
 
     shared_layout_acc: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [1, 0])
-    c_desc = gl.amd.gfx1250.tdm.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
-                                                       block_shape=(BLOCK_M, BLOCK_N), layout=shared_layout_acc)
+    c_desc = gl.amd.cdna5.tdm.make_tensor_descriptor(base=c_ptr, shape=(M, N), strides=(stride_cm, stride_cn),
+                                                     block_shape=(BLOCK_M, BLOCK_N), layout=shared_layout_acc)
     c_off_m = pid_m * BLOCK_M
     c_off_n = pid_n * BLOCK_N
 

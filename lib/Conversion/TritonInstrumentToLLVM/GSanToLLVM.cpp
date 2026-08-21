@@ -4,11 +4,13 @@
 #include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 #include "third_party/nvidia/include/TritonNVIDIAGPUToLLVM/AtomicPTXBuilder.h"
 #include "third_party/nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
+#include "third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/LogicalResult.h"
+#include "llvm/Support/MathExtras.h"
 #include <limits>
 #include <type_traits>
 #include <utility>
@@ -19,10 +21,6 @@ namespace ttg = mlir::triton::gpu;
 
 namespace {
 
-static constexpr unsigned kTensorMapStrideWordBase = 3;
-static constexpr unsigned kTensorMapShapeWordBase = 8;
-static constexpr unsigned kTensorMapScalarWordBase = 2;
-static constexpr unsigned kTensorMapNumQwords = 16;
 static constexpr unsigned kGSanShadowGranularityBytes = 4;
 
 struct GSanSourceLocation {
@@ -34,8 +32,16 @@ static constexpr StringLiteral kGSanLoadTensorRuntimeFn =
     "__triton_gsan_load_tensor";
 static constexpr StringLiteral kGSanStoreTensorRuntimeFn =
     "__triton_gsan_store_tensor";
-static constexpr StringLiteral kGSanAtomicTensorRuntimeFn =
-    "__triton_gsan_atomic_tensor";
+static constexpr StringLiteral kGSanLoadTensorDescRuntimeFn =
+    "__triton_gsan_load_tensor_desc";
+static constexpr StringLiteral kGSanStoreTensorDescRuntimeFn =
+    "__triton_gsan_store_tensor_desc";
+static constexpr StringLiteral kGSanLoadIndexedTensorDescRuntimeFn =
+    "__triton_gsan_load_indexed_tensor_desc";
+static constexpr StringLiteral kGSanStoreIndexedTensorDescRuntimeFn =
+    "__triton_gsan_store_indexed_tensor_desc";
+static constexpr StringLiteral kGSanAtomicTensorDescRuntimeFn =
+    "__triton_gsan_atomic_tensor_desc";
 static constexpr StringLiteral kGSanAtomicBeginRuntimeFn =
     "__triton_gsan_atomic_begin_scalar";
 static constexpr StringLiteral kGSanAtomicEndRuntimeFn =
@@ -45,6 +51,18 @@ static constexpr StringLiteral kGSanKernelExitRuntimeFn =
     "__triton_gsan_kernel_exit";
 static constexpr StringLiteral kGSanGridDependencyWaitRuntimeFn =
     "__triton_gsan_grid_dependency_wait";
+static constexpr StringLiteral kGSanClusterBarrierInitRuntimeFn =
+    "__triton_gsan_cluster_barrier_init";
+static constexpr StringLiteral kGSanClusterBarrierSyncRuntimeFn =
+    "__triton_gsan_cluster_barrier_sync";
+static constexpr StringLiteral kGSanMBarrierTableInitRuntimeFn =
+    "__triton_gsan_mbarrier_table_init";
+static constexpr StringLiteral kGSanMBarrierInitRuntimeFn =
+    "__triton_gsan_mbarrier_init";
+static constexpr StringLiteral kGSanMBarrierArriveRuntimeFn =
+    "__triton_gsan_mbarrier_arrive";
+static constexpr StringLiteral kGSanMBarrierWaitRuntimeFn =
+    "__triton_gsan_mbarrier_wait";
 static constexpr StringLiteral kGSanGlobalStateArgAttr =
     "tti.gsan_global_state";
 static constexpr StringLiteral kGSanStreamClockArgAttr =
@@ -68,11 +86,36 @@ getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
               i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanGridDependencyWaitRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i64_ty, i32_ty, i32_ty, i32_ty};
+  } else if (funcName == kGSanClusterBarrierInitRuntimeFn) {
+    argTys = {ptr_ty(ctx), i32_ty};
+  } else if (funcName == kGSanClusterBarrierSyncRuntimeFn) {
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i32_ty,
+              i32_ty,      ptr_ty(ctx), i32_ty};
+  } else if (funcName == kGSanMBarrierTableInitRuntimeFn) {
+    argTys = {ptr_ty(ctx), i32_ty, i32_ty};
+  } else if (funcName == kGSanMBarrierInitRuntimeFn) {
+    argTys = {ptr_ty(ctx), i32_ty, i32_ty, i32_ty, i32_ty, ptr_ty(ctx), i32_ty};
+  } else if (funcName == kGSanMBarrierArriveRuntimeFn) {
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i32_ty,      i32_ty,
+              i32_ty,      i32_ty,      i32_ty, ptr_ty(ctx), i32_ty};
+  } else if (funcName == kGSanMBarrierWaitRuntimeFn) {
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty,      i32_ty,
+              i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanLoadTensorRuntimeFn ||
              funcName == kGSanStoreTensorRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i32_ty, ptr_ty(ctx), i32_ty};
-  } else if (funcName == kGSanAtomicTensorRuntimeFn) {
-    argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty,      i32_ty,
+  } else if (funcName == kGSanLoadTensorDescRuntimeFn ||
+             funcName == kGSanStoreTensorDescRuntimeFn) {
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), ptr_ty(ctx), i32_ty,
+              ptr_ty(ctx), i32_ty,      i32_ty,      i32_ty,
+              i32_ty,      ptr_ty(ctx), i32_ty};
+  } else if (funcName == kGSanLoadIndexedTensorDescRuntimeFn ||
+             funcName == kGSanStoreIndexedTensorDescRuntimeFn) {
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), ptr_ty(ctx), i32_ty,      i32_ty,
+              i32_ty,      i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
+  } else if (funcName == kGSanAtomicTensorDescRuntimeFn) {
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), ptr_ty(ctx), i32_ty,
+              ptr_ty(ctx), i32_ty,      i32_ty,      i32_ty,
               i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanAtomicBeginRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty,      i64_ty, i32_ty,
@@ -194,31 +237,6 @@ void emitTensorAccessRuntimeCall(ConversionPatternRewriter &rewriter,
                     b.i32_val(bytesPerElem), sourceLoc.file, sourceLoc.line});
 }
 
-void emitAtomicTensorAccessRuntimeCall(ConversionPatternRewriter &rewriter,
-                                       Location loc, Value gsanGlobalStatePtr,
-                                       ArrayRef<Value> ptrElems,
-                                       ArrayRef<Value> maskElems,
-                                       uint32_t regMask, Value threadPred,
-                                       int32_t bytesPerElem, MemSemantic sem,
-                                       MemSyncScope scope) {
-  if (ptrElems.empty())
-    return;
-
-  TritonLLVMOpBuilder b(loc, rewriter);
-  auto [stackPtr, numElems] =
-      prepareTensorStackArg(rewriter, loc, ptrElems, maskElems, regMask,
-                            threadPred, /*elemIndexStride=*/1);
-  auto runtimeFunc =
-      getOrCreateGSanRuntimeFunction(rewriter, kGSanAtomicTensorRuntimeFn);
-  auto sourceLoc = materializeSourceLocation(rewriter, loc);
-
-  b.call(runtimeFunc, ValueRange{gsanGlobalStatePtr, stackPtr,
-                                 b.i32_val(numElems), b.i32_val(bytesPerElem),
-                                 b.i32_val(static_cast<int32_t>(sem)),
-                                 b.i32_val(static_cast<int32_t>(scope)),
-                                 sourceLoc.file, sourceLoc.line});
-}
-
 unsigned getCanonicalIndex(unsigned index, unsigned freeVarMask) {
   return index & ~freeVarMask;
 }
@@ -228,6 +246,15 @@ Value materializeI32Bool(ConversionPatternRewriter &rewriter,
   if (!pred)
     return b.i32_val(1);
   return b.zext(i32_ty, pred);
+}
+
+Value castToGenericPointer(ConversionPatternRewriter &rewriter, Location loc,
+                           Value ptr) {
+  Type genericPtrTy = ptr_ty(rewriter.getContext());
+  if (ptr.getType() == genericPtrTy)
+    return ptr;
+  TritonLLVMOpBuilder b(loc, rewriter);
+  return b.addrspacecast(genericPtrTy, ptr);
 }
 
 void emitGSanAtomicBeginCall(ConversionPatternRewriter &rewriter, Location loc,
@@ -372,61 +399,6 @@ FailureOr<Value> getGSanKernelIdArg(Operation *op,
   return emitError(loc, "Unable to find gsan kernel ID");
 }
 
-static LLVM::LLVMStructType
-getTensorDescStructType(ConversionPatternRewriter &rewriter, Type basePtrTy) {
-  SmallVector<Type> fieldTypes;
-  fieldTypes.reserve(1 + 2 * (kTensorMapNumQwords - 1));
-  fieldTypes.push_back(basePtrTy);
-  fieldTypes.append(2 * (kTensorMapNumQwords - 1), i32_ty);
-  return LLVM::LLVMStructType::getLiteral(rewriter.getContext(), fieldTypes);
-}
-
-static Value extractTensorDescWord(ConversionPatternRewriter &rewriter,
-                                   Location loc, Value descStruct,
-                                   unsigned word) {
-  assert(word >= kTensorMapScalarWordBase && word < 2 * kTensorMapNumQwords &&
-         "tensor descriptor word index out of range");
-  TritonLLVMOpBuilder b(loc, rewriter);
-  Value wordValue =
-      b.extract_val(i32_ty, descStruct, word - kTensorMapScalarWordBase + 1);
-  return b.zext(i64_ty, wordValue);
-}
-
-static SmallVector<Value>
-decodeTensorDescShape(ConversionPatternRewriter &rewriter, Location loc,
-                      Value descStruct, unsigned rank) {
-  TritonLLVMOpBuilder b(loc, rewriter);
-  SmallVector<Value> shape;
-  shape.reserve(rank);
-  for (unsigned dim = 0; dim < rank; ++dim) {
-    unsigned packedIdx = rank - 1 - dim;
-    Value dimMinusOne = extractTensorDescWord(
-        rewriter, loc, descStruct, kTensorMapShapeWordBase + packedIdx);
-    shape.push_back(b.add(dimMinusOne, b.i64_val(1)));
-  }
-  return shape;
-}
-
-static SmallVector<Value>
-decodeTensorDescStrides(ConversionPatternRewriter &rewriter, Location loc,
-                        Value descStruct, unsigned rank, unsigned elemBytes) {
-  TritonLLVMOpBuilder b(loc, rewriter);
-  SmallVector<Value> strides;
-  strides.reserve(rank);
-  for (unsigned dim = 0; dim < rank; ++dim) {
-    if (dim + 1 == rank) {
-      strides.push_back(b.i64_val(1));
-      continue;
-    }
-    unsigned packedIdx = rank - 2 - dim;
-    Value strideUnits = extractTensorDescWord(
-        rewriter, loc, descStruct, kTensorMapStrideWordBase + packedIdx);
-    Value strideBytes = b.mul(strideUnits, b.i64_val(16));
-    strides.push_back(b.udiv(strideBytes, b.i64_val(elemBytes)));
-  }
-  return strides;
-}
-
 ////////////////////////////////////////////
 // Patterns
 ////////////////////////////////////////////
@@ -483,68 +455,177 @@ public:
                                 maskElems, freeVarMasks.lookup(kReg),
                                 threadPred, bytesPerElem, op.getIsStore(),
                                 mergeVec);
-
     rewriter.eraseOp(op);
     return success();
   }
 };
 
-struct GSanAtomicTensorAccessOpConversion
-    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanAtomicTensorAccessOp> {
+template <typename AccessOp>
+struct GSanTensorDescAccessOpConversion
+    : public ConvertOpToLLVMPattern<AccessOp> {
 public:
-  using ConvertOpToLLVMPattern<
-      tti::ExperimentalGSanAtomicTensorAccessOp>::ConvertOpToLLVMPattern;
+  using ConvertOpToLLVMPattern<AccessOp>::ConvertOpToLLVMPattern;
+  using OpAdaptor = typename AccessOp::Adaptor;
   const TargetInfoBase *targetInfo;
-  ModuleAxisInfoAnalysis *axisInfoAnalysis;
 
-  GSanAtomicTensorAccessOpConversion(LLVMTypeConverter &typeConverter,
-                                     ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                     const TargetInfoBase &targetInfo,
-                                     PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(&targetInfo),
-        axisInfoAnalysis(&axisInfoAnalysis) {}
-
-  unsigned getVecSize(tti::ExperimentalGSanAtomicTensorAccessOp op) const {
-    // GSan tracks conflicts at shadow-cell granularity, so atomics may only be
-    // coalesced while they still fit inside a single shadow cell.
-    return getTensorAccessVecSize(op, *axisInfoAnalysis,
-                                  /*keepWithinSingleShadowCell=*/true);
-  }
+  GSanTensorDescAccessOpConversion(LLVMTypeConverter &typeConverter,
+                                   const TargetInfoBase &targetInfo,
+                                   PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern<AccessOp>(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
 
   LogicalResult
-  matchAndRewrite(tti::ExperimentalGSanAtomicTensorAccessOp op,
-                  OpAdaptor adaptor,
+  matchAndRewrite(AccessOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-    auto ptrTy = op.getPtr().getType();
-    auto ptrElems =
-        unpackTensorElements(loc, adaptor.getPtr(), rewriter, ptrTy);
-    SmallVector<Value> maskElems;
-    if (Value llMask = adaptor.getMask()) {
-      maskElems =
-          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
-    }
-
-    int32_t bytesPerElem = std::max(1u, tt::getPointeeBitWidth(ptrTy) / 8);
-    unsigned mergeVec = getVecSize(op);
-    auto maskAlign =
-        op.getMask() ? axisInfoAnalysis->getMaskAlignment(op.getMask()) : 1;
-    mergeTensorAccessElements(rewriter, loc, ptrElems, maskElems, mergeVec,
-                              maskAlign, bytesPerElem);
-
-    auto ctx = op.getContext();
-    auto kReg = str_attr("register");
-    auto freeVarMasks = getFreeVariableMasks(ptrTy);
-    auto regMask = freeVarMasks.lookup(kReg);
-    auto threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
-                                                        loc, *targetInfo);
     auto gsanGlobalStatePtr = getGSanGlobalStateArg(op, rewriter, loc);
     if (failed(gsanGlobalStatePtr))
       return failure();
-    emitAtomicTensorAccessRuntimeCall(rewriter, loc, *gsanGlobalStatePtr,
-                                      ptrElems, maskElems, regMask, threadPred,
-                                      bytesPerElem, op.getSem(), op.getScope());
 
+    auto descTy = cast<tt::TensorDescType>(op.getDesc().getType());
+    ArrayRef<int64_t> blockShape = descTy.getShape();
+    if (blockShape.empty() || blockShape.size() > 5 ||
+        blockShape.size() != op.getCoords().size()) {
+      return rewriter.notifyMatchFailure(
+          op, "expected one to five descriptor coordinates");
+    }
+
+    for (int64_t extent : blockShape)
+      if (extent < 1 || extent > std::numeric_limits<int16_t>::max())
+        return rewriter.notifyMatchFailure(
+            op, "descriptor block extent does not fit in int16_t");
+
+    auto elemTy = descTy.getSignlessBlockType().getElementType();
+    if (!elemTy.isIntOrFloat() || elemTy.getIntOrFloatBitWidth() % 8 != 0) {
+      return rewriter.notifyMatchFailure(op,
+                                         "expected byte-addressable element");
+    }
+
+    auto *ctx = rewriter.getContext();
+    TritonLLVMOpBuilder b(loc, rewriter);
+    unsigned rank = blockShape.size();
+    auto coordsTy = array_ty(i32_ty, rank);
+    Value coords = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx), coordsTy,
+                                          b.i32_val(1), /*alignment=*/0);
+    auto shapeTy = array_ty(i16_ty, rank);
+    Value shape = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx), shapeTy,
+                                         b.i32_val(1), /*alignment=*/0);
+    for (auto [dim, coord] : llvm::enumerate(adaptor.getCoords())) {
+      Value coordSlot = b.gep(ptr_ty(ctx), coordsTy, coords,
+                              ValueRange{b.i32_val(0), b.i32_val(dim)});
+      b.store(coord, coordSlot);
+      Value shapeSlot = b.gep(ptr_ty(ctx), shapeTy, shape,
+                              ValueRange{b.i32_val(0), b.i32_val(dim)});
+      b.store(b.i16_val(blockShape[dim]), shapeSlot);
+    }
+
+    Value warpId = getLaneAndWarpId(rewriter, loc).second;
+    int numWarps = ttg::lookupNumWarps(op);
+    int numCTAs = ttg::lookupNumCTAs(op);
+    if (numCTAs > 1) {
+      Value ctaRank = targetInfo->getClusterCTAId(rewriter, loc);
+      warpId = b.add(b.mul(warpId, b.i32_val(numCTAs)), ctaRank);
+      numWarps *= numCTAs;
+    }
+
+    StringRef funcName;
+    if constexpr (std::is_same_v<
+                      AccessOp,
+                      tti::ExperimentalGSanAtomicTensorDescAccessOp>) {
+      funcName = kGSanAtomicTensorDescRuntimeFn;
+    } else {
+      funcName = op.getIsStore() ? kGSanStoreTensorDescRuntimeFn
+                                 : kGSanLoadTensorDescRuntimeFn;
+    }
+    auto runtimeFunc = getOrCreateGSanRuntimeFunction(rewriter, funcName);
+    auto sourceLoc = materializeSourceLocation(rewriter, loc);
+    SmallVector<Value> args{
+        *gsanGlobalStatePtr,
+        castToGenericPointer(rewriter, loc, adaptor.getDesc()),
+        coords,
+        b.i32_val(rank),
+        shape,
+        b.i32_val(elemTy.getIntOrFloatBitWidth() / 8)};
+    if constexpr (std::is_same_v<
+                      AccessOp,
+                      tti::ExperimentalGSanAtomicTensorDescAccessOp>) {
+      args.append({b.i32_val(static_cast<int32_t>(op.getSem())),
+                   b.i32_val(static_cast<int32_t>(op.getScope()))});
+    } else {
+      args.push_back(materializeI32Bool(rewriter, b, adaptor.getPred()));
+    }
+    args.append({warpId, b.i32_val(numWarps), sourceLoc.file, sourceLoc.line});
+    b.call(runtimeFunc, args);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct GSanIndexedTensorDescAccessOpConversion
+    : public ConvertOpToLLVMPattern<
+          tti::ExperimentalGSanIndexedTensorDescAccessOp> {
+public:
+  using ConvertOpToLLVMPattern<
+      tti::ExperimentalGSanIndexedTensorDescAccessOp>::ConvertOpToLLVMPattern;
+  const TargetInfoBase *targetInfo;
+
+  GSanIndexedTensorDescAccessOpConversion(LLVMTypeConverter &typeConverter,
+                                          const TargetInfoBase &targetInfo,
+                                          PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanIndexedTensorDescAccessOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto gsanGlobalStatePtr = getGSanGlobalStateArg(op, rewriter, loc);
+    if (failed(gsanGlobalStatePtr))
+      return failure();
+
+    auto descTy = cast<tt::TensorDescType>(op.getDesc().getType());
+    ArrayRef<int64_t> blockShape = descTy.getShape();
+    if (blockShape.size() != 2 || blockShape.front() != 1)
+      return rewriter.notifyMatchFailure(op, "expected a 1xN descriptor");
+
+    auto elemTy = descTy.getSignlessBlockType().getElementType();
+    if (!elemTy.isIntOrFloat() || elemTy.getIntOrFloatBitWidth() % 8 != 0) {
+      return rewriter.notifyMatchFailure(op,
+                                         "expected byte-addressable element");
+    }
+
+    auto *ctx = rewriter.getContext();
+    TritonLLVMOpBuilder b(loc, rewriter);
+    SmallVector<Value> indexElems =
+        unpackUniqueTensorElements(loc, adaptor.getIndices(), rewriter);
+    auto indicesTy = array_ty(i32_ty, indexElems.size());
+    Value indices = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx),
+                                           indicesTy, b.i32_val(1), 0);
+    for (auto [index, elem] : llvm::enumerate(indexElems)) {
+      Value slot = b.gep(ptr_ty(ctx), indicesTy, indices,
+                         ValueRange{b.i32_val(0), b.i32_val(index)});
+      b.store(elem, slot);
+    }
+
+    auto freeVarMasks = getFreeVariableMasks(op.getIndices().getType());
+    freeVarMasks[StringAttr::get(ctx, "lane")] = 0;
+    Value pred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter, loc,
+                                                   *targetInfo);
+    pred = ttg::maybeAnd(rewriter, loc, pred, adaptor.getPred());
+
+    StringRef funcName = op.getIsStore() ? kGSanStoreIndexedTensorDescRuntimeFn
+                                         : kGSanLoadIndexedTensorDescRuntimeFn;
+    auto runtimeFunc = getOrCreateGSanRuntimeFunction(rewriter, funcName);
+    auto sourceLoc = materializeSourceLocation(rewriter, loc);
+    b.call(runtimeFunc,
+           ValueRange{*gsanGlobalStatePtr,
+                      castToGenericPointer(rewriter, loc, adaptor.getDesc()),
+                      indices, b.i32_val(indexElems.size()),
+                      adaptor.getOffset(), b.i32_val(blockShape.back()),
+                      b.i32_val(elemTy.getIntOrFloatBitWidth() / 8),
+                      materializeI32Bool(rewriter, b, pred), sourceLoc.file,
+                      sourceLoc.line});
     rewriter.eraseOp(op);
     return success();
   }
@@ -623,7 +704,7 @@ public:
     auto rmwOp = op.getAtomicRmwOp();
     auto sem = op.getSem();
     auto scope = op.getScope();
-    insertAtomicOrderingBarriers(op, sem, !op->hasAttr("allocation.offset"),
+    insertAtomicOrderingBarriers(op, sem, !atomicResultHasOrderingBarrier(op),
                                  rewriter, *targetInfo);
 
     TritonLLVMOpBuilder b(loc, rewriter);
@@ -730,7 +811,7 @@ public:
 
     auto sem = op.getSem();
     auto scope = op.getScope();
-    insertAtomicOrderingBarriers(op, sem, !op->hasAttr("allocation.offset"),
+    insertAtomicOrderingBarriers(op, sem, !atomicResultHasOrderingBarrier(op),
                                  rewriter, *targetInfo);
 
     TritonLLVMOpBuilder b(loc, rewriter);
@@ -808,50 +889,6 @@ public:
 
     finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals, valueElemTy,
                                 b, threadPred, *targetInfo, getTypeConverter());
-    return success();
-  }
-};
-
-struct GSanTensorDescInfoOpConversion
-    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanTensorDescInfoOp> {
-public:
-  using ConvertOpToLLVMPattern<
-      tti::ExperimentalGSanTensorDescInfoOp>::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(tti::ExperimentalGSanTensorDescInfoOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op.getLoc();
-    auto descTy = dyn_cast<tt::TensorDescInterface>(op.getDesc().getType());
-    if (!descTy)
-      return rewriter.notifyMatchFailure(op, "expected tensor descriptor type");
-
-    auto elemTy = descTy.getSignlessBlockType().getElementType();
-    if (!elemTy.isIntOrFloat() || (elemTy.getIntOrFloatBitWidth() % 8) != 0) {
-      return rewriter.notifyMatchFailure(op,
-                                         "expected byte-addressable element");
-    }
-
-    unsigned rank = descTy.getShape().size();
-    unsigned elemBytes = elemTy.getIntOrFloatBitWidth() / 8;
-    if (op->getNumResults() != 1 + 2 * rank) {
-      return rewriter.notifyMatchFailure(
-          op, "descriptor info result count does not match descriptor rank");
-    }
-
-    TritonLLVMOpBuilder b(loc, rewriter);
-    Type ptrTy = getTypeConverter()->convertType(op->getResult(0).getType());
-    auto structTy = getTensorDescStructType(rewriter, ptrTy);
-    Value descStruct = b.load(structTy, adaptor.getDesc());
-    SmallVector<Value> decoded;
-    decoded.reserve(op->getNumResults());
-    decoded.push_back(b.extract_val(ptrTy, descStruct, 0));
-    auto shape = decodeTensorDescShape(rewriter, loc, descStruct, rank);
-    decoded.append(shape.begin(), shape.end());
-    auto strides =
-        decodeTensorDescStrides(rewriter, loc, descStruct, rank, elemBytes);
-    decoded.append(strides.begin(), strides.end());
-    rewriter.replaceOp(op, decoded);
     return success();
   }
 };
@@ -934,6 +971,256 @@ struct GSanStreamClockOpConversion : public ConvertOpToLLVMPattern<OpTy> {
   }
 };
 
+struct GSanClusterBarrierInitOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanClusterBarrierInitOp> {
+  const TargetInfoBase &targetInfo;
+
+  GSanClusterBarrierInitOpConversion(LLVMTypeConverter &typeConverter,
+                                     const TargetInfoBase &targetInfo)
+      : ConvertOpToLLVMPattern<tti::ExperimentalGSanClusterBarrierInitOp>(
+            typeConverter),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanClusterBarrierInitOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
+    Value elect = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
+    Value ctaRank = targetInfo.getClusterCTAId(rewriter, loc);
+    Value isCTA0 = b.icmp_eq(ctaRank, b.i32_val(0));
+    Value pred = b.and_(elect, isCTA0);
+    auto runtimeFunc = getOrCreateGSanRuntimeFunction(
+        rewriter, kGSanClusterBarrierInitRuntimeFn);
+    Value scratch = castToGenericPointer(rewriter, loc, adaptor.getScratch());
+    b.call(runtimeFunc, ValueRange{scratch, b.zext(i32_ty, pred)});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct GSanClusterBarrierSyncOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanClusterBarrierSyncOp> {
+  const TargetInfoBase &targetInfo;
+
+  GSanClusterBarrierSyncOpConversion(LLVMTypeConverter &typeConverter,
+                                     const TargetInfoBase &targetInfo)
+      : ConvertOpToLLVMPattern<tti::ExperimentalGSanClusterBarrierSyncOp>(
+            typeConverter),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanClusterBarrierSyncOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto gsanGlobalStatePtr = getGSanGlobalStateArg(op, rewriter, loc);
+    if (failed(gsanGlobalStatePtr))
+      return failure();
+
+    TritonLLVMOpBuilder b(loc, rewriter);
+    Value elect = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
+    Value ctaRank = targetInfo.getClusterCTAId(rewriter, loc);
+    auto sourceLoc = materializeSourceLocation(rewriter, loc);
+    auto runtimeFunc = getOrCreateGSanRuntimeFunction(
+        rewriter, kGSanClusterBarrierSyncRuntimeFn);
+    Value scratch = castToGenericPointer(rewriter, loc, adaptor.getScratch());
+    b.call(runtimeFunc,
+           ValueRange{*gsanGlobalStatePtr, scratch, b.zext(i32_ty, elect),
+                      b.i32_val(ttg::lookupNumCTAs(op)), ctaRank,
+                      sourceLoc.file, sourceLoc.line});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+static Value getMBarrierOffset(Location loc, Value barrier,
+                               ConversionPatternRewriter &rewriter) {
+  auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+      loc, barrier, rewriter.getI64Type(), rewriter);
+  TritonLLVMOpBuilder b(loc, rewriter);
+  Value address = b.ptrtoint(i32_ty, smemObj.getBase());
+  return b.and_(address, b.i32_val(0x00ffffff));
+}
+
+static Value
+getMBarrierIssuerPredicate(Location loc, ConversionPatternRewriter &rewriter,
+                           const TargetInfoBase &targetInfo, Value opPred,
+                           ttg::MemDescType barrierTy, bool leaderOnly,
+                           uint32_t sourceBroadcastMask) {
+  TritonLLVMOpBuilder b(loc, rewriter);
+  Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
+  if (opPred)
+    pred = b.and_(pred, opPred);
+  if (leaderOnly) {
+    if (auto leaderPred =
+            LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy))
+      pred = b.and_(pred, *leaderPred);
+  }
+  if (sourceBroadcastMask != 0) {
+    Value ctaRank = targetInfo.getClusterCTAId(rewriter, loc);
+    Value rankInGroup = b.and_(ctaRank, b.i32_val(sourceBroadcastMask));
+    pred = b.and_(pred, b.icmp_eq(rankInGroup, b.i32_val(0)));
+  }
+  return pred;
+}
+
+struct GSanMBarrierTableInitOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanMBarrierTableInitOp> {
+  const TargetInfoBase &targetInfo;
+
+  GSanMBarrierTableInitOpConversion(LLVMTypeConverter &typeConverter,
+                                    const TargetInfoBase &targetInfo)
+      : ConvertOpToLLVMPattern<tti::ExperimentalGSanMBarrierTableInitOp>(
+            typeConverter),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanMBarrierTableInitOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
+    Value elect = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
+    Value ctaRank = targetInfo.getClusterCTAId(rewriter, loc);
+    Value pred = b.and_(elect, b.icmp_eq(ctaRank, b.i32_val(0)));
+    auto runtimeFunc = getOrCreateGSanRuntimeFunction(
+        rewriter, kGSanMBarrierTableInitRuntimeFn);
+    Value scratch = castToGenericPointer(rewriter, loc, adaptor.getScratch());
+    b.call(runtimeFunc, ValueRange{scratch, b.zext(i32_ty, pred),
+                                   b.i32_val(op.getCapacity())});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct GSanMBarrierInitOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanMBarrierInitOp> {
+  const TargetInfoBase &targetInfo;
+
+  GSanMBarrierInitOpConversion(LLVMTypeConverter &typeConverter,
+                               const TargetInfoBase &targetInfo)
+      : ConvertOpToLLVMPattern<tti::ExperimentalGSanMBarrierInitOp>(
+            typeConverter),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanMBarrierInitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
+    auto barrierTy = op.getBarrier().getType();
+    Value pred = getMBarrierIssuerPredicate(
+        loc, rewriter, targetInfo, /*opPred=*/{}, barrierTy,
+        /*leaderOnly=*/true, /*sourceBroadcastMask=*/0);
+    Value ctaRank = targetInfo.getClusterCTAId(rewriter, loc);
+    Value offset = getMBarrierOffset(loc, adaptor.getBarrier(), rewriter);
+    Value scratch = castToGenericPointer(rewriter, loc, adaptor.getScratch());
+    auto sourceLoc = materializeSourceLocation(rewriter, loc);
+    auto runtimeFunc =
+        getOrCreateGSanRuntimeFunction(rewriter, kGSanMBarrierInitRuntimeFn);
+    b.call(runtimeFunc, ValueRange{scratch, offset, b.zext(i32_ty, pred),
+                                   ctaRank, b.i32_val(op.getExpectedCount()),
+                                   sourceLoc.file, sourceLoc.line});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct GSanMBarrierArriveOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanMBarrierArriveOp> {
+  const TargetInfoBase &targetInfo;
+
+  GSanMBarrierArriveOpConversion(LLVMTypeConverter &typeConverter,
+                                 const TargetInfoBase &targetInfo)
+      : ConvertOpToLLVMPattern<tti::ExperimentalGSanMBarrierArriveOp>(
+            typeConverter),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanMBarrierArriveOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto gsanGlobalStatePtr = getGSanGlobalStateArg(op, rewriter, loc);
+    if (failed(gsanGlobalStatePtr))
+      return failure();
+
+    TritonLLVMOpBuilder b(loc, rewriter);
+    Value ctaRank = targetInfo.getClusterCTAId(rewriter, loc);
+    Value pred = getMBarrierIssuerPredicate(
+        loc, rewriter, targetInfo, adaptor.getPred(), op.getBarrier().getType(),
+        /*leaderOnly=*/false, op.getSourceBroadcastMask());
+    Value recipientMask;
+    if (!op.getMulticast()) {
+      uint32_t broadcastMask =
+          LLVM::NVIDIA::getCGABroadcastMask(op.getBarrier().getType());
+      Value leaderRank =
+          b.and_(ctaRank, b.i32_val(static_cast<uint32_t>(~broadcastMask)));
+      recipientMask = b.shl(b.i32_val(1), leaderRank);
+    } else {
+      for (int32_t mask : op.getMulticastMasks()) {
+        Value nextMask = LLVM::NVIDIA::createTMAMulticastMask(
+            loc, rewriter, static_cast<uint16_t>(mask), ctaRank);
+        recipientMask =
+            recipientMask ? b.or_(recipientMask, nextMask) : nextMask;
+      }
+      assert(recipientMask && "multicast mbarrier arrival needs recipients");
+    }
+
+    Value offset = getMBarrierOffset(loc, adaptor.getBarrier(), rewriter);
+    Value scratch = castToGenericPointer(rewriter, loc, adaptor.getScratch());
+    auto sourceLoc = materializeSourceLocation(rewriter, loc);
+    auto runtimeFunc =
+        getOrCreateGSanRuntimeFunction(rewriter, kGSanMBarrierArriveRuntimeFn);
+    b.call(runtimeFunc, ValueRange{*gsanGlobalStatePtr, scratch, offset,
+                                   b.zext(i32_ty, pred), recipientMask,
+                                   b.i32_val(op.getCount()), ctaRank,
+                                   b.i32_val(op.getPublishClock()),
+                                   sourceLoc.file, sourceLoc.line});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct GSanMBarrierWaitOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanMBarrierWaitOp> {
+  const TargetInfoBase &targetInfo;
+
+  GSanMBarrierWaitOpConversion(LLVMTypeConverter &typeConverter,
+                               const TargetInfoBase &targetInfo)
+      : ConvertOpToLLVMPattern<tti::ExperimentalGSanMBarrierWaitOp>(
+            typeConverter),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanMBarrierWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto gsanGlobalStatePtr = getGSanGlobalStateArg(op, rewriter, loc);
+    if (failed(gsanGlobalStatePtr))
+      return failure();
+
+    TritonLLVMOpBuilder b(loc, rewriter);
+    auto barrierTy = op.getBarrier().getType();
+    Value pred = getMBarrierIssuerPredicate(
+        loc, rewriter, targetInfo, adaptor.getPred(), barrierTy,
+        /*leaderOnly=*/true, /*sourceBroadcastMask=*/0);
+    Value ctaRank = targetInfo.getClusterCTAId(rewriter, loc);
+    Value offset = getMBarrierOffset(loc, adaptor.getBarrier(), rewriter);
+    Value scratch = castToGenericPointer(rewriter, loc, adaptor.getScratch());
+    auto sourceLoc = materializeSourceLocation(rewriter, loc);
+    auto runtimeFunc =
+        getOrCreateGSanRuntimeFunction(rewriter, kGSanMBarrierWaitRuntimeFn);
+    b.call(runtimeFunc,
+           ValueRange{*gsanGlobalStatePtr, scratch, offset,
+                      b.zext(i32_ty, pred), ctaRank, adaptor.getPhase(),
+                      sourceLoc.file, sourceLoc.line});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::populateGSanToLLVMPatterns(
@@ -945,12 +1232,22 @@ void mlir::triton::populateGSanToLLVMPatterns(
       GSanStreamClockOpConversion<tti::ExperimentalGSanKernelExitOp>,
       GSanStreamClockOpConversion<tti::ExperimentalGSanGridDependencyWaitOp>>(
       typeConverter);
-  patterns.add<GSanTensorDescInfoOpConversion>(typeConverter);
+  patterns.add<GSanClusterBarrierInitOpConversion>(typeConverter, targetInfo);
+  patterns.add<GSanClusterBarrierSyncOpConversion>(typeConverter, targetInfo);
+  patterns.add<GSanMBarrierTableInitOpConversion>(typeConverter, targetInfo);
+  patterns.add<GSanMBarrierInitOpConversion>(typeConverter, targetInfo);
+  patterns.add<GSanMBarrierArriveOpConversion>(typeConverter, targetInfo);
+  patterns.add<GSanMBarrierWaitOpConversion>(typeConverter, targetInfo);
+  patterns.add<
+      GSanTensorDescAccessOpConversion<tti::ExperimentalGSanTensorDescAccessOp>,
+      GSanTensorDescAccessOpConversion<
+          tti::ExperimentalGSanAtomicTensorDescAccessOp>>(typeConverter,
+                                                          targetInfo);
+  patterns.add<GSanIndexedTensorDescAccessOpConversion>(typeConverter,
+                                                        targetInfo);
   patterns.add<GSanAtomicPollOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanAtomicCASOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanAtomicRMWOpConversion>(typeConverter, targetInfo);
-  patterns.add<GSanAtomicTensorAccessOpConversion>(
-      typeConverter, axisInfoAnalysis, targetInfo);
   patterns.add<GSanTensorAccessOpConversion>(typeConverter, axisInfoAnalysis,
                                              targetInfo);
 }

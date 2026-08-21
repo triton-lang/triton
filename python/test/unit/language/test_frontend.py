@@ -1,7 +1,10 @@
+import collections
 import functools
 import triton
 import triton.language as tl
 from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
+from triton.compiler.code_generator import CodeGenerator
+from triton.runtime.jit import MockTensor
 from triton.compiler.errors import CompilationError
 import pytest
 from typing import NamedTuple
@@ -622,6 +625,19 @@ def test_call_in_while():
             trivial_return()
         else:
             trivial_return()
+
+
+@filecheck_test
+@triton.jit
+def test_while_integer_condition():
+    # CHECK-LABEL: test_while_integer_condition
+    i = tl.program_id(0)
+    # CHECK: scf.while
+    # CHECK: [[COND:%.*]] = arith.cmpi ne, %{{.*}}, %{{.*}} : i32
+    # CHECK: scf.condition([[COND]])
+    while i:
+        i -= 1
+    anchor(i)
 
 
 def test_return_in_while():
@@ -1268,3 +1284,194 @@ def test_dot_fp16_accumulator():
         tl.dot(a, b, c)
 
     run_parser(fp16_acc_kernel)
+
+
+# ===-----------------------------------------------------------------------===#
+# Loop-carried variable lowering
+# ===-----------------------------------------------------------------------===#
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_readonly_alias():
+    # CHECK-LABEL: test_loop_carry_readonly_alias
+    # CHECK: %[[SEED:.*]] = arith.constant 1 : i32
+    seed = 1
+    acc = seed
+    # CHECK: scf.for {{.*}} iter_args(%[[ACC:.*]] = %[[SEED]]) -> (i32)
+    for i in range(3):
+        # CHECK: %[[SUM:.*]] = arith.addi %[[ACC]], %[[SEED]] : i32
+        acc = acc + seed
+        # CHECK: scf.yield %[[SUM]] : i32
+    anchor(acc)
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_shared_initial_value():
+    # CHECK-LABEL: test_loop_carry_shared_initial_value
+    # CHECK: %[[SEED:.*]] = arith.constant 1 : i32
+    seed = 1
+    a = seed
+    b = seed
+    # CHECK: scf.for {{.*}} iter_args(%[[A:.*]] = %[[SEED]], %[[B:.*]] = %[[SEED]])
+    for i in range(3):
+        # CHECK: %[[NEXT_A:.*]] = arith.addi %[[A]],
+        a = a + 1
+        # CHECK: %[[NEXT_B:.*]] = arith.addi %[[B]],
+        b = b + 2
+        # CHECK: scf.yield %[[NEXT_A]], %[[NEXT_B]] : i32, i32
+    anchor(a)
+    anchor(b)
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_while_shared_initial_value():
+    # CHECK-LABEL: test_loop_carry_while_shared_initial_value
+    # CHECK: %[[SEED:.*]] = arith.constant 1 : i32
+    seed = 1
+    a = seed
+    b = seed
+    # CHECK: scf.while
+    while a < 4:
+        # CHECK: } do {
+        # CHECK-NEXT: ^bb0(%[[A:.*]]: i32, %[[B:.*]]: i32):
+        # CHECK: %[[NEXT_A:.*]] = arith.addi %[[A]], %[[SEED]] : i32
+        a = a + seed
+        # CHECK: %[[NEXT_B:.*]] = arith.addi %[[B]],
+        b = b + 2
+        # CHECK: scf.yield %[[NEXT_A]], %[[NEXT_B]] : i32, i32
+    anchor(a)
+    anchor(b)
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_tuple_shared_initial_value():
+    # CHECK-LABEL: test_loop_carry_tuple_shared_initial_value
+    # CHECK: %[[SEED:.*]] = arith.constant 1 : i32
+    seed = 1
+    pair = (seed, seed)
+    # CHECK: scf.for {{.*}} iter_args(%[[A:.*]] = %[[SEED]], %[[B:.*]] = %[[SEED]])
+    for i in range(3):
+        # CHECK: %[[NEXT_A:.*]] = arith.addi %[[A]],
+        # CHECK: %[[NEXT_B:.*]] = arith.addi %[[B]],
+        pair = (pair[0] + 1, pair[1] + 2)
+        # CHECK: scf.yield %[[NEXT_A]], %[[NEXT_B]] : i32, i32
+    anchor(pair[0])
+    anchor(pair[1])
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_swap():
+    # CHECK-LABEL: test_loop_carry_swap
+    a = 0
+    b = 1
+    # CHECK: scf.for {{.*}} iter_args(%[[A:.*]] = {{.*}}, %[[B:.*]] = {{.*}})
+    for i in range(3):
+        a, b = b, a
+        # CHECK: scf.yield %[[B]], %[[A]] : i32, i32
+    anchor(a)
+    anchor(b)
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_invariant_identity():
+    # CHECK-LABEL: test_loop_carry_invariant_identity
+    seed = 1
+    alias = seed
+    acc = 0
+    # CHECK: scf.for {{.*}} iter_args({{.*}}) -> (i32)
+    for i in range(3):
+        tl.static_assert(alias is seed)
+        acc = acc + alias
+    anchor(acc)
+
+
+@filecheck_test
+@triton.jit
+def test_loop_carry_empty_nested():
+    # CHECK-LABEL: test_loop_carry_empty_nested
+    # CHECK: %[[SEED:.*]] = arith.constant 1 : i32
+    seed = 1
+    # CHECK: scf.for
+    # CHECK-NOT: iter_args
+    for i in range(2):
+        # CHECK: scf.while : () -> ()
+        while seed < 0:
+            # CHECK: } do {
+            # CHECK: tt.call @{{.*}}anchor{{.*}}(%[[SEED]])
+            anchor(seed)
+            # CHECK: scf.yield
+
+
+@triton.jit
+def _loop_carry_nest_depth_3(KIND: tl.constexpr):
+    acc = 0
+    if KIND == 0:
+        for i in range(2):
+            for j in range(2):
+                for k in range(2):
+                    acc += 1
+    elif KIND == 1:
+        i = 0
+        while i < 2:
+            j = 0
+            while j < 2:
+                k = 0
+                while k < 2:
+                    acc += 1
+                    k += 1
+                j += 1
+            i += 1
+    elif KIND == 2:
+        for i in range(2):
+            j = 0
+            while j < 2:
+                for k in range(2):
+                    acc += 1
+                j += 1
+    else:
+        i = 0
+        while i < 2:
+            for j in range(2):
+                k = 0
+                while k < 2:
+                    acc += 1
+                    k += 1
+            i += 1
+    anchor(acc)
+
+
+@pytest.mark.parametrize("kind", range(4), ids=["for", "while", "for-while-for", "while-for-while"])
+def test_loop_carry_discovery_avoids_exponential_revisits(monkeypatch, kind):
+    """A depth-three body is generated four times, rather than eight."""
+    per_body = collections.Counter()
+    visit = CodeGenerator.visit_compound_statement
+
+    def counted(self, stmts):
+        per_body[id(stmts)] += 1
+        return visit(self, stmts)
+
+    monkeypatch.setattr(CodeGenerator, "visit_compound_statement", counted)
+    run_parser(_loop_carry_nest_depth_3, args=(kind, ))
+    assert max(per_body.values()) == 4
+
+
+def test_const_ptr_is_constant_addrspace():
+
+    @triton.jit
+    def kernel(In: tl.const, Out, N, BLOCK: tl.constexpr):
+        # CHECK-LABEL: tt.func public @kernel
+        # A `tl.const` pointer argument is tagged with Triton's constant address
+        # CHECK-SAME: %arg0: !tt.ptr<f32, "constant">
+        # A plain pointer stays global
+        # CHECK-SAME: %arg1: !tt.ptr<f32> {
+        offs = tl.arange(0, BLOCK)
+        mask = offs < N
+        tl.store(Out + offs, tl.load(In + offs, mask=mask), mask=mask)
+
+    run_filecheck_test(kernel, args=(MockTensor(tl.float32), MockTensor(tl.float32), 8, 128))

@@ -129,8 +129,6 @@ public:
   virtual std::optional<MemEffectsOpInfo>
   getMemEffectsOpInfo(Operation *op) const {
     namespace ttg = triton::gpu;
-    if (getBarrierInitInfo(op) || getBarrierInvalidateInfo(op))
-      return std::nullopt;
     MemEffectsOpInfo info;
     if (isa<ttg::AsyncCopyGlobalToLocalOp>(op)) {
       info.trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
@@ -175,6 +173,9 @@ public:
 
   virtual SmallVector<CommitKind::Kind>
   getRequiredCommitKinds(ModuleOp module) const = 0;
+
+  // AMD barriers are ordinary LDS objects and have no invalidate operation.
+  virtual bool barrierWritesInvalidate() const { return false; }
 };
 
 LogicalResult runConcurrencySanitizer(ModuleOp module,

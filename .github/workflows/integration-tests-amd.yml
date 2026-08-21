@@ -45,8 +45,8 @@ jobs:
       TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
       TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
       TRITON_DISABLE_LINE_INFO: 1
-      PROTON_SKIP_PC_SAMPLING_TEST: 1
       PROTON_SKIP_CUDAGRAPH_TEST: 1
+      PROTON_SKIP_PC_SAMPLING_TEST: 1
       PYTHON: "python3"
       PYTEST_ADDOPTS: "-p triton._compile_warmup"
       CCACHE_COMPRESS: "true"
@@ -159,8 +159,8 @@ jobs:
           pytest --capture=tee-sys -rfs -n 8 third_party/amd/python/test/ \
                 --ignore=third_party/amd/python/test/test_scalarize_packed_fops.py \
                 --ignore=third_party/amd/python/test/test_address_sanitizer.py \
-                --ignore=third_party/amd/python/test/test_gluon_gfx1250.py
-          pytest --capture=tee-sys -rfs -n 8 third_party/amd/python/test/test_gluon_gfx1250.py -k "test_compile"
+                --ignore=third_party/amd/python/test/test_gluon_cdna5.py
+          pytest --capture=tee-sys -rfs -n 8 third_party/amd/python/test/test_gluon_cdna5.py -k "test_compile"
           TRITON_ALWAYS_COMPILE=1 pytest --capture=tee-sys -rfs third_party/amd/python/test/test_scalarize_packed_fops.py
           cd python/test/unit
           TRITON_CI_CACHE_PHASE=unit pytest --capture=tee-sys -rfs -n 12 \
@@ -255,8 +255,8 @@ jobs:
       TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
       TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
       TRITON_DISABLE_LINE_INFO: 1
-      PROTON_SKIP_PC_SAMPLING_TEST: 1
       PROTON_SKIP_CUDAGRAPH_TEST: 1
+      PROTON_SKIP_PC_SAMPLING_TEST: 1
       PYTHON: "python3"
       CCACHE_COMPRESS: "true"
       PIP_BREAK_SYSTEM_PACKAGES: 1

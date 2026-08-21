@@ -79,6 +79,53 @@ def test_copy_kernel(layout, XBLOCK):
     torch.testing.assert_close(out, inp)
 
 
+@gluon.jit(noinline=True)
+def _noinline_convert_layout_scratch(input, output):
+    src_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    dst_layout: ttgl.constexpr = ttgl.SliceLayout(1, ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0]))
+    src_offsets = ttgl.arange(0, 128, layout=src_layout)
+    dst_offsets = ttgl.arange(0, 128, layout=dst_layout)
+    values = ttgl.load(input + src_offsets)
+    ttgl.store(output + dst_offsets, ttgl.convert_layout(values, dst_layout))
+
+
+@gluon.jit(noinline=True)
+def _noinline_forward_convert_layout_scratch(input, output):
+    _noinline_convert_layout_scratch(input, output)
+
+
+@gluon.jit
+def _noinline_shared_allocation_call_kernel(input, output, sentinel_output, NESTED: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
+    offsets = ttgl.arange(0, 128, layout=layout)
+    sentinel = offsets + 4096
+    caller_allocation = ttgl.allocate_shared_memory(ttgl.int32, [128], shared_layout, sentinel)
+
+    if NESTED:
+        _noinline_forward_convert_layout_scratch(input, output)
+    else:
+        _noinline_convert_layout_scratch(input, output)
+
+    ttgl.store(sentinel_output + offsets, caller_allocation.load(layout))
+
+
+@pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
+@pytest.mark.parametrize("NESTED", [False, True], ids=["direct", "nested"])
+def test_noinline_call_preserves_live_shared_allocation(NESTED, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = ""
+    values = torch.arange(128, device="cuda", dtype=torch.int32) * 3 + 7
+    output = torch.empty_like(values)
+    sentinel_output = torch.empty_like(values)
+
+    compiled = _noinline_shared_allocation_call_kernel[(1, )](values, output, sentinel_output, NESTED, num_warps=4)
+
+    assert compiled.metadata.shared >= 2 * values.numel() * values.element_size()
+    assert compiled.asm["ttgir"].count("noinline = true") >= 1 + int(NESTED)
+    torch.testing.assert_close(output, values)
+    torch.testing.assert_close(sentinel_output, torch.arange(128, device="cuda", dtype=torch.int32) + 4096)
+
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_copy_kernel_multi_cta():
     XBLOCK = 2048
@@ -214,6 +261,21 @@ def tma_kernel(desc):
     alloc._keep_alive()
 
 
+@gluon.jit(noinline=True)
+def noinline_tma_store(desc, alloc):
+    tma.async_store(desc, [0, 0], alloc)
+    tma.store_wait(0)
+
+
+@gluon.jit
+def noinline_tma_kernel(desc):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
+    value = ttgl.full(desc.block_shape, 0, desc.dtype, layout)
+    alloc = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout, value)
+    noinline_tma_store(desc, alloc)
+    alloc._keep_alive()
+
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_tma():
     out = torch.ones((16, 16), dtype=torch.float16, device="cuda")
@@ -227,6 +289,18 @@ def test_tma():
 
     desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(out, [16, 16], layout)
     tma_kernel[(1, )](desc)
+    torch.testing.assert_close(out, torch.zeros_like(out))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_proxy_fence_noinline_tma_store():
+    out = torch.ones((16, 16), dtype=torch.float16, device="cuda")
+    layout = ttgl.NVMMASharedLayout(32, 16, rank=2)
+    desc = TensorDescriptor.from_tensor(out, [16, 16], layout)
+
+    compiled = noinline_tma_kernel[(1, )](desc)
+    assert "tt.call" in compiled.asm["ttgir"]
+    assert "fence.proxy.async.shared::cta" in compiled.asm["ptx"]
     torch.testing.assert_close(out, torch.zeros_like(out))
 
 
@@ -1052,6 +1126,58 @@ def test_warpgroup_mma(ASYNC):
     ref = torch.matmul(a, b)
 
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-1)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("M", [64, 128])
+@pytest.mark.parametrize("N", [64, 128, 256])
+def test_tcgen05_mma_collector_a(M, N):
+    K = 32
+    layout = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+    acc_layout = TensorMemoryLayout([M, 64], col_stride=1)
+    shared_a = ttgl.NVMMASharedLayout.get_default_for([M, K], ttgl.float16)
+    shared_b = ttgl.NVMMASharedLayout.get_default_for([K, N], ttgl.float16)
+
+    torch.manual_seed(0)
+    a = torch.randint(-3, 4, (M, K), device="cuda").to(torch.float16)
+    b = torch.randint(-3, 4, (K, N), device="cuda").to(torch.float16)
+    out = torch.empty((M, N), device="cuda", dtype=torch.float32)
+    compiled = mma_kernel[(1, )](a, b, out, M, N, K, layout, layout, (), acc_layout, shared_a, shared_b, ttgl.float32,
+                                 False, True, num_warps=4)
+
+    collectors = re.findall(r"tcgen05\.mma\.cta_group::1\.kind::f16(?:\.collector::a::(\w+))?", compiled.asm["ptx"])
+    n_tiles = N // 64
+    # M=64 can place successive N tiles in different halves of the datapath.
+    expected = [""] * n_tiles if M == 64 or n_tiles == 1 else ["fill"] + ["use"] * (n_tiles - 2) + ["lastuse"]
+    assert collectors == expected * (K // 16)
+    torch.testing.assert_close(out, a.float() @ b.float(), atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
+@pytest.mark.parametrize("N,BLOCK_N,expected", [
+    pytest.param(128, 128, [("", "fill"), ("", "lastuse")], id="b-only"),
+    pytest.param(256, 128, [("", "fill"), ("fill", "lastuse"), ("lastuse", "fill"), ("", "lastuse")], id="b-major"),
+    pytest.param(128, 64, [("fill", ""), ("lastuse", "fill"), ("fill", "lastuse"), ("lastuse", "")], id="a-major"),
+])
+def test_tcgen05_mma_collector_ab(N, BLOCK_N, expected):
+    M, K = 256, 32
+    layout = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+    acc_layout = TensorMemoryLayout([128, BLOCK_N], col_stride=1)
+    shared_a = ttgl.NVMMASharedLayout.get_default_for([M, K], ttgl.float16)
+    shared_b = ttgl.NVMMASharedLayout.get_default_for([K, N], ttgl.float16)
+
+    torch.manual_seed(0)
+    a = torch.randint(-3, 4, (M, K), device="cuda").to(torch.float16)
+    b = torch.randint(-3, 4, (K, N), device="cuda").to(torch.float16)
+    out = torch.empty((M, N), device="cuda", dtype=torch.float32)
+    compiled = mma_kernel[(1, )](a, b, out, M, N, K, layout, layout, (), acc_layout, shared_a, shared_b, ttgl.float32,
+                                 False, True, num_warps=4)
+
+    collectors = re.findall(
+        r"tcgen05\.mma\.cta_group::1\.kind::f16(?:\.collector::a::(\w+))?(?:\.collector::b::(\w+))?\s",
+        compiled.asm["ptx"])
+    assert collectors == expected * (K // 16)
+    torch.testing.assert_close(out, a.float() @ b.float(), atol=0, rtol=0)
 
 
 @gluon.jit
@@ -3104,8 +3230,9 @@ def test_tcgen05_mma_scaled_noncontiguous_accumulator():
     ],
 )
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("acc_block_n", [64, 128])
 def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_dtype, a_is_fp4, b_is_fp4, a_fp4_padded,
-                                     scale_vec_size, nvfp4):
+                                     scale_vec_size, nvfp4, acc_block_n):
     torch.manual_seed(0)
     M = 128
     N = 128
@@ -3115,7 +3242,7 @@ def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_
     @gluon.jit
     def kernel(out_ptr, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr, a, b, a_scale, b_scale,
                A_FORMAT: ttgl.constexpr, B_FORMAT: ttgl.constexpr, A_IS_FP4: ttgl.constexpr, B_IS_FP4: ttgl.constexpr,
-               A_FP4_PADDED: ttgl.constexpr, SCALE_VEC_SIZE: ttgl.constexpr):
+               A_FP4_PADDED: ttgl.constexpr, SCALE_VEC_SIZE: ttgl.constexpr, ACC_BLOCK_N: ttgl.constexpr):
         store_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [threads_per_warp, 1], [ttgl.num_warps(), 1], [1, 0])
 
         A_K_INPUT: ttgl.constexpr = K // 2 if A_IS_FP4 else K
@@ -3152,7 +3279,7 @@ def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_
             b_smem = ttgl.allocate_shared_memory(b.dtype.element_ty, [K, N], b_layout,
                                                  ttgl.load(b + b_offs_k * N + b_offs_n))
 
-        acc_layout: ttgl.constexpr = TensorMemoryLayout([M, N], col_stride=1)
+        acc_layout: ttgl.constexpr = TensorMemoryLayout([M, ACC_BLOCK_N], col_stride=1)
         acc_tmem = allocate_tensor_memory(ttgl.float32, [M, N], acc_layout)
         acc_reg_layout: ttgl.constexpr = acc_tmem.get_reg_layout()
         acc_tmem.store(ttgl.zeros([M, N], ttgl.float32, layout=acc_reg_layout))
@@ -3228,8 +3355,14 @@ def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_
     ref = torch.matmul(a_ref, b_ref)
     atol, rtol = (1e-3, 1e-3) if a_is_fp4 or b_is_fp4 else (1e-6, 1e-6)
 
-    kernel[(1, )](out, M, N, K, a, b, a_scale, b_scale, a_format, b_format, a_is_fp4, b_is_fp4, a_fp4_padded,
-                  scale_vec_size)
+    compiled = kernel[(1, )](out, M, N, K, a, b, a_scale, b_scale, a_format, b_format, a_is_fp4, b_is_fp4, a_fp4_padded,
+                             scale_vec_size, acc_block_n)
+    # Both D and A must use TMEM address operands in the collector sequence.
+    collectors = re.findall(r"tcgen05\.mma\.[^\s;]+\.collector::a::(\w+)\s+\[[^]]+\],\s*\[", compiled.asm["ptx"])
+    if acc_block_n < N:
+        assert collectors and collectors == ["fill", "lastuse"] * (len(collectors) // 2)
+    else:
+        assert not collectors
     torch.testing.assert_close(out, ref, atol=atol, rtol=rtol)
 
 

@@ -682,11 +682,6 @@ void init_gluon_ir(py::module_ &m) {
           },
           py::arg("operand"), py::arg("numBins"), py::arg("mask").none(),
           py::arg("layout"))
-      .def("create_cat",
-           [](GluonOpBuilder &self, Value &lhs, Value &rhs,
-              Type retType) -> Value {
-             return self.create<triton::CatOp>(retType, lhs, rhs);
-           })
       .def("create_experimental_fpsan_embed",
            [](GluonOpBuilder &self, Value &src, Type &dstType) -> Value {
              return self.create<triton::instrument::ExperimentalFPSanEmbedOp>(
