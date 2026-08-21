@@ -2,9 +2,12 @@
 This file implements a BSHD Flash Attention and tests against torch reference.
 """
 
+import functools
+
 import torch
 from triton.experimental import gluon
 import triton.experimental.gluon.language as gl
+from triton.runtime import driver
 import pytest
 
 
@@ -146,7 +149,8 @@ class AttentionProgram:
                                                          strides=(stride_kn, stride_kk),
                                                          block_shape=(cfg.BLOCK_N, cfg.HEAD_SZ),
                                                          layout=cfg.k_smem_layout)
-        k_buffer = gl.allocate_shared_memory(k_desc.dtype, shape=[2] + k_desc.block_shape, layout=k_desc.layout)
+        k_buffer = gl.allocate_shared_memory(k_desc.dtype, shape=[cfg.NUM_BUFFERS] + k_desc.block_shape,
+                                             layout=k_desc.layout)
 
         # v [BLOCK_N, BLOCK_DMODEL]
         v_desc = gl.amd.cdna5.tdm.make_tensor_descriptor(base=v_ptr + stride_vz * off_z + stride_vh * off_k_head,
@@ -154,7 +158,8 @@ class AttentionProgram:
                                                          strides=(stride_vn, stride_vk),
                                                          block_shape=(cfg.BLOCK_N, cfg.HEAD_SZ),
                                                          layout=cfg.v_smem_layout)
-        v_buffer = gl.allocate_shared_memory(v_desc.dtype, shape=[2] + v_desc.block_shape, layout=v_desc.layout)
+        v_buffer = gl.allocate_shared_memory(v_desc.dtype, shape=[cfg.NUM_BUFFERS] + v_desc.block_shape,
+                                             layout=v_desc.layout)
 
         q_mask = (off_m + gl.arange(0, cfg.BLOCK_M, layout=gl.SliceLayout(1, cfg.q_layout)))[:, None] < cfg.SEQLEN_Q
         q = gl.amd.cdna5.buffer_load(q_ptr, q_offs, mask=q_mask)
@@ -197,7 +202,8 @@ class AttentionProgram:
             strides=(stride_kn, stride_kk),  #
             block_shape=(BLOCK_N, HEAD_SZ),  #
             layout=cfg.k_smem_layout)
-        k_buffer = gl.allocate_shared_memory(k_desc.dtype, shape=[2] + k_desc.block_shape, layout=k_desc.layout)
+        k_buffer = gl.allocate_shared_memory(k_desc.dtype, shape=[cfg.NUM_BUFFERS] + k_desc.block_shape,
+                                             layout=k_desc.layout)
 
         # v [BLOCK_N, BLOCK_DMODEL]
         v_desc = gl.amd.cdna5.tdm.make_tensor_descriptor(  #
@@ -206,7 +212,8 @@ class AttentionProgram:
             strides=(stride_vn, stride_vk),  #
             block_shape=(BLOCK_N, HEAD_SZ),  #
             layout=cfg.v_smem_layout)
-        v_buffer = gl.allocate_shared_memory(v_desc.dtype, shape=[2] + v_desc.block_shape, layout=v_desc.layout)
+        v_buffer = gl.allocate_shared_memory(v_desc.dtype, shape=[cfg.NUM_BUFFERS] + v_desc.block_shape,
+                                             layout=v_desc.layout)
 
         q_mask = (off_m + gl.arange(0, BLOCK_M, layout=gl.SliceLayout(1, cfg.q_layout)))[:, None] < SEQLEN_Q
         q = gl.amd.cdna5.buffer_load(q_ptr, q_offs, mask=q_mask)
@@ -881,6 +888,25 @@ def generate_configs():
             "BATCH": 1, "SEQLEN_Q": 1, "SEQLEN_K": 30, "NUM_Q_HEADS": 8, "NUM_K_HEADS": 8, "HEAD_SZ": 32, "BLOCK_M":
             128, "BLOCK_N": 32, "ATTN_FN": "pipeline"
         }),
+        # Tests for the shape-driven "auto" config selection. BLOCK_M/BLOCK_N are
+        # ignored for this mode, so they only need to be present.
+        pytest.param({
+            "BATCH": 8, "SEQLEN_Q": 1024, "SEQLEN_K": 1024, "NUM_Q_HEADS": 8, "NUM_K_HEADS": 8, "HEAD_SZ": 128,
+            "BLOCK_M": 128, "BLOCK_N": 128, "ATTN_FN": "auto"
+        }),
+        pytest.param({
+            "BATCH": 1, "SEQLEN_Q": 512, "SEQLEN_K": 512, "NUM_Q_HEADS": 4, "NUM_K_HEADS": 4, "HEAD_SZ": 64, "BLOCK_M":
+            128, "BLOCK_N": 128, "ATTN_FN": "auto"
+        }),
+        pytest.param({
+            "BATCH": 2, "SEQLEN_Q": 2000, "SEQLEN_K": 2000, "NUM_Q_HEADS": 8, "NUM_K_HEADS": 8, "HEAD_SZ": 128,
+            "BLOCK_M": 128, "BLOCK_N": 128, "ATTN_FN": "auto"
+        }),
+        # HEAD_SZ 256 is outside the tuned set, so this exercises the fallback.
+        pytest.param({
+            "BATCH": 1, "SEQLEN_Q": 512, "SEQLEN_K": 512, "NUM_Q_HEADS": 4, "NUM_K_HEADS": 4, "HEAD_SZ": 256, "BLOCK_M":
+            128, "BLOCK_N": 128, "ATTN_FN": "auto"
+        }),
         # Tests for pingpong pipelined attention fwd kernel
         pytest.param({
             "BATCH": 8, "SEQLEN_Q": 1024, "SEQLEN_K": 1024, "NUM_Q_HEADS": 8, "NUM_K_HEADS": 8, "HEAD_SZ": 128,
@@ -914,6 +940,47 @@ _ATTN_TYPE_TO_KERNEL_FN = {
     "default": attn_fwd_kernel, "pipeline": attn_fwd_pipelined_kernel, "pingpong": attn_fwd_pingpong_pipelined_kernel,
     "decode": attn_decode_fwd_kernel
 }
+
+_PREFILL_BLOCK_M = 256
+
+# Fastest BLOCK_N per head size, measured on gfx1250. These do not follow a
+# formula: 64 wins at HEAD_SZ 32 and 128, while HEAD_SZ 64 prefers 128.
+_PREFILL_BLOCK_N = {32: 64, 64: 128, 128: 64}
+
+# Config the example has always shipped, used for anything not tuned below.
+_PREFILL_FALLBACK = ("pipeline", 128, 128)
+
+
+@functools.lru_cache
+def get_num_cus():
+    device = driver.active.get_device_interface().current_device()
+    return driver.active.utils.get_device_properties(device)["multiprocessor_count"]
+
+
+def select_prefill_config(batch, num_q_heads, seqlen_q, head_sz, num_cus=None):
+    """Pick (attn_fn, BLOCK_M, BLOCK_N) for prefill, measured on gfx1250.
+
+    BLOCK_M=256 is the fastest M tile at every head size tuned here. Going
+    wider spills the fp32 accumulator; going narrower both underfeeds the WMMA
+    pipeline and needs more registers per wave, which costs occupancy.
+
+    A 256-row tile also quarters the workgroup count relative to 128, so the
+    pingpong schedule only pays off while there is still enough parallelism to
+    fill the device. Below that the device starves and the small tile wins.
+
+    Head sizes outside the tuned set keep the shipped configuration instead of
+    extrapolating: at HEAD_SZ 256 a 256-row tile spills the accumulator hard
+    enough to run several times slower than the default.
+    """
+    if head_sz not in _PREFILL_BLOCK_N:
+        return _PREFILL_FALLBACK
+    if num_cus is None:
+        num_cus = get_num_cus()
+    block_n = _PREFILL_BLOCK_N[head_sz]
+    workgroups = batch * num_q_heads * ((seqlen_q + _PREFILL_BLOCK_M - 1) // _PREFILL_BLOCK_M)
+    if workgroups >= num_cus:
+        return "pingpong", _PREFILL_BLOCK_M, block_n
+    return "pipeline", 128, block_n
 
 
 def run_decode_attention(config, q, k, v, o, sm_scale):
@@ -954,7 +1021,10 @@ def run_prefill_attention(config, q, k, v, o, sm_scale):
     HEAD_SZ = config["HEAD_SZ"]
     BLOCK_M = config["BLOCK_M"]
     BLOCK_N = config["BLOCK_N"]
-    attn_fn = _ATTN_TYPE_TO_KERNEL_FN[config["ATTN_FN"]]
+    attn_type = config["ATTN_FN"]
+    if attn_type == "auto":
+        attn_type, BLOCK_M, BLOCK_N = select_prefill_config(BATCH, NUM_Q_HEADS, SEQLEN_Q, HEAD_SZ)
+    attn_fn = _ATTN_TYPE_TO_KERNEL_FN[attn_type]
 
     num_warps = _KERNEL_NUM_WARPS[attn_fn]
 
@@ -1034,7 +1104,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--attention-type",
         type=str,
-        choices=["default", "pipeline", "pingpong", "decode"],
+        choices=["default", "pipeline", "pingpong", "decode", "auto"],
         default="default",
         help="Attention Kernel Type",
     )
@@ -1048,5 +1118,10 @@ if __name__ == "__main__":
         "ATTN_FN": args.attention_type,  #
     }
     print(config)
+    if args.attention_type == "auto":
+        # BLOCK_M/BLOCK_N above are placeholders in this mode, so report what
+        # actually runs instead of leaving the printed config misleading.
+        resolved = select_prefill_config(args.b, args.num_heads_q, args.seqlen_q, args.head_size)
+        print("auto selected: ATTN_FN={}, BLOCK_M={}, BLOCK_N={}".format(*resolved))
     attn_kernel = run_attention(config)
     [static_profile(kernel) for kernel in attn_kernel]
