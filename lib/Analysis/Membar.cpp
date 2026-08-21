@@ -211,7 +211,7 @@ void MembarAnalysis::updateSuccessor(Operation *terminator, Block *successor,
                                      MembarInfo *membarInfo) {
   if (bufferIndexAnalysis.isBackedgeSuccessor(terminator, successor)) {
     bufferIndexAnalysis.invalidateBufferIndices(membarInfo->pending);
-    bufferIndexAnalysis.invalidateBufferIndices(membarInfo->entry);
+    bufferIndexAnalysis.invalidateBufferIndices(membarInfo->entryBlockInfo);
   }
 }
 
@@ -219,7 +219,7 @@ void MembarAnalysis::updateExitState(MembarInfo *membarInfo) {
   // Function summaries are reused at every call site, so per-function SSA
   // index identity is no longer meaningful.
   bufferIndexAnalysis.invalidateBufferIndices(membarInfo->pending);
-  bufferIndexAnalysis.invalidateBufferIndices(membarInfo->entry);
+  bufferIndexAnalysis.invalidateBufferIndices(membarInfo->entryBlockInfo);
 }
 
 void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
@@ -263,10 +263,10 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
         callOffset = allocation.getAllocatedInterval(callBufferId).start();
       calleeMembarInfo.pending =
           translateBlockInfoToCallsite(calleeMembarInfo.pending, callOffset);
-      calleeMembarInfo.entry =
-          translateBlockInfoToCallsite(calleeMembarInfo.entry, callOffset);
-      if (membarInfo->pending.isIntersected(calleeMembarInfo.entry, filter,
-                                            &allocation)) {
+      calleeMembarInfo.entryBlockInfo = translateBlockInfoToCallsite(
+          calleeMembarInfo.entryBlockInfo, callOffset);
+      if (membarInfo->pending.isIntersected(calleeMembarInfo.entryBlockInfo,
+                                            filter, &allocation)) {
         builder->setInsertionPoint(op);
         insertBarrier(op, builder);
         membarInfo->sync();

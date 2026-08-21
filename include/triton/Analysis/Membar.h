@@ -236,8 +236,7 @@ struct MembarInfo {
   }
 
   bool operator==(const MembarInfo &other) const {
-    return pending == other.pending &&
-           entryBlockInfo == other.entryBlockInfo &&
+    return pending == other.pending && entryBlockInfo == other.entryBlockInfo &&
            allPathsFromEntrySynced == other.allPathsFromEntrySynced;
   }
 };
