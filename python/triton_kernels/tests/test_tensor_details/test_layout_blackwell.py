@@ -133,7 +133,7 @@ def test_mxfp4_value_shuffled_convert_layout_matches_torch(shape):
     assert torch.equal(roundtrip.storage.data, data_cuda)
 
 
-@pytest.mark.parametrize("shape", [(256, 128), (2, 66, 34), (2, 3, 130, 65)])
+@pytest.mark.parametrize("shape", [(256, 128), (2, 258, 257), (2, 3, 130, 65)])
 @pytest.mark.parametrize("layout", [
     BlackwellMXValueLayout(),
     BlackwellMX4ValueShuffledLayout(),
