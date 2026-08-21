@@ -51,8 +51,7 @@ using ExternIdToStateMap =
 
 class GPUCorrelation {
 public:
-  void submit(uint64_t numTasks,
-              uint64_t correlationId = Scope::DummyScopeId);
+  void submit(uint64_t numTasks, uint64_t correlationId = Scope::DummyScopeId);
   void complete(uint64_t numTasks, uint64_t correlationId);
   void complete(uint64_t correlationId);
   void correlate(uint64_t correlationId, size_t externId, size_t numNodes,
@@ -185,7 +184,6 @@ protected:
       sessionManager.exitScope(scopeStack.back());
       scopeStack.pop_back();
     }
-
   };
 
   static thread_local ThreadState threadState;
