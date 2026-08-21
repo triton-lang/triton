@@ -5,6 +5,11 @@ Each test should invoke one or more GPU kernels and check the validity of their 
 
 import os
 import pathlib
+import shutil
+import subprocess
+import sys
+
+import cuda_graph_helper
 
 import triton
 import triton.profiler as proton
@@ -1974,3 +1979,82 @@ def test_hw_trace(fresh_knobs, tmp_path: pathlib.Path, device: str):
     kernel_frame = data[0]["children"][0]["children"][0]
     assert "elementwise" in kernel_frame["frame"]["name"]
     assert kernel_frame["metrics"]["time (ns)"] > 0
+
+
+@pytest.fixture(scope="module")
+def cupti_graph_construction_runtime(tmp_path_factory: pytest.TempPathFactory):
+    if not is_blackwell():
+        pytest.skip("CUPTI HES graph construction tests require a Blackwell GPU")
+    if shutil.which("gcc") is None:
+        pytest.skip("gcc is required to build the CUDA graph test runtime")
+
+    cuda_home = pathlib.Path(os.environ.get("CUDA_HOME", "/usr/local/cuda"))
+    if not (cuda_home / "include" / "cuda.h").is_file():
+        pytest.skip(f"CUDA headers are unavailable under {cuda_home}")
+    build_dir = tmp_path_factory.mktemp("cupti-graph-construction")
+    return cuda_graph_helper.build_runtime(build_dir, cuda_home)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="HW trace is only supported on Blackwell GPUs")
+@pytest.mark.parametrize("case", cuda_graph_helper.CASES)
+def test_cupti_hes_graph_construction_launch(
+    case: str,
+    cupti_graph_construction_runtime: cuda_graph_helper.RuntimeBuild,
+    tmp_path: pathlib.Path,
+):
+    replays = 3
+    helper_path = pathlib.Path(cuda_graph_helper.__file__).resolve()
+
+    profile_path = tmp_path / f"{case}.hatchet"
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(helper_path),
+                case,
+                str(replays),
+                str(profile_path),
+                str(cupti_graph_construction_runtime.library_path),
+                str(cupti_graph_construction_runtime.producer_path),
+                str(cupti_graph_construction_runtime.consumer_path),
+                cupti_graph_construction_runtime.producer_name,
+                cupti_graph_construction_runtime.consumer_name,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as error:
+        pytest.fail(f"{case}: timed out after {error.timeout}s\n"
+                    f"stdout:\n{error.stdout}\nstderr:\n{error.stderr}")
+
+    assert result.returncode == 0, (f"{case}: child exited with status {result.returncode}\n"
+                                    f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+
+    with profile_path.open() as profile_file:
+        profile = json.load(profile_file)
+    build = cupti_graph_construction_runtime
+    kernel_names = {build.producer_name, build.consumer_name}
+
+    for replay in range(replays):
+        scope_name = f"{case}_{replay}"
+        replay_frame = _find_frame_by_name(profile[0], scope_name)
+        assert replay_frame is not None
+        capture_frame = _find_frame_by_name(replay_frame, "<captured_at>")
+        assert capture_frame is not None
+        kernel_frames = [child for child in capture_frame["children"] if child["frame"]["name"] in kernel_names]
+        assert sum(frame["metrics"]["count"] for frame in kernel_frames) == cuda_graph_helper.KERNELS_PER_GRAPH
+        assert all(frame["metrics"]["time (ns)"] > 0 for frame in kernel_frames)
+
+        producer_count = sum(frame["metrics"]["count"]
+                             for frame in kernel_frames
+                             if frame["frame"]["name"] == build.producer_name)
+        consumer_count = sum(frame["metrics"]["count"]
+                             for frame in kernel_frames
+                             if frame["frame"]["name"] == build.consumer_name)
+        if case in ("pdl", "no-pdl"):
+            assert producer_count == 1
+            assert consumer_count == cuda_graph_helper.CONSUMERS_PER_GRAPH
+        else:
+            assert producer_count == 0
+            assert consumer_count == cuda_graph_helper.KERNELS_PER_GRAPH
