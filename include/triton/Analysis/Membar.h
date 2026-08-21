@@ -199,7 +199,7 @@ struct MembarInfo {
   /// Buffers accessed since the most recent synchronization.
   BlockInfo pending;
 
-  /// Buffers reachable from the basic block entry
+  /// Buffers reachable from the basic block entry.
   BlockInfo entry;
 
   /// Whether every path to this basic block has synchronized.
