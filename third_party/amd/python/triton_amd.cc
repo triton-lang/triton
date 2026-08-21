@@ -43,6 +43,8 @@
 
 namespace py = nanobind;
 
+void init_triton_amd_loader(py::module_ &m);
+
 namespace {
 const char *const amdTargetTriple = "amdgcn-amd-amdhsa";
 
@@ -344,6 +346,7 @@ static std::optional<std::string> lldInvoke(const char *inPath,
 
 void init_triton_amd(py::module_ &m) {
   m.doc() = "Python bindings to the AMD Triton backend";
+  init_triton_amd_loader(m);
 
   auto passes = m.def_submodule("passes");
   auto ttgpuir_m = passes.def_submodule("ttgpuir");
