@@ -328,7 +328,7 @@ void MembarAnalysis::update(Operation *op, MembarInfo *blockInfo,
     if (barrierStages.betweenMemoryEffects) {
       // The internal barrier synchronizes all incoming effects. Do not carry
       // them past the operation; only effects after the barrier are outgoing.
-      blockInfo->addEffects(curBlockInfo);
+      blockInfo->addBlockInfo(curBlockInfo);
       blockInfo->sync();
       curBlockInfo.sync();
     }
@@ -341,7 +341,7 @@ void MembarAnalysis::update(Operation *op, MembarInfo *blockInfo,
   }
   // Update the region info, even if barrier is inserted, we have to maintain
   // the current op's read/write buffers.
-  blockInfo->addEffects(curBlockInfo);
+  blockInfo->addBlockInfo(curBlockInfo);
 
   if (barrierStages.afterMemoryEffects) {
     // Model a trailing local barrier after handling the operation's effects.
