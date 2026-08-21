@@ -1,6 +1,7 @@
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Gluon/Transforms/InferLayoutUtils.h"
 #include "triton/Dialect/Gluon/Transforms/Passes.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/PriorityWorklist.h"
 #include "llvm/Support/Debug.h"
@@ -32,6 +33,28 @@ LogicalResult inferAutoLayout(ModuleOp &mod) {
     llvm::SmallVector<std::pair<Value, Attribute>> seedEncodings;
     func.walk([&](gluon::SetAutoLayoutOp op) {
       seedEncodings.push_back({op.getSrc(), op.getType().getEncoding()});
+    });
+    func.walk([&](triton::LinearApplyOp op) {
+      if (!isAutoEncodingTensorType(op.getBases().getType()))
+        return;
+
+      // Preserve any layout the user explicitly selected for the basis. When
+      // it is unconstrained, prefer the one-basis-per-lane fast path.
+      for (const auto &seed : seedEncodings)
+        if (seed.first == op.getBases())
+          return;
+
+      unsigned threadsPerWarp =
+          static_cast<unsigned>(ttg::TritonGPUDialect::getThreadsPerWarp(mod));
+      unsigned numWarps =
+          static_cast<unsigned>(ttg::lookupNumWarps(op.getOperation()));
+      unsigned numCTAs =
+          static_cast<unsigned>(ttg::lookupNumCTAs(op.getOperation()));
+      auto cgaLayout = ttg::CGAEncodingAttr::fromSplitParams(
+          mod.getContext(), {numCTAs}, {1}, {0});
+      auto basisEncoding = ttg::BlockedEncodingAttr::get(
+          mod.getContext(), {1}, {threadsPerWarp}, {numWarps}, {0}, cgaLayout);
+      seedEncodings.push_back({op.getBases(), basisEncoding});
     });
 
     if (failed(inferLayout(func, isAutoEncodingTensorType, seedEncodings)))

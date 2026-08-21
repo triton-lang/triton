@@ -216,6 +216,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#generic_rank_one = #ttg.generic_linear<{register = [[1], [2]], lane = [[4], [8], [16], [32], [64]], warp = [[64], [128]], block = []}>
+#generic_rank_two = #ttg.generic_linear<{register = [[1, 0], [0, 1]], lane = [[2, 0], [4, 0], [8, 0], [0, 2], [0, 4]], warp = [[16, 8], [0, 8]], block = []}>
+#canonical_basis = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // Non-injective GenericLinear index layouts are valid; the basis keeps its
+  // independent, canonical one-value-per-lane layout.
+  // CHECK-LABEL: @linear_apply_generic_linear_rank_one
+  // CHECK-SAME: [[INDEX:%[^:]+]]: tensor<256xi32, [[INDEX_LAYOUT:#[^>]+]]>, [[BASES:%[^:]+]]: tensor<32xi32, [[BASIS_LAYOUT:#[^>]+]]>
+  // CHECK: [[RESULT:%.*]] = tt.linear_apply [[INDEX]], [[BASES]] : tensor<256xi32, [[INDEX_LAYOUT]]>, tensor<32xi32, [[BASIS_LAYOUT]]> -> tensor<256xi32, [[INDEX_LAYOUT]]>
+  // CHECK: tt.return [[RESULT]] : tensor<256xi32, [[INDEX_LAYOUT]]>
+  tt.func @linear_apply_generic_linear_rank_one(%index: tensor<256xi32, #generic_rank_one>, %bases: tensor<32xi32, #canonical_basis>) -> tensor<256xi32, #generic_rank_one> {
+    %result = tt.linear_apply %index, %bases : tensor<256xi32, #generic_rank_one>, tensor<32xi32, #canonical_basis> -> tensor<256xi32, #generic_rank_one>
+    tt.return %result : tensor<256xi32, #generic_rank_one>
+  }
+
+  // A warp basis may simultaneously contribute to both index dimensions.
+  // The result preserves that swizzled encoding without changing the basis.
+  // CHECK-LABEL: @linear_apply_generic_linear_rank_two
+  // CHECK-SAME: [[INDEX:%[^:]+]]: tensor<32x16xi32, [[INDEX_LAYOUT:#[^>]+]]>, [[BASES:%[^:]+]]: tensor<32xi32, [[BASIS_LAYOUT:#[^>]+]]>
+  // CHECK: [[RESULT:%.*]] = tt.linear_apply [[INDEX]], [[BASES]] : tensor<32x16xi32, [[INDEX_LAYOUT]]>, tensor<32xi32, [[BASIS_LAYOUT]]> -> tensor<32x16xi32, [[INDEX_LAYOUT]]>
+  // CHECK: tt.return [[RESULT]] : tensor<32x16xi32, [[INDEX_LAYOUT]]>
+  tt.func @linear_apply_generic_linear_rank_two(%index: tensor<32x16xi32, #generic_rank_two>, %bases: tensor<32xi32, #canonical_basis>) -> tensor<32x16xi32, #generic_rank_two> {
+    %result = tt.linear_apply %index, %bases : tensor<32x16xi32, #generic_rank_two>, tensor<32xi32, #canonical_basis> -> tensor<32x16xi32, #generic_rank_two>
+    tt.return %result : tensor<32x16xi32, #generic_rank_two>
+  }
+}
+
+// -----
+
 #shared1d = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #shared2d = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory

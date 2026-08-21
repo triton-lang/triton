@@ -591,16 +591,13 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         basis_layout = bases.type.layout
         if not isinstance(basis_layout, (AutoLayout, CoalescedLayout)):
             linear_layout = ttgl._unwrap_if_constexpr(self.to_linear_layout(basis_layout, bases.type.shape))
-            canonical_lane_bases = [[1 << bit] for bit in range(5)]
-            if len(linear_layout.lane_bases) == 6:
-                canonical_lane_bases.append([0])
+            reachable_basis_indices = {0}
+            for basis in linear_layout.reg_bases + linear_layout.lane_bases + linear_layout.warp_bases:
+                reachable_basis_indices.update(value ^ basis[0] for value in list(reachable_basis_indices))
             _check(
-                linear_layout.lane_bases == canonical_lane_bases
-                and all(basis == [0]
-                        for basis in linear_layout.reg_bases + linear_layout.warp_bases + linear_layout.block_bases),
-                lambda: "linear_apply bases layout must have one value per lane, with basis i owned by lane i "
-                "and replicated in every warp and CTA; use gl.convert_layout(..., "
-                "gl.BlockedLayout([1], [warp_size], [num_warps], [0]))",
+                all(value in reachable_basis_indices for value in range(32)),
+                lambda: "linear_apply bases layout must make all 32 values accessible within each CTA; "
+                "cross-CTA basis layouts are unsupported; use gl.convert_layout to select a CTA-local layout",
             )
 
         result = self.builder.create_linear_apply(index.handle, bases.handle)

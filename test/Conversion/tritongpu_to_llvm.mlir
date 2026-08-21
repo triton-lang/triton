@@ -3299,3 +3299,102 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return %result : tensor<16x16xi32, #index>
   }
 }
+
+// -----
+
+#index = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#basis2 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#basis4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#basis8 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#slice_parent = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#basis_slice = #ttg.slice<{dim = 0, parent = #slice_parent}>
+#basis_generic = #ttg.generic_linear<{register = [[4]], lane = [[1], [8], [2], [16], [0]], warp = [[0], [0]], block = []}>
+#basis_generic_warp = #ttg.generic_linear<{register = [], lane = [[1], [2], [4], [8], [16]], warp = [[1], [2]], block = []}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // Noncanonical warp-local bases are selected directly from the owning lane
+  // and register, without a layout conversion or shared-memory roundtrip.
+  // CHECK-LABEL: @linear_apply_basis_spt2
+  // CHECK-COUNT-32: nvvm.shfl.sync idx
+  // CHECK-NOT: nvvm.shfl.sync
+  // CHECK-NOT: nvvm.barrier
+  // CHECK: llvm.return
+  tt.func private @linear_apply_basis_spt2(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis2>) -> tensor<128xi32, #index> {
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis2> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+
+  // CHECK-LABEL: @linear_apply_basis_spt4
+  // CHECK-COUNT-32: nvvm.shfl.sync idx
+  // CHECK-NOT: nvvm.shfl.sync
+  // CHECK-NOT: nvvm.barrier
+  // CHECK: llvm.return
+  tt.func private @linear_apply_basis_spt4(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis4>) -> tensor<128xi32, #index> {
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis4> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+
+  // CHECK-LABEL: @linear_apply_basis_spt8
+  // CHECK-COUNT-32: nvvm.shfl.sync idx
+  // CHECK-NOT: nvvm.shfl.sync
+  // CHECK-NOT: nvvm.barrier
+  // CHECK: llvm.return
+  tt.func private @linear_apply_basis_spt8(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis8>) -> tensor<128xi32, #index> {
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis8> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+
+  // CHECK-LABEL: @linear_apply_basis_slice
+  // CHECK-COUNT-32: nvvm.shfl.sync idx
+  // CHECK-NOT: nvvm.shfl.sync
+  // CHECK-NOT: nvvm.barrier
+  // CHECK: llvm.return
+  tt.func private @linear_apply_basis_slice(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis_slice>) -> tensor<128xi32, #index> {
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis_slice> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+
+  // CHECK-LABEL: @linear_apply_basis_generic_linear
+  // CHECK-COUNT-32: nvvm.shfl.sync idx
+  // CHECK-NOT: nvvm.shfl.sync
+  // CHECK-NOT: nvvm.barrier
+  // CHECK: llvm.return
+  tt.func private @linear_apply_basis_generic_linear(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis_generic>) -> tensor<128xi32, #index> {
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis_generic> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+
+  // A nonzero warp basis is harmless when every warp still spans all 32
+  // elements; the shuffle owner incorporates the current warp's XOR offset.
+  // CHECK-LABEL: @linear_apply_basis_generic_redundant_warp
+  // CHECK-COUNT-32: nvvm.shfl.sync idx
+  // CHECK-NOT: nvvm.shfl.sync
+  // CHECK-NOT: nvvm.barrier
+  // CHECK: llvm.return
+  tt.func private @linear_apply_basis_generic_redundant_warp(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis_generic_warp>) -> tensor<128xi32, #index> {
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis_generic_warp> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+}
+
+// -----
+
+#index = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#cross_warp_parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [1, 0]}>
+#cross_warp_basis = #ttg.slice<{dim = 0, parent = #cross_warp_parent}>
+
+// CHECK: module attributes {{.*}}ttg.shared = 128 : i32
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // The basis is distributed over four warps. Stage all 32 values once in CTA
+  // shared memory, synchronize, then retain the ordinary 32-broadcast loop.
+  // CHECK-LABEL: @linear_apply_basis_cross_warp
+  // CHECK: nvvm.barrier
+  // CHECK-COUNT-32: nvvm.shfl.sync idx
+  // CHECK-NOT: nvvm.shfl.sync
+  // CHECK-NOT: nvvm.barrier
+  // CHECK: llvm.return
+  tt.func private @linear_apply_basis_cross_warp(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #cross_warp_basis>) -> tensor<128xi32, #index> {
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #cross_warp_basis> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+}

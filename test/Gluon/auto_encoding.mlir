@@ -182,11 +182,10 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // -----
 
 #index = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 8], warpsPerCTA = [2, 2], order = [1, 0]}>
-#basis = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // The index and result infer the same rank-two encoding. Their independently
-  // seeded rank-one basis must keep its own warp-local encoding.
+  // The index and result infer the same rank-two encoding. The unseeded
+  // rank-one basis independently infers its required warp-local encoding.
   // CHECK-DAG: [[$INDEX:#.*]] = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 8], warpsPerCTA = [2, 2], order = [1, 0]}>
   // CHECK-DAG: [[$BASIS:#.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
   // CHECK-LABEL: @infer_linear_apply_independent_basis
@@ -197,10 +196,104 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
   tt.func public @infer_linear_apply_independent_basis() -> tensor<8x8xi32, #index> {
     %index = arith.constant dense<5> : tensor<8x8xi32, #gluon.auto_encoding>
     %bases = arith.constant dense<7> : tensor<32xi32, #gluon.auto_encoding>
-    %resolved_bases = gluon.set_auto_layout %bases : tensor<32xi32, #gluon.auto_encoding> -> tensor<32xi32, #basis>
     %result = tt.linear_apply %index, %bases : tensor<8x8xi32, #gluon.auto_encoding>, tensor<32xi32, #gluon.auto_encoding> -> tensor<8x8xi32, #gluon.auto_encoding>
     %resolved_result = gluon.set_auto_layout %result : tensor<8x8xi32, #gluon.auto_encoding> -> tensor<8x8xi32, #index>
     tt.return %resolved_result : tensor<8x8xi32, #index>
+  }
+}
+
+// -----
+
+#parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 0, parent = #parent}>
+#index = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // An explicit slice encoding equivalent to the canonical blocked encoding
+  // must be preserved instead of producing conflicting inference seeds.
+  // CHECK-DAG: [[$PARENT:#.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+  // CHECK-DAG: [[$INDEX_SLICE:#.*]] = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+  // CHECK-LABEL: @infer_linear_apply_explicit_slice_basis
+  // CHECK: [[INDEX_VALUE:%.*]] = arith.constant dense<5> : tensor<128xi32, [[$INDEX_SLICE]]>
+  // CHECK: [[BASIS_VALUE:%.*]] = arith.constant dense<7> : tensor<32xi32, #ttg.slice<{dim = 0, parent = [[$PARENT]]}>>
+  // CHECK: [[RESULT:%.*]] = tt.linear_apply [[INDEX_VALUE]], [[BASIS_VALUE]] : tensor<128xi32, [[$INDEX_SLICE]]>, tensor<32xi32, #ttg.slice<{dim = 0, parent = [[$PARENT]]}>> -> tensor<128xi32, [[$INDEX_SLICE]]>
+  // CHECK: tt.return [[RESULT]] : tensor<128xi32, [[$INDEX_SLICE]]>
+  tt.func public @infer_linear_apply_explicit_slice_basis() -> tensor<128xi32, #index> {
+    %index = arith.constant dense<5> : tensor<128xi32, #index>
+    %bases = arith.constant dense<7> : tensor<32xi32, #gluon.auto_encoding>
+    %resolved_bases = gluon.set_auto_layout %bases : tensor<32xi32, #gluon.auto_encoding> -> tensor<32xi32, #slice>
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #gluon.auto_encoding> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+}
+
+// -----
+
+#index = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#basis = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // An explicit noncanonical seed takes priority over the canonical default.
+  // CHECK-DAG: [[$INDEX_SPT4:#.*]] = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+  // CHECK-DAG: [[$BASIS_SPT4:#.*]] = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+  // CHECK-LABEL: @infer_linear_apply_explicit_spt4_basis
+  // CHECK: [[INDEX_VALUE:%.*]] = arith.constant dense<5> : tensor<128xi32, [[$INDEX_SPT4]]>
+  // CHECK: [[BASIS_VALUE:%.*]] = arith.constant dense<7> : tensor<32xi32, [[$BASIS_SPT4]]>
+  // CHECK: [[RESULT:%.*]] = tt.linear_apply [[INDEX_VALUE]], [[BASIS_VALUE]] : tensor<128xi32, [[$INDEX_SPT4]]>, tensor<32xi32, [[$BASIS_SPT4]]> -> tensor<128xi32, [[$INDEX_SPT4]]>
+  // CHECK: tt.return [[RESULT]] : tensor<128xi32, [[$INDEX_SPT4]]>
+  tt.func public @infer_linear_apply_explicit_spt4_basis() -> tensor<128xi32, #index> {
+    %index = arith.constant dense<5> : tensor<128xi32, #index>
+    %bases = arith.constant dense<7> : tensor<32xi32, #gluon.auto_encoding>
+    %resolved_bases = gluon.set_auto_layout %bases : tensor<32xi32, #gluon.auto_encoding> -> tensor<32xi32, #basis>
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #gluon.auto_encoding> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+}
+
+// -----
+
+#index = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [1, 0]}>
+#basis = #ttg.slice<{dim = 0, parent = #parent}>
+
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // Explicit CTA-local cross-warp basis distributions are also preserved.
+  // CHECK-DAG: [[$CROSS_PARENT:#.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [1, 0]}>
+  // CHECK-DAG: [[$CROSS_INDEX:#.*]] = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+  // CHECK-LABEL: @infer_linear_apply_explicit_cross_warp_basis
+  // CHECK: [[INDEX_VALUE:%.*]] = arith.constant dense<5> : tensor<128xi32, [[$CROSS_INDEX]]>
+  // CHECK: [[BASIS_VALUE:%.*]] = arith.constant dense<7> : tensor<32xi32, #ttg.slice<{dim = 0, parent = [[$CROSS_PARENT]]}>>
+  // CHECK: [[RESULT:%.*]] = tt.linear_apply [[INDEX_VALUE]], [[BASIS_VALUE]] : tensor<128xi32, [[$CROSS_INDEX]]>, tensor<32xi32, #ttg.slice<{dim = 0, parent = [[$CROSS_PARENT]]}>> -> tensor<128xi32, [[$CROSS_INDEX]]>
+  // CHECK: tt.return [[RESULT]] : tensor<128xi32, [[$CROSS_INDEX]]>
+  tt.func public @infer_linear_apply_explicit_cross_warp_basis() -> tensor<128xi32, #index> {
+    %index = arith.constant dense<5> : tensor<128xi32, #index>
+    %bases = arith.constant dense<7> : tensor<32xi32, #gluon.auto_encoding>
+    %resolved_bases = gluon.set_auto_layout %bases : tensor<32xi32, #gluon.auto_encoding> -> tensor<32xi32, #basis>
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #gluon.auto_encoding> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+}
+
+// -----
+
+#index = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // On a wave64 target, the basis has one value per lane, with lanes 32-63
+  // replicating lanes 0-31 because the basis tensor has only 32 elements.
+  // CHECK-DAG: [[$INDEX64:#.*]] = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+  // CHECK-DAG: [[$BASIS64:#.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+  // CHECK-LABEL: @infer_linear_apply_wave64_basis
+  // CHECK: [[INDEX_VALUE:%.*]] = arith.constant dense<5> : tensor<128xi32, [[$INDEX64]]>
+  // CHECK: [[BASIS_VALUE:%.*]] = arith.constant dense<7> : tensor<32xi32, [[$BASIS64]]>
+  // CHECK: [[RESULT:%.*]] = tt.linear_apply [[INDEX_VALUE]], [[BASIS_VALUE]] : tensor<128xi32, [[$INDEX64]]>, tensor<32xi32, [[$BASIS64]]> -> tensor<128xi32, [[$INDEX64]]>
+  // CHECK: tt.return [[RESULT]] : tensor<128xi32, [[$INDEX64]]>
+  tt.func public @infer_linear_apply_wave64_basis() -> tensor<128xi32, #index> {
+    %index = arith.constant dense<5> : tensor<128xi32, #gluon.auto_encoding>
+    %bases = arith.constant dense<7> : tensor<32xi32, #gluon.auto_encoding>
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #gluon.auto_encoding>, tensor<32xi32, #gluon.auto_encoding> -> tensor<128xi32, #gluon.auto_encoding>
+    %resolved = gluon.set_auto_layout %result : tensor<128xi32, #gluon.auto_encoding> -> tensor<128xi32, #index>
+    tt.return %resolved : tensor<128xi32, #index>
   }
 }
 

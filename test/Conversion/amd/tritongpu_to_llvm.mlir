@@ -1025,3 +1025,147 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return %result : tensor<128xi32, #index>
   }
 }
+
+// -----
+
+#index = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+#basis2 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+#basis4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+#basis8 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+#slice_parent = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#basis_slice = #ttg.slice<{dim = 0, parent = #slice_parent}>
+#basis_generic = #ttg.generic_linear<{register = [[4]], lane = [[1], [8], [2], [16], [0], [0]], warp = [[0], [0]], block = []}>
+#basis_generic_warp = #ttg.generic_linear<{register = [], lane = [[1], [2], [4], [8], [16], [0]], warp = [[1], [2]], block = []}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // Wave-local register/lane layouts use exactly one broadcast per basis bit.
+  // COMMON-LABEL: @linear_apply_wave64_basis_spt2
+  // COMMON-COUNT-32: rocdl.ds_bpermute
+  // COMMON-NOT: rocdl.ds_bpermute
+  // COMMON-NOT: rocdl.s.barrier
+  // COMMON: llvm.return
+  tt.func private @linear_apply_wave64_basis_spt2(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis2>) -> tensor<128xi32, #index> {
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis2> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+
+  // COMMON-LABEL: @linear_apply_wave64_basis_spt4
+  // COMMON-COUNT-32: rocdl.ds_bpermute
+  // COMMON-NOT: rocdl.ds_bpermute
+  // COMMON-NOT: rocdl.s.barrier
+  // COMMON: llvm.return
+  tt.func private @linear_apply_wave64_basis_spt4(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis4>) -> tensor<128xi32, #index> {
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis4> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+
+  // COMMON-LABEL: @linear_apply_wave64_basis_spt8
+  // COMMON-COUNT-32: rocdl.ds_bpermute
+  // COMMON-NOT: rocdl.ds_bpermute
+  // COMMON-NOT: rocdl.s.barrier
+  // COMMON: llvm.return
+  tt.func private @linear_apply_wave64_basis_spt8(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis8>) -> tensor<128xi32, #index> {
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis8> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+
+  // COMMON-LABEL: @linear_apply_wave64_basis_slice
+  // COMMON-COUNT-32: rocdl.ds_bpermute
+  // COMMON-NOT: rocdl.ds_bpermute
+  // COMMON-NOT: rocdl.s.barrier
+  // COMMON: llvm.return
+  tt.func private @linear_apply_wave64_basis_slice(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis_slice>) -> tensor<128xi32, #index> {
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis_slice> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+
+  // COMMON-LABEL: @linear_apply_wave64_basis_generic_linear
+  // COMMON-COUNT-32: rocdl.ds_bpermute
+  // COMMON-NOT: rocdl.ds_bpermute
+  // COMMON-NOT: rocdl.s.barrier
+  // COMMON: llvm.return
+  tt.func private @linear_apply_wave64_basis_generic_linear(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis_generic>) -> tensor<128xi32, #index> {
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis_generic> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+
+  // COMMON-LABEL: @linear_apply_wave64_basis_generic_redundant_warp
+  // COMMON-COUNT-32: rocdl.ds_bpermute
+  // COMMON-NOT: rocdl.ds_bpermute
+  // COMMON-NOT: rocdl.s.barrier
+  // COMMON: llvm.return
+  tt.func private @linear_apply_wave64_basis_generic_redundant_warp(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis_generic_warp>) -> tensor<128xi32, #index> {
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis_generic_warp> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+}
+
+// -----
+
+#index = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+#cross_warp_parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [1, 0]}>
+#cross_warp_basis = #ttg.slice<{dim = 0, parent = #cross_warp_parent}>
+
+// COMMON: module attributes {{.*}}ttg.shared = 128 : i32
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // A genuinely cross-wave basis requires one CTA-wide LDS synchronization.
+  // COMMON-LABEL: @linear_apply_wave64_basis_cross_warp
+  // COMMON: rocdl.s.barrier
+  // COMMON-COUNT-32: rocdl.ds_bpermute
+  // COMMON-NOT: rocdl.ds_bpermute
+  // COMMON-NOT: rocdl.s.barrier
+  // COMMON: llvm.return
+  tt.func private @linear_apply_wave64_basis_cross_warp(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #cross_warp_basis>) -> tensor<128xi32, #index> {
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #cross_warp_basis> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+}
+
+// -----
+
+#index = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#basis = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#basis4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // AMD wave32 keeps the same fast path for canonical and register-rich bases.
+  // COMMON-LABEL: @linear_apply_wave32_i32
+  // COMMON-COUNT-32: rocdl.ds_bpermute
+  // COMMON-NOT: rocdl.ds_bpermute
+  // COMMON-NOT: rocdl.s.barrier
+  // COMMON: llvm.return
+  tt.func private @linear_apply_wave32_i32(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis>) -> tensor<128xi32, #index> {
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+
+  // COMMON-LABEL: @linear_apply_wave32_basis_spt4
+  // COMMON-COUNT-32: rocdl.ds_bpermute
+  // COMMON-NOT: rocdl.ds_bpermute
+  // COMMON-NOT: rocdl.s.barrier
+  // COMMON: llvm.return
+  tt.func private @linear_apply_wave32_basis_spt4(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis4>) -> tensor<128xi32, #index> {
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis4> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+}
+
+// -----
+
+#index = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#cross_warp_parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [1, 0]}>
+#cross_warp_basis = #ttg.slice<{dim = 0, parent = #cross_warp_parent}>
+
+// COMMON: module attributes {{.*}}ttg.shared = 128 : i32
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // COMMON-LABEL: @linear_apply_wave32_basis_cross_warp
+  // COMMON: rocdl.s.barrier
+  // COMMON-COUNT-32: rocdl.ds_bpermute
+  // COMMON-NOT: rocdl.ds_bpermute
+  // COMMON-NOT: rocdl.s.barrier
+  // COMMON: llvm.return
+  tt.func private @linear_apply_wave32_basis_cross_warp(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #cross_warp_basis>) -> tensor<128xi32, #index> {
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #cross_warp_basis> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+}

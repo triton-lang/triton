@@ -104,6 +104,20 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     GatherLoweringHelper helper(gatherOp);
     return helper.getScratchSizeInBytes();
   }
+  if (auto linearApply = dyn_cast<LinearApplyOp>(op)) {
+    auto *ctx = op->getContext();
+    auto kRegister = StringAttr::get(ctx, "register");
+    auto kLane = StringAttr::get(ctx, "lane");
+    auto kWarp = StringAttr::get(ctx, "warp");
+    auto kDim = StringAttr::get(ctx, "dim0");
+    auto basisLayout = gpu::toLinearLayout(linearApply.getBases().getType());
+    if (basisLayout.sublayout({kRegister, kLane}, {kDim}).isSurjective() ||
+        !basisLayout.sublayout({kRegister, kLane, kWarp}, {kDim})
+             .isSurjective()) {
+      return 0;
+    }
+    return 32 * sizeof(uint32_t);
+  }
   if (auto histogram = dyn_cast<HistogramOp>(op)) {
     auto dstTy = histogram.getType();
     int threadsPerWarp = gpu::TritonGPUDialect::getThreadsPerWarp(

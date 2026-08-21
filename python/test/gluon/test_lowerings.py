@@ -2095,6 +2095,85 @@ def test_linear_apply_layouts(second_dim, use_member, device):
     assert compiled.metadata.shared == 0
 
 
+@pytest.mark.parametrize("basis_kind", [
+    "canonical", "two-per-lane", "four-per-lane", "eight-per-lane", "permuted-lanes", "noncanonical-slice", "cross-warp"
+])
+def test_linear_apply_cta_local_basis_layouts(basis_kind, device):
+    block = 128
+    index_layout = ttgl.BlockedLayout([2], [THREADS_PER_WARP], [4], [0])
+    if basis_kind in {"canonical", "two-per-lane", "four-per-lane", "eight-per-lane"}:
+        elements_per_lane = {"canonical": 1, "two-per-lane": 2, "four-per-lane": 4, "eight-per-lane": 8}[basis_kind]
+        basis_layout = ttgl.BlockedLayout([elements_per_lane], [THREADS_PER_WARP], [4], [0])
+    elif basis_kind == "permuted-lanes":
+        basis_layout = ttgl.DistributedLinearLayout(
+            reg_bases=[],
+            lane_bases=[[2], [1], [4], [8], [16]] + ([[0]] if THREADS_PER_WARP == 64 else []),
+            warp_bases=[[8], [16]],
+            block_bases=[],
+            shape=[32],
+        )
+    elif basis_kind == "noncanonical-slice":
+        basis_layout = ttgl.SliceLayout(0, ttgl.BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0]))
+    else:
+        basis_layout = ttgl.SliceLayout(0, ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP // 8, 8], [1, 4], [1, 0]))
+
+    torch.manual_seed(8231)
+    indices = torch.randint(-(1 << 31), (1 << 31) - 1, (block, ), dtype=torch.int32, device=device)
+    indices[:5] = torch.tensor([0, 1, 5, -(1 << 31), -1], dtype=torch.int32, device=device)
+    bases = torch.randint(-(1 << 31), (1 << 31) - 1, (32, ), dtype=torch.int32, device=device)
+    output = torch.empty_like(indices)
+
+    reference = torch.zeros_like(indices)
+    for bit in range(32):
+        selected = ((indices.to(torch.int64) >> bit) & 1).to(torch.bool)
+        reference = torch.where(selected, reference ^ bases[bit], reference)
+
+    compiled = _linear_apply_kernel[(1, )](indices, bases, output, block, index_layout, basis_layout, 0, False,
+                                           num_warps=4)
+    torch.testing.assert_close(output, reference, rtol=0, atol=0)
+    assert "tt.linear_apply" in compiled.asm["ttgir"]
+    assert "ttg.convert_layout" not in compiled.asm["ttgir"]
+    assert compiled.metadata.shared == (128 if basis_kind == "cross-warp" else 0)
+    if is_cuda():
+        ptx = compiled.asm["ptx"]
+        assert ptx.count("shfl.sync") == 32
+        assert ("bar.sync" in ptx or "barrier.sync" in ptx) == (basis_kind == "cross-warp")
+
+
+@pytest.mark.parametrize(
+    "index_layout",
+    _filter_layouts([_swizzled_warp_layouts_1d()[0], _swizzled_warp_layouts_2d()[0]]),
+    ids=["non-injective-1d", "swizzled-2d"],
+)
+def test_linear_apply_generic_linear_layout(index_layout, device):
+    shape = index_layout.shape
+    block = math.prod(shape)
+    second_dim = shape[1] if len(shape) == 2 else 0
+    num_warps = 2**len(index_layout.warp_bases)
+    basis_layout = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [num_warps], [0])
+
+    torch.manual_seed(4513)
+    indices = torch.randint(-(1 << 31), (1 << 31) - 1, (block, ), dtype=torch.int32, device=device)
+    indices[:5] = torch.tensor([0, 1, 5, -(1 << 31), -1], dtype=torch.int32, device=device)
+    bases = torch.randint(-(1 << 31), (1 << 31) - 1, (32, ), dtype=torch.int32, device=device)
+    output = torch.empty_like(indices)
+
+    reference = torch.zeros_like(indices)
+    for bit in range(32):
+        selected = ((indices.to(torch.int64) >> bit) & 1).to(torch.bool)
+        reference = torch.where(selected, reference ^ bases[bit], reference)
+
+    compiled = _linear_apply_kernel[(1, )](indices, bases, output, block, index_layout, basis_layout, second_dim, False,
+                                           num_warps=num_warps)
+    torch.testing.assert_close(output, reference, rtol=0, atol=0)
+    assert "#ttg.generic_linear" in compiled.asm["ttgir"]
+    assert "tt.linear_apply" in compiled.asm["ttgir"]
+    assert f"sizePerThread = [1], threadsPerWarp = [{THREADS_PER_WARP}]" in compiled.asm["ttgir"]
+    if is_cuda():
+        assert "nvvm.shfl.sync.idx" in compiled.asm["llir"]
+    assert compiled.metadata.shared == 0
+
+
 @gluon.jit
 def _linear_apply_convert_basis_layout_kernel(indices_ptr, bases_ptr, output_ptr, BLOCK: ttgl.constexpr,
                                               INDEX_LAYOUT: ttgl.constexpr, SOURCE_BASIS_LAYOUT: ttgl.constexpr,
@@ -2139,19 +2218,30 @@ def _linear_apply_auto_layout_kernel(indices_ptr, bases_ptr, output_ptr, INDEX_L
     index = ttgl.load(indices_ptr + offsets).to(ttgl.uint32)
     bases = ttgl.load(bases_ptr + ttgl.arange(0, 32)).to(ttgl.uint32)
 
-    # Keep the actual operands automatic, but independently seed the 1-D basis
-    # and the 2-D result so Gluon must not propagate between their layouts.
-    ttgl.set_auto_layout(bases, BASIS_LAYOUT)
+    if BASIS_LAYOUT is not None:
+        ttgl.set_auto_layout(bases, BASIS_LAYOUT)
+
+    # The 1-D basis must infer its canonical layout independently of the
+    # explicitly seeded 2-D result while preserving an optional basis seed.
     result = ttgl.linear_apply(index, bases)
     result = ttgl.set_auto_layout(result, INDEX_LAYOUT)
     offsets = ttgl.set_auto_layout(offsets, INDEX_LAYOUT)
     ttgl.store(output_ptr + offsets, result)
 
 
-def test_linear_apply_auto_layout_independent_bases(device):
+@pytest.mark.parametrize(
+    "basis_layout",
+    [
+        None,
+        ttgl.SliceLayout(0, ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], [4, 1], [1, 0])),
+        ttgl.BlockedLayout([4], [THREADS_PER_WARP], [4], [0]),
+        ttgl.SliceLayout(0, ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP // 8, 8], [1, 4], [1, 0])),
+    ],
+    ids=["unseeded", "canonical-slice", "four-per-lane", "cross-warp"],
+)
+def test_linear_apply_auto_layout_independent_bases(basis_layout, device):
     block = 128
     index_layout = ttgl.BlockedLayout([1, 2], [4, THREADS_PER_WARP // 4], [2, 2], [1, 0])
-    basis_layout = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0])
 
     torch.manual_seed(1717)
     indices = torch.randint(-(1 << 31), (1 << 31) - 1, (block, ), dtype=torch.int32, device=device)
@@ -2167,7 +2257,15 @@ def test_linear_apply_auto_layout_independent_bases(device):
     assert "tt.linear_apply" in compiled.asm["ttgir"]
     assert "auto_encoding" not in compiled.asm["ttgir"]
     assert "sizePerThread = [1, 2]" in compiled.asm["ttgir"]
-    assert "sizePerThread = [1], threadsPerWarp = " in compiled.asm["ttgir"]
+    if basis_layout is None:
+        assert f"sizePerThread = [1], threadsPerWarp = [{THREADS_PER_WARP}]" in compiled.asm["ttgir"]
+    elif isinstance(basis_layout, ttgl.BlockedLayout):
+        assert f"sizePerThread = [4], threadsPerWarp = [{THREADS_PER_WARP}]" in compiled.asm["ttgir"]
+    else:
+        assert "#ttg.slice" in compiled.asm["ttgir"]
+        assert f"threadsPerWarp = {basis_layout.parent.threads_per_warp}" in compiled.asm["ttgir"]
+    crosses_warps = isinstance(basis_layout, ttgl.SliceLayout) and basis_layout.parent.threads_per_warp[0] != 1
+    assert compiled.metadata.shared == (128 if crosses_warps else 0)
 
 
 @pytest.mark.parametrize("M, N, M_tile_size, N_tile_size",

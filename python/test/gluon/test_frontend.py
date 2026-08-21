@@ -977,15 +977,12 @@ def test_linear_apply_tensor_member_multidimensional():
 @gluon.jit
 def test_linear_apply_auto_layout_independent_bases_frontend():
     # CHECK-DAG: [[INDEX_LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 8], warpsPerCTA = [2, 2], order = [1, 0]}>
-    # CHECK-DAG: [[BASIS_LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
     # CHECK-LABEL: @test_linear_apply_auto_layout_independent_bases_frontend
     index_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [2, 2], [1, 0])
-    basis_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
     index = ttgl.full([8, 8], 5, ttgl.uint32, layout=ttgl.AutoLayout())
     bases = ttgl.full([32], 7, ttgl.uint32, layout=ttgl.AutoLayout())
     # CHECK: [[BASES:%.*]] = arith.constant dense<7> : tensor<32xi32, #gluon.auto_encoding>
-    # CHECK: gluon.set_auto_layout [[BASES]] : tensor<32xi32, #gluon.auto_encoding> -> tensor<32xi32, [[BASIS_LAYOUT]]>
-    ttgl.set_auto_layout(bases, basis_layout)
+    # CHECK-NOT: gluon.set_auto_layout [[BASES]]
     # CHECK: [[RESULT:%.*]] = tt.linear_apply {{.*}}, [[BASES]] : tensor<8x8xi32, #gluon.auto_encoding>, tensor<32xi32, #gluon.auto_encoding> -> tensor<8x8xi32, #gluon.auto_encoding>
     result = ttgl.linear_apply(index, bases)
     ttgl.static_assert(result.dtype == ttgl.uint32)
@@ -1037,6 +1034,60 @@ def test_linear_apply_frontend_targets(target, rank_two, use_member):
         rf"tensor<{index_shape}xi32, \1>", text)
 
 
+@pytest.mark.parametrize("target", [HOPPER_TARGET, HIP_TARGET_RDNA4, HIP_TARGET_CDNA3],
+                         ids=["cuda", "wave32", "wave64"])
+@pytest.mark.parametrize(
+    "basis_kind",
+    ["two-per-lane", "four-per-lane", "eight-per-lane", "permuted-lanes", "noncanonical-slice", "cross-warp"])
+def test_linear_apply_frontend_cta_local_basis_layouts(target, basis_kind):
+    warp_size = target.warp_size
+    index_layout = ttgl.BlockedLayout([2], [warp_size], [4], [0])
+    if basis_kind.endswith("-per-lane"):
+        elements_per_lane = {"two-per-lane": 2, "four-per-lane": 4, "eight-per-lane": 8}[basis_kind]
+        basis_layout = ttgl.BlockedLayout([elements_per_lane], [warp_size], [4], [0])
+    elif basis_kind == "permuted-lanes":
+        basis_layout = ttgl.DistributedLinearLayout(
+            reg_bases=[],
+            lane_bases=[[2], [1], [4], [8], [16]] + ([[0]] if warp_size == 64 else []),
+            warp_bases=[[0], [0]],
+            block_bases=[],
+            shape=[32],
+        )
+    elif basis_kind == "noncanonical-slice":
+        basis_layout = ttgl.SliceLayout(0, ttgl.BlockedLayout([1, 4], [1, warp_size], [4, 1], [1, 0]))
+    else:
+        basis_layout = ttgl.SliceLayout(0, ttgl.BlockedLayout([1, 1], [warp_size // 8, 8], [1, 4], [1, 0]))
+
+    module = run_parser(_linear_apply_target_frontend_kernel, *make_args(index_layout, basis_layout, False, False),
+                        target=target)
+    text = module.str_nodebug()
+    assert "tt.linear_apply" in text
+    assert "ttg.convert_layout" not in text
+
+
+@pytest.mark.parametrize("cta_complete", [False, True], ids=["cross-cta-sharded", "redundant-cta-permutation"])
+def test_linear_apply_frontend_cta_complete_bases(cta_complete):
+    index_layout = ttgl.BlockedLayout([2], [32], [4], [0], cga_layout=[[0]])
+    basis_layout = ttgl.DistributedLinearLayout(
+        reg_bases=[],
+        lane_bases=[[1], [2], [4], [8], [16] if cta_complete else [0]],
+        warp_bases=[[0], [0]],
+        block_bases=[[16]],
+        shape=[32],
+    )
+    args = make_args(index_layout, basis_layout, False, False, num_ctas=2)
+    if cta_complete:
+        module = run_parser(_linear_apply_target_frontend_kernel, *args, target=HOPPER_TARGET)
+        assert "tt.linear_apply" in module.str_nodebug()
+    else:
+        with pytest.raises(CompilationError) as exc:
+            run_parser(_linear_apply_target_frontend_kernel, *args, target=HOPPER_TARGET)
+        message = str(exc.value.__cause__ or exc.value)
+        assert "all 32 values accessible within each CTA" in message
+        assert "cross-CTA basis layouts are unsupported" in message
+        assert "gl.convert_layout" in message
+
+
 @gluon.jit
 def _linear_apply_invalid_frontend_kernel(case: ttgl.constexpr):
     layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
@@ -1063,23 +1114,6 @@ def _linear_apply_invalid_frontend_kernel(case: ttgl.constexpr):
         bases = ttgl.full([4, 8], 7, ttgl.uint32, layout=rank_two_layout)
     elif case == "bases_length":
         bases = ttgl.full([16], 7, ttgl.uint32, layout=layout)
-    elif case == "bases_two_per_lane":
-        bases = ttgl.full([32], 7, ttgl.uint32, layout=ttgl.BlockedLayout([2], [32], [4], [0]))
-    elif case == "bases_four_per_lane":
-        bases = ttgl.full([32], 7, ttgl.uint32, layout=ttgl.BlockedLayout([4], [32], [4], [0]))
-    elif case == "bases_permuted_lanes":
-        permuted_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(reg_bases=[], lane_bases=[[2], [1], [4], [8],
-                                                                                                 [16]],
-                                                                       warp_bases=[[0],
-                                                                                   [0]], block_bases=[], shape=[32])
-        bases = ttgl.full([32], 7, ttgl.uint32, layout=permuted_layout)
-    elif case == "bases_noncanonical_slice":
-        slice_parent: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0])
-        bases = ttgl.full([32], 7, ttgl.uint32, layout=ttgl.SliceLayout(0, slice_parent))
-    elif case == "bases_cross_warp":
-        cross_warp_parent: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [4, 8], [1, 4], [1, 0])
-        cross_warp_layout: ttgl.constexpr = ttgl.SliceLayout(0, cross_warp_parent)
-        bases = ttgl.full([32], 7, ttgl.uint32, layout=cross_warp_layout)
     ttgl.linear_apply(index, bases)
 
 
@@ -1096,23 +1130,12 @@ def _linear_apply_invalid_frontend_kernel(case: ttgl.constexpr):
         ("bases_scalar", "linear_apply bases must be a uint32 tensor"),
         ("bases_rank", "linear_apply bases must be a one-dimensional tensor"),
         ("bases_length", "linear_apply bases must contain exactly 32 elements, but got 16"),
-        ("bases_two_per_lane", "linear_apply bases layout must have one value per lane"),
-        ("bases_four_per_lane", "linear_apply bases layout must have one value per lane"),
-        ("bases_permuted_lanes", "linear_apply bases layout must have one value per lane"),
-        ("bases_noncanonical_slice", "linear_apply bases layout must have one value per lane"),
-        ("bases_cross_warp", "linear_apply bases layout must have one value per lane"),
     ],
 )
 def test_linear_apply_frontend_errors(case, message):
     with pytest.raises(CompilationError) as exc:
         run_parser(_linear_apply_invalid_frontend_kernel, *make_args(case), target=HOPPER_TARGET)
     assert message in str(exc.value.__cause__ or exc.value)
-    if case.startswith("bases_") and case in {
-            "bases_two_per_lane", "bases_four_per_lane", "bases_permuted_lanes", "bases_noncanonical_slice",
-            "bases_cross_warp"
-    }:
-        assert "gl.convert_layout(..., gl.BlockedLayout([1], [warp_size], [num_warps], [0]))" in str(exc.value.__cause__
-                                                                                                     or exc.value)
 
 
 @filecheck_test
