@@ -199,41 +199,46 @@ struct MembarInfo {
   /// Buffers accessed since the most recent synchronization.
   BlockInfo pending;
 
-  /// Buffers reachable from the basic block entry.
-  BlockInfo entry;
+  /// Buffers reachable from the function entry block before the first
+  /// synchronization.
+  /// It keeps incrementing during the iterative algorithm until
+  ///  we note all paths to a basic block has synchronized.
+  BlockInfo entryBlockInfo;
 
-  /// Whether every path to this basic block has synchronized.
-  bool allPathsSynced = false;
+  /// Whether every path from the function entry block to the current program
+  /// point has synchronized.
+  bool allPathsFromEntrySynced = false;
 
   MembarInfo &join(const MembarInfo &other) {
     pending.join(other.pending);
-    entry.join(other.entry);
-    allPathsSynced &= other.allPathsSynced;
+    entryBlockInfo.join(other.entryBlockInfo);
+    allPathsFromEntrySynced &= other.allPathsFromEntrySynced;
     return *this;
   }
 
   void addBlockInfo(const BlockInfo &blockInfo) {
-    if (!allPathsSynced)
-      entry.join(blockInfo);
+    if (!allPathsFromEntrySynced)
+      entryBlockInfo.join(blockInfo);
     pending.join(blockInfo);
   }
 
   void sync() {
     pending.sync();
-    allPathsSynced = true;
+    allPathsFromEntrySynced = true;
   }
 
   void applyCallSummary(const MembarInfo &callee) {
-    if (!allPathsSynced)
-      entry.join(callee.entry);
-    if (callee.allPathsSynced)
+    if (!allPathsFromEntrySynced)
+      entryBlockInfo.join(callee.entryBlockInfo);
+    if (callee.allPathsFromEntrySynced)
       sync();
     pending.join(callee.pending);
   }
 
   bool operator==(const MembarInfo &other) const {
-    return pending == other.pending && entry == other.entry &&
-           allPathsSynced == other.allPathsSynced;
+    return pending == other.pending &&
+           entryBlockInfo == other.entryBlockInfo &&
+           allPathsFromEntrySynced == other.allPathsFromEntrySynced;
   }
 };
 
