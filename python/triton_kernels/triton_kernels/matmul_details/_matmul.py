@@ -470,8 +470,8 @@ def _matmul(
                 if is_x_microscaled:
                     acc = tl.dot_scaled(wT, None, "bf16", x.T, x_scales, x_format, acc=acc, fast_math=True)
                 else:
-                    tl.static_assert(x_format == "bf16")
-                    acc = tl.dot(wT, x.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
+                    tl.static_assert(x_format == "fp16" or x_format == "bf16")
+                    acc = tl.dot(wT.to(x.dtype), x.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
             elif (is_w_mxfp4 and WMxScale.dtype.element_ty == tl.float8e4nv and not is_x_microscaled
                   and x_format != "fp16" and x_format != "bf16"):
                 # This fallback upcasts only local values and block scales.
