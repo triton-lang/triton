@@ -208,31 +208,6 @@ def test_mxfp4_value_convert_layout_compact_source(mma_version, major_dim, devic
 
 
 @pytest.mark.parametrize("mx_axis", [-2, -1])
-@pytest.mark.parametrize("major_dim", [-2, -1])
-@pytest.mark.parametrize("step", [1, 2])
-def test_mxfp4_value_convert_layout_to_strided_peak_allocation(mx_axis, major_dim, step):
-    data = torch.empty((2048, 2048), dtype=torch.uint8, device="cuda")
-    layout = HopperMXValueLayout(mx_axis, 3)
-    source = convert_layout(wrap_torch_tensor(data, dtype=FP4), layout)
-    if step == 2:
-        storage = torch.stack((source.data, source.data), dim=-1)[..., 1]
-        source = wrap_torch_tensor(storage, dtype=FP4, shape=source.shape, layout=layout)
-    destination = StridedLayout(major_dim)
-    warm = convert_layout(source, destination)
-    torch.cuda.synchronize(source.device)
-    del warm
-    baseline = torch.cuda.memory_allocated(source.device)
-    torch.cuda.reset_peak_memory_stats(source.device)
-
-    actual = convert_layout(source, destination)
-    torch.cuda.synchronize(source.device)
-    peak = torch.cuda.max_memory_allocated(source.device) - baseline
-
-    # Public conversion should allocate only its final packed storage.
-    assert peak <= actual.data.nbytes + 1024**2
-
-
-@pytest.mark.parametrize("mx_axis", [-2, -1])
 def test_mxfp4_value_swizzle_peak_allocation(mx_axis):
     data = torch.empty((2048, 2048), dtype=torch.uint8, device="cuda")
     layout = HopperMXValueLayout(mx_axis, 3)

@@ -40,8 +40,8 @@ def test_scale_zero_sized_roundtrip(shape, layout, device):
     assert roundtrip.storage.data.shape == x.shape
 
 
-@pytest.mark.parametrize(("shape", "major_dim"),
-                         [(shape[:-1] + (2 * shape[-1], ), -1) for shape in ZERO_SIZED_SHAPES] + [((2, 0, 6, 8), -2)])
+@pytest.mark.parametrize("shape", ZERO_SIZED_SHAPES + [(0, 0), (2, 0, 6, 8)])
+@pytest.mark.parametrize("major_dim", [-2, -1])
 @pytest.mark.parametrize("layouts", [
     (BlackwellMXValueLayout(), ),
     (BlackwellMX4ValueShuffledLayout(), BlackwellMX4ValueShuffledLayout(block_k=256, block_n=128)),
@@ -63,6 +63,7 @@ def test_value_zero_sized_roundtrip(shape, major_dim, layouts, device):
 
     assert src.shape == roundtrip.shape == list(shape)
     assert roundtrip.data.shape == src.data.shape
+    assert roundtrip.data.stride() == src.data.stride()
 
 
 @pytest.mark.parametrize("k", [1, 3])
@@ -74,13 +75,14 @@ def test_mxfp4_value_shuffled_rejects_odd_k(k, n):
 
 
 @pytest.mark.parametrize("k", [0, 2])
-def test_mxfp4_value_shuffled_retile_rejects_odd_n(k):
+@pytest.mark.parametrize("destination", [BlackwellMX4ValueShuffledLayout(), StridedLayout(-2), StridedLayout(-1)])
+def test_mxfp4_value_shuffled_rejects_odd_n(k, destination):
     shape = [k, 3]
     layout = BlackwellMX4ValueShuffledLayout(block_n=128)
     data = torch.full(layout.storage_shape(shape, True), 0x11, dtype=torch.uint8, device="cuda")
     src = wrap_torch_tensor(data, dtype=FP4, shape=shape, layout=layout)
     with pytest.raises(ValueError, match="packing dimension -1 must have an even size"):
-        convert_layout(src, BlackwellMX4ValueShuffledLayout())
+        convert_layout(src, destination)
 
 
 @pytest.mark.parametrize("shape", [(256, 256), (258, 129), (2, 66, 33), (2, 3, 130, 65)])
@@ -129,6 +131,54 @@ def test_mxfp4_value_shuffled_convert_layout_matches_torch(shape):
     assert actual.storage.data.is_contiguous()
     assert torch.equal(actual.storage.data.cpu(), expected.storage.data)
     assert torch.equal(roundtrip.storage.data, data_cuda)
+
+
+@pytest.mark.parametrize("shape", [(256, 128), (2, 66, 34), (2, 3, 130, 65)])
+@pytest.mark.parametrize("layout", [
+    BlackwellMXValueLayout(),
+    BlackwellMX4ValueShuffledLayout(),
+    BlackwellMX4ValueShuffledLayout(block_k=256, block_n=128)
+])
+@pytest.mark.parametrize("major_dim", [-2, -1])
+@pytest.mark.parametrize("step", [1, 2])
+@pytest.mark.parametrize("dtype", [torch.uint8, torch.int32])
+def test_mxfp4_value_convert_layout_to_strided_matches_torch(shape, layout, major_dim, step, dtype):
+    data = torch.randint(0, 256, shape, dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
+    source = convert_layout(wrap_torch_tensor(data, dtype=FP4), layout)
+    source = wrap_torch_tensor(source.data.to(dtype), dtype=FP4, shape=source.shape, layout=layout)
+    destination = StridedLayout(major_dim)
+    expected = convert_layout(source, destination)
+
+    data_cuda = source.data.cuda()
+    if step == 2:
+        contiguous_axis = -2 if isinstance(layout, BlackwellMXValueLayout) else -1
+        data_cuda = data_cuda.movedim(contiguous_axis, -1)
+        data_cuda = torch.stack((torch.zeros_like(data_cuda), data_cuda), dim=-2)[..., 1, :]
+        data_cuda = data_cuda.movedim(-1, contiguous_axis)
+    source_cuda = wrap_torch_tensor(data_cuda, dtype=FP4, shape=source.shape, layout=layout)
+    actual = convert_layout(source_cuda, destination)
+
+    assert actual.shape == expected.shape
+    assert actual.data.shape == expected.data.shape
+    assert actual.data.stride() == expected.data.stride()
+    assert actual.data.dtype == expected.data.dtype
+    assert torch.equal(actual.data.cpu(), expected.data)
+
+
+@pytest.mark.parametrize(("shape", "major_dim"), [((64, 129), -2), ((129, 64), -1)])
+def test_mxfp4_value_convert_layout_odd_source_packing(shape, major_dim):
+    layout = BlackwellMXValueLayout()
+    data = torch.full(layout.storage_shape(list(shape), True), 0x11, dtype=torch.uint8).mT.contiguous().mT
+    source_cpu = wrap_torch_tensor(data, dtype=FP4, shape=shape, layout=layout)
+    destination = StridedLayout(major_dim)
+
+    with pytest.raises(RuntimeError) as expected:
+        convert_layout(source_cpu, destination)
+
+    source_cuda = wrap_torch_tensor(data.cuda(), dtype=FP4, shape=shape, layout=layout)
+    with pytest.raises(RuntimeError) as actual:
+        convert_layout(source_cuda, destination)
+    assert str(actual.value) == str(expected.value)
 
 
 @pytest.mark.parametrize("inverse", [False, True])
