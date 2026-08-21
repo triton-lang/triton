@@ -187,6 +187,34 @@ inferFp4ToFpResultType(RankedTensorType srcType, Type elemType, int32_t axis,
   return RankedTensorType::get(shape, elemType, outEnc);
 }
 
+FailureOr<RankedTensorType>
+inferFpToFp4ResultType(RankedTensorType srcType, int32_t axis,
+                       std::optional<Location> loc) {
+  auto rank = srcType.getRank();
+  if (axis < 0 || axis >= rank)
+    return failure();
+  if (srcType.getShape()[axis] % 2 != 0)
+    return failure();
+
+  // srcType is the unpacked (larger) tensor. Infer the packed encoding from
+  // the unpacked one using backward inference, then halve the axis extent.
+  Attribute inEnc = srcType.getEncoding();
+  assert(inEnc && "expected an encoding on the unpacked source type");
+  Attribute outEnc;
+  auto result =
+      inEnc.getDialect()
+          .getRegisteredInterface<triton::DialectInferLayoutInterface>()
+          ->inferFp4ToFpOpEncoding(srcType.getShape(), axis, inEnc, outEnc,
+                                   /*fwdInference=*/false, loc);
+  if (failed(result))
+    return failure();
+
+  auto shape = llvm::to_vector(srcType.getShape());
+  shape[axis] /= 2;
+  return RankedTensorType::get(shape, IntegerType::get(srcType.getContext(), 8),
+                               outEnc);
+}
+
 SmallVector<unsigned> getThreadsPerWarp(Attribute layout,
                                         ArrayRef<int64_t> shape) {
   return toGenericLinearEncoding(cast<DistributedEncodingTrait>(layout), shape)

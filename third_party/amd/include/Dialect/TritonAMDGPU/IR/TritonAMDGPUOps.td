@@ -556,7 +556,7 @@ def MaskedStoreOp : TT_AMDGPU_Op<"masked_store", []> {
 // ScaledUpcastFp4Op
 //===----------------------------------------------------------------------===//
 
-def ScaledUpcastFp4Op : TT_AMDGPU_Op<"scaled_upcast_fp4", [Pure, DeclareOpInterfaceMethods<UpcastFpOpInterface>]> {
+def ScaledUpcastFp4Op : TT_AMDGPU_Op<"scaled_upcast_fp4", [Pure, DeclareOpInterfaceMethods<CastFpOpInterface>]> {
   let summary = "Upcast fp4 and then multiply scale";
 
   let description = [{
@@ -610,7 +610,7 @@ def ScaledUpcastFp8Op : TT_AMDGPU_Op<"scaled_upcast_fp8", [
     Elementwise,
     SameOperandsAndResultShape,
     SameOperandsAndResultEncoding,
-    DeclareOpInterfaceMethods<UpcastFpOpInterface>]> {
+    DeclareOpInterfaceMethods<CastFpOpInterface>]> {
   let summary = "Upcast Fp8 and then multiply scale";
 
   let description = [{
@@ -628,6 +628,118 @@ def ScaledUpcastFp8Op : TT_AMDGPU_Op<"scaled_upcast_fp8", [
     $input `scale` $scale attr-dict
         `:` type($input) `,` type($scale) `->` type($output)
   }];
+}
+
+//===----------------------------------------------------------------------===//
+// ScaledDowncastFp4Op
+//===----------------------------------------------------------------------===//
+
+def ScaledDowncastFp4Op : TT_AMDGPU_Op<"scaled_downcast_fp4", [
+    Pure,
+    DeclareOpInterfaceMethods<CastFpOpInterface>]> {
+  let summary = "Scale and downcast floating-point values to packed FP4";
+
+  let description = [{
+    Divide FP16, BF16, or FP32 values by an E8M0 scale and convert them to
+    packed e2m1 values. The result packs two consecutive fp4 values per i8
+    along `axis`: the element at even position provides the low nibble and the
+    following element the high nibble, so the result extent along `axis` is
+    half the input extent (the inverse of `scaled_upcast_fp4`).
+
+    The `axis` attribute identifies the dimension along which the fp4 elements
+    are packed and along which scales are shared. The scale must be compact
+    along `axis`: one raw E8M0 i8 payload covers multiple consecutive packed
+    bytes along that axis (unlike :func:`scaled_upcast_fp4`, expanded scales
+    with one scale per output element are not supported). Each scale block along
+    `axis` must cover a multiple of 8 fp4 values.
+
+    This will be hardware accelerated on architectures supporting
+    `v_cvt_scalef32_pk_*` instructions (e.g. CDNA4 and CDNA5).
+  }];
+
+  let arguments = (ins
+    RankedTensorOf<[F16, BF16, F32]>:$input,
+    RankedTensorOf<[I8]>:$scale,
+    I32Attr:$axis);
+  let results = (outs RankedTensorOf<[I8]>:$output);
+
+  let builders = [
+      OpBuilder<(ins "Value":$input, "Value":$scale, "int32_t":$axis), [{
+        auto inputTy = cast<RankedTensorType>(input.getType());
+        auto resultTy = mlir::triton::gpu::inferFpToFp4ResultType(
+            inputTy, axis, $_state.location);
+        assert(succeeded(resultTy));
+        build($_builder, $_state, *resultTy, input, scale, axis);
+      }]>
+  ];
+
+  let assemblyFormat = [{
+    $input `scale` $scale attr-dict
+        `:` type($input) `,` type($scale) `->` type($output)
+  }];
+
+  let extraClassDeclaration = [{
+    static std::optional<mlir::triton::LinearLayout>
+    computeScaleLayout(const mlir::triton::LinearLayout &outputLayout,
+                       int64_t axis, int64_t pairsPerScale);
+  }];
+
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// ScaledDowncastFp8Op
+//===----------------------------------------------------------------------===//
+
+def ScaledDowncastFp8Op : TT_AMDGPU_Op<"scaled_downcast_fp8", [
+    Pure,
+    DeclareOpInterfaceMethods<CastFpOpInterface>]> {
+  let summary = "Scale and downcast floating-point values to fp8";
+
+  let description = [{
+    Divide FP16, BF16, or FP32 values by an E8M0 scale and convert them to
+    fp8 (e4m3) or bf8 (e5m2) values. This is the elementwise inverse of
+    `scaled_upcast_fp8`: input and result share the same shape and encoding,
+    and each fp8 result occupies its own byte (no packing).
+
+    The `axis` attribute identifies the dimension along which scales are
+    shared. The scale must be compact along `axis`: one raw E8M0 i8 payload
+    covers multiple consecutive output elements along that axis (unlike
+    :func:`scaled_upcast_fp8`, expanded scales with one scale per output element
+    are not supported). Each scale block along `axis` must cover a multiple of 8
+    output elements.
+
+    This will be hardware accelerated on architectures supporting
+    `v_cvt_scalef32_pk_{fp8,bf8}_*` instructions (e.g. CDNA4 and CDNA5).
+  }];
+
+  let arguments = (ins
+    RankedTensorOf<[F16, BF16, F32]>:$input,
+    RankedTensorOf<[I8]>:$scale,
+    I32Attr:$axis);
+  let results = (outs RankedTensorOf<[AnyTypeOf<[F8E4M3FN, F8E5M2]>]>:$output);
+
+  let builders = [
+      OpBuilder<(ins "Value":$input, "Value":$scale, "Type":$elemType,
+                     "int32_t":$axis), [{
+        auto inputTy = cast<RankedTensorType>(input.getType());
+        auto resultTy = inputTy.clone(elemType);
+        build($_builder, $_state, resultTy, input, scale, axis);
+      }]>
+  ];
+
+  let assemblyFormat = [{
+    $input `scale` $scale attr-dict
+        `:` type($input) `,` type($scale) `->` type($output)
+  }];
+
+  let extraClassDeclaration = [{
+    static std::optional<mlir::triton::LinearLayout>
+    computeScaleLayout(const mlir::triton::LinearLayout &outputLayout,
+                       int64_t axis, int64_t elementsPerScale);
+  }];
+
+  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//
