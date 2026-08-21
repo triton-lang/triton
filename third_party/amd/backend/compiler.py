@@ -426,7 +426,7 @@ class HIPBackend(BaseBackend):
         llvm.init_targets()
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
-        amd.attach_target_triple(llvm_mod)
+        llvm.attach_target_triple(llvm_mod, amd.TARGET_TRIPLE)
         target_features = ''
         if knobs.compilation.enable_asan:
             target_features = '+xnack'
