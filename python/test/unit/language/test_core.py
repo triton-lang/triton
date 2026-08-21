@@ -2377,7 +2377,7 @@ def test_load_store_same_ptr(device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("dtype_str", ['int32'])
+@pytest.mark.parametrize("dtype_str", ['int32', 'uint32', 'int64', 'uint64'])
 def test_umulhi(dtype_str, device):
 
     @triton.jit
@@ -2388,29 +2388,31 @@ def test_umulhi(dtype_str, device):
         z = tl.umulhi(x, y)
         tl.store(Z + tl.arange(0, N), z)
 
-    def umulhi32(a, b):
-        # Convert to 64-bit unsigned integers to prevent overflow
-        a_64 = a.astype(np.int64)
-        b_64 = b.astype(np.int64)
+    def umulhi_ref(a, b):
+        # umulhi multiplies the unsigned bit patterns; Python ints keep the
+        # 2N-bit product exact where numpy would overflow.
+        bits = a.dtype.itemsize * 8
+        unsigned = np.dtype(f'uint{bits}')
+        product = a.view(unsigned).astype(object) * b.view(unsigned).astype(object)
+        return np.array((product >> bits).tolist(), dtype=unsigned).view(a.dtype)
 
-        # Perform the multiplication in 64-bit
-        product_64 = a_64 * b_64
-
-        # Shift right by 32 bits to get the high part of the product
-        result_high_32 = product_64 >> 32
-        return result_high_32
-
+    np_dtype = np.dtype(dtype_str)
+    unsigned = np.dtype(f'uint{np_dtype.itemsize * 8}')
+    iinfo = np.iinfo(np_dtype)
+    # Boundary values matter most here: operands whose top bit is set.
+    edges = np.array([0, 1, 2, 3, 7, 255, iinfo.max, iinfo.min], dtype=np_dtype)
     rs = RandomState(17)
-    N = 128
-    x = numpy_random((N, ), dtype_str=dtype_str, rs=rs, low=0)
-    x_tri = to_triton(x, device=device)
-    y = numpy_random((N, ), dtype_str=dtype_str, rs=rs, low=0)
-    y_tri = to_triton(y, device=device)
-    z_tri = torch.zeros_like(x_tri)
+    N = 32
+    random = np.frombuffer(rs.bytes((N - len(edges)) * np_dtype.itemsize), dtype=unsigned).view(np_dtype)
+    x = np.concatenate((edges, random))
+    y = np.roll(x, 1)
+
+    x_tri = to_triton(x, device=device, dst_type=dtype_str)
+    y_tri = to_triton(y, device=device, dst_type=dtype_str)
+    z_tri = to_triton(np.zeros_like(x), device=device, dst_type=dtype_str)
     kernel[(1, )](x_tri, y_tri, z_tri, N=N)
 
-    z_ref = umulhi32(x, y)
-    np.testing.assert_equal(z_ref, to_numpy(z_tri))
+    np.testing.assert_equal(umulhi_ref(x, y), to_numpy(z_tri))
 
 
 @pytest.mark.interpreter
