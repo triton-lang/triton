@@ -1,7 +1,7 @@
 from abc import ABCMeta, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, Union
+from typing import Dict, Tuple, Union
 from types import ModuleType
 
 
@@ -22,6 +22,11 @@ class Language(Enum):
 
 class BaseBackend(metaclass=ABCMeta):
     supports_native_tensor_specialization = True
+
+    # Config option names (besides kwargs and ir_override) meaningful for this
+    # backend; the autotuner forwards and displays only these. Backends may
+    # override the default GPU knobs.
+    autotune_option_names: Tuple[str, ...] = ("num_warps", "num_ctas", "num_stages", "maxnreg")
 
     def __init__(self, target: GPUTarget) -> None:
         self.target = target
