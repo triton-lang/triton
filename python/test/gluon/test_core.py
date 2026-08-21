@@ -6,6 +6,7 @@ from itertools import product
 
 import triton
 import triton.language as tl
+from triton import CompilationError
 
 from triton._internal_testing import (
     is_compile_warmup,
@@ -1044,6 +1045,41 @@ def test_device_tma_store():
 
     tma_device_store_kernel[(1, )](out, XBLOCK, smem_layout)
     torch.testing.assert_close(out, torch.zeros_like(out))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_device_tma_stride_alignment():
+
+    @gluon.jit
+    def kernel(input_ptr, XBLOCK: ttgl.constexpr, stride_m: ttgl.constexpr, smem_layout: ttgl.constexpr):
+        tma.make_tensor_descriptor(
+            input_ptr,
+            shape=[XBLOCK, XBLOCK],
+            strides=[stride_m, 1],
+            block_shape=[XBLOCK, XBLOCK],
+            layout=smem_layout,
+        )
+
+    XBLOCK = 16
+    inp = torch.zeros((XBLOCK, XBLOCK), device="cuda", dtype=torch.float16)
+    smem_layout = ttgl.NVMMASharedLayout(
+        swizzle_byte_width=32,
+        element_bitwidth=16,
+        rank=2,
+        transposed=False,
+        fp4_padded=False,
+    )
+
+    def alloc_fn(size: int, alignment: int, stream: int):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    # float16 is 2 bytes, so a stride of 15 => 30 bytes, which is not 16-byte aligned.
+    with pytest.raises(CompilationError, match="16-byte aligned"):
+        kernel[(1, )](inp, XBLOCK, 15, smem_layout)
+    # A stride of 16 => 32 bytes is aligned.
+    kernel[(1, )](inp, XBLOCK, XBLOCK, smem_layout)
 
 
 @gluon.jit
