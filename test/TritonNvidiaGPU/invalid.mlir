@@ -13,6 +13,8 @@
 
 #shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
+#shared_a_16 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
+#shared_16 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 16}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 #tmem_acc_fp4_padded = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, fp4Padded = true>
 #tmem_fp4_dense = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
@@ -45,7 +47,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %scale_b: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
       %useAcc: i1,
       %pred: i1) {
-    // expected-error @below {{expected e2m1 LHS operand to have i8 storage}}
+    // expected-error @below {{LHS operand dtype 'f8E5M2' does not match its scaled MMA format}}
     ttng.tc_gen5_mma_scaled %a, %b, %c, %scale_a, %scale_b, %useAcc, %pred lhs = e2m1 rhs = e5m2 :
        !ttg.memdesc<128x64xf8E5M2, #tmem_fp4_padded, #ttng.tensor_memory>,
        !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
@@ -95,10 +97,100 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %scale_b: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
       %useAcc: i1,
       %pred: i1) {
-    // expected-error @below {{unsupported LHS operand type for scaled MMA}}
+    // expected-error @below {{LHS operand format fp16 is not supported by scaled MMA}}
     ttng.tc_gen5_mma_scaled %a, %b, %c, %scale_a, %scale_b, %useAcc, %pred lhs = fp16 rhs = fp16 :
        !ttg.memdesc<128x64xf16, #tmem, #ttng.tensor_memory>,
        !ttg.memdesc<64x128xf16, #shared, #ttg.shared_memory>,
+       !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+       !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+       !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>
+    tt.return
+  }
+
+  tt.func public @scaled_lhs_format_mismatch(
+      %a: !ttg.memdesc<128x64xf8E4M3FN, #shared_a, #ttg.shared_memory>,
+      %b: !ttg.memdesc<64x128xf8E5M2, #shared, #ttg.shared_memory>,
+      %c: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+      %scale_a: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+      %scale_b: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+      %useAcc: i1,
+      %pred: i1) {
+    // expected-error @below {{LHS operand dtype 'f8E4M3FN' does not match its scaled MMA format}}
+    ttng.tc_gen5_mma_scaled %a, %b, %c, %scale_a, %scale_b, %useAcc, %pred lhs = e5m2 rhs = e5m2 :
+       !ttg.memdesc<128x64xf8E4M3FN, #shared_a, #ttg.shared_memory>,
+       !ttg.memdesc<64x128xf8E5M2, #shared, #ttg.shared_memory>,
+       !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+       !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+       !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>
+    tt.return
+  }
+
+  tt.func public @scaled_rhs_format_mismatch(
+      %a: !ttg.memdesc<128x64xf8E4M3FN, #shared_a, #ttg.shared_memory>,
+      %b: !ttg.memdesc<64x128xf8E5M2, #shared, #ttg.shared_memory>,
+      %c: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+      %scale_a: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+      %scale_b: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+      %useAcc: i1,
+      %pred: i1) {
+    // expected-error @below {{RHS operand dtype 'f8E5M2' does not match its scaled MMA format}}
+    ttng.tc_gen5_mma_scaled %a, %b, %c, %scale_a, %scale_b, %useAcc, %pred lhs = e4m3 rhs = e4m3 :
+       !ttg.memdesc<128x64xf8E4M3FN, #shared_a, #ttg.shared_memory>,
+       !ttg.memdesc<64x128xf8E5M2, #shared, #ttg.shared_memory>,
+       !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+       !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+       !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>
+    tt.return
+  }
+
+  tt.func public @scaled_integer_storage_width_invalid(
+      %a: !ttg.memdesc<128x64xi16, #shared_a_16, #ttg.shared_memory>,
+      %b: !ttg.memdesc<64x128xf8E5M2, #shared, #ttg.shared_memory>,
+      %c: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+      %scale_a: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+      %scale_b: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+      %useAcc: i1,
+      %pred: i1) {
+    // expected-error @below {{LHS operand dtype 'i16' does not match its scaled MMA format}}
+    ttng.tc_gen5_mma_scaled %a, %b, %c, %scale_a, %scale_b, %useAcc, %pred lhs = e5m2 rhs = e5m2 :
+       !ttg.memdesc<128x64xi16, #shared_a_16, #ttg.shared_memory>,
+       !ttg.memdesc<64x128xf8E5M2, #shared, #ttg.shared_memory>,
+       !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+       !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+       !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>
+    tt.return
+  }
+
+  tt.func public @scaled_shared_fp16_format_invalid(
+      %a: !ttg.memdesc<128x64xf16, #shared_a_16, #ttg.shared_memory>,
+      %b: !ttg.memdesc<64x128xf16, #shared_16, #ttg.shared_memory>,
+      %c: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+      %scale_a: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+      %scale_b: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+      %useAcc: i1,
+      %pred: i1) {
+    // expected-error @below {{LHS operand format fp16 is not supported by scaled MMA}}
+    ttng.tc_gen5_mma_scaled %a, %b, %c, %scale_a, %scale_b, %useAcc, %pred lhs = fp16 rhs = fp16 :
+       !ttg.memdesc<128x64xf16, #shared_a_16, #ttg.shared_memory>,
+       !ttg.memdesc<64x128xf16, #shared_16, #ttg.shared_memory>,
+       !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+       !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+       !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>
+    tt.return
+  }
+
+  tt.func public @scaled_shared_bf16_format_invalid(
+      %a: !ttg.memdesc<128x64xbf16, #shared_a_16, #ttg.shared_memory>,
+      %b: !ttg.memdesc<64x128xbf16, #shared_16, #ttg.shared_memory>,
+      %c: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+      %scale_a: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+      %scale_b: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+      %useAcc: i1,
+      %pred: i1) {
+    // expected-error @below {{LHS operand format bf16 is not supported by scaled MMA}}
+    ttng.tc_gen5_mma_scaled %a, %b, %c, %scale_a, %scale_b, %useAcc, %pred lhs = bf16 rhs = bf16 :
+       !ttg.memdesc<128x64xbf16, #shared_a_16, #ttg.shared_memory>,
+       !ttg.memdesc<64x128xbf16, #shared_16, #ttg.shared_memory>,
        !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
        !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
        !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>
