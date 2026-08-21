@@ -54,6 +54,9 @@ def async_gather(tensor_desc, x_offsets, y_offset, barrier, result, pred=True, m
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         multicast (bool): Enable multicast.
     """
+    # As in async_scatter, Gluon bypasses TritonSemantic.descriptor_gather.
+    _semantic._check_supports_tma_gather()
+
     if _semantic.builder.options.enable_iisan:
         _emit_alignment_check(tensor_desc, (y_offset, ), "async_gather", "y_offset", _semantic=_semantic)
 
@@ -86,12 +89,9 @@ def async_scatter(tensor_desc, x_offsets, y_offset, src, _semantic=None):
         y_offset (int): Scalar Y offset.
         src (tensor_memory_descriptor): The source data, must be in NVMMASharedLayout.
     """
-    # TMA scatter lowers to `tile::scatter4`, which consumer Blackwell (sm_12x) does not
-    # implement. Gluon calls the builder directly and never passes through
-    # TritonSemantic.descriptor_scatter, so the check has to live here too.
-    assert _semantic._has_tma_scatter(), \
-        "TMA scatter is not supported on consumer Blackwell (sm_12x). " \
-        "TMA gather is supported on this architecture; use regular stores instead."
+    # Gluon calls the builder directly and never passes through
+    # TritonSemantic.descriptor_scatter, so the target check has to live here too.
+    _semantic._check_supports_tma_scatter()
 
     if _semantic.builder.options.enable_iisan:
         _emit_alignment_check(tensor_desc, (y_offset, ), "async_scatter", "y_offset", _semantic=_semantic)
