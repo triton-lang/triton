@@ -1595,6 +1595,39 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %sum = arith.addf %call, %cvt : tensor<128x32xf16, #blockedCallDst>
     tt.return %sum : tensor<128x32xf16, #blockedCallDst>
   }
+
+  tt.func private @nested_entry_c() -> tensor<128x32xf16, #blockedCallDst> {
+    %cst = arith.constant dense<0.0> : tensor<128x32xf16, #blockedCallSrc>
+    %cvt = ttg.convert_layout %cst : tensor<128x32xf16, #blockedCallSrc> -> tensor<128x32xf16, #blockedCallDst>
+    tt.return %cvt : tensor<128x32xf16, #blockedCallDst>
+  }
+
+  // CHECK-LABEL: @nested_entry_b
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: tt.call @nested_entry_c
+  tt.func private @nested_entry_b() -> tensor<128x32xf16, #blockedCallDst> {
+    %call = tt.call @nested_entry_c() : () -> tensor<128x32xf16, #blockedCallDst>
+    tt.return %call : tensor<128x32xf16, #blockedCallDst>
+  }
+
+  // The first call has no pending shared-memory accesses and needs no barrier.
+  // The conversion before the second call conflicts with the entry state
+  // propagated through B from C.
+  // CHECK-LABEL: @nested_entry_a
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: %[[FIRST:.*]] = tt.call @nested_entry_b
+  // CHECK: ttg.convert_layout
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: %[[SECOND:.*]] = tt.call @nested_entry_b
+  tt.func @nested_entry_a() -> tensor<128x32xf16, #blockedCallDst> {
+    %first = tt.call @nested_entry_b() : () -> tensor<128x32xf16, #blockedCallDst>
+    %cst = arith.constant dense<0.0> : tensor<128x32xf16, #blockedCallSrc>
+    %cvt = ttg.convert_layout %cst : tensor<128x32xf16, #blockedCallSrc> -> tensor<128x32xf16, #blockedCallDst>
+    %second = tt.call @nested_entry_b() : () -> tensor<128x32xf16, #blockedCallDst>
+    %sum0 = arith.addf %first, %cvt : tensor<128x32xf16, #blockedCallDst>
+    %sum1 = arith.addf %sum0, %second : tensor<128x32xf16, #blockedCallDst>
+    tt.return %sum1 : tensor<128x32xf16, #blockedCallDst>
+  }
 }
 
 // -----
