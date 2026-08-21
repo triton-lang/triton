@@ -2327,6 +2327,26 @@ def test_cat_nd(shape, dim, device):
     torch.testing.assert_close(z, z_ref, atol=0, rtol=0)
 
 
+@pytest.mark.parametrize("m1, m2", [
+    pytest.param(16, 8, id="non_broadcastable"),
+    pytest.param(1, 8, id="broadcastable"),
+])
+def test_cat_shape_mismatch(m1, m2, device):
+
+    @triton.jit
+    def kernel(X, Y, M1: tl.constexpr, M2: tl.constexpr):
+        x = tl.load(X + tl.arange(0, M1))
+        y = tl.load(Y + tl.arange(0, M2))
+        z = tl.cat(x, y, dim=0)
+        tl.store(X + tl.arange(0, 1), tl.sum(z))
+
+    x = torch.zeros(m1, device=device, dtype=torch.float32)
+    y = torch.zeros(m2, device=device, dtype=torch.float32)
+    with pytest.raises(triton.CompilationError) as exc_info:
+        kernel[(1, )](x, y, M1=m1, M2=m2)
+    assert "tl.cat requires tensors of the same shape" in str(exc_info.value)
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", list(torch_dtypes))
 @pytest.mark.parametrize("constant_field", ["value", "mask"])
