@@ -39,6 +39,9 @@ def test_therock_runtime_library_variables():
 import ctypes
 import os
 import pathlib
+import shutil
+import subprocess
+import sys
 
 import rocm_sdk
 
@@ -48,10 +51,20 @@ settings = {
     "roctracer64": ("TRITON_ROCTRACER_LIB_PATH", "TRITON_ROCTRACER_LIBRARY"),
 }
 
-amdhip = pathlib.Path(rocm_sdk.find_libraries("amdhip64")[0])
+rocm_sdk_root = pathlib.Path(
+    subprocess.check_output(
+        [sys.executable, "-I", shutil.which("rocm-sdk"), "path", "--root"],
+        text=True,
+    ).strip()
+)
+hsa = next(
+    path
+    for name in ("libhsa-runtime64.so.1", "libhsa-runtime64.so")
+    if (path := rocm_sdk_root / "lib" / name).is_file()
+)
 expected = {
-    "amdhip64": amdhip,
-    "hsa-runtime64": amdhip.parent / "libhsa-runtime64.so.1",
+    "amdhip64": pathlib.Path(rocm_sdk.find_libraries("amdhip64")[0]),
+    "hsa-runtime64": hsa,
     "rocprofiler-sdk": pathlib.Path(rocm_sdk.find_libraries("rocprofiler-sdk")[0]),
     "roctracer64": pathlib.Path(rocm_sdk.find_libraries("roctracer64")[0]),
 }
@@ -59,7 +72,7 @@ roctx = pathlib.Path(rocm_sdk.find_libraries("roctx64")[0])
 
 import triton.profiler
 
-assert os.environ["TRITON_LIBHIP_PATH"] == str(amdhip)
+assert os.environ["TRITON_LIBHIP_PATH"] == str(expected["amdhip64"])
 ctypes.CDLL(os.environ["TRITON_LIBHIP_PATH"])
 
 for name, (path_key, library_key) in settings.items():
@@ -71,7 +84,17 @@ for name, (path_key, library_key) in settings.items():
 assert os.environ["TRITON_ROCTX_LIBRARY"] == str(roctx)
 ctypes.CDLL(os.environ["TRITON_ROCTX_LIBRARY"])
 """
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, env=clean_rocprofiler_env(), text=True)
+    env = clean_rocprofiler_env()
+    for path_key, library_key in (
+        ("TRITON_HSA_RUNTIME_PATH", "TRITON_HSA_RUNTIME_LIBRARY"),
+        ("TRITON_ROCPROFILER_SDK_LIB_PATH", "TRITON_ROCPROFILER_SDK_LIBRARY"),
+        ("TRITON_ROCTRACER_LIB_PATH", "TRITON_ROCTRACER_LIBRARY"),
+        ("TRITON_ROCTX_LIB_PATH", "TRITON_ROCTX_LIBRARY"),
+    ):
+        env.pop(path_key, None)
+        env.pop(library_key, None)
+    env.pop("TRITON_LIBHIP_PATH", None)
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, env=env, text=True)
     assert result.returncode == 0, result.stderr
 
 
