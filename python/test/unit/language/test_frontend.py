@@ -4,6 +4,7 @@ import triton
 import triton.language as tl
 from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
 from triton.compiler.code_generator import CodeGenerator
+from triton.runtime.jit import MockTensor
 from triton.compiler.errors import CompilationError
 import pytest
 from typing import NamedTuple
@@ -1458,3 +1459,19 @@ def test_loop_carry_discovery_avoids_exponential_revisits(monkeypatch, kind):
     monkeypatch.setattr(CodeGenerator, "visit_compound_statement", counted)
     run_parser(_loop_carry_nest_depth_3, args=(kind, ))
     assert max(per_body.values()) == 4
+
+
+def test_const_ptr_is_constant_addrspace():
+
+    @triton.jit
+    def kernel(In: tl.const, Out, N, BLOCK: tl.constexpr):
+        # CHECK-LABEL: tt.func public @kernel
+        # A `tl.const` pointer argument is tagged with Triton's constant address
+        # CHECK-SAME: %arg0: !tt.ptr<f32, "constant">
+        # A plain pointer stays global
+        # CHECK-SAME: %arg1: !tt.ptr<f32> {
+        offs = tl.arange(0, BLOCK)
+        mask = offs < N
+        tl.store(Out + offs, tl.load(In + offs, mask=mask), mask=mask)
+
+    run_filecheck_test(kernel, args=(MockTensor(tl.float32), MockTensor(tl.float32), 8, 128))

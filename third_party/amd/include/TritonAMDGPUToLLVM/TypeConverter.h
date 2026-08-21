@@ -29,6 +29,9 @@ public:
         return LLVM::LLVMPointerType::get(ctx, llvm::AMDGPUAS::GLOBAL_ADDRESS);
       case triton::PtrAddrSpace::Descriptor:
         return LLVM::LLVMPointerType::get(ctx, llvm::AMDGPUAS::FLAT_ADDRESS);
+      case triton::PtrAddrSpace::Constant:
+        return LLVM::LLVMPointerType::get(ctx,
+                                          llvm::AMDGPUAS::CONSTANT_ADDRESS);
       }
       llvm_unreachable("unknown PtrAddrSpace");
     });

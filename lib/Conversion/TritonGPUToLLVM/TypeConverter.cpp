@@ -24,6 +24,8 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
   addConversion([ctx](triton::PointerType type) -> std::optional<Type> {
     switch (type.getAddressSpace()) {
     case triton::PtrAddrSpace::Global:
+    // Constant is AMD-specific; map to global here.
+    case triton::PtrAddrSpace::Constant:
       return LLVM::LLVMPointerType::get(ctx,
                                         llvm::NVPTXAS::ADDRESS_SPACE_GLOBAL);
     case triton::PtrAddrSpace::Descriptor:
