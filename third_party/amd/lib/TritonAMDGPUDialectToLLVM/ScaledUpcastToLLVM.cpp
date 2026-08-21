@@ -2,6 +2,7 @@
 #include "TritonAMDGPUToLLVM/PatternTritonAMDGPUToLLVM.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "third_party/amd/include/Dialect/TritonAMDGPU/Utility/CommonUtils.h"
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
@@ -37,22 +38,20 @@ SmallVector<int> computeFp4GroupScaleRegisters(amdgpu::ScaledUpcastFp4Op op,
   auto outToScaleLL = amdgpu::ScaledUpcastFp4Op::computeScaleLayout(
       outLL, axis, elementsPerScale);
   assert(outToScaleLL && "expected valid scale layout after verifier");
-  LinearLayout outRegToScaleReg = outToScaleLL->invertAndCompose(scaleLL);
+  scaleLL = scaleLL.removeZeroBasesAlongDim(kReg);
 
   // One intrinsic spans 8 fp4 values
   int64_t numGroups = (2 * numInputBytes) / 8;
   SmallVector<int> groupScaleReg;
   groupScaleReg.reserve(numGroups);
   for (int g = 0; g < numGroups; ++g) {
-    auto scaleCoord =
-        outRegToScaleReg.apply({{kReg, static_cast<int32_t>(8 * g)},
-                                {kLane, 0},
-                                {kWarp, 0},
-                                {kBlock, 0}});
-    auto regIt = llvm::find_if(
-        scaleCoord, [&](const auto &dimVal) { return dimVal.first == kReg; });
-    assert(regIt != scaleCoord.end() && "scale register mapping missing");
-    groupScaleReg.push_back(regIt->second);
+    auto scaleCoord = outToScaleLL->apply({{kReg, static_cast<int32_t>(8 * g)},
+                                           {kLane, 0},
+                                           {kWarp, 0},
+                                           {kBlock, 0}});
+    auto scaleReg = AMD::getRegFromCoordinates(scaleLL, scaleCoord, ctx);
+    assert(scaleReg && "scale register mapping missing");
+    groupScaleReg.push_back(*scaleReg);
   }
   return groupScaleReg;
 }
@@ -139,17 +138,19 @@ struct ScaledUpcastFp4OpPattern
         results.append(converted.begin(), converted.end());
       }
     } else if (targetInfo.supportsHwScaledUpcast()) {
-      assert(scaleVals.size() == 2 * inputVals.size() &&
-             "compact fp4 scales are only supported on pk scale path");
+      auto groupScaleReg =
+          computeFp4GroupScaleRegisters(upcastOp, inputVals.size());
+      bool useShiftedScale =
+          upcastOp.getScale().getType().getElementType().isBF16();
       for (int i = 0; i < inputVals.size(); i += 4) {
+        int scaleIdx = groupScaleReg[i / 4];
         SmallVector<Value, 4> v4i32 =
-            elemType.isF16()
-                ? upcast8xMxfp4_HW<ROCDL::CvtScaleF32PkF16Fp4Op>(
-                      rewriter, loc, inputVals, i, scaleVals[i * 2],
-                      /*useShiftedScale=*/true)
-                : upcast8xMxfp4_HW<ROCDL::CvtScaleF32PkBf16Fp4Op>(
-                      rewriter, loc, inputVals, i, scaleVals[i * 2],
-                      /*useShiftedScale=*/true);
+            elemType.isF16() ? upcast8xMxfp4_HW<ROCDL::CvtScaleF32PkF16Fp4Op>(
+                                   rewriter, loc, inputVals, i,
+                                   scaleVals[scaleIdx], useShiftedScale)
+                             : upcast8xMxfp4_HW<ROCDL::CvtScaleF32PkBf16Fp4Op>(
+                                   rewriter, loc, inputVals, i,
+                                   scaleVals[scaleIdx], useShiftedScale);
         for (int j = 0; j < 4; j++) {
           Value elements = b.bitcast(v4i32[j], vec_ty(elemType, 2));
           results.push_back(b.extract_element(elements, b.i32_val(0)));
@@ -157,8 +158,8 @@ struct ScaledUpcastFp4OpPattern
         }
       }
     } else {
-      assert(scaleVals.size() == 2 * inputVals.size() &&
-             "compact fp4 scales are only supported on pk scale path");
+      auto groupScaleReg =
+          computeFp4GroupScaleRegisters(upcastOp, inputVals.size());
       // Software emulation: upcast fp4 via LUT, then multiply by scale.
       bool toFp16 = elemType.isF16();
       auto isaFamily = targetInfo.getISAFamily();
@@ -173,7 +174,7 @@ struct ScaledUpcastFp4OpPattern
 
         // The bf16 scale was left-shifted by 7 (scaleTo16); shift by 16 more
         // to get f32.
-        Value scaleBf16 = scaleVals[i * 2];
+        Value scaleBf16 = scaleVals[groupScaleReg[i / 4]];
         Value scaleF32 = b.bitcast(
             b.shl(b.zext(i32_ty, b.bitcast(scaleBf16, i16_ty)), b.i32_val(16)),
             f32_ty);
