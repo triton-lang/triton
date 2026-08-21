@@ -509,7 +509,7 @@ Syntax:
 ```
 operation ::= `amdg.buffer_atomic_cas` $sem `,` $scope `,` $cmp `,` $val `,` $ptr `[` $offsets `]`
               (`stride` `=` $stride^)?
-              attr-dict `:` type($result)
+              attr-dict `:` qualified(type($ptr)) `->` type($result)
 ```
 
 AMD Buffer Atomic CAS operation. Buffer atomics are similar to normal atomics, but access global memory via a
@@ -559,7 +559,7 @@ Syntax:
 ```
 operation ::= `amdg.buffer_atomic_rmw` $atomic_rmw_op `,` $sem `,` $scope `,` $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
               (`stride` `=` $stride^)?
-              attr-dict `:` type($result)
+              attr-dict `:` qualified(type($ptr)) `->` type($result)
 ```
 
 AMD Buffer atomic RMW operation. Buffer atomics are similar to normal atomics, but access global memory via a
@@ -613,7 +613,7 @@ Syntax:
 operation ::= `amdg.buffer_load` $ptr `[` $offsets `]` (`,` $mask^)? (`,` $other^)?
               oilist(`cacheModifier` `=` $cache)
               (`stride` `=` $stride^)?
-              attr-dict `:` type($result)
+              attr-dict `:` qualified(type($ptr)) `->` type($result)
 ```
 
 AMD Buffer load operation. Buffer store is similar to
@@ -670,7 +670,7 @@ Syntax:
 ```
 operation ::= `amdg.buffer_load_to_local` $ptr `[` $offsets `]` (`mask` `=` $mask^)? (`other` `=` $other^)? (`stride` `=` $stride^)?
               oilist(`cacheModifier` `=` $cache) `into` $dest
-              attr-dict `:` type($ptr) `[` type($offsets) `]` type($other) `->` type($dest)
+              attr-dict `:` qualified(type($ptr)) `[` type($offsets) `]` type($other) `->` type($dest)
 ```
 
 AMD Buffer load operation. Similar to amdg.buffer_load op but directly wirtes to shared memory instead of into registers.
@@ -718,7 +718,7 @@ Syntax:
 operation ::= `amdg.buffer_store` $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
               oilist(`cacheModifier` `=` $cache)
               (`stride` `=` $stride^)?
-              attr-dict `:` type($value)
+              attr-dict `:` qualified(type($ptr)) `->` type($value)
 ```
 
 AMD Buffer store operation. Buffer store is similar to
