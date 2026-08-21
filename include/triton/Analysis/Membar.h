@@ -304,13 +304,13 @@ public:
 
 private:
   /// Updates the BlockInfo operation based on the operation.
-  void update(Operation *operation, MembarInfo *blockInfo, FuncMapT *funcMap,
+  void update(Operation *operation, MembarInfo *membarInfo, FuncMapT *funcMap,
               OpBuilder *builder) override;
 
   void updateSuccessor(Operation *terminator, Block *successor,
-                       MembarInfo *blockInfo) override;
+                       MembarInfo *membarInfo) override;
 
-  void updateExitState(MembarInfo *blockInfo) override;
+  void updateExitState(MembarInfo *membarInfo) override;
 
   void insertBarrier(Operation *operation, OpBuilder *builder);
 
