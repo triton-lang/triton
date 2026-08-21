@@ -4,7 +4,7 @@ import triton
 import triton.language as tl
 from dataclasses import dataclass
 from .base import Layout, LayoutTransformation
-from .strided import StridedLayoutTransformation
+from triton_kernels.tensor_details.layout_details import strided
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from triton_kernels.target_info import cuda_capability_geq
 from .torch_utils import repack
@@ -88,7 +88,7 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         # Keep compact or otherwise unsupported sources on the reference path.
         if (not self.is_fp4 or self.N % 2 or self.shape[self.mx_axis] % 2 or data.device.type != "cuda"
                 or data.dtype != torch.uint8 or list(data.shape) != self.storage_shape
-                or not isinstance(destination, StridedLayoutTransformation)
+                or not isinstance(destination, strided.StridedLayoutTransformation)
                 or destination.order[0] < len(self.shape) - 2):
             return super().convert_data(data, destination)
 
@@ -101,10 +101,10 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         grid = (math.prod(self.leading_shape) * triton.cdiv(m, 4 * block_m) * triton.cdiv(k, block_k // 2), )
         if grid[0] > 0:
             with torch.cuda.device(data.device):
-                _unswizzle_to_strided_kernel[grid](source, target, tuple(self.leading_shape), source.stride()[:-2],
-                                                   target.stride()[:-2], *source.stride()[-2:], *target.stride()[-2:],
-                                                   m, k, self.mma_version, destination.order[0] != self.mx_axis,
-                                                   block_m, block_k)
+                _unswizzle_to_strided_kernel[grid](source, target, tuple(self.leading_shape), source.stride(),
+                                                   target.stride(), m, k, MMA_VERSION=self.mma_version,
+                                                   PACK_M=destination.order[0] != self.mx_axis, BLOCK_M=block_m,
+                                                   BLOCK_K=block_k)
         return out
 
     def swizzle_data(self, data):
@@ -371,11 +371,9 @@ def _unshuffle_triton(x, mma_version: tl.constexpr):
 
 
 @triton.jit
-def _unswizzle_to_strided_kernel(X, Y, LEADING_SHAPE: tl.constexpr, X_BATCH_STRIDES: tl.constexpr,
-                                 Y_BATCH_STRIDES: tl.constexpr, X_STRIDE_M: tl.constexpr, X_STRIDE_K: tl.constexpr,
-                                 Y_STRIDE_M: tl.constexpr, Y_STRIDE_K: tl.constexpr, M: tl.constexpr, K: tl.constexpr,
-                                 MMA_VERSION: tl.constexpr, PACK_M: tl.constexpr, BLOCK_M: tl.constexpr,
-                                 BLOCK_K: tl.constexpr):
+def _unswizzle_to_strided_kernel(X, Y, LEADING_SHAPE: tl.constexpr, X_STRIDES: tl.constexpr, Y_STRIDES: tl.constexpr,
+                                 M: tl.constexpr, K: tl.constexpr, MMA_VERSION: tl.constexpr, PACK_M: tl.constexpr,
+                                 BLOCK_M: tl.constexpr, BLOCK_K: tl.constexpr):
     tiles_m: tl.constexpr = triton.cdiv(M, 4 * BLOCK_M)
     tiles_k: tl.constexpr = triton.cdiv(K, BLOCK_K // 2)
     pid = tl.program_id(0).to(tl.int64)
@@ -388,18 +386,18 @@ def _unswizzle_to_strided_kernel(X, Y, LEADING_SHAPE: tl.constexpr, X_BATCH_STRI
     for dim in tl.static_range(len(LEADING_SHAPE) - 1, -1, -1):
         index = batch % LEADING_SHAPE[dim]
         batch //= LEADING_SHAPE[dim]
-        X += index * X_BATCH_STRIDES[dim]
-        Y += index * Y_BATCH_STRIDES[dim]
+        X += index * X_STRIDES[dim]
+        Y += index * Y_STRIDES[dim]
 
     # Each encoded word contains four packed FP4 bytes. Decode and undo the
     # MMA tile permutation before selecting the destination packing axis.
     rows = tile_m * BLOCK_M + tl.arange(0, BLOCK_M)
     words = tile_k * (BLOCK_K // 4) + tl.arange(0, BLOCK_K // 4)
-    offsets = rows[:, None] * X_STRIDE_M + 4 * words[None, :] * X_STRIDE_K
+    offsets = rows[:, None] * X_STRIDES[-2] + 4 * words[None, :] * X_STRIDES[-1]
     a = tl.load(X + offsets).to(tl.uint32)
-    b = tl.load(X + offsets + X_STRIDE_K).to(tl.uint32)
-    c = tl.load(X + offsets + 2 * X_STRIDE_K).to(tl.uint32)
-    d = tl.load(X + offsets + 3 * X_STRIDE_K).to(tl.uint32)
+    b = tl.load(X + offsets + X_STRIDES[-1]).to(tl.uint32)
+    c = tl.load(X + offsets + 2 * X_STRIDES[-1]).to(tl.uint32)
+    d = tl.load(X + offsets + 3 * X_STRIDES[-1]).to(tl.uint32)
     x = _unpack_bits_triton(a | (b << 8) | (c << 16) | (d << 24))
     shifts = 8 * tl.arange(0, 4)
     x = (x[:, :, None] >> shifts[None, None, :]).to(tl.uint8)
@@ -416,7 +414,7 @@ def _unswizzle_to_strided_kernel(X, Y, LEADING_SHAPE: tl.constexpr, X_BATCH_STRI
         rows = tile_m * (4 * BLOCK_M) + tl.arange(0, 4 * BLOCK_M)
         cols = tile_k * (BLOCK_K // 4) + tl.arange(0, BLOCK_K // 4)
         mask = (rows[:, None] < M) & (cols[None, :] < K // 2)
-    tl.store(Y + rows[:, None] * Y_STRIDE_M + cols[None, :] * Y_STRIDE_K, x, mask)
+    tl.store(Y + rows[:, None] * Y_STRIDES[-2] + cols[None, :] * Y_STRIDES[-1], x, mask)
 
 
 @triton.jit

@@ -151,15 +151,14 @@ def test_mxfp4_value_convert_layout_to_strided_matches_torch(shape, layout, majo
 
     data_cuda = source.data.cuda()
     if step == 2:
-        contiguous_axis = -2 if isinstance(layout, BlackwellMXValueLayout) else -1
-        data_cuda = data_cuda.movedim(contiguous_axis, -1)
+        contiguous_dim = data_cuda.stride().index(1)
+        data_cuda = data_cuda.movedim(contiguous_dim, -1)
         data_cuda = torch.stack((torch.zeros_like(data_cuda), data_cuda), dim=-2)[..., 1, :]
-        data_cuda = data_cuda.movedim(-1, contiguous_axis)
+        data_cuda = data_cuda.movedim(-1, contiguous_dim)
     source_cuda = wrap_torch_tensor(data_cuda, dtype=FP4, shape=source.shape, layout=layout)
     actual = convert_layout(source_cuda, destination)
 
     assert actual.shape == expected.shape
-    assert actual.data.shape == expected.data.shape
     assert actual.data.stride() == expected.data.stride()
     assert actual.data.dtype == expected.data.dtype
     assert torch.equal(actual.data.cpu(), expected.data)

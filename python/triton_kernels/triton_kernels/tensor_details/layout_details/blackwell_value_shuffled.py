@@ -110,7 +110,7 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
 
     def _convert_data(self, data: torch.Tensor, inverse: bool, major_dim: int) -> torch.Tensor:
         storage_shape = self.storage_shape
-        # The canonical intermediate packs N, while shuffled storage packs K.
+        # Preserve the canonical path's even-N packing requirement.
         if self.shape[-1] % 2:
             raise ValueError(f"FP4 packing dimension -1 must have an even size, got {self.shape[-1]}")
         if data.device.type != "cuda" or data.dtype != torch.uint8:
