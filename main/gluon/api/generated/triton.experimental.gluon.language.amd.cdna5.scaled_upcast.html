@@ -147,10 +147,9 @@ supported:</p>
 <ul class="simple">
 <li><p><strong>Expanded scale:</strong> one scale per output value. For example, fp4 bytes
 <code class="docutils literal notranslate"><span class="pre">[M,</span> <span class="pre">K</span> <span class="pre">/</span> <span class="pre">2]</span></code> produce output <code class="docutils literal notranslate"><span class="pre">[M,</span> <span class="pre">K]</span></code> with scale <code class="docutils literal notranslate"><span class="pre">[M,</span> <span class="pre">K]</span></code>.</p></li>
-<li><p><strong>Compact scale:</strong> one scale per native scale block. For example, with
+<li><p><strong>Compact scale:</strong> one scale per scale block. For example, with
 <code class="docutils literal notranslate"><span class="pre">axis=1</span></code> and a 32-element scale block, output <code class="docutils literal notranslate"><span class="pre">[M,</span> <span class="pre">K]</span></code> uses scale
-<code class="docutils literal notranslate"><span class="pre">[M,</span> <span class="pre">K</span> <span class="pre">/</span> <span class="pre">32]</span></code>. CDNA5 preserves those scale bytes in the native
-<code class="docutils literal notranslate"><span class="pre">cvt.scale.pk8</span></code> payload form.</p></li>
+<code class="docutils literal notranslate"><span class="pre">[M,</span> <span class="pre">K</span> <span class="pre">/</span> <span class="pre">32]</span></code>.</p></li>
 </ul>
 </dd></dl>
 
