@@ -262,6 +262,10 @@ private:
   bool sourceLocationWarningEmitted{false};
   uint64_t pcSamplingInterval{1ULL << 17};
   std::string invalidPCSamplingInterval;
+  // PC sampling must be configured during rocprofiler-sdk initialization,
+  // before Proton knows whether a session will request it. Save any failure
+  // here and report it only if PC-sampling mode is later selected. Avoiding
+  // this deferred error would require selecting the mode before initialization.
   std::string pcSamplingConfigurationFailureReason{
       "Proton was built without rocprofiler-sdk PC sampling support"};
   rocprofiler_context_id_t pcSamplingContext{};
