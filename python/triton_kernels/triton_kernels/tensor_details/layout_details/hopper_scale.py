@@ -58,7 +58,9 @@ class HopperMXScaleLayoutTransformation(LayoutTransformation):
             M, K = K, M
         align_m = 32 * self.num_warps
         M = (M + align_m - 1) // align_m * align_m
-        K = (K + 1) // 2 * 2
+        # Hopper mxfp4 matmul reads one BLOCK_K = 128 tile, or 4 scale groups.
+        scale_k_align = 4
+        K = (K + scale_k_align - 1) // scale_k_align * scale_k_align
         return [*leading_shape, M, K]
 
     @property
