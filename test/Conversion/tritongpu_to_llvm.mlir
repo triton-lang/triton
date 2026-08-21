@@ -3261,3 +3261,41 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.prof
     tt.return
   }
 }
+
+// -----
+
+#index = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#basis = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // Arbitrary per-lane indices require broadcasting basis values across the
+  // warp; no inter-warp shared-memory scratch is needed.
+  // CHECK-LABEL: @linear_apply_dynamic_i32
+  // CHECK-COUNT-32: nvvm.shfl.sync idx
+  // CHECK-NOT: nvvm.shfl.sync
+  // CHECK: llvm.xor
+  // CHECK-NOT: llvm.load {{.*}}!llvm.ptr<3>
+  // CHECK: llvm.return
+  tt.func private @linear_apply_dynamic_i32(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis>) -> tensor<128xi32, #index> {
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+}
+
+// -----
+
+#index = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 8], warpsPerCTA = [2, 2], order = [1, 0]}>
+#basis = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // The index/result may have a different rank and distribution from bases.
+  // CHECK-LABEL: @linear_apply_dynamic_rank_two
+  // CHECK-COUNT-32: nvvm.shfl.sync idx
+  // CHECK-NOT: nvvm.shfl.sync
+  // CHECK: llvm.xor
+  // CHECK: llvm.return
+  tt.func private @linear_apply_dynamic_rank_two(%index: tensor<16x16xi32, #index>, %bases: tensor<32xi32, #basis>) -> tensor<16x16xi32, #index> {
+    %result = tt.linear_apply %index, %bases : tensor<16x16xi32, #index>, tensor<32xi32, #basis> -> tensor<16x16xi32, #index>
+    tt.return %result : tensor<16x16xi32, #index>
+  }
+}

@@ -146,6 +146,7 @@ Math Ops
     floor
     fma
     fp4_to_fp
+    linear_apply
     log
     log2
     maximum

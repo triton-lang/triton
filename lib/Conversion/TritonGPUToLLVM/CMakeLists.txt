@@ -14,6 +14,7 @@ add_triton_library(TritonGPUToLLVM
     GatherOpToLLVM.cpp
     GlobalScratchMemoryAllocation.cpp
     HistogramOpToLLVM.cpp
+    LinearApplyOpToLLVM.cpp
     MakeRangeOpToLLVM.cpp
     MemoryOpToLLVM.cpp
     PrintOpToLLVM.cpp

@@ -2046,6 +2046,130 @@ def test_gather_layouts(axis, src_layout, index_layout, src_shape, idx_shape, de
     assert ("nvvm.shfl.sync.idx" in obj.asm["llir"]) or ("llvm.amdgcn.ds.bpermute" in obj.asm["llir"])
 
 
+@gluon.jit
+def _linear_apply_kernel(indices_ptr, bases_ptr, output_ptr, BLOCK: ttgl.constexpr, INDEX_LAYOUT: ttgl.constexpr,
+                         BASIS_LAYOUT: ttgl.constexpr, SECOND_DIM: ttgl.constexpr, USE_MEMBER: ttgl.constexpr):
+    if SECOND_DIM:
+        row = ttgl.arange(0, BLOCK // SECOND_DIM, layout=ttgl.SliceLayout(1, INDEX_LAYOUT))[:, None]
+        col = ttgl.arange(0, SECOND_DIM, layout=ttgl.SliceLayout(0, INDEX_LAYOUT))[None, :]
+        offsets = row * SECOND_DIM + col
+    else:
+        offsets = ttgl.arange(0, BLOCK, layout=INDEX_LAYOUT)
+
+    index = ttgl.load(indices_ptr + offsets).to(ttgl.uint32)
+    bases = ttgl.load(bases_ptr + ttgl.arange(0, 32, layout=BASIS_LAYOUT)).to(ttgl.uint32)
+    if USE_MEMBER:
+        result = index.linear_apply(bases)
+    else:
+        result = ttgl.linear_apply(index, bases)
+    ttgl.store(output_ptr + offsets, result)
+
+
+@pytest.mark.parametrize("second_dim", [0, 8])
+@pytest.mark.parametrize("use_member", [False, True])
+def test_linear_apply_layouts(second_dim, use_member, device):
+    block = 128
+    basis_layout = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0])
+    if second_dim:
+        index_layout = ttgl.BlockedLayout([1, 2], [4, THREADS_PER_WARP // 4], [2, 2], [1, 0])
+    else:
+        index_layout = ttgl.BlockedLayout([2], [THREADS_PER_WARP], [4], [0])
+
+    torch.manual_seed(3108)
+    indices = torch.randint(-(1 << 31), (1 << 31) - 1, (block, ), dtype=torch.int32, device=device)
+    indices[:5] = torch.tensor([0, 1, 5, -(1 << 31), -1], dtype=torch.int32, device=device)
+    bases = torch.randint(-(1 << 31), (1 << 31) - 1, (32, ), dtype=torch.int32, device=device)
+    output = torch.empty_like(indices)
+
+    reference = torch.zeros_like(indices)
+    for bit in range(32):
+        selected = ((indices.to(torch.int64) >> bit) & 1).to(torch.bool)
+        reference = torch.where(selected, reference ^ bases[bit], reference)
+
+    compiled = _linear_apply_kernel[(1, )](indices, bases, output, block, index_layout, basis_layout, second_dim,
+                                           use_member, num_warps=4)
+    torch.testing.assert_close(output, reference, rtol=0, atol=0)
+    assert "tt.linear_apply" in compiled.asm["ttgir"]
+    if is_cuda():
+        assert "nvvm.shfl.sync.idx" in compiled.asm["llir"]
+    assert compiled.metadata.shared == 0
+
+
+@gluon.jit
+def _linear_apply_convert_basis_layout_kernel(indices_ptr, bases_ptr, output_ptr, BLOCK: ttgl.constexpr,
+                                              INDEX_LAYOUT: ttgl.constexpr, SOURCE_BASIS_LAYOUT: ttgl.constexpr,
+                                              BASIS_LAYOUT: ttgl.constexpr):
+    offsets = ttgl.arange(0, BLOCK, layout=INDEX_LAYOUT)
+    index = ttgl.load(indices_ptr + offsets).to(ttgl.uint32)
+    bases = ttgl.load(bases_ptr + ttgl.arange(0, 32, layout=SOURCE_BASIS_LAYOUT)).to(ttgl.uint32)
+    bases = ttgl.convert_layout(bases, BASIS_LAYOUT)
+    ttgl.store(output_ptr + offsets, ttgl.linear_apply(index, bases))
+
+
+def test_linear_apply_convert_basis_layout(device):
+    block = 128
+    index_layout = ttgl.BlockedLayout([2], [THREADS_PER_WARP], [4], [0])
+    source_basis_layout = ttgl.BlockedLayout([2], [THREADS_PER_WARP], [4], [0])
+    basis_layout = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0])
+
+    torch.manual_seed(4127)
+    indices = torch.randint(-(1 << 31), (1 << 31) - 1, (block, ), dtype=torch.int32, device=device)
+    indices[:5] = torch.tensor([0, 1, 5, -(1 << 31), -1], dtype=torch.int32, device=device)
+    bases = torch.randint(-(1 << 31), (1 << 31) - 1, (32, ), dtype=torch.int32, device=device)
+    output = torch.empty_like(indices)
+    reference = torch.zeros_like(indices)
+    for bit in range(32):
+        selected = ((indices.to(torch.int64) >> bit) & 1).to(torch.bool)
+        reference = torch.where(selected, reference ^ bases[bit], reference)
+
+    compiled = _linear_apply_convert_basis_layout_kernel[(1, )](indices, bases, output, block, index_layout,
+                                                                source_basis_layout, basis_layout, num_warps=4)
+    torch.testing.assert_close(output, reference, rtol=0, atol=0)
+    assert "tt.linear_apply" in compiled.asm["ttgir"]
+    assert "ttg.convert_layout" in compiled.asm["ttgir"]
+    assert "sizePerThread = [1], threadsPerWarp = " in compiled.asm["ttgir"]
+
+
+@gluon.jit
+def _linear_apply_auto_layout_kernel(indices_ptr, bases_ptr, output_ptr, INDEX_LAYOUT: ttgl.constexpr,
+                                     BASIS_LAYOUT: ttgl.constexpr):
+    row = ttgl.arange(0, 16)[:, None]
+    col = ttgl.arange(0, 8)[None, :]
+    offsets = row * 8 + col
+    index = ttgl.load(indices_ptr + offsets).to(ttgl.uint32)
+    bases = ttgl.load(bases_ptr + ttgl.arange(0, 32)).to(ttgl.uint32)
+
+    # Keep the actual operands automatic, but independently seed the 1-D basis
+    # and the 2-D result so Gluon must not propagate between their layouts.
+    ttgl.set_auto_layout(bases, BASIS_LAYOUT)
+    result = ttgl.linear_apply(index, bases)
+    result = ttgl.set_auto_layout(result, INDEX_LAYOUT)
+    offsets = ttgl.set_auto_layout(offsets, INDEX_LAYOUT)
+    ttgl.store(output_ptr + offsets, result)
+
+
+def test_linear_apply_auto_layout_independent_bases(device):
+    block = 128
+    index_layout = ttgl.BlockedLayout([1, 2], [4, THREADS_PER_WARP // 4], [2, 2], [1, 0])
+    basis_layout = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0])
+
+    torch.manual_seed(1717)
+    indices = torch.randint(-(1 << 31), (1 << 31) - 1, (block, ), dtype=torch.int32, device=device)
+    bases = torch.randint(-(1 << 31), (1 << 31) - 1, (32, ), dtype=torch.int32, device=device)
+    output = torch.empty_like(indices)
+    reference = torch.zeros_like(indices)
+    for bit in range(32):
+        selected = ((indices.to(torch.int64) >> bit) & 1).to(torch.bool)
+        reference = torch.where(selected, reference ^ bases[bit], reference)
+
+    compiled = _linear_apply_auto_layout_kernel[(1, )](indices, bases, output, index_layout, basis_layout, num_warps=4)
+    torch.testing.assert_close(output, reference, rtol=0, atol=0)
+    assert "tt.linear_apply" in compiled.asm["ttgir"]
+    assert "auto_encoding" not in compiled.asm["ttgir"]
+    assert "sizePerThread = [1, 2]" in compiled.asm["ttgir"]
+    assert "sizePerThread = [1], threadsPerWarp = " in compiled.asm["ttgir"]
+
+
 @pytest.mark.parametrize("M, N, M_tile_size, N_tile_size",
                          [[128, 128, 64, 64], [128, 128, 64, 32], [128, 64, 64, 32], [256, 128, 64, 64]])
 @pytest.mark.parametrize("shared_layout_cfg", [

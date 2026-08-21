@@ -756,6 +756,13 @@ class InterpreterBuilder:
     def create_gather(self, src, indices, axis):
         return TensorHandle(np.take_along_axis(src.data, indices.data, axis=axis), src.dtype.scalar)
 
+    def create_linear_apply(self, index, bases):
+        result = np.zeros(index.data.shape, dtype=np.uint32)
+        for bit, basis in enumerate(bases.data):
+            selected = ((index.data >> bit) & 1).astype(bool, copy=False)
+            np.bitwise_xor(result, basis, out=result, where=selected)
+        return TensorHandle(result, tl.uint32)
+
     # pointer arithmetic
 
     def create_addptr(self, ptr, offset):

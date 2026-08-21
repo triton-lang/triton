@@ -1571,6 +1571,37 @@ LogicalResult GatherOp::inferReturnTypes(
   return success();
 }
 
+// -- LinearApplyOp --
+LogicalResult LinearApplyOp::verify() {
+  RankedTensorType indexTy = getIndex().getType();
+  RankedTensorType basesTy = getBases().getType();
+  RankedTensorType resultTy = getResult().getType();
+
+  if (indexTy.getRank() == 0)
+    return emitOpError("index must have rank of at least one");
+  if (basesTy.getRank() != 1)
+    return emitOpError("bases must be a one-dimensional tensor");
+  if (basesTy.getDimSize(0) != 32)
+    return emitOpError("bases must contain exactly 32 elements");
+
+  if (indexTy.getShape() != resultTy.getShape())
+    return emitOpError("index and result shapes must match");
+  if (indexTy.getEncoding() != resultTy.getEncoding())
+    return emitOpError("index and result encodings must match");
+
+  return success();
+}
+
+LogicalResult LinearApplyOp::inferReturnTypes(
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, PropertyRef properties, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  LinearApplyOpAdaptor adaptor(operands, attributes, properties, regions);
+  auto indexTy = cast<RankedTensorType>(adaptor.getIndex().getType());
+  inferredReturnTypes.push_back(indexTy);
+  return success();
+}
+
 // -- DescriptorGatherOp
 LogicalResult verifyGatherScatterResultType(Operation *op,
                                             ShapedType resultType,

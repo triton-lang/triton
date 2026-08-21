@@ -335,6 +335,13 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
         continue;
       }
     }
+    if (auto linearApplyOp = dyn_cast<LinearApplyOp>(user)) {
+      // The basis is independently distributed and must never determine the
+      // result layout. Propagate only from the index to the result.
+      if (&use == &linearApplyOp.getIndexMutable())
+        setEncoding(linearApplyOp.getResult(), info, changed, user);
+      continue;
+    }
     if (auto reshapeOp = dyn_cast<ReshapeOp>(user);
         reshapeOp && reshapeOp.getEfficientLayout())
       continue;
@@ -673,6 +680,12 @@ void LayoutPropagation::rewriteOp(Operation *op) {
     Attribute encoding = *layouts[op->getResult(0)].encodings.begin();
     if (canUseResultEncoding(op, encoding)) {
       setEncodingInPlace(op->getResult(0), encoding);
+    } else if (auto linearApply = dyn_cast<LinearApplyOp>(op)) {
+      // The index and result move together; the canonical one-dimensional
+      // basis layout is independent and must remain untouched.
+      linearApply.getIndexMutable().assign(
+          getValueAs(linearApply.getIndex(), encoding));
+      setEncodingInPlace(linearApply.getResult(), encoding);
     } else if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
                op->hasTrait<OpTrait::Elementwise>() ||
                isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
@@ -859,6 +872,12 @@ void LayoutRematerialization::rewriteSlice(
       continue;
     }
     Operation *newOp = builder.clone(*op, mapping);
+    if (auto linearApply = dyn_cast<LinearApplyOp>(op)) {
+      // The basis does not participate in result/index layout propagation,
+      // even if its SSA value was remapped while rematerializing the index.
+      cast<LinearApplyOp>(newOp).getBasesMutable().assign(
+          linearApply.getBases());
+    }
     for (auto [old, newV] : llvm::zip(op->getResults(), newOp->getResults())) {
       auto it = layout.find(old);
       if (it == layout.end())

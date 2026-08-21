@@ -7111,6 +7111,38 @@ def test_gather(src_shape, indices_shape, axis, device):
 
 
 @triton.jit
+def _linear_apply_test_kernel(index_ptr, bases_ptr, out_ptr, BLOCK: tl.constexpr, SECOND_DIM: tl.constexpr):
+    offsets = tl.arange(0, BLOCK)
+    index = tl.load(index_ptr + offsets)
+    if SECOND_DIM:
+        index = tl.reshape(index, (BLOCK // SECOND_DIM, SECOND_DIM))
+    bases = tl.load(bases_ptr + tl.arange(0, 32))
+    result = tl.linear_apply(index, bases)
+    tl.store(out_ptr + offsets, tl.reshape(result, (BLOCK, )))
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("second_dim", [0, 8])
+def test_linear_apply(second_dim, device):
+    block = 128
+    generator = np.random.default_rng(576)
+    indices = generator.integers(0, np.iinfo(np.uint32).max, size=block, dtype=np.uint32)
+    indices[:5] = [0, 1, 5, 1 << 31, np.iinfo(np.uint32).max]
+
+    basis_values = generator.integers(0, np.iinfo(np.uint32).max, size=32, dtype=np.uint32)
+    expected = np.zeros(block, dtype=np.uint32)
+    for bit, basis in enumerate(basis_values):
+        selected = ((indices >> bit) & 1).astype(bool)
+        np.bitwise_xor(expected, basis, out=expected, where=selected)
+
+    triton_indices = to_triton(indices, device=device)
+    triton_bases = to_triton(basis_values, device=device)
+    result = to_triton(np.empty(block, dtype=np.uint32), device=device)
+    _linear_apply_test_kernel[(1, )](triton_indices, triton_bases, result, block, second_dim, num_warps=4)
+    np.testing.assert_array_equal(to_numpy(result), expected)
+
+
+@triton.jit
 def mul_jit_function(x, y):
     return x * y
 

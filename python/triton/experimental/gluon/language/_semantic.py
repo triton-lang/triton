@@ -571,6 +571,41 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         gather = self.builder.create_gather(src.handle, index.handle, axis)
         return self.wrap_tensor(gather, src.type.scalar, index.type.shape, index.type.layout)
 
+    def linear_apply(self, index: TensorTy, bases: TensorTy) -> TensorTy:
+        _check(
+            isinstance(index, self.tensor) and isinstance(index.type, ttgl.distributed_type)
+            and index.dtype == ttgl.uint32,
+            lambda: "linear_apply index must be a uint32 tensor",
+        )
+        _check(
+            isinstance(bases, self.tensor) and isinstance(bases.type, ttgl.distributed_type)
+            and bases.dtype == ttgl.uint32,
+            lambda: "linear_apply bases must be a uint32 tensor",
+        )
+        _check(len(bases.type.shape) == 1, lambda: "linear_apply bases must be a one-dimensional tensor")
+        _check(
+            bases.type.shape[0] == 32,
+            lambda: f"linear_apply bases must contain exactly 32 elements, but got {bases.type.shape[0]}",
+        )
+
+        basis_layout = bases.type.layout
+        if not isinstance(basis_layout, (AutoLayout, CoalescedLayout)):
+            linear_layout = ttgl._unwrap_if_constexpr(self.to_linear_layout(basis_layout, bases.type.shape))
+            canonical_lane_bases = [[1 << bit] for bit in range(5)]
+            if len(linear_layout.lane_bases) == 6:
+                canonical_lane_bases.append([0])
+            _check(
+                linear_layout.lane_bases == canonical_lane_bases
+                and all(basis == [0]
+                        for basis in linear_layout.reg_bases + linear_layout.warp_bases + linear_layout.block_bases),
+                lambda: "linear_apply bases layout must have one value per lane, with basis i owned by lane i "
+                "and replicated in every warp and CTA; use gl.convert_layout(..., "
+                "gl.BlockedLayout([1], [warp_size], [num_warps], [0]))",
+            )
+
+        result = self.builder.create_linear_apply(index.handle, bases.handle)
+        return self.wrap_tensor(result, ttgl.uint32, index.type.shape, index.type.layout)
+
     def fp4_to_fp(self, src: TensorTy, elem_type, axis) -> TensorTy:
         result = self.builder.create_fp4_to_fp(src.handle, elem_type.to_ir(self.builder), axis)
         shape = list(src.type.shape)

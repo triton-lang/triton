@@ -155,6 +155,12 @@ LogicalResult inferLayout(
                                   worklist, hashMemo)))
           return failure();
       } else {
+        if (auto linearApply = dyn_cast<triton::LinearApplyOp>(op);
+            linearApply && &use != &linearApply.getIndexMutable()) {
+          // The one-dimensional basis has an independent encoding and must
+          // not be propagated into the index-shaped result.
+          continue;
+        }
         auto dstEnc = inferDstEncoding(op, info.encoding);
         if (dstEnc) {
           bool mayVary = info.mayVary || encodingsMayVary(op);
@@ -181,9 +187,15 @@ LogicalResult inferLayout(
           bool mayVary = info.mayVary || encodingsMayVary(definingOp);
           LayoutInfo srcInfo{srcEncoding, mayVary};
           llvm::SmallVector<Value> tensorOperands;
-          for (auto operand : definingOp->getOperands())
-            if (isa<RankedTensorType>(operand.getType()))
-              tensorOperands.push_back(operand);
+          if (auto linearApply = dyn_cast<triton::LinearApplyOp>(definingOp)) {
+            // Only the index shares the result encoding; the basis may have a
+            // different rank and is resolved from its own layout seed.
+            tensorOperands.push_back(linearApply.getIndex());
+          } else {
+            for (auto operand : definingOp->getOperands())
+              if (isa<RankedTensorType>(operand.getType()))
+                tensorOperands.push_back(operand);
+          }
 
           if (failed(updateEncoding(tensorOperands, srcInfo, &func,
                                     valueToEncoding, worklist, hashMemo)))

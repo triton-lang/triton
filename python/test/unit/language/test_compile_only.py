@@ -70,6 +70,31 @@ def test_compile_only_sm100() -> None:
     assert k.asm["cubin"] != b""
 
 
+def test_compile_only_linear_apply() -> None:
+
+    @triton.jit
+    def linear_apply_kernel(indices_ptr, bases_ptr, output_ptr):
+        offsets = tl.arange(0, 128)
+        indices = tl.load(indices_ptr + offsets)
+        bases = tl.load(bases_ptr + tl.arange(0, 32))
+        tl.store(output_ptr + offsets, tl.linear_apply(indices, bases))
+
+    source = ASTSource(
+        fn=linear_apply_kernel,
+        signature={
+            "indices_ptr": "*u32",
+            "bases_ptr": "*u32",
+            "output_ptr": "*u32",
+        },
+        constexprs={},
+    )
+    compiled = triton.compile(source, target=GPUTarget("cuda", 90, 32))
+    assert "tt.linear_apply" in compiled.asm["ttir"]
+    assert "tt.linear_apply" in compiled.asm["ttgir"]
+    assert "shfl.sync" in compiled.asm["ptx"]
+    assert compiled.asm["cubin"]
+
+
 @pytest.mark.parametrize("element_type", ["f32", "f16", "bf16"])
 def test_compile_only_packed_arith_chains(element_type, tmp_path) -> None:
     packed_type = f"{element_type}x2"

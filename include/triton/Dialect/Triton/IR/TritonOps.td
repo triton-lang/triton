@@ -979,6 +979,31 @@ def TT_GatherOp : TT_Op<"gather", [Pure,
 }
 
 //
+// Linear Apply Op
+//
+def TT_LinearApplyOp : TT_Op<"linear_apply", [Pure,
+    DeclareOpInterfaceMethods<InferTypeOpInterface>]> {
+  let summary = "apply a runtime GF(2)-linear map to 32-bit indices";
+  let description = [{
+    For every element of `index`, return the bitwise XOR of `bases[i]` for
+    each set bit `i` of that element. `index` and `bases` both contain 32-bit
+    integers, and `bases` is a one-dimensional tensor with exactly 32 elements.
+    The result has the shape and encoding of `index` and 32-bit elements.
+  }];
+
+  let arguments = (ins RankedTensorOf<[I32]>:$index,
+                       RankedTensorOf<[I32]>:$bases);
+  let results = (outs RankedTensorOf<[I32]>:$result);
+
+  let assemblyFormat = [{
+    $index `,` $bases attr-dict `:` type($index) `,` type($bases)
+    `->` type($result)
+  }];
+
+  let hasVerifier = 1;
+}
+
+//
 // Print Op
 //
 def TT_PrintOp : TT_Op<"print", [SameVariadicOperandSize, MemoryEffects<[MemWrite<GlobalMemory>]>]> {

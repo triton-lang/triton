@@ -1252,6 +1252,9 @@ class tensor(base_value):
     def gather(self, indices, axis) -> tensor:
         ...
 
+    def linear_apply(self, bases) -> tensor:
+        ...
+
     def histogram(self, num_bins) -> tensor:
         ...
 
@@ -3097,6 +3100,29 @@ def gather(src, index, axis, _semantic=None):
     index = _unwrap_if_constexpr(index)
     axis = _unwrap_if_constexpr(axis)
     return _semantic.gather(src, index, axis)
+
+
+@_tensor_member_fn
+@builtin
+def linear_apply(index, bases, _semantic=None):
+    """Apply a GF(2)-linear map to each element of a :code:`uint32` tensor.
+
+    For every element :code:`x` of :code:`index`, the result is the bitwise
+    XOR of :code:`bases[i]` for all set bits :code:`i` of :code:`x`. The
+    result has the same shape as :code:`index` and :code:`uint32` dtype.
+    For example, an index element of :code:`5` (:code:`0b101`) produces
+    :code:`bases[0] ^ bases[2]`.
+
+    :param index: A tensor of :code:`uint32` indices.
+    :type index: Tensor
+    :param bases: A one-dimensional tensor containing exactly 32
+        :code:`uint32` basis elements.
+    :type bases: Tensor
+
+    """
+    index = _unwrap_if_constexpr(index)
+    bases = _unwrap_if_constexpr(bases)
+    return _semantic.linear_apply(index, bases)
 
 
 @builtin

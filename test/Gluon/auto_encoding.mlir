@@ -181,6 +181,31 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // -----
 
+#index = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 8], warpsPerCTA = [2, 2], order = [1, 0]}>
+#basis = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // The index and result infer the same rank-two encoding. Their independently
+  // seeded rank-one basis must keep its own warp-local encoding.
+  // CHECK-DAG: [[$INDEX:#.*]] = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 8], warpsPerCTA = [2, 2], order = [1, 0]}>
+  // CHECK-DAG: [[$BASIS:#.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+  // CHECK-LABEL: @infer_linear_apply_independent_basis
+  // CHECK: [[INDEX_VALUE:%.*]] = arith.constant dense<5> : tensor<8x8xi32, [[$INDEX]]>
+  // CHECK: [[BASIS_VALUE:%.*]] = arith.constant dense<7> : tensor<32xi32, [[$BASIS]]>
+  // CHECK: [[RESULT:%.*]] = tt.linear_apply [[INDEX_VALUE]], [[BASIS_VALUE]] : tensor<8x8xi32, [[$INDEX]]>, tensor<32xi32, [[$BASIS]]> -> tensor<8x8xi32, [[$INDEX]]>
+  // CHECK: tt.return [[RESULT]] : tensor<8x8xi32, [[$INDEX]]>
+  tt.func public @infer_linear_apply_independent_basis() -> tensor<8x8xi32, #index> {
+    %index = arith.constant dense<5> : tensor<8x8xi32, #gluon.auto_encoding>
+    %bases = arith.constant dense<7> : tensor<32xi32, #gluon.auto_encoding>
+    %resolved_bases = gluon.set_auto_layout %bases : tensor<32xi32, #gluon.auto_encoding> -> tensor<32xi32, #basis>
+    %result = tt.linear_apply %index, %bases : tensor<8x8xi32, #gluon.auto_encoding>, tensor<32xi32, #gluon.auto_encoding> -> tensor<8x8xi32, #gluon.auto_encoding>
+    %resolved_result = gluon.set_auto_layout %result : tensor<8x8xi32, #gluon.auto_encoding> -> tensor<8x8xi32, #index>
+    tt.return %resolved_result : tensor<8x8xi32, #index>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {

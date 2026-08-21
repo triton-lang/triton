@@ -678,3 +678,71 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
     tt.return
   }
 }
+
+// -----
+
+tt.func @linear_apply_rank_zero_index(%index: tensor<i32>, %bases: tensor<32xi32>) {
+  // expected-error @below {{index must have rank of at least one}}
+  %result = tt.linear_apply %index, %bases : tensor<i32>, tensor<32xi32> -> tensor<i32>
+  tt.return
+}
+
+// -----
+
+tt.func @linear_apply_rank_two_bases(%index: tensor<128xi32>, %bases: tensor<8x4xi32>) {
+  // expected-error @below {{bases must be a one-dimensional tensor}}
+  %result = tt.linear_apply %index, %bases : tensor<128xi32>, tensor<8x4xi32> -> tensor<128xi32>
+  tt.return
+}
+
+// -----
+
+tt.func @linear_apply_invalid_index_type(%index: tensor<128xi64>, %bases: tensor<32xi32>) {
+  // expected-error @below {{operand #0 must be ranked tensor of 32-bit signless integer values}}
+  %result = tt.linear_apply %index, %bases : tensor<128xi64>, tensor<32xi32> -> tensor<128xi32>
+  tt.return
+}
+
+// -----
+
+tt.func @linear_apply_invalid_bases_type(%index: tensor<128xi32>, %bases: tensor<32xi64>) {
+  // expected-error @below {{operand #1 must be ranked tensor of 32-bit signless integer values}}
+  %result = tt.linear_apply %index, %bases : tensor<128xi32>, tensor<32xi64> -> tensor<128xi32>
+  tt.return
+}
+
+// -----
+
+tt.func @linear_apply_bases_length_mismatch(%index: tensor<128xi32>, %bases: tensor<16xi32>) {
+  // expected-error @below {{bases must contain exactly 32 elements}}
+  %result = tt.linear_apply %index, %bases : tensor<128xi32>, tensor<16xi32> -> tensor<128xi32>
+  tt.return
+}
+
+// -----
+
+tt.func @linear_apply_result_shape_mismatch(%index: tensor<128xi32>, %bases: tensor<32xi32>) {
+  // expected-error @below {{index and result shapes must match}}
+  %result = tt.linear_apply %index, %bases : tensor<128xi32>, tensor<32xi32> -> tensor<64xi32>
+  tt.return
+}
+
+// -----
+
+#index_layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#result_layout = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @linear_apply_result_encoding_mismatch(%index: tensor<128xi32, #index_layout>, %bases: tensor<32xi32, #index_layout>) {
+    // expected-error @below {{index and result encodings must match}}
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index_layout>, tensor<32xi32, #index_layout> -> tensor<128xi32, #result_layout>
+    tt.return
+  }
+}
+
+// -----
+
+tt.func @linear_apply_invalid_result_type(%index: tensor<128xi32>, %bases: tensor<32xi32>) {
+  // expected-error @below {{result #0 must be ranked tensor of 32-bit signless integer values}}
+  %result = tt.linear_apply %index, %bases : tensor<128xi32>, tensor<32xi32> -> tensor<128xi64>
+  tt.return
+}

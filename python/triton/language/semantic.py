@@ -1740,6 +1740,23 @@ class TritonSemantic(Generic[TensorTy]):
         return self.wrap_tensor(gather, src.type.scalar, index.type.shape)
 
 # ===----------------------------------------------------------------------===
+#                               Linear Apply
+# ===----------------------------------------------------------------------===
+
+    def linear_apply(self, index: TensorTy, bases: TensorTy) -> TensorTy:
+        if not isinstance(index, self.tensor) or not index.type.is_block() or index.dtype != tl.uint32:
+            raise ValueError("linear_apply index must be a uint32 tensor")
+        if not isinstance(bases, self.tensor) or not bases.type.is_block() or bases.dtype != tl.uint32:
+            raise ValueError("linear_apply bases must be a uint32 tensor")
+        if len(bases.type.shape) != 1:
+            raise ValueError("linear_apply bases must be a one-dimensional tensor")
+        if bases.type.shape[0] != 32:
+            raise ValueError(f"linear_apply bases must contain exactly 32 elements, but got {bases.type.shape[0]}")
+
+        result = self.builder.create_linear_apply(index.handle, bases.handle)
+        return self.wrap_tensor(result, tl.uint32, index.type.shape)
+
+# ===----------------------------------------------------------------------===
 #                               Map Elementwise
 # ===----------------------------------------------------------------------===
 
