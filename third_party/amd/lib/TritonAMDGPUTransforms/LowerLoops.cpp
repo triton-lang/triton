@@ -378,9 +378,8 @@ bool hasEnoughCTABytesForDirectToLds(tt::LoadOp loadOp,
 
 // Return whether the shared-memory swizzle maps every register and lane of
 // srcTy to a source lane within the same warp.
-static bool
-swizzlesInsideWarp(RankedTensorType srcTy,
-                   ttg::SwizzledSharedEncodingAttr enc) {
+static bool swizzlesInsideWarp(RankedTensorType srcTy,
+                               ttg::SwizzledSharedEncodingAttr enc) {
   // maxPhase == 1 means no swizzling, so `requiresSrcPtrSwizzling` is false in
   // the lowering and there is no lane shuffle.
   if (!enc || enc.getMaxPhase() == 1)
@@ -583,8 +582,7 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
     // On non-scatter targets, direct-to-LDS realizes the shared-memory swizzle
     // by shuffling source pointers between lanes, which must stay in one warp.
     if (canUseAsyncCopy && !targetInfo.supportsDirectToLdsScatter()) {
-      auto clampedEncoding =
-          clampSwizzleForDirectToLds(ty, sharedEncoding);
+      auto clampedEncoding = clampSwizzleForDirectToLds(ty, sharedEncoding);
       // Clamping changes the shared layout used by the final eligibility
       // check, so verify that the load remains convertible.
       canUseAsyncCopy = canBeConvertedToAsyncLoad(
