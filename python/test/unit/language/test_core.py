@@ -2357,6 +2357,60 @@ def test_store_constant(num_ctas, dtype_str, constant_field, device):
         assert torch.all(output == 0)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("value", [0, 1, 2, 127, 128, 255, 256, 257, 512, 65536, -1, -256])
+def test_store_int_to_bool(value, device):
+    # Storing an integer through a `bool` pointer must convert with `value != 0`.
+    # Previously the value was truncated to the i8 storage type, so any value
+    # whose low byte was zero (e.g. 256) was silently stored as `False`.
+    # See https://github.com/triton-lang/triton/issues/9991
+
+    @triton.jit
+    def kernel(output_ptr, value):
+        tl.store(output_ptr, value)
+
+    output = torch.zeros([1], dtype=torch.bool, device=device)
+    kernel[(1, )](output, value)
+    assert output[0].item() == (value != 0)
+
+
+@pytest.mark.interpreter
+def test_store_bool_reduction(device):
+    # `tl.sum` over a bool tensor reduces in int32; storing that result into a
+    # bool output must not truncate. 256 `True` values used to yield `False`.
+    # See https://github.com/triton-lang/triton/issues/9991
+
+    @triton.jit
+    def kernel(input_ptr, output_ptr, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.arange(0, BLOCK_SIZE)
+        x = tl.load(input_ptr + offsets)
+        tl.store(output_ptr, tl.sum(x, 0))
+
+    for block_size in [1, 2, 128, 256, 512]:
+        x = torch.ones([block_size], dtype=torch.bool, device=device)
+        output = torch.zeros([1], dtype=torch.bool, device=device)
+        kernel[(1, )](x, output, BLOCK_SIZE=block_size)
+        assert output[0].item() is True
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_str", ["int8", "int16"])
+@pytest.mark.parametrize("value", [0, 1, 127, 256, 257, 300, 65536, 65537, -1])
+def test_store_int_truncates(dtype_str, value, device):
+    # Narrowing stores to non-bool integer types must keep truncating; only a
+    # `bool` destination compares against zero.
+
+    @triton.jit
+    def kernel(output_ptr, value):
+        tl.store(output_ptr, value)
+
+    dtype = getattr(torch, dtype_str)
+    output = torch.zeros([1], dtype=dtype, device=device)
+    kernel[(1, )](output, value)
+    ref = torch.tensor([value], dtype=torch.int32, device=device).to(dtype)
+    assert output[0].item() == ref[0].item()
+
+
 def test_load_store_same_ptr(device):
 
     @triton.jit()

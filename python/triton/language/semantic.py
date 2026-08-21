@@ -1212,12 +1212,18 @@ class TritonSemantic(Generic[TensorTy]):
         elt_ty = ptr_ty.element_ty
 
         # Treat `pointer_type<tl.int1>` as `pointer_type<tl.int8>`
-        if elt_ty == tl.int1:
+        is_bool = elt_ty == tl.int1
+        if is_bool:
             elt_ty = tl.int8
             ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space)
             ptr = self.cast(ptr, ptr_ty)
 
-        # Cast to target data type
+        # Cast to target data type. For a bool destination the conversion must go
+        # through `tl.int1` first (i.e. `val != 0`) so that values whose low byte
+        # is zero -- e.g. 256 -- do not silently become `False`. Casting straight
+        # to the `tl.int8` storage type would truncate instead of comparing.
+        if is_bool:
+            val = self.cast(val, tl.int1)
         val = self.cast(val, elt_ty)
 
         # Build IR
