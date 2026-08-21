@@ -392,9 +392,9 @@ void ClusterBarrierAnalysis::update(Operation *op, MembarInfo *membarInfo,
       // read phases. Record the write before clearing the state, then retain
       // only the read as an outgoing effect.
       // For example:
-      //   addBlockInfo records W(scratch)
-      //   internal cluster sync clears W(scratch)
-      //   the insertion below records R(scratch)
+      //   pending = {},          curBlockInfo = W(scratch)
+      //   cluster_barrier
+      //   pending = {},          curBlockInfo = R(scratch)
       membarInfo->addBlockInfo(curBlockInfo);
       membarInfo->sync();
       curBlockInfo.sync();
