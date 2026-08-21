@@ -73,8 +73,8 @@ def test_mxfp4_value_storage_shape_matches_swizzle():
     assert torch.equal(transformation.unswizzle_data(swizzled), x)
 
 
-@pytest.mark.parametrize(("shape", "major_dim"),
-                         [(shape[:-1] + (2 * shape[-1], ), -1) for shape in ZERO_SIZED_SHAPES] + [((2, 0, 6, 8), -2)])
+@pytest.mark.parametrize("shape", ZERO_SIZED_SHAPES + [(0, 0), (2, 0, 6, 8)])
+@pytest.mark.parametrize("major_dim", [-2, -1])
 @pytest.mark.parametrize("mx_axis", [-2, -1])
 @pytest.mark.parametrize("mma_version", [2, 3])
 @pytest.mark.parametrize("device", ["cpu", "meta", "cuda"])
@@ -92,6 +92,7 @@ def test_mxfp4_value_zero_sized_roundtrip(shape, major_dim, mx_axis, mma_version
     assert list(swizzled.data.shape) == transformation.storage_shape
     assert canonical.shape == (*shape[:-1], shape[-1] // 2)
     assert roundtrip.data.shape == src.data.shape
+    assert roundtrip.data.stride() == src.data.stride()
 
 
 @pytest.mark.parametrize("mx_axis", [-2, -1])
@@ -143,7 +144,7 @@ def test_mxfp4_value_convert_layout_to_strided_matches_torch(shape, step, mx_axi
 
     data_cuda = source.data.cuda()
     if step == 2:
-        data_cuda = torch.stack((data_cuda, data_cuda), dim=-1)[..., 1]
+        data_cuda = torch.stack((torch.zeros_like(data_cuda), data_cuda), dim=-1)[..., 1]
     source_cuda = wrap_torch_tensor(data_cuda, dtype=FP4, shape=source.shape, layout=layout)
     actual = convert_layout(source_cuda, destination)
 

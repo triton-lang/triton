@@ -94,17 +94,17 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
 
         out = torch.empty_strided(destination.storage_shape, destination.storage_strides, dtype=data.dtype,
                                   device=data.device)
-        if out.numel() == 0:
-            return out
         source = self._maybe_mT(data)
         target = self._maybe_mT(out)
         m, k = (self.N, self.K) if self.mx_axis == len(self.leading_shape) else (self.K, self.N)
         block_m, block_k = 16, 256
         grid = (math.prod(self.leading_shape) * triton.cdiv(m, 4 * block_m) * triton.cdiv(k, block_k // 2), )
-        with torch.cuda.device(data.device):
-            _unswizzle_to_strided_kernel[grid](source, target, tuple(self.leading_shape), source.stride()[:-2],
-                                               target.stride()[:-2], *source.stride()[-2:], *target.stride()[-2:], m, k,
-                                               self.mma_version, destination.order[0] != self.mx_axis, block_m, block_k)
+        if grid[0] > 0:
+            with torch.cuda.device(data.device):
+                _unswizzle_to_strided_kernel[grid](source, target, tuple(self.leading_shape), source.stride()[:-2],
+                                                   target.stride()[:-2], *source.stride()[-2:], *target.stride()[-2:],
+                                                   m, k, self.mma_version, destination.order[0] != self.mx_axis,
+                                                   block_m, block_k)
         return out
 
     def swizzle_data(self, data):
@@ -402,12 +402,12 @@ def _unswizzle_to_strided_kernel(X, Y, LEADING_SHAPE: tl.constexpr, X_BATCH_STRI
     d = tl.load(X + offsets + 3 * X_STRIDE_K).to(tl.uint32)
     x = _unpack_bits_triton(a | (b << 8) | (c << 16) | (d << 24))
     shifts = 8 * tl.arange(0, 4)
-    x = ((x[:, :, None] >> shifts[None, None, :]) & 0xFF).to(tl.uint8)
+    x = (x[:, :, None] >> shifts[None, None, :]).to(tl.uint8)
     x = _unshuffle_triton(x.reshape(BLOCK_M, BLOCK_K), MMA_VERSION)
 
     if PACK_M:
         even, odd = tl.split(x.reshape(2 * BLOCK_M, 2, BLOCK_K // 4).trans(0, 2, 1))
-        x = tl.join((even & 0xF) | ((odd & 0xF) << 4), (even >> 4) | (odd & 0xF0))
+        x = tl.join((even & 0xF) | (odd << 4), (even >> 4) | (odd & 0xF0))
         x = x.reshape(2 * BLOCK_M, BLOCK_K // 2)
         rows = tile_m * (2 * BLOCK_M) + tl.arange(0, 2 * BLOCK_M)
         cols = tile_k * (BLOCK_K // 2) + tl.arange(0, BLOCK_K // 2)
