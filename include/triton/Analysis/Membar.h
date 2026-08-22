@@ -85,13 +85,22 @@ public:
 
 private:
   std::tuple<Interval<size_t>, Allocation::BufferId, const void *,
-             llvm::ArrayRef<int64_t>, const BufferIndexExpr *>
+             llvm::ArrayRef<int64_t>, const void *, const BufferIndexExpr *>
   asTuple() const {
-    return {allocationInterval, bufferId, accessTy.getAsOpaquePointer(),
-            subsliceOffsets, bufferIndexExpr};
+    return {allocationInterval,
+            bufferId,
+            accessTy.getAsOpaquePointer(),
+            subsliceOffsets,
+            subsliceSrcTy.getAsOpaquePointer(),
+            bufferIndexExpr};
   }
   // Offsets from subslice. Empty when offsets are unknown
   SmallVector<int64_t> subsliceOffsets;
+  // Type of the value the subslice was taken from. Offsets are logical
+  // coordinates in that type's shape and element type, so they are only
+  // comparable between slices whose sources agree on it. Null when there are
+  // no offsets.
+  triton::gpu::MemDescType subsliceSrcTy;
   // The allocated interval for this buffer
   Interval<size_t> allocationInterval;
   // Type of the memory descriptor for this access
