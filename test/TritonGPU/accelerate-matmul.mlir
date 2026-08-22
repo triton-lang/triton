@@ -937,6 +937,146 @@ module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num
 
 // -----
 
+// Verify that for SM_120 with mixed FP8 x FP4 inputs, tt.dot_scaled is preserved
+// and the packed fp4 operand is staged through fp4Padded shared memory
+// (local_alloc + local_load) so the pipeliner can multi-buffer it, while the fp8
+// operand uses the register path. (Flow 2)
+
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked2_k = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
+
+module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-DAG: #[[$MMA:.+]] = #ttg.nvidia_mma<{versionMajor = 2
+  // CHECK-DAG: #[[$SHARED:.+]] = #ttg.nvmma_shared<{{.*}}elementBitWidth = 8, fp4Padded = true{{.*}}>
+  // CHECK-LABEL: @sm120_dot_scaled_fp8_fp4_mixed
+  // The fp8 operand A stays in registers as a kWidth=4 dot operand.
+  // CHECK-DAG: %[[A:.+]] = ttg.convert_layout %arg0 {{.*}}-> tensor<128x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #[[$MMA]], kWidth = 4}>>
+  // The packed fp4 operand B is staged through shared memory, then loaded into a
+  // kWidth=2 fp4Unpacked register dot operand (the LocalLoadOp lowering expands
+  // the two e2m1 nibbles into separate 8-bit fields) that feeds the dot.
+  // CHECK-DAG: %[[SMEM:.+]] = ttg.local_alloc %arg2 {{.*}}-> !ttg.memdesc<32x128xi8, #[[$SHARED]], #smem>
+  // CHECK: %[[B:.+]] = ttg.local_load %[[SMEM]] {{.*}}-> tensor<32x128xi8, #ttg.dot_op<{opIdx = 1, parent = #[[$MMA]], kWidth = 2, fp4Unpacked = true}>>
+  // CHECK: tt.dot_scaled %[[A]] scale {{.*}}, %[[B]] scale {{.*}} lhs = e4m3 rhs = e2m1
+  // CHECK-NOT: ttg.fp4_to_fp
+  tt.func public @sm120_dot_scaled_fp8_fp4_mixed(
+    %a: tensor<128x64xf8E4M3FN, #blocked2_k>,
+    %scale_a: tensor<128x2xi8, #blocked2>,
+    %b: tensor<32x128xi8, #blocked2>,
+    %scale_b: tensor<128x2xi8, #blocked2>
+  ) -> tensor<128x128xf32, #blocked2> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked2>
+    %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e4m3 rhs = e2m1 {fastMath = false}
+      : tensor<128x64xf8E4M3FN, #blocked2_k>, tensor<128x2xi8, #blocked2>
+        * tensor<32x128xi8, #blocked2>, tensor<128x2xi8, #blocked2>
+        -> tensor<128x128xf32, #blocked2>
+    tt.return %d : tensor<128x128xf32, #blocked2>
+  }
+}
+
+// -----
+
+// Mirror of the previous case: A is packed FP4 and B is FP8. The packed fp4 A
+// operand is staged through fp4Padded shared memory (local_alloc + local_load)
+// into a kWidth=2 opIdx=0 dot operand, while the fp8 B operand uses the register
+// path. (Flow 2)
+
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked2_k = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
+
+module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-DAG: #[[$MMA:.+]] = #ttg.nvidia_mma<{versionMajor = 2
+  // CHECK-DAG: #[[$SHARED:.+]] = #ttg.nvmma_shared<{{.*}}elementBitWidth = 8, fp4Padded = true{{.*}}>
+  // CHECK-LABEL: @sm120_dot_scaled_fp4_fp8_mixed
+  // The fp8 operand B stays in registers as a kWidth=4 dot operand.
+  // CHECK-DAG: %[[B:.+]] = ttg.convert_layout %arg2 {{.*}}-> tensor<64x128xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #[[$MMA]], kWidth = 4}>>
+  // The packed fp4 operand A is staged through shared memory, then loaded into a
+  // kWidth=2 fp4Unpacked opIdx=0 register dot operand (the LocalLoadOp lowering
+  // expands the two e2m1 nibbles into separate 8-bit fields) that feeds the dot.
+  // CHECK-DAG: %[[SMEM:.+]] = ttg.local_alloc %arg0 {{.*}}-> !ttg.memdesc<128x32xi8, #[[$SHARED]], #smem>
+  // CHECK-DAG: %[[A:.+]] = ttg.local_load %[[SMEM]] {{.*}}-> tensor<128x32xi8, #ttg.dot_op<{opIdx = 0, parent = #[[$MMA]], kWidth = 2, fp4Unpacked = true}>>
+  // CHECK: tt.dot_scaled %[[A]] scale {{.*}}, %[[B]] scale {{.*}} lhs = e2m1 rhs = e4m3
+  // CHECK-NOT: ttg.fp4_to_fp
+  tt.func public @sm120_dot_scaled_fp4_fp8_mixed(
+    %a: tensor<128x32xi8, #blocked2>,
+    %scale_a: tensor<128x2xi8, #blocked2>,
+    %b: tensor<64x128xf8E4M3FN, #blocked2_k>,
+    %scale_b: tensor<128x2xi8, #blocked2>
+  ) -> tensor<128x128xf32, #blocked2> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked2>
+    %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e2m1 rhs = e4m3 {fastMath = false}
+      : tensor<128x32xi8, #blocked2>, tensor<128x2xi8, #blocked2>
+        * tensor<64x128xf8E4M3FN, #blocked2_k>, tensor<128x2xi8, #blocked2>
+        -> tensor<128x128xf32, #blocked2>
+    tt.return %d : tensor<128x128xf32, #blocked2>
+  }
+}
+
+// -----
+
+// Verify that FP8 x FP8 with ue4m3 scales falls back to decomposition on
+// SM_120. Native ue4m3 scale support is limited to FP4 x FP4.
+
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked2_k = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
+
+module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @sm120_dot_scaled_fp8_fp8_ue4m3_scale_fallback
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: tt.dot
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: tt.return
+  tt.func public @sm120_dot_scaled_fp8_fp8_ue4m3_scale_fallback(
+    %a: tensor<128x64xf8E4M3FN, #blocked2_k>,
+    %scale_a: tensor<128x4xf8E4M3FN, #blocked2>,
+    %b: tensor<64x128xf8E4M3FN, #blocked2>,
+    %scale_b: tensor<128x4xf8E4M3FN, #blocked2>
+  ) -> tensor<128x128xf32, #blocked2> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked2>
+    %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e4m3 rhs = e4m3 {fastMath = false}
+      : tensor<128x64xf8E4M3FN, #blocked2_k>, tensor<128x4xf8E4M3FN, #blocked2>
+        * tensor<64x128xf8E4M3FN, #blocked2>, tensor<128x4xf8E4M3FN, #blocked2>
+        -> tensor<128x128xf32, #blocked2>
+    tt.return %d : tensor<128x128xf32, #blocked2>
+  }
+}
+
+// -----
+
+// A non-K-packed FP4 operand cannot use the native mixed mxf8f6f4 path. It
+// must be decomposed by unpacking along M instead of being staged through the
+// padded-SMEM/fp4Unpacked ldmatrix path.
+
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked2_k = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
+
+module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-NOT: fp4Padded = true
+  // CHECK-LABEL: @sm120_dot_scaled_fp4_m_packed_decomposes
+  // CHECK-NOT: fp4Padded = true
+  // CHECK-NOT: fp4Unpacked = true
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: ttg.fp4_to_fp {{.*}} {axis = 0 : i32}
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: tt.dot
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: tt.return
+  tt.func public @sm120_dot_scaled_fp4_m_packed_decomposes(
+    %a: tensor<64x64xi8, #blocked2>,
+    %scale_a: tensor<128x2xi8, #blocked2>,
+    %b: tensor<64x128xf8E4M3FN, #blocked2_k>,
+    %scale_b: tensor<128x2xi8, #blocked2>
+  ) -> tensor<128x128xf32, #blocked2> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked2>
+    %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e2m1 rhs = e4m3 {fastMath = false, lhs_k_pack = false}
+      : tensor<64x64xi8, #blocked2>, tensor<128x2xi8, #blocked2>
+        * tensor<64x128xf8E4M3FN, #blocked2_k>, tensor<128x2xi8, #blocked2>
+        -> tensor<128x128xf32, #blocked2>
+    tt.return %d : tensor<128x128xf32, #blocked2>
+  }
+}
+
+// -----
+
 // Verify that for SM_120 with mixed fp16/fp8 inputs, tt.dot_scaled falls back
 // to decomposition instead of native dot_scaled MMAv2 lowering.
 

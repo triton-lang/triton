@@ -1222,12 +1222,22 @@ def mxfp8_mxfp4_matmul(  #
 def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TRANS, PACK_B_ALONG_K, CONST_SCALE,
                             A_DATA_TYPE, B_DATA_TYPE, WITH_A_SCALE, WITH_B_SCALE, nonKDim, device):
     if is_cuda():
-        if torch.cuda.get_device_capability()[0] != 10:
-            pytest.skip("Requires compute capability == 10")
+        cc = torch.cuda.get_device_capability()[0]
+        if cc not in (10, 12):
+            pytest.skip("Requires compute capability == 10 or 12")
         if not (WITH_A_SCALE and WITH_B_SCALE):
             pytest.skip("None scale has not been tested on NV backend")
-        if not (A_DATA_TYPE == "float8e5" and B_DATA_TYPE == "float4"):
-            pytest.skip(f"(A: {A_DATA_TYPE}, B: {B_DATA_TYPE}) has not been tested on NV backend")
+        if cc == 10:
+            if not (A_DATA_TYPE == "float8e5" and B_DATA_TYPE == "float4"):
+                pytest.skip(f"(A: {A_DATA_TYPE}, B: {B_DATA_TYPE}) has not been tested on NV backend")
+        elif cc == 12:
+            fp8_types = ("float8e5", "float8e4nv")
+            is_mixed = (A_DATA_TYPE in fp8_types and B_DATA_TYPE == "float4") or \
+                       (A_DATA_TYPE == "float4" and B_DATA_TYPE in fp8_types)
+            if not is_mixed:
+                pytest.skip("Mixed fp8 x fp4 operands expected here")
+            if not PACK_B_ALONG_K:
+                pytest.skip("Mixed fp8 x fp4 requires K-packed fp4")
     elif is_hip():
         if not (is_hip_cdna4() or is_hip_gfx1250()):
             pytest.skip("Scaled mxfp4 & mxfp8 matmul is only natively supported on CDNA4 and above")
@@ -1315,8 +1325,11 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
     if is_hip_gfx1250() and B_DATA_TYPE == "float4" and not PACK_B_ALONG_K:
         assert "ds_load_tr4_b64" in out.asm["amdgcn"]
     if is_blackwell() and not is_rubin():
-        ttgir = out.asm["ttgir"]
-        assert "fp4Padded = true" in ttgir
+        # sm100: uses the padded fp4 shared memory layout.
+        assert "fp4Padded = true" in out.asm["ttgir"]
+    elif is_cuda() and torch.cuda.get_device_capability()[0] == 12:
+        # sm120: uses the fp4Unpacked register layout, staged through smem.
+        assert "kind::mxf8f6f4" in out.asm["ptx"]
 
     torch.testing.assert_close(ref_out, output, atol=1e-3, rtol=1e-3)
 

@@ -487,7 +487,8 @@ void init_gluon_ir(py::module_ &m) {
            [](GluonOpBuilder &self, unsigned opIdx, Attribute parent,
               unsigned kWidth) -> Attribute {
              return self.getChecked<ttg::DotOperandEncodingAttr>(
-                 self.getContext(), opIdx, parent, kWidth);
+                 self.getContext(), opIdx, parent, kWidth,
+                 /*fp4Unpacked=*/false);
            })
       .def("get_mma_layout",
            [](GluonOpBuilder &self, std::vector<unsigned> &version,

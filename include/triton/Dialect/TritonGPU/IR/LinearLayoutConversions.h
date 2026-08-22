@@ -55,6 +55,15 @@ LinearLayout toLinearLayout(TensorOrMemDesc type);
 // with the allocShape as the shape, otherwise the layout will be incorrect!
 LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
 
+// Returns the layout of individually represented register elements.
+//
+// Usually this is identical to toLinearLayout. For encodings such as
+// fp4Unpacked, the logical tensor retains its packed shape while each packed
+// element is represented by multiple register elements. This layout gives
+// those register elements distinct coordinates.
+LinearLayout toRegisterElementLinearLayout(ArrayRef<int64_t> shape,
+                                           Attribute layout);
+
 // Returns the linear component of a padded shared encoding. The encoding must
 // satisfy isPaddedEncoding (asserts otherwise).
 //

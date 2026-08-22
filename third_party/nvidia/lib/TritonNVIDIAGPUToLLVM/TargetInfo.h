@@ -48,6 +48,9 @@ public:
   bool supportLdStMatrixB8() const override {
     return targetFeatures.supportLdStMatrixB8();
   }
+  bool supportsFp4Ldmatrix() const {
+    return targetFeatures.supportsFp4Ldmatrix();
+  }
   bool supportBitwidth16Elementwise() const override {
     return targetFeatures.supportBitwidth16Elementwise();
   }

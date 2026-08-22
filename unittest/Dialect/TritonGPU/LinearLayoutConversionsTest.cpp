@@ -4,6 +4,7 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Signals.h"
@@ -3554,6 +3555,199 @@ TEST_F(LinearLayoutConversionsTest,
           << dim0 << ", " << dim1 << "] with " << swizzleBytes << "B swizzle";
     }
   }
+}
+
+TEST_F(LinearLayoutConversionsTest, Fp4UnpackedDotOperandLayout) {
+  auto mmaEnc = mma(2, 0, {16, 8}, /*numWarps=*/{1, 1});
+
+  auto findOut =
+      [](const llvm::SmallVector<std::pair<StringAttr, int32_t>> &out,
+         StringAttr name) -> int32_t {
+    for (auto &kv : out)
+      if (kv.first == name)
+        return kv.second;
+    ADD_FAILURE() << "missing output dim " << name.str();
+    return 0;
+  };
+
+  auto check = [&](int opIdx, ArrayRef<int64_t> packedShape) {
+    auto packedDot = dot(mmaEnc, opIdx, /*kWidth=*/2);
+    auto unpackedDot = DotOperandEncodingAttr::get(
+        &ctx, opIdx, mmaEnc, /*kWidth=*/2, /*fp4Unpacked=*/true);
+    LinearLayout packed = toLinearLayout(packedShape, packedDot);
+    LinearLayout unpacked = toLinearLayout(packedShape, unpackedDot);
+
+    int rank = packedShape.size();
+    int kDim = opIdx == 0 ? rank - 1 : rank - 2;
+    SmallVector<int64_t> expandedShape(packedShape.begin(), packedShape.end());
+    expandedShape[kDim] *= 2;
+    auto expandedDot = dot(mmaEnc, opIdx, /*kWidth=*/4);
+    LinearLayout expanded = toLinearLayout(expandedShape, expandedDot);
+    LinearLayout registerElements =
+        toRegisterElementLinearLayout(packedShape, unpackedDot);
+
+    StringAttr kOut = opIdx == 0 ? S("dim1") : S("dim0");
+    StringAttr otherOut = opIdx == 0 ? S("dim0") : S("dim1");
+
+    EXPECT_EQ(toRegisterElementLinearLayout(packedShape, packedDot), packed);
+    EXPECT_EQ(registerElements, expanded);
+
+    // Same packed tensor shape (codomain), double the registers.
+    ASSERT_EQ(unpacked.getInDimSize(S("register")),
+              2 * packed.getInDimSize(S("register")));
+    EXPECT_EQ(getUniqueElemsPerThread(unpackedDot, packedShape),
+              unpacked.getInDimSize(S("register")));
+    ASSERT_EQ(unpacked.getOutDimSize(kOut), packed.getOutDimSize(kOut));
+    ASSERT_EQ(unpacked.getOutDimSize(otherOut), packed.getOutDimSize(otherOut));
+
+    // MMAv2 consumes the unpacked registers as an ordinary byte-expanded
+    // kWidth=4 operand. Register parity must therefore select consecutive K
+    // elements in the expanded layout.
+    ASSERT_EQ(expanded.getInDimSize(S("register")),
+              unpacked.getInDimSize(S("register")));
+    ASSERT_EQ(expanded.getOutDimSize(kOut), 2 * unpacked.getOutDimSize(kOut));
+    ASSERT_EQ(expanded.getOutDimSize(otherOut),
+              unpacked.getOutDimSize(otherOut));
+
+    int32_t numRegs = unpacked.getInDimSize(S("register"));
+    int32_t numLanes = unpacked.getInDimSize(S("lane"));
+    int32_t numWarps = unpacked.getInDimSize(S("warp"));
+    for (int32_t reg = 0; reg < numRegs; ++reg) {
+      for (int32_t lane = 0; lane < numLanes; ++lane) {
+        for (int32_t warp = 0; warp < numWarps; ++warp) {
+          auto unp = unpacked.apply({{S("register"), reg},
+                                     {S("lane"), lane},
+                                     {S("warp"), warp},
+                                     {S("block"), 0}});
+          auto pk = packed.apply({{S("register"), reg >> 1},
+                                  {S("lane"), lane},
+                                  {S("warp"), warp},
+                                  {S("block"), 0}});
+          auto exp = expanded.apply({{S("register"), reg},
+                                     {S("lane"), lane},
+                                     {S("warp"), warp},
+                                     {S("block"), 0}});
+          EXPECT_EQ(findOut(unp, kOut), findOut(pk, kOut))
+              << "opIdx=" << opIdx << " reg=" << reg << " lane=" << lane
+              << " warp=" << warp;
+          EXPECT_EQ(findOut(unp, otherOut), findOut(pk, otherOut))
+              << "opIdx=" << opIdx << " reg=" << reg << " lane=" << lane
+              << " warp=" << warp;
+          EXPECT_EQ(findOut(exp, kOut), 2 * findOut(unp, kOut) + (reg & 1))
+              << "opIdx=" << opIdx << " reg=" << reg << " lane=" << lane
+              << " warp=" << warp;
+          EXPECT_EQ(findOut(exp, otherOut), findOut(unp, otherOut))
+              << "opIdx=" << opIdx << " reg=" << reg << " lane=" << lane
+              << " warp=" << warp;
+        }
+      }
+    }
+  };
+
+  // A (opIdx 0): K is the contiguous dim.
+  check(/*opIdx=*/0, /*packedShape=*/{16, 16});
+  // B (opIdx 1): K is the outer dim.
+  check(/*opIdx=*/1, /*packedShape=*/{16, 8});
+
+  // Preserve the semantic parity bit while still removing genuine broadcasts
+  // introduced when the tensor is smaller than the MMA tile.
+  auto checkBroadcast = [&](int opIdx, ArrayRef<int64_t> packedShape) {
+    auto packedDot = dot(mmaEnc, opIdx, /*kWidth=*/2);
+    auto unpackedDot = DotOperandEncodingAttr::get(
+        &ctx, opIdx, mmaEnc, /*kWidth=*/2, /*fp4Unpacked=*/true);
+    SmallVector<int64_t> expandedShape(packedShape);
+    int kDim = opIdx == 0 ? packedShape.size() - 1 : packedShape.size() - 2;
+    expandedShape[kDim] *= 2;
+    auto expandedDot = dot(mmaEnc, opIdx, /*kWidth=*/4);
+
+    EXPECT_EQ(toRegisterElementLinearLayout(packedShape, unpackedDot),
+              toLinearLayout(expandedShape, expandedDot));
+    EXPECT_EQ(getUniqueElemsPerThread(unpackedDot, packedShape),
+              2 * getUniqueElemsPerThread(packedDot, packedShape));
+    EXPECT_EQ(getUniqueElemsPerThread(unpackedDot, packedShape),
+              getUniqueElemsPerThread(expandedDot, expandedShape));
+    EXPECT_LT(getUniqueElemsPerThread(unpackedDot, packedShape),
+              getTotalElemsPerThread(unpackedDot, packedShape));
+  };
+  checkBroadcast(/*opIdx=*/0, /*packedShape=*/{8, 16});
+  checkBroadcast(/*opIdx=*/1, /*packedShape=*/{8, 8});
+}
+
+// Verify fp4Unpacked register-element layouts are not limited to NVIDIA MMA.
+TEST_F(LinearLayoutConversionsTest,
+       Fp4UnpackedDotOperandLayoutIsTargetIndependent) {
+  auto parent = blocked(/*size*/ {1, 1}, /*threads*/ {1, 32}, /*warps*/ {1, 1},
+                        /*ctas*/ {1, 1}, /*splits*/ {1, 1}, /*order*/ {1, 0},
+                        /*cta order*/ {1, 0});
+  SmallVector<int64_t> shape = {1, 1};
+  auto packedDot = dot(parent, /*idx=*/0, /*kWidth=*/0);
+  auto unpackedDot = DotOperandEncodingAttr::get(
+      &ctx, /*opIdx=*/0, parent, /*kWidth=*/0, /*fp4Unpacked=*/true);
+  auto packedLayout = toLinearLayout(shape, packedDot);
+
+  EXPECT_EQ(toLinearLayout(shape, unpackedDot),
+            LinearLayout::zeros1D(2, S("register"), S("dim1")) * packedLayout);
+  EXPECT_EQ(toRegisterElementLinearLayout(shape, unpackedDot),
+            LinearLayout::identity1D(2, S("register"), S("dim1")) *
+                packedLayout);
+}
+
+TEST_F(LinearLayoutConversionsTest,
+       Fp4UnpackedRegisterWithPaddedSmemDividesByLdMatrixTile) {
+  auto mmaEnc = mma(2, 0, {16, 8}, /*numWarps=*/{2, 2});
+
+  auto kReg = S("register");
+  auto kLane = S("lane");
+  auto kWarp = S("warp");
+  auto kOffset = S("offset");
+  auto kAddr = S("addr");
+  auto kUnpack = S("unpack");
+
+  auto fullTile = LinearLayout::identity1D(2, kReg, kUnpack) *
+                  LinearLayout::identity1D(2, kReg, kOffset) *
+                  LinearLayout::identity1D(4, kLane, kOffset) *
+                  LinearLayout::identity1D(8, kLane, kAddr);
+  ASSERT_TRUE(fullTile.isInvertible());
+  auto tile =
+      fullTile.resizeInDim(kLane, 4).sublayout({kReg, kLane}, {kOffset});
+  EXPECT_EQ(tile, LinearLayout({{kReg, {{0}, {1}}}, {kLane, {{2}, {4}}}},
+                               {{kOffset, 8}},
+                               /*requireSurjective=*/false));
+
+  auto check = [&](int opIdx, ArrayRef<int64_t> packedShape, int swizzleBytes,
+                   bool transposed) {
+    auto unpackedDot = DotOperandEncodingAttr::get(
+        &ctx, opIdx, mmaEnc, /*kWidth=*/2, /*fp4Unpacked=*/true);
+    LinearLayout reg = toLinearLayout(packedShape, unpackedDot);
+    auto sharedEnc =
+        nvmmaShared(swizzleBytes, transposed,
+                    /*elementBitWidth=*/8, {1, 1}, {1, 1}, {1, 0}, {1, 0},
+                    /*fp4Padded=*/true);
+    LinearLayout smem = toLinearLayout(packedShape, sharedEnc);
+
+    auto maybeCvt = reg.invertAndCompose(smem).quotient({S("block")});
+    ASSERT_TRUE(maybeCvt) << "opIdx=" << opIdx;
+
+    auto maybePerm = regPermForDivide(*maybeCvt, tile, /*left=*/true);
+    ASSERT_TRUE(maybePerm) << "opIdx=" << opIdx << " cvt=" << *maybeCvt
+                           << " tile=" << tile;
+    auto cvt = maybePerm->apply(*maybeCvt);
+    auto maybeQuot = divideLeft(cvt, tile);
+    ASSERT_TRUE(maybeQuot) << "opIdx=" << opIdx;
+
+    auto reps = zerosLike(tile) * *maybeQuot;
+    auto fullTileVec = fullTile * LinearLayout::identity1D(4, kReg, kAddr);
+    fullTileVec *= LinearLayout::identity1D(1, kWarp, kAddr);
+    ASSERT_TRUE(fullTileVec.isInvertible()) << "opIdx=" << opIdx;
+    auto addrToOffset = fullTileVec.invert().compose(reps);
+    EXPECT_TRUE(addrToOffset.sublayoutIsZero({kUnpack}, {kOffset}))
+        << "opIdx=" << opIdx;
+  };
+
+  check(/*opIdx=*/0, /*packedShape=*/{128, 32}, /*swizzleBytes=*/64,
+        /*transposed=*/false);
+  check(/*opIdx=*/1, /*packedShape=*/{16, 128}, /*swizzleBytes=*/32,
+        /*transposed=*/true);
 }
 
 } // anonymous namespace
