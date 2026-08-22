@@ -758,6 +758,13 @@ public:
           dotOp, "SM120 native FP4xFP4 requires K-packed operands");
     }
 
+    // sm120 native scaled dot does not support k_pack=False for FP4.
+    // Fall back to dequantize -> fp16 MMA in that case.
+    if (isFP4(aElemType) && (!dotOp.getLhsKPack() || !dotOp.getRhsKPack())) {
+      return rewriter.notifyMatchFailure(
+          dotOp, "FP4 with k_pack=False is not supported on sm120 native MMA");
+    }
+
     auto scaleElemType = dotOp.getAScale().getType().getElementType();
     if (scaleElemType != dotOp.getBScale().getType().getElementType()) {
       return failure();
