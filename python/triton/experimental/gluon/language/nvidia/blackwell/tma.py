@@ -54,7 +54,7 @@ def async_gather(tensor_desc, x_offsets, y_offset, barrier, result, pred=True, m
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         multicast (bool): Enable multicast.
     """
-    # As in async_scatter, Gluon bypasses TritonSemantic.descriptor_gather.
+    # Gluon bypasses TritonSemantic.descriptor_gather, so the check has to live here too.
     _semantic._check_supports_tma_gather()
 
     if _semantic.builder.options.enable_iisan:
@@ -89,8 +89,7 @@ def async_scatter(tensor_desc, x_offsets, y_offset, src, _semantic=None):
         y_offset (int): Scalar Y offset.
         src (tensor_memory_descriptor): The source data, must be in NVMMASharedLayout.
     """
-    # Gluon calls the builder directly and never passes through
-    # TritonSemantic.descriptor_scatter, so the target check has to live here too.
+    # Gluon bypasses TritonSemantic.descriptor_scatter, so the check has to live here too.
     _semantic._check_supports_tma_scatter()
 
     if _semantic.builder.options.enable_iisan:

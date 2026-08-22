@@ -1084,26 +1084,29 @@ class TritonSemantic(Generic[TensorTy]):
         target = driver.active.get_current_target()
         return (target.backend == "cuda" and target.arch >= 90)
 
-    def _check_supports_tma_gather(self):
-        # TMA gather lowers to `cp.async.bulk.tensor.2d.tile::gather4`, introduced with
-        # Blackwell. Hopper has TMA but not the tiled gather/scatter variants. Non-CUDA
-        # backends lower DescriptorGatherOp on their own (AMD via TDM), so only gate CUDA.
-        target = driver.active.get_current_target()
-        if target.backend != "cuda":
+    def _tma_target(self):
+        options = self.builder.options
+        backend = options.backend_name
+        return backend, int(options.arch.removeprefix("sm")) if backend == "cuda" else None
+
+    def _check_supports_tma_gather(self, allow_fallback=False):
+        backend, capability = self._tma_target()
+        if backend == "interpreter":
             return
-        assert target.arch >= 100, \
+        if allow_fallback and (backend != "cuda" or capability < 90):
+            return
+        assert backend == "cuda" and capability >= 100, \
             "TMA gather requires NVIDIA Blackwell (sm_100) or newer"
 
-    def _check_supports_tma_scatter(self):
-        # As for gather, plus: consumer Blackwell (sm_12x) implements `tile::gather4` but
-        # not `tile::scatter4`, so scatter has to be rejected there as well. Without this
-        # the failure surfaces as an internal ptxas error late in compilation.
-        target = driver.active.get_current_target()
-        if target.backend != "cuda":
+    def _check_supports_tma_scatter(self, allow_fallback=False):
+        backend, capability = self._tma_target()
+        if backend == "interpreter":
             return
-        assert target.arch >= 100, \
+        if allow_fallback and (backend != "cuda" or capability < 90):
+            return
+        assert backend == "cuda" and capability >= 100, \
             "TMA scatter requires NVIDIA Blackwell (sm_100) or newer"
-        assert target.arch // 10 != 12, \
+        assert capability // 10 != 12, \
             "TMA scatter is not supported on consumer Blackwell (sm_12x). " \
             "TMA gather is supported on this architecture; use regular stores instead."
 
@@ -1150,7 +1153,7 @@ class TritonSemantic(Generic[TensorTy]):
     def descriptor_gather(self, desc, x_offsets, y_offset, cache_modifier: str, eviction_policy: str) -> TensorTy:
         assert isinstance(desc, tl.tensor_descriptor_base), \
             f"expected a tensor descriptor, got {desc.__class__.__name__}"
-        self._check_supports_tma_gather()
+        self._check_supports_tma_gather(allow_fallback=True)
         assert cache_modifier == "", "cache modifier is not supported yet"
         assert eviction_policy == "", "eviction policy is not supported yet"
 
@@ -1179,7 +1182,7 @@ class TritonSemantic(Generic[TensorTy]):
         assert isinstance(desc, tl.tensor_descriptor_base), \
             f"expected a tensor descriptor, got {type(desc).__name__}"
 
-        self._check_supports_tma_scatter()
+        self._check_supports_tma_scatter(allow_fallback=True)
 
         # Validate descriptor.
         assert len(desc.block_shape) == 2, f"descriptor must be 2D, but got {desc.block_shape}"
