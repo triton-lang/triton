@@ -234,6 +234,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 
 #blockedScratch = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
+#sliceScratch0 = #ttg.slice<{dim = 0, parent = #blockedScratch}>
 #sliceScratch1 = #ttg.slice<{dim = 1, parent = #blockedScratch}>
 #sharedScratch = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32, CGALayout = [[0, 0]]}>
 #tmemScratch = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[0, 0]]>
@@ -258,6 +259,103 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
     %dst = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmemScratch, #ttng.tensor_memory, mutable>
     ttng.tmem_copy %src, %dst : !ttg.memdesc<128x128xf32, #sharedScratch, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmemScratch, #ttng.tensor_memory, mutable>
     tt.return %reduced : tensor<256xf16, #sliceScratch1>
+  }
+
+  // A scalar atomic CAS broadcasts its result through scratch memory as:
+  //   write scratch -> cluster barrier -> read scratch
+  // The following two-CTA tmem_copy only reads the reused scratch allocation,
+  // so the atomic's internal barrier makes another barrier unnecessary.
+  // CHECK-LABEL: @cross_cta_atomic_cas_then_tmem_copy
+  // CHECK: tt.atomic_cas
+  // CHECK-NOT: ttng.cluster_barrier
+  // CHECK: ttng.tmem_copy
+  tt.func @cross_cta_atomic_cas_then_tmem_copy(%ptr: !tt.ptr<i32>) -> i32 {
+    %c0 = arith.constant 0 : i32
+    %result = tt.atomic_cas relaxed, gpu, %ptr, %c0, %c0 : (!tt.ptr<i32>, i32, i32) -> i32
+    %src = ttg.local_alloc : () -> !ttg.memdesc<128x128xf32, #sharedScratch, #smem, mutable>
+    %dst = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmemScratch, #ttng.tensor_memory, mutable>
+    ttng.tmem_copy %src, %dst : !ttg.memdesc<128x128xf32, #sharedScratch, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmemScratch, #ttng.tensor_memory, mutable>
+    tt.return %result : i32
+  }
+
+  // After the atomic's internal barrier, its cross-CTA scratch read remains
+  // pending. A CTA-local reduction then reuses that allocation for a scratch
+  // write, so the read must be classified as distributed and synchronized.
+  // CHECK-LABEL: @cross_cta_atomic_cas_then_local_reduce
+  // CHECK: tt.atomic_cas
+  // CHECK-NEXT: ttng.cluster_barrier
+  // CHECK-NEXT: "tt.reduce"{{.*}}axis = 0
+  tt.func @cross_cta_atomic_cas_then_local_reduce(%ptr: !tt.ptr<i32>, %input: tensor<256x128xf16, #blockedScratch>) -> (i32, tensor<128xf16, #sliceScratch0>) {
+    %c0 = arith.constant 0 : i32
+    %result = tt.atomic_cas relaxed, gpu, %ptr, %c0, %c0 : (!tt.ptr<i32>, i32, i32) -> i32
+    %reduced = "tt.reduce"(%input) ({
+    ^bb0(%lhs: f16, %rhs: f16):
+      %sum = arith.addf %lhs, %rhs : f16
+      tt.reduce.return %sum : f16
+    }) {axis = 0 : i32} : (tensor<256x128xf16, #blockedScratch>) -> tensor<128xf16, #sliceScratch0>
+    tt.return %result, %reduced : i32, tensor<128xf16, #sliceScratch0>
+  }
+
+  // A scalar atomic RMW has the same scratch broadcast sequence as atomic CAS.
+  // Its internal barrier also leaves only a read before the following
+  // read-only reuse.
+  // CHECK-LABEL: @cross_cta_atomic_rmw_then_tmem_copy
+  // CHECK: tt.atomic_rmw
+  // CHECK-NOT: ttng.cluster_barrier
+  // CHECK: ttng.tmem_copy
+  tt.func @cross_cta_atomic_rmw_then_tmem_copy(%ptr: !tt.ptr<i32>) -> i32 {
+    %c1 = arith.constant 1 : i32
+    %result = tt.atomic_rmw add, relaxed, gpu, %ptr, %c1 : (!tt.ptr<i32>, i32) -> i32
+    %src = ttg.local_alloc : () -> !ttg.memdesc<128x128xf32, #sharedScratch, #smem, mutable>
+    %dst = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmemScratch, #ttng.tensor_memory, mutable>
+    ttng.tmem_copy %src, %dst : !ttg.memdesc<128x128xf32, #sharedScratch, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmemScratch, #ttng.tensor_memory, mutable>
+    tt.return %result : i32
+  }
+
+  // A timed atomic poll broadcasts its result through cross-CTA scratch. The
+  // rendezvous between the scratch write and read makes another barrier before
+  // the following read-only reuse unnecessary.
+  // CHECK-LABEL: @cross_cta_atomic_poll_then_tmem_copy
+  // CHECK: tt.atomic_poll
+  // CHECK-NOT: ttng.cluster_barrier
+  // CHECK: ttng.tmem_copy
+  tt.func @cross_cta_atomic_poll_then_tmem_copy(%ptr: !tt.ptr<i32>, %expected: i32, %timeout: i64) -> i1 {
+    %matched = tt.atomic_poll acquire, gpu, %ptr, %expected timeout %timeout : !tt.ptr<i32>, i32 -> i1
+    %src = ttg.local_alloc : () -> !ttg.memdesc<128x128xf32, #sharedScratch, #smem, mutable>
+    %dst = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmemScratch, #ttng.tensor_memory, mutable>
+    ttng.tmem_copy %src, %dst : !ttg.memdesc<128x128xf32, #sharedScratch, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmemScratch, #ttng.tensor_memory, mutable>
+    tt.return %matched : i1
+  }
+}
+
+// -----
+
+#replicatedAtomicScratch = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0]]}>
+#sharedAtomicDst = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
+#sharedAtomicReuse = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32, CGALayout = [[0, 0]]}>
+#tmemAtomicReuse = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[0, 0]]>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // A cross-CTA local atomic scatter broadcasts its result through scratch
+  // while separately accessing its explicit shared-memory destination. Its
+  // internal barrier leaves only a scratch read before the following read-only
+  // reuse, so another cluster barrier is unnecessary.
+  // CHECK-LABEL: @cross_cta_local_atomic_scatter_then_tmem_copy
+  // CHECK: ttg.local_atomic_scatter_rmw
+  // CHECK-NOT: ttng.cluster_barrier
+  // CHECK: ttng.tmem_copy
+  tt.func @cross_cta_local_atomic_scatter_then_tmem_copy(
+      %indices: tensor<8x32xi32, #replicatedAtomicScratch>,
+      %values: tensor<8x32xi32, #replicatedAtomicScratch>) -> tensor<8x32xi32, #replicatedAtomicScratch> {
+    %parent = ttg.local_alloc : () -> !ttg.memdesc<16x32xi32, #sharedAtomicDst, #smem, mutable>
+    %dst = ttg.memdesc_subslice %parent [0, 0] : !ttg.memdesc<16x32xi32, #sharedAtomicDst, #smem, mutable> -> !ttg.memdesc<8x32xi32, #sharedAtomicDst, #smem, mutable, 16x32>
+    %old = ttg.local_atomic_scatter_rmw add, %dst[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<8x32xi32, #sharedAtomicDst, #smem, mutable, 16x32>, tensor<8x32xi32, #replicatedAtomicScratch>, tensor<8x32xi32, #replicatedAtomicScratch>) -> tensor<8x32xi32, #replicatedAtomicScratch>
+    %src = ttg.local_alloc : () -> !ttg.memdesc<128x32xi32, #sharedAtomicReuse, #smem, mutable>
+    %tmem = ttng.tmem_alloc : () -> !ttg.memdesc<128x32xi32, #tmemAtomicReuse, #ttng.tensor_memory, mutable>
+    ttng.tmem_copy %src, %tmem : !ttg.memdesc<128x32xi32, #sharedAtomicReuse, #smem, mutable>, !ttg.memdesc<128x32xi32, #tmemAtomicReuse, #ttng.tensor_memory, mutable>
+    ttg.local_dealloc %parent : !ttg.memdesc<16x32xi32, #sharedAtomicDst, #smem, mutable>
+    tt.return %old : tensor<8x32xi32, #replicatedAtomicScratch>
   }
 }
 

@@ -1,7 +1,6 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierInsertion.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Membar.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -25,23 +24,14 @@ namespace {
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
-static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
-  if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(op)) {
-    if (!isRead)
-      return false;
-    auto srcTy = cvt.getSrc().getType();
-    auto dstTy = cvt.getType();
-    auto kBlock = StringAttr::get(op->getContext(), "block");
-    return !isCvtDimSync(ttg::toLinearLayout(srcTy), ttg::toLinearLayout(dstTy),
-                         kBlock);
-  }
-  if (auto reduce = dyn_cast<triton::ReduceOp>(op)) {
-    if (!isRead)
-      return false;
-    auto srcTy = reduce.getInputTypes()[0];
-    auto splitNum = ttg::getCTASplitNum(srcTy.getEncoding());
-    return splitNum[reduce.getAxis()] > 1;
-  }
+// `isRead` identifies whether `op` is being classified for an entry in
+// BlockInfo::syncReadSlices or BlockInfo::syncWriteSlices. It does not describe
+// all memory effects of the operation.
+bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
+  // Scratch writes are CTA-local. When the scratch spans CTAs, only its read
+  // phase accesses another CTA's shared memory.
+  if (hasCrossCTAScratch(op))
+    return isRead;
   if (isa<ttng::CLCTryCancelOp, ttng::AsyncSharedStoreOp>(op)) {
     return ttg::lookupNumCTAs(op) > 1;
   } else if (isa<ttng::TMEMCopyOp>(op)) {
@@ -54,17 +44,17 @@ static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
   return hasTCGen5CommitCrossCTA(op);
 }
 
-static bool isPreAllocAliasSliceFilter(const AllocationSlice &lhsSlice,
-                                       const AllocationSlice &rhsSlice,
-                                       bool /*lhsIsRead*/, bool /*rhsIsRead*/,
-                                       Allocation *allocation) {
+bool isPreAllocAliasSliceFilter(const AllocationSlice &lhsSlice,
+                                const AllocationSlice &rhsSlice,
+                                bool /*lhsIsRead*/, bool /*rhsIsRead*/,
+                                Allocation *allocation) {
   auto bufferId = lhsSlice.getBufferId();
   return bufferId != Allocation::InvalidBufferId &&
          bufferId == rhsSlice.getBufferId() &&
          allocation->isExplicitBuffer(bufferId);
 }
 
-static bool hasUnresolvedCrossClusterDependency(const BlockInfo &blockInfo) {
+bool hasUnresolvedCrossClusterDependency(const BlockInfo &blockInfo) {
   auto hasDistributedDependency = [](const BlockInfo::SliceMapT &slices,
                                      bool isRead) {
     for (const auto &sliceAndOps : slices)
@@ -78,9 +68,9 @@ static bool hasUnresolvedCrossClusterDependency(const BlockInfo &blockInfo) {
          hasDistributedDependency(blockInfo.syncWriteSlices, /*isRead=*/false);
 }
 
-static bool valueAliasesTrackedBuffers(Value value,
-                                       const Allocation::BufferIdSetT &tracked,
-                                       Allocation *allocation) {
+bool valueAliasesTrackedBuffers(Value value,
+                                const Allocation::BufferIdSetT &tracked,
+                                Allocation *allocation) {
   for (auto bufferId : allocation->getAllBufferIdsWithAliases(value)) {
     if (bufferId != Allocation::InvalidBufferId && tracked.contains(bufferId))
       return true;
@@ -88,10 +78,9 @@ static bool valueAliasesTrackedBuffers(Value value,
   return false;
 }
 
-static bool requiresCrossCTAMBarrierInitSync(ttng::InitBarrierOp initBarrierOp,
-                                             FunctionOpInterface funcOp,
-                                             Allocation *allocation,
-                                             int numCTAs) {
+bool requiresCrossCTAMBarrierInitSync(ttng::InitBarrierOp initBarrierOp,
+                                      FunctionOpInterface funcOp,
+                                      Allocation *allocation, int numCTAs) {
   Allocation::BufferIdSetT initBarrierBuffers;
   for (auto bufferId :
        allocation->getAllBufferIdsWithAliases(initBarrierOp.getBarrier())) {
@@ -106,9 +95,9 @@ static bool requiresCrossCTAMBarrierInitSync(ttng::InitBarrierOp initBarrierOp,
       });
 }
 
-static bool nestedOpUsesTrackedMBarrier(Operation *op,
-                                        const Allocation::BufferIdSetT &tracked,
-                                        Allocation *allocation) {
+bool nestedOpUsesTrackedMBarrier(Operation *op,
+                                 const Allocation::BufferIdSetT &tracked,
+                                 Allocation *allocation) {
   if (isa<ttng::InitBarrierOp, ttg::LocalAllocOp>(op))
     return false;
 
@@ -124,9 +113,9 @@ static bool nestedOpUsesTrackedMBarrier(Operation *op,
   return false;
 }
 
-static bool opUsesTrackedMBarrier(Operation *op,
-                                  const Allocation::BufferIdSetT &tracked,
-                                  Allocation *allocation) {
+bool opUsesTrackedMBarrier(Operation *op,
+                           const Allocation::BufferIdSetT &tracked,
+                           Allocation *allocation) {
   return op
       ->walk<WalkOrder::PreOrder>([&](Operation *nestedOp) {
         if (nestedOpUsesTrackedMBarrier(nestedOp, tracked, allocation))
@@ -136,7 +125,7 @@ static bool opUsesTrackedMBarrier(Operation *op,
       .wasInterrupted();
 }
 
-static LogicalResult
+LogicalResult
 insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
                                           Allocation *allocation, int numCTAs,
                                           OpBuilder &builder) {
