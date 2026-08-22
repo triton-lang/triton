@@ -1,10 +1,23 @@
 # ruff: noqa: E402
+import os
+
+try:
+    import rocm_sdk
+
+    libhip_path = str(rocm_sdk.find_libraries("amdhip64")[0])
+except (ImportError, FileNotFoundError, IndexError):
+    libhip_path = None
+
 import hip
+
+# hip-python owns its dlopen target. Point it at TheRock's absolute runtime
+# path; older ROCm distributions keep hip-python's bare-name system lookup.
+if libhip_path is not None:
+    hip.chip.DLL = os.fsencode(libhip_path)
 
 hip.hip.hipInit(0)
 
 import sys
-import os
 
 os.environ["TRITON_INSTRUMENTATION_MODE"] = "consan"
 import torch

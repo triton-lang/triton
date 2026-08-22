@@ -98,6 +98,12 @@ def get_memset_tbps():
         value = ctypes.c_ubyte(0)
     elif is_hip():
         libname = "libamdhip64.so"
+        try:
+            import rocm_sdk
+
+            libname = str(rocm_sdk.find_libraries("amdhip64")[0])
+        except (ImportError, ModuleNotFoundError, FileNotFoundError, IndexError):
+            pass
         init_name = "hipInit"
         memset_name = "hipMemsetAsync"
         memset_argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_size_t, ctypes.c_void_p]
