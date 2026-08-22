@@ -1,6 +1,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierInsertion.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Membar.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -25,10 +26,22 @@ namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
 static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
-  // Scratch writes are CTA-local. When the scratch spans CTAs, only its read
-  // phase accesses another CTA's shared memory.
-  if (hasCrossCTAScratch(op))
-    return isRead;
+  if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(op)) {
+    if (!isRead)
+      return false;
+    auto srcTy = cvt.getSrc().getType();
+    auto dstTy = cvt.getType();
+    auto kBlock = StringAttr::get(op->getContext(), "block");
+    return !isCvtDimSync(ttg::toLinearLayout(srcTy), ttg::toLinearLayout(dstTy),
+                         kBlock);
+  }
+  if (auto reduce = dyn_cast<triton::ReduceOp>(op)) {
+    if (!isRead)
+      return false;
+    auto srcTy = reduce.getInputTypes()[0];
+    auto splitNum = ttg::getCTASplitNum(srcTy.getEncoding());
+    return splitNum[reduce.getAxis()] > 1;
+  }
   if (isa<ttng::CLCTryCancelOp, ttng::AsyncSharedStoreOp>(op)) {
     return ttg::lookupNumCTAs(op) > 1;
   } else if (isa<ttng::TMEMCopyOp>(op)) {

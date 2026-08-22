@@ -235,8 +235,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 #sharedAtomic = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32, CGALayout = [[0, 0]]}>
 #tmemAtomic = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[0, 0]]>
-#blockedAtomic = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
-#sliceAtomic = #ttg.slice<{dim = 0, parent = #blockedAtomic}>
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
@@ -255,24 +253,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
     %dst = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmemAtomic, #ttng.tensor_memory, mutable>
     ttng.tmem_copy %src, %dst : !ttg.memdesc<128x128xf32, #sharedAtomic, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmemAtomic, #ttng.tensor_memory, mutable>
     tt.return %result : i32
-  }
-
-  // The read phase of a cross-CTA atomic accesses distributed scratch. A
-  // following CTA-local reduction reuses that allocation for a write, so it
-  // must wait until every CTA has finished reading the atomic result.
-  // CHECK-LABEL: @cross_cta_atomic_then_local_reduce
-  // CHECK: tt.atomic_cas
-  // CHECK-NEXT: ttng.cluster_barrier
-  // CHECK-NEXT: "tt.reduce"
-  tt.func @cross_cta_atomic_then_local_reduce(%ptr: !tt.ptr<i32>, %input: tensor<256x128xf16, #blockedAtomic>) -> (i32, tensor<128xf16, #sliceAtomic>) {
-    %c0 = arith.constant 0 : i32
-    %result = tt.atomic_cas relaxed, gpu, %ptr, %c0, %c0 : (!tt.ptr<i32>, i32, i32) -> i32
-    %reduced = "tt.reduce"(%input) ({
-    ^bb0(%lhs: f16, %rhs: f16):
-      %sum = arith.addf %lhs, %rhs : f16
-      tt.reduce.return %sum : f16
-    }) {axis = 0 : i32} : (tensor<256x128xf16, #blockedAtomic>) -> tensor<128xf16, #sliceAtomic>
-    tt.return %result, %reduced : i32, tensor<128xf16, #sliceAtomic>
   }
 }
 
