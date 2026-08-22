@@ -38,7 +38,24 @@ static SmallVector<Value> computeHistogram(
   // Apply atomic add to update the histogram in shared memory.
   Value numBinsValue = b.i32_val(numBins);
   for (int i = 0; i < srcValues.size(); ++i) {
-    Value updatePred = b.icmp_ult(srcValues[i], numBinsValue);
+    Value srcValue = srcValues[i];
+    Value histogramIndex = srcValue;
+    Value compareValue = srcValue;
+    Value compareLimit = numBinsValue;
+    unsigned srcWidth = srcValue.getType().getIntOrFloatBitWidth();
+
+    // Histogram storage is indexed with i32. Narrow inputs must be widened
+    // before the comparison/index, while wide inputs must be range-checked at
+    // their original width before truncation so large values cannot alias a
+    // valid bin.
+    if (srcWidth < 32) {
+      histogramIndex = b.zext(i32_ty, srcValue);
+      compareValue = histogramIndex;
+    } else if (srcWidth > 32) {
+      compareLimit = b.zext(srcValue.getType(), numBinsValue);
+    }
+
+    Value updatePred = b.icmp_ult(compareValue, compareLimit);
     if (!maskValues.empty())
       updatePred = b.and_(updatePred, maskValues[i]);
 
@@ -46,8 +63,10 @@ static SmallVector<Value> computeHistogram(
         createIfBlock(rewriter, loc, updatePred);
     (void)prevBlock;
     rewriter.setInsertionPointToStart(ifBlock);
+    if (srcWidth > 32)
+      histogramIndex = b.trunc(i32_ty, srcValue);
     Value sharedMemPtr = b.gep(baseSharedMemPtr.getType(), i32_ty,
-                               baseSharedMemPtr, srcValues[i]);
+                               baseSharedMemPtr, histogramIndex);
     atomicAddOne(sharedMemPtr, loc, rewriter);
     rewriter.setInsertionPointToStart(thenBlock);
   }
