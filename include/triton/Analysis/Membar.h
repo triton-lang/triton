@@ -193,6 +193,54 @@ private:
   }
 };
 
+/// Tracks the shared-memory state needed at the current program point and at
+/// function boundaries.
+struct MembarInfo {
+  /// Buffers accessed since the most recent synchronization.
+  BlockInfo pending;
+
+  /// Buffers reachable from the function entry block before the first
+  /// synchronization.
+  /// It keeps incrementing during the iterative algorithm until
+  ///  we note all paths to a basic block has synchronized.
+  BlockInfo entryBlockInfo;
+
+  /// Whether every path from the function entry block to the current program
+  /// point has synchronized.
+  bool allPathsFromEntrySynced = false;
+
+  MembarInfo &join(const MembarInfo &other) {
+    pending.join(other.pending);
+    entryBlockInfo.join(other.entryBlockInfo);
+    allPathsFromEntrySynced &= other.allPathsFromEntrySynced;
+    return *this;
+  }
+
+  void addBlockInfo(const BlockInfo &blockInfo) {
+    if (!allPathsFromEntrySynced)
+      entryBlockInfo.join(blockInfo);
+    pending.join(blockInfo);
+  }
+
+  void sync() {
+    pending.sync();
+    allPathsFromEntrySynced = true;
+  }
+
+  void applyCallSummary(const MembarInfo &callee) {
+    if (!allPathsFromEntrySynced)
+      entryBlockInfo.join(callee.entryBlockInfo);
+    if (callee.allPathsFromEntrySynced)
+      sync();
+    pending.join(callee.pending);
+  }
+
+  bool operator==(const MembarInfo &other) const {
+    return pending == other.pending && entryBlockInfo == other.entryBlockInfo &&
+           allPathsFromEntrySynced == other.allPathsFromEntrySynced;
+  }
+};
+
 inline BlockInfo translateBlockInfoToCallsite(const BlockInfo &calleeBlockInfo,
                                               size_t callOffset) {
   BlockInfo translatedBlockInfo;
@@ -233,7 +281,7 @@ protected:
   MembarFilterFn filter;
 };
 
-class MembarAnalysis : public MembarOrFenceAnalysis {
+class MembarAnalysis : public triton::PostOrderFunctionAnalysis<MembarInfo> {
 public:
   /// Creates a new Membar analysis that generates the shared memory barrier
   /// in the following circumstances:
@@ -249,22 +297,24 @@ public:
   /// it is considered as the problem of the operation itself but not the membar
   /// analysis.
   MembarAnalysis(Allocation &allocation, MembarFilterFn filter)
-      : MembarOrFenceAnalysis(allocation, std::move(filter)),
+      : allocation(allocation), filter(std::move(filter)),
         bufferIndexAnalysis(
             cast<FunctionOpInterface>(allocation.getOperation())) {}
 
 private:
   /// Updates the BlockInfo operation based on the operation.
-  void update(Operation *operation, BlockInfo *blockInfo, FuncMapT *funcMap,
+  void update(Operation *operation, MembarInfo *membarInfo, FuncMapT *funcMap,
               OpBuilder *builder) override;
 
   void updateSuccessor(Operation *terminator, Block *successor,
-                       BlockInfo *blockInfo) override;
+                       MembarInfo *membarInfo) override;
 
-  void updateExitState(BlockInfo *blockInfo) override;
+  void updateExitState(MembarInfo *membarInfo) override;
 
   void insertBarrier(Operation *operation, OpBuilder *builder);
 
+  Allocation &allocation;
+  MembarFilterFn filter;
   BufferIndexAnalysis bufferIndexAnalysis;
 };
 
@@ -299,7 +349,20 @@ private:
   MembarFilterFn filter;
 };
 
-using ModuleMembarAnalysis = ModuleMembarOrFenceAnalysis<MembarAnalysis>;
+/// Inserts shared-memory barriers across a module. Function summaries retain
+/// entry-prefix and pending exit states for calls.
+class ModuleMembarAnalysis {
+public:
+  ModuleMembarAnalysis(ModuleAllocation &moduleAllocation,
+                       MembarFilterFn filter = nullptr)
+      : moduleAllocation(moduleAllocation), filter(std::move(filter)) {}
+
+  void run();
+
+private:
+  ModuleAllocation &moduleAllocation;
+  MembarFilterFn filter;
+};
 
 } // namespace mlir
 
