@@ -376,6 +376,99 @@ bool hasEnoughCTABytesForDirectToLds(tt::LoadOp loadOp,
   return ctaTileBits >= 32 * targetInfo.getWarpSize();
 }
 
+// Return whether the shared-memory swizzle maps every register and lane of
+// srcTy to a source lane within the same warp.
+static bool swizzlesInsideWarp(RankedTensorType srcTy,
+                               ttg::SwizzledSharedEncodingAttr enc) {
+  // maxPhase == 1 means no swizzling, so `requiresSrcPtrSwizzling` is false in
+  // the lowering and there is no lane shuffle.
+  if (!enc || enc.getMaxPhase() == 1)
+    return true;
+
+  MLIRContext *ctx = srcTy.getContext();
+  auto shape = srcTy.getShape();
+
+  // Compare against an otherwise identical unswizzled layout to isolate the
+  // lane displacement introduced by the candidate swizzle.
+  auto flatEnc = ttg::SwizzledSharedEncodingAttr::get(
+      ctx, enc.getVec(), /*perPhase=*/1, /*maxPhase=*/1, enc.getOrder(),
+      enc.getCGALayout());
+
+  auto regLayout = triton::gpu::toLinearLayout(srcTy);
+  auto sharedSwizz = triton::gpu::toLinearLayout(shape, enc);
+  auto sharedFlat = triton::gpu::toLinearLayout(shape, flatEnc);
+
+  auto regToSharedSwizzled = regLayout.invertAndCompose(sharedSwizz);
+  auto regToSharedFlat = regLayout.invertAndCompose(sharedFlat);
+
+  auto kRegister = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+  auto kWarp = StringAttr::get(ctx, "warp");
+  auto kBlock = StringAttr::get(ctx, "block");
+
+  // Mirror emitSwizzledLaneOffsets, which normalizes the swizzled-vs-flat
+  // offset delta by the vector size to turn it into a lane offset.
+  int64_t vec = enc.getVec();
+  // Enumerate lanes over the layout's own lane dimension: apply() silently
+  // ignores index bits above the in-dim size, so an out-of-range lane would
+  // alias onto a smaller one and yield a meaningless offset.
+  int64_t warpSize = regToSharedSwizzled.getInDimSize(kLane);
+  int64_t numRegs = regToSharedSwizzled.getInDimSize(kRegister);
+
+  for (int32_t regId = 0; regId < numRegs; regId += vec) {
+    for (int64_t lane = 0; lane < warpSize; ++lane) {
+      int32_t swizzledOff = regToSharedSwizzled
+                                .apply({{kRegister, regId},
+                                        {kLane, static_cast<int32_t>(lane)},
+                                        {kWarp, 0},
+                                        {kBlock, 0}})[0]
+                                .second;
+      int32_t flatOff = regToSharedFlat
+                            .apply({{kRegister, regId},
+                                    {kLane, static_cast<int32_t>(lane)},
+                                    {kWarp, 0},
+                                    {kBlock, 0}})[0]
+                            .second;
+      int64_t shuffledLane = lane + (swizzledOff - flatOff) / vec;
+      if (shuffledLane < 0 || shuffledLane >= warpSize)
+        return false;
+    }
+  }
+  return true;
+}
+
+// If a swizzled shared encoding would make the GFX9 direct-to-LDS lane shuffle
+// leave the warp, shrink its maxPhase until the shuffle is valid. Halving
+// maxPhase monotonically reduces the swizzle reach, and maxPhase == 1 always
+// passes, so the search terminates on the largest safe value.
+static ttg::SharedEncodingTrait
+clampSwizzleForDirectToLds(RankedTensorType srcTy,
+                           ttg::SharedEncodingTrait enc) {
+  auto swizz = dyn_cast_or_null<ttg::SwizzledSharedEncodingAttr>(enc);
+  if (!swizz)
+    return enc;
+
+  for (unsigned maxPhase = swizz.getMaxPhase(); maxPhase > 1; maxPhase /= 2) {
+    auto candidate =
+        maxPhase == swizz.getMaxPhase()
+            ? swizz
+            : ttg::SwizzledSharedEncodingAttr::get(
+                  swizz.getContext(), swizz.getVec(), swizz.getPerPhase(),
+                  maxPhase, swizz.getOrder(), swizz.getCGALayout());
+    if (swizzlesInsideWarp(srcTy, candidate)) {
+      if (candidate != swizz)
+        LDBG("Clamped direct-to-LDS swizzle maxPhase "
+             << swizz.getMaxPhase() << " -> " << maxPhase
+             << " to keep the lane shuffle inside the warp");
+      return candidate;
+    }
+  }
+  // Unreachable: maxPhase == 1 always stays in warp.
+  return ttg::SwizzledSharedEncodingAttr::get(
+      swizz.getContext(), swizz.getVec(), swizz.getPerPhase(), /*maxPhase=*/1,
+      swizz.getOrder(), swizz.getCGALayout());
+}
+
 bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
                                ttg::SharedEncodingTrait sharedEnc,
                                tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
@@ -477,13 +570,33 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
     if (!loadOp && !descLoadOp && !gatherOp)
       continue;
 
-    // Create an allocation that can hold distance number of loadOp shapes.
     auto ty = cast<RankedTensorType>(op->getResultTypes()[0]);
-    Value alloc = triton::createAlloc(forOp, ty, op->getLoc(),
-                                      info.sharedEncoding, numBuffers);
-    assert(alloc && "Failed to create alloc for the async load.");
     triton::AMD::TargetInfo targetInfo(
         getAMDArch(op->getParentOfType<ModuleOp>()));
+
+    ttg::SharedEncodingTrait sharedEncoding = info.sharedEncoding;
+    bool canUseAsyncCopy =
+        loadOp && useAsyncCopy &&
+        canBeConvertedToAsyncLoad(numBuffers, loadOp, sharedEncoding,
+                                  axisInfoAnalysis, targetInfo);
+    // On non-scatter targets, direct-to-LDS realizes the shared-memory swizzle
+    // by shuffling source pointers between lanes, which must stay in one warp.
+    if (canUseAsyncCopy && !targetInfo.supportsDirectToLdsScatter()) {
+      auto clampedEncoding = clampSwizzleForDirectToLds(ty, sharedEncoding);
+      // Clamping changes the shared layout used by the final eligibility
+      // check, so verify that the load remains convertible.
+      canUseAsyncCopy = canBeConvertedToAsyncLoad(
+          numBuffers, loadOp, clampedEncoding, axisInfoAnalysis, targetInfo);
+      if (canUseAsyncCopy)
+        sharedEncoding = clampedEncoding;
+    }
+
+    // Create the allocation only after final async-copy eligibility is known.
+    // Stream copies retain the original encoding; only the direct-to-LDS path
+    // uses the clamped encoding.
+    Value alloc = triton::createAlloc(forOp, ty, op->getLoc(), sharedEncoding,
+                                      numBuffers);
+    assert(alloc && "Failed to create alloc for the async load.");
 
     // Replace the old load with multi-buffered loads
     if (descLoadOp) {
@@ -495,9 +608,7 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
       continue;
     }
 
-    if (useAsyncCopy &&
-        canBeConvertedToAsyncLoad(numBuffers, loadOp, info.sharedEncoding,
-                                  axisInfoAnalysis, targetInfo)) {
+    if (canUseAsyncCopy) {
       unsigned vec = axisInfoAnalysis.getContiguity(loadOp.getPtr());
       if (auto mask = loadOp.getMask())
         vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
