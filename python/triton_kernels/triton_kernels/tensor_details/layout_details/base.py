@@ -17,6 +17,10 @@ class LayoutTransformation(ABC):
         assert list(data.shape) == self.storage_shape
         return data
 
+    def convert_data(self, data, destination: "LayoutTransformation"):
+        """Convert to another layout, using canonical storage by default."""
+        return destination.swizzle_data(self.unswizzle_data(data))
+
     @abstractmethod
     def swizzle_data(self, data):
         pass
