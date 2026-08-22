@@ -360,8 +360,8 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
     // its write and read phases. Keep its write before that synchronization
     // and only its read afterward:
     //   write scratch -> cluster barrier -> read scratch
-    bool hasInternalClusterSync = hasCrossCTAScratch(op);
-    if (hasInternalClusterSync) {
+    bool hasClusterSync = isDistributedMultiCTAOp(op, /*isRead=*/true);
+    if (hasClusterSync) {
       blockInfo->join(curBlockInfo);
       blockInfo->sync();
       curBlockInfo.sync();
