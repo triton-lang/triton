@@ -52,8 +52,9 @@ def test_atomic_cas_accepts_non_contiguous_ndarray_views() -> None:
     ptrs = _element_ptrs(dst)[:, ::2]
     expected = dst.copy()[:, ::2]
     desired = (np.arange(12, dtype=np.int32).reshape(3, 4) + 200)[:, ::2]
+    mask = np.ones((3, 4), dtype=bool)[:, ::2]
 
-    old = _interpreter.atomic_cas(ptrs, expected, desired, _interpreter.MEM_SEMANTIC.RELAXED)
+    old = _interpreter.atomic_cas(ptrs, expected, desired, mask, _interpreter.MEM_SEMANTIC.RELAXED)
 
     original = np.arange(12, dtype=np.int32).reshape(3, 4)
     np.testing.assert_array_equal(old, original[:, ::2])
