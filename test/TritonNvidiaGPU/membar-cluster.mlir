@@ -312,6 +312,25 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
     tt.return %result : i32
   }
 
+  // The atomic RMW's scratch access is:
+  //   write scratch -> cluster barrier -> read scratch
+  // A CTA-local reduction then writes the reused scratch allocation, so it
+  // must wait for the pending cross-CTA read.
+  // CHECK-LABEL: @cross_cta_atomic_rmw_then_local_reduce
+  // CHECK: tt.atomic_rmw
+  // CHECK-NEXT: ttng.cluster_barrier
+  // CHECK-NEXT: "tt.reduce"{{.*}}axis = 0
+  tt.func @cross_cta_atomic_rmw_then_local_reduce(%ptr: !tt.ptr<i32>, %input: tensor<256x128xf16, #blockedScratch>) -> (i32, tensor<128xf16, #sliceScratch0>) {
+    %c1 = arith.constant 1 : i32
+    %result = tt.atomic_rmw add, relaxed, gpu, %ptr, %c1 : (!tt.ptr<i32>, i32) -> i32
+    %reduced = "tt.reduce"(%input) ({
+    ^bb0(%lhs: f16, %rhs: f16):
+      %sum = arith.addf %lhs, %rhs : f16
+      tt.reduce.return %sum : f16
+    }) {axis = 0 : i32} : (tensor<256x128xf16, #blockedScratch>) -> tensor<128xf16, #sliceScratch0>
+    tt.return %result, %reduced : i32, tensor<128xf16, #sliceScratch0>
+  }
+
   // A timed atomic poll broadcasts its result through cross-CTA scratch. The
   // rendezvous between the scratch write and read makes another barrier before
   // the following read-only reuse unnecessary.
@@ -326,6 +345,24 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
     ttng.tmem_copy %src, %dst : !ttg.memdesc<128x128xf32, #sharedScratch, #smem, mutable>, !ttg.memdesc<128x128xf32, #tmemScratch, #ttng.tensor_memory, mutable>
     tt.return %matched : i1
   }
+
+  // The atomic poll's scratch access is:
+  //   write scratch -> cluster barrier -> read scratch
+  // A CTA-local reduction then writes the reused scratch allocation, so it
+  // must wait for the pending cross-CTA read.
+  // CHECK-LABEL: @cross_cta_atomic_poll_then_local_reduce
+  // CHECK: tt.atomic_poll
+  // CHECK-NEXT: ttng.cluster_barrier
+  // CHECK-NEXT: "tt.reduce"{{.*}}axis = 0
+  tt.func @cross_cta_atomic_poll_then_local_reduce(%ptr: !tt.ptr<i32>, %expected: i32, %timeout: i64, %input: tensor<256x128xf16, #blockedScratch>) -> (i1, tensor<128xf16, #sliceScratch0>) {
+    %matched = tt.atomic_poll acquire, gpu, %ptr, %expected timeout %timeout : !tt.ptr<i32>, i32 -> i1
+    %reduced = "tt.reduce"(%input) ({
+    ^bb0(%lhs: f16, %rhs: f16):
+      %sum = arith.addf %lhs, %rhs : f16
+      tt.reduce.return %sum : f16
+    }) {axis = 0 : i32} : (tensor<256x128xf16, #blockedScratch>) -> tensor<128xf16, #sliceScratch0>
+    tt.return %matched, %reduced : i1, tensor<128xf16, #sliceScratch0>
+  }
 }
 
 // -----
@@ -334,6 +371,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
 #sharedAtomicDst = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
 #sharedAtomicReuse = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32, CGALayout = [[0, 0]]}>
 #tmemAtomicReuse = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[0, 0]]>
+#blockedAtomicReduce = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
+#sliceAtomicReduce0 = #ttg.slice<{dim = 0, parent = #blockedAtomicReduce}>
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
@@ -356,6 +395,30 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
     ttng.tmem_copy %src, %tmem : !ttg.memdesc<128x32xi32, #sharedAtomicReuse, #smem, mutable>, !ttg.memdesc<128x32xi32, #tmemAtomicReuse, #ttng.tensor_memory, mutable>
     ttg.local_dealloc %parent : !ttg.memdesc<16x32xi32, #sharedAtomicDst, #smem, mutable>
     tt.return %old : tensor<8x32xi32, #replicatedAtomicScratch>
+  }
+
+  // The local atomic scatter RMW's scratch access is:
+  //   write scratch -> cluster barrier -> read scratch
+  // A CTA-local reduction then writes the reused scratch allocation, so it
+  // must wait for the pending cross-CTA read.
+  // CHECK-LABEL: @cross_cta_local_atomic_scatter_then_local_reduce
+  // CHECK: ttg.local_atomic_scatter_rmw
+  // CHECK-NEXT: ttng.cluster_barrier
+  // CHECK-NEXT: "tt.reduce"{{.*}}axis = 0
+  tt.func @cross_cta_local_atomic_scatter_then_local_reduce(
+      %indices: tensor<8x32xi32, #replicatedAtomicScratch>,
+      %values: tensor<8x32xi32, #replicatedAtomicScratch>,
+      %input: tensor<256x128xi32, #blockedAtomicReduce>) -> (tensor<8x32xi32, #replicatedAtomicScratch>, tensor<128xi32, #sliceAtomicReduce0>) {
+    %parent = ttg.local_alloc : () -> !ttg.memdesc<16x32xi32, #sharedAtomicDst, #smem, mutable>
+    %dst = ttg.memdesc_subslice %parent [0, 0] : !ttg.memdesc<16x32xi32, #sharedAtomicDst, #smem, mutable> -> !ttg.memdesc<8x32xi32, #sharedAtomicDst, #smem, mutable, 16x32>
+    %old = ttg.local_atomic_scatter_rmw add, %dst[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<8x32xi32, #sharedAtomicDst, #smem, mutable, 16x32>, tensor<8x32xi32, #replicatedAtomicScratch>, tensor<8x32xi32, #replicatedAtomicScratch>) -> tensor<8x32xi32, #replicatedAtomicScratch>
+    %reduced = "tt.reduce"(%input) ({
+    ^bb0(%lhs: i32, %rhs: i32):
+      %sum = arith.addi %lhs, %rhs : i32
+      tt.reduce.return %sum : i32
+    }) {axis = 0 : i32} : (tensor<256x128xi32, #blockedAtomicReduce>) -> tensor<128xi32, #sliceAtomicReduce0>
+    ttg.local_dealloc %parent : !ttg.memdesc<16x32xi32, #sharedAtomicDst, #smem, mutable>
+    tt.return %old, %reduced : tensor<8x32xi32, #replicatedAtomicScratch>, tensor<128xi32, #sliceAtomicReduce0>
   }
 }
 

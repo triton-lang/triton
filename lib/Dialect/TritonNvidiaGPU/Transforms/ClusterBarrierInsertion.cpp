@@ -24,9 +24,11 @@ namespace {
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
-// `isRead` identifies whether `op` is being classified for an entry in
-// BlockInfo::syncReadSlices or BlockInfo::syncWriteSlices. It does not describe
-// all memory effects of the operation.
+// Returns whether an operation's tracked access touches distributed shared
+// memory across CTAs.
+// op: The operation associated with the tracked access.
+// isRead: Whether the access is recorded in BlockInfo::syncReadSlices rather
+// than BlockInfo::syncWriteSlices.
 bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
   // Scratch writes are CTA-local. When the scratch spans CTAs, only its read
   // phase accesses another CTA's shared memory.
