@@ -233,6 +233,65 @@ tt.func @test_combine_select_masked_load_pattern(%ptr: tensor<8x!tt.ptr<f32>>, %
     tt.return %0, %1 : tensor<8xf32>, tensor<8xf32>
 }
 
+// A volatile load with a single user is combined in place: the select is
+// removed and the volatile load's `other` is replaced with the false value, so
+// the read still happens exactly once.
+// CHECK-LABEL: @test_combine_select_volatile_masked_load_single_use
+tt.func @test_combine_select_volatile_masked_load_single_use(%ptr: tensor<8x!tt.ptr<f32>>, %cond: i1, %old_other: tensor<8xf32>, %false_value: tensor<8xf32>) -> tensor<8xf32> {
+    // CHECK: %[[MASK:.*]] = tt.splat %{{.*}} : i1 -> tensor<8xi1>
+    // CHECK-NEXT: %[[LOAD:.*]] = tt.load %{{.*}}, %[[MASK]], %arg3 {isVolatile = true} : tensor<8x!tt.ptr<f32>>
+    // CHECK-NOT: arith.select
+    // CHECK-NEXT: tt.return %[[LOAD]] : tensor<8xf32>
+    %mask = tt.splat %cond : i1 -> tensor<8xi1>
+    %load = tt.load %ptr, %mask, %old_other {isVolatile = true} : tensor<8x!tt.ptr<f32>>
+    %select = arith.select %cond, %load, %false_value : tensor<8xf32>
+    tt.return %select : tensor<8xf32>
+}
+
+// A volatile load with more than one user is not combined: rewriting would
+// build a second volatile load and read the memory twice.
+// CHECK-LABEL: @test_not_combine_select_volatile_masked_load_multi_use
+tt.func @test_not_combine_select_volatile_masked_load_multi_use(%ptr: tensor<8x!tt.ptr<f32>>, %cond: i1, %old_other: tensor<8xf32>, %false_value: tensor<8xf32>) -> (tensor<8xf32>, tensor<8xf32>) {
+    // CHECK: %[[LOAD:.*]] = tt.load %{{.*}}, %{{.*}}, %{{.*}} {isVolatile = true} : tensor<8x!tt.ptr<f32>>
+    // CHECK-NEXT: %[[SELECT:.*]] = arith.select %{{.*}}, %[[LOAD]], %{{.*}} : tensor<8xf32>
+    // CHECK-NEXT: tt.return %[[SELECT]], %[[LOAD]] : tensor<8xf32>, tensor<8xf32>
+    %mask = tt.splat %cond : i1 -> tensor<8xi1>
+    %load = tt.load %ptr, %mask, %old_other {isVolatile = true} : tensor<8x!tt.ptr<f32>>
+    %select = arith.select %cond, %load, %false_value : tensor<8xf32>
+    tt.return %select, %load : tensor<8xf32>, tensor<8xf32>
+}
+
+// A volatile load cannot be updated in place when the false value is defined
+// after it (using it as the load's `other` would not dominate the load), and it
+// cannot be duplicated either, so it is left unchanged.
+// CHECK-LABEL: @test_not_combine_select_volatile_masked_load_false_after
+tt.func @test_not_combine_select_volatile_masked_load_false_after(%ptr: tensor<8x!tt.ptr<f32>>, %cond: i1, %old_other: tensor<8xf32>) -> tensor<8xf32> {
+    // CHECK: %[[LOAD:.*]] = tt.load %{{.*}}, %{{.*}}, %{{.*}} {isVolatile = true} : tensor<8x!tt.ptr<f32>>
+    // CHECK-NEXT: %[[FV:.*]] = arith.negf
+    // CHECK-NEXT: %[[SELECT:.*]] = arith.select %{{.*}}, %[[LOAD]], %[[FV]] : tensor<8xf32>
+    // CHECK-NEXT: tt.return %[[SELECT]] : tensor<8xf32>
+    %mask = tt.splat %cond : i1 -> tensor<8xi1>
+    %load = tt.load %ptr, %mask, %old_other {isVolatile = true} : tensor<8x!tt.ptr<f32>>
+    %false_value = arith.negf %old_other : tensor<8xf32>
+    %select = arith.select %cond, %load, %false_value : tensor<8xf32>
+    tt.return %select : tensor<8xf32>
+}
+
+// A non-volatile load whose false value is defined after it still combines, by
+// creating a fresh load at the select where the false value dominates.
+// CHECK-LABEL: @test_combine_select_masked_load_false_after
+tt.func @test_combine_select_masked_load_false_after(%ptr: tensor<8x!tt.ptr<f32>>, %cond: i1, %old_other: tensor<8xf32>) -> tensor<8xf32> {
+    // CHECK: %[[FV:.*]] = arith.negf
+    // CHECK-NEXT: %[[LOAD:.*]] = tt.load %{{.*}}, %{{.*}}, %[[FV]] : tensor<8x!tt.ptr<f32>>
+    // CHECK-NOT: arith.select
+    // CHECK-NEXT: tt.return %[[LOAD]] : tensor<8xf32>
+    %mask = tt.splat %cond : i1 -> tensor<8xi1>
+    %load = tt.load %ptr, %mask, %old_other : tensor<8x!tt.ptr<f32>>
+    %false_value = arith.negf %old_other : tensor<8xf32>
+    %select = arith.select %cond, %load, %false_value : tensor<8xf32>
+    tt.return %select : tensor<8xf32>
+}
+
 // CHECK-LABEL: @test_combine_select_masked_load_fail_pattern
 tt.func @test_combine_select_masked_load_fail_pattern(%ptr: tensor<8x!tt.ptr<f32>>, %dummy_load: tensor<8xf32>, %dummy_broadcast: tensor<8xi1>, %cond0: i1, %cond1: i1) -> (tensor<8xf32>, tensor<8xf32>, tensor<8xf32>) {
     %false_val = arith.constant dense<0.0> : tensor<8xf32>

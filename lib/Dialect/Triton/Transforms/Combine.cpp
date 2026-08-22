@@ -1,4 +1,5 @@
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
@@ -98,6 +99,23 @@ public:
 
     auto splatCond = splatOp.getSrc();
     if (splatCond != condSelect)
+      return failure();
+
+    // Fold the select into the load's `other`. If the load feeds only this
+    // select, update it in place to keep a single load -- a volatile load must
+    // be read exactly once. This requires the false value to dominate the load,
+    // since it becomes one of the load's operands. Otherwise a fresh load is
+    // created at the select (where the false value dominates); that duplicates
+    // the read, so the volatile case is declined instead.
+    if (loadOp.getResult().hasOneUse() &&
+        DominanceInfo().properlyDominates(falseValue, loadOp)) {
+      rewriter.modifyOpInPlace(
+          loadOp, [&] { loadOp.getOtherMutable().assign(falseValue); });
+      rewriter.replaceOp(op, loadOp.getResult());
+      return success();
+    }
+
+    if (loadOp.getIsVolatile())
       return failure();
 
     rewriter.replaceOpWithNewOp<LoadOp>(
