@@ -1,7 +1,6 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierInsertion.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Membar.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -26,22 +25,10 @@ namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
 static bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
-  if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(op)) {
-    if (!isRead)
-      return false;
-    auto srcTy = cvt.getSrc().getType();
-    auto dstTy = cvt.getType();
-    auto kBlock = StringAttr::get(op->getContext(), "block");
-    return !isCvtDimSync(ttg::toLinearLayout(srcTy), ttg::toLinearLayout(dstTy),
-                         kBlock);
-  }
-  if (auto reduce = dyn_cast<triton::ReduceOp>(op)) {
-    if (!isRead)
-      return false;
-    auto srcTy = reduce.getInputTypes()[0];
-    auto splitNum = ttg::getCTASplitNum(srcTy.getEncoding());
-    return splitNum[reduce.getAxis()] > 1;
-  }
+  // Scratch writes are CTA-local. When the scratch spans CTAs, only its read
+  // phase accesses another CTA's shared memory.
+  if (hasCrossCTAScratch(op))
+    return isRead;
   if (isa<ttng::CLCTryCancelOp, ttng::AsyncSharedStoreOp>(op)) {
     return ttg::lookupNumCTAs(op) > 1;
   } else if (isa<ttng::TMEMCopyOp>(op)) {
@@ -362,13 +349,19 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
     if (insertClusterBarrierNeeded) {
       builder->setInsertionPoint(op);
       ttng::ClusterBarrierOp::create(*builder, op->getLoc());
+      blockInfo->sync();
     }
 
-    // Clear prior distributed dependencies if we have inserted a cluster
-    // barrier, or if the scratch op itself performs a cluster-level sync.
-    bool hasClusterSync = isDistributedMultiCTAOp(op, /*isRead=*/true);
-    if (insertClusterBarrierNeeded || hasClusterSync)
+    // A scratch operation that crosses CTAs synchronizes internally between
+    // its write and read phases. Keep its write before that synchronization
+    // and only its read afterward:
+    //   write scratch -> cluster barrier -> read scratch
+    bool hasInternalClusterSync = hasCrossCTAScratch(op);
+    if (hasInternalClusterSync) {
+      blockInfo->join(curBlockInfo);
       blockInfo->sync();
+      curBlockInfo.sync();
+    }
 
     curBlockInfo.syncReadSlices[scratchSlice].insert(op);
   } else if (blockInfo->isIntersected(curBlockInfo, filter, &allocation,
