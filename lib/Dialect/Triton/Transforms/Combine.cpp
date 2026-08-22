@@ -153,18 +153,28 @@ public:
     auto mulOp = reduceOp.getOperand(0).getDefiningOp<arith::MulFOp>();
     if (!mulOp)
       return failure();
-    // mul operand has to be broadcast
-    auto broadcastLhsOp = mulOp.getOperand(0).getDefiningOp<BroadcastOp>();
-    if (!broadcastLhsOp)
+    // mul operands have to be broadcasts. Since multiplication is
+    // commutative, identify the dot operands from their broadcast axes instead
+    // of from the mul operand order.
+    auto broadcast0Op = mulOp.getOperand(0).getDefiningOp<BroadcastOp>();
+    if (!broadcast0Op)
       return failure();
-    auto broadcastRhsOp = mulOp.getOperand(1).getDefiningOp<BroadcastOp>();
-    if (!broadcastRhsOp)
+    auto broadcast1Op = mulOp.getOperand(1).getDefiningOp<BroadcastOp>();
+    if (!broadcast1Op)
       return failure();
-    // The first operand must be broadcasted from (M, K, 1) to (M, K, N), and
-    // the second operand must go from (1, K, N) to (M, K, N).
-    if (!isBroadcastAlongAxis(broadcastLhsOp, 2) ||
-        !isBroadcastAlongAxis(broadcastRhsOp, 0))
+    // axis=2 maps to dot lhs; axis=0 maps to dot rhs.
+    auto broadcastLhsOp = broadcast0Op;
+    auto broadcastRhsOp = broadcast1Op;
+    if (isBroadcastAlongAxis(broadcast0Op, 0) &&
+        isBroadcastAlongAxis(broadcast1Op, 2)) {
+      broadcastLhsOp = broadcast1Op;
+      broadcastRhsOp = broadcast0Op;
+    } else if (!isBroadcastAlongAxis(broadcast0Op, 2) ||
+               !isBroadcastAlongAxis(broadcast1Op, 0)) {
       return failure();
+    }
+    // broadcastLhsOp must go from (M, K, 1) to (M, K, N), and
+    // broadcastRhsOp must go from (1, K, N) to (M, K, N).
     auto broadcastLhsShape =
         cast<ShapedType>(broadcastLhsOp.getType()).getShape();
     auto broadcastRhsShape =
