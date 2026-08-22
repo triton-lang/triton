@@ -141,25 +141,25 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // CHECK-LABEL: @preserve_rows_when_reordering_registers
 // CHECK: %[[LOAD:.*]] = tt.load
-// CHECK-NEXT: %[[FACTORED:.*]] = tt.reshape %[[LOAD]] : {{.*}} -> tensor<{{256x2x1x1xf32.*}}>
+// CHECK-NEXT: %[[FACTORED:.*]] = tt.reshape %[[LOAD]] : {{.*}} -> tensor<{{256x2x2x1xf32.*}}>
 // CHECK-NEXT: %[[TRANSPOSED:.*]] = tt.trans %[[FACTORED]] {order = array<i32: 0, 2, 1, 3>}
-// CHECK-NEXT: %[[RESHAPED:.*]] = tt.reshape %[[TRANSPOSED]] efficient_layout : {{.*}} -> tensor<{{256x1x2xf32.*}}>
-// CHECK-NEXT: %[[REORDERED:.*]] = ttg.convert_layout %[[RESHAPED]] : tensor<{{256x1x2xf32.*}}> -> tensor<{{256x1x2xf32.*}}>
+// CHECK-NEXT: %[[RESHAPED:.*]] = tt.reshape %[[TRANSPOSED]] efficient_layout : {{.*}} -> tensor<{{256x2x2xf32.*}}>
+// CHECK-NEXT: %[[REORDERED:.*]] = ttg.convert_layout %[[RESHAPED]] : tensor<{{256x2x2xf32.*}}> -> tensor<{{256x2x2xf32.*}}>
 // CHECK-NEXT: "tt.reduce"(%[[REORDERED]]) <{axis = 2 : i32}>
-#blocked = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+#blocked = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [16, 2], warpsPerCTA = [1, 1], order = [0, 1]}>
 #slice = #ttg.slice<{dim = 1, parent = #blocked}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @preserve_rows_when_reordering_registers(%input: tensor<256x2x!tt.ptr<f32>, #blocked>, %output: tensor<256x!tt.ptr<f32>, #slice>, %count: i32) {
+  tt.func public @preserve_rows_when_reordering_registers(%input: tensor<256x4x!tt.ptr<f32>, #blocked>, %output: tensor<256x!tt.ptr<f32>, #slice>, %count: i32) {
     %zero = arith.constant dense<0.000000e+00> : tensor<256xf32, #slice>
     %start = arith.constant 0 : i32
     %step = arith.constant 1 : i32
     %result = scf.for %index = %start to %count step %step iter_args(%accumulator = %zero) -> (tensor<256xf32, #slice>) : i32 {
-      %values = tt.load %input : tensor<256x2x!tt.ptr<f32>, #blocked>
+      %values = tt.load %input : tensor<256x4x!tt.ptr<f32>, #blocked>
       %reduced = "tt.reduce"(%values) <{axis = 1 : i32}> ({
       ^bb0(%left: f32, %right: f32):
         %sum = arith.addf %left, %right : f32
         tt.reduce.return %sum : f32
-      }) : (tensor<256x2xf32, #blocked>) -> tensor<256xf32, #slice>
+      }) : (tensor<256x4xf32, #blocked>) -> tensor<256xf32, #slice>
       %updated = arith.addf %accumulator, %reduced : tensor<256xf32, #slice>
       scf.yield %updated : tensor<256xf32, #slice>
     }
@@ -172,21 +172,22 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // The yielded accumulator belongs to a different loop than the one enclosing the reduce.
 // CHECK-LABEL: @reduce_outside_accumulator_loop
+// CHECK-NOT: tt.reshape
 // CHECK: "tt.reduce"({{.*}}) <{axis = 1 : i32}>
-#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [16, 2], warpsPerCTA = [1, 1], order = [1, 0]}>
 #slice = #ttg.slice<{dim = 1, parent = #blocked}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @reduce_outside_accumulator_loop(%input: tensor<32x2x!tt.ptr<f32>, #blocked>, %output: tensor<32x!tt.ptr<f32>, #slice>, %count: i32) {
+  tt.func public @reduce_outside_accumulator_loop(%input: tensor<32x4x!tt.ptr<f32>, #blocked>, %output: tensor<32x!tt.ptr<f32>, #slice>, %count: i32) {
     %zero = arith.constant dense<0.000000e+00> : tensor<32xf32, #slice>
     %start = arith.constant 0 : i32
     %step = arith.constant 1 : i32
     scf.for %index = %start to %count step %step : i32 {
-      %values = tt.load %input : tensor<32x2x!tt.ptr<f32>, #blocked>
+      %values = tt.load %input : tensor<32x4x!tt.ptr<f32>, #blocked>
       %reduced = "tt.reduce"(%values) <{axis = 1 : i32}> ({
       ^bb0(%left: f32, %right: f32):
         %sum = arith.addf %left, %right : f32
         tt.reduce.return %sum : f32
-      }) : (tensor<32x2xf32, #blocked>) -> tensor<32xf32, #slice>
+      }) : (tensor<32x4xf32, #blocked>) -> tensor<32xf32, #slice>
       %result = scf.for %inner = %start to %count step %step iter_args(%accumulator = %zero) -> (tensor<32xf32, #slice>) : i32 {
         %updated = arith.addf %accumulator, %reduced : tensor<32xf32, #slice>
         scf.yield %updated : tensor<32xf32, #slice>
@@ -622,19 +623,29 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // -----
 
-// CHECK-LABEL: remains_unchanged
-// CHECK: %[[CST:.*]] = arith.constant dense
-// CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[CST]]) -> {{.*}}
+// The reduce operand comes from an elementwise op rather than a load
+// CHECK-LABEL: elementwise_operand
+// CHECK: %[[ORIG_INIT:.*]] = arith.constant dense<0.000000e+00>
+// CHECK: %[[INIT_ARG:.*]] = arith.constant dense<0xFF800000>
+// CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[INIT_ARG]]) -> {{.*}}
 // CHECK: %[[LOAD:.*]] = tt.load
 // CHECK: %[[MULF:.*]] = arith.mulf %[[LOAD]], %[[LOAD]]
-// CHECK-NEXT: %[[REDUCE:.*]] = "tt.reduce"(%[[MULF]]) <{axis = 1 : i32}>
+// CHECK: tt.reshape %[[MULF]] : {{.*}} -> tensor<{{32x2x32x2xf32.*}}>
+// CHECK: tt.reshape {{%.*}} efficient_layout : {{.*}} -> tensor<{{32x32x4xf32.*}}>
+// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.maximumf
 // CHECK: arith.maximumf %[[FOR_ARG]], %[[REDUCE]]
 // CHECK-NEXT: scf.yield
+// CHECK: %[[FINAL_REDUCE:.*]] = "tt.reduce"(%[[LOOP_OUTPUT]]) <{axis = 1 : i32}>
+// CHECK: arith.maximumf
+// CHECK: %[[CVT:.*]] = ttg.convert_layout %[[FINAL_REDUCE]]
+// CHECK: %[[WITH_INIT:.*]] = arith.maximumf %[[CVT]], %[[ORIG_INIT]]
+// CHECK: %[[OUTPUT:.*]] = ttg.convert_layout %[[WITH_INIT]]
+// CHECK: tt.store {{%.*}}, %[[OUTPUT]]
 #blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @remains_unchanged(
+  tt.func public @elementwise_operand(
     %arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
     %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32},
     %arg2: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32},
@@ -883,4 +894,395 @@ tt.func @skip_optimize_on_1d_tensor(%arg0: tensor<256xf32, #blocked>, %arg1: ten
   tt.return %0 : tensor<8xf32, #blocked>
 }
 
+}
+
+// -----
+
+// A multi-operand reduce must be left untouched
+// CHECK-LABEL: @two_operand_reduce
+// CHECK-NOT: tt.reshape
+// CHECK: "tt.reduce"({{.*}}, {{.*}}) <{axis = 1 : i32}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [16, 2], warpsPerCTA = [1, 1], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @two_operand_reduce(%values: tensor<32x4x!tt.ptr<f32>, #blocked>, %tags: tensor<32x4x!tt.ptr<f32>, #blocked>, %output: tensor<32x!tt.ptr<f32>, #slice>, %count: i32) {
+    %zero = arith.constant dense<0.000000e+00> : tensor<32xf32, #slice>
+    %start = arith.constant 0 : i32
+    %step = arith.constant 1 : i32
+    %result = scf.for %index = %start to %count step %step iter_args(%accumulator = %zero) -> (tensor<32xf32, #slice>) : i32 {
+      %v = tt.load %values : tensor<32x4x!tt.ptr<f32>, #blocked>
+      %t = tt.load %tags : tensor<32x4x!tt.ptr<f32>, #blocked>
+      %reduced:2 = "tt.reduce"(%v, %t) <{axis = 1 : i32}> ({
+      ^bb0(%a0: f32, %a1: f32, %b0: f32, %b1: f32):
+        %sum = arith.addf %a0, %b0 : f32
+        tt.reduce.return %sum, %a1 : f32, f32
+      }) : (tensor<32x4xf32, #blocked>, tensor<32x4xf32, #blocked>) -> (tensor<32xf32, #slice>, tensor<32xf32, #slice>)
+      %updated = arith.addf %accumulator, %reduced#0 : tensor<32xf32, #slice>
+      scf.yield %updated : tensor<32xf32, #slice>
+    }
+    tt.store %output, %result : tensor<32x!tt.ptr<f32>, #slice>
+    tt.return
+  }
+}
+
+// -----
+
+// A degenerate combiner that could change the result if the optimization is applied
+// CHECK-LABEL: @self_add_combiner
+// CHECK-NOT: tt.reshape
+// CHECK: "tt.reduce"({{.*}}) <{axis = 1 : i32}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [16, 2], warpsPerCTA = [1, 1], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @self_add_combiner(%values: tensor<32x4x!tt.ptr<f32>, #blocked>, %output: tensor<32x!tt.ptr<f32>, #slice>, %count: i32) {
+    %zero = arith.constant dense<0.000000e+00> : tensor<32xf32, #slice>
+    %start = arith.constant 0 : i32
+    %step = arith.constant 1 : i32
+    %result = scf.for %index = %start to %count step %step iter_args(%accumulator = %zero) -> (tensor<32xf32, #slice>) : i32 {
+      %v = tt.load %values : tensor<32x4x!tt.ptr<f32>, #blocked>
+      %reduced = "tt.reduce"(%v) <{axis = 1 : i32}> ({
+      ^bb0(%a: f32, %b: f32):
+        %sum = arith.addf %a, %a : f32
+        tt.reduce.return %sum : f32
+      }) : (tensor<32x4xf32, #blocked>) -> tensor<32xf32, #slice>
+      %updated = arith.addf %accumulator, %reduced : tensor<32xf32, #slice>
+      scf.yield %updated : tensor<32xf32, #slice>
+    }
+    tt.store %output, %result : tensor<32x!tt.ptr<f32>, #slice>
+    tt.return
+  }
+}
+
+// -----
+
+// The accumulator update op does not match the reduce's combiner
+// CHECK-LABEL: @update_combiner_mismatch
+// CHECK-NOT: tt.reshape
+// CHECK: "tt.reduce"({{.*}}) <{axis = 1 : i32}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [16, 2], warpsPerCTA = [1, 1], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @update_combiner_mismatch(%values: tensor<32x4x!tt.ptr<f32>, #blocked>, %output: tensor<32x!tt.ptr<f32>, #slice>, %count: i32) {
+    %zero = arith.constant dense<0xFF800000> : tensor<32xf32, #slice>
+    %start = arith.constant 0 : i32
+    %step = arith.constant 1 : i32
+    %result = scf.for %index = %start to %count step %step iter_args(%accumulator = %zero) -> (tensor<32xf32, #slice>) : i32 {
+      %v = tt.load %values : tensor<32x4x!tt.ptr<f32>, #blocked>
+      %reduced = "tt.reduce"(%v) <{axis = 1 : i32}> ({
+      ^bb0(%a: f32, %b: f32):
+        %sum = arith.addf %a, %b : f32
+        tt.reduce.return %sum : f32
+      }) : (tensor<32x4xf32, #blocked>) -> tensor<32xf32, #slice>
+      %updated = arith.maximumf %accumulator, %reduced : tensor<32xf32, #slice>
+      scf.yield %updated : tensor<32xf32, #slice>
+    }
+    tt.store %output, %result : tensor<32x!tt.ptr<f32>, #slice>
+    tt.return
+  }
+}
+
+// -----
+
+// The accumulator's final value is consumed in two places
+// CHECK-LABEL: @loop_result_two_uses
+// CHECK-NOT: tt.reshape
+// CHECK: "tt.reduce"({{.*}}) <{axis = 1 : i32}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [16, 2], warpsPerCTA = [1, 1], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @loop_result_two_uses(%values: tensor<32x4x!tt.ptr<f32>, #blocked>, %out1: tensor<32x!tt.ptr<f32>, #slice>, %out2: tensor<32x!tt.ptr<f32>, #slice>, %count: i32) {
+    %zero = arith.constant dense<0.000000e+00> : tensor<32xf32, #slice>
+    %start = arith.constant 0 : i32
+    %step = arith.constant 1 : i32
+    %result = scf.for %index = %start to %count step %step iter_args(%accumulator = %zero) -> (tensor<32xf32, #slice>) : i32 {
+      %v = tt.load %values : tensor<32x4x!tt.ptr<f32>, #blocked>
+      %reduced = "tt.reduce"(%v) <{axis = 1 : i32}> ({
+      ^bb0(%a: f32, %b: f32):
+        %sum = arith.addf %a, %b : f32
+        tt.reduce.return %sum : f32
+      }) : (tensor<32x4xf32, #blocked>) -> tensor<32xf32, #slice>
+      %updated = arith.addf %accumulator, %reduced : tensor<32xf32, #slice>
+      scf.yield %updated : tensor<32xf32, #slice>
+    }
+    tt.store %out1, %result : tensor<32x!tt.ptr<f32>, #slice>
+    tt.store %out2, %result : tensor<32x!tt.ptr<f32>, #slice>
+    tt.return
+  }
+}
+
+// -----
+
+// The accumulator has a second use inside the loop
+// CHECK-LABEL: @accumulator_second_use
+// CHECK-NOT: tt.reshape
+// CHECK: "tt.reduce"({{.*}}) <{axis = 1 : i32}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [16, 2], warpsPerCTA = [1, 1], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @accumulator_second_use(%values: tensor<32x4x!tt.ptr<f32>, #blocked>, %trace: tensor<32x!tt.ptr<f32>, #slice>, %output: tensor<32x!tt.ptr<f32>, #slice>, %count: i32) {
+    %zero = arith.constant dense<0.000000e+00> : tensor<32xf32, #slice>
+    %start = arith.constant 0 : i32
+    %step = arith.constant 1 : i32
+    %result = scf.for %index = %start to %count step %step iter_args(%accumulator = %zero) -> (tensor<32xf32, #slice>) : i32 {
+      tt.store %trace, %accumulator : tensor<32x!tt.ptr<f32>, #slice>
+      %v = tt.load %values : tensor<32x4x!tt.ptr<f32>, #blocked>
+      %reduced = "tt.reduce"(%v) <{axis = 1 : i32}> ({
+      ^bb0(%a: f32, %b: f32):
+        %sum = arith.addf %a, %b : f32
+        tt.reduce.return %sum : f32
+      }) : (tensor<32x4xf32, #blocked>) -> tensor<32xf32, #slice>
+      %updated = arith.addf %accumulator, %reduced : tensor<32xf32, #slice>
+      scf.yield %updated : tensor<32xf32, #slice>
+    }
+    tt.store %output, %result : tensor<32x!tt.ptr<f32>, #slice>
+    tt.return
+  }
+}
+
+// -----
+
+// The update's other operand is a rescaled accumulator rather than the iter_arg
+// CHECK-LABEL: @rescaled_accumulator
+// CHECK-NOT: tt.reshape
+// CHECK: "tt.reduce"({{.*}}) <{axis = 1 : i32}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [16, 2], warpsPerCTA = [1, 1], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @rescaled_accumulator(%values: tensor<32x4x!tt.ptr<f32>, #blocked>, %output: tensor<32x!tt.ptr<f32>, #slice>, %count: i32) {
+    %zero = arith.constant dense<0.000000e+00> : tensor<32xf32, #slice>
+    %alpha = arith.constant dense<5.000000e-01> : tensor<32xf32, #slice>
+    %start = arith.constant 0 : i32
+    %step = arith.constant 1 : i32
+    %result = scf.for %index = %start to %count step %step iter_args(%accumulator = %zero) -> (tensor<32xf32, #slice>) : i32 {
+      %v = tt.load %values : tensor<32x4x!tt.ptr<f32>, #blocked>
+      %reduced = "tt.reduce"(%v) <{axis = 1 : i32}> ({
+      ^bb0(%a: f32, %b: f32):
+        %sum = arith.addf %a, %b : f32
+        tt.reduce.return %sum : f32
+      }) : (tensor<32x4xf32, #blocked>) -> tensor<32xf32, #slice>
+      %scaled = arith.mulf %accumulator, %alpha : tensor<32xf32, #slice>
+      %updated = arith.addf %scaled, %reduced : tensor<32xf32, #slice>
+      scf.yield %updated : tensor<32xf32, #slice>
+    }
+    tt.store %output, %result : tensor<32x!tt.ptr<f32>, #slice>
+    tt.return
+  }
+}
+
+// -----
+
+// Two independent accumulators in the same loop are both optimized
+// CHECK-LABEL: @two_independent_accumulators
+// CHECK: %[[RES:.*]]:2 = scf.for {{.*}} iter_args(%[[SUM:.*]] = %{{.*}}, %[[MAX:.*]] = %{{.*}})
+// CHECK: %[[A_RED:.*]] = "tt.reduce"({{.*}}) <{axis = 2 : i32}>
+// CHECK: %[[SUM_UPD:.*]] = arith.addf %[[SUM]], %[[A_RED]]
+// CHECK: %[[B_RED:.*]] = "tt.reduce"({{.*}}) <{axis = 2 : i32}>
+// CHECK: %[[MAX_UPD:.*]] = arith.maximumf %[[MAX]], %[[B_RED]]
+// CHECK: scf.yield %[[SUM_UPD]], %[[MAX_UPD]]
+// CHECK: %[[MAX_RED:.*]] = "tt.reduce"(%[[RES]]#1) <{axis = 1 : i32}>
+// CHECK: %[[MAX_OUT:.*]] = ttg.convert_layout %[[MAX_RED]]
+// CHECK: %[[SUM_RED:.*]] = "tt.reduce"(%[[RES]]#0) <{axis = 1 : i32}>
+// CHECK: %[[SUM_CVT:.*]] = ttg.convert_layout %[[SUM_RED]]
+// CHECK: %[[SUM_OUT:.*]] = arith.addf %[[SUM_CVT]], %{{.*}}
+// CHECK: tt.store %{{.*}}, %[[SUM_OUT]]
+// CHECK: tt.store %{{.*}}, %[[MAX_OUT]]
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [16, 2], warpsPerCTA = [1, 1], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @two_independent_accumulators(%a_ptr: tensor<32x4x!tt.ptr<f32>, #blocked>, %b_ptr: tensor<32x4x!tt.ptr<f32>, #blocked>, %sum_out: tensor<32x!tt.ptr<f32>, #slice>, %max_out: tensor<32x!tt.ptr<f32>, #slice>, %count: i32) {
+    %zero = arith.constant dense<0.000000e+00> : tensor<32xf32, #slice>
+    %ninf = arith.constant dense<0xFF800000> : tensor<32xf32, #slice>
+    %start = arith.constant 0 : i32
+    %step = arith.constant 1 : i32
+    %result:2 = scf.for %i = %start to %count step %step iter_args(%sum_acc = %zero, %max_acc = %ninf) -> (tensor<32xf32, #slice>, tensor<32xf32, #slice>) : i32 {
+      %a = tt.load %a_ptr : tensor<32x4x!tt.ptr<f32>, #blocked>
+      %a_red = "tt.reduce"(%a) <{axis = 1 : i32}> ({
+      ^bb0(%l: f32, %r: f32):
+        %s = arith.addf %l, %r : f32
+        tt.reduce.return %s : f32
+      }) : (tensor<32x4xf32, #blocked>) -> tensor<32xf32, #slice>
+      %sum_upd = arith.addf %sum_acc, %a_red : tensor<32xf32, #slice>
+      %b = tt.load %b_ptr : tensor<32x4x!tt.ptr<f32>, #blocked>
+      %b_red = "tt.reduce"(%b) <{axis = 1 : i32}> ({
+      ^bb0(%l: f32, %r: f32):
+        %m = arith.maximumf %l, %r : f32
+        tt.reduce.return %m : f32
+      }) : (tensor<32x4xf32, #blocked>) -> tensor<32xf32, #slice>
+      %max_upd = arith.maximumf %max_acc, %b_red : tensor<32xf32, #slice>
+      scf.yield %sum_upd, %max_upd : tensor<32xf32, #slice>, tensor<32xf32, #slice>
+    }
+    tt.store %sum_out, %result#0 : tensor<32x!tt.ptr<f32>, #slice>
+    tt.store %max_out, %result#1 : tensor<32x!tt.ptr<f32>, #slice>
+    tt.return
+  }
+}
+
+// -----
+
+// Two reductions in a loop, each accumulator's running value feeds the other reduce's load mask
+// CHECK-LABEL: @mutually_dependent_accumulators
+// CHECK: scf.for {{.*}} iter_args(%[[SUM:.*]] = %{{.*}}, %[[MAX:.*]] = %{{.*}})
+// CHECK: tt.expand_dims %[[MAX]]
+// CHECK: "tt.reduce"({{.*}}) <{axis = 1 : i32}>
+// CHECK: arith.addf %[[SUM]],
+// CHECK: tt.expand_dims %[[SUM]]
+// CHECK: "tt.reduce"({{.*}}) <{axis = 1 : i32}>
+// CHECK: arith.maximumf %[[MAX]],
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [16, 2], warpsPerCTA = [1, 1], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @mutually_dependent_accumulators(%a_ptr: tensor<32x4x!tt.ptr<f32>, #blocked>, %b_ptr: tensor<32x4x!tt.ptr<f32>, #blocked>, %sum_out: tensor<32x!tt.ptr<f32>, #slice>, %max_out: tensor<32x!tt.ptr<f32>, #slice>, %count: i32) {
+    %zero = arith.constant dense<0.000000e+00> : tensor<32xf32, #slice>
+    %ninf = arith.constant dense<0xFF800000> : tensor<32xf32, #slice>
+    %thresh = arith.constant dense<0.000000e+00> : tensor<32x1xf32, #blocked>
+    %start = arith.constant 0 : i32
+    %step = arith.constant 1 : i32
+    %result:2 = scf.for %i = %start to %count step %step iter_args(%sum_acc = %zero, %max_acc = %ninf) -> (tensor<32xf32, #slice>, tensor<32xf32, #slice>) : i32 {
+      %max_col = tt.expand_dims %max_acc {axis = 1 : i32} : tensor<32xf32, #slice> -> tensor<32x1xf32, #blocked>
+      %a_cmp = arith.cmpf ogt, %max_col, %thresh : tensor<32x1xf32, #blocked>
+      %a_mask = tt.broadcast %a_cmp : tensor<32x1xi1, #blocked> -> tensor<32x4xi1, #blocked>
+      %a = tt.load %a_ptr, %a_mask : tensor<32x4x!tt.ptr<f32>, #blocked>
+      %a_red = "tt.reduce"(%a) <{axis = 1 : i32}> ({
+      ^bb0(%l: f32, %r: f32):
+        %s = arith.addf %l, %r : f32
+        tt.reduce.return %s : f32
+      }) : (tensor<32x4xf32, #blocked>) -> tensor<32xf32, #slice>
+      %sum_upd = arith.addf %sum_acc, %a_red : tensor<32xf32, #slice>
+      %sum_col = tt.expand_dims %sum_acc {axis = 1 : i32} : tensor<32xf32, #slice> -> tensor<32x1xf32, #blocked>
+      %b_cmp = arith.cmpf ogt, %sum_col, %thresh : tensor<32x1xf32, #blocked>
+      %b_mask = tt.broadcast %b_cmp : tensor<32x1xi1, #blocked> -> tensor<32x4xi1, #blocked>
+      %b = tt.load %b_ptr, %b_mask : tensor<32x4x!tt.ptr<f32>, #blocked>
+      %b_red = "tt.reduce"(%b) <{axis = 1 : i32}> ({
+      ^bb0(%l: f32, %r: f32):
+        %m = arith.maximumf %l, %r : f32
+        tt.reduce.return %m : f32
+      }) : (tensor<32x4xf32, #blocked>) -> tensor<32xf32, #slice>
+      %max_upd = arith.maximumf %max_acc, %b_red : tensor<32xf32, #slice>
+      scf.yield %sum_upd, %max_upd : tensor<32xf32, #slice>, tensor<32xf32, #slice>
+    }
+    tt.store %sum_out, %result#0 : tensor<32x!tt.ptr<f32>, #slice>
+    tt.store %max_out, %result#1 : tensor<32x!tt.ptr<f32>, #slice>
+    tt.return
+  }
+}
+
+// -----
+
+// The reduction axis is entirely in the registers of one thread
+// CHECK-LABEL: @thread_local_axis
+// CHECK-NOT: tt.reshape
+// CHECK: "tt.reduce"({{.*}}) <{axis = 1 : i32}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @thread_local_axis(%values: tensor<32x32x!tt.ptr<f32>, #blocked>, %output: tensor<32x!tt.ptr<f32>, #slice>, %count: i32) {
+    %zero = arith.constant dense<0.000000e+00> : tensor<32xf32, #slice>
+    %start = arith.constant 0 : i32
+    %step = arith.constant 1 : i32
+    %result = scf.for %index = %start to %count step %step iter_args(%accumulator = %zero) -> (tensor<32xf32, #slice>) : i32 {
+      %v = tt.load %values : tensor<32x32x!tt.ptr<f32>, #blocked>
+      %reduced = "tt.reduce"(%v) <{axis = 1 : i32}> ({
+      ^bb0(%a: f32, %b: f32):
+        %sum = arith.addf %a, %b : f32
+        tt.reduce.return %sum : f32
+      }) : (tensor<32x32xf32, #blocked>) -> tensor<32xf32, #slice>
+      %updated = arith.addf %accumulator, %reduced : tensor<32xf32, #slice>
+      scf.yield %updated : tensor<32xf32, #slice>
+    }
+    tt.store %output, %result : tensor<32x!tt.ptr<f32>, #slice>
+    tt.return
+  }
+}
+
+// -----
+
+// The reduction axis has one element per thread, but distributed across multiple threads in a warp
+// CHECK-LABEL: @lane_spread_axis
+// CHECK: %[[RES:.*]] = scf.for {{.*}} iter_args(%[[ACC:.*]] = %{{.*}}) -> (tensor<32x32xf32
+// CHECK: "tt.reduce"({{.*}}) <{axis = 2 : i32}>
+// CHECK: arith.addf %[[ACC]], %{{.*}}
+// CHECK: scf.yield
+// CHECK: "tt.reduce"(%[[RES]]) <{axis = 1 : i32}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @lane_spread_axis(%values: tensor<32x32x!tt.ptr<f32>, #blocked>, %output: tensor<32x!tt.ptr<f32>, #slice>, %count: i32) {
+    %zero = arith.constant dense<0.000000e+00> : tensor<32xf32, #slice>
+    %start = arith.constant 0 : i32
+    %step = arith.constant 1 : i32
+    %result = scf.for %index = %start to %count step %step iter_args(%accumulator = %zero) -> (tensor<32xf32, #slice>) : i32 {
+      %v = tt.load %values : tensor<32x32x!tt.ptr<f32>, #blocked>
+      %reduced = "tt.reduce"(%v) <{axis = 1 : i32}> ({
+      ^bb0(%a: f32, %b: f32):
+        %sum = arith.addf %a, %b : f32
+        tt.reduce.return %sum : f32
+      }) : (tensor<32x32xf32, #blocked>) -> tensor<32xf32, #slice>
+      %updated = arith.addf %accumulator, %reduced : tensor<32xf32, #slice>
+      scf.yield %updated : tensor<32xf32, #slice>
+    }
+    tt.store %output, %result : tensor<32x!tt.ptr<f32>, #slice>
+    tt.return
+  }
+}
+
+// -----
+
+// The reduction axis has one element per thread, but distributed across multiple warps
+// CHECK-LABEL: @warp_spread_axis
+// CHECK: %[[RES:.*]] = scf.for {{.*}} iter_args(%[[ACC:.*]] = %{{.*}}) -> (tensor<32x4xf32
+// CHECK: "tt.reduce"({{.*}}) <{axis = 2 : i32}>
+// CHECK: arith.addf %[[ACC]], %{{.*}}
+// CHECK: scf.yield
+// CHECK: "tt.reduce"(%[[RES]]) <{axis = 1 : i32}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @warp_spread_axis(%values: tensor<32x4x!tt.ptr<f32>, #blocked>, %output: tensor<32x!tt.ptr<f32>, #slice>, %count: i32) {
+    %zero = arith.constant dense<0.000000e+00> : tensor<32xf32, #slice>
+    %start = arith.constant 0 : i32
+    %step = arith.constant 1 : i32
+    %result = scf.for %index = %start to %count step %step iter_args(%accumulator = %zero) -> (tensor<32xf32, #slice>) : i32 {
+      %v = tt.load %values : tensor<32x4x!tt.ptr<f32>, #blocked>
+      %reduced = "tt.reduce"(%v) <{axis = 1 : i32}> ({
+      ^bb0(%a: f32, %b: f32):
+        %sum = arith.addf %a, %b : f32
+        tt.reduce.return %sum : f32
+      }) : (tensor<32x4xf32, #blocked>) -> tensor<32xf32, #slice>
+      %updated = arith.addf %accumulator, %reduced : tensor<32xf32, #slice>
+      scf.yield %updated : tensor<32xf32, #slice>
+    }
+    tt.store %output, %result : tensor<32x!tt.ptr<f32>, #slice>
+    tt.return
+  }
+}
+
+// -----
+
+// The reduction axis has one element per thread, but distributed across multiple CTAs
+// CHECK-LABEL: @cta_split_axis
+// CHECK: %[[RES:.*]] = scf.for {{.*}} iter_args(%[[ACC:.*]] = %{{.*}}) -> (tensor<32x2xf32
+// CHECK: "tt.reduce"({{.*}}) <{axis = 2 : i32}>
+// CHECK: arith.addf %[[ACC]], %{{.*}}
+// CHECK: scf.yield
+// CHECK: "tt.reduce"(%[[RES]]) <{axis = 1 : i32}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @cta_split_axis(%values: tensor<32x64x!tt.ptr<f32>, #blocked>, %output: tensor<32x!tt.ptr<f32>, #slice>, %count: i32) {
+    %zero = arith.constant dense<0.000000e+00> : tensor<32xf32, #slice>
+    %start = arith.constant 0 : i32
+    %step = arith.constant 1 : i32
+    %result = scf.for %index = %start to %count step %step iter_args(%accumulator = %zero) -> (tensor<32xf32, #slice>) : i32 {
+      %v = tt.load %values : tensor<32x64x!tt.ptr<f32>, #blocked>
+      %reduced = "tt.reduce"(%v) <{axis = 1 : i32}> ({
+      ^bb0(%a: f32, %b: f32):
+        %sum = arith.addf %a, %b : f32
+        tt.reduce.return %sum : f32
+      }) : (tensor<32x64xf32, #blocked>) -> tensor<32xf32, #slice>
+      %updated = arith.addf %accumulator, %reduced : tensor<32xf32, #slice>
+      scf.yield %updated : tensor<32xf32, #slice>
+    }
+    tt.store %output, %result : tensor<32x!tt.ptr<f32>, #slice>
+    tt.return
+  }
 }
