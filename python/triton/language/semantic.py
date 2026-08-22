@@ -1084,6 +1084,32 @@ class TritonSemantic(Generic[TensorTy]):
         target = driver.active.get_current_target()
         return (target.backend == "cuda" and target.arch >= 90)
 
+    def _tma_target(self):
+        options = self.builder.options
+        backend = options.backend_name
+        return backend, int(options.arch.removeprefix("sm")) if backend == "cuda" else None
+
+    def _check_supports_tma_gather(self, allow_fallback=False):
+        backend, capability = self._tma_target()
+        if backend == "interpreter":
+            return
+        if allow_fallback and (backend != "cuda" or capability < 90):
+            return
+        assert backend == "cuda" and capability >= 100, \
+            "TMA gather requires NVIDIA Blackwell (sm_100) or newer"
+
+    def _check_supports_tma_scatter(self, allow_fallback=False):
+        backend, capability = self._tma_target()
+        if backend == "interpreter":
+            return
+        if allow_fallback and (backend != "cuda" or capability < 90):
+            return
+        assert backend == "cuda" and capability >= 100, \
+            "TMA scatter requires NVIDIA Blackwell (sm_100) or newer"
+        assert capability // 10 != 12, \
+            "TMA scatter is not supported on consumer Blackwell (sm_12x). " \
+            "TMA gather is supported on this architecture; use regular stores instead."
+
     def _descriptor_atomic_min_max_supported(self, dtype):
         assert dtype in {tl.uint32, tl.int32, tl.uint64, tl.int64, tl.float16, tl.bfloat16}, "Unsupported dtype"
         if dtype in {tl.float16, tl.bfloat16}:
@@ -1127,6 +1153,7 @@ class TritonSemantic(Generic[TensorTy]):
     def descriptor_gather(self, desc, x_offsets, y_offset, cache_modifier: str, eviction_policy: str) -> TensorTy:
         assert isinstance(desc, tl.tensor_descriptor_base), \
             f"expected a tensor descriptor, got {desc.__class__.__name__}"
+        self._check_supports_tma_gather(allow_fallback=True)
         assert cache_modifier == "", "cache modifier is not supported yet"
         assert eviction_policy == "", "eviction policy is not supported yet"
 
@@ -1154,6 +1181,8 @@ class TritonSemantic(Generic[TensorTy]):
     def descriptor_scatter(self, desc, value: TensorTy, x_offsets, y_offset) -> TensorTy:
         assert isinstance(desc, tl.tensor_descriptor_base), \
             f"expected a tensor descriptor, got {type(desc).__name__}"
+
+        self._check_supports_tma_scatter(allow_fallback=True)
 
         # Validate descriptor.
         assert len(desc.block_shape) == 2, f"descriptor must be 2D, but got {desc.block_shape}"
