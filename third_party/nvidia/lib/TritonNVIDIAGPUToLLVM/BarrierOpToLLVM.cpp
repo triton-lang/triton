@@ -49,6 +49,66 @@ void mlir::triton::NVIDIA::createFenceMBarrierInitReleaseCluster(
 }
 
 namespace {
+constexpr int kMaxMbarV1InitCount = (1 << 9) - 1;
+
+bool supportsMbarV1Layout(const NVIDIA::TargetInfo &targetInfo) {
+  return targetInfo.getTargetFeatures().supportsMbarV1Layout() &&
+         targetInfo.getPtxVersion() >= 93;
+}
+
+Value createMbarrierTestWriterPredicate(Operation *op,
+                                        ConversionPatternRewriter &rewriter,
+                                        const NVIDIA::TargetInfo &targetInfo) {
+  if (ttg::lookupNumWarps(op) == 1)
+    return {};
+
+  auto loc = op->getLoc();
+  auto ctx = op->getContext();
+  auto freeVarMasks = getFreeVariableMasks(op->getResult(0).getType());
+  // The result is broadcast through CTA-local shared memory, so elect one
+  // writer per CTA rather than one writer across the cluster.
+  freeVarMasks[str_attr("block")] = 0;
+  return ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter, loc,
+                                           targetInfo);
+}
+
+SmallVector<Value> broadcastMbarrierTestResults(
+    Operation *op, ArrayRef<Value> results, Value writerPred,
+    ConversionPatternRewriter &rewriter, TritonLLVMOpBuilder &b,
+    const NVIDIA::TargetInfo &targetInfo) {
+  assert(!results.empty() && results.size() <= 8 &&
+         llvm::all_of(
+             results,
+             [](Value result) { return result.getType().isInteger(1); }) &&
+         "expected one to eight predicate results");
+  if (ttg::lookupNumWarps(op) == 1)
+    return SmallVector<Value>(results);
+
+  assert(op->hasAttr("allocation.offset") &&
+         "multi-warp mbarrier test requires shared scratch");
+  Value packed = b.zext(i8_ty, results.front());
+  for (auto [index, result] : llvm::enumerate(results.drop_front())) {
+    Value bit = b.zext(i8_ty, result);
+    bit = b.shl(bit, b.i8_val(index + 1));
+    packed = b.or_(packed, bit);
+  }
+
+  Value scratch =
+      LLVM::getSharedMemoryBase(op->getLoc(), rewriter, targetInfo, op);
+  targetInfo.storeShared(rewriter, op->getLoc(), scratch, packed, writerPred);
+  targetInfo.barrier(op->getLoc(), rewriter, ttg::AddrSpace::Local);
+  packed = targetInfo.loadShared(rewriter, op->getLoc(), scratch, i8_ty,
+                                 b.true_val());
+
+  SmallVector<Value> broadcast;
+  broadcast.reserve(results.size());
+  for (unsigned index = 0; index < results.size(); ++index) {
+    Value bit = b.and_(packed, b.i8_val(1 << index));
+    broadcast.push_back(b.icmp_ne(bit, b.i8_val(0)));
+  }
+  return broadcast;
+}
+
 template <typename OpTy>
 struct GridDependencyOpConversion : public ConvertOpToLLVMPattern<OpTy> {
   using ConvertOpToLLVMPattern<OpTy>::ConvertOpToLLVMPattern;
@@ -196,8 +256,18 @@ struct InitBarrierOpConversion
     initCount *= numCTAs / barrierTy.getNumElements();
 
     ::mlir::triton::PTXBuilder ptxBuilder;
-    const std::string ptx = "@$0 mbarrier.init.shared::cta.b64 [$1], " +
-                            std::to_string(initCount) + ";";
+    std::string ptx;
+    // The expected arrival count has only 9 bits in the v1 layout. Preserve
+    // v0 for barriers whose count cannot be represented by v1.
+    // The v1 layout is only needed when the conditonal phase is queried.
+    // But for simplicity we always use it when possible.
+    if (supportsMbarV1Layout(*targetInfo) && initCount <= kMaxMbarV1InitCount) {
+      ptx = "@$0 mbarrier.init.layout::v1.shared::cta.b64 [$1], " +
+            std::to_string(initCount) + ";";
+    } else {
+      ptx = "@$0 mbarrier.init.shared::cta.b64 [$1], " +
+            std::to_string(initCount) + ";";
+    }
     auto &barSyncOp = *ptxBuilder.create(ptx);
     barSyncOp({ptxBuilder.newOperand(pred, "b"),
                ptxBuilder.newOperand(smemObj.getBase(), "r")},
@@ -365,12 +435,19 @@ struct WaitBarrierOpConversion
 )";
       }
     } else {
+      std::string phaseType;
+      if (supportsMbarV1Layout(*targetInfo) &&
+          op.getPhaseType() ==
+              triton::nvidia_gpu::MBarrierPhaseType::CONDITIONAL)
+        phaseType = ".phase_type::conditional";
+
       if (!predicated) {
         ptx = R"(
 {
 	.reg .pred complete;
 	waitLoop:
-	mbarrier.try_wait.parity.shared::cta.b64 complete, [$0], $1;
+	mbarrier.try_wait.parity)" +
+              phaseType + R"(.shared::cta.b64 complete, [$0], $1;
 	@!complete bra.uni waitLoop;
 }
 )";
@@ -380,7 +457,8 @@ struct WaitBarrierOpConversion
 	@!$2 bra.uni skipWait;
 	.reg .pred complete;
 	waitLoop:
-	mbarrier.try_wait.parity.shared::cta.b64 complete, [$0], $1;
+	mbarrier.try_wait.parity)" +
+              phaseType + R"(.shared::cta.b64 complete, [$0], $1;
 	@!complete bra.uni waitLoop;
 	skipWait:
 }
@@ -398,6 +476,154 @@ struct WaitBarrierOpConversion
     waitLoop(operands, /*onlyAttachMLIRArgs=*/true);
     ptxBuilder.launch(rewriter, loc, void_ty(ctx));
     rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct BarrierTestWaitOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::BarrierTestWaitOp> {
+  const NVIDIA::TargetInfo *targetInfo;
+  BarrierTestWaitOpConversion(LLVMTypeConverter &typeConverter,
+                              PatternBenefit benefit,
+                              NVIDIA::TargetInfo &targetInfo)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::BarrierTestWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    bool conditional =
+        op.getPhaseType() == triton::nvidia_gpu::MBarrierPhaseType::CONDITIONAL;
+    if (conditional && !supportsMbarV1Layout(*targetInfo))
+      return op.emitError(
+          "conditional mbarrier test requires mbarrier v1 layout support");
+
+    auto barrierTy = op.getAlloc().getType();
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+        op.getLoc(), adaptor.getAlloc(),
+        typeConverter->convertType(barrierTy.getElementType()), rewriter);
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto pred = adaptor.getPred();
+    Value writerPred =
+        createMbarrierTestWriterPredicate(op, rewriter, *targetInfo);
+    if (writerPred)
+      pred = pred ? b.and_(pred, writerPred) : writerPred;
+    if (auto leaderPred =
+            LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy))
+      pred = pred ? b.and_(pred, *leaderPred) : *leaderPred;
+    bool predicated = pred && !matchPattern(pred, m_NonZero());
+    std::string phaseType =
+        conditional ? ".phase_type::conditional" : std::string();
+
+    ::mlir::triton::PTXBuilder ptxBuilder;
+    SmallVector<::mlir::triton::PTXBuilder::Operand *, 4> operands = {
+        ptxBuilder.newOperand("=b"),
+        ptxBuilder.newOperand(smemObj.getBase(), "r"),
+        ptxBuilder.newOperand(adaptor.getPhase(), "r")};
+
+    std::string ptx;
+    if (predicated) {
+      ptx = R"(
+{
+	mov.pred $0, 0;
+	@!$3 bra.uni skipTest;
+	mbarrier.test_wait.parity)" +
+            phaseType + R"(.shared::cta.b64 $0, [$1], $2;
+	skipTest:
+}
+)";
+      operands.push_back(ptxBuilder.newOperand(pred, "b"));
+    } else {
+      ptx = R"(
+{
+	mbarrier.test_wait.parity)" +
+            phaseType + R"(.shared::cta.b64 $0, [$1], $2;
+}
+)";
+    }
+
+    auto &test = *ptxBuilder.create(ptx);
+    test(operands, /*onlyAttachMLIRArgs=*/true);
+    Value complete = ptxBuilder.launch(rewriter, loc, rewriter.getI1Type());
+    auto results = broadcastMbarrierTestResults(op, {complete}, writerPred,
+                                                rewriter, b, *targetInfo);
+    rewriter.replaceOp(op, results);
+    return success();
+  }
+};
+
+struct BarrierTestWaitReportOpConversion
+    : public ConvertOpToLLVMPattern<
+          triton::nvidia_gpu::BarrierTestWaitReportOp> {
+  const NVIDIA::TargetInfo *targetInfo;
+  BarrierTestWaitReportOpConversion(LLVMTypeConverter &typeConverter,
+                                    PatternBenefit benefit,
+                                    NVIDIA::TargetInfo &targetInfo)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::BarrierTestWaitReportOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!supportsMbarV1Layout(*targetInfo))
+      return op.emitError(
+          "primary mbarrier report requires mbarrier v1 layout support");
+
+    auto barrierTy = op.getAlloc().getType();
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
+        op.getLoc(), adaptor.getAlloc(),
+        typeConverter->convertType(barrierTy.getElementType()), rewriter);
+    auto ctx = op.getContext();
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto pred = adaptor.getPred();
+    Value writerPred =
+        createMbarrierTestWriterPredicate(op, rewriter, *targetInfo);
+    if (writerPred)
+      pred = pred ? b.and_(pred, writerPred) : writerPred;
+    if (auto leaderPred =
+            LLVM::NVIDIA::getLeaderCTAPredicate(loc, rewriter, barrierTy))
+      pred = pred ? b.and_(pred, *leaderPred) : *leaderPred;
+    bool predicated = pred && !matchPattern(pred, m_NonZero());
+
+    ::mlir::triton::PTXBuilder ptxBuilder;
+    SmallVector<::mlir::triton::PTXBuilder::Operand *, 5> operands = {
+        ptxBuilder.newOperand("=b"), ptxBuilder.newOperand("=b"),
+        ptxBuilder.newOperand(smemObj.getBase(), "r"),
+        ptxBuilder.newOperand(adaptor.getPhase(), "r")};
+
+    std::string ptx;
+    if (predicated) {
+      ptx = R"(
+{
+	mov.pred $0, 0;
+	mov.pred $1, 0;
+	@!$4 bra.uni skipTest;
+	mbarrier.test_wait.parity.phase_type::primary.shared::cta.b64 $0|$1, [$2], $3;
+	skipTest:
+}
+)";
+      operands.push_back(ptxBuilder.newOperand(pred, "b"));
+    } else {
+      ptx = R"(
+{
+	mbarrier.test_wait.parity.phase_type::primary.shared::cta.b64 $0|$1, [$2], $3;
+}
+)";
+    }
+
+    auto &test = *ptxBuilder.create(ptx);
+    test(operands, /*onlyAttachMLIRArgs=*/true);
+    SmallVector<Type> resultTypes(2, rewriter.getI1Type());
+    Value packed = ptxBuilder.launch(rewriter, loc, struct_ty(resultTypes));
+    SmallVector<Value> results = {
+        b.extract_val(rewriter.getI1Type(), packed, 0),
+        b.extract_val(rewriter.getI1Type(), packed, 1)};
+    results = broadcastMbarrierTestResults(op, results, writerPred, rewriter, b,
+                                           *targetInfo);
+    rewriter.replaceOp(op, results);
     return success();
   }
 };
@@ -656,7 +882,8 @@ struct CLCGetProgramIdOpConversion
 void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit, NVIDIA::TargetInfo &targetInfo) {
-  bool supportsMBarrierMulticast = targetInfo.getComputeCapability() == 107;
+  bool supportsMBarrierMulticast =
+      targetInfo.getTargetFeatures().supportsMbarMulticast();
   patterns.add<FenceAsyncSharedOpConversion>(typeConverter, benefit);
   patterns.add<
       GridDependencyOpConversion<triton::GridDependencyWaitOp>,
@@ -667,6 +894,9 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
   patterns.add<InitBarrierOpConversion, InvalBarrierOpConversion>(
       typeConverter, benefit, targetInfo);
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit, targetInfo);
+  patterns.add<BarrierTestWaitOpConversion>(typeConverter, benefit, targetInfo);
+  patterns.add<BarrierTestWaitReportOpConversion>(typeConverter, benefit,
+                                                  targetInfo);
   patterns.add<BarrierExpectConversion>(typeConverter, benefit,
                                         supportsMBarrierMulticast);
   patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit,

@@ -1109,7 +1109,7 @@ def test_rubin_namespace_extends_blackwell():
     assert rubin.TensorMemoryLayout is blackwell.TensorMemoryLayout
     assert rubin.allocate_tensor_memory is blackwell.allocate_tensor_memory
     assert rubin.tcgen05_mma_scaled is blackwell.tcgen05_mma_scaled
-    assert rubin.tma is blackwell.tma
+    assert rubin.tma is not blackwell.tma
     assert rubin.cluster is blackwell.cluster
     assert rubin.mbarrier is not blackwell.mbarrier
     assert rubin.mbarrier.allocate_mbarrier is blackwell.mbarrier.allocate_mbarrier
@@ -1635,6 +1635,67 @@ def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr):
 
     tma.async_store(input_desc, [0, 0], smem)
     tma.store_wait(0)
+
+
+@gluon.jit
+def rubin_tma_validity_kernel(input_desc, XBLOCK: ttgl.constexpr):
+    smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], input_desc.layout)
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [1], rubin.mbarrier.MBarrierLayout())
+    rubin.mbarrier.init(bar, count=1)
+
+    rubin.mbarrier.expect(bar, input_desc.block_type.nbytes)
+    rubin.tma.async_load(input_desc, [0, 0], bar, smem, report_validity="per_16B_fp16")
+    _ = rubin.mbarrier.test_wait(bar, 0)
+    _ = rubin.mbarrier.test_wait(bar, 0, phase_type="conditional")
+    done, valid = rubin.mbarrier.test_wait_validity(bar, 0)
+    _ = done & valid
+    rubin.mbarrier.wait(bar, 0, phase_type="conditional")
+
+    rubin.mbarrier.invalidate(bar)
+
+
+def test_rubin_tma_validity_ir():
+    input = MockTensor(ttgl.float16, (1024, 1024))
+    xblock = 128
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+    input_desc = TensorDescriptor.from_tensor(input, [xblock, xblock], shared_layout)
+
+    mod = run_parser(
+        rubin_tma_validity_kernel,
+        *make_args(input_desc, xblock, num_warps=4),
+        target=RUBIN_TARGET,
+    )
+    ir = anonymize_ir(mod.str_nodebug())
+    assert "reportValidity = per_16B_fp16" in ir
+    assert ir.count("ttng.barrier_test_wait ") == 2
+    assert "ttng.barrier_test_wait" in ir and ", conditional :" in ir
+    assert ir.count("ttng.barrier_test_wait_report") == 1
+    assert "arith.xori" in ir and "arith.andi" in ir
+    assert "ttng.wait_barrier" in ir and ", conditional :" in ir
+
+
+@gluon.jit
+def rubin_mbarrier_test_wait_multicta_kernel(op: ttgl.constexpr):
+    bar = ttgl.allocate_shared_memory(
+        ttgl.int64,
+        [1],
+        rubin.mbarrier.MBarrierLayout(),
+    )
+    if op == "test_wait":
+        _ = rubin.mbarrier.test_wait(bar, 0)
+    else:
+        _ = rubin.mbarrier.test_wait_validity(bar, 0)
+
+
+@pytest.mark.parametrize("op", ["test_wait", "test_wait_validity"])
+def test_rubin_mbarrier_test_wait_rejects_multicta(op):
+    with pytest.raises(CompilationError) as exc:
+        run_parser(
+            rubin_mbarrier_test_wait_multicta_kernel,
+            *make_args(op, num_ctas=2),
+            target=RUBIN_TARGET,
+        )
+    assert f"mbarrier.{op} is only supported when num_ctas == 1" in str(exc.value.__cause__)
 
 
 @pytest.mark.parametrize("target", [HOPPER_TARGET, BLACKWELL_TARGET])

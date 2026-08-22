@@ -136,6 +136,12 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     auto elemTy = getElementTypeOrSelf(getPointeeType(value.getType()));
     return elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
   }
+  if (isa<ttng::BarrierTestWaitOp, ttng::BarrierTestWaitReportOp>(op) &&
+      gpu::lookupNumWarps(op) > 1) {
+    // Multi-warp mbarrier tests broadcast their scalar predicate results
+    // through shared memory. Pack both report predicates into one byte.
+    return 1;
+  }
   if (isa<ttng::TensormapCreateOp>(op)) {
     constexpr int32_t kTMASize = 128;
     return kTMASize;

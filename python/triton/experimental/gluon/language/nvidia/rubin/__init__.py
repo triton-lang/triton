@@ -28,10 +28,9 @@ from ..blackwell import (
     tcgen05_mma,
     tcgen05_mma_barrier_count,
     tcgen05_mma_scaled,
-    tma,
 )
 from ..blackwell import TensorMemoryScalesLayout as _BlackwellTensorMemoryScalesLayout
-from . import mbarrier
+from . import mbarrier, tma
 
 __all__ = [
     "add2",
