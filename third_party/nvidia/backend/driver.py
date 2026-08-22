@@ -27,9 +27,13 @@ def libcuda_dirs():
     if env_libcuda_path := knobs.nvidia.libcuda_path:
         return [env_libcuda_path]
 
-    libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode(errors="ignore")
-    # each line looks like the following:
-    # libcuda.so.1 (libc6,x86-64) => /lib/x86_64-linux-gnu/libcuda.so.1
+    # The program should not crash in the case of a failure to retrieve the ld cache
+    try:
+        # each line looks like the following:
+        # libcuda.so.1 (libc6,x86-64) => /lib/x86_64-linux-gnu/libcuda.so.1
+        libs = subprocess.check_output(["ldconfig", "-p"]).decode(errors="ignore")
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        libs = ""
     locs = [line.split()[-1] for line in libs.splitlines() if "libcuda.so.1" in line]
     dirs = [os.path.dirname(loc) for loc in locs]
     env_ld_library_path = os.getenv("LD_LIBRARY_PATH")
