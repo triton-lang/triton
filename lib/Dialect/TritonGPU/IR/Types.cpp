@@ -14,6 +14,75 @@ using namespace mlir::triton::gpu;
 
 static constexpr llvm::StringRef kMutableMemory = "mutable";
 
+static LogicalResult verifyNonPow2InvertedLayoutInvariant(
+    function_ref<InFlightDiagnostic()> emitError, ArrayRef<int64_t> blockShape,
+    const mlir::triton::LinearLayout &ll) {
+  if (isPositivePowerOfTwoShape(blockShape))
+    return success();
+
+  auto *ctx = ll.getOutDimNames().begin()->getContext();
+  auto kOffset = StringAttr::get(ctx, "offset");
+  auto outDims = mlir::triton::standardOutDimNames(ctx, blockShape.size());
+  auto llInv = ll.pseudoinvert();
+  if (!llInv.hasOutDim(kOffset))
+    return emitError()
+           << "non-power-of-two shapes require an inverted layout view "
+              "(logical indices -> offset) with an offset basis";
+
+  bool seenNonPow2Dim = false;
+  for (auto [dim, m] : llvm::enumerate(blockShape)) {
+    if (llvm::isPowerOf2_64(m))
+      continue;
+    if (seenNonPow2Dim)
+      return emitError()
+             << "at most one non-power-of-two dimension is currently "
+                "supported for nvmma_shared/shared_linear memdesc shapes in "
+                "shape "
+             << blockShape;
+    seenNonPow2Dim = true;
+
+    // Project the inverted layout to the non-power-of-two logical dimension and
+    // physical offset. We factor this dimension into a power-of-two inner group
+    // of size C and an implicit outer group coordinate. The checks below verify
+    // that the bases of this outer coordinate select homogeneous, consecutively
+    // ordered physical groups.
+    auto dimName = outDims[dim];
+    auto dimToOffset = llInv.sublayout({dimName}, {kOffset});
+    int64_t m2 = dimToOffset.getInDimSize(dimName);
+    int64_t projectedOffsetRange = dimToOffset.getOutDimSize(kOffset);
+    int64_t c = std::gcd(m, m2);
+    unsigned log2C = llvm::Log2_64(c);
+    unsigned log2M2 = llvm::Log2_64(m2);
+    // From the gcd boundary onward, adjacent bases must double. This means
+    // the layout past the inner C-sized region repeats the same group.
+    for (unsigned i = log2C; i + 1 < log2M2; ++i) {
+      int32_t curr = dimToOffset.getBasis(dimName, i, kOffset);
+      int32_t next = dimToOffset.getBasis(dimName, i + 1, kOffset);
+      if (next != 2 * curr) {
+        return emitError()
+               << "non-power-of-two dimension " << m
+               << " has unexpected basis in inverted layout view (logical "
+                  "indices -> offset) at dim "
+               << dim << ": b[" << (i + 1) << "] (" << next << ") != 2 * b["
+               << i << "] (" << (2 * curr) << ")";
+      }
+    }
+
+    // The MSB must span half of this projected offset range, making the
+    // non-pow2 dimension the slowest-moving dimension of the view.
+    int32_t msbBasis = dimToOffset.getBasis(dimName, log2M2 - 1, kOffset);
+    int32_t expectedMsbBasis = static_cast<int32_t>(projectedOffsetRange / 2);
+    if (msbBasis != expectedMsbBasis) {
+      return emitError() << "non-power-of-two dimension " << m
+                         << " has unexpected MSB basis in inverted layout "
+                            "view (logical indices -> offset) at dim "
+                         << dim << ": b[" << (log2M2 - 1) << "] (" << msbBasis
+                         << ") != offsetRange/2 (" << expectedMsbBasis << ")";
+    }
+  }
+  return success();
+}
+
 Type MemDescType::parse(AsmParser &parser) {
   Location loc = parser.getEncodedSourceLoc(parser.getCurrentLocation());
   if (failed(parser.parseLess()))
@@ -110,7 +179,8 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
   auto layoutEncoding = dyn_cast_if_present<LayoutEncodingTrait>(encoding);
   if (!layoutEncoding ||
       !isa<nvidia_gpu::TensorMemoryEncodingAttr, SharedEncodingTrait,
-           nvidia_gpu::TensorMemoryScalesEncodingAttr>(encoding))
+           nvidia_gpu::TensorMemoryScalesEncodingAttr,
+           nvidia_gpu::TensorMemoryLUTEncodingAttr>(encoding))
     return emitError() << encoding << " is not a valid encoding";
   auto rank = layoutEncoding.getRank();
   if (isa<nvidia_gpu::TensorMemoryEncodingAttr>(encoding)) {
@@ -122,21 +192,32 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
                          << "the shape size. Got " << rank << " and "
                          << shape.size();
   } else {
-    assert(isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(encoding) &&
-           "expected tensor-memory scales encoding");
-    if (shape.size() != 2)
-      return emitError() << "tensor-memory scale descriptors must have rank 2; "
-                         << "got " << shape.size();
+    assert((isa<nvidia_gpu::TensorMemoryScalesEncodingAttr,
+                nvidia_gpu::TensorMemoryLUTEncodingAttr>(encoding)) &&
+           "expected tensor-memory scales or LUT encoding");
+    if (shape.size() != 2) {
+      if (isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(encoding))
+        return emitError()
+               << "tensor-memory scale descriptors must have rank 2; got "
+               << shape.size();
+      return emitError() << "tensor-memory LUT descriptors must have rank 2; "
+                            "got "
+                         << shape.size();
+    }
   }
   // Every layout dimension must be a power of 2; only a leading pipeline
-  // dimension may have another positive size.
+  // dimension may have another positive size. The limited non-pow2
+  // relaxation is restricted to MMA operand layouts whose physical envelope
+  // is checked below.
   ArrayRef<int64_t> layoutShape = dropPipeliningDim(shape, encoding);
   ArrayRef<int64_t> layoutAllocShape = dropPipeliningDim(allocShape, encoding);
-  if (!llvm::all_of(layoutShape, llvm::isPowerOf2_64))
+  bool allowNonPow2 =
+      isa<SharedLinearEncodingAttr, NVMMASharedEncodingAttr>(encoding);
+  if (!allowNonPow2 && !llvm::all_of(layoutShape, llvm::isPowerOf2_64))
     return emitError()
            << "shape must have power-of-2 and non-zero dimensions; got "
            << shape;
-  if (!llvm::all_of(layoutAllocShape, llvm::isPowerOf2_64))
+  if (!allowNonPow2 && !llvm::all_of(layoutAllocShape, llvm::isPowerOf2_64))
     return emitError()
            << "alloc shape must have power-of-2 and non-zero dimensions; got "
            << allocShape;
@@ -200,6 +281,19 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     if (bitwidth != 8) {
       return emitError() << "bitwidth must be 8";
     }
+  } else if (auto enc =
+                 dyn_cast<nvidia_gpu::TensorMemoryLUTEncodingAttr>(encoding)) {
+    if (memorySpace != nvidia_gpu::TensorMemorySpaceAttr::get(ctx)) {
+      return emitError() << "memorySpace must be TensorMemorySpace";
+    }
+    if (allocShape.size() != 2) {
+      return emitError() << "LUT doesn't currently support multibuffering";
+    }
+    if (elementType.getIntOrFloatBitWidth() != 8) {
+      return emitError() << "bitwidth must be 8";
+    }
+  } else {
+    return emitError() << encoding << " is not a valid encoding";
   }
 
   // PaddedSharedEncodingAttr is also a SharedEncodingTrait but we have some
@@ -227,15 +321,51 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
                                 enc.getTransposed(), /*packedSize=*/false,
                                 emitError, TMAMode::Tiled)))
       return failure();
+    auto packedTMABlockShape = getTMABlockShape(
+        blockShape, enc.getElementBitWidth(), enc.getSwizzlingByteWidth(),
+        enc.getFp4Padded(), enc.getTransposed(), /*packedSize=*/true,
+        TMAMode::Tiled);
+    for (auto [dim, dimShapes] :
+         llvm::enumerate(llvm::zip(blockShape, packedTMABlockShape))) {
+      auto [dimSize, tmaBlockSize] = dimShapes;
+      if (dimSize % tmaBlockSize != 0)
+        return emitError() << "shapePerCTA size " << dimSize
+                           << " must be divisible by its TMA block size "
+                           << tmaBlockSize << " (dim " << dim << ")";
+      int64_t numMessages = dimSize / tmaBlockSize;
+      if (!llvm::isPowerOf2_64(numMessages))
+        return emitError() << "number of TMA messages per CTA (" << numMessages
+                           << ") must be a power of two (dim " << dim
+                           << ", dimSize=" << dimSize
+                           << ", tmaBlockSize=" << tmaBlockSize << ")";
+      if (numMessages > 1 && !llvm::isPowerOf2_64(dimSize))
+        return emitError()
+               << "non-power-of-two dimension " << dimSize
+               << " is unsupported when split across multiple messages (dim "
+               << dim << ", numMessages=" << numMessages << ")";
+    }
   } else if (auto enc = dyn_cast<SharedLinearEncodingAttr>(encoding)) {
     auto blockShape = dropPipeliningDim(allocShape, enc);
     const LinearLayout &ll = enc.getLinearLayout();
     for (auto [dim, size, llSize] :
          llvm::enumerate(blockShape, ll.getOutDimSizes())) {
-      if (size == llSize)
+      if (llvm::PowerOf2Ceil(size) == llSize)
         continue;
       return emitError() << "Mismatch in expected shape for dimension " << dim
-                         << ". Expected: " << size << ", got: " << llSize;
+                         << ". Expected in [1, " << llSize
+                         << "], got: " << size;
+    }
+  }
+
+  if (isa<SharedLinearEncodingAttr, NVMMASharedEncodingAttr>(encoding)) {
+    auto shared = cast<SharedEncodingTrait>(encoding);
+    auto rank = cast<LayoutEncodingTrait>(shared).getRank();
+    auto blockShape = ArrayRef(allocShape).take_back(rank);
+    if (!isPositivePowerOfTwoShape(blockShape)) {
+      auto ll = toLinearLayout(normalizeShapeToPowerOf2(blockShape), encoding);
+      if (failed(
+              verifyNonPow2InvertedLayoutInvariant(emitError, blockShape, ll)))
+        return failure();
     }
   }
 

@@ -61,6 +61,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
+#blocked_lut_alloc = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#tmem_f32_lut_alloc = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#tmem_lut_alloc = #ttng.tensor_memory_lut_encoding<>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @alloc_with_lut
+  tt.func public @alloc_with_lut() {
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+    %0 = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmem_f32_lut_alloc, #ttng.tensor_memory, mutable>
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 128 : i32, tensor_memory_row_offset = 0 : i32}
+    %1 = ttng.tmem_alloc : () -> !ttg.memdesc<32x16xi8, #tmem_lut_alloc, #ttng.tensor_memory, mutable>
+    // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 132 : i32, tensor_memory_row_offset = 0 : i32}
+    %2 = ttng.tmem_alloc : () -> !ttg.memdesc<32x16xi8, #tmem_lut_alloc, #ttng.tensor_memory, mutable>
+    "test.use"(%0, %1, %2) : (!ttg.memdesc<128x128xf32, #tmem_f32_lut_alloc, #ttng.tensor_memory, mutable>, !ttg.memdesc<32x16xi8, #tmem_lut_alloc, #ttng.tensor_memory, mutable>, !ttg.memdesc<32x16xi8, #tmem_lut_alloc, #ttng.tensor_memory, mutable>) -> ()
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 
