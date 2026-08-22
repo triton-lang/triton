@@ -838,6 +838,7 @@ def test_within_2gb(device, fresh_triton_cache) -> None:
         for use_buffer_ops, pointer_range in zip(use_buffer_ops_opts, pointer_ranges):
             # Set AMDGCN_USE_BUFFER_OPS
             os.environ["AMDGCN_USE_BUFFER_OPS"] = use_buffer_ops
+            triton.knobs.refresh_knobs()
 
             @triton.jit
             def kernel_add(a):
@@ -864,6 +865,7 @@ def test_within_2gb(device, fresh_triton_cache) -> None:
             assert pointer_range_32 == pointer_range
     finally:
         os.environ["AMDGCN_USE_BUFFER_OPS"] = default_buffer_ops
+        triton.knobs.refresh_knobs()
 
 
 def test_function_arguments(device):
