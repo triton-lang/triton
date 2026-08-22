@@ -814,19 +814,23 @@ void init_gluon_ir(py::module_ &m) {
                return ttg::bankConflictsMemDesc(regLayout, smemLayout,
                                                 bitwidth);
              tt::AMD::TargetInfo targetInfo(arch->str());
-             int numBanks = targetInfo.getSharedMemoryBanks();
-             auto vecBitwidth = std::max<int32_t>(
-                 32, smemLayout.getInDimSize(StringAttr::get(
-                         smemLayout.getInDimNames().begin()->getContext(),
-                         "vector")) *
-                         bitwidth);
+             auto *ctx = self.getContext();
+             auto kVec = StringAttr::get(ctx, "vector");
+             auto kReg = StringAttr::get(ctx, "register");
+             auto vecBitwidth = smemLayout.getInDimSize(kVec) * bitwidth;
+             auto numLoadElems =
+                 regLayout.removeZeroBasesAlongDim(kReg).getInDimSize(kReg);
+             auto [numBanksDst, numBanksSrc] =
+                 targetInfo.getSharedMemoryLdStBanks(vecBitwidth, bitwidth,
+                                                     numLoadElems);
+             (void)numBanksSrc;
              auto [dstTile, srcTile] =
                  targetInfo.getSharedLdStTiles(vecBitwidth);
              (void)srcTile;
              assert(srcTile.laneAddr.empty() &&
                     "srcTile.laneAddr should be empty");
              return ttg::bankConflictsMemDesc(regLayout, smemLayout, bitwidth,
-                                              numBanks, dstTile);
+                                              numBanksDst, dstTile);
            })
       .def(
           "create_local_dealloc",

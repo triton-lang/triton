@@ -18,15 +18,20 @@ unsigned getConvertLayoutScratchInBytes(gpu::ConvertLayoutOp op,
     return 0;
   auto srcTy = op.getSrc().getType();
   auto dstTy = op.getType();
-  int numBanks = targetInfo.getSharedMemoryBanks();
   auto srcLayout = gpu::toLinearLayout(srcTy);
   auto dstLayout = gpu::toLinearLayout(dstTy);
   auto bitwidth = getBitwidth(srcTy);
   auto vecBitwidth =
       triton::gpu::getVecBitwidthLdSt(srcLayout, dstLayout, bitwidth);
+  auto kReg = StringAttr::get(srcTy.getContext(), "register");
+  auto numLoadElems =
+      dstLayout.removeZeroBasesAlongDim(kReg).getInDimSize(kReg);
+  auto [numBanksDst, numBanksSrc] =
+      targetInfo.getSharedMemoryLdStBanks(vecBitwidth, bitwidth, numLoadElems);
   auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
-  unsigned elems = getNumScratchElemsSwizzledCvt(srcLayout, dstLayout, bitwidth,
-                                                 numBanks, srcTile, dstTile);
+  unsigned elems =
+      getNumScratchElemsSwizzledCvt(srcLayout, dstLayout, bitwidth, numBanksSrc,
+                                    numBanksDst, srcTile, dstTile);
   return elems * bitwidth / 8;
 }
 
@@ -57,12 +62,17 @@ unsigned AMDAllocationAnalysisScratchSizeFn(Operation *op,
     ReduceOpHelper::GetNumScratchElemsFn AMDGetNumScratchElemsFn =
         [&targetInfo](const triton::LinearLayout &src,
                       const triton::LinearLayout &dst, unsigned bitwidth) {
-          int numBanks = targetInfo.getSharedMemoryBanks();
           auto vecBitwidth =
               triton::gpu::getVecBitwidthLdSt(src, dst, bitwidth);
+          auto *ctx = src.getInDimNames().begin()->getContext();
+          auto kReg = StringAttr::get(ctx, "register");
+          auto numLoadElems =
+              dst.removeZeroBasesAlongDim(kReg).getInDimSize(kReg);
+          auto [numBanksDst, numBanksSrc] = targetInfo.getSharedMemoryLdStBanks(
+              vecBitwidth, bitwidth, numLoadElems);
           auto [dstTile, srcTile] = targetInfo.getSharedLdStTiles(vecBitwidth);
-          return getNumScratchElemsSwizzledCvt(src, dst, bitwidth, numBanks,
-                                               srcTile, dstTile);
+          return getNumScratchElemsSwizzledCvt(src, dst, bitwidth, numBanksSrc,
+                                               numBanksDst, srcTile, dstTile);
         };
     return ReduceOpHelper(reduceOp).getScratchSizeInBytes(
         AMDGetNumScratchElemsFn);

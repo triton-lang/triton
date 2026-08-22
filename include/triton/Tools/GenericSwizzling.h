@@ -26,8 +26,14 @@ struct LocalMemOpTile {
   // If laneAddr.size() < 3, we assume that the first
   // 3 - laneAddr.size() bases are registers
   llvm::SmallVector<int32_t> laneAddr;
+  // A set of bitmasks representing the basis vectors whose span defines the
+  // phase 0 lane ID subspace. This is used to track which parallel lane
+  // addresses are processed together in the same hardware execution phase for
+  // shared memory bank conflict accounting.
+  llvm::SmallVector<int32_t> laneMask;
 
   llvm::SmallVector<int32_t> getLaneAddr(llvm::ArrayRef<int32_t> lane) const;
+  llvm::SmallVector<int32_t> getLaneMask(llvm::ArrayRef<int32_t> lane) const;
 };
 
 // Given a set of possible instructions given by
@@ -44,16 +50,16 @@ int32_t getVecBitwidthLdSt(const LinearLayout &src, const LinearLayout &dst,
 
 LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
                                   const LinearLayout &dst, int32_t bitwidth,
-                                  int32_t numBanks = 32,
+                                  int32_t numBanksSrc = 32,
+                                  int32_t numBanksDst = 32,
                                   LocalMemOpTile srcTile = {},
                                   LocalMemOpTile dstTile = {});
 
-std::pair<int, int> bankConflictsLdSt(const LinearLayout &src,
-                                      const LinearLayout &dst,
-                                      const LinearLayout &smem,
-                                      int32_t bitwidth, int32_t numBanks = 32,
-                                      LocalMemOpTile srcTile = {},
-                                      LocalMemOpTile dstTile = {});
+std::pair<int, int>
+bankConflictsLdSt(const LinearLayout &src, const LinearLayout &dst,
+                  const LinearLayout &smem, int32_t bitwidth,
+                  int32_t numBanksSrc = 32, int32_t numBanksDst = 32,
+                  LocalMemOpTile srcTile = {}, LocalMemOpTile dstTile = {});
 
 int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
                          int32_t bitwidth, int32_t numBanks = 32,
@@ -61,7 +67,9 @@ int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
 
 std::pair<int, int> bankConflicts(llvm::ArrayRef<int32_t> tileSrc,
                                   llvm::ArrayRef<int32_t> tileDst,
-                                  const LinearLayout &smem);
+                                  const LinearLayout &smem, int32_t bitwidth,
+                                  int32_t numBanksSrc = 32,
+                                  int32_t numBanksDst = 32);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_GENERIC_SWIZZLING_H
