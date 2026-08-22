@@ -346,11 +346,12 @@ void ClusterBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
   // read/write operations, and ending with a shared memory read, i.e., shared
   // memory write -> ... -> shared memory read.
   if (scratchBufferId != Allocation::InvalidBufferId) {
-    if (!curBlockInfo.syncReadSlices.empty() ||
-        !curBlockInfo.syncWriteSlices.empty()) {
+    if ((!curBlockInfo.syncReadSlices.empty() ||
+         !curBlockInfo.syncWriteSlices.empty()) &&
+        !isa<ttg::LocalAtomicScatterRMWOp>(op)) {
       llvm::report_fatal_error(
           "scratch buffer operations should not have any shared memory "
-          "dependencies");
+          "dependencies except for local_atomic_scatter_rmw");
     }
 
     auto interval = allocation.getAllocatedInterval(scratchBufferId);
