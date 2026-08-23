@@ -216,6 +216,7 @@ uint32_t getMemDescStorageOffset(ttg::MemDescType ty, unsigned index) {
 }
 
 struct MemDescSubsliceOffsets {
+  uint32_t storageOffset = 0;
   uint32_t byteOffset = 0;
   uint32_t partitionOffset = 0;
   uint32_t ctaOffset = 0;
@@ -257,19 +258,24 @@ getMemDescSubsliceUnpaddedOffsets(ttg::MemDescSubsliceOp op) {
     else if (dim == partitionDim)
       partitionOffset = static_cast<uint32_t>(offset);
   }
+  uint32_t storageElementOffset = 0;
   if (offsets.size() != layoutRank) {
     uint32_t stride = ttg::getAllocationElems(
         encoding, ttg::dropPipeliningDim(srcTy.getAllocShape(), encoding));
     if (auto partitioned =
             dyn_cast<ttg::PartitionedSharedEncodingAttr>(encoding))
       stride /= partitioned.getNumPartitions();
-    elementOffset += offsets.front() * stride;
+    // The pipeline prefix advances every base pointer by addition. Only the
+    // layout-ranked suffix composes by XOR; nested prefix offsets may carry.
+    // Padded pipeline subslices are rejected by the verifier.
+    storageElementOffset = offsets.front() * stride;
   }
 
   uint32_t elementSizeBytes =
       srcTy.getElementType().getIntOrFloatBitWidth() / 8;
   assert(elementSizeBytes > 0 && "element size must be non-zero");
-  return MemDescSubsliceOffsets{elementOffset * elementSizeBytes,
+  return MemDescSubsliceOffsets{storageElementOffset * elementSizeBytes,
+                                elementOffset * elementSizeBytes,
                                 partitionOffset, blockOffset};
 }
 
@@ -597,9 +603,9 @@ LogicalResult BufferRegionAnalysis::visitOperation(
         getMemDescSubsliceUnpaddedOffsets(memdescSubsliceOp);
     for (const BufferRegionView &view : in.views)
       regionInfo.views.insert(
-          getSubView(memdescSubsliceOp.getType(), view, /*storageOffset=*/0,
-                     relativeOffset.byteOffset, relativeOffset.partitionOffset,
-                     relativeOffset.ctaOffset));
+          getSubView(memdescSubsliceOp.getType(), view,
+                     relativeOffset.storageOffset, relativeOffset.byteOffset,
+                     relativeOffset.partitionOffset, relativeOffset.ctaOffset));
     return propagateRegions(regionInfo);
   }
   if (auto tmemSubsliceOp = dyn_cast<ttng::TMEMSubSliceOp>(op)) {
