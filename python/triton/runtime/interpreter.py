@@ -1269,6 +1269,7 @@ def _patch_lang_core(lang, scope: _LangPatchScope):
 
     scope.set_attr(lang, "range", _new_range)
     scope.set_attr(lang, "static_range", _new_range)
+    scope.set_attr(lang.condition, "__bool__", lambda self: bool(self.condition))
     scope.set_attr(lang, "static_assert", _new_static_assert)
     scope.set_attr(lang, "static_print", print)
     scope.set_attr(lang.dtype, "to_ir", _new_to_ir)
