@@ -1709,9 +1709,11 @@ def test_tcgen05_mma_scaled_k96_dependencies(vec, case, run_wrapper, monkeypatch
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() != (10, 3), reason="Requires sm103 K96")
 @pytest.mark.parametrize("fmt, buffers", [("mxfp4", 5), ("mxfp4", 6), ("nvfp4", 4), ("nvfp4", 5)])
 @pytest.mark.parametrize("clc_scheduler", [False, True])
-def test_tcgen05_mma_scaled_k96_pipeline(fmt, buffers, clc_scheduler, run_wrapper, monkeypatch):
+@pytest.mark.parametrize("example", ["experimental-tcgen05-k96.py", "07-pure-k96-matmul.py"])
+def test_tcgen05_mma_scaled_k96_pipeline(fmt, buffers, clc_scheduler, example, run_wrapper, monkeypatch):
     if run_wrapper:
-        result = run_in_process(test_tcgen05_mma_scaled_k96_pipeline, (fmt, buffers, clc_scheduler, False, monkeypatch))
+        result = run_in_process(test_tcgen05_mma_scaled_k96_pipeline,
+                                (fmt, buffers, clc_scheduler, example, False, monkeypatch))
         assert result.exc is None
         assert result.driver_stderr_output == ""
         return
@@ -1719,6 +1721,7 @@ def test_tcgen05_mma_scaled_k96_pipeline(fmt, buffers, clc_scheduler, run_wrappe
     knobs.refresh_knobs()
     from test_core import pure_k96_benchmark
     bench = pure_k96_benchmark.__wrapped__()
+    bench.experiment = bench.load_experiment(example)
     torch.manual_seed(123)
     operands, scales, refs, vec = bench.prepare(3968, 4096, 4608, fmt)
     scales = [bench.experiment.base.swizzle_scales_packed_block(scale) for scale in scales]

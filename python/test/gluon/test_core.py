@@ -5949,11 +5949,13 @@ def pure_k96_benchmark():
 
 @pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires sm103 K=96 MMA")
 @pytest.mark.parametrize("fmt", ["mxfp4", "nvfp4"])
+@pytest.mark.parametrize("example", ["experimental-tcgen05-k96.py", "07-pure-k96-matmul.py"])
 @pytest.mark.parametrize("m, n, k, clc_scheduler", [(256, 256, 768, False), (384, 512, 1536, False),
-                                                    (512, 384, 2304, True)])
-def test_tcgen05_mma_scaled_pure_k96_pipeline(pure_k96_benchmark, fmt, m, n, k, clc_scheduler):
+                                                    (512, 384, 2304, True), (3968, 4096, 4608, False),
+                                                    (500, 600, 2304, True)])
+def test_tcgen05_mma_scaled_pure_k96_pipeline(pure_k96_benchmark, fmt, example, m, n, k, clc_scheduler):
     bench = pure_k96_benchmark
-    experiment = bench.experiment
+    experiment = bench.load_experiment(example)
     torch.manual_seed(123)
     operands, scales, refs, vec = bench.prepare(m, n, k, fmt)
     scales = [experiment.base.swizzle_scales_packed_block(s) for s in scales]

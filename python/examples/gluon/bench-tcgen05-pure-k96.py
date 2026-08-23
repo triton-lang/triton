@@ -19,8 +19,8 @@ import triton
 from triton.tools.mxfp import MXFP4Tensor
 
 
-def load_experiment():
-    path = Path(__file__).with_name('experimental-tcgen05-k96.py')
+def load_experiment(filename="experimental-tcgen05-k96.py"):
+    path = Path(__file__).with_name(filename)
     spec = importlib.util.spec_from_file_location('k96_experiment', path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -146,8 +146,10 @@ def verify_frozen_cases(directory):
         (directory / 'validation.json').write_text(json.dumps(checked, indent=2) + '\n')
 
 
-def main():
+def main(default_example="experimental-tcgen05-k96.py"):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--example', choices=['experimental-tcgen05-k96.py', '07-pure-k96-matmul.py'],
+                        default=default_example)
     parser.add_argument('--size', type=int, default=8192, help='M=N; K can be set separately without padding')
     parser.add_argument('--k', type=int)
     parser.add_argument('--format', choices=['mxfp4', 'nvfp4'], default='mxfp4')
@@ -158,7 +160,10 @@ def main():
     parser.add_argument('--repeats', type=int, default=7)
     parser.add_argument('--rep-ms', type=int, default=500)
     parser.add_argument('--output', type=Path)
-    parser.add_argument('--frozen', type=Path, help='Add paired archived controls to this measurement')
+    comparison = parser.add_mutually_exclusive_group()
+    comparison.add_argument('--compare-native', action='store_true',
+                            help='Compare with the original native K96 kernel and its original scheduling')
+    comparison.add_argument('--frozen', type=Path, help='Add paired archived controls to this measurement')
     parser.add_argument('--verify-frozen', type=Path, help='Validate archived controls at every recorded shape')
     args = parser.parse_args()
     if args.buffers is None:
@@ -171,13 +176,18 @@ def main():
     if args.output is None:
         parser.error('--output is required for benchmarking')
     k = args.k if args.k is not None else args.size // 768 * 768
-    experiment = load_experiment()
+    experiment = load_experiment(args.example)
     args.output.mkdir(parents=True, exist_ok=True)
     torch.manual_seed(123)
     operands, scales, refs, vec = prepare(args.size, args.size, k, args.format)
     expected = refs[0] @ refs[1].T
     scales = [experiment.base.swizzle_scales_packed_block(s) for s in scales]
-    scheduler = args.scheduler if args.scheduler != 'auto' else ('sps' if k <= 8192 else 'clc')
+    scheduler = args.scheduler
+    if scheduler == 'auto':
+        if args.example == '07-pure-k96-matmul.py':
+            scheduler = 'clc' if vec == 16 and k > 16384 else 'sps'
+        else:
+            scheduler = 'sps' if k <= 8192 else 'clc'
     scheduler_id = experiment.SCHEDULER_SPS if scheduler == 'sps' else experiment.SCHEDULER_CLC
     config = dict(experiment.base.BEST_2CTA_CONFIG, scheduler=scheduler_id, num_buffers=5)
     selected = {}
@@ -190,25 +200,39 @@ def main():
 
     experiment.base.mma_scaled_warp_specialized_kernel.run = capture
     root = Path(__file__).resolve().parents[3]
+    from triton.backends.nvidia.compiler import get_ptxas, get_ptxas_version
+    assembler = get_ptxas(torch.cuda.get_device_capability()[0] * 10 + torch.cuda.get_device_capability()[1])
     report = dict(
         commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),
         diff_sha256=hashlib.sha256(subprocess.check_output(['git', 'diff', 'HEAD'], cwd=root)).hexdigest(),
         source_sha256=hashlib.sha256(Path(experiment.__file__).read_bytes()).hexdigest(),
         compiler_library_sha256=hashlib.sha256(Path(triton._C.libtriton.__file__).read_bytes()).hexdigest(),
-        torch=torch.__version__, triton=triton.__file__, gpu_before=gpu_state(),
-        method='same inputs; alternating order; CUDA graphs; no L2 flush', seed=123, scale_values=[
-            0.125, 0.25, 0.5, 1.0
-        ], args={key: str(value) if isinstance(value, Path) else value
-                 for key, value in vars(args).items()} | dict(k=k, scheduler=scheduler), results=[])
+        torch=torch.__version__, triton=triton.__file__, gpu_before=gpu_state(), ptxas_path=assembler.path,
+        ptxas_sha256=hashlib.sha256(Path(assembler.path).read_bytes()).hexdigest(),
+        ptxas_version=get_ptxas_version(103), method='same inputs; alternating order; CUDA graphs; no L2 flush',
+        seed=123, scale_values=[0.125, 0.25, 0.5, 1.0],
+        args={key: str(value) if isinstance(value, Path) else value
+              for key, value in vars(args).items()} | dict(k=k, scheduler=scheduler), results=[])
     (args.output / 'source.py').write_bytes(Path(experiment.__file__).read_bytes())
+    if args.compare_native:
+        reference_path = Path(__file__).with_name('experimental-tcgen05-k96.py')
+        (args.output / 'reference-source.py').write_bytes(reference_path.read_bytes())
+        report['reference_source_sha256'] = hashlib.sha256(reference_path.read_bytes()).hexdigest()
     functions = []
     baseline = None
-    for mode in args.modes:
+    for mode in args.modes + (["reference"] if args.compare_native else []):
         if mode in ('k64', 'mixed'):
 
             def fn(mode=mode, config=config):
                 return experiment.base.mma_scaled_warp_specialized(*operands, *scales, vec,
                                                                    enable_fp4_k96=mode == 'mixed', **config)
+        elif mode == "reference":
+            reference = load_experiment()
+
+            def fn():
+                out, compiled = reference.matmul(*operands, *scales, vec)
+                selected['kernel'] = compiled
+                return out
         else:
 
             def fn(mode=mode):
@@ -222,11 +246,13 @@ def main():
         for ext in ('ptx', 'ttgir', 'cubin'):
             data = compiled.asm[ext]
             (args.output / f'{mode}.{ext}').write_bytes(data if isinstance(data, bytes) else data.encode())
+        FrozenKernel.archive(compiled, args.output / mode)
         torch.cuda.synchronize()
         torch.testing.assert_close(out.float(), expected, atol=1e-3, rtol=1e-3)
         if baseline is None:
             baseline = out
-        row = dict(mode=mode, correct=True, kernel_hash=compiled.hash, compiler_metadata=compiled.metadata._asdict() | dict(target=asdict(compiled.metadata.target)),
+        row = dict(mode=mode, correct=True, kernel_hash=compiled.hash,
+                   compiler_metadata=compiled.metadata._asdict() | dict(target=asdict(compiled.metadata.target)),
                    shared=compiled.metadata.shared, tmem=compiled.metadata.tmem_size,
                    cubin_sha256=hashlib.sha256(compiled.asm['cubin']).hexdigest(),
                    ptx_mmas=compiled.asm['ptx'].count('tcgen05.mma.'),
@@ -238,8 +264,9 @@ def main():
         index = json.loads((args.frozen / 'index.json').read_text())
         for mode in args.modes:
             native = mode in ('k64', 'mixed')
-            config = dict(format=args.format, mode='pure' if mode == 'native' else mode, block_k=256, buffers=5 if native else args.buffers,
-                          epilogue=64 if native else args.epilogue, scheduler=scheduler)
+            config = dict(format=args.format, mode='pure' if mode == 'native' else mode, block_k=256,
+                          buffers=5 if native else args.buffers, epilogue=64 if native else args.epilogue,
+                          scheduler=scheduler)
             matched = next(c for c in index['controls'] if control_key(c) == control_key(config))
             frozen = FrozenKernel(args.frozen / matched['cubin_sha256'])
 
@@ -294,12 +321,16 @@ def main():
             # remaining calls, and replays that graph ten times.
             executions = 10 * (calls - 6)
             report['results'][i].setdefault('device_executions', []).append(executions)
-            if args.frozen is not None and args.repeats >= 7:
+            if (args.frozen is not None or args.compare_native) and args.repeats >= 7:
                 assert executions >= 300, "increase --rep-ms to capture at least 300 device executions"
     for row in report['results']:
         row['median_ms'] = statistics.median(row['ms'])
         row['pflops'] = 2 * args.size**2 * k / (row['median_ms'] * 1e12)
         print(json.dumps(row), flush=True)
+    if args.compare_native:
+        reference_ms = next(row['median_ms'] for row in report['results'] if row['mode'] == 'reference')
+        for row in report['results']:
+            row['latency_ratio_vs_reference'] = row['median_ms'] / reference_ms
     if args.frozen is not None:
         rows = {row['mode']: row for row in report['results']}
         for mode in args.modes:
