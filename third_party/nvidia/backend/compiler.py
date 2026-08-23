@@ -119,7 +119,7 @@ class CUDAOptions:
     ir_override: Optional[str] = None  # filename of a user-defined IR (*.{ttir|ttgir|llir|ptx})
     enable_fp_fusion: bool = True
     # Experimental packed 96+96+64 decomposition on sm103, 2CTA FP4 MMA.
-    enable_fp4_k96: bool = False
+    enable_fp4_k96: bool = True
     enable_reflect_ftz: bool = True  # ftz in libdevice
     launch_cooperative_grid: bool = False
     launch_pdl: bool = False

@@ -230,7 +230,7 @@ def main():
     parser.add_argument('--size', type=int, default=8192, help='M=N; K can be set separately without padding')
     parser.add_argument('--k', type=int)
     parser.add_argument('--format', choices=['mxfp4', 'nvfp4'], default='mxfp4')
-    parser.add_argument('--modes', nargs='+', choices=['k64', 'mixed', 'raw', 'pure', 'exact192', 'exact384'],
+    parser.add_argument('--modes', nargs='+', choices=['k64', 'mixed', 'raw', 'pure', 'native', 'exact192', 'exact384'],
                         default=['k64', 'mixed', 'raw', 'pure'])
     parser.add_argument('--buffers', type=int, default=6,
                         help='Experimental modes only; native controls retain five buffers')
@@ -277,14 +277,15 @@ def main():
                   torch=torch.__version__, triton=triton.__file__, gpu_before=gpu_state(),
                   method='same inputs; alternating order; CUDA graphs; no L2 flush', seed=123,
                   scale_values=[0.125, 0.25, 0.5, 1.0],
-                  args=vars(args) | dict(output=str(args.output), k=k, scheduler=scheduler), results=[])
+                  args={key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()} |
+                  dict(k=k, scheduler=scheduler), results=[])
     (args.output / 'source.py').write_bytes(Path(experiment.__file__).read_bytes())
     functions = []
     baseline = None
     for mode in args.modes:
         if mode in ('k64', 'mixed'):
 
-            def fn(mode=mode):
+            def fn(mode=mode, config=config):
                 return experiment.base.mma_scaled_warp_specialized(*operands, *scales, vec,
                                                                    enable_fp4_k96=mode == 'mixed', **config)
         else:
@@ -315,7 +316,7 @@ def main():
         index = json.loads((args.frozen / 'index.json').read_text())
         for mode in args.modes:
             native = mode in ('k64', 'mixed')
-            config = dict(format=args.format, mode=mode, block_k=256, buffers=5 if native else args.buffers,
+            config = dict(format=args.format, mode='pure' if mode == 'native' else mode, block_k=256, buffers=5 if native else args.buffers,
                           epilogue=64 if native else args.epilogue, scheduler=scheduler)
             matched = next(c for c in index['controls'] if control_key(c) == control_key(config))
             frozen = FrozenKernel(args.frozen / matched['cubin_sha256'])
@@ -339,7 +340,20 @@ def main():
     for repeat in range(args.repeats):
         order = range(len(functions)) if repeat % 2 == 0 else reversed(range(len(functions)))
         for i in order:
-            report['results'][i]['ms'].append(triton.testing.do_bench_cudagraph(functions[i], rep=args.rep_ms))
+            calls = 0
+
+            def timed():
+                nonlocal calls
+                calls += 1
+                return functions[i]()
+
+            report['results'][i]['ms'].append(triton.testing.do_bench_cudagraph(timed, rep=args.rep_ms))
+            # do_bench_cudagraph makes six warmup/estimation calls, captures the
+            # remaining calls, and replays that graph ten times.
+            executions = 10 * (calls - 6)
+            report['results'][i].setdefault('device_executions', []).append(executions)
+            if args.frozen is not None and args.repeats >= 7:
+                assert executions >= 300, "increase --rep-ms to capture at least 300 device executions"
     for row in report['results']:
         row['median_ms'] = statistics.median(row['ms'])
         row['pflops'] = 2 * args.size**2 * k / (row['median_ms'] * 1e12)

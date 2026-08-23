@@ -804,9 +804,16 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     I1:$pred,
     Variadic<TTG_MemDescType>:$barriers,
     Variadic<I1>:$barrier_preds,
+    Optional<TTG_MemDescType>:$a_next,
+    Optional<TTG_MemDescType>:$b_next,
     UnitAttr:$two_ctas,
     UnitAttr:$multicast,
-    UnitAttr:$is_async
+    UnitAttr:$is_async,
+    OptionalAttr<DenseI32ArrayAttr>:$k_range,
+    OptionalAttr<I32Attr>:$instruction_k,
+    OptionalAttr<I32Attr>:$scale_block_size,
+    DefaultValuedAttr<I32Attr, "0">:$a_scale_offset,
+    DefaultValuedAttr<I32Attr, "0">:$b_scale_offset
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
 
@@ -814,6 +821,8 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     int64_t getBlockM();
     int64_t getBlockN();
     int64_t getBlockK();
+    int64_t getKStart();
+    int64_t getScaleVecSize();
   }];
 
   let builders = [
@@ -835,6 +844,8 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
   let assemblyFormat = [{
     $a `,` $b `,` $d `` custom<Token>($acc_dep, type($token)) `,` $a_scale `,`
     $b_scale `,` $useD `,` $pred `lhs` `=` $a_type `rhs` `=` $b_type
+    (`a_next` $a_next^ `:` qualified(type($a_next)))?
+    (`b_next` $b_next^ `:` qualified(type($b_next)))?
     `` custom<BarriersAndPreds>($barriers, $barrier_preds)
     attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
     qualified(type($d)) `,` qualified(type($a_scale)) `,`

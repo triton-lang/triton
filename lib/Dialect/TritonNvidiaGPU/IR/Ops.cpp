@@ -34,6 +34,8 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/NvmmaSmemAttrs.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/TargetFeatures.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.cpp.inc"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
@@ -1404,6 +1406,76 @@ verifyScaleBlockRepOrder(TCGen5MMAScaledOp op,
 }
 
 LogicalResult TCGen5MMAScaledOp::verify() {
+  auto range = getKRangeAttr();
+  if (range && (range.size() != 2 || range.asArrayRef()[0] < 0 ||
+                range.asArrayRef()[1] <= range.asArrayRef()[0]))
+    return emitOpError("k_range must be a nonempty half-open K interval");
+  bool partial = range || getANext() || getBNext();
+  bool fp4 = getAType() == ScaleDotElemType::E2M1 &&
+             getBType() == ScaleDotElemType::E2M1;
+  if (partial && (!fp4 || !getScaleBlockSize()))
+    return emitOpError("partial K requires packed e2m1 operands and an explicit scale_block_size");
+  if (auto size = getScaleBlockSize(); size && *size != 16 && *size != 32)
+    return emitOpError("scale_block_size must be 16 or 32");
+  if (auto width = getInstructionK()) {
+    if (!llvm::is_contained({32, 64, 96, 128}, *width) ||
+        getBlockK() % *width != 0)
+      return emitOpError("instruction_k must exactly divide the selected K extent");
+    if (*width == 96 && (!fp4 || !getTwoCtas()))
+      return emitOpError("K96 requires two-CTA e2m1 x e2m1 MMA");
+    if (*width == 96) {
+      auto module = (*this)->getParentOfType<ModuleOp>();
+      if (module->hasAttr(triton::gpu::AttrTargetName) &&
+          !TargetFeatures::fromModuleOp(module).supportsK96Tcgen05MMA())
+        return emitOpError("K96 requires sm103");
+    }
+  }
+  if (partial || getInstructionK() == 96) {
+    if (getKStart() % 32 != 0)
+      return emitOpError("packed K window must start at a 16-byte boundary");
+    auto verifySource = [&](TypedValue<MemDescType> first, Value next,
+                            bool isA) -> LogicalResult {
+      auto type = first.getType();
+      if (type.getRank() != 2 || !type.getElementType().isInteger(8) ||
+          !isa<SharedMemorySpaceAttr>(type.getMemorySpace()))
+        return emitOpError("K96 operands must be two-dimensional packed shared-memory views");
+      auto attrs = getNvmmaSmemAttrs(type);
+      if (!attrs || attrs->swizzlingByteWidth != 128 || attrs->fp4Padded ||
+          attrs->transposed == isA)
+        return emitOpError("K96 operands require K-major, non-padded 128-byte swizzling");
+      int kDim = isA ? 1 : 0;
+      int64_t firstK = type.getShape()[kDim] * 2;
+      int64_t available = firstK;
+      if (next) {
+        auto nextTy = cast<MemDescType>(next.getType());
+        auto nextAttrs = getNvmmaSmemAttrs(nextTy);
+        if (nextTy.getRank() != 2 || nextTy.getElementType() != type.getElementType() ||
+            nextTy.getMemorySpace() != type.getMemorySpace() ||
+            nextTy.getShape()[1 - kDim] != type.getShape()[1 - kDim] ||
+            triton::gpu::getCGALayout(nextTy.getEncoding()) != triton::gpu::getCGALayout(type.getEncoding()) ||
+            !nextAttrs || nextAttrs->swizzlingByteWidth != 128 ||
+            nextAttrs->fp4Padded || nextAttrs->transposed != attrs->transposed)
+          return emitOpError("continuation must have a compatible packed shared-memory layout");
+        available += nextTy.getShape()[kDim] * 2;
+        if (getInstructionK() != 96)
+          return emitOpError("continuation requires instruction_k=96");
+      }
+      if (getKStart() >= firstK || getKStart() + getBlockK() > available)
+        return emitOpError("selected K interval exceeds the operand views");
+      return success();
+    };
+    if (failed(verifySource(getA(), getANext(), true)) ||
+        failed(verifySource(getB(), getBNext(), false)))
+      return failure();
+    if (getScaleVecSize() != 16 && getScaleVecSize() != 32)
+      return emitOpError("K96 requires block16 or block32 scales");
+    if (getAScaleOffset() < 0 || getBScaleOffset() < 0 ||
+        getAScaleOffset() + llvm::divideCeil(getBlockK(), getScaleVecSize()) > getAScale().getType().getShape().back() ||
+        getBScaleOffset() + llvm::divideCeil(getBlockK(), getScaleVecSize()) > getBScale().getType().getShape().back())
+      return emitOpError("selected scale interval exceeds the scale views");
+    if (getScaleVecSize() == 16 && ((getAScaleOffset() | getBScaleOffset()) & 1))
+      return emitOpError("block16 K96 scale offsets must be even");
+  }
   if (!getIsAsync() && !getBarriers().empty()) {
     return emitOpError("The op is synchronous but a barrier is present.");
   }
@@ -1495,6 +1567,10 @@ void TCGen5MMAScaledOp::getEffects(
   }
   effects.push_back(
       makeShared<MemoryEffects::Read>(&getBMutable(), SharedKind::Async));
+  if (getANext())
+    effects.push_back(makeShared<MemoryEffects::Read>(&getANextMutable()[0], SharedKind::Async));
+  if (getBNext())
+    effects.push_back(makeShared<MemoryEffects::Read>(&getBNextMutable()[0], SharedKind::Async));
   effects.emplace_back(MemoryEffects::Read::get(), &getAScaleMutable(),
                        TensorMemory::get());
   effects.emplace_back(MemoryEffects::Read::get(), &getBScaleMutable(),
@@ -1505,6 +1581,8 @@ void TCGen5MMAScaledOp::getEffects(
 }
 
 bool TCGen5MMAScaledOp::verifyDims() {
+  if (getKRangeAttr() || getANext() || getBNext())
+    return true; // Exact interval bounds are checked by the operation verifier.
   auto aShape = this->getA().getType().getShape();
   auto bShape = this->getB().getType().getShape();
 
@@ -1573,6 +1651,10 @@ SmallVector<Value> TCGen5MMAScaledOp::getCompletionDescs() {
   if (getMulticast()) {
     appendMulticastDesc(descs, getA());
     appendMulticastDesc(descs, getB());
+    if (getANext())
+      appendMulticastDesc(descs, getANext());
+    if (getBNext())
+      appendMulticastDesc(descs, getBNext());
     appendMulticastDesc(descs, getAScale());
     appendMulticastDesc(descs, getBScale());
   }
@@ -1630,7 +1712,20 @@ int64_t TCGen5MMAScaledOp::getBlockN() {
   return blockN;
 }
 
+int64_t TCGen5MMAScaledOp::getKStart() {
+  auto range = getKRangeAttr();
+  return range && range.size() == 2 ? range.asArrayRef()[0] : 0;
+}
+
+int64_t TCGen5MMAScaledOp::getScaleVecSize() {
+  if (auto size = getScaleBlockSize())
+    return *size;
+  return getBlockK() / getAScale().getType().getShape().back();
+}
+
 int64_t TCGen5MMAScaledOp::getBlockK() {
+  if (auto range = getKRangeAttr(); range && range.size() == 2)
+    return range.asArrayRef()[1] - range.asArrayRef()[0];
   ArrayRef<int64_t> shape = getA().getType().getShape();
   int64_t blockK = shape[shape.size() - 1];
   bool transA = false;
@@ -1657,9 +1752,12 @@ void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
   build(builder, state, token, a, b, d, accDep, aScale, bScale,
         ScaleDotElemTypeAttr::get(ctx, aType),
         ScaleDotElemTypeAttr::get(ctx, bType), useD, pred, barriers,
-        barrierPreds, twoCTAs ? builder.getUnitAttr() : UnitAttr(),
+        barrierPreds, Value(), Value(),
+        twoCTAs ? builder.getUnitAttr() : UnitAttr(),
         multicast ? builder.getUnitAttr() : UnitAttr(),
-        isAsync ? builder.getUnitAttr() : UnitAttr());
+        isAsync ? builder.getUnitAttr() : UnitAttr(), DenseI32ArrayAttr(),
+        IntegerAttr(), IntegerAttr(), builder.getI32IntegerAttr(0),
+        builder.getI32IntegerAttr(0));
 }
 
 bool TCGen5MMAScaledOp::isAsync() { return getIsAsync(); }

@@ -9,7 +9,7 @@ import triton.experimental.gluon.language as gl
 from triton.experimental.gluon.language._core import builtin
 from triton.experimental.gluon.language.nvidia.blackwell import (TensorMemoryLayout, TensorMemoryScalesLayout,
                                                                  allocate_tensor_memory, tcgen05_copy, tcgen05_commit,
-                                                                 tcgen05_mma_barrier_count, mbarrier, tma)
+                                                                 tcgen05_mma_barrier_count, tcgen05_mma_scaled, mbarrier, tma)
 
 _base_path = Path(__file__).with_name('04-2cta-block-scale-matmul.py')
 _spec = importlib.util.spec_from_file_location('k96_base', _base_path)
@@ -252,6 +252,70 @@ def raw_mma_partition(p, MODE: gl.constexpr):
 
 
 @gluon.jit
+def native_mma_partition(p, MODE: gl.constexpr):
+    K = p.a_desc.shape[1] * 2
+    VEC: gl.constexpr = 32 if p.a_scale_desc.dtype == gl.uint8 else 16
+    load_state = Counter.create(0, p.load_empty_bars.shape[0])
+    acc_state = Counter.create(1, p.acc_empty_bars.shape[0])
+    if p.scheduler == SCHEDULER_CLC:
+        scheduler = p.get_clc_consumer()
+    else:
+        scheduler = p.get_sps_scheduler()
+    sa = allocate_tensor_memory(p.a_scale_desc.dtype, [256, 1024 // VEC], TensorMemoryScalesLayout([[1, 0]]))
+    sb = allocate_tensor_memory(p.b_scale_desc.dtype, [256, 1024 // VEC], TensorMemoryScalesLayout([[0, 0]]))
+    i = 0
+    while scheduler.has_work:
+        mbarrier.wait(p.acc_empty_bars.index(acc_state.index), acc_state.phase)
+        acc = p.acc_bufs.index(acc_state.index)
+        use_acc = False
+        for k in range(0, K, 768):
+            s0 = load_state
+            s1 = s0.next()
+            s2 = s1.next()
+            a0, b0 = p.a_bufs.index(s0.index), p.b_bufs.index(s0.index).permute((1, 0))
+            a1, b1 = p.a_bufs.index(s1.index), p.b_bufs.index(s1.index).permute((1, 0))
+            a2, b2 = p.a_bufs.index(s2.index), p.b_bufs.index(s2.index).permute((1, 0))
+            mbarrier.wait(p.load_ready_bars.index(s0.index), s0.phase)
+            copy_scales(p, s0.index, sa, sb, 0, VEC)
+            tcgen05_mma_scaled(a0, b0, acc, sa, sb, "e2m1", "e2m1", use_acc=use_acc,
+                               k_range=(0, 192), instruction_k=96, scale_block_size=VEC,
+                               a_scale_offset=0, b_scale_offset=0, multicast=True, mbarriers=[])
+            mbarrier.wait(p.load_ready_bars.index(s1.index), s1.phase)
+            copy_scales(p, s1.index, sa, sb, 256 // VEC, VEC)
+            tcgen05_mma_scaled(a0, b0, acc, sa, sb, "e2m1", "e2m1", a_next=a1, b_next=b1,
+                               k_range=(192, 288), instruction_k=96, scale_block_size=VEC,
+                               a_scale_offset=192 // VEC, b_scale_offset=192 // VEC,
+                               multicast=True, mbarriers=[p.load_empty_bars.index(s0.index)])
+            tcgen05_mma_scaled(a1, b1, acc, sa, sb, "e2m1", "e2m1",
+                               k_range=(32, 224), instruction_k=96, scale_block_size=VEC,
+                               a_scale_offset=288 // VEC, b_scale_offset=288 // VEC, multicast=True, mbarriers=[])
+            mbarrier.wait(p.load_ready_bars.index(s2.index), s2.phase)
+            copy_scales(p, s2.index, sa, sb, 512 // VEC, VEC)
+            tcgen05_mma_scaled(a1, b1, acc, sa, sb, "e2m1", "e2m1", a_next=a2, b_next=b2,
+                               k_range=(224, 320), instruction_k=96, scale_block_size=VEC,
+                               a_scale_offset=480 // VEC, b_scale_offset=480 // VEC,
+                               multicast=True, mbarriers=[p.load_empty_bars.index(s1.index)])
+            tcgen05_mma_scaled(a2, b2, acc, sa, sb, "e2m1", "e2m1",
+                               k_range=(64, 256), instruction_k=96, scale_block_size=VEC,
+                               a_scale_offset=576 // VEC, b_scale_offset=576 // VEC,
+                               multicast=True, mbarriers=[p.load_empty_bars.index(s2.index)])
+            load_state = s2.next()
+            use_acc = True
+        tcgen05_commit(p.acc_ready_bars.index(acc_state.index))
+        acc_state = acc_state.next()
+        scheduler = scheduler.step(i)
+        i += 1
+
+
+@gluon.jit
+def mma_partition(p, MODE: gl.constexpr):
+    if MODE == "native":
+        native_mma_partition(p, MODE)
+    else:
+        raw_mma_partition(p, MODE)
+
+
+@gluon.jit
 def raw_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc, M, N, K, A_ELEM_PER_BYTE, num_buffers: gl.constexpr,
                BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, BLOCK_K: gl.constexpr, EPILOGUE_BLOCK_N: gl.constexpr,
                num_acc_buffers: gl.constexpr, GRID_MINOR_DIM: gl.constexpr, GRID_TILE_WIDTH: gl.constexpr,
@@ -317,14 +381,14 @@ def raw_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc, M, N, K, A_EL
     if scheduler == SCHEDULER_CLC:
         gl.warp_specialize([
             (mma_scaled_epilogue_partition, (p, )),
-            (raw_mma_partition, (p, MODE)),
+            (mma_partition, (p, MODE)),
             (experimental_load_partition, (p, MODE)),
             (mma_scaled_clc_partition, (p, )),
         ], [1, 1, 1], [24, 24, 24])
     else:
         gl.warp_specialize([
             (mma_scaled_epilogue_partition, (p, )),
-            (raw_mma_partition, (p, MODE)),
+            (mma_partition, (p, MODE)),
             (experimental_load_partition, (p, MODE)),
         ], [1, 1], [24, 24])
 
@@ -358,10 +422,10 @@ def matmul(A, B, A_scale, B_scale, vec, *, mode='pure', buffers=6, epilogue=32, 
     assert torch.cuda.get_device_capability(A.device) == (10, 3)
     assert A.dtype == B.dtype == torch.uint8
     assert vec in (16, 32)
-    assert mode in ('raw', 'pure', 'exact192', 'exact384')
+    assert mode in ('raw', 'pure', 'native', 'exact192', 'exact384')
     M, N, K = A.shape[0], B.shape[0], A.shape[1] * 2
     assert B.shape[1] * 2 == K
-    assert K % (768 if mode == 'pure' else (384 if mode.startswith('exact') else 256)) == 0
+    assert K % (768 if mode in ('pure', 'native') else (384 if mode.startswith('exact') else 256)) == 0
     if mode == 'exact192':
         assert buffers % 2 == 0
     if scheduler is None:

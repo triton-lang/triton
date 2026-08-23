@@ -5787,7 +5787,7 @@ def pure_k96_benchmark():
 
 @pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires sm103 K=96 MMA")
 @pytest.mark.parametrize("fmt", ["mxfp4", "nvfp4"])
-@pytest.mark.parametrize("mode", ["raw", "pure", "exact192", "exact384"])
+@pytest.mark.parametrize("mode", ["raw", "pure", "native", "exact192", "exact384"])
 @pytest.mark.parametrize("m, n, k, clc_scheduler", [(256, 256, 768, False), (384, 512, 1536, False),
                                                     (512, 384, 2304, True)])
 def test_tcgen05_mma_scaled_pure_k96_pipeline(pure_k96_benchmark, fmt, mode, m, n, k, clc_scheduler):

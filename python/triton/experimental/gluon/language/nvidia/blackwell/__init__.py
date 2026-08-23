@@ -598,7 +598,9 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
 
 @builtin
 def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=True, pred=True, multicast=False,
-                       mbarriers=None, mbarrier_preds=None, _semantic=None):
+                       mbarriers=None, mbarrier_preds=None, k_range=None, instruction_k=None,
+                       a_next=None, b_next=None, scale_block_size=None, a_scale_offset=None, b_scale_offset=None,
+                       _semantic=None):
     """
     Emit a 5th generation TensorCore MMA scaled instruction.
     acc = (a * a_scale) * (b * b_scale) + (acc if use_acc else 0)
@@ -616,7 +618,36 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
         multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
         mbarriers (Sequence[mbarrier], optional): Barriers to signal when the operation is complete. If None, mma is synchronous. Defaults to None.
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
+        k_range (tuple[int, int], optional): Half-open reduction interval in logical elements, independent of the backing allocation.
+        instruction_k (int, optional): Exact instruction reduction width. K96 requires sm103, two CTAs, and packed FP4 operands.
+        a_next (shared_memory_descriptor, optional): Continuation of A after its logical K extent.
+        b_next (shared_memory_descriptor, optional): Continuation of B after its logical K extent.
+        scale_block_size (int, optional): Logical elements per scale, 16 or 32. Required for partial reductions and continuations.
+        a_scale_offset (int, optional): First A scale index. Defaults to k_range[0] // scale_block_size.
+        b_scale_offset (int, optional): First B scale index. Defaults to k_range[0] // scale_block_size.
+
+    Range and scale metadata are compile-time constants. Continuations retain the
+    ownership and bounds of ordinary shared-memory descriptors; they need not be
+    adjacent in memory. An explicit instruction width must divide the reduction
+    exactly, without padding. As with full-operand MMA, mbarriers=[] issues an
+    asynchronous operation without attaching a completion barrier.
     """
+    k_range = _unwrap_if_constexpr(k_range)
+    instruction_k = _unwrap_if_constexpr(instruction_k)
+    a_next = _unwrap_if_constexpr(a_next)
+    b_next = _unwrap_if_constexpr(b_next)
+    scale_block_size = _unwrap_if_constexpr(scale_block_size)
+    a_scale_offset = _unwrap_if_constexpr(a_scale_offset)
+    b_scale_offset = _unwrap_if_constexpr(b_scale_offset)
+    if k_range is not None or a_next is not None or b_next is not None:
+        assert scale_block_size is not None, "partial MMA requires scale_block_size"
+    k_start = 0 if k_range is None else _unwrap_if_constexpr(k_range[0])
+    if a_scale_offset is None:
+        a_scale_offset = k_start // scale_block_size if scale_block_size is not None else 0
+    if b_scale_offset is None:
+        b_scale_offset = k_start // scale_block_size if scale_block_size is not None else 0
+    k_range = [] if k_range is None else [_unwrap_if_constexpr(x) for x in k_range]
+    is_async = mbarriers is not None
     use_acc = _semantic.to_tensor(use_acc)
     pred = _semantic.to_tensor(pred)
     assert acc.type.layout.block[0] != 64, "tcgen05_mma_scaled does not support blockM=64"
@@ -641,7 +672,10 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
     multicast = _unwrap_if_constexpr(multicast)
     _semantic.builder.create_tcgen05_mma_scaled(a.handle, b.handle, acc.handle, a_scale.handle, b_scale.handle, a_type,
                                                 b_type, use_acc.handle, pred.handle, mbarriers, mbarrier_preds,
-                                                acc.layout.two_ctas, multicast)
+                                                acc.layout.two_ctas, multicast, is_async, k_range, instruction_k or 0,
+                                                a_next.handle if a_next is not None else None,
+                                                b_next.handle if b_next is not None else None, scale_block_size or 0,
+                                                a_scale_offset, b_scale_offset)
 
 
 @constexpr_function
