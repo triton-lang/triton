@@ -33,6 +33,9 @@ compensate for losing producer lookahead in these cases. Increasing the producer
 K tile to 512 with two buffers also lost: 6.072 PFLOPS at 16384³. The original
 K=256, five-buffer producer remains the best configuration tested here.
 
+[Raw measurement samples and binary identities](k96-measurements.json) include
+the main sweep and both producer-design screens.
+
 ## How the operands stay packed
 
 A K=256 FP4 row occupies one 128-byte swizzle sector:

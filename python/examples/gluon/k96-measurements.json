@@ -1,0 +1,669 @@
+{
+  "compiler_checkpoint": "25f6654c012e54e85cba00a011601985d3aed4bf",
+  "main": {
+    "commit": "f4fca2c0bc0e19930d2be76bb06ee7b232b60e86",
+    "diff_sha256": "eca3151f4850920036277cf8b3e5a5f9d1b6f2964273d19b33d2e7c4ebe2b5ba",
+    "torch": "2.13.0+cu130",
+    "triton": "/root/code/triton/python/triton/__init__.py",
+    "device": "NVIDIA GB300",
+    "method": "same inputs; CUDA graph steady state; alternating AB/BA; no L2 flush",
+    "scale_values": [
+      0.125,
+      0.25,
+      0.5,
+      1.0
+    ],
+    "args": {
+      "sizes": [
+        8192,
+        16384,
+        32768
+      ],
+      "formats": [
+        "mxfp4",
+        "nvfp4"
+      ],
+      "buffers": [
+        5
+      ],
+      "block_k": 256,
+      "scheduler": "auto",
+      "repeats": 7,
+      "rep_ms": 200,
+      "output": "/root/code/jeffniu-codex-workdir/work/2026-08-23/01a02c07-7d32-7f72-b030-5dd20efa2a8c-tcgen05-k96/interleaved-main"
+    },
+    "cases": [
+      {
+        "format": "mxfp4",
+        "size": 8192,
+        "block_k": 256,
+        "buffers": 5,
+        "scheduler": "sps",
+        "gpu_before": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 2070 MHz, 34, 230.73 W, 2 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 31, 226.30 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 31, 222.24 W, 0 %",
+        "variants": [
+          {
+            "mode": "k64",
+            "correct": true,
+            "cubin_sha256": "45bcd61a457e04875dc96b1b463659de3d767163a998fd7c4f8ddd1cc68cce74",
+            "shared_bytes": 212092,
+            "tmem_columns": 512,
+            "ptx_mmas": 8,
+            "ms": [
+              0.16741928036741632,
+              0.16786099055957887,
+              0.16848321720916093,
+              0.16871994122154613,
+              0.16871575265978567,
+              0.1685472558207375,
+              0.16879786358716664
+            ],
+            "median_ms": 0.1685472558207375,
+            "pflops": 6.523462054733256
+          },
+          {
+            "mode": "k96",
+            "correct": true,
+            "cubin_sha256": "cdcb0efdc594d75c5c622508449c26bfd3e7cb4f090fb2f923985f664c447365",
+            "shared_bytes": 212092,
+            "tmem_columns": 512,
+            "ptx_mmas": 6,
+            "ms": [
+              0.15222756336208906,
+              0.15231715687067487,
+              0.15227641251654112,
+              0.15236082331230183,
+              0.1527027031640793,
+              0.1526319604880397,
+              0.1526720517988589
+            ],
+            "baseline_max_abs": 0.0,
+            "median_ms": 0.15236082331230183,
+            "pflops": 7.216498335154533
+          }
+        ],
+        "speedup": 1.1062374969926325,
+        "gpu_after": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 1560 MHz, 57, 1347.58 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 31, 229.36 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 31, 222.71 W, 0 %"
+      },
+      {
+        "format": "mxfp4",
+        "size": 16384,
+        "block_k": 256,
+        "buffers": 5,
+        "scheduler": "clc",
+        "gpu_before": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 1560 MHz, 57, 1347.58 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 31, 229.20 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 31, 222.71 W, 0 %",
+        "variants": [
+          {
+            "mode": "k64",
+            "correct": true,
+            "cubin_sha256": "a70c200941efd6795042bee4fd6c794536693f90cb4aae6d2e080d8a59c35edf",
+            "shared_bytes": 212172,
+            "tmem_columns": 512,
+            "ptx_mmas": 8,
+            "ms": [
+              1.2960264172857208,
+              1.3051335616850517,
+              1.3046607770417866,
+              1.3045626504080636,
+              1.3044247878225226,
+              1.3046024376237897,
+              1.3048084587450848
+            ],
+            "median_ms": 1.3046024376237897,
+            "pflops": 6.742355194605686
+          },
+          {
+            "mode": "k96",
+            "correct": true,
+            "cubin_sha256": "656fe8795ef3fbf5995328230acbf41eed20dbf7e5e5b2881a13ba199049f6af",
+            "shared_bytes": 212172,
+            "tmem_columns": 512,
+            "ptx_mmas": 6,
+            "ms": [
+              1.1845706246115943,
+              1.185904270769602,
+              1.185876926967076,
+              1.186616801066571,
+              1.1874320155552456,
+              1.186619724135801,
+              1.1870341535295759
+            ],
+            "baseline_max_abs": 0.0,
+            "median_ms": 1.186616801066571,
+            "pflops": 7.412749435455301
+          }
+        ],
+        "speedup": 1.0994302764390065,
+        "gpu_after": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 1492 MHz, 59, 1369.97 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 32, 229.83 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 32, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 223.37 W, 0 %"
+      },
+      {
+        "format": "mxfp4",
+        "size": 32768,
+        "block_k": 256,
+        "buffers": 5,
+        "scheduler": "clc",
+        "gpu_before": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 1492 MHz, 59, 1369.97 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 32, 229.71 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 32, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 223.37 W, 0 %",
+        "variants": [
+          {
+            "mode": "k64",
+            "correct": true,
+            "cubin_sha256": "a70c200941efd6795042bee4fd6c794536693f90cb4aae6d2e080d8a59c35edf",
+            "shared_bytes": 212172,
+            "tmem_columns": 512,
+            "ptx_mmas": 8,
+            "ms": [
+              10.191458290501645,
+              10.235824161105686,
+              10.267494844135484,
+              10.235459645589192,
+              10.272875896253083,
+              10.239541541205512,
+              10.275404759457237
+            ],
+            "median_ms": 10.239541541205512,
+            "pflops": 6.872255353864155
+          },
+          {
+            "mode": "k96",
+            "correct": true,
+            "cubin_sha256": "656fe8795ef3fbf5995328230acbf41eed20dbf7e5e5b2881a13ba199049f6af",
+            "shared_bytes": 212172,
+            "tmem_columns": 512,
+            "ptx_mmas": 6,
+            "ms": [
+              9.466407194591703,
+              9.450543358212425,
+              9.470731608072917,
+              9.45222654796782,
+              9.463108462379092,
+              9.462168520972842,
+              9.473027316006748
+            ],
+            "baseline_max_abs": 0.0,
+            "median_ms": 9.463108462379092,
+            "pflops": 7.4361130338320995
+          }
+        ],
+        "speedup": 1.082048418013294,
+        "gpu_after": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 1380 MHz, 58, 1362.18 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 32, 229.71 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 31, 222.25 W, 0 %"
+      },
+      {
+        "format": "nvfp4",
+        "size": 8192,
+        "block_k": 256,
+        "buffers": 5,
+        "scheduler": "sps",
+        "gpu_before": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 2002 MHz, 49, 1309.81 W, 64 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 32, 229.71 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 31, 222.24 W, 0 %",
+        "variants": [
+          {
+            "mode": "k64",
+            "correct": true,
+            "cubin_sha256": "2328d95f291b17f9db6c342eecce6ca4182da62dfacacb9af0b3b74d1ea0171f",
+            "shared_bytes": 227452,
+            "tmem_columns": 512,
+            "ptx_mmas": 4,
+            "ms": [
+              0.1711455452542345,
+              0.17159559478314035,
+              0.17147668347214207,
+              0.1709854522308746,
+              0.17139119615741805,
+              0.1716714583293046,
+              0.17152414448094502
+            ],
+            "median_ms": 0.17147668347214207,
+            "pflops": 6.412018272761997
+          },
+          {
+            "mode": "k96",
+            "correct": true,
+            "cubin_sha256": "71d5b31c3d5f8768fbc1c9c105a13778f4361a38fabda1fa68ef825151805f3e",
+            "shared_bytes": 227452,
+            "tmem_columns": 512,
+            "ptx_mmas": 3,
+            "ms": [
+              0.1563586439344618,
+              0.15663277214486637,
+              0.15629189423506554,
+              0.15656689988805894,
+              0.156392083516935,
+              0.15663271755033592,
+              0.15649142456054688
+            ],
+            "baseline_max_abs": 0.0,
+            "median_ms": 0.15649142456054688,
+            "pflops": 7.026018395983075
+          }
+        ],
+        "speedup": 1.0957577001658474,
+        "gpu_after": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 1545 MHz, 57, 1330.16 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 32, 229.68 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 31, 222.32 W, 0 %"
+      },
+      {
+        "format": "nvfp4",
+        "size": 16384,
+        "block_k": 256,
+        "buffers": 5,
+        "scheduler": "clc",
+        "gpu_before": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 1545 MHz, 57, 1330.16 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 32, 229.68 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 31, 222.32 W, 0 %",
+        "variants": [
+          {
+            "mode": "k64",
+            "correct": true,
+            "cubin_sha256": "0c8b80b9f942de837dca73f32732f100b24ae5c7e3288feb4f13fdb141868336",
+            "shared_bytes": 227532,
+            "tmem_columns": 512,
+            "ptx_mmas": 4,
+            "ms": [
+              1.316056698069853,
+              1.3235175491224789,
+              1.3239774780273437,
+              1.3235108075823103,
+              1.3240445048014322,
+              1.3241937909807477,
+              1.3250778503417968
+            ],
+            "median_ms": 1.3239774780273437,
+            "pflops": 6.643687802993229
+          },
+          {
+            "mode": "k96",
+            "correct": true,
+            "cubin_sha256": "b353c476bff50dc9f342d857555c1ae6ad77ae4cfd9de6940440a2a0dcb69f0b",
+            "shared_bytes": 227532,
+            "tmem_columns": 512,
+            "ptx_mmas": 3,
+            "ms": [
+              1.214590965719784,
+              1.2155268663277654,
+              1.217335911800987,
+              1.2160422996238425,
+              1.216784846434119,
+              1.215716187646784,
+              1.2176865427117598
+            ],
+            "baseline_max_abs": 0.0,
+            "median_ms": 1.2160422996238425,
+            "pflops": 7.233377510740284
+          }
+        ],
+        "speedup": 1.0887593946665248,
+        "gpu_after": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 1492 MHz, 58, 1351.03 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 32, 229.76 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 222.24 W, 0 %"
+      },
+      {
+        "format": "nvfp4",
+        "size": 32768,
+        "block_k": 256,
+        "buffers": 5,
+        "scheduler": "clc",
+        "gpu_before": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 1492 MHz, 58, 1351.03 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 32, 229.45 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 222.24 W, 0 %",
+        "variants": [
+          {
+            "mode": "k64",
+            "correct": true,
+            "cubin_sha256": "0c8b80b9f942de837dca73f32732f100b24ae5c7e3288feb4f13fdb141868336",
+            "shared_bytes": 227532,
+            "tmem_columns": 512,
+            "ptx_mmas": 4,
+            "ms": [
+              10.431085739135742,
+              10.472863287674754,
+              10.488051300048827,
+              10.489540184868707,
+              10.502170522589433,
+              10.468796539306641,
+              10.49771230597245
+            ],
+            "median_ms": 10.488051300048827,
+            "pflops": 6.709420288336729
+          },
+          {
+            "mode": "k96",
+            "correct": true,
+            "cubin_sha256": "b353c476bff50dc9f342d857555c1ae6ad77ae4cfd9de6940440a2a0dcb69f0b",
+            "shared_bytes": 227532,
+            "tmem_columns": 512,
+            "ptx_mmas": 3,
+            "ms": [
+              9.72375967843192,
+              9.715437088012695,
+              9.724965268089658,
+              9.724882431030274,
+              9.724606032598587,
+              9.723803634643556,
+              9.719713556198847
+            ],
+            "baseline_max_abs": 0.0,
+            "median_ms": 9.723803634643556,
+            "pflops": 7.236750845827163
+          }
+        ],
+        "speedup": 1.0785955469814756,
+        "gpu_after": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 1365 MHz, 58, 1364.55 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 32, 229.77 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 222.39 W, 0 %"
+      }
+    ]
+  },
+  "producer_buffer_screen": {
+    "commit": "f4fca2c0bc0e19930d2be76bb06ee7b232b60e86",
+    "diff_sha256": "754c68b19a9b828976264ee0493ca682010952cc95755a836e90f5d3a85c3e33",
+    "torch": "2.13.0+cu130",
+    "triton": "/root/code/triton/python/triton/__init__.py",
+    "device": "NVIDIA GB300",
+    "method": "same inputs; CUDA graph steady state; alternating AB/BA; no L2 flush",
+    "scale_values": [
+      0.125,
+      0.25,
+      0.5,
+      1.0
+    ],
+    "args": {
+      "sizes": [
+        8192,
+        16384
+      ],
+      "formats": [
+        "mxfp4"
+      ],
+      "buffers": [
+        3,
+        4
+      ],
+      "block_k": 256,
+      "scheduler": "auto",
+      "repeats": 3,
+      "rep_ms": 100,
+      "output": "/root/code/jeffniu-codex-workdir/work/2026-08-23/01a02c07-7d32-7f72-b030-5dd20efa2a8c-tcgen05-k96/tune-buffers"
+    },
+    "cases": [
+      {
+        "format": "mxfp4",
+        "size": 8192,
+        "block_k": 256,
+        "buffers": 3,
+        "scheduler": "sps",
+        "gpu_before": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 2070 MHz, 31, 227.91 W, 1 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 31, 226.29 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 31, 222.70 W, 0 %",
+        "variants": [
+          {
+            "mode": "k64",
+            "correct": true,
+            "cubin_sha256": "8f89e76e673c6fa5ddc7461319b977a8b78dba09f2f38416cccc3fe402b2cd0f",
+            "shared_bytes": 140380,
+            "tmem_columns": 512,
+            "ptx_mmas": 8,
+            "ms": [
+              0.19333497480912643,
+              0.19422491745427553,
+              0.1942337474256459
+            ],
+            "median_ms": 0.19422491745427553,
+            "pflops": 5.661022500034513
+          },
+          {
+            "mode": "k96",
+            "correct": true,
+            "cubin_sha256": "59a78fffacbbae728d0088911b5aa1951707189d22b6f53baa7a8974b066c889",
+            "shared_bytes": 140380,
+            "tmem_columns": 512,
+            "ptx_mmas": 6,
+            "ms": [
+              0.18487374294678677,
+              0.18515014346283262,
+              0.18527986836987873
+            ],
+            "baseline_max_abs": 0.0,
+            "median_ms": 0.18515014346283262,
+            "pflops": 5.938486501884445
+          }
+        ],
+        "speedup": 1.0490130540636853,
+        "gpu_after": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 2025 MHz, 57, 1308.80 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 31, 229.45 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 31, 222.31 W, 0 %"
+      },
+      {
+        "format": "mxfp4",
+        "size": 8192,
+        "block_k": 256,
+        "buffers": 4,
+        "scheduler": "sps",
+        "gpu_before": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 2025 MHz, 57, 1308.80 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 31, 229.45 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 31, 222.56 W, 0 %",
+        "variants": [
+          {
+            "mode": "k64",
+            "correct": true,
+            "cubin_sha256": "b8563b32484ee9549d6958604a381ac226f24ab1ba798528ed2d992c9cf1bc2f",
+            "shared_bytes": 176220,
+            "tmem_columns": 512,
+            "ptx_mmas": 8,
+            "ms": [
+              0.1707983794035735,
+              0.17053616501902805,
+              0.1707354493193574
+            ],
+            "median_ms": 0.1707354493193574,
+            "pflops": 6.439855531813925
+          },
+          {
+            "mode": "k96",
+            "correct": true,
+            "cubin_sha256": "ac1a1c76c5c72359d5f1e941fc94680ce41d8f4cabef1dd1f3735e94bbf11874",
+            "shared_bytes": 176220,
+            "tmem_columns": 512,
+            "ptx_mmas": 6,
+            "ms": [
+              0.15857135485433654,
+              0.1584151144897671,
+              0.15901156805257882
+            ],
+            "baseline_max_abs": 0.0,
+            "median_ms": 0.15857135485433654,
+            "pflops": 6.93386033553166
+          }
+        ],
+        "speedup": 1.0767105412966598,
+        "gpu_after": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 1695 MHz, 57, 1308.56 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 31, 229.33 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 31, 222.16 W, 0 %"
+      },
+      {
+        "format": "mxfp4",
+        "size": 16384,
+        "block_k": 256,
+        "buffers": 3,
+        "scheduler": "clc",
+        "gpu_before": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 1695 MHz, 57, 1308.56 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 31, 229.33 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 31, 222.31 W, 0 %",
+        "variants": [
+          {
+            "mode": "k64",
+            "correct": true,
+            "cubin_sha256": "91af1c64687591631ded174bd48339aff147913f3bd642b1190bcaa1cedbede5",
+            "shared_bytes": 140460,
+            "tmem_columns": 512,
+            "ptx_mmas": 8,
+            "ms": [
+              1.5404686208871694,
+              1.5474257946014405,
+              1.5477071046829223
+            ],
+            "median_ms": 1.5474257946014405,
+            "pflops": 5.684339147567039
+          },
+          {
+            "mode": "k96",
+            "correct": true,
+            "cubin_sha256": "131ac7a0fa47f49fd2a936fd5f4e8125bb81ce637c2e585cc8b7a12be06db812",
+            "shared_bytes": 140460,
+            "tmem_columns": 512,
+            "ptx_mmas": 6,
+            "ms": [
+              1.4664581184956564,
+              1.468366901910127,
+              1.4692014324131297
+            ],
+            "baseline_max_abs": 0.0,
+            "median_ms": 1.468366901910127,
+            "pflops": 5.990391782030493
+          }
+        ],
+        "speedup": 1.0538413747875068,
+        "gpu_after": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 2040 MHz, 59, 1360.32 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 31, 229.36 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 222.32 W, 0 %"
+      },
+      {
+        "format": "mxfp4",
+        "size": 16384,
+        "block_k": 256,
+        "buffers": 4,
+        "scheduler": "clc",
+        "gpu_before": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 2025 MHz, 59, 1333.53 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 31, 229.29 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 222.32 W, 0 %",
+        "variants": [
+          {
+            "mode": "k64",
+            "correct": true,
+            "cubin_sha256": "e77a42233ceeadad0aeba3e259899953a5da46a306b91026a2fcfe5248ad6097",
+            "shared_bytes": 176300,
+            "tmem_columns": 512,
+            "ptx_mmas": 8,
+            "ms": [
+              1.330112361907959,
+              1.3414627796894796,
+              1.3447982478786158
+            ],
+            "median_ms": 1.3414627796894796,
+            "pflops": 6.557090629263759
+          },
+          {
+            "mode": "k96",
+            "correct": true,
+            "cubin_sha256": "97279ef5bef4a6acae9fb9b41cac94e1a1050304160eccdd7d5a7faef309817b",
+            "shared_bytes": 176300,
+            "tmem_columns": 512,
+            "ptx_mmas": 6,
+            "ms": [
+              1.2515412342699268,
+              1.2522098686121688,
+              1.2543641585337966
+            ],
+            "baseline_max_abs": 0.0,
+            "median_ms": 1.2522098686121688,
+            "pflops": 7.024455918045718
+          }
+        ],
+        "speedup": 1.0712763198202793,
+        "gpu_after": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 1740 MHz, 58, 1357.33 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 31, 229.49 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 222.62 W, 0 %"
+      }
+    ]
+  },
+  "producer_k512_screen": {
+    "commit": "f4fca2c0bc0e19930d2be76bb06ee7b232b60e86",
+    "diff_sha256": "9929b0fe34fbb22383b84c6ead4461420a13b888d8dfbbc05b25ded5826f4e49",
+    "torch": "2.13.0+cu130",
+    "triton": "/root/code/triton/python/triton/__init__.py",
+    "device": "NVIDIA GB300",
+    "method": "same inputs; CUDA graph steady state; alternating AB/BA; no L2 flush",
+    "scale_values": [
+      0.125,
+      0.25,
+      0.5,
+      1.0
+    ],
+    "args": {
+      "sizes": [
+        8192,
+        16384
+      ],
+      "formats": [
+        "mxfp4"
+      ],
+      "buffers": [
+        2
+      ],
+      "block_k": 512,
+      "scheduler": "auto",
+      "repeats": 3,
+      "rep_ms": 100,
+      "output": "/root/code/jeffniu-codex-workdir/work/2026-08-23/01a02c07-7d32-7f72-b030-5dd20efa2a8c-tcgen05-k96/tune-bk512"
+    },
+    "cases": [
+      {
+        "format": "mxfp4",
+        "size": 8192,
+        "block_k": 512,
+        "buffers": 2,
+        "scheduler": "sps",
+        "gpu_before": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 2070 MHz, 32, 233.20 W, 5 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 32, 226.61 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 32, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 223.85 W, 0 %",
+        "variants": [
+          {
+            "mode": "k64",
+            "correct": true,
+            "cubin_sha256": "2757c93c543dc5ac675b22942ade25be854556ad66f634c6c74c95fcd703927b",
+            "shared_bytes": 176188,
+            "tmem_columns": 512,
+            "ptx_mmas": 8,
+            "ms": [
+              0.19465615364813035,
+              0.19549348496899163,
+              0.19558704921177456
+            ],
+            "median_ms": 0.19549348496899163,
+            "pflops": 5.624287827036282
+          },
+          {
+            "mode": "k96",
+            "correct": true,
+            "cubin_sha256": "841d54590869a1c8514ed0f8c294a3e3091eb90a4e6d959469ed59ed0e83ee33",
+            "shared_bytes": 176188,
+            "tmem_columns": 512,
+            "ptx_mmas": 6,
+            "ms": [
+              0.18122195641971328,
+              0.18123063104001083,
+              0.18149787021943034
+            ],
+            "baseline_max_abs": 0.0,
+            "median_ms": 0.18123063104001083,
+            "pflops": 6.066919380384752
+          }
+        ],
+        "speedup": 1.0787000180219641,
+        "gpu_after": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 1995 MHz, 57, 1317.35 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 32, 229.20 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 32, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 222.48 W, 0 %"
+      },
+      {
+        "format": "mxfp4",
+        "size": 16384,
+        "block_k": 512,
+        "buffers": 2,
+        "scheduler": "clc",
+        "gpu_before": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 2070 MHz, 51, 1284.70 W, 83 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 32, 229.20 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 32, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 222.32 W, 0 %",
+        "variants": [
+          {
+            "mode": "k64",
+            "correct": true,
+            "cubin_sha256": "6f7b7480ab3c1545cb1edd37b64050aabb25d37080e18e4c5b34438a9dada560",
+            "shared_bytes": 176268,
+            "tmem_columns": 512,
+            "ptx_mmas": 8,
+            "ms": [
+              1.5495122704139122,
+              1.5564711809158325,
+              1.5555873036384582
+            ],
+            "median_ms": 1.5555873036384582,
+            "pflops": 5.654515822824139
+          },
+          {
+            "mode": "k96",
+            "correct": true,
+            "cubin_sha256": "bd8e0079c191e56092fad47fc3d2484e8258fb203bae2484cd71d3f9177d564d",
+            "shared_bytes": 176268,
+            "tmem_columns": 512,
+            "ptx_mmas": 6,
+            "ms": [
+              1.4487312092500575,
+              1.4486211440142462,
+              1.450192788067986
+            ],
+            "baseline_max_abs": 0.0,
+            "median_ms": 1.4487312092500575,
+            "pflops": 6.07158385630509
+          }
+        ],
+        "speedup": 1.0737583988707713,
+        "gpu_after": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 2025 MHz, 59, 1362.50 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 32, 229.79 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 32, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 222.74 W, 0 %"
+      }
+    ]
+  }
+}
