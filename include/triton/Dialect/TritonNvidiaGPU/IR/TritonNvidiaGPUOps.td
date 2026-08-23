@@ -759,6 +759,13 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
   let hasVerifier = 1;
 }
 
+def TTNG_ExperimentalDescriptorAddressOp : TTNG_Op<"experimental_descriptor_address"> {
+  let summary = "expose an SMEM or TMEM address for experimental inline PTX";
+  let arguments = (ins TTG_MemDescType:$src);
+  let results = (outs I32:$address);
+  let assemblyFormat = "$src attr-dict `:` qualified(type($src))";
+}
+
 def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
     DeclareOpInterfaceMethods<DotOpInterface, ["verifyDims", "verifyOutputDims"]>,

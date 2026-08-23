@@ -1027,6 +1027,20 @@ void init_gluon_ir(py::module_ &m) {
                                             pred, two_ctas, multicast,
                                             mbarriers, mbarrier_preds);
            })
+      .def("create_experimental_descriptor_address",
+           [](GluonOpBuilder &self, Value src) -> Value {
+             auto op = self.create<ttng::ExperimentalDescriptorAddressOp>(
+                 self.getBuilder().getI32Type(), src);
+             auto ty = cast<ttg::MemDescType>(src.getType());
+             if (auto enc = dyn_cast<ttng::TensorMemoryEncodingAttr>(
+                     ty.getEncoding())) {
+               if (enc.getTwoCTAs())
+                 op->getParentOfType<ModuleOp>()->setAttr(
+                     ttng::AttrTwoCTAsName,
+                     self.getBuilder().getBoolAttr(true));
+             }
+             return op.getResult();
+           })
       .def("create_tcgen05_mma_scaled",
            [](GluonOpBuilder &self, Value a, Value b, Value acc, Value aScale,
               Value bScale, tt::ScaleDotElemType aType,

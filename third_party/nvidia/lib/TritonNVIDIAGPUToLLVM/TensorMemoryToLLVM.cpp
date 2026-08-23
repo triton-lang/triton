@@ -818,6 +818,24 @@ public:
   }
 };
 
+struct ExperimentalDescriptorAddressOpConversion
+    : public ConvertOpToLLVMPattern<ExperimentalDescriptorAddressOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ExperimentalDescriptorAddressOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto ty = op.getSrc().getType();
+    Value base = adaptor.getSrc();
+    if (isa<SharedMemorySpaceAttr>(ty.getMemorySpace()))
+      base = getOffsetedBase(base, ty, getTypeConverter(), rewriter, loc);
+    rewriter.replaceOp(op, b.ptrtoint(i32_ty, base));
+    return success();
+  }
+};
+
 struct TMEMSubSliceOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMSubSliceOp> {
   using ConvertOpToLLVMPattern<
@@ -853,6 +871,8 @@ void mlir::triton::NVIDIA::populateTensorMemoryOpToLLVMPattern(
 void mlir::triton::NVIDIA::populateTensorMemorySubviewOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
-  patterns.add<MemDescReinterpretOpConversion, MemDescIndexOpConversion,
-               TMEMSubSliceOpConversion>(typeConverter, benefit);
+  patterns
+      .add<MemDescReinterpretOpConversion, MemDescIndexOpConversion,
+           TMEMSubSliceOpConversion, ExperimentalDescriptorAddressOpConversion>(
+          typeConverter, benefit);
 }

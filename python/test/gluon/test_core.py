@@ -5773,6 +5773,41 @@ def test_tcgen05_mma_scaled_k96_packed(fmt, vec_size, block_n, m, n, k, block_k)
     assert counts[1] * 4 == counts[0] * 3
 
 
+@pytest.fixture(scope="module")
+def pure_k96_benchmark():
+    import importlib.util
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[2] / "examples/gluon/bench-tcgen05-pure-k96.py"
+    spec = importlib.util.spec_from_file_location("pure_k96_benchmark", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.experiment = module.load_experiment()
+    return module
+
+
+@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires sm103 K=96 MMA")
+@pytest.mark.parametrize("fmt", ["mxfp4", "nvfp4"])
+@pytest.mark.parametrize("mode", ["raw", "pure", "exact192", "exact384"])
+@pytest.mark.parametrize("m, n, k, clc_scheduler", [(256, 256, 768, False), (384, 512, 1536, False),
+                                                    (512, 384, 2304, True)])
+def test_tcgen05_mma_scaled_pure_k96_pipeline(pure_k96_benchmark, fmt, mode, m, n, k, clc_scheduler):
+    bench = pure_k96_benchmark
+    experiment = bench.experiment
+    torch.manual_seed(123)
+    operands, scales, refs, vec = bench.prepare(m, n, k, fmt)
+    scales = [experiment.base.swizzle_scales_packed_block(s) for s in scales]
+    scheduler = experiment.SCHEDULER_CLC if clc_scheduler else experiment.SCHEDULER_SPS
+    actual, compiled = experiment.matmul(*operands, *scales, vec, mode=mode, buffers=2 if mode == "exact384" else 4,
+                                         epilogue=32, scheduler=scheduler, out_dtype=torch.float32)
+    torch.testing.assert_close(actual, refs[0] @ refs[1].T, atol=1e-3, rtol=1e-3)
+    if mode != "raw":
+        ptx = compiled.asm["ptx"]
+        constants = dict(re.findall(r"mov\.b32\s+(%r\d+),\s+(-?\d+);", ptx))
+        descriptors = re.findall(r"tcgen05\.mma[^;]*?\], [^,]+, [^,]+, (%r\d+),", ptx)
+        assert descriptors
+        assert all(int(constants[register]) & (1 << 31) for register in descriptors)
+
+
 @gluon.jit
 def tmem288k_simple_kernel(in_ptr, out_ptr, M: ttgl.constexpr, Ncol1: ttgl.constexpr, Ncol2: ttgl.constexpr,
                            num_warps: ttgl.constexpr):
