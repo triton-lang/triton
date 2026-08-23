@@ -1,0 +1,5804 @@
+{
+  "checkpoint": "d93e07b76de305b651df579ce50b64ab7d237618",
+  "controls": [
+    {
+      "format": "mxfp4",
+      "size": 8192,
+      "k": 8192,
+      "mode": "k64",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "sps",
+      "cubin_sha256": "45bcd61a457e04875dc96b1b463659de3d767163a998fd7c4f8ddd1cc68cce74",
+      "historical_ms": 0.1685472558207375
+    },
+    {
+      "format": "mxfp4",
+      "size": 8192,
+      "k": 8192,
+      "mode": "mixed",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "sps",
+      "cubin_sha256": "cdcb0efdc594d75c5c622508449c26bfd3e7cb4f090fb2f923985f664c447365",
+      "historical_ms": 0.15236082331230183
+    },
+    {
+      "format": "mxfp4",
+      "size": 16384,
+      "k": 16384,
+      "mode": "k64",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "clc",
+      "cubin_sha256": "a70c200941efd6795042bee4fd6c794536693f90cb4aae6d2e080d8a59c35edf",
+      "historical_ms": 1.3046024376237897
+    },
+    {
+      "format": "mxfp4",
+      "size": 16384,
+      "k": 16384,
+      "mode": "mixed",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "clc",
+      "cubin_sha256": "656fe8795ef3fbf5995328230acbf41eed20dbf7e5e5b2881a13ba199049f6af",
+      "historical_ms": 1.186616801066571
+    },
+    {
+      "format": "mxfp4",
+      "size": 32768,
+      "k": 32768,
+      "mode": "k64",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "clc",
+      "cubin_sha256": "a70c200941efd6795042bee4fd6c794536693f90cb4aae6d2e080d8a59c35edf",
+      "historical_ms": 10.239541541205512
+    },
+    {
+      "format": "mxfp4",
+      "size": 32768,
+      "k": 32768,
+      "mode": "mixed",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "clc",
+      "cubin_sha256": "656fe8795ef3fbf5995328230acbf41eed20dbf7e5e5b2881a13ba199049f6af",
+      "historical_ms": 9.463108462379092
+    },
+    {
+      "format": "nvfp4",
+      "size": 8192,
+      "k": 8192,
+      "mode": "k64",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "sps",
+      "cubin_sha256": "2328d95f291b17f9db6c342eecce6ca4182da62dfacacb9af0b3b74d1ea0171f",
+      "historical_ms": 0.17147668347214207
+    },
+    {
+      "format": "nvfp4",
+      "size": 8192,
+      "k": 8192,
+      "mode": "mixed",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "sps",
+      "cubin_sha256": "71d5b31c3d5f8768fbc1c9c105a13778f4361a38fabda1fa68ef825151805f3e",
+      "historical_ms": 0.15649142456054688
+    },
+    {
+      "format": "nvfp4",
+      "size": 16384,
+      "k": 16384,
+      "mode": "k64",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "clc",
+      "cubin_sha256": "0c8b80b9f942de837dca73f32732f100b24ae5c7e3288feb4f13fdb141868336",
+      "historical_ms": 1.3239774780273437
+    },
+    {
+      "format": "nvfp4",
+      "size": 16384,
+      "k": 16384,
+      "mode": "mixed",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "clc",
+      "cubin_sha256": "b353c476bff50dc9f342d857555c1ae6ad77ae4cfd9de6940440a2a0dcb69f0b",
+      "historical_ms": 1.2160422996238425
+    },
+    {
+      "format": "nvfp4",
+      "size": 32768,
+      "k": 32768,
+      "mode": "k64",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "clc",
+      "cubin_sha256": "0c8b80b9f942de837dca73f32732f100b24ae5c7e3288feb4f13fdb141868336",
+      "historical_ms": 10.488051300048827
+    },
+    {
+      "format": "nvfp4",
+      "size": 32768,
+      "k": 32768,
+      "mode": "mixed",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "clc",
+      "cubin_sha256": "b353c476bff50dc9f342d857555c1ae6ad77ae4cfd9de6940440a2a0dcb69f0b",
+      "historical_ms": 9.723803634643556
+    },
+    {
+      "format": "mxfp4",
+      "size": 8192,
+      "k": 7680,
+      "mode": "k64",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "sps",
+      "cubin_sha256": "45bcd61a457e04875dc96b1b463659de3d767163a998fd7c4f8ddd1cc68cce74",
+      "historical_ms": 0.16147866657063614
+    },
+    {
+      "format": "mxfp4",
+      "size": 8192,
+      "k": 7680,
+      "mode": "mixed",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "sps",
+      "cubin_sha256": "cdcb0efdc594d75c5c622508449c26bfd3e7cb4f090fb2f923985f664c447365",
+      "historical_ms": 0.1459681240967223
+    },
+    {
+      "format": "mxfp4",
+      "size": 8192,
+      "k": 7680,
+      "mode": "raw",
+      "block_k": 256,
+      "buffers": 6,
+      "epilogue": 32,
+      "scheduler": "sps",
+      "cubin_sha256": "cbd5b318abc9a54003a775a5a0711ab4e393f818d91a1cc51c094e88343add04",
+      "historical_ms": 0.14637742465685588
+    },
+    {
+      "format": "mxfp4",
+      "size": 8192,
+      "k": 7680,
+      "mode": "pure",
+      "block_k": 256,
+      "buffers": 6,
+      "epilogue": 32,
+      "scheduler": "sps",
+      "cubin_sha256": "55a19f8fa1ecd22a029dab80745bcaecb89068fa6c84738a150b43eecb1750a7",
+      "historical_ms": 0.14111409628204735
+    },
+    {
+      "format": "mxfp4",
+      "size": 16384,
+      "k": 16128,
+      "mode": "k64",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "clc",
+      "cubin_sha256": "a70c200941efd6795042bee4fd6c794536693f90cb4aae6d2e080d8a59c35edf",
+      "historical_ms": 1.298154920942328
+    },
+    {
+      "format": "mxfp4",
+      "size": 16384,
+      "k": 16128,
+      "mode": "mixed",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "clc",
+      "cubin_sha256": "656fe8795ef3fbf5995328230acbf41eed20dbf7e5e5b2881a13ba199049f6af",
+      "historical_ms": 1.1817890185664817
+    },
+    {
+      "format": "mxfp4",
+      "size": 16384,
+      "k": 16128,
+      "mode": "raw",
+      "block_k": 256,
+      "buffers": 6,
+      "epilogue": 32,
+      "scheduler": "clc",
+      "cubin_sha256": "3c3d780b5be0ec225013fdcdf885727fbf50f0ab1ff44092d0ec0c8c7fbc1af6",
+      "historical_ms": 1.1560050366660966
+    },
+    {
+      "format": "mxfp4",
+      "size": 16384,
+      "k": 16128,
+      "mode": "pure",
+      "block_k": 256,
+      "buffers": 6,
+      "epilogue": 32,
+      "scheduler": "clc",
+      "cubin_sha256": "1be076a354a9e204d1f1b212e9bcbcab601c8bc497a1071c39dc1d480e502f73",
+      "historical_ms": 1.1284118311745779
+    },
+    {
+      "format": "mxfp4",
+      "size": 32768,
+      "k": 32256,
+      "mode": "k64",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "clc",
+      "cubin_sha256": "a70c200941efd6795042bee4fd6c794536693f90cb4aae6d2e080d8a59c35edf",
+      "historical_ms": 10.219124668666295
+    },
+    {
+      "format": "mxfp4",
+      "size": 32768,
+      "k": 32256,
+      "mode": "mixed",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "clc",
+      "cubin_sha256": "656fe8795ef3fbf5995328230acbf41eed20dbf7e5e5b2881a13ba199049f6af",
+      "historical_ms": 9.375997627072218
+    },
+    {
+      "format": "mxfp4",
+      "size": 32768,
+      "k": 32256,
+      "mode": "raw",
+      "block_k": 256,
+      "buffers": 6,
+      "epilogue": 32,
+      "scheduler": "clc",
+      "cubin_sha256": "3c3d780b5be0ec225013fdcdf885727fbf50f0ab1ff44092d0ec0c8c7fbc1af6",
+      "historical_ms": 8.92999906652114
+    },
+    {
+      "format": "mxfp4",
+      "size": 32768,
+      "k": 32256,
+      "mode": "pure",
+      "block_k": 256,
+      "buffers": 6,
+      "epilogue": 32,
+      "scheduler": "clc",
+      "cubin_sha256": "1be076a354a9e204d1f1b212e9bcbcab601c8bc497a1071c39dc1d480e502f73",
+      "historical_ms": 8.792802961482558
+    },
+    {
+      "format": "nvfp4",
+      "size": 8192,
+      "k": 7680,
+      "mode": "k64",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "sps",
+      "cubin_sha256": "2328d95f291b17f9db6c342eecce6ca4182da62dfacacb9af0b3b74d1ea0171f",
+      "historical_ms": 0.16341376707127792
+    },
+    {
+      "format": "nvfp4",
+      "size": 8192,
+      "k": 7680,
+      "mode": "mixed",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "sps",
+      "cubin_sha256": "71d5b31c3d5f8768fbc1c9c105a13778f4361a38fabda1fa68ef825151805f3e",
+      "historical_ms": 0.1493844912931318
+    },
+    {
+      "format": "nvfp4",
+      "size": 8192,
+      "k": 7680,
+      "mode": "raw",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "sps",
+      "cubin_sha256": "5e226662d7eb7b6bd8b0f013818497ec0bdea1427201a21007719f8fc4033324",
+      "historical_ms": 0.1497086735478154
+    },
+    {
+      "format": "nvfp4",
+      "size": 8192,
+      "k": 7680,
+      "mode": "pure",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "sps",
+      "cubin_sha256": "c755a3014e5b04037ff75ba3b33e24a320ab16e0726a7fe48f044ccb27701073",
+      "historical_ms": 0.14891614182391094
+    },
+    {
+      "format": "nvfp4",
+      "size": 16384,
+      "k": 16128,
+      "mode": "k64",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "clc",
+      "cubin_sha256": "0c8b80b9f942de837dca73f32732f100b24ae5c7e3288feb4f13fdb141868336",
+      "historical_ms": 1.3205128040719538
+    },
+    {
+      "format": "nvfp4",
+      "size": 16384,
+      "k": 16128,
+      "mode": "mixed",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "clc",
+      "cubin_sha256": "b353c476bff50dc9f342d857555c1ae6ad77ae4cfd9de6940440a2a0dcb69f0b",
+      "historical_ms": 1.2092445373535157
+    },
+    {
+      "format": "nvfp4",
+      "size": 16384,
+      "k": 16128,
+      "mode": "raw",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "clc",
+      "cubin_sha256": "35334dfa92b41ea4bbff0254fc03a60427d51a1e4e70402f7b269ec97e8172ad",
+      "historical_ms": 1.2128616145553401
+    },
+    {
+      "format": "nvfp4",
+      "size": 16384,
+      "k": 16128,
+      "mode": "pure",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "clc",
+      "cubin_sha256": "154446a7199b0cbbdc42e603f32c72e3300f2d6847d52bc98f391d0711e9f493",
+      "historical_ms": 1.2062400647487592
+    },
+    {
+      "format": "nvfp4",
+      "size": 32768,
+      "k": 32256,
+      "mode": "k64",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "clc",
+      "cubin_sha256": "0c8b80b9f942de837dca73f32732f100b24ae5c7e3288feb4f13fdb141868336",
+      "historical_ms": 10.402392578125
+    },
+    {
+      "format": "nvfp4",
+      "size": 32768,
+      "k": 32256,
+      "mode": "mixed",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "clc",
+      "cubin_sha256": "b353c476bff50dc9f342d857555c1ae6ad77ae4cfd9de6940440a2a0dcb69f0b",
+      "historical_ms": 9.642739520495452
+    },
+    {
+      "format": "nvfp4",
+      "size": 32768,
+      "k": 32256,
+      "mode": "raw",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "clc",
+      "cubin_sha256": "35334dfa92b41ea4bbff0254fc03a60427d51a1e4e70402f7b269ec97e8172ad",
+      "historical_ms": 9.683782721185064
+    },
+    {
+      "format": "nvfp4",
+      "size": 32768,
+      "k": 32256,
+      "mode": "pure",
+      "block_k": 256,
+      "buffers": 5,
+      "epilogue": 64,
+      "scheduler": "clc",
+      "cubin_sha256": "154446a7199b0cbbdc42e603f32c72e3300f2d6847d52bc98f391d0711e9f493",
+      "historical_ms": 9.68963478489926
+    }
+  ],
+  "verified": [
+    {
+      "key": "mxfp4-k64-256-5-64-sps",
+      "cubin_sha256": "45bcd61a457e04875dc96b1b463659de3d767163a998fd7c4f8ddd1cc68cce74",
+      "graph_replays": 10,
+      "bit_identical": true
+    },
+    {
+      "key": "mxfp4-mixed-256-5-64-sps",
+      "cubin_sha256": "cdcb0efdc594d75c5c622508449c26bfd3e7cb4f090fb2f923985f664c447365",
+      "graph_replays": 10,
+      "bit_identical": true
+    },
+    {
+      "key": "mxfp4-k64-256-5-64-clc",
+      "cubin_sha256": "a70c200941efd6795042bee4fd6c794536693f90cb4aae6d2e080d8a59c35edf",
+      "graph_replays": 10,
+      "bit_identical": true
+    },
+    {
+      "key": "mxfp4-mixed-256-5-64-clc",
+      "cubin_sha256": "656fe8795ef3fbf5995328230acbf41eed20dbf7e5e5b2881a13ba199049f6af",
+      "graph_replays": 10,
+      "bit_identical": true
+    },
+    {
+      "key": "nvfp4-k64-256-5-64-sps",
+      "cubin_sha256": "2328d95f291b17f9db6c342eecce6ca4182da62dfacacb9af0b3b74d1ea0171f",
+      "graph_replays": 10,
+      "bit_identical": true
+    },
+    {
+      "key": "nvfp4-mixed-256-5-64-sps",
+      "cubin_sha256": "71d5b31c3d5f8768fbc1c9c105a13778f4361a38fabda1fa68ef825151805f3e",
+      "graph_replays": 10,
+      "bit_identical": true
+    },
+    {
+      "key": "nvfp4-k64-256-5-64-clc",
+      "cubin_sha256": "0c8b80b9f942de837dca73f32732f100b24ae5c7e3288feb4f13fdb141868336",
+      "graph_replays": 10,
+      "bit_identical": true
+    },
+    {
+      "key": "nvfp4-mixed-256-5-64-clc",
+      "cubin_sha256": "b353c476bff50dc9f342d857555c1ae6ad77ae4cfd9de6940440a2a0dcb69f0b",
+      "graph_replays": 10,
+      "bit_identical": true
+    },
+    {
+      "key": "mxfp4-raw-256-6-32-sps",
+      "cubin_sha256": "cbd5b318abc9a54003a775a5a0711ab4e393f818d91a1cc51c094e88343add04",
+      "graph_replays": 10,
+      "bit_identical": true
+    },
+    {
+      "key": "mxfp4-pure-256-6-32-sps",
+      "cubin_sha256": "55a19f8fa1ecd22a029dab80745bcaecb89068fa6c84738a150b43eecb1750a7",
+      "graph_replays": 10,
+      "bit_identical": true
+    },
+    {
+      "key": "mxfp4-raw-256-6-32-clc",
+      "cubin_sha256": "3c3d780b5be0ec225013fdcdf885727fbf50f0ab1ff44092d0ec0c8c7fbc1af6",
+      "graph_replays": 10,
+      "bit_identical": true
+    },
+    {
+      "key": "mxfp4-pure-256-6-32-clc",
+      "cubin_sha256": "1be076a354a9e204d1f1b212e9bcbcab601c8bc497a1071c39dc1d480e502f73",
+      "graph_replays": 10,
+      "bit_identical": true
+    },
+    {
+      "key": "nvfp4-raw-256-5-64-sps",
+      "cubin_sha256": "5e226662d7eb7b6bd8b0f013818497ec0bdea1427201a21007719f8fc4033324",
+      "graph_replays": 10,
+      "bit_identical": true
+    },
+    {
+      "key": "nvfp4-pure-256-5-64-sps",
+      "cubin_sha256": "c755a3014e5b04037ff75ba3b33e24a320ab16e0726a7fe48f044ccb27701073",
+      "graph_replays": 10,
+      "bit_identical": true
+    },
+    {
+      "key": "nvfp4-raw-256-5-64-clc",
+      "cubin_sha256": "35334dfa92b41ea4bbff0254fc03a60427d51a1e4e70402f7b269ec97e8172ad",
+      "graph_replays": 10,
+      "bit_identical": true
+    },
+    {
+      "key": "nvfp4-pure-256-5-64-clc",
+      "cubin_sha256": "154446a7199b0cbbdc42e603f32c72e3300f2d6847d52bc98f391d0711e9f493",
+      "graph_replays": 10,
+      "bit_identical": true
+    }
+  ],
+  "gpu": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 2070 MHz, 32, 235.02 W, 0 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 31, 226.22 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 31, 222.10 W, 0 %",
+  "validation": [
+    {
+      "format": "mxfp4",
+      "size": 8192,
+      "k": 8192,
+      "mode": "k64",
+      "cubin_sha256": "45bcd61a457e04875dc96b1b463659de3d767163a998fd7c4f8ddd1cc68cce74",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "mxfp4",
+      "size": 8192,
+      "k": 8192,
+      "mode": "mixed",
+      "cubin_sha256": "cdcb0efdc594d75c5c622508449c26bfd3e7cb4f090fb2f923985f664c447365",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "mxfp4",
+      "size": 16384,
+      "k": 16384,
+      "mode": "k64",
+      "cubin_sha256": "a70c200941efd6795042bee4fd6c794536693f90cb4aae6d2e080d8a59c35edf",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "mxfp4",
+      "size": 16384,
+      "k": 16384,
+      "mode": "mixed",
+      "cubin_sha256": "656fe8795ef3fbf5995328230acbf41eed20dbf7e5e5b2881a13ba199049f6af",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "mxfp4",
+      "size": 32768,
+      "k": 32768,
+      "mode": "k64",
+      "cubin_sha256": "a70c200941efd6795042bee4fd6c794536693f90cb4aae6d2e080d8a59c35edf",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "mxfp4",
+      "size": 32768,
+      "k": 32768,
+      "mode": "mixed",
+      "cubin_sha256": "656fe8795ef3fbf5995328230acbf41eed20dbf7e5e5b2881a13ba199049f6af",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "nvfp4",
+      "size": 8192,
+      "k": 8192,
+      "mode": "k64",
+      "cubin_sha256": "2328d95f291b17f9db6c342eecce6ca4182da62dfacacb9af0b3b74d1ea0171f",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "nvfp4",
+      "size": 8192,
+      "k": 8192,
+      "mode": "mixed",
+      "cubin_sha256": "71d5b31c3d5f8768fbc1c9c105a13778f4361a38fabda1fa68ef825151805f3e",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "nvfp4",
+      "size": 16384,
+      "k": 16384,
+      "mode": "k64",
+      "cubin_sha256": "0c8b80b9f942de837dca73f32732f100b24ae5c7e3288feb4f13fdb141868336",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "nvfp4",
+      "size": 16384,
+      "k": 16384,
+      "mode": "mixed",
+      "cubin_sha256": "b353c476bff50dc9f342d857555c1ae6ad77ae4cfd9de6940440a2a0dcb69f0b",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "nvfp4",
+      "size": 32768,
+      "k": 32768,
+      "mode": "k64",
+      "cubin_sha256": "0c8b80b9f942de837dca73f32732f100b24ae5c7e3288feb4f13fdb141868336",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "nvfp4",
+      "size": 32768,
+      "k": 32768,
+      "mode": "mixed",
+      "cubin_sha256": "b353c476bff50dc9f342d857555c1ae6ad77ae4cfd9de6940440a2a0dcb69f0b",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "mxfp4",
+      "size": 8192,
+      "k": 7680,
+      "mode": "k64",
+      "cubin_sha256": "45bcd61a457e04875dc96b1b463659de3d767163a998fd7c4f8ddd1cc68cce74",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "mxfp4",
+      "size": 8192,
+      "k": 7680,
+      "mode": "mixed",
+      "cubin_sha256": "cdcb0efdc594d75c5c622508449c26bfd3e7cb4f090fb2f923985f664c447365",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "mxfp4",
+      "size": 8192,
+      "k": 7680,
+      "mode": "raw",
+      "cubin_sha256": "cbd5b318abc9a54003a775a5a0711ab4e393f818d91a1cc51c094e88343add04",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "mxfp4",
+      "size": 8192,
+      "k": 7680,
+      "mode": "pure",
+      "cubin_sha256": "55a19f8fa1ecd22a029dab80745bcaecb89068fa6c84738a150b43eecb1750a7",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "mxfp4",
+      "size": 16384,
+      "k": 16128,
+      "mode": "k64",
+      "cubin_sha256": "a70c200941efd6795042bee4fd6c794536693f90cb4aae6d2e080d8a59c35edf",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "mxfp4",
+      "size": 16384,
+      "k": 16128,
+      "mode": "mixed",
+      "cubin_sha256": "656fe8795ef3fbf5995328230acbf41eed20dbf7e5e5b2881a13ba199049f6af",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "mxfp4",
+      "size": 16384,
+      "k": 16128,
+      "mode": "raw",
+      "cubin_sha256": "3c3d780b5be0ec225013fdcdf885727fbf50f0ab1ff44092d0ec0c8c7fbc1af6",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "mxfp4",
+      "size": 16384,
+      "k": 16128,
+      "mode": "pure",
+      "cubin_sha256": "1be076a354a9e204d1f1b212e9bcbcab601c8bc497a1071c39dc1d480e502f73",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "mxfp4",
+      "size": 32768,
+      "k": 32256,
+      "mode": "k64",
+      "cubin_sha256": "a70c200941efd6795042bee4fd6c794536693f90cb4aae6d2e080d8a59c35edf",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "mxfp4",
+      "size": 32768,
+      "k": 32256,
+      "mode": "mixed",
+      "cubin_sha256": "656fe8795ef3fbf5995328230acbf41eed20dbf7e5e5b2881a13ba199049f6af",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "mxfp4",
+      "size": 32768,
+      "k": 32256,
+      "mode": "raw",
+      "cubin_sha256": "3c3d780b5be0ec225013fdcdf885727fbf50f0ab1ff44092d0ec0c8c7fbc1af6",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "mxfp4",
+      "size": 32768,
+      "k": 32256,
+      "mode": "pure",
+      "cubin_sha256": "1be076a354a9e204d1f1b212e9bcbcab601c8bc497a1071c39dc1d480e502f73",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "nvfp4",
+      "size": 8192,
+      "k": 7680,
+      "mode": "k64",
+      "cubin_sha256": "2328d95f291b17f9db6c342eecce6ca4182da62dfacacb9af0b3b74d1ea0171f",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "nvfp4",
+      "size": 8192,
+      "k": 7680,
+      "mode": "mixed",
+      "cubin_sha256": "71d5b31c3d5f8768fbc1c9c105a13778f4361a38fabda1fa68ef825151805f3e",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "nvfp4",
+      "size": 8192,
+      "k": 7680,
+      "mode": "raw",
+      "cubin_sha256": "5e226662d7eb7b6bd8b0f013818497ec0bdea1427201a21007719f8fc4033324",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "nvfp4",
+      "size": 8192,
+      "k": 7680,
+      "mode": "pure",
+      "cubin_sha256": "c755a3014e5b04037ff75ba3b33e24a320ab16e0726a7fe48f044ccb27701073",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "nvfp4",
+      "size": 16384,
+      "k": 16128,
+      "mode": "k64",
+      "cubin_sha256": "0c8b80b9f942de837dca73f32732f100b24ae5c7e3288feb4f13fdb141868336",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "nvfp4",
+      "size": 16384,
+      "k": 16128,
+      "mode": "mixed",
+      "cubin_sha256": "b353c476bff50dc9f342d857555c1ae6ad77ae4cfd9de6940440a2a0dcb69f0b",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "nvfp4",
+      "size": 16384,
+      "k": 16128,
+      "mode": "raw",
+      "cubin_sha256": "35334dfa92b41ea4bbff0254fc03a60427d51a1e4e70402f7b269ec97e8172ad",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "nvfp4",
+      "size": 16384,
+      "k": 16128,
+      "mode": "pure",
+      "cubin_sha256": "154446a7199b0cbbdc42e603f32c72e3300f2d6847d52bc98f391d0711e9f493",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "nvfp4",
+      "size": 32768,
+      "k": 32256,
+      "mode": "k64",
+      "cubin_sha256": "0c8b80b9f942de837dca73f32732f100b24ae5c7e3288feb4f13fdb141868336",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "nvfp4",
+      "size": 32768,
+      "k": 32256,
+      "mode": "mixed",
+      "cubin_sha256": "b353c476bff50dc9f342d857555c1ae6ad77ae4cfd9de6940440a2a0dcb69f0b",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "nvfp4",
+      "size": 32768,
+      "k": 32256,
+      "mode": "raw",
+      "cubin_sha256": "35334dfa92b41ea4bbff0254fc03a60427d51a1e4e70402f7b269ec97e8172ad",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    },
+    {
+      "format": "nvfp4",
+      "size": 32768,
+      "k": 32256,
+      "mode": "pure",
+      "cubin_sha256": "154446a7199b0cbbdc42e603f32c72e3300f2d6847d52bc98f391d0711e9f493",
+      "correct": true,
+      "bit_identical": true,
+      "graph_replays": 10
+    }
+  ],
+  "kernels": {
+    "0c8b80b9f942de837dca73f32732f100b24ae5c7e3288feb4f13fdb141868336": {
+      "cache_hash": "f84d090a46ba89c68956d824c7d7ad770c476ddb3685209cdbefa5c268f263bf",
+      "cubin_sha256": "0c8b80b9f942de837dca73f32732f100b24ae5c7e3288feb4f13fdb141868336",
+      "arg_names": [
+        "a_desc",
+        "b_desc",
+        "c_desc",
+        "a_scale_desc",
+        "b_scale_desc",
+        "M",
+        "N",
+        "K",
+        "A_ELEM_PER_BYTE",
+        "num_buffers",
+        "BLOCK_M",
+        "BLOCK_N",
+        "BLOCK_K",
+        "EPILOGUE_BLOCK_N",
+        "num_acc_buffers",
+        "GRID_MINOR_DIM",
+        "GRID_TILE_WIDTH",
+        "CGA_LAYOUT",
+        "scheduler"
+      ],
+      "signature": [
+        [
+          "a_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "b_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "c_desc",
+          "tensordesc<fp16[256, 64],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "a_scale_desc",
+          "tensordesc<fp8e4nv[1, 2, 4, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 1, 0, 0, 0]])>"
+        ],
+        [
+          "b_scale_desc",
+          "tensordesc<fp8e4nv[1, 2, 4, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 0, 0, 0, 0]])>"
+        ],
+        [
+          "M",
+          "i32"
+        ],
+        [
+          "N",
+          "i32"
+        ],
+        [
+          "K",
+          "i32"
+        ],
+        [
+          "A_ELEM_PER_BYTE",
+          "i32"
+        ],
+        [
+          "num_buffers",
+          "constexpr"
+        ],
+        [
+          "BLOCK_M",
+          "constexpr"
+        ],
+        [
+          "BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "BLOCK_K",
+          "constexpr"
+        ],
+        [
+          "EPILOGUE_BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "num_acc_buffers",
+          "constexpr"
+        ],
+        [
+          "GRID_MINOR_DIM",
+          "constexpr"
+        ],
+        [
+          "GRID_TILE_WIDTH",
+          "constexpr"
+        ],
+        [
+          "CGA_LAYOUT",
+          "constexpr"
+        ],
+        [
+          "scheduler",
+          "constexpr"
+        ]
+      ],
+      "constants": [
+        [
+          [
+            9
+          ],
+          5
+        ],
+        [
+          [
+            10
+          ],
+          256
+        ],
+        [
+          [
+            11
+          ],
+          256
+        ],
+        [
+          [
+            12
+          ],
+          256
+        ],
+        [
+          [
+            13
+          ],
+          64
+        ],
+        [
+          [
+            14
+          ],
+          1
+        ],
+        [
+          [
+            15
+          ],
+          0
+        ],
+        [
+          [
+            16
+          ],
+          8
+        ],
+        [
+          [
+            17
+          ],
+          [
+            [
+              1,
+              0
+            ]
+          ]
+        ],
+        [
+          [
+            18
+          ],
+          "cluster_launch_control"
+        ]
+      ],
+      "files": {
+        "mma_scaled_warp_specialized_kernel.source": "1dbe377180350674ff7e30b8be444a24157834de48fca717634b7b43af6467e4",
+        "mma_scaled_warp_specialized_kernel.ttgir": "88199a07b55c864118ab884fcfcc039f42fb7449f83209a65f55ac984f7c8411",
+        "mma_scaled_warp_specialized_kernel.llir": "5ce08e83da72d536edb06247ca932a04f1dada3e2774acb39a9bc66127e73c64",
+        "mma_scaled_warp_specialized_kernel.ptx": "6434a5071b5f83f87509bb5ec58931942843cdfad47c911c34cd782630dbc3ba",
+        "mma_scaled_warp_specialized_kernel.cubin": "0c8b80b9f942de837dca73f32732f100b24ae5c7e3288feb4f13fdb141868336",
+        "mma_scaled_warp_specialized_kernel.json": "a897664e6c1cccf02f0676098c5e144e07fc135329574d737a9b875815d6a774"
+      },
+      "compiler_metadata": {
+        "hash": "f84d090a46ba89c68956d824c7d7ad770c476ddb3685209cdbefa5c268f263bf",
+        "target": {
+          "backend": "cuda",
+          "arch": 103,
+          "warp_size": 32
+        },
+        "num_warps": 8,
+        "num_ctas": 2,
+        "num_stages": 3,
+        "warp_size": 32,
+        "maxnreg": null,
+        "ptx_version": null,
+        "ptx_options": null,
+        "ir_override": null,
+        "enable_fp_fusion": true,
+        "enable_fp4_k96": false,
+        "enable_reflect_ftz": true,
+        "launch_cooperative_grid": false,
+        "launch_pdl": false,
+        "clc": false,
+        "supported_fp8_dtypes": [
+          "fp8e4b15",
+          "fp8e4nv",
+          "fp8e5"
+        ],
+        "deprecated_fp8_dot_operand_dtypes": [
+          "fp8e4b15"
+        ],
+        "default_dot_input_precision": "tf32",
+        "allowed_dot_input_precisions": [
+          "tf32",
+          "tf32x3",
+          "ieee",
+          "bf16x3",
+          "bf16x6"
+        ],
+        "max_num_imprecise_acc_default": 0,
+        "extern_libs": [
+          [
+            "libdevice",
+            "/root/code/triton/python/triton/backends/nvidia/lib/libdevice.10.bc"
+          ]
+        ],
+        "debug": false,
+        "backend_name": "cuda",
+        "sanitize_overflow": true,
+        "arch": "sm103",
+        "instrumentation_mode": "",
+        "fpsan_homomorphic_casts": false,
+        "min_shared_mem": null,
+        "triton_version": "3.8.0",
+        "tensordesc_meta": [
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 2,
+            "elem_type": 6,
+            "block_size": [
+              128,
+              64
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              1,
+              4,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              2,
+              4,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          }
+        ],
+        "shared": 227532,
+        "tmem_size": 512,
+        "global_scratch_size": 0,
+        "global_scratch_align": 1,
+        "profile_scratch_size": 0,
+        "profile_scratch_align": 1,
+        "name": "mma_scaled_warp_specialized_kernel"
+      }
+    },
+    "154446a7199b0cbbdc42e603f32c72e3300f2d6847d52bc98f391d0711e9f493": {
+      "cache_hash": "c8e0eb18cc20247b30e4514225feb9e534bec4d866859111f8a5cf32e2f2cda9",
+      "cubin_sha256": "154446a7199b0cbbdc42e603f32c72e3300f2d6847d52bc98f391d0711e9f493",
+      "arg_names": [
+        "a_desc",
+        "b_desc",
+        "c_desc",
+        "a_scale_desc",
+        "b_scale_desc",
+        "M",
+        "N",
+        "K",
+        "A_ELEM_PER_BYTE",
+        "num_buffers",
+        "BLOCK_M",
+        "BLOCK_N",
+        "BLOCK_K",
+        "EPILOGUE_BLOCK_N",
+        "num_acc_buffers",
+        "GRID_MINOR_DIM",
+        "GRID_TILE_WIDTH",
+        "CGA_LAYOUT",
+        "scheduler",
+        "MODE"
+      ],
+      "signature": [
+        [
+          "a_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "b_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "c_desc",
+          "tensordesc<fp16[256, 64],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "a_scale_desc",
+          "tensordesc<fp8e4nv[1, 2, 4, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 1, 0, 0, 0]])>"
+        ],
+        [
+          "b_scale_desc",
+          "tensordesc<fp8e4nv[1, 2, 4, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 0, 0, 0, 0]])>"
+        ],
+        [
+          "M",
+          "i32"
+        ],
+        [
+          "N",
+          "i32"
+        ],
+        [
+          "K",
+          "i32"
+        ],
+        [
+          "A_ELEM_PER_BYTE",
+          "i32"
+        ],
+        [
+          "num_buffers",
+          "constexpr"
+        ],
+        [
+          "BLOCK_M",
+          "constexpr"
+        ],
+        [
+          "BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "BLOCK_K",
+          "constexpr"
+        ],
+        [
+          "EPILOGUE_BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "num_acc_buffers",
+          "constexpr"
+        ],
+        [
+          "GRID_MINOR_DIM",
+          "constexpr"
+        ],
+        [
+          "GRID_TILE_WIDTH",
+          "constexpr"
+        ],
+        [
+          "CGA_LAYOUT",
+          "constexpr"
+        ],
+        [
+          "scheduler",
+          "constexpr"
+        ],
+        [
+          "MODE",
+          "constexpr"
+        ]
+      ],
+      "constants": [
+        [
+          [
+            9
+          ],
+          5
+        ],
+        [
+          [
+            10
+          ],
+          256
+        ],
+        [
+          [
+            11
+          ],
+          256
+        ],
+        [
+          [
+            12
+          ],
+          256
+        ],
+        [
+          [
+            13
+          ],
+          64
+        ],
+        [
+          [
+            14
+          ],
+          1
+        ],
+        [
+          [
+            15
+          ],
+          0
+        ],
+        [
+          [
+            16
+          ],
+          8
+        ],
+        [
+          [
+            17
+          ],
+          [
+            [
+              1,
+              0
+            ]
+          ]
+        ],
+        [
+          [
+            18
+          ],
+          "cluster_launch_control"
+        ],
+        [
+          [
+            19
+          ],
+          "pure"
+        ]
+      ],
+      "files": {
+        "raw_kernel.source": "ecd1539a51878f32a5a887479769461ce855d6bf9a642fdebece6f550b039b94",
+        "raw_kernel.ttgir": "51893d529098c7fa7a998fd93c2cf1f06f08a6a791fb8dfb29aab0c464274835",
+        "raw_kernel.llir": "0281a3418baec1ab10fd0ccd550931f2960abf932fbc20b55e4e9d22be2df26d",
+        "raw_kernel.ptx": "5c678b956c0453233e1fa6ec8dc6d1869d9ef99b8786d00c07792bb708e84af2",
+        "raw_kernel.cubin": "154446a7199b0cbbdc42e603f32c72e3300f2d6847d52bc98f391d0711e9f493",
+        "raw_kernel.json": "c38e7789a55235bbf4247c94f4c022fd0092baf6ba108bc3ed048c13566b627c"
+      },
+      "compiler_metadata": {
+        "hash": "c8e0eb18cc20247b30e4514225feb9e534bec4d866859111f8a5cf32e2f2cda9",
+        "target": {
+          "backend": "cuda",
+          "arch": 103,
+          "warp_size": 32
+        },
+        "num_warps": 8,
+        "num_ctas": 2,
+        "num_stages": 3,
+        "warp_size": 32,
+        "maxnreg": null,
+        "ptx_version": null,
+        "ptx_options": null,
+        "ir_override": null,
+        "enable_fp_fusion": true,
+        "enable_fp4_k96": false,
+        "enable_reflect_ftz": true,
+        "launch_cooperative_grid": false,
+        "launch_pdl": false,
+        "clc": false,
+        "supported_fp8_dtypes": [
+          "fp8e4b15",
+          "fp8e4nv",
+          "fp8e5"
+        ],
+        "deprecated_fp8_dot_operand_dtypes": [
+          "fp8e4b15"
+        ],
+        "default_dot_input_precision": "tf32",
+        "allowed_dot_input_precisions": [
+          "tf32",
+          "tf32x3",
+          "ieee",
+          "bf16x3",
+          "bf16x6"
+        ],
+        "max_num_imprecise_acc_default": 0,
+        "extern_libs": [
+          [
+            "libdevice",
+            "/root/code/triton/python/triton/backends/nvidia/lib/libdevice.10.bc"
+          ]
+        ],
+        "debug": false,
+        "backend_name": "cuda",
+        "sanitize_overflow": true,
+        "arch": "sm103",
+        "instrumentation_mode": "",
+        "fpsan_homomorphic_casts": false,
+        "min_shared_mem": null,
+        "triton_version": "3.8.0",
+        "tensordesc_meta": [
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 2,
+            "elem_type": 6,
+            "block_size": [
+              128,
+              64
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              1,
+              4,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              2,
+              4,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          }
+        ],
+        "shared": 227532,
+        "tmem_size": 512,
+        "global_scratch_size": 0,
+        "global_scratch_align": 1,
+        "profile_scratch_size": 0,
+        "profile_scratch_align": 1,
+        "name": "raw_kernel"
+      }
+    },
+    "1be076a354a9e204d1f1b212e9bcbcab601c8bc497a1071c39dc1d480e502f73": {
+      "cache_hash": "02fd55034c5d8ac74c005a3b98f3cc2eece40c50a4c8c612ab32640a5a6abc28",
+      "cubin_sha256": "1be076a354a9e204d1f1b212e9bcbcab601c8bc497a1071c39dc1d480e502f73",
+      "arg_names": [
+        "a_desc",
+        "b_desc",
+        "c_desc",
+        "a_scale_desc",
+        "b_scale_desc",
+        "M",
+        "N",
+        "K",
+        "A_ELEM_PER_BYTE",
+        "num_buffers",
+        "BLOCK_M",
+        "BLOCK_N",
+        "BLOCK_K",
+        "EPILOGUE_BLOCK_N",
+        "num_acc_buffers",
+        "GRID_MINOR_DIM",
+        "GRID_TILE_WIDTH",
+        "CGA_LAYOUT",
+        "scheduler",
+        "MODE"
+      ],
+      "signature": [
+        [
+          "a_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "b_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "c_desc",
+          "tensordesc<fp16[256, 32],NVMMASharedLayout(swizzle_byte_width=64, element_bitwidth=16, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "a_scale_desc",
+          "tensordesc<u8[1, 2, 2, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 1, 0, 0, 0]])>"
+        ],
+        [
+          "b_scale_desc",
+          "tensordesc<u8[1, 2, 2, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 0, 0, 0, 0]])>"
+        ],
+        [
+          "M",
+          "i32"
+        ],
+        [
+          "N",
+          "i32"
+        ],
+        [
+          "K",
+          "i32"
+        ],
+        [
+          "A_ELEM_PER_BYTE",
+          "i32"
+        ],
+        [
+          "num_buffers",
+          "constexpr"
+        ],
+        [
+          "BLOCK_M",
+          "constexpr"
+        ],
+        [
+          "BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "BLOCK_K",
+          "constexpr"
+        ],
+        [
+          "EPILOGUE_BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "num_acc_buffers",
+          "constexpr"
+        ],
+        [
+          "GRID_MINOR_DIM",
+          "constexpr"
+        ],
+        [
+          "GRID_TILE_WIDTH",
+          "constexpr"
+        ],
+        [
+          "CGA_LAYOUT",
+          "constexpr"
+        ],
+        [
+          "scheduler",
+          "constexpr"
+        ],
+        [
+          "MODE",
+          "constexpr"
+        ]
+      ],
+      "constants": [
+        [
+          [
+            9
+          ],
+          6
+        ],
+        [
+          [
+            10
+          ],
+          256
+        ],
+        [
+          [
+            11
+          ],
+          256
+        ],
+        [
+          [
+            12
+          ],
+          256
+        ],
+        [
+          [
+            13
+          ],
+          32
+        ],
+        [
+          [
+            14
+          ],
+          1
+        ],
+        [
+          [
+            15
+          ],
+          0
+        ],
+        [
+          [
+            16
+          ],
+          8
+        ],
+        [
+          [
+            17
+          ],
+          [
+            [
+              1,
+              0
+            ]
+          ]
+        ],
+        [
+          [
+            18
+          ],
+          "cluster_launch_control"
+        ],
+        [
+          [
+            19
+          ],
+          "pure"
+        ]
+      ],
+      "files": {
+        "raw_kernel.source": "193c3317bc23a03c3feb4119d8677c4d871e03a87aa23abba50a11f0733966b7",
+        "raw_kernel.ttgir": "6b502d9b60c2875cbc6daa6ce21c7f3d590c266b9f47e823ed7f0b3b4bae68c9",
+        "raw_kernel.llir": "030cda6a986e3a757d8bd347e844677572e1f4cfa30b529a3fb79caf9e62e37b",
+        "raw_kernel.ptx": "5979ffb63de3ee2acb179967911c8175958efd12f4c402e9d93ca857cdd574a3",
+        "raw_kernel.cubin": "1be076a354a9e204d1f1b212e9bcbcab601c8bc497a1071c39dc1d480e502f73",
+        "raw_kernel.json": "4152d349554a3a75d3dd5a0621f709363f430fe751e1a4284bb5429623f52f02"
+      },
+      "compiler_metadata": {
+        "hash": "02fd55034c5d8ac74c005a3b98f3cc2eece40c50a4c8c612ab32640a5a6abc28",
+        "target": {
+          "backend": "cuda",
+          "arch": 103,
+          "warp_size": 32
+        },
+        "num_warps": 8,
+        "num_ctas": 2,
+        "num_stages": 3,
+        "warp_size": 32,
+        "maxnreg": null,
+        "ptx_version": null,
+        "ptx_options": null,
+        "ir_override": null,
+        "enable_fp_fusion": true,
+        "enable_fp4_k96": false,
+        "enable_reflect_ftz": true,
+        "launch_cooperative_grid": false,
+        "launch_pdl": false,
+        "clc": false,
+        "supported_fp8_dtypes": [
+          "fp8e4b15",
+          "fp8e4nv",
+          "fp8e5"
+        ],
+        "deprecated_fp8_dot_operand_dtypes": [
+          "fp8e4b15"
+        ],
+        "default_dot_input_precision": "tf32",
+        "allowed_dot_input_precisions": [
+          "tf32",
+          "tf32x3",
+          "ieee",
+          "bf16x3",
+          "bf16x6"
+        ],
+        "max_num_imprecise_acc_default": 0,
+        "extern_libs": [
+          [
+            "libdevice",
+            "/root/code/triton/python/triton/backends/nvidia/lib/libdevice.10.bc"
+          ]
+        ],
+        "debug": false,
+        "backend_name": "cuda",
+        "sanitize_overflow": true,
+        "arch": "sm103",
+        "instrumentation_mode": "",
+        "fpsan_homomorphic_casts": false,
+        "min_shared_mem": null,
+        "triton_version": "3.8.0",
+        "tensordesc_meta": [
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 2,
+            "elem_size": 2,
+            "elem_type": 6,
+            "block_size": [
+              128,
+              32
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              1,
+              2,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              2,
+              2,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          }
+        ],
+        "shared": 231628,
+        "tmem_size": 512,
+        "global_scratch_size": 0,
+        "global_scratch_align": 1,
+        "profile_scratch_size": 0,
+        "profile_scratch_align": 1,
+        "name": "raw_kernel"
+      }
+    },
+    "2328d95f291b17f9db6c342eecce6ca4182da62dfacacb9af0b3b74d1ea0171f": {
+      "cache_hash": "3cb89bb049b9034070e3f88c56dcb237cf488bd8ac8371d53d33616668b19736",
+      "cubin_sha256": "2328d95f291b17f9db6c342eecce6ca4182da62dfacacb9af0b3b74d1ea0171f",
+      "arg_names": [
+        "a_desc",
+        "b_desc",
+        "c_desc",
+        "a_scale_desc",
+        "b_scale_desc",
+        "M",
+        "N",
+        "K",
+        "A_ELEM_PER_BYTE",
+        "num_buffers",
+        "BLOCK_M",
+        "BLOCK_N",
+        "BLOCK_K",
+        "EPILOGUE_BLOCK_N",
+        "num_acc_buffers",
+        "GRID_MINOR_DIM",
+        "GRID_TILE_WIDTH",
+        "CGA_LAYOUT",
+        "scheduler"
+      ],
+      "signature": [
+        [
+          "a_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "b_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "c_desc",
+          "tensordesc<fp16[256, 64],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "a_scale_desc",
+          "tensordesc<fp8e4nv[1, 2, 4, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 1, 0, 0, 0]])>"
+        ],
+        [
+          "b_scale_desc",
+          "tensordesc<fp8e4nv[1, 2, 4, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 0, 0, 0, 0]])>"
+        ],
+        [
+          "M",
+          "i32"
+        ],
+        [
+          "N",
+          "i32"
+        ],
+        [
+          "K",
+          "i32"
+        ],
+        [
+          "A_ELEM_PER_BYTE",
+          "i32"
+        ],
+        [
+          "num_buffers",
+          "constexpr"
+        ],
+        [
+          "BLOCK_M",
+          "constexpr"
+        ],
+        [
+          "BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "BLOCK_K",
+          "constexpr"
+        ],
+        [
+          "EPILOGUE_BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "num_acc_buffers",
+          "constexpr"
+        ],
+        [
+          "GRID_MINOR_DIM",
+          "constexpr"
+        ],
+        [
+          "GRID_TILE_WIDTH",
+          "constexpr"
+        ],
+        [
+          "CGA_LAYOUT",
+          "constexpr"
+        ],
+        [
+          "scheduler",
+          "constexpr"
+        ]
+      ],
+      "constants": [
+        [
+          [
+            9
+          ],
+          5
+        ],
+        [
+          [
+            10
+          ],
+          256
+        ],
+        [
+          [
+            11
+          ],
+          256
+        ],
+        [
+          [
+            12
+          ],
+          256
+        ],
+        [
+          [
+            13
+          ],
+          64
+        ],
+        [
+          [
+            14
+          ],
+          1
+        ],
+        [
+          [
+            15
+          ],
+          0
+        ],
+        [
+          [
+            16
+          ],
+          8
+        ],
+        [
+          [
+            17
+          ],
+          [
+            [
+              1,
+              0
+            ]
+          ]
+        ],
+        [
+          [
+            18
+          ],
+          "static_persistent"
+        ]
+      ],
+      "files": {
+        "mma_scaled_warp_specialized_kernel.source": "31152bc06d8842a76a21e3e4519a95d18681246ef377a615b6b6ebe925f7e606",
+        "mma_scaled_warp_specialized_kernel.ttgir": "e329ea297b46a7f77c17f462e6ece68087badc79f54d06a7607c575af5c88d64",
+        "mma_scaled_warp_specialized_kernel.llir": "6e15afed4a4e5e809742cf777720f85c3d85924a124f72f4288a7d955a7cfcef",
+        "mma_scaled_warp_specialized_kernel.ptx": "5437d7cd57205e42b9af6a30a7b83b9c2d02258a6a4a6395efbcfb377eaa765a",
+        "mma_scaled_warp_specialized_kernel.cubin": "2328d95f291b17f9db6c342eecce6ca4182da62dfacacb9af0b3b74d1ea0171f",
+        "mma_scaled_warp_specialized_kernel.json": "bc0174ba139469d4b76dbaa6c9f074ddf0fdf10f3eff826c65551ab40463bc6b"
+      },
+      "compiler_metadata": {
+        "hash": "3cb89bb049b9034070e3f88c56dcb237cf488bd8ac8371d53d33616668b19736",
+        "target": {
+          "backend": "cuda",
+          "arch": 103,
+          "warp_size": 32
+        },
+        "num_warps": 8,
+        "num_ctas": 2,
+        "num_stages": 3,
+        "warp_size": 32,
+        "maxnreg": null,
+        "ptx_version": null,
+        "ptx_options": null,
+        "ir_override": null,
+        "enable_fp_fusion": true,
+        "enable_fp4_k96": false,
+        "enable_reflect_ftz": true,
+        "launch_cooperative_grid": false,
+        "launch_pdl": false,
+        "clc": false,
+        "supported_fp8_dtypes": [
+          "fp8e4b15",
+          "fp8e4nv",
+          "fp8e5"
+        ],
+        "deprecated_fp8_dot_operand_dtypes": [
+          "fp8e4b15"
+        ],
+        "default_dot_input_precision": "tf32",
+        "allowed_dot_input_precisions": [
+          "tf32",
+          "tf32x3",
+          "ieee",
+          "bf16x3",
+          "bf16x6"
+        ],
+        "max_num_imprecise_acc_default": 0,
+        "extern_libs": [
+          [
+            "libdevice",
+            "/root/code/triton/python/triton/backends/nvidia/lib/libdevice.10.bc"
+          ]
+        ],
+        "debug": false,
+        "backend_name": "cuda",
+        "sanitize_overflow": true,
+        "arch": "sm103",
+        "instrumentation_mode": "",
+        "fpsan_homomorphic_casts": false,
+        "min_shared_mem": null,
+        "triton_version": "3.8.0",
+        "tensordesc_meta": [
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 2,
+            "elem_type": 6,
+            "block_size": [
+              128,
+              64
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              1,
+              4,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              2,
+              4,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          }
+        ],
+        "shared": 227452,
+        "tmem_size": 512,
+        "global_scratch_size": 0,
+        "global_scratch_align": 1,
+        "profile_scratch_size": 0,
+        "profile_scratch_align": 1,
+        "name": "mma_scaled_warp_specialized_kernel"
+      }
+    },
+    "35334dfa92b41ea4bbff0254fc03a60427d51a1e4e70402f7b269ec97e8172ad": {
+      "cache_hash": "04b34ab858b7d849d46a88fc09e713e0cb5cfb5d246644b3e724bb8142293673",
+      "cubin_sha256": "35334dfa92b41ea4bbff0254fc03a60427d51a1e4e70402f7b269ec97e8172ad",
+      "arg_names": [
+        "a_desc",
+        "b_desc",
+        "c_desc",
+        "a_scale_desc",
+        "b_scale_desc",
+        "M",
+        "N",
+        "K",
+        "A_ELEM_PER_BYTE",
+        "num_buffers",
+        "BLOCK_M",
+        "BLOCK_N",
+        "BLOCK_K",
+        "EPILOGUE_BLOCK_N",
+        "num_acc_buffers",
+        "GRID_MINOR_DIM",
+        "GRID_TILE_WIDTH",
+        "CGA_LAYOUT",
+        "scheduler",
+        "MODE"
+      ],
+      "signature": [
+        [
+          "a_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "b_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "c_desc",
+          "tensordesc<fp16[256, 64],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "a_scale_desc",
+          "tensordesc<fp8e4nv[1, 2, 4, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 1, 0, 0, 0]])>"
+        ],
+        [
+          "b_scale_desc",
+          "tensordesc<fp8e4nv[1, 2, 4, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 0, 0, 0, 0]])>"
+        ],
+        [
+          "M",
+          "i32"
+        ],
+        [
+          "N",
+          "i32"
+        ],
+        [
+          "K",
+          "i32"
+        ],
+        [
+          "A_ELEM_PER_BYTE",
+          "i32"
+        ],
+        [
+          "num_buffers",
+          "constexpr"
+        ],
+        [
+          "BLOCK_M",
+          "constexpr"
+        ],
+        [
+          "BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "BLOCK_K",
+          "constexpr"
+        ],
+        [
+          "EPILOGUE_BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "num_acc_buffers",
+          "constexpr"
+        ],
+        [
+          "GRID_MINOR_DIM",
+          "constexpr"
+        ],
+        [
+          "GRID_TILE_WIDTH",
+          "constexpr"
+        ],
+        [
+          "CGA_LAYOUT",
+          "constexpr"
+        ],
+        [
+          "scheduler",
+          "constexpr"
+        ],
+        [
+          "MODE",
+          "constexpr"
+        ]
+      ],
+      "constants": [
+        [
+          [
+            9
+          ],
+          5
+        ],
+        [
+          [
+            10
+          ],
+          256
+        ],
+        [
+          [
+            11
+          ],
+          256
+        ],
+        [
+          [
+            12
+          ],
+          256
+        ],
+        [
+          [
+            13
+          ],
+          64
+        ],
+        [
+          [
+            14
+          ],
+          1
+        ],
+        [
+          [
+            15
+          ],
+          0
+        ],
+        [
+          [
+            16
+          ],
+          8
+        ],
+        [
+          [
+            17
+          ],
+          [
+            [
+              1,
+              0
+            ]
+          ]
+        ],
+        [
+          [
+            18
+          ],
+          "cluster_launch_control"
+        ],
+        [
+          [
+            19
+          ],
+          "raw"
+        ]
+      ],
+      "files": {
+        "raw_kernel.source": "890374fe61c11a2009cf0a2a91611d67fa27e49d2e81dfa9c45b33a83d854710",
+        "raw_kernel.ttgir": "eb2a1d901818be08762577d2c7ad4d4d561bf2439b84171535ee986ffbe80987",
+        "raw_kernel.llir": "e0f124fc17b0f3695602a57246c1cf0f41cf6480c46878f5dda6dd0d5c66e342",
+        "raw_kernel.ptx": "1b3f34943d1dc273d7ef05b64bfa87612358becece2cf598c60a281f2ccbd41f",
+        "raw_kernel.cubin": "35334dfa92b41ea4bbff0254fc03a60427d51a1e4e70402f7b269ec97e8172ad",
+        "raw_kernel.json": "8c7a67e230de4772d529d912e7d577ff65abe980cd43527cd1f48d6b7e06c3fa"
+      },
+      "compiler_metadata": {
+        "hash": "04b34ab858b7d849d46a88fc09e713e0cb5cfb5d246644b3e724bb8142293673",
+        "target": {
+          "backend": "cuda",
+          "arch": 103,
+          "warp_size": 32
+        },
+        "num_warps": 8,
+        "num_ctas": 2,
+        "num_stages": 3,
+        "warp_size": 32,
+        "maxnreg": null,
+        "ptx_version": null,
+        "ptx_options": null,
+        "ir_override": null,
+        "enable_fp_fusion": true,
+        "enable_fp4_k96": false,
+        "enable_reflect_ftz": true,
+        "launch_cooperative_grid": false,
+        "launch_pdl": false,
+        "clc": false,
+        "supported_fp8_dtypes": [
+          "fp8e4b15",
+          "fp8e4nv",
+          "fp8e5"
+        ],
+        "deprecated_fp8_dot_operand_dtypes": [
+          "fp8e4b15"
+        ],
+        "default_dot_input_precision": "tf32",
+        "allowed_dot_input_precisions": [
+          "tf32",
+          "tf32x3",
+          "ieee",
+          "bf16x3",
+          "bf16x6"
+        ],
+        "max_num_imprecise_acc_default": 0,
+        "extern_libs": [
+          [
+            "libdevice",
+            "/root/code/triton/python/triton/backends/nvidia/lib/libdevice.10.bc"
+          ]
+        ],
+        "debug": false,
+        "backend_name": "cuda",
+        "sanitize_overflow": true,
+        "arch": "sm103",
+        "instrumentation_mode": "",
+        "fpsan_homomorphic_casts": false,
+        "min_shared_mem": null,
+        "triton_version": "3.8.0",
+        "tensordesc_meta": [
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 2,
+            "elem_type": 6,
+            "block_size": [
+              128,
+              64
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              1,
+              4,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              2,
+              4,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          }
+        ],
+        "shared": 227532,
+        "tmem_size": 512,
+        "global_scratch_size": 0,
+        "global_scratch_align": 1,
+        "profile_scratch_size": 0,
+        "profile_scratch_align": 1,
+        "name": "raw_kernel"
+      }
+    },
+    "3c3d780b5be0ec225013fdcdf885727fbf50f0ab1ff44092d0ec0c8c7fbc1af6": {
+      "cache_hash": "db8169ada6ea55e9dc69c55150e55c5bafcd5ecd922c6f691cd7050621f52983",
+      "cubin_sha256": "3c3d780b5be0ec225013fdcdf885727fbf50f0ab1ff44092d0ec0c8c7fbc1af6",
+      "arg_names": [
+        "a_desc",
+        "b_desc",
+        "c_desc",
+        "a_scale_desc",
+        "b_scale_desc",
+        "M",
+        "N",
+        "K",
+        "A_ELEM_PER_BYTE",
+        "num_buffers",
+        "BLOCK_M",
+        "BLOCK_N",
+        "BLOCK_K",
+        "EPILOGUE_BLOCK_N",
+        "num_acc_buffers",
+        "GRID_MINOR_DIM",
+        "GRID_TILE_WIDTH",
+        "CGA_LAYOUT",
+        "scheduler",
+        "MODE"
+      ],
+      "signature": [
+        [
+          "a_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "b_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "c_desc",
+          "tensordesc<fp16[256, 32],NVMMASharedLayout(swizzle_byte_width=64, element_bitwidth=16, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "a_scale_desc",
+          "tensordesc<u8[1, 2, 2, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 1, 0, 0, 0]])>"
+        ],
+        [
+          "b_scale_desc",
+          "tensordesc<u8[1, 2, 2, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 0, 0, 0, 0]])>"
+        ],
+        [
+          "M",
+          "i32"
+        ],
+        [
+          "N",
+          "i32"
+        ],
+        [
+          "K",
+          "i32"
+        ],
+        [
+          "A_ELEM_PER_BYTE",
+          "i32"
+        ],
+        [
+          "num_buffers",
+          "constexpr"
+        ],
+        [
+          "BLOCK_M",
+          "constexpr"
+        ],
+        [
+          "BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "BLOCK_K",
+          "constexpr"
+        ],
+        [
+          "EPILOGUE_BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "num_acc_buffers",
+          "constexpr"
+        ],
+        [
+          "GRID_MINOR_DIM",
+          "constexpr"
+        ],
+        [
+          "GRID_TILE_WIDTH",
+          "constexpr"
+        ],
+        [
+          "CGA_LAYOUT",
+          "constexpr"
+        ],
+        [
+          "scheduler",
+          "constexpr"
+        ],
+        [
+          "MODE",
+          "constexpr"
+        ]
+      ],
+      "constants": [
+        [
+          [
+            9
+          ],
+          6
+        ],
+        [
+          [
+            10
+          ],
+          256
+        ],
+        [
+          [
+            11
+          ],
+          256
+        ],
+        [
+          [
+            12
+          ],
+          256
+        ],
+        [
+          [
+            13
+          ],
+          32
+        ],
+        [
+          [
+            14
+          ],
+          1
+        ],
+        [
+          [
+            15
+          ],
+          0
+        ],
+        [
+          [
+            16
+          ],
+          8
+        ],
+        [
+          [
+            17
+          ],
+          [
+            [
+              1,
+              0
+            ]
+          ]
+        ],
+        [
+          [
+            18
+          ],
+          "cluster_launch_control"
+        ],
+        [
+          [
+            19
+          ],
+          "raw"
+        ]
+      ],
+      "files": {
+        "raw_kernel.source": "53f37237f1edfcad2eb986a7dba9cdd59e1236391fa3120fbfe1252874d7a352",
+        "raw_kernel.ttgir": "c38cd16081f1af14a2c9e2c088de46504ebe72fc79bae65a86c4dd9c23ed8bf1",
+        "raw_kernel.llir": "95aae9e31031319cd5c31fc22d26a0e971fbf6786ef3e771f8cabddbedf645b7",
+        "raw_kernel.ptx": "5c331e39d371cc4e5e571b6590118fefe3b503a5ebb47a821fda94c554a570e6",
+        "raw_kernel.cubin": "3c3d780b5be0ec225013fdcdf885727fbf50f0ab1ff44092d0ec0c8c7fbc1af6",
+        "raw_kernel.json": "e29b3815cbf841a10b52387b16a2e405f0941cc33751a662378941890845f7b3"
+      },
+      "compiler_metadata": {
+        "hash": "db8169ada6ea55e9dc69c55150e55c5bafcd5ecd922c6f691cd7050621f52983",
+        "target": {
+          "backend": "cuda",
+          "arch": 103,
+          "warp_size": 32
+        },
+        "num_warps": 8,
+        "num_ctas": 2,
+        "num_stages": 3,
+        "warp_size": 32,
+        "maxnreg": null,
+        "ptx_version": null,
+        "ptx_options": null,
+        "ir_override": null,
+        "enable_fp_fusion": true,
+        "enable_fp4_k96": false,
+        "enable_reflect_ftz": true,
+        "launch_cooperative_grid": false,
+        "launch_pdl": false,
+        "clc": false,
+        "supported_fp8_dtypes": [
+          "fp8e4b15",
+          "fp8e4nv",
+          "fp8e5"
+        ],
+        "deprecated_fp8_dot_operand_dtypes": [
+          "fp8e4b15"
+        ],
+        "default_dot_input_precision": "tf32",
+        "allowed_dot_input_precisions": [
+          "tf32",
+          "tf32x3",
+          "ieee",
+          "bf16x3",
+          "bf16x6"
+        ],
+        "max_num_imprecise_acc_default": 0,
+        "extern_libs": [
+          [
+            "libdevice",
+            "/root/code/triton/python/triton/backends/nvidia/lib/libdevice.10.bc"
+          ]
+        ],
+        "debug": false,
+        "backend_name": "cuda",
+        "sanitize_overflow": true,
+        "arch": "sm103",
+        "instrumentation_mode": "",
+        "fpsan_homomorphic_casts": false,
+        "min_shared_mem": null,
+        "triton_version": "3.8.0",
+        "tensordesc_meta": [
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 2,
+            "elem_size": 2,
+            "elem_type": 6,
+            "block_size": [
+              128,
+              32
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              1,
+              2,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              2,
+              2,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          }
+        ],
+        "shared": 231628,
+        "tmem_size": 512,
+        "global_scratch_size": 0,
+        "global_scratch_align": 1,
+        "profile_scratch_size": 0,
+        "profile_scratch_align": 1,
+        "name": "raw_kernel"
+      }
+    },
+    "45bcd61a457e04875dc96b1b463659de3d767163a998fd7c4f8ddd1cc68cce74": {
+      "cache_hash": "498fa338a1800531a4d9e44ea4b6a8ffb4d4337ffb723c96f703a16e3f2ad54f",
+      "cubin_sha256": "45bcd61a457e04875dc96b1b463659de3d767163a998fd7c4f8ddd1cc68cce74",
+      "arg_names": [
+        "a_desc",
+        "b_desc",
+        "c_desc",
+        "a_scale_desc",
+        "b_scale_desc",
+        "M",
+        "N",
+        "K",
+        "A_ELEM_PER_BYTE",
+        "num_buffers",
+        "BLOCK_M",
+        "BLOCK_N",
+        "BLOCK_K",
+        "EPILOGUE_BLOCK_N",
+        "num_acc_buffers",
+        "GRID_MINOR_DIM",
+        "GRID_TILE_WIDTH",
+        "CGA_LAYOUT",
+        "scheduler"
+      ],
+      "signature": [
+        [
+          "a_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "b_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "c_desc",
+          "tensordesc<fp16[256, 64],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "a_scale_desc",
+          "tensordesc<u8[1, 2, 2, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 1, 0, 0, 0]])>"
+        ],
+        [
+          "b_scale_desc",
+          "tensordesc<u8[1, 2, 2, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 0, 0, 0, 0]])>"
+        ],
+        [
+          "M",
+          "i32"
+        ],
+        [
+          "N",
+          "i32"
+        ],
+        [
+          "K",
+          "i32"
+        ],
+        [
+          "A_ELEM_PER_BYTE",
+          "i32"
+        ],
+        [
+          "num_buffers",
+          "constexpr"
+        ],
+        [
+          "BLOCK_M",
+          "constexpr"
+        ],
+        [
+          "BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "BLOCK_K",
+          "constexpr"
+        ],
+        [
+          "EPILOGUE_BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "num_acc_buffers",
+          "constexpr"
+        ],
+        [
+          "GRID_MINOR_DIM",
+          "constexpr"
+        ],
+        [
+          "GRID_TILE_WIDTH",
+          "constexpr"
+        ],
+        [
+          "CGA_LAYOUT",
+          "constexpr"
+        ],
+        [
+          "scheduler",
+          "constexpr"
+        ]
+      ],
+      "constants": [
+        [
+          [
+            9
+          ],
+          5
+        ],
+        [
+          [
+            10
+          ],
+          256
+        ],
+        [
+          [
+            11
+          ],
+          256
+        ],
+        [
+          [
+            12
+          ],
+          256
+        ],
+        [
+          [
+            13
+          ],
+          64
+        ],
+        [
+          [
+            14
+          ],
+          1
+        ],
+        [
+          [
+            15
+          ],
+          0
+        ],
+        [
+          [
+            16
+          ],
+          8
+        ],
+        [
+          [
+            17
+          ],
+          [
+            [
+              1,
+              0
+            ]
+          ]
+        ],
+        [
+          [
+            18
+          ],
+          "static_persistent"
+        ]
+      ],
+      "files": {
+        "mma_scaled_warp_specialized_kernel.source": "d92d6c358c2b4abf21602fce581af95472cf073327700e7868d30e71826aab7a",
+        "mma_scaled_warp_specialized_kernel.ttgir": "ac0014d47ab59f6d87d26a9e6739164e82199741f39f7ec686b90e99c0f40777",
+        "mma_scaled_warp_specialized_kernel.llir": "7e3ee8184be7aeceec19b3e962422dae9d6fd02ae96f08059a61f23778d027bd",
+        "mma_scaled_warp_specialized_kernel.ptx": "f93caea2982370fe5592c23eb4c005b8380bd158b317736d52fe0fa2decb2f44",
+        "mma_scaled_warp_specialized_kernel.cubin": "45bcd61a457e04875dc96b1b463659de3d767163a998fd7c4f8ddd1cc68cce74",
+        "mma_scaled_warp_specialized_kernel.json": "a7fcbe5ef48064600fad02feb050e8916ffd62d9f9a4fdd8884cc43b83528cd0"
+      },
+      "compiler_metadata": {
+        "hash": "498fa338a1800531a4d9e44ea4b6a8ffb4d4337ffb723c96f703a16e3f2ad54f",
+        "target": {
+          "backend": "cuda",
+          "arch": 103,
+          "warp_size": 32
+        },
+        "num_warps": 8,
+        "num_ctas": 2,
+        "num_stages": 3,
+        "warp_size": 32,
+        "maxnreg": null,
+        "ptx_version": null,
+        "ptx_options": null,
+        "ir_override": null,
+        "enable_fp_fusion": true,
+        "enable_fp4_k96": false,
+        "enable_reflect_ftz": true,
+        "launch_cooperative_grid": false,
+        "launch_pdl": false,
+        "clc": false,
+        "supported_fp8_dtypes": [
+          "fp8e4b15",
+          "fp8e4nv",
+          "fp8e5"
+        ],
+        "deprecated_fp8_dot_operand_dtypes": [
+          "fp8e4b15"
+        ],
+        "default_dot_input_precision": "tf32",
+        "allowed_dot_input_precisions": [
+          "tf32",
+          "tf32x3",
+          "ieee",
+          "bf16x3",
+          "bf16x6"
+        ],
+        "max_num_imprecise_acc_default": 0,
+        "extern_libs": [
+          [
+            "libdevice",
+            "/root/code/triton/python/triton/backends/nvidia/lib/libdevice.10.bc"
+          ]
+        ],
+        "debug": false,
+        "backend_name": "cuda",
+        "sanitize_overflow": true,
+        "arch": "sm103",
+        "instrumentation_mode": "",
+        "fpsan_homomorphic_casts": false,
+        "min_shared_mem": null,
+        "triton_version": "3.8.0",
+        "tensordesc_meta": [
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 2,
+            "elem_type": 6,
+            "block_size": [
+              128,
+              64
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              1,
+              2,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              2,
+              2,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          }
+        ],
+        "shared": 212092,
+        "tmem_size": 512,
+        "global_scratch_size": 0,
+        "global_scratch_align": 1,
+        "profile_scratch_size": 0,
+        "profile_scratch_align": 1,
+        "name": "mma_scaled_warp_specialized_kernel"
+      }
+    },
+    "55a19f8fa1ecd22a029dab80745bcaecb89068fa6c84738a150b43eecb1750a7": {
+      "cache_hash": "4b9926e65201ead7388656f3e30a09db4954c1f467e9fcead1a7a6b5fdf608a5",
+      "cubin_sha256": "55a19f8fa1ecd22a029dab80745bcaecb89068fa6c84738a150b43eecb1750a7",
+      "arg_names": [
+        "a_desc",
+        "b_desc",
+        "c_desc",
+        "a_scale_desc",
+        "b_scale_desc",
+        "M",
+        "N",
+        "K",
+        "A_ELEM_PER_BYTE",
+        "num_buffers",
+        "BLOCK_M",
+        "BLOCK_N",
+        "BLOCK_K",
+        "EPILOGUE_BLOCK_N",
+        "num_acc_buffers",
+        "GRID_MINOR_DIM",
+        "GRID_TILE_WIDTH",
+        "CGA_LAYOUT",
+        "scheduler",
+        "MODE"
+      ],
+      "signature": [
+        [
+          "a_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "b_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "c_desc",
+          "tensordesc<fp16[256, 32],NVMMASharedLayout(swizzle_byte_width=64, element_bitwidth=16, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "a_scale_desc",
+          "tensordesc<u8[1, 2, 2, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 1, 0, 0, 0]])>"
+        ],
+        [
+          "b_scale_desc",
+          "tensordesc<u8[1, 2, 2, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 0, 0, 0, 0]])>"
+        ],
+        [
+          "M",
+          "i32"
+        ],
+        [
+          "N",
+          "i32"
+        ],
+        [
+          "K",
+          "i32"
+        ],
+        [
+          "A_ELEM_PER_BYTE",
+          "i32"
+        ],
+        [
+          "num_buffers",
+          "constexpr"
+        ],
+        [
+          "BLOCK_M",
+          "constexpr"
+        ],
+        [
+          "BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "BLOCK_K",
+          "constexpr"
+        ],
+        [
+          "EPILOGUE_BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "num_acc_buffers",
+          "constexpr"
+        ],
+        [
+          "GRID_MINOR_DIM",
+          "constexpr"
+        ],
+        [
+          "GRID_TILE_WIDTH",
+          "constexpr"
+        ],
+        [
+          "CGA_LAYOUT",
+          "constexpr"
+        ],
+        [
+          "scheduler",
+          "constexpr"
+        ],
+        [
+          "MODE",
+          "constexpr"
+        ]
+      ],
+      "constants": [
+        [
+          [
+            9
+          ],
+          6
+        ],
+        [
+          [
+            10
+          ],
+          256
+        ],
+        [
+          [
+            11
+          ],
+          256
+        ],
+        [
+          [
+            12
+          ],
+          256
+        ],
+        [
+          [
+            13
+          ],
+          32
+        ],
+        [
+          [
+            14
+          ],
+          1
+        ],
+        [
+          [
+            15
+          ],
+          0
+        ],
+        [
+          [
+            16
+          ],
+          8
+        ],
+        [
+          [
+            17
+          ],
+          [
+            [
+              1,
+              0
+            ]
+          ]
+        ],
+        [
+          [
+            18
+          ],
+          "static_persistent"
+        ],
+        [
+          [
+            19
+          ],
+          "pure"
+        ]
+      ],
+      "files": {
+        "raw_kernel.source": "7d38ac96c4207bc633e738702cc5e564a03cd4bb0ec4ff2e58168309a0c36c37",
+        "raw_kernel.ttgir": "87425c50849ff55d53ca5804ca8653c23063e44828d32547082e783f289066b7",
+        "raw_kernel.llir": "22420ea726f26cb7112cdc355bf27238378e9bbc16a21c3df5ffa86d605e5249",
+        "raw_kernel.ptx": "9fea68be10a929fb954d70856b519a7c8bfd83d79659ede9a06eb27f6e904c4c",
+        "raw_kernel.cubin": "55a19f8fa1ecd22a029dab80745bcaecb89068fa6c84738a150b43eecb1750a7",
+        "raw_kernel.json": "d1506ef1f9bd1730857457d3a49c79cc38e8d6f4e80cbf7d01cf105b3502177b"
+      },
+      "compiler_metadata": {
+        "hash": "4b9926e65201ead7388656f3e30a09db4954c1f467e9fcead1a7a6b5fdf608a5",
+        "target": {
+          "backend": "cuda",
+          "arch": 103,
+          "warp_size": 32
+        },
+        "num_warps": 8,
+        "num_ctas": 2,
+        "num_stages": 3,
+        "warp_size": 32,
+        "maxnreg": null,
+        "ptx_version": null,
+        "ptx_options": null,
+        "ir_override": null,
+        "enable_fp_fusion": true,
+        "enable_fp4_k96": false,
+        "enable_reflect_ftz": true,
+        "launch_cooperative_grid": false,
+        "launch_pdl": false,
+        "clc": false,
+        "supported_fp8_dtypes": [
+          "fp8e4b15",
+          "fp8e4nv",
+          "fp8e5"
+        ],
+        "deprecated_fp8_dot_operand_dtypes": [
+          "fp8e4b15"
+        ],
+        "default_dot_input_precision": "tf32",
+        "allowed_dot_input_precisions": [
+          "tf32",
+          "tf32x3",
+          "ieee",
+          "bf16x3",
+          "bf16x6"
+        ],
+        "max_num_imprecise_acc_default": 0,
+        "extern_libs": [
+          [
+            "libdevice",
+            "/root/code/triton/python/triton/backends/nvidia/lib/libdevice.10.bc"
+          ]
+        ],
+        "debug": false,
+        "backend_name": "cuda",
+        "sanitize_overflow": true,
+        "arch": "sm103",
+        "instrumentation_mode": "",
+        "fpsan_homomorphic_casts": false,
+        "min_shared_mem": null,
+        "triton_version": "3.8.0",
+        "tensordesc_meta": [
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 2,
+            "elem_size": 2,
+            "elem_type": 6,
+            "block_size": [
+              128,
+              32
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              1,
+              2,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              2,
+              2,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          }
+        ],
+        "shared": 231548,
+        "tmem_size": 512,
+        "global_scratch_size": 0,
+        "global_scratch_align": 1,
+        "profile_scratch_size": 0,
+        "profile_scratch_align": 1,
+        "name": "raw_kernel"
+      }
+    },
+    "5e226662d7eb7b6bd8b0f013818497ec0bdea1427201a21007719f8fc4033324": {
+      "cache_hash": "274a880edd01a1602e8320f74c1753ff44c03144a8a6dc4f69c1b5308823f4d9",
+      "cubin_sha256": "5e226662d7eb7b6bd8b0f013818497ec0bdea1427201a21007719f8fc4033324",
+      "arg_names": [
+        "a_desc",
+        "b_desc",
+        "c_desc",
+        "a_scale_desc",
+        "b_scale_desc",
+        "M",
+        "N",
+        "K",
+        "A_ELEM_PER_BYTE",
+        "num_buffers",
+        "BLOCK_M",
+        "BLOCK_N",
+        "BLOCK_K",
+        "EPILOGUE_BLOCK_N",
+        "num_acc_buffers",
+        "GRID_MINOR_DIM",
+        "GRID_TILE_WIDTH",
+        "CGA_LAYOUT",
+        "scheduler",
+        "MODE"
+      ],
+      "signature": [
+        [
+          "a_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "b_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "c_desc",
+          "tensordesc<fp16[256, 64],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "a_scale_desc",
+          "tensordesc<fp8e4nv[1, 2, 4, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 1, 0, 0, 0]])>"
+        ],
+        [
+          "b_scale_desc",
+          "tensordesc<fp8e4nv[1, 2, 4, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 0, 0, 0, 0]])>"
+        ],
+        [
+          "M",
+          "i32"
+        ],
+        [
+          "N",
+          "i32"
+        ],
+        [
+          "K",
+          "i32"
+        ],
+        [
+          "A_ELEM_PER_BYTE",
+          "i32"
+        ],
+        [
+          "num_buffers",
+          "constexpr"
+        ],
+        [
+          "BLOCK_M",
+          "constexpr"
+        ],
+        [
+          "BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "BLOCK_K",
+          "constexpr"
+        ],
+        [
+          "EPILOGUE_BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "num_acc_buffers",
+          "constexpr"
+        ],
+        [
+          "GRID_MINOR_DIM",
+          "constexpr"
+        ],
+        [
+          "GRID_TILE_WIDTH",
+          "constexpr"
+        ],
+        [
+          "CGA_LAYOUT",
+          "constexpr"
+        ],
+        [
+          "scheduler",
+          "constexpr"
+        ],
+        [
+          "MODE",
+          "constexpr"
+        ]
+      ],
+      "constants": [
+        [
+          [
+            9
+          ],
+          5
+        ],
+        [
+          [
+            10
+          ],
+          256
+        ],
+        [
+          [
+            11
+          ],
+          256
+        ],
+        [
+          [
+            12
+          ],
+          256
+        ],
+        [
+          [
+            13
+          ],
+          64
+        ],
+        [
+          [
+            14
+          ],
+          1
+        ],
+        [
+          [
+            15
+          ],
+          0
+        ],
+        [
+          [
+            16
+          ],
+          8
+        ],
+        [
+          [
+            17
+          ],
+          [
+            [
+              1,
+              0
+            ]
+          ]
+        ],
+        [
+          [
+            18
+          ],
+          "static_persistent"
+        ],
+        [
+          [
+            19
+          ],
+          "raw"
+        ]
+      ],
+      "files": {
+        "raw_kernel.source": "bbd3e0571b6947b1e7e79b50195ea1c11301a61ed0101de50e58de6fcd5ae214",
+        "raw_kernel.ttgir": "c521d1a650d8e6768c8022bb8b80c4f28febf9ae1caaaa7f4c0aa4565ddeffd9",
+        "raw_kernel.llir": "d1863a8b3d7d7f84266cb641e219ea4c297ed6c99547ea0191151ef98b40e1b3",
+        "raw_kernel.ptx": "91a3805199ddc1b50a51eba5296f3de61f9e32c99e2cced7238b7721c2edac3b",
+        "raw_kernel.cubin": "5e226662d7eb7b6bd8b0f013818497ec0bdea1427201a21007719f8fc4033324",
+        "raw_kernel.json": "9dcbd1bf38e96c7aac95b4b157b0633fb50f30766914ba014da5ccb550e4fc29"
+      },
+      "compiler_metadata": {
+        "hash": "274a880edd01a1602e8320f74c1753ff44c03144a8a6dc4f69c1b5308823f4d9",
+        "target": {
+          "backend": "cuda",
+          "arch": 103,
+          "warp_size": 32
+        },
+        "num_warps": 8,
+        "num_ctas": 2,
+        "num_stages": 3,
+        "warp_size": 32,
+        "maxnreg": null,
+        "ptx_version": null,
+        "ptx_options": null,
+        "ir_override": null,
+        "enable_fp_fusion": true,
+        "enable_fp4_k96": false,
+        "enable_reflect_ftz": true,
+        "launch_cooperative_grid": false,
+        "launch_pdl": false,
+        "clc": false,
+        "supported_fp8_dtypes": [
+          "fp8e4b15",
+          "fp8e4nv",
+          "fp8e5"
+        ],
+        "deprecated_fp8_dot_operand_dtypes": [
+          "fp8e4b15"
+        ],
+        "default_dot_input_precision": "tf32",
+        "allowed_dot_input_precisions": [
+          "tf32",
+          "tf32x3",
+          "ieee",
+          "bf16x3",
+          "bf16x6"
+        ],
+        "max_num_imprecise_acc_default": 0,
+        "extern_libs": [
+          [
+            "libdevice",
+            "/root/code/triton/python/triton/backends/nvidia/lib/libdevice.10.bc"
+          ]
+        ],
+        "debug": false,
+        "backend_name": "cuda",
+        "sanitize_overflow": true,
+        "arch": "sm103",
+        "instrumentation_mode": "",
+        "fpsan_homomorphic_casts": false,
+        "min_shared_mem": null,
+        "triton_version": "3.8.0",
+        "tensordesc_meta": [
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 2,
+            "elem_type": 6,
+            "block_size": [
+              128,
+              64
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              1,
+              4,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              2,
+              4,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          }
+        ],
+        "shared": 227452,
+        "tmem_size": 512,
+        "global_scratch_size": 0,
+        "global_scratch_align": 1,
+        "profile_scratch_size": 0,
+        "profile_scratch_align": 1,
+        "name": "raw_kernel"
+      }
+    },
+    "656fe8795ef3fbf5995328230acbf41eed20dbf7e5e5b2881a13ba199049f6af": {
+      "cache_hash": "8de645a27ba855debc32e646ef7a306a0d481ea2fc955524b9d9a15ea31d5093",
+      "cubin_sha256": "656fe8795ef3fbf5995328230acbf41eed20dbf7e5e5b2881a13ba199049f6af",
+      "arg_names": [
+        "a_desc",
+        "b_desc",
+        "c_desc",
+        "a_scale_desc",
+        "b_scale_desc",
+        "M",
+        "N",
+        "K",
+        "A_ELEM_PER_BYTE",
+        "num_buffers",
+        "BLOCK_M",
+        "BLOCK_N",
+        "BLOCK_K",
+        "EPILOGUE_BLOCK_N",
+        "num_acc_buffers",
+        "GRID_MINOR_DIM",
+        "GRID_TILE_WIDTH",
+        "CGA_LAYOUT",
+        "scheduler"
+      ],
+      "signature": [
+        [
+          "a_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "b_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "c_desc",
+          "tensordesc<fp16[256, 64],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "a_scale_desc",
+          "tensordesc<u8[1, 2, 2, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 1, 0, 0, 0]])>"
+        ],
+        [
+          "b_scale_desc",
+          "tensordesc<u8[1, 2, 2, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 0, 0, 0, 0]])>"
+        ],
+        [
+          "M",
+          "i32"
+        ],
+        [
+          "N",
+          "i32"
+        ],
+        [
+          "K",
+          "i32"
+        ],
+        [
+          "A_ELEM_PER_BYTE",
+          "i32"
+        ],
+        [
+          "num_buffers",
+          "constexpr"
+        ],
+        [
+          "BLOCK_M",
+          "constexpr"
+        ],
+        [
+          "BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "BLOCK_K",
+          "constexpr"
+        ],
+        [
+          "EPILOGUE_BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "num_acc_buffers",
+          "constexpr"
+        ],
+        [
+          "GRID_MINOR_DIM",
+          "constexpr"
+        ],
+        [
+          "GRID_TILE_WIDTH",
+          "constexpr"
+        ],
+        [
+          "CGA_LAYOUT",
+          "constexpr"
+        ],
+        [
+          "scheduler",
+          "constexpr"
+        ]
+      ],
+      "constants": [
+        [
+          [
+            9
+          ],
+          5
+        ],
+        [
+          [
+            10
+          ],
+          256
+        ],
+        [
+          [
+            11
+          ],
+          256
+        ],
+        [
+          [
+            12
+          ],
+          256
+        ],
+        [
+          [
+            13
+          ],
+          64
+        ],
+        [
+          [
+            14
+          ],
+          1
+        ],
+        [
+          [
+            15
+          ],
+          0
+        ],
+        [
+          [
+            16
+          ],
+          8
+        ],
+        [
+          [
+            17
+          ],
+          [
+            [
+              1,
+              0
+            ]
+          ]
+        ],
+        [
+          [
+            18
+          ],
+          "cluster_launch_control"
+        ]
+      ],
+      "files": {
+        "mma_scaled_warp_specialized_kernel.source": "788f7ab6d5b0086ecb7a786f6184f7ae47ee544f9f4ff168db8292a646912858",
+        "mma_scaled_warp_specialized_kernel.ttgir": "28cd411b02f939b6479f661e1ae6dca5978a6fef1ac8574ce5eba7275f0c78e3",
+        "mma_scaled_warp_specialized_kernel.llir": "8207e1e8b94f97942804aff7d511cd936a3c6e88c4a29f8e0c7d0451dfe05660",
+        "mma_scaled_warp_specialized_kernel.ptx": "252724002a310cbe87c38661ab99e2f9d152677ddfbb77336a2ca052a0281be7",
+        "mma_scaled_warp_specialized_kernel.cubin": "656fe8795ef3fbf5995328230acbf41eed20dbf7e5e5b2881a13ba199049f6af",
+        "mma_scaled_warp_specialized_kernel.json": "73282972558248a61a0f2d30038edf8e81d8d6942a311bfa3e019fe85e216200"
+      },
+      "compiler_metadata": {
+        "hash": "8de645a27ba855debc32e646ef7a306a0d481ea2fc955524b9d9a15ea31d5093",
+        "target": {
+          "backend": "cuda",
+          "arch": 103,
+          "warp_size": 32
+        },
+        "num_warps": 8,
+        "num_ctas": 2,
+        "num_stages": 3,
+        "warp_size": 32,
+        "maxnreg": null,
+        "ptx_version": null,
+        "ptx_options": null,
+        "ir_override": null,
+        "enable_fp_fusion": true,
+        "enable_fp4_k96": true,
+        "enable_reflect_ftz": true,
+        "launch_cooperative_grid": false,
+        "launch_pdl": false,
+        "clc": false,
+        "supported_fp8_dtypes": [
+          "fp8e4b15",
+          "fp8e4nv",
+          "fp8e5"
+        ],
+        "deprecated_fp8_dot_operand_dtypes": [
+          "fp8e4b15"
+        ],
+        "default_dot_input_precision": "tf32",
+        "allowed_dot_input_precisions": [
+          "tf32",
+          "tf32x3",
+          "ieee",
+          "bf16x3",
+          "bf16x6"
+        ],
+        "max_num_imprecise_acc_default": 0,
+        "extern_libs": [
+          [
+            "libdevice",
+            "/root/code/triton/python/triton/backends/nvidia/lib/libdevice.10.bc"
+          ]
+        ],
+        "debug": false,
+        "backend_name": "cuda",
+        "sanitize_overflow": true,
+        "arch": "sm103",
+        "instrumentation_mode": "",
+        "fpsan_homomorphic_casts": false,
+        "min_shared_mem": null,
+        "triton_version": "3.8.0",
+        "tensordesc_meta": [
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 2,
+            "elem_type": 6,
+            "block_size": [
+              128,
+              64
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              1,
+              2,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              2,
+              2,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          }
+        ],
+        "shared": 212172,
+        "tmem_size": 512,
+        "global_scratch_size": 0,
+        "global_scratch_align": 1,
+        "profile_scratch_size": 0,
+        "profile_scratch_align": 1,
+        "name": "mma_scaled_warp_specialized_kernel"
+      }
+    },
+    "71d5b31c3d5f8768fbc1c9c105a13778f4361a38fabda1fa68ef825151805f3e": {
+      "cache_hash": "e543ea819c7fa438ac69db84d127b22e96ae2ded859a21081289fb8be9829f07",
+      "cubin_sha256": "71d5b31c3d5f8768fbc1c9c105a13778f4361a38fabda1fa68ef825151805f3e",
+      "arg_names": [
+        "a_desc",
+        "b_desc",
+        "c_desc",
+        "a_scale_desc",
+        "b_scale_desc",
+        "M",
+        "N",
+        "K",
+        "A_ELEM_PER_BYTE",
+        "num_buffers",
+        "BLOCK_M",
+        "BLOCK_N",
+        "BLOCK_K",
+        "EPILOGUE_BLOCK_N",
+        "num_acc_buffers",
+        "GRID_MINOR_DIM",
+        "GRID_TILE_WIDTH",
+        "CGA_LAYOUT",
+        "scheduler"
+      ],
+      "signature": [
+        [
+          "a_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "b_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "c_desc",
+          "tensordesc<fp16[256, 64],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "a_scale_desc",
+          "tensordesc<fp8e4nv[1, 2, 4, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 1, 0, 0, 0]])>"
+        ],
+        [
+          "b_scale_desc",
+          "tensordesc<fp8e4nv[1, 2, 4, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 0, 0, 0, 0]])>"
+        ],
+        [
+          "M",
+          "i32"
+        ],
+        [
+          "N",
+          "i32"
+        ],
+        [
+          "K",
+          "i32"
+        ],
+        [
+          "A_ELEM_PER_BYTE",
+          "i32"
+        ],
+        [
+          "num_buffers",
+          "constexpr"
+        ],
+        [
+          "BLOCK_M",
+          "constexpr"
+        ],
+        [
+          "BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "BLOCK_K",
+          "constexpr"
+        ],
+        [
+          "EPILOGUE_BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "num_acc_buffers",
+          "constexpr"
+        ],
+        [
+          "GRID_MINOR_DIM",
+          "constexpr"
+        ],
+        [
+          "GRID_TILE_WIDTH",
+          "constexpr"
+        ],
+        [
+          "CGA_LAYOUT",
+          "constexpr"
+        ],
+        [
+          "scheduler",
+          "constexpr"
+        ]
+      ],
+      "constants": [
+        [
+          [
+            9
+          ],
+          5
+        ],
+        [
+          [
+            10
+          ],
+          256
+        ],
+        [
+          [
+            11
+          ],
+          256
+        ],
+        [
+          [
+            12
+          ],
+          256
+        ],
+        [
+          [
+            13
+          ],
+          64
+        ],
+        [
+          [
+            14
+          ],
+          1
+        ],
+        [
+          [
+            15
+          ],
+          0
+        ],
+        [
+          [
+            16
+          ],
+          8
+        ],
+        [
+          [
+            17
+          ],
+          [
+            [
+              1,
+              0
+            ]
+          ]
+        ],
+        [
+          [
+            18
+          ],
+          "static_persistent"
+        ]
+      ],
+      "files": {
+        "mma_scaled_warp_specialized_kernel.source": "31152bc06d8842a76a21e3e4519a95d18681246ef377a615b6b6ebe925f7e606",
+        "mma_scaled_warp_specialized_kernel.ttgir": "e329ea297b46a7f77c17f462e6ece68087badc79f54d06a7607c575af5c88d64",
+        "mma_scaled_warp_specialized_kernel.llir": "92dfbcae34e4bb7769085ddc3672be77d66830ee6e6d753f16cfea919330769e",
+        "mma_scaled_warp_specialized_kernel.ptx": "5c1e7693f33bf87fb77ebc57a4abbfa35d1edf63d4562aa7eaed221a11932a66",
+        "mma_scaled_warp_specialized_kernel.cubin": "71d5b31c3d5f8768fbc1c9c105a13778f4361a38fabda1fa68ef825151805f3e",
+        "mma_scaled_warp_specialized_kernel.json": "6ab694821262f26cc9de5d9073f6614bc20507893a0534b6c900895ebc98a155"
+      },
+      "compiler_metadata": {
+        "hash": "e543ea819c7fa438ac69db84d127b22e96ae2ded859a21081289fb8be9829f07",
+        "target": {
+          "backend": "cuda",
+          "arch": 103,
+          "warp_size": 32
+        },
+        "num_warps": 8,
+        "num_ctas": 2,
+        "num_stages": 3,
+        "warp_size": 32,
+        "maxnreg": null,
+        "ptx_version": null,
+        "ptx_options": null,
+        "ir_override": null,
+        "enable_fp_fusion": true,
+        "enable_fp4_k96": true,
+        "enable_reflect_ftz": true,
+        "launch_cooperative_grid": false,
+        "launch_pdl": false,
+        "clc": false,
+        "supported_fp8_dtypes": [
+          "fp8e4b15",
+          "fp8e4nv",
+          "fp8e5"
+        ],
+        "deprecated_fp8_dot_operand_dtypes": [
+          "fp8e4b15"
+        ],
+        "default_dot_input_precision": "tf32",
+        "allowed_dot_input_precisions": [
+          "tf32",
+          "tf32x3",
+          "ieee",
+          "bf16x3",
+          "bf16x6"
+        ],
+        "max_num_imprecise_acc_default": 0,
+        "extern_libs": [
+          [
+            "libdevice",
+            "/root/code/triton/python/triton/backends/nvidia/lib/libdevice.10.bc"
+          ]
+        ],
+        "debug": false,
+        "backend_name": "cuda",
+        "sanitize_overflow": true,
+        "arch": "sm103",
+        "instrumentation_mode": "",
+        "fpsan_homomorphic_casts": false,
+        "min_shared_mem": null,
+        "triton_version": "3.8.0",
+        "tensordesc_meta": [
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 2,
+            "elem_type": 6,
+            "block_size": [
+              128,
+              64
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              1,
+              4,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              2,
+              4,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          }
+        ],
+        "shared": 227452,
+        "tmem_size": 512,
+        "global_scratch_size": 0,
+        "global_scratch_align": 1,
+        "profile_scratch_size": 0,
+        "profile_scratch_align": 1,
+        "name": "mma_scaled_warp_specialized_kernel"
+      }
+    },
+    "a70c200941efd6795042bee4fd6c794536693f90cb4aae6d2e080d8a59c35edf": {
+      "cache_hash": "2cf49596c98885643eaead8a7d7be7d33f0013dd2bd2ef51d54bb5f174c172b5",
+      "cubin_sha256": "a70c200941efd6795042bee4fd6c794536693f90cb4aae6d2e080d8a59c35edf",
+      "arg_names": [
+        "a_desc",
+        "b_desc",
+        "c_desc",
+        "a_scale_desc",
+        "b_scale_desc",
+        "M",
+        "N",
+        "K",
+        "A_ELEM_PER_BYTE",
+        "num_buffers",
+        "BLOCK_M",
+        "BLOCK_N",
+        "BLOCK_K",
+        "EPILOGUE_BLOCK_N",
+        "num_acc_buffers",
+        "GRID_MINOR_DIM",
+        "GRID_TILE_WIDTH",
+        "CGA_LAYOUT",
+        "scheduler"
+      ],
+      "signature": [
+        [
+          "a_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "b_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "c_desc",
+          "tensordesc<fp16[256, 64],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "a_scale_desc",
+          "tensordesc<u8[1, 2, 2, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 1, 0, 0, 0]])>"
+        ],
+        [
+          "b_scale_desc",
+          "tensordesc<u8[1, 2, 2, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 0, 0, 0, 0]])>"
+        ],
+        [
+          "M",
+          "i32"
+        ],
+        [
+          "N",
+          "i32"
+        ],
+        [
+          "K",
+          "i32"
+        ],
+        [
+          "A_ELEM_PER_BYTE",
+          "i32"
+        ],
+        [
+          "num_buffers",
+          "constexpr"
+        ],
+        [
+          "BLOCK_M",
+          "constexpr"
+        ],
+        [
+          "BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "BLOCK_K",
+          "constexpr"
+        ],
+        [
+          "EPILOGUE_BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "num_acc_buffers",
+          "constexpr"
+        ],
+        [
+          "GRID_MINOR_DIM",
+          "constexpr"
+        ],
+        [
+          "GRID_TILE_WIDTH",
+          "constexpr"
+        ],
+        [
+          "CGA_LAYOUT",
+          "constexpr"
+        ],
+        [
+          "scheduler",
+          "constexpr"
+        ]
+      ],
+      "constants": [
+        [
+          [
+            9
+          ],
+          5
+        ],
+        [
+          [
+            10
+          ],
+          256
+        ],
+        [
+          [
+            11
+          ],
+          256
+        ],
+        [
+          [
+            12
+          ],
+          256
+        ],
+        [
+          [
+            13
+          ],
+          64
+        ],
+        [
+          [
+            14
+          ],
+          1
+        ],
+        [
+          [
+            15
+          ],
+          0
+        ],
+        [
+          [
+            16
+          ],
+          8
+        ],
+        [
+          [
+            17
+          ],
+          [
+            [
+              1,
+              0
+            ]
+          ]
+        ],
+        [
+          [
+            18
+          ],
+          "cluster_launch_control"
+        ]
+      ],
+      "files": {
+        "mma_scaled_warp_specialized_kernel.source": "788f7ab6d5b0086ecb7a786f6184f7ae47ee544f9f4ff168db8292a646912858",
+        "mma_scaled_warp_specialized_kernel.ttgir": "28cd411b02f939b6479f661e1ae6dca5978a6fef1ac8574ce5eba7275f0c78e3",
+        "mma_scaled_warp_specialized_kernel.llir": "91dfb1961251799659e386d8fd0944050782574b6d4bc6910bdfe6f9228a603b",
+        "mma_scaled_warp_specialized_kernel.ptx": "dafd1bf322ccd3c467748a656805bff69d114cb4337c1a946b276c0ee3fe6a31",
+        "mma_scaled_warp_specialized_kernel.cubin": "a70c200941efd6795042bee4fd6c794536693f90cb4aae6d2e080d8a59c35edf",
+        "mma_scaled_warp_specialized_kernel.json": "2eab56489a7db47adffbfc88ba74937fa75f445dfc566e271f796c0a17448afe"
+      },
+      "compiler_metadata": {
+        "hash": "2cf49596c98885643eaead8a7d7be7d33f0013dd2bd2ef51d54bb5f174c172b5",
+        "target": {
+          "backend": "cuda",
+          "arch": 103,
+          "warp_size": 32
+        },
+        "num_warps": 8,
+        "num_ctas": 2,
+        "num_stages": 3,
+        "warp_size": 32,
+        "maxnreg": null,
+        "ptx_version": null,
+        "ptx_options": null,
+        "ir_override": null,
+        "enable_fp_fusion": true,
+        "enable_fp4_k96": false,
+        "enable_reflect_ftz": true,
+        "launch_cooperative_grid": false,
+        "launch_pdl": false,
+        "clc": false,
+        "supported_fp8_dtypes": [
+          "fp8e4b15",
+          "fp8e4nv",
+          "fp8e5"
+        ],
+        "deprecated_fp8_dot_operand_dtypes": [
+          "fp8e4b15"
+        ],
+        "default_dot_input_precision": "tf32",
+        "allowed_dot_input_precisions": [
+          "tf32",
+          "tf32x3",
+          "ieee",
+          "bf16x3",
+          "bf16x6"
+        ],
+        "max_num_imprecise_acc_default": 0,
+        "extern_libs": [
+          [
+            "libdevice",
+            "/root/code/triton/python/triton/backends/nvidia/lib/libdevice.10.bc"
+          ]
+        ],
+        "debug": false,
+        "backend_name": "cuda",
+        "sanitize_overflow": true,
+        "arch": "sm103",
+        "instrumentation_mode": "",
+        "fpsan_homomorphic_casts": false,
+        "min_shared_mem": null,
+        "triton_version": "3.8.0",
+        "tensordesc_meta": [
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 2,
+            "elem_type": 6,
+            "block_size": [
+              128,
+              64
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              1,
+              2,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              2,
+              2,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          }
+        ],
+        "shared": 212172,
+        "tmem_size": 512,
+        "global_scratch_size": 0,
+        "global_scratch_align": 1,
+        "profile_scratch_size": 0,
+        "profile_scratch_align": 1,
+        "name": "mma_scaled_warp_specialized_kernel"
+      }
+    },
+    "b353c476bff50dc9f342d857555c1ae6ad77ae4cfd9de6940440a2a0dcb69f0b": {
+      "cache_hash": "f7da7fb01497cc25a4179f29d842e1ecc4fd00836f09ddb81e52860511c5ef7a",
+      "cubin_sha256": "b353c476bff50dc9f342d857555c1ae6ad77ae4cfd9de6940440a2a0dcb69f0b",
+      "arg_names": [
+        "a_desc",
+        "b_desc",
+        "c_desc",
+        "a_scale_desc",
+        "b_scale_desc",
+        "M",
+        "N",
+        "K",
+        "A_ELEM_PER_BYTE",
+        "num_buffers",
+        "BLOCK_M",
+        "BLOCK_N",
+        "BLOCK_K",
+        "EPILOGUE_BLOCK_N",
+        "num_acc_buffers",
+        "GRID_MINOR_DIM",
+        "GRID_TILE_WIDTH",
+        "CGA_LAYOUT",
+        "scheduler"
+      ],
+      "signature": [
+        [
+          "a_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "b_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "c_desc",
+          "tensordesc<fp16[256, 64],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "a_scale_desc",
+          "tensordesc<fp8e4nv[1, 2, 4, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 1, 0, 0, 0]])>"
+        ],
+        [
+          "b_scale_desc",
+          "tensordesc<fp8e4nv[1, 2, 4, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 0, 0, 0, 0]])>"
+        ],
+        [
+          "M",
+          "i32"
+        ],
+        [
+          "N",
+          "i32"
+        ],
+        [
+          "K",
+          "i32"
+        ],
+        [
+          "A_ELEM_PER_BYTE",
+          "i32"
+        ],
+        [
+          "num_buffers",
+          "constexpr"
+        ],
+        [
+          "BLOCK_M",
+          "constexpr"
+        ],
+        [
+          "BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "BLOCK_K",
+          "constexpr"
+        ],
+        [
+          "EPILOGUE_BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "num_acc_buffers",
+          "constexpr"
+        ],
+        [
+          "GRID_MINOR_DIM",
+          "constexpr"
+        ],
+        [
+          "GRID_TILE_WIDTH",
+          "constexpr"
+        ],
+        [
+          "CGA_LAYOUT",
+          "constexpr"
+        ],
+        [
+          "scheduler",
+          "constexpr"
+        ]
+      ],
+      "constants": [
+        [
+          [
+            9
+          ],
+          5
+        ],
+        [
+          [
+            10
+          ],
+          256
+        ],
+        [
+          [
+            11
+          ],
+          256
+        ],
+        [
+          [
+            12
+          ],
+          256
+        ],
+        [
+          [
+            13
+          ],
+          64
+        ],
+        [
+          [
+            14
+          ],
+          1
+        ],
+        [
+          [
+            15
+          ],
+          0
+        ],
+        [
+          [
+            16
+          ],
+          8
+        ],
+        [
+          [
+            17
+          ],
+          [
+            [
+              1,
+              0
+            ]
+          ]
+        ],
+        [
+          [
+            18
+          ],
+          "cluster_launch_control"
+        ]
+      ],
+      "files": {
+        "mma_scaled_warp_specialized_kernel.source": "1dbe377180350674ff7e30b8be444a24157834de48fca717634b7b43af6467e4",
+        "mma_scaled_warp_specialized_kernel.ttgir": "88199a07b55c864118ab884fcfcc039f42fb7449f83209a65f55ac984f7c8411",
+        "mma_scaled_warp_specialized_kernel.llir": "e4945c1dae642fa953709a60b46a0b9db7e42d20a019ace7e5a7540e03ec4dd2",
+        "mma_scaled_warp_specialized_kernel.ptx": "a697c532494fd12ebc05b01011a7c7fb23010a90691e5a7491c5718cc6220508",
+        "mma_scaled_warp_specialized_kernel.cubin": "b353c476bff50dc9f342d857555c1ae6ad77ae4cfd9de6940440a2a0dcb69f0b",
+        "mma_scaled_warp_specialized_kernel.json": "f7ba606936263937baa68a7dc54b44ed5bbf8a25b0da07c5452f366c37bdfbfc"
+      },
+      "compiler_metadata": {
+        "hash": "f7da7fb01497cc25a4179f29d842e1ecc4fd00836f09ddb81e52860511c5ef7a",
+        "target": {
+          "backend": "cuda",
+          "arch": 103,
+          "warp_size": 32
+        },
+        "num_warps": 8,
+        "num_ctas": 2,
+        "num_stages": 3,
+        "warp_size": 32,
+        "maxnreg": null,
+        "ptx_version": null,
+        "ptx_options": null,
+        "ir_override": null,
+        "enable_fp_fusion": true,
+        "enable_fp4_k96": true,
+        "enable_reflect_ftz": true,
+        "launch_cooperative_grid": false,
+        "launch_pdl": false,
+        "clc": false,
+        "supported_fp8_dtypes": [
+          "fp8e4b15",
+          "fp8e4nv",
+          "fp8e5"
+        ],
+        "deprecated_fp8_dot_operand_dtypes": [
+          "fp8e4b15"
+        ],
+        "default_dot_input_precision": "tf32",
+        "allowed_dot_input_precisions": [
+          "tf32",
+          "tf32x3",
+          "ieee",
+          "bf16x3",
+          "bf16x6"
+        ],
+        "max_num_imprecise_acc_default": 0,
+        "extern_libs": [
+          [
+            "libdevice",
+            "/root/code/triton/python/triton/backends/nvidia/lib/libdevice.10.bc"
+          ]
+        ],
+        "debug": false,
+        "backend_name": "cuda",
+        "sanitize_overflow": true,
+        "arch": "sm103",
+        "instrumentation_mode": "",
+        "fpsan_homomorphic_casts": false,
+        "min_shared_mem": null,
+        "triton_version": "3.8.0",
+        "tensordesc_meta": [
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 2,
+            "elem_type": 6,
+            "block_size": [
+              128,
+              64
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              1,
+              4,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              2,
+              4,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          }
+        ],
+        "shared": 227532,
+        "tmem_size": 512,
+        "global_scratch_size": 0,
+        "global_scratch_align": 1,
+        "profile_scratch_size": 0,
+        "profile_scratch_align": 1,
+        "name": "mma_scaled_warp_specialized_kernel"
+      }
+    },
+    "c755a3014e5b04037ff75ba3b33e24a320ab16e0726a7fe48f044ccb27701073": {
+      "cache_hash": "2c462a0ac40928d036c18588d002e081abcdabbddd9f94c42ed20c6b65374225",
+      "cubin_sha256": "c755a3014e5b04037ff75ba3b33e24a320ab16e0726a7fe48f044ccb27701073",
+      "arg_names": [
+        "a_desc",
+        "b_desc",
+        "c_desc",
+        "a_scale_desc",
+        "b_scale_desc",
+        "M",
+        "N",
+        "K",
+        "A_ELEM_PER_BYTE",
+        "num_buffers",
+        "BLOCK_M",
+        "BLOCK_N",
+        "BLOCK_K",
+        "EPILOGUE_BLOCK_N",
+        "num_acc_buffers",
+        "GRID_MINOR_DIM",
+        "GRID_TILE_WIDTH",
+        "CGA_LAYOUT",
+        "scheduler",
+        "MODE"
+      ],
+      "signature": [
+        [
+          "a_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "b_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "c_desc",
+          "tensordesc<fp16[256, 64],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "a_scale_desc",
+          "tensordesc<fp8e4nv[1, 2, 4, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 1, 0, 0, 0]])>"
+        ],
+        [
+          "b_scale_desc",
+          "tensordesc<fp8e4nv[1, 2, 4, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 0, 0, 0, 0]])>"
+        ],
+        [
+          "M",
+          "i32"
+        ],
+        [
+          "N",
+          "i32"
+        ],
+        [
+          "K",
+          "i32"
+        ],
+        [
+          "A_ELEM_PER_BYTE",
+          "i32"
+        ],
+        [
+          "num_buffers",
+          "constexpr"
+        ],
+        [
+          "BLOCK_M",
+          "constexpr"
+        ],
+        [
+          "BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "BLOCK_K",
+          "constexpr"
+        ],
+        [
+          "EPILOGUE_BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "num_acc_buffers",
+          "constexpr"
+        ],
+        [
+          "GRID_MINOR_DIM",
+          "constexpr"
+        ],
+        [
+          "GRID_TILE_WIDTH",
+          "constexpr"
+        ],
+        [
+          "CGA_LAYOUT",
+          "constexpr"
+        ],
+        [
+          "scheduler",
+          "constexpr"
+        ],
+        [
+          "MODE",
+          "constexpr"
+        ]
+      ],
+      "constants": [
+        [
+          [
+            9
+          ],
+          5
+        ],
+        [
+          [
+            10
+          ],
+          256
+        ],
+        [
+          [
+            11
+          ],
+          256
+        ],
+        [
+          [
+            12
+          ],
+          256
+        ],
+        [
+          [
+            13
+          ],
+          64
+        ],
+        [
+          [
+            14
+          ],
+          1
+        ],
+        [
+          [
+            15
+          ],
+          0
+        ],
+        [
+          [
+            16
+          ],
+          8
+        ],
+        [
+          [
+            17
+          ],
+          [
+            [
+              1,
+              0
+            ]
+          ]
+        ],
+        [
+          [
+            18
+          ],
+          "static_persistent"
+        ],
+        [
+          [
+            19
+          ],
+          "pure"
+        ]
+      ],
+      "files": {
+        "raw_kernel.source": "823bd9ba35e7fd7a8154048eb4c32d8403b3325ad28409c6fa77a27800054c58",
+        "raw_kernel.ttgir": "b82f8484ed916d66756f9183afcf9e2135a9d230348c64d59bf4f9e0d2397fb3",
+        "raw_kernel.llir": "c33df10c9b50307d8d15c45fcc5b0bdcc23b8e45debdbe336081e037c71ae117",
+        "raw_kernel.ptx": "512093d6f6c15645e704cf189179f7c34385fe50561b266c40d12266dc6d86a6",
+        "raw_kernel.cubin": "c755a3014e5b04037ff75ba3b33e24a320ab16e0726a7fe48f044ccb27701073",
+        "raw_kernel.json": "c5316da3ea3dc39b93106727a43d2bc4d45dba1aad45ab8dae69154a38dd562d"
+      },
+      "compiler_metadata": {
+        "hash": "2c462a0ac40928d036c18588d002e081abcdabbddd9f94c42ed20c6b65374225",
+        "target": {
+          "backend": "cuda",
+          "arch": 103,
+          "warp_size": 32
+        },
+        "num_warps": 8,
+        "num_ctas": 2,
+        "num_stages": 3,
+        "warp_size": 32,
+        "maxnreg": null,
+        "ptx_version": null,
+        "ptx_options": null,
+        "ir_override": null,
+        "enable_fp_fusion": true,
+        "enable_fp4_k96": false,
+        "enable_reflect_ftz": true,
+        "launch_cooperative_grid": false,
+        "launch_pdl": false,
+        "clc": false,
+        "supported_fp8_dtypes": [
+          "fp8e4b15",
+          "fp8e4nv",
+          "fp8e5"
+        ],
+        "deprecated_fp8_dot_operand_dtypes": [
+          "fp8e4b15"
+        ],
+        "default_dot_input_precision": "tf32",
+        "allowed_dot_input_precisions": [
+          "tf32",
+          "tf32x3",
+          "ieee",
+          "bf16x3",
+          "bf16x6"
+        ],
+        "max_num_imprecise_acc_default": 0,
+        "extern_libs": [
+          [
+            "libdevice",
+            "/root/code/triton/python/triton/backends/nvidia/lib/libdevice.10.bc"
+          ]
+        ],
+        "debug": false,
+        "backend_name": "cuda",
+        "sanitize_overflow": true,
+        "arch": "sm103",
+        "instrumentation_mode": "",
+        "fpsan_homomorphic_casts": false,
+        "min_shared_mem": null,
+        "triton_version": "3.8.0",
+        "tensordesc_meta": [
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 2,
+            "elem_type": 6,
+            "block_size": [
+              128,
+              64
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              1,
+              4,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              2,
+              4,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          }
+        ],
+        "shared": 227452,
+        "tmem_size": 512,
+        "global_scratch_size": 0,
+        "global_scratch_align": 1,
+        "profile_scratch_size": 0,
+        "profile_scratch_align": 1,
+        "name": "raw_kernel"
+      }
+    },
+    "cbd5b318abc9a54003a775a5a0711ab4e393f818d91a1cc51c094e88343add04": {
+      "cache_hash": "5410d593815a08800d019134580f08a904d7513c01b829dda66a7e96385deb95",
+      "cubin_sha256": "cbd5b318abc9a54003a775a5a0711ab4e393f818d91a1cc51c094e88343add04",
+      "arg_names": [
+        "a_desc",
+        "b_desc",
+        "c_desc",
+        "a_scale_desc",
+        "b_scale_desc",
+        "M",
+        "N",
+        "K",
+        "A_ELEM_PER_BYTE",
+        "num_buffers",
+        "BLOCK_M",
+        "BLOCK_N",
+        "BLOCK_K",
+        "EPILOGUE_BLOCK_N",
+        "num_acc_buffers",
+        "GRID_MINOR_DIM",
+        "GRID_TILE_WIDTH",
+        "CGA_LAYOUT",
+        "scheduler",
+        "MODE"
+      ],
+      "signature": [
+        [
+          "a_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "b_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "c_desc",
+          "tensordesc<fp16[256, 32],NVMMASharedLayout(swizzle_byte_width=64, element_bitwidth=16, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "a_scale_desc",
+          "tensordesc<u8[1, 2, 2, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 1, 0, 0, 0]])>"
+        ],
+        [
+          "b_scale_desc",
+          "tensordesc<u8[1, 2, 2, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 0, 0, 0, 0]])>"
+        ],
+        [
+          "M",
+          "i32"
+        ],
+        [
+          "N",
+          "i32"
+        ],
+        [
+          "K",
+          "i32"
+        ],
+        [
+          "A_ELEM_PER_BYTE",
+          "i32"
+        ],
+        [
+          "num_buffers",
+          "constexpr"
+        ],
+        [
+          "BLOCK_M",
+          "constexpr"
+        ],
+        [
+          "BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "BLOCK_K",
+          "constexpr"
+        ],
+        [
+          "EPILOGUE_BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "num_acc_buffers",
+          "constexpr"
+        ],
+        [
+          "GRID_MINOR_DIM",
+          "constexpr"
+        ],
+        [
+          "GRID_TILE_WIDTH",
+          "constexpr"
+        ],
+        [
+          "CGA_LAYOUT",
+          "constexpr"
+        ],
+        [
+          "scheduler",
+          "constexpr"
+        ],
+        [
+          "MODE",
+          "constexpr"
+        ]
+      ],
+      "constants": [
+        [
+          [
+            9
+          ],
+          6
+        ],
+        [
+          [
+            10
+          ],
+          256
+        ],
+        [
+          [
+            11
+          ],
+          256
+        ],
+        [
+          [
+            12
+          ],
+          256
+        ],
+        [
+          [
+            13
+          ],
+          32
+        ],
+        [
+          [
+            14
+          ],
+          1
+        ],
+        [
+          [
+            15
+          ],
+          0
+        ],
+        [
+          [
+            16
+          ],
+          8
+        ],
+        [
+          [
+            17
+          ],
+          [
+            [
+              1,
+              0
+            ]
+          ]
+        ],
+        [
+          [
+            18
+          ],
+          "static_persistent"
+        ],
+        [
+          [
+            19
+          ],
+          "raw"
+        ]
+      ],
+      "files": {
+        "raw_kernel.source": "daed52f06233d1f345547a0410a43164c4f7e2d357adcb1cc56cee77f74d9de1",
+        "raw_kernel.ttgir": "7f79ff61f8a5ad5a56f6f9733ac99f33b1f3236702ec3ddee9a014b7b96b5cb1",
+        "raw_kernel.llir": "b78e0cf5c5951ca358ff230e77ea595ae29bb3b40152db8e60f5dc1e3b40ad60",
+        "raw_kernel.ptx": "c75e493ffa89531bf4a4f357c362e5cf8cb890648a23624549c6b2054f60fbbb",
+        "raw_kernel.cubin": "cbd5b318abc9a54003a775a5a0711ab4e393f818d91a1cc51c094e88343add04",
+        "raw_kernel.json": "c7f769bbcaa5ba6960b0d966d5aa23490fbf4137d6ed9b03a9f6e03f86b086e7"
+      },
+      "compiler_metadata": {
+        "hash": "5410d593815a08800d019134580f08a904d7513c01b829dda66a7e96385deb95",
+        "target": {
+          "backend": "cuda",
+          "arch": 103,
+          "warp_size": 32
+        },
+        "num_warps": 8,
+        "num_ctas": 2,
+        "num_stages": 3,
+        "warp_size": 32,
+        "maxnreg": null,
+        "ptx_version": null,
+        "ptx_options": null,
+        "ir_override": null,
+        "enable_fp_fusion": true,
+        "enable_fp4_k96": false,
+        "enable_reflect_ftz": true,
+        "launch_cooperative_grid": false,
+        "launch_pdl": false,
+        "clc": false,
+        "supported_fp8_dtypes": [
+          "fp8e4b15",
+          "fp8e4nv",
+          "fp8e5"
+        ],
+        "deprecated_fp8_dot_operand_dtypes": [
+          "fp8e4b15"
+        ],
+        "default_dot_input_precision": "tf32",
+        "allowed_dot_input_precisions": [
+          "tf32",
+          "tf32x3",
+          "ieee",
+          "bf16x3",
+          "bf16x6"
+        ],
+        "max_num_imprecise_acc_default": 0,
+        "extern_libs": [
+          [
+            "libdevice",
+            "/root/code/triton/python/triton/backends/nvidia/lib/libdevice.10.bc"
+          ]
+        ],
+        "debug": false,
+        "backend_name": "cuda",
+        "sanitize_overflow": true,
+        "arch": "sm103",
+        "instrumentation_mode": "",
+        "fpsan_homomorphic_casts": false,
+        "min_shared_mem": null,
+        "triton_version": "3.8.0",
+        "tensordesc_meta": [
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 2,
+            "elem_size": 2,
+            "elem_type": 6,
+            "block_size": [
+              128,
+              32
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              1,
+              2,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              2,
+              2,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          }
+        ],
+        "shared": 231548,
+        "tmem_size": 512,
+        "global_scratch_size": 0,
+        "global_scratch_align": 1,
+        "profile_scratch_size": 0,
+        "profile_scratch_align": 1,
+        "name": "raw_kernel"
+      }
+    },
+    "cdcb0efdc594d75c5c622508449c26bfd3e7cb4f090fb2f923985f664c447365": {
+      "cache_hash": "cd56023d4621d8fcfd28a7a7459cb9142225d55db995d86b0c4737a5292d197c",
+      "cubin_sha256": "cdcb0efdc594d75c5c622508449c26bfd3e7cb4f090fb2f923985f664c447365",
+      "arg_names": [
+        "a_desc",
+        "b_desc",
+        "c_desc",
+        "a_scale_desc",
+        "b_scale_desc",
+        "M",
+        "N",
+        "K",
+        "A_ELEM_PER_BYTE",
+        "num_buffers",
+        "BLOCK_M",
+        "BLOCK_N",
+        "BLOCK_K",
+        "EPILOGUE_BLOCK_N",
+        "num_acc_buffers",
+        "GRID_MINOR_DIM",
+        "GRID_TILE_WIDTH",
+        "CGA_LAYOUT",
+        "scheduler"
+      ],
+      "signature": [
+        [
+          "a_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "b_desc",
+          "tensordesc<u8[256, 128],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=8, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "c_desc",
+          "tensordesc<fp16[256, 64],NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2, transposed=False, fp4_padded=False, cga_layout=((1, 0),))>"
+        ],
+        [
+          "a_scale_desc",
+          "tensordesc<u8[1, 2, 2, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 1, 0, 0, 0]])>"
+        ],
+        [
+          "b_scale_desc",
+          "tensordesc<u8[1, 2, 2, 2, 256],NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=5, transposed=False, fp4_padded=False, cga_layout=[[0, 0, 0, 0, 0]])>"
+        ],
+        [
+          "M",
+          "i32"
+        ],
+        [
+          "N",
+          "i32"
+        ],
+        [
+          "K",
+          "i32"
+        ],
+        [
+          "A_ELEM_PER_BYTE",
+          "i32"
+        ],
+        [
+          "num_buffers",
+          "constexpr"
+        ],
+        [
+          "BLOCK_M",
+          "constexpr"
+        ],
+        [
+          "BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "BLOCK_K",
+          "constexpr"
+        ],
+        [
+          "EPILOGUE_BLOCK_N",
+          "constexpr"
+        ],
+        [
+          "num_acc_buffers",
+          "constexpr"
+        ],
+        [
+          "GRID_MINOR_DIM",
+          "constexpr"
+        ],
+        [
+          "GRID_TILE_WIDTH",
+          "constexpr"
+        ],
+        [
+          "CGA_LAYOUT",
+          "constexpr"
+        ],
+        [
+          "scheduler",
+          "constexpr"
+        ]
+      ],
+      "constants": [
+        [
+          [
+            9
+          ],
+          5
+        ],
+        [
+          [
+            10
+          ],
+          256
+        ],
+        [
+          [
+            11
+          ],
+          256
+        ],
+        [
+          [
+            12
+          ],
+          256
+        ],
+        [
+          [
+            13
+          ],
+          64
+        ],
+        [
+          [
+            14
+          ],
+          1
+        ],
+        [
+          [
+            15
+          ],
+          0
+        ],
+        [
+          [
+            16
+          ],
+          8
+        ],
+        [
+          [
+            17
+          ],
+          [
+            [
+              1,
+              0
+            ]
+          ]
+        ],
+        [
+          [
+            18
+          ],
+          "static_persistent"
+        ]
+      ],
+      "files": {
+        "mma_scaled_warp_specialized_kernel.source": "d92d6c358c2b4abf21602fce581af95472cf073327700e7868d30e71826aab7a",
+        "mma_scaled_warp_specialized_kernel.ttgir": "ac0014d47ab59f6d87d26a9e6739164e82199741f39f7ec686b90e99c0f40777",
+        "mma_scaled_warp_specialized_kernel.llir": "7e79d201faa29fdf374c54043d99de3183a73521e4a6df56836ad9c48c56b540",
+        "mma_scaled_warp_specialized_kernel.ptx": "0983f5067fdcbb57c3c22b4263511ef23f49a14e2cef475c21611e8aebed6690",
+        "mma_scaled_warp_specialized_kernel.cubin": "cdcb0efdc594d75c5c622508449c26bfd3e7cb4f090fb2f923985f664c447365",
+        "mma_scaled_warp_specialized_kernel.json": "a6669ddeeac0b1748ef2b48cfa010df289d287932b08b9384cc8afc5b48a863d"
+      },
+      "compiler_metadata": {
+        "hash": "cd56023d4621d8fcfd28a7a7459cb9142225d55db995d86b0c4737a5292d197c",
+        "target": {
+          "backend": "cuda",
+          "arch": 103,
+          "warp_size": 32
+        },
+        "num_warps": 8,
+        "num_ctas": 2,
+        "num_stages": 3,
+        "warp_size": 32,
+        "maxnreg": null,
+        "ptx_version": null,
+        "ptx_options": null,
+        "ir_override": null,
+        "enable_fp_fusion": true,
+        "enable_fp4_k96": true,
+        "enable_reflect_ftz": true,
+        "launch_cooperative_grid": false,
+        "launch_pdl": false,
+        "clc": false,
+        "supported_fp8_dtypes": [
+          "fp8e4b15",
+          "fp8e4nv",
+          "fp8e5"
+        ],
+        "deprecated_fp8_dot_operand_dtypes": [
+          "fp8e4b15"
+        ],
+        "default_dot_input_precision": "tf32",
+        "allowed_dot_input_precisions": [
+          "tf32",
+          "tf32x3",
+          "ieee",
+          "bf16x3",
+          "bf16x6"
+        ],
+        "max_num_imprecise_acc_default": 0,
+        "extern_libs": [
+          [
+            "libdevice",
+            "/root/code/triton/python/triton/backends/nvidia/lib/libdevice.10.bc"
+          ]
+        ],
+        "debug": false,
+        "backend_name": "cuda",
+        "sanitize_overflow": true,
+        "arch": "sm103",
+        "instrumentation_mode": "",
+        "fpsan_homomorphic_casts": false,
+        "min_shared_mem": null,
+        "triton_version": "3.8.0",
+        "tensordesc_meta": [
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              128,
+              128
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 3,
+            "elem_size": 2,
+            "elem_type": 6,
+            "block_size": [
+              128,
+              64
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              1,
+              2,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          },
+          {
+            "swizzle": 0,
+            "elem_size": 1,
+            "elem_type": 0,
+            "block_size": [
+              1,
+              2,
+              2,
+              2,
+              256
+            ],
+            "fp4_padded": false,
+            "is_im2col": false
+          }
+        ],
+        "shared": 212092,
+        "tmem_size": 512,
+        "global_scratch_size": 0,
+        "global_scratch_align": 1,
+        "profile_scratch_size": 0,
+        "profile_scratch_align": 1,
+        "name": "mma_scaled_warp_specialized_kernel"
+      }
+    }
+  }
+}

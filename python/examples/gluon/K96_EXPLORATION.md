@@ -1,5 +1,18 @@
 # Packed tcgen05 K=96 experiment
 
+## Native compiler migration: frozen controls
+
+The immutable source checkpoint is `d93e07b76de305b651df579ce50b64ab7d237618`.
+[Launch manifests and replay validation](k96-frozen-controls.json) preserve 16
+unique control binaries spanning all 36 recorded launches. Every recorded shape
+passes the FP32 reference and ten bit-identical CUDA-graph replays through the
+normal `CompiledKernel` launcher, without recompiling the archived controls.
+The existing benchmark accepts `--freeze-controls DIR`, `--verify-frozen DIR`,
+and `--frozen DIR`. The native replacement must take no more than 1.02 times the
+paired control's median latency at each mixed/pure case. Original measurements
+remain unchanged. Binary payloads currently reside in the task-owned
+`native-k96/frozen` artifact directory; remote publication is not yet verified.
+
 ## All-K96 Gluon continuation
 
 **Yes: a genuinely all-K96 stream improves MXFP4 beyond the mixed 96+96+64
