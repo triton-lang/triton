@@ -5797,9 +5797,20 @@ def test_tcgen05_mma_scaled_pure_k96_pipeline(pure_k96_benchmark, fmt, mode, m, 
     operands, scales, refs, vec = bench.prepare(m, n, k, fmt)
     scales = [experiment.base.swizzle_scales_packed_block(s) for s in scales]
     scheduler = experiment.SCHEDULER_CLC if clc_scheduler else experiment.SCHEDULER_SPS
-    actual, compiled = experiment.matmul(*operands, *scales, vec, mode=mode, buffers=2 if mode == "exact384" else 4,
-                                         epilogue=32, scheduler=scheduler, out_dtype=torch.float32)
+
+    def invoke():
+        return experiment.matmul(*operands, *scales, vec, mode=mode, buffers=2 if mode == "exact384" else 4,
+                                 epilogue=32, scheduler=scheduler, out_dtype=torch.float32)
+
+    actual, compiled = invoke()
     torch.testing.assert_close(actual, refs[0] @ refs[1].T, atol=1e-3, rtol=1e-3)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        replayed, _ = invoke()
+    for _ in range(3):
+        graph.replay()
+    torch.cuda.synchronize()
+    assert torch.equal(replayed.view(torch.int32), actual.view(torch.int32))
     if mode != "raw":
         ptx = compiled.asm["ptx"]
         constants = dict(re.findall(r"mov\.b32\s+(%r\d+),\s+(-?\d+);", ptx))

@@ -1,0 +1,1526 @@
+{
+  "description": "Unpadded all-K96 FP4 Gluon experiment: final same-input sweep and rejected-design screens",
+  "base_commit": "f4fca2c0bc0e19930d2be76bb06ee7b232b60e86",
+  "implementation_commit": "e4b2d9ee7c85f02d97caf48b851b90b3f0ff3423",
+  "notes": [
+    "Native K64 and mixed controls retain original five-buffer/N64 configuration.",
+    "MXFP4 raw and pure use six buffers/N32; NVFP4 raw and pure use five buffers/N64.",
+    "All six final points have the same experimental source SHA; the first was measured before its source commit.",
+    "Final medians use seven alternating samples; do_bench_cudagraph replays each constructed graph ten times.",
+    "Clocks are not locked. No L2 flushing. K is divisible by 768; no padded reduction tail.",
+    "The pure/raw comparison isolates the instruction stream within the same producer and epilogue configuration.",
+    "Exact-transfer screens multiply and transfer no padding, but 128-byte swizzle sectors reserve unused SMEM bytes.",
+    "Raw inline-PTX memory operations are not fully modeled by Triton ConSan."
+  ],
+  "summary": [
+    {
+      "format": "mxfp4",
+      "m": 8192,
+      "n": 8192,
+      "k": 7680,
+      "scheduler": "sps",
+      "pflops": {
+        "k64": 6.383457164535708,
+        "mixed": 7.061761993714259,
+        "raw": 7.042015894571354,
+        "pure": 7.304671738674049
+      },
+      "pure_uplift_percent": {
+        "k64": 14.431279953694887,
+        "mixed": 3.439789462969811,
+        "raw": 3.7298388421016515
+      },
+      "pure_sample_cv_percent": 0.1348191728390912
+    },
+    {
+      "format": "mxfp4",
+      "m": 16384,
+      "n": 16384,
+      "k": 16128,
+      "scheduler": "clc",
+      "pflops": {
+        "k64": 6.669969761737453,
+        "mixed": 7.326734241649163,
+        "raw": 7.49015254614067,
+        "pure": 7.673310248549148
+      },
+      "pure_uplift_percent": {
+        "k64": 15.0426542046322,
+        "mixed": 4.730293135649144,
+        "raw": 2.4453133802041283
+      },
+      "pure_sample_cv_percent": 0.1040773563290017
+    },
+    {
+      "format": "mxfp4",
+      "m": 32768,
+      "n": 32768,
+      "k": 32256,
+      "scheduler": "clc",
+      "pflops": {
+        "k64": 6.778391965632843,
+        "mixed": 7.3879319625551405,
+        "raw": 7.756913750369878,
+        "pure": 7.877946640374674
+      },
+      "pure_uplift_percent": {
+        "k64": 16.221467869026874,
+        "mixed": 6.632636579534235,
+        "raw": 1.5603227507721584
+      },
+      "pure_sample_cv_percent": 0.025958550908616086
+    },
+    {
+      "format": "nvfp4",
+      "m": 8192,
+      "n": 8192,
+      "k": 7680,
+      "scheduler": "sps",
+      "pflops": {
+        "k64": 6.307866035487624,
+        "mixed": 6.900262149819246,
+        "raw": 6.88532017960052,
+        "pure": 6.9219638543878075
+      },
+      "pure_uplift_percent": {
+        "k64": 9.735428993661422,
+        "mixed": 0.3145055085933324,
+        "raw": 0.5322000114947878
+      },
+      "pure_sample_cv_percent": 0.053311647630530805
+    },
+    {
+      "format": "nvfp4",
+      "m": 16384,
+      "n": 16384,
+      "k": 16128,
+      "scheduler": "clc",
+      "pflops": {
+        "k64": 6.557039085146346,
+        "mixed": 7.160383033597027,
+        "raw": 7.139028859372749,
+        "pure": 7.178217936691947
+      },
+      "pure_uplift_percent": {
+        "k64": 9.473465743901954,
+        "mixed": 0.249077500620265,
+        "raw": 0.5489412928727289
+      },
+      "pure_sample_cv_percent": 0.16819967142033426
+    },
+    {
+      "format": "nvfp4",
+      "m": 32768,
+      "n": 32768,
+      "k": 32256,
+      "scheduler": "clc",
+      "pflops": {
+        "k64": 6.658971196256618,
+        "mixed": 7.183563592344025,
+        "raw": 7.153117179957865,
+        "pure": 7.148797048351103
+      },
+      "pure_uplift_percent": {
+        "k64": 7.3558788235913,
+        "mixed": -0.4839734979164789,
+        "raw": -0.06039509067272686
+      },
+      "pure_sample_cv_percent": 0.03489937314382639
+    }
+  ],
+  "final_sweep": [
+    {
+      "commit": "3c5e70cbb2f6cd18cec1404823c2dac7fe5455cd",
+      "diff_sha256": "8da677a5c33a8973ac2f8a8b5408ec23252390d890884bbacc38b850d5a57c72",
+      "source_sha256": "f67b6d65c39cddd06c82f9105ffd21928e55ee41ebcc003e41c343e85680e755",
+      "torch": "2.13.0+cu130",
+      "triton": "/root/code/triton/python/triton/__init__.py",
+      "gpu_before": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 2070 MHz, 32, 238.57 W, 1 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 31, 226.51 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 222.66 W, 0 %",
+      "method": "same inputs; alternating order; CUDA graphs; no L2 flush",
+      "seed": 123,
+      "scale_values": [
+        0.125,
+        0.25,
+        0.5,
+        1.0
+      ],
+      "args": {
+        "size": 8192,
+        "k": 7680,
+        "format": "mxfp4",
+        "modes": [
+          "k64",
+          "mixed",
+          "raw",
+          "pure"
+        ],
+        "buffers": 6,
+        "epilogue": 32,
+        "scheduler": "sps",
+        "repeats": 7,
+        "rep_ms": 500,
+        "output": "/root/code/jeffniu-codex-workdir/work/2026-08-23/01a02c07-7d32-7f72-b030-5dd20efa2a8c-tcgen05-k96/final-mxfp4-8192"
+      },
+      "results": [
+        {
+          "mode": "k64",
+          "correct": true,
+          "shared": 212092,
+          "tmem": 512,
+          "cubin_sha256": "45bcd61a457e04875dc96b1b463659de3d767163a998fd7c4f8ddd1cc68cce74",
+          "ptx_mmas": 8,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.16037914131198938,
+            0.16147866657063614,
+            0.16148681919197141,
+            0.1615317661574303,
+            0.16138676363542534,
+            0.16153649948495097,
+            0.16146980282746926
+          ],
+          "median_ms": 0.16147866657063614,
+          "pflops": 6.383457164535708
+        },
+        {
+          "mode": "mixed",
+          "correct": true,
+          "shared": 212092,
+          "tmem": 512,
+          "cubin_sha256": "cdcb0efdc594d75c5c622508449c26bfd3e7cb4f090fb2f923985f664c447365",
+          "ptx_mmas": 6,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.1455906879471009,
+            0.14586825971620038,
+            0.14592220554658797,
+            0.1459681240967223,
+            0.1460090064082287,
+            0.1461302206330622,
+            0.14614715198077988
+          ],
+          "median_ms": 0.1459681240967223,
+          "pflops": 7.061761993714259
+        },
+        {
+          "mode": "raw",
+          "correct": true,
+          "shared": 231548,
+          "tmem": 512,
+          "cubin_sha256": "cbd5b318abc9a54003a775a5a0711ab4e393f818d91a1cc51c094e88343add04",
+          "ptx_mmas": 6,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.1458759954727584,
+            0.1461198525217782,
+            0.1465064732591439,
+            0.1463760666928049,
+            0.14667813983838274,
+            0.14637742465685588,
+            0.14648924770224725
+          ],
+          "median_ms": 0.14637742465685588,
+          "pflops": 7.042015894571354
+        },
+        {
+          "mode": "pure",
+          "correct": true,
+          "shared": 231548,
+          "tmem": 512,
+          "cubin_sha256": "55a19f8fa1ecd22a029dab80745bcaecb89068fa6c84738a150b43eecb1750a7",
+          "ptx_mmas": 8,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.14074108271309024,
+            0.1408589620776163,
+            0.14115773540206258,
+            0.14115394466463058,
+            0.14109018177371152,
+            0.14111409628204735,
+            0.14128953254331317
+          ],
+          "median_ms": 0.14111409628204735,
+          "pflops": 7.304671738674049
+        }
+      ],
+      "gpu_after": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 1492 MHz, 57, 1339.19 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 32, 229.63 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 222.54 W, 0 %",
+      "artifact_directory": "final-mxfp4-8192"
+    },
+    {
+      "commit": "e4b2d9ee7c85f02d97caf48b851b90b3f0ff3423",
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_sha256": "f67b6d65c39cddd06c82f9105ffd21928e55ee41ebcc003e41c343e85680e755",
+      "torch": "2.13.0+cu130",
+      "triton": "/root/code/triton/python/triton/__init__.py",
+      "gpu_before": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 2070 MHz, 32, 245.82 W, 15 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 31, 226.74 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 222.15 W, 0 %",
+      "method": "same inputs; alternating order; CUDA graphs; no L2 flush",
+      "seed": 123,
+      "scale_values": [
+        0.125,
+        0.25,
+        0.5,
+        1.0
+      ],
+      "args": {
+        "size": 16384,
+        "k": 16128,
+        "format": "mxfp4",
+        "modes": [
+          "k64",
+          "mixed",
+          "raw",
+          "pure"
+        ],
+        "buffers": 6,
+        "epilogue": 32,
+        "scheduler": "clc",
+        "repeats": 7,
+        "rep_ms": 500,
+        "output": "/root/code/jeffniu-codex-workdir/work/2026-08-23/01a02c07-7d32-7f72-b030-5dd20efa2a8c-tcgen05-k96/final-mxfp4-16384"
+      },
+      "results": [
+        {
+          "mode": "k64",
+          "correct": true,
+          "shared": 212172,
+          "tmem": 512,
+          "cubin_sha256": "a70c200941efd6795042bee4fd6c794536693f90cb4aae6d2e080d8a59c35edf",
+          "ptx_mmas": 8,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            1.291516797657144,
+            1.2976998318447157,
+            1.2977538426717121,
+            1.298154920942328,
+            1.2983415294068021,
+            1.298572728874978,
+            1.2989704791163899
+          ],
+          "median_ms": 1.298154920942328,
+          "pflops": 6.669969761737453
+        },
+        {
+          "mode": "mixed",
+          "correct": true,
+          "shared": 212172,
+          "tmem": 512,
+          "cubin_sha256": "656fe8795ef3fbf5995328230acbf41eed20dbf7e5e5b2881a13ba199049f6af",
+          "ptx_mmas": 6,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            1.1773475578239372,
+            1.1809577630864059,
+            1.1816334720111001,
+            1.181830613469503,
+            1.1822414760675906,
+            1.1817890185664817,
+            1.1829302826618178
+          ],
+          "median_ms": 1.1817890185664817,
+          "pflops": 7.326734241649163
+        },
+        {
+          "mode": "raw",
+          "correct": true,
+          "shared": 231628,
+          "tmem": 512,
+          "cubin_sha256": "3c3d780b5be0ec225013fdcdf885727fbf50f0ab1ff44092d0ec0c8c7fbc1af6",
+          "ptx_mmas": 6,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            1.153771459342148,
+            1.1545564273661246,
+            1.1560050366660966,
+            1.1560330999465216,
+            1.1559042985665056,
+            1.1560871887207032,
+            1.15668724711993
+          ],
+          "median_ms": 1.1560050366660966,
+          "pflops": 7.49015254614067
+        },
+        {
+          "mode": "pure",
+          "correct": true,
+          "shared": 231628,
+          "tmem": 512,
+          "cubin_sha256": "1be076a354a9e204d1f1b212e9bcbcab601c8bc497a1071c39dc1d480e502f73",
+          "ptx_mmas": 8,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            1.1262044044273734,
+            1.1265986920484339,
+            1.1284118311745779,
+            1.1289966696215654,
+            1.1287790025983537,
+            1.1281717036586771,
+            1.1291384157185054
+          ],
+          "median_ms": 1.1284118311745779,
+          "pflops": 7.673310248549148
+        }
+      ],
+      "gpu_after": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 1425 MHz, 52, 1344.10 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 32, 229.46 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 31, 222.97 W, 0 %",
+      "artifact_directory": "final-mxfp4-16384"
+    },
+    {
+      "commit": "e4b2d9ee7c85f02d97caf48b851b90b3f0ff3423",
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_sha256": "f67b6d65c39cddd06c82f9105ffd21928e55ee41ebcc003e41c343e85680e755",
+      "torch": "2.13.0+cu130",
+      "triton": "/root/code/triton/python/triton/__init__.py",
+      "gpu_before": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 2070 MHz, 37, 289.44 W, 58 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 32, 227.00 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 32, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 223.50 W, 0 %",
+      "method": "same inputs; alternating order; CUDA graphs; no L2 flush",
+      "seed": 123,
+      "scale_values": [
+        0.125,
+        0.25,
+        0.5,
+        1.0
+      ],
+      "args": {
+        "size": 32768,
+        "k": 32256,
+        "format": "mxfp4",
+        "modes": [
+          "k64",
+          "mixed",
+          "raw",
+          "pure"
+        ],
+        "buffers": 6,
+        "epilogue": 32,
+        "scheduler": "clc",
+        "repeats": 7,
+        "rep_ms": 750,
+        "output": "/root/code/jeffniu-codex-workdir/work/2026-08-23/01a02c07-7d32-7f72-b030-5dd20efa2a8c-tcgen05-k96/final-mxfp4-32768"
+      },
+      "results": [
+        {
+          "mode": "k64",
+          "correct": true,
+          "shared": 212172,
+          "tmem": 512,
+          "cubin_sha256": "a70c200941efd6795042bee4fd6c794536693f90cb4aae6d2e080d8a59c35edf",
+          "ptx_mmas": 8,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            10.121871571998074,
+            10.213489027426276,
+            10.217662190755208,
+            10.221492745535715,
+            10.21957088104666,
+            10.219124668666295,
+            10.219280923379435
+          ],
+          "median_ms": 10.219124668666295,
+          "pflops": 6.778391965632843
+        },
+        {
+          "mode": "mixed",
+          "correct": true,
+          "shared": 212172,
+          "tmem": 512,
+          "cubin_sha256": "656fe8795ef3fbf5995328230acbf41eed20dbf7e5e5b2881a13ba199049f6af",
+          "ptx_mmas": 6,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            9.352436552852033,
+            9.37278048358386,
+            9.372742741282392,
+            9.378722294674644,
+            9.375997627072218,
+            9.377167211605023,
+            9.37999657320689
+          ],
+          "median_ms": 9.375997627072218,
+          "pflops": 7.3879319625551405
+        },
+        {
+          "mode": "raw",
+          "correct": true,
+          "shared": 231628,
+          "tmem": 512,
+          "cubin_sha256": "3c3d780b5be0ec225013fdcdf885727fbf50f0ab1ff44092d0ec0c8c7fbc1af6",
+          "ptx_mmas": 6,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            8.921838809742647,
+            8.932902917196584,
+            8.932529773931394,
+            8.923357250072337,
+            8.929801712913076,
+            8.92999906652114,
+            8.930620978860293
+          ],
+          "median_ms": 8.92999906652114,
+          "pflops": 7.756913750369878
+        },
+        {
+          "mode": "pure",
+          "correct": true,
+          "shared": 231628,
+          "tmem": 512,
+          "cubin_sha256": "1be076a354a9e204d1f1b212e9bcbcab601c8bc497a1071c39dc1d480e502f73",
+          "ptx_mmas": 8,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            8.794089570886948,
+            8.792035414751838,
+            8.79814208984375,
+            8.792780330882353,
+            8.79609005950218,
+            8.79227933995864,
+            8.792802961482558
+          ],
+          "median_ms": 8.792802961482558,
+          "pflops": 7.877946640374674
+        }
+      ],
+      "gpu_after": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 1282 MHz, 58, 1364.62 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 32, 230.08 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 223.18 W, 0 %",
+      "artifact_directory": "final-mxfp4-32768"
+    },
+    {
+      "commit": "e4b2d9ee7c85f02d97caf48b851b90b3f0ff3423",
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_sha256": "f67b6d65c39cddd06c82f9105ffd21928e55ee41ebcc003e41c343e85680e755",
+      "torch": "2.13.0+cu130",
+      "triton": "/root/code/triton/python/triton/__init__.py",
+      "gpu_before": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 2070 MHz, 32, 239.08 W, 1 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 31, 226.77 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 222.41 W, 0 %",
+      "method": "same inputs; alternating order; CUDA graphs; no L2 flush",
+      "seed": 123,
+      "scale_values": [
+        0.125,
+        0.25,
+        0.5,
+        1.0
+      ],
+      "args": {
+        "size": 8192,
+        "k": 7680,
+        "format": "nvfp4",
+        "modes": [
+          "k64",
+          "mixed",
+          "raw",
+          "pure"
+        ],
+        "buffers": 5,
+        "epilogue": 64,
+        "scheduler": "sps",
+        "repeats": 7,
+        "rep_ms": 500,
+        "output": "/root/code/jeffniu-codex-workdir/work/2026-08-23/01a02c07-7d32-7f72-b030-5dd20efa2a8c-tcgen05-k96/final-nvfp4-8192"
+      },
+      "results": [
+        {
+          "mode": "k64",
+          "correct": true,
+          "shared": 227452,
+          "tmem": 512,
+          "cubin_sha256": "2328d95f291b17f9db6c342eecce6ca4182da62dfacacb9af0b3b74d1ea0171f",
+          "ptx_mmas": 4,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.16247896067646497,
+            0.16321901057316707,
+            0.16337527603161053,
+            0.16341376707127792,
+            0.16348960850246994,
+            0.1635574057915742,
+            0.16354995188584492
+          ],
+          "median_ms": 0.16341376707127792,
+          "pflops": 6.307866035487624
+        },
+        {
+          "mode": "mixed",
+          "correct": true,
+          "shared": 227452,
+          "tmem": 512,
+          "cubin_sha256": "71d5b31c3d5f8768fbc1c9c105a13778f4361a38fabda1fa68ef825151805f3e",
+          "ptx_mmas": 3,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.1491522841650152,
+            0.1493844912931318,
+            0.14938451284222898,
+            0.14929155865680901,
+            0.14934699831467604,
+            0.14959346495397927,
+            0.1494354093303632
+          ],
+          "median_ms": 0.1493844912931318,
+          "pflops": 6.900262149819246
+        },
+        {
+          "mode": "raw",
+          "correct": true,
+          "shared": 227452,
+          "tmem": 512,
+          "cubin_sha256": "5e226662d7eb7b6bd8b0f013818497ec0bdea1427201a21007719f8fc4033324",
+          "ptx_mmas": 3,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.1495312143172309,
+            0.14963393746336617,
+            0.14975446785371757,
+            0.14969265845514113,
+            0.1497906952137969,
+            0.14977829111793828,
+            0.1497086735478154
+          ],
+          "median_ms": 0.1497086735478154,
+          "pflops": 6.88532017960052
+        },
+        {
+          "mode": "pure",
+          "correct": true,
+          "shared": 227452,
+          "tmem": 512,
+          "cubin_sha256": "c755a3014e5b04037ff75ba3b33e24a320ab16e0726a7fe48f044ccb27701073",
+          "ptx_mmas": 8,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.14883855318761874,
+            0.1487747519872283,
+            0.14884884624226172,
+            0.1489554467423415,
+            0.14895905089741096,
+            0.14899449279245022,
+            0.14891614182391094
+          ],
+          "median_ms": 0.14891614182391094,
+          "pflops": 6.9219638543878075
+        }
+      ],
+      "gpu_after": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 1612 MHz, 57, 1349.39 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 32, 229.74 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 222.55 W, 0 %",
+      "artifact_directory": "final-nvfp4-8192"
+    },
+    {
+      "commit": "e4b2d9ee7c85f02d97caf48b851b90b3f0ff3423",
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_sha256": "f67b6d65c39cddd06c82f9105ffd21928e55ee41ebcc003e41c343e85680e755",
+      "torch": "2.13.0+cu130",
+      "triton": "/root/code/triton/python/triton/__init__.py",
+      "gpu_before": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 2070 MHz, 32, 247.51 W, 12 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 31, 226.42 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 222.63 W, 0 %",
+      "method": "same inputs; alternating order; CUDA graphs; no L2 flush",
+      "seed": 123,
+      "scale_values": [
+        0.125,
+        0.25,
+        0.5,
+        1.0
+      ],
+      "args": {
+        "size": 16384,
+        "k": 16128,
+        "format": "nvfp4",
+        "modes": [
+          "k64",
+          "mixed",
+          "raw",
+          "pure"
+        ],
+        "buffers": 5,
+        "epilogue": 64,
+        "scheduler": "clc",
+        "repeats": 7,
+        "rep_ms": 500,
+        "output": "/root/code/jeffniu-codex-workdir/work/2026-08-23/01a02c07-7d32-7f72-b030-5dd20efa2a8c-tcgen05-k96/final-nvfp4-16384"
+      },
+      "results": [
+        {
+          "mode": "k64",
+          "correct": true,
+          "shared": 227532,
+          "tmem": 512,
+          "cubin_sha256": "0c8b80b9f942de837dca73f32732f100b24ae5c7e3288feb4f13fdb141868336",
+          "ptx_mmas": 4,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            1.309199947781033,
+            1.3196526576450893,
+            1.319899327704247,
+            1.3211554162563075,
+            1.3205128040719538,
+            1.3209879353258192,
+            1.3211470377604166
+          ],
+          "median_ms": 1.3205128040719538,
+          "pflops": 6.557039085146346
+        },
+        {
+          "mode": "mixed",
+          "correct": true,
+          "shared": 227532,
+          "tmem": 512,
+          "cubin_sha256": "b353c476bff50dc9f342d857555c1ae6ad77ae4cfd9de6940440a2a0dcb69f0b",
+          "ptx_mmas": 3,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            1.2037143857739088,
+            1.208191679078612,
+            1.2086821303256723,
+            1.2097870761908374,
+            1.2092445373535157,
+            1.210261520830173,
+            1.2101346951778804
+          ],
+          "median_ms": 1.2092445373535157,
+          "pflops": 7.160383033597027
+        },
+        {
+          "mode": "raw",
+          "correct": true,
+          "shared": 227532,
+          "tmem": 512,
+          "cubin_sha256": "35334dfa92b41ea4bbff0254fc03a60427d51a1e4e70402f7b269ec97e8172ad",
+          "ptx_mmas": 3,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            1.20858917984308,
+            1.2111742426433836,
+            1.212977018988982,
+            1.2130691163277512,
+            1.2132105398062083,
+            1.2123962983630951,
+            1.2128616145553401
+          ],
+          "median_ms": 1.2128616145553401,
+          "pflops": 7.139028859372749
+        },
+        {
+          "mode": "pure",
+          "correct": true,
+          "shared": 227532,
+          "tmem": 512,
+          "cubin_sha256": "154446a7199b0cbbdc42e603f32c72e3300f2d6847d52bc98f391d0711e9f493",
+          "ptx_mmas": 8,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            1.2023399864177846,
+            1.202446256628359,
+            1.2061429028440578,
+            1.2067419731326219,
+            1.2068566031254846,
+            1.2065919153898665,
+            1.2062400647487592
+          ],
+          "median_ms": 1.2062400647487592,
+          "pflops": 7.178217936691947
+        }
+      ],
+      "gpu_after": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 1537 MHz, 58, 1370.09 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 32, 229.34 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 222.89 W, 0 %",
+      "artifact_directory": "final-nvfp4-16384"
+    },
+    {
+      "commit": "e4b2d9ee7c85f02d97caf48b851b90b3f0ff3423",
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_sha256": "f67b6d65c39cddd06c82f9105ffd21928e55ee41ebcc003e41c343e85680e755",
+      "torch": "2.13.0+cu130",
+      "triton": "/root/code/triton/python/triton/__init__.py",
+      "gpu_before": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 2070 MHz, 33, 277.78 W, 51 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 31, 226.47 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 222.34 W, 0 %",
+      "method": "same inputs; alternating order; CUDA graphs; no L2 flush",
+      "seed": 123,
+      "scale_values": [
+        0.125,
+        0.25,
+        0.5,
+        1.0
+      ],
+      "args": {
+        "size": 32768,
+        "k": 32256,
+        "format": "nvfp4",
+        "modes": [
+          "k64",
+          "mixed",
+          "raw",
+          "pure"
+        ],
+        "buffers": 5,
+        "epilogue": 64,
+        "scheduler": "clc",
+        "repeats": 7,
+        "rep_ms": 750,
+        "output": "/root/code/jeffniu-codex-workdir/work/2026-08-23/01a02c07-7d32-7f72-b030-5dd20efa2a8c-tcgen05-k96/final-nvfp4-32768"
+      },
+      "results": [
+        {
+          "mode": "k64",
+          "correct": true,
+          "shared": 227532,
+          "tmem": 512,
+          "cubin_sha256": "0c8b80b9f942de837dca73f32732f100b24ae5c7e3288feb4f13fdb141868336",
+          "ptx_mmas": 4,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            10.331690979003906,
+            10.398125689962637,
+            10.40033066208298,
+            10.407726440429688,
+            10.404735492026969,
+            10.405424499511719,
+            10.402392578125
+          ],
+          "median_ms": 10.402392578125,
+          "pflops": 6.658971196256618
+        },
+        {
+          "mode": "mixed",
+          "correct": true,
+          "shared": 227532,
+          "tmem": 512,
+          "cubin_sha256": "b353c476bff50dc9f342d857555c1ae6ad77ae4cfd9de6940440a2a0dcb69f0b",
+          "ptx_mmas": 3,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            9.62438339605564,
+            9.641769252679287,
+            9.642739520495452,
+            9.64132929934731,
+            9.64345558166504,
+            9.646341411884015,
+            9.646989135742187
+          ],
+          "median_ms": 9.642739520495452,
+          "pflops": 7.183563592344025
+        },
+        {
+          "mode": "raw",
+          "correct": true,
+          "shared": 227532,
+          "tmem": 512,
+          "cubin_sha256": "35334dfa92b41ea4bbff0254fc03a60427d51a1e4e70402f7b269ec97e8172ad",
+          "ptx_mmas": 3,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            9.658996899096996,
+            9.678552464076452,
+            9.6788597998681,
+            9.686459884643554,
+            9.683782721185064,
+            9.684576725054391,
+            9.685802243079667
+          ],
+          "median_ms": 9.683782721185064,
+          "pflops": 7.153117179957865
+        },
+        {
+          "mode": "pure",
+          "correct": true,
+          "shared": 227532,
+          "tmem": 512,
+          "cubin_sha256": "154446a7199b0cbbdc42e603f32c72e3300f2d6847d52bc98f391d0711e9f493",
+          "ptx_mmas": 8,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            9.684435312371505,
+            9.68722628079928,
+            9.686791666666666,
+            9.691102952223558,
+            9.694227439478825,
+            9.691891244741587,
+            9.68963478489926
+          ],
+          "median_ms": 9.68963478489926,
+          "pflops": 7.148797048351103
+        }
+      ],
+      "gpu_after": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 1447 MHz, 51, 1345.05 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 32, 229.76 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 222.71 W, 0 %",
+      "artifact_directory": "final-nvfp4-32768"
+    }
+  ],
+  "development_screens": [
+    {
+      "args": {
+        "size": 7680,
+        "format": "mxfp4",
+        "modes": [
+          "k64",
+          "mixed",
+          "raw",
+          "pure"
+        ],
+        "buffers": 5,
+        "epilogue": 64,
+        "repeats": 3,
+        "output": "/root/code/jeffniu-codex-workdir/work/2026-08-23/01a02c07-7d32-7f72-b030-5dd20efa2a8c-tcgen05-k96/issuer-7680-screen"
+      },
+      "results": [
+        {
+          "mode": "k64",
+          "shared": 212092,
+          "tmem": 512,
+          "cubin": "45bcd61a457e04875dc96b1b463659de3d767163a998fd7c4f8ddd1cc68cce74",
+          "mmas": 8,
+          "max_error": 0.5,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.1387649209450442,
+            0.13916949688548774,
+            0.1395265069828017
+          ],
+          "median_ms": 0.13916949688548774,
+          "pflops": 6.509829267727075
+        },
+        {
+          "mode": "mixed",
+          "shared": 212092,
+          "tmem": 512,
+          "cubin": "cdcb0efdc594d75c5c622508449c26bfd3e7cb4f090fb2f923985f664c447365",
+          "mmas": 6,
+          "max_error": 0.5,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.1263917722367683,
+            0.12658152680185195,
+            0.12659060234431918
+          ],
+          "median_ms": 0.12658152680185195,
+          "pflops": 7.15720284696981
+        },
+        {
+          "mode": "raw",
+          "shared": 212092,
+          "tmem": 512,
+          "cubin": "faedac8dfd14461a09ca7cb93970d56c4c286f7338f65c6848d15448b1b3e20d",
+          "mmas": 6,
+          "max_error": 0.5,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.12668369929528694,
+            0.12674946682512267,
+            0.12661496180851137
+          ],
+          "median_ms": 0.12668369929528694,
+          "pflops": 7.151430444798395
+        },
+        {
+          "mode": "pure",
+          "shared": 212092,
+          "tmem": 512,
+          "cubin": "9be473533c26089803baf8838df050f8a9e4c3a6954896b26352b83a0d3126cf",
+          "mmas": 8,
+          "max_error": 0.5,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.12544350494359607,
+            0.125576005618813,
+            0.12579552055205276
+          ],
+          "median_ms": 0.125576005618813,
+          "pflops": 7.214512514039334
+        }
+      ],
+      "artifact_directory": "issuer-7680-screen",
+      "evidence_tier": "development screen; not a final frozen-source sweep point"
+    },
+    {
+      "provenance": {
+        "commit": "3c5e70cbb2f6cd18cec1404823c2dac7fe5455cd",
+        "diff_sha256": "23fb0d0d089ca960c0b4516a5c7ac5197591ecfe2c29fdc4c95949a272d4af96",
+        "source_sha256": "264eb4e998bffbf9460fa84dc3df50ff4c869505ba4fd336b9aae04c0f825953",
+        "torch": "2.13.0+cu130",
+        "triton": "/root/code/triton/python/triton/__init__.py",
+        "gpu_before": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 2070 MHz, 32, 261.76 W, 9 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 31, 226.84 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.75 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 31, 222.89 W, 0 %",
+        "method": "same input; alternating order; CUDA graphs 200ms; no L2 flush",
+        "seed": 123,
+        "scale_values": [
+          0.125,
+          0.25,
+          0.5,
+          1.0
+        ],
+        "gpu_after": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 1627 MHz, 58, 1353.12 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 32, 229.25 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 31, 222.81 W, 0 %"
+      },
+      "args": {
+        "size": 12288,
+        "format": "mxfp4",
+        "modes": [
+          "k64",
+          "mixed",
+          "raw",
+          "pure"
+        ],
+        "buffers": 5,
+        "epilogue": 64,
+        "repeats": 7,
+        "output": "/root/code/jeffniu-codex-workdir/work/2026-08-23/01a02c07-7d32-7f72-b030-5dd20efa2a8c-tcgen05-k96/pure-12288-main"
+      },
+      "results": [
+        {
+          "mode": "k64",
+          "shared": 212172,
+          "tmem": 512,
+          "cubin": "a70c200941efd6795042bee4fd6c794536693f90cb4aae6d2e080d8a59c35edf",
+          "mmas": 8,
+          "max_error": 0.5,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.5657733232547075,
+            0.5684104942765076,
+            0.5679375944081803,
+            0.5695532562535837,
+            0.5694160089793383,
+            0.5696689187026606,
+            0.5699521484375
+          ],
+          "median_ms": 0.5694160089793383,
+          "pflops": 6.516943122824373
+        },
+        {
+          "mode": "mixed",
+          "shared": 212172,
+          "tmem": 512,
+          "cubin": "656fe8795ef3fbf5995328230acbf41eed20dbf7e5e5b2881a13ba199049f6af",
+          "mmas": 6,
+          "max_error": 0.5,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.5193069148969047,
+            0.5200958899540989,
+            0.5205570454500159,
+            0.5211982059225796,
+            0.5212215048840424,
+            0.5215586018880208,
+            0.521406170794072
+          ],
+          "median_ms": 0.5211982059225796,
+          "pflops": 7.119847500578737
+        },
+        {
+          "mode": "raw",
+          "shared": 212172,
+          "tmem": 512,
+          "cubin": "b5661e95e8715212711bea03792b996f81340c60e5647f5872a4365e55fdcdac",
+          "mmas": 6,
+          "max_error": 0.5,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.5207446981545802,
+            0.5213957548141479,
+            0.5209177477606411,
+            0.5214766898292162,
+            0.5223889200846354,
+            0.5220644798976012,
+            0.5217712769533861
+          ],
+          "median_ms": 0.5214766898292162,
+          "pflops": 7.116045292377891
+        },
+        {
+          "mode": "pure",
+          "shared": 212172,
+          "tmem": 512,
+          "cubin": "b676fb64b9582b2646a782779d88e2692742e617af788658de64b742003b7b35",
+          "mmas": 8,
+          "max_error": 0.5,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.513152821858724,
+            0.5135548643904007,
+            0.5135360636824955,
+            0.5146642859237313,
+            0.5142840033817039,
+            0.5144492821944388,
+            0.5142721363340828
+          ],
+          "median_ms": 0.5142721363340828,
+          "pflops": 7.215735564046478
+        }
+      ],
+      "artifact_directory": "pure-12288-main",
+      "evidence_tier": "development screen; not a final frozen-source sweep point"
+    },
+    {
+      "provenance": {
+        "commit": "3c5e70cbb2f6cd18cec1404823c2dac7fe5455cd",
+        "diff_sha256": "23fb0d0d089ca960c0b4516a5c7ac5197591ecfe2c29fdc4c95949a272d4af96",
+        "source_sha256": "da4ccce0e2a732f51ee15034400709dc89407a20aeba78c3e638af5f3d30e139",
+        "torch": "2.13.0+cu130",
+        "triton": "/root/code/triton/python/triton/__init__.py",
+        "gpu_before": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 2070 MHz, 32, 240.74 W, 4 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 31, 226.62 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 223.05 W, 0 %",
+        "method": "same input; alternating order; CUDA graphs 200ms; no L2 flush",
+        "seed": 123,
+        "scale_values": [
+          0.125,
+          0.25,
+          0.5,
+          1.0
+        ],
+        "gpu_after": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 1822 MHz, 57, 1335.27 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 31, 230.00 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 31, 222.95 W, 0 %"
+      },
+      "args": {
+        "size": 7680,
+        "format": "mxfp4",
+        "modes": [
+          "k64",
+          "mixed",
+          "raw",
+          "pure",
+          "exact192"
+        ],
+        "buffers": 6,
+        "epilogue": 32,
+        "repeats": 3,
+        "output": "/root/code/jeffniu-codex-workdir/work/2026-08-23/01a02c07-7d32-7f72-b030-5dd20efa2a8c-tcgen05-k96/exact192-7680-screen"
+      },
+      "results": [
+        {
+          "mode": "k64",
+          "shared": 212092,
+          "tmem": 512,
+          "cubin": "45bcd61a457e04875dc96b1b463659de3d767163a998fd7c4f8ddd1cc68cce74",
+          "mmas": 8,
+          "max_error": 0.5,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.13891922033779508,
+            0.13972542734824464,
+            0.13966938211328458
+          ],
+          "median_ms": 0.13966938211328458,
+          "pflops": 6.4865301921732295
+        },
+        {
+          "mode": "mixed",
+          "shared": 212092,
+          "tmem": 512,
+          "cubin": "cdcb0efdc594d75c5c622508449c26bfd3e7cb4f090fb2f923985f664c447365",
+          "mmas": 6,
+          "max_error": 0.5,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.1266728879905972,
+            0.1265884696422122,
+            0.1268168425655748
+          ],
+          "median_ms": 0.1266728879905972,
+          "pflops": 7.152040806610876
+        },
+        {
+          "mode": "raw",
+          "shared": 231548,
+          "tmem": 512,
+          "cubin": "a972a195bbdab7723177e4be3a093efaa068197203e1a5a24bc14cacce438e3f",
+          "mmas": 6,
+          "max_error": 0.5,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.126315231696622,
+            0.12652470324934736,
+            0.12658572334774656
+          ],
+          "median_ms": 0.12652470324934736,
+          "pflops": 7.160417220774419
+        },
+        {
+          "mode": "pure",
+          "shared": 231548,
+          "tmem": 512,
+          "cubin": "c623c8da539e32980d39ca16dbdebf6613b62eb195218a13c3761a36b5fdd242",
+          "mmas": 8,
+          "max_error": 0.5,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.12249688442593382,
+            0.12254811087570622,
+            0.12267678428035211
+          ],
+          "median_ms": 0.12254811087570622,
+          "pflops": 7.392767277488879
+        },
+        {
+          "mode": "exact192",
+          "shared": 231548,
+          "tmem": 512,
+          "cubin": "8244908374efcbf503b977a11ff83a20e899587bca04eee838ce5c541b74284f",
+          "mmas": 4,
+          "max_error": 0.5,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.13971346220867562,
+            0.139925797914713,
+            0.13987975388430476
+          ],
+          "median_ms": 0.13987975388430476,
+          "pflops": 6.476774792936309
+        }
+      ],
+      "artifact_directory": "exact192-7680-screen",
+      "evidence_tier": "development screen; not a final frozen-source sweep point"
+    },
+    {
+      "provenance": {
+        "commit": "3c5e70cbb2f6cd18cec1404823c2dac7fe5455cd",
+        "diff_sha256": "23fb0d0d089ca960c0b4516a5c7ac5197591ecfe2c29fdc4c95949a272d4af96",
+        "source_sha256": "264eb4e998bffbf9460fa84dc3df50ff4c869505ba4fd336b9aae04c0f825953",
+        "torch": "2.13.0+cu130",
+        "triton": "/root/code/triton/python/triton/__init__.py",
+        "gpu_before": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 2070 MHz, 32, 240.51 W, 1 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 31, 226.36 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 31, 222.54 W, 0 %",
+        "method": "same input; alternating order; CUDA graphs 200ms; no L2 flush",
+        "seed": 123,
+        "scale_values": [
+          0.125,
+          0.25,
+          0.5,
+          1.0
+        ],
+        "gpu_after": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 1920 MHz, 57, 1342.35 W, 100 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 32, 229.66 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 32, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 32, 223.45 W, 0 %"
+      },
+      "args": {
+        "size": 7680,
+        "format": "mxfp4",
+        "modes": [
+          "k64",
+          "mixed",
+          "exact384"
+        ],
+        "buffers": 3,
+        "epilogue": 32,
+        "repeats": 3,
+        "output": "/root/code/jeffniu-codex-workdir/work/2026-08-23/01a02c07-7d32-7f72-b030-5dd20efa2a8c-tcgen05-k96/exact384-grouped-screen"
+      },
+      "results": [
+        {
+          "mode": "k64",
+          "shared": 212092,
+          "tmem": 512,
+          "cubin": "45bcd61a457e04875dc96b1b463659de3d767163a998fd7c4f8ddd1cc68cce74",
+          "mmas": 8,
+          "max_error": 0.5,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.1388846504880192,
+            0.13957714274778205,
+            0.1396191860500135
+          ],
+          "median_ms": 0.13957714274778205,
+          "pflops": 6.490816806854261
+        },
+        {
+          "mode": "mixed",
+          "shared": 212092,
+          "tmem": 512,
+          "cubin": "cdcb0efdc594d75c5c622508449c26bfd3e7cb4f090fb2f923985f664c447365",
+          "mmas": 6,
+          "max_error": 0.5,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.1268057266146858,
+            0.12632520763390717,
+            0.12673044173443904
+          ],
+          "median_ms": 0.12673044173443904,
+          "pflops": 7.1487927572953645
+        },
+        {
+          "mode": "exact384",
+          "shared": 231516,
+          "tmem": 512,
+          "cubin": "fae030e473d6fdf2f2fd18cd1ee049119e74f947522d26c0d6d9e05ec3a3c22c",
+          "mmas": 8,
+          "max_error": 0.5,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.14471349647576862,
+            0.14491999810345696,
+            0.14504447778782617
+          ],
+          "median_ms": 0.14491999810345696,
+          "pflops": 6.251515842232051
+        }
+      ],
+      "artifact_directory": "exact384-grouped-screen",
+      "evidence_tier": "development screen; not a final frozen-source sweep point"
+    },
+    {
+      "provenance": {
+        "commit": "3c5e70cbb2f6cd18cec1404823c2dac7fe5455cd",
+        "diff_sha256": "23fb0d0d089ca960c0b4516a5c7ac5197591ecfe2c29fdc4c95949a272d4af96",
+        "source_sha256": "ee666da03b798b5f239bca18f40b4c99c72303ab9a78a224202099186029dc6e",
+        "torch": "2.13.0+cu130",
+        "triton": "/root/code/triton/python/triton/__init__.py",
+        "gpu_before": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 2070 MHz, 32, 237.68 W, 1 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 31, 226.29 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 31, 222.25 W, 0 %",
+        "method": "same input; alternating order; CUDA graphs 200ms; no L2 flush",
+        "seed": 123,
+        "scale_values": [
+          0.125,
+          0.25,
+          0.5,
+          1.0
+        ],
+        "gpu_after": "0, GPU-4ed02509-778a-be63-cad2-f338cc3fc883, 2070 MHz, 47, 1131.24 W, 78 %\n1, GPU-8eea7894-d339-220d-2026-cf1279e47fc6, 2070 MHz, 31, 228.26 W, 0 %\n2, GPU-a6c8dc8f-c2fe-af65-6bb9-60f1dcef9f7c, 2070 MHz, 31, 221.76 W, 0 %\n3, GPU-5c6af1a3-bf1b-a24b-0b93-c863386c8949, 2070 MHz, 31, 222.00 W, 0 %"
+      },
+      "args": {
+        "size": 7680,
+        "format": "mxfp4",
+        "modes": [
+          "k64",
+          "mixed",
+          "raw",
+          "pure"
+        ],
+        "buffers": 6,
+        "epilogue": 64,
+        "direct": true,
+        "repeats": 3,
+        "output": "/root/code/jeffniu-codex-workdir/work/2026-08-23/01a02c07-7d32-7f72-b030-5dd20efa2a8c-tcgen05-k96/direct-coalesced-screen-03"
+      },
+      "results": [
+        {
+          "mode": "k64",
+          "shared": 212092,
+          "tmem": 512,
+          "cubin": "45bcd61a457e04875dc96b1b463659de3d767163a998fd7c4f8ddd1cc68cce74",
+          "mmas": 8,
+          "max_error": 0.5,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.1386867036755453,
+            0.13938038140586473,
+            0.1395126455987866
+          ],
+          "median_ms": 0.13938038140586473,
+          "pflops": 6.499979802479429
+        },
+        {
+          "mode": "mixed",
+          "shared": 212092,
+          "tmem": 512,
+          "cubin": "cdcb0efdc594d75c5c622508449c26bfd3e7cb4f090fb2f923985f664c447365",
+          "mmas": 6,
+          "max_error": 0.5,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.12621822243354713,
+            0.12629961198376072,
+            0.12658209140260832
+          ],
+          "median_ms": 0.12629961198376072,
+          "pflops": 7.173178521850782
+        },
+        {
+          "mode": "raw",
+          "shared": 219260,
+          "tmem": 512,
+          "cubin": "2451570114762fc784a07341f79764720318dea025d605a5362234ac7484b52b",
+          "mmas": 6,
+          "max_error": 0.5,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.23524452806955362,
+            0.23523391084042852,
+            0.23525864878383038
+          ],
+          "median_ms": 0.23524452806955362,
+          "pflops": 3.851182730729177
+        },
+        {
+          "mode": "pure",
+          "shared": 219260,
+          "tmem": 512,
+          "cubin": "d221ab2ecb4bde1534e4bfb4b5a3661d0ee6246e3fb3dc5a00e31974e1f56e98",
+          "mmas": 8,
+          "max_error": 0.5,
+          "baseline_max_abs": 0.0,
+          "ms": [
+            0.22980002155103652,
+            0.22982527640412603,
+            0.22982980432644695
+          ],
+          "median_ms": 0.22982527640412603,
+          "pflops": 3.941993144422191
+        }
+      ],
+      "artifact_directory": "direct-coalesced-screen-03",
+      "evidence_tier": "development screen; not a final frozen-source sweep point"
+    }
+  ],
+  "graph_replay_validation": [
+    {
+      "results": "final-mxfp4-8192/results.json",
+      "mode": "raw",
+      "cubin_sha256": "cbd5b318abc9a54003a775a5a0711ab4e393f818d91a1cc51c094e88343add04",
+      "replays": 10,
+      "reference_correct": true,
+      "standalone_bit_identical": true,
+      "native_k64_bit_identical": true,
+      "native_mixed_bit_identical": true
+    },
+    {
+      "results": "final-mxfp4-8192/results.json",
+      "mode": "pure",
+      "cubin_sha256": "55a19f8fa1ecd22a029dab80745bcaecb89068fa6c84738a150b43eecb1750a7",
+      "replays": 10,
+      "reference_correct": true,
+      "standalone_bit_identical": true,
+      "native_k64_bit_identical": true,
+      "native_mixed_bit_identical": true
+    },
+    {
+      "results": "final-mxfp4-16384/results.json",
+      "mode": "raw",
+      "cubin_sha256": "3c3d780b5be0ec225013fdcdf885727fbf50f0ab1ff44092d0ec0c8c7fbc1af6",
+      "replays": 10,
+      "reference_correct": true,
+      "standalone_bit_identical": true,
+      "native_k64_bit_identical": true,
+      "native_mixed_bit_identical": true
+    },
+    {
+      "results": "final-mxfp4-16384/results.json",
+      "mode": "pure",
+      "cubin_sha256": "1be076a354a9e204d1f1b212e9bcbcab601c8bc497a1071c39dc1d480e502f73",
+      "replays": 10,
+      "reference_correct": true,
+      "standalone_bit_identical": true,
+      "native_k64_bit_identical": true,
+      "native_mixed_bit_identical": true
+    },
+    {
+      "results": "final-mxfp4-32768/results.json",
+      "mode": "raw",
+      "cubin_sha256": "3c3d780b5be0ec225013fdcdf885727fbf50f0ab1ff44092d0ec0c8c7fbc1af6",
+      "replays": 10,
+      "reference_correct": true,
+      "standalone_bit_identical": true,
+      "native_k64_bit_identical": true,
+      "native_mixed_bit_identical": true
+    },
+    {
+      "results": "final-mxfp4-32768/results.json",
+      "mode": "pure",
+      "cubin_sha256": "1be076a354a9e204d1f1b212e9bcbcab601c8bc497a1071c39dc1d480e502f73",
+      "replays": 10,
+      "reference_correct": true,
+      "standalone_bit_identical": true,
+      "native_k64_bit_identical": true,
+      "native_mixed_bit_identical": true
+    },
+    {
+      "results": "final-nvfp4-8192/results.json",
+      "mode": "raw",
+      "cubin_sha256": "5e226662d7eb7b6bd8b0f013818497ec0bdea1427201a21007719f8fc4033324",
+      "replays": 10,
+      "reference_correct": true,
+      "standalone_bit_identical": true,
+      "native_k64_bit_identical": true,
+      "native_mixed_bit_identical": true
+    },
+    {
+      "results": "final-nvfp4-8192/results.json",
+      "mode": "pure",
+      "cubin_sha256": "c755a3014e5b04037ff75ba3b33e24a320ab16e0726a7fe48f044ccb27701073",
+      "replays": 10,
+      "reference_correct": true,
+      "standalone_bit_identical": true,
+      "native_k64_bit_identical": true,
+      "native_mixed_bit_identical": true
+    },
+    {
+      "results": "final-nvfp4-16384/results.json",
+      "mode": "raw",
+      "cubin_sha256": "35334dfa92b41ea4bbff0254fc03a60427d51a1e4e70402f7b269ec97e8172ad",
+      "replays": 10,
+      "reference_correct": true,
+      "standalone_bit_identical": true,
+      "native_k64_bit_identical": true,
+      "native_mixed_bit_identical": true
+    },
+    {
+      "results": "final-nvfp4-16384/results.json",
+      "mode": "pure",
+      "cubin_sha256": "154446a7199b0cbbdc42e603f32c72e3300f2d6847d52bc98f391d0711e9f493",
+      "replays": 10,
+      "reference_correct": true,
+      "standalone_bit_identical": true,
+      "native_k64_bit_identical": true,
+      "native_mixed_bit_identical": true
+    },
+    {
+      "results": "final-nvfp4-32768/results.json",
+      "mode": "raw",
+      "cubin_sha256": "35334dfa92b41ea4bbff0254fc03a60427d51a1e4e70402f7b269ec97e8172ad",
+      "replays": 10,
+      "reference_correct": true,
+      "standalone_bit_identical": true,
+      "native_k64_bit_identical": true,
+      "native_mixed_bit_identical": true
+    },
+    {
+      "results": "final-nvfp4-32768/results.json",
+      "mode": "pure",
+      "cubin_sha256": "154446a7199b0cbbdc42e603f32c72e3300f2d6847d52bc98f391d0711e9f493",
+      "replays": 10,
+      "reference_correct": true,
+      "standalone_bit_identical": true,
+      "native_k64_bit_identical": true,
+      "native_mixed_bit_identical": true
+    }
+  ],
+  "sass_coverage": {
+    "comparison": null,
+    "duplicate_offsets": [],
+    "errors": [],
+    "expected_instruction_count": 1624,
+    "extra_offsets": [],
+    "hashes": {
+      "cubin_sha256": "55a19f8fa1ecd22a029dab80745bcaecb89068fa6c84738a150b43eecb1750a7",
+      "sass_sha256": "c21d60e5e8dab9899a87fd797236583111839ba7b747f8c10d4d7c04a001a25e"
+    },
+    "instruction_count": 1624,
+    "instruction_width": 16,
+    "missing_offsets": [],
+    "required_pc_offsets": [
+      21632,
+      21648,
+      22704,
+      22800,
+      22816,
+      23872,
+      23968,
+      23984
+    ],
+    "sass": "/root/code/jeffniu-codex-workdir/work/2026-08-23/01a02c07-7d32-7f72-b030-5dd20efa2a8c-tcgen05-k96/final-mxfp4-8192/pure.sass",
+    "status": "valid",
+    "text_size": 25984
+  },
+  "hardware_memcheck": [
+    {
+      "tool": "CUDA Compute Sanitizer memcheck",
+      "errors": 0,
+      "cubin_sha256": "1be076a354a9e204d1f1b212e9bcbcab601c8bc497a1071c39dc1d480e502f73",
+      "mode": "pure",
+      "format": "mxfp4",
+      "m": 768,
+      "n": 768,
+      "k": 2304,
+      "scheduler": "clc",
+      "buffers": 6,
+      "epilogue": 32,
+      "note": "report-api-errors=no suppresses the intentionally unsupported oversized-SMEM attribute probe, not memory errors."
+    },
+    {
+      "tool": "CUDA Compute Sanitizer memcheck",
+      "errors": 0,
+      "cubin_sha256": "6bf6d8021c4c3cb922c126cc90974dca9335efcb60ce17afe18bc84b919df8bd",
+      "mode": "exact192",
+      "format": "mxfp4",
+      "m": 768,
+      "n": 768,
+      "k": 2304,
+      "scheduler": "clc",
+      "buffers": 6,
+      "epilogue": 32,
+      "note": "Exact operand and scale TMA boxes. Sanitized timings are not performance evidence."
+    }
+  ],
+  "tests": {
+    "passed": 53,
+    "log": "test-pure-replay.log",
+    "coverage": "24 experimental pipeline cases plus 12 native K96 cases and 17 existing MMA regressions; experimental cases include three graph replays and bit-exact FP32 output comparison"
+  }
+}

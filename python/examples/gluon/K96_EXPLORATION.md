@@ -2,56 +2,131 @@
 
 ## All-K96 Gluon continuation
 
-The [experimental kernel](experimental-tcgen05-k96.py) now implements a genuinely
-all-K96 reduction. Its packed stream consumes K768 with eight K96 instructions
-fed by three K256 TMA producer slots. Two instructions cross producer boundaries
-using the descriptor's absolute leading-dimension address. A slot is released
-only after its final consuming instruction. There is no operand padding, extra
-operand copy, or extra operand/scale transfer. The native mixed lowering remains
-unchanged; this separate path uses an experimental SMEM/TMEM-address compiler
-hook and Gluon inline PTX, not CUDA C++.
+**Yes: a genuinely all-K96 stream improves MXFP4 beyond the mixed 96+96+64
+kernel.** Across the final three-shape sweep, pure K96 adds **1.6–3.7%** with the
+same producer/epilogue configuration. Combining it with six producer buffers
+and a smaller epilogue tile gives **3.4–6.6%** over the original mixed kernel,
+peaking at **7.878 PFLOPS**. NVFP4 is effectively neutral: **−0.5% to +0.3%**
+versus its native mixed control. This is a measured prototype, not an exhaustive
+optimum or a production compiler interface.
 
-An exact-transfer alternative uses 96-byte TMA boxes (K192 packed FP4) and
-transfers scales once per K384: twelve MXFP4 or twenty-four NVFP4 factors per row.
-`exact384` releases paired K192 transfers together; `exact192` releases each
-independently. Neither pads inputs, transfers, or MMA arithmetic. Both reserve
-unused shared-memory bytes because the 128-byte swizzle has a wider physical
-footprint. The fully packed stream avoids those operand holes.
+### Packed producer/consumer redesign
 
-The first frozen-source comparison uses M=N=8192, K=7680, MXFP4, static persistent
-scheduling, seven alternating measurements, and 500 ms CUDA-graph construction
-budgets (the benchmark helper replays each graph ten times). All outputs are
-bit-identical. K is deliberately divisible by 768: no padded tail is counted as
-useful work.
+The [experimental kernel](experimental-tcgen05-k96.py) consumes K768 with eight
+K96 instructions fed by three full packed K256 TMA producer slots. It uses an
+experimental SMEM/TMEM-address compiler hook and Gluon inline PTX, not CUDA C++.
+The original Gluon TMA producer, warp specialization, TMA epilogue, and SPS/CLC
+schedulers remain in use. There is no operand padding, shared-memory operand
+hole, extra operand copy, or extra operand/scale transfer in this packed path.
 
-| Variant | Producer buffers / epilogue N | PFLOPS |
-| --- | --- | ---: |
-| Original K64 | 5 / 64 | 6.383 |
-| Native 96+96+64 | 5 / 64 | 7.062 |
-| Inline-PTX 96+96+64 control | 6 / 32 | 7.042 |
-| Packed all-K96 | 6 / 32 | 7.305 |
+| Logical K start | Source slot(s) | Byte offset in first slot | Lifetime action |
+| ---: | --- | ---: | --- |
+| 0, 96 | 0 | 0, 48 | Retain slot 0 |
+| 192 | 0 → 1 | 96 | Release slot 0 after this MMA |
+| 288, 384 | 1 | 16, 64 | Retain slot 1 |
+| 480 | 1 → 2 | 112 | Release slot 1 after this MMA |
+| 576, 672 | 2 | 32, 80 | Release slot 2 after the last MMA |
 
-That is **3.44% beyond the native mixed kernel**, or **14.43% beyond K64** at this
-point. The larger-shape sweep is still being collected. The manual mixed path
-first matched the native mixed path with identical five-buffer configurations
-(7.151 versus 7.157 PFLOPS at 7680 cubed); moving the lead-CTA branch outside the
-inline assembly was necessary to remove avoidable control overhead.
+The two crossing instructions use the descriptor's absolute leading-dimension
+address. Corresponding scales are copied into TMEM before either crossing;
+scale-word addresses advance by four TMEM columns for A and eight for B. The
+scale allocation has a power-of-two logical envelope, but only the useful scale
+factors are transferred or consumed. Hardware TMEM allocation remains 512
+columns for all final controls and candidates. All MMA instructions in `pure`,
+`exact192`, and `exact384` are K96; there is no K64 remainder.
 
-Earlier 7680-cubed screens reached 7.39 PFLOPS with the packed six-buffer stream,
-versus 7.15 native mixed. Exact K192 stages reached 6.48 and paired K384 stages
-6.25. Reducing the epilogue staging tile permits six packed producer buffers;
-the same change did not improve the mixed control. A direct-store epilogue was
-rejected after a coalesced version reached only 3.94 PFLOPS.
+### Final same-input measurements
 
-Validation at this checkpoint: **53 tests passed**, including 24 new pipeline
-cases across MXFP4/NVFP4, partial output tiles, ring wraparound, and CLC. The new
-tests also verify the K96 bit in every pure-path MMA descriptor. These tests use
-an FP32 output/reference to avoid hiding errors behind FP16 output rounding.
-Inline-PTX memory operations are not fully modeled by Triton's concurrency
-sanitizer; the previous native-path sanitizer result must not be interpreted as
-coverage of the new raw PTX path. The address hook is experimental and does not
-provide general non-power-of-two tensor semantics or a production pointer-escape
-lifetime contract.
+Hardware: GB300, GPU UUID `GPU-4ed02509-778a-be63-cad2-f338cc3fc883`, CUDA/ptxas
+13.0. Clocks were **not locked**. Each point uses seven alternating samples;
+the CUDA-graph helper replays each graph ten times. Graph construction budgets
+are 500 ms for the first two sizes and 750 ms for the largest. Inputs and
+nonuniform bounded scales are identical across variants, with no L2 flush.
+K is deliberately divisible by 768: no padded tail is counted as useful work.
+The first size uses SPS; the larger two use CLC.
+
+MXFP4 throughput in PFLOPS. Native controls use five producer buffers/N64
+epilogue; inline mixed and pure use six buffers/N32.
+
+| M=N | K | Native K64 | Native mixed | Inline mixed control | Pure K96 | Pure/native mixed | Pure/inline mixed |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 8192 | 7680 | 6.383 | 7.062 | 7.042 | 7.305 | +3.44% | +3.73% |
+| 16384 | 16128 | 6.670 | 7.327 | 7.490 | 7.673 | +4.73% | +2.45% |
+| 32768 | 32256 | 6.778 | 7.388 | 7.757 | 7.878 | +6.63% | +1.56% |
+
+The combined gain over K64 is 14.4–16.2%. Do not attribute the whole improvement
+to instruction width alone: the matched inline mixed control separates the
+pure-stream gain from producer/epilogue tuning. The pure samples' coefficients
+of variation are 0.135%, 0.104%, and 0.026%, respectively. Paired comparisons
+are more useful than absolute throughput across independently collected runs.
+
+NVFP4 throughput in PFLOPS. All variants use five buffers/N64; six buffers do
+not fit with block-16 scales.
+
+| M=N | K | Native K64 | Native mixed | Inline mixed control | Pure K96 | Pure/native mixed |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 8192 | 7680 | 6.308 | 6.900 | 6.885 | 6.922 | +0.31% |
+| 16384 | 16128 | 6.557 | 7.160 | 7.139 | 7.178 | +0.25% |
+| 32768 | 32256 | 6.659 | 7.184 | 7.153 | 7.149 | −0.48% |
+
+There is no broad NVFP4 win beyond the mixed kernel. A separate data/scale-ring
+redesign could provide more operand lookahead without six complete scale stages,
+but that is an untested next experiment, not an established improvement.
+
+[Raw samples, binary identities, and replay validation](pure-k96-measurements.json)
+preserve the complete final sweep and relevant development screens. All six
+points use the same experimental source hash, committed in `e4b2d9e`; the first
+point was collected before that commit, with its source snapshot preserved.
+
+### Exact K192/K384 transfer alternatives
+
+An alternative uses exact 96-byte operand TMA boxes (K192 packed FP4), with
+scales transferred once per K384: twelve MXFP4 or twenty-four NVFP4 factors per
+row. `exact384` releases paired K192 transfers together; `exact192` releases each
+independently. Neither pads input values, transfers, or MMA arithmetic. Both
+reserve unused shared-memory bytes: a 96-byte transfer still occupies a
+128-byte-swizzled row. A separate TMA probe checked the actual byte mapping.
+The experimental runtime descriptor override changes hardware box sizes and
+barrier byte counts while keeping power-of-two compiler-visible allocations.
+
+These variants lost in 7680-cubed MXFP4 screens: **6.48 PFLOPS** for independent
+K192 stages and **6.25 PFLOPS** for paired K384 stages, versus **7.39 PFLOPS** for
+the packed all-K96 stream. More operand TMA packets, swizzle holes, and less
+lookahead are plausible contributors; these screens do not isolate one cause.
+Six packed K256 buffers cover K1536, versus K1152 for six exact K192 buffers.
+Thus matching every producer stage to an integer number of K96 operations is
+not necessary for the best result: packed K768 consumption across producer
+boundaries is faster here and still transfers only useful bytes.
+
+The manual mixed path first matched native mixed with identical five-buffer
+configurations (7.151 versus 7.157 PFLOPS at 7680 cubed). Moving the lead-CTA
+branch outside inline assembly removed avoidable control overhead. A separate
+coalesced direct-store epilogue reached only 3.94 PFLOPS and was rejected.
+These development screens are not substituted for the frozen-source sweep.
+
+### Validation and limits
+
+**53 focused and existing tests pass**, including 24 pipeline cases spanning
+MXFP4/NVFP4, all four experimental modes, partial output tiles, ring wraparound,
+SPS/CLC, and repeated CUDA-graph replay. These tests compare FP32 outputs with
+FP32 references and verify the K96 bit in every pure-path MMA descriptor.
+For all six final performance points, the exact measured raw/pure cubins also
+passed ten graph replays and strict FP32-reference checks; their FP16 storage
+bits match standalone execution and both native K64/mixed outputs.
+
+CUDA Compute Sanitizer reports zero memory errors for the measured MXFP4 packed
+CLC binary and the exact-K192 TMA path. Complete SASS coverage was verified for the measured SPS binary,
+including all eight MMA PCs. Inline-PTX memory operations are not fully modeled
+by Triton's concurrency sanitizer; the previous native-path sanitizer result
+must not be interpreted as coverage of this raw PTX path. The address hook does
+not provide general non-power-of-two tensor semantics or a production
+pointer-escape lifetime contract. This remains an opt-in research harness.
+
+The packed path requires K divisible by 768; exact-transfer paths require K
+divisible by 384. Arbitrary reduction tails and a K288-specific producer were
+not implemented. All measured kernels use FP4×FP4, global M/N tiles 256, and
+2CTAs on sm103. The other requested examples are assessed below without
+silently changing their arithmetic precision.
 
 [Reproduction harness](bench-tcgen05-pure-k96.py):
 
@@ -60,10 +135,11 @@ PYTHONPATH=python TRITON_BACKENDS_IN_TREE=1 python python/examples/gluon/bench-t
   --size 8192 --k 7680 --buffers 6 --epilogue 32 --output /absolute/task-owned/path/pure-k96
 ```
 
-For NVFP4, use `--format nvfp4 --buffers 5 --epilogue 64`; six buffers exceed the
-shared-memory budget with block-16 scales. Exact K192 uses six buffers/N32 for
-MXFP4 or four buffers/N64 for NVFP4. Exact K384 uses three buffers/N32 or two
-buffers/N64 respectively.
+Use `--size 16384 --k 16128` or `--size 32768 --k 32256 --rep-ms 750` for the
+larger points. For NVFP4, add `--format nvfp4 --buffers 5 --epilogue 64`.
+Exact K192 uses six buffers/N32 for MXFP4 or four/N64 for NVFP4; exact K384 uses
+three/N32 or two/N64 respectively. Select them with `--modes k64 mixed exact192`
+or `--modes k64 mixed exact384`. Keep all GPU runs on an otherwise idle device.
 
 ## Initial mixed-K96 experiment
 
