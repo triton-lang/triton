@@ -457,6 +457,98 @@ def test_tma_multicast_copy(ctas_per_cga):
 
 
 @gluon.jit
+def tma_multicast_remote_store_reuse_kernel(input_desc, output):
+    BLOCK_M: ttgl.constexpr = 256
+    BLOCK_N: ttgl.constexpr = 64
+    ttgl.static_assert(ttgl.num_ctas() == 4)
+
+    src_layout: ttgl.constexpr = ttgl.BlockedLayout(
+        size_per_thread=[1, BLOCK_N // 2],
+        threads_per_warp=[16, 2],
+        warps_per_cta=[4, 1],
+        order=[0, 1],
+        cga_layout=((1, 0), (2, 0)),
+    )
+    dst_layout: ttgl.constexpr = ttgl.BlockedLayout(
+        size_per_thread=[1, BLOCK_M // 8],
+        threads_per_warp=[8, 4],
+        warps_per_cta=[4, 1],
+        order=[1, 0],
+        cga_layout=((0, 1), (0, 2)),
+    )
+    replacement_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(
+        vec=1,
+        per_phase=1,
+        max_phase=1,
+        order=[1, 0],
+        cga_layout=((1, 0), (2, 0)),
+    )
+
+    buffers = ttgl.allocate_shared_memory(ttgl.float16, [1, BLOCK_M // 2, BLOCK_N], input_desc.layout)
+    tile = buffers.index(0)
+
+    bar = mbarrier.allocate_mbarrier()
+    mbarrier.init(bar, count=1)
+    mbarrier.expect(bar, input_desc.nbytes_per_cta)
+
+    # The TMA layout forms two multicast groups: CTAs 0/2 and CTAs 1/3.
+    cta_rank = ttgl.inline_asm_elementwise(
+        "mov.u32 $0, %cluster_ctarank;",
+        "=r",
+        [],
+        dtype=ttgl.int32,
+        is_pure=True,
+        pack=1,
+    )
+    if (cta_rank & 1) != 0:
+        ttgl.inline_asm_elementwise(
+            "nanosleep.u32 100000; mov.b32 $0, 0;",
+            "=r",
+            [],
+            dtype=ttgl.int32,
+            is_pure=False,
+            pack=1,
+        )
+
+    tma.async_load(input_desc, [0, 0], bar, tile, multicast=True)
+    mbarrier.wait(bar, phase=0, deps=[tile])
+    buffers._keep_alive()
+
+    replacement = ttgl.allocate_shared_memory(ttgl.float16, [BLOCK_N, BLOCK_M], replacement_layout)
+    value = ttgl.full([BLOCK_M, BLOCK_N], 7, ttgl.float16, src_layout)
+    replacement.store(value.trans())
+
+    ttgl.barrier(cluster=True)
+    result = replacement.load(dst_layout)
+    dst_n = ttgl.arange(0, BLOCK_N)[:, None]
+    dst_m = ttgl.arange(0, BLOCK_M)[None, :]
+    dst_ptrs = output + dst_n * BLOCK_M + dst_m
+    ttgl.store(ttgl.set_auto_layout(dst_ptrs, dst_layout), result)
+    mbarrier.invalidate(bar)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_tma_multicast_remote_store_reuse():
+    BLOCK_M, BLOCK_N = 256, 64
+    source = torch.full((BLOCK_M, BLOCK_N), 2, device="cuda", dtype=torch.float16)
+    output = torch.empty((BLOCK_N, BLOCK_M), device="cuda", dtype=torch.float16)
+    input_layout = ttgl.NVMMASharedLayout.get_default_for(
+        [BLOCK_M // 2, BLOCK_N],
+        ttgl.float16,
+        cga_layout=((1, 0), (0, 0)),
+    )
+    input_desc = TensorDescriptor.from_tensor(source, [BLOCK_M // 2, BLOCK_N], input_layout)
+
+    compiled = tma_multicast_remote_store_reuse_kernel[(1, )](input_desc, output, num_warps=4, num_ctas=4)
+
+    ptx = compiled.asm["ptx"]
+    wait_pos = ptx.index("mbarrier.try_wait.parity")
+    store_pos = ptx.index("st.shared::cluster")
+    assert "barrier.cluster.arrive.aligned" in ptx[wait_pos:store_pos]
+    torch.testing.assert_close(output, torch.full_like(output, 7), atol=0, rtol=0)
+
+
+@gluon.jit
 def tma_gather_scatter_kernel(in_desc, gather_out_desc, scatter_out_desc, gather_idx_ptr, scatter_idx_ptr,
                               BLOCK_M: ttgl.constexpr, x_offsets_layout: ttgl.constexpr):
     smem = ttgl.allocate_shared_memory(in_desc.dtype, [BLOCK_M, gather_out_desc.block_shape[1]], gather_out_desc.layout)
