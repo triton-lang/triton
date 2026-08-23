@@ -60,7 +60,7 @@ def native_mma_partition(p):
             copy_scales(p, s0.index, sa, sb, 0, VEC)
             tcgen05_mma_scaled(a0, b0, acc, sa, sb, "e2m1", "e2m1", use_acc=use_acc,
                                k_range=(0, 192), instruction_k=96, scale_block_size=VEC,
-                               a_scale_offset=0, b_scale_offset=0, multicast=True, mbarriers=[])
+                               a_scale_offset=0, b_scale_offset=0, multicast=True, mbarriers=[], is_async=True)
             mbarrier.wait(p.load_ready_bars.index(s1.index), s1.phase)
             copy_scales(p, s1.index, sa, sb, 256 // VEC, VEC)
             tcgen05_mma_scaled(a0, b0, acc, sa, sb, "e2m1", "e2m1", a_next=a1, b_next=b1,
@@ -69,7 +69,7 @@ def native_mma_partition(p):
                                multicast=True, mbarriers=[p.load_empty_bars.index(s0.index)])
             tcgen05_mma_scaled(a1, b1, acc, sa, sb, "e2m1", "e2m1",
                                k_range=(32, 224), instruction_k=96, scale_block_size=VEC,
-                               a_scale_offset=288 // VEC, b_scale_offset=288 // VEC, multicast=True, mbarriers=[])
+                               a_scale_offset=288 // VEC, b_scale_offset=288 // VEC, multicast=True, mbarriers=[], is_async=True)
             mbarrier.wait(p.load_ready_bars.index(s2.index), s2.phase)
             copy_scales(p, s2.index, sa, sb, 512 // VEC, VEC)
             tcgen05_mma_scaled(a1, b1, acc, sa, sb, "e2m1", "e2m1", a_next=a2, b_next=b2,
@@ -111,7 +111,7 @@ def pure_k96_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc, M, N, K,
     acc_bufs = allocate_tensor_memory(gl.float32, [num_acc_buffers, BLOCK_M, BLOCK_N], tmem_layout)
 
     mma_barrier_count: gl.constexpr = tcgen05_mma_barrier_count(
-        [a_bufs.index(0), b_bufs.index(0),
+        [a_bufs.index(0), b_bufs.index(0), a_bufs.index(1), b_bufs.index(1),
          a_scale_bufs.index(0), b_scale_bufs.index(0)], multicast=True, two_ctas=acc_bufs.index(0).type.layout.two_ctas)
 
     load_empty_bars = mbarrier.allocate_mbarrier(batch=num_buffers)

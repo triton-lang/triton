@@ -1305,9 +1305,6 @@ bool TCGen5MMAOp::isAsync() { return getIsAsync(); }
 
 // -- TCGen5CommitOp --
 LogicalResult TCGen5CommitOp::verify() {
-  auto numDescs = getDescs().size();
-  if (numDescs > 4)
-    return emitOpError("expected 0 to 4 descriptors, got ") << numDescs;
   auto barrierTy = getBarrier().getType();
   if (failed(verifyBarrierType(*this, barrierTy)))
     return failure();

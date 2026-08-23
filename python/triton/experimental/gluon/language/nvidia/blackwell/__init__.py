@@ -598,7 +598,7 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
 
 @builtin
 def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=True, pred=True, multicast=False,
-                       mbarriers=None, mbarrier_preds=None, k_range=None, instruction_k=None,
+                       mbarriers=None, mbarrier_preds=None, is_async=False, k_range=None, instruction_k=None,
                        a_next=None, b_next=None, scale_block_size=None, a_scale_offset=None, b_scale_offset=None,
                        _semantic=None):
     """
@@ -616,8 +616,9 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
-        mbarriers (Sequence[mbarrier], optional): Barriers to signal when the operation is complete. If None, mma is synchronous. Defaults to None.
+        mbarriers (Sequence[mbarrier], optional): Barriers to signal when the operation is complete. Nonempty barriers imply asynchronous execution. Defaults to None.
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
+        is_async (bool): Issue without an implicit completion wait. Nonempty mbarriers also imply asynchronous execution. Defaults to False.
         k_range (tuple[int, int], optional): Half-open reduction interval in logical elements, independent of the backing allocation.
         instruction_k (int, optional): Exact instruction reduction width. K96 requires sm103, two CTAs, and packed FP4 operands.
         a_next (shared_memory_descriptor, optional): Continuation of A after its logical K extent.
@@ -628,9 +629,11 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
 
     Range and scale metadata are compile-time constants. Continuations retain the
     ownership and bounds of ordinary shared-memory descriptors; they need not be
-    adjacent in memory. The selected interval must begin within each first view. An explicit instruction width must divide the reduction
-    exactly, without padding. As with full-operand MMA, mbarriers=[] issues an
-    asynchronous operation without attaching a completion barrier.
+    adjacent in memory. The selected interval must begin within each first view.
+    An explicit instruction width must divide the reduction exactly, without
+    padding. With no completion barriers (None or []), the operation remains
+    synchronous unless is_async=True; an asynchronous issue must be completed
+    by a subsequent MMA with a completion barrier or tcgen05_commit.
     """
     k_range = _unwrap_if_constexpr(k_range)
     instruction_k = _unwrap_if_constexpr(instruction_k)
@@ -651,7 +654,7 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
     if b_scale_offset is None:
         b_scale_offset = k_start // scale_block_size if scale_block_size is not None else 0
     k_range = [] if k_range is None else [_unwrap_if_constexpr(x) for x in k_range]
-    is_async = mbarriers is not None
+    is_async = _unwrap_if_constexpr(is_async)
     use_acc = _semantic.to_tensor(use_acc)
     pred = _semantic.to_tensor(pred)
     assert acc.type.layout.block[0] != 64, "tcgen05_mma_scaled does not support blockM=64"
@@ -688,14 +691,13 @@ def tcgen05_mma_barrier_count(smems, multicast, two_ctas):
     Calculate the number of CTAs that will commit the tcgen05 MMA instruction.
 
     Args:
-        smems (Sequence[shared_memory_descriptor]): Shared memory descriptors used in the tcgen05 instruction.
+        smems (Sequence[shared_memory_descriptor]): Shared memory descriptors used in the tcgen05 instruction, including continuation views.
         multicast (bool): Whether the tcgen05 instruction is multicast.
         two_ctas (bool): Whether the tcgen05 instruction uses cta_group::2.
 
     Returns:
         int: The number of CTAs that will commit the tcgen05 MMA instruction.
     """
-    assert 0 <= len(smems) <= 4, "tcgen05_mma_barrier_count supports 0 to 4 descriptors"
     if not smems or not multicast:
         return 1
 

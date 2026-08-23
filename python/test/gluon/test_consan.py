@@ -1661,7 +1661,7 @@ def test_tcgen05_mma_scaled_k96_dependencies(vec, case, run_wrapper, monkeypatch
         if CASE == "completion":
             blackwell.tcgen05_mma_scaled(a0, b0.permute((1, 0)), acc, sa, sb, "e2m1", "e2m1", use_acc=False,
                                          k_range=WINDOW, instruction_k=96, a_next=a1, b_next=b1.permute(
-                                             (1, 0)), scale_block_size=VEC, mbarriers=[])
+                                             (1, 0)), scale_block_size=VEC, mbarriers=[], is_async=True)
             # A generic arrival does not complete tensor-core accesses.
             mbarrier.arrive(done)
         else:

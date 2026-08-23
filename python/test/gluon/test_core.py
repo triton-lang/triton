@@ -5591,7 +5591,7 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
                                    A_VIEWS: ttgl.constexpr = None, B_VIEWS: ttgl.constexpr = None,
                                    SCALE_OFFSETS: ttgl.constexpr = (None, None), INSTRUCTION_K: ttgl.constexpr = 96,
                                    SCALE_VIEWS: ttgl.constexpr = None, REINTERPRET: ttgl.constexpr = False,
-                                   CHECK_PREDICATE: ttgl.constexpr = False):
+                                   CHECK_PREDICATE: ttgl.constexpr = False, SYNC_MODE: ttgl.constexpr = 0):
     A_IS_FP4: ttgl.constexpr = a_desc.dtype == ttgl.uint8
     B_IS_FP4: ttgl.constexpr = b_desc.dtype == ttgl.uint8
     A_ELEM_PER_BYTE: ttgl.constexpr = 2 if A_IS_FP4 else 1
@@ -5654,6 +5654,12 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
     off_m_a_scale = pid_m * REP_M
     off_n_b_scale = pid_n * REP_N
 
+    if SYNC_MODE == 0:
+        completion = [mma_bar]
+    elif SYNC_MODE == 1:
+        completion = None
+    else:
+        completion = []
     for k in range(0, K, BLOCK_K):
         off_k_a = k // A_ELEM_PER_BYTE
         off_k_b = k // B_ELEM_PER_BYTE
@@ -5681,7 +5687,7 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
         b_format: ttgl.constexpr = "e2m1" if B_IS_FP4 else "e4m3"
         if K_WINDOW is None:
             tcgen05_mma_scaled(a_smem, b_smem.permute((1, 0)), acc_tmem, a_scale_tmem, b_scale_tmem, a_format, b_format,
-                               use_acc=(k != 0), multicast=multicast, mbarriers=[mma_bar])
+                               use_acc=(k != 0), multicast=multicast, mbarriers=completion)
         else:
             a_view = a_smem.slice(A_VIEWS[0] // 2, A_VIEWS[1] // 2, dim=1)
             b_view = b_smem.slice(B_VIEWS[0] // 2, B_VIEWS[1] // 2, dim=1).permute((1, 0))
@@ -5705,15 +5711,20 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
             if CHECK_PREDICATE:
                 # A runtime-false issue must neither reset nor update the accumulator.
                 tcgen05_mma_scaled(a_view, b_view, acc_tmem, sa, sb, a_format, b_format, use_acc=False,
-                                   pred=(off_m < 0), mbarriers=[], k_range=K_WINDOW, instruction_k=INSTRUCTION_K,
+                                   pred=(off_m < 0), mbarriers=[], is_async=True, k_range=K_WINDOW, instruction_k=INSTRUCTION_K,
                                    a_next=a_next, b_next=b_next, scale_block_size=VEC_SIZE, a_scale_offset=SA_OFFSET,
                                    b_scale_offset=SB_OFFSET)
             tcgen05_mma_scaled(a_view, b_view, acc_tmem, sa, sb, a_format, b_format, use_acc=(k != 0)
-                               or CHECK_PREDICATE, multicast=multicast, mbarriers=[mma_bar], k_range=K_WINDOW,
+                               or CHECK_PREDICATE, multicast=multicast, mbarriers=completion, k_range=K_WINDOW,
                                instruction_k=INSTRUCTION_K, a_next=a_next, b_next=b_next, scale_block_size=VEC_SIZE,
                                a_scale_offset=SA_OFFSET, b_scale_offset=SB_OFFSET)
-        mbarrier.wait(mma_bar, phase_mma)
-        phase_mma ^= 1
+        # Synchronous 2CTA issue waits on the issuing CTA; publish completion
+        # to the peer before either CTA reuses shared inputs or loads the result.
+        if SYNC_MODE != 0 and multi_cta:
+            ttgl.barrier(cluster=True)
+        if SYNC_MODE == 0:
+            mbarrier.wait(mma_bar, phase_mma)
+            phase_mma ^= 1
 
     mbarrier.invalidate(tma_bar)
     mbarrier.invalidate(mma_bar)
@@ -5730,7 +5741,7 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
 def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, ctas_per_cga, multicast,
                             out_dtype=torch.float16, enable_fp4_k96=False, return_kernel=False, k_window=None,
                             a_views=None, b_views=None, scale_offsets=(None, None), instruction_k=96, scale_views=None,
-                            reinterpret=False, check_predicate=False):
+                            reinterpret=False, check_predicate=False, sync_mode=0):
     from dataclasses import replace
     M, N = A.shape[0], B.shape[0]
     MIXED_PREC = A.dtype != B.dtype
@@ -5774,7 +5785,7 @@ def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, 
         A_desc, B_desc, C_desc, A_scale_desc, B_scale_desc, VEC_SIZE, block_layout_c, a_scale_layout_tmem,
         b_scale_layout_tmem, ctas_per_cga, num_warps=num_warps, num_ctas=num_ctas, multicast=multicast,
         enable_fp4_k96=enable_fp4_k96, K_WINDOW=k_window, A_VIEWS=a_views, B_VIEWS=b_views, SCALE_OFFSETS=scale_offsets,
-        INSTRUCTION_K=instruction_k, SCALE_VIEWS=scale_views, REINTERPRET=reinterpret, CHECK_PREDICATE=check_predicate)
+        INSTRUCTION_K=instruction_k, SCALE_VIEWS=scale_views, REINTERPRET=reinterpret, CHECK_PREDICATE=check_predicate, SYNC_MODE=sync_mode)
     return (C_desc.base, compiled) if return_kernel else C_desc.base
 
 
@@ -5821,6 +5832,23 @@ def test_tcgen05_mma_scaled_k96_packed(fmt, vec_size, block_n, m, n, k, block_k)
         torch.testing.assert_close(actual, expected, atol=1e-3, rtol=1e-3)
         counts.append(compiled.asm["ptx"].count("tcgen05.mma."))
     assert counts[1] * 4 == counts[0] * 3
+
+
+@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires sm103 K=96 MMA")
+@pytest.mark.parametrize("fmt, vec", [("mxfp4", 32), ("nvfp4", 16)])
+@pytest.mark.parametrize("sync_mode", [1, 2], ids=["none", "empty"])
+def test_tcgen05_mma_scaled_k96_synchronous(fmt, vec, sync_mode):
+    torch.manual_seed(0)
+    a, sa, ar = random_quantized_tensor(256, 512, fmt)
+    b, sb, br = random_quantized_tensor(256, 512, fmt)
+    sa, sb = swizzle_scales_packed_block(sa, vec), swizzle_scales_packed_block(sb, vec)
+    for enable in (False, True):
+        actual, compiled = mma_scaled_tcgen05_copy(
+            a, b, sa, sb, vec, 256, 256, 256, (2, 1), False, out_dtype=torch.float32,
+            enable_fp4_k96=enable, return_kernel=True, sync_mode=sync_mode)
+        torch.testing.assert_close(actual, ar @ br.T, atol=1e-3, rtol=1e-3)
+        mma_ops = [line for line in compiled.asm["ttgir"].splitlines() if "ttng.tc_gen5_mma_scaled" in line]
+        assert mma_ops and all("is_async" not in line for line in mma_ops)
 
 
 @pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires sm103 K=96 MMA")

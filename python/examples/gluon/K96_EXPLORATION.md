@@ -60,6 +60,13 @@ the existing selection. `enable_fp4_k96=False` disables automatic selection;
 an explicit `instruction_k` takes precedence. Existing calls retain their
 full-operand semantics.
 
+With no completion barriers (`None` or `[]`), old calls remain synchronous.
+The small `is_async=True` extension exposes the IR's existing asynchronous
+issue mode without a completion barrier; the next completing MMA or explicit
+`tcgen05_commit` completes those issues. Operations 1 and 3 below use that flag.
+The barrier-count helper accepts continuation descriptors alongside the current
+data/scale views, rather than assuming a four-descriptor maximum.
+
 ### Five operations per K768
 
 | Operation | Current/continuation view | `k_range` | Scale start | Completion |
