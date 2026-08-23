@@ -1,5 +1,38 @@
 # Native packed tcgen05 K=96
 
+## Dense example 07: the 9-PFLOPS target remains unmet
+
+`07-pure-k96-matmul.py` is a runnable native MXFP4/NVFP4 dense example. It uses only K96 MMAs, unsigned packed inputs, FP32 accumulation, and FP16 output. Three exact K256 producer stages feed each K768 macrotile, without operand padding or extra transfers. The existing native controls and historical measurements are unchanged.
+
+**Observed peak medians: 8.154 PFLOPS MXFP4 and 7.669 PFLOPS NVFP4. Neither reached 9 PFLOPS.** These are end-to-end kernel timings, not issuer-only or compute-only measurements.
+
+| Format | M=N | K | Original native PFLOPS | Example 07 PFLOPS | Throughput uplift |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| mxfp4 | 8192 | 7680 | 7.391 | 7.448 | +0.77% |
+| mxfp4 | 16384 | 16128 | 7.726 | 8.154 | +5.53% |
+| mxfp4 | 32768 | 32256 | 7.928 | 8.012 | +1.07% |
+| nvfp4 | 8192 | 7680 | 6.972 | 7.075 | +1.49% |
+| nvfp4 | 16384 | 16128 | 7.249 | 7.669 | +5.79% |
+| nvfp4 | 32768 | 32256 | 7.190 | 7.191 | +0.01% |
+
+All six cases meet the per-case 2% preservation gate; worst latency ratio is 0.999906. Each has seven alternating samples and at least 510 device executions per variant per sample, identical seed123 inputs and the same GPU0 GB300 (GPU-4ed02509-778a-be63-cad2-f338cc3fc883). Timing uses CUDA graphs, unlocked clocks, and no L2 flush. The actual assembler was bundled ptxas-blackwell13.0.88. Source checkpoint: `a1a3186a41d107c19b487c9a852ff5259ea7410c`.
+
+The retained change is tile traversal: width16 for K≤16384, width8 above that, with static persistence except for NVFP4 K>16384, which retains CLC. MXFP4 keeps six producer buffers/N32 epilogue; NVFP4 keeps five/N64. No compiler change was needed.
+
+The exploration retained24 screening reports and70 candidate measurements. Larger issuer register budgets, early/whole-tile accumulator draining, a separate scale warp, independently released scale staging, exact K512 producers, N128 double-buffered accumulators, and four/eight-CTA multicast did not provide a broad improvement over the chosen two-CTA path. Larger cluster grids also exposed second-wave tails: the driver reported76/36/15 resident clusters for2/4/8 CTAs; correcting the grids did not make wider clusters win. Rejected code remains archived, not in the supported example.
+
+A cycle-instrumented diagnostic attributed roughly56–58% of sampled issuer intervals to readiness waits and8–11% to accumulator reuse waits. These are perturbed issuer-local timings, not whole-GPU idle fractions or a promised speedup. The exact baseline NVFP4 profile showed69.5% tensor activity and16.1% HBM throughput.
+
+Validation:20 FP32-reference/graph cases,16 ConSan pipeline cases, and10 hardware memcheck cases passed, with zero memory errors. Coverage includes MX/NV scales, SPS/CLC, odd/even producer rings, ring wraparound, repeated launches, and M500/N600 edge tiles. The expanded API’s earlier FPSan coverage is unchanged; this slice adds no compiler/API semantics. All12 final archived native/control binaries replay correctly without GPU recompilation and produce bit-identical outputs.
+
+All six exact measured candidate binaries pass PTX/SASS checks: eight K96 instructions per K768, release commits after instructions3/6/8, the final accumulator commit after8, correct scale selectors and continuation descriptors, and no stack/local spills. Complete launch manifests, compiler metadata, source hashes, individual samples, and final checks are in `dense-k96-measurements.json` and the task-owned archive.
+
+```bash
+python python/examples/gluon/07-pure-k96-matmul.py --format nvfp4 \
+  --size 16384 --k 16128 --modes native --compare-native \
+  --repeats 7 --rep-ms 500 --output /tmp/dense-k96
+```
+
 ## Native compiler migration: frozen controls
 
 The immutable source checkpoint is `d93e07b76de305b651df579ce50b64ab7d237618`.
