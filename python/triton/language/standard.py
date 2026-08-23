@@ -52,15 +52,25 @@ def sigmoid(x):
 
 @core._tensor_member_fn
 @jit
-@math._add_math_1arg_docstr("softmax")
-def softmax(x, dim=None, keep_dims=False, ieee_rounding=False):
+def softmax(x, dim=None, ieee_rounding=False):
+    """
+    Computes the softmax of :code:`x` along the given axis.
+
+    :param x: the input values
+    :type x: Block
+    :param dim: the axis along which to normalize. Defaults to 0 -- note that
+        this is *not* the last axis, unlike :code:`torch.softmax`.
+    :type dim: int | None
+    :param ieee_rounding: whether the final division uses IEEE-compliant rounding
+    :type ieee_rounding: bool
+    """
     if dim is None:
         _dim: core.constexpr = 0
     else:
         _dim: core.constexpr = dim
-    z = x - max(x, _dim, keep_dims=keep_dims)
+    z = x - max(x, _dim, keep_dims=True)
     num = math.exp(z)
-    den = sum(num, _dim, keep_dims=keep_dims)
+    den = sum(num, _dim, keep_dims=True)
     return math.fdiv(num, den, ieee_rounding)
 
 
