@@ -349,16 +349,5 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
   }
 }
 
-void ModuleMembarAnalysis::run() {
-  triton::CallGraph<MembarInfo> callGraph(moduleAllocation.getModuleOp());
-  triton::CallGraph<MembarInfo>::FuncDataMapT summaries;
-  callGraph.walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
-      [](CallOpInterface, FunctionOpInterface) {},
-      [&](FunctionOpInterface function) {
-        if (!summaries.try_emplace(function).second)
-          return;
-        auto &allocation = *moduleAllocation.getFuncData(function);
-        MembarAnalysis(allocation, filter).run(function, summaries);
-      });
-}
+void ModuleMembarAnalysis::run() { runAnalysis<MembarAnalysis>(); }
 } // namespace mlir
