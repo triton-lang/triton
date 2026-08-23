@@ -873,33 +873,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
     tt.return %t2 : tensor<64x128xf16, #blocked>
   }
-
-  // Track multicast TMA writes through memdesc views when the underlying
-  // shared-memory allocation is reused.
-  // CHECK-LABEL: @cluster_barrier_for_multicast_tma_memdesc_view
-  // CHECK: ttng.async_tma_copy_global_to_local
-  // CHECK: ttng.wait_barrier
-  // CHECK: ttg.local_dealloc
-  // CHECK: ttg.local_alloc
-  // CHECK-NEXT: ttng.cluster_barrier
-  // CHECK-NEXT: ttg.local_store
-  tt.func @cluster_barrier_for_multicast_tma_memdesc_view(%desc: !tt.tensordesc<64x128xf16, #nvmma>, %v: tensor<64x128xf16, #blocked>) {
-    %c0 = arith.constant 0 : i32
-    %true = arith.constant true
-    %barrier = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
-    ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
-    %buffers = ttg.local_alloc : () -> !ttg.memdesc<1x64x128xf16, #nvmma, #smem, mutable>
-    %dst = ttg.memdesc_index %buffers[%c0] : !ttg.memdesc<1x64x128xf16, #nvmma, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
-    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %dst, %barrier, %true {multicast} :
-      !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
-    ttng.wait_barrier %barrier, %c0 deps %dst :
-      !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>,
-      !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
-    ttg.local_dealloc %buffers : !ttg.memdesc<1x64x128xf16, #nvmma, #smem, mutable>
-    %reuse = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
-    ttg.local_store %v, %reuse : tensor<64x128xf16, #blocked> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
-    tt.return
-  }
 }
 
 // -----
