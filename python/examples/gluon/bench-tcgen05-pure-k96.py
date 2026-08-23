@@ -1,9 +1,10 @@
-"""Interleaved exact-input FP4 controls and all-K96 Gluon experiments on sm103.
+"""Interleaved native FP4 kernels and immutable binary controls on sm103.
 
 Use reductions divisible by 768 for the packed stream. Example:
   python bench-tcgen05-pure-k96.py --size 16384 --k 16128 --buffers 6 --epilogue 32 --output RESULTS
 """
 import argparse
+from dataclasses import asdict
 import hashlib
 import importlib.util
 import json
@@ -62,6 +63,8 @@ class FrozenKernel:
         from triton.compiler.compiler import CompiledKernel
         self.directory = Path(directory)
         self.manifest = json.loads((self.directory / 'launch.json').read_text())
+        for name, digest in self.manifest['files'].items():
+            assert hashlib.sha256((self.directory / name).read_bytes()).hexdigest() == digest, name
         self.constants = {tuple(k): v for k, v in self.manifest['constants']}
         source = SimpleNamespace(signature=dict(self.manifest['signature']), constants=self.constants,
                                  fn=SimpleNamespace(arg_names=self.manifest['arg_names']))
@@ -107,88 +110,6 @@ def control_key(config):
     return '-'.join(str(config[x]) for x in ('format', 'mode', 'block_k', 'buffers', 'epilogue', 'scheduler'))
 
 
-def recorded_controls():
-    root = Path(__file__).parent
-    mixed = json.loads((root / 'k96-measurements.json').read_text())['main']
-    pure = json.loads((root / 'pure-k96-measurements.json').read_text())['final_sweep']
-    controls = []
-    for case in mixed['cases']:
-        for row in case['variants']:
-            controls.append(
-                dict(format=case['format'], size=case['size'], k=case['size'],
-                     mode='mixed' if row['mode'] == 'k96' else 'k64', block_k=case['block_k'], buffers=case['buffers'],
-                     epilogue=64, scheduler=case['scheduler'], cubin_sha256=row['cubin_sha256'],
-                     historical_ms=row['median_ms']))
-    for report in pure:
-        args = report['args']
-        for row in report['results']:
-            native = row['mode'] in ('k64', 'mixed')
-            controls.append(
-                dict(format=args['format'], size=args['size'], k=args['k'], mode=row['mode'], block_k=256,
-                     buffers=5 if native else args['buffers'], epilogue=64 if native else args['epilogue'],
-                     scheduler=args['scheduler'], cubin_sha256=row['cubin_sha256'], historical_ms=row['median_ms']))
-    return controls
-
-
-def freeze_controls(directory):
-    directory = Path(directory)
-    directory.mkdir(parents=True, exist_ok=True)
-    experiment = load_experiment()
-    selected = {}
-    original = experiment.base.mma_scaled_warp_specialized_kernel.run
-
-    def capture(*args, **kwargs):
-        compiled = original(*args, **kwargs)
-        selected['kernel'] = compiled
-        return compiled
-
-    experiment.base.mma_scaled_warp_specialized_kernel.run = capture
-    controls = recorded_controls()
-    configs = {}
-    for config in controls:
-        key = control_key(config)
-        if key in configs:
-            assert configs[key]['cubin_sha256'] == config['cubin_sha256']
-        configs[key] = config
-    verified = []
-    for key, config in configs.items():
-        torch.manual_seed(123)
-        operands, scales, refs, vec = prepare(256, 256, 768, config['format'])
-        scales = [experiment.base.swizzle_scales_packed_block(s) for s in scales]
-        scheduler = experiment.SCHEDULER_SPS if config['scheduler'] == 'sps' else experiment.SCHEDULER_CLC
-        if config['mode'] in ('k64', 'mixed'):
-            options = dict(experiment.base.BEST_2CTA_CONFIG, scheduler=scheduler, num_buffers=config['buffers'])
-            output = experiment.base.mma_scaled_warp_specialized(*operands, *scales, vec,
-                                                                 enable_fp4_k96=config['mode'] == 'mixed', **options)
-            compiled = selected['kernel']
-        else:
-            output, compiled = experiment.matmul(*operands, *scales, vec, mode=config['mode'],
-                                                 buffers=config['buffers'], epilogue=config['epilogue'],
-                                                 scheduler=scheduler)
-        digest = hashlib.sha256(compiled.asm['cubin']).hexdigest()
-        assert digest == config['cubin_sha256'], (key, digest, config['cubin_sha256'])
-        FrozenKernel.archive(compiled, directory / digest)
-        frozen = FrozenKernel(directory / digest)
-        replayed = frozen.invoke(experiment.base, operands, scales, vec, config)
-        graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph):
-            graph_output = frozen.invoke(experiment.base, operands, scales, vec, config)
-        for _ in range(10):
-            graph.replay()
-        torch.cuda.synchronize()
-        torch.testing.assert_close(replayed.float(), refs[0] @ refs[1].T, atol=1e-3, rtol=1e-3)
-        assert torch.equal(output.view(torch.int16), replayed.view(torch.int16))
-        assert torch.equal(output.view(torch.int16), graph_output.view(torch.int16))
-        verified.append(dict(key=key, cubin_sha256=digest, graph_replays=10, bit_identical=True))
-        print(json.dumps(verified[-1]), flush=True)
-    for name in ('experimental-tcgen05-k96.py', '04-2cta-block-scale-matmul.py', 'k96-measurements.json',
-                 'pure-k96-measurements.json'):
-        (directory / name).write_bytes(Path(__file__).with_name(name).read_bytes())
-    manifest = dict(checkpoint='d93e07b76de305b651df579ce50b64ab7d237618', controls=controls, verified=verified,
-                    gpu=gpu_state())
-    (directory / 'index.json').write_text(json.dumps(manifest, indent=2) + '\n')
-
-
 def verify_frozen_cases(directory):
     directory = Path(directory)
     index = json.loads((directory / 'index.json').read_text())
@@ -230,22 +151,20 @@ def main():
     parser.add_argument('--size', type=int, default=8192, help='M=N; K can be set separately without padding')
     parser.add_argument('--k', type=int)
     parser.add_argument('--format', choices=['mxfp4', 'nvfp4'], default='mxfp4')
-    parser.add_argument('--modes', nargs='+', choices=['k64', 'mixed', 'raw', 'pure', 'native', 'exact192', 'exact384'],
-                        default=['k64', 'mixed', 'raw', 'pure'])
-    parser.add_argument('--buffers', type=int, default=6,
-                        help='Experimental modes only; native controls retain five buffers')
-    parser.add_argument('--epilogue', type=int, default=32, help='Experimental modes only; native controls retain N64')
+    parser.add_argument('--modes', nargs='+', choices=['k64', 'mixed', 'native'], default=['k64', 'mixed', 'native'])
+    parser.add_argument('--buffers', type=int, help='Pure K96 only; mixed/K64 controls retain five buffers')
+    parser.add_argument('--epilogue', type=int, help='Pure K96 only; mixed/K64 controls retain N64')
     parser.add_argument('--scheduler', choices=['auto', 'sps', 'clc'], default='auto')
     parser.add_argument('--repeats', type=int, default=7)
     parser.add_argument('--rep-ms', type=int, default=500)
     parser.add_argument('--output', type=Path)
-    parser.add_argument('--freeze-controls', type=Path, help='Archive and verify the recorded control binaries')
     parser.add_argument('--frozen', type=Path, help='Add paired archived controls to this measurement')
     parser.add_argument('--verify-frozen', type=Path, help='Validate archived controls at every recorded shape')
     args = parser.parse_args()
-    if args.freeze_controls is not None:
-        freeze_controls(args.freeze_controls)
-        return
+    if args.buffers is None:
+        args.buffers = 6 if args.format == 'mxfp4' else 5
+    if args.epilogue is None:
+        args.epilogue = 32 if args.format == 'mxfp4' else 64
     if args.verify_frozen is not None:
         verify_frozen_cases(args.verify_frozen)
         return
@@ -271,14 +190,16 @@ def main():
 
     experiment.base.mma_scaled_warp_specialized_kernel.run = capture
     root = Path(__file__).resolve().parents[3]
-    report = dict(commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),
-                  diff_sha256=hashlib.sha256(subprocess.check_output(['git', 'diff', 'HEAD'], cwd=root)).hexdigest(),
-                  source_sha256=hashlib.sha256(Path(experiment.__file__).read_bytes()).hexdigest(),
-                  torch=torch.__version__, triton=triton.__file__, gpu_before=gpu_state(),
-                  method='same inputs; alternating order; CUDA graphs; no L2 flush', seed=123,
-                  scale_values=[0.125, 0.25, 0.5, 1.0],
-                  args={key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()} |
-                  dict(k=k, scheduler=scheduler), results=[])
+    report = dict(
+        commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),
+        diff_sha256=hashlib.sha256(subprocess.check_output(['git', 'diff', 'HEAD'], cwd=root)).hexdigest(),
+        source_sha256=hashlib.sha256(Path(experiment.__file__).read_bytes()).hexdigest(),
+        compiler_library_sha256=hashlib.sha256(Path(triton._C.libtriton.__file__).read_bytes()).hexdigest(),
+        torch=torch.__version__, triton=triton.__file__, gpu_before=gpu_state(),
+        method='same inputs; alternating order; CUDA graphs; no L2 flush', seed=123, scale_values=[
+            0.125, 0.25, 0.5, 1.0
+        ], args={key: str(value) if isinstance(value, Path) else value
+                 for key, value in vars(args).items()} | dict(k=k, scheduler=scheduler), results=[])
     (args.output / 'source.py').write_bytes(Path(experiment.__file__).read_bytes())
     functions = []
     baseline = None
@@ -291,8 +212,8 @@ def main():
         else:
 
             def fn(mode=mode):
-                out, compiled = experiment.matmul(*operands, *scales, vec, mode=mode, buffers=args.buffers,
-                                                  epilogue=args.epilogue, scheduler=scheduler_id)
+                out, compiled = experiment.matmul(*operands, *scales, vec, buffers=args.buffers, epilogue=args.epilogue,
+                                                  scheduler=scheduler_id)
                 selected['kernel'] = compiled
                 return out
 
@@ -305,7 +226,8 @@ def main():
         torch.testing.assert_close(out.float(), expected, atol=1e-3, rtol=1e-3)
         if baseline is None:
             baseline = out
-        row = dict(mode=mode, correct=True, shared=compiled.metadata.shared, tmem=compiled.metadata.tmem_size,
+        row = dict(mode=mode, correct=True, kernel_hash=compiled.hash, compiler_metadata=compiled.metadata._asdict() | dict(target=asdict(compiled.metadata.target)),
+                   shared=compiled.metadata.shared, tmem=compiled.metadata.tmem_size,
                    cubin_sha256=hashlib.sha256(compiled.asm['cubin']).hexdigest(),
                    ptx_mmas=compiled.asm['ptx'].count('tcgen05.mma.'),
                    baseline_max_abs=(out.float() - baseline.float()).abs().max().item(), ms=[])
@@ -333,6 +255,26 @@ def main():
         paired = [i for pair in zip(range(count), range(count, 2 * count)) for i in pair]
         functions = [functions[i] for i in paired]
         report['results'] = [report['results'][i] for i in paired]
+        # Keep the historical K64 and same-producer inline-mixed controls as
+        # replay-only diagnostics; the supported kernel has no inline MMA path.
+        for diagnostic in ('k64', 'raw'):
+            label = 'frozen-' + diagnostic
+            if any(row['mode'] == label for row in report['results']):
+                continue
+            config = dict(format=args.format, mode=diagnostic, block_k=256,
+                          buffers=5 if diagnostic == 'k64' else args.buffers,
+                          epilogue=64 if diagnostic == 'k64' else args.epilogue, scheduler=scheduler)
+            matched = next(c for c in index['controls'] if control_key(c) == control_key(config))
+            frozen = FrozenKernel(args.frozen / matched['cubin_sha256'])
+
+            def fn(frozen=frozen, config=config):
+                return frozen.invoke(experiment.base, operands, scales, vec, config)
+
+            out = fn()
+            torch.testing.assert_close(out.float(), expected, atol=1e-3, rtol=1e-3)
+            report['results'].append(
+                dict(mode=label, diagnostic=True, correct=True, cubin_sha256=matched['cubin_sha256'], ms=[]))
+            functions.append(fn)
     for fn in functions:
         for _ in range(3):
             fn()

@@ -10,6 +10,9 @@
 #tmem64 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 128, colStride = 1>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
 
+#packed_a = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
+#packed_b = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 8}>
+
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @alloc_then_alloc
   // CHECK: ttng.tmem_alloc
@@ -328,6 +331,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttg.barrier local
     ttng.tmem_store %arg0, %0, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
     ttng.tmem_copy %arg1, %0 : !ttg.memdesc<128x128xf32, #shared_copy, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @selected_scale_ranges
+  // CHECK: ttng.tmem_store
+  // CHECK-NEXT: ttng.tc_gen5_mma_scaled
+  // CHECK-NEXT: ttng.tmem_store
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.tc_gen5_mma_scaled
+  tt.func @selected_scale_ranges(
+      %values: tensor<128x4xi8, #blocked_scales>,
+      %a: !ttg.memdesc<128x128xi8, #packed_a, #ttg.shared_memory>,
+      %b: !ttg.memdesc<128x128xi8, #packed_b, #ttg.shared_memory>) {
+    %true = arith.constant true
+    %false = arith.constant false
+    %d = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %scales = ttng.tmem_alloc {tensor_memory_col_offset = 128 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x16xi8, #tmem_scales, #ttng.tensor_memory, mutable>
+    %unused = ttng.tmem_subslice %scales {offset = 4 : i32} : !ttg.memdesc<128x16xi8, #tmem_scales, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory, mutable, 128x16>
+    %used = ttng.tmem_subslice %scales {offset = 0 : i32} : !ttg.memdesc<128x16xi8, #tmem_scales, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory, mutable, 128x16>
+    ttng.tmem_store %values, %unused, %true : tensor<128x4xi8, #blocked_scales> -> !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory, mutable, 128x16>
+    ttng.tc_gen5_mma_scaled %a, %b, %d, %scales, %scales, %false, %true lhs = e2m1 rhs = e2m1 {is_async, instruction_k = 64 : i32, k_range = array<i32: 0, 64>, scale_block_size = 32 : i32} : !ttg.memdesc<128x128xi8, #packed_a, #ttg.shared_memory>, !ttg.memdesc<128x128xi8, #packed_b, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x16xi8, #tmem_scales, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x16xi8, #tmem_scales, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %values, %used, %true : tensor<128x4xi8, #blocked_scales> -> !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory, mutable, 128x16>
+    ttng.tc_gen5_mma_scaled %a, %b, %d, %scales, %scales, %false, %true lhs = e2m1 rhs = e2m1 {is_async, instruction_k = 64 : i32, k_range = array<i32: 0, 64>, scale_block_size = 32 : i32} : !ttg.memdesc<128x128xi8, #packed_a, #ttg.shared_memory>, !ttg.memdesc<128x128xi8, #packed_b, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x16xi8, #tmem_scales, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x16xi8, #tmem_scales, #ttng.tensor_memory, mutable>
     tt.return
   }
 }

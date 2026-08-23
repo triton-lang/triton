@@ -1,4 +1,4 @@
-# Packed tcgen05 K=96 experiment
+# Native packed tcgen05 K=96
 
 ## Native compiler migration: frozen controls
 
@@ -7,13 +7,106 @@ The immutable source checkpoint is `d93e07b76de305b651df579ce50b64ab7d237618`.
 unique control binaries spanning all 36 recorded launches. Every recorded shape
 passes the FP32 reference and ten bit-identical CUDA-graph replays through the
 normal `CompiledKernel` launcher, without recompiling the archived controls.
-The existing benchmark accepts `--freeze-controls DIR`, `--verify-frozen DIR`,
-and `--frozen DIR`. The native replacement must take no more than 1.02 times the
+The benchmark accepts `--verify-frozen DIR` and `--frozen DIR`. The native replacement must take no more than 1.02 times the
 paired control's median latency at each mixed/pure case. Original measurements
 remain unchanged. Binary payloads currently reside in the task-owned
 `native-k96/frozen` artifact directory; remote publication is not yet verified.
 
-## All-K96 Gluon continuation
+## Native programming model
+
+The current kernel uses `tcgen05_mma_scaled` directly. The experimental
+address-escape operation, inline MMA implementation, and tensor-map encoder
+patch have been removed. Existing descriptor views retain their normal
+ownership, bounds, layout, and lifetime rules; no new tensor type or general
+non-power-of-two layout is introduced.
+
+```python
+tcgen05_mma_scaled(
+    a0, b0, acc, sa, sb, "e2m1", "e2m1",
+    k_range=(192, 288), instruction_k=96,
+    a_next=a1, b_next=b1,
+    scale_block_size=32,
+    a_scale_offset=6, b_scale_offset=6,
+    multicast=True, mbarriers=[empty0],
+)
+```
+
+`k_range` is a half-open interval in logical elements, relative to the first
+operand view. Each operand independently continues into its corresponding
+`*_next` only when necessary. The backing descriptors remain explicit SSA
+operands, including when their ring indices are dynamic. Range metadata is
+compile-time. Omitted scale offsets are `k_range.start // scale_block_size`;
+explicit offsets address independently staged scale streams. Partial operations
+use logical, two-dimensional TMEM scale views. An explicit instruction width
+must exactly divide the selected interval; K96 never pads or emits a remainder.
+
+`index`, `slice`, `permute`, and valid `reinterpret` can supply the operand
+views. A normalization pass reuses physical-region/provenance analysis to prove
+16-byte alignment, K-major non-padded 128-byte swizzling, zero matrix base
+offset, scale coverage, and legal physical crossings. A continuation boundary
+must coincide with the physical 128-byte K boundary. For example, a tail view
+beginning at logical K128 can continue after its remaining K128; a K128 view
+beginning at K0 cannot splice another allocation at that same logical length.
+LLVM lowering uses only the operation, normalized metadata, types, and converted
+SSA operands—never producer traversal or loop-carried-value inspection.
+
+### Automatic mixed selection
+
+Full-operand FP4×FP4 operations automatically use `96+96+64` per K256 when
+eligible: sm103, the supported 2CTA/M256 instruction, packed K-major SMEM
+operands with 128-byte swizzling, and reduction extent divisible by 256. The
+compiler must prove the physical view alignment. Ineligible operations retain
+the existing selection. `enable_fp4_k96=False` disables automatic selection;
+an explicit `instruction_k` takes precedence. Existing calls retain their
+full-operand semantics.
+
+### Five operations per K768
+
+| Operation | Current/continuation view | `k_range` | Scale start | Completion |
+| --- | --- | --- | --- | --- |
+| 1 | slot0 | `(0, 192)` | `0` | none |
+| 2 | slot0 → slot1 | `(192, 288)` | `192 / vec` | release slot0 |
+| 3 | slot1 | `(32, 224)` | `288 / vec` | none |
+| 4 | slot1 → slot2 | `(224, 320)` | `480 / vec` | release slot1 |
+| 5 | slot2 | `(64, 256)` | `576 / vec` | release slot2 |
+
+These issue eight K96 instructions. Each producer still transfers exactly K256
+of packed operands and their useful scales. There is no operand padding,
+additional copy, excess TMA payload, or changed FLOP accounting. Readiness
+waits, scale copies, accumulator handoff, SPS/CLC scheduling, and the TMA
+epilogue remain intact. MXFP4 uses six buffers/N32; NVFP4 uses five/N64.
+Six NVFP4 producer slots alone require 233,472 bytes, above the 232,448-byte SMEM
+limit, so odd/even sanitizer stress tests use four/five NVFP4 slots and
+five/six MXFP4 slots.
+
+### Frozen-binary acceptance
+
+The first native expressibility gate is preserved in commit `faddd74` and
+[native measurements](native-k96-measurements.json). Every one of the 18
+recorded mixed/pure cases passed: worst median latency ratio 1.00052347 versus
+the allowed 1.02. Seven alternating samples used at least 510 device executions
+per sample and identical inputs on the same GPU. Peak native MXFP4 pure
+throughput was 7.9319 PFLOPS. Instrumented executions are correctness tests only.
+
+The full post-integration gate and final sanitizer results are recorded below
+once complete. Historical measurements and cubins are not regenerated. The
+benchmark pairs current candidates with normal-launcher `CompiledKernel`
+replay and keeps frozen K64 and same-producer inline-mixed binaries as diagnostic
+controls. All archived files, including launch metadata and cubins, are checked
+against their hashes before replay.
+
+```bash
+python python/examples/gluon/bench-tcgen05-pure-k96.py \
+  --format mxfp4 --size 32768 --k 32256 --modes mixed native \
+  --buffers 6 --epilogue 32 --repeats 7 --rep-ms 500 \
+  --frozen /path/to/native-k96/frozen --output /path/to/results
+```
+
+## Historical all-K96 prototype
+
+The measurements and implementation discussion in this section describe the
+immutable `d93e07b` prototype. Its source and rejected exact-TMA alternatives
+remain archived evidence, not dependencies of the native implementation.
 
 **Yes: a genuinely all-K96 stream improves MXFP4 beyond the mixed 96+96+64
 kernel.** Across the final three-shape sweep, pure K96 adds **1.6–3.7%** with the
@@ -25,7 +118,7 @@ optimum or a production compiler interface.
 
 ### Packed producer/consumer redesign
 
-The [experimental kernel](experimental-tcgen05-k96.py) consumes K768 with eight
+The archived experimental kernel consumes K768 with eight
 K96 instructions fed by three full packed K256 TMA producer slots. It uses an
 experimental SMEM/TMEM-address compiler hook and Gluon inline PTX, not CUDA C++.
 The original Gluon TMA producer, warp specialization, TMA epilogue, and SPS/CLC
@@ -154,7 +247,7 @@ Exact K192 uses six buffers/N32 for MXFP4 or four/N64 for NVFP4; exact K384 uses
 three/N32 or two/N64 respectively. Select them with `--modes k64 mixed exact192`
 or `--modes k64 mixed exact384`. Keep all GPU runs on an otherwise idle device.
 
-## Initial mixed-K96 experiment
+## Historical initial mixed-K96 experiment
 
 ## Result and scope
 
@@ -262,7 +355,10 @@ That requires coordinating data and scale lifetimes across producer tiles. The
 [absolute-address SMEM descriptor mode](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#tcgen05-leading-dimension-absolute-address)
 is relevant where a 48-byte read crosses a 128-byte swizzle boundary. The continuation above implements and benchmarks that producer/consumer redesign.
 
-## Validation and reproduction
+## Historical validation and reproduction
+
+Commands here record the archived prototype; use the native command above for
+current kernels and frozen-binary replay.
 
 The starting revision is `f4fca2c0bc0e19930d2be76bb06ee7b232b60e86`, fetched from
 `origin/main` on 2026-08-23. Hardware: GB300, GPU UUID

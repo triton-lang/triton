@@ -33,6 +33,10 @@ public:
                                 PatternRewriter &rewriter) const override {
     MLIRContext *context = tcGen5MMAOp->getContext();
     Location loc = tcGen5MMAOp.getLoc();
+    if (auto scaled = dyn_cast<TCGen5MMAScaledOp>(tcGen5MMAOp.getOperation()))
+      if (scaled.getKRangeAttr() || scaled.getInstructionK() == 96 ||
+          scaled.getANext() || scaled.getBNext())
+        return failure();
     auto lhs = tcGen5MMAOp.getA();
     auto localAllocOp = lhs.template getDefiningOp<ttg::LocalAllocOp>();
     if (!localAllocOp)

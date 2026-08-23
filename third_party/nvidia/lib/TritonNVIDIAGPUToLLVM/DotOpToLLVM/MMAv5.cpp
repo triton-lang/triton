@@ -478,16 +478,17 @@ struct DotConversion {
   int mmaSizeK;
   // A packed 128-byte swizzle sector holds K=256 FP4 values. Consume it
   // as 48 + 48 + 32 bytes, without padding or crossing a swizzle boundary.
-  bool useK96 = false;
+  SmallVector<ttng::MMAInstructionTile> kTiles;
+  std::array<int32_t, 4> kBaseOffsets{};
   int kStart = 0;
   Value aNext, bNext, loadedANext, loadedBNext;
 
   int getKOffset(int k) const {
-    return kStart + (useK96 ? (k / 3) * 256 + (k % 3) * 96 : k * mmaSizeK);
+    return kTiles.empty() ? kStart + k * mmaSizeK : kTiles[k].k;
   }
 
   int getKSize(int k) const {
-    return useK96 ? (k % 3 == 2 ? 64 : 96) : mmaSizeK;
+    return kTiles.empty() ? mmaSizeK : kTiles[k].width;
   }
   int numBitsPerElementA;
   int numBitsPerElementB;
@@ -566,7 +567,8 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   int numRepN = ceil<unsigned>(N, mmaSizeN);
   assert((!twoCTAs || numRepN == 1) &&
          "grep for [Note: numRepN > 1 and two_ctas]");
-  int numRepK = op.useK96 ? K / 256 * 3 : ceil<unsigned>(K, mmaSizeK);
+  int numRepK =
+      op.kTiles.empty() ? ceil<unsigned>(K, mmaSizeK) : op.kTiles.size();
 
   // In A * B = C
   // For M=64 twoCTAs, B and C have the same split and A has a split half of C
@@ -609,14 +611,16 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   bool transB = !bLoader->getDescriptor().transposed;
 
   std::optional<DotOpMmaSmemLoader> aNextLoader, bNextLoader;
-  auto buildContinuation = [&](Value next, Value loaded, bool lhs,
-                               std::optional<DotOpMmaSmemLoader> &result) -> LogicalResult {
+  auto buildContinuation =
+      [&](Value next, Value loaded, bool lhs,
+          std::optional<DotOpMmaSmemLoader> &result) -> LogicalResult {
     if (!next)
       return success();
     auto ty = cast<MemDescType>(next.getType());
     Value base = getOffsetedBase(loaded, ty, &typeConverter, rewriter, loc);
     auto loader = DotOpMmaSmemLoader::build(loc, rewriter, ty, base,
-        lhs ? aOperandShape : bOperandShape, lhs ? 0 : 1, 5, true);
+                                            lhs ? aOperandShape : bOperandShape,
+                                            lhs ? 0 : 1, 5, true);
     if (failed(loader))
       return failure();
     result = std::move(*loader);
@@ -627,9 +631,10 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
     return mlir::emitError(loc, "invalid K96 continuation layout");
 
   auto loadSmem = [&](DotOpMmaSmemLoader &first,
-                      std::optional<DotOpMmaSmemLoader> &next,
-                      MemDescType type, int mn, int k, int width, bool lhs) {
-    int capacity = type.getShape()[lhs ? 1 : 0] * (lhs ? (isFp4a ? 2 : 1) : (isFp4b ? 2 : 1));
+                      std::optional<DotOpMmaSmemLoader> &next, MemDescType type,
+                      int mn, int k, int width, bool lhs) {
+    int capacity = type.getShape()[lhs ? 1 : 0] *
+                   (lhs ? (isFp4a ? 2 : 1) : (isFp4b ? 2 : 1));
     auto load = [&](DotOpMmaSmemLoader &loader, int offset) {
       return lhs ? loader.smemLoad(mn, offset, rewriter, loc)
                  : loader.smemLoad(offset, mn, rewriter, loc);
@@ -641,12 +646,13 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
       k -= capacity;
     }
     Value descriptor = load(*source, k);
+    int kBase = op.kBaseOffsets[(lhs ? 0 : 1) + (inNext ? 2 : 0)];
     if (width == 96) {
       Value continuation;
       if (!inNext && next && k + width > capacity)
         continuation = load(*next, 0);
-      else if (k % 256 + width > 256)
-        continuation = load(*source, (k / 256 + 1) * 256);
+      else if ((kBase + k) % 256 + width > 256)
+        continuation = load(*source, k + 256 - (kBase + k) % 256);
       if (continuation) {
         uint64_t addressMask = uint64_t(0x3fff) << 16;
         descriptor = tb.and_(descriptor, tb.i64_val(~addressMask));
@@ -744,13 +750,17 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
     auto [m, n, k] = indices;
     MemDescOperand accAddress =
         dLoader.tmemLoad(m * mmaSizeM, n * mmaSizeN, rewriter, loc);
-    MemDescOperand a = aInTmem
-        ? aLoader->memLoad(m * aOperandShape[0], op.getKOffset(k), rewriter, loc)
-        : MemDescOperand{loadSmem(*static_cast<DotOpMmaSmemLoader *>(aLoader.get()),
-                                 aNextLoader, aTensorTy, m * aOperandShape[0],
-                                 op.getKOffset(k), op.getKSize(k), true), std::nullopt};
+    MemDescOperand a =
+        aInTmem
+            ? aLoader->memLoad(m * aOperandShape[0], op.getKOffset(k), rewriter,
+                               loc)
+            : MemDescOperand{
+                  loadSmem(*static_cast<DotOpMmaSmemLoader *>(aLoader.get()),
+                           aNextLoader, aTensorTy, m * aOperandShape[0],
+                           op.getKOffset(k), op.getKSize(k), true),
+                  std::nullopt};
     Value b = loadSmem(*bLoader, bNextLoader, bTensorTy, n * bOperandShape[1],
-                      op.getKOffset(k), op.getKSize(k), false);
+                       op.getKOffset(k), op.getKSize(k), false);
     Value useInitAcc = k == 0 ? useDFlag : tb.i1_val(1);
     createGen5MMA(rewriter, loc, op.kind, a, b, accAddress, elect,
                   op.getInstOperands(desc, m, n, k), useInitAcc, twoCTAs,
@@ -880,6 +890,10 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
   MemDescType bTensorTy = op.getB().getType();
   MemDescType dTensorTy = op.getD().getType();
   int blockK = op.getBlockK();
+  if ((op.getKRangeAttr() || op.getInstructionK() == 96) &&
+      !op.getKBaseOffsetsAttr())
+    return op.emitError(
+        "selected K ranges must be normalized before LLVM lowering");
 
   mxfpKind mxfpInstKind =
       getMXFPKind(op.getAType(), op.getBType(), op.getAScale().getType(),
@@ -923,6 +937,8 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
     dot.mmaSizeK = opKindIsMXFP4 ? std::min(blockK, 128) : std::min(blockK, 64);
   }
 
+  if (op.getKRangeAttr() && !op.getInstructionK())
+    dot.mmaSizeK = 64;
   if (auto width = op.getInstructionK()) {
     if (*width == 96 && !targetFeatures.supportsK96Tcgen05MMA())
       return op.emitError("K96 requires sm103");
@@ -942,31 +958,30 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
   Value baseScaleB = tb.ptrtoint(i32_ty, adaptor.getBScale());
   bool twoCTAs = ttng::getModuleTwoCTAs(op);
   SmallVector<Value> commitDescs = op.getCompletionDescs();
-  dot.useK96 =
-      !op.getInstructionK() && !op.getKRangeAttr() &&
-      op->getParentOfType<ModuleOp>()->hasAttr("ttng.enable_fp4_k96") &&
-      targetFeatures.supportsK96Tcgen05MMA() && twoCTAs &&
-      mmaSizeM == 128 && opKindIsMXFP4 && !hasFp4PaddedOperand &&
-      blockK % 256 == 0 &&
-      !isa<ttng::TensorMemoryEncodingAttr>(aTensorTy.getEncoding()) &&
-      ttng::getNvmmaSmemAttrs(aTensorTy)->swizzlingByteWidth == 128 &&
-      ttng::getNvmmaSmemAttrs(bTensorTy)->swizzlingByteWidth == 128;
+  dot.kTiles = op.getK96Instructions();
+  if (auto bases = op.getKBaseOffsetsAttr())
+    llvm::copy(bases.asArrayRef(), dot.kBaseOffsets.begin());
   int mmasPerScaleWord =
       4 / getScaleFactorColsPerSet(mxfpInstKind, op, dot.mmaSizeK);
 
-  bool explicitScales = opKindIsMXFP4 &&
-      (dot.useK96 || op.getInstructionK() || op.getKRangeAttr() || op.getScaleBlockSize());
+  bool explicitScales = !dot.kTiles.empty() || op.getInstructionK() ||
+                        op.getKRangeAttr() || op.getScaleBlockSize() ||
+                        op.getAScaleOffset() || op.getBScaleOffset();
   dot.getInstOperands = [&](const DotConversion::InstDesc &desc, int m, int n,
                             int k) -> MMAInstOperands {
     auto [numRepM, numRepN, numRepK] = desc.repShape;
-    int aWords = explicitScales ? ceil<int>(op.getAScale().getType().getShape().back(), 4)
-                               : ceil<int>(numRepK, mmasPerScaleWord);
-    int bWords = explicitScales ? ceil<int>(op.getBScale().getType().getShape().back(), 4)
-                               : ceil<int>(numRepK, mmasPerScaleWord);
-    int aColumns = ceil<int>(ttng::getTmemAllocSizes(op.getAScale().getType()).numCols,
-                             numRepM * aWords);
-    int bColumns = std::max(2, ceil<int>(ttng::getTmemAllocSizes(op.getBScale().getType()).numCols,
-                                         numRepN * bWords));
+    int aWords = explicitScales
+                     ? ceil<int>(op.getAScale().getType().getShape().back(), 4)
+                     : ceil<int>(numRepK, mmasPerScaleWord);
+    int bWords = explicitScales
+                     ? ceil<int>(op.getBScale().getType().getShape().back(), 4)
+                     : ceil<int>(numRepK, mmasPerScaleWord);
+    int aColumns =
+        ceil<int>(ttng::getTmemAllocSizes(op.getAScale().getType()).numCols,
+                  numRepM * aWords);
+    int bColumns = std::max(
+        2, ceil<int>(ttng::getTmemAllocSizes(op.getBScale().getType()).numCols,
+                     numRepN * bWords));
     int scaleAdvance = (dot.getKOffset(k) - dot.kStart) / getScaleVecSize(op);
     int aOffset = op.getAScaleOffset() + scaleAdvance;
     int bOffset = op.getBScaleOffset() + scaleAdvance;
@@ -974,17 +989,38 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
     int bId = explicitScales ? bOffset % 4 : k % mmasPerScaleWord;
     int aWord = explicitScales ? aOffset / 4 : k / mmasPerScaleWord;
     int bWord = explicitScales ? bOffset / 4 : k / mmasPerScaleWord;
-    int aIndex = linearizeScaleBlockIdx(op.getAScale(), m, aWord, numRepM, aWords);
-    int bIndex = linearizeScaleBlockIdx(op.getBScale(), n, bWord, numRepN, bWords);
-    Value scaleA = tb.add(baseScaleA, tb.i32_val(aIndex * aColumns));
-    Value scaleB = tb.add(baseScaleB, tb.i32_val(bIndex * bColumns));
+    int aIndex =
+        linearizeScaleBlockIdx(op.getAScale(), m, aWord, numRepM, aWords);
+    int bIndex =
+        linearizeScaleBlockIdx(op.getBScale(), n, bWord, numRepN, bWords);
+    int aAddress = aIndex * aColumns;
+    int bAddress = bIndex * bColumns;
+    if (explicitScales) {
+      // Reuse the physical layout mapping, including subview allocation
+      // strides. Scale-factor selectors address bytes within the first word.
+      aAddress =
+          ttng::getTMemSubSliceOffset(op.getAScale().getType(),
+                                      m * desc.mmaSizeM, 0) +
+          ttng::getTMemSubSliceOffset(op.getAScale().getType(), aWord * 4, 1);
+      bAddress =
+          ttng::getTMemSubSliceOffset(op.getBScale().getType(),
+                                      n * desc.mmaSizeN, 0) +
+          ttng::getTMemSubSliceOffset(op.getBScale().getType(), bWord * 4, 1);
+    }
+    Value scaleA = tb.add(baseScaleA, tb.i32_val(aAddress));
+    Value scaleB = tb.add(baseScaleB, tb.i32_val(bAddress));
     Value instDescriptor;
     if (mxfpInstKind == mxfpKind::mxf8f6f4) {
+      if (explicitScales && dot.mmaSizeK == 64) {
+        aId /= 2;
+        bId /= 2;
+      }
       instDescriptor = createScaleInstDescriptorFp8(
           rewriter, op, desc.mmaSizeM, desc.mmaSizeN, desc.transA, desc.transB,
           aId, bId, dot.mmaSizeK);
     } else {
-      if (explicitScales && dot.getKSize(k) == 64 && getScaleVecSize(op) == 32) {
+      if (explicitScales && dot.getKSize(k) == 64 &&
+          getScaleVecSize(op) == 32) {
         aId /= 2;
         bId /= 2;
       }

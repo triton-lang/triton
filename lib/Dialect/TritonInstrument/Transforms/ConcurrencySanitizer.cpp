@@ -1234,7 +1234,11 @@ private:
         op->emitError("missing buffer-region candidates for memdesc");
         return failure();
       }
-      const BufferStateCandidates &candidates = candidateIt->second;
+      auto &accessMap =
+          auxData.accessCandidates[static_cast<int>(materialized.memType)];
+      auto accessIt = accessMap.find(std::make_pair(op, buf));
+      const BufferStateCandidates &candidates =
+          accessIt == accessMap.end() ? candidateIt->second : accessIt->second;
       Value runtimeBase;
       if (!candidates.unknown && candidates.cases.size() > 1)
         runtimeBase = tti::ExperimentalMemDescToI32Op::create(b, buf);

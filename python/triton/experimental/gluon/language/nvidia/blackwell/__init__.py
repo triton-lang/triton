@@ -628,7 +628,7 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
 
     Range and scale metadata are compile-time constants. Continuations retain the
     ownership and bounds of ordinary shared-memory descriptors; they need not be
-    adjacent in memory. An explicit instruction width must divide the reduction
+    adjacent in memory. The selected interval must begin within each first view. An explicit instruction width must divide the reduction
     exactly, without padding. As with full-operand MMA, mbarriers=[] issues an
     asynchronous operation without attaching a completion barrier.
     """
@@ -639,6 +639,10 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
     scale_block_size = _unwrap_if_constexpr(scale_block_size)
     a_scale_offset = _unwrap_if_constexpr(a_scale_offset)
     b_scale_offset = _unwrap_if_constexpr(b_scale_offset)
+    assert instruction_k in (None, 32, 64, 96, 128), "instruction_k must be a legal MMA width"
+    assert scale_block_size in (None, 16, 32), "scale_block_size must be 16 or 32"
+    if k_range is not None:
+        assert len(k_range) == 2, "k_range must be a half-open (start, stop) interval"
     if k_range is not None or a_next is not None or b_next is not None:
         assert scale_block_size is not None, "partial MMA requires scale_block_size"
     k_start = 0 if k_range is None else _unwrap_if_constexpr(k_range[0])

@@ -230,6 +230,10 @@ struct MemoryAccess {
   bool isWrite;
   bool isRead;
   std::optional<gpu::SharedKind> sharedKind;
+  // Optional interval in logical storage elements, without changing the type.
+  int axis = -1;
+  int64_t start = 0;
+  int64_t length = 0;
 
   bool isShared() const { return sharedKind.has_value(); }
   bool isShared(gpu::SharedKind kind) const { return sharedKind == kind; }
@@ -258,7 +262,9 @@ public:
   using Base =
       dataflow::SparseForwardDataFlowAnalysis<dataflow::Lattice<RegionInfo>>;
   using Base::getLatticeElement;
-  using Base::SparseForwardDataFlowAnalysis;
+  explicit BufferRegionAnalysis(DataFlowSolver &solver,
+                                bool relativeToAllocation = false)
+      : Base(solver), relativeToAllocation(relativeToAllocation) {}
 
   enum RegionType { SHARED_MEMORY, TENSOR_MEMORY, BARRIER, NUM_REGION_TYPES };
 
@@ -269,6 +275,9 @@ public:
   /// Return every exact view an access may reference. A null view represents
   /// an unknown region and therefore may alias any other view.
   llvm::SmallVector<BufferRegionAccess> getAccessRegions(Value value);
+  llvm::SmallVector<BufferRegionAccess>
+  getAccessRegions(const MemoryAccess &access);
+  Operation *getAllocation(uint32_t id) const { return operationInterner[id]; }
 
   /// Translate a callee-local view into the caller's allocation frame.
   BufferRegionAccess translateToCallsite(BufferRegionAccess view,
@@ -325,6 +334,7 @@ private:
   bool usedUnknownBufferRegions[NUM_REGION_TYPES] = {};
   llvm::DenseMap<std::pair<Type, uint32_t>, AddressSet> footprintCache;
   llvm::UniqueVector<Operation *> operationInterner;
+  bool relativeToAllocation;
 };
 
 } // namespace mlir::triton

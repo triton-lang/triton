@@ -683,6 +683,8 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
     return failure();
 
   SmallVector<std::pair<Value, RegionInfo>> candidates[numMemTypes];
+  DenseMap<std::pair<Operation *, Value>, RegionInfo>
+      accessRegions[numMemTypes];
   DenseSet<Value> seenValues;
   auto collectCandidates = [&](Value value) {
     SmallVector<Value> pending = {value};
@@ -709,8 +711,27 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
   SmallVector<BufferRegion> staticSharedRegions;
   unsigned numCTAs = lookupNumCTAs(module);
   entryPoint.walk([&](Operation *op) {
-    for (const MemoryAccess &access : getMemoryAccesses(op))
+    for (const MemoryAccess &access : getMemoryAccesses(op)) {
       collectCandidates(access.value);
+      if (access.axis < 0)
+        continue;
+      RegionInfo selected(RegionInfo::ViewList{});
+      for (const auto &view : analysis->getAccessRegions(access)) {
+        if (!view) {
+          selected = RegionInfo::getPessimisticValueState();
+          break;
+        }
+        selected.views.insert(*view);
+      }
+      auto type = cast<MemDescType>(access.value.getType());
+      int memType = isa<SharedMemorySpaceAttr>(type.getMemorySpace())
+                        ? int(MemType::SHARED_MEM)
+                        : int(MemType::TENSOR_MEM);
+      auto [it, inserted] = accessRegions[memType].try_emplace(
+          std::make_pair(op, access.value), selected);
+      if (!inserted)
+        it->second = RegionInfo::join(it->second, selected);
+    }
 
     auto info = getConSanMemEffectsOpInfo(hooks, op);
     if (!info)
@@ -742,6 +763,9 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
         analysis->getAllUsedBufferRegions(regionType);
     if (memType == MemType::SHARED_MEM)
       llvm::append_range(regions, staticSharedRegions);
+    for (const auto &[key, info] : accessRegions[iMemType])
+      for (const auto &view : info.views)
+        regions.push_back(view.region);
     llvm::sort(regions);
     regions.erase(std::unique(regions.begin(), regions.end()), regions.end());
     bool hasUnknown = analysis->hasUnknownUsedBufferRegions(regionType);
@@ -762,7 +786,9 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
       }
     }
 
-    for (const auto &[value, regionInfo] : candidates[iMemType]) {
+    auto createCandidates =
+        [&](Value value,
+            const RegionInfo &regionInfo) -> FailureOr<BufferStateCandidates> {
       BufferStateCandidates stateCandidates;
       stateCandidates.unknown = regionInfo.isUnknown();
       for (const BufferRegionView &view : regionInfo.views) {
@@ -792,7 +818,19 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
           existing->mask |= bufferStatePlans[iMemType].regionMasks[id];
         }
       }
-      bufferCandidates[iMemType].try_emplace(value, std::move(stateCandidates));
+      return stateCandidates;
+    };
+    for (const auto &[value, info] : candidates[iMemType]) {
+      auto states = createCandidates(value, info);
+      if (failed(states))
+        return failure();
+      bufferCandidates[iMemType].try_emplace(value, std::move(*states));
+    }
+    for (const auto &[key, info] : accessRegions[iMemType]) {
+      auto states = createCandidates(key.second, info);
+      if (failed(states))
+        return failure();
+      accessCandidates[iMemType].try_emplace(key, std::move(*states));
     }
   }
   return success();

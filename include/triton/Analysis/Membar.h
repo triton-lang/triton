@@ -331,7 +331,7 @@ public:
       : triton::CallGraph<BlockInfo>(moduleAllocation.getModuleOp()),
         moduleAllocation(moduleAllocation), filter(std::move(filter)) {}
 
-  void run() {
+  template <typename... AnalysisArgs> void run(AnalysisArgs &...args) {
     walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
         // Pre-order walk callback
         [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
@@ -340,7 +340,7 @@ public:
           auto &allocation = *moduleAllocation.getFuncData(funcOp);
           if (!funcMap.try_emplace(funcOp).second)
             return;
-          AnalysisT(allocation, filter).run(funcOp, funcMap);
+          AnalysisT(allocation, filter, args...).run(funcOp, funcMap);
         });
   }
 

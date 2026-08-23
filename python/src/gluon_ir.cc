@@ -1027,55 +1027,44 @@ void init_gluon_ir(py::module_ &m) {
                                             pred, two_ctas, multicast,
                                             mbarriers, mbarrier_preds);
            })
-      .def("create_experimental_descriptor_address",
-           [](GluonOpBuilder &self, Value src) -> Value {
-             auto op = self.create<ttng::ExperimentalDescriptorAddressOp>(
-                 self.getBuilder().getI32Type(), src);
-             auto ty = cast<ttg::MemDescType>(src.getType());
-             if (auto enc = dyn_cast<ttng::TensorMemoryEncodingAttr>(
-                     ty.getEncoding())) {
-               if (enc.getTwoCTAs())
-                 op->getParentOfType<ModuleOp>()->setAttr(
-                     ttng::AttrTwoCTAsName,
-                     self.getBuilder().getBoolAttr(true));
-             }
-             return op.getResult();
-           })
-      .def("create_tcgen05_mma_scaled",
-           [](GluonOpBuilder &self, Value a, Value b, Value acc, Value aScale,
-              Value bScale, tt::ScaleDotElemType aType,
-              tt::ScaleDotElemType bType, Value useAcc, Value pred,
-              std::vector<Value> &mbarriers, std::vector<Value> &mbarrier_preds,
-              bool two_ctas, bool multicast, bool isAsync,
-              std::vector<int32_t> kRange, int instructionK,
-              std::optional<Value> aNext, std::optional<Value> bNext, int scaleBlockSize,
-              int aScaleOffset, int bScaleOffset) {
-             Value accDep;
-             auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
-             auto op = self.create<ttng::TCGen5MMAScaledOp>(
-                 tokType, a, b, acc, accDep, aScale, bScale, aType, bType,
-                 useAcc, pred, mbarriers, mbarrier_preds, two_ctas,
-                 isAsync, multicast);
-             if (aNext)
-               op.getANextMutable().assign(*aNext);
-             if (bNext)
-               op.getBNextMutable().assign(*bNext);
-             auto &builder = self.getBuilder();
-             if (!kRange.empty())
-               op.setKRangeAttr(builder.getDenseI32ArrayAttr(kRange));
-             if (instructionK)
-               op.setInstructionK(instructionK);
-             if (scaleBlockSize)
-               op.setScaleBlockSize(scaleBlockSize);
-             op.setAScaleOffset(aScaleOffset);
-             op.setBScaleOffset(bScaleOffset);
-           }, py::arg("a"), py::arg("b"), py::arg("acc"), py::arg("aScale"),
-           py::arg("bScale"), py::arg("aType"), py::arg("bType"),
-           py::arg("useAcc"), py::arg("pred"), py::arg("mbarriers"),
-           py::arg("mbarrier_preds"), py::arg("two_ctas"), py::arg("multicast"),
-           py::arg("isAsync"), py::arg("kRange"), py::arg("instructionK"),
-           py::arg("aNext").none(), py::arg("bNext").none(),
-           py::arg("scaleBlockSize"), py::arg("aScaleOffset"), py::arg("bScaleOffset"))
+      .def(
+          "create_tcgen05_mma_scaled",
+          [](GluonOpBuilder &self, Value a, Value b, Value acc, Value aScale,
+             Value bScale, tt::ScaleDotElemType aType,
+             tt::ScaleDotElemType bType, Value useAcc, Value pred,
+             std::vector<Value> &mbarriers, std::vector<Value> &mbarrier_preds,
+             bool two_ctas, bool multicast, bool isAsync,
+             std::vector<int32_t> kRange, int instructionK,
+             std::optional<Value> aNext, std::optional<Value> bNext,
+             int scaleBlockSize, int aScaleOffset, int bScaleOffset) {
+            Value accDep;
+            auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
+            auto op = self.create<ttng::TCGen5MMAScaledOp>(
+                tokType, a, b, acc, accDep, aScale, bScale, aType, bType,
+                useAcc, pred, mbarriers, mbarrier_preds, two_ctas, isAsync,
+                multicast);
+            if (aNext)
+              op.getANextMutable().assign(*aNext);
+            if (bNext)
+              op.getBNextMutable().assign(*bNext);
+            auto &builder = self.getBuilder();
+            if (!kRange.empty())
+              op.setKRangeAttr(builder.getDenseI32ArrayAttr(kRange));
+            if (instructionK)
+              op.setInstructionK(instructionK);
+            if (scaleBlockSize)
+              op.setScaleBlockSize(scaleBlockSize);
+            op.setAScaleOffset(aScaleOffset);
+            op.setBScaleOffset(bScaleOffset);
+          },
+          py::arg("a"), py::arg("b"), py::arg("acc"), py::arg("aScale"),
+          py::arg("bScale"), py::arg("aType"), py::arg("bType"),
+          py::arg("useAcc"), py::arg("pred"), py::arg("mbarriers"),
+          py::arg("mbarrier_preds"), py::arg("two_ctas"), py::arg("multicast"),
+          py::arg("isAsync"), py::arg("kRange"), py::arg("instructionK"),
+          py::arg("aNext").none(), py::arg("bNext").none(),
+          py::arg("scaleBlockSize"), py::arg("aScaleOffset"),
+          py::arg("bScaleOffset"))
       .def("create_tcgen05_commit",
            [](GluonOpBuilder &self, Value &barrier, Value &pred,
               std::vector<Value> &descs) {

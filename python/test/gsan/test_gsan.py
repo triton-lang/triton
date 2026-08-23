@@ -1399,3 +1399,28 @@ def test_host_tma_reduce_updates_atomic_shadow(with_gsan, block_x, dtype):
             for byte_offset in range(0, target.element_size(), SHADOW_GRANULARITY_BYTES):
                 address = target[row, col].data_ptr() + byte_offset
                 _assert_atomic_rmw_shadow(address, AtomicScope.GPU, is_release=False)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() != (10, 3), reason="Requires sm103 K96")
+@pytest.mark.parametrize("fmt", ["mxfp4", "nvfp4"])
+def test_tcgen05_mma_scaled_k96_completion(with_gsan, fmt):
+    import importlib.util
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[2] / "examples/gluon/bench-tcgen05-pure-k96.py"
+    spec = importlib.util.spec_from_file_location("gsan_k96_benchmark", path)
+    bench = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bench)
+    experiment = bench.load_experiment()
+    torch.manual_seed(123)
+    operands, scales, refs, vec = bench.prepare(256, 256, 1536, fmt)
+    scales = [experiment.base.swizzle_scales_packed_block(scale) for scale in scales]
+    scheduler = experiment.SCHEDULER_SPS if fmt == "mxfp4" else experiment.SCHEDULER_CLC
+
+    def invoke():
+        return experiment.matmul(*operands, *scales, vec, buffers=4, epilogue=32, scheduler=scheduler,
+                                 out_dtype=torch.float16)[0]
+
+    expected = (refs[0] @ refs[1].T).to(torch.float16)
+    for _ in range(3):
+        torch.testing.assert_close(invoke(), expected, atol=1e-3, rtol=1e-3)
+    torch.cuda.synchronize()
