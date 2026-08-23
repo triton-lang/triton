@@ -146,6 +146,33 @@ def test_swizzle2d(size_i, size_j, size_g, device):
     assert (output == expected_order).all(), (output, expected_order)
 
 
+# ---------------
+# test softmax
+# ---------------
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("shape, dim", [((2, 2), 1), ((8, 64), -1), ((128, ), 0)])
+def test_softmax(shape, dim, device):
+    # Reproducer for https://github.com/triton-lang/triton/issues/11406, where
+    # softmax normalized along the wrong axis for every dim but the default.
+
+    @triton.jit
+    def softmax_kernel(X, Z, numel: tl.constexpr, shape: tl.constexpr, dim: tl.constexpr):
+        # X is contiguous, so its row-major flat offsets are just an arange.
+        offs = tl.arange(0, numel).reshape(shape)
+        x = tl.load(X + offs)
+        z = tl.softmax(x, dim=dim)
+        tl.static_assert(z.shape == x.shape, "softmax must preserve the input shape")
+        tl.store(Z + offs, z)
+
+    x = numpy_random(shape, dtype_str='float32')
+    x = torch.from_numpy(x).to(device)
+    z = torch.empty_like(x)
+    softmax_kernel[(1, )](x, z, x.numel(), shape, dim)
+    torch.testing.assert_close(z, torch.softmax(x, dim=dim), rtol=1e-5, atol=1e-6)
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("shape, dim", [((1, 2, 4), 0), ((2, 1, 4), 1), ((2, 4, 1), 2)])
 def test_squeeze(shape, dim, device):
