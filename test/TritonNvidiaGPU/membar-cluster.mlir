@@ -877,6 +877,45 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#tmaShared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0], [0, 0]]}>
+#barrierEnc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2]]}>
+#reuseShared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0], [2, 0]]}>
+#remoteBlocked = #ttg.blocked<{sizePerThread = [32, 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1], [0, 2]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // Track multicast TMA writes through memdesc views when the underlying
+  // shared-memory allocation is reused. The TMA layout forms two independent
+  // multicast groups, while the replacement store targets all four CTAs.
+  // CHECK-LABEL: @cluster_barrier_for_multicast_tma_memdesc_view
+  // CHECK: ttng.async_tma_copy_global_to_local
+  // CHECK: ttng.wait_barrier
+  // CHECK: ttg.local_dealloc
+  // CHECK: ttg.local_alloc
+  // CHECK-NEXT: ttng.cluster_barrier
+  // CHECK-NEXT: ttg.local_store
+  tt.func @cluster_barrier_for_multicast_tma_memdesc_view(%desc: !tt.tensordesc<128x64xf16, #tmaShared>, %v: tensor<64x256xf16, #remoteBlocked>) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<4xi64, #barrierEnc, #smem, mutable>
+    ttng.init_barrier %barrier, 1 : !ttg.memdesc<4xi64, #barrierEnc, #smem, mutable>
+    ttng.barrier_expect %barrier, 8192, %true : !ttg.memdesc<4xi64, #barrierEnc, #smem, mutable>
+    %buffers = ttg.local_alloc : () -> !ttg.memdesc<1x128x64xf16, #tmaShared, #smem, mutable>
+    %dst = ttg.memdesc_index %buffers[%c0] : !ttg.memdesc<1x128x64xf16, #tmaShared, #smem, mutable> -> !ttg.memdesc<128x64xf16, #tmaShared, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %dst, %barrier, %true {multicast} :
+      !tt.tensordesc<128x64xf16, #tmaShared>, !ttg.memdesc<4xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<128x64xf16, #tmaShared, #smem, mutable>
+    ttng.wait_barrier %barrier, %c0, %true deps %dst :
+      !ttg.memdesc<4xi64, #barrierEnc, #smem, mutable>,
+      !ttg.memdesc<128x64xf16, #tmaShared, #smem, mutable>
+    ttg.local_dealloc %buffers : !ttg.memdesc<1x128x64xf16, #tmaShared, #smem, mutable>
+    %reuse = ttg.local_alloc : () -> !ttg.memdesc<64x256xf16, #reuseShared, #smem, mutable>
+    ttg.local_store %v, %reuse : tensor<64x256xf16, #remoteBlocked> -> !ttg.memdesc<64x256xf16, #reuseShared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #barrierEncMC = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
 #smem = #ttg.shared_memory
 
