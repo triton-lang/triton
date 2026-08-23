@@ -329,7 +329,13 @@ static Value createScaleInstDescriptorFp4(
   desc.BScaleFactor = scaleFactorsubIdxB;
   desc.scaleType = static_cast<uint32_t>(getScaleKind(op, blockK));
 
-  assert(kSize == 64 || kSize == 128);
+  assert(kSize == 64 || kSize == 96 || kSize == 128);
+  if (kSize == 96) {
+    // K96 selects three (block32) or six (block16) consecutive scales,
+    // including across scale words. The IDs are byte offsets, not MMA indices.
+    desc.kSizeLower = 1;
+    return b.int_val(32, desc.descriptor);
+  }
   if (kSize == 128) {
     desc.kSizeUpper = 1;
   }
@@ -485,6 +491,17 @@ struct DotConversion {
 
   unsigned blockK;
   int mmaSizeK;
+  // A packed 128-byte swizzle sector holds K=256 FP4 values. Consume it
+  // as 48 + 48 + 32 bytes, without padding or crossing a swizzle boundary.
+  bool useK96 = false;
+
+  int getKOffset(int k) const {
+    return useK96 ? (k / 3) * 256 + (k % 3) * 96 : k * mmaSizeK;
+  }
+
+  int getKSize(int k) const {
+    return useK96 ? (k % 3 == 2 ? 64 : 96) : mmaSizeK;
+  }
   int numBitsPerElementA;
   int numBitsPerElementB;
   StringRef kind;
@@ -562,7 +579,7 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   int numRepN = ceil<unsigned>(N, mmaSizeN);
   assert((!twoCTAs || numRepN == 1) &&
          "grep for [Note: numRepN > 1 and two_ctas]");
-  int numRepK = ceil<unsigned>(K, mmaSizeK);
+  int numRepK = op.useK96 ? K / 256 * 3 : ceil<unsigned>(K, mmaSizeK);
 
   // In A * B = C
   // For M=64 twoCTAs, B and C have the same split and A has a split half of C
@@ -690,9 +707,9 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
     auto [m, n, k] = indices;
     MemDescOperand accAddress =
         dLoader.tmemLoad(m * mmaSizeM, n * mmaSizeN, rewriter, loc);
-    MemDescOperand a = aLoader->memLoad(m * aOperandShape[0],
-                                        k * aOperandShape[1], rewriter, loc);
-    Value b = bLoader->smemLoad(k * bOperandShape[0], n * bOperandShape[1],
+    MemDescOperand a =
+        aLoader->memLoad(m * aOperandShape[0], op.getKOffset(k), rewriter, loc);
+    Value b = bLoader->smemLoad(op.getKOffset(k), n * bOperandShape[1],
                                 rewriter, loc);
     Value useInitAcc = k == 0 ? useDFlag : tb.i1_val(1);
     createGen5MMA(rewriter, loc, op.kind, a, b, accAddress, elect,
@@ -874,13 +891,22 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
   Value baseScaleB = tb.ptrtoint(i32_ty, adaptor.getBScale());
   bool twoCTAs = ttng::getModuleTwoCTAs(op);
   SmallVector<Value> commitDescs = op.getCompletionDescs();
+  dot.useK96 =
+      op->getParentOfType<ModuleOp>()->hasAttr("ttng.enable_fp4_k96") &&
+      targetFeatures.getComputeCapability() == 103 && twoCTAs &&
+      mmaSizeM == 128 && opKindIsMXFP4 && !hasFp4PaddedOperand &&
+      blockK % 256 == 0 &&
+      !isa<ttng::TensorMemoryEncodingAttr>(aTensorTy.getEncoding()) &&
+      ttng::getNvmmaSmemAttrs(aTensorTy)->swizzlingByteWidth == 128 &&
+      ttng::getNvmmaSmemAttrs(bTensorTy)->swizzlingByteWidth == 128;
   int mmasPerScaleWord =
       4 / getScaleFactorColsPerSet(mxfpInstKind, op, dot.mmaSizeK);
 
   dot.getInstOperands = [&](const DotConversion::InstDesc &desc, int m, int n,
                             int k) -> MMAInstOperands {
     auto [numRepM, numRepN, numRepK] = desc.repShape;
-    int numRepKWords = ceil<int>(numRepK, mmasPerScaleWord);
+    int numRepKWords = dot.useK96 ? blockK / (4 * getScaleVecSize(op))
+                                  : ceil<int>(numRepK, mmasPerScaleWord);
     int numColPerScaleBlockA = ceil<int>(
         ttng::getTmemAllocSizes(cast<MemDescType>(op.getAScale().getType()))
             .numCols,
@@ -890,8 +916,9 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
             .numCols,
         numRepN * numRepKWords);
     numColPerScaleBlockB = std::max(numColPerScaleBlockB, 2);
-    int subWordIdx = k % mmasPerScaleWord;
-    int wordIdx = k / mmasPerScaleWord;
+    int scaleOffset = dot.getKOffset(k) / getScaleVecSize(op);
+    int subWordIdx = dot.useK96 ? scaleOffset % 4 : k % mmasPerScaleWord;
+    int wordIdx = dot.useK96 ? scaleOffset / 4 : k / mmasPerScaleWord;
     int scaleIdxA = linearizeScaleBlockIdx(op.getAScale(), m, wordIdx, numRepM,
                                            numRepKWords);
     int scaleIdxB = linearizeScaleBlockIdx(op.getBScale(), n, wordIdx, numRepN,
@@ -906,9 +933,14 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
           rewriter, op, desc.mmaSizeM, desc.mmaSizeN, desc.transA, desc.transB,
           subWordIdx, subWordIdx, dot.mmaSizeK);
     } else {
+      // The existing K64 block32 descriptor helper takes a two-byte index.
+      int scaleId =
+          dot.useK96 && dot.getKSize(k) == 64 && getScaleVecSize(op) == 32
+              ? subWordIdx / 2
+              : subWordIdx;
       instDescriptor = createScaleInstDescriptorFp4(
           rewriter, op, desc.mmaSizeM, desc.mmaSizeN, desc.transA, desc.transB,
-          subWordIdx, subWordIdx, mxfpInstKind, blockK, dot.mmaSizeK);
+          scaleId, scaleId, mxfpInstKind, blockK, dot.getKSize(k));
     }
 
     return {instDescriptor, scaleA, scaleB};

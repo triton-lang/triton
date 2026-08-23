@@ -118,6 +118,8 @@ class CUDAOptions:
     ptx_options: Optional[str] = knobs.nvidia.ptxas_options
     ir_override: Optional[str] = None  # filename of a user-defined IR (*.{ttir|ttgir|llir|ptx})
     enable_fp_fusion: bool = True
+    # Experimental packed 96+96+64 decomposition on sm103, 2CTA FP4 MMA.
+    enable_fp4_k96: bool = False
     enable_reflect_ftz: bool = True  # ftz in libdevice
     launch_cooperative_grid: bool = False
     launch_pdl: bool = False
@@ -400,6 +402,8 @@ class CUDABackend(BaseBackend):
         return mod
 
     def make_llir(self, src, metadata, options, capability):
+        if options.enable_fp4_k96:
+            src.set_attr("ttng.enable_fp4_k96", ir.builder(src.context).get_int32_attr(1))
         ptx_version = get_ptx_version_from_options(options, self.target.arch)
 
         mod = src
