@@ -95,12 +95,93 @@ the allowed 1.02. Seven alternating samples used at least 510 device executions
 per sample and identical inputs on the same GPU. Peak native MXFP4 pure
 throughput was 7.9319 PFLOPS. Instrumented executions are correctness tests only.
 
-The full post-integration gate and final sanitizer results are recorded below
-once complete. Historical measurements and cubins are not regenerated. The
-benchmark pairs current candidates with normal-launcher `CompiledKernel`
-replay and keeps frozen K64 and same-producer inline-mixed binaries as diagnostic
-controls. All archived files, including launch metadata and cubins, are checked
-against their hashes before replay.
+The complete post-integration gate at `be23bec20762267d43e3d885e514cd67626628c1`
+passes **all 18 cases**, separately: twelve mixed comparisons and six pure-K96
+comparisons. The worst median latency ratio is **1.00019780**
+(**+0.0198%**, versus the allowed +2%). Seven alternating samples
+contain at least **460 device executions per variant per sample**.
+All samples, launch/compiler metadata, source and binary hashes, code-generation
+checks, and validation receipts are preserved in
+[native measurements](native-k96-measurements.json). The initial native gate is
+retained there separately; the interrupted seven-case run at `471bfb4` is
+historical evidence, not final acceptance.
+
+The final sweep uses the same prepared inputs and GPU
+`GPU-4ed02509-778a-be63-cad2-f338cc3fc883` (GB300/sm103), CUDA/ptxas 13.0,
+and the unchanged CUDA-graph timing method, without an L2 flush. Clocks were
+not locked. The source commit and compiler-library hash are identical across
+all twelve reports; the worktree was clean throughout. No candidate was
+instrumented. Frozen controls are normal-launcher `CompiledKernel` replays,
+never recompiled; every archived file is checked against its hash. Across all
+36 historical control points, replayed median latencies differ from the original
+records by -1.075% to +1.540%; the largest within-run sample coefficient of
+variation is 0.297%. No candidate result is borderline.
+
+Throughput is useful FP4 FLOP/s, in PFLOPS. "Same-producer gain" compares native
+pure K96 with the replayed inline-mixed control using the same buffers and
+N-size epilogue. Mixed uses the original five-buffer/N64 configuration.
+
+| Format | M=N | K | Native mixed | Native pure | Same-producer gain | Pure/frozen latency |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| MXFP4 | 8192 | 7680 | 7.119 | 7.386 | +3.75% | 0.997476 |
+| MXFP4 | 16384 | 16128 | 7.345 | 7.717 | +2.88% | 0.996442 |
+| MXFP4 | 32768 | 32256 | 7.393 | 7.923 | +2.13% | 0.993084 |
+| NVFP4 | 8192 | 7680 | 6.948 | 6.989 | +0.93% | 0.995932 |
+| NVFP4 | 16384 | 16128 | 7.172 | 7.251 | +1.44% | 0.993091 |
+| NVFP4 | 32768 | 32256 | 7.183 | 7.186 | +0.43% | 0.995073 |
+
+With the producer and epilogue matched, native pure K96 gains 2.13–3.75% for
+MXFP4 and 0.43–1.44% for NVFP4 in this sweep. Peak native pure throughput is
+7.923 PFLOPS. The NVFP4 gain is modest; these are measured kernel comparisons,
+not an isolated estimate of instruction throughput.
+
+PTX/SASS inspection of every measured native artifact confirms exact K96 widths
+and scale selectors, four absolute-leading continuation descriptors in the pure
+kernel, eight pure instructions, and slot releases after instructions 3, 6, and
+8 (plus the final accumulator completion). Scale copies remain 18 for MXFP4 and
+36 for NVFP4 per K768 macrotile. There are no local-memory spills or stack
+allocations. Mixed loops contain `96+96+64` groups, including the compiler's
+peeled first iteration where present. No adjacent-issue fusion was necessary.
+
+### Compiler and sanitizer validation
+
+- **295 compiler tests pass**, with two unsupported tests, including range
+  verification, physical normalization, automatic eligibility/opt-out,
+  pipelining, allocation, view/alias, barrier/fence, NVWS, and commit lowering.
+- **127 native GPU tests pass**: 81 core correctness/codegen cases, 20 FPSan,
+  24 ConSan, and two GSan cases. Coverage includes both scale formats, both
+  crossings, independent continuations and scale offsets, scale subviews,
+  reinterpretation, nonadjacent views, partial M/N tiles, predication,
+  accumulator initialization, ring wraparound, and repeated launches.
+- **378 existing targeted GPU regressions pass** (25 skipped), plus **15
+  multicast sanitizer tests** (nine skipped).
+- **80 NVIDIA memcheck cases pass with zero errors**, on the second isolated
+  GB300. API-error reporting is disabled only for the driver's unsupported-SMEM
+  capability probes; memory-error detection and a failing error exit code stay on.
+
+FPSan reconstructs the selected reduction from K32 payload chunks and independent
+scale streams. ConSan tracks selected K/scale-index regions and all continuation
+reads, including replicated TMEM scale words. Positive tests include unused data,
+scale, and continuation regions; negative tests cover missing continuation waits,
+premature reuse, scale overwrite, and false completion. Persistent tests cover
+multiple output tiles, odd/even rings, SPS/CLC, and repeated launches.
+Synchronous `None`/empty-barrier compatibility is tested with the peer-CTA
+visibility barrier required before cooperative shared-buffer reuse.
+
+Unsanitized graph replay is covered. GSan is tested with repeated ordinary
+launches; its runtime does not support graph capture. Instrumented timings are
+not performance evidence. These results cover the native FP4 pipelines, not
+arbitrary reduction tails, non-power-of-two tensor layouts, or quantized
+replacements for gather/attention.
+
+### Publication
+
+Implementation and validation are complete locally. Brix Git uploads still time
+out at `PrepareServer`; no GitHub branch update is claimed. The branch has no
+upstream PR, and the current handoff helper requires a PR/create entry, so a
+branch-only handoff cannot be generated without creating an unrequested PR.
+The task-owned archive and local Git bundle preserve the exact implementation
+and evidence; their publication status is reported separately.
 
 ```bash
 python python/examples/gluon/bench-tcgen05-pure-k96.py \
