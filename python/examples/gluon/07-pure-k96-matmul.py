@@ -15,6 +15,10 @@ Run correctness checks and benchmark both formats::
 
     python 07-pure-k96-matmul.py --M 16384 --N 16384 --K 16128
 
+Compare output types (the operands remain FP4)::
+
+    python 07-pure-k96-matmul.py --out-dtype float16 bfloat16 float32
+
 Or run the example's tests::
 
     pytest -s 07-pure-k96-matmul.py
@@ -473,25 +477,30 @@ def make_problem(M, N, K, format):
     return A, B, A_scale, B_scale, A_ref @ B_ref.T
 
 
-def benchmark(M, N, K, format, scheduler, rep_ms=500, tile_width=None):
+def benchmark(M, N, K, format, scheduler, rep_ms=500, tile_width=None, out_dtype=torch.float16):
     A, B, A_scale, B_scale, C_ref = make_problem(M, N, K, format)
 
     def run():
-        return matmul(A, B, A_scale, B_scale, scheduler=scheduler, tile_width=tile_width)
+        return matmul(A, B, A_scale, B_scale, scheduler=scheduler, tile_width=tile_width, out_dtype=out_dtype)
 
     C = run()
-    torch.testing.assert_close(C.float(), C_ref, atol=2e-3, rtol=1e-3)
+    # Compare before output rounding: independent BF16 rounding can straddle a midpoint.
+    rtol = max(1e-3, torch.finfo(out_dtype).eps / 2)
+    torch.testing.assert_close(C.float(), C_ref, atol=2e-3, rtol=rtol)
     ms = triton.testing.do_bench_cudagraph(run, rep=rep_ms)
     return ms, 2.0 * M * N * K / (ms * 1.0e12)
 
 
 @pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires sm103 K96")
 @pytest.mark.parametrize("format", ["mxfp4", "nvfp4"])
-def test_matmul(format):
+@pytest.mark.parametrize("out_dtype", [torch.float16, torch.bfloat16, torch.float32])
+def test_matmul(format, out_dtype):
     torch.manual_seed(0)
     A, B, A_scale, B_scale, C_ref = make_problem(512, 512, 2304, format)
-    C = matmul(A, B, A_scale, B_scale)
-    torch.testing.assert_close(C.float(), C_ref, atol=2e-3, rtol=1e-3)
+    C = matmul(A, B, A_scale, B_scale, out_dtype=out_dtype)
+    # Compare before output rounding: independent BF16 rounding can straddle a midpoint.
+    rtol = max(1e-3, torch.finfo(out_dtype).eps / 2)
+    torch.testing.assert_close(C.float(), C_ref, atol=2e-3, rtol=rtol)
 
 
 def main():
@@ -500,6 +509,8 @@ def main():
     parser.add_argument("--N", type=int, default=16384)
     parser.add_argument("--K", type=int, default=16128, help="Reduction size, divisible by 768")
     parser.add_argument("--format", nargs="+", choices=["mxfp4", "nvfp4"], default=["mxfp4", "nvfp4"])
+    parser.add_argument("--out-dtype", nargs="+", choices=["float16", "bfloat16", "float32"], default=["float16"],
+                        help="Output type; operands remain packed FP4 and accumulation remains FP32")
     parser.add_argument("--scheduler", choices=["sps", "clc"], default="sps")
     parser.add_argument("--tile-width", type=int, help="Override the grouped tile traversal width")
     parser.add_argument("--rep-ms", type=int, default=500, help="CUDA-graph benchmark duration parameter")
@@ -509,11 +520,13 @@ def main():
     if args.K % 768:
         parser.error("--K must be divisible by 768")
     scheduler = SCHEDULER_SPS if args.scheduler == "sps" else SCHEDULER_CLC
-    print("format           M       N       K        ms   PFLOPS")
+    print("format   output          M       N       K        ms   PFLOPS")
     for format in args.format:
-        torch.manual_seed(0)
-        ms, pflops = benchmark(args.M, args.N, args.K, format, scheduler, args.rep_ms, args.tile_width)
-        print(f"{format:8s} {args.M:7d} {args.N:7d} {args.K:7d} {ms:9.4f} {pflops:8.4f}")
+        for dtype in args.out_dtype:
+            torch.manual_seed(0)
+            ms, pflops = benchmark(args.M, args.N, args.K, format, scheduler, args.rep_ms, args.tile_width,
+                                   getattr(torch, dtype))
+            print(f"{format:8s} {dtype:8s} {args.M:7d} {args.N:7d} {args.K:7d} {ms:9.4f} {pflops:8.4f}")
 
 
 if __name__ == "__main__":

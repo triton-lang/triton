@@ -165,7 +165,11 @@ def main():
     parser.add_argument('--example', choices=['experimental-tcgen05-k96.py', '07-pure-k96-matmul.py'],
                         default="experimental-tcgen05-k96.py")
     parser.add_argument('--size', type=int, default=8192, help='M=N; K can be set separately without padding')
+    parser.add_argument('--m', type=int, help='Override the row dimension for a rectangular problem')
+    parser.add_argument('--n', type=int, help='Override the column dimension for a rectangular problem')
     parser.add_argument('--k', type=int)
+    parser.add_argument('--out-dtype', choices=['float16', 'bfloat16', 'float32'], default='float16',
+                        help='Example 07 output type; input operands remain packed FP4')
     parser.add_argument('--format', choices=['mxfp4', 'nvfp4'], default='mxfp4')
     parser.add_argument('--modes', nargs='+', choices=['k64', 'mixed', 'native'], default=['k64', 'mixed', 'native'])
     parser.add_argument('--buffers', type=int, help='Pure K96 only; mixed/K64 controls retain five buffers')
@@ -185,22 +189,31 @@ def main():
     args = parser.parse_args()
     if args.tile_width is not None and args.example != '07-pure-k96-matmul.py':
         parser.error('--tile-width requires example 07')
+    if args.out_dtype != 'float16' and (args.example != '07-pure-k96-matmul.py' or args.modes != ['native']
+                                        or args.compare_native or args.frozen or args.frozen_native):
+        parser.error('non-FP16 output requires example 07 native mode without historical controls')
+    out_dtype = getattr(torch, args.out_dtype)
     tuned_dense = args.example == '07-pure-k96-matmul.py' and args.frozen is None
     if args.buffers is None:
-        args.buffers = 6 if args.format == 'mxfp4' or tuned_dense else 5
+        args.buffers = 6 if args.format == 'mxfp4' or (tuned_dense and out_dtype.itemsize == 2) else 5
     if args.epilogue is None:
-        args.epilogue = 32 if args.format == 'mxfp4' else (16 if tuned_dense and args.buffers > 5 else 64)
+        split_scales = tuned_dense and args.format == 'nvfp4' and args.buffers > 5
+        args.epilogue = 16 if split_scales else (64 if args.format == 'mxfp4' else 128) // out_dtype.itemsize
     if args.verify_frozen is not None:
         verify_frozen_cases(args.verify_frozen)
         return
     if args.output is None:
         parser.error('--output is required for benchmarking')
+    m = args.m if args.m is not None else args.size
+    n = args.n if args.n is not None else args.size
     k = args.k if args.k is not None else args.size // 768 * 768
     experiment = load_experiment(args.example)
     args.output.mkdir(parents=True, exist_ok=True)
     torch.manual_seed(123)
-    operands, scales, refs, vec = prepare(args.size, args.size, k, args.format)
+    operands, scales, refs, vec = prepare(m, n, k, args.format)
     expected = refs[0] @ refs[1].T
+    if out_dtype == torch.bfloat16:
+        expected = expected.to(out_dtype).float()
     scales = [experiment.base.swizzle_scales_packed_block(s) for s in scales]
     scheduler = args.scheduler
     if scheduler == 'auto':
@@ -240,7 +253,11 @@ def main():
         ptxas_version=get_ptxas_version(103), method='same inputs; alternating order; CUDA graphs; no L2 flush',
         seed=123, scale_values=[0.125, 0.25, 0.5, 1.0],
         args={key: str(value) if isinstance(value, Path) else value
-              for key, value in vars(args).items()} | dict(k=k, scheduler=scheduler), results=[])
+              for key, value in vars(args).items()} | dict(m=m, n=n, k=k, scheduler=scheduler), inputs=[
+                  dict(shape=list(t.shape), dtype=str(t.dtype),
+                       sha256=hashlib.sha256(t.view(torch.uint8).cpu().numpy().tobytes()).hexdigest())
+                  for t in operands + scales
+              ], results=[])
     (args.output / 'source.py').write_bytes(Path(experiment.__file__).read_bytes())
     if args.compare_native:
         reference_path = Path(__file__).with_name('experimental-tcgen05-k96.py')
@@ -267,7 +284,7 @@ def main():
                 tuning = {} if args.tile_width is None else dict(tile_width=args.tile_width)
                 if args.example == '07-pure-k96-matmul.py':
                     return experiment.matmul(*operands, *scales, buffers=args.buffers, epilogue=args.epilogue,
-                                             scheduler=scheduler_id, **tuning)
+                                             scheduler=scheduler_id, out_dtype=out_dtype, **tuning)
                 out, compiled = experiment.matmul(*operands, *scales, vec, buffers=args.buffers, epilogue=args.epilogue,
                                                   scheduler=scheduler_id)
                 selected['kernel'] = compiled
@@ -281,9 +298,16 @@ def main():
         FrozenKernel.archive(compiled, args.output / mode)
         torch.cuda.synchronize()
         torch.testing.assert_close(out.float(), expected, atol=1e-3, rtol=1e-3)
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            replayed = fn()
+        for _ in range(10):
+            graph.replay()
+        torch.cuda.synchronize()
+        torch.testing.assert_close(replayed, out, atol=0, rtol=0)
         if baseline is None:
             baseline = out
-        row = dict(mode=mode, correct=True, kernel_hash=compiled.hash,
+        row = dict(mode=mode, correct=True, graph_replays=10, kernel_hash=compiled.hash,
                    compiler_metadata=compiled.metadata._asdict() | dict(target=asdict(compiled.metadata.target)),
                    shared=compiled.metadata.shared, tmem=compiled.metadata.tmem_size, registers=compiled.n_regs,
                    spills=compiled.n_spills, cubin_sha256=hashlib.sha256(compiled.asm['cubin']).hexdigest(),
@@ -368,11 +392,12 @@ def main():
             # remaining calls, and replays that graph ten times.
             executions = 10 * (calls - 6)
             report['results'][i].setdefault('device_executions', []).append(executions)
-            if (args.frozen is not None or args.frozen_native is not None or args.compare_native) and args.repeats >= 7:
+            if args.repeats >= 7:
                 assert executions >= 300, "increase --rep-ms to capture at least 300 device executions"
     for row in report['results']:
         row['median_ms'] = statistics.median(row['ms'])
-        row['pflops'] = 2 * args.size**2 * k / (row['median_ms'] * 1e12)
+        row['pflops'] = 2 * m * n * k / (row['median_ms'] * 1e12)
+        row['cv_percent'] = 100 * statistics.pstdev(row['ms']) / statistics.mean(row['ms'])
         print(json.dumps(row), flush=True)
     if args.compare_native:
         reference_ms = next(row['median_ms'] for row in report['results'] if row['mode'] == 'reference')
