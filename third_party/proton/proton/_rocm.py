@@ -46,6 +46,8 @@ def find_therock_rocm_libraries():
     ):
         try:
             libraries[name] = str(rocm_sdk.find_libraries(name)[0])
+        except ModuleNotFoundError:
+            return None
         except (FileNotFoundError, IndexError):
             pass
     if hsa := _find_therock_hsa_runtime():
