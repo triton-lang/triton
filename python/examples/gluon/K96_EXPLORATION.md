@@ -1,5 +1,27 @@
 # Native packed tcgen05 K=96
 
+## Runnable dense example
+
+[Example 07](07-pure-k96-matmul.py) contains the selected native MXFP4/NVFP4
+pipeline. Like the neighboring examples, it has a tensor-returning `matmul`,
+a random problem/reference helper, pytest checks, and its own benchmark CLI:
+
+```bash
+python python/examples/gluon/07-pure-k96-matmul.py \
+  --M 16384 --N 16384 --K 16128 --format mxfp4 nvfp4
+pytest -s --tb=short python/examples/gluon/07-pure-k96-matmul.py
+```
+
+`matmul` infers block32/MXFP4 from uint8 E8M0 scales and block16/NVFP4 from
+float8_e4m3fn scales. Inputs use packed uint8 FP4 and example 04's packed scale
+layout. The source explains the K768 instruction schedule, cross-slot
+continuations, independent NVFP4 scale ring, and final-tile storage reuse.
+It does not import the research harness or require any saved binaries.
+
+Frozen-control comparisons and artifact capture remain in
+`bench-tcgen05-pure-k96.py --example 07-pure-k96-matmul.py`; the historical
+measurements below retain their original source and binary identities.
+
 ## NVFP4 follow-up: 7.935 sustained PFLOPS; 8 remains unmet
 
 The retained native Gluon kernel reaches **7.934985 PFLOPS** at
@@ -118,7 +140,8 @@ TMEM scale-placement screens appeared slightly faster but gained less than
 retained. Short screens above 8 PFLOPS are retained as screening evidence only.
 
 ```bash
-python python/examples/gluon/07-pure-k96-matmul.py \
+python python/examples/gluon/bench-tcgen05-pure-k96.py \
+  --example 07-pure-k96-matmul.py \
   --format nvfp4 --size 16384 --k 16128 --modes native \
   --frozen-native /path/to/archived/example07/nvfp4-16384/native \
   --repeats 7 --rep-ms 500 --output /tmp/nvfp4-k96
@@ -152,7 +175,8 @@ Validation:20 FP32-reference/graph cases,16 ConSan pipeline cases, and10 hardwar
 All six exact measured candidate binaries pass PTX/SASS checks: eight K96 instructions per K768, release commits after instructions3/6/8, the final accumulator commit after8, correct scale selectors and continuation descriptors, and no stack/local spills. Complete launch manifests, compiler metadata, source hashes, individual samples, and final checks are in `dense-k96-measurements.json` and the task-owned archive.
 
 ```bash
-python python/examples/gluon/07-pure-k96-matmul.py --format nvfp4 \
+python python/examples/gluon/bench-tcgen05-pure-k96.py \
+  --example 07-pure-k96-matmul.py --format nvfp4 \
   --size 16384 --k 16128 --modes native --compare-native \
   --repeats 7 --rep-ms 500 --output /tmp/dense-k96
 ```

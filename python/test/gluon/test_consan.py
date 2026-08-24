@@ -1739,8 +1739,12 @@ def test_tcgen05_mma_scaled_k96_pipeline(fmt, buffers, clc_scheduler, example, r
     # slots and reuses retired input storage for its final SPS output tile.
     epilogue = 32 if fmt == "mxfp4" else (16 if buffers == 6 else 64)
     for _ in range(2):
-        actual, _ = bench.experiment.matmul(*operands, *scales, vec, buffers=buffers, epilogue=epilogue,
-                                            scheduler=scheduler, out_dtype=torch.float16)
+        if example == "07-pure-k96-matmul.py":
+            actual = bench.experiment.matmul(*operands, *scales, buffers=buffers, epilogue=epilogue,
+                                             scheduler=scheduler, out_dtype=torch.float16)
+        else:
+            actual, _ = bench.experiment.matmul(*operands, *scales, vec, buffers=buffers, epilogue=epilogue,
+                                                scheduler=scheduler, out_dtype=torch.float16)
         torch.testing.assert_close(actual, (refs[0] @ refs[1].T).to(actual.dtype), atol=1e-3, rtol=1e-3)
 
 

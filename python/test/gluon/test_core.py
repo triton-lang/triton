@@ -5959,7 +5959,8 @@ def pure_k96_benchmark():
     (500, 600, 2304, False, torch.float16),
     pytest.param(384, 512, 1536, False, torch.float32, id="fp32-output"),
 ])
-def test_tcgen05_mma_scaled_pure_k96_pipeline(pure_k96_benchmark, fmt, example, m, n, k, clc_scheduler, out_dtype):
+def test_tcgen05_mma_scaled_pure_k96_pipeline(pure_k96_benchmark, fmt, example, m, n, k, clc_scheduler, out_dtype,
+                                              monkeypatch):
     bench = pure_k96_benchmark
     experiment = bench.load_experiment(example)
     torch.manual_seed(123)
@@ -5967,18 +5968,30 @@ def test_tcgen05_mma_scaled_pure_k96_pipeline(pure_k96_benchmark, fmt, example, 
     scales = [experiment.base.swizzle_scales_packed_block(s) for s in scales]
     scheduler = experiment.SCHEDULER_CLC if clc_scheduler else experiment.SCHEDULER_SPS
 
-    def invoke():
-        config = {}
-        if example == "experimental-tcgen05-k96.py":
-            config = dict(buffers=6 if fmt == "mxfp4" else 5,
-                          epilogue=(128 if fmt == "nvfp4" else 64) // out_dtype.itemsize)
-        return experiment.matmul(*operands, *scales, vec, scheduler=scheduler, out_dtype=out_dtype, **config)
+    kernel = experiment.dense_k96_kernel if example == "07-pure-k96-matmul.py" else experiment.pure_k96_kernel
+    original_run = kernel.run
+    compiled = None
 
-    actual, compiled = invoke()
+    def capture(*args, **kwargs):
+        nonlocal compiled
+        compiled = original_run(*args, **kwargs)
+        return compiled
+
+    monkeypatch.setattr(kernel, "run", capture)
+
+    def invoke():
+        if example == "07-pure-k96-matmul.py":
+            return experiment.matmul(*operands, *scales, scheduler=scheduler, out_dtype=out_dtype)
+        actual, _ = experiment.matmul(*operands, *scales, vec, scheduler=scheduler, out_dtype=out_dtype,
+                                      buffers=6 if fmt == "mxfp4" else 5,
+                                      epilogue=(128 if fmt == "nvfp4" else 64) // out_dtype.itemsize)
+        return actual
+
+    actual = invoke()
     torch.testing.assert_close(actual, (refs[0] @ refs[1].T).to(actual.dtype), atol=1e-3, rtol=1e-3)
     graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph):
-        replayed, _ = invoke()
+        replayed = invoke()
     for _ in range(3):
         graph.replay()
     torch.cuda.synchronize()

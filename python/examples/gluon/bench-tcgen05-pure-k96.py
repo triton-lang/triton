@@ -160,10 +160,10 @@ def verify_frozen_cases(directory):
         (directory / 'validation.json').write_text(json.dumps(checked, indent=2) + '\n')
 
 
-def main(default_example="experimental-tcgen05-k96.py"):
+def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--example', choices=['experimental-tcgen05-k96.py', '07-pure-k96-matmul.py'],
-                        default=default_example)
+                        default="experimental-tcgen05-k96.py")
     parser.add_argument('--size', type=int, default=8192, help='M=N; K can be set separately without padding')
     parser.add_argument('--k', type=int)
     parser.add_argument('--format', choices=['mxfp4', 'nvfp4'], default='mxfp4')
@@ -213,14 +213,20 @@ def main(default_example="experimental-tcgen05-k96.py"):
     scheduler_id = experiment.SCHEDULER_SPS if scheduler == 'sps' else experiment.SCHEDULER_CLC
     config = dict(experiment.base.BEST_2CTA_CONFIG, scheduler=scheduler_id, num_buffers=5)
     selected = {}
-    original_run = experiment.base.mma_scaled_warp_specialized_kernel.run
 
-    def capture(*a, **kw):
-        compiled = original_run(*a, **kw)
-        selected['kernel'] = compiled
-        return compiled
+    def capture(run):
 
-    experiment.base.mma_scaled_warp_specialized_kernel.run = capture
+        def wrapped(*a, **kw):
+            compiled = run(*a, **kw)
+            selected['kernel'] = compiled
+            return compiled
+
+        return wrapped
+
+    base_kernel = experiment.base.mma_scaled_warp_specialized_kernel
+    base_kernel.run = capture(base_kernel.run)
+    if args.example == '07-pure-k96-matmul.py':
+        experiment.dense_k96_kernel.run = capture(experiment.dense_k96_kernel.run)
     root = Path(__file__).resolve().parents[3]
     from triton.backends.nvidia.compiler import get_ptxas, get_ptxas_version
     assembler = get_ptxas(torch.cuda.get_device_capability()[0] * 10 + torch.cuda.get_device_capability()[1])
@@ -259,8 +265,11 @@ def main(default_example="experimental-tcgen05-k96.py"):
 
             def fn(mode=mode):
                 tuning = {} if args.tile_width is None else dict(tile_width=args.tile_width)
+                if args.example == '07-pure-k96-matmul.py':
+                    return experiment.matmul(*operands, *scales, buffers=args.buffers, epilogue=args.epilogue,
+                                             scheduler=scheduler_id, **tuning)
                 out, compiled = experiment.matmul(*operands, *scales, vec, buffers=args.buffers, epilogue=args.epilogue,
-                                                  scheduler=scheduler_id, **tuning)
+                                                  scheduler=scheduler_id)
                 selected['kernel'] = compiled
                 return out
 
