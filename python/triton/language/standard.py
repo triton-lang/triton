@@ -50,9 +50,18 @@ def sigmoid(x):
     return 1 / (1 + math.exp(-x))
 
 
+@constexpr_function
+def _softmax_keep_dims_warning():
+    import warnings
+
+    warnings.warn(
+        "The keep_dims argument to tl.softmax is deprecated and ignored; softmax always preserves the input shape.",
+        stacklevel=2)
+
+
 @core._tensor_member_fn
 @jit
-def softmax(x, dim=None, *, ieee_rounding=False):
+def softmax(x, dim=None, *, keep_dims=None, ieee_rounding=False):
     """
     Computes the softmax of :code:`x` along the given axis.
 
@@ -61,10 +70,16 @@ def softmax(x, dim=None, *, ieee_rounding=False):
     :param dim: the axis along which to normalize. Defaults to 0 -- note that
         this is *not* the last axis, unlike :code:`torch.softmax`.
     :type dim: int | None
+    :param keep_dims: deprecated and ignored. Softmax always preserves the input shape.
+        Defaults to :code:`None`; any other value emits a warning.
+        Must be passed by keyword.
+    :type keep_dims: bool | None
     :param ieee_rounding: whether the final division uses IEEE-compliant rounding.
         Must be passed by keyword.
     :type ieee_rounding: bool
     """
+    if keep_dims is not None:
+        _softmax_keep_dims_warning()
     if dim is None:
         _dim: core.constexpr = 0
     else:
