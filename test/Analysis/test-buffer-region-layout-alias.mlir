@@ -339,6 +339,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.shar
 // CHECK: stage_partition_b_second vs stage_partition_d_second_first: alias=true
 // CHECK: stage_partition_b_second vs stage_partition_e_second_peer: alias=true
 // CHECK: stage_partition_d_second_first vs stage_partition_e_second_peer: alias=false
+// CHECK: stage_partition_f_prefix_first vs stage_partition_g_prefix_nested: alias=false
+// CHECK: stage_partition_f_prefix_first vs stage_partition_i_prefix_merged: alias=true, lhs_contains_rhs=false, rhs_contains_lhs=true
+// CHECK: stage_partition_g_prefix_nested vs stage_partition_h_prefix_direct: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true
+// CHECK: stage_partition_g_prefix_nested vs stage_partition_i_prefix_merged: alias=true, lhs_contains_rhs=false, rhs_contains_lhs=true
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.shared = 4096 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 2 : i32} {
   tt.func public @partitioned_multibuffer_physical_alias(%index: i32) {
     %c0 = arith.constant 0 : i32
@@ -354,6 +358,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.shar
     %2 = ttg.local_load %dynamic {test.region_name = "stage_partition_c_dynamic"} : !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable> -> tensor<16x16xf16>
     %3 = ttg.local_load %second_first {test.region_name = "stage_partition_d_second_first"} : !ttg.memdesc<4x16xf16, #partitioned, #smem, mutable, 16x16> -> tensor<4x16xf16>
     %4 = ttg.local_load %second_peer {test.region_name = "stage_partition_e_second_peer"} : !ttg.memdesc<4x16xf16, #partitioned, #smem, mutable, 16x16> -> tensor<4x16xf16>
+    tt.return
+  }
+
+  // Prefix slices add to every partition base, even across a CFG edge. Two
+  // offsets of one stage must become stage two, not XOR back to stage zero;
+  // merging those distinct origins must retain both physical footprints.
+  tt.func public @nested_pipeline_prefix_cfg(%choose: i1) {
+    %c0 = arith.constant 0 : i32
+    %c2 = arith.constant 2 : i32
+    %parent = ttg.local_alloc {allocation.offset = [0 : i32, 2048 : i32]} : () -> !ttg.memdesc<4x16x16xf16, #partitioned, #smem, mutable>
+    %prefix = ttg.memdesc_subslice %parent [1, 0, 0] : !ttg.memdesc<4x16x16xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<3x16x16xf16, #partitioned, #smem, mutable, 4x16x16>
+    cf.br ^slice(%prefix : !ttg.memdesc<3x16x16xf16, #partitioned, #smem, mutable, 4x16x16>)
+  ^slice(%stage: !ttg.memdesc<3x16x16xf16, #partitioned, #smem, mutable, 4x16x16>):
+    %nested = ttg.memdesc_subslice %stage [1, 0, 0] : !ttg.memdesc<3x16x16xf16, #partitioned, #smem, mutable, 4x16x16> -> !ttg.memdesc<2x16x16xf16, #partitioned, #smem, mutable, 4x16x16>
+    %low = ttg.memdesc_subslice %parent [0, 0, 0] : !ttg.memdesc<4x16x16xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<2x16x16xf16, #partitioned, #smem, mutable, 4x16x16>
+    %first = ttg.memdesc_index %parent[%c0] : !ttg.memdesc<4x16x16xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable>
+    %nested_stage = ttg.memdesc_index %nested[%c0] : !ttg.memdesc<2x16x16xf16, #partitioned, #smem, mutable, 4x16x16> -> !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable>
+    %direct = ttg.memdesc_index %parent[%c2] : !ttg.memdesc<4x16x16xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable>
+    %0 = ttg.local_load %first {test.region_name = "stage_partition_f_prefix_first"} : !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable> -> tensor<16x16xf16>
+    %1 = ttg.local_load %nested_stage {test.region_name = "stage_partition_g_prefix_nested"} : !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable> -> tensor<16x16xf16>
+    %2 = ttg.local_load %direct {test.region_name = "stage_partition_h_prefix_direct"} : !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable> -> tensor<16x16xf16>
+    cf.cond_br %choose, ^merge(%nested : !ttg.memdesc<2x16x16xf16, #partitioned, #smem, mutable, 4x16x16>), ^merge(%low : !ttg.memdesc<2x16x16xf16, #partitioned, #smem, mutable, 4x16x16>)
+  ^merge(%selected: !ttg.memdesc<2x16x16xf16, #partitioned, #smem, mutable, 4x16x16>):
+    %selected_stage = ttg.memdesc_index %selected[%c0] : !ttg.memdesc<2x16x16xf16, #partitioned, #smem, mutable, 4x16x16> -> !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable>
+    %3 = ttg.local_load %selected_stage {test.region_name = "stage_partition_i_prefix_merged"} : !ttg.memdesc<16x16xf16, #partitioned, #smem, mutable> -> tensor<16x16xf16>
     tt.return
   }
 }

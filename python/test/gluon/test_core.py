@@ -2495,6 +2495,40 @@ def test_multibuffer_prefix_subslice():
     torch.testing.assert_close(out3, torch.full_like(out3, 3), atol=0, rtol=0)
 
 
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_proxy_fence_nested_multibuffer_prefix(fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = ""
+
+    @gluon.jit(do_not_specialize=["choose"])
+    def kernel(desc, inp, choose):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+        parent = ttgl.allocate_shared_memory(ttgl.float32, [4, 32, 32], desc.layout)
+        if choose:
+            first = parent.slice(1, 3, dim=0)
+        else:
+            first = parent.slice(0, 3, dim=0)
+        nested = first.slice(1, 2, dim=0).index(0)
+        rows = ttgl.arange(0, 32, layout=ttgl.SliceLayout(1, layout))[:, None]
+        cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))[None, :]
+        nested.store(ttgl.load(inp + rows * 32 + cols))
+        # The runtime merge prevents folding the nested slices. With choose=1,
+        # their offsets add to stage 2, whose TMA read needs a proxy fence.
+        tma.async_store(desc, [0, 0], parent.index(2))
+        tma.store_wait(0)
+        parent._keep_alive()
+
+    values = torch.arange(1024, device="cuda", dtype=torch.float32).reshape(32, 32)
+    output = torch.empty_like(values)
+    desc = TensorDescriptor.from_tensor(output, [32, 32], ttgl.NVMMASharedLayout(128, 32, rank=2))
+    compiled = kernel[(1, )](desc, values, 1, num_warps=4)
+    ptx = compiled.asm["ptx"]
+    stores = list(re.finditer(r"\b(?:st\.shared|stmatrix\.)", ptx))
+    tma_store = re.search(r"\bcp\.async\.bulk\.tensor\.2d\.global\.shared::cta\b", ptx)
+    assert stores and tma_store
+    assert "fence.proxy.async.shared::cta" in ptx[stores[-1].end():tma_store.start()]
+    torch.testing.assert_close(output, values, atol=0, rtol=0)
+
+
 def test_slice_reinterpret():
     BLOCK = ttgl.constexpr(2048)
     SPLIT_BLOCK = ttgl.constexpr(BLOCK // 2)
