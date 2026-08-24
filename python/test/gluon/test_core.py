@@ -1310,7 +1310,7 @@ def tma_mma_shared_inputs_kernel(a_desc, b_desc, out_ptr, out_desc, gather_idx_p
                                  NUM_K_TILES: ttgl.constexpr, block_layout_c: ttgl.constexpr,
                                  acc_layout: ttgl.constexpr, acc_tmem_layout: ttgl.constexpr,
                                  use_tcgen05: ttgl.constexpr, multicast: ttgl.constexpr,
-                                 use_gather_scatter: ttgl.constexpr):
+                                 use_gather_scatter: ttgl.constexpr, expect_before_copy: ttgl.constexpr):
     smem_a = ttgl.allocate_shared_memory(a_desc.dtype, [BLOCK_M, BLOCK_K], a_desc.layout)
     smem_b = ttgl.allocate_shared_memory(b_desc.dtype, b_desc.block_shape, b_desc.layout)
 
@@ -1339,12 +1339,17 @@ def tma_mma_shared_inputs_kernel(a_desc, b_desc, out_ptr, out_desc, gather_idx_p
         gather_offsets = ttgl.load(gather_idx_ptr + ttgl.arange(0, BLOCK_M, layout=gather_offsets_layout))
 
     for k in range(NUM_K_TILES):
-        mbarrier.expect(tma_bar, smem_a.nbytes_per_cta + smem_b.nbytes_per_cta)
+        if expect_before_copy:
+            mbarrier.expect(tma_bar, smem_a.nbytes_per_cta + smem_b.nbytes_per_cta)
         if use_gather_scatter:
             blackwell_tma.async_gather(a_desc, gather_offsets, k * BLOCK_K, tma_bar, smem_a, multicast=multicast)
         else:
             tma.async_load(a_desc, [0, k * BLOCK_K], tma_bar, smem_a, multicast=multicast)
         tma.async_load(b_desc, [k * BLOCK_K, 0], tma_bar, smem_b, multicast=multicast)
+        if not expect_before_copy:
+            # The pending arrival keeps this phase open even if the copies
+            # complete before their expected-byte count is registered.
+            mbarrier.expect(tma_bar, smem_a.nbytes_per_cta + smem_b.nbytes_per_cta)
         mbarrier.wait(tma_bar, phase=phase_tma, deps=[smem_a, smem_b])
         phase_tma ^= 1
 
@@ -1389,6 +1394,21 @@ def tma_mma_shared_inputs_kernel(a_desc, b_desc, out_ptr, out_desc, gather_idx_p
 @pytest.mark.parametrize("multicast", [False, True])
 @pytest.mark.parametrize("use_gather_scatter", [False, True] if is_blackwell() else [False])
 def test_tma_mma_shared_inputs(warps, reps, ctas_per_cga, two_ctas, multicast, use_gather_scatter):
+    _run_tma_mma_shared_inputs(warps, reps, ctas_per_cga, two_ctas, multicast, use_gather_scatter,
+                               expect_before_copy=True)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("use_gather_scatter", [False, True], ids=["copy", "gather"])
+@pytest.mark.parametrize("expect_before_copy", [True, False], ids=["expect-first", "copy-first"])
+def test_tma_mma_shared_inputs_expect_order(num_warps, use_gather_scatter, expect_before_copy):
+    _run_tma_mma_shared_inputs([num_warps, 1], [1, 1, 1], [1, 1], two_ctas=False, multicast=False,
+                               use_gather_scatter=use_gather_scatter, expect_before_copy=expect_before_copy, exact=True)
+
+
+def _run_tma_mma_shared_inputs(warps, reps, ctas_per_cga, two_ctas, multicast, use_gather_scatter, expect_before_copy,
+                               exact=False):
     bitwidth = 16
     acc_dtype = torch.float32
 
@@ -1452,9 +1472,15 @@ def test_tma_mma_shared_inputs(warps, reps, ctas_per_cga, two_ctas, multicast, u
 
     torch_dtype = torch.float16
     device = triton.runtime.driver.active.get_current_device()
-    a = cast(torch.randn((BLOCK_M, K), device=device, dtype=torch.float32), torch_dtype)
     # We transpose b in the kernel
-    b = cast(torch.randn((K, BLOCK_N), device=device, dtype=torch.float32), torch_dtype)
+    if exact:
+        # Positive integers expose missing K tiles without cancellation, and
+        # every product and sum is exactly representable in FP32 for K=64.
+        a = torch.randint(1, 4, (BLOCK_M, K), device=device, dtype=torch.int32).to(torch_dtype)
+        b = torch.randint(1, 4, (K, BLOCK_N), device=device, dtype=torch.int32).to(torch_dtype)
+    else:
+        a = cast(torch.randn((BLOCK_M, K), device=device, dtype=torch.float32), torch_dtype)
+        b = cast(torch.randn((K, BLOCK_N), device=device, dtype=torch.float32), torch_dtype)
     out = torch.empty((BLOCK_M, BLOCK_N), device=device, dtype=acc_dtype)
 
     gluon_dtype = ttgl.float16
@@ -1490,6 +1516,7 @@ def test_tma_mma_shared_inputs(warps, reps, ctas_per_cga, two_ctas, multicast, u
             is_blackwell(),
             multicast=multicast,
             use_gather_scatter=use_gather_scatter,
+            expect_before_copy=expect_before_copy,
             num_warps=num_warps,
             num_ctas=num_ctas,
         )
@@ -1509,7 +1536,9 @@ def test_tma_mma_shared_inputs(warps, reps, ctas_per_cga, two_ctas, multicast, u
     finally:
         torch.backends.cuda.matmul.allow_tf32 = allow_tf32
 
-    if bitwidth == 8:
+    if exact:
+        atol, rtol = 0, 0
+    elif bitwidth == 8:
         atol, rtol = 8e-2, 8e-1
     elif bitwidth == 16:
         atol, rtol = 5e-2, 5e-1
