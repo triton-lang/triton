@@ -193,8 +193,11 @@ class DependenciesFinder(ast.NodeVisitor):
     def visit_FunctionDef(self, node):
         # Save the local name, which may hide the global name.
         self.local_names = {arg.arg for arg in node.args.args}
-        self.function_args = node.args
-        self.generic_visit(node)
+        for child in ast.iter_child_nodes(node):
+            self.visit(child)
+            # Keyword-only parameters shadow globals in the body, but not in defaults.
+            if child is node.args and node.args.kwonlyargs:
+                self.local_names.update(arg.arg for arg in node.args.kwonlyargs)
 
     def visit_arguments(self, node):
         # The purpose of this function is to visit everything in `arguments`
@@ -227,10 +230,6 @@ class DependenciesFinder(ast.NodeVisitor):
             self.visit(node.kwarg)
 
         visit_defaults(node.defaults)
-
-        # Keyword-only parameters shadow globals in the body, but not in defaults.
-        if node.kwonlyargs and node is self.function_args:
-            self.local_names.update(arg.arg for arg in node.kwonlyargs)
 
     def visitAssnTarget(self, node):
         # Target is either a single string, or a (possibly nested) list of strings if the assign target is a tuple.
