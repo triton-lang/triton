@@ -234,6 +234,12 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
         shift[subnormal_index] = (1 - bias_output) - (exponent[subnormal_index] - bias_input)
         significand_output[subnormal_index] = (significand_output[subnormal_index] >> shift[subnormal_index]) | (
             1 << (output_dtype.fp_mantissa_width - shift[subnormal_index]))
+    if output_dtype in (tl.float8e4b8, tl.float8e5b16):
+        # FNUZ formats have only unsigned zero; the sign bit alone encodes NaN.
+        zero_output = (exponent_output == 0) & (significand_output == 0)
+        if input_dtype in (tl.float8e4b8, tl.float8e5b16):
+            zero_output &= input_bin != 0x80
+        sign_output[zero_output] = 0
     output = (sign_output << (output_dtype.primitive_bitwidth - 1)) | (
         exponent_output << output_dtype.fp_mantissa_width) | significand_output
     return output.reshape(input.shape)
@@ -486,6 +492,9 @@ class InterpreterBuilder:
 
     def get_fp16(self, value):
         return TensorHandle(np.array([value], dtype=np.float16), tl.float16)
+
+    def get_bf16(self, value):
+        return self.create_fp_trunc(self.get_fp32(value), tl.bfloat16)
 
     def get_fp32(self, value):
         return TensorHandle(np.array([value], dtype=np.float32), tl.float32)
