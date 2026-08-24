@@ -598,6 +598,8 @@ class TritonSemantic(Generic[TensorTy]):
         if dtype is None:
             raise ValueError("dtype must be specified when value is not a tensor")
         if dtype.is_int() and value == 0:
+            # For BC, we explicitly allow e.g. tl.full((), 0.0, tl.int32)
+            # which raises a type error for non-zero values.
             value = 0
         if dtype.is_fp8():
             # Validate target support
