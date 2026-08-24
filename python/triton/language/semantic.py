@@ -600,6 +600,8 @@ class TritonSemantic(Generic[TensorTy]):
         if dtype.is_int() and value == 0:
             value = 0
         if dtype.is_fp8():
+            # Validate target support
+            dtype.to_ir(self.builder)
             value = self.tensor(self.builder.get_fp32(value), tl.float32)
             return self.cast(value, dtype)
         else:
