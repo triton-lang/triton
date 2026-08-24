@@ -645,9 +645,8 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
     // or byte-padded, and FP6 also occupies byte-sized containers. There is no
     // measured SMEM-versus-TMEM weighting here; equal sizes retain B priority.
     auto storageBits = [](MemDescType ty, int logicalBits) {
-      return logicalBits == 4 && !isFp4Padded(ty)
-                 ? 4u
-                 : std::max<unsigned>(8, ty.getElementTypeBitWidth());
+      return logicalBits == 4 && !isFp4Padded(ty) ? 4u
+                                                  : ty.getElementTypeBitWidth();
     };
     uint64_t aTileBits = uint64_t(aOperandShape[0]) * aOperandShape[1] *
                          storageBits(aTensorTy, op.numBitsPerElementA);
