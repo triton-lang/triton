@@ -388,11 +388,13 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
   return result;
 }
 
-std::string translateLLVMIRToASM(
-    llvm::Module &module, const std::string &triple, const std::string &proc,
-    const std::string &features, const std::vector<std::string> &flags,
-    bool enable_fp_fusion, bool isObject, bool canonicalizeGEP,
-    const std::string &abi) {
+std::string translateLLVMIRToASM(llvm::Module &module,
+                                 const std::string &triple,
+                                 const std::string &proc,
+                                 const std::string &features,
+                                 const std::vector<std::string> &flags,
+                                 bool enable_fp_fusion, bool isObject,
+                                 bool canonicalizeGEP, const std::string &abi) {
   using namespace mlir;
 
   // Apply flags
@@ -724,25 +726,25 @@ void init_triton_llvm(py::module_ &m) {
 #endif
   });
 
-  m.def("attach_datalayout", [](llvm::Module *mod, const std::string triple,
-                                const std::string proc,
-                                const std::string features,
-                                const std::string abi) {
-    std::string error;
-    llvm::Triple targetTriple(triple);
-    auto target = llvm::TargetRegistry::lookupTarget(targetTriple, error);
-    if (!target) {
-      throw std::runtime_error("target lookup error: " + error);
-    }
-    llvm::TargetOptions opt;
-    opt.MCOptions.ABIName = abi;
-    // Target machine is only used to create the data layout.
-    std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
-        targetTriple, proc, features, opt, llvm::Reloc::PIC_, std::nullopt,
-        llvm::CodeGenOptLevel::None)};
-    // set data layout
-    mod->setDataLayout(machine->createDataLayout());
-  });
+  m.def("attach_datalayout",
+        [](llvm::Module *mod, const std::string triple, const std::string proc,
+           const std::string features, const std::string abi) {
+          std::string error;
+          llvm::Triple targetTriple(triple);
+          auto target = llvm::TargetRegistry::lookupTarget(targetTriple, error);
+          if (!target) {
+            throw std::runtime_error("target lookup error: " + error);
+          }
+          llvm::TargetOptions opt;
+          opt.MCOptions.ABIName = abi;
+          // Target machine is only used to create the data layout.
+          std::unique_ptr<llvm::TargetMachine> machine{
+              target->createTargetMachine(targetTriple, proc, features, opt,
+                                          llvm::Reloc::PIC_, std::nullopt,
+                                          llvm::CodeGenOptLevel::None)};
+          // set data layout
+          mod->setDataLayout(machine->createDataLayout());
+        });
 
   m.def(
       "optimize_module",
@@ -885,8 +887,8 @@ void init_triton_llvm(py::module_ &m) {
   m.def("translate_to_asm",
         [](std::string llvmIR, std::string triple, std::string proc,
            std::string features, std::vector<std::string> flags,
-           bool enable_fp_fusion, bool isObject,
-           bool canonicalizeGEP, std::string abi) -> py::object {
+           bool enable_fp_fusion, bool isObject, bool canonicalizeGEP,
+           std::string abi) -> py::object {
           std::string obj;
           {
             // when allow_threads goes out of scope, gil will be released
