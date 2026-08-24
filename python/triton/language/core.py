@@ -3654,6 +3654,14 @@ class condition(base_value):
         self.condition = arg1
         self.disable_licm = disable_licm
 
+    def __bool__(self):
+        # In the interpreter, `while tl.condition(c)` is a plain Python loop, so
+        # its truth value comes from here. Without this, the wrapper object is
+        # always truthy and a false condition loops forever. Defer to the wrapped
+        # condition's truth value (a tensor in the interpreter). In @triton.jit
+        # code the compiler handles the wrapper directly and never calls this.
+        return bool(self.condition)
+
 
 # -----------------------
 # Extern functions

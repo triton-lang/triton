@@ -6828,6 +6828,25 @@ def test_disable_licm():
     assert "llvm.licm.disable" in compiled_kernel3.asm["llir"]
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("n", [0, 1, 5])
+def test_while_condition(n, device):
+    # A `while tl.condition(c)` loop must run exactly as many iterations as the
+    # condition allows, including zero when the initial condition is false. In
+    # the interpreter the wrapper's own truth value drives the Python loop, so a
+    # missing __bool__ made a false condition loop forever (issue #11402).
+    @triton.jit
+    def kernel(out_ptr, n):
+        i = 0
+        while tl.condition(i < n):
+            i += 1
+        tl.store(out_ptr, i)
+
+    out = torch.zeros(1, dtype=torch.int32, device=device)
+    kernel[(1, )](out, n)
+    assert int(out.cpu().item()) == n
+
+
 @triton.jit(noinline=True)
 def maxnreg_noinline1(X):
     tl.store(X, 0)
