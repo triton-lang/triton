@@ -634,6 +634,11 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
     padding. With no completion barriers (None or []), the operation remains
     synchronous unless is_async=True; an asynchronous issue must be completed
     by a subsequent MMA with a completion barrier or tcgen05_commit.
+
+    On sm103, full K reductions divisible by 256 automatically use 96+96+64
+    for eligible two-CTA M256 packed FP4 operands with K-major, non-padded
+    128-byte swizzling. The compiler option enable_fp4_k96=False disables
+    automatic selection; an explicit instruction_k takes precedence.
     """
     k_range = _unwrap_if_constexpr(k_range)
     instruction_k = _unwrap_if_constexpr(instruction_k)

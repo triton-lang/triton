@@ -356,4 +356,37 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttng.tc_gen5_mma_scaled %a, %b, %d, %scales, %scales, %false, %true lhs = e2m1 rhs = e2m1 {is_async, instruction_k = 64 : i32, k_range = array<i32: 0, 64>, scale_block_size = 32 : i32} : !ttg.memdesc<128x128xi8, #packed_a, #ttg.shared_memory>, !ttg.memdesc<128x128xi8, #packed_b, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x16xi8, #tmem_scales, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x16xi8, #tmem_scales, #ttng.tensor_memory, mutable>
     tt.return
   }
+
+  // CHECK-LABEL: @tmem_entry_c
+  // CHECK: ttng.tmem_alloc
+  // CHECK-NEXT: ttg.barrier local
+  tt.func private @tmem_entry_c() {
+    %cst = arith.constant dense<0.0> : tensor<128x128xf32, #blocked>
+    %alloc = ttng.tmem_alloc %cst {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttg.barrier local
+    tt.return
+  }
+
+  // CHECK-LABEL: @tmem_entry_b
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: tt.call @tmem_entry_c
+  tt.func private @tmem_entry_b() {
+    tt.call @tmem_entry_c() : () -> ()
+    tt.return
+  }
+
+  // CHECK-LABEL: @tmem_entry_a
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: tt.call @tmem_entry_b
+  // CHECK: ttng.tmem_load
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: tt.call @tmem_entry_b
+  tt.func @tmem_entry_a() {
+    tt.call @tmem_entry_b() : () -> ()
+    %alloc = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttg.barrier local
+    %loaded = ttng.tmem_load %alloc : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    tt.call @tmem_entry_b() : () -> ()
+    tt.return
+  }
 }

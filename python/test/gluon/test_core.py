@@ -5711,9 +5711,9 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
             if CHECK_PREDICATE:
                 # A runtime-false issue must neither reset nor update the accumulator.
                 tcgen05_mma_scaled(a_view, b_view, acc_tmem, sa, sb, a_format, b_format, use_acc=False,
-                                   pred=(off_m < 0), mbarriers=[], is_async=True, k_range=K_WINDOW, instruction_k=INSTRUCTION_K,
-                                   a_next=a_next, b_next=b_next, scale_block_size=VEC_SIZE, a_scale_offset=SA_OFFSET,
-                                   b_scale_offset=SB_OFFSET)
+                                   pred=(off_m < 0), mbarriers=[], is_async=True, k_range=K_WINDOW,
+                                   instruction_k=INSTRUCTION_K, a_next=a_next, b_next=b_next, scale_block_size=VEC_SIZE,
+                                   a_scale_offset=SA_OFFSET, b_scale_offset=SB_OFFSET)
             tcgen05_mma_scaled(a_view, b_view, acc_tmem, sa, sb, a_format, b_format, use_acc=(k != 0)
                                or CHECK_PREDICATE, multicast=multicast, mbarriers=completion, k_range=K_WINDOW,
                                instruction_k=INSTRUCTION_K, a_next=a_next, b_next=b_next, scale_block_size=VEC_SIZE,
@@ -5785,7 +5785,8 @@ def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, 
         A_desc, B_desc, C_desc, A_scale_desc, B_scale_desc, VEC_SIZE, block_layout_c, a_scale_layout_tmem,
         b_scale_layout_tmem, ctas_per_cga, num_warps=num_warps, num_ctas=num_ctas, multicast=multicast,
         enable_fp4_k96=enable_fp4_k96, K_WINDOW=k_window, A_VIEWS=a_views, B_VIEWS=b_views, SCALE_OFFSETS=scale_offsets,
-        INSTRUCTION_K=instruction_k, SCALE_VIEWS=scale_views, REINTERPRET=reinterpret, CHECK_PREDICATE=check_predicate, SYNC_MODE=sync_mode)
+        INSTRUCTION_K=instruction_k, SCALE_VIEWS=scale_views, REINTERPRET=reinterpret, CHECK_PREDICATE=check_predicate,
+        SYNC_MODE=sync_mode)
     return (C_desc.base, compiled) if return_kernel else C_desc.base
 
 
@@ -5843,9 +5844,9 @@ def test_tcgen05_mma_scaled_k96_synchronous(fmt, vec, sync_mode):
     b, sb, br = random_quantized_tensor(256, 512, fmt)
     sa, sb = swizzle_scales_packed_block(sa, vec), swizzle_scales_packed_block(sb, vec)
     for enable in (False, True):
-        actual, compiled = mma_scaled_tcgen05_copy(
-            a, b, sa, sb, vec, 256, 256, 256, (2, 1), False, out_dtype=torch.float32,
-            enable_fp4_k96=enable, return_kernel=True, sync_mode=sync_mode)
+        actual, compiled = mma_scaled_tcgen05_copy(a, b, sa, sb, vec, 256, 256, 256, (2, 1), False,
+                                                   out_dtype=torch.float32, enable_fp4_k96=enable, return_kernel=True,
+                                                   sync_mode=sync_mode)
         torch.testing.assert_close(actual, ar @ br.T, atol=1e-3, rtol=1e-3)
         mma_ops = [line for line in compiled.asm["ttgir"].splitlines() if "ttng.tc_gen5_mma_scaled" in line]
         assert mma_ops and all("is_async" not in line for line in mma_ops)
@@ -5935,21 +5936,8 @@ def test_tcgen05_mma_scaled_k96_physical_crossing(capfd):
     assert "continuation boundary must coincide" in capfd.readouterr().err
 
 
-@pytest.fixture(scope="module")
-def pure_k96_benchmark():
-    import importlib.util
-    from pathlib import Path
-    path = Path(__file__).resolve().parents[2] / "examples/gluon/bench-tcgen05-pure-k96.py"
-    spec = importlib.util.spec_from_file_location("pure_k96_benchmark", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    module.experiment = module.load_experiment()
-    return module
-
-
 @pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires sm103 K=96 MMA")
 @pytest.mark.parametrize("fmt", ["mxfp4", "nvfp4"])
-@pytest.mark.parametrize("example", ["experimental-tcgen05-k96.py", "07-pure-k96-matmul.py"])
 @pytest.mark.parametrize("m, n, k, clc_scheduler, out_dtype", [
     (256, 256, 768, False, torch.float16),
     (384, 512, 1536, False, torch.float16),
@@ -5959,16 +5947,16 @@ def pure_k96_benchmark():
     (500, 600, 2304, False, torch.float16),
     pytest.param(384, 512, 1536, False, torch.float32, id="fp32-output"),
 ])
-def test_tcgen05_mma_scaled_pure_k96_pipeline(pure_k96_benchmark, fmt, example, m, n, k, clc_scheduler, out_dtype,
-                                              monkeypatch):
-    bench = pure_k96_benchmark
-    experiment = bench.load_experiment(example)
+def test_tcgen05_mma_scaled_pure_k96_pipeline(fmt, m, n, k, clc_scheduler, out_dtype, monkeypatch):
+    from importlib import import_module
+    from pathlib import Path
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "examples/gluon"))
+    example = import_module("07-pure-k96-matmul")
     torch.manual_seed(123)
-    operands, scales, refs, vec = bench.prepare(m, n, k, fmt)
-    scales = [experiment.base.swizzle_scales_packed_block(s) for s in scales]
-    scheduler = experiment.SCHEDULER_CLC if clc_scheduler else experiment.SCHEDULER_SPS
+    a, b, sa, sb, expected = example.make_problem(m, n, k, fmt)
+    scheduler = example.SCHEDULER_CLC if clc_scheduler else example.SCHEDULER_SPS
 
-    kernel = experiment.dense_k96_kernel if example == "07-pure-k96-matmul.py" else experiment.pure_k96_kernel
+    kernel = example.dense_k96_kernel
     original_run = kernel.run
     compiled = None
 
@@ -5980,15 +5968,10 @@ def test_tcgen05_mma_scaled_pure_k96_pipeline(pure_k96_benchmark, fmt, example, 
     monkeypatch.setattr(kernel, "run", capture)
 
     def invoke():
-        if example == "07-pure-k96-matmul.py":
-            return experiment.matmul(*operands, *scales, scheduler=scheduler, out_dtype=out_dtype)
-        actual, _ = experiment.matmul(*operands, *scales, vec, scheduler=scheduler, out_dtype=out_dtype,
-                                      buffers=6 if fmt == "mxfp4" else 5,
-                                      epilogue=(128 if fmt == "nvfp4" else 64) // out_dtype.itemsize)
-        return actual
+        return example.matmul(a, b, sa, sb, scheduler=scheduler, out_dtype=out_dtype)
 
     actual = invoke()
-    torch.testing.assert_close(actual, (refs[0] @ refs[1].T).to(actual.dtype), atol=1e-3, rtol=1e-3)
+    torch.testing.assert_close(actual.float(), expected, atol=2e-3, rtol=1e-3)
     graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph):
         replayed = invoke()

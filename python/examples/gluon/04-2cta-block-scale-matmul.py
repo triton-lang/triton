@@ -794,7 +794,7 @@ def mma_scaled_warp_specialized_grid(M, N, BLOCK_M, BLOCK_N, num_ctas, scheduler
 
 def mma_scaled_warp_specialized(A, B, A_scale, B_scale, VEC_SIZE, scheduler, GRID_MINOR_DIM=0, GRID_TILE_WIDTH=4,
                                 out_dtype=torch.float16, BLOCK_M=128, BLOCK_N=256, BLOCK_K=None, EPILOGUE_BLOCK_N=None,
-                                num_buffers=3, acc_buffers=None, num_ctas=1, enable_fp4_k96=True):
+                                num_buffers=3, acc_buffers=None, num_ctas=1):
     """Warp-specialized block-scale MMA (supports 1CTA and 2CTA)."""
     if BLOCK_K is None:
         BLOCK_K = 128 if torch.float8_e4m3fn in [A.dtype, B.dtype] else 256
@@ -846,7 +846,6 @@ def mma_scaled_warp_specialized(A, B, A_scale, B_scale, VEC_SIZE, scheduler, GRI
         cga_layout,
         scheduler=scheduler,
         num_ctas=num_ctas,
-        enable_fp4_k96=enable_fp4_k96,
     )
     return C_desc.base
 

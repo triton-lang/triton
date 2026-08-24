@@ -22,9 +22,6 @@ Compare output types (the operands remain FP4)::
 Or run the example's tests::
 
     pytest -s 07-pure-k96-matmul.py
-
-For frozen-binary comparisons and measured results, see
-bench-tcgen05-pure-k96.py and K96_EXPLORATION.md.
 """
 
 import argparse

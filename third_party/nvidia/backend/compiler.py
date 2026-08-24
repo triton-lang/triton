@@ -118,7 +118,7 @@ class CUDAOptions:
     ptx_options: Optional[str] = knobs.nvidia.ptxas_options
     ir_override: Optional[str] = None  # filename of a user-defined IR (*.{ttir|ttgir|llir|ptx})
     enable_fp_fusion: bool = True
-    # Experimental packed 96+96+64 decomposition on sm103, 2CTA FP4 MMA.
+    # Use 96+96+64 for eligible sm103 two-CTA packed FP4 reductions.
     enable_fp4_k96: bool = True
     enable_reflect_ftz: bool = True  # ftz in libdevice
     launch_cooperative_grid: bool = False

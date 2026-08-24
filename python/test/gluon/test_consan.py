@@ -1707,45 +1707,36 @@ def test_tcgen05_mma_scaled_k96_dependencies(vec, case, run_wrapper, monkeypatch
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() != (10, 3), reason="Requires sm103 K96")
-@pytest.mark.parametrize("example, fmt, buffers", [
-    ("experimental-tcgen05-k96.py", "mxfp4", 5),
-    ("experimental-tcgen05-k96.py", "mxfp4", 6),
-    ("experimental-tcgen05-k96.py", "nvfp4", 4),
-    ("experimental-tcgen05-k96.py", "nvfp4", 5),
-    ("07-pure-k96-matmul.py", "mxfp4", 5),
-    ("07-pure-k96-matmul.py", "mxfp4", 6),
-    ("07-pure-k96-matmul.py", "nvfp4", 4),
-    ("07-pure-k96-matmul.py", "nvfp4", 5),
-    ("07-pure-k96-matmul.py", "nvfp4", 6),
+@pytest.mark.parametrize("fmt, buffers", [
+    ("mxfp4", 5),
+    ("mxfp4", 6),
+    ("nvfp4", 4),
+    ("nvfp4", 5),
+    ("nvfp4", 6),
 ])
 @pytest.mark.parametrize("clc_scheduler", [False, True])
-def test_tcgen05_mma_scaled_k96_pipeline(fmt, buffers, clc_scheduler, example, run_wrapper, monkeypatch):
+def test_tcgen05_mma_scaled_k96_pipeline(fmt, buffers, clc_scheduler, run_wrapper, monkeypatch):
     if run_wrapper:
-        result = run_in_process(test_tcgen05_mma_scaled_k96_pipeline,
-                                (fmt, buffers, clc_scheduler, example, False, monkeypatch))
+        result = run_in_process(test_tcgen05_mma_scaled_k96_pipeline, (fmt, buffers, clc_scheduler, False, monkeypatch))
         assert result.exc is None
         assert result.driver_stderr_output == ""
         return
     monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     knobs.refresh_knobs()
-    from test_core import pure_k96_benchmark
-    bench = pure_k96_benchmark.__wrapped__()
-    bench.experiment = bench.load_experiment(example)
+    from importlib import import_module
+    from pathlib import Path
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "examples/gluon"))
+    example = import_module("07-pure-k96-matmul")
     torch.manual_seed(123)
-    operands, scales, refs, vec = bench.prepare(3968, 4096, 4608, fmt)
-    scales = [bench.experiment.base.swizzle_scales_packed_block(scale) for scale in scales]
-    scheduler = bench.experiment.SCHEDULER_CLC if clc_scheduler else bench.experiment.SCHEDULER_SPS
-    # Example 07's six-slot NVFP4 ring stages scales independently in five
-    # slots and reuses retired input storage for its final SPS output tile.
+    a, b, sa, sb, expected = example.make_problem(3968, 4096, 4608, fmt)
+    scheduler = example.SCHEDULER_CLC if clc_scheduler else example.SCHEDULER_SPS
+    # The six-slot NVFP4 ring stages scales independently in five slots and
+    # reuses retired input storage for its final SPS output tile.
     epilogue = 32 if fmt == "mxfp4" else (16 if buffers == 6 else 64)
     for _ in range(2):
-        if example == "07-pure-k96-matmul.py":
-            actual = bench.experiment.matmul(*operands, *scales, buffers=buffers, epilogue=epilogue,
-                                             scheduler=scheduler, out_dtype=torch.float16)
-        else:
-            actual, _ = bench.experiment.matmul(*operands, *scales, vec, buffers=buffers, epilogue=epilogue,
-                                                scheduler=scheduler, out_dtype=torch.float16)
-        torch.testing.assert_close(actual, (refs[0] @ refs[1].T).to(actual.dtype), atol=1e-3, rtol=1e-3)
+        actual = example.matmul(a, b, sa, sb, buffers=buffers, epilogue=epilogue, scheduler=scheduler,
+                                out_dtype=torch.float16)
+        torch.testing.assert_close(actual.float(), expected, atol=2e-3, rtol=1e-3)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")

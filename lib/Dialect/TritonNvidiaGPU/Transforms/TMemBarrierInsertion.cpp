@@ -110,16 +110,15 @@ getTMemSlices(const MemoryAccess &access, BufferRegionAnalysis &regions) {
   return slices;
 }
 
-class TMemBarrierAnalysis : public MembarOrFenceAnalysis {
+class TMemBarrierAnalysis : public MembarAnalysis {
 public:
   TMemBarrierAnalysis(Allocation &allocation, MembarFilterFn filter,
                       BufferRegionAnalysis &regions)
-      : MembarOrFenceAnalysis(allocation, std::move(filter)), regions(regions) {
-  }
+      : MembarAnalysis(allocation, std::move(filter)), regions(regions) {}
 
 private:
   BufferRegionAnalysis &regions;
-  void update(Operation *operation, BlockInfo *blockInfo, FuncMapT *funcMap,
+  void update(Operation *operation, MembarInfo *membarInfo, FuncMapT *funcMap,
               OpBuilder *builder) override;
 
   void insertBarrier(Operation *operation, OpBuilder *builder);
@@ -131,18 +130,29 @@ void TMemBarrierAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
                                  triton::gpu::AddrSpace::Local);
 }
 
-void TMemBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
+void TMemBarrierAnalysis::update(Operation *op, MembarInfo *membarInfo,
                                  FuncMapT *funcMap, OpBuilder *builder) {
   if (mlir::containsLocalBarrier(op)) {
-    blockInfo->sync();
+    membarInfo->sync();
     return;
   }
 
   BlockInfo curBlockInfo;
   if (isa<triton::CallOp>(op)) {
-    auto call = dyn_cast<CallOpInterface>(op);
-    if (auto callee = dyn_cast<FunctionOpInterface>(call.resolveCallable()))
-      curBlockInfo = funcMap->lookup(callee);
+    auto call = cast<CallOpInterface>(op);
+    if (auto callee = dyn_cast<FunctionOpInterface>(call.resolveCallable())) {
+      // Tensor-memory allocation attributes are physical addresses assigned
+      // across the whole module, so callee slices need no call-frame offset.
+      MembarInfo calleeMembarInfo = funcMap->lookup(callee);
+      if (membarInfo->pending.isIntersected(calleeMembarInfo.entryBlockInfo,
+                                            filter, &allocation)) {
+        builder->setInsertionPoint(op);
+        insertBarrier(op, builder);
+        membarInfo->sync();
+      }
+      membarInfo->applyCallSummary(calleeMembarInfo);
+    }
+    return;
   } else if (isa<TMEMLoadOp, TMEMStoreOp, TMEMAllocOp, MMAv5OpInterface,
                  TMEMCopyOp>(op)) {
     for (const auto &access : getMemoryAccesses(op)) {
@@ -157,13 +167,13 @@ void TMemBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
     }
   }
 
-  if (blockInfo->isIntersected(curBlockInfo, filter, &allocation)) {
+  if (membarInfo->pending.isIntersected(curBlockInfo, filter, &allocation)) {
     builder->setInsertionPoint(op);
     insertBarrier(op, builder);
-    blockInfo->sync();
+    membarInfo->sync();
   }
 
-  blockInfo->join(curBlockInfo);
+  membarInfo->addBlockInfo(curBlockInfo);
 }
 
 } // namespace
@@ -183,9 +193,8 @@ struct TMemBarrierInsertionPass
       signalPassFailure();
       return;
     }
-    ModuleMembarOrFenceAnalysis<TMemBarrierAnalysis> analysis(allocation,
-                                                              filterFn);
-    analysis.run(*regions);
+    ModuleMembarAnalysis analysis(allocation, filterFn);
+    analysis.runAnalysis<TMemBarrierAnalysis>(*regions);
   }
 };
 
