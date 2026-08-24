@@ -1,3 +1,4 @@
+#include "triton/Analysis/Allocation.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -33,21 +34,6 @@ uint32_t getBlockBroadcastMask(Type type) {
   auto memDescTy = cast<ttg::MemDescType>(type);
   auto kBlock = StringAttr::get(type.getContext(), "block");
   return toLinearLayout(memDescTy).getFreeVariableMasks().lookup(kBlock);
-}
-
-std::optional<uint16_t> getAtomicScratchBroadcastMask(Operation *op) {
-  if (!op->hasAttr("allocation.size") ||
-      !isa<AtomicPollOp, AtomicRMWOp, AtomicCASOp, ttg::LocalAtomicScatterRMWOp,
-           tti::ExperimentalGSanAtomicRMWOp, tti::ExperimentalGSanAtomicCASOp>(
-          op))
-    return std::nullopt;
-
-  Type resultTy = op->getResult(0).getType();
-  if (auto tensorTy = dyn_cast<RankedTensorType>(resultTy)) {
-    auto kBlock = StringAttr::get(op->getContext(), "block");
-    return ttg::toLinearLayout(tensorTy).getFreeVariableMasks().lookup(kBlock);
-  }
-  return static_cast<uint16_t>(ttg::lookupNumCTAs(op) - 1);
 }
 
 } // namespace
@@ -118,17 +104,12 @@ public:
                          Operation *op) const override {
     // mask = 0 means no CTA predication.
     uint32_t mask = 0;
-    auto getBarrierMask = [&](Value barrier) {
-      auto barrierTy = cast<ttg::MemDescType>(barrier.getType());
-      auto kBlock = StringAttr::get(op->getContext(), "block");
-      return toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
-    };
     if (auto initOp = dyn_cast<ttng::InitBarrierOp>(op))
-      mask = getBarrierMask(initOp.getAlloc());
+      mask = getBlockBroadcastMask(initOp.getAlloc().getType());
     if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op))
-      mask = getBarrierMask(waitOp.getAlloc());
+      mask = getBlockBroadcastMask(waitOp.getAlloc().getType());
     if (auto invalOp = dyn_cast<ttng::InvalBarrierOp>(op))
-      mask = getBarrierMask(invalOp.getAlloc());
+      mask = getBlockBroadcastMask(invalOp.getAlloc().getType());
     if (isa<ttng::BarrierExpectOp, ttng::ArriveBarrierOp>(op)) {
       std::optional<uint32_t> fromCTA;
       if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op))

@@ -9,6 +9,7 @@
 #include "llvm/ADT/SetVector.h"
 
 #include <limits>
+#include <optional>
 
 namespace mlir {
 
@@ -23,6 +24,11 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op);
 
 /// Returns whether an operation uses scratch memory across CTAs.
 bool hasCrossCTAScratch(Operation *op);
+
+/// For allocated atomic-result scratch, returns the CTA bits broadcast from
+/// each group leader. Physical scratch owners have these bits clear.
+/// Scalar results are broadcast from CTA0 across all CTAs.
+std::optional<uint16_t> getAtomicScratchBroadcastMask(Operation *op);
 
 unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
                                        const LinearLayout &dstLayout,

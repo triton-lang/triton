@@ -2087,6 +2087,7 @@ tt.func @shared_subslice_shifted_source(%input: tensor<64xi32, #writer>) -> tens
 #writer = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
 #reader = #ttg.linear<{register = [], lane = [[1], [2], [4], [8], [16]], warp = [[64], [32]], block = [[0]]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#split = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.num-ctas" = 2 : i32} {
@@ -2233,6 +2234,26 @@ tt.func private @nested_subslices_same_source(%initial: tensor<512xi32, #writer>
   ttg.local_store %input, %low : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #shared, #smem, mutable, 512>
   %disjoint = ttg.local_load %high : !ttg.memdesc<128xi32, #shared, #smem, mutable, 512> -> tensor<128xi32, #reader>
   %overlapping = ttg.local_load %low : !ttg.memdesc<128xi32, #shared, #smem, mutable, 512> -> tensor<128xi32, #reader>
+  tt.return %disjoint, %overlapping : tensor<128xi32, #reader>, tensor<128xi32, #reader>
+}
+
+// Block arguments hide the immediate subslices. Equal offsets in different
+// physical CTAs remain disjoint; an overlapping access still needs a barrier.
+// CHECK-LABEL: @shared_distinct_cta_footprints
+tt.func @shared_distinct_cta_footprints(%initial: tensor<256xi32, #writer>, %input: tensor<128xi32, #writer>) -> (tensor<128xi32, #reader>, tensor<128xi32, #reader>) {
+  %allocation = ttg.local_alloc %initial : (tensor<256xi32, #writer>) -> !ttg.memdesc<256xi32, #split, #smem, mutable>
+  %first = ttg.memdesc_subslice %allocation [0] : !ttg.memdesc<256xi32, #split, #smem, mutable> -> !ttg.memdesc<128xi32, #split, #smem, mutable, 256>
+  %second = ttg.memdesc_subslice %allocation [128] : !ttg.memdesc<256xi32, #split, #smem, mutable> -> !ttg.memdesc<128xi32, #split, #smem, mutable, 256>
+  ttng.cluster_barrier
+  cf.br ^access(%first, %second : !ttg.memdesc<128xi32, #split, #smem, mutable, 256>, !ttg.memdesc<128xi32, #split, #smem, mutable, 256>)
+^access(%left: !ttg.memdesc<128xi32, #split, #smem, mutable, 256>, %right: !ttg.memdesc<128xi32, #split, #smem, mutable, 256>):
+  // CHECK: ttg.local_store
+  // CHECK-NEXT: {{.*}} = ttg.local_load
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: {{.*}} = ttg.local_load
+  ttg.local_store %input, %left : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #split, #smem, mutable, 256>
+  %disjoint = ttg.local_load %right : !ttg.memdesc<128xi32, #split, #smem, mutable, 256> -> tensor<128xi32, #reader>
+  %overlapping = ttg.local_load %left : !ttg.memdesc<128xi32, #split, #smem, mutable, 256> -> tensor<128xi32, #reader>
   tt.return %disjoint, %overlapping : tensor<128xi32, #reader>, tensor<128xi32, #reader>
 }
 

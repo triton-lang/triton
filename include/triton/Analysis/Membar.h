@@ -18,9 +18,6 @@ namespace mlir {
 class OpBuilder;
 struct AllocationSlice;
 
-// Complete MAY-addresses in a known kernel allocation frame.
-using SharedMemoryFootprints = DenseMap<Value, triton::AddressSet>;
-
 /// Callback to allow backend to provide more information on whether a barrier
 /// is needed between two operations. Even though two operations access the same
 /// shared memory they may not require a barrier in between them.
@@ -86,10 +83,10 @@ public:
     subsliceSource = {};
   }
 
-  // Immutable geometry covering every dynamic instance of this access. It
-  // remains valid across backedges, unlike the epoch-relative facts above.
-  // The owning module analysis outlives every slice using this pointer.
-  const triton::AddressSet *physicalFootprint = nullptr;
+  // Immutable MAY-addresses covering every dynamic instance of this access.
+  // They remain valid across backedges, unlike the epoch-relative facts above.
+  // The owning BufferRegionAnalysis outlives every slice using this pointer.
+  const triton::BufferRegionFootprint *physicalFootprint = nullptr;
 
   // Buffer-index expression attached by BufferIndexAnalysis. It participates
   // in ordering/equality so accesses to different slots remain separate.
@@ -316,9 +313,8 @@ public:
   /// it is considered as the problem of the operation itself but not the membar
   /// analysis.
   MembarAnalysis(Allocation &allocation, MembarFilterFn filter,
-                 const SharedMemoryFootprints &physicalFootprints)
-      : allocation(allocation), filter(std::move(filter)),
-        physicalFootprints(physicalFootprints),
+                 triton::BufferRegionAnalysis *regions = nullptr)
+      : allocation(allocation), filter(std::move(filter)), regions(regions),
         bufferIndexAnalysis(
             cast<FunctionOpInterface>(allocation.getOperation())) {}
 
@@ -337,9 +333,9 @@ protected:
 
   Allocation &allocation;
   MembarFilterFn filter;
+  triton::BufferRegionAnalysis *regions;
 
 private:
-  const SharedMemoryFootprints &physicalFootprints;
   BufferIndexAnalysis bufferIndexAnalysis;
 };
 
@@ -354,8 +350,7 @@ public:
   void run();
 
   template <typename AnalysisT>
-  void runAnalysis(const SharedMemoryFootprints &physicalFootprints =
-                       SharedMemoryFootprints{}) {
+  void runAnalysis(triton::BufferRegionAnalysis *regions = nullptr) {
     triton::CallGraph<MembarInfo> callGraph(moduleAllocation.getModuleOp());
     triton::CallGraph<MembarInfo>::FuncDataMapT summaries;
     callGraph.walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
@@ -364,14 +359,11 @@ public:
           if (!summaries.try_emplace(function).second)
             return;
           auto &allocation = *moduleAllocation.getFuncData(function);
-          AnalysisT(allocation, filter, physicalFootprints)
-              .run(function, summaries);
+          AnalysisT(allocation, filter, regions).run(function, summaries);
         });
   }
 
 private:
-  SharedMemoryFootprints getSharedMemoryFootprints();
-
   ModuleAllocation &moduleAllocation;
   MembarFilterFn filter;
 };

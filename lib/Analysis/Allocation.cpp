@@ -146,6 +146,19 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   return 0;
 }
 
+std::optional<uint16_t> getAtomicScratchBroadcastMask(Operation *op) {
+  if (!op->hasAttr("allocation.size") ||
+      !isa<AtomicOpInterface, AtomicPollOp, gpu::LocalAtomicScatterRMWOp>(op))
+    return std::nullopt;
+
+  Type resultTy = op->getResult(0).getType();
+  if (auto tensorTy = dyn_cast<RankedTensorType>(resultTy)) {
+    auto block = StringAttr::get(op->getContext(), "block");
+    return gpu::toLinearLayout(tensorTy).getFreeVariableMasks().lookup(block);
+  }
+  return static_cast<uint16_t>(gpu::lookupNumCTAs(op) - 1);
+}
+
 bool hasCrossCTAScratch(Operation *op) {
   if (gpu::lookupNumCTAs(op) == 1)
     return false;

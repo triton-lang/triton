@@ -33,9 +33,9 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
   if (!allocationInterval.intersects(other.allocationInterval))
     return false;
 
-  // Physical footprints include every possible origin across loop iterations.
-  if (physicalFootprint && other.physicalFootprint &&
-      !physicalFootprint->intersects(*other.physicalFootprint))
+  // Physical footprints include every possible origin across loop iterations,
+  // retaining CTA and memory-space identity.
+  if (!triton::mayOverlap(physicalFootprint, other.physicalFootprint))
     return false;
 
   // For slices of the same allocation, compare dynamic buffer indices to prove
@@ -286,12 +286,18 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
 
   // Intra-function dependencies
   // Explicit buffer
+  auto function = cast<FunctionOpInterface>(allocation.getOperation());
   for (const auto &access : triton::getMemoryAccesses(op)) {
     Value value = access.value;
-    const triton::AddressSet *footprint = nullptr;
-    auto found = physicalFootprints.find(value);
-    if (found != physicalFootprints.end())
-      footprint = &found->second;
+    const triton::BufferRegionFootprint *footprint = nullptr;
+    auto memory = cast<triton::gpu::MemDescType>(value.getType());
+    // Physical offsets must use the current kernel's allocation frame.
+    // Device-function allocations need their callsite offsets before
+    // comparison. Returned descriptors may include views from another caller's
+    // frame.
+    if (regions && triton::isKernel(function) &&
+        isa<triton::gpu::SharedMemorySpaceAttr>(memory.getMemorySpace()))
+      footprint = regions->getFootprint(value, function);
     for (auto bufferId : allocation.getAllBufferIdsWithAliases(value)) {
       if (bufferId == Allocation::InvalidBufferId)
         continue;
@@ -320,6 +326,8 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
     }
     auto interval = allocation.getAllocatedInterval(scratchBufferId);
     auto scratchSlice = AllocationSlice(interval);
+    scratchSlice.physicalFootprint =
+        regions ? regions->getScratchFootprint(op) : nullptr;
     curBlockInfo.syncWriteSlices[scratchSlice].insert(op);
     auto insertCTABarrier =
         membarInfo->pending.isIntersected(curBlockInfo, filter, &allocation);
@@ -354,49 +362,15 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
   }
 }
 
-SharedMemoryFootprints ModuleMembarAnalysis::getSharedMemoryFootprints() {
+void ModuleMembarAnalysis::run() {
   ModuleOp module = moduleAllocation.getModuleOp();
-  SharedMemoryFootprints footprints;
-
-  // Physical footprints use the addresses assigned by the allocation passes.
+  // Footprints use allocated addresses and retain CTA identity. MembarAnalysis
+  // checks allocation frames and conservatively translates call summaries.
+  // Shared effects cover only descriptor elements, including gather/scatter
+  // and async copies; BufferRegion maps them through padding and partitions.
   auto solver = createDataFlowSolver();
   auto *regions = solver->load<triton::BufferRegionAnalysis>();
-  if (failed(solver->initializeAndRun(module)))
-    return footprints;
-  // Device-function allocations need their callsite offsets before comparison.
-  for (auto function : module.getOps<FunctionOpInterface>()) {
-    if (!triton::isKernel(function))
-      continue;
-    uint32_t frame = regions->getOperationId(function.getOperation());
-
-    function.walk([&](Operation *op) {
-      for (const auto &access : triton::getMemoryAccesses(op)) {
-        Value value = access.value;
-        if (!access.isShared() || footprints.contains(value))
-          continue;
-        const auto &info = regions->getRegionInfo(value);
-        // BufferRegion joins callee arguments across call sites, so a returned
-        // descriptor can include views from another caller's allocation frame.
-        if (info.kind != triton::RegionInfo::Kind::Exact ||
-            info.views.empty() ||
-            llvm::any_of(info.views, [&](const auto &view) {
-              return view.allocationFrame != frame;
-            }))
-          continue;
-        // Union all possible origins. Merging CTA address sets only adds
-        // aliases.
-        auto &footprint = footprints[value];
-        for (const auto &view : info.views)
-          for (const auto &entry : view.region.ctaAddresses)
-            footprint.insert(entry.second);
-      }
-    });
-  }
-  return footprints;
-}
-
-void ModuleMembarAnalysis::run() {
-  auto physicalFootprints = getSharedMemoryFootprints();
-  runAnalysis<MembarAnalysis>(physicalFootprints);
+  runAnalysis<MembarAnalysis>(
+      succeeded(solver->initializeAndRun(module)) ? regions : nullptr);
 }
 } // namespace mlir
