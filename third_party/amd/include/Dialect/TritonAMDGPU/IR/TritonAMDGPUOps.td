@@ -313,6 +313,7 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
 //===----------------------------------------------------------------------===//
 
 def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
+  GlobalToLocalCopyTrait,
   AttrSizedOperandSegments,
   BufferOpInterface,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
@@ -851,6 +852,7 @@ def AsyncCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_copy_local_to_global", [
 //===----------------------------------------------------------------------===//
 
 def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local", [
+    GlobalToLocalCopyTrait,
     DeclareOpInterfaceMethods<MBarrierOpInterface>,
     DeclareOpInterfaceMethods<TDMOpInterface>]> {
   let summary = "Copy data based on descriptor from global memory to local memory asynchronously";
@@ -930,6 +932,7 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local",
 }
 
 def AsyncTDMFusedCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_fused_copy_global_to_local", [
+    GlobalToLocalCopyTrait,
     SameVariadicOperandSize]> {
   let summary = "Fuse multiple TDM global-to-local copies into one async operation";
 
@@ -1043,6 +1046,7 @@ def AsyncTDMScatterOp : TT_AMDGPU_Op<"async_tdm_scatter", [
 //===----------------------------------------------------------------------===//
 
 def AsyncTDMGatherOp : TT_AMDGPU_Op<"async_tdm_gather", [
+    GlobalToLocalCopyTrait,
     DeclareOpInterfaceMethods<MBarrierOpInterface>,
     DeclareOpInterfaceMethods<TDMOpInterface>]> {
   let summary = "Gather data from non-contiguous global memory rows to local memory asynchronously";
