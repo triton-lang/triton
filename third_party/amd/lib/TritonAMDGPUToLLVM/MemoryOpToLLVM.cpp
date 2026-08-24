@@ -72,7 +72,13 @@ static Value createDsReadTr(Operation *op, RewriterBase &rewriter, Location loc,
       return {};
     AMD::addLocalLoadNoAliasScope(
         op, cast<LLVM::AliasAnalysisOpInterface>(dsReadTr.getDefiningOp()));
-    return dsReadTr;
+    // CDNA4 ISA section 11.4 requires EXEC to be all ones for ds_read_tr.
+    // Pull the load into whole-wave mode even when preceding control flow
+    // leaves a partial execution mask.
+    return LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
+                                           "llvm.amdgcn.strict.wwm",
+                                           {dsReadTr.getType()}, {dsReadTr})
+        .getResult(0);
   }
   default:
     return {};

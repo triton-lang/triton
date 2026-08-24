@@ -18,7 +18,11 @@
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   //  CHECK-LABEL: ds_transpose_n_t_fp16_mfma_16
   tt.func @ds_transpose_n_t_fp16_mfma_16(%arg0: !ttg.memdesc<128x64xf16, #shared, #smem, mutable>, %arg1: !ttg.memdesc<64x128xf16, #shared1, #smem, mutable>, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
-    // CHECK-COUNT-32: rocdl.ds.read.tr16.b64 %{{.*}} : <3> -> vector<4xf16>
+    // CDNA4 transpose loads require EXEC to be all ones. Check that the
+    // intrinsic result itself is marked as requiring whole-wave execution.
+    // CHECK: [[TR16:%.*]] = rocdl.ds.read.tr16.b64 %{{.*}} : <3> -> vector<4xf16>
+    // CHECK-NEXT: llvm.call_intrinsic "llvm.amdgcn.strict.wwm"([[TR16]]) : (vector<4xf16>) -> vector<4xf16>
+    // CHECK-COUNT-31: rocdl.ds.read.tr16.b64 %{{.*}} : <3> -> vector<4xf16>
     // CHECK-NOT: rocdl.ds.read.tr16.b64
     %1 = ttg.local_load %arg0 : !ttg.memdesc<128x64xf16, #shared, #smem, mutable> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma16, kWidth = 8}>>
     %2 = ttg.local_load %arg1 : !ttg.memdesc<64x128xf16, #shared1, #smem, mutable> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma16, kWidth = 8}>>
@@ -220,7 +224,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
   //  CHECK-LABEL: ds_transpose_n_t_i8_mfma_16
   tt.func @ds_transpose_n_t_i8_mfma_16(%arg0: !ttg.memdesc<128x64xi8, #shared, #smem, mutable>, %arg1: !ttg.memdesc<64x128xi8, #shared1, #smem, mutable>, %arg2: !tt.ptr<i8> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
-    // CHECK-COUNT-16: rocdl.ds.read.tr8.b64 %{{.*}} : <3> -> vector<2xi32>
+    // CHECK: [[TR8:%.*]] = rocdl.ds.read.tr8.b64 %{{.*}} : <3> -> vector<2xi32>
+    // CHECK-NEXT: llvm.call_intrinsic "llvm.amdgcn.strict.wwm"([[TR8]]) : (vector<2xi32>) -> vector<2xi32>
+    // CHECK-COUNT-15: rocdl.ds.read.tr8.b64 %{{.*}} : <3> -> vector<2xi32>
     // CHECK-NOT: rocdl.ds.read.tr8.b64
     %1 = ttg.local_load %arg0 : !ttg.memdesc<128x64xi8, #shared, #smem, mutable> -> tensor<128x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma16, kWidth = 16}>>
     %2 = ttg.local_load %arg1 : !ttg.memdesc<64x128xi8, #shared1, #smem, mutable> -> tensor<64x128xi8, #ttg.dot_op<{opIdx = 1, parent = #mma16, kWidth = 16}>>
@@ -636,7 +642,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
   //  CHECK-LABEL: ds_transpose_t_fp4_mfma32_small
   tt.func @ds_transpose_t_fp4_mfma32_small(%arg0: !ttg.memdesc<16x64xi8, #shared, #smem, mutable>, %arg1: !ttg.memdesc<64x16xi8, #shared1, #smem, mutable>, %arg2: !tt.ptr<i8> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
-    // CHECK-COUNT-4: rocdl.ds.read.tr4.b64 %{{.*}} : <3> -> vector<2xi32>
+    // CHECK: [[TR4:%.*]] = rocdl.ds.read.tr4.b64 %{{.*}} : <3> -> vector<2xi32>
+    // CHECK-NEXT: llvm.call_intrinsic "llvm.amdgcn.strict.wwm"([[TR4]]) : (vector<2xi32>) -> vector<2xi32>
+    // CHECK-COUNT-3: rocdl.ds.read.tr4.b64 %{{.*}} : <3> -> vector<2xi32>
     // CHECK-NOT: rocdl.ds.read.tr4.b64
     %1 = amdg.local_load_packed_transposed %arg0 : !ttg.memdesc<16x64xi8, #shared, #smem, mutable> -> tensor<32x32xi8, #ttg.dot_op<{opIdx = 0, parent = #mma32, kWidth = 16}>>
     %2 = amdg.local_load_packed_transposed %arg1 : !ttg.memdesc<64x16xi8, #shared1, #smem, mutable> -> tensor<32x32xi8, #ttg.dot_op<{opIdx = 1, parent = #mma32, kWidth = 16}>>
