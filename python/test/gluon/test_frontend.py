@@ -3901,6 +3901,28 @@ def test_amd_scaled_downcast_fp8_cdna(target, fp8_format, ir_dtype):
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4], ids=["cdna3", "cdna4"])
+def test_amd_scaled_upcast_fp4_compact_scale_cdna(target):
+    scaled_upcast = _get_amd_scaled_upcast(target)
+
+    @gluon.jit
+    def kernel():
+        packed_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [8, 8], [1, 1], [1, 0])
+        compact_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [8, 8], [1, 1], [1, 0])
+        src = ttgl.full([16, 32], 0x11, ttgl.uint8, packed_layout)
+        scale = ttgl.full([16, 2], 0x02, ttgl.uint8, compact_layout)
+        scale_layout: ttgl.constexpr = ttgl.amd.get_scaled_upcast_fp4_scale_layout(src, scale, ttgl.bfloat16, axis=1)
+        scale = ttgl.convert_layout(scale, scale_layout)
+        scaled_upcast(src, scale, ttgl.bfloat16, axis=1)
+
+    module = run_parser(kernel, *make_args(num_warps=1), target=target)
+    ir = anonymize_ir(module.str_nodebug())
+    assert "ttg.convert_layout" in ir
+    assert "tensor<16x2xbf16" in ir
+    assert "amdg.scaled_upcast_fp4" in ir
+    assert "tensor<16x64xbf16" in ir
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4], ids=["cdna3", "cdna4"])
 def test_amd_scaled_upcast_fp8_cdna(target):
     scaled_upcast = _get_amd_scaled_upcast(target)
 

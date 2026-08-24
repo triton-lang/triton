@@ -639,6 +639,39 @@ void init_gluon_ir(py::module_ &m) {
              check(ty.getEncoding(), "expected a tensor with an encoding");
              return layoutToGluon(ty.getEncoding(), self.isRubin());
            })
+      .def("get_scaled_upcast_fp4_scale_layout",
+           [](GluonOpBuilder &self, Value input, Value scale, Type elemType,
+              int32_t axis) -> py::object {
+             auto inputTy = cast<RankedTensorType>(input.getType());
+             auto scaleTy = cast<RankedTensorType>(scale.getType());
+             auto resultTy = ttg::inferFp4ToFpResultType(
+                 inputTy, elemType, axis, self.getLastLoc());
+             check(succeeded(resultTy),
+                   "failed to infer scaled_upcast_fp4 result type");
+
+             auto outputShape = resultTy->getShape();
+             auto scaleShape = scaleTy.getShape();
+             check(outputShape[axis] % scaleShape[axis] == 0,
+                   "scaled_upcast_fp4 scale shape must divide output shape");
+             int64_t elementsPerScale = outputShape[axis] / scaleShape[axis];
+             auto outputLayout = ttg::toLinearLayout(*resultTy);
+             auto scaleLayout = ttag::ScaledUpcastFp4Op::computeScaleLayout(
+                 outputLayout, axis, elementsPerScale);
+             check(scaleLayout.has_value(),
+                   "failed to infer scaled_upcast_fp4 scale layout");
+             if (ttg::toLinearLayout(scaleTy) == *scaleLayout)
+               return layoutToGluon(scaleTy.getEncoding(), self.isRubin());
+
+             Attribute encoding;
+             auto *ctx = self.getContext();
+             if (ttg::isPermutationMatrixLayout(*scaleLayout))
+               encoding =
+                   ttg::LinearEncodingAttr::get(ctx, std::move(*scaleLayout));
+             else
+               encoding = ttg::GenericLinearEncodingAttr::get(
+                   ctx, std::move(*scaleLayout));
+             return layoutToGluon(encoding, self.isRubin());
+           })
       .def("get_gluon_layout_from_memdesc",
            [](GluonOpBuilder &self, Value memdesc) -> py::object {
              auto ty = dyn_cast<ttg::MemDescType>(memdesc.getType());

@@ -30,6 +30,52 @@ def _wrap_scaled_upcast_result(handle, elem_type, semantic):
     return ttgl.tensor(handle, ret_ty)
 
 
+def _validate_scaled_upcast_fp4_args(src, scale, axis):
+    _check(src.dtype in {ttgl.int8, ttgl.uint8},
+           lambda: f"Expected packed fp4 input in int8/uint8, but got {src.dtype}")
+    _check(axis is not None, lambda: "axis is required for packed fp4 scaled_upcast")
+
+    rank = len(src.type.shape)
+    _check(-rank <= axis < rank, lambda: f"axis {axis} out of range for rank {rank}")
+    if axis < 0:
+        axis += rank
+
+    expected_shape = list(src.type.shape)
+    expected_shape[axis] *= 2
+    _check(
+        scale.type.shape[:axis] + scale.type.shape[axis + 1:] == expected_shape[:axis] + expected_shape[axis + 1:],
+        lambda: f"Expected scale shape for scaled_upcast to match output shape on non-axis dims: "
+        f"{expected_shape}, but got {scale.type.shape}")
+    _check(
+        scale.type.shape[axis] > 0 and expected_shape[axis] % scale.type.shape[axis] == 0,
+        lambda: f"Expected output axis extent {expected_shape[axis]} to be divisible by scale axis extent "
+        f"{scale.type.shape[axis]}")
+    _check(scale.dtype in {ttgl.int8, ttgl.uint8, ttgl.bfloat16},
+           lambda: f"Unsupported scale dtype for fp4 scaled_upcast: {scale.dtype}")
+    return axis
+
+
+@ttgl.builtin
+def get_scaled_upcast_fp4_scale_layout(src, scale, elem_type, axis, _semantic=None):
+    """Return the scale layout required by an FP4 scaled_upcast.
+
+    The caller must explicitly convert the scale tensor to the returned layout.
+    """
+    _check(isinstance(src.type, ttgl.distributed_type),
+           lambda: f"Expected src to have a distributed_type but got {src.type}")
+    _check(isinstance(scale.type, ttgl.distributed_type),
+           lambda: f"Expected scale to have a distributed_type but got {scale.type}")
+    _check(elem_type in {ttgl.float16, ttgl.bfloat16},
+           lambda: f"Expected elem_type to be fp16 or bf16 but got {elem_type}")
+    axis = _validate_scaled_upcast_fp4_args(src, scale, axis)
+    return _semantic.builder.get_scaled_upcast_fp4_scale_layout(
+        src.handle,
+        scale.handle,
+        elem_type.to_ir(_semantic.builder),
+        axis,
+    )
+
+
 def _infer_fp4_repacked_shape(src_shape, op_idx):
     result_shape = list(src_shape)
     k_dim = -1 if op_idx == 0 else -2
@@ -174,27 +220,7 @@ def _scaled_upcast(src, scale, elem_type, axis, semantic):
         handle = semantic.builder.create_scaled_upcast_fp8(ret_ty.to_ir(semantic.builder), src.handle, scale.handle)
         return _wrap_scaled_upcast_result(handle, elem_type, semantic)
 
-    _check(src.dtype in {ttgl.int8, ttgl.uint8},
-           lambda: f"Expected packed fp4 input in int8/uint8 or fp8 input, but got {src.dtype}")
-    _check(axis is not None, lambda: "axis is required for packed fp4 scaled_upcast")
-
-    rank = len(src.type.shape)
-    _check(-rank <= axis < rank, lambda: f"axis {axis} out of range for rank {rank}")
-    if axis < 0:
-        axis += rank
-
-    expected_shape = list(src.type.shape)
-    expected_shape[axis] *= 2
-    _check(
-        scale.type.shape[:axis] + scale.type.shape[axis + 1:] == expected_shape[:axis] + expected_shape[axis + 1:],
-        lambda: f"Expected scale shape for scaled_upcast to match output shape on non-axis dims: "
-        f"{expected_shape}, but got {scale.type.shape}")
-    _check(
-        scale.type.shape[axis] > 0 and expected_shape[axis] % scale.type.shape[axis] == 0,
-        lambda: f"Expected output axis extent {expected_shape[axis]} to be divisible by scale axis extent "
-        f"{scale.type.shape[axis]}")
-    _check(scale.dtype in {ttgl.int8, ttgl.uint8, ttgl.bfloat16},
-           lambda: f"Unsupported scale dtype for fp4 scaled_upcast: {scale.dtype}")
+    axis = _validate_scaled_upcast_fp4_args(src, scale, axis)
 
     handle = semantic.builder.create_scaled_upcast_fp4(src.handle, scale.handle, elem_type.to_ir(semantic.builder),
                                                        axis)
