@@ -1,5 +1,6 @@
 #include "triton/Analysis/Membar.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -14,19 +15,16 @@ namespace mlir {
 AllocationSlice::AllocationSlice(Value value,
                                  Interval<size_t> allocationInterval,
                                  Allocation::BufferId bufferId)
-    : allocationInterval(allocationInterval), bufferId(bufferId) {
-  auto accessTy = cast<triton::gpu::MemDescType>(value.getType());
-  this->accessTy = accessTy;
-
+    : allocationInterval(allocationInterval),
+      accessTy(cast<triton::gpu::MemDescType>(value.getType())),
+      bufferId(bufferId) {
   // Get the memdesc_subslice information if present. If no subslice is
   // present the whole interval is accessed
   if (auto subslice = value.getDefiningOp<triton::gpu::MemDescSubsliceOp>()) {
-    // We know there aren't subslices before the one because of subslice::fold
-    // Still need to check this for where a fold isn't possible (control flow)
-    // and when a subslice is carried in a loop
-    if (accessTy.getAllocShape() == subslice.getSrc().getType().getShape()) {
-      subsliceOffsets = SmallVector<int64_t>(subslice.getOffsets());
-    }
+    // The source supplies coordinates even if a preceding subslice has not
+    // folded, or the descriptor is carried through control flow or a loop.
+    subsliceOffsets = subslice.getOffsets();
+    subsliceSource = subslice.getSrc();
   }
 }
 
@@ -35,27 +33,30 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
   if (!allocationInterval.intersects(other.allocationInterval))
     return false;
 
+  // A MAY-set covers every runtime origin, including across loop iterations.
+  // The unions are disjoint exactly when every candidate pair is disjoint in
+  // the same physical allocation frame. Collection certifies the current
+  // function's frame, and call translation discards these footprints.
+  if (physicalFootprint && other.physicalFootprint &&
+      !physicalFootprint->intersects(*other.physicalFootprint))
+    return false;
+
   // For slices of the same allocation, compare dynamic buffer indices to prove
   // that different slots do not overlap.
   if (bufferId == other.bufferId && bufferId != Allocation::InvalidBufferId &&
       areBufferIndicesProvablyDifferent(*this, other))
     return false;
 
-  // If access types are unknown, assume intersection
-  if (!accessTy || !other.accessTy)
+  // Logical offsets share coordinates only for the same source descriptor
+  // in the same dynamic iteration. Matching encodings or allocation IDs
+  // do not establish this after selection, indexing or reinterpretation.
+  // The subslice verifier guarantees known types, offsets and matching layouts
+  // for a common source. Otherwise, conservatively assume intersection.
+  if (!subsliceSource || subsliceSource != other.subsliceSource)
     return true;
 
-  // If offsets are unknown, conservatively assume overlap
-  if (subsliceOffsets.empty() || other.subsliceOffsets.empty())
-    return true;
-
-  // If layouts differ, we assume intersection as we currently only work on
-  // logical elements
-  if (accessTy.getEncoding() != other.accessTy.getEncoding())
-    return true;
-
-  auto shapeA = SmallVector<int64_t>(accessTy.getShape());
-  auto shapeB = SmallVector<int64_t>(other.accessTy.getShape());
+  auto shapeA = accessTy.getShape();
+  auto shapeB = other.accessTy.getShape();
   // Chek if all subslice region dimensions have some intersection
   // [offsetA, offsetA + shape) and [offsetB, offsetB + other.shape)
   // If any dimension doesn't intersect, we are looking at disjoint subslices
@@ -96,6 +97,20 @@ void AllocationSlice::print(raw_ostream &os) const {
   } else {
     os << "? layout=unknown";
   }
+}
+
+void BlockInfo::invalidateIterationInfo() {
+  auto rebuild = [](SliceMapT &slices) {
+    SliceMapT rebuilt;
+    for (const auto &[slice, ops] : slices) {
+      AllocationSlice key = slice;
+      key.invalidateIterationInfo();
+      rebuilt[key].insert(ops.begin(), ops.end());
+    }
+    slices = std::move(rebuilt);
+  };
+  rebuild(syncReadSlices);
+  rebuild(syncWriteSlices);
 }
 
 void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
@@ -210,16 +225,16 @@ static bool hasSyncPointBeforeMemoryEffect(Operation *op,
 void MembarAnalysis::updateSuccessor(Operation *terminator, Block *successor,
                                      MembarInfo *membarInfo) {
   if (bufferIndexAnalysis.isBackedgeSuccessor(terminator, successor)) {
-    bufferIndexAnalysis.invalidateBufferIndices(membarInfo->pending);
-    bufferIndexAnalysis.invalidateBufferIndices(membarInfo->entryBlockInfo);
+    membarInfo->pending.invalidateIterationInfo();
+    membarInfo->entryBlockInfo.invalidateIterationInfo();
   }
 }
 
 void MembarAnalysis::updateExitState(MembarInfo *membarInfo) {
   // Function summaries are reused at every call site, so per-function SSA
   // index identity is no longer meaningful.
-  bufferIndexAnalysis.invalidateBufferIndices(membarInfo->pending);
-  bufferIndexAnalysis.invalidateBufferIndices(membarInfo->entryBlockInfo);
+  membarInfo->pending.invalidateIterationInfo();
+  membarInfo->entryBlockInfo.invalidateIterationInfo();
 }
 
 void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
@@ -274,29 +289,26 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
       membarInfo->applyCallSummary(calleeMembarInfo);
     }
     return;
-  } else {
-    // Intra-function dependencies
-    if (auto memoryEffectOpInterface = dyn_cast<MemoryEffectOpInterface>(op)) {
-      // Explicit buffer
-      SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>>
-          effectInstances;
-      memoryEffectOpInterface.getEffects(effectInstances);
-      for (auto effectInstance : effectInstances) {
-        if (auto value = effectInstance.getValue()) {
-          for (auto bufferId : allocation.getAllBufferIdsWithAliases(value)) {
-            if (bufferId != Allocation::InvalidBufferId) {
-              auto interval = allocation.getAllocatedInterval(bufferId);
-              auto slice =
-                  bufferIndexAnalysis.makeSlice(value, interval, bufferId);
+  }
 
-              if (isa<MemoryEffects::Write>(effectInstance.getEffect()))
-                curBlockInfo.syncWriteSlices[slice].insert(op);
-              else if (isa<MemoryEffects::Read>(effectInstance.getEffect()))
-                curBlockInfo.syncReadSlices[slice].insert(op);
-            }
-          }
-        }
-      }
+  // Intra-function dependencies
+  // Explicit buffer
+  for (const auto &access : triton::getMemoryAccesses(op)) {
+    Value value = access.value;
+    const triton::AddressSet *footprint = nullptr;
+    auto found = physicalFootprints.find(value);
+    if (found != physicalFootprints.end())
+      footprint = &found->second;
+    for (auto bufferId : allocation.getAllBufferIdsWithAliases(value)) {
+      if (bufferId == Allocation::InvalidBufferId)
+        continue;
+      auto interval = allocation.getAllocatedInterval(bufferId);
+      auto slice = bufferIndexAnalysis.makeSlice(value, interval, bufferId);
+      slice.physicalFootprint = footprint;
+      if (access.isWrite)
+        curBlockInfo.syncWriteSlices[slice].insert(op);
+      if (access.isRead)
+        curBlockInfo.syncReadSlices[slice].insert(op);
     }
   }
 
@@ -349,5 +361,56 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
   }
 }
 
-void ModuleMembarAnalysis::run() { runAnalysis<MembarAnalysis>(); }
+SharedMemoryFootprints ModuleMembarAnalysis::getSharedMemoryFootprints() {
+  ModuleOp module = moduleAllocation.getModuleOp();
+  SharedMemoryFootprints footprints;
+  if (triton::gpu::lookupNumCTAs(module) != 1)
+    return footprints;
+
+  // Physical footprints use the addresses assigned by the allocation passes.
+  auto solver = createDataFlowSolver();
+  auto *regions = solver->load<triton::BufferRegionAnalysis>();
+  if (failed(solver->initializeAndRun(module)))
+    return footprints;
+  // Physical offsets must use the current kernel's allocation frame. Different
+  // unnormalized frames are unknown, not evidence of disjointness. Device-
+  // function frames and returned descriptors need callsite translation before
+  // comparing their offsets; use coarse intervals until that is supported.
+  for (auto function : module.getOps<FunctionOpInterface>()) {
+    if (!triton::isKernel(function))
+      continue;
+    uint32_t frame = regions->getOperationId(function.getOperation());
+
+    // Shared-memory effects access only their descriptor's logical elements,
+    // including gathers, scatters, and asynchronous copies. BufferRegion maps
+    // those elements through padding and partition bases, so no byte-level
+    // containment solve or register-layout size limit is needed here.
+    function.walk([&](Operation *op) {
+      for (const auto &access : triton::getMemoryAccesses(op)) {
+        Value value = access.value;
+        if (!access.isShared() || footprints.contains(value))
+          continue;
+        const auto &info = regions->getRegionInfo(value);
+        if (info.kind != triton::RegionInfo::Kind::Exact ||
+            info.views.empty() ||
+            llvm::any_of(info.views, [&](const auto &view) {
+              return view.allocationFrame != frame;
+            }))
+          continue;
+        // Preserve every possible runtime stage and origin, not only
+        // singletons.
+        auto &footprint = footprints[value];
+        for (const auto &view : info.views)
+          for (const auto &entry : view.region.ctaAddresses)
+            footprint.insert(entry.second);
+      }
+    });
+  }
+  return footprints;
+}
+
+void ModuleMembarAnalysis::run() {
+  auto physicalFootprints = getSharedMemoryFootprints();
+  runAnalysis<MembarAnalysis>(physicalFootprints);
+}
 } // namespace mlir

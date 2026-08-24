@@ -5,6 +5,7 @@
 #include "triton/Analysis/BufferRegion.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
@@ -177,7 +178,8 @@ static Value createCurrentCTAMask(OpBuilder &b, Location loc,
 uint32_t getMemDescLength(Value buf) {
   auto memDescType = cast<MemDescType>(buf.getType());
   if (isa<SharedEncodingTrait>(memDescType.getEncoding())) {
-    unsigned elSize = memDescType.getElementType().getIntOrFloatBitWidth() / 8;
+    unsigned elSize =
+        getIntOrFloatOrPtrBitWidth(memDescType.getElementType()) / 8;
     return static_cast<uint32_t>(product(getShapePerCTA(memDescType)) * elSize);
   }
   if (isa<TensorMemorySpaceAttr>(memDescType.getMemorySpace())) {
