@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import torch
 import triton
+from triton.experimental.gluon.language import NVMMASharedLayout
 from triton.tools.mxfp import MXFP4Tensor
 
 
@@ -88,13 +89,26 @@ class FrozenKernel:
         (directory / 'launch.json').write_text(json.dumps(manifest, indent=2) + '\n')
         return manifest
 
-    def invoke(self, example, operands, scales, vec, config):
+    def launch_config(self):
+
+        def saved(name):
+            return self.constants[(self.manifest['arg_names'].index(name), )]
+
+        return dict(block_k=saved('BLOCK_K'), buffers=saved('num_buffers'), epilogue=saved('EPILOGUE_BLOCK_N'),
+                    scheduler='clc' if saved('scheduler') == 'cluster_launch_control' else 'sps')
+
+    def invoke(self, example, operands, scales, vec, config=None):
+        if config is None:
+            config = self.launch_config()
         m, n, k = operands[0].shape[0], operands[1].shape[0], operands[0].shape[1] * 2
         ad, bd, cd, asd, bsd = example.make_dummy_descriptors(*operands, *scales, torch.float16, m, n)
         values = dict(a_desc=ad, b_desc=bd, c_desc=cd, a_scale_desc=asd, b_scale_desc=bsd, M=m, N=n, K=k,
                       A_ELEM_PER_BYTE=2, B_ELEM_PER_BYTE=2, BLOCK_M=256, BLOCK_N=256, BLOCK_K=config['block_k'],
                       EPILOGUE_BLOCK_N=config['epilogue'], CGA_LAYOUT=((1, 0), ))
         example.mma_scaled_tma_set_block_size_hook(values)
+        if 'c_final' in self.manifest['arg_names']:
+            layout = NVMMASharedLayout(128, 16, cga_layout=((1, 0), ))
+            values['c_final'] = example.TensorDescriptor.from_tensor(cd.base, [256, 256], layout)
         args = [
             values[name] if name in values else self.constants[(i, )]
             for i, name in enumerate(self.manifest['arg_names'])
@@ -164,12 +178,15 @@ def main(default_example="experimental-tcgen05-k96.py"):
     comparison.add_argument('--compare-native', action='store_true',
                             help='Compare with the original native K96 kernel and its original scheduling')
     comparison.add_argument('--frozen', type=Path, help='Add paired archived controls to this measurement')
+    comparison.add_argument('--frozen-native', type=Path,
+                            help='Compare with one archived native binary using its saved launch configuration')
     parser.add_argument('--verify-frozen', type=Path, help='Validate archived controls at every recorded shape')
     args = parser.parse_args()
+    tuned_dense = args.example == '07-pure-k96-matmul.py' and args.frozen is None
     if args.buffers is None:
-        args.buffers = 6 if args.format == 'mxfp4' else 5
+        args.buffers = 6 if args.format == 'mxfp4' or tuned_dense else 5
     if args.epilogue is None:
-        args.epilogue = 32 if args.format == 'mxfp4' else 64
+        args.epilogue = 32 if args.format == 'mxfp4' else (16 if tuned_dense and args.buffers > 5 else 64)
     if args.verify_frozen is not None:
         verify_frozen_cases(args.verify_frozen)
         return
@@ -184,7 +201,9 @@ def main(default_example="experimental-tcgen05-k96.py"):
     scales = [experiment.base.swizzle_scales_packed_block(s) for s in scales]
     scheduler = args.scheduler
     if scheduler == 'auto':
-        if args.example == '07-pure-k96-matmul.py':
+        if tuned_dense:
+            scheduler = 'sps'
+        elif args.example == '07-pure-k96-matmul.py':
             scheduler = 'clc' if vec == 16 and k > 16384 else 'sps'
         else:
             scheduler = 'sps' if k <= 8192 else 'clc'
@@ -253,8 +272,8 @@ def main(default_example="experimental-tcgen05-k96.py"):
             baseline = out
         row = dict(mode=mode, correct=True, kernel_hash=compiled.hash,
                    compiler_metadata=compiled.metadata._asdict() | dict(target=asdict(compiled.metadata.target)),
-                   shared=compiled.metadata.shared, tmem=compiled.metadata.tmem_size,
-                   cubin_sha256=hashlib.sha256(compiled.asm['cubin']).hexdigest(),
+                   shared=compiled.metadata.shared, tmem=compiled.metadata.tmem_size, registers=compiled.n_regs,
+                   spills=compiled.n_spills, cubin_sha256=hashlib.sha256(compiled.asm['cubin']).hexdigest(),
                    ptx_mmas=compiled.asm['ptx'].count('tcgen05.mma.'),
                    baseline_max_abs=(out.float() - baseline.float()).abs().max().item(), ms=[])
         report['results'].append(row)
@@ -302,6 +321,21 @@ def main(default_example="experimental-tcgen05-k96.py"):
             report['results'].append(
                 dict(mode=label, diagnostic=True, correct=True, cubin_sha256=matched['cubin_sha256'], ms=[]))
             functions.append(fn)
+    if args.frozen_native is not None:
+        frozen = FrozenKernel(args.frozen_native)
+
+        def fn(frozen=frozen):
+            return frozen.invoke(experiment.base, operands, scales, vec)
+
+        out = fn()
+        torch.cuda.synchronize()
+        torch.testing.assert_close(out.float(), expected, atol=1e-3, rtol=1e-3)
+        report['results'].append(
+            dict(mode='frozen-native', correct=True, launch_config=frozen.launch_config(),
+                 shared=frozen.kernel.metadata.shared, tmem=frozen.kernel.metadata.tmem_size,
+                 registers=frozen.kernel.n_regs, spills=frozen.kernel.n_spills,
+                 cubin_sha256=frozen.manifest['cubin_sha256'], ms=[]))
+        functions.append(fn)
     for fn in functions:
         for _ in range(3):
             fn()
@@ -321,7 +355,7 @@ def main(default_example="experimental-tcgen05-k96.py"):
             # remaining calls, and replays that graph ten times.
             executions = 10 * (calls - 6)
             report['results'][i].setdefault('device_executions', []).append(executions)
-            if (args.frozen is not None or args.compare_native) and args.repeats >= 7:
+            if (args.frozen is not None or args.frozen_native is not None or args.compare_native) and args.repeats >= 7:
                 assert executions >= 300, "increase --rep-ms to capture at least 300 device executions"
     for row in report['results']:
         row['median_ms'] = statistics.median(row['ms'])
@@ -337,6 +371,12 @@ def main(default_example="experimental-tcgen05-k96.py"):
             row = rows[mode]
             row['latency_ratio_vs_frozen'] = row['median_ms'] / rows['frozen-' + mode]['median_ms']
             row['within_two_percent'] = row['latency_ratio_vs_frozen'] <= 1.02
+    if args.frozen_native is not None:
+        frozen_ms = next(row['median_ms'] for row in report['results'] if row['mode'] == 'frozen-native')
+        for row in report['results']:
+            if row['mode'] != 'frozen-native':
+                row['latency_ratio_vs_frozen'] = row['median_ms'] / frozen_ms
+                row['within_two_percent'] = row['latency_ratio_vs_frozen'] <= 1.02
     report['gpu_after'] = gpu_state()
     (args.output / 'results.json').write_text(json.dumps(report, indent=2) + '\n')
 

@@ -5950,10 +5950,16 @@ def pure_k96_benchmark():
 @pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires sm103 K=96 MMA")
 @pytest.mark.parametrize("fmt", ["mxfp4", "nvfp4"])
 @pytest.mark.parametrize("example", ["experimental-tcgen05-k96.py", "07-pure-k96-matmul.py"])
-@pytest.mark.parametrize("m, n, k, clc_scheduler", [(256, 256, 768, False), (384, 512, 1536, False),
-                                                    (512, 384, 2304, True), (3968, 4096, 4608, False),
-                                                    (500, 600, 2304, True)])
-def test_tcgen05_mma_scaled_pure_k96_pipeline(pure_k96_benchmark, fmt, example, m, n, k, clc_scheduler):
+@pytest.mark.parametrize("m, n, k, clc_scheduler, out_dtype", [
+    (256, 256, 768, False, torch.float16),
+    (384, 512, 1536, False, torch.float16),
+    (512, 384, 2304, True, torch.float16),
+    (3968, 4096, 4608, False, torch.float16),
+    (500, 600, 2304, True, torch.float16),
+    (500, 600, 2304, False, torch.float16),
+    pytest.param(384, 512, 1536, False, torch.float32, id="fp32-output"),
+])
+def test_tcgen05_mma_scaled_pure_k96_pipeline(pure_k96_benchmark, fmt, example, m, n, k, clc_scheduler, out_dtype):
     bench = pure_k96_benchmark
     experiment = bench.load_experiment(example)
     torch.manual_seed(123)
@@ -5962,10 +5968,11 @@ def test_tcgen05_mma_scaled_pure_k96_pipeline(pure_k96_benchmark, fmt, example, 
     scheduler = experiment.SCHEDULER_CLC if clc_scheduler else experiment.SCHEDULER_SPS
 
     def invoke():
-        buffers = 6 if fmt == "mxfp4" else 5
-        epilogue = 64 if fmt == "nvfp4" else 32
-        return experiment.matmul(*operands, *scales, vec, buffers=buffers, epilogue=epilogue, scheduler=scheduler,
-                                 out_dtype=torch.float16)
+        config = {}
+        if example == "experimental-tcgen05-k96.py":
+            config = dict(buffers=6 if fmt == "mxfp4" else 5,
+                          epilogue=(128 if fmt == "nvfp4" else 64) // out_dtype.itemsize)
+        return experiment.matmul(*operands, *scales, vec, scheduler=scheduler, out_dtype=out_dtype, **config)
 
     actual, compiled = invoke()
     torch.testing.assert_close(actual, (refs[0] @ refs[1].T).to(actual.dtype), atol=1e-3, rtol=1e-3)
