@@ -7,6 +7,7 @@
 #include "CallGraph.h"
 #include "Function.h"
 
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/raw_ostream.h"
 #include <functional>
 #include <set>
@@ -18,9 +19,19 @@ namespace mlir {
 class OpBuilder;
 struct AllocationSlice;
 
-// Complete MAY-views in a known single-CTA kernel allocation frame. Runtime
+// Complete MAY-addresses in a known single-CTA kernel allocation frame. Runtime
 // indices may select several possible physical views across loop iterations.
-using SharedMemoryFootprints = DenseMap<Value, triton::RegionInfo::ViewList>;
+struct SharedMemoryFootprint {
+  uint32_t allocationFrame;
+  // Only the per-CTA addresses are needed, not a runtime descriptor key.
+  triton::BufferRegion region;
+};
+
+struct SharedMemoryFootprints {
+  // Share geometry per descriptor, but certify access coverage per operation.
+  DenseMap<Value, SharedMemoryFootprint> regions{};
+  DenseSet<Operation *> accesses{};
+};
 
 /// Callback to allow backend to provide more information on whether a barrier
 /// is needed between two operations. Even though two operations access the same
@@ -91,7 +102,7 @@ public:
   // Immutable geometry covering every dynamic instance of this access. It
   // remains valid across backedges, unlike the epoch-relative facts above.
   // The owning module analysis outlives every slice using this pointer.
-  const triton::RegionInfo::ViewList *physicalFootprint = nullptr;
+  const SharedMemoryFootprint *physicalFootprint = nullptr;
 
   // Buffer-index expression attached by BufferIndexAnalysis. It participates
   // in ordering/equality so accesses to different slots remain separate.
