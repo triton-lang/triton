@@ -59,6 +59,9 @@ find_library(PROTON_AMD_COMGR_LIBRARY
 find_library(PROTON_DW_LIBRARY
   NAMES dw
   HINTS "${_PROTON_ROCM_ROOT}/lib/rocm_sysdeps/lib")
+find_path(PROTON_DWARF_INCLUDE_DIR
+  NAMES dwarf.h
+  HINTS "${_PROTON_ROCM_ROOT}/lib/rocm_sysdeps/include")
 
 unset(PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE CACHE)
 set(PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE OFF)
@@ -66,7 +69,8 @@ if(PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING AND
    EXISTS
      "${ROCPROFILER_SDK_INCLUDE_DIR}/rocprofiler-sdk/cxx/codeobj/code_printing.hpp"
    AND
-   PROTON_AMD_COMGR_LIBRARY AND PROTON_DW_LIBRARY)
+   PROTON_AMD_COMGR_LIBRARY AND PROTON_DW_LIBRARY AND
+   PROTON_DWARF_INCLUDE_DIR)
   set(PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE ON)
 endif()
 
@@ -116,6 +120,10 @@ function(add_proton_library name)
       "${PROTON_COMMON_DIR}/include"
       "${PROTON_SRC_DIR}/include"
   )
+  if(PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE)
+    target_include_directories(${name} SYSTEM PRIVATE
+      "${PROTON_DWARF_INCLUDE_DIR}")
+  endif()
 
   # If HIP is AMD-based
   target_compile_definitions(${name} PRIVATE __HIP_PLATFORM_AMD__)
