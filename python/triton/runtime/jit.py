@@ -193,6 +193,7 @@ class DependenciesFinder(ast.NodeVisitor):
     def visit_FunctionDef(self, node):
         # Save the local name, which may hide the global name.
         self.local_names = {arg.arg for arg in node.args.args}
+        self.function_args = node.args
         self.generic_visit(node)
 
     def visit_arguments(self, node):
@@ -226,6 +227,10 @@ class DependenciesFinder(ast.NodeVisitor):
             self.visit(node.kwarg)
 
         visit_defaults(node.defaults)
+
+        # Keyword-only parameters shadow globals in the body, but not in defaults.
+        if node.kwonlyargs and node is self.function_args:
+            self.local_names.update(arg.arg for arg in node.kwonlyargs)
 
     def visitAssnTarget(self, node):
         # Target is either a single string, or a (possibly nested) list of strings if the assign target is a tuple.
@@ -422,15 +427,21 @@ def create_function_from_signature(sig, kparams, backend):
             else:
                 specialization.append(f"{ret}")
 
-    # compute argument string for a given parameter
-    def arg(name_param):
-        name, param = name_param
+    # compute argument strings, preserving the keyword-only separator
+    arg_list = []
+    has_star = False
+    for name, param in sig.parameters.items():
         if param.kind == inspect.Parameter.VAR_POSITIONAL:
-            return f"*{name}"
-        return name if param.default is inspect.Parameter.empty else f"{name}=default_{name}"
+            arg_list.append(f"*{name}")
+            has_star = True
+            continue
+        if param.kind == inspect.Parameter.KEYWORD_ONLY and not has_star:
+            arg_list.append("*")
+            has_star = True
+        arg_list.append(name if param.default is inspect.Parameter.empty else f"{name}=default_{name}")
 
     func_body = f"""
-def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options"])}):
+def dynamic_func({", ".join(arg_list + ["**options"])}):
     params = {{{', '.join([f"'{name}': {name}" for name in sig.parameters.keys()])}}}
     specialization = [{','.join(specialization)}]
     return params, specialization, options

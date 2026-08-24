@@ -5201,6 +5201,16 @@ def _impl(value=10):
     return value
 
 
+@triton.jit
+def _keyword_only_impl(value=3, *, required, optional=5, REQUIRED: tl.constexpr, OPTIONAL: tl.constexpr = 2):
+    return value + required + optional + REQUIRED * OPTIONAL
+
+
+@triton.jit
+def _keyword_only_varargs(value, *values, scale: tl.constexpr = 2):
+    return value + values[0] + values[1] * scale
+
+
 @pytest.mark.interpreter
 def test_default(device):
     value = 5
@@ -5219,6 +5229,36 @@ def test_default(device):
     _kernel[(1, )](ret0, ret1)
     assert ret0.item() == 10
     assert ret1.item() == 3
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("args, kwargs, expected", [((), {}, [37, 37, 20]),
+                                                    ((13, ), {"optional": 17, "OPTIONAL": 19}, [37, 246, 343])])
+def test_keyword_only_arguments(device, args, kwargs, expected):
+
+    @triton.jit
+    def kernel(value=3, *, output, required, optional=5, REQUIRED: tl.constexpr, OPTIONAL: tl.constexpr = 2):
+        tl.store(output, _keyword_only_impl(required=required, REQUIRED=REQUIRED))
+        tl.store(output + 1,
+                 _keyword_only_impl(value, required=required, optional=optional, REQUIRED=REQUIRED, OPTIONAL=OPTIONAL))
+        tl.store(output + 2, _keyword_only_varargs(value, required, optional, scale=OPTIONAL))
+
+    output = torch.empty(3, dtype=torch.int32, device=device)
+    kernel[(1, )](*args, output=output, required=7, REQUIRED=11, **kwargs)
+    assert output.tolist() == expected
+
+
+@pytest.mark.interpreter
+def test_keyword_only_launch_errors():
+
+    @triton.jit
+    def kernel(*, MODE: tl.constexpr):
+        pass
+
+    with pytest.raises(TypeError, match="positional argument"):
+        kernel[(1, )](0)
+    with pytest.raises(TypeError, match="MODE"):
+        kernel[(1, )]()
 
 
 # ---------------

@@ -701,6 +701,7 @@ class CodeGenerator(ast.NodeVisitor):
             arg_names += [self.visit(arg)]
         if node.vararg is not None:
             arg_names += [self.visit(node.vararg)]
+        arg_names += [self.visit(arg) for arg in node.kwonlyargs]
         kwarg_names = self.visit(node.kwarg)
         return arg_names, kwarg_names
 

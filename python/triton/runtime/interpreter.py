@@ -1419,10 +1419,10 @@ class GridExecutor:
 
     def __call__(self, *args_dev, **kwargs):
         # Removes not used reserved keywords from kwargs
-        # Triton doesn't support keyword-only, variable positional or variable keyword arguments
-        # It's safe to inspect only positional or keyword arguments (i.e., argspec.args)
+        # Triton doesn't support variable positional or variable keyword arguments
+        # Keep both positional-or-keyword and keyword-only arguments.
         argspec = inspect.getfullargspec(self.fn)
-        kwargs = {k: v for k, v in kwargs.items() if k in argspec.args}
+        kwargs = {k: v for k, v in kwargs.items() if k in argspec.args or k in argspec.kwonlyargs}
         # copy arguments to the host
         args_hst, kwargs_hst = self._init_args_hst(args_dev, kwargs)
         # run pre-run hooks
