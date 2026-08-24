@@ -802,14 +802,17 @@ class JITFunction(JITCallable, KernelInterface[T]):
         self.do_not_specialize_on_alignment = do_not_specialize_on_alignment
         self._repr = repr
         self.launch_metadata = launch_metadata
-        # Register for simple deserialization of JITFunction constants
-        _triton_jit_function_registry[f"{self.module}:{self.fn.__qualname__}"] = self
 
         self.params = []
         for i, param in enumerate(self.signature.parameters.values()):
+            if param.kind == inspect.Parameter.VAR_KEYWORD:
+                raise TypeError(f"JIT functions do not support **{param.name} parameters")
             dns = i in do_not_specialize or param.name in do_not_specialize
             dns_oa = i in do_not_specialize_on_alignment or param.name in do_not_specialize_on_alignment
             self.params.append(KernelParam(i, param, dns, dns_oa))
+
+        # Register for simple deserialization of JITFunction constants
+        _triton_jit_function_registry[f"{self.module}:{self.fn.__qualname__}"] = self
 
         # cache of just-in-time compiled kernels
         self.device_caches = defaultdict(self.create_binder)

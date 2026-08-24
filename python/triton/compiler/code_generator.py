@@ -703,7 +703,6 @@ class CodeGenerator(ast.NodeVisitor):
             arg_names += [self.visit(node.vararg)]
         # Keyword-only parameters use the same ordered IR argument list.
         arg_names += [self.visit(arg) for arg in node.kwonlyargs]
-        self.visit(node.kwarg)
         return arg_names
 
     def visit_arg(self, node):
