@@ -7,7 +7,7 @@
 - Regression tests must be expressible as valid Triton/Gluon block programs. Targeted PTX delays may expose an existing race, but must not change values, memory effects, synchronization, or thread participation, or introduce divergence.
 
 ## Descriptor Memory Effects
-- Shared-memory read/write effects access only the logical elements of their attached memory descriptor's view. This also applies to gathers, scatters, and asynchronous copies; these operations do not access memory outside their descriptors.
+- Shared-memory read/write effects access only the logical elements of their attached memory descriptor's view. This also applies to gathers, scatters, shared-memory atomic operations, and asynchronous copies; these operations do not access memory outside their descriptors.
 - FP4 tensor copies do not touch the padding bytes introduced by their shared-memory layout. Padding affects the physical addresses of logical elements, not which elements an operation accesses.
 
 ## Build and Testing Guidelines
