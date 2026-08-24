@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file -tritongpu-pipeline | FileCheck %s --check-prefixes=CHECK
+// RUN: triton-opt %s -split-input-file -tritongpu-pipeline -triton-nvidia-tma-lowering | FileCheck %s --check-prefix=TMA
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -85,6 +86,35 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       scf.yield %next : i32
     } {tt.num_stages = 2 : i32, tt.scheduled_max_stage = 1 : i32}
     tt.return %result : i32
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // The invariant TMA load is lowered after the loop is pipelined. Its storage
+  // must still forward into the loop without yielding a different memdesc type.
+  // TMA-LABEL: @pipeline_invariant_tma_load
+  // TMA: %[[ALLOC:.*]] = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16
+  // TMA: ttng.async_tma_copy_global_to_local {{.*}} %[[ALLOC]],
+  // TMA: scf.for
+  // TMA: ttg.local_load %[[ALLOC]]
+  // TMA: tt.return
+  tt.func @pipeline_invariant_tma_load(%desc: !tt.tensordesc<16x16xf16, #shared>, %n: i32) -> tensor<16x16xf16, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %zero = arith.constant dense<0.0> : tensor<16x16xf16, #blocked>
+    %tile = tt.descriptor_load %desc[%c0, %c0] : !tt.tensordesc<16x16xf16, #shared> -> tensor<16x16xf16, #blocked>
+    %result = scf.for %i = %c0 to %n step %c1 iter_args(%sum = %zero) -> tensor<16x16xf16, #blocked> : i32 {
+      %view = ttg.local_alloc %tile {loop.cluster = 0 : i32, loop.stage = 0 : i32} : (tensor<16x16xf16, #blocked>) -> !ttg.memdesc<16x16xf16, #shared, #smem>
+      %loaded = ttg.local_load %view {loop.cluster = 0 : i32, loop.stage = 0 : i32} : !ttg.memdesc<16x16xf16, #shared, #smem> -> tensor<16x16xf16, #blocked>
+      %next = arith.addf %sum, %loaded {loop.cluster = 1 : i32, loop.stage = 1 : i32} : tensor<16x16xf16, #blocked>
+      scf.yield %next : tensor<16x16xf16, #blocked>
+    } {tt.num_stages = 2 : i32, tt.scheduled_max_stage = 1 : i32}
+    tt.return %result : tensor<16x16xf16, #blocked>
   }
 }
 

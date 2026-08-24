@@ -1,5 +1,6 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/DebugStringHelper.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -844,6 +845,14 @@ void LocalAllocOp::getEffects(
   if (getSrc())
     effects.push_back(
         makeShared<MemoryEffects::Write>(alloc, SharedKind::Generic));
+}
+
+Speculation::Speculatability LocalAllocOp::getSpeculatability() {
+  // Immutable local allocations are safe to speculate before physical storage
+  // is assigned.
+  return mlir::isMemoryEffectFree(getOperation())
+             ? Speculation::Speculatable
+             : Speculation::NotSpeculatable;
 }
 
 OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {

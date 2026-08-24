@@ -1017,7 +1017,10 @@ def TTNG_TMEMStoreOp : TTNG_Op<"tmem_store", [
   let hasVerifier = 1;
 }
 
-def TTNG_TMEMAllocOp : TTNG_Op<"tmem_alloc", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+def TTNG_TMEMAllocOp : TTNG_Op<"tmem_alloc", [
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+  DeclareOpInterfaceMethods<ConditionallySpeculatable>
+]> {
   let summary = "allocate tensor memory";
   let description = [{
     This operation allocates a buffer in tensor memory and returns a descriptor

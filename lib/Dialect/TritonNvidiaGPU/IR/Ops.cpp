@@ -24,6 +24,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -1782,6 +1783,12 @@ void TMEMAllocOp::getEffects(
   if (getSrc())
     effects.emplace_back(MemoryEffects::Write::get(), alloc,
                          TensorMemory::get());
+}
+
+Speculation::Speculatability TMEMAllocOp::getSpeculatability() {
+  return mlir::isMemoryEffectFree(getOperation())
+             ? Speculation::Speculatable
+             : Speculation::NotSpeculatable;
 }
 
 // -- TMEMCopyOp --

@@ -167,3 +167,70 @@ tt.func @hoist_cond_no_hoist_load_from_scf_while(%ptr: tensor<1024x!tt.ptr<f32>>
   tt.store %ptr, %1 : tensor<1024x!tt.ptr<f32>>
   tt.return
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @local_alloc_speculation
+  // CHECK: ttg.local_alloc {{.*}} -> !ttg.memdesc<128xf32, #shared, #smem>
+  // CHECK-NOT: ttg.local_alloc
+  // CHECK: scf.for
+  // CHECK: ttg.local_alloc {{.*}} -> !ttg.memdesc<128xf32, #shared, #smem, mutable>
+  // CHECK: ttg.local_alloc {{.*}} {allocation.offset = 0 : i32}
+  // CHECK-NOT: ttg.local_alloc
+  // CHECK: scf.yield
+  tt.func @local_alloc_speculation(%src: tensor<128xf32, #blocked>, %n: i32) -> tensor<128xf32, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %result = scf.for %i = %c0 to %n step %c1 iter_args(%sum = %src) -> tensor<128xf32, #blocked> : i32 {
+      %immutable = ttg.local_alloc %src : (tensor<128xf32, #blocked>) -> !ttg.memdesc<128xf32, #shared, #smem>
+      %mutable = ttg.local_alloc %src : (tensor<128xf32, #blocked>) -> !ttg.memdesc<128xf32, #shared, #smem, mutable>
+      %allocated = ttg.local_alloc %src {allocation.offset = 0 : i32} : (tensor<128xf32, #blocked>) -> !ttg.memdesc<128xf32, #shared, #smem>
+      %a = ttg.local_load %immutable : !ttg.memdesc<128xf32, #shared, #smem> -> tensor<128xf32, #blocked>
+      %b = ttg.local_load %mutable : !ttg.memdesc<128xf32, #shared, #smem, mutable> -> tensor<128xf32, #blocked>
+      %c = ttg.local_load %allocated : !ttg.memdesc<128xf32, #shared, #smem> -> tensor<128xf32, #blocked>
+      %sum_a = arith.addf %sum, %a : tensor<128xf32, #blocked>
+      %sum_b = arith.addf %sum_a, %b : tensor<128xf32, #blocked>
+      %sum_c = arith.addf %sum_b, %c : tensor<128xf32, #blocked>
+      scf.yield %sum_c : tensor<128xf32, #blocked>
+    }
+    tt.return %result : tensor<128xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+#tmem_space = #ttng.tensor_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @tmem_alloc_speculation
+  // CHECK: %[[ALLOC:.*]], %[[TOKEN:.*]] = ttng.tmem_alloc
+  // CHECK-NOT: ttng.tmem_alloc
+  // CHECK: scf.for
+  // CHECK: ttng.tmem_alloc {{.*}} -> !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+  // CHECK: ttng.tmem_alloc {{.*}} {tensor_memory_col_offset = 0 : i32
+  // CHECK-NOT: ttng.tmem_alloc
+  // CHECK: ttng.tmem_load %[[ALLOC]][%[[TOKEN]]]
+  // CHECK: scf.yield
+  tt.func @tmem_alloc_speculation(%src: tensor<128x64xf32, #blocked>, %n: i32) -> tensor<128x64xf32, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %result = scf.for %i = %c0 to %n step %c1 iter_args(%sum = %src) -> tensor<128x64xf32, #blocked> : i32 {
+      %immutable, %token = ttng.tmem_alloc %src : (tensor<128x64xf32, #blocked>) -> (!ttg.memdesc<128x64xf32, #tmem, #tmem_space>, !ttg.async.token)
+      %mutable = ttng.tmem_alloc %src : (tensor<128x64xf32, #blocked>) -> !ttg.memdesc<128x64xf32, #tmem, #tmem_space, mutable>
+      %allocated = ttng.tmem_alloc %src {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x64xf32, #blocked>) -> !ttg.memdesc<128x64xf32, #tmem, #tmem_space>
+      %a, %load_token = ttng.tmem_load %immutable[%token] : !ttg.memdesc<128x64xf32, #tmem, #tmem_space> -> tensor<128x64xf32, #blocked>
+      %b = ttng.tmem_load %mutable : !ttg.memdesc<128x64xf32, #tmem, #tmem_space, mutable> -> tensor<128x64xf32, #blocked>
+      %c = ttng.tmem_load %allocated : !ttg.memdesc<128x64xf32, #tmem, #tmem_space> -> tensor<128x64xf32, #blocked>
+      %sum_a = arith.addf %sum, %a : tensor<128x64xf32, #blocked>
+      %sum_b = arith.addf %sum_a, %b : tensor<128x64xf32, #blocked>
+      %sum_c = arith.addf %sum_b, %c : tensor<128x64xf32, #blocked>
+      scf.yield %sum_c : tensor<128x64xf32, #blocked>
+    }
+    tt.return %result : tensor<128x64xf32, #blocked>
+  }
+}
