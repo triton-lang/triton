@@ -2059,3 +2059,68 @@ tt.func @shared_subslice_shifted_source(%input: tensor<64xi32, #writer>) -> tens
 }
 
 }
+
+// -----
+
+#writer = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#pipeline_writer = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#reader = #ttg.linear<{register = [], lane = [[1], [2], [4], [8], [16]], warp = [[64], [32]], block = []}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.num-ctas" = 1 : i32} {
+
+// Different descriptor SSA values select disjoint groups of physical stages.
+// Their complete MAY-sets remain disjoint across the loop backedge, even
+// though the scalar stage and relative source identities change epochs.
+// CHECK-LABEL: @shared_dynamic_disjoint_stage_groups
+tt.func @shared_dynamic_disjoint_stage_groups(%initial: tensor<4x128xi32, #pipeline_writer>, %input: tensor<128xi32, #writer>, %ub: i32) -> tensor<128xi32, #writer> {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %c2 = arith.constant 2 : i32
+  %allocation = ttg.local_alloc %initial : (tensor<4x128xi32, #pipeline_writer>) -> !ttg.memdesc<4x128xi32, #shared, #smem, mutable>
+  ttg.barrier local
+  %low_group = ttg.memdesc_subslice %allocation [0, 0] : !ttg.memdesc<4x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<2x128xi32, #shared, #smem, mutable, 4x128>
+  %high_group = ttg.memdesc_subslice %allocation [2, 0] : !ttg.memdesc<4x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<2x128xi32, #shared, #smem, mutable, 4x128>
+  // CHECK: scf.for
+  %result = scf.for %i = %c0 to %ub step %c1 iter_args(%last = %input) -> (tensor<128xi32, #writer>) : i32 {
+    %stage = arith.remui %i, %c2 : i32
+    %low = ttg.memdesc_index %low_group[%stage] : !ttg.memdesc<2x128xi32, #shared, #smem, mutable, 4x128> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    %high = ttg.memdesc_index %high_group[%stage] : !ttg.memdesc<2x128xi32, #shared, #smem, mutable, 4x128> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    // CHECK: ttg.memdesc_index
+    // CHECK: ttg.memdesc_index
+    // CHECK-NEXT: {{.*}} = ttg.local_load
+    %loaded = ttg.local_load %low : !ttg.memdesc<128xi32, #shared, #smem, mutable> -> tensor<128xi32, #writer>
+    // The high group can still alias across iterations; only the low load
+    // is proved disjoint here.
+    // CHECK: ttg.local_store
+    ttg.local_store %input, %high : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    scf.yield %loaded : tensor<128xi32, #writer>
+  }
+  tt.return %result : tensor<128xi32, #writer>
+}
+
+// One overlapping candidate pair is enough to retain the barrier. For
+// stage=1, both accesses select physical stage one through different parents
+// and exchange values between warps.
+// CHECK-LABEL: @shared_dynamic_overlapping_stage_groups
+tt.func @shared_dynamic_overlapping_stage_groups(%initial: tensor<4x128xi32, #pipeline_writer>, %input: tensor<128xi32, #writer>, %phase: i32) -> tensor<128xi32, #reader> {
+  %c1 = arith.constant 1 : i32
+  %c2 = arith.constant 2 : i32
+  %allocation = ttg.local_alloc %initial : (tensor<4x128xi32, #pipeline_writer>) -> !ttg.memdesc<4x128xi32, #shared, #smem, mutable>
+  ttg.barrier local
+  %stage = arith.remui %phase, %c2 : i32
+  %other_stage = arith.subi %c1, %stage : i32
+  %low_group = ttg.memdesc_subslice %allocation [0, 0] : !ttg.memdesc<4x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<2x128xi32, #shared, #smem, mutable, 4x128>
+  %high_group = ttg.memdesc_subslice %allocation [1, 0] : !ttg.memdesc<4x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<2x128xi32, #shared, #smem, mutable, 4x128>
+  %low = ttg.memdesc_index %low_group[%stage] : !ttg.memdesc<2x128xi32, #shared, #smem, mutable, 4x128> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  %high = ttg.memdesc_index %high_group[%other_stage] : !ttg.memdesc<2x128xi32, #shared, #smem, mutable, 4x128> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  // CHECK: ttg.local_store
+  // CHECK-NEXT: ttg.barrier local{{$}}
+  // CHECK-NEXT: {{.*}} = ttg.local_load
+  ttg.local_store %input, %low : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  %loaded = ttg.local_load %high : !ttg.memdesc<128xi32, #shared, #smem, mutable> -> tensor<128xi32, #reader>
+  tt.return %loaded : tensor<128xi32, #reader>
+}
+
+}

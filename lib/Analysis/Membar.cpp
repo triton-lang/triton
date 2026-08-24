@@ -1,11 +1,14 @@
 #include "triton/Analysis/Membar.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "llvm/Support/MathExtras.h"
 
 namespace ttng = mlir::triton::nvidia_gpu;
 
@@ -34,6 +37,19 @@ AllocationSlice::AllocationSlice(Value value,
 bool AllocationSlice::intersects(const AllocationSlice &other) const {
   // Disjoint intervals don't overlap
   if (!allocationInterval.intersects(other.allocationInterval))
+    return false;
+
+  // A MAY-set covers every runtime origin, including across loop iterations.
+  // Require disjointness for every pair in the same physical allocation frame.
+  // Different unnormalized frames are unknown, not evidence of disjointness.
+  if (physicalFootprint && other.physicalFootprint &&
+      !physicalFootprint->empty() && !other.physicalFootprint->empty() &&
+      llvm::all_of(*physicalFootprint, [&](const auto &lhs) {
+        return llvm::all_of(*other.physicalFootprint, [&](const auto &rhs) {
+          return lhs.allocationFrame == rhs.allocationFrame &&
+                 !lhs.intersects(rhs);
+        });
+      }))
     return false;
 
   // For slices of the same allocation, compare dynamic buffer indices to prove
@@ -288,13 +304,90 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
       SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>>
           effectInstances;
       memoryEffectOpInterface.getEffects(effectInstances);
+      auto getPhysicalFootprint =
+          [&](Value value) -> const triton::RegionInfo::ViewList * {
+        auto found = physicalFootprints.find(value);
+        if (found == physicalFootprints.end())
+          return nullptr;
+
+        // Only these operations have a complete access image given by the
+        // existing block-local register-to-shared conversion. Other effects,
+        // including asynchronous instructions, keep the allocation fallback.
+        RankedTensorType registerType;
+        if (auto load = dyn_cast<triton::gpu::LocalLoadOp>(op)) {
+          if (value == load.getSrc())
+            registerType = load.getType();
+        } else if (auto store = dyn_cast<triton::gpu::LocalStoreOp>(op)) {
+          if (value == store.getDst())
+            registerType = store.getSrc().getType();
+        } else if (auto alloc = dyn_cast<triton::gpu::LocalAllocOp>(op)) {
+          if (alloc.getSrc() && value == alloc.getResult())
+            registerType = alloc.getSrc().getType();
+        }
+        if (!registerType ||
+            !isa_and_nonnull<triton::gpu::DistributedEncodingTrait>(
+                registerType.getEncoding()))
+          return nullptr;
+
+        auto type = cast<triton::gpu::MemDescType>(value.getType());
+        auto encoding = type.getEncoding();
+        if (!isa_and_nonnull<triton::gpu::SharedEncodingTrait>(encoding) ||
+            triton::gpu::getPaddedEncoding(encoding) ||
+            isa<triton::gpu::PartitionedSharedEncodingAttr>(encoding))
+          return nullptr;
+        unsigned bitWidth = type.getElementType().getIntOrFloatBitWidth();
+        if (bitWidth < 8 || !llvm::isPowerOf2_32(bitWidth) ||
+            llvm::any_of(
+                type.getShape(),
+                [](int64_t size) {
+                  return size <= 0 ||
+                         size > std::numeric_limits<int32_t>::max() ||
+                         !llvm::isPowerOf2_64(size);
+                }))
+          return nullptr;
+
+        // BufferRegion inverts the descriptor's storage layout and restricts
+        // it to the logical shape. Prove that the complete instruction access
+        // fits inside that image before using it as a physical MAY-footprint.
+        auto storage = triton::gpu::toLinearLayout(type);
+        auto offset = StringAttr::get(op->getContext(), "offset");
+        auto block = StringAttr::get(op->getContext(), "block");
+        if (storage.getNumOutDims() != type.getRank() ||
+            storage.getNumInDims() != 2 || !storage.hasInDim(offset) ||
+            !storage.hasInDim(block) || storage.getInDimSize(block) != 1 ||
+            !storage.isSurjective() ||
+            storage.getTotalInDimSizeLog2() + storage.getTotalOutDimSizeLog2() >
+                64 ||
+            storage.getInDimSizeLog2(offset) + llvm::Log2_32(bitWidth / 8) >=
+                31)
+          return nullptr;
+        auto footprint = storage.pseudoinvert();
+        auto logicalDims = llvm::to_vector(footprint.getInDimNames());
+        for (auto [dim, size] : llvm::zip_equal(logicalDims, type.getShape()))
+          footprint = footprint.resizeInDim(dim, size);
+        auto byte = StringAttr::get(op->getContext(), "byte");
+        footprint =
+            triton::LinearLayout::identity1D(bitWidth / 8, byte, offset) *
+            footprint;
+
+        auto reg = StringAttr::get(op->getContext(), "register");
+        auto registerLayout = triton::gpu::toLinearLayout(registerType)
+                                  .removeZeroBasesAlongDim(reg);
+        auto access =
+            triton::invertAndComposeBlockLocal(storage, registerLayout);
+        access = triton::LinearLayout::identity1D(bitWidth / 8, reg, offset) *
+                 access;
+        return triton::lstsq(footprint, access) ? &found->second : nullptr;
+      };
       for (auto effectInstance : effectInstances) {
         if (auto value = effectInstance.getValue()) {
+          auto *footprint = getPhysicalFootprint(value);
           for (auto bufferId : allocation.getAllBufferIdsWithAliases(value)) {
             if (bufferId != Allocation::InvalidBufferId) {
               auto interval = allocation.getAllocatedInterval(bufferId);
               auto slice =
                   bufferIndexAnalysis.makeSlice(value, interval, bufferId);
+              slice.physicalFootprint = footprint;
 
               if (isa<MemoryEffects::Write>(effectInstance.getEffect()))
                 curBlockInfo.syncWriteSlices[slice].insert(op);
@@ -356,5 +449,72 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
   }
 }
 
-void ModuleMembarAnalysis::run() { runAnalysis<MembarAnalysis>(); }
+SharedMemoryFootprints ModuleMembarAnalysis::getSharedMemoryFootprints() {
+  ModuleOp module = moduleAllocation.getModuleOp();
+  SharedMemoryFootprints footprints;
+  // Physical footprints need allocated addresses. Standalone analyses may lack
+  // those attributes; retain the coarse allocation intervals in that case.
+  bool canAnalyzeFootprints = true;
+  module.walk([&](Operation *op) {
+    if (isa<triton::gpu::LocalAllocOp>(op))
+      canAnalyzeFootprints &= op->hasAttr("allocation.offset");
+    if (isa<ttng::TMEMAllocOp>(op))
+      canAnalyzeFootprints &= op->hasAttr("tensor_memory_col_offset") &&
+                              op->hasAttr("tensor_memory_row_offset");
+    // BufferRegion currently describes byte-addressed numeric shared
+    // storage, not pointers or the widened storage of sub-byte elements.
+    // Check views too: reinterpretation can change an allocation's element.
+    for (Type type :
+         llvm::concat<Type>(op->getOperandTypes(), op->getResultTypes())) {
+      auto memory = dyn_cast<triton::gpu::MemDescType>(type);
+      if (!memory ||
+          !isa<triton::gpu::SharedMemorySpaceAttr>(memory.getMemorySpace()))
+        continue;
+      Type element = memory.getElementType();
+      canAnalyzeFootprints &= isa<IntegerType, FloatType>(element) &&
+                              element.getIntOrFloatBitWidth() % 8 == 0;
+    }
+  });
+  if (!canAnalyzeFootprints)
+    return footprints;
+
+  auto solver = createDataFlowSolver();
+  auto *regions = solver->load<triton::BufferRegionAnalysis>();
+  if (failed(solver->initializeAndRun(module)))
+    return footprints;
+  // Absolute addresses must belong to a common physical frame. Device-function
+  // frames and returned descriptors need callsite translation before comparing
+  // their offsets; use coarse allocation intervals until that is supported.
+  module.walk([&](Operation *op) {
+    auto function = op->getParentOfType<FunctionOpInterface>();
+    if (!function || !triton::isKernel(function) ||
+        triton::gpu::lookupNumCTAs(op) != 1)
+      return;
+    auto consider = [&](Value value) {
+      auto type = dyn_cast<triton::gpu::MemDescType>(value.getType());
+      if (!type ||
+          !isa<triton::gpu::SharedMemorySpaceAttr>(type.getMemorySpace()))
+        return;
+      const auto &info = regions->getRegionInfo(value);
+      if (info.kind != triton::RegionInfo::Kind::Exact || info.views.empty() ||
+          llvm::any_of(info.views, [&](const auto &view) {
+            return view.allocationFrame !=
+                   regions->getOperationId(function.getOperation());
+          }))
+        return;
+      // Preserve every possible runtime stage and origin, not only singletons.
+      footprints.try_emplace(value, info.views);
+    };
+    for (Value value : op->getOperands())
+      consider(value);
+    for (Value value : op->getResults())
+      consider(value);
+  });
+  return footprints;
+}
+
+void ModuleMembarAnalysis::run() {
+  auto physicalFootprints = getSharedMemoryFootprints();
+  runAnalysis<MembarAnalysis>(physicalFootprints);
+}
 } // namespace mlir

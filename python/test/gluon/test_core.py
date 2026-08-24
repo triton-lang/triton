@@ -2470,6 +2470,56 @@ def test_block_m_64_mma():
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+@pytest.mark.parametrize("high_base", [1, 2])
+def test_shared_dynamic_stage_synchronization(high_base, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = ""
+
+    @gluon.jit(do_not_specialize=["n_iters"])
+    def kernel(out, n_iters, HIGH_BASE: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        read: ttgl.constexpr = ttgl.DistributedLinearLayout([], [[1], [2], [4], [8], [16]], [[64], [32]], [], [128])
+        parent = ttgl.allocate_shared_memory(ttgl.int32, [4, 128], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+        for slot in ttgl.static_range(4):
+            parent.index(slot).store(ttgl.full([128], slot, ttgl.int32, layout))
+        ttgl.barrier()
+        total = ttgl.full([128], 0, ttgl.int32, read)
+        last_stage = 0
+        for iteration in range(n_iters):
+            last_stage = iteration % 2
+            # Different parent descriptors each select between two stages.
+            # The groups overlap at stage one only when HIGH_BASE is one.
+            low = parent.slice(0, 2).index(last_stage)
+            high = parent.slice(HIGH_BASE, 2).index(1 - last_stage)
+            low.store(ttgl.full([128], iteration + 1, ttgl.int32, layout))
+            value = high.load(read)
+            total += value
+        latest = parent.slice(0, 2).index(last_stage).load(read)
+        ttgl.store(out + ttgl.arange(0, 128, layout=read), total + latest)
+
+    out = torch.empty(128, device="cuda", dtype=torch.int32)
+    n_iters = 7
+    compiled = kernel[(1, )](out, n_iters, high_base, num_warps=4)
+    stages = list(range(4))
+    total = 0
+    for iteration in range(n_iters):
+        low = iteration % 2
+        high = high_base + 1 - low
+        stages[low] = iteration + 1
+        total += stages[high]
+    torch.testing.assert_close(out, torch.full_like(out, total + stages[(n_iters - 1) % 2]))
+
+    ptx = compiled.asm["ptx"]
+    load = re.search(r"\b(?:ld\.shared|ldmatrix\.)", ptx)
+    stores = list(re.finditer(r"\b(?:st\.shared|stmatrix\.)", ptx))
+    assert load and stores
+    before = next(store for store in reversed(stores) if store.start() < load.start())
+    barrier = re.search(r"\b(?:bar\.sync|barrier\.cta\.sync)\b", ptx[before.end():load.start()])
+    # Disjoint physical MAY-sets remove the low-store/high-load barrier.
+    # Overlapping groups require it because the read layout exchanges warps.
+    assert (barrier is not None) == (high_base == 1)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 @pytest.mark.parametrize("case", ["shifted_source", "changed_stride", "shifted_subslice"])
 def test_shared_descriptor_alias_synchronization(case, fresh_knobs):
     fresh_knobs.compilation.instrumentation_mode = ""

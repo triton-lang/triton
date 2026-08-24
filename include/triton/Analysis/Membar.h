@@ -3,6 +3,7 @@
 
 #include "Allocation.h"
 #include "BufferIndexAnalysis.h"
+#include "BufferRegion.h"
 #include "CallGraph.h"
 #include "Function.h"
 
@@ -16,6 +17,10 @@ namespace mlir {
 
 class OpBuilder;
 struct AllocationSlice;
+
+// Complete MAY-views in a known single-CTA kernel allocation frame. Runtime
+// indices may select several possible physical views across loop iterations.
+using SharedMemoryFootprints = DenseMap<Value, triton::RegionInfo::ViewList>;
 
 /// Callback to allow backend to provide more information on whether a barrier
 /// is needed between two operations. Even though two operations access the same
@@ -64,6 +69,9 @@ public:
   AllocationSlice translated(size_t offset,
                              bool invalidateBufferId = false) const {
     AllocationSlice shifted = *this;
+    // Calls retain the coarse translated interval until frame translation of
+    // these physical views is supported.
+    shifted.physicalFootprint = nullptr;
     shifted.allocationInterval = Interval<size_t>(
         allocationInterval.start() + offset, allocationInterval.end() + offset);
     if (invalidateBufferId) {
@@ -80,6 +88,11 @@ public:
 
   void invalidateOrigin() { subsliceSource = {}; }
 
+  // Immutable geometry covering every dynamic instance of this access. It
+  // remains valid across backedges, unlike the epoch-relative facts above.
+  // The owning module analysis outlives every slice using this pointer.
+  const triton::RegionInfo::ViewList *physicalFootprint = nullptr;
+
   // Buffer-index expression attached by BufferIndexAnalysis. It participates
   // in ordering/equality so accesses to different slots remain separate.
   // Must not be mutated after the slice is inserted into a sorted container
@@ -89,14 +102,16 @@ public:
 
 private:
   std::tuple<Interval<size_t>, Allocation::BufferId, const void *,
-             llvm::ArrayRef<int64_t>, const BufferIndexExpr *, const void *>
+             llvm::ArrayRef<int64_t>, const BufferIndexExpr *, const void *,
+             const void *>
   asTuple() const {
     return {allocationInterval,
             bufferId,
             accessTy.getAsOpaquePointer(),
             subsliceOffsets,
             bufferIndexExpr,
-            subsliceSource.getAsOpaquePointer()};
+            subsliceSource.getAsOpaquePointer(),
+            physicalFootprint};
   }
   // Offsets from subslice. Empty when offsets are unknown
   SmallVector<int64_t> subsliceOffsets;
@@ -294,8 +309,10 @@ public:
   /// a shared memory read. If the temporary storage is written but not read,
   /// it is considered as the problem of the operation itself but not the membar
   /// analysis.
-  MembarAnalysis(Allocation &allocation, MembarFilterFn filter)
+  MembarAnalysis(Allocation &allocation, MembarFilterFn filter,
+                 const SharedMemoryFootprints &physicalFootprints)
       : allocation(allocation), filter(std::move(filter)),
+        physicalFootprints(physicalFootprints),
         bufferIndexAnalysis(
             cast<FunctionOpInterface>(allocation.getOperation())) {}
 
@@ -316,6 +333,7 @@ protected:
   MembarFilterFn filter;
 
 private:
+  const SharedMemoryFootprints &physicalFootprints;
   BufferIndexAnalysis bufferIndexAnalysis;
 };
 
@@ -329,7 +347,9 @@ public:
 
   void run();
 
-  template <typename AnalysisT> void runAnalysis() {
+  template <typename AnalysisT>
+  void runAnalysis(const SharedMemoryFootprints &physicalFootprints =
+                       SharedMemoryFootprints{}) {
     triton::CallGraph<MembarInfo> callGraph(moduleAllocation.getModuleOp());
     triton::CallGraph<MembarInfo>::FuncDataMapT summaries;
     callGraph.walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
@@ -338,11 +358,14 @@ public:
           if (!summaries.try_emplace(function).second)
             return;
           auto &allocation = *moduleAllocation.getFuncData(function);
-          AnalysisT(allocation, filter).run(function, summaries);
+          AnalysisT(allocation, filter, physicalFootprints)
+              .run(function, summaries);
         });
   }
 
 private:
+  SharedMemoryFootprints getSharedMemoryFootprints();
+
   ModuleAllocation &moduleAllocation;
   MembarFilterFn filter;
 };
