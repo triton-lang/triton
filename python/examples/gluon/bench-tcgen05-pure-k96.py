@@ -171,6 +171,7 @@ def main(default_example="experimental-tcgen05-k96.py"):
     parser.add_argument('--buffers', type=int, help='Pure K96 only; mixed/K64 controls retain five buffers')
     parser.add_argument('--epilogue', type=int, help='Pure K96 only; mixed/K64 controls retain N64')
     parser.add_argument('--scheduler', choices=['auto', 'sps', 'clc'], default='auto')
+    parser.add_argument('--tile-width', type=int, help='Example 07 traversal width')
     parser.add_argument('--repeats', type=int, default=7)
     parser.add_argument('--rep-ms', type=int, default=500)
     parser.add_argument('--output', type=Path)
@@ -182,6 +183,8 @@ def main(default_example="experimental-tcgen05-k96.py"):
                             help='Compare with one archived native binary using its saved launch configuration')
     parser.add_argument('--verify-frozen', type=Path, help='Validate archived controls at every recorded shape')
     args = parser.parse_args()
+    if args.tile_width is not None and args.example != '07-pure-k96-matmul.py':
+        parser.error('--tile-width requires example 07')
     tuned_dense = args.example == '07-pure-k96-matmul.py' and args.frozen is None
     if args.buffers is None:
         args.buffers = 6 if args.format == 'mxfp4' or tuned_dense else 5
@@ -255,8 +258,9 @@ def main(default_example="experimental-tcgen05-k96.py"):
         else:
 
             def fn(mode=mode):
+                tuning = {} if args.tile_width is None else dict(tile_width=args.tile_width)
                 out, compiled = experiment.matmul(*operands, *scales, vec, buffers=args.buffers, epilogue=args.epilogue,
-                                                  scheduler=scheduler_id)
+                                                  scheduler=scheduler_id, **tuning)
                 selected['kernel'] = compiled
                 return out
 

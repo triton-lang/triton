@@ -223,7 +223,7 @@ def _epilogue_partition(p, c_final):
                 tiles = joined
             # All input reads have completed, and this persistent CTA has no
             # future producer work. Its retired input storage holds one wide
-            # final output transfer, avoiding the narrow epilogue's tail.
+            # final collective store, avoiding the narrow epilogue's tail.
             scratch = p.a_bufs.slice(0, 4, 0).reinterpret(p.c_desc.dtype, [256, 256], c_final.layout)
             scratch.store(tiles[0])
             tma.async_store(c_final, [off_m, off_n], scratch)
