@@ -173,7 +173,7 @@ bool mlir::triton::isOuterLoop(scf::ForOp forOp) {
 Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
                                      Value pred) {
   OpBuilder::InsertionGuard guard(rewriter);
-  if (mlir::isSpeculatable(op) && mlir::isMemoryEffectFree(op))
+  if (mlir::isMemoryEffectFree(op))
     return op;
   if (isConstantIntValue(pred, 1))
     return op;

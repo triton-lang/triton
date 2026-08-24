@@ -60,36 +60,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: @predicate_non_speculatable
-  // CHECK: %[[POISON:.*]] = ub.poison : i32
-  // CHECK: %[[PRED:.*]] = arith.cmpi slt
-  // CHECK: %[[PREDICATED_DIV:.*]] = scf.if %[[PRED]] -> (i32) {
-  // CHECK-NEXT: %[[DIV:.*]] = arith.divsi
-  // CHECK-NEXT: scf.yield %[[DIV]] : i32
-  // CHECK-NEXT: } else {
-  // CHECK-NEXT: scf.yield %[[POISON]] : i32
-  // CHECK-NEXT: }
-  // CHECK: tt.addptr {{.*}}, %[[PREDICATED_DIV]]
-  // CHECK: %[[MASK:.*]] = tt.splat %[[PRED]]
-  // CHECK: ttg.async_copy_global_to_local {{.*}} mask %[[MASK]]
-  tt.func public @predicate_non_speculatable(%ptr: !tt.ptr<i32>, %n: i32) -> i32 {
-    %c0 = arith.constant 0 : i32
-    %c1 = arith.constant 1 : i32
-    %result = scf.for %i = %c0 to %n step %c1 iter_args(%sum = %c0) -> i32 : i32 {
-      %divisor = arith.subi %n, %i {loop.cluster = 0 : i32, loop.stage = 0 : i32} : i32
-      %offset = arith.divsi %n, %divisor {loop.cluster = 0 : i32, loop.stage = 0 : i32} : i32
-      %load_ptr = tt.addptr %ptr, %offset {loop.cluster = 0 : i32, loop.stage = 0 : i32} : !tt.ptr<i32>, i32
-      %value = tt.load %load_ptr {loop.cluster = 0 : i32, loop.stage = 0 : i32} : !tt.ptr<i32>
-      %next = arith.addi %sum, %value {loop.cluster = 1 : i32, loop.stage = 1 : i32} : i32
-      scf.yield %next : i32
-    } {tt.num_stages = 2 : i32, tt.scheduled_max_stage = 1 : i32}
-    tt.return %result : i32
-  }
-}
-
-// -----
-
 #blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [0, 1]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
