@@ -22,6 +22,19 @@ Frozen-control comparisons and artifact capture remain in
 `bench-tcgen05-pure-k96.py --example 07-pure-k96-matmul.py`; the historical
 measurements below retain their original source and binary identities.
 
+## Shape and output-dtype sweep
+
+[Performance tables and plot](K96_PERFORMANCE.md) cover 14 shapes for both
+MXFP4 and NVFP4, plus FP16/BF16/FP32 output at the 8K and 16K square anchors:
+36 cases and two longer rectangular repeats. The kernels and tuning are unchanged.
+At M=N=16384, K=16128, FP16 output measures 8.121 PFLOPS MXFP4 and 7.921 NVFP4;
+FP32 output measures 7.499 and 7.025. All six original frozen comparisons pass.
+
+The longer M8192/N16384/K16128 repeat measures 8.106/7.931 PFLOPS (MX/NV).
+The initial NVFP4 value above 8 did not hold; the report uses the longer values
+and preserves both cohorts. The [raw data](k96-shape-dtype-measurements.json)
+contains commands, individual samples, input/binary hashes, resources and controls.
+
 ## NVFP4 follow-up: 7.935 sustained PFLOPS; 8 remains unmet
 
 The retained native Gluon kernel reaches **7.934985 PFLOPS** at
