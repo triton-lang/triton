@@ -61,7 +61,7 @@ def _softmax_keep_dims_warning():
 
 @core._tensor_member_fn
 @jit
-def softmax(x, dim=None, keep_dims=None, *, ieee_rounding=False):
+def softmax(x, dim=None, *, keep_dims=None, ieee_rounding=False):
     """
     Computes the softmax of :code:`x` along the given axis.
 
@@ -72,6 +72,7 @@ def softmax(x, dim=None, keep_dims=None, *, ieee_rounding=False):
     :type dim: int | None
     :param keep_dims: deprecated and ignored. Softmax always preserves the input shape.
         Defaults to :code:`None`; any other value emits a warning.
+        Must be passed by keyword.
     :type keep_dims: bool | None
     :param ieee_rounding: whether the final division uses IEEE-compliant rounding.
         Must be passed by keyword.
