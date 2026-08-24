@@ -4,6 +4,8 @@ import torch
 import triton.language as tl
 
 from test_core import _test_binary, int_dtypes, uint_dtypes, float_dtypes, numpy_random
+from triton._internal_testing import is_interpreter
+from triton.runtime.errors import InterpreterError
 
 # ---------------
 # test maximum/minimum ops
@@ -152,25 +154,45 @@ def test_swizzle2d(size_i, size_j, size_g, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("shape, dim", [((2, 2), 1), ((8, 64), -1), ((128, ), 0)])
-def test_softmax(shape, dim, device):
+@pytest.mark.parametrize("shape, dim, ieee_rounding", [((2, 2), 1, False), ((8, 64), -1, True), ((128, ), 0, False)])
+def test_softmax(shape, dim, ieee_rounding, device):
     # Reproducer for https://github.com/triton-lang/triton/issues/11406, where
     # softmax normalized along the wrong axis for every dim but the default.
 
     @triton.jit
-    def softmax_kernel(X, Z, numel: tl.constexpr, shape: tl.constexpr, dim: tl.constexpr):
+    def softmax_kernel(X, Z, numel: tl.constexpr, shape: tl.constexpr, dim: tl.constexpr, ieee_rounding: tl.constexpr):
         # X is contiguous, so its row-major flat offsets are just an arange.
         offs = tl.arange(0, numel).reshape(shape)
         x = tl.load(X + offs)
-        z = tl.softmax(x, dim=dim)
+        if ieee_rounding:
+            z = x.softmax(dim=dim, ieee_rounding=True)
+        else:
+            z = tl.softmax(x, dim=dim)
         tl.static_assert(z.shape == x.shape, "softmax must preserve the input shape")
         tl.store(Z + offs, z)
 
     x = numpy_random(shape, dtype_str='float32')
     x = torch.from_numpy(x).to(device)
     z = torch.empty_like(x)
-    softmax_kernel[(1, )](x, z, x.numel(), shape, dim)
+    softmax_kernel[(1, )](x, z, x.numel(), shape, dim, ieee_rounding)
     torch.testing.assert_close(z, torch.softmax(x, dim=dim), rtol=1e-5, atol=1e-6)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("member", [False, True])
+def test_softmax_rejects_positional_keep_dims(member):
+
+    @triton.jit
+    def kernel(member: tl.constexpr):
+        x = tl.full((2, 2), 1.0, tl.float32)
+        if member:
+            x.softmax(1, True)
+        else:
+            tl.softmax(x, 1, True)
+
+    error = InterpreterError if is_interpreter() else triton.CompilationError
+    with pytest.raises(error, match="positional argument"):
+        kernel[(1, )](member)
 
 
 @pytest.mark.interpreter

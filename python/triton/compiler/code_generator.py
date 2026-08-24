@@ -653,7 +653,7 @@ class CodeGenerator(ast.NodeVisitor):
             raise self._unsupported(
                 node, "nested function definitions are not allowed inside a @triton.jit kernel. "
                 "Move the helper function to module level and decorate it with @triton.jit.")
-        arg_names, kwarg_names = self.visit(node.args)
+        arg_names = self.visit(node.args)
         # initialize defaults
         for i, default_value in enumerate(node.args.defaults[::-1]):
             arg_node = node.args.args[-i - 1]
@@ -701,8 +701,9 @@ class CodeGenerator(ast.NodeVisitor):
             arg_names += [self.visit(arg)]
         if node.vararg is not None:
             arg_names += [self.visit(node.vararg)]
-        kwarg_names = self.visit(node.kwarg)
-        return arg_names, kwarg_names
+        # Keyword-only parameters use the same ordered IR argument list.
+        arg_names += [self.visit(arg) for arg in node.kwonlyargs]
+        return arg_names
 
     def visit_arg(self, node):
         ast.NodeVisitor.generic_visit(self, node)

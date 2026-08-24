@@ -2,6 +2,7 @@ import collections
 import functools
 import triton
 import triton.language as tl
+from triton.experimental import gluon
 from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
 from triton.compiler.code_generator import CodeGenerator
 from triton.runtime.jit import MockTensor
@@ -12,6 +13,16 @@ from typing import NamedTuple
 # ===-----------------------------------------------------------------------===#
 # Unit Tests
 # ===-----------------------------------------------------------------------===#
+
+
+@pytest.mark.parametrize("jit", [triton.jit, gluon.jit])
+def test_jit_variadic_keyword_arguments(jit):
+
+    def kernel(**kwargs):
+        pass
+
+    with pytest.raises(TypeError, match=r"JIT functions do not support \*\*kwargs"):
+        jit(kernel)
 
 
 def doesnt_compile(kernel):
@@ -391,6 +402,12 @@ def test_constexpr_function_from_jit():
 
 def test_constexpr_function_from_python():
     assert constexpr_function(7) == 8
+
+    @triton.constexpr_function
+    def with_kwargs(**kwargs):
+        return kwargs["value"] + 1
+
+    assert with_kwargs(value=7) == 8
 
 
 @filecheck_test
