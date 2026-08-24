@@ -11702,8 +11702,7 @@
       "work/2026-08-24/01a02c07-7d32-7f72-b030-5dd20efa2a8c-k96-shape-dtype-benchmarks/validation"
     ],
     "logical_bytes": 134122659,
-    "verification_level": "remote-size",
-    "metadata_index": "BLOBSTORE.d/bundles/2a14b86bdcb2ce93a1bd0e51-0000-1f9ffc4bed3d06fe.jsonl"
+    "verification_level": "remote-size"
   },
   "validation": {
     "candidate_cases": 36,
