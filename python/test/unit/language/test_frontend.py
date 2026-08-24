@@ -29,6 +29,29 @@ def anchor(v):
     pass
 
 
+@pytest.mark.parametrize("dtype", [tl.float16, tl.bfloat16, tl.float32, tl.float64, tl.float8e4nv, tl.float8e5],
+                         ids=str)
+def test_scalar_constant_preserves_signed_zero(dtype):
+
+    @triton.jit
+    def kernel(dtype: tl.constexpr):
+        # CHECK: arith.constant -0.000000e+00
+        anchor(tl.full((), -0.0, dtype))
+        # CHECK: arith.constant 0.000000e+00
+        anchor(tl.full((), 0.0, dtype))
+
+    run_filecheck_test(kernel, args=(dtype, ))
+
+
+@filecheck_test
+@triton.jit
+def test_scalar_constant_fp8e4b15_preserves_signed_zero():
+    # CHECK: arith.constant -128 : i8
+    anchor(tl.full((), -0.0, tl.float8e4b15))
+    # CHECK: arith.constant 0 : i8
+    anchor(tl.full((), 0.0, tl.float8e4b15))
+
+
 @triton.aggregate
 class Pair:
     first: tl.tensor
