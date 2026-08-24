@@ -26,6 +26,7 @@ AllocationSlice::AllocationSlice(Value value,
     // and when a subslice is carried in a loop
     if (accessTy.getAllocShape() == subslice.getSrc().getType().getShape()) {
       subsliceOffsets = SmallVector<int64_t>(subslice.getOffsets());
+      subsliceSource = subslice.getSrc();
     }
   }
 }
@@ -47,6 +48,12 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
 
   // If offsets are unknown, conservatively assume overlap
   if (subsliceOffsets.empty() || other.subsliceOffsets.empty())
+    return true;
+
+  // Logical offsets share coordinates only for the same source descriptor
+  // in the same dynamic iteration. Matching encodings or allocation IDs
+  // do not establish this after selection, indexing or reinterpretation.
+  if (!subsliceSource || subsliceSource != other.subsliceSource)
     return true;
 
   // If layouts differ, we assume intersection as we currently only work on

@@ -24,6 +24,9 @@ struct BufferIndexExpr;
 /// into `base + constantOffset`, optionally under a positive constant modulus,
 /// and proves two accesses disjoint only when the expressions have the same
 /// base and different offsets modulo the same modulus.
+/// Scalar indices follow Triton's block-programming semantics. Comparisons
+/// also require the same indexed source in the same dynamic iteration:
+/// a source change can change both the origin and the byte stride of a slot.
 ///
 /// Recognized index shapes:
 ///   1. integer constants,
@@ -62,11 +65,14 @@ public:
   AllocationSlice makeSlice(Value value, Interval<size_t> allocationInterval,
                             Allocation::BufferId bufferId);
 
-  /// Returns true if `successor` is reached by a cf-form loop backedge from
-  /// `terminator`, using the standard dominance rule.
+  /// Returns true if `successor` may revisit definitions from `terminator`'s
+  /// dynamic iteration. Uses dominance for reducible cf-form loops and
+  /// conservatively invalidates region-to-region, nested and irreducible CFG
+  /// edges, whose reducibility is not established by this analysis.
   bool isBackedgeSuccessor(Operation *terminator, Block *successor) const;
 
-  /// Clears the buffer index of every slice in `info`, rebuilding both maps.
+  /// Clears the buffer index and access origin of every slice in `info`,
+  /// rebuilding both maps.
   /// Used at loop backedges where the same SSA value can denote a value from a
   /// different dynamic iteration, and before storing function summaries where
   /// per-function SSA index identity is no longer meaningful.

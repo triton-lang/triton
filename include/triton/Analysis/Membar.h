@@ -66,8 +66,10 @@ public:
     AllocationSlice shifted = *this;
     shifted.allocationInterval = Interval<size_t>(
         allocationInterval.start() + offset, allocationInterval.end() + offset);
-    if (invalidateBufferId)
+    if (invalidateBufferId) {
       shifted.bufferId = Allocation::InvalidBufferId;
+      shifted.invalidateOrigin();
+    }
     // This preserves analysis payloads such as bufferIndexExpr. Callers that
     // translate slices across function boundaries must clear per-function
     // payloads before translating.
@@ -75,6 +77,8 @@ public:
   }
 
   void print(raw_ostream &os) const;
+
+  void invalidateOrigin() { subsliceSource = {}; }
 
   // Buffer-index expression attached by BufferIndexAnalysis. It participates
   // in ordering/equality so accesses to different slots remain separate.
@@ -85,13 +89,19 @@ public:
 
 private:
   std::tuple<Interval<size_t>, Allocation::BufferId, const void *,
-             llvm::ArrayRef<int64_t>, const BufferIndexExpr *>
+             llvm::ArrayRef<int64_t>, const BufferIndexExpr *, const void *>
   asTuple() const {
-    return {allocationInterval, bufferId, accessTy.getAsOpaquePointer(),
-            subsliceOffsets, bufferIndexExpr};
+    return {allocationInterval,
+            bufferId,
+            accessTy.getAsOpaquePointer(),
+            subsliceOffsets,
+            bufferIndexExpr,
+            subsliceSource.getAsOpaquePointer()};
   }
   // Offsets from subslice. Empty when offsets are unknown
   SmallVector<int64_t> subsliceOffsets;
+  // The source descriptor supplying the coordinates for subslice offsets.
+  Value subsliceSource;
   // The allocated interval for this buffer
   Interval<size_t> allocationInterval;
   // Type of the memory descriptor for this access

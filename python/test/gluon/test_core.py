@@ -9,6 +9,7 @@ import triton.language as tl
 
 from triton._internal_testing import (
     is_compile_warmup,
+    is_cuda,
     is_ampere_or_newer,
     is_blackwell,
     is_blackwell_ultra,
@@ -2466,6 +2467,54 @@ def test_block_m_64_mma():
 
     d_ref = a @ b + c
     torch.testing.assert_close(d_ref, d_tri, rtol=0.08, atol=0)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+@pytest.mark.parametrize("case", ["shifted_source", "changed_stride", "shifted_subslice"])
+def test_shared_descriptor_alias_synchronization(case, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = ""
+
+    @gluon.jit
+    def kernel(out, CASE: ttgl.constexpr):
+        write: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        size: ttgl.constexpr = 256 if CASE == "changed_stride" else 128
+        read: ttgl.constexpr = ttgl.DistributedLinearLayout([[128]] if CASE == "changed_stride" else [],
+                                                            [[1], [2], [4], [8], [16]], [[64], [32]], [], [size])
+        allocation_size: ttgl.constexpr = 256 if CASE == "shifted_subslice" else 128
+        parent = ttgl.allocate_shared_memory(ttgl.int32, (4, allocation_size), ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+        for stage in ttgl.static_range(4):
+            parent.index(stage).store(ttgl.full((allocation_size, ), 0, ttgl.int32, write))
+        ttgl.barrier()
+
+        if CASE == "shifted_source":
+            # Distinct indices name the same physical slot through different bases.
+            write_view = parent.index(1)
+            read_view = parent.slice(1, 3).index(0)
+        elif CASE == "changed_stride":
+            # The result shapes differ, but the first 128 elements overlap.
+            write_view = parent.index(2)
+            read_view = parent.reinterpret(shape=(2, 256)).index(1)
+        else:
+            # Both indices are zero. Relative subslice offsets 0 and 256 refer
+            # to the same physical bytes because the parent origins differ.
+            write_view = parent.slice(1, 3).index(0).slice(0, 128)
+            read_view = parent.reinterpret(shape=(2, 512)).index(0).slice(256, 128)
+
+        write_view.store(ttgl.full((128, ), 1, ttgl.int32, write))
+        values = read_view.load(read)
+        ttgl.store(out + ttgl.arange(0, size, layout=read), values)
+
+    out = torch.empty(256 if case == "changed_stride" else 128, device="cuda", dtype=torch.int32)
+    compiled = kernel[(1, )](out, case, num_warps=4)
+    expected = torch.ones_like(out)
+    if case == "changed_stride":
+        expected[128:] = 0
+    torch.testing.assert_close(out, expected)
+    ptx = compiled.asm["ptx"]
+    stores = list(re.finditer(r"\b(?:st\.shared|stmatrix\.)", ptx))
+    load = re.search(r"\b(?:ld\.shared|ldmatrix\.)", ptx)
+    assert stores and load
+    assert re.search(r"\b(?:bar\.sync|barrier\.cta\.sync)\b", ptx[stores[-1].end():load.start()])
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
