@@ -1,6 +1,130 @@
 # Native packed tcgen05 K=96
 
-## Dense example 07: the 9-PFLOPS target remains unmet
+## NVFP4 follow-up: 7.935 sustained PFLOPS; 8 remains unmet
+
+The retained native Gluon kernel reaches **7.934985 PFLOPS** at
+**M=N=16384, K=16128**, versus **7.652739** for the contemporaneously replayed,
+pre-optimization example-07 binary: **+3.69% throughput / −3.56% latency**.
+This is the original NVFP4 target case. It did **not** sustain 8 PFLOPS.
+A separately disclosed M=N=16384, K=19200, traversal-width16 run reached
+7.986153 PFLOPS over seven 500-ms samples; its short 8.019368 screen did not
+hold. A subsequent sustained replay of that nearby case measured 7.968620.
+Neither a different K nor rounding is used to claim the target.
+
+### Final frozen-binary gate
+
+| Format | M=N | K | Frozen example 07 PFLOPS | New example 07 PFLOPS | Throughput uplift | New/frozen latency |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| NVFP4 | 8192 | 7680 | 7.032437 | 7.269058 | +3.36% | 0.967448 |
+| NVFP4 | 16384 | 16128 | 7.652739 | 7.934985 | +3.69% | 0.964430 |
+| NVFP4 | 32768 | 32256 | 7.183970 | 7.454270 | +3.76% | 0.963739 |
+| MXFP4 | 8192 | 7680 | 7.375524 | 7.386394 | +0.15% | 0.998528 |
+| MXFP4 | 16384 | 16128 | 8.104257 | 8.104300 | +0.00% | 0.999995 |
+| MXFP4 | 32768 | 32256 | 7.998173 | 8.000901 | +0.03% | 0.999659 |
+
+**All six cases pass the individual ≤1.02 latency gate.** Controls are the
+previous example-07 binaries, not the slower original experimental native
+kernel. They are hash-verified `CompiledKernel` launches, never recompiled.
+Seven alternating samples use identical seed123 inputs on GB300 GPU0
+`GPU-4ed02509-778a-be63-cad2-f338cc3fc883`, CUDA graphs, and no L2 flush.
+The benchmark's `rep_ms` is 500 for 8K/16K and 750 for 32K. Every sample has
+at least 720 device executions; maximum within-case sample coefficient of
+variation is 0.147%. Clocks and power limits are unchanged and unlocked.
+No candidate is instrumented during performance measurement.
+
+The final source checkpoint is `f24a2f3cfa91fd08914db71962fe3860deea37eb`,
+with a clean worktree and one unchanged compiler-library hash throughout the
+sweep. The assembler is bundled ptxas-blackwell 13.0.88. The integrated kernel
+also reproduces the exact frozen winning scratch implementation within 0.022%
+latency (7.932027 versus 7.933748 PFLOPS in their paired recovery run).
+Full samples, launch manifests, source/compiler/binary hashes, resources,
+replay results, and supplementary experiments are in
+[nvfp4-k96-measurements.json](nvfp4-k96-measurements.json). Earlier measurement
+files remain unchanged; their results below describe historical phases.
+
+### What changed
+
+No new compiler or language change was needed. The existing typed K96 API
+expresses the winner without inline MMA or raw shared addresses. Unsigned
+packed FP4, block16/block32 scales, FP32 accumulation, FP16 output, useful
+`2*M*N*K` FLOP accounting, and exact K256 TMA producer transfers are unchanged.
+Three producer stages still feed eight K96 instructions per K768, without
+padding or excess data/scale traffic. This gain combines producer, scheduling,
+and epilogue changes; it is **not** an isolated K96-versus-K64 comparison.
+
+NVFP4 now uses six data slots and five independently released scale slots,
+48-register load/MMA workers, and a single-stage N16 epilogue. A/B data loads
+are issued before waiting for a reusable scale slot, then B scales before A
+scales. K128 scale copies are interleaved with native MMA issue; their total
+remains 36 `tcgen05.cp` instructions per K768. Independent ring counters persist
+across output tiles. The seven native operations are:
+
+| Operation | Data window | Scale-factor start (block16) | K96 instructions | Data release |
+| --- | --- | ---: | ---: | --- |
+| 1 | slot0 `(0,96)` | 0 | 1 | none |
+| 2 | slot0 `(96,192)` | 6 | 1 | none |
+| 3 | slot0 → slot1 `(192,288)` | 12 | 1 | slot0 |
+| 4 | slot1 `(32,128)` | 18 | 1 | none |
+| 5 | slot1 `(128,224)` | 24 | 1 | none |
+| 6 | slot1 → slot2 `(224,320)` | 30 | 1 | slot1 |
+| 7 | slot2 `(64,256)` | 36 | 2 | slot2 |
+
+Scale-slot completion commits follow the second K128 scale copy for each
+slot, after MMA instructions 1, 4, and 6 respectively. Data completion remains
+after instructions 3, 6, and 8. The epilogue drains two N128 accumulator halves
+early into FP16 registers and releases the accumulator before output staging.
+Ordinary tiles issue sixteen N16 output stores. The last SPS tile reuses a
+contained view of retired input storage for one collective Gluon store:
+**four hardware N64 TMA boxes per CTA**, not one hardware transaction. The
+verified final SASS has an unpredicated store after a 128-thread barrier;
+all four epilogue warps participate. CLC retains the narrow-store epilogue.
+
+Defaults use SPS for both formats; CLC remains selectable. Traversal width is
+16 for K≤16384 and 8 above, with `--tile-width` for explicit experiments. MXFP4
+retains its six-slot coupled data/scale pipeline and N32 epilogue. FP32 output
+retains the staging byte budget through coupled-ring defaults: six slots/N16
+for MXFP4 and five slots/N32 for NVFP4. The measured FP16 NVFP4 binary uses
+231,596 shared-memory bytes, 512 TMEM columns, 255 reported registers, and no
+spills. No unsupported shared-memory limit override is used.
+
+### Validation and rejected experiments
+
+Passed: **28 functional cases, 18 ConSan pipeline cases, 20 FPSan window cases,
+and 14 hardware device-memory checks**. These cover MX/NV scales, FP16/FP32
+output, SPS/CLC, independent ring wraparound, M/N tails including the final
+SPS reuse path, and CUDA-graph replay. The raw memory-check log separately
+records handled `cuFuncSetAttribute` capability-probe errors in the unchanged
+loader. The final device-access check uses `--report-api-errors no` and reports
+zero device errors; this does not claim the raw loader probes succeeded.
+The large CLC/ConSan variant required lengthy LLVM/ptxas compilation, but passed.
+
+All twelve final candidate/control binaries and all 36 original historical
+launches pass FP32-reference checks, two direct launches, and ten graph replays
+with all Triton compilation entry points patched to fail. Each pair is
+bit-identical. The legacy indexed-control CLI and the explicit traversal-width
+CLI also pass correctness smoke tests; their short timings are not acceptance
+evidence. Every final candidate has complete executable-section SASS coverage,
+eight K96 instructions, correct scale selectors, four absolute-leading
+continuation descriptors, the expected copy/commit ordering, and no stack or
+local-memory spills. Only Python example, benchmark, and existing tests changed;
+no native rebuild was necessary.
+
+Rejected experiments remain in the task-owned archive, not dependencies:
+N128 tiles/double accumulators (about 6 PFLOPS), extra/compact scale rings,
+separate scale-copy warps, direct global stores, paired K512 TMA loads, wider
+CTA clusters, XOR traversal, and polling/election/assembler-only PTX changes.
+TMEM scale-placement screens appeared slightly faster but gained less than
+0.1% in sustained testing and regressed the nearby K19200 case, so were not
+retained. Short screens above 8 PFLOPS are retained as screening evidence only.
+
+```bash
+python python/examples/gluon/07-pure-k96-matmul.py \
+  --format nvfp4 --size 16384 --k 16128 --modes native \
+  --frozen-native /path/to/archived/example07/nvfp4-16384/native \
+  --repeats 7 --rep-ms 500 --output /tmp/nvfp4-k96
+```
+
+## Historical dense example 07: the initial 9-PFLOPS attempt
 
 `07-pure-k96-matmul.py` is a runnable native MXFP4/NVFP4 dense example. It uses only K96 MMAs, unsigned packed inputs, FP32 accumulation, and FP16 output. Three exact K256 producer stages feed each K768 macrotile, without operand padding or extra transfers. The existing native controls and historical measurements are unchanged.
 
@@ -100,7 +224,7 @@ issue mode without a completion barrier; the next completing MMA or explicit
 The barrier-count helper accepts continuation descriptors alongside the current
 data/scale views, rather than assuming a four-descriptor maximum.
 
-### Five operations per K768
+### Original coupled-ring pipeline: five operations per K768
 
 | Operation | Current/continuation view | `k_range` | Scale start | Completion |
 | --- | --- | --- | --- | --- |
@@ -115,9 +239,11 @@ of packed operands and their useful scales. There is no operand padding,
 additional copy, excess TMA payload, or changed FLOP accounting. Readiness
 waits, scale copies, accumulator handoff, SPS/CLC scheduling, and the TMA
 epilogue remain intact. MXFP4 uses six buffers/N32; NVFP4 uses five/N64.
-Six NVFP4 producer slots alone require 233,472 bytes, above the 232,448-byte SMEM
-limit, so odd/even sanitizer stress tests use four/five NVFP4 slots and
-five/six MXFP4 slots.
+In this original coupled-ring/N64 pipeline, six NVFP4 producer slots require
+233,472 bytes, above the 232,448-byte SMEM limit, so its odd/even sanitizer
+stress tests use four/five NVFP4 slots and five/six MXFP4 slots. The later
+independent-ring NVFP4 pipeline described above fits six data slots with five
+scale slots and an N16 epilogue.
 
 ### Frozen-binary acceptance
 
