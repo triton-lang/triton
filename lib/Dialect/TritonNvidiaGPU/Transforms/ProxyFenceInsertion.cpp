@@ -118,7 +118,7 @@ struct ProxyFenceFunctionAnalysis
       uint8_t accessScopes = async ? getProxyFenceScope(op) : scopes;
       ProxyBlockInfo::Frontier &frontier =
           async ? effects.async : effects.generic;
-      for (BufferAccess region : regions.getAccessRegions(access.value)) {
+      for (BufferAccess region : regions.getAccessRegions(access)) {
         if (access.isRead)
           frontier.addRead(region, accessScopes);
         if (access.isWrite)

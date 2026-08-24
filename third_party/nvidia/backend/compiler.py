@@ -118,6 +118,8 @@ class CUDAOptions:
     ptx_options: Optional[str] = knobs.nvidia.ptxas_options
     ir_override: Optional[str] = None  # filename of a user-defined IR (*.{ttir|ttgir|llir|ptx})
     enable_fp_fusion: bool = True
+    # Use 96+96+64 for eligible sm103 two-CTA packed FP4 reductions.
+    enable_fp4_k96: bool = True
     enable_reflect_ftz: bool = True  # ftz in libdevice
     launch_cooperative_grid: bool = False
     launch_pdl: bool = False
@@ -362,6 +364,8 @@ class CUDABackend(BaseBackend):
         passes.common.add_sccp(pm)
         passes.common.add_cse(pm)
         passes.common.add_canonicalizer(pm)
+        mod.set_attr("ttng.enable_fp4_k96", ir.builder(mod.context).get_int32_attr(int(opt.enable_fp4_k96)))
+        nvidia.passes.ttnvgpuir.add_normalize_mma_k(pm)
         if "fpsan" in opt.instrumentation_mode:
             passes.ttgpuir.add_fp_sanitizer(pm, opt.fpsan_homomorphic_casts)
             passes.ttgpuir.add_remove_layout_conversions(pm, True)
@@ -388,6 +392,8 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         nvidia.passes.ttnvgpuir.add_check_matmul_two_cta(pm)
 
+        mod.set_attr("ttng.enable_fp4_k96", ir.builder(mod.context).get_int32_attr(int(options.enable_fp4_k96)))
+        nvidia.passes.ttnvgpuir.add_normalize_mma_k(pm)
         if "fpsan" in options.instrumentation_mode:
             passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
         if any(mode in options.instrumentation_mode for mode in ["consan", "fpsan"]):
@@ -400,6 +406,7 @@ class CUDABackend(BaseBackend):
         return mod
 
     def make_llir(self, src, metadata, options, capability):
+        src.set_attr("ttng.enable_fp4_k96", ir.builder(src.context).get_int32_attr(int(options.enable_fp4_k96)))
         ptx_version = get_ptx_version_from_options(options, self.target.arch)
 
         mod = src

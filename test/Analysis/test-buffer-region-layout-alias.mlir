@@ -807,3 +807,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     tt.return
   }
 }
+
+// -----
+
+// Scale values are replicated into all four warp-addressable TMEM regions.
+// A valid reinterpret sees exactly the same physical words, not a superset.
+// CHECK-LABEL: scale_replicas vs scale_replicas
+// CHECK: scale_replicas vs scale_storage: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true
+#scales = #ttng.tensor_memory_scales_encoding<>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 16, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:103", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @scale_replicas() {
+    %scales = ttng.tmem_alloc {test.region_name = "scale_replicas", tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x16xi8, #scales, #ttng.tensor_memory, mutable>
+    %all = ttg.memdesc_reinterpret %scales : !ttg.memdesc<128x16xi8, #scales, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x16xi32, #tmem, #ttng.tensor_memory, mutable>
+    %a = ttng.tmem_load %all {test.region_name = "scale_storage"} : !ttg.memdesc<128x16xi32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x16xi32>
+    tt.return
+  }
+}

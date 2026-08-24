@@ -210,6 +210,8 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module_ &m) {
                      mlir::triton::createConvertWarpSpecializeToLLVM);
   ADD_PASS_WRAPPER_0("add_allocate_tensor_memory",
                      ttng::createTritonTensorMemoryAllocationPass);
+  ADD_PASS_WRAPPER_0("add_normalize_mma_k",
+                     ttng::createTritonNvidiaGPUNormalizeMMAKPass);
   ADD_PASS_WRAPPER_0("add_lower_mma",
                      ttng::createTritonNvidiaGPUMMALoweringPass);
   ADD_PASS_WRAPPER_0("add_optimize_descriptor_encoding",

@@ -1575,3 +1575,25 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#data = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  // Current, continuation, and scale descriptors all participate in completion.
+  // CHECK-LABEL: @commit_segmented_operands
+  // CHECK: tcgen05.commit.cta_group::1.mbarrier::arrive::one.shared::cluster.multicast::cluster.b64
+  tt.func @commit_segmented_operands(%barrier: !ttg.memdesc<2xi64, #bar, #smem, mutable>,
+      %a: !ttg.memdesc<128x128xf16, #data, #smem>, %b: !ttg.memdesc<128x128xf16, #data, #smem>,
+      %an: !ttg.memdesc<128x128xf16, #data, #smem>, %bn: !ttg.memdesc<128x128xf16, #data, #smem>,
+      %sa: !ttg.memdesc<128x128xf16, #data, #smem>, %sb: !ttg.memdesc<128x128xf16, #data, #smem>) {
+    ttng.tc_gen5_commit %barrier descs %a, %b, %an, %bn, %sa, %sb :
+      !ttg.memdesc<2xi64, #bar, #smem, mutable>,
+      !ttg.memdesc<128x128xf16, #data, #smem>, !ttg.memdesc<128x128xf16, #data, #smem>,
+      !ttg.memdesc<128x128xf16, #data, #smem>, !ttg.memdesc<128x128xf16, #data, #smem>,
+      !ttg.memdesc<128x128xf16, #data, #smem>, !ttg.memdesc<128x128xf16, #data, #smem>
+    tt.return
+  }
+}

@@ -319,7 +319,8 @@ public:
 
   void run();
 
-  template <typename AnalysisT> void runAnalysis() {
+  template <typename AnalysisT, typename... AnalysisArgs>
+  void runAnalysis(AnalysisArgs &...args) {
     triton::CallGraph<MembarInfo> callGraph(moduleAllocation.getModuleOp());
     triton::CallGraph<MembarInfo>::FuncDataMapT summaries;
     callGraph.walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
@@ -328,7 +329,7 @@ public:
           if (!summaries.try_emplace(function).second)
             return;
           auto &allocation = *moduleAllocation.getFuncData(function);
-          AnalysisT(allocation, filter).run(function, summaries);
+          AnalysisT(allocation, filter, args...).run(function, summaries);
         });
   }
 

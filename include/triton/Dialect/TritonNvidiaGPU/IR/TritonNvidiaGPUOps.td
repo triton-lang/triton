@@ -779,6 +779,15 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     Otherwise, if a barrier is given, the op will trigger a commit/arrive on it.
     The result will be safe to read after a barrier wait.
 
+    k_range selects a half-open interval of logical K elements, independently
+    of allocation size. Each operand continues into its corresponding a_next or
+    b_next view only after exhausting its first view. Partial operations require
+    scale_block_size (16 or 32), and scale offsets name the first scale consumed
+    in each independently staged scale stream. instruction_k specifies an exact
+    instruction decomposition, with no padded remainder. All backing storage
+    remains explicit in the operand list. k_base_offsets records physical K
+    origins proved by the normalization pass; it is not an address escape.
+
     This operation takes and produces an optional token to indicate TMEM read
     and write on its accumulator operand. When the tokens are present, they can
     be used to check aliasing and modref on the accumulator memory.
@@ -797,9 +806,17 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     I1:$pred,
     Variadic<TTG_MemDescType>:$barriers,
     Variadic<I1>:$barrier_preds,
+    Optional<TTG_MemDescType>:$a_next,
+    Optional<TTG_MemDescType>:$b_next,
     UnitAttr:$two_ctas,
     UnitAttr:$multicast,
-    UnitAttr:$is_async
+    UnitAttr:$is_async,
+    OptionalAttr<DenseI32ArrayAttr>:$k_range,
+    OptionalAttr<I32Attr>:$instruction_k,
+    OptionalAttr<I32Attr>:$scale_block_size,
+    DefaultValuedAttr<I32Attr, "0">:$a_scale_offset,
+    DefaultValuedAttr<I32Attr, "0">:$b_scale_offset,
+    OptionalAttr<DenseI32ArrayAttr>:$k_base_offsets
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
 
@@ -807,6 +824,9 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     int64_t getBlockM();
     int64_t getBlockN();
     int64_t getBlockK();
+    int64_t getKStart();
+    int64_t getScaleVecSize();
+    ::llvm::SmallVector<::mlir::triton::nvidia_gpu::MMAInstructionTile> getK96Instructions(bool allowUnnormalized = false);
   }];
 
   let builders = [
@@ -828,6 +848,8 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
   let assemblyFormat = [{
     $a `,` $b `,` $d `` custom<Token>($acc_dep, type($token)) `,` $a_scale `,`
     $b_scale `,` $useD `,` $pred `lhs` `=` $a_type `rhs` `=` $b_type
+    (`a_next` $a_next^ `:` qualified(type($a_next)))?
+    (`b_next` $b_next^ `:` qualified(type($b_next)))?
     `` custom<BarriersAndPreds>($barriers, $barrier_preds)
     attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
     qualified(type($d)) `,` qualified(type($a_scale)) `,`

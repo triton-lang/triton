@@ -95,7 +95,8 @@ MemDescFootprint getMemDescAddresses(
     llvm::DenseMap<std::pair<Type, uint32_t>, triton::AddressSet> *cache =
         nullptr,
     ArrayRef<uint32_t> partitionBases = {}, uint32_t affinePartitionOffset = 0,
-    uint32_t affineCTAOffset = 0) {
+    uint32_t affineCTAOffset = 0, int axis = -1, int64_t start = 0,
+    int64_t length = 0) {
   bool isTmem = isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace());
   if (cast<ttg::LayoutEncodingTrait>(ty.getEncoding()).getRank() !=
       ty.getRank()) {
@@ -103,12 +104,15 @@ MemDescFootprint getMemDescAddresses(
         ty.cloneWith(ty.getShape().drop_front(), ty.getElementType());
     MemDescFootprint footprint;
     for (int64_t page = 0; page < ty.getDimSize(0); ++page) {
+      if (axis == 0 && (page < start || page >= start + length))
+        continue;
       uint32_t pageOffset = getMemDescStorageOffset(pageTy, page);
       for (const auto &[cta, addresses] : getMemDescAddresses(
                storageBase + pageOffset, affineOffset, pageTy,
                /*cache=*/nullptr,
                advancePartitionBases(partitionBases, pageOffset),
-               affinePartitionOffset, affineCTAOffset))
+               affinePartitionOffset, affineCTAOffset, axis > 0 ? axis - 1 : -1,
+               start, length))
         getAddressesForCTA(footprint, cta).insert(addresses);
     }
     return footprint;
@@ -127,6 +131,21 @@ MemDescFootprint getMemDescAddresses(
   StringAttr rowName = StringAttr::get(ctx, "row");
   StringAttr colName = StringAttr::get(ctx, "col");
 
+  // Zero row bases at bits 5/6 represent physical warp replicas, not unused
+  // storage (see [Zeros in TMEM LinearLayouts]). The pseudoinverse selects one
+  // representative; include every copy in access and alias footprints.
+  SmallVector<uint32_t, 4> rowReplicas{0};
+  if (isTmem) {
+    for (unsigned bit : {5u, 6u}) {
+      if (llvm::all_of(layout.getBasis(rowName, bit),
+                       [](int32_t value) { return value == 0; })) {
+        unsigned count = rowReplicas.size();
+        for (unsigned i = 0; i < count; ++i)
+          rowReplicas.push_back(rowReplicas[i] | (1u << bit));
+      }
+    }
+  }
+
   MemDescFootprint footprint;
   auto addPhysicalAddress = [&](uint32_t offset, uint32_t row, uint32_t col,
                                 uint32_t partition, uint32_t block) {
@@ -136,10 +155,12 @@ MemDescFootprint getMemDescAddresses(
       uint32_t bitBegin = col * bitWidth;
       uint32_t firstWord = bitBegin / 32;
       uint32_t lastWord = llvm::divideCeil(bitBegin + bitWidth, uint32_t{32});
-      uint32_t relative = (row << 16) | firstWord;
-      uint32_t begin = storageBase + affineOffset + relative;
-      for (uint32_t word = firstWord; word < lastWord; ++word)
-        addresses.set(begin + word - firstWord);
+      for (uint32_t replica : rowReplicas) {
+        uint32_t relative = ((row | replica) << 16) | firstWord;
+        uint32_t begin = storageBase + affineOffset + relative;
+        for (uint32_t word = firstWord; word < lastWord; ++word)
+          addresses.set(begin + word - firstWord);
+      }
     } else {
       uint32_t base = storageBase;
       if (!partitionBases.empty())
@@ -153,6 +174,7 @@ MemDescFootprint getMemDescAddresses(
   };
 
   struct PhysicalBasis {
+    uint32_t coordinate = 0;
     uint32_t offset = 0;
     uint32_t row = 0;
     uint32_t col = 0;
@@ -171,12 +193,13 @@ MemDescFootprint getMemDescAddresses(
       };
       uint32_t block = basis(blockName);
       hasCTAAddressVariation |= block != 0;
-      bases.push_back({basis(offsetName), basis(rowName), basis(colName),
+      bases.push_back({axis >= 0 && dim == dims[axis] ? uint32_t(1) << bit : 0,
+                       basis(offsetName), basis(rowName), basis(colName),
                        basis(partitionName), block});
     }
   }
 
-  if (cache && partitionBases.empty() && !hasCTAAddressVariation) {
+  if (cache && axis < 0 && partitionBases.empty() && !hasCTAAddressVariation) {
     auto [found, inserted] =
         cache->try_emplace(std::make_pair(Type(ty), affineOffset));
     if (inserted)
@@ -191,12 +214,16 @@ MemDescFootprint getMemDescAddresses(
   for (uint64_t index = 0; index < numPoints; ++index) {
     if (index != 0) {
       const PhysicalBasis &basis = bases[llvm::countr_zero(index)];
+      physical.coordinate ^= basis.coordinate;
       physical.offset ^= basis.offset;
       physical.row ^= basis.row;
       physical.col ^= basis.col;
       physical.partition ^= basis.partition;
       physical.block ^= basis.block;
     }
+    if (axis >= 0 &&
+        (physical.coordinate < start || physical.coordinate >= start + length))
+      continue;
     addPhysicalAddress(physical.offset, physical.row, physical.col,
                        physical.partition, physical.block);
   }
@@ -448,7 +475,10 @@ BufferRegionAnalysis::getAllocView(Value allocation, uint32_t storageBase,
   view.storageBase = storageBase;
   view.partitionBases = llvm::to_vector<2>(partitionBases);
   view.allocationFrame = getOperationId(
-      allocation.getDefiningOp()->getParentOfType<FunctionOpInterface>());
+      relativeToAllocation ? allocation.getDefiningOp()
+                           : allocation.getDefiningOp()
+                                 ->getParentOfType<FunctionOpInterface>()
+                                 .getOperation());
   return getSubView(allocation.getType(), view);
 }
 
@@ -487,7 +517,8 @@ BufferRegionAnalysis::getSubView(Type type, const BufferRegionView &view,
 
 LogicalResult BufferRegionAnalysis::initialize(Operation *top) {
   top->walk([&](Operation *operation) {
-    if (isa<FunctionOpInterface, CallOpInterface>(operation))
+    if (isa<FunctionOpInterface, CallOpInterface, ttg::LocalAllocOp,
+            ttng::TMEMAllocOp>(operation))
       operationInterner.insert(operation);
   });
 
@@ -517,6 +548,23 @@ BufferRegionAnalysis::getAccessRegions(Value value) {
   for (const BufferRegionView &view : info.views)
     accesses.push_back(view);
   return accesses;
+}
+
+SmallVector<BufferRegionAccess>
+BufferRegionAnalysis::getAccessRegions(const MemoryAccess &access) {
+  auto views = getAccessRegions(access.value);
+  if (access.axis < 0)
+    return views;
+  auto type = cast<ttg::MemDescType>(access.value.getType());
+  for (auto &view : views) {
+    if (!view)
+      continue;
+    view->region.ctaAddresses = getMemDescAddresses(
+        view->storageBase, view->affineOffset, type, nullptr,
+        view->partitionBases, view->affinePartitionOffset,
+        view->affineCTAOffset, access.axis, access.start, access.length);
+  }
+  return views;
 }
 
 BufferRegionAccess BufferRegionAnalysis::translateToCallsite(
@@ -554,7 +602,9 @@ LogicalResult BufferRegionAnalysis::visitOperation(
   }
   if (auto localAllocOp = dyn_cast<ttg::LocalAllocOp>(op)) {
     FailureOr<SmallVector<uint32_t, 2>> offsets =
-        getAllocationOffsets(localAllocOp);
+        relativeToAllocation
+            ? FailureOr<SmallVector<uint32_t, 2>>(SmallVector<uint32_t, 2>{0})
+            : getAllocationOffsets(localAllocOp);
     if (failed(offsets))
       return failure();
     ArrayRef<uint32_t> partitionBases = offsets->size() > 1
@@ -565,8 +615,9 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     return propagateRegions(regionInfo);
   }
   if (auto tmemAllocOp = dyn_cast<ttng::TMEMAllocOp>(op)) {
-    regionInfo.views.insert(getAllocView(tmemAllocOp.getResult(),
-                                         getAllocationOffset(tmemAllocOp)));
+    regionInfo.views.insert(getAllocView(
+        tmemAllocOp.getResult(),
+        relativeToAllocation ? 0 : getAllocationOffset(tmemAllocOp)));
     return propagateRegions(regionInfo);
   }
   if (auto memdescIndexOp = dyn_cast<ttg::MemDescIndexOp>(op)) {
@@ -701,14 +752,28 @@ SmallVector<MemoryAccess> getMemoryAccesses(Operation *op,
     if (kind && sharedKind != kind)
       continue;
 
-    auto existing = llvm::find_if(accesses, [&](const MemoryAccess &access) {
-      return access.value == value && access.sharedKind == sharedKind;
-    });
-    if (existing == accesses.end())
-      accesses.push_back({value, isWrite, isRead, sharedKind});
-    else {
-      existing->isWrite |= isWrite;
-      existing->isRead |= isRead;
+    SmallVector<MemoryAccess> selected;
+    if (isRead)
+      if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op))
+        for (const auto &range : mma.getOperandRanges())
+          if (range.value == value)
+            selected.push_back({value, isWrite, isRead, sharedKind,
+                                int(range.axis), range.start, range.length});
+    if (selected.empty())
+      selected.push_back({value, isWrite, isRead, sharedKind});
+    for (const MemoryAccess &selection : selected) {
+      auto existing = llvm::find_if(accesses, [&](const MemoryAccess &access) {
+        return access.value == value && access.sharedKind == sharedKind &&
+               access.axis == selection.axis &&
+               access.start == selection.start &&
+               access.length == selection.length;
+      });
+      if (existing == accesses.end())
+        accesses.push_back(selection);
+      else {
+        existing->isWrite |= isWrite;
+        existing->isRead |= isRead;
+      }
     }
   }
   return accesses;
