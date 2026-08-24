@@ -50,9 +50,18 @@ def sigmoid(x):
     return 1 / (1 + math.exp(-x))
 
 
+@constexpr_function
+def _softmax_keep_dims_warning():
+    import warnings
+
+    warnings.warn(
+        "The keep_dims argument to tl.softmax is deprecated and ignored; softmax always preserves the input shape.",
+        stacklevel=2)
+
+
 @core._tensor_member_fn
 @jit
-def softmax(x, dim=None, *, ieee_rounding=False):
+def softmax(x, dim=None, keep_dims=None, *, ieee_rounding=False):
     """
     Computes the softmax of :code:`x` along the given axis.
 
@@ -65,6 +74,8 @@ def softmax(x, dim=None, *, ieee_rounding=False):
         Must be passed by keyword.
     :type ieee_rounding: bool
     """
+    if keep_dims is not None:
+        _softmax_keep_dims_warning()
     if dim is None:
         _dim: core.constexpr = 0
     else:

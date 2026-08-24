@@ -1,3 +1,5 @@
+import warnings
+
 import triton
 import pytest
 import torch
@@ -174,25 +176,61 @@ def test_softmax(shape, dim, ieee_rounding, device):
     x = numpy_random(shape, dtype_str='float32')
     x = torch.from_numpy(x).to(device)
     z = torch.empty_like(x)
-    softmax_kernel[(1, )](x, z, x.numel(), shape, dim, ieee_rounding)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message=".*keep_dims.*")
+        softmax_kernel[(1, )](x, z, x.numel(), shape, dim, ieee_rounding)
     torch.testing.assert_close(z, torch.softmax(x, dim=dim), rtol=1e-5, atol=1e-6)
 
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("member", [False, True])
-def test_softmax_rejects_positional_keep_dims(member):
+def test_softmax_rejects_positional_ieee_rounding(member):
 
     @triton.jit
     def kernel(member: tl.constexpr):
         x = tl.full((2, 2), 1.0, tl.float32)
         if member:
-            x.softmax(1, True)
+            x.softmax(1, None, True)
         else:
-            tl.softmax(x, 1, True)
+            tl.softmax(x, 1, None, True)
 
     error = InterpreterError if is_interpreter() else triton.CompilationError
     with pytest.raises(error, match="positional argument"):
         kernel[(1, )](member)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("keep_dims", [None, False, True])
+@pytest.mark.parametrize("call_style", ["keyword", "positional", "member_keyword", "member_positional"])
+def test_softmax_keep_dims_deprecated(keep_dims, call_style, device, fresh_triton_cache):
+
+    @triton.jit
+    def kernel(X, Z, keep_dims: tl.constexpr, call_style: tl.constexpr):
+        offs = tl.arange(0, 32).reshape((8, 4))
+        x = tl.load(X + offs)
+        if call_style == "keyword":
+            z = tl.softmax(x, dim=1, keep_dims=keep_dims, ieee_rounding=True)
+        elif call_style == "positional":
+            z = tl.softmax(x, 1, keep_dims, ieee_rounding=True)
+        elif call_style == "member_keyword":
+            z = x.softmax(dim=1, keep_dims=keep_dims, ieee_rounding=True)
+        else:
+            z = x.softmax(1, keep_dims, ieee_rounding=True)
+        tl.static_assert(z.shape == x.shape, "softmax must preserve the input shape")
+        tl.store(Z + offs, z)
+
+    x = torch.from_numpy(numpy_random((8, 4), dtype_str='float32')).to(device)
+    z = torch.empty_like(x)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        kernel[(1, )](x, z, keep_dims, call_style)
+    if keep_dims is None:
+        assert not caught
+    else:
+        assert len(caught) == 1
+        assert caught[0].category is UserWarning
+        assert "keep_dims argument to tl.softmax is deprecated and ignored" in str(caught[0].message)
+    torch.testing.assert_close(z, torch.softmax(x, dim=1), rtol=1e-5, atol=1e-6)
 
 
 @pytest.mark.interpreter
