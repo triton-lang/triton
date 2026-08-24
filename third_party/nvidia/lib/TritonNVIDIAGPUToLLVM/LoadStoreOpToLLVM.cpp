@@ -269,8 +269,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
             auto tensorType = dyn_cast<RankedTensorType>(op.getType());
             if (tensorType &&
                 ((valueElemNBits == 16 && nWords > 1) ||
-                 (valueElemNBits == 8 && width == 32 && nWords == 1 && vec == 4 &&
-                  tensorType.getRank() == 1 &&
+                 (valueElemNBits == 8 && width == 32 && nWords == 1 &&
+                  vec == 4 && tensorType.getRank() == 1 &&
                   isa<FloatType>(tensorType.getElementType())))) {
               // Match each fallback to its destination instead of moving it.
               // Match the packed FP8 fallback to its 32-bit destination.
@@ -288,7 +288,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         }
       }
 
-      auto *addrOpr = ptxBuilder.newAddrOperand(ptrElems[runStart], "l", in_off);
+      auto *addrOpr =
+          ptxBuilder.newAddrOperand(ptrElems[runStart], "l", in_off);
 
       // Define the instruction opcode
       auto &ld = ptxBuilder.create("ld")
@@ -476,7 +477,8 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
         pred = ttg::maybeAnd(rewriter, loc, pred, mask);
       }
 
-      auto *asmAddr = ptxBuilder.newAddrOperand(ptrElems[runStart], "l", in_off);
+      auto *asmAddr =
+          ptxBuilder.newAddrOperand(ptrElems[runStart], "l", in_off);
 
       auto &ptxStoreInstr =
           ptxBuilder.create("st")
