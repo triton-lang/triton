@@ -70,6 +70,9 @@ def softmax(x, dim=None, keep_dims=None, *, ieee_rounding=False):
     :param dim: the axis along which to normalize. Defaults to 0 -- note that
         this is *not* the last axis, unlike :code:`torch.softmax`.
     :type dim: int | None
+    :param keep_dims: deprecated and ignored. Softmax always preserves the input shape.
+        Defaults to :code:`None`; any other value emits a warning.
+    :type keep_dims: bool | None
     :param ieee_rounding: whether the final division uses IEEE-compliant rounding.
         Must be passed by keyword.
     :type ieee_rounding: bool
