@@ -76,7 +76,9 @@ void promoteRocprofilerLibraries() {
   // ROCm 7.2.4 requires the registration library to be globally visible
   // before the SDK library. The generic dispatch loader uses a local,
   // single-library load, so promote both libraries in that order and, when
-  // possible, from the same installation directory.
+  // possible, from the same installation directory. This workaround is only
+  // needed for non-TheRock installations; TheRock's runtime setup already
+  // preloads the SDK and its dependencies globally.
   std::string libDir = getStrEnv(rocprofiler::ExternLibRocprofiler::pathEnv);
   if (libDir.empty()) {
     auto path = findLoadedLibPath("librocprofiler-register.so",
