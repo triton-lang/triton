@@ -1,8 +1,10 @@
+import math
 import torch
 import triton
 import triton.language as tl
 from dataclasses import dataclass
 from .base import Layout, LayoutTransformation
+from triton_kernels.tensor_details.layout_details import strided
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from triton_kernels.target_info import cuda_capability_geq
 from .torch_utils import repack
@@ -80,6 +82,30 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         if self.mx_axis == len(self.leading_shape):
             return data.mT
         return data
+
+    def convert_data(self, data, destination: LayoutTransformation):
+        # The tiled path needs the full padded encoding and even packing extents.
+        # Keep compact or otherwise unsupported sources on the reference path.
+        if (not self.is_fp4 or self.N % 2 or self.shape[self.mx_axis] % 2 or data.device.type != "cuda"
+                or data.dtype != torch.uint8 or list(data.shape) != self.storage_shape
+                or not isinstance(destination, strided.StridedLayoutTransformation)
+                or destination.order[0] < len(self.shape) - 2):
+            return super().convert_data(data, destination)
+
+        out = torch.empty_strided(destination.storage_shape, destination.storage_strides, dtype=data.dtype,
+                                  device=data.device)
+        source = self._maybe_mT(data)
+        target = self._maybe_mT(out)
+        m, k = (self.N, self.K) if self.mx_axis == len(self.leading_shape) else (self.K, self.N)
+        block_m, block_k = 16, 256
+        grid = (math.prod(self.leading_shape) * triton.cdiv(m, 4 * block_m) * triton.cdiv(k, block_k // 2), )
+        if grid[0] > 0:
+            with torch.cuda.device(data.device):
+                _unswizzle_to_strided_kernel[grid](source, target, tuple(self.leading_shape), source.stride(),
+                                                   target.stride(), m, k, MMA_VERSION=self.mma_version,
+                                                   PACK_M=destination.order[0] != self.mx_axis, BLOCK_M=block_m,
+                                                   BLOCK_K=block_k)
+        return out
 
     def swizzle_data(self, data):
         """
@@ -275,6 +301,14 @@ def _bf16x2_to_fp4e2m1x2_triton(x):
 
 
 @triton.jit
+def _unpack_bits_triton(x):
+    fourth = ((x << 1) & 0x80008000) | ((x >> 3) & 0x01800180) | ((x >> 7) & 0x00400040)
+    return (_bf16x2_to_fp4e2m1x2_triton(x) | (_bf16x2_to_fp4e2m1x2_triton(x << 3) << 8)
+            | (_bf16x2_to_fp4e2m1x2_triton(x << 6) << 16)
+            | (_bf16x2_to_fp4e2m1x2_triton(fourth) << 24))
+
+
+@triton.jit
 def _convert_bits_kernel(X, Y, N, INVERSE: tl.constexpr, BLOCK_SIZE: tl.constexpr):
     offsets = tl.program_id(0).to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offsets < N
@@ -284,11 +318,7 @@ def _convert_bits_kernel(X, Y, N, INVERSE: tl.constexpr, BLOCK_SIZE: tl.constexp
     c = tl.load(X + 4 * offsets + 2, mask, other=0).to(tl.uint32)
     d = tl.load(X + 4 * offsets + 3, mask, other=0).to(tl.uint32)
     if INVERSE:
-        x = a | (b << 8) | (c << 16) | (d << 24)
-        fourth = ((x << 1) & 0x80008000) | ((x >> 3) & 0x01800180) | ((x >> 7) & 0x00400040)
-        ret = (_bf16x2_to_fp4e2m1x2_triton(x) | (_bf16x2_to_fp4e2m1x2_triton(x << 3) << 8)
-               | (_bf16x2_to_fp4e2m1x2_triton(x << 6) << 16)
-               | (_bf16x2_to_fp4e2m1x2_triton(fourth) << 24))
+        ret = _unpack_bits_triton(a | (b << 8) | (c << 16) | (d << 24))
     else:
         ret = (_compress_fp4x2_triton(a, False) | (_compress_fp4x2_triton(b, False) >> 3)
                | (_compress_fp4x2_triton(c, False) >> 6) | _compress_fp4x2_triton(d, True))
@@ -338,6 +368,53 @@ def _unshuffle_triton(x, mma_version: tl.constexpr):
     # if mx_axis == 0:
     #     x = x.trans()
     return x
+
+
+@triton.jit
+def _unswizzle_to_strided_kernel(X, Y, LEADING_SHAPE: tl.constexpr, X_STRIDES: tl.constexpr, Y_STRIDES: tl.constexpr,
+                                 M: tl.constexpr, K: tl.constexpr, MMA_VERSION: tl.constexpr, PACK_M: tl.constexpr,
+                                 BLOCK_M: tl.constexpr, BLOCK_K: tl.constexpr):
+    tiles_m: tl.constexpr = triton.cdiv(M, 4 * BLOCK_M)
+    tiles_k: tl.constexpr = triton.cdiv(K, BLOCK_K // 2)
+    pid = tl.program_id(0).to(tl.int64)
+    batch = pid // (tiles_m * tiles_k)
+    tile = pid % (tiles_m * tiles_k)
+    if PACK_M:
+        tile_m, tile_k = tile % tiles_m, tile // tiles_m
+    else:
+        tile_m, tile_k = tile // tiles_k, tile % tiles_k
+    for dim in tl.static_range(len(LEADING_SHAPE) - 1, -1, -1):
+        index = batch % LEADING_SHAPE[dim]
+        batch //= LEADING_SHAPE[dim]
+        X += index * X_STRIDES[dim]
+        Y += index * Y_STRIDES[dim]
+
+    # Each encoded word contains four packed FP4 bytes. Decode and undo the
+    # MMA tile permutation before selecting the destination packing axis.
+    rows = tile_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    words = tile_k * (BLOCK_K // 4) + tl.arange(0, BLOCK_K // 4)
+    offsets = rows[:, None] * X_STRIDES[-2] + 4 * words[None, :] * X_STRIDES[-1]
+    a = tl.load(X + offsets).to(tl.uint32)
+    b = tl.load(X + offsets + X_STRIDES[-1]).to(tl.uint32)
+    c = tl.load(X + offsets + 2 * X_STRIDES[-1]).to(tl.uint32)
+    d = tl.load(X + offsets + 3 * X_STRIDES[-1]).to(tl.uint32)
+    x = _unpack_bits_triton(a | (b << 8) | (c << 16) | (d << 24))
+    shifts = 8 * tl.arange(0, 4)
+    x = (x[:, :, None] >> shifts[None, None, :]).to(tl.uint8)
+    x = _unshuffle_triton(x.reshape(BLOCK_M, BLOCK_K), MMA_VERSION)
+
+    if PACK_M:
+        even, odd = tl.split(x.reshape(2 * BLOCK_M, 2, BLOCK_K // 4).trans(0, 2, 1))
+        x = tl.join((even & 0xF) | (odd << 4), (even >> 4) | (odd & 0xF0))
+        x = x.reshape(2 * BLOCK_M, BLOCK_K // 2)
+        rows = tile_m * (2 * BLOCK_M) + tl.arange(0, 2 * BLOCK_M)
+        cols = tile_k * (BLOCK_K // 2) + tl.arange(0, BLOCK_K // 2)
+        mask = (rows[:, None] < M // 2) & (cols[None, :] < K)
+    else:
+        rows = tile_m * (4 * BLOCK_M) + tl.arange(0, 4 * BLOCK_M)
+        cols = tile_k * (BLOCK_K // 4) + tl.arange(0, BLOCK_K // 4)
+        mask = (rows[:, None] < M) & (cols[None, :] < K // 2)
+    tl.store(Y + rows[:, None] * Y_STRIDES[-2] + cols[None, :] * Y_STRIDES[-1], x, mask)
 
 
 @triton.jit
