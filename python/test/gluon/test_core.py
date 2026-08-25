@@ -5670,7 +5670,7 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
     a_scale_tmem = allocate_tensor_memory(a_scale_desc.dtype, [BLOCK_M, BLOCK_K // VEC_SIZE], scale_layout_a)
     b_scale_tmem = allocate_tensor_memory(b_scale_desc.dtype, [BLOCK_N, BLOCK_K // VEC_SIZE], scale_layout_b)
     tmem_layout: ttgl.constexpr = TensorMemoryLayout(
-        [BLOCK_M // ctas_per_cga[0], BLOCK_N // ctas_per_cga[1]],
+        [min(BLOCK_M // ctas_per_cga[0], 128), BLOCK_N // ctas_per_cga[1]],
         col_stride=1,
         cga_layout=c_desc.layout.cga_layout,
         two_ctas=multi_cta,
@@ -5744,7 +5744,7 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
 
 
 def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, ctas_per_cga, multicast,
-                            out_dtype=torch.float16):
+                            out_dtype=torch.float16, return_kernel=False):
     from dataclasses import replace
     M, N = A.shape[0], B.shape[0]
     MIXED_PREC = A.dtype != B.dtype
@@ -5784,10 +5784,11 @@ def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, 
                                         cga_layout=cga_layout_c) if multi_cta else None
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
-    mma_scaled_tcgen05_copy_kernel[grid](A_desc, B_desc, C_desc, A_scale_desc, B_scale_desc, VEC_SIZE, block_layout_c,
-                                         a_scale_layout_tmem, b_scale_layout_tmem, ctas_per_cga, num_warps=num_warps,
-                                         num_ctas=num_ctas, multicast=multicast)
-    return C_desc.base
+    compiled = mma_scaled_tcgen05_copy_kernel[grid](A_desc, B_desc, C_desc, A_scale_desc, B_scale_desc, VEC_SIZE,
+                                                    block_layout_c, a_scale_layout_tmem, b_scale_layout_tmem,
+                                                    ctas_per_cga, num_warps=num_warps, num_ctas=num_ctas,
+                                                    multicast=multicast)
+    return (C_desc.base, compiled) if return_kernel else C_desc.base
 
 
 @pytest.mark.parametrize("M, N, K", [(2048, 2048, 4096)])
@@ -5812,6 +5813,29 @@ def test_mma_scaled_tcgen05_copy(M, N, K, BLOCK_K, a_format, b_format, VEC_SIZE,
     C_ref = A_ref @ B_ref.T
     C = mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, ctas_per_cga, multicast)
     torch.testing.assert_close(C_ref, C.to(torch.float32), atol=1e-3, rtol=1e-3)
+
+
+@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires sm103 K96 MMA")
+@pytest.mark.parametrize("fmt, vec_size", [("mxfp4", 32), ("nvfp4", 16)])
+@pytest.mark.parametrize(
+    "m, n, k, block_m, block_n, block_k",
+    [(m, n, k, 256, block_n, block_k)
+     for m, n, k, block_k in [(256, 256, 128, 128), (256, 256, 256, 256), (500, 384, 704, 256), (512, 512, 1024, 512),
+                              (256, 256, 1024, 1024), (500, 384, 2752, 1024)]
+     for block_n in [128, 256]] + [(256, 256, 2048, 256, 128, 2048), (512, 256, 512, 512, 128, 256)])
+def test_tcgen05_mma_scaled_k96_subtiling(fmt, vec_size, block_n, m, n, k, block_m, block_k):
+    torch.manual_seed(0)
+    a, a_scale, a_ref = random_quantized_tensor(m, k, fmt)
+    b, b_scale, b_ref = random_quantized_tensor(n, k, fmt)
+    a_scale = swizzle_scales_packed_block(a_scale, vec_size)
+    b_scale = swizzle_scales_packed_block(b_scale, vec_size)
+    actual, compiled = mma_scaled_tcgen05_copy(a, b, a_scale, b_scale, vec_size, block_m, block_n, block_k, (2, 1),
+                                               False, out_dtype=torch.float32, return_kernel=True)
+    torch.testing.assert_close(actual, a_ref @ b_ref.T, atol=1e-3, rtol=1e-3)
+    # Repeated M tiles interleave A scale words, so they retain K64.
+    use_k96 = block_k >= 256 and block_m == 256
+    expected_mmas = (triton.cdiv(block_k, 96) if use_k96 else block_k // 64) * (block_m // 256)
+    assert compiled.asm["ptx"].count("tcgen05.mma.") == expected_mmas
 
 
 @gluon.jit
