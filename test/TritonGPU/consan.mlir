@@ -3078,3 +3078,83 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// B=K=16 with four CTAs clears B in two chunks of eight, retaining the
+// completed-recipient and next-phase masks and the full backing strides.
+#phase_clear_barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2]]}>
+#phase_clear_smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32, ttg.shared = 128 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {
+  // CHECK-LABEL: tt.func private @__triton_consan_verify_and_update_barrier_state_
+  // CHECK: %[[PC_DONE_WIDE:.*]] = arith.extui %[[PC_ZERO_COUNTS:[^ ]+]] : tensor<4x16xi1, {{.*}}> to tensor<4x16xi64,
+  // CHECK: %[[PC_NEW_PHASES:.*]] = arith.xori {{.*}}, %[[PC_DONE_WIDE]] : tensor<4x16xi64,
+  // CHECK: %[[PC_COMPLETED:.*]] = arith.andi %[[PC_ZERO_COUNTS]], {{.*}} : tensor<4x16xi1,
+  // CHECK: %[[PC_ANY_COMPLETED:.*]] = "tt.reduce"
+  // CHECK: cf.cond_br %[[PC_ANY_COMPLETED]],
+  // CHECK: %[[PC_NEXT_PHASES:.*]] = arith.trunci %[[PC_NEW_PHASES]] : tensor<4x16xi64, {{.*}}> to tensor<4x16xi32,
+  // Write tracking keeps Cbar/K in dimensions 2/3 and both phase banks.
+  // CHECK: ttg.convert_layout %[[PC_COMPLETED]]
+  // CHECK: %[[PC_W_DONE:.*]] = tt.broadcast {{.*}} : tensor<1x1x4x16x1xi1, {{.*}}> -> tensor<4x8x4x16x2xi1,
+  // CHECK: ttg.convert_layout %[[PC_NEXT_PHASES]]
+  // CHECK: %[[PC_W_PHASE:.*]] = tt.broadcast {{.*}} : tensor<1x1x4x16x1xi32, {{.*}}> -> tensor<4x8x4x16x2xi32,
+  // CHECK: %[[PC_W_PHASE_MASK:.*]] = arith.cmpi eq, {{.*}}, %[[PC_W_PHASE]]
+  // CHECK-NEXT: %[[PC_W_MASK:.*]] = arith.andi %[[PC_W_DONE]], %[[PC_W_PHASE_MASK]]
+  // CHECK-NEXT: %[[PC_W_ZERO:.*]] = arith.constant dense<0> : tensor<4x8x4x16x2xi8,
+  // CHECK: %[[PC_W_FIRST:.*]] = arith.constant 0 : i32
+  // CHECK: %[[PC_W_STEP:.*]] = arith.constant 8 : i32
+  // CHECK: %[[PC_W_LIMIT:.*]] = arith.constant 16 : i32
+  // CHECK: %[[PC_W_STRIDE:.*]] = arith.constant 4 : i32
+  // CHECK: cf.br ^[[PC_W_LOOP:bb[0-9]+]](%[[PC_W_FIRST]] : i32)
+  // CHECK: ^[[PC_W_LOOP]](%[[PC_W_ROW:[^:]+]]: i32):
+  // CHECK: %[[PC_W_OFFSET:.*]] = arith.muli %[[PC_W_ROW]], %[[PC_W_STRIDE]] : i32
+  // CHECK-NEXT: tt.addptr {{.*}}, %[[PC_W_OFFSET]] : !tt.ptr<i8>, i32
+  // CHECK: arith.constant dense<64> : tensor<4xi32,
+  // CHECK: arith.constant dense<256> : tensor<16xi32,
+  // CHECK: arith.constant dense<4096> : tensor<2xi32,
+  // CHECK: tt.store {{.*}}, %[[PC_W_ZERO]], %[[PC_W_MASK]]{{.*}} : tensor<4x8x4x16x2x!tt.ptr<i8>,
+  // CHECK-NEXT: %[[PC_W_NEXT:.*]] = arith.addi %[[PC_W_ROW]], %[[PC_W_STEP]] : i32
+  // CHECK-NEXT: %[[PC_W_MORE:.*]] = arith.cmpi ult, %[[PC_W_NEXT]], %[[PC_W_LIMIT]] : i32
+  // CHECK-NEXT: cf.cond_br %[[PC_W_MORE]], ^[[PC_W_LOOP]](%[[PC_W_NEXT]] : i32),
+  // Read tracking also keeps all reader origins and the full phase stride.
+  // CHECK: ttg.convert_layout %[[PC_COMPLETED]]
+  // CHECK: %[[PC_R_DONE:.*]] = tt.broadcast {{.*}} : tensor<1x1x4x16x1x1xi1, {{.*}}> -> tensor<4x8x4x16x4x2xi1,
+  // CHECK: ttg.convert_layout %[[PC_NEXT_PHASES]]
+  // CHECK: %[[PC_R_PHASE:.*]] = tt.broadcast {{.*}} : tensor<1x1x4x16x1x1xi32, {{.*}}> -> tensor<4x8x4x16x4x2xi32,
+  // CHECK: %[[PC_R_PHASE_MASK:.*]] = arith.cmpi eq, {{.*}}, %[[PC_R_PHASE]]
+  // CHECK-NEXT: %[[PC_R_MASK:.*]] = arith.andi %[[PC_R_DONE]], %[[PC_R_PHASE_MASK]]
+  // CHECK-NEXT: %[[PC_R_ZERO:.*]] = arith.constant dense<0> : tensor<4x8x4x16x4x2xi{{32|64}},
+  // CHECK: %[[PC_R_FIRST:.*]] = arith.constant 0 : i32
+  // CHECK: %[[PC_R_STEP:.*]] = arith.constant 8 : i32
+  // CHECK: %[[PC_R_LIMIT:.*]] = arith.constant 16 : i32
+  // CHECK: %[[PC_R_STRIDE:.*]] = arith.constant 4 : i32
+  // CHECK: cf.br ^[[PC_R_LOOP:bb[0-9]+]](%[[PC_R_FIRST]] : i32)
+  // CHECK: ^[[PC_R_LOOP]](%[[PC_R_ROW:[^:]+]]: i32):
+  // CHECK: %[[PC_R_OFFSET:.*]] = arith.muli %[[PC_R_ROW]], %[[PC_R_STRIDE]] : i32
+  // CHECK-NEXT: tt.addptr {{.*}}, %[[PC_R_OFFSET]] : !tt.ptr<i{{32|64}}>, i32
+  // CHECK: arith.constant dense<64> : tensor<4xi32,
+  // CHECK: arith.constant dense<256> : tensor<16xi32,
+  // CHECK: arith.constant dense<4096> : tensor<4xi32,
+  // CHECK: arith.constant dense<16384> : tensor<2xi32,
+  // CHECK: tt.store {{.*}}, %[[PC_R_ZERO]], %[[PC_R_MASK]]{{.*}} : tensor<4x8x4x16x4x2x!tt.ptr<i{{32|64}}>,
+  // CHECK-NEXT: %[[PC_R_NEXT:.*]] = arith.addi %[[PC_R_ROW]], %[[PC_R_STEP]] : i32
+  // CHECK-NEXT: %[[PC_R_MORE:.*]] = arith.cmpi ult, %[[PC_R_NEXT]], %[[PC_R_LIMIT]] : i32
+  // CHECK-NEXT: cf.cond_br %[[PC_R_MORE]], ^[[PC_R_LOOP]](%[[PC_R_NEXT]] : i32),
+  // CHECK: tt.return
+  // CHECK-LABEL: @streamed_barrier_phase_clear
+  tt.func public @streamed_barrier_phase_clear(%idx: i32) {
+    // CHECK: tti.experimental_buffer_descriptors [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120], [8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8], shared_mem
+    %zero = arith.constant 0 : i32
+    %fifteen = arith.constant 15 : i32
+    %true = arith.constant true
+    %slot = arith.andi %idx, %fifteen : i32
+    %ring = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16x4xi64, #phase_clear_barrier, #phase_clear_smem, mutable>
+    %bar = ttg.memdesc_index %ring[%slot] : !ttg.memdesc<16x4xi64, #phase_clear_barrier, #phase_clear_smem, mutable> -> !ttg.memdesc<4xi64, #phase_clear_barrier, #phase_clear_smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<4xi64, #phase_clear_barrier, #phase_clear_smem, mutable>
+    ttng.arrive_barrier %bar, 1 : !ttg.memdesc<4xi64, #phase_clear_barrier, #phase_clear_smem, mutable>
+    ttng.wait_barrier %bar, %zero, %true : !ttg.memdesc<4xi64, #phase_clear_barrier, #phase_clear_smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<4xi64, #phase_clear_barrier, #phase_clear_smem, mutable>
+    tt.return
+  }
+}

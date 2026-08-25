@@ -1589,21 +1589,70 @@ void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
               arith::TruncIOp::create(fb, phaseStateType, newPhase);
           for (auto [index, trackingType] : llvm::enumerate(trackingTypes)) {
             Value trackingPtr = entryBlock->getArgument(8 + index);
+            SmallVector<int64_t> shape(trackingType.getShape());
+            SmallVector<int64_t> strides(shape.size(), 1);
+            for (unsigned dim = 1; dim < shape.size(); ++dim)
+              strides[dim] = strides[dim - 1] * shape[dim - 1];
+            int64_t extent = shape[1];
+            // Stream buffer rows with a warp-sized contiguous prefix. The
+            // completion and phase masks depend only on [barrier CTA, K].
+            int64_t chunk = std::min<int64_t>(
+                extent, std::max<int64_t>(1, ttg::lookupThreadsPerWarp(fb) /
+                                                 strides[1]));
+            RankedTensorType storeType = trackingType;
+            if (chunk < extent) {
+              shape[1] = chunk;
+              storeType = tti::getIntTensorType(
+                  fb.getInsertionBlock()->getParent(), shape,
+                  trackingType.getElementType().getIntOrFloatBitWidth());
+            }
             Value completedMask =
-                convertAndBroadcast(fb, completed, {2, 3}, trackingType);
+                convertAndBroadcast(fb, completed, {2, 3}, storeType);
             Value nextPhase =
-                convertAndBroadcast(fb, nextPhases, {2, 3}, trackingType);
+                convertAndBroadcast(fb, nextPhases, {2, 3}, storeType);
             Value phaseIndices =
-                createDimIndices(fb, trackingType, trackingType.getRank() - 1);
+                createDimIndices(fb, storeType, storeType.getRank() - 1);
             Value phaseMask = arith::CmpIOp::create(
                 fb, arith::CmpIPredicate::eq, phaseIndices, nextPhase);
             Value clearMask =
                 arith::AndIOp::create(fb, completedMask, phaseMask);
             Value zero =
-                tti::createConstIntTensor(fb, fb.getLoc(), 0, trackingType);
-            tti::createStoreScratchMemory(fb, fb.getLoc(), trackingPtr, zero,
-                                          trackingType,
-                                          /*currentCTAOnly=*/false, clearMask);
+                tti::createConstIntTensor(fb, fb.getLoc(), 0, storeType);
+            if (chunk == extent) {
+              tti::createStoreScratchMemory(
+                  fb, fb.getLoc(), trackingPtr, zero, trackingType,
+                  /*currentCTAOnly=*/false, clearMask);
+              continue;
+            }
+
+            Value first = arith::ConstantIntOp::create(fb, 0, 32);
+            Value step = arith::ConstantIntOp::create(fb, chunk, 32);
+            Value limit = arith::ConstantIntOp::create(fb, extent, 32);
+            Value stride = arith::ConstantIntOp::create(fb, strides[1], 32);
+            Block *preheader = fb.getInsertionBlock();
+            Block *continueBlock =
+                preheader->splitBlock(fb.getInsertionPoint());
+            Block *loopBlock = fb.createBlock(continueBlock);
+            loopBlock->addArgument(fb.getI32Type(), fb.getLoc());
+            fb.setInsertionPointToEnd(preheader);
+            cf::BranchOp::create(fb, loopBlock, ValueRange{first});
+
+            fb.setInsertionPointToStart(loopBlock);
+            Value row = loopBlock->getArgument(0);
+            Value offset = arith::MulIOp::create(fb, row, stride);
+            Value viewPtr = triton::AddPtrOp::create(fb, trackingPtr.getType(),
+                                                     trackingPtr, offset);
+            // Keep full backing strides for every CTA, barrier, origin and
+            // phase. Only the B coordinate advances between iterations.
+            tti::createStoreScratchMemory(
+                fb, fb.getLoc(), viewPtr, zero, storeType,
+                /*currentCTAOnly=*/false, clearMask, strides);
+            Value next = arith::AddIOp::create(fb, row, step);
+            Value more = arith::CmpIOp::create(fb, arith::CmpIPredicate::ult,
+                                               next, limit);
+            cf::CondBranchOp::create(fb, more, loopBlock, ValueRange{next},
+                                     continueBlock, ValueRange{});
+            fb.setInsertionPointToStart(continueBlock);
           }
         }
 
