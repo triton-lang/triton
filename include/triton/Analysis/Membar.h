@@ -291,9 +291,10 @@ inline BlockInfo translateBlockInfoToCallsite(const BlockInfo &calleeBlockInfo,
   return translatedBlockInfo;
 }
 
-/// Returns true if `op` synchronizes local memory accesses for membar-style
-/// analyses.
-bool containsLocalBarrier(Operation *op);
+/// Classify the barriers that synchronize local memory accesses in `op`
+/// relative to its memory effects.
+triton::BarrierStages getLocalBarrierStages(Operation *op,
+                                            Allocation *allocation);
 
 //===----------------------------------------------------------------------===//
 // Shared Memory Barrier Analysis
