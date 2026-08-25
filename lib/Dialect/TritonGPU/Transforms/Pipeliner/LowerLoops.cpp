@@ -785,14 +785,9 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
 
   // List of buffers that may be used until wait completes
   SmallVector<Value> waitBuffers;
-  auto mmaAsDotOp = cast<DotOpInterface>(mma.getOperation());
-  waitBuffers.push_back(mmaAsDotOp.getA());
-  waitBuffers.push_back(mmaAsDotOp.getB());
-  if (auto mmaAsScaledDotOp =
-          dyn_cast<ttng::TCGen5MMAScaledOp>(mma.getOperation())) {
-    waitBuffers.push_back(mmaAsScaledDotOp.getAScale());
-    waitBuffers.push_back(mmaAsScaledDotOp.getBScale());
-  }
+  for (const auto &range : mma.getOperandRanges())
+    if (!llvm::is_contained(waitBuffers, range.value))
+      waitBuffers.push_back(range.value);
 
   builder.setInsertionPointAfter(mma);
   builder.setStageCluster({mainWaitStage, mainWaitCluster});

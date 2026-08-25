@@ -179,6 +179,9 @@ struct MmaOperandSource {
   RankedTensorType tileType;
   int64_t rowStride;
   int64_t stride;
+  Value continuation;
+  int64_t kStart = 0;
+  int64_t kCapacity = 0;
 
   bool isShared() const { return static_cast<bool>(sharedMemdesc); }
 };
@@ -1106,6 +1109,37 @@ Value createAsyncToken(PatternRewriter &rewriter, Location loc,
 Value loadMmaOperand(PatternRewriter &rewriter, Location loc,
                      const MmaOperandSource &source, RankedTensorType resultTy,
                      bool isLhs, Value tileOffset, Value kOffset) {
+  if (source.kStart || source.continuation) {
+    MmaOperandSource current = source;
+    current.kStart = 0;
+    current.continuation = Value();
+    if (source.kStart)
+      kOffset = arith::AddIOp::create(
+          rewriter, loc, kOffset,
+          arith::ConstantIntOp::create(rewriter, loc, source.kStart, 32));
+    if (!source.continuation)
+      return loadMmaOperand(rewriter, loc, current, resultTy, isLhs, tileOffset,
+                            kOffset);
+    Value boundary =
+        arith::ConstantIntOp::create(rewriter, loc, source.kCapacity, 32);
+    Value inNext = arith::CmpIOp::create(
+        rewriter, loc, arith::CmpIPredicate::uge, kOffset, boundary);
+    auto selected =
+        scf::IfOp::create(rewriter, loc, TypeRange{resultTy}, inNext, true);
+    rewriter.setInsertionPointToStart(&selected.getThenRegion().front());
+    current.sharedMemdesc = source.continuation;
+    Value nextOffset = arith::SubIOp::create(rewriter, loc, kOffset, boundary);
+    Value next = loadMmaOperand(rewriter, loc, current, resultTy, isLhs,
+                                tileOffset, nextOffset);
+    scf::YieldOp::create(rewriter, loc, next);
+    rewriter.setInsertionPointToStart(&selected.getElseRegion().front());
+    current.sharedMemdesc = source.sharedMemdesc;
+    Value first = loadMmaOperand(rewriter, loc, current, resultTy, isLhs,
+                                 tileOffset, kOffset);
+    scf::YieldOp::create(rewriter, loc, first);
+    rewriter.setInsertionPointAfter(selected);
+    return selected.getResult(0);
+  }
   if (!source.isShared()) {
     Value rowOffset = isLhs ? tileOffset : kOffset;
     Value colOffset = isLhs ? kOffset : tileOffset;
@@ -2933,27 +2967,30 @@ struct TCGen5MMAScaledPattern
     int64_t aKPackFactor = 1;
     int64_t bKPackFactor = 1;
     if (op.getAType() == tt::ScaleDotElemType::E2M1) {
-      if (op.getBlockK() == aPackedK * 2) {
+      if (op.getKRangeAttr() || op.getBlockK() == aPackedK * 2) {
         aKPackFactor = 2;
       } else {
         return emitFpSanInvariantError(op.getOperation());
       }
     }
     if (op.getBType() == tt::ScaleDotElemType::E2M1) {
-      if (op.getBlockK() == bPackedK * 2) {
+      if (op.getKRangeAttr() || op.getBlockK() == bPackedK * 2) {
         bKPackFactor = 2;
       } else {
         return emitFpSanInvariantError(op.getOperation());
       }
     }
 
-    int64_t k = aPackedK * aKPackFactor;
-    if (aShape[0] != m || bShape[1] != n || k != bPackedK * bKPackFactor)
+    int64_t k = op.getBlockK();
+    if (aShape[0] != m || bShape[1] != n ||
+        (!op.getKRangeAttr() && k != bPackedK * bKPackFactor))
       return emitFpSanInvariantError(op.getOperation());
 
     auto deduceScaleFactor = [&](ArrayRef<int64_t> scaleShape,
                                  int64_t rows) -> std::optional<int64_t> {
-      if (scaleShape[0] != rows || scaleShape[1] <= 0 ||
+      if (op.getScaleBlockSize())
+        return op.getScaleVecSize();
+      if (scaleShape[0] < rows || scaleShape[1] <= 0 ||
           (k % scaleShape[1]) != 0)
         return std::nullopt;
       return k / scaleShape[1];
@@ -3009,6 +3046,12 @@ struct TCGen5MMAScaledPattern
                                           /*rowStride=*/1, /*stride=*/bPackedK);
     if (!aSource || !bSource)
       return emitFpSanCodegenError(op.getOperation());
+    aSource->continuation = op.getANext();
+    bSource->continuation = op.getBNext();
+    aSource->kStart = op.getKStart() / aKPackFactor;
+    bSource->kStart = op.getKStart() / bKPackFactor;
+    aSource->kCapacity = aPackedK;
+    bSource->kCapacity = bPackedK;
 
     DotScaleConfig scale;
     scale.aElemType = op.getAType();
@@ -3017,6 +3060,17 @@ struct TCGen5MMAScaledPattern
                                                      scale.bElemType);
     scale.aScalePtr = aScaleScratch->ptr;
     scale.bScalePtr = bScaleScratch->ptr;
+    auto offsetScale = [&](Value ptr, int64_t offset, int64_t rows) -> Value {
+      if (!offset)
+        return ptr;
+      Value index =
+          arith::ConstantIntOp::create(rewriter, loc, offset * rows, 32);
+      return tt::AddPtrOp::create(rewriter, loc, ptr.getType(), ptr, index);
+    };
+    scale.aScalePtr =
+        offsetScale(scale.aScalePtr, op.getAScaleOffset(), aScaleShape[0]);
+    scale.bScalePtr =
+        offsetScale(scale.bScalePtr, op.getBScaleOffset(), bScaleShape[0]);
     scale.aScaleTileTy = RankedTensorType::get(
         {tileM, 1}, aScaleMemTy.getElementType(), accTileLayout);
     scale.bScaleTileTy = RankedTensorType::get(

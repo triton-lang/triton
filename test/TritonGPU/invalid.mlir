@@ -940,3 +940,15 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @memdesc_reinterpret_unallocated_suffix(%arg: !ttg.memdesc<3x32xi8, #shared, #smem, mutable>) {
+    // expected-error @+1 {{result shared-memory footprint (128 bytes) exceeds the source view (96 bytes)}}
+    %padded = ttg.memdesc_reinterpret %arg : !ttg.memdesc<3x32xi8, #shared, #smem, mutable> -> !ttg.memdesc<4x32xi8, #shared, #smem, mutable>
+    tt.return
+  }
+}

@@ -244,6 +244,8 @@ struct AuxDataMap {
   // cases for each memdesc.
   triton::BufferStatePlan bufferStatePlans[numMemTypes];
   DenseMap<Value, BufferStateCandidates> bufferCandidates[numMemTypes];
+  DenseMap<std::pair<Operation *, Value>, BufferStateCandidates>
+      accessCandidates[numMemTypes];
 
   // Shared-memory state lanes occupied by each physical mbarrier. Virtual
   // cluster barriers have no storage and therefore do not appear here.

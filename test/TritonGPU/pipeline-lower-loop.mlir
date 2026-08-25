@@ -1831,3 +1831,39 @@ module attributes {ttg.max_reg_auto_ws = 152 : i32, ttg.min_reg_auto_ws = 24 : i
     tt.return
   }
 }
+
+// -----
+
+#k96_a = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, CGALayout = [[1, 0]]}>
+#k96_b = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 8, CGALayout = [[0, 1]]}>
+#k96_d = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
+#k96_s = #ttng.tensor_memory_scales_encoding<CGALayout = [[1, 0]]>
+#k96_reg = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[32, 0], [64, 0]], block = [[128, 0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:103", "ttg.threads-per-warp" = 32 : i32, "ttng.two-ctas" = true} {
+  // CHECK-LABEL: @pipelined_k96_continuations
+  // CHECK: ttng.tc_gen5_mma_scaled
+  // CHECK-SAME: a_next %arg5
+  // CHECK-SAME: b_next %arg6
+  // CHECK-SAME: k_range = array<i32: 192, 288>
+  // CHECK: ttng.wait_barrier {{.*}} deps %arg3, %arg5, %arg4, %arg6, %arg7, %arg8
+  // TMA-LOWERING-LABEL: @pipelined_k96_continuations
+  // TMA-LOWERING: ttng.tc_gen5_mma_scaled {{.*}}a_next %arg5
+  tt.func @pipelined_k96_continuations(
+      %lb: i32, %ub: i32, %step: i32,
+      %a: !ttg.memdesc<256x128xi8, #k96_a, #ttg.shared_memory>,
+      %b: !ttg.memdesc<128x256xi8, #k96_b, #ttg.shared_memory>,
+      %an: !ttg.memdesc<256x128xi8, #k96_a, #ttg.shared_memory>,
+      %bn: !ttg.memdesc<128x256xi8, #k96_b, #ttg.shared_memory>,
+      %sa: !ttg.memdesc<256x16xi8, #k96_s, #ttng.tensor_memory>,
+      %sb: !ttg.memdesc<256x16xi8, #k96_s, #ttng.tensor_memory>) -> tensor<256x256xf32, #k96_reg> {
+    %true = arith.constant true
+    %zero = arith.constant dense<0.0> : tensor<256x256xf32, #k96_reg>
+    %acc, %init = ttng.tmem_alloc %zero : (tensor<256x256xf32, #k96_reg>) -> (!ttg.memdesc<256x256xf32, #k96_d, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %last = scf.for %i = %lb to %ub step %step iter_args(%tok = %init) -> !ttg.async.token : i32 {
+      %next = ttng.tc_gen5_mma_scaled %a, %b, %acc[%tok], %sa, %sb, %true, %true lhs = e2m1 rhs = e2m1 a_next %an : !ttg.memdesc<256x128xi8, #k96_a, #ttg.shared_memory> b_next %bn : !ttg.memdesc<128x256xi8, #k96_b, #ttg.shared_memory> {two_ctas, instruction_k = 96 : i32, k_range = array<i32: 192, 288>, scale_block_size = 32 : i32, a_scale_offset = 6 : i32, b_scale_offset = 6 : i32, loop.cluster = 0 : i32, loop.stage = 2 : i32, tt.self_latency = 1 : i32} : !ttg.memdesc<256x128xi8, #k96_a, #ttg.shared_memory>, !ttg.memdesc<128x256xi8, #k96_b, #ttg.shared_memory>, !ttg.memdesc<256x256xf32, #k96_d, #ttng.tensor_memory, mutable>, !ttg.memdesc<256x16xi8, #k96_s, #ttng.tensor_memory>, !ttg.memdesc<256x16xi8, #k96_s, #ttng.tensor_memory>
+      scf.yield %next : !ttg.async.token
+    } {tt.scheduled_max_stage = 3 : i32}
+    %result, %read = ttng.tmem_load %acc[%last] : !ttg.memdesc<256x256xf32, #k96_d, #ttng.tensor_memory, mutable> -> tensor<256x256xf32, #k96_reg>
+    tt.return %result : tensor<256x256xf32, #k96_reg>
+  }
+}

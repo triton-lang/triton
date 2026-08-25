@@ -52,6 +52,21 @@ LogicalResult verifyMMAv5Op(Operation *op);
 #define GET_ATTRDEF_CLASSES
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.h.inc"
 
+namespace mlir::triton::nvidia_gpu {
+// Logical storage-element interval consumed from an existing descriptor.
+// Layout and ownership continue to come from the descriptor itself.
+struct MMAOperandRange {
+  Value value;
+  unsigned axis;
+  int64_t start;
+  int64_t length;
+};
+struct MMAInstructionTile {
+  int k;
+  int width;
+};
+} // namespace mlir::triton::nvidia_gpu
+
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.h.inc"
 
 #define GET_OP_CLASSES

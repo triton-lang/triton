@@ -5865,7 +5865,7 @@ def swizzle_scales_packed_block(scales, VEC_SIZE):
 
 
 def make_scales_descriptor(scales, BLOCK_MN, BLOCK_K, VEC_SIZE, cga_layout=None):
-    REP_MN = BLOCK_MN // 128
+    REP_MN = max(1, BLOCK_MN // 128)
     REP_K = BLOCK_K // (VEC_SIZE * 4)
     block_shape = [1, REP_MN, REP_K, 2, 256]
     scales = scales.reshape(1, scales.shape[0], scales.shape[1], 2, 256)
@@ -5903,7 +5903,11 @@ def unswizzle_scales_shared_memory(smem, BLOCK_MN: ttgl.constexpr, BLOCK_K: ttgl
 def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_desc, VEC_SIZE: ttgl.constexpr,
                                    block_layout_c: ttgl.constexpr, a_scale_layout_tmem: ttgl.constexpr,
                                    b_scale_layout_tmem: ttgl.constexpr, ctas_per_cga: ttgl.constexpr,
-                                   multicast: ttgl.constexpr):
+                                   multicast: ttgl.constexpr, K_WINDOW: ttgl.constexpr = None,
+                                   A_VIEWS: ttgl.constexpr = None, B_VIEWS: ttgl.constexpr = None,
+                                   SCALE_OFFSETS: ttgl.constexpr = (None, None), INSTRUCTION_K: ttgl.constexpr = 96,
+                                   SCALE_VIEWS: ttgl.constexpr = None, REINTERPRET: ttgl.constexpr = False,
+                                   CHECK_PREDICATE: ttgl.constexpr = False, SYNC_MODE: ttgl.constexpr = 0):
     A_IS_FP4: ttgl.constexpr = a_desc.dtype == ttgl.uint8
     B_IS_FP4: ttgl.constexpr = b_desc.dtype == ttgl.uint8
     A_ELEM_PER_BYTE: ttgl.constexpr = 2 if A_IS_FP4 else 1
@@ -5913,15 +5917,24 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
     BLOCK_K: ttgl.constexpr = a_desc.block_type.shape[1] * A_ELEM_PER_BYTE
     K = a_desc.shape[1] * A_ELEM_PER_BYTE
 
-    a_smem = ttgl.allocate_shared_memory(a_desc.dtype, a_desc.block_type.shape, a_desc.layout)
-    b_smem = ttgl.allocate_shared_memory(b_desc.dtype, b_desc.block_type.shape, b_desc.layout)
+    if REINTERPRET:
+        a_storage = ttgl.allocate_shared_memory(ttgl.uint32, [BLOCK_M, BLOCK_K // 8],
+                                                ttgl.NVMMASharedLayout(128, 32, cga_layout=a_desc.layout.cga_layout))
+        b_storage = ttgl.allocate_shared_memory(ttgl.uint32, [BLOCK_N, BLOCK_K // 8],
+                                                ttgl.NVMMASharedLayout(128, 32, cga_layout=b_desc.layout.cga_layout))
+        a_smem = a_storage.reinterpret(a_desc.dtype, a_desc.block_shape, a_desc.layout)
+        b_smem = b_storage.reinterpret(b_desc.dtype, b_desc.block_shape, b_desc.layout)
+    else:
+        a_smem = ttgl.allocate_shared_memory(a_desc.dtype, a_desc.block_type.shape, a_desc.layout)
+        b_smem = ttgl.allocate_shared_memory(b_desc.dtype, b_desc.block_type.shape, b_desc.layout)
 
     num_ctas: ttgl.constexpr = ttgl.num_ctas()
     multi_cta: ttgl.constexpr = num_ctas > 1
     scale_layout_a: ttgl.constexpr = TensorMemoryScalesLayout(cga_layout=a_scale_layout_tmem)
     scale_layout_b: ttgl.constexpr = TensorMemoryScalesLayout(cga_layout=b_scale_layout_tmem)
     a_scale_tmem = allocate_tensor_memory(a_scale_desc.dtype, [BLOCK_M, BLOCK_K // VEC_SIZE], scale_layout_a)
-    b_scale_tmem = allocate_tensor_memory(b_scale_desc.dtype, [BLOCK_N, BLOCK_K // VEC_SIZE], scale_layout_b)
+    SCALE_N: ttgl.constexpr = max(BLOCK_N, 128)
+    b_scale_tmem = allocate_tensor_memory(b_scale_desc.dtype, [SCALE_N, BLOCK_K // VEC_SIZE], scale_layout_b)
     tmem_layout: ttgl.constexpr = TensorMemoryLayout(
         [BLOCK_M // ctas_per_cga[0], BLOCK_N // ctas_per_cga[1]],
         col_stride=1,
@@ -5929,6 +5942,9 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
         two_ctas=multi_cta,
     )
     acc_tmem = allocate_tensor_memory(ttgl.float32, [BLOCK_M, BLOCK_N], tmem_layout)
+    if CHECK_PREDICATE:
+        acc_tmem.store(ttgl.full(acc_tmem.shape, 7, ttgl.float32, acc_tmem.get_reg_layout()))
+        ttgl.barrier(cluster=True)
 
     tma_bar = mbarrier.allocate_mbarrier(two_ctas=multi_cta)
     mbarrier.init(tma_bar, count=1)
@@ -5954,6 +5970,12 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
     off_m_a_scale = pid_m * REP_M
     off_n_b_scale = pid_n * REP_N
 
+    if SYNC_MODE == 0:
+        completion = [mma_bar]
+    elif SYNC_MODE == 1:
+        completion = None
+    else:
+        completion = []
     for k in range(0, K, BLOCK_K):
         off_k_a = k // A_ELEM_PER_BYTE
         off_k_b = k // B_ELEM_PER_BYTE
@@ -5973,16 +5995,52 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
         phase_tma ^= 1
 
         a_scale = unswizzle_scales_shared_memory(a_scale_smem, BLOCK_M, BLOCK_K, VEC_SIZE)
-        b_scale = unswizzle_scales_shared_memory(b_scale_smem, BLOCK_N, BLOCK_K, VEC_SIZE)
+        b_scale = unswizzle_scales_shared_memory(b_scale_smem, SCALE_N, BLOCK_K, VEC_SIZE)
         tcgen05_copy(a_scale, a_scale_tmem)
         tcgen05_copy(b_scale, b_scale_tmem)
 
         a_format: ttgl.constexpr = "e2m1" if A_IS_FP4 else "e4m3"
         b_format: ttgl.constexpr = "e2m1" if B_IS_FP4 else "e4m3"
-        tcgen05_mma_scaled(a_smem, b_smem.permute((1, 0)), acc_tmem, a_scale_tmem, b_scale_tmem, a_format, b_format,
-                           use_acc=(k != 0), multicast=multicast, mbarriers=[mma_bar])
-        mbarrier.wait(mma_bar, phase_mma)
-        phase_mma ^= 1
+        if K_WINDOW is None:
+            tcgen05_mma_scaled(a_smem, b_smem.permute((1, 0)), acc_tmem, a_scale_tmem, b_scale_tmem, a_format, b_format,
+                               use_acc=(k != 0), multicast=multicast, mbarriers=completion)
+        else:
+            a_view = a_smem.slice(A_VIEWS[0] // 2, A_VIEWS[1] // 2, dim=1)
+            b_view = b_smem.slice(B_VIEWS[0] // 2, B_VIEWS[1] // 2, dim=1).permute((1, 0))
+            if A_VIEWS[3]:
+                a_next = a_smem.slice(A_VIEWS[2] // 2, A_VIEWS[3] // 2, dim=1)
+            else:
+                a_next = None
+            if B_VIEWS[3]:
+                b_next = b_smem.slice(B_VIEWS[2] // 2, B_VIEWS[3] // 2, dim=1).permute((1, 0))
+            else:
+                b_next = None
+            if SCALE_VIEWS is not None:
+                sa = a_scale_tmem.slice(SCALE_VIEWS[0][0], SCALE_VIEWS[0][1])
+                sb = b_scale_tmem.slice(SCALE_VIEWS[1][0], SCALE_VIEWS[1][1])
+                SA_OFFSET: ttgl.constexpr = SCALE_OFFSETS[0] - SCALE_VIEWS[0][0]
+                SB_OFFSET: ttgl.constexpr = SCALE_OFFSETS[1] - SCALE_VIEWS[1][0]
+            else:
+                sa, sb = a_scale_tmem, b_scale_tmem
+                SA_OFFSET: ttgl.constexpr = SCALE_OFFSETS[0]
+                SB_OFFSET: ttgl.constexpr = SCALE_OFFSETS[1]
+            if CHECK_PREDICATE:
+                # A runtime-false issue must neither reset nor update the accumulator.
+                tcgen05_mma_scaled(a_view, b_view, acc_tmem, sa, sb, a_format, b_format, use_acc=False,
+                                   pred=(off_m < 0), mbarriers=[], is_async=True, k_range=K_WINDOW,
+                                   instruction_k=INSTRUCTION_K, a_next=a_next, b_next=b_next, scale_block_size=VEC_SIZE,
+                                   a_scale_offset=SA_OFFSET, b_scale_offset=SB_OFFSET)
+            tcgen05_mma_scaled(a_view, b_view, acc_tmem, sa, sb, a_format, b_format, use_acc=(k != 0)
+                               or CHECK_PREDICATE, multicast=multicast, mbarriers=completion, k_range=K_WINDOW,
+                               instruction_k=INSTRUCTION_K, a_next=a_next, b_next=b_next, scale_block_size=VEC_SIZE,
+                               a_scale_offset=SA_OFFSET, b_scale_offset=SB_OFFSET)
+        # Synchronous 2CTA issue waits on the issuing CTA; publish completion
+        # to the peer before either CTA reuses shared inputs or loads the result.
+        if SYNC_MODE != 0 and multi_cta:
+            ttgl.barrier(cluster=True)
+        if SYNC_MODE == 0:
+            mbarrier.wait(mma_bar, phase_mma)
+            phase_mma ^= 1
 
     mbarrier.invalidate(tma_bar)
     mbarrier.invalidate(mma_bar)
@@ -5997,7 +6055,10 @@ def mma_scaled_tcgen05_copy_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale
 
 
 def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, ctas_per_cga, multicast,
-                            out_dtype=torch.float16):
+                            out_dtype=torch.float16, enable_fp4_k96=False, return_kernel=False, k_window=None,
+                            a_views=None, b_views=None, scale_offsets=(None, None), instruction_k=96, scale_views=None,
+                            reinterpret=False, check_predicate=False, sync_mode=0):
+    from dataclasses import replace
     M, N = A.shape[0], B.shape[0]
     MIXED_PREC = A.dtype != B.dtype
     num_ctas = ctas_per_cga[0] * ctas_per_cga[1]
@@ -6029,10 +6090,13 @@ def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, 
                                         cga_layout=cga_layout_c) if multi_cta else None
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
-    mma_scaled_tcgen05_copy_kernel[grid](A_desc, B_desc, C_desc, A_scale_desc, B_scale_desc, VEC_SIZE, block_layout_c,
-                                         a_scale_layout_tmem, b_scale_layout_tmem, ctas_per_cga, num_warps=num_warps,
-                                         num_ctas=num_ctas, multicast=multicast)
-    return C_desc.base
+    compiled = mma_scaled_tcgen05_copy_kernel[grid](
+        A_desc, B_desc, C_desc, A_scale_desc, B_scale_desc, VEC_SIZE, block_layout_c, a_scale_layout_tmem,
+        b_scale_layout_tmem, ctas_per_cga, num_warps=num_warps, num_ctas=num_ctas, multicast=multicast,
+        enable_fp4_k96=enable_fp4_k96, K_WINDOW=k_window, A_VIEWS=a_views, B_VIEWS=b_views, SCALE_OFFSETS=scale_offsets,
+        INSTRUCTION_K=instruction_k, SCALE_VIEWS=scale_views, REINTERPRET=reinterpret, CHECK_PREDICATE=check_predicate,
+        SYNC_MODE=sync_mode)
+    return (C_desc.base, compiled) if return_kernel else C_desc.base
 
 
 @pytest.mark.parametrize("M, N, K", [(2048, 2048, 4096)])
@@ -6057,6 +6121,258 @@ def test_mma_scaled_tcgen05_copy(M, N, K, BLOCK_K, a_format, b_format, VEC_SIZE,
     C_ref = A_ref @ B_ref.T
     C = mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, BLOCK_K, ctas_per_cga, multicast)
     torch.testing.assert_close(C_ref, C.to(torch.float32), atol=1e-3, rtol=1e-3)
+
+
+@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires sm103 K=96 MMA")
+@pytest.mark.parametrize("fmt, vec_size", [("mxfp4", 32), ("nvfp4", 16)])
+@pytest.mark.parametrize("block_n", [128, 256])
+@pytest.mark.parametrize("m, n, k, block_k", [(256, 256, 256, 256), (500, 384, 1024, 256), (512, 512, 1024, 512)])
+def test_tcgen05_mma_scaled_k96_packed(fmt, vec_size, block_n, m, n, k, block_k):
+    torch.manual_seed(0)
+    a, a_scale, a_ref = random_quantized_tensor(m, k, fmt)
+    b, b_scale, b_ref = random_quantized_tensor(n, k, fmt)
+    a_scale = swizzle_scales_packed_block(a_scale, vec_size)
+    b_scale = swizzle_scales_packed_block(b_scale, vec_size)
+    expected = a_ref @ b_ref.T
+    counts = []
+    for enable in [False, True]:
+        actual, compiled = mma_scaled_tcgen05_copy(a, b, a_scale, b_scale, vec_size, 256, block_n, block_k, (2, 1),
+                                                   False, out_dtype=torch.float32, enable_fp4_k96=enable,
+                                                   return_kernel=True)
+        torch.testing.assert_close(actual, expected, atol=1e-3, rtol=1e-3)
+        counts.append(compiled.asm["ptx"].count("tcgen05.mma."))
+    assert counts[1] * 4 == counts[0] * 3
+
+
+@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires sm103 K=96 MMA")
+@pytest.mark.parametrize("fmt, vec", [("mxfp4", 32), ("nvfp4", 16)])
+@pytest.mark.parametrize("sync_mode", [1, 2], ids=["none", "empty"])
+def test_tcgen05_mma_scaled_k96_synchronous(fmt, vec, sync_mode):
+    torch.manual_seed(0)
+    a, sa, ar = random_quantized_tensor(256, 512, fmt)
+    b, sb, br = random_quantized_tensor(256, 512, fmt)
+    sa, sb = swizzle_scales_packed_block(sa, vec), swizzle_scales_packed_block(sb, vec)
+    for enable in (False, True):
+        actual, compiled = mma_scaled_tcgen05_copy(a, b, sa, sb, vec, 256, 256, 256, (2, 1), False,
+                                                   out_dtype=torch.float32, enable_fp4_k96=enable, return_kernel=True,
+                                                   sync_mode=sync_mode)
+        torch.testing.assert_close(actual, ar @ br.T, atol=1e-3, rtol=1e-3)
+        mma_ops = [line for line in compiled.asm["ttgir"].splitlines() if "ttng.tc_gen5_mma_scaled" in line]
+        assert mma_ops and all("is_async" not in line for line in mma_ops)
+
+
+@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires sm103 K=96 MMA")
+@pytest.mark.parametrize("fmt, vec", [("mxfp4", 32), ("nvfp4", 16)])
+@pytest.mark.parametrize("block_n", [64, 128, 256])
+@pytest.mark.parametrize("window, a_views, b_views", [
+    ((0, 192), (0, 512, 0, 0), (0, 512, 0, 0)),
+    ((32, 224), (0, 512, 0, 0), (0, 512, 0, 0)),
+    ((192, 288), (0, 512, 0, 0), (0, 512, 0, 0)),
+    ((192, 288), (0, 256, 256, 256), (0, 256, 256, 256)),
+    ((224, 320), (0, 256, 256, 256), (0, 256, 256, 256)),
+    ((192, 288), (0, 256, 256, 256), (0, 512, 0, 0)),
+    ((192, 288), (0, 512, 0, 0), (0, 256, 256, 256)),
+    ((192, 288), (256, 256, 0, 256), (256, 256, 0, 256)),
+    ((64, 160), (128, 128, 256, 256), (128, 128, 256, 256)),
+])
+def test_tcgen05_mma_scaled_k96_windows(fmt, vec, block_n, window, a_views, b_views):
+    torch.manual_seed(123)
+    m, n, k = 384, 64 if block_n == 64 else 192, 512
+    a_values = MXFP4Tensor(size=(m, k), device="cuda").random()
+    b_values = MXFP4Tensor(size=(n, k), device="cuda").random()
+    values = [a_values.to(torch.float32), b_values.to(torch.float32)]
+    operands = [a_values.to_packed_tensor(dim=1), b_values.to_packed_tensor(dim=1)]
+    exponents = [torch.randint(-3, 1, (rows, k // vec), device="cuda") for rows in (m, n)]
+    scale_values = [torch.exp2(e.float()) for e in exponents]
+    scales = [v.to(torch.float8_e4m3fn) for v in scale_values] if vec == 16 else [(e + 127).to(torch.uint8)
+                                                                                  for e in exponents]
+    offsets = (None, None) if window == (32, 224) else (2 * 32 // vec, 5 * 32 // vec)
+    refs = []
+    for value, scale, views, offset in zip(values, scale_values, (a_views, b_views), offsets):
+        first, length, next_start, next_length = views
+        stream = torch.cat((value[:, first:first + length], value[:, next_start:next_start + next_length]), dim=1)
+        selected = stream[:, window[0]:window[1]]
+        offset = window[0] // vec if offset is None else offset
+        selected_scale = scale[:, offset:offset + (window[1] - window[0]) // vec].repeat_interleave(vec, dim=1)
+        refs.append(selected * selected_scale)
+    scales = [swizzle_scales_packed_block(scale, vec) for scale in scales]
+    actual, compiled = mma_scaled_tcgen05_copy(*operands, *scales, vec, 256, block_n, k, (2, 1), False,
+                                               out_dtype=torch.float32, return_kernel=True, k_window=window,
+                                               a_views=a_views, b_views=b_views, scale_offsets=offsets)
+    torch.testing.assert_close(actual, refs[0] @ refs[1].T, atol=1e-3, rtol=1e-3)
+    assert compiled.asm["ptx"].count("tcgen05.mma.") == (window[1] - window[0]) // 96
+
+
+@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires sm103 K96")
+@pytest.mark.parametrize("vec", [16, 32])
+@pytest.mark.parametrize("width", [64, 96])
+def test_tcgen05_mma_scaled_k96_scale_subviews(vec, width):
+    torch.manual_seed(321)
+    m, n, k = 256, 128, 512
+    a = MXFP4Tensor(size=(m, k), device="cuda").random()
+    b = MXFP4Tensor(size=(n, k), device="cuda").random()
+    exponents = [torch.randint(-3, 1, (rows, k // vec), device="cuda") for rows in (m, n)]
+    scale_values = [torch.exp2(e.float()) for e in exponents]
+    scales = [v.to(torch.float8_e4m3fn) for v in scale_values] if vec == 16 else [(e + 127).to(torch.uint8)
+                                                                                  for e in exponents]
+    factor = 32 // vec
+    offsets = (8 * factor, 12 * factor)
+    scale_views = ((4 * factor, 8 * factor), (8 * factor, 8 * factor))
+    window = (192, 288) if width == 96 else (64, 128)
+    views = (0, 256, 256, 256) if width == 96 else (0, 512, 0, 0)
+    values = [a.to(torch.float32), b.to(torch.float32)]
+    refs = [
+        value[:, window[0]:window[1]] * scale[:, offset:offset + width // vec].repeat_interleave(vec, 1)
+        for value, scale, offset in zip(values, scale_values, offsets)
+    ]
+    actual = mma_scaled_tcgen05_copy(a.to_packed_tensor(dim=1), b.to_packed_tensor(dim=1),
+                                     *[swizzle_scales_packed_block(scale, vec) for scale in scales], vec, m, n, k,
+                                     (2, 1), False, out_dtype=torch.float32, k_window=window, a_views=views,
+                                     b_views=views, scale_offsets=offsets, instruction_k=width, scale_views=scale_views,
+                                     reinterpret=True, check_predicate=True)
+    torch.testing.assert_close(actual, 7 + refs[0] @ refs[1].T, atol=1e-3, rtol=1e-3)
+
+
+@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires sm103 K96")
+def test_tcgen05_mma_scaled_k96_physical_crossing(capfd):
+    data = torch.zeros((256, 256), dtype=torch.uint8, device="cuda")
+    scale = swizzle_scales_packed_block(torch.full((256, 16), 127, dtype=torch.uint8, device="cuda"), 32)
+    # This K128 view ends before the physical K256 swizzle boundary; an
+    # absolute leading address cannot splice another allocation there.
+    with pytest.raises(RuntimeError, match="PassManager::run failed"):
+        mma_scaled_tcgen05_copy(data, data, scale, scale, 32, 256, 256, 512, (2, 1), False, k_window=(64, 160),
+                                a_views=(0, 128, 256, 256), b_views=(0, 128, 256, 256))
+    assert "continuation boundary must coincide" in capfd.readouterr().err
+
+
+@gluon.jit
+def mma_scaled_tcgen05_npot_kernel(a_desc, b_desc, sa_desc, sb_desc, out, tile, VEC: ttgl.constexpr,
+                                  WINDOW: ttgl.constexpr, OVERWRITE: ttgl.constexpr, OUT_LAYOUT: ttgl.constexpr):
+    a = ttgl.allocate_shared_memory(ttgl.uint8, a_desc.block_shape, a_desc.layout)
+    b = ttgl.allocate_shared_memory(ttgl.uint8, b_desc.block_shape, b_desc.layout)
+    sa = ttgl.allocate_shared_memory(sa_desc.dtype, [3] + sa_desc.block_shape, sa_desc.layout)
+    sb = ttgl.allocate_shared_memory(sb_desc.dtype, [3] + sb_desc.block_shape, sb_desc.layout)
+    ta = allocate_tensor_memory(sa_desc.dtype, [256, 1024 // VEC], TensorMemoryScalesLayout([[1, 0]]))
+    tb = allocate_tensor_memory(sb_desc.dtype, [256, 1024 // VEC], TensorMemoryScalesLayout([[0, 0]]))
+    acc = allocate_tensor_memory(
+        ttgl.float32, [256, 256], TensorMemoryLayout([128, 256], col_stride=1, cga_layout=[[1, 0]], two_ctas=True))
+    ready = mbarrier.allocate_mbarrier(two_ctas=True)
+    done = mbarrier.allocate_mbarrier()
+    mbarrier.init(ready, count=1)
+    mbarrier.init(done, count=1)
+    mbarrier.expect(ready, a_desc.nbytes_per_cta + b_desc.nbytes_per_cta +
+                    3 * (sa_desc.nbytes_per_cta + sb_desc.nbytes_per_cta))
+    tma.async_load(a_desc, [tile * 3, 0, 0], ready, a)
+    tma.async_load(b_desc, [tile * 3, 0, 0], ready, b)
+    for i in ttgl.static_range(3):
+        offset = (tile * 3 + i) * (256 // VEC // 4)
+        tma.async_load(sa_desc, [0, 0, offset, 0, 0], ready, sa.index(i))
+        tma.async_load(sb_desc, [0, 0, offset, 0, 0], ready, sb.index(i))
+    mbarrier.wait(ready, 0, deps=[a, b, sa, sb])
+    for i in ttgl.static_range(3):
+        tcgen05_copy(unswizzle_scales_shared_memory(sa.index(i), 256, 256, VEC),
+                     ta.slice(i * (256 // VEC), 256 // VEC))
+        tcgen05_copy(unswizzle_scales_shared_memory(sb.index(i), 256, 256, VEC),
+                     tb.slice(i * (256 // VEC), 256 // VEC))
+    # A complete three-sector allocation becomes an exact packed K768 view.
+    av = a.permute((1, 0, 2)).reshape((256, 384))
+    bv = b.permute((1, 0, 2)).reshape((256, 384)).permute((1, 0))
+    hopper.cluster.barrier()
+    tcgen05_mma_scaled(av, bv, acc, ta, tb, "e2m1", "e2m1", use_acc=False, instruction_k=96,
+                       k_range=WINDOW, scale_block_size=VEC, mbarriers=[done])
+    if OVERWRITE:
+        # The last sector is disjoint from WINDOW=(192, 288), but is read by
+        # a full K768 issue. This also exercises offset 2 in an extent of 3.
+        last = a.slice(2, 1, dim=0)
+        last.store(ttgl.full(last.shape, 0, ttgl.uint8,
+                            ttgl.BlockedLayout([1, 1, 4], [1, 4, 8], [1, 4, 1], [2, 1, 0],
+                                               cga_layout=[[0, 1, 0]])))
+    mbarrier.wait(done, 0)
+    mbarrier.invalidate(done)
+    mbarrier.invalidate(ready)
+    values = ttgl.convert_layout(acc.load(), OUT_LAYOUT)
+    rows = ttgl.arange(0, 256, layout=ttgl.SliceLayout(1, OUT_LAYOUT))
+    cols = ttgl.arange(0, 256, layout=ttgl.SliceLayout(0, OUT_LAYOUT))
+    ttgl.store(out + rows[:, None] * 256 + cols[None, :], values)
+
+
+def mma_scaled_tcgen05_npot(a, b, sa, sb, vec, tile=0, window=None, overwrite=False):
+    layout = ttgl.NVMMASharedLayout(128, 8, rank=3, cga_layout=[[0, 1, 0]])
+    descriptors = [TensorDescriptor.from_tensor(x.reshape(256, -1, 128).permute(1, 0, 2), [3, 256, 128], layout)
+                   for x in (a, b)]
+    scales = [swizzle_scales_packed_block(x, vec) for x in (sa, sb)]
+    sa_desc = make_scales_descriptor(scales[0], 256, 256, vec, [[0, 1, 0, 0, 0]])
+    sb_desc = make_scales_descriptor(scales[1], 256, 256, vec, [[0, 0, 0, 0, 0]])
+    out = torch.empty((256, 256), device=a.device, dtype=torch.float32)
+    out_layout = ttgl.BlockedLayout([1, 8], [1, 32], [4, 1], [1, 0], cga_layout=[[1, 0]])
+    compiled = mma_scaled_tcgen05_npot_kernel[(1, )](*descriptors, sa_desc, sb_desc, out, tile, vec, window,
+                                                    overwrite, out_layout, num_ctas=2, num_warps=4)
+    return out, compiled
+
+
+@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires sm103 K96")
+@pytest.mark.parametrize("fmt, vec", [("mxfp4", 32), ("nvfp4", 16)])
+@pytest.mark.parametrize("window", [None, (192, 288), (480, 576)])
+def test_tcgen05_mma_scaled_k96_non_power_of_two(fmt, vec, window):
+    torch.manual_seed(123)
+    a, sa, ar = random_quantized_tensor(256, 1536, fmt)
+    b, sb, br = random_quantized_tensor(256, 1536, fmt)
+    lo, hi = (0, 768) if window is None else window
+    for tile in (0, 1):
+        actual, compiled = mma_scaled_tcgen05_npot(a, b, sa, sb, vec, tile, window)
+        selected = slice(tile * 768 + lo, tile * 768 + hi)
+        torch.testing.assert_close(actual, ar[:, selected] @ br[:, selected].T, atol=1e-3, rtol=1e-3)
+        assert compiled.asm["ptx"].count("tcgen05.mma.") == (hi - lo) // 96
+
+
+@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires sm103 K=96 MMA")
+@pytest.mark.parametrize("fmt", ["mxfp4", "nvfp4"])
+@pytest.mark.parametrize("m, n, k, clc_scheduler, out_dtype", [
+    (256, 256, 768, False, torch.float16),
+    (384, 512, 1536, False, torch.float16),
+    (512, 384, 2304, True, torch.float16),
+    (3968, 4096, 4608, False, torch.float16),
+    (500, 600, 2304, True, torch.float16),
+    (500, 600, 2304, False, torch.float16),
+    pytest.param(384, 512, 1536, False, torch.float32, id="fp32-output"),
+])
+def test_tcgen05_mma_scaled_pure_k96_pipeline(fmt, m, n, k, clc_scheduler, out_dtype, monkeypatch):
+    from importlib import import_module
+    from pathlib import Path
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "examples/gluon"))
+    example = import_module("07-pure-k96-matmul")
+    torch.manual_seed(123)
+    a, b, sa, sb, expected = example.make_problem(m, n, k, fmt)
+    scheduler = example.SCHEDULER_CLC if clc_scheduler else example.SCHEDULER_SPS
+
+    kernel = example.dense_k96_kernel
+    original_run = kernel.run
+    compiled = None
+
+    def capture(*args, **kwargs):
+        nonlocal compiled
+        compiled = original_run(*args, **kwargs)
+        return compiled
+
+    monkeypatch.setattr(kernel, "run", capture)
+
+    def invoke():
+        return example.matmul(a, b, sa, sb, scheduler=scheduler, out_dtype=out_dtype)
+
+    actual = invoke()
+    torch.testing.assert_close(actual.float(), expected, atol=2e-3, rtol=1e-3)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        replayed = invoke()
+    for _ in range(3):
+        graph.replay()
+    torch.cuda.synchronize()
+    assert torch.equal(replayed.view(torch.int32), actual.view(torch.int32))
+    ptx = compiled.asm["ptx"]
+    constants = dict(re.findall(r"mov\.b32\s+(%r\d+),\s+(-?\d+);", ptx))
+    descriptors = re.findall(r"tcgen05\.mma[^;]*?\], [^,]+, [^,]+, (%r\d+),", ptx)
+    assert descriptors
+    assert all(int(constants[register]) & (1 << 31) for register in descriptors)
 
 
 @gluon.jit

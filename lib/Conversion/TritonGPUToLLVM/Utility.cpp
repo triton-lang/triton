@@ -1441,7 +1441,7 @@ std::pair<uint64_t, uint64_t> SharedMemoryObject::getMaskSpanOffsetsAndBlocks(
     return {0, 0};
   }
   auto totalLl = triton::gpu::toLinearLayoutIgnoringPadding(
-      allocShape, srcTy.getEncoding());
+      triton::gpu::normalizeShapeToPowerOf2(allocShape), srcTy.getEncoding());
   // Map from dimNames to offset, block
   auto invLl = totalLl.pseudoinvert();
   SmallVector<std::pair<StringAttr, int32_t>> logicalOffsets;
@@ -1453,7 +1453,7 @@ std::pair<uint64_t, uint64_t> SharedMemoryObject::getMaskSpanOffsetsAndBlocks(
   uint64_t blockMask = 0;
   for (auto [dim, shapes] : llvm::enumerate(llvm::zip(shape, allocShape))) {
     auto [shape, allocShape] = shapes;
-    for (int j = llvm::Log2_32(shape); j < llvm::Log2_32(allocShape); ++j) {
+    for (int j = llvm::Log2_32_Ceil(shape); j < llvm::Log2_32_Ceil(allocShape); ++j) {
       logicalOffsets[dim].second = 1 << j;
       auto offsetAndBlock = invLl.apply(logicalOffsets);
       offsetMask |= offsetAndBlock[0].second;

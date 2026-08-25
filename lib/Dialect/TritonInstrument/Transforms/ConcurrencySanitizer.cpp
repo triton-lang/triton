@@ -342,6 +342,35 @@ void initializeAllocation(ImplicitLocOpBuilder &b, Value alloc) {
       leaves.push_back(createSingleBufferView(b, alloc, buffer));
   }
 
+  // Shared descriptors may have an irregular extent, but register tensors
+  // remain power-of-two. Poison complete power-of-two subviews without
+  // touching the unallocated suffix of the normalized layout.
+  SmallVector<Value> poisonViews;
+  for (Value leaf : leaves) {
+    auto type = cast<ttg::MemDescType>(leaf.getType());
+    auto shape = llvm::to_vector(type.getShape());
+    auto irregular = llvm::find_if(shape, [](int64_t dim) {
+      return !llvm::isPowerOf2_64(dim);
+    });
+    if (irregular == shape.end()) {
+      poisonViews.push_back(leaf);
+      continue;
+    }
+    unsigned axis = irregular - shape.begin();
+    SmallVector<int32_t> offsets(shape.size(), 0);
+    for (int64_t remaining = *irregular; remaining;) {
+      int64_t size = llvm::bit_floor(uint64_t(remaining));
+      shape[axis] = size;
+      auto viewType = ttg::MemDescType::get(
+          shape, type.getElementType(), type.getEncoding(), type.getMemorySpace(),
+          type.getMutableMemory(), type.getAllocShape());
+      poisonViews.push_back(
+          ttg::MemDescSubsliceOp::create(b, viewType, leaf, offsets));
+      offsets[axis] += size;
+      remaining -= size;
+    }
+  }
+
   bool isTensorMemory =
       isa<ttng::TensorMemorySpaceAttr>(allocType.getMemorySpace());
   ttg::AddrSpace barrierSpace =
@@ -352,7 +381,7 @@ void initializeAllocation(ImplicitLocOpBuilder &b, Value alloc) {
   // memory that is still being used, and finish poisoning before the kernel's
   // first real use of the allocation.
   ttg::BarrierOp::create(b, b.getLoc(), barrierSpace);
-  for (Value leaf : leaves) {
+  for (Value leaf : poisonViews) {
     auto leafType = cast<ttg::MemDescType>(leaf.getType());
     Value poison = createPoisonTensor(b, leafType);
     if (isTensorMemory) {
@@ -1060,7 +1089,11 @@ private:
         op->emitError("missing buffer-region candidates for memdesc");
         return failure();
       }
-      const BufferStateCandidates &candidates = candidateIt->second;
+      auto &accessMap =
+          auxData.accessCandidates[static_cast<int>(materialized.memType)];
+      auto accessIt = accessMap.find(std::make_pair(op, buf));
+      const BufferStateCandidates &candidates =
+          accessIt == accessMap.end() ? candidateIt->second : accessIt->second;
       Value runtimeBase;
       if (!candidates.unknown && candidates.cases.size() > 1)
         runtimeBase = tti::ExperimentalMemDescToI32Op::create(b, buf);

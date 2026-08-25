@@ -211,6 +211,12 @@ public:
 
     if (auto mmaScaledOp = dyn_cast<triton::nvidia_gpu::TCGen5MMAScaledOp>(
             dotOp.getOperation())) {
+      if (mmaScaledOp.getANext() &&
+          rewriteOperand(mmaScaledOp.getANext(), rewriter).succeeded())
+        changed = true;
+      if (mmaScaledOp.getBNext() &&
+          rewriteOperand(mmaScaledOp.getBNext(), rewriter).succeeded())
+        changed = true;
       if (rewriteOperand(mmaScaledOp.getAScale(), rewriter).succeeded())
         changed = true;
       if (rewriteOperand(mmaScaledOp.getBScale(), rewriter).succeeded())

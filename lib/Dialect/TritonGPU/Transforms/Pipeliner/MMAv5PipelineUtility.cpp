@@ -114,6 +114,17 @@ void ttng::MMAv5PipelineableOperandsHelper::run() {
   // For scaled MMA check if the scales are passed through shared memory, and
   // also coming from load or outside the loop.
   if (auto scaledOp = dyn_cast<ttng::TCGen5MMAScaledOp>(mmaOp.getOperation())) {
+    for (Value next : {scaledOp.getANext(), scaledOp.getBNext()}) {
+      if (!next)
+        continue;
+      Operation *foundDef = nullptr;
+      if (!isOperandPipelineable(next, foundDef)) {
+        if (foundDef)
+          unpipelineableOperandDefs.push_back(foundDef);
+        else
+          isOperandsStateDetermined = false;
+      }
+    }
     if (!ttng::areScalesPipelineable(scaledOp, forOp)) {
       // Undecidable, we could follow the tmem use-def chain to find the first
       // tmem_load.

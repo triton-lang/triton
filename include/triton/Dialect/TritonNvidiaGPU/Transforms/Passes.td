@@ -214,6 +214,11 @@ def TritonNvidiaGPUMMALoweringPass : Pass<"triton-nvidia-mma-lowering", "mlir::M
   ];
 }
 
+def TritonNvidiaGPUNormalizeMMAKPass : Pass<"triton-nvidia-normalize-mma-k", "mlir::ModuleOp"> {
+  let summary = "Verify and normalize the physical boundaries of selected MMA K intervals";
+  let dependentDialects = ["mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"];
+}
+
 def TritonNvidiaGPUPromoteLHSToTMemPass : Pass<"tritongpu-promote-lhs-to-tmem", "mlir::ModuleOp"> {
   let summary = "Promote LHS operand of MMAv5 op to Tensor Memory";
 

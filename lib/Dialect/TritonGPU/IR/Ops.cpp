@@ -719,9 +719,11 @@ LogicalResult MemDescReinterpretOp::verify() {
           "expected shared or tensor memory"));
 
   auto srcAllocation = toLinearLayoutIgnoringPadding(
-      dropPipeliningDim(srcTy.getAllocShape(), srcEnc), srcEnc);
+      normalizeShapeToPowerOf2(dropPipeliningDim(srcTy.getAllocShape(), srcEnc)),
+      srcEnc);
   auto dstAllocation = toLinearLayoutIgnoringPadding(
-      dropPipeliningDim(dstTy.getAllocShape(), dstEnc), dstEnc);
+      normalizeShapeToPowerOf2(dropPipeliningDim(dstTy.getAllocShape(), dstEnc)),
+      dstEnc);
   auto srcShape = dropPipeliningDim(srcTy.getShape(), srcEnc);
   auto blockDim = StringAttr::get(getContext(), "block");
   for (const auto &basis : srcAllocation.getBases().lookup(blockDim))
@@ -758,12 +760,20 @@ LogicalResult MemDescReinterpretOp::verify() {
   unsigned dstElementBits = dstTy.getElementTypeBitWidth();
   // Pipeline dimensions outside the layout-ranked suffix represent separate
   // copies of the physical allocation.
+  // The normalized layout can describe an unallocated suffix. Reinterpret
+  // may only claim bytes belonging to the exact shared-memory allocation.
+  int64_t srcAllocationElems =
+      srcIsTmem ? srcAllocation.getInDimSize(addressDim)
+                : getAllocationElems(
+                      srcEnc, dropPipeliningDim(srcTy.getAllocShape(), srcEnc));
+  int64_t dstAllocationElems =
+      srcIsTmem ? dstAllocation.getInDimSize(addressDim)
+                : getAllocationElems(
+                      dstEnc, dropPipeliningDim(dstTy.getAllocShape(), dstEnc));
   uint64_t srcStride = llvm::divideCeil(
-      uint64_t(srcAllocation.getInDimSize(addressDim)) * srcElementBits,
-      uint64_t(unitBits));
+      uint64_t(srcAllocationElems) * srcElementBits, uint64_t(unitBits));
   uint64_t dstStride = llvm::divideCeil(
-      uint64_t(dstAllocation.getInDimSize(addressDim)) * dstElementBits,
-      uint64_t(unitBits));
+      uint64_t(dstAllocationElems) * dstElementBits, uint64_t(unitBits));
   auto dstShape = dropPipeliningDim(dstTy.getShape(), dstEnc);
   int64_t srcStages = product(srcTy.getShape().drop_back(srcShape.size()));
   int64_t dstStages = product(dstTy.getShape().drop_back(dstShape.size()));

@@ -1486,6 +1486,175 @@ def test_tma_store(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     kernel[(1, )](output_desc, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() != (10, 3), reason="Requires sm103 K96")
+@pytest.mark.parametrize("vec", [16, 32])
+@pytest.mark.parametrize(
+    "case",
+    ["correct", "unused_data", "unused_scale", "unused_next", "next_wait", "reuse", "scale_overwrite", "completion"])
+def test_tcgen05_mma_scaled_k96_dependencies(vec, case, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_tcgen05_mma_scaled_k96_dependencies, (vec, case, False, monkeypatch))
+        if case in ("correct", "unused_data", "unused_scale", "unused_next"):
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        else:
+            assert_expected_cuda_failure(result.exc)
+            if case == "next_wait":
+                assert "ANext" in result.driver_stderr_output or "BNext" in result.driver_stderr_output
+            else:
+                assert "outstanding reads" in result.driver_stderr_output
+        return
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+    from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
+
+    @gluon.jit
+    def kernel(a_desc, b_desc, out, VEC: ttgl.constexpr, CASE: ttgl.constexpr):
+        a0 = ttgl.allocate_shared_memory(ttgl.uint8, a_desc.block_shape, a_desc.layout)
+        b0 = ttgl.allocate_shared_memory(ttgl.uint8, b_desc.block_shape, b_desc.layout)
+        a1 = ttgl.allocate_shared_memory(ttgl.uint8, a_desc.block_shape, a_desc.layout)
+        b1 = ttgl.allocate_shared_memory(ttgl.uint8, b_desc.block_shape, b_desc.layout)
+        ready0 = mbarrier.allocate_mbarrier(two_ctas=True)
+        ready1 = mbarrier.allocate_mbarrier(two_ctas=True)
+        done = mbarrier.allocate_mbarrier()
+        mbarrier.init(ready0, count=1)
+        mbarrier.init(ready1, count=1)
+        mbarrier.init(done, count=1)
+        BYTES: ttgl.constexpr = a_desc.nbytes_per_cta + b_desc.nbytes_per_cta
+        mbarrier.expect(ready0, BYTES)
+        tma.async_load(a_desc, [0, 0], ready0, a0)
+        tma.async_load(b_desc, [0, 0], ready0, b0)
+        mbarrier.expect(ready1, BYTES)
+        tma.async_load(a_desc, [0, 128], ready1, a1)
+        tma.async_load(b_desc, [0, 128], ready1, b1)
+        mbarrier.wait(ready0, 0)
+        if CASE != "next_wait" and CASE != "unused_next":
+            mbarrier.wait(ready1, 0)
+        # The two-CTA waits run on the even CTA. Generic writes below also
+        # execute on the odd CTA, so publish completed TMA writes to it first.
+        hopper.cluster.barrier()
+        SCALE_DTYPE: ttgl.constexpr = ttgl.float8e4nv if VEC == 16 else ttgl.uint8
+        sa = allocate_tensor_memory(SCALE_DTYPE, [256, 512 // VEC], blackwell.TensorMemoryScalesLayout([[1, 0]]))
+        sb = allocate_tensor_memory(SCALE_DTYPE, [256, 512 // VEC], blackwell.TensorMemoryScalesLayout([[0, 0]]))
+        sa.store(ttgl.full(sa.shape, 1 if VEC == 16 else 127, SCALE_DTYPE, sa.get_reg_layout()))
+        sb.store(ttgl.full(sb.shape, 1 if VEC == 16 else 127, SCALE_DTYPE, sb.get_reg_layout()))
+        hopper.cluster.barrier()
+        acc = allocate_tensor_memory(
+            ttgl.float32, [256, 256],
+            blackwell.TensorMemoryLayout([128, 256], col_stride=1, cga_layout=[[1, 0]], two_ctas=True))
+        WINDOW: ttgl.constexpr = (0, 192) if CASE == "unused_next" else (192, 288)
+        if CASE == "completion":
+            blackwell.tcgen05_mma_scaled(a0, b0.permute((1, 0)), acc, sa, sb, "e2m1", "e2m1", use_acc=False,
+                                         k_range=WINDOW, instruction_k=96, a_next=a1, b_next=b1.permute(
+                                             (1, 0)), scale_block_size=VEC, mbarriers=[], is_async=True)
+            # A generic arrival does not complete tensor-core accesses.
+            mbarrier.arrive(done)
+        else:
+            blackwell.tcgen05_mma_scaled(a0, b0.permute((1, 0)), acc, sa, sb, "e2m1", "e2m1", use_acc=False,
+                                         k_range=WINDOW, instruction_k=96, a_next=a1, b_next=b1.permute(
+                                             (1, 0)), scale_block_size=VEC, mbarriers=[done])
+        if CASE == "reuse":
+            a1.store(
+                ttgl.full(a1.shape, 0, ttgl.uint8,
+                          ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], cga_layout=[[1, 0]])))
+        if CASE == "scale_overwrite":
+            sa.store(ttgl.full(sa.shape, 0, SCALE_DTYPE, sa.get_reg_layout()))
+        if CASE == "unused_data":
+            unused = a1.slice(32, 32, dim=1)
+            unused.store(
+                ttgl.full(unused.shape, 0, ttgl.uint8,
+                          ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], cga_layout=[[1, 0]])))
+        if CASE == "unused_scale":
+            unused_scale = sa.slice(384 // VEC, 4)
+            unused_scale.store(ttgl.full(unused_scale.shape, 0, SCALE_DTYPE, unused_scale.get_reg_layout()))
+        mbarrier.wait(done, 0)
+        if CASE == "unused_next":
+            mbarrier.wait(ready1, 0)
+        if CASE == "completion":
+            a1.store(
+                ttgl.full(a1.shape, 0, ttgl.uint8,
+                          ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], cga_layout=[[1, 0]])))
+        value = acc.load()
+        layout: ttgl.constexpr = acc.get_reg_layout()
+        rows = ttgl.arange(0, 256, layout=ttgl.SliceLayout(1, layout))[:, None]
+        cols = ttgl.arange(0, 256, layout=ttgl.SliceLayout(0, layout))[None, :]
+        ttgl.store(out + rows * 256 + cols, value)
+        mbarrier.invalidate(ready0)
+        mbarrier.invalidate(ready1)
+        mbarrier.invalidate(done)
+
+    data = torch.zeros((256, 256), device="cuda", dtype=torch.uint8)
+    layout = ttgl.NVMMASharedLayout(128, 8, cga_layout=[[1, 0]])
+    desc = TensorDescriptor.from_tensor(data, [256, 128], layout)
+    out = torch.empty((256, 256), device="cuda", dtype=torch.float32)
+    kernel[(1, )](desc, desc, out, vec, case, num_ctas=2)
+    torch.testing.assert_close(out, torch.zeros_like(out))
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() != (10, 3), reason="Requires sm103 K96")
+@pytest.mark.parametrize("vec", [16, 32])
+@pytest.mark.parametrize("case", ["correct", "unused_data", "reuse"])
+def test_tcgen05_mma_scaled_k96_non_power_of_two(vec, case, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_tcgen05_mma_scaled_k96_non_power_of_two, (vec, case, False, monkeypatch))
+        if case == "reuse":
+            assert_expected_cuda_failure(result.exc)
+            assert "outstanding reads" in result.driver_stderr_output
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        return
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+    from test_core import mma_scaled_tcgen05_npot, random_quantized_tensor
+    fmt = "nvfp4" if vec == 16 else "mxfp4"
+    a, sa, ar = random_quantized_tensor(256, 768, fmt)
+    b, sb, br = random_quantized_tensor(256, 768, fmt)
+    window = (192, 288) if case == "unused_data" else None
+    selected = slice(*window) if window is not None else slice(None)
+    expected = ar[:, selected] @ br[:, selected].T
+    actual, _ = mma_scaled_tcgen05_npot(a, b, sa, sb, vec, window=window, overwrite=case != "correct")
+    torch.cuda.synchronize()
+    torch.testing.assert_close(actual, expected, atol=1e-3, rtol=1e-3)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() != (10, 3), reason="Requires sm103 K96")
+@pytest.mark.parametrize("fmt, buffers", [
+    ("mxfp4", 3),
+    ("mxfp4", 5),
+    ("mxfp4", 6),
+    ("nvfp4", 3),
+    ("nvfp4", 4),
+    ("nvfp4", 5),
+    ("nvfp4", 6),
+])
+@pytest.mark.parametrize("clc_scheduler", [False, True])
+def test_tcgen05_mma_scaled_k96_pipeline(fmt, buffers, clc_scheduler, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_tcgen05_mma_scaled_k96_pipeline, (fmt, buffers, clc_scheduler, False, monkeypatch))
+        assert result.exc is None
+        assert result.driver_stderr_output == ""
+        return
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    knobs.refresh_knobs()
+    from importlib import import_module
+    from pathlib import Path
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "examples/gluon"))
+    example = import_module("07-pure-k96-matmul")
+    torch.manual_seed(123)
+    a, b, sa, sb, expected = example.make_problem(3968, 4096, 4608, fmt)
+    scheduler = example.SCHEDULER_CLC if clc_scheduler else example.SCHEDULER_SPS
+    # The six-slot NVFP4 ring stages scales independently in five slots and
+    # reuses retired input storage for its final SPS output tile.
+    epilogue = 32 if fmt == "mxfp4" else (16 if buffers == 6 else 64)
+    for _ in range(2):
+        actual = example.matmul(a, b, sa, sb, buffers=buffers, epilogue=epilogue, scheduler=scheduler,
+                                out_dtype=torch.float16)
+        torch.testing.assert_close(actual.float(), expected, atol=2e-3, rtol=1e-3)
+
+
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 @pytest.mark.parametrize("MEM_ACCESS_KIND", ["tma_cp", "local_store", "tmem_load", "tmem_store"])
