@@ -1,13 +1,13 @@
 #include "triton/Analysis/Allocation.h"
+#include "triton/Analysis/BufferRegion.h"
 #include "triton/Analysis/Membar.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/Interfaces/ControlFlowInterfaces.h"
-#include "llvm/ADT/DenseSet.h"
 
 #include <limits>
 
@@ -27,7 +27,6 @@ enum class TMemAccessKind { None, Load, Store, MMA };
 // Keep row groups far apart so per-row column intervals do not alias after
 // flattening the physical 2D tensor-memory address space into 1D intervals.
 static constexpr size_t kFlattenedRowStride = size_t{1} << 32;
-static constexpr int kAllocRowGranularity = 64;
 static constexpr int kRowOffsetGranularity = 16;
 
 // Fine grain modeling of TMEM ops as pipelining behavior is not fully
@@ -82,154 +81,44 @@ static bool isTensorMemory(Value value) {
          isa<TensorMemorySpaceAttr>(memDescType.getMemorySpace());
 }
 
-static void appendRootAllocs(Value value, SmallVectorImpl<TMEMAllocOp> &allocs,
-                             bool &unknown) {
-  DenseSet<Value> seen;
-  SmallVector<Value> worklist{value};
-
-  while (!worklist.empty()) {
-    Value current = worklist.pop_back_val();
-    if (!seen.insert(current).second)
-      continue;
-
-    if (auto arg = dyn_cast<BlockArgument>(current)) {
-      Block *block = arg.getOwner();
-      Operation *parentOp = block->getParentOp();
-
-      if (!block->isEntryBlock()) {
-        for (Block *pred : block->getPredecessors()) {
-          auto branch = dyn_cast<BranchOpInterface>(pred->getTerminator());
-          if (!branch) {
-            unknown = true;
-            continue;
-          }
-          auto it = llvm::find(branch->getSuccessors(), block);
-          unsigned successorIndex =
-              std::distance(branch->getSuccessors().begin(), it);
-          SuccessorOperands args = branch.getSuccessorOperands(successorIndex);
-          worklist.push_back(
-              args.getForwardedOperands()[arg.getArgNumber() -
-                                          args.getProducedOperandCount()]);
-        }
-        continue;
+static SmallVector<AllocationSlice>
+getTMemSlices(const MemoryAccess &access, BufferRegionAnalysis &regions) {
+  SmallVector<size_t> addresses;
+  for (const auto &view : regions.getAccessRegions(access)) {
+    if (!view)
+      return {AllocationSlice(
+          Interval<size_t>(0, std::numeric_limits<size_t>::max()))};
+    for (const auto &[cta, words] : view->region.ctaAddresses)
+      for (uint32_t word : words) {
+        size_t rowGroup = (word >> 16) / kRowOffsetGranularity;
+        addresses.push_back(rowGroup * kFlattenedRowStride + (word & 0xffff));
       }
-
-      if (auto ws = dyn_cast<ttg::WarpSpecializePartitionsOp>(parentOp)) {
-        worklist.push_back(ws.getExplicitCaptures()[arg.getArgNumber()]);
-      } else if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
-        unsigned idx = arg.getArgNumber() - 1;
-        worklist.push_back(forOp.getYieldedValues()[idx]);
-        worklist.push_back(forOp.getInits()[idx]);
-      } else if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp)) {
-        unsigned idx = arg.getArgNumber();
-        if (arg.getParentRegion() == &whileOp.getAfter()) {
-          worklist.push_back(whileOp.getConditionOp().getArgs()[idx]);
-        } else {
-          worklist.push_back(whileOp.getYieldedValues()[idx]);
-          worklist.push_back(whileOp.getInits()[idx]);
-        }
-      } else {
-        unknown = true;
-      }
-      continue;
-    }
-
-    Operation *defOp = current.getDefiningOp();
-    if (!defOp) {
-      unknown = true;
-      continue;
-    }
-
-    unsigned resultIndex = cast<OpResult>(current).getResultNumber();
-    if (auto alloc = dyn_cast<TMEMAllocOp>(defOp)) {
-      allocs.push_back(alloc);
-    } else if (defOp->hasTrait<OpTrait::MemDescViewTrait>()) {
-      worklist.push_back(defOp->getOperand(0));
-    } else if (auto slice = dyn_cast<TMEMSubSliceOp>(defOp)) {
-      worklist.push_back(slice.getSrc());
-    } else if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
-      worklist.push_back(selectOp.getTrueValue());
-      worklist.push_back(selectOp.getFalseValue());
-    } else if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
-      worklist.push_back(ifOp.thenYield().getOperand(resultIndex));
-      worklist.push_back(ifOp.elseYield().getOperand(resultIndex));
-    } else if (auto forOp = dyn_cast<scf::ForOp>(defOp)) {
-      worklist.push_back(forOp.getYieldedValues()[resultIndex]);
-      worklist.push_back(forOp.getInits()[resultIndex]);
-    } else if (auto whileOp = dyn_cast<scf::WhileOp>(defOp)) {
-      worklist.push_back(whileOp.getConditionOp().getArgs()[resultIndex]);
-    } else {
-      unknown = true;
-    }
   }
-}
-
-static SmallVector<AllocationSlice> getTMemSlices(Value value) {
-  SmallVector<TMEMAllocOp> allocs;
-  bool unknown = false;
-  appendRootAllocs(value, allocs, unknown);
-
+  llvm::sort(addresses);
+  addresses.erase(std::unique(addresses.begin(), addresses.end()),
+                  addresses.end());
   SmallVector<AllocationSlice> slices;
-  if (unknown || allocs.empty()) {
-    slices.emplace_back(
-        Interval<size_t>(0, std::numeric_limits<size_t>::max()));
-    return slices;
-  }
-
-  for (TMEMAllocOp alloc : allocs) {
-    auto colAttr =
-        alloc->getAttrOfType<IntegerAttr>("tensor_memory_col_offset");
-    auto rowAttr =
-        alloc->getAttrOfType<IntegerAttr>("tensor_memory_row_offset");
-    if (!colAttr || !rowAttr) {
-      slices.clear();
-      slices.emplace_back(
-          Interval<size_t>(0, std::numeric_limits<size_t>::max()));
-      return slices;
+  for (unsigned i = 0; i < addresses.size();) {
+    size_t begin = addresses[i++];
+    size_t end = begin + 1;
+    while (i < addresses.size() && addresses[i] == end) {
+      ++i;
+      ++end;
     }
-
-    int64_t colOffset = colAttr.getInt();
-    int64_t rowOffset = rowAttr.getInt();
-    TMemAllocation allocSize = getTmemAllocSizes(alloc.getType());
-    if (rowOffset % kRowOffsetGranularity != 0 ||
-        allocSize.numRows % kAllocRowGranularity != 0) {
-      slices.clear();
-      slices.emplace_back(
-          Interval<size_t>(0, std::numeric_limits<size_t>::max()));
-      return slices;
-    }
-
-    int64_t rowGroup = rowOffset / kRowOffsetGranularity;
-    int64_t numRowGroups = allocSize.numRows / kAllocRowGranularity;
-    for (int64_t row = 0; row < numRowGroups; ++row) {
-      size_t start = static_cast<size_t>(rowGroup + row) * kFlattenedRowStride +
-                     static_cast<size_t>(colOffset);
-      slices.emplace_back(Interval<size_t>(start, start + allocSize.numCols));
-    }
+    slices.emplace_back(Interval<size_t>(begin, end));
   }
   return slices;
 }
 
-static void appendReadSlices(Value value, Operation *op, BlockInfo *blockInfo) {
-  if (!isTensorMemory(value))
-    return;
-  for (AllocationSlice slice : getTMemSlices(value))
-    blockInfo->syncReadSlices[slice].insert(op);
-}
-
-static void appendWriteSlices(Value value, Operation *op,
-                              BlockInfo *blockInfo) {
-  if (!isTensorMemory(value))
-    return;
-  for (AllocationSlice slice : getTMemSlices(value))
-    blockInfo->syncWriteSlices[slice].insert(op);
-}
-
 class TMemBarrierAnalysis : public MembarOrFenceAnalysis {
 public:
-  using MembarOrFenceAnalysis::MembarOrFenceAnalysis;
+  TMemBarrierAnalysis(Allocation &allocation, MembarFilterFn filter,
+                      BufferRegionAnalysis &regions)
+      : MembarOrFenceAnalysis(allocation, std::move(filter)),
+        regions(regions) {}
 
 private:
+  BufferRegionAnalysis &regions;
   void update(Operation *operation, BlockInfo *blockInfo, FuncMapT *funcMap,
               OpBuilder *builder) override;
 
@@ -254,22 +143,18 @@ void TMemBarrierAnalysis::update(Operation *op, BlockInfo *blockInfo,
     auto call = dyn_cast<CallOpInterface>(op);
     if (auto callee = dyn_cast<FunctionOpInterface>(call.resolveCallable()))
       curBlockInfo = funcMap->lookup(callee);
-  } else if (auto load = dyn_cast<TMEMLoadOp>(op)) {
-    appendReadSlices(load.getSrc(), op, &curBlockInfo);
-  } else if (auto store = dyn_cast<TMEMStoreOp>(op)) {
-    appendWriteSlices(store.getDst(), op, &curBlockInfo);
-  } else if (auto alloc = dyn_cast<TMEMAllocOp>(op)) {
-    if (alloc.getSrc())
-      appendWriteSlices(alloc.getResult(), op, &curBlockInfo);
-  } else if (auto mma = dyn_cast<MMAv5OpInterface>(op)) {
-    appendWriteSlices(mma.getAccumulator(), op, &curBlockInfo);
-    appendReadSlices(mma.getA(), op, &curBlockInfo);
-    if (auto scaledMma = dyn_cast<TCGen5MMAScaledOp>(op)) {
-      appendReadSlices(scaledMma.getAScale(), op, &curBlockInfo);
-      appendReadSlices(scaledMma.getBScale(), op, &curBlockInfo);
+  } else if (isa<TMEMLoadOp, TMEMStoreOp, TMEMAllocOp, MMAv5OpInterface,
+                 TMEMCopyOp>(op)) {
+    for (const auto &access : getMemoryAccesses(op)) {
+      if (!isTensorMemory(access.value))
+        continue;
+      for (AllocationSlice slice : getTMemSlices(access, regions)) {
+        if (access.isRead)
+          curBlockInfo.syncReadSlices[slice].insert(op);
+        if (access.isWrite)
+          curBlockInfo.syncWriteSlices[slice].insert(op);
+      }
     }
-  } else if (auto copy = dyn_cast<TMEMCopyOp>(op)) {
-    appendWriteSlices(copy.getDst(), op, &curBlockInfo);
   }
 
   if (blockInfo->isIntersected(curBlockInfo, filter, &allocation)) {
@@ -292,9 +177,15 @@ struct TMemBarrierInsertionPass
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     ModuleAllocation allocation(mod);
+    auto solver = createDataFlowSolver();
+    auto *regions = solver->load<BufferRegionAnalysis>();
+    if (failed(solver->initializeAndRun(mod))) {
+      signalPassFailure();
+      return;
+    }
     ModuleMembarOrFenceAnalysis<TMemBarrierAnalysis> analysis(allocation,
                                                               filterFn);
-    analysis.run();
+    analysis.runAnalysis(*regions);
   }
 };
 

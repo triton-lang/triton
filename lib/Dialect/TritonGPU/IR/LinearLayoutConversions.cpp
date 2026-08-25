@@ -1324,9 +1324,11 @@ LinearLayout toLinearLayout(MemDescType type) {
   }
   // Shared memory needs the allocation shape so that invertAndCompose can trim
   // subviews. We also remove the first dimension of the allocation shape if
-  // there was a call to memdesc_index.
+  // there was a call to memdesc_index. Irregular shared-memory extents use
+  // a power-of-two layout domain, not a padded allocation.
   return toLinearLayout(
-      dropPipeliningDim(type.getAllocShape(), type.getEncoding()),
+      normalizeShapeToPowerOf2(
+          dropPipeliningDim(type.getAllocShape(), type.getEncoding())),
       type.getEncoding());
 }
 

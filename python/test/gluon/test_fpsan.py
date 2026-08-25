@@ -2714,6 +2714,110 @@ def test_tcgen05_mma_scaled(device, type_a, type_b, m, n, k, scale_factor, scale
     _assert_payload_equal(out, exp_bits)
 
 
+@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires sm103 K96")
+@pytest.mark.parametrize("vec", [16, 32])
+@pytest.mark.parametrize("check_predicate", [False, True])
+@pytest.mark.parametrize("window, a_views, b_views", [
+    ((32, 224), (0, 512, 0, 0), (0, 512, 0, 0)),
+    ((192, 288), (0, 256, 256, 256), (0, 512, 0, 0)),
+    ((224, 320), (0, 256, 256, 256), (0, 256, 256, 256)),
+    ((192, 288), (256, 256, 0, 256), (256, 256, 0, 256)),
+    ((64, 160), (128, 128, 256, 256), (128, 128, 256, 256)),
+])
+def test_tcgen05_mma_scaled_k96_windows(device, fresh_knobs, vec, check_predicate, window, a_views, b_views):
+    from test_core import mma_scaled_tcgen05_copy, swizzle_scales_packed_block
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    m, n, k = 256, 128, 512
+    rs = np.random.RandomState(123)
+    a_bits = rs.randint(0, 256, size=(m, k // 2), dtype=np.uint8)
+    b_bits = rs.randint(0, 256, size=(n, k // 2), dtype=np.uint8)
+    a_scales = rs.randint(1, 0x40 if vec == 16 else 4, size=(m, k // vec), dtype=np.uint8)
+    b_scales = rs.randint(1, 0x40 if vec == 16 else 4, size=(n, k // vec), dtype=np.uint8)
+    offsets = (2 * 32 // vec, 5 * 32 // vec)
+
+    def selected_indices(views):
+        first, length, next_start, next_length = views
+        indices = np.concatenate(
+            (np.arange(first // 2, (first + length) // 2), np.arange(next_start // 2, (next_start + next_length) // 2)))
+        return indices[window[0] // 2:window[1] // 2]
+
+    ai, bi = selected_indices(a_views), selected_indices(b_views)
+    scale_count = (window[1] - window[0]) // vec
+
+    def reference(a):
+        return _mm_scaled_payload_u32(
+            a[:, ai], b_bits[:, bi].T, a_scales[:, offsets[0]:offsets[0] + scale_count],
+            b_scales[:, offsets[1]:offsets[1] + scale_count], a_pack=2, b_pack=2, c_i32=np.full(
+                (m, n), 7, dtype=np.float32).view(np.int32) if check_predicate else None, scale_factor=vec,
+            scale_type="e4m3" if vec == 16 else "e8m0")
+
+    def invoke(a):
+        operands = [torch.tensor(x.copy(), device="cuda") for x in (a, b_bits)]
+        scales = [torch.tensor(x.copy(), device="cuda") for x in (a_scales, b_scales)]
+        if vec == 16:
+            scales = [scale.view(torch.float8_e4m3fn) for scale in scales]
+        scales = [swizzle_scales_packed_block(scale, vec) for scale in scales]
+        return mma_scaled_tcgen05_copy(*operands, *scales, vec, m, n, k, (2, 1), False, out_dtype=torch.float32,
+                                       k_window=window, a_views=a_views, b_views=b_views, scale_offsets=offsets,
+                                       check_predicate=check_predicate)
+
+    expected = reference(a_bits)
+    _assert_payload_equal(invoke(a_bits), expected)
+    excluded = np.setdiff1d(np.arange(k // 2), ai)[0]
+    a_bits[0, excluded] ^= np.uint8(0xff)
+    _assert_payload_equal(invoke(a_bits), expected)
+    a_bits[0, ai[0]] ^= np.uint8(1)
+    changed = reference(a_bits)
+    assert not _payload_equal(changed, expected)
+    _assert_payload_equal(invoke(a_bits), changed)
+    a_scales[0, 0] ^= np.uint8(1)
+    _assert_payload_equal(invoke(a_bits), changed)
+    a_scales[0, offsets[0]] ^= np.uint8(1)
+    changed_scale = reference(a_bits)
+    assert not _payload_equal(changed_scale, changed)
+    _assert_payload_equal(invoke(a_bits), changed_scale)
+
+
+@pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires sm103 K96")
+@pytest.mark.parametrize("vec", [16, 32])
+@pytest.mark.parametrize("window", [None, (192, 288), (480, 576)])
+def test_tcgen05_mma_scaled_k96_non_power_of_two(device, fresh_knobs, vec, window):
+    from test_core import mma_scaled_tcgen05_npot
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    rs = np.random.RandomState(123)
+    a, b = [rs.randint(0, 256, size=(256, 768), dtype=np.uint8) for _ in range(2)]
+    scales = [rs.randint(1, 0x40 if vec == 16 else 4, size=(256, 1536 // vec), dtype=np.uint8) for _ in range(2)]
+    lo, hi = (0, 768) if window is None else window
+    lo, hi = lo + 768, hi + 768
+
+    def reference():
+        return _mm_scaled_payload_u32(
+            a[:, lo // 2:hi // 2], b[:, lo // 2:hi // 2].T,
+            scales[0][:, lo // vec:hi // vec], scales[1][:, lo // vec:hi // vec],
+            a_pack=2, b_pack=2, scale_factor=vec, scale_type="e4m3" if vec == 16 else "e8m0")
+
+    def invoke():
+        operands = [torch.tensor(x.copy(), device=device) for x in (a, b)]
+        scale_tensors = [torch.tensor(x.copy(), device=device) for x in scales]
+        if vec == 16:
+            scale_tensors = [x.view(torch.float8_e4m3fn) for x in scale_tensors]
+        actual, _ = mma_scaled_tcgen05_npot(*operands, *scale_tensors, vec, tile=1, window=window)
+        return actual
+
+    expected = reference()
+    _assert_payload_equal(invoke(), expected)
+    a[0, 0] ^= np.uint8(0xff)
+    scales[0][0, 0] ^= np.uint8(1)
+    _assert_payload_equal(invoke(), expected)
+    a[0, hi // 2 - 1] ^= np.uint8(1)
+    scales[0][0, hi // vec - 1] ^= np.uint8(1)
+    changed = reference()
+    assert not _payload_equal(changed, expected)
+    _assert_payload_equal(invoke(), changed)
+
+
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tcgen05_mma_scaled_two_ctas(device, fresh_knobs):
     _require_cuda_backend(device)

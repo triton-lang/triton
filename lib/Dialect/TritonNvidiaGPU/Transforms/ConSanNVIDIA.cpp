@@ -182,6 +182,10 @@ public:
       if (auto mmaScaledOp = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
         namedOperands.emplace_back(mmaScaledOp.getAScale(), "AScale");
         namedOperands.emplace_back(mmaScaledOp.getBScale(), "BScale");
+        if (mmaScaledOp.getANext())
+          namedOperands.emplace_back(mmaScaledOp.getANext(), "ANext");
+        if (mmaScaledOp.getBNext())
+          namedOperands.emplace_back(mmaScaledOp.getBNext(), "BNext");
       }
     }
     if (auto commitOp = dyn_cast<ttng::TCGen5CommitOp>(op)) {

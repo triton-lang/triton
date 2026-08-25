@@ -2,6 +2,8 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
+#include "triton/Analysis/BufferRegion.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -14,6 +16,7 @@ namespace triton {
 namespace nvidia_gpu {
 
 #define GEN_PASS_DEF_TRITONNVIDIAGPUMMALOWERINGPASS
+#define GEN_PASS_DEF_TRITONNVIDIAGPUNORMALIZEMMAKPASS
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
 
 namespace {
@@ -85,8 +88,10 @@ struct TCGen5MMAScaleSharedToTmemConversion
                                 PatternRewriter &rewriter) const override {
     auto aScaleType = op.getAScale().getType();
     auto bScaleType = op.getBScale().getType();
-    if (aScaleType.getShape() != aScaleType.getAllocShape() ||
-        bScaleType.getShape() != bScaleType.getAllocShape()) {
+    if ((isa<ttg::SharedMemorySpaceAttr>(aScaleType.getMemorySpace()) &&
+         aScaleType.getShape() != aScaleType.getAllocShape()) ||
+        (isa<ttg::SharedMemorySpaceAttr>(bScaleType.getMemorySpace()) &&
+         bScaleType.getShape() != bScaleType.getAllocShape())) {
       op.emitError("subviews NYI");
       return failure();
     }
@@ -216,6 +221,129 @@ public:
 };
 
 } // anonymous namespace
+
+class TritonNvidiaGPUNormalizeMMAKPass
+    : public impl::TritonNvidiaGPUNormalizeMMAKPassBase<
+          TritonNvidiaGPUNormalizeMMAKPass> {
+public:
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    SmallVector<TCGen5MMAScaledOp> mmas;
+    module.walk([&](TCGen5MMAScaledOp op) {
+      if (!op.getK96Instructions(/*allowUnnormalized=*/true).empty() ||
+          op.getKRangeAttr())
+        mmas.push_back(op);
+    });
+    if (mmas.empty())
+      return;
+    auto solver = createDataFlowSolver();
+    auto *regions =
+        solver->load<BufferRegionAnalysis>(/*relativeToAllocation=*/true);
+    if (failed(solver->initializeAndRun(module))) {
+      signalPassFailure();
+      return;
+    }
+    for (auto op : mmas) {
+      bool automatic = !op.getInstructionK() && !op.getKRangeAttr();
+      if (automatic)
+        op.removeKBaseOffsetsAttr();
+      auto tiles = op.getK96Instructions(/*allowUnnormalized=*/true);
+      bool hasK96 = !tiles.empty();
+      if (tiles.empty())
+        for (int k = op.getKStart(); k < op.getKStart() + op.getBlockK();
+             k += op.getInstructionK().value_or(64))
+          tiles.push_back({k, int(op.getInstructionK().value_or(64))});
+      auto invalid = [&](StringRef message) {
+        if (!automatic)
+          op.emitError(message);
+        return failure();
+      };
+      SmallVector<int32_t> bases(4, 0);
+      SetVector<ttg::LocalAllocOp> allocations;
+      auto getBase = [&](Value value, unsigned index) -> LogicalResult {
+        if (!value)
+          return success();
+        const auto &info = regions->getRegionInfo(value);
+        if (info.kind != RegionInfo::Kind::Exact || info.views.empty())
+          return invalid(
+              "cannot prove the physical K origin of the MMA operand");
+        std::optional<int32_t> phase;
+        for (const auto &view : info.views) {
+          auto alloc = dyn_cast<ttg::LocalAllocOp>(
+              regions->getAllocation(view.allocationFrame));
+          if (!alloc)
+            return invalid("selected MMA operands must originate in "
+                           "shared-memory allocations");
+          // The hardware absolute-stride form requires matrix base offset zero.
+          // Reinterprets retain allocation ownership; strengthen that
+          // allocation's alignment instead of manufacturing a new base address.
+          allocations.insert(alloc);
+          uint32_t offset = view.region.baseOffset;
+          if ((offset & 15) || (hasK96 && (offset & 0x380)))
+            return invalid("K96 requires a 16-byte aligned origin and zero "
+                           "matrix base offset");
+          int32_t current = (offset & 127) * 2;
+          if (phase && *phase != current)
+            return invalid(
+                "MMA ring views must have a consistent physical K alignment");
+          phase = current;
+        }
+        bases[index] = *phase;
+        return success();
+      };
+      int end = op.getKStart() + op.getBlockK();
+      Value aNext =
+          end > op.getA().getType().getShape()[1] * 2 ? op.getANext() : Value();
+      Value bNext =
+          end > op.getB().getType().getShape()[0] * 2 ? op.getBNext() : Value();
+      if (failed(getBase(op.getA(), 0)) || failed(getBase(op.getB(), 1)) ||
+          failed(getBase(aNext, 2)) || failed(getBase(bNext, 3))) {
+        if (automatic)
+          continue;
+        signalPassFailure();
+        return;
+      }
+      auto verifySource = [&](Value first, Value next,
+                              bool lhs) -> LogicalResult {
+        int capacity =
+            cast<ttg::MemDescType>(first.getType()).getShape()[lhs ? 1 : 0] * 2;
+        int firstBase = bases[lhs ? 0 : 1];
+        int nextBase = bases[lhs ? 2 : 3];
+        for (auto tile : tiles) {
+          bool inNext = tile.k >= capacity;
+          int k = inNext ? tile.k - capacity : tile.k;
+          int base = inNext ? nextBase : firstBase;
+          int remaining = 256 - (base + k) % 256;
+          bool crossesView = !inNext && tile.k + tile.width > capacity;
+          if (crossesView) {
+            if (!next || tile.width != 96 || capacity - tile.k != remaining)
+              return invalid("continuation boundary must coincide with the "
+                             "physical 128-byte K boundary");
+            if (nextBase + tile.width - remaining > 256)
+              return invalid("continuation chunk crosses a second physical "
+                             "128-byte K boundary");
+          } else if (tile.width > remaining && tile.width != 96) {
+            return invalid(
+                "only K96 supports crossing a physical 128-byte K boundary");
+          }
+        }
+        return success();
+      };
+      if (failed(verifySource(op.getA(), op.getANext(), true)) ||
+          failed(verifySource(op.getB(), op.getBNext(), false))) {
+        if (automatic)
+          continue;
+        signalPassFailure();
+        return;
+      }
+      if (hasK96)
+        for (auto alloc : allocations)
+          if (alloc.getAlignmentOrDefault() < 1024)
+            alloc.setAlignment(1024);
+      op.setKBaseOffsetsAttr(DenseI32ArrayAttr::get(&getContext(), bases));
+    }
+  }
+};
 
 class TritonNvidiaGPUMMALoweringPass
     : public impl::TritonNvidiaGPUMMALoweringPassBase<

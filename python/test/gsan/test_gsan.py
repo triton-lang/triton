@@ -1282,3 +1282,21 @@ def test_host_tma_reduce_updates_atomic_shadow(with_gsan, block_x, dtype):
             for byte_offset in range(0, target.element_size(), SHADOW_GRANULARITY_BYTES):
                 address = target[row, col].data_ptr() + byte_offset
                 _assert_atomic_rmw_shadow(address, AtomicScope.GPU, is_release=False)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() != (10, 3), reason="Requires sm103 K96")
+@pytest.mark.parametrize("fmt", ["mxfp4", "nvfp4"])
+@pytest.mark.parametrize("buffers", [4, 6])
+def test_tcgen05_mma_scaled_k96_completion(with_gsan, fmt, buffers, monkeypatch):
+    from importlib import import_module
+    from pathlib import Path
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "examples/gluon"))
+    example = import_module("07-pure-k96-matmul")
+    torch.manual_seed(123)
+    a, b, sa, sb, expected = example.make_problem(256, 256, 1536, fmt)
+    scheduler = example.SCHEDULER_SPS if fmt == "mxfp4" else example.SCHEDULER_CLC
+    epilogue = 16 if fmt == "nvfp4" and buffers == 6 else 32
+    for _ in range(3):
+        actual = example.matmul(a, b, sa, sb, buffers=buffers, epilogue=epilogue, scheduler=scheduler)
+        torch.testing.assert_close(actual.float(), expected, atol=2e-3, rtol=1e-3)
+    torch.cuda.synchronize()

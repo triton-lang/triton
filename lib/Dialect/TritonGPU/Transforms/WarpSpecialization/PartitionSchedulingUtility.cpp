@@ -64,6 +64,10 @@ Flags getNodeFlags(Node *node) {
 }
 
 size_t computeCost(Operation *op) {
+  if (auto scaled = dyn_cast<nvidia_gpu::TCGen5MMAScaledOp>(op))
+    if (scaled.getKRangeAttr())
+      return scaled.getBlockM() * scaled.getBlockN() * scaled.getBlockK() /
+             8192;
   if (auto mma = dyn_cast<nvidia_gpu::MMAv5OpInterface>(op)) {
     auto a = mma.getA();
     auto b = mma.getB();

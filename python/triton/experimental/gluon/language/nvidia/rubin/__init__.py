@@ -179,7 +179,8 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
     lut_handle = lut.handle if lut is not None else None
     _semantic.builder.create_tcgen05_mma_scaled(a.handle, b.handle, acc.handle, a_scale.handle, b_scale.handle, a_type,
                                                 b_type, use_acc.handle, pred.handle, mbarriers, mbarrier_preds,
-                                                acc.layout.two_ctas, multicast, lut_handle)
+                                                acc.layout.two_ctas, multicast, False, [], 0, None, None, 0, 0, 0,
+                                                lut_handle)
 
 
 @dataclass(frozen=True, eq=True)
