@@ -5784,9 +5784,10 @@ def mma_scaled_tcgen05_copy(A, B, A_scale, B_scale, VEC_SIZE, BLOCK_M, BLOCK_N, 
                                         cga_layout=cga_layout_c) if multi_cta else None
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
-    compiled = mma_scaled_tcgen05_copy_kernel[grid](
-        A_desc, B_desc, C_desc, A_scale_desc, B_scale_desc, VEC_SIZE, block_layout_c, a_scale_layout_tmem,
-        b_scale_layout_tmem, ctas_per_cga, num_warps=num_warps, num_ctas=num_ctas, multicast=multicast)
+    compiled = mma_scaled_tcgen05_copy_kernel[grid](A_desc, B_desc, C_desc, A_scale_desc, B_scale_desc, VEC_SIZE,
+                                                    block_layout_c, a_scale_layout_tmem, b_scale_layout_tmem,
+                                                    ctas_per_cga, num_warps=num_warps, num_ctas=num_ctas,
+                                                    multicast=multicast)
     return (C_desc.base, compiled) if return_kernel else C_desc.base
 
 
@@ -5816,13 +5817,12 @@ def test_mma_scaled_tcgen05_copy(M, N, K, BLOCK_K, a_format, b_format, VEC_SIZE,
 
 @pytest.mark.skipif(not is_blackwell_ultra(), reason="Requires sm103 K96 MMA")
 @pytest.mark.parametrize("fmt, vec_size", [("mxfp4", 32), ("nvfp4", 16)])
-@pytest.mark.parametrize("m, n, k, block_m, block_n, block_k", [
-    (m, n, k, 256, block_n, block_k)
-    for m, n, k, block_k in [(256, 256, 128, 128), (256, 256, 256, 256), (500, 384, 704, 256),
-                                (512, 512, 1024, 512), (256, 256, 1024, 1024),
-                                (500, 384, 2752, 1024)]
-    for block_n in [128, 256]
-] + [(256, 256, 2048, 256, 128, 2048), (512, 256, 512, 512, 128, 256)])
+@pytest.mark.parametrize(
+    "m, n, k, block_m, block_n, block_k",
+    [(m, n, k, 256, block_n, block_k)
+     for m, n, k, block_k in [(256, 256, 128, 128), (256, 256, 256, 256), (500, 384, 704, 256), (512, 512, 1024, 512),
+                              (256, 256, 1024, 1024), (500, 384, 2752, 1024)]
+     for block_n in [128, 256]] + [(256, 256, 2048, 256, 128, 2048), (512, 256, 512, 512, 128, 256)])
 def test_tcgen05_mma_scaled_k96_subtiling(fmt, vec_size, block_n, m, n, k, block_m, block_k):
     torch.manual_seed(0)
     a, a_scale, a_ref = random_quantized_tensor(m, k, fmt)

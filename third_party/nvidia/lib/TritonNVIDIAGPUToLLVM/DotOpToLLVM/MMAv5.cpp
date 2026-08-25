@@ -497,9 +497,7 @@ struct DotConversion {
     return kOffsets.empty() ? k * mmaSizeK : kOffsets[k];
   }
 
-  int getKSize(int k) const {
-    return getKOffset(k + 1) - getKOffset(k);
-  }
+  int getKSize(int k) const { return getKOffset(k + 1) - getKOffset(k); }
 
   int numBitsPerElementA;
   int numBitsPerElementB;
@@ -578,8 +576,8 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   int numRepN = ceil<unsigned>(N, mmaSizeN);
   assert((!twoCTAs || numRepN == 1) &&
          "grep for [Note: numRepN > 1 and two_ctas]");
-  int numRepK =
-      op.kOffsets.empty() ? ceil<unsigned>(K, mmaSizeK) : op.kOffsets.size() - 1;
+  int numRepK = op.kOffsets.empty() ? ceil<unsigned>(K, mmaSizeK)
+                                    : op.kOffsets.size() - 1;
 
   // In A * B = C
   // For M=64 twoCTAs, B and C have the same split and A has a split half of C
@@ -707,7 +705,7 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
     MemDescOperand accAddress =
         dLoader.tmemLoad(m * mmaSizeM, n * mmaSizeN, rewriter, loc);
     MemDescOperand a = aLoader->memLoad(m * aOperandShape[0], op.getKOffset(k),
-                                       rewriter, loc, op.getKSize(k));
+                                        rewriter, loc, op.getKSize(k));
     Value b = bLoader->smemLoad(op.getKOffset(k), n * bOperandShape[1],
                                 rewriter, loc, op.getKSize(k));
     Value useInitAcc = k == 0 ? useDFlag : tb.i1_val(1);
@@ -943,14 +941,14 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
     int offsetA = scaleIdxA * numColPerScaleBlockA;
     int offsetB = scaleIdxB * numColPerScaleBlockB;
     if (useK96) {
-      offsetA = ttng::getTMemSubSliceOffset(op.getAScale().getType(),
-                                           m * desc.mmaSizeM, 0) +
-                ttng::getTMemSubSliceOffset(op.getAScale().getType(), wordIdx * 4,
-                                           1);
-      offsetB = ttng::getTMemSubSliceOffset(op.getBScale().getType(),
-                                           n * desc.mmaSizeN, 0) +
-                ttng::getTMemSubSliceOffset(op.getBScale().getType(), wordIdx * 4,
-                                           1);
+      offsetA =
+          ttng::getTMemSubSliceOffset(op.getAScale().getType(),
+                                      m * desc.mmaSizeM, 0) +
+          ttng::getTMemSubSliceOffset(op.getAScale().getType(), wordIdx * 4, 1);
+      offsetB =
+          ttng::getTMemSubSliceOffset(op.getBScale().getType(),
+                                      n * desc.mmaSizeN, 0) +
+          ttng::getTMemSubSliceOffset(op.getBScale().getType(), wordIdx * 4, 1);
     }
     Value scaleA = tb.add(baseScaleA, tb.i32_val(offsetA));
     Value scaleB = tb.add(baseScaleB, tb.i32_val(offsetB));

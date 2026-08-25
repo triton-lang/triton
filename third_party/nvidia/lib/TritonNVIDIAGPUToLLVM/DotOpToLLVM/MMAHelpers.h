@@ -195,8 +195,7 @@ public:
     if (useAbsolute) {
       int nextK = (k / 256 + 1) * 256;
       Value next = smemLoad(desc.transposed ? nextK : a,
-                           desc.transposed ? b : nextK,
-                           rewriter, loc);
+                            desc.transposed ? b : nextK, rewriter, loc);
       Value nextAddress = tb.and_(next, tb.i64_val(0x3fff));
       result = tb.or_(result, tb.shl(nextAddress, tb.i64_val(16)));
     }
