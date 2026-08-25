@@ -1276,10 +1276,10 @@ public:
       return {i8_ty, rewriter.getIntegerAttr(i8_ty, 0x7F)};
     };
 
-    auto convertScaleLayout = [&](TensorValue scale,
-                                  llvm::ArrayRef<int64_t> valShape,
-                                  LinearLayout dotLL, int idx,
-                                  ttg::CGAEncodingAttr cgaLayout) -> Value {
+    auto convertScaleLayout =
+        [&](TensorValue scale, llvm::ArrayRef<int64_t> valShape,
+            LinearLayout dotLL, int idx,
+            ttg::CGAEncodingAttr operandCgaLayout) -> Value {
       SmallVector<int64_t> shape;
       Type scaleType;
       // 0x7F is 1.0 in E8M0
@@ -1298,7 +1298,7 @@ public:
 
       LinearLayout newLL = ttg::chooseScaledWmmaScaleLayout(
           ctx, idx, shape, mDim, nDim, wmmaEnc.getIsTransposed(), scaleFactor,
-          ctaLayout, cgaLayout);
+          ctaLayout, operandCgaLayout);
       Attribute newScaleEncoding = ttg::LinearEncodingAttr::get(ctx, newLL);
       auto newScaleType =
           RankedTensorType::get(shape, scaleType, newScaleEncoding);
@@ -1322,11 +1322,13 @@ public:
     auto newAScale = convertScaleLayout(aScale, aShape, aEncLL,
                                         /*dotOperandIdx=*/0, aScaleCgaLayout);
 
-    auto bScaleCgaLayout = inferBScaleCgaLayout(ctx, cgaLayout);
+    auto bOperandCgaLayout =
+        ttg::inferDotOperandCGALayout(cgaLayout, /*opIdx=*/1);
     assert(!bScale || (ttg::getCGALayout(bScale.getType().getEncoding()) ==
-                       bScaleCgaLayout));
+                       ttg::inferDotScaleCGALayoutFromOperand(bOperandCgaLayout,
+                                                              /*opIdx=*/1)));
     auto newBScale = convertScaleLayout(bScale, bShape, bEncLL,
-                                        /*dotOperandIdx=*/1, bScaleCgaLayout);
+                                        /*dotOperandIdx=*/1, bOperandCgaLayout);
 
     auto newDot = triton::DotScaledOp::create(
         rewriter, dotOp.getLoc(), newRetType, a, b, newAcc, newAScale,
@@ -1336,31 +1338,6 @@ public:
                                                       newDot);
 
     return success();
-  }
-
-  // If Bscale were present, we could directly grab the CGA layout from it.
-  // Unfortunately, it is optional; on top of that, sometime we need to know
-  // its CGA layout even if it's not present.
-  //
-  // Note that split only take place along M and N dimension. For A and Ascale,
-  // their shapes are MxK and Mx(K/grp), respectively. Hence, A and A-scale can
-  // share the CGA layout. For B and Bscale, their shapes are KxN and Nx(K/grp),
-  // respectively. Since N shows up on different positions, we cannot "reuse"
-  // B's CGA layout for B-scale.
-  //
-  // We can grab N's split number from D's CGA layout, and construct Bscale's
-  // using that info.
-  //
-  static ttg::CGAEncodingAttr
-  inferBScaleCgaLayout(MLIRContext *ctx, ttg::CGAEncodingAttr dCgaLayout) {
-    auto resultSplit = dCgaLayout.getCTASplitNum();
-    unsigned nSplit = resultSplit[1];
-    unsigned numCtas = mlir::product(dCgaLayout.getCTAsPerCGA());
-
-    return ttg::CGAEncodingAttr::fromSplitParams(
-        ctx,
-        /*CTAsPerCGA=*/{nSplit, numCtas / nSplit},
-        /*CTASplitNum=*/{nSplit, 1}, /*CTAOrder*/ {0, 1});
   }
 };
 
