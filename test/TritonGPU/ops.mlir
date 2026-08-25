@@ -1,5 +1,6 @@
 // RUN: triton-opt --split-input-file %s | FileCheck %s
 // RUN: triton-opt --split-input-file %s --tritongpu-decompose-linear-apply | FileCheck %s --check-prefix=DECOMPOSE
+// RUN: triton-opt --split-input-file %s --tritongpu-decompose-linear-apply --tritongpu-optimize-linear-apply-warp-shuffle | FileCheck %s --check-prefix=SHUFFLE
 // RUN: sed -n 's@^// AMD-CTA-INPUT: @@p' %s | not triton-opt --tritongpu-decompose-linear-apply 2>&1 | FileCheck %s --check-prefix=AMD-CTA-ERROR
 // RUN: sed -n 's@^// UNKNOWN-CTA-INPUT: @@p' %s | not triton-opt --tritongpu-decompose-linear-apply 2>&1 | FileCheck %s --check-prefix=UNKNOWN-CTA-ERROR
 
@@ -214,6 +215,174 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   tt.func @reshape_generic_linear_to_permutation(%arg: tensor<32x1xi32, #src>) {
     %0 = tt.reshape %arg : tensor<32x1xi32, #src> -> tensor<32xi32, #dst>
     tt.return
+  }
+}
+
+// -----
+
+#shuffle_index = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shuffle_basis = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shuffle_basis4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shuffle_cross_warp_parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [1, 0]}>
+#shuffle_cross_warp = #ttg.slice<{dim = 0, parent = #shuffle_cross_warp_parent}>
+#shuffle_permuted = #ttg.linear<{register = [], lane = [[2], [1], [4], [8], [16]], warp = [[0], [0]], block = []}>
+
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // An independently matched reduction selects a computed, register-resident
+  // basis element without requiring 31 sibling reductions or a memory pointer.
+  // CHECK-LABEL: @linear_apply_warp_shuffle_single_reduction
+  // DECOMPOSE-LABEL: @linear_apply_warp_shuffle_single_reduction
+  // DECOMPOSE: "tt.reduce"
+  // SHUFFLE-LABEL: @linear_apply_warp_shuffle_single_reduction
+  // SHUFFLE: [[COMPUTED:%.*]] = arith.xori
+  // SHUFFLE-NOT: tt.load
+  // SHUFFLE-NOT: "tt.reduce"
+  // SHUFFLE: [[ELEMENT:%.*]] = tt.gather [[COMPUTED]][{{.*}}] {{.*}} : (tensor<32xi32, {{.*}}>, tensor<1xi32, {{.*}}>) -> tensor<1xi32, {{.*}}>
+  // SHUFFLE: tt.unsplat [[ELEMENT]] : tensor<1xi32, {{.*}}>
+  // SHUFFLE: tt.elementwise_inline_asm "lop3.b32 $0, $1, $2, $3, 0x78;"
+  // SHUFFLE-NOT: tt.load
+  // SHUFFLE-NOT: "tt.reduce"
+  // SHUFFLE: tt.return
+  tt.func @linear_apply_warp_shuffle_single_reduction(%index: tensor<128xi32, #shuffle_index>, %bases: tensor<32xi32, #shuffle_basis>) -> tensor<128xi32, #shuffle_index> {
+    %zero = arith.constant 0 : i32
+    %bit = arith.constant 7 : i32
+    %zero_basis = tt.splat %zero : i32 -> tensor<32xi32, #shuffle_basis>
+    %zero_index = tt.splat %zero : i32 -> tensor<128xi32, #shuffle_index>
+    %basis_bit = tt.splat %bit : i32 -> tensor<32xi32, #shuffle_basis>
+    %offsets = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #shuffle_basis>
+    %computed = arith.xori %bases, %offsets : tensor<32xi32, #shuffle_basis>
+    %is_basis_bit = arith.cmpi eq, %offsets, %basis_bit : tensor<32xi32, #shuffle_basis>
+    %selected_basis = arith.select %is_basis_bit, %computed, %zero_basis : tensor<32xi1, #shuffle_basis>, tensor<32xi32, #shuffle_basis>
+    %reduced = "tt.reduce"(%selected_basis) <{axis = 0 : i32}> ({
+      ^bb0(%left: i32, %right: i32):
+        %combined = arith.xori %left, %right : i32
+        tt.reduce.return %combined : i32
+    }) : (tensor<32xi32, #shuffle_basis>) -> i32
+    %broadcast = tt.splat %reduced : i32 -> tensor<128xi32, #shuffle_index>
+    %condition = arith.cmpi ne, %index, %zero_index : tensor<128xi32, #shuffle_index>
+    %contribution = arith.select %condition, %broadcast, %zero_index : tensor<128xi1, #shuffle_index>, tensor<128xi32, #shuffle_index>
+    %result = arith.xori %index, %contribution : tensor<128xi32, #shuffle_index>
+    tt.return %result : tensor<128xi32, #shuffle_index>
+  }
+
+  // One computed value per lane allows all 32 basis extractions to become
+  // warp-local gathers; no scalar or vector basis load is introduced.
+  // CHECK-LABEL: @linear_apply_warp_shuffle_computed_basis
+  // DECOMPOSE-LABEL: @linear_apply_warp_shuffle_computed_basis
+  // DECOMPOSE-COUNT-32: "tt.reduce"
+  // SHUFFLE-LABEL: @linear_apply_warp_shuffle_computed_basis
+  // SHUFFLE: [[COMPUTED:%.*]] = arith.xori
+  // SHUFFLE-NOT: tt.load
+  // SHUFFLE-NOT: "tt.reduce"
+  // SHUFFLE-COUNT-32: tt.gather [[COMPUTED]]
+  // SHUFFLE: tt.unsplat
+  // SHUFFLE: tt.elementwise_inline_asm "lop3.b32 $0, $1, $2, $3, 0x78;"
+  // SHUFFLE-NOT: tt.load
+  // SHUFFLE-NOT: "tt.reduce"
+  // SHUFFLE: tt.return
+  tt.func @linear_apply_warp_shuffle_computed_basis(%index: tensor<128xi32, #shuffle_index>, %bases: tensor<32xi32, #shuffle_basis>) -> tensor<128xi32, #shuffle_index> {
+    %offsets = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #shuffle_basis>
+    %computed = arith.xori %bases, %offsets : tensor<32xi32, #shuffle_basis>
+    %result = tt.linear_apply %index, %computed : tensor<128xi32, #shuffle_index>, tensor<32xi32, #shuffle_basis> -> tensor<128xi32, #shuffle_index>
+    tt.return %result : tensor<128xi32, #shuffle_index>
+  }
+
+  // A full-rank lane permutation is still warp-local and owns exactly one
+  // basis element per lane.
+  // CHECK-LABEL: @linear_apply_warp_shuffle_permuted_lanes
+  // DECOMPOSE-LABEL: @linear_apply_warp_shuffle_permuted_lanes
+  // DECOMPOSE-COUNT-32: "tt.reduce"
+  // SHUFFLE-LABEL: @linear_apply_warp_shuffle_permuted_lanes
+  // SHUFFLE-NOT: "tt.reduce"
+  // SHUFFLE-COUNT-32: tt.gather
+  // SHUFFLE: tt.unsplat
+  // SHUFFLE: tt.elementwise_inline_asm "lop3.b32 $0, $1, $2, $3, 0x78;"
+  // SHUFFLE-NOT: "tt.reduce"
+  // SHUFFLE: tt.return
+  tt.func @linear_apply_warp_shuffle_permuted_lanes(%index: tensor<128xi32, #shuffle_index>, %bases: tensor<32xi32, #shuffle_permuted>) -> tensor<128xi32, #shuffle_index> {
+    %offsets = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #shuffle_permuted>
+    %computed = arith.xori %bases, %offsets : tensor<32xi32, #shuffle_permuted>
+    %result = tt.linear_apply %index, %computed : tensor<128xi32, #shuffle_index>, tensor<32xi32, #shuffle_permuted> -> tensor<128xi32, #shuffle_index>
+    tt.return %result : tensor<128xi32, #shuffle_index>
+  }
+
+  // Multiple register values per lane need register selection in addition to a
+  // shuffle, so retain the ordinary reduction.
+  // CHECK-LABEL: @linear_apply_warp_shuffle_multiple_registers
+  // DECOMPOSE-LABEL: @linear_apply_warp_shuffle_multiple_registers
+  // DECOMPOSE-COUNT-32: "tt.reduce"
+  // SHUFFLE-LABEL: @linear_apply_warp_shuffle_multiple_registers
+  // SHUFFLE-NOT: tt.gather
+  // SHUFFLE-COUNT-32: "tt.reduce"
+  // SHUFFLE-NOT: tt.gather
+  // SHUFFLE: tt.return
+  tt.func @linear_apply_warp_shuffle_multiple_registers(%index: tensor<128xi32, #shuffle_index>, %bases: tensor<32xi32, #shuffle_basis4>) -> tensor<128xi32, #shuffle_index> {
+    %offsets = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #shuffle_basis4>
+    %computed = arith.xori %bases, %offsets : tensor<32xi32, #shuffle_basis4>
+    %result = tt.linear_apply %index, %computed : tensor<128xi32, #shuffle_index>, tensor<32xi32, #shuffle_basis4> -> tensor<128xi32, #shuffle_index>
+    tt.return %result : tensor<128xi32, #shuffle_index>
+  }
+
+  // A warp shuffle cannot retrieve basis elements owned by another warp.
+  // CHECK-LABEL: @linear_apply_warp_shuffle_cross_warp
+  // DECOMPOSE-LABEL: @linear_apply_warp_shuffle_cross_warp
+  // DECOMPOSE-COUNT-32: "tt.reduce"
+  // SHUFFLE-LABEL: @linear_apply_warp_shuffle_cross_warp
+  // SHUFFLE-NOT: tt.gather
+  // SHUFFLE-COUNT-32: "tt.reduce"
+  // SHUFFLE-NOT: tt.gather
+  // SHUFFLE: tt.return
+  tt.func @linear_apply_warp_shuffle_cross_warp(%index: tensor<128xi32, #shuffle_index>, %bases: tensor<32xi32, #shuffle_cross_warp>) -> tensor<128xi32, #shuffle_index> {
+    %offsets = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #shuffle_cross_warp>
+    %computed = arith.xori %bases, %offsets : tensor<32xi32, #shuffle_cross_warp>
+    %result = tt.linear_apply %index, %computed : tensor<128xi32, #shuffle_index>, tensor<32xi32, #shuffle_cross_warp> -> tensor<128xi32, #shuffle_index>
+    tt.return %result : tensor<128xi32, #shuffle_index>
+  }
+}
+
+// -----
+
+#shuffle_cross_cta_index = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+#shuffle_cross_cta_basis = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
+
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // Basis values distributed across CTAs cannot be transferred by a warp
+  // shuffle; the existing cross-CTA reduction must remain intact.
+  // CHECK-LABEL: @linear_apply_warp_shuffle_cross_cta
+  // DECOMPOSE-LABEL: @linear_apply_warp_shuffle_cross_cta
+  // DECOMPOSE-COUNT-32: "tt.reduce"
+  // SHUFFLE-LABEL: @linear_apply_warp_shuffle_cross_cta
+  // SHUFFLE-NOT: tt.gather
+  // SHUFFLE-COUNT-32: "tt.reduce"
+  // SHUFFLE-NOT: tt.gather
+  // SHUFFLE: tt.return
+  tt.func @linear_apply_warp_shuffle_cross_cta(%index: tensor<128xi32, #shuffle_cross_cta_index>, %bases: tensor<32xi32, #shuffle_cross_cta_basis>) -> tensor<128xi32, #shuffle_cross_cta_index> {
+    %offsets = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #shuffle_cross_cta_basis>
+    %computed = arith.xori %bases, %offsets : tensor<32xi32, #shuffle_cross_cta_basis>
+    %result = tt.linear_apply %index, %computed : tensor<128xi32, #shuffle_cross_cta_index>, tensor<32xi32, #shuffle_cross_cta_basis> -> tensor<128xi32, #shuffle_cross_cta_index>
+    tt.return %result : tensor<128xi32, #shuffle_cross_cta_index>
+  }
+}
+
+// -----
+
+#shuffle_amd = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.target" = "hip:gfx950", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CUDA-specific warp shuffle and LOP3 rewriting does not run on AMD.
+  // CHECK-LABEL: @linear_apply_warp_shuffle_amd
+  // DECOMPOSE-LABEL: @linear_apply_warp_shuffle_amd
+  // DECOMPOSE-COUNT-32: "tt.reduce"
+  // SHUFFLE-LABEL: @linear_apply_warp_shuffle_amd
+  // SHUFFLE-NOT: tt.gather
+  // SHUFFLE-COUNT-32: "tt.reduce"
+  // SHUFFLE-NOT: tt.elementwise_inline_asm
+  // SHUFFLE: tt.return
+  tt.func @linear_apply_warp_shuffle_amd(%index: tensor<128xi32, #shuffle_amd>, %bases: tensor<32xi32, #shuffle_amd>) -> tensor<128xi32, #shuffle_amd> {
+    %offsets = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #shuffle_amd>
+    %computed = arith.xori %bases, %offsets : tensor<32xi32, #shuffle_amd>
+    %result = tt.linear_apply %index, %computed : tensor<128xi32, #shuffle_amd>, tensor<32xi32, #shuffle_amd> -> tensor<128xi32, #shuffle_amd>
+    tt.return %result : tensor<128xi32, #shuffle_amd>
   }
 }
 

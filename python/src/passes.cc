@@ -86,6 +86,8 @@ void init_triton_passes_ttgpuir(py::module_ &m) {
                      createTritonGPUReduceDataDuplication);
   ADD_PASS_WRAPPER_0("add_decompose_linear_apply",
                      createTritonGPUDecomposeLinearApply);
+  ADD_PASS_WRAPPER_0("add_optimize_linear_apply_warp_shuffle",
+                     createTritonGPUOptimizeLinearApplyWarpShuffle);
   ADD_PASS_WRAPPER_0("add_allocate_warp_groups",
                      createTritonGPUAllocateWarpGroups);
   ADD_PASS_OPTION_WRAPPER_1("add_allocate_warp_groups",

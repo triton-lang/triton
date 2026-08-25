@@ -374,4 +374,13 @@ def TritonGPUDecomposeLinearApply
                            "mlir::arith::ArithDialect"];
 }
 
+def TritonGPUOptimizeLinearApplyWarpShuffle
+    : Pass<"tritongpu-optimize-linear-apply-warp-shuffle", "mlir::ModuleOp"> {
+  let summary = "Replace warp-local linear_apply basis reductions with shuffles";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect",
+                           "mlir::arith::ArithDialect"];
+}
+
 #endif
