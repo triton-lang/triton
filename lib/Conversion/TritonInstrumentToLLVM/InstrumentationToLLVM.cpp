@@ -469,85 +469,6 @@ private:
   const TargetInfoBase &targetInfo;
 };
 
-struct LocalScatterConflictCheckOpConversion
-    : public ConvertOpToLLVMPattern<
-          tti::ExperimentalLocalScatterConflictCheckOp> {
-  LocalScatterConflictCheckOpConversion(const LLVMTypeConverter &converter,
-                                        const TargetInfoBase &targetInfo)
-      : ConvertOpToLLVMPattern<tti::ExperimentalLocalScatterConflictCheckOp>(
-            converter),
-        targetInfo(targetInfo) {}
-
-  LogicalResult
-  matchAndRewrite(tti::ExperimentalLocalScatterConflictCheckOp op,
-                  OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op.getLoc();
-    MLIRContext *ctx = op.getContext();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto destinationType = cast<ttg::MemDescType>(op.getDst().getType());
-    auto indicesType = cast<RankedTensorType>(op.getIndices().getType());
-    LinearLayout layout = ttg::toLinearLayout(indicesType);
-    auto freeVariables = layout.getFreeVariableMasks();
-    uint32_t freeThreadMask = freeVariables.lookup(str_attr("lane")) |
-                              (freeVariables.lookup(str_attr("warp")) *
-                               ttg::lookupThreadsPerWarp(rewriter));
-    Value owner =
-        b.add(b.and_(getThreadId(rewriter, loc), b.i32_val(~freeThreadMask)),
-              b.i32_val(1));
-
-    auto indices =
-        unpackUniqueTensorElements(loc, adaptor.getIndices(), rewriter);
-    layout = layout.removeZeroBasesAlongDim(str_attr("register"));
-    auto destinations =
-        computeBlockLocalOffsets(loc, destinationType, layout, indices,
-                                 op.getAxis(), rewriter, targetInfo);
-    int slotsPerCTA = ttg::toLinearLayoutIgnoringPadding(destinationType)
-                          .getInDimSize(str_attr("offset"));
-    auto scope = StringAttr::get(
-        ctx, targetInfo.getAtomicSyncScope(tt::MemSyncScope::CTA));
-    Value zero = b.i32_val(0);
-    SmallVector<Value> shadowPointers;
-    for (auto [offset, targetCTA] : destinations) {
-      Value slot = offset;
-      if (targetCTA)
-        slot = b.add(slot, b.mul(targetCTA, b.i32_val(slotsPerCTA)));
-      Value pointer = b.gep(adaptor.getScratch().getType(), i32_ty,
-                            adaptor.getScratch(), slot);
-      shadowPointers.push_back(pointer);
-      LLVM::AtomicRMWOp::create(rewriter, loc, LLVM::AtomicBinOp::xchg, pointer,
-                                zero, LLVM::AtomicOrdering::monotonic, scope);
-    }
-    targetInfo.barrier(loc, rewriter,
-                       ttg::AddrSpace::GlobalRead |
-                           ttg::AddrSpace::GlobalWrite);
-
-    Value hasConflict = b.false_val();
-    for (Value pointer : shadowPointers) {
-      Value previous = LLVM::AtomicRMWOp::create(
-          rewriter, loc, LLVM::AtomicBinOp::xchg, pointer, owner,
-          LLVM::AtomicOrdering::monotonic, scope);
-      Value occupied = b.icmp_ne(previous, zero);
-      Value otherOwner = b.icmp_ne(previous, owner);
-      hasConflict = b.or_(hasConflict, b.and_(occupied, otherOwner));
-    }
-
-    auto [previousBlock, failureBlock, continuation] =
-        createIfBlock(rewriter, loc, hasConflict);
-    (void)previousBlock;
-    rewriter.setInsertionPointToStart(failureBlock);
-    targetInfo.assertFail(
-        rewriter, loc, "Non-atomic local scatter has conflicting destinations",
-        "unknown", "unknown", 0);
-    rewriter.setInsertionPointToStart(continuation);
-    rewriter.eraseOp(op);
-    return success();
-  }
-
-private:
-  const TargetInfoBase &targetInfo;
-};
-
 } // namespace
 
 void mlir::triton::populateInstrumentationToLLVMPatterns(
@@ -561,6 +482,4 @@ void mlir::triton::populateInstrumentationToLLVMPatterns(
   patterns.add<MemoryOffsetToI32OpConversion>(typeConverter);
   patterns.add<ClusterCTAIdOpConversion>(typeConverter, targetInfo);
   patterns.add<LocalGatherOpConversion>(typeConverter, targetInfo);
-  patterns.add<LocalScatterConflictCheckOpConversion>(typeConverter,
-                                                      targetInfo);
 }

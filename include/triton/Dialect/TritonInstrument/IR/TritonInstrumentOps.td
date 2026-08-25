@@ -116,23 +116,6 @@ def TTI_ExperimentalLocalGatherOp
   let hasVerifier = 1;
 }
 
-def TTI_ExperimentalLocalScatterConflictCheckOp
-    : TTI_Op<"experimental_local_scatter_conflict_check",
-             [MemoryEffects<[MemRead<GlobalMemory>,
-                             MemWrite<GlobalMemory>]>]> {
-  let summary = "Check non-atomic scatter destinations across physical threads";
-  let description = [{
-    Claims each physical shared-memory destination in cluster-shared global
-    scratch and diagnoses collisions between distinct physical-thread owners.
-  }];
-  let arguments = (ins TT_Ptr:$scratch, TTG_MemDescType:$dst,
-                       TT_IntTensor:$indices, I32Attr:$axis);
-  let assemblyFormat = [{
-    $scratch `,` $dst `[` $indices `]` attr-dict `:` type($scratch) `,`
-    qualified(type($dst)) `,` type($indices)
-  }];
-}
-
 def TTI_ExperimentalGSanInitOp
     : TTI_Op<"experimental_gsan_init"> {
   let summary = "Initialize GSan thread";

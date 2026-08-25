@@ -194,30 +194,3 @@ tt.func private @experimental_local_gather(%out: !tt.ptr<i32>) {
   tt.return
 }
 }
-
-// -----
-
-#scatter_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
-#scatter_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
-// CHECK-LABEL: @experimental_local_scatter_conflict_check
-// CHECK: nvvm.read.ptx.sreg.tid.x
-// CHECK: llvm.atomicrmw xchg {{.*}} syncscope("block") monotonic
-// CHECK: nvvm.barrier
-// CHECK: llvm.atomicrmw xchg {{.*}} syncscope("block") monotonic
-// CHECK: llvm.icmp "ne"
-// CHECK: llvm.cond_br
-// CHECK: llvm.call @__assertfail
-// CHECK: llvm.return
-tt.func private @experimental_local_scatter_conflict_check(
-    %scratch: !tt.ptr<i32>,
-    %dst: !ttg.memdesc<2x32xi32, #scatter_shared, #ttg.shared_memory, mutable>,
-    %indices: tensor<2x32xi32, #scatter_blocked>) {
-  tti.experimental_local_scatter_conflict_check %scratch, %dst[%indices]
-      {axis = 1 : i32} : !tt.ptr<i32>,
-      !ttg.memdesc<2x32xi32, #scatter_shared, #ttg.shared_memory, mutable>,
-      tensor<2x32xi32, #scatter_blocked>
-  tt.return
-}
-}

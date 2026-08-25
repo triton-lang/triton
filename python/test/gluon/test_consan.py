@@ -976,19 +976,18 @@ def test_cluster_barrier_publishes_only_observed_tensor_reads(FINISHED, device, 
         pytest.param("lane-conflict", 128, 1, True, id="conflicting-lanes"),
         pytest.param("warp-conflict", 128, 1, True, id="conflicting-warps"),
         pytest.param("unique", 128, 1, False, id="unique-destinations"),
-        pytest.param("same-thread", 256, 2, False, id="repeated-within-thread"),
-        pytest.param("replicated-lanes-and-warps", 16, 2, False, id="repeated-with-replicated-lanes-and-warps"),
+        pytest.param("same-thread", 256, 2, True, id="repeated-within-thread"),
+        pytest.param("unique", 1, 2, False, id="replicated-registers-lanes-and-warps"),
         pytest.param("atomic", 128, 1, False, id="colliding-atomics"),
     ],
 )
-def test_local_scatter_physical_thread_conflicts(MODE, BLOCK, SIZE_PER_THREAD, FAILURE, device, run_wrapper,
-                                                 monkeypatch):
+def test_local_scatter_duplicate_destinations(MODE, BLOCK, SIZE_PER_THREAD, FAILURE, device, run_wrapper, monkeypatch):
     if run_wrapper:
-        result = run_in_process(test_local_scatter_physical_thread_conflicts,
+        result = run_in_process(test_local_scatter_duplicate_destinations,
                                 (MODE, BLOCK, SIZE_PER_THREAD, FAILURE, device, False, monkeypatch))
         if FAILURE:
             assert_expected_cuda_failure(result.exc)
-            assert "Non-atomic local scatter has conflicting destinations" in result.driver_stderr_output
+            assert "Non-atomic local scatter has duplicate destinations" in result.driver_stderr_output
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""
@@ -1032,8 +1031,6 @@ def test_local_scatter_physical_thread_conflicts(MODE, BLOCK, SIZE_PER_THREAD, F
             expected.copy_(torch.arange(1, BLOCK + 1, device=device, dtype=torch.int32))
         elif MODE == "atomic":
             expected[0] = BLOCK * (BLOCK + 1) // 2
-        else:
-            expected[:BLOCK // 2] = torch.arange(2, BLOCK + 1, 2, device=device, dtype=torch.int32)
         torch.testing.assert_close(output, expected)
 
 
