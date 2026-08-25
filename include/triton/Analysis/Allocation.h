@@ -26,15 +26,13 @@ bool hasCrossCTAScratch(Operation *op);
 
 unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
                                        const LinearLayout &dstLayout,
-                                       int bitwidth, int numBanksSrc = 32,
-                                       int numBanksDst = 32,
+                                       int bitwidth, int numBanks = 32,
                                        gpu::LocalMemOpTile srcTile = {},
                                        gpu::LocalMemOpTile dstTile = {});
 
 unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
                                        RankedTensorType dstTy,
-                                       int numBanksSrc = 32,
-                                       int numBanksDst = 32,
+                                       int numBanks = 32,
                                        gpu::LocalMemOpTile srcTile = {},
                                        gpu::LocalMemOpTile dstTile = {});
 

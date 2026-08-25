@@ -450,13 +450,11 @@ TEST_F(SwizzleTest, Test64x128F16BlockedLinear32Bank) {
        {S("block"), {}}},
       {{S("dim0"), 64}, {S("dim1"), 128}},
       /*requireSurjective=*/true);
-  auto smem = optimalSwizzlingLdSt(src, dst, /*bitwidth=*/16,
-                                   /*numBanksSrc=*/32, /*numBanksDst=*/32,
+  auto smem = optimalSwizzlingLdSt(src, dst, /*bitwidth=*/16, /*numBanks*/ 32,
                                    /*srcTile*/ {},
                                    /*dstTile*/ {{}, {}, {1, 2, 20}});
   auto [r, w] = bankConflictsLdSt(src, dst, smem, /*bitwidth=*/16,
-                                  /*numBanksSrc=*/32, /*numBanksDst=*/32,
-                                  /*srcTile*/ {},
+                                  /*numBanks*/ 32, /*srcTile*/ {},
                                   /*dstTile*/ {{}, {}, {1, 2, 20}});
   EXPECT_EQ(r, 0);
   EXPECT_EQ(w, 0);
@@ -479,12 +477,10 @@ TEST_F(SwizzleTest, Test64x128F16BlockedMfma64Bank) {
       {{S("dim0"), 64}, {S("dim1"), 128}},
       /*requireSurjective=*/true);
   auto smem = optimalSwizzlingLdSt(src, dst, /*bitwidth=*/16,
-                                   /*numBanksSrc=*/64, /*numBanksDst=*/64,
-                                   /*srcTile*/ {},
+                                   /*numBanks*/ 64, /*srcTile*/ {},
                                    /*dstTile*/ {{}, {}, {1, 2, 12, 20}});
   auto [r, w] = bankConflictsLdSt(src, dst, smem, /*bitwidth=*/16,
-                                  /*numBanksSrc=*/64, /*numBanksDst=*/64,
-                                  /*srcTile*/ {},
+                                  /*numBanks*/ 64, /*srcTile*/ {},
                                   /*dstTile*/ {{}, {}, {1, 2, 12, 20}});
   EXPECT_EQ(r, 0);
   EXPECT_EQ(w, 0);
@@ -504,12 +500,10 @@ TEST_F(SwizzleTest, Test1024F32WarpSwapped32Bank) {
                    {{S("dim0"), 1024}},
                    /*requireSurjective=*/true);
   auto smem = optimalSwizzlingLdSt(src, dst, /*bitwidth=*/32,
-                                   /*numBanksSrc=*/32, /*numBanksDst=*/32,
-                                   /*srcTile*/ {},
+                                   /*numBanks*/ 32, /*srcTile*/ {},
                                    /*dstTile*/ {{}, {}, {1, 2, 20}});
   auto [r, w] = bankConflictsLdSt(src, dst, smem, /*bitwidth=*/32,
-                                  /*numBanksSrc=*/32, /*numBanksDst=*/32,
-                                  /*srcTile*/ {},
+                                  /*numBanks*/ 32, /*srcTile*/ {},
                                   /*dstTile*/ {{}, {}, {1, 2, 20}});
   EXPECT_EQ(r, 0);
   EXPECT_EQ(w, 0);
@@ -529,70 +523,13 @@ TEST_F(SwizzleTest, Test1024F32WarpSwapped64Bank) {
                    {{S("dim0"), 1024}},
                    /*requireSurjective=*/true);
   auto smem = optimalSwizzlingLdSt(src, dst, /*bitwidth=*/32,
-                                   /*numBanksSrc=*/64, /*numBanksDst=*/64,
-                                   /*srcTile*/ {},
+                                   /*numBanks*/ 64, /*srcTile*/ {},
                                    /*dstTile*/ {{}, {}, {1, 2, 12, 20}});
   auto [r, w] = bankConflictsLdSt(src, dst, smem, /*bitwidth=*/32,
-                                  /*numBanksSrc=*/64, /*numBanksDst=*/64,
-                                  /*srcTile*/ {},
+                                  /*numBanks*/ 64, /*srcTile*/ {},
                                   /*dstTile*/ {{}, {}, {1, 2, 12, 20}});
   EXPECT_EQ(r, 0);
   EXPECT_EQ(w, 0);
-}
-
-TEST_F(SwizzleTest, TestAsymmetricB64ReadWrite) {
-  LinearLayout src(
-      {{S("register"), {{1, 0}, {2, 0}, {0, 1}, {0, 2}, {0, 4}}},
-       {S("lane"), {{0, 8}, {0, 16}, {0, 32}, {0, 64}, {4, 0}, {8, 0}}},
-       {S("warp"), {{16, 0}, {32, 0}}},
-       {S("block"), {}}},
-      {{S("dim0"), 64}, {S("dim1"), 128}},
-      /*requireSurjective=*/true);
-  LinearLayout dst(
-      {{S("register"),
-        {{1, 0}, {2, 0}, {8, 0}, {16, 0}, {32, 0}, {0, 32}, {0, 64}}},
-       {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {4, 0}}},
-       {S("warp"), {{0, 0}, {0, 0}}},
-       {S("block"), {}}},
-      {{S("dim0"), 64}, {S("dim1"), 128}},
-      /*requireSurjective=*/true);
-
-  auto smem = optimalSwizzlingLdSt(src, dst, /*bitwidth=*/16,
-                                   /*numBanksSrc=*/32, /*numBanksDst=*/64);
-  auto [read, write] = bankConflictsLdSt(src, dst, smem, /*bitwidth=*/16,
-                                         /*numBanksSrc=*/32,
-                                         /*numBanksDst=*/64);
-  EXPECT_EQ(read, 0);
-  EXPECT_EQ(write, 0);
-}
-
-TEST_F(SwizzleTest, TestAsymmetricB128ReadWrite) {
-  LinearLayout src(
-      {{S("register"),
-        {{1, 0}, {2, 0}, {8, 0}, {16, 0}, {32, 0}, {0, 32}, {0, 64}}},
-       {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {4, 0}}},
-       {S("warp"), {{0, 0}, {0, 0}}},
-       {S("block"), {}}},
-      {{S("dim0"), 64}, {S("dim1"), 128}},
-      /*requireSurjective=*/true);
-  LinearLayout dst(
-      {{S("register"), {{1, 0}, {2, 0}, {8, 0}, {0, 1}, {0, 2}, {0, 4}}},
-       {S("lane"), {{0, 8}, {0, 32}, {0, 16}, {0, 64}, {4, 0}, {16, 0}}},
-       {S("warp"), {{32, 0}}},
-       {S("block"), {}}},
-      {{S("dim0"), 64}, {S("dim1"), 128}},
-      /*requireSurjective=*/true);
-
-  auto smem = optimalSwizzlingLdSt(src, dst, /*bitwidth=*/16,
-                                   /*numBanksSrc=*/32, /*numBanksDst=*/64,
-                                   /*srcTile=*/{},
-                                   /*dstTile=*/{{}, {}, {1, 2, 12, 20}});
-  auto [read, write] = bankConflictsLdSt(src, dst, smem, /*bitwidth=*/16,
-                                         /*numBanksSrc=*/32,
-                                         /*numBanksDst=*/64, /*srcTile=*/{},
-                                         /*dstTile=*/{{}, {}, {1, 2, 12, 20}});
-  EXPECT_EQ(read, 0);
-  EXPECT_EQ(write, 0);
 }
 
 TEST_F(BankConflictTest, bankConflicts) {
@@ -782,18 +719,17 @@ TEST_F(BankConflictTest, LowVectorF32MmaConvertKeeps64BankRegisterBasisHigh) {
   EXPECT_EQ(getVecBitwidthLdSt(srcLL, dstLL, /*bitwidth=*/32), 32);
 
   auto smem = optimalSwizzlingLdSt(srcLL, dstLL, /*bitwidth=*/32,
-                                   /*numBanksSrc=*/32, /*numBanksDst*/ 32);
+                                   /*numBanks=*/64);
   auto [readConflicts, writeConflicts] =
-      bankConflictsLdSt(srcLL, dstLL, smem, /*bitwidth=*/32, /*numBanksSrc=*/32,
-                        /*numBanksDst*/ 32);
+      bankConflictsLdSt(srcLL, dstLL, smem, /*bitwidth=*/32, /*numBanks=*/64);
   EXPECT_EQ(readConflicts, 0);
   EXPECT_EQ(writeConflicts, 0);
-  EXPECT_EQ(smem.getInDimSize(S("bank")), 32);
-  EXPECT_EQ(smem.getInDimSize(S("segment")), 4);
+  EXPECT_EQ(smem.getInDimSize(S("bank")), 64);
+  EXPECT_EQ(smem.getInDimSize(S("segment")), 2);
 
   auto dstToSmem = dstLL.invertAndCompose(smem);
-  EXPECT_EQ(dstToSmem.getBasis(S("register"), /*pos=*/0, S("bank")), 0);
-  EXPECT_EQ(dstToSmem.getBasis(S("register"), /*pos=*/0, S("segment")), 2);
+  EXPECT_EQ(dstToSmem.getBasis(S("register"), /*pos=*/0, S("bank")), 32);
+  EXPECT_EQ(dstToSmem.getBasis(S("register"), /*pos=*/0, S("segment")), 0);
 }
 
 } // namespace

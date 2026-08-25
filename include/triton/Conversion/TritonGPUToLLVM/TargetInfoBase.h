@@ -101,13 +101,7 @@ public:
                           StringRef message, StringRef file, StringRef func,
                           int line) const = 0;
 
-  // Returns the number of shared-memory banks visible to load and store
-  // instructions, in the same {load, store} order as getSharedLdStTiles().
-  virtual std::pair<int, int> getSharedMemoryLdStBanks(int vecBitwidth,
-                                                       int bitwidth,
-                                                       int numLoadElems) const {
-    return {32, 32};
-  }
+  virtual int getSharedMemoryBanks() const { return 32; }
 
   virtual int getSharedAddressSpace() const = 0;
 

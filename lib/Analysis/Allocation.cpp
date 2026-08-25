@@ -40,8 +40,7 @@ namespace triton {
 
 unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
                                        const LinearLayout &dstLayout,
-                                       int bitwidth, int numBanksSrc,
-                                       int numBanksDst,
+                                       int bitwidth, int numBanks,
                                        gpu::LocalMemOpTile srcTile,
                                        gpu::LocalMemOpTile dstTile) {
   auto *ctx = srcLayout.getInDimNames().begin()->getContext();
@@ -49,9 +48,9 @@ unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
       actionRemoveBroadcastedRegs(srcLayout).apply(srcLayout);
   auto dstLayoutNoBroadcast =
       actionRemoveBroadcastedRegs(dstLayout).apply(dstLayout);
-  auto smem = gpu::optimalSwizzlingLdSt(
-      srcLayoutNoBroadcast, dstLayoutNoBroadcast, bitwidth, numBanksSrc,
-      numBanksDst, srcTile, dstTile);
+  auto smem =
+      gpu::optimalSwizzlingLdSt(srcLayoutNoBroadcast, dstLayoutNoBroadcast,
+                                bitwidth, numBanks, srcTile, dstTile);
   auto reps = smem.getInDimSize(StringAttr::get(ctx, "reps"));
   // The smem has the same CGA layout as srcLayout, so use that instead.
   // Remove the number of elements duplicated in the CGA layout.
@@ -61,13 +60,12 @@ unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
 }
 
 unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
-                                       RankedTensorType dstTy, int numBanksSrc,
-                                       int numBanksDst,
+                                       RankedTensorType dstTy, int numBanks,
                                        gpu::LocalMemOpTile srcTile,
                                        gpu::LocalMemOpTile dstTile) {
   return getNumScratchElemsSwizzledCvt(
       gpu::toLinearLayout(srcTy), gpu::toLinearLayout(dstTy),
-      getBitwidth(srcTy), numBanksSrc, numBanksDst, srcTile, dstTile);
+      getBitwidth(srcTy), numBanks, srcTile, dstTile);
 }
 
 // Both `atomic_cas` and `atomic_rmw` may need scratch memory to store values

@@ -24,8 +24,7 @@ public:
 
   int getSharedMemorySize() const;
 
-  std::pair<int, int> getSharedMemoryLdStBanks(int vecBitwidth, int bitwidth,
-                                               int numLoadElems) const override;
+  int getSharedMemoryBanks() const override;
 
   size_t getSharedMemoryPartitionSize() const override;
 
