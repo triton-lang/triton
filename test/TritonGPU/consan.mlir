@@ -274,6 +274,29 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #barrier_multicast_four = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2]]}>
 #smem_multicast_four = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 64 : i32, ttg.target = "cuda:107", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // Selecting K must retain a separate phase for each recipient CTA. Reduce
+  // only K from [Cbar, K] = [4, 2], then broadcast that [4] vector into both
+  // compact tracking masks on Cbar (dimension 2).
+  // CHECK-LABEL: tt.func private @__triton_consan_track_visible_accesses_{{.*}}_I1(
+  // CHECK: %[[MCAST_SELECTED_PHASES:.*]] = arith.select {{.*}}tensor<4x2xi{{32|64}},
+  // CHECK: %[[MCAST_PHASES:.*]] = "tt.reduce"(%[[MCAST_SELECTED_PHASES]]) <{axis = 1 : i32}>
+  // CHECK: }) : (tensor<4x2xi{{32|64}}, {{.*}}>) -> tensor<4xi{{32|64}},
+  // CHECK: %[[MCAST_WRITE_PHASE_LAYOUT:.*]] = ttg.convert_layout %[[MCAST_PHASES]]{{.*}} : tensor<4xi{{32|64}},
+  // CHECK: tt.reshape %[[MCAST_WRITE_PHASE_LAYOUT]]{{.*}} -> tensor<1x1x4x1xi{{32|64}},
+  // CHECK: %[[MCAST_WRITE_PHASE_BCAST:.*]] = tt.broadcast {{.*}} : tensor<1x1x4x1xi{{32|64}}, {{.*}}> -> tensor<4x2x4x2xi{{32|64}},
+  // CHECK: %[[MCAST_WRITE_PHASE:.*]] = arith.trunci %[[MCAST_WRITE_PHASE_BCAST]]
+  // CHECK: %[[MCAST_WRITE_PHASE_MASK:.*]] = arith.cmpi eq, {{.*}}, %[[MCAST_WRITE_PHASE]]
+  // CHECK: %[[MCAST_WRITE_BARRIER_MASK:.*]] = arith.andi {{.*}}, %[[MCAST_WRITE_PHASE_MASK]]
+  // CHECK: %[[MCAST_WRITE_STORE_MASK:.*]] = arith.andi %[[MCAST_WRITE_BARRIER_MASK]],
+  // CHECK: tt.store {{.*}}, %[[MCAST_WRITE_STORE_MASK]]{{.*}} : tensor<4x2x4x2x!tt.ptr<i8>,
+  // CHECK: %[[MCAST_READ_PHASE_LAYOUT:.*]] = ttg.convert_layout %[[MCAST_PHASES]]{{.*}} : tensor<4xi{{32|64}},
+  // CHECK: tt.reshape %[[MCAST_READ_PHASE_LAYOUT]]{{.*}} -> tensor<1x1x4x1x1xi{{32|64}},
+  // CHECK: %[[MCAST_READ_PHASE_BCAST:.*]] = tt.broadcast {{.*}} : tensor<1x1x4x1x1xi{{32|64}}, {{.*}}> -> tensor<4x2x4x4x2xi{{32|64}},
+  // CHECK: %[[MCAST_READ_PHASE:.*]] = arith.trunci %[[MCAST_READ_PHASE_BCAST]]
+  // CHECK: %[[MCAST_READ_PHASE_MASK:.*]] = arith.cmpi eq, {{.*}}, %[[MCAST_READ_PHASE]]
+  // CHECK: %[[MCAST_READ_BARRIER_MASK:.*]] = arith.andi {{.*}}, %[[MCAST_READ_PHASE_MASK]]
+  // CHECK: tt.store {{.*}}, %[[MCAST_READ_BARRIER_MASK]]{{.*}} : tensor<4x2x4x4x2x!tt.ptr<i{{32|64}}>,
+  // CHECK: tt.return
   // CHECK-LABEL: @mbarrier_multicast_four_ctas
   tt.func public @mbarrier_multicast_four_ctas() {
     %bar0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4xi64, #barrier_multicast_four, #smem_multicast_four, mutable>
@@ -301,6 +324,61 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state{{.*}}({{.*}}%[[HIGH_RECIPIENTS]], {{.*}})
     // CHECK: ttng.arrive_barrier {{.*}}multicastCTA = 2 : i32
     ttng.arrive_barrier %bar1, 1 {multicastCTA = 2 : i32} : !ttg.memdesc<4xi64, #barrier_multicast_four, #smem_multicast_four, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// Different CTA footprints can produce the same packed barrier descriptor.
+// Retain both K entries: choosing one matching index would lose a frontier.
+#duplicate_key_distributed = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#duplicate_key_replicated = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#duplicate_key_smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32, ttg.shared = 32 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 0 : i32} {
+  // CHECK-LABEL: tt.func private @__triton_consan_track_visible_accesses_{{.*}}_I0(
+  // K=4 includes the two real barriers, a cluster rendezvous, and padding.
+  // Full tracking tensors retain every K entry and both phases, despite B=1.
+  // CHECK: tt.store {{.*}} : tensor<2x1x2x4x2x!tt.ptr<i8>,
+  // CHECK: tt.load {{.*}} : tensor<2x1x2x4x2x2x!tt.ptr<i{{32|64}}>,
+  // CHECK: tt.store {{.*}} : tensor<2x1x2x4x2x2x!tt.ptr<i{{32|64}}>,
+  // CHECK: tt.return
+  // CHECK-LABEL: @duplicate_barrier_descriptor_tracking
+  tt.func public @duplicate_barrier_descriptor_tracking() {
+    // The collision is between nonempty descriptors, not the padded entries.
+    // CHECK: tti.experimental_buffer_descriptors [16, 16, 0, 0], [8, 8, 0, 0], shared_mem : tensor<4xi64,
+    // CHECK: %[[DUP_DISTRIBUTED:.*]] = ttg.local_alloc
+    %distributed = ttg.local_alloc {allocation.offset = 16 : i32} : () -> !ttg.memdesc<2xi64, #duplicate_key_distributed, #duplicate_key_smem, mutable>
+    %zero = arith.constant 0 : i32
+    %true = arith.constant true
+    // Both CTAs execute each lifetime; the layouts select the barrier owners.
+    // CHECK: ttng.init_barrier %[[DUP_DISTRIBUTED]]
+    ttng.init_barrier %distributed, 1 : !ttg.memdesc<2xi64, #duplicate_key_distributed, #duplicate_key_smem, mutable>
+    // CHECK: tt.call @__triton_consan_track_visible_accesses_{{.*}}_I0(
+    // CHECK: ttng.arrive_barrier %[[DUP_DISTRIBUTED]]
+    ttng.arrive_barrier %distributed, 1 : !ttg.memdesc<2xi64, #duplicate_key_distributed, #duplicate_key_smem, mutable>
+    ttng.wait_barrier %distributed, %zero, %true : !ttg.memdesc<2xi64, #duplicate_key_distributed, #duplicate_key_smem, mutable>
+    // CHECK: ttng.inval_barrier %[[DUP_DISTRIBUTED]]
+    ttng.inval_barrier %distributed : !ttg.memdesc<2xi64, #duplicate_key_distributed, #duplicate_key_smem, mutable>
+    // End the per-CTA lifetimes before reusing their physical scratch offset.
+    // CHECK: ttng.cluster_barrier
+    ttng.cluster_barrier
+    // CHECK: %[[DUP_REPLICATED:.*]] = ttg.local_alloc
+    %replicated = ttg.local_alloc {allocation.offset = 16 : i32} : () -> !ttg.memdesc<1xi64, #duplicate_key_replicated, #duplicate_key_smem, mutable>
+    // CHECK: ttng.init_barrier %[[DUP_REPLICATED]]
+    ttng.init_barrier %replicated, 1 : !ttg.memdesc<1xi64, #duplicate_key_replicated, #duplicate_key_smem, mutable>
+    // Publish the lead CTA's initialization before either CTA can arrive.
+    // CHECK: ttng.fence_mbarrier_init_release_cluster
+    ttng.fence_mbarrier_init_release_cluster
+    // CHECK: ttng.cluster_barrier {relaxed = true}
+    ttng.cluster_barrier {relaxed = true}
+    // CHECK: tt.call @__triton_consan_track_visible_accesses_{{.*}}_I0(
+    // CHECK: ttng.arrive_barrier %[[DUP_REPLICATED]]
+    ttng.arrive_barrier %replicated, 1 : !ttg.memdesc<1xi64, #duplicate_key_replicated, #duplicate_key_smem, mutable>
+    ttng.wait_barrier %replicated, %zero, %true : !ttg.memdesc<1xi64, #duplicate_key_replicated, #duplicate_key_smem, mutable>
+    // CHECK: ttng.inval_barrier %[[DUP_REPLICATED]]
+    ttng.inval_barrier %replicated : !ttg.memdesc<1xi64, #duplicate_key_replicated, #duplicate_key_smem, mutable>
     tt.return
   }
 }
