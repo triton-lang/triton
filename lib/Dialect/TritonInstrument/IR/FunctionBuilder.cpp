@@ -1800,7 +1800,8 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
           Value readerBit =
               triton::SplatOp::create(fb, tableType, readerMaskElem);
           Value allOnes =
-              tti::createConstIntTensor(fb, fb.getLoc(), -1, tableType);
+              tti::createConstIntTensor(fb, fb.getLoc(), -1, tableType,
+                                        /*isSigned=*/true);
           Value notReaderBit = arith::XOrIOp::create(fb, readerBit, allOnes);
           Value withoutReader = arith::AndIOp::create(fb, table, notReaderBit);
           return arith::SelectOp::create(fb, rows, withoutReader, table)
@@ -1989,10 +1990,13 @@ void FunctionBuilder::createTrackVisibleAccessesCall(
           Value phaseMask = arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
                                                   phaseIndices, currentPhase);
           barrierMask = arith::AndIOp::create(fb, barrierMask, phaseMask);
-          Value threadI64 =
-              arith::ExtUIOp::create(fb, fb.getI64Type(), threadVal);
-          Value one64 = arith::ConstantIntOp::create(fb, 1, 64);
-          Value threadBitScalar = arith::ShLIOp::create(fb, one64, threadI64);
+          auto elemType =
+              cast<IntegerType>(writeVisibilityType.getElementType());
+          Value threadElem = adjustIntegerWidth(fb, threadVal, elemType);
+          Value oneScalar = arith::ConstantOp::create(
+              fb, elemType, fb.getIntegerAttr(elemType, 1));
+          Value threadBitScalar =
+              arith::ShLIOp::create(fb, oneScalar, threadElem);
           Value threadBit =
               triton::SplatOp::create(fb, writeVisibilityType, threadBitScalar);
           Value visibleWrites =
@@ -2416,10 +2420,10 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
             tti::createConstIntTensor(fb, fb.getLoc(), 0, writeVisibilityType);
         Value noOneIsWriting = arith::CmpIOp::create(
             fb, arith::CmpIPredicate::eq, writeVisibility, writeVisibilityZero);
-        Value threadI64 =
-            arith::ExtUIOp::create(fb, fb.getI64Type(), threadVal);
+        auto elemType = cast<IntegerType>(writeVisibilityType.getElementType());
+        Value threadElem = adjustIntegerWidth(fb, threadVal, elemType);
         Value threadMask =
-            triton::SplatOp::create(fb, writeVisibilityType, threadI64);
+            triton::SplatOp::create(fb, writeVisibilityType, threadElem);
         Value bufferMaskExt =
             arith::ExtUIOp::create(fb, writeVisibilityType, bufferMask);
         Value bufferThreadBit =
