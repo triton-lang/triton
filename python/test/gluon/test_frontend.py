@@ -1065,7 +1065,7 @@ def test_linear_apply_frontend_cta_local_basis_layouts(target, basis_kind):
     assert "ttg.convert_layout" not in text
 
 
-@pytest.mark.parametrize("basis_kind", ["blocked-cross-cta", "generic-cross-cta", "redundant-cta-permutation"])
+@pytest.mark.parametrize("basis_kind", ["blocked-cross-cta", "linear-cross-cta"])
 def test_linear_apply_frontend_cross_cta_basis_layouts(basis_kind):
     index_layout = ttgl.BlockedLayout([2], [32], [4], [0], cga_layout=[[0]])
     if basis_kind == "blocked-cross-cta":
@@ -1073,7 +1073,7 @@ def test_linear_apply_frontend_cross_cta_basis_layouts(basis_kind):
     else:
         basis_layout = ttgl.DistributedLinearLayout(
             reg_bases=[],
-            lane_bases=[[1], [2], [4], [8], [16] if basis_kind == "redundant-cta-permutation" else [0]],
+            lane_bases=[[1], [2], [4], [8], [0]],
             warp_bases=[[0], [0]],
             block_bases=[[16]],
             shape=[32],

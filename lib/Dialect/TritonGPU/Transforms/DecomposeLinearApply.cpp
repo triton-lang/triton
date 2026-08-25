@@ -24,8 +24,8 @@ public:
 
     Location loc = op.getLoc();
     RankedTensorType indexType = op.getIndex().getType();
-    Value bases = prepareBases(op, rewriter);
-    RankedTensorType basisType = cast<RankedTensorType>(bases.getType());
+    Value bases = op.getBases();
+    RankedTensorType basisType = op.getBases().getType();
 
     Value zero = arith::ConstantIntOp::create(rewriter, loc, 0, 32);
     Value one = arith::ConstantIntOp::create(rewriter, loc, 1, 32);
@@ -78,11 +78,6 @@ private:
     if (layout.sublayout({kRegister, kLane, kWarp}, {kDim}).isSurjective())
       return success();
 
-    if (isGenericLinearEncoding(basisType.getEncoding()))
-      return op.emitOpError(
-          "linear_apply with a generic cross-CTA basis layout "
-          "is unsupported; use a CTA-local basis layout");
-
     ModuleOp module = op->getParentOfType<ModuleOp>();
     auto target = module->getAttrOfType<StringAttr>(AttrTargetName);
     if (target && target.getValue().starts_with("cuda:"))
@@ -96,40 +91,6 @@ private:
     return op.emitOpError("linear_apply with a cross-CTA basis layout "
                           "requires an explicit CUDA target; use a CTA-local "
                           "basis layout");
-  }
-
-  static Value prepareBases(triton::LinearApplyOp op,
-                            PatternRewriter &rewriter) {
-    Value bases = op.getBases();
-    RankedTensorType basisType = op.getBases().getType();
-    if (!isGenericLinearEncoding(basisType.getEncoding()))
-      return bases;
-
-    // Reductions do not support generic linear layouts. Round-trip through
-    // shared memory because generic layout conversions only support values
-    // owned by the same thread.
-    Location loc = op.getLoc();
-    MLIRContext *context = op.getContext();
-    ModuleOp module = op->getParentOfType<ModuleOp>();
-    unsigned numCTAs = static_cast<unsigned>(lookupNumCTAs(op));
-    auto cgaLayout =
-        CGAEncodingAttr::fromSplitParams(context, {numCTAs}, {1}, {0});
-    auto sharedLayout =
-        SwizzledSharedEncodingAttr::get(context, 1, 1, 1, {0}, cgaLayout);
-    auto sharedType = MemDescType::get(
-        basisType.getShape(), basisType.getElementType(), sharedLayout,
-        SharedMemorySpaceAttr::get(context), /*mutableMemory=*/true);
-    Value sharedBases = LocalAllocOp::create(rewriter, loc, sharedType);
-    LocalStoreOp::create(rewriter, loc, bases, sharedBases);
-    BarrierOp::create(rewriter, loc, AddrSpace::Local);
-
-    unsigned threadsPerWarp =
-        static_cast<unsigned>(TritonGPUDialect::getThreadsPerWarp(module));
-    unsigned numWarps = static_cast<unsigned>(lookupNumWarps(op));
-    auto blockedLayout = BlockedEncodingAttr::get(
-        context, {1}, {threadsPerWarp}, {numWarps}, {0}, cgaLayout);
-    auto blockedBasisType = basisType.cloneWithEncoding(blockedLayout);
-    return LocalLoadOp::create(rewriter, loc, blockedBasisType, sharedBases);
   }
 
   static Value createXorReduction(Location loc, Value input,

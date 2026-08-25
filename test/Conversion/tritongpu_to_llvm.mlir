@@ -3304,8 +3304,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #basis8 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #slice_parent = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #basis_slice = #ttg.slice<{dim = 0, parent = #slice_parent}>
-#basis_generic = #ttg.generic_linear<{register = [[4]], lane = [[1], [8], [2], [16], [0]], warp = [[0], [0]], block = []}>
-#basis_generic_warp = #ttg.generic_linear<{register = [], lane = [[1], [2], [4], [8], [16]], warp = [[1], [2]], block = []}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // The ordinary reduction lowering handles noncanonical basis distributions.
@@ -3340,23 +3338,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis_slice> -> tensor<128xi32, #index>
     tt.return %result : tensor<128xi32, #index>
   }
-
-  // CHECK-LABEL: @linear_apply_basis_generic_linear
-  // CHECK: llvm.xor
-  // CHECK: llvm.return
-  tt.func private @linear_apply_basis_generic_linear(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis_generic>) -> tensor<128xi32, #index> {
-    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis_generic> -> tensor<128xi32, #index>
-    tt.return %result : tensor<128xi32, #index>
-  }
-
-  // Redundant warp contributions remain valid reduction inputs.
-  // CHECK-LABEL: @linear_apply_basis_generic_redundant_warp
-  // CHECK: llvm.xor
-  // CHECK: llvm.return
-  tt.func private @linear_apply_basis_generic_redundant_warp(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis_generic_warp>) -> tensor<128xi32, #index> {
-    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis_generic_warp> -> tensor<128xi32, #index>
-    tt.return %result : tensor<128xi32, #index>
-  }
 }
 
 // -----
@@ -3380,7 +3361,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 #index = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
 #cross_cta_basis = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
-#redundant_block_basis = #ttg.generic_linear<{register = [], lane = [[1], [2], [4], [8], [16]], warp = [[1], [2]], block = [[16]]}>
 
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // Ordinary layouts support cross-CTA reductions on NVIDIA.
@@ -3390,15 +3370,6 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 2 : i32, "ttg.num-
   // CHECK: llvm.return
   tt.func private @linear_apply_cross_cta_blocked_basis(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #cross_cta_basis>) -> tensor<128xi32, #index> {
     %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #cross_cta_basis> -> tensor<128xi32, #index>
-    tt.return %result : tensor<128xi32, #index>
-  }
-
-  // A nonzero block basis is harmless if every CTA spans all basis values.
-  // CHECK-LABEL: @linear_apply_generic_redundant_block_basis
-  // CHECK: llvm.xor
-  // CHECK: llvm.return
-  tt.func private @linear_apply_generic_redundant_block_basis(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #redundant_block_basis>) -> tensor<128xi32, #index> {
-    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #redundant_block_basis> -> tensor<128xi32, #index>
     tt.return %result : tensor<128xi32, #index>
   }
 }

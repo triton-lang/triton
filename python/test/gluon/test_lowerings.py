@@ -2106,7 +2106,7 @@ def test_linear_apply_cta_local_basis_layouts(basis_kind, device):
         basis_layout = ttgl.DistributedLinearLayout(
             reg_bases=[],
             lane_bases=[[2], [1], [4], [8], [16]] + ([[0]] if THREADS_PER_WARP == 64 else []),
-            warp_bases=[[8], [16]],
+            warp_bases=[[0], [0]],
             block_bases=[],
             shape=[32],
         )
@@ -2161,77 +2161,6 @@ def test_linear_apply_cross_cta_basis_layouts(basis_kind, device):
     assert "tt.linear_apply" in compiled.asm["ttgir"]
     cga_layout = "[[1]]" if basis_kind == "blocked" else "[[0, 1]]"
     assert f"CGALayout = {cga_layout}" in compiled.asm["ttgir"]
-
-
-@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA warp specialization and ConSan")
-def test_linear_apply_generic_basis_warp_specialize_consan(device, fresh_compilation_knobs):
-
-    @gluon.jit
-    def empty_partition():
-        pass
-
-    @gluon.jit
-    def worker_partition(index_ptr, bases_ptr, output_ptr, INDEX_LAYOUT: ttgl.constexpr, BASIS_LAYOUT: ttgl.constexpr):
-        offsets = ttgl.arange(0, 128, layout=INDEX_LAYOUT)
-        indices = ttgl.load(index_ptr + offsets).to(ttgl.uint32)
-        bases = ttgl.load(bases_ptr + ttgl.arange(0, 32, layout=BASIS_LAYOUT)).to(ttgl.uint32)
-        ttgl.store(output_ptr + offsets, ttgl.linear_apply(indices, bases))
-
-    @gluon.jit
-    def kernel(index_ptr, bases_ptr, output_ptr, INDEX_LAYOUT: ttgl.constexpr, BASIS_LAYOUT: ttgl.constexpr):
-        ttgl.warp_specialize([
-            (empty_partition, ()),
-            (worker_partition, (index_ptr, bases_ptr, output_ptr, INDEX_LAYOUT, BASIS_LAYOUT)),
-        ], [4])
-
-    triton.knobs.compilation.instrumentation_mode = "consan"
-    triton.knobs.compilation.disable_line_info = True
-    index_layout = ttgl.BlockedLayout([1], [32], [4], [0])
-    basis_layout = ttgl.DistributedLinearLayout(
-        reg_bases=[],
-        lane_bases=[[2], [1], [4], [8], [16]],
-        warp_bases=[[8], [16]],
-        block_bases=[],
-        shape=[32],
-    )
-    indices = torch.arange(128, dtype=torch.int32, device=device)
-    bases = torch.arange(32, dtype=torch.int32, device=device)
-    output = torch.empty_like(indices)
-
-    compiled = kernel.warmup(indices, bases, output, index_layout, basis_layout, grid=(1, ), num_warps=4)
-    assert "tt.linear_apply" in compiled.asm["ttgir"]
-    assert "tt.linear_apply" not in compiled.asm["llir"]
-
-
-@pytest.mark.parametrize(
-    "index_layout",
-    _filter_layouts([_swizzled_warp_layouts_1d()[0], _swizzled_warp_layouts_2d()[0]]),
-    ids=["non-injective-1d", "swizzled-2d"],
-)
-def test_linear_apply_generic_linear_layout(index_layout, device):
-    shape = index_layout.shape
-    block = math.prod(shape)
-    second_dim = shape[1] if len(shape) == 2 else 0
-    num_warps = 2**len(index_layout.warp_bases)
-    basis_layout = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [num_warps], [0])
-
-    torch.manual_seed(4513)
-    indices = torch.randint(-(1 << 31), (1 << 31) - 1, (block, ), dtype=torch.int32, device=device)
-    indices[:5] = torch.tensor([0, 1, 5, -(1 << 31), -1], dtype=torch.int32, device=device)
-    bases = torch.randint(-(1 << 31), (1 << 31) - 1, (32, ), dtype=torch.int32, device=device)
-    output = torch.empty_like(indices)
-
-    reference = torch.zeros_like(indices)
-    for bit in range(32):
-        selected = ((indices.to(torch.int64) >> bit) & 1).to(torch.bool)
-        reference = torch.where(selected, reference ^ bases[bit], reference)
-
-    compiled = _linear_apply_kernel[(1, )](indices, bases, output, block, index_layout, basis_layout, second_dim, False,
-                                           num_warps=num_warps)
-    torch.testing.assert_close(output, reference, rtol=0, atol=0)
-    assert "#ttg.generic_linear" in compiled.asm["ttgir"]
-    assert "tt.linear_apply" in compiled.asm["ttgir"]
-    assert f"sizePerThread = [1], threadsPerWarp = [{THREADS_PER_WARP}]" in compiled.asm["ttgir"]
 
 
 @gluon.jit
