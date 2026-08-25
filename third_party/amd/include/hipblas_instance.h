@@ -73,7 +73,8 @@ class HipblasLtInstance {
   void loadHipBlasDylib() {
     if (dylibHandle == nullptr) {
       // First reuse the existing handle
-      dylibHandle = dlopen(libraryPath.c_str(), RTLD_NOLOAD);
+      dylibHandle =
+          dlopen(libraryPath.c_str(), RTLD_NOLOAD | RTLD_LOCAL | RTLD_LAZY);
     }
     if (dylibHandle == nullptr) {
       // If not found, try to load it
