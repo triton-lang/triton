@@ -1,5 +1,6 @@
 #include "triton/Dialect/TritonInstrument/IR/FunctionBuilder.h"
 
+#include <algorithm>
 #include <cassert>
 #include <optional>
 
@@ -1713,14 +1714,63 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
 
         auto clearTable = [&](RankedTensorType tableType) {
           Value tablePtr = entryBlock->getArgument(nextArg++);
-          Value tableMask = convertAndBroadcast(fb, bufferMask, {1}, tableType);
+          SmallVector<int64_t> shape(tableType.getShape());
+          SmallVector<int64_t> strides(shape.size(), 1);
+          for (unsigned dim = 1; dim < shape.size(); ++dim)
+            strides[dim] = strides[dim - 1] * shape[dim - 1];
+          int64_t extent = shape[3];
+          unsigned bitWidth =
+              tableType.getElementType().getIntOrFloatBitWidth();
+          int64_t threadsPerWarp = ttg::lookupThreadsPerWarp(fb);
+          // Keep a warp's 128-bit vector span while streaming the K/T axis.
+          int64_t chunk = std::min<int64_t>(
+              extent, std::max<int64_t>(1, threadsPerWarp * (128 / bitWidth) /
+                                               strides[3]));
+          RankedTensorType storeType = tableType;
+          if (chunk < extent) {
+            shape[3] = chunk;
+            storeType = tti::getIntTensorType(
+                fb.getInsertionBlock()->getParent(), shape, bitWidth);
+          }
+          Value tableMask = convertAndBroadcast(fb, bufferMask, {1}, storeType);
           Value ctaMask =
-              createCTASetMask(fb, tableType, /*dim=*/0, effectCTAs);
+              createCTASetMask(fb, storeType, /*dim=*/0, effectCTAs);
           tableMask = arith::AndIOp::create(fb, tableMask, ctaMask);
-          Value zero = tti::createConstIntTensor(fb, fb.getLoc(), 0, tableType);
-          tti::createStoreScratchMemory(fb, fb.getLoc(), tablePtr, zero,
-                                        tableType, /*currentCTAOnly=*/false,
-                                        tableMask);
+          Value zero = tti::createConstIntTensor(fb, fb.getLoc(), 0, storeType);
+          if (chunk == extent) {
+            tti::createStoreScratchMemory(fb, fb.getLoc(), tablePtr, zero,
+                                          tableType, /*currentCTAOnly=*/false,
+                                          tableMask);
+            return;
+          }
+
+          Value first = arith::ConstantIntOp::create(fb, 0, 32);
+          Value step = arith::ConstantIntOp::create(fb, chunk, 32);
+          Value limit = arith::ConstantIntOp::create(fb, extent, 32);
+          Value stride = arith::ConstantIntOp::create(fb, strides[3], 32);
+          Block *preheader = fb.getInsertionBlock();
+          Block *continueBlock = preheader->splitBlock(fb.getInsertionPoint());
+          Block *loopBlock = fb.createBlock(continueBlock);
+          loopBlock->addArgument(fb.getI32Type(), fb.getLoc());
+          fb.setInsertionPointToEnd(preheader);
+          cf::BranchOp::create(fb, loopBlock, ValueRange{first});
+
+          fb.setInsertionPointToStart(loopBlock);
+          Value index = loopBlock->getArgument(0);
+          Value offset = arith::MulIOp::create(fb, index, stride);
+          Value viewPtr = triton::AddPtrOp::create(fb, tablePtr.getType(),
+                                                   tablePtr, offset);
+          // K/T is chunked, but every CTA, origin and phase retains its
+          // original physical stride in the backing table.
+          tti::createStoreScratchMemory(
+              fb, fb.getLoc(), viewPtr, zero, storeType,
+              /*currentCTAOnly=*/false, tableMask, strides);
+          Value next = arith::AddIOp::create(fb, index, step);
+          Value more =
+              arith::CmpIOp::create(fb, arith::CmpIPredicate::ult, next, limit);
+          cf::CondBranchOp::create(fb, more, loopBlock, ValueRange{next},
+                                   continueBlock, ValueRange{});
+          fb.setInsertionPointToStart(continueBlock);
         };
 
         if (clearWrites)
