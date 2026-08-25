@@ -1498,6 +1498,94 @@ def test_noinline(mode, device):
 
 
 @triton.jit(noinline=True)
+def noinline_tmem_dot_fn(a_ptr, b_ptr, out_ptr, BLOCK: tl.constexpr):
+    offs_m = tl.arange(0, BLOCK)[:, None]
+    offs_n = tl.arange(0, BLOCK)[None, :]
+    offs_k = tl.arange(0, BLOCK)
+    a = tl.load(a_ptr + offs_m * BLOCK + offs_k[None, :])
+    b = tl.load(b_ptr + offs_k[:, None] * BLOCK + offs_n)
+    accumulator = tl.dot(a, b)
+    tl.store(out_ptr + offs_m * BLOCK + offs_n, accumulator)
+
+
+@triton.jit
+def noinline_tmem_dot_kernel(a_ptr, b_ptr, out_ptr, BLOCK: tl.constexpr):
+    noinline_tmem_dot_fn(a_ptr, b_ptr, out_ptr, BLOCK)
+
+
+def test_noinline_tmem_dot(device):
+    if not is_cuda():
+        pytest.skip("Requires CUDA")
+
+    BLOCK = 64
+    torch.manual_seed(0)
+    a = torch.randn((BLOCK, BLOCK), device=device, dtype=torch.float16)
+    b = torch.randn((BLOCK, BLOCK), device=device, dtype=torch.float16)
+    actual = torch.empty((BLOCK, BLOCK), device=device, dtype=torch.float32)
+
+    compiled = noinline_tmem_dot_kernel[(1, )](a, b, actual, BLOCK=BLOCK, num_warps=4)
+
+    expected = a.float() @ b.float()
+    torch.testing.assert_close(actual, expected, rtol=2e-3, atol=2e-2)
+
+    ttgir = compiled.asm["ttgir"]
+    assert "tt.call" in ttgir
+    assert "noinline = true" in ttgir
+    if torch.cuda.get_device_capability()[0] >= 10:
+        assert "ttng.tmem_alloc" in ttgir
+
+
+@triton.jit(noinline=True)
+def noinline_tmem_dot_live_fn(b_ptr, out_ptr, BLOCK: tl.constexpr):
+    offs_m = tl.arange(0, BLOCK)[:, None]
+    offs_n = tl.arange(0, BLOCK)[None, :]
+    offs_k = tl.arange(0, BLOCK)
+    b = tl.load(b_ptr + offs_k[:, None] * BLOCK + offs_n)
+    helper_acc = tl.dot(b, b)
+    tl.store(out_ptr + offs_m * BLOCK + offs_n, helper_acc)
+
+
+@triton.jit
+def noinline_tmem_dot_live_acc_kernel(a_ptr, b_ptr, helper_out_ptr, out_ptr, BLOCK: tl.constexpr):
+    offs_m = tl.arange(0, BLOCK)[:, None]
+    offs_n = tl.arange(0, BLOCK)[None, :]
+    offs_k = tl.arange(0, BLOCK)
+    a = tl.load(a_ptr + offs_m * BLOCK + offs_k[None, :])
+    b = tl.load(b_ptr + offs_k[:, None] * BLOCK + offs_n)
+    acc = tl.dot(a, b)
+    # The helper's dot executes while `acc` is still live; a correct allocator
+    # must keep the two accumulators in disjoint tensor memory.
+    noinline_tmem_dot_live_fn(b_ptr, helper_out_ptr, BLOCK)
+    acc = tl.dot(a, b, acc)
+    tl.store(out_ptr + offs_m * BLOCK + offs_n, acc)
+
+
+def test_noinline_tmem_dot_live_across_call(device):
+    if not is_cuda():
+        pytest.skip("Requires CUDA")
+
+    BLOCK = 64
+    torch.manual_seed(0)
+    a = torch.randn((BLOCK, BLOCK), device=device, dtype=torch.float16)
+    b = torch.randn((BLOCK, BLOCK), device=device, dtype=torch.float16)
+    helper_out = torch.empty((BLOCK, BLOCK), device=device, dtype=torch.float32)
+    out = torch.empty((BLOCK, BLOCK), device=device, dtype=torch.float32)
+
+    compiled = noinline_tmem_dot_live_acc_kernel[(1, )](a, b, helper_out, out, BLOCK=BLOCK, num_warps=4)
+
+    expected_helper = b.float() @ b.float()
+    expected = 2 * (a.float() @ b.float())
+    torch.testing.assert_close(helper_out, expected_helper, rtol=2e-3, atol=2e-2)
+    torch.testing.assert_close(out, expected, rtol=2e-3, atol=4e-2)
+
+    ttgir = compiled.asm["ttgir"]
+    assert "tt.call" in ttgir
+    assert "noinline = true" in ttgir
+    if torch.cuda.get_device_capability()[0] >= 10:
+        assert "ttng.tmem_alloc" in ttgir
+
+
+@triton.jit(noinline=True)
 def noinline_load_block_fn(ptr, BLOCK_SIZE: tl.constexpr):
     offsets = tl.arange(0, BLOCK_SIZE)
     return tl.load(ptr + offsets)
