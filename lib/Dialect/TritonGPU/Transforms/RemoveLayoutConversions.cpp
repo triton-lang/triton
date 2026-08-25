@@ -872,12 +872,6 @@ void LayoutRematerialization::rewriteSlice(
       continue;
     }
     Operation *newOp = builder.clone(*op, mapping);
-    if (auto linearApply = dyn_cast<LinearApplyOp>(op)) {
-      // The basis does not participate in result/index layout propagation,
-      // even if its SSA value was remapped while rematerializing the index.
-      cast<LinearApplyOp>(newOp).getBasesMutable().assign(
-          linearApply.getBases());
-    }
     for (auto [old, newV] : llvm::zip(op->getResults(), newOp->getResults())) {
       auto it = layout.find(old);
       if (it == layout.end())

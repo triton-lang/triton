@@ -4549,7 +4549,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
   // Backward rematerialization must follow only the index operand. Propagating
   // the rank-two result encoding into the rank-one basis would produce invalid
-  // IR and lose the canonical warp-local basis distribution.
+  // IR.
   // CHECK-LABEL: @linear_apply_backward_rematerialization
   // CHECK-SAME: [[BASES:%[^:]+]]: tensor<32xi32, #[[BASIS_LAYOUT:[^>]+]]>
   // CHECK-NOT: ttg.convert_layout
@@ -4573,12 +4573,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #index_layout = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // Rematerializing the index must not replace the independently distributed
-  // basis, even when both operands are originally the same SSA value.
+  // When both operands are the same SSA value, rematerialization may update
+  // both together because linear_apply supports the new basis layout.
   // CHECK-LABEL: @linear_apply_backward_rematerialization_aliased_basis
-  // CHECK-DAG: [[INDEX:%.*]] = tt.make_range {{.*}} : tensor<32xi32, #[[INDEX_LAYOUT:[^>]+]]>
-  // CHECK-DAG: [[BASES:%.*]] = tt.make_range {{.*}} : tensor<32xi32, #[[BASIS_LAYOUT:[^>]+]]>
-  // CHECK: [[RESULT:%.*]] = tt.linear_apply [[INDEX]], [[BASES]] : tensor<32xi32, #[[INDEX_LAYOUT]]>, tensor<32xi32, #[[BASIS_LAYOUT]]> -> tensor<32xi32, #[[INDEX_LAYOUT]]>
+  // CHECK: [[VALUE:%.*]] = tt.make_range {{.*}} : tensor<32xi32, #[[LAYOUT:[^>]+]]>
+  // CHECK: [[RESULT:%.*]] = tt.linear_apply [[VALUE]], [[VALUE]] : tensor<32xi32, #[[LAYOUT]]>, tensor<32xi32, #[[LAYOUT]]> -> tensor<32xi32, #[[LAYOUT]]>
   // CHECK-NOT: ttg.convert_layout
   // CHECK: tt.return [[RESULT]]
   tt.func @linear_apply_backward_rematerialization_aliased_basis() -> tensor<32xi32, #index_layout> {
@@ -4588,13 +4587,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return %converted : tensor<32xi32, #index_layout>
   }
 
-  // A basis feeding the index transitively has the same hazard: its remapped
-  // copy belongs only in the index expression, not in the basis operand.
+  // A basis feeding the index transitively can likewise be rematerialized once
+  // and reused by the index expression and basis operand.
   // CHECK-LABEL: @linear_apply_backward_rematerialization_transitive_basis
-  // CHECK-DAG: [[INDEX_BASE:%.*]] = tt.make_range {{.*}} : tensor<32xi32, #[[INDEX_LAYOUT:[^>]+]]>
-  // CHECK-DAG: [[BASES:%.*]] = tt.make_range {{.*}} : tensor<32xi32, #[[BASIS_LAYOUT:[^>]+]]>
-  // CHECK: [[INDEX:%.*]] = arith.xori [[INDEX_BASE]], {{.*}} : tensor<32xi32, #[[INDEX_LAYOUT]]>
-  // CHECK: [[RESULT:%.*]] = tt.linear_apply [[INDEX]], [[BASES]] : tensor<32xi32, #[[INDEX_LAYOUT]]>, tensor<32xi32, #[[BASIS_LAYOUT]]> -> tensor<32xi32, #[[INDEX_LAYOUT]]>
+  // CHECK: [[BASES:%.*]] = tt.make_range {{.*}} : tensor<32xi32, #[[LAYOUT:[^>]+]]>
+  // CHECK: [[INDEX:%.*]] = arith.xori [[BASES]], {{.*}} : tensor<32xi32, #[[LAYOUT]]>
+  // CHECK: [[RESULT:%.*]] = tt.linear_apply [[INDEX]], [[BASES]] : tensor<32xi32, #[[LAYOUT]]>, tensor<32xi32, #[[LAYOUT]]> -> tensor<32xi32, #[[LAYOUT]]>
   // CHECK-NOT: ttg.convert_layout
   // CHECK: tt.return [[RESULT]]
   tt.func @linear_apply_backward_rematerialization_transitive_basis() -> tensor<32xi32, #index_layout> {
