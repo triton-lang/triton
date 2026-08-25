@@ -2107,14 +2107,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @alias_matrix_mixed
   tt.func public @alias_matrix_mixed() {
-    // CHECK-DAG: arith.constant dense<true> : tensor<1xi1
-    // CHECK-DAG: arith.constant dense<[true, true, false, false]> : tensor<4xi1
-    // CHECK-DAG: arith.constant dense<[false, true, true, false]> : tensor<4xi1
     %smem0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32xf32, #shared, #smem, mutable>
     %smem1 = ttg.local_alloc {allocation.offset = 16 : i32} : () -> !ttg.memdesc<32xf32, #shared, #smem, mutable>
     %tmem0 = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    // The tensor-memory read has one atom; each overlapping shared-memory
+    // read spans two atoms and must keep the full state-mask path.
+    // CHECK: arith.constant dense<true> : tensor<1xi1
+    // CHECK: tt.call @__triton_consan_set_read_visibility_nw1_I32_
+    // CHECK: ttng.tmem_load
     ttng.tmem_load %tmem0 : !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<64x64xf32>
+    // CHECK: arith.constant dense<[true, true, false, false]> : tensor<4xi1
+    // CHECK: tt.call @__triton_consan_set_read_visibility_nw1_T4xI1_
+    // CHECK: ttg.local_load
     ttg.local_load %smem0 : !ttg.memdesc<32xf32, #shared, #smem, mutable> -> tensor<32xf32>
+    // CHECK: arith.constant dense<[false, true, true, false]> : tensor<4xi1
+    // CHECK: tt.call @__triton_consan_set_read_visibility_nw1_T4xI1_
+    // CHECK: ttg.local_load
     ttg.local_load %smem1 : !ttg.memdesc<32xf32, #shared, #smem, mutable> -> tensor<32xf32>
     tt.return
   }
@@ -2334,13 +2342,17 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[REMOTE_CTAS]])
     // CHECK: ttg.local_load
     %r = ttg.local_load %remote : !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32> -> tensor<2x32xi32, #blocked>
+    // CHECK: %[[SELECTED_LOCAL_CTA_BIT:.*]] = arith.constant 1 : i32
     // CHECK: %[[LOCAL_SELECTED:.*]] = arith.andi {{.*}}, %[[CHOOSE]] : i1
     // CHECK: %[[REMOTE_CHOICE:.*]] = arith.xori %[[CHOOSE]], {{.*}} : i1
     // CHECK: %[[REMOTE_SELECTED:.*]] = arith.andi {{.*}}, %[[REMOTE_CHOICE]] : i1
-    // CHECK: %[[LOCAL_CTA:.*]] = arith.select %[[LOCAL_SELECTED]], {{.*}} : i32
-    // CHECK: %[[REMOTE_CTA:.*]] = arith.select %[[REMOTE_SELECTED]], {{.*}} : i32
+    // CHECK: %[[LOCAL_CTA:.*]] = arith.select %[[LOCAL_SELECTED]], %[[SELECTED_LOCAL_CTA_BIT]], {{.*}} : i32
+    // CHECK: %[[SELECTED_REMOTE_CTA_BIT:.*]] = arith.constant 2 : i32
+    // CHECK: %[[REMOTE_CTA:.*]] = arith.select %[[REMOTE_SELECTED]], %[[SELECTED_REMOTE_CTA_BIT]], {{.*}} : i32
     // CHECK: %[[SELECTED_CTAS:.*]] = arith.ori %[[LOCAL_CTA]], %[[REMOTE_CTA]] : i32
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[SELECTED_CTAS]])
+    // Same-base candidates with different CTA masks share one physical atom.
+    // CHECK: tt.call @__triton_consan_set_read_visibility_nw4_I32_
     // CHECK: ttg.local_load
     %s = ttg.local_load %selected : !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32> -> tensor<2x32xi32, #blocked>
     // CHECK: %[[STORE_CTAS:.*]] = arith.constant 2 : i32
@@ -2417,10 +2429,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %known = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
     // CHECK: arith.constant dense<[true, false]> : tensor<2xi1
     // CHECK: tt.call @__triton_consan_verify_write_visibility
+    // CHECK: tt.call @__triton_consan_set_read_visibility_nw1_I32_
     // CHECK: ttg.local_load %[[KNOWN]]
     %0 = ttg.local_load %known : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> tensor<16xi32>
     // CHECK: arith.constant dense<true> : tensor<2xi1
     // CHECK: tt.call @__triton_consan_verify_write_visibility
+    // CHECK: tt.call @__triton_consan_set_read_visibility_nw1_T2xI1_
     // CHECK: ttg.local_load %arg0
     %1 = ttg.local_load %incoming : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> tensor<16xi32>
     tt.return
@@ -2439,6 +2453,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   tt.func public @unknown_only_descriptor_state(%incoming: !ttg.memdesc<16xi32, #shared, #smem, mutable>) {
     // CHECK: arith.constant dense<true> : tensor<1xi1
     // CHECK: tt.call @__triton_consan_verify_write_visibility
+    // CHECK-NOT: tti.experimental_memdesc_to_i32
+    // An unknown descriptor stays on the mask path even when B is one.
+    // CHECK: tt.call @__triton_consan_set_read_visibility_nw1_T1xI1_
     // CHECK-NOT: tti.experimental_memdesc_to_i32
     // CHECK: ttg.local_load %arg0
     %0 = ttg.local_load %incoming : !ttg.memdesc<16xi32, #shared, #smem, mutable> -> tensor<16xi32>
@@ -2803,6 +2820,70 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}%[[TMA_OWNER]]
     // CHECK: ttg.convert_layout
     %converted = ttg.convert_layout %value {allocation.offset = 0 : i32, allocation.size = 1024 : i32} : tensor<16x32xi32, #tma_src> -> tensor<16x32xi32, #tma_dst>
+    tt.return
+  }
+}
+
+// -----
+
+// Selecting a barrier from a ring selects exactly one state atom at runtime.
+// The B=1 viewport must retain the original B=2 strides, every observer and
+// barrier column, and both origin/phase banks.
+#row_barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#row_smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32, ttg.shared = 16 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 0 : i32} {
+  // CHECK-LABEL: tt.func private @__triton_consan_set_read_visibility_nw1_I32_
+  // CHECK-SAME: (%[[ROW_INDEX:[^:]+]]: i32,
+  // CHECK: %[[ROW_STRIDE:.*]] = arith.constant 2 : i32
+  // CHECK-NEXT: %[[ROW_OFFSET:.*]] = arith.muli %[[ROW_INDEX]], %[[ROW_STRIDE]] : i32
+  // CHECK-NEXT: tt.addptr {{.*}}, %[[ROW_OFFSET]] : !tt.ptr<i{{32|64}}>, i32
+  // The last visibility axis retains stride 16, not the viewport's stride 8.
+  // CHECK: arith.constant dense<16> : tensor<2xi32
+  // CHECK: tt.load {{.*}} : tensor<2x1x2x2x2x!tt.ptr<i{{32|64}}>
+  // CHECK: arith.constant dense<16> : tensor<2xi32
+  // CHECK: tt.store {{.*}} : tensor<2x1x2x2x2x!tt.ptr<i{{32|64}}>
+  // Each origin/phase bank spans 16 backing elements, not 8 viewport elements.
+  // CHECK: %[[ROW_ORIGIN:.*]] = tti.experimental_cluster_cta_id
+  // CHECK-NEXT: %[[ROW_BANK_SIZE:.*]] = arith.constant 16 : i32
+  // CHECK-NEXT: %[[ROW_BANK_OFFSET:.*]] = arith.muli %[[ROW_ORIGIN]], %[[ROW_BANK_SIZE]] : i32
+  // CHECK-NEXT: tt.addptr {{.*}}, %[[ROW_BANK_OFFSET]] : !tt.ptr<i{{32|64}}>, i32
+  // CHECK: arith.constant dense<8> : tensor<2xi32
+  // CHECK: tt.load {{.*}} : tensor<2x1x2x2x!tt.ptr<i{{32|64}}>
+  // CHECK: arith.constant dense<8> : tensor<2xi32
+  // CHECK: tt.store {{.*}} : tensor<2x1x2x2x!tt.ptr<i{{32|64}}>
+  // CHECK: %[[ROW_PHASE_STRIDE:.*]] = arith.constant 2 : i32
+  // CHECK-NEXT: %[[ROW_PHASE_ORIGIN:.*]] = arith.addi %[[ROW_ORIGIN]], %[[ROW_PHASE_STRIDE]] : i32
+  // CHECK-NEXT: %[[ROW_NEXT_BANK_SIZE:.*]] = arith.constant 16 : i32
+  // CHECK-NEXT: arith.muli %[[ROW_PHASE_ORIGIN]], %[[ROW_NEXT_BANK_SIZE]] : i32
+  // CHECK: tt.load {{.*}} : tensor<2x1x2x2x!tt.ptr<i{{32|64}}>
+  // CHECK: tt.store {{.*}} : tensor<2x1x2x2x!tt.ptr<i{{32|64}}>
+  // CHECK: tt.return
+  // CHECK-LABEL: @single_buffer_dynamic_barrier_ring
+  // CHECK-SAME: (%[[ROW_DYNAMIC_INDEX:[^:]+]]: i32,
+  tt.func public @single_buffer_dynamic_barrier_ring(%idx: i32, %phase: i32) {
+    // Each entry has one eight-byte barrier per CTA.
+    // CHECK: tti.experimental_buffer_descriptors [0, 8], [8, 8], shared_mem : tensor<2xi64,
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %true = arith.constant true
+    %ring = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x2xi64, #row_barrier, #row_smem, mutable>
+    %bar0 = ttg.memdesc_index %ring[%c0] : !ttg.memdesc<2x2xi64, #row_barrier, #row_smem, mutable> -> !ttg.memdesc<2xi64, #row_barrier, #row_smem, mutable>
+    %bar1 = ttg.memdesc_index %ring[%c1] : !ttg.memdesc<2x2xi64, #row_barrier, #row_smem, mutable> -> !ttg.memdesc<2xi64, #row_barrier, #row_smem, mutable>
+    ttng.init_barrier %bar0, 1 : !ttg.memdesc<2xi64, #row_barrier, #row_smem, mutable>
+    ttng.init_barrier %bar1, 1 : !ttg.memdesc<2xi64, #row_barrier, #row_smem, mutable>
+    // CHECK: %[[ROW_DYNAMIC:.*]] = ttg.memdesc_index {{.*}}[%[[ROW_DYNAMIC_INDEX]]]
+    %dynamic = ttg.memdesc_index %ring[%idx] : !ttg.memdesc<2x2xi64, #row_barrier, #row_smem, mutable> -> !ttg.memdesc<2xi64, #row_barrier, #row_smem, mutable>
+    // CHECK: tti.experimental_memdesc_to_i32 %[[ROW_DYNAMIC]]
+    // CHECK: internal ConSan error: active memdesc resolved to no buffer state
+    // CHECK: arith.select {{.*}} : i32
+    // CHECK: %[[ROW_SELECTED:.*]] = arith.select {{.*}} : i32
+    // CHECK: tt.call @__triton_consan_set_read_visibility_nw1_I32_{{.*}}(%[[ROW_SELECTED]],
+    // CHECK: ttng.tc_gen5_commit %[[ROW_DYNAMIC]]
+    ttng.tc_gen5_commit %dynamic : !ttg.memdesc<2xi64, #row_barrier, #row_smem, mutable>
+    ttng.wait_barrier %dynamic, %phase, %true : !ttg.memdesc<2xi64, #row_barrier, #row_smem, mutable>
+    ttng.inval_barrier %bar0 : !ttg.memdesc<2xi64, #row_barrier, #row_smem, mutable>
+    ttng.inval_barrier %bar1 : !ttg.memdesc<2xi64, #row_barrier, #row_smem, mutable>
     tt.return
   }
 }

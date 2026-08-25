@@ -160,10 +160,12 @@ public:
                                         Value effectCTAs);
   // setReadVisibility: record the actual reader in the visibility columns of
   // each observer, including any synthetic peers.
+  // bufferIndex is optional and requires a proven one-hot bufferMask.
   void createSetReadVisibilityCall(ImplicitLocOpBuilder &b, Value bufferMask,
                                    int reader, uint64_t observerMask,
                                    Value pred, MemType memType,
-                                   Operation *insertPoint, Value effectCTAs);
+                                   Operation *insertPoint, Value effectCTAs,
+                                   Value bufferIndex = nullptr);
   // trackVisibleAccesses: snapshot the available read and write visibility
   // frontiers into their independent tracking tables for the barrier's current
   // phase.

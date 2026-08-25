@@ -1733,12 +1733,10 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
       });
 }
 
-void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
-                                                  Value bufferMask, int reader,
-                                                  uint64_t observerMask,
-                                                  Value pred, MemType memType,
-                                                  Operation *insertPoint,
-                                                  Value effectCTAs) {
+void FunctionBuilder::createSetReadVisibilityCall(
+    ImplicitLocOpBuilder &b, Value bufferMask, int reader,
+    uint64_t observerMask, Value pred, MemType memType, Operation *insertPoint,
+    Value effectCTAs, Value bufferIndex) {
 
   if (auxData.readVisibility[(int)memType].empty()) {
     return;
@@ -1752,12 +1750,18 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
   auto readVisibilityType = cast<RankedTensorType>(
       auxData.readVisibility[(int)memType].at(insertPoint).type);
   bool hasReadTracking = !auxData.readTracking[(int)memType].empty();
-  SmallVector<Value> args = {bufferMask,        pred,
-                             readerMaskVal,     observerMaskVal,
-                             readVisibilityVal, effectCTAs};
+  bool singleBuffer = static_cast<bool>(bufferIndex);
+  SmallVector<Value> args = {singleBuffer ? bufferIndex : bufferMask,
+                             pred,
+                             readerMaskVal,
+                             observerMaskVal,
+                             readVisibilityVal,
+                             effectCTAs};
   RankedTensorType readTrackingType;
-  ManglingArgs specializationArgs{readVisibilityType,
-                                  (uint64_t)hasReadTracking};
+  // Keep the full backing types in the cache key: equal one-buffer view shapes
+  // can have different physical strides and origin/phase bank offsets.
+  ManglingArgs specializationArgs{readVisibilityType, (uint64_t)hasReadTracking,
+                                  (uint64_t)singleBuffer};
   if (hasReadTracking) {
     ValueType tracking = auxData.readTracking[(int)memType].at(insertPoint);
     readTrackingType = cast<RankedTensorType>(tracking.type);
@@ -1767,9 +1771,9 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
   createCallToCachedFunction(
       b, "set_read_visibility", args,
       /*assertInfo=*/std::nullopt, specializationArgs,
-      [readVisibilityType, readTrackingType,
-       hasReadTracking](ImplicitLocOpBuilder &fb, Block *entryBlock) {
-        Value bufferMask = entryBlock->getArgument(0);
+      [readVisibilityType, readTrackingType, hasReadTracking,
+       singleBuffer](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+        Value bufferSelection = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value readerMaskVal = entryBlock->getArgument(2);
         Value observerMaskVal = entryBlock->getArgument(3);
@@ -1782,9 +1786,54 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
 
+        SmallVector<int64_t> visibilityStrides, trackingStrides;
+        auto createBufferView = [&](RankedTensorType type,
+                                    SmallVectorImpl<int64_t> &strides) {
+          if (!singleBuffer)
+            return type;
+          SmallVector<int64_t> shape(type.getShape());
+          strides.resize(shape.size(), 1);
+          for (unsigned dim = 1; dim < shape.size(); ++dim)
+            strides[dim] = strides[dim - 1] * shape[dim - 1];
+          shape[1] = 1;
+          // Distribute lanes over the narrowed shape to avoid redundant loads.
+          return tti::getIntTensorType(
+              fb.getInsertionBlock()->getParent(), shape,
+              type.getElementType().getIntOrFloatBitWidth());
+        };
+        RankedTensorType visibilityType =
+            createBufferView(readVisibilityType, visibilityStrides);
+        RankedTensorType trackingType;
+        if (hasReadTracking)
+          trackingType = createBufferView(readTrackingType, trackingStrides);
+
+        auto selectBufferPointer = [&](Value ptr,
+                                       RankedTensorType type) -> Value {
+          if (!singleBuffer)
+            return ptr;
+          Value stride =
+              arith::ConstantIntOp::create(fb, type.getShape()[0], 32);
+          Value offset = arith::MulIOp::create(fb, bufferSelection, stride);
+          return triton::AddPtrOp::create(fb, ptr.getType(), ptr, offset)
+              .getResult();
+        };
+        readVisibilityPtr =
+            selectBufferPointer(readVisibilityPtr, readVisibilityType);
+        if (hasReadTracking)
+          readTrackingPtr =
+              selectBufferPointer(readTrackingPtr, readTrackingType);
+
         Value currentCTA = createCurrentCTAMask(fb);
+        auto createBufferRows = [&](RankedTensorType tableType) -> Value {
+          if (singleBuffer) {
+            auto maskType =
+                cast<RankedTensorType>(tableType.clone(fb.getI1Type()));
+            return tti::createConstIntTensor(fb, fb.getLoc(), 1, maskType);
+          }
+          return convertAndBroadcast(fb, bufferSelection, {1}, tableType);
+        };
         auto createReaderRows = [&](RankedTensorType tableType) {
-          Value rows = convertAndBroadcast(fb, bufferMask, {1}, tableType);
+          Value rows = createBufferRows(tableType);
           Value ownerMask =
               createCTASetMask(fb, tableType, /*dim=*/0, effectCTAs);
           Value readerCTAMask =
@@ -1808,23 +1857,24 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
               .getResult();
         };
 
-        Value readVisibility = tti::createLoadScratchMemory(
-            fb, fb.getLoc(), readVisibilityPtr, readVisibilityType);
-        Value visibilityRows = createReaderRows(readVisibilityType);
+        Value readVisibility =
+            tti::createLoadScratchMemory(fb, fb.getLoc(), readVisibilityPtr,
+                                         visibilityType, visibilityStrides);
+        Value visibilityRows = createReaderRows(visibilityType);
         // A logical reader reuses one bit for every read. Remove the previous
         // generation before publishing the current one so an old observer or
         // barrier snapshot cannot license a later unfinished read.
         Value newVisibility =
-            clearReader(readVisibility, readVisibilityType, visibilityRows);
-        auto elemType = cast<IntegerType>(readVisibilityType.getElementType());
+            clearReader(readVisibility, visibilityType, visibilityRows);
+        auto elemType = cast<IntegerType>(visibilityType.getElementType());
         Value readerMaskElem = adjustIntegerWidth(fb, readerMaskVal, elemType);
         Value readerBit =
-            triton::SplatOp::create(fb, readVisibilityType, readerMaskElem);
+            triton::SplatOp::create(fb, visibilityType, readerMaskElem);
         Value observerColumnMask =
-            createThreadColumnMask(fb, observerMaskVal, readVisibilityType,
+            createThreadColumnMask(fb, observerMaskVal, visibilityType,
                                    /*columnDim=*/3);
         Value observerCTAMask =
-            createCTASetMask(fb, readVisibilityType, /*dim=*/2, currentCTA);
+            createCTASetMask(fb, visibilityType, /*dim=*/2, currentCTA);
         Value observerRows =
             arith::AndIOp::create(fb, visibilityRows, observerCTAMask);
         observerRows =
@@ -1833,40 +1883,51 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
         newVisibility = arith::SelectOp::create(fb, observerRows, withReader,
                                                 newVisibility);
         tti::createStoreScratchMemory(fb, fb.getLoc(), readVisibilityPtr,
-                                      newVisibility, readVisibilityType,
-                                      /*currentCTAOnly=*/false);
+                                      newVisibility, visibilityType,
+                                      /*currentCTAOnly=*/false,
+                                      /*storeMask=*/nullptr, visibilityStrides);
 
         if (hasReadTracking) {
           if (readTrackingType.getShape()[4] == 1) {
-            Value readTracking = tti::createLoadScratchMemory(
-                fb, fb.getLoc(), readTrackingPtr, readTrackingType);
-            Value trackingRows = createReaderRows(readTrackingType);
+            Value readTracking =
+                tti::createLoadScratchMemory(fb, fb.getLoc(), readTrackingPtr,
+                                             trackingType, trackingStrides);
+            Value trackingRows = createReaderRows(trackingType);
             Value newTracking =
-                clearReader(readTracking, readTrackingType, trackingRows);
-            tti::createStoreScratchMemory(fb, fb.getLoc(), readTrackingPtr,
-                                          newTracking, readTrackingType,
-                                          /*currentCTAOnly=*/false);
+                clearReader(readTracking, trackingType, trackingRows);
+            tti::createStoreScratchMemory(
+                fb, fb.getLoc(), readTrackingPtr, newTracking, trackingType,
+                /*currentCTAOnly=*/false,
+                /*storeMask=*/nullptr, trackingStrides);
           } else {
-            RankedTensorType bankType =
+            RankedTensorType fullBankType =
                 tti::getSlicedTensorType(readTrackingType, {0, 1, 2, 3},
                                          readTrackingType.getElementType());
-            Value trackingRows =
-                convertAndBroadcast(fb, bufferMask, {1}, bankType);
+            RankedTensorType bankType = tti::getSlicedTensorType(
+                trackingType, {0, 1, 2, 3}, trackingType.getElementType());
+            SmallVector<int64_t> bankStrides;
+            if (singleBuffer)
+              bankStrides.assign(trackingStrides.begin(),
+                                 trackingStrides.begin() + 4);
+            Value trackingRows = createBufferRows(bankType);
             Value ownerMask =
                 createCTASetMask(fb, bankType, /*dim=*/0, effectCTAs);
             trackingRows = arith::AndIOp::create(fb, trackingRows, ownerMask);
             Value originId =
                 tti::ExperimentalClusterCTAIdOp::create(fb, fb.getLoc());
             for (int phase = 0; phase < 2; ++phase) {
+              // The pointer is a B=1 view into the original allocation. Origin
+              // and phase banks are still separated by the full table stride.
               Value bankPtr = createTrackingOriginPhasePointer(
-                  fb, readTrackingPtr, readTrackingType, bankType, originId,
+                  fb, readTrackingPtr, readTrackingType, fullBankType, originId,
                   phase);
-              Value tracking = tti::createLoadScratchMemory(fb, fb.getLoc(),
-                                                            bankPtr, bankType);
+              Value tracking = tti::createLoadScratchMemory(
+                  fb, fb.getLoc(), bankPtr, bankType, bankStrides);
               Value updated = clearReader(tracking, bankType, trackingRows);
               tti::createStoreScratchMemory(fb, fb.getLoc(), bankPtr, updated,
                                             bankType,
-                                            /*currentCTAOnly=*/false);
+                                            /*currentCTAOnly=*/false,
+                                            /*storeMask=*/nullptr, bankStrides);
             }
           }
         }

@@ -78,12 +78,15 @@ inline int estimateConSanCaptureCount(int numActiveMemTypes, bool hasMBarriers,
 
 void createAssertInThread(ImplicitLocOpBuilder &b, Value condition,
                           StringRef message);
+// Strides are in elements; an empty list uses contiguous column-major storage.
 Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
                                     Value tensor, RankedTensorType tensorType,
                                     bool currentCTAOnly = false,
-                                    Value storeMask = nullptr);
+                                    Value storeMask = nullptr,
+                                    ArrayRef<int64_t> strides = {});
 Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
-                              RankedTensorType tensorType);
+                              RankedTensorType tensorType,
+                              ArrayRef<int64_t> strides = {});
 gpu::GlobalScratchAllocOp
 createThirdPartyScratchAlloc(OpBuilder &b, Location loc, Type ptrType,
                              int64_t sizeInBytes, int64_t alignment,

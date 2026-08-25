@@ -311,7 +311,8 @@ Value reshapeAndBroadcast(OpBuilder &b, Location loc, Value tensor,
 }
 
 static Value createPointerTensor(OpBuilder &b, Location loc, Value base,
-                                 RankedTensorType tensorType) {
+                                 RankedTensorType tensorType,
+                                 ArrayRef<int64_t> explicitStrides = {}) {
   auto encoding = cast<DistributedEncodingTrait>(tensorType.getEncoding());
   Value ptrTensor = SplatOp::create(
       b, loc,
@@ -319,10 +320,16 @@ static Value createPointerTensor(OpBuilder &b, Location loc, Value base,
       base);
   auto offsetsType =
       RankedTensorType::get(tensorType.getShape(), b.getI32Type(), encoding);
-  SmallVector<int> strides(tensorType.getRank());
-  strides[0] = 1;
-  for (int i = 1; i < tensorType.getRank(); ++i) {
-    strides[i] = strides[i - 1] * tensorType.getShape()[i - 1];
+  assert(
+      (explicitStrides.empty() ||
+       explicitStrides.size() == static_cast<size_t>(tensorType.getRank())) &&
+      "expected one stride per scratch tensor dimension");
+  SmallVector<int64_t> strides(explicitStrides.begin(), explicitStrides.end());
+  if (strides.empty()) {
+    strides.resize(tensorType.getRank());
+    strides[0] = 1;
+    for (int i = 1; i < tensorType.getRank(); ++i)
+      strides[i] = strides[i - 1] * tensorType.getShape()[i - 1];
   }
   for (int i = 0; i < tensorType.getRank(); ++i) {
     auto arangeType = getSlicedTensorType(tensorType, {i}, b.getI32Type());
@@ -357,7 +364,8 @@ static Value createCurrentCTAMask(OpBuilder &b, Location loc,
 
 Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
                                     Value tensor, RankedTensorType tensorType,
-                                    bool currentCTAOnly, Value storeMask) {
+                                    bool currentCTAOnly, Value storeMask,
+                                    ArrayRef<int64_t> strides) {
   if (currentCTAOnly) {
     assert(tensorType.getRank() >= 1 &&
            "expected currentCTAOnly tensor to have a leading CTA dimension");
@@ -373,15 +381,16 @@ Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
       }
     }
   }
-  auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType);
+  auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType, strides);
   return StoreOp::create(b, loc, ptrTensor, tensor, storeMask,
                          CacheModifier::NONE, EvictionPolicy::NORMAL,
                          /*ignore_cta=*/true);
 }
 
 Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
-                              RankedTensorType tensorType) {
-  auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType);
+                              RankedTensorType tensorType,
+                              ArrayRef<int64_t> strides) {
+  auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType, strides);
   return LoadOp::create(b, loc, ptrTensor, CacheModifier::NONE,
                         EvictionPolicy::NORMAL, false);
 }
