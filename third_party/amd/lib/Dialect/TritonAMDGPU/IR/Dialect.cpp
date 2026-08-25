@@ -26,6 +26,7 @@
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 #include "third_party/amd/include/Utils/Utility.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Interfaces.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -1007,6 +1008,29 @@ LogicalResult BufferLoadToLocalOp::verify() {
   if (features.getArch().empty() || features.supportsBufferLoadToLocal())
     return success();
   return emitError() << "BufferLoadToLocal unsupported on target architecture";
+}
+
+namespace {
+// Masked buffer loads natively zero-fill LDS, so an explicit zero does not
+// require the software fallback-store path.
+struct DropZeroOtherFromBufferLoadToLocal
+    : OpRewritePattern<BufferLoadToLocalOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(BufferLoadToLocalOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!op.getOther() || !isZeroConst(op.getOther()))
+      return failure();
+
+    rewriter.modifyOpInPlace(op, [&] { op.getOtherMutable().clear(); });
+    return success();
+  }
+};
+} // namespace
+
+void BufferLoadToLocalOp::getCanonicalizationPatterns(
+    RewritePatternSet &patterns, MLIRContext *context) {
+  patterns.add<DropZeroOtherFromBufferLoadToLocal>(context);
 }
 
 // A buffer write's scalar base must be global memory (address space 1).

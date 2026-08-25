@@ -32,6 +32,10 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
     out-of-bound masking support. Prefer :func:`buffer_load_to_shared` when
     possible for better performance.
 
+    When ``mask`` is provided without ``other``, masked elements in ``dest``
+    are left unchanged. Providing ``other`` writes that value to masked
+    elements instead.
+
     The underlying hardware instruction uses separate registers for global
     memory address for each thread but the same register for local memory
     address for the whole warp. Therefore, while using this operation
@@ -46,7 +50,8 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
         dest (shared_memory_descriptor): Destination shared memory descriptor.
         ptr (pointer tensor): Tensor of pointers to global memory to load from.
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
-        other (tensor or scalar, optional): Tensor or scalar providing default values for masked elements. Defaults to None.
+        other (tensor or scalar, optional): Tensor or scalar providing values for masked elements. When omitted, masked
+            elements in ``dest`` are left unchanged. Defaults to None.
         cache_modifier (str): Cache modifier specifier. Defaults to "".
     """
     _check(ptr.type.is_block(), lambda: "expected ptr to be a tensor")
@@ -106,18 +111,23 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
         dest (shared_memory_descriptor): Destination shared memory descriptor.
         ptr (pointer to scalar): Global memory scalar base pointer to load from.
         offsets (tensor): Offsets tensor for the load operation.
-        mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
-        other (tensor or scalar, optional): Tensor or scalar providing default values for masked elements. Defaults to None.
+        mask (tensor, optional): Mask tensor for predicated loads. Requires ``other`` when specified. Defaults to None.
+        other (tensor or scalar, optional): Tensor or scalar providing values for masked elements. Buffer loads cannot
+            preserve masked destination elements, so this is required when ``mask`` is specified. Defaults to None.
         cache_modifier (str): Cache modifier specifier. Defaults to "".
     """
     _check(isinstance(offsets.type.layout, DistributedLayout),
            lambda: "expected offsets type layout to be a DistributedLayout")
+    mask = _unwrap_if_constexpr(mask)
+    other = _unwrap_if_constexpr(other)
+    _check(
+        mask is None or other is not None, lambda:
+        "other is required for a masked buffer_load_to_shared because masked buffer loads cannot preserve destination shared memory"
+    )
     _verify_buffer_ops(ptr, offsets, mask, other)
 
-    mask = _unwrap_if_constexpr(mask)
     if mask is not None:
         offsets, mask = _semantic.broadcast_impl_value(offsets, mask)
-    other = _unwrap_if_constexpr(other)
     if other is not None:
         other = _semantic.to_tensor(other)
         other = _semantic.cast(other, ptr.type.scalar.element_ty)
