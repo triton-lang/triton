@@ -4,6 +4,10 @@
 // on the TDM path when numStages >= 3).
 // RUN: triton-opt %s -split-input-file -tritonamdgpu-optimize-descriptor-encoding  -tritonamdgpu-schedule-loops="num_stages=3" -tritonamdgpu-pipeline="use_async_copy=1" -canonicalize | FileCheck %s --check-prefix=LDS_PREFETCH
 
+// Re-run with TRITON_HIP_TDM_REORDER=1 to exercise the opt-in TDM copy
+// reordering: all async TDM copies first, then the wait, then local_loads/dot.
+// RUN: env TRITON_HIP_TDM_REORDER=1 triton-opt %s -split-input-file -tritonamdgpu-optimize-descriptor-encoding  -tritonamdgpu-schedule-loops="num_stages=2" -tritonamdgpu-pipeline="use_async_copy=1" -canonicalize | FileCheck %s --check-prefix=REORDER
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[1, 0], [2, 0], [4, 0]]}, instrShape = [16, 16, 32]}>
@@ -101,6 +105,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // LDS_PREFETCH: %[[NXT_A:.+]] = ttg.local_load {{.*}} -> tensor<512x32xf16, #ttg.dot_op<{opIdx = 0, parent = {{.*}}, kWidth = 8}>>
 // LDS_PREFETCH: %[[NXT_B:.+]] = ttg.local_load {{.*}} -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = {{.*}}, kWidth = 8}>>
 // LDS_PREFETCH: scf.yield {{.*}}, %[[NXT_A]], %[[NXT_B]]
+
+// REORDER-LABEL: tt.func @matmul_kernel_make_tensor_descriptor
+// REORDER: scf.for
+// REORDER: async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<512x32xf16
+// REORDER: async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<32x64xf16
+// REORDER: amdg.async_tdm_wait %{{[^,]+}}, %{{[^,]+}} {num = 0 : i32}
+// REORDER-NOT: async_tdm_copy_global_to_local
+// REORDER: ttg.local_load
+// REORDER: ttg.local_load
+// REORDER: tt.dot
 
 // -----
 
