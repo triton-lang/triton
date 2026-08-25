@@ -712,11 +712,9 @@ class InterpreterBuilder:
         dtype = z.data.dtype
         if dtype == np.float64:
             ret = np_fma_fp64(x.data, y.data, z.data)
-        elif dtype == np.float32 or dtype == np.float16:
+        else:
             product = np.multiply(x.data, y.data, dtype=np.float64)
             ret = np.add(product, z.data, dtype=np.float64).astype(dtype)
-        else:
-            ret = x.data * y.data + z.data
         return TensorHandle(ret, z.dtype.scalar)
 
     # unary functions
