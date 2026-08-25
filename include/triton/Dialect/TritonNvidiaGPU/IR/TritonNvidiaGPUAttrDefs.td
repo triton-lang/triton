@@ -34,6 +34,15 @@ def TTG_TensorMemorySpace : AttrDef<TritonNvidiaGPU_Dialect, "TensorMemorySpace"
   }];
 }
 
+def TTNG_TMEMWaitKindAttr : I32EnumAttr<
+    "TMEMWaitKind", "tensor memory wait kind",
+    [
+        I32EnumAttrCase<"LOAD", 0, "load">,
+        I32EnumAttrCase<"STORE", 1, "store">,
+    ]> {
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
+}
+
 def TTNG_TMEMLoadReduceModifierAttr : I32EnumAttr<
     "TMEMLoadReduceModifier", "",
     [

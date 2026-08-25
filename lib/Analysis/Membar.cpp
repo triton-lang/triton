@@ -175,6 +175,9 @@ triton::BarrierStages getLocalBarrierStages(Operation *op,
           triton::gpu::WarpReturnOp, ttng::ArriveBarrierOp,
           ttng::BarrierExpectOp, ttng::TCGen5CommitOp>(op);
 
+  // Tensor-map acquire ends with a CTA barrier after the descriptor fence.
+  stages.afterMemoryEffects = isa<ttng::TensormapFenceproxyAcquireOp>(op);
+
   // Warp specialization writes its captures before the launch rendezvous.
   if (isa<triton::gpu::WarpSpecializeOp>(op))
     stages.beforeMemoryEffects = !hasScratchBarrier;
@@ -202,8 +205,7 @@ static bool hasSyncPointBeforeMemoryEffect(Operation *op,
     if (stages.betweenMemoryEffects)
       return false;
 
-    // Barriers classified as "after" have no shared-memory effects before
-    // them. Currently these are non-scratch atomics and polls.
+    // These trailing barriers have no shared-memory effects before them.
     if (stages.afterMemoryEffects)
       return true;
 

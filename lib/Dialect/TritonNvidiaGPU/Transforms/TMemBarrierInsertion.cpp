@@ -16,6 +16,7 @@ namespace triton {
 namespace nvidia_gpu {
 
 #define GEN_PASS_DEF_TRITONNVIDIAGPUTMEMBARRIERINSERTIONPASS
+#define GEN_PASS_DEF_TRITONNVIDIAGPUTMEMWAITINSERTIONPASS
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
 
 namespace {
@@ -225,6 +226,18 @@ static void appendWriteSlices(Value value, Operation *op,
     blockInfo->syncWriteSlices[slice].insert(op);
 }
 
+static BlockInfo getTMemAccesses(Operation *op) {
+  // Use physical TMEM allocation slices; unknown origins alias all TMEM.
+  BlockInfo accesses;
+  for (const MemoryAccess &access : getMemoryAccesses(op)) {
+    if (access.isRead)
+      appendReadSlices(access.value, op, &accesses);
+    if (access.isWrite)
+      appendWriteSlices(access.value, op, &accesses);
+  }
+  return accesses;
+}
+
 class TMemBarrierAnalysis : public MembarAnalysis {
 public:
   using MembarAnalysis::MembarAnalysis;
@@ -232,15 +245,7 @@ public:
 private:
   void update(Operation *operation, MembarInfo *membarInfo, FuncMapT *funcMap,
               OpBuilder *builder) override;
-
-  void insertBarrier(Operation *operation, OpBuilder *builder);
 };
-
-void TMemBarrierAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
-  OpBuilder::InsertionGuard g(*builder);
-  triton::gpu::BarrierOp::create(*builder, op->getLoc(),
-                                 triton::gpu::AddrSpace::Local);
-}
 
 void TMemBarrierAnalysis::update(Operation *op, MembarInfo *membarInfo,
                                  FuncMapT *funcMap, OpBuilder *builder) {
@@ -248,7 +253,6 @@ void TMemBarrierAnalysis::update(Operation *op, MembarInfo *membarInfo,
   if (stages.beforeMemoryEffects)
     membarInfo->sync();
 
-  BlockInfo curBlockInfo;
   if (isa<triton::CallOp>(op)) {
     auto call = cast<CallOpInterface>(op);
     if (auto callee = dyn_cast<FunctionOpInterface>(call.resolveCallable())) {
@@ -264,24 +268,9 @@ void TMemBarrierAnalysis::update(Operation *op, MembarInfo *membarInfo,
       membarInfo->applyCallSummary(calleeMembarInfo);
     }
     return;
-  } else if (auto load = dyn_cast<TMEMLoadOp>(op)) {
-    appendReadSlices(load.getSrc(), op, &curBlockInfo);
-  } else if (auto store = dyn_cast<TMEMStoreOp>(op)) {
-    appendWriteSlices(store.getDst(), op, &curBlockInfo);
-  } else if (auto alloc = dyn_cast<TMEMAllocOp>(op)) {
-    if (alloc.getSrc())
-      appendWriteSlices(alloc.getResult(), op, &curBlockInfo);
-  } else if (auto mma = dyn_cast<MMAv5OpInterface>(op)) {
-    appendWriteSlices(mma.getAccumulator(), op, &curBlockInfo);
-    appendReadSlices(mma.getA(), op, &curBlockInfo);
-    if (auto scaledMma = dyn_cast<TCGen5MMAScaledOp>(op)) {
-      appendReadSlices(scaledMma.getAScale(), op, &curBlockInfo);
-      appendReadSlices(scaledMma.getBScale(), op, &curBlockInfo);
-    }
-  } else if (auto copy = dyn_cast<TMEMCopyOp>(op)) {
-    appendWriteSlices(copy.getDst(), op, &curBlockInfo);
   }
 
+  BlockInfo curBlockInfo = getTMemAccesses(op);
   if (membarInfo->pending.isIntersected(curBlockInfo, filter, &allocation)) {
     builder->setInsertionPoint(op);
     insertBarrier(op, builder);
@@ -296,7 +285,228 @@ void TMemBarrierAnalysis::update(Operation *op, MembarInfo *membarInfo,
     membarInfo->sync();
 }
 
+// Ops before which we 100% need to flush reads and writes
+bool isWaitBoundary(Operation *op) {
+  // Defer waits at CTA barriers until a hazard or boundary requires them.
+  if (isa<gpu::BarrierOp>(op))
+    return false;
+
+  // Flush before starting or ending WS
+  if (isa<gpu::WarpSpecializeOp, gpu::WarpSpecializePartitionsOp,
+          gpu::WarpYieldOp, gpu::WarpReturnOp, CallOpInterface>(op))
+    return true;
+  // ClusterBarrier could be followed by a 2CTA MMA, in which
+  // case we need to put the wait before the cluster barrier.
+  // We could track barriers and cluster barriers separately
+  // and place the wait before the previous relevant op, but
+  // I don't think there are many use cases for that.
+  if (isa<ClusterBarrierOp>(op))
+    return true;
+  // Atomic ops may synchronise as well
+  if (auto atomic = dyn_cast<AtomicOpInterface>(op))
+    if (atomic.getMemSemantic() == MemSemantic::RELEASE ||
+        atomic.getMemSemantic() == MemSemantic::ACQUIRE_RELEASE)
+      return true;
+  // Mbarriers may signal other WS partitions.
+  if (auto barrier = dyn_cast<gpu::MBarrierOpInterface>(op))
+    if (!barrier.getBarriers().empty())
+      return true;
+
+  // Carry pending accesses through control-flow joins and backedges.
+  if (isa<BranchOpInterface, RegionBranchOpInterface>(op) ||
+      (isa<RegionBranchTerminatorOpInterface>(op) &&
+       isa<RegionBranchOpInterface>(op->getParentOp())))
+    return false;
+  if (op->hasTrait<OpTrait::ReturnLike>())
+    return true;
+
+  // Volatile loads add an opaque write effect to prevent optimization, but
+  // still access only global memory.
+  if (isa<triton::LoadOp>(op))
+    return false;
+
+  // Wait if we can't prove that it's memory-effect free
+  auto memory = dyn_cast<MemoryEffectOpInterface>(op);
+  if (!memory)
+    return !isMemoryEffectFree(op);
+  SmallVector<MemoryEffects::EffectInstance> effects;
+  memory.getEffects(effects);
+  return llvm::any_of(effects, [](const auto &effect) {
+    Value value = effect.getValue();
+    // - An unbound DefaultResource effect may hide synchronization
+    //   in impure inline asm or extern calls.
+    if (!value)
+      return isa<SideEffects::DefaultResource>(effect.getResource());
+    assert(!(isTensorMemory(value) &&
+             isa<MemoryEffects::Free>(effect.getEffect())) &&
+           "unexpected TMEM free");
+    return false;
+  });
+}
+
+class TMemWaitAnalysis : public MembarAnalysis {
+public:
+  using MembarAnalysis::MembarAnalysis;
+
+private:
+  static BlockInfo::SliceMapT &accesses(BlockInfo &info, TMEMWaitKind kind) {
+    return kind == TMEMWaitKind::LOAD ? info.syncReadSlices
+                                      : info.syncWriteSlices;
+  }
+
+  bool hasHazard(const BlockInfo &pending, const BlockInfo &effects,
+                 TMEMWaitKind kind) {
+    return pending.isIntersected(
+        effects,
+        [kind](Operation *, Operation *, bool isRead, bool, Allocation *) {
+          return isRead != (kind == TMEMWaitKind::LOAD);
+        },
+        &allocation);
+  }
+
+  void waitBeforeBarrier(TMEMWaitKind kind, BlockInfo &pending,
+                         OpBuilder *builder) {
+    if (accesses(beforeBarrier, kind).empty())
+      return;
+    assert(lastBarrier && "publication needs a remembered rendezvous");
+    builder->setInsertionPoint(lastBarrier);
+    TMEMWaitOp::create(*builder, lastBarrier->getLoc(), kind);
+    // The unconditional wait completes all preceding accesses of this kind.
+    // Preserve later accesses, even if the same operation also has pending
+    // accesses from an earlier loop iteration.
+    accesses(beforeBarrier, kind).clear();
+    accesses(pending, kind).clear();
+    pending.join(afterBarrier);
+  }
+
+  void waitNow(Operation *op, TMEMWaitKind kind, BlockInfo &pending,
+               OpBuilder *builder) {
+    if (accesses(pending, kind).empty())
+      return;
+    builder->setInsertionPoint(op);
+    TMEMWaitOp::create(*builder, op->getLoc(), kind);
+    accesses(pending, kind).clear();
+    accesses(afterBarrier, kind).clear();
+  }
+
+  void rememberBarrier(Operation *op, const BlockInfo &pending) {
+    lastBarrier = op;
+    beforeBarrier = pending;
+    afterBarrier.sync();
+  }
+
+  void finishBlock(BlockInfo &pending, OpBuilder *builder) {
+    // Complete accesses preceding lastBarrier before forgetting it.
+    // Leave later accesses in pending for joins and backedges.
+    for (TMEMWaitKind kind : {TMEMWaitKind::LOAD, TMEMWaitKind::STORE})
+      waitBeforeBarrier(kind, pending, builder);
+    lastBarrier = nullptr;
+    afterBarrier.sync();
+  }
+
+  void update(Operation *op, MembarInfo *membarInfo, FuncMapT *,
+              OpBuilder *builder) override {
+    BlockInfo &pending = membarInfo->pending;
+    if (auto wait = dyn_cast<TMEMWaitOp>(op)) {
+      accesses(pending, wait.getKind()).clear();
+      accesses(afterBarrier, wait.getKind()).clear();
+      return;
+    }
+
+    BlockInfo effects = getTMemAccesses(op);
+    // Include internal scratch barriers even without descriptor memory effects.
+    auto stages = getLocalBarrierStages(op, &allocation);
+    // Reuse this barrier for incoming hazards only if it precedes the op's TMEM
+    // effects, or the op has no TMEM effects.
+    bool beforeEffects =
+        stages.beforeMemoryEffects ||
+        (effects.syncReadSlices.empty() && effects.syncWriteSlices.empty());
+    if (stages.hasBarrier() && beforeEffects)
+      rememberBarrier(op, pending);
+
+    if (isWaitBoundary(op)) {
+      finishBlock(pending, builder);
+      for (TMEMWaitKind kind : {TMEMWaitKind::LOAD, TMEMWaitKind::STORE})
+        waitNow(op, kind, pending, builder);
+    }
+
+    bool loadHazard = hasHazard(pending, effects, TMEMWaitKind::LOAD) ||
+                      hasHazard(beforeBarrier, effects, TMEMWaitKind::LOAD);
+    bool storeHazard = hasHazard(pending, effects, TMEMWaitKind::STORE) ||
+                       hasHazard(beforeBarrier, effects, TMEMWaitKind::STORE);
+    if (loadHazard || storeHazard) {
+      // Reuse the last barrier if no later access conflicts with this
+      // operation. Otherwise, insert a wait and a new barrier before the
+      // operation.
+      if (lastBarrier &&
+          !afterBarrier.isIntersected(effects, nullptr, &allocation)) {
+        if (loadHazard)
+          waitBeforeBarrier(TMEMWaitKind::LOAD, pending, builder);
+        if (storeHazard)
+          waitBeforeBarrier(TMEMWaitKind::STORE, pending, builder);
+      } else {
+        if (loadHazard)
+          waitNow(op, TMEMWaitKind::LOAD, pending, builder);
+        if (storeHazard)
+          waitNow(op, TMEMWaitKind::STORE, pending, builder);
+        builder->setInsertionPoint(op);
+        insertBarrier(op, builder);
+        rememberBarrier(op->getPrevNode(), pending);
+      }
+    }
+
+    // Handle this operation's hazards before recording its internal barrier.
+    // Waits go before the operation, so its own accesses remain in
+    // afterBarrier.
+    if (stages.hasBarrier() && !beforeEffects)
+      rememberBarrier(op, pending);
+
+    // Track loads and stores, including allocation initializers. An allocation
+    // without an initializer preserves pending accesses to reused storage.
+    auto kind = getTMemAccessKind(op);
+    if (kind == TMemAccessKind::Load || kind == TMemAccessKind::Store) {
+      pending.join(effects);
+      afterBarrier.join(effects);
+    }
+
+    if (op->hasTrait<OpTrait::IsTerminator>() ||
+        isa<RegionBranchOpInterface>(op))
+      finishBlock(pending, builder);
+  }
+
+  // These snapshots track accesses before and after lastBarrier within one
+  // virtual block. Only MembarInfo::pending flows through joins and backedges.
+  Operation *lastBarrier = nullptr;
+  BlockInfo beforeBarrier;
+  BlockInfo afterBarrier;
+};
+
 } // namespace
+
+struct TMemWaitInsertionPass
+    : public impl::TritonNvidiaGPUTMemWaitInsertionPassBase<
+          TMemWaitInsertionPass> {
+  using impl::TritonNvidiaGPUTMemWaitInsertionPassBase<
+      TMemWaitInsertionPass>::TritonNvidiaGPUTMemWaitInsertionPassBase;
+
+  void runOnOperation() override {
+    ModuleOp mod = getOperation();
+    if (!mod.walk([](Operation *op) {
+              auto kind = getTMemAccessKind(op);
+              return kind == TMemAccessKind::Load ||
+                             kind == TMemAccessKind::Store
+                         ? WalkResult::interrupt()
+                         : WalkResult::advance();
+            })
+             .wasInterrupted())
+      return;
+    // Run after TMEM and shared-memory barrier insertion. Calls and returns
+    // complete pending accesses, so this pass needs no call summaries.
+    ModuleAllocation allocation(mod);
+    ModuleMembarAnalysis analysis(allocation);
+    analysis.runAnalysis<TMemWaitAnalysis>();
+  }
+};
 
 struct TMemBarrierInsertionPass
     : public impl::TritonNvidiaGPUTMemBarrierInsertionPassBase<
