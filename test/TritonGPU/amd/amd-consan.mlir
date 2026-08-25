@@ -997,6 +997,37 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
+#scatter_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
+#scatter_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 512 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @amd_local_scatter_physical_thread_conflicts
+  tt.func public @amd_local_scatter_physical_thread_conflicts(
+      %indices: tensor<4x32xi32, #scatter_blocked>,
+      %values: tensor<4x32xi32, #scatter_blocked>) {
+    %dst = ttg.local_alloc {allocation.offset = 0 : i32}
+        : () -> !ttg.memdesc<4x32xi32, #scatter_shared, #ttg.shared_memory, mutable>
+    // CHECK: ttg.local_alloc
+    // CHECK: %[[OWNERS:.*]] = ttg.global_scratch_alloc {{.*}}shared_cluster_state, third_party_allocation
+    // CHECK: tti.experimental_local_scatter_conflict_check %[[OWNERS]],
+    // CHECK: ttg.local_scatter
+    ttg.local_scatter %dst[%indices], %values {axis = 1 : i32}
+        : !ttg.memdesc<4x32xi32, #scatter_shared, #ttg.shared_memory, mutable>,
+        tensor<4x32xi32, #scatter_blocked>, tensor<4x32xi32, #scatter_blocked>
+    // CHECK-NOT: tti.experimental_local_scatter_conflict_check
+    // CHECK: ttg.local_atomic_scatter_rmw
+    %old = ttg.local_atomic_scatter_rmw add, %dst[%indices], %values
+        {axis = 1 : i32} : (!ttg.memdesc<4x32xi32, #scatter_shared,
+        #ttg.shared_memory, mutable>, tensor<4x32xi32, #scatter_blocked>,
+        tensor<4x32xi32, #scatter_blocked>) -> tensor<4x32xi32, #scatter_blocked>
+    amdg.cluster_barrier_arrive
+    amdg.cluster_barrier_wait
+    tt.return
+  }
+}
+
+// -----
+
 #lifetime_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #lifetime_smem = #ttg.shared_memory
 #lifetime_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>

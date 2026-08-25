@@ -961,6 +961,8 @@ private:
         b.setListener(nullptr);
         return WalkResult::interrupt();
       }
+      if (auto scatter = dyn_cast<ttg::LocalScatterOp>(op))
+        instrumentLocalScatter(b, scatter);
       b.setLoc(op->getLoc());
       if (auto info = hooks.getAsyncProxyFenceInfo(op)) {
         funcBuilder.createFenceProxyAccessesCall(
@@ -1120,6 +1122,28 @@ private:
           /*publishVisibility=*/!clusterBarrier.getRelaxed(), op);
     }
     return success();
+  }
+
+  void instrumentLocalScatter(ImplicitLocOpBuilder &b,
+                              ttg::LocalScatterOp scatter) {
+    LinearLayout layout = ttg::toLinearLayout(
+        cast<RankedTensorType>(scatter.getIndices().getType()));
+    StringAttr axis = b.getStringAttr("dim" + Twine(scatter.getAxis()));
+    if (layout.sublayoutIsZero(
+            {b.getStringAttr("lane"), b.getStringAttr("warp")}, {axis}))
+      return;
+
+    auto destinationType = scatter.getDst().getType();
+    int slotsPerCTA = ttg::toLinearLayoutIgnoringPadding(destinationType)
+                          .getInDimSize(b.getStringAttr("offset"));
+    int slots = slotsPerCTA * ttg::lookupNumCTAs(scatter);
+    Value scratch = tti::createThirdPartyScratchAlloc(
+        b, b.getLoc(), tt::getPointerType(b.getI32Type()),
+        slots * sizeof(int32_t),
+        /*alignment=*/16, /*sharedClusterState=*/true);
+    tti::ExperimentalLocalScatterConflictCheckOp::create(
+        b, scratch, scatter.getDst(), scatter.getIndices(),
+        b.getI32IntegerAttr(scatter.getAxis()));
   }
 
   void instrumentBarrierWait(Operation *op, Value alloc, Value phase,

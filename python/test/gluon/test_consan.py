@@ -971,6 +971,74 @@ def test_cluster_barrier_publishes_only_observed_tensor_reads(FINISHED, device, 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize(
+    "MODE,BLOCK,SIZE_PER_THREAD,FAILURE",
+    [
+        pytest.param("lane-conflict", 128, 1, True, id="conflicting-lanes"),
+        pytest.param("warp-conflict", 128, 1, True, id="conflicting-warps"),
+        pytest.param("unique", 128, 1, False, id="unique-destinations"),
+        pytest.param("same-thread", 256, 2, False, id="repeated-within-thread"),
+        pytest.param("replicated-lanes-and-warps", 16, 2, False, id="repeated-with-replicated-lanes-and-warps"),
+        pytest.param("atomic", 128, 1, False, id="colliding-atomics"),
+    ],
+)
+def test_local_scatter_physical_thread_conflicts(MODE, BLOCK, SIZE_PER_THREAD, FAILURE, device, run_wrapper,
+                                                 monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_local_scatter_physical_thread_conflicts,
+                                (MODE, BLOCK, SIZE_PER_THREAD, FAILURE, device, False, monkeypatch))
+        if FAILURE:
+            assert_expected_cuda_failure(result.exc)
+            assert "Non-atomic local scatter has conflicting destinations" in result.driver_stderr_output
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(output, MODE: ttgl.constexpr, BLOCK: ttgl.constexpr, SIZE_PER_THREAD: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([SIZE_PER_THREAD], [32], [4], [0])
+        shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
+        offsets = ttgl.arange(0, BLOCK, layout=layout)
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [BLOCK], shared_layout)
+        smem.store(ttgl.full([BLOCK], 0, ttgl.int32, layout))
+        ttgl.barrier()
+
+        if MODE == "warp-conflict":
+            indices = offsets % 32
+        elif MODE == "atomic":
+            indices = offsets * 0
+        elif MODE == "unique":
+            indices = offsets
+        else:
+            indices = offsets // 2
+
+        values = offsets + 1
+        if MODE == "atomic":
+            smem.atomic_scatter_add(values, indices, axis=0)
+        else:
+            smem.scatter(values, indices, axis=0)
+        ttgl.barrier()
+        ttgl.store(output + offsets, smem.load(layout))
+
+    output = torch.empty(BLOCK, device=device, dtype=torch.int32)
+    kernel[(1, )](output, MODE=MODE, BLOCK=BLOCK, SIZE_PER_THREAD=SIZE_PER_THREAD, num_warps=4)
+    if not FAILURE:
+        expected = torch.zeros_like(output)
+        if MODE == "unique":
+            expected.copy_(torch.arange(1, BLOCK + 1, device=device, dtype=torch.int32))
+        elif MODE == "atomic":
+            expected[0] = BLOCK * (BLOCK + 1) // 2
+        else:
+            expected[:BLOCK // 2] = torch.arange(2, BLOCK + 1, 2, device=device, dtype=torch.int32)
+        torch.testing.assert_close(output, expected)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+@pytest.mark.parametrize(
     "OP,FAILURE",
     [
         pytest.param("gather", True, id="gather-missing-barrier"),
