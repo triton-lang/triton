@@ -789,6 +789,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 #barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // Read the issuing observer's [buffer CTA, buffer, reader CTA] view, not
+  // every observer. Reader CTAs retain stride 16 from the 2x2x2x2x2 table.
+  // CHECK-LABEL: tt.func private @__triton_consan_track_visible_accesses_
+  // CHECK-SAME: (%{{[^:]+}}: i32, %{{[^:]+}}: i32, %{{[^:]+}}: i1, %[[OBSERVER_THREAD:[^:]+]]: i32,
+  // CHECK-SAME: !tt.ptr<i8>{{[^,]*}}, %[[OBSERVER_VISIBILITY:[^:]+]]: !tt.ptr<i32>
+  // CHECK: tt.store {{.*}} : tensor<{{.*}}x!tt.ptr<i8>
+  // CHECK-NOT: tt.load
+  // CHECK: %[[OBSERVER_CTA:.*]] = tti.experimental_cluster_cta_id : i32
+  // CHECK-NEXT: %[[OBSERVER_CTA_STRIDE:.*]] = arith.constant 4 : i32
+  // CHECK-NEXT: %[[OBSERVER_CTA_OFFSET:.*]] = arith.muli %[[OBSERVER_CTA]], %[[OBSERVER_CTA_STRIDE]] : i32
+  // CHECK-NEXT: %[[OBSERVER_THREAD_STRIDE:.*]] = arith.constant 8 : i32
+  // CHECK-NEXT: %[[OBSERVER_THREAD_OFFSET:.*]] = arith.muli %[[OBSERVER_THREAD]], %[[OBSERVER_THREAD_STRIDE]] : i32
+  // CHECK-NEXT: %[[OBSERVER_OFFSET:.*]] = arith.addi %[[OBSERVER_CTA_OFFSET]], %[[OBSERVER_THREAD_OFFSET]] : i32
+  // CHECK-NEXT: %[[OBSERVER_PTR:.*]] = tt.addptr %[[OBSERVER_VISIBILITY]], %[[OBSERVER_OFFSET]] : !tt.ptr<i32>, i32
+  // CHECK-NEXT: %[[OBSERVER_PTRS:.*]] = tt.splat %[[OBSERVER_PTR]] : !tt.ptr<i32> -> tensor<2x2x2x!tt.ptr<i32>
+  // CHECK-NOT: tt.load
+  // CHECK: %[[OBSERVER_OWNER_PTRS:.*]] = tt.addptr %[[OBSERVER_PTRS]], {{.*}} : tensor<2x2x2x!tt.ptr<i32>
+  // CHECK-NOT: tt.load
+  // CHECK: %[[OBSERVER_BUFFER_PTRS:.*]] = tt.addptr %[[OBSERVER_OWNER_PTRS]], {{.*}} : tensor<2x2x2x!tt.ptr<i32>
+  // CHECK-NEXT: %[[READER_CTAS:.*]] = tt.make_range {end = 2 : i32, start = 0 : i32}
+  // CHECK-NEXT: %[[READER_CTA_STRIDE:.*]] = arith.constant dense<16> : tensor<2xi32
+  // CHECK-NEXT: %[[READER_CTA_OFFSETS:.*]] = arith.muli %[[READER_CTAS]], %[[READER_CTA_STRIDE]]
+  // CHECK-NEXT: %[[READER_CTA_RESHAPED:.*]] = tt.reshape %[[READER_CTA_OFFSETS]] : {{.*}} -> tensor<1x1x2xi32
+  // CHECK-NEXT: %[[READER_CTA_LAYOUT:.*]] = ttg.convert_layout %[[READER_CTA_RESHAPED]]
+  // CHECK-NEXT: %[[READER_CTA_BROADCAST:.*]] = tt.broadcast %[[READER_CTA_LAYOUT]] : {{.*}} -> tensor<2x2x2xi32
+  // CHECK-NEXT: %[[OBSERVER_READER_PTRS:.*]] = tt.addptr %[[OBSERVER_BUFFER_PTRS]], %[[READER_CTA_BROADCAST]] : tensor<2x2x2x!tt.ptr<i32>
+  // CHECK-NEXT: tt.load %[[OBSERVER_READER_PTRS]] : tensor<2x2x2x!tt.ptr<i32>
+
   // CHECK-LABEL: @clc_try_cancel_diagonal_effect_recipients
   tt.func public @clc_try_cancel_diagonal_effect_recipients() {
     %true = arith.constant true

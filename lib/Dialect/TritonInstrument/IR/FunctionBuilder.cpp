@@ -2083,8 +2083,31 @@ void FunctionBuilder::createTrackVisibleAccessesCall(
         if (trackReads) {
           Value visibilityPtr = entryBlock->getArgument(nextArg++);
           Value trackingPtr = entryBlock->getArgument(nextArg++);
-          Value visibility = tti::createLoadScratchMemory(
-              fb, fb.getLoc(), visibilityPtr, readVisibilityType);
+          // Select the issuing observer before loading [Cbuf, B, Creader].
+          // The retained reader-CTA dimension keeps its full-table stride.
+          ArrayRef<int64_t> visibilityShape = readVisibilityType.getShape();
+          int64_t observerCTAStride = visibilityShape[0] * visibilityShape[1];
+          int64_t observerThreadStride = observerCTAStride * visibilityShape[2];
+          Value observerCTA =
+              tti::ExperimentalClusterCTAIdOp::create(fb, fb.getLoc());
+          Value observerCTAOffset = arith::MulIOp::create(
+              fb, observerCTA,
+              arith::ConstantIntOp::create(fb, observerCTAStride, 32));
+          Value observerThreadOffset = arith::MulIOp::create(
+              fb, threadVal,
+              arith::ConstantIntOp::create(fb, observerThreadStride, 32));
+          Value observerOffset = arith::AddIOp::create(fb, observerCTAOffset,
+                                                       observerThreadOffset);
+          Value observerPtr = triton::AddPtrOp::create(
+              fb, visibilityPtr.getType(), visibilityPtr, observerOffset);
+          RankedTensorType observerType = tti::getIntTensorType(
+              entryBlock->getParent(),
+              {visibilityShape[0], visibilityShape[1], visibilityShape[4]},
+              readVisibilityType.getElementType().getIntOrFloatBitWidth());
+          Value visibleReads = tti::createLoadScratchMemory(
+              fb, fb.getLoc(), observerPtr, observerType,
+              {1, visibilityShape[0],
+               observerThreadStride * visibilityShape[3]});
           Value tracking = tti::createLoadScratchMemory(
               fb, fb.getLoc(), trackingPtr, readTrackingType);
           Value barrierMask =
@@ -2111,17 +2134,6 @@ void FunctionBuilder::createTrackVisibleAccessesCall(
           Value phaseMask = arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
                                                   phaseIndices, currentPhase);
           barrierMask = arith::AndIOp::create(fb, barrierMask, phaseMask);
-          Value threadColumnMask =
-              createDimMask(fb, threadVal, readVisibilityType, /*dim=*/3);
-          Value zero =
-              tti::createConstIntTensor(fb, fb.getLoc(), 0, readVisibilityType);
-          Value sourceCTAMask =
-              createCTASetMask(fb, readVisibilityType, /*dim=*/2, currentCTA);
-          Value observer =
-              arith::AndIOp::create(fb, threadColumnMask, sourceCTAMask);
-          Value visibleReads =
-              arith::SelectOp::create(fb, observer, visibility, zero);
-          visibleReads = reduce<arith::OrIOp>(fb, visibleReads, {2, 3});
           visibleReads = convertAndBroadcast(fb, visibleReads, {0, 1, 4},
                                              readTrackingType);
           Value withVisible = arith::OrIOp::create(fb, tracking, visibleReads);
