@@ -4038,15 +4038,11 @@ def test_barrier_invalidate_requires_completion_wait(WAIT, device, run_wrapper, 
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
-@pytest.mark.parametrize("ENGINE,WAIT", [
-    pytest.param("clc", False, id="bit31-outstanding"),
-    pytest.param("clc", True, id="bit31-waited"),
-    pytest.param("tc", False, id="bit35-outstanding"),
-    pytest.param("tc", True, id="bit35-waited"),
-])
-def test_consan_visibility_high_thread_bits(ENGINE, WAIT, device, run_wrapper, monkeypatch):
+@pytest.mark.parametrize("WIDTH", [pytest.param(32, id="bit31"), pytest.param(64, id="bit35")])
+@pytest.mark.parametrize("WAIT", [False, True], ids=["outstanding", "waited"])
+def test_consan_visibility_high_thread_bits(WIDTH, WAIT, device, run_wrapper, monkeypatch):
     if run_wrapper and not WAIT:
-        result = run_in_process(test_consan_visibility_high_thread_bits, (ENGINE, WAIT, device, False, monkeypatch))
+        result = run_in_process(test_consan_visibility_high_thread_bits, (WIDTH, WAIT, device, False, monkeypatch))
         assert_expected_cuda_failure(result.exc)
         assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
         return
@@ -4056,114 +4052,60 @@ def test_consan_visibility_high_thread_bits(ENGINE, WAIT, device, run_wrapper, m
     knobs.refresh_knobs()
 
     @gluon.jit
-    def mark_partition(markers, INDEX: ttgl.constexpr):
+    def partition(barrier, clc_result, markers, INDEX: ttgl.constexpr, N: ttgl.constexpr):
+        if INDEX == N - 1:
+            if N == 8:
+                mbarrier.expect(barrier, 16)
+                clc.try_cancel(clc_result, barrier)
+            else:
+                blackwell.tcgen05_commit(barrier)
         ttgl.store(markers + INDEX, INDEX)
 
     @gluon.jit
-    def complete_from_last_partition(barrier, clc_result, markers, ENGINE: ttgl.constexpr, INDEX: ttgl.constexpr):
-        if ENGINE == "tc":
-            blackwell.tcgen05_commit(barrier)
-        else:
-            mbarrier.expect(barrier, 16)
-            clc.try_cancel(clc_result, barrier)
-        ttgl.store(markers + INDEX, INDEX)
-
-    @gluon.jit
-    def kernel(input_desc, output, markers, ENGINE: ttgl.constexpr, WAIT: ttgl.constexpr):
+    def kernel(input_desc, markers, N: ttgl.constexpr, WAIT: ttgl.constexpr):
         smem = ttgl.allocate_shared_memory(ttgl.float16, [16, 64], input_desc.layout)
-        clc_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
-        clc_result = ttgl.allocate_shared_memory(ttgl.int64, [2], clc_layout)
-
-        # Complete the prelude operations so only the worker's later barrier
-        # completion remains pending. They also establish the peer ranges.
-        load_barrier = mbarrier.allocate_mbarrier()
-        mbarrier.init(load_barrier, count=1)
-        mbarrier.expect(load_barrier, input_desc.nbytes_per_cta)
-        tma.async_load(input_desc, [0, 0], load_barrier, smem)
-        mbarrier.wait(load_barrier, 0, deps=[smem])
-        mbarrier.invalidate(load_barrier)
-        if ENGINE == "clc":
-            tc_barrier = mbarrier.allocate_mbarrier()
-            mbarrier.init(tc_barrier, count=1)
-            blackwell.tcgen05_commit(tc_barrier)
-            mbarrier.wait(tc_barrier, 0)
-            mbarrier.invalidate(tc_barrier)
-
+        clc_result = ttgl.allocate_shared_memory(ttgl.int64, [2], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
         barrier = mbarrier.allocate_mbarrier()
         mbarrier.init(barrier, count=1)
-        # Keep every base partition observable. Eight base threads with all
-        # peer classes use 32 bits; twelve with TMA and TC use 36 bits.
-        # Fill whole worker warpgroups: a padding partition would add a
-        # logical base thread and move the peer-bit ranges.
-        if ENGINE == "clc":
-            ttgl.warp_specialize([
-                (mark_partition, (markers, 0)),
-                (mark_partition, (markers, 1)),
-                (mark_partition, (markers, 2)),
-                (mark_partition, (markers, 3)),
-                (mark_partition, (markers, 4)),
-                (mark_partition, (markers, 5)),
-                (mark_partition, (markers, 6)),
-                (complete_from_last_partition, (barrier, clc_result, markers, ENGINE, 7)),
-            ], [1] * 6 + [2])
-        else:
-            ttgl.warp_specialize([
-                (mark_partition, (markers, 0)),
-                (mark_partition, (markers, 1)),
-                (mark_partition, (markers, 2)),
-                (mark_partition, (markers, 3)),
-                (mark_partition, (markers, 4)),
-                (mark_partition, (markers, 5)),
-                (mark_partition, (markers, 6)),
-                (mark_partition, (markers, 7)),
-                (mark_partition, (markers, 8)),
-                (mark_partition, (markers, 9)),
-                (mark_partition, (markers, 10)),
-                (complete_from_last_partition, (barrier, clc_result, markers, ENGINE, 11)),
-            ], [1] * 10 + [2])
-        # Joining the base partitions does not acquire an async peer's
-        # completion. Invalidation must still require this explicit wait.
+        # Enable TMA and TC peers, completing both phases before the workers.
+        mbarrier.expect(barrier, input_desc.nbytes_per_cta)
+        tma.async_load(input_desc, [0, 0], barrier, smem)
+        mbarrier.wait(barrier, 0, deps=[smem])
+        blackwell.tcgen05_commit(barrier)
+        mbarrier.wait(barrier, 1)
+
+        # Eight base threads use CLC bit 31; twelve use TC bit 35.
+        # Fill whole worker warpgroups so padding cannot change the thread IDs.
+        ttgl.warp_specialize([
+            (partition, (barrier, clc_result, markers, i, N)) for i in (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11) if i < N
+        ], [1] * (N - 2) + [2])
+        # Joining base partitions does not acquire the async completion.
         if WAIT:
-            mbarrier.wait(barrier, 0, deps=[smem, clc_result])
+            mbarrier.wait(barrier, 0, deps=[clc_result])
         mbarrier.invalidate(barrier)
 
-        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
-        rows = ttgl.arange(0, 16, ttgl.SliceLayout(1, layout))[:, None]
-        cols = ttgl.arange(0, 64, ttgl.SliceLayout(0, layout))[None, :]
-        ttgl.store(output + rows * 64 + cols, smem.load(layout))
-
-    source = torch.arange(16 * 64, device=device, dtype=torch.float16).reshape(16, 64)
-    output = torch.empty_like(source)
-    num_base_threads = 8 if ENGINE == "clc" else 12
-    markers = torch.full((num_base_threads, ), -1, device=device, dtype=torch.int32)
-    smem_layout = ttgl.NVMMASharedLayout(128, 16, rank=2)
-    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(source, [16, 64], smem_layout)
-    compiled = kernel.warmup(input_desc, output, markers, ENGINE=ENGINE, WAIT=WAIT, grid=(1, ), num_warps=4, num_ctas=1)
-
-    reader_bit = 31 if ENGINE == "clc" else 35
-    thread_slots = 32 if ENGINE == "clc" else 64
-    mask_width = 32 if ENGINE == "clc" else 64
-    # ConSan is inserted during make_llir, after the saved TTGIR stage.
-    llir = compiled.asm["llir"]
-    reader_helpers = re.findall(r"^define [^\n]*@(__triton_consan_set_read_visibility_[^(]+)\([^\n]*\n(.*?)^}", llir,
-                                re.MULTILINE | re.DOTALL)
+    source = torch.zeros((16, 64), device=device, dtype=torch.float16)
+    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(source, [16, 64],
+                                                                  ttgl.NVMMASharedLayout(128, 16, rank=2))
+    num_partitions = 8 if WIDTH == 32 else 12
+    markers = torch.full((num_partitions, ), -1, device=device, dtype=torch.int32)
+    compiled = kernel.warmup(input_desc, markers, N=num_partitions, WAIT=WAIT, grid=(1, ), num_warps=4, num_ctas=1)
+    # ConSan is inserted after saved TTGIR. Check the actual reader helper,
+    # not an integer that could also occur in unrelated range metadata.
+    reader_helpers = re.findall(r"^define [^\n]*@(__triton_consan_set_read_visibility_[^(]+)\([^\n]*\n(.*?)^}",
+                                compiled.asm["llir"], re.MULTILINE | re.DOTALL)
     assert reader_helpers
-    assert all(f"x1x{thread_slots}x1xI{mask_width}" in name for name, _ in reader_helpers)
+    assert all(f"x1x{WIDTH}x1xI{WIDTH}" in name for name, _ in reader_helpers)
     worker_helpers = [body for name, body in reader_helpers if "_nw2_" in name]
     assert len(worker_helpers) == 1
-    # Check retirement of the actual reader bit in its helper, not an integer
-    # that could also occur in an unrelated intrinsic's range metadata.
-    clear_reader_mask = ((1 << mask_width) - 1) ^ (1 << reader_bit)
-    if clear_reader_mask >= 1 << (mask_width - 1):
-        clear_reader_mask -= 1 << mask_width
-    assert re.search(rf"^\s+%\S+ = and i{mask_width} %[^,\s]+, {clear_reader_mask}(?:,|\s*$)", worker_helpers[0],
+    clear_reader_mask = (1 << 31) - 1 if WIDTH == 32 else ~(1 << 35)
+    assert re.search(rf"^\s+%\S+ = and i{WIDTH} %[^,\s]+, {clear_reader_mask}(?:,|\s*$)", worker_helpers[0],
                      re.MULTILINE)
 
     if is_compile_warmup():
         return
-    kernel[(1, )](input_desc, output, markers, ENGINE=ENGINE, WAIT=WAIT, num_warps=4, num_ctas=1)
-    torch.testing.assert_close(output, source)
-    torch.testing.assert_close(markers, torch.arange(num_base_threads, device=device, dtype=torch.int32))
+    kernel[(1, )](input_desc, markers, N=num_partitions, WAIT=WAIT, num_warps=4, num_ctas=1)
+    torch.testing.assert_close(markers, torch.arange(num_partitions, device=device, dtype=torch.int32))
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
