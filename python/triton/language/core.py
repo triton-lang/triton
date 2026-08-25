@@ -3182,11 +3182,20 @@ def map_elementwise(
 
 
 @builtin
-def debug_barrier(_semantic=None):
-    '''
-    Insert a barrier to synchronize all threads in a block.
-    '''
-    return _semantic.debug_barrier()
+def barrier(_semantic=None):
+    """
+    Synchronize all threads within a block.
+
+    Triton does not automatically detect dependencies through global memory.
+    When using global memory as scratch space within a kernel, explicitly
+    insert a barrier between writes and subsequent reads so all threads in the
+    block observe the completed writes.
+    """
+    return _semantic.barrier()
+
+
+# `debug_barrier` is a regular block barrier, retained for backward compatibility.
+debug_barrier = barrier
 
 
 @builtin

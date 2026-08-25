@@ -1811,7 +1811,7 @@ class TritonSemantic(Generic[TensorTy]):
         x.handle.set_attr("tt.constancy", ir.make_attr(values, x.handle.get_context()))
         return x
 
-    def debug_barrier(self) -> TensorTy:
+    def barrier(self) -> TensorTy:
         return self.tensor(self.builder.create_barrier(), tl.void)
 
     def grid_dependency_wait(self) -> None:

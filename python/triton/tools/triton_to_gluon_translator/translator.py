@@ -103,7 +103,7 @@ def add_expr_rewrites(rewrites: list[RewriteFn]) -> None:
     import triton.language as tl
 
     rewrites.append(expr_rewrite(triton.jit, "gluon.jit"))
-    rewrites.append(expr_rewrite(tl.debug_barrier, "gl.barrier"))
+    rewrites.append(expr_rewrite(tl.barrier, "gl.barrier"))
 
 
 @dataclass
