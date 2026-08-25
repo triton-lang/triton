@@ -1456,6 +1456,11 @@ RocprofSDKProfiler::RocprofSDKProfiler() {
   // Construction of this singleton is triggered at libproton.so load time
   // via the __attribute__((constructor)) hook below, so force_configure
   // lands before any user code touches the HIP/HSA runtimes.
+  // TODO: Remove this up-front initialization once rocprofiler-sdk no longer
+  // requires a single global force_configure. Until then, Proton must
+  // optimistically configure PC sampling before it knows whether a session
+  // will request it. This adds launch latency when PC sampling is unused and
+  // requires configuration failures to be saved and reported later.
   if (!state.configured) {
     promoteRocprofilerLibraries();
     setenv("ROCPROFILER_PC_SAMPLING_BETA_ENABLED", "ON", /*overwrite=*/0);
