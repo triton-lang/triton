@@ -96,6 +96,9 @@ struct RocprofilerRuntimeState {
   bool configured{false};
   bool codeObjectStarted{false};
   bool profilingStarted{false};
+  // The profiling context stays started across Proton sessions, so track
+  // whether callbacks should logically be processed separately.
+  std::atomic<bool> profilingActive{false};
   std::atomic<bool> nvtxEnabled{false};
   RocprofSDKProfiler::RocprofSDKProfilerPimpl *pimpl{nullptr};
 };
@@ -439,12 +442,10 @@ private:
   std::map<Data *, std::map<size_t, size_t>> phaseInstances;
 };
 
-void processKernelRecord(
-    RocprofSDKProfiler &profiler,
-    RocprofSDKProfiler::CorrIdToExternIdMap &corrIdToExternId,
-    RocprofSDKProfiler::ExternIdToStateMap &externIdToState,
-    KernelPhaseTracker &phaseTracker, DataPhases &dataPhases,
-    const std::string &kernelName,
+bool processKernelRecord(
+    RocprofSDKProfiler &profiler, CorrIdToExternIdMap &corrIdToExternId,
+    ExternIdToStateMap &externIdToState, KernelPhaseTracker &phaseTracker,
+    DataPhases &dataPhases, const std::string &kernelName,
     const rocprofiler_buffer_tracing_kernel_dispatch_record_t *record,
     uint64_t streamId) {
   auto externId = Scope::DummyScopeId;
@@ -453,19 +454,17 @@ void processKernelRecord(
                                 [&](const size_t &value) { externId = value; });
 
   if (!hasCorrelation)
-    return;
-
-  if (externId == Scope::DummyScopeId)
-    return;
+    return false;
 
   DataToEntryMap dataToEntry;
   bool isMissingName = true;
-  if (!externIdToState.withRead(
-          externId, [&](const RocprofSDKProfiler::ExternIdState &state) {
-            dataToEntry = state.dataToEntry;
-            isMissingName = state.isMissingName;
-          }))
-    return;
+  if (!externIdToState.withRead(externId, [&](const ExternIdState &state) {
+        dataToEntry = state.dataToEntry;
+        isMissingName = state.isMissingName;
+      })) {
+    corrIdToExternId.erase(record->correlation_id.internal);
+    return true;
+  }
 
   for (auto [data, entry] : dataToEntry) {
     if (auto metric = convertDispatchToMetric(record, streamId)) {
@@ -481,84 +480,21 @@ void processKernelRecord(
   phaseTracker.complete(dataToEntry, dataPhases);
 
   bool complete = false;
-  externIdToState.withWrite(externId,
-                            [&](RocprofSDKProfiler::ExternIdState &state) {
-                              if (state.numNodes > 0)
-                                --state.numNodes;
-                              complete = state.numNodes == 0;
-                            });
+  externIdToState.withWrite(externId, [&](ExternIdState &state) {
+    --state.numNodes;
+    complete = state.numNodes == 0;
+  });
   if (complete) {
     corrIdToExternId.erase(record->correlation_id.internal);
     externIdToState.erase(externId);
   }
+  return true;
 }
 
 #if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
-RocprofSDKProfiler::ExternIdState *
-buildGraphNodeEntries(const DataToEntryMap &dataToEntry, GraphState &graphState,
-                      RocprofSDKProfiler::ExternIdToStateMap &externIdToState,
-                      size_t externId) {
-  if (dataToEntry.empty())
-    return nullptr;
-
-  auto &externIdState = externIdToState[externId];
-  for (auto &[data, entry] : dataToEntry) {
-    if (graphState.dataToEntryIdToNodeStates.find(data) ==
-        graphState.dataToEntryIdToNodeStates.end())
-      // This is a new data which was not enabled during graph capture.
-      continue;
-    externIdState.dataToGraphEntry.insert({data, entry});
-  }
-  externIdState.nodeIdToState = &graphState.nodeIdToState;
-  return &externIdState;
-}
-
-void queueGraphMetrics(PendingGraphPool *pendingGraphPool,
-                       const GraphState &graphState,
-                       const RocprofSDKProfiler::ExternIdState *externIdState) {
-  if (graphState.metricSeqIdToNodeId.empty())
-    return;
-
-  PendingGraphQueue::SeqIdToStateMap seqIdToState;
-  size_t phase = Data::kNoCompletePhase;
-  for (const auto &[seqId, nodeId] : graphState.metricSeqIdToNodeId) {
-    const auto &metricNodeState = graphState.metricNodeIdToState.at(nodeId);
-    if (externIdState) {
-      for (const auto &[data, graphEntry] : externIdState->dataToGraphEntry) {
-        phase = graphEntry.phase;
-        auto &pendingMetricNode =
-            seqIdToState
-                .emplace(seqId,
-                         PendingGraphQueue::MetricNodeState{
-                             metricNodeState.metricId, {}})
-                .first->second;
-        auto entryId = Scope::DummyScopeId;
-        if (auto entryIdIter = metricNodeState.dataToEntryId.find(data);
-            entryIdIter != metricNodeState.dataToEntryId.end()) {
-          entryId = entryIdIter->second;
-        }
-        // Otherwise, a DummyScopeId entry indicates that we'll call
-        // upsertFlexibleMetric instead of upsertLinkedFlexibleMetric in
-        // emitMetricRecords, so that the flexible metric can be attached to
-        // the graph launch entry.
-        pendingMetricNode.dataToEntry.emplace(
-            data, DataEntry(entryId, phase, graphEntry.metricSet.get()));
-      }
-    }
-  }
-
-  // Whether a data is active or not, the GPU will write the metric data into
-  // the metric buffer if there is a metric node. So we need the complete number
-  // of metrics of a graph.
-  pendingGraphPool->flushIfNeeded(graphState.numMetricWords);
-  pendingGraphPool->push(phase, graphState.numMetricWords,
-                         std::move(seqIdToState));
-}
-
 void processGraphKernelRecord(
-    RocprofSDKProfiler::ExternIdToStateMap &externIdToState,
-    KernelPhaseTracker &phaseTracker, DataPhases &dataPhases,
-    const std::string &kernelName,
+    ExternIdToStateMap &externIdToState, KernelPhaseTracker &phaseTracker,
+    DataPhases &dataPhases, const std::string &kernelName,
     const rocprofiler_buffer_tracing_kernel_dispatch_record_t *record,
     const GraphDispatchCorrelation &graphCorrelation, uint64_t streamId) {
   // Graph kernels:
@@ -586,8 +522,7 @@ void processGraphKernelRecord(
     if (nodeStateIt != nodeIdToState->end()) {
       const auto &nodeState = nodeStateIt->second;
       if (nodeState.status.isMissingName()) {
-        throw makeRuntimeError(
-            "[PROTON] Kernel name is missing for a graph node.");
+        throw makeRuntimeError("Kernel name is missing for a graph node.");
       }
       const bool isMetricKernel = nodeState.status.isMetricNode();
       for (auto &[data, entry] : externState.dataToGraphEntry) {
@@ -616,12 +551,10 @@ void processGraphKernelRecord(
                                       : externState.dataToEntry,
                         dataPhases);
   bool complete = false;
-  externIdToState.withWrite(externId,
-                            [&](RocprofSDKProfiler::ExternIdState &state) {
-                              if (state.numNodes > 0)
-                                --state.numNodes;
-                              complete = state.numNodes == 0;
-                            });
+  externIdToState.withWrite(externId, [&](ExternIdState &state) {
+    --state.numNodes;
+    complete = state.numNodes == 0;
+  });
   if (complete)
     externIdToState.erase(externId);
 }
@@ -642,7 +575,7 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
     profiler.pendingGraphPool =
         std::make_unique<PendingGraphPool>(profiler.metricBuffer.get());
   }
-  virtual ~RocprofSDKProfilerPimpl() = default;
+  ~RocprofSDKProfilerPimpl() override = default;
 
   void doStart() override;
   void doFlush() override;
@@ -787,76 +720,19 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleStreamCaptureBegin(
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleCapturedKernelEnter() {
   auto &profiler = threadState.profiler;
   if (profiler.isOpInProgress()) {
-    auto &scope = threadState.scopeStack.back();
     const auto nodeId = streamCaptureGraphState.nodeIdToState.size();
-    auto &nodeState = streamCaptureGraphState.nodeIdToState[nodeId];
-    nodeState.nodeId = nodeId;
-    if (scope.name.empty())
-      nodeState.status.setMissingName();
-    const bool isMetricKernelNode = threadState.isMetricKernelLaunching;
-    if (isMetricKernelNode) {
-      nodeState.status.setMetricNode();
+    std::optional<GraphState::MetricNodeState> metricNodeState;
+    if (threadState.isMetricKernelLaunching) {
       auto metricKernelLaunchInfo =
           threadState.metricKernelLaunchInfoQueue.front();
       threadState.metricKernelLaunchInfoQueue.pop_front();
-      streamCaptureGraphState.metricNodeIdToState.insert_or_assign(
-          nodeId, GraphState::MetricNodeState{metricKernelLaunchInfo.seqId,
-                                              metricKernelLaunchInfo.metricId,
-                                              metricKernelLaunchInfo.numWords});
-      streamCaptureGraphState.metricSeqIdToNodeId.insert_or_assign(
-          metricKernelLaunchInfo.seqId, nodeId);
-      streamCaptureGraphState.numMetricWords += metricKernelLaunchInfo.numWords;
+      metricNodeState.emplace(GraphState::MetricNodeState{
+          metricKernelLaunchInfo.seqId, metricKernelLaunchInfo.metricId,
+          metricKernelLaunchInfo.numWords});
     }
-
-    for (auto *data : profiler.dataSet) {
-      auto currentContexts = data->getContexts();
-      std::vector<Context> contexts;
-      contexts.emplace_back(GraphState::captureTag);
-      for (const auto &context : currentContexts) {
-        contexts.push_back(context);
-      }
-
-      if (isMetricKernelNode) {
-        auto flexibleMetricContexts = data->getContexts(false);
-        std::vector<Context> flexibleMetricEntryContexts;
-        flexibleMetricEntryContexts.emplace_back(GraphState::captureTag);
-        for (const auto &context : flexibleMetricContexts) {
-          flexibleMetricEntryContexts.push_back(context);
-        }
-        if (!threadState.isApiExternOp) { // Triton ops
-          flexibleMetricEntryContexts.emplace_back(scope.name);
-        }
-        contexts.emplace_back(GraphState::metricTag);
-        flexibleMetricEntryContexts.emplace_back(GraphState::metricTag);
-
-        // Create a static capture entry for this graph node. The entry id is
-        // stable for the same node ordinal and is used during replay to link
-        // the graph launch entry to the original captured call path.
-        // For metric nodes, timing info is attributed to a frame under a
-        // metadata state. Flexible metrics are attributed to the current GPU
-        // operation.
-        auto staticEntry =
-            data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
-        nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);
-        streamCaptureGraphState.dataToEntryIdToNodeStates[data][staticEntry.id]
-            .insert(&nodeState);
-        auto flexibleMetricEntry =
-            data->addOp(Data::kVirtualPhase, Data::kRootEntryId,
-                        flexibleMetricEntryContexts);
-        streamCaptureGraphState.metricNodeIdToState.at(nodeId)
-            .dataToEntryId.insert_or_assign(data, flexibleMetricEntry.id);
-      } else {
-        contexts.emplace_back(scope.name);
-        // Create a static capture entry for this graph node. The entry id is
-        // stable for the same node ordinal and is used during replay to link
-        // the graph launch entry to the original captured call path.
-        auto staticEntry =
-            data->addOp(Data::kVirtualPhase, Data::kRootEntryId, contexts);
-        nodeState.dataToEntryId.insert_or_assign(data, staticEntry.id);
-        streamCaptureGraphState.dataToEntryIdToNodeStates[data][staticEntry.id]
-            .insert(&nodeState);
-      }
-    }
+    streamCaptureGraphState.recordNode(
+        nodeId, threadState.scopeStack.back().name, std::move(metricNodeState),
+        profiler.dataSet, threadState.isApiExternOp);
   }
 }
 #endif
@@ -891,6 +767,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleRuntimeEnter(
   auto isMissingName = scope.name.empty();
   profiler.correlation.correlate(record.correlation_id.internal, scope.scopeId,
                                  /*numNodes=*/1, isMissingName, dataToEntry);
+  profiler.correlation.submit(/*numNodes=*/1, record.correlation_id.internal);
   impl->kernelPhaseTracker.record(dataToEntry);
   impl->corrIdToStreamId[record.correlation_id.internal] =
       extractStreamId(operation, payload);
@@ -958,18 +835,13 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleRuntimeExit(
   auto &dataToEntry = threadState.dataToEntry;
   const bool deactivated = dataToEntry.empty();
   threadState.exitOp();
-#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
-  if (threadState.isStreamCapturing)
-    return;
-#endif
-  if (deactivated) // Profiler is deactivated
-    return;
-  profiler.correlation.submit(record.correlation_id.internal);
 }
 
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
     rocprofiler_callback_tracing_record_t record,
     rocprofiler_user_data_t *userData, void *arg) {
+  if (!getRuntimeState().profilingActive.load(std::memory_order_relaxed))
+    return;
   if (record.kind != ROCPROFILER_CALLBACK_TRACING_HIP_RUNTIME_API)
     return;
 
@@ -989,6 +861,8 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipRuntimeCallback(
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback(
     rocprofiler_callback_tracing_record_t record,
     rocprofiler_user_data_t *userData, void *arg) {
+  if (!getRuntimeState().profilingActive.load(std::memory_order_relaxed))
+    return;
   auto *payload = static_cast<rocprofiler_callback_tracing_hip_graph_data_t *>(
       record.payload);
   auto *impl = static_cast<RocprofSDKProfilerPimpl *>(arg);
@@ -1015,29 +889,10 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::hipGraphCallback(
     auto externId = threadState.scopeStack.back().scopeId;
     auto &profiler = threadState.profiler;
     auto &dataToEntry = threadState.dataToEntry;
-    size_t numNodes = std::numeric_limits<size_t>::max();
-    auto findGraph = false;
-    if (impl->graphStates.contain(graphExecId)) {
-      auto &graphState = impl->graphStates[graphExecId];
-      if (!graphState.captureStatusChecked)
-        numNodes = graphState.nodeIdToState.size();
-      findGraph = true;
-    }
-    if (!findGraph && !impl->graphStates[graphExecId].captureStatusChecked) {
-      impl->graphStates[graphExecId].captureStatusChecked = true;
-      std::cerr << "[PROTON] Cannot find graph for graphExecId: " << graphExecId
-                << ", and graph replay attribution may be incomplete. "
-                   "Please start profiling before the graph is captured."
-                << std::endl;
-    } else if (findGraph &&
-               !impl->graphStates[graphExecId].captureStatusChecked) {
-      auto &graphState = impl->graphStates[graphExecId];
-      auto *externIdState =
-          buildGraphNodeEntries(dataToEntry, graphState,
-                                profiler.correlation.externIdToState, externId);
-      queueGraphMetrics(profiler.pendingGraphPool.get(), graphState,
-                        externIdState);
-    }
+    size_t numNodes = detail::prepareGraphLaunch(
+        impl->graphStates, graphExecId, externId, dataToEntry,
+        profiler.correlation.externIdToState, profiler.pendingGraphPool.get(),
+        /*flushMetricBuffer=*/true);
     if (!dataToEntry.empty()) {
       auto &scope = threadState.scopeStack.back();
       profiler.correlation.correlate(record.correlation_id.internal, externId,
@@ -1057,6 +912,8 @@ int RocprofSDKProfiler::RocprofSDKProfilerPimpl::graphNodeCorrelationCallback(
     rocprofiler_tracing_operation_t operation, uint64_t internalCorrelationId,
     rocprofiler_user_data_t *externalCorrelationId, void *userData) {
   externalCorrelationId->value = 0;
+  if (!getRuntimeState().profilingActive.load(std::memory_order_relaxed))
+    return 0;
   if (kind != ROCPROFILER_EXTERNAL_CORRELATION_REQUEST_KERNEL_DISPATCH)
     return 0;
   if (graphLaunchStack.empty())
@@ -1069,11 +926,13 @@ int RocprofSDKProfiler::RocprofSDKProfilerPimpl::graphNodeCorrelationCallback(
   auto &profiler = threadState.profiler;
   auto *impl = static_cast<RocprofSDKProfilerPimpl *>(profiler.pImpl.get());
   profiler.correlation.externIdToState.withRead(
-      externId, [&](const RocprofSDKProfiler::ExternIdState &state) {
+      externId, [&](const ExternIdState &state) {
         impl->kernelPhaseTracker.record(
             state.nodeIdToState ? state.dataToGraphEntry : state.dataToEntry);
       });
-  profiler.correlation.submit(internalCorrelationId);
+  // We always invoke callbacks for each node in the graph so this is more
+  // accurate than the CUPTI approach.
+  profiler.correlation.submit(/*numNodes=*/1, internalCorrelationId);
   return 0;
 }
 #endif
@@ -1089,6 +948,8 @@ int RocprofSDKProfiler::RocprofSDKProfilerPimpl::graphNodeCorrelationCallback(
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::markerCallback(
     rocprofiler_callback_tracing_record_t record,
     rocprofiler_user_data_t *userData, void *arg) {
+  if (!getRuntimeState().profilingActive.load(std::memory_order_relaxed))
+    return;
   if (record.kind != ROCPROFILER_CALLBACK_TRACING_MARKER_CORE_API)
     return;
   if (record.phase != ROCPROFILER_CALLBACK_PHASE_ENTER)
@@ -1111,6 +972,10 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::markerCallback(
 // librocprofiler-sdk-roctx.so is not loaded (e.g. bare ROCm without TheRock).
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::roctxCallback(
     uint32_t operationId, void *data) {
+  auto &state = getRuntimeState();
+  if (!state.profilingActive.load(std::memory_order_relaxed) ||
+      !state.nvtxEnabled.load(std::memory_order_relaxed))
+    return;
   auto *apiData = static_cast<roctx_api_data_t *>(data);
   if (operationId == ROCTX_API_ID_roctxRangePushA) {
     threadState.enterScope(apiData->args.roctxRangePushA.message);
@@ -1130,7 +995,10 @@ void registerRoctxCallback(bool enable) {
   // case dlsym(RTLD_DEFAULT, "roctxRegisterTracerCallback") does not find the
   // callback registration entry point, but resolving it from the library handle
   // does.
-  void *roctxLib = dlopen("libroctx64.so", RTLD_NOLOAD | RTLD_NOW);
+  auto roctxLibrary = getStrEnv("TRITON_ROCTX_LIB_PATH");
+  if (roctxLibrary.empty())
+    roctxLibrary = getStrEnv("TRITON_ROCTX_LIBRARY");
+  void *roctxLib = dlopen(roctxLibrary.c_str(), RTLD_NOLOAD | RTLD_NOW);
   if (!roctxLib)
     return;
   auto *fn = reinterpret_cast<RoctxRegisterTracerCallbackFn>(
@@ -1176,6 +1044,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
   auto *impl = static_cast<RocprofSDKProfilerPimpl *>(profiler.pImpl.get());
   auto &correlation = profiler.correlation;
 
+  uint64_t numCompletedTasks = 0;
   uint64_t maxCorrelationId = 0;
   DataPhases dataPhases;
 
@@ -1205,6 +1074,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
         processGraphKernelRecord(
             correlation.externIdToState, impl->kernelPhaseTracker, dataPhases,
             kernelName, record, *graphCorrelation, streamId);
+        ++numCompletedTasks;
         correlation.corrIdToExternId.erase(record->correlation_id.internal);
         // Release the heap allocation for graph correlation data created in
         // graphNodeCorrelationCallback
@@ -1212,22 +1082,20 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::kernelBufferCallback(
         record->correlation_id.external.ptr = nullptr;
         record->correlation_id.external.value = 0;
       } else {
-        processKernelRecord(
+        numCompletedTasks += processKernelRecord(
             profiler, correlation.corrIdToExternId, correlation.externIdToState,
             impl->kernelPhaseTracker, dataPhases, kernelName, record, streamId);
       }
 #else
-      processKernelRecord(profiler, correlation.corrIdToExternId,
-                          correlation.externIdToState, impl->kernelPhaseTracker,
-                          dataPhases, kernelName, record, streamId);
+      numCompletedTasks += processKernelRecord(
+          profiler, correlation.corrIdToExternId, correlation.externIdToState,
+          impl->kernelPhaseTracker, dataPhases, kernelName, record, streamId);
 #endif
       impl->corrIdToStreamId.erase(record->correlation_id.internal);
     }
   }
   profiler.flushDataPhases(dataPhases, profiler.pendingGraphPool.get());
-  if (maxCorrelationId > 0) {
-    correlation.complete(maxCorrelationId);
-  }
+  correlation.complete(numCompletedTasks, maxCorrelationId);
 }
 
 // ---- SDK tool init / fini (called by rocprofiler_force_configure) ----
@@ -1361,6 +1229,8 @@ int protonToolInit(rocprofiler_client_finalize_t, void *toolData) {
 
 void protonToolFini(void *toolData) {
   auto *state = static_cast<RocprofilerRuntimeState *>(toolData);
+  state->profilingActive.store(false, std::memory_order_relaxed);
+  state->nvtxEnabled.store(false, std::memory_order_relaxed);
   {
     std::lock_guard<std::mutex> lock(state->mutex);
     if (state->profilingStarted) {
@@ -1398,16 +1268,16 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStart() {
       rocprofiler::startContext<true>(state.profilingContext);
       state.profilingStarted = true;
     }
+    state.profilingActive.store(true, std::memory_order_relaxed);
     bool nvtx = getBoolEnv("TRITON_ENABLE_NVTX", true);
     state.nvtxEnabled.store(nvtx, std::memory_order_relaxed);
     if (nvtx)
       registerRoctxCallback(true);
   }
 
-  if (!profiler.isTimestampCalibrated) {
+  if (!profiler.timestampOffsetNs) {
     profiler.timestampOffsetNs =
         detail::computeTimestampOffsetNs(rocprofiler::getTimestamp<true>);
-    profiler.isTimestampCalibrated = true;
   }
 }
 
@@ -1422,17 +1292,29 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doFlush() {
 
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStop() {
   auto &state = getRuntimeState();
+  state.profilingActive.store(false, std::memory_order_relaxed);
   state.nvtxEnabled.store(false, std::memory_order_relaxed);
   registerRoctxCallback(false);
+
   corrIdToStreamId.clear();
   kernelPhaseTracker.clear();
+
+#if PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH
+  graphToState.clear();
+  graphExecToGraph.clear();
+  graphExecToGraphExecId.clear();
+  graphStates.clear();
+#endif
+
   profiler.periodicFlushingEnabled = false;
   profiler.periodicFlushingFormat.clear();
   profiler.correlation.clear();
+
   // Keep the profiling context running. rocprofiler-sdk does not reliably
   // re-intercept HIP runtime API calls after a stopContext→startContext
-  // cycle on the same context. The correlation ID mechanism ensures that
-  // kernel dispatch records without a matching active session are discarded.
+  // cycle on the same context. profilingActive suppresses synchronous
+  // callbacks outside a Proton session, while the correlation ID mechanism
+  // discards unmatched kernel dispatch records from the always-running buffer.
 }
 
 RocprofSDKProfiler::RocprofSDKProfiler() {
@@ -1480,8 +1362,8 @@ void RocprofSDKProfiler::doSetMode(
                                     periodicFlushingFormat, modeAndOptions,
                                     "RocprofSDKProfiler");
   } else if (!mode.empty()) {
-    throw std::invalid_argument(
-        "[PROTON] RocprofSDKProfiler: unsupported mode: " + mode);
+    throw std::invalid_argument("RocprofSDKProfiler: unsupported mode: " +
+                                mode);
   }
 }
 

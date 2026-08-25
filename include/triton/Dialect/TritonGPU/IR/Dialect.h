@@ -13,6 +13,7 @@
 #include "triton/Dialect/TritonGPU/IR/Traits.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 
+#include <type_traits>
 #include <unordered_map>
 
 namespace mlir {
@@ -101,6 +102,39 @@ struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
   SideEffects::Resource *getParent() const override { return nullptr; }
 };
 
+class SharedMemoryEffect {
+public:
+  SharedMemoryEffect(std::nullptr_t) : effect(nullptr) {}
+  explicit SharedMemoryEffect(const MemoryEffects::EffectInstance *effect)
+      : effect(effect) {}
+
+  explicit operator bool() const { return effect != nullptr; }
+
+  static bool classof(const MemoryEffects::EffectInstance *effect) {
+    return isa<SharedMemory>(effect->getResource()) &&
+           isa_and_present<SharedKindAttr>(effect->getParameters());
+  }
+
+  SharedKind getKind() const {
+    return cast<SharedKindAttr>(effect->getParameters()).getValue();
+  }
+
+private:
+  const MemoryEffects::EffectInstance *effect;
+};
+
+template <typename Effect, typename ValueT>
+MemoryEffects::EffectInstance makeShared(ValueT value, SharedKind kind) {
+  Value effectValue;
+  if constexpr (std::is_same_v<ValueT, OpOperand *>)
+    effectValue = value->get();
+  else
+    effectValue = value;
+  return {Effect::get(), value,
+          SharedKindAttr::get(effectValue.getContext(), kind),
+          SharedMemory::get()};
+}
+
 // Returns true iff every non-broadcast basis of `ll`, after flattening in and
 // out dimensions, maps to a single power-of-2 in the flattened output.
 bool hasPowerOfTwoBases(const LinearLayout &ll);
@@ -142,6 +176,10 @@ SmallVector<unsigned> getElemsPerThread(Type type);
 
 FailureOr<RankedTensorType> inferFp4ToFpResultType(RankedTensorType srcType,
                                                    Type elemType, int32_t axis,
+                                                   std::optional<Location> loc);
+
+FailureOr<RankedTensorType> inferFpToFp4ResultType(RankedTensorType srcType,
+                                                   int32_t axis,
                                                    std::optional<Location> loc);
 
 // Returns the number of warps per CTA that have access to non-replicated
@@ -304,9 +342,6 @@ SmallVector<unsigned> getMatrixOrder(unsigned rank, bool rowMajor);
 SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank,
                                             bool kContig);
 
-// Return true if \p cat would be valid with result encoding \p targetEncoding.
-bool isLegalCatEncoding(CatOp cat, Attribute targetEncoding);
-
 // Return true if a view between the two types cannot be implemented as a no-op.
 bool isExpensiveView(ArrayRef<int64_t> srcShape, Attribute srcEncoding,
                      ArrayRef<int64_t> dstShape, Attribute dstEncoding);
@@ -394,5 +429,14 @@ bool isPaddedEncoding(Attribute encoding);
 unsigned getMinInterval(Attribute encoding);
 
 } // namespace mlir::triton::gpu
+
+namespace llvm {
+template <typename T>
+struct CastInfo<
+    mlir::triton::gpu::SharedMemoryEffect, T *,
+    std::enable_if_t<std::is_same_v<std::remove_const_t<T>,
+                                    mlir::MemoryEffects::EffectInstance>>>
+    : ValueFromPointerCast<mlir::triton::gpu::SharedMemoryEffect, T> {};
+} // namespace llvm
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_

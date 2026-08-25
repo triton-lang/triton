@@ -34,6 +34,9 @@ class OptFlags:
     arch: str
     occupancy_target: int
     target_kernel_kwargs: dict
+    clc: bool = False
+    swap_xw: bool | None = None
+    use_output_tma: bool | None = None
 
 
 def max_allowable_mn(
@@ -185,6 +188,7 @@ def make_default_opt_flags_amd(
         w_cache_modifier=w_cache_modifier,
         split_k=split_k,
         is_persistent=is_persistent,
+        clc=False,
         idle_sms=constraints.get("idle_sms", _get_idle_sms()),
         epilogue_subtile=epilogue_subtile,
         arch=None,
@@ -218,7 +222,7 @@ def make_default_opt_flags_nvidia(
     mx_block_size=None,
     epilogue_reduction_n=1,
 ):
-    constraints_supported = {"block_m", "block_n", "block_k", "split_k", "is_persistent", "epilogue_subtile", "num_stages", "idle_sms", "max_allowable_mn", "num_warps", "disable_mx4_block_swap"}
+    constraints_supported = {"block_m", "block_n", "block_k", "split_k", "is_persistent", "clc", "epilogue_subtile", "num_stages", "idle_sms", "max_allowable_mn", "num_warps", "disable_mx4_block_swap", "swap_xw", "group_m", "use_output_tma"}
     unsupported = set(constraints.keys()) - constraints_supported
     assert not unsupported, f"Given unsupported constraint: {unsupported}"
     is_large_ragged_nvfp4 = (
@@ -241,6 +245,8 @@ def make_default_opt_flags_nvidia(
     group_m = 8
     if lhs_dtype == FP4 and rhs_dtype == FP4:
         group_m = 16
+    if constraints.get("group_m") is not None:
+        group_m = constraints["group_m"]
     xcd_swizzle = 1
     # block_m
     if constraints.get("block_m", None):
@@ -282,6 +288,14 @@ def make_default_opt_flags_nvidia(
     n_sms = torch.cuda.get_device_properties(0).multi_processor_count
     tiles_per_sm = grid_size_tma / n_sms
     supports_persistent = can_use_persistent_tma and (arch is None or int(arch[2:-1]) >= 9)
+    clc = constraints.get("clc", False)
+    if clc:
+        if not cuda_capability_geq(10, 0):
+            raise InapplicableConstraint("cannot enforce `clc=True` constraint before NVIDIA SM100")
+        if not supports_persistent:
+            raise InapplicableConstraint("cannot enforce `clc=True` constraint without persistent TMA support")
+        if constraints.get("is_persistent", True) is False:
+            raise InapplicableConstraint("`clc=True` requires `is_persistent=True`")
     a_mx_scale_layout = None if not isinstance(precision_config.a_mx_scale, Tensor) else precision_config.a_mx_scale.storage.layout
     b_mx_scale_layout = None if not isinstance(precision_config.b_mx_scale, Tensor) else precision_config.b_mx_scale.storage.layout
 
@@ -289,7 +303,9 @@ def make_default_opt_flags_nvidia(
         return layout is None or isinstance(layout, StridedLayout)
 
     requires_persistent = (not _is_layout_strided(a_mx_scale_layout) or not _is_layout_strided(b_mx_scale_layout)) and target_info.has_native_mxfp()
-    if constraints.get("is_persistent", None) is not None:
+    if clc:
+        is_persistent = True
+    elif constraints.get("is_persistent", None) is not None:
         if requires_persistent and not constraints["is_persistent"]:
             raise InapplicableConstraint("cannot enforce `is_persistent=False` constraint because persistent kernel is required")
         is_persistent = constraints["is_persistent"]
@@ -316,10 +332,12 @@ def make_default_opt_flags_nvidia(
         # the full 512-column TMEM budget, so leave headroom for that operand.
         block_n = min(block_n, 128)
     if (is_persistent and constraints.get("block_n", None) is None
-            and opt_flags_nvidia.is_blackwell_mx_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype)):
-        # Native Blackwell MX lhs + dense rhs persistent dots also stage an
-        # expanded operand in TMEM, so keep the accumulator tile below the
-        # 512-column budget.
+            and (opt_flags_nvidia.is_blackwell_mx_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype)
+                 or opt_flags_nvidia.is_blackwell_nvfp4_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype))):
+        # Native Blackwell MX/NVFP lhs + dense rhs persistent dots also stage
+        # an expanded operand in TMEM, so keep the accumulator tile below the
+        # 512-column budget, including MX output. Keep NVFP separate from the MX predicate because
+        # that predicate also controls block_k and num_warps.
         block_n = min(block_n, 128)
     # adjust block_m based on is_persistent signal
     if is_persistent and opt_flags_nvidia.is_x_scale_swizzled(precision_config):
@@ -366,6 +384,7 @@ def make_default_opt_flags_nvidia(
     )
 
     num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, is_persistent, precision_config, constraints)
+    swap_xw = constraints.get("swap_xw")
     if is_large_ragged_nvfp4 and constraints.get("num_warps", None) is None:
         # Eight warps overrun GB300 TMEM for the large ragged NVFP4 tile.
         num_warps = 4
@@ -373,7 +392,8 @@ def make_default_opt_flags_nvidia(
             and is_persistent
             and block_n <= 128
             and block_k >= 256
-            and opt_flags_nvidia.is_blackwell_mx_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype)):
+            and opt_flags_nvidia.is_blackwell_mx_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype)
+            and precision_config.c_mx_scale is None):
         num_warps = max(num_warps, 8)
 
     # Occupancy target and maxnreg (for Hopper)
@@ -405,6 +425,7 @@ def make_default_opt_flags_nvidia(
     for ep in subtiles_to_check:
         ns = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, epilogue_subtile=ep,
                                                  occupancy_target=occupancy_target,
+                                                 swap_xw=swap_xw,
                                                  w_transpose=w_transpose)
         if ns > num_stages:
             epilogue_subtile, num_stages = ep, ns
@@ -437,6 +458,7 @@ def make_default_opt_flags_nvidia(
         w_cache_modifier=None,
         split_k=split_k,
         is_persistent=is_persistent,
+        clc=clc,
         epilogue_subtile=epilogue_subtile,
         arch=arch,
         target_kernel_kwargs=dict(
@@ -446,6 +468,8 @@ def make_default_opt_flags_nvidia(
         ),
         idle_sms=constraints.get("idle_sms", _get_idle_sms()),
         occupancy_target=occupancy_target,
+        swap_xw=swap_xw,
+        use_output_tma=constraints.get("use_output_tma"),
     )
     # check constraints
     all_constraints_satisfied(ret, constraints)
@@ -470,7 +494,7 @@ def _get_opt_flags_constraints() -> dict:
     constraints = _opt_flags_constraints.get()
     return {} if constraints is None else constraints
 
-def update_opt_flags_constraints(constraints: dict[str, int]):
+def update_opt_flags_constraints(constraints: dict[str, int | bool | None]):
     updated = _get_opt_flags_constraints().copy()
     updated.update(constraints)
     _opt_flags_constraints.set(updated)

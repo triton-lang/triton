@@ -621,7 +621,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
             otherElems, vecStart);
 
       Value loadVal = llLoad(rewriter, loc, ptr, vecTy, pred, falseVal,
-                             multicastMask, cacheMod);
+                             multicastMask, cacheMod, op.getIsVolatile());
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, getTypeConverter()->getIndexType(), ii);
@@ -868,13 +868,13 @@ struct BufferLoadToLocalOpConversion
         if (targetInfo.requiresAliasInfoForAsyncOps())
           AMD::addAsyncCopyAliasScope(bufferLoadToLds);
 
+        rewriter.setInsertionPointToStart(afterLoadBlock);
+
         if (hasOther) {
           emitOtherStore(rewriter, loc, this->getTypeConverter(), vecTy,
                          maskElem, otherElems, shmemAddr, laneId,
                          requiresSrcPtrSwizzling, swizzleLaneOffset);
         }
-
-        rewriter.setInsertionPointToStart(afterLoadBlock);
       }
 
       return {};
@@ -2283,7 +2283,16 @@ struct AtomicRMWOpConversion
                                  targetInfo);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
+    Type atomicElementType = getElementTypeOrSelf(op.getVal().getType());
     auto binOp = matchAtomicOp(op.getAtomicRmwOp());
+    // MAX/MIN normally denote signed integer atomics. Float-typed Triton IR
+    // uses the same RMW enum values, so select LLVM's floating operations.
+    if (isa<FloatType>(atomicElementType)) {
+      if (op.getAtomicRmwOp() == RMWOp::MAX)
+        binOp = LLVM::AtomicBinOp::fmax;
+      else if (op.getAtomicRmwOp() == RMWOp::MIN)
+        binOp = LLVM::AtomicBinOp::fmin;
+    }
     if (!binOp)
       return rewriter.notifyMatchFailure(op, "Unsupported RMW operation");
 

@@ -118,17 +118,17 @@ def create_tensor_descriptors(a_ptr, b_ptr, off_am, off_bn, stride_am, stride_ak
                               N: ttgl.constexpr, K: ttgl.constexpr, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
                               BLOCK_K: ttgl.constexpr, TRANSPOSE_B: ttgl.constexpr):
 
-    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr + off_am, shape=(M, K),
-                                                         strides=(stride_am, stride_ak), block_shape=(BLOCK_M, BLOCK_K),
-                                                         layout=shared_layout_a)
+    a_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=a_ptr + off_am, shape=(M, K),
+                                                       strides=(stride_am, stride_ak), block_shape=(BLOCK_M, BLOCK_K),
+                                                       layout=shared_layout_a)
     if not TRANSPOSE_B:
-        b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=b_ptr + off_bn, shape=(K, N),
-                                                             strides=(stride_bk, stride_bn),
-                                                             block_shape=(BLOCK_K, BLOCK_N), layout=shared_layout_b)
+        b_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=b_ptr + off_bn, shape=(K, N),
+                                                           strides=(stride_bk, stride_bn),
+                                                           block_shape=(BLOCK_K, BLOCK_N), layout=shared_layout_b)
     else:
-        b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=b_ptr + off_bn, shape=(N, K),
-                                                             strides=(stride_bn, stride_bk),
-                                                             block_shape=(BLOCK_N, BLOCK_K), layout=shared_layout_b)
+        b_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=b_ptr + off_bn, shape=(N, K),
+                                                           strides=(stride_bn, stride_bk),
+                                                           block_shape=(BLOCK_N, BLOCK_K), layout=shared_layout_b)
 
     return a_desc, b_desc
 
@@ -143,11 +143,11 @@ def issue_l2_prefetches(distance, producer, a_desc, b_desc, off_am, off_bn, BLOC
         return
 
     prefetch_iteration = producer + distance
-    ttgl.amd.gfx1250.tdm.prefetch(a_desc, [off_am, prefetch_iteration * BLOCK_K], pred=pred)
+    ttgl.amd.cdna5.tdm.prefetch(a_desc, [off_am, prefetch_iteration * BLOCK_K], pred=pred)
     if not TRANSPOSE_B:
-        ttgl.amd.gfx1250.tdm.prefetch(b_desc, [prefetch_iteration * BLOCK_K, off_bn], pred=pred)
+        ttgl.amd.cdna5.tdm.prefetch(b_desc, [prefetch_iteration * BLOCK_K, off_bn], pred=pred)
     else:
-        ttgl.amd.gfx1250.tdm.prefetch(b_desc, [off_bn, prefetch_iteration * BLOCK_K], pred=pred)
+        ttgl.amd.cdna5.tdm.prefetch(b_desc, [off_bn, prefetch_iteration * BLOCK_K], pred=pred)
 
 
 @gluon.jit
@@ -167,14 +167,14 @@ def issue_loads(producer, a_desc, b_desc, off_am, off_bn, a_buffer, b_buffer, BL
     # pred is a hardware predicate passed to async_load for conditional execution without branch divergence
     # Convert boolean pred to i32 for hardware predicate (i1 -> i32)
     pred_i32 = pred.to(ttgl.int32) if hasattr(pred, 'to') else pred
-    ttgl.amd.gfx1250.tdm.async_load(a_desc, [off_am, producer * BLOCK_K], a_buffer.index(producer % NUM_BUFFERS),
-                                    pred=pred_i32)
+    ttgl.amd.cdna5.tdm.async_load(a_desc, [off_am, producer * BLOCK_K], a_buffer.index(producer % NUM_BUFFERS),
+                                  pred=pred_i32)
     if not TRANSPOSE_B:
-        ttgl.amd.gfx1250.tdm.async_load(b_desc, [producer * BLOCK_K, off_bn], b_buffer.index(producer % NUM_BUFFERS),
-                                        pred=pred_i32)
+        ttgl.amd.cdna5.tdm.async_load(b_desc, [producer * BLOCK_K, off_bn], b_buffer.index(producer % NUM_BUFFERS),
+                                      pred=pred_i32)
     else:
-        ttgl.amd.gfx1250.tdm.async_load(b_desc, [off_bn, producer * BLOCK_K], b_buffer.index(producer % NUM_BUFFERS),
-                                        pred=pred_i32)
+        ttgl.amd.cdna5.tdm.async_load(b_desc, [off_bn, producer * BLOCK_K], b_buffer.index(producer % NUM_BUFFERS),
+                                      pred=pred_i32)
     producer += 1
     return producer
 
@@ -191,12 +191,12 @@ def issue_wmma(consumer, a_buffer, a_layout: ttgl.constexpr, b_buffer, b_layout:
     """
     num_ctas: ttgl.constexpr = ttgl.num_ctas()
     if num_ctas > 1:
-        ttgl.amd.gfx1250.cluster.arrive()
+        ttgl.amd.cdna5.cluster.arrive()
 
-    ttgl.amd.gfx1250.tdm.async_wait(wait_producers_cnt)
+    ttgl.amd.cdna5.tdm.async_wait(wait_producers_cnt)
 
     if num_ctas > 1:
-        ttgl.amd.gfx1250.cluster.wait()
+        ttgl.amd.cdna5.cluster.wait()
 
     a = a_buffer.index(consumer % NUM_BUFFERS).load(layout=a_layout)
     if not TRANSPOSE_B:
@@ -204,7 +204,7 @@ def issue_wmma(consumer, a_buffer, a_layout: ttgl.constexpr, b_buffer, b_layout:
     else:
         b = b_buffer.index(consumer % NUM_BUFFERS).permute([1, 0]).load(layout=b_layout)
 
-    accumulator = ttgl.amd.gfx1250.wmma(a, b, accumulator)
+    accumulator = ttgl.amd.cdna5.wmma(a, b, accumulator)
     consumer += 1
     return consumer, accumulator
 
@@ -240,7 +240,7 @@ def lds_load(consumer, a_buffer, a_layout: ttgl.constexpr, b_buffer, b_layout: t
 @gluon.jit
 def issue_wmma_compute(a, b, accumulator):
     """Perform WMMA computation on pre-loaded operands."""
-    accumulator = ttgl.amd.gfx1250.wmma(a, b, accumulator)
+    accumulator = ttgl.amd.cdna5.wmma(a, b, accumulator)
     return accumulator
 
 

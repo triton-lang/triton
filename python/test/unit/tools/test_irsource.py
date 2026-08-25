@@ -33,7 +33,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
                                 %arg6: i32 {tt.divisibility = 16 : i32},
                                 %arg7: i32 {tt.divisibility = 16 : i32},
                                 %arg8: i32 {tt.divisibility = 16 : i32, tt.nv_tma_desc = 0 : i32},
-                                %desc: !tt.ptr<i8, 0> {tt.nv_tma_desc = 1 : i32}) attributes {noinline = false} {
+                                %desc: !tt.ptr<i8, "descriptor"> {tt.nv_tma_desc = 1 : i32}) attributes {noinline = false} {
     tt.return
   }
 }

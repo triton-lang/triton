@@ -2563,6 +2563,37 @@ TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps) {
                    {S("dim0"), S("dim1")}));
 }
 
+TEST_F(LinearLayoutConversionsTest,
+       WMMA_v3_32x16TransposedPartitionedCTAIsInjective) {
+  auto cgaLayout = CGAEncodingAttr::get1CTALayout(&ctx, 2);
+
+  LinearLayout ctaLayout({{S("register"), {{0, 1}, {1, 0}}},
+                          {S("warp"), {{4, 2}, {2, 0}, {4, 0}}}},
+                         {S("dim0"), S("dim1")});
+  auto layout = AMDWmmaEncodingAttr::get(&ctx, /*version=*/3, ctaLayout,
+                                         /*isTransposed=*/true, cgaLayout,
+                                         /*instrShape=*/{32, 16, 128});
+
+  auto linear = toLinearLayout({128, 128}, layout);
+  EXPECT_TRUE(linear.isInjective());
+  EXPECT_EQ(linear.getInDimSize(S("register")), 64);
+
+  // Physical 32x16 CTA extents are wrong for the transposed layout's logical
+  // 16x32 output tile. The N dimension is clipped when composed for a 128x128
+  // accumulator, duplicating half the values and registers.
+  LinearLayout physicalCtaLayout({{S("register"), {{0, 1}, {0, 2}}},
+                                  {S("warp"), {{2, 4}, {1, 0}, {2, 0}}}},
+                                 {S("dim0"), S("dim1")});
+  auto physicalLayout =
+      AMDWmmaEncodingAttr::get(&ctx, /*version=*/3, physicalCtaLayout,
+                               /*isTransposed=*/true, cgaLayout,
+                               /*instrShape=*/{32, 16, 128});
+
+  auto physicalLinear = toLinearLayout({128, 128}, physicalLayout);
+  EXPECT_FALSE(physicalLinear.isInjective());
+  EXPECT_EQ(physicalLinear.getInDimSize(S("register")), 128);
+}
+
 TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_lhs) {
   auto dot = wmma(/*warps=*/{2, 4}, /*version=*/3, /*transposed=*/false,
                   /*instrShape=*/{16, 16, 32});
@@ -3443,6 +3474,34 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
       {S("dim0"), S("dim1")});
 
   EXPECT_EQ(ll, layout);
+}
+
+TEST_F(LinearLayoutConversionsTest, SM120BatchedDotScaledScaleLayout) {
+  auto cgaLayout =
+      CGAEncodingAttr::fromSplitParams(&ctx, {1, 1, 1}, {1, 1, 1}, {2, 1, 0});
+
+  auto layout =
+      getSM120DotScaledScaleLayout(&ctx, /*shape=*/{4, 128, 2}, /*opIdx=*/0,
+                                   /*warpsPerCTA=*/{4, 1, 1}, cgaLayout);
+  auto expected = LinearLayout(
+      {{S("register"), {{0, 0, 1}, {0, 16, 0}, {0, 32, 0}, {0, 64, 0}}},
+       {S("lane"), {{0, 8, 0}, {0, 0, 0}, {0, 1, 0}, {0, 2, 0}, {0, 4, 0}}},
+       {S("warp"), {{1, 0, 0}, {2, 0, 0}}},
+       {S("block"), {}}},
+      {S("dim0"), S("dim1"), S("dim2")});
+  EXPECT_EQ(expected, layout);
+
+  layout =
+      getSM120DotScaledScaleLayout(&ctx, /*shape=*/{4, 128, 2}, /*opIdx=*/1,
+                                   /*warpsPerCTA=*/{4, 1, 1}, cgaLayout);
+  expected = LinearLayout(
+      {{S("register"),
+        {{0, 0, 1}, {0, 8, 0}, {0, 16, 0}, {0, 32, 0}, {0, 64, 0}}},
+       {S("lane"), {{0, 0, 0}, {0, 0, 0}, {0, 1, 0}, {0, 2, 0}, {0, 4, 0}}},
+       {S("warp"), {{1, 0, 0}, {2, 0, 0}}},
+       {S("block"), {}}},
+      {S("dim0"), S("dim1"), S("dim2")});
+  EXPECT_EQ(expected, layout);
 }
 
 //===----------------------------------------------------------------------===//

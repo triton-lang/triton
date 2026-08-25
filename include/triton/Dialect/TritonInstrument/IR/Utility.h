@@ -80,13 +80,15 @@ void createAssertInThread(ImplicitLocOpBuilder &b, Value condition,
                           StringRef message);
 Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
                                     Value tensor, RankedTensorType tensorType,
-                                    bool currentCTAOnly = false);
+                                    bool currentCTAOnly = false,
+                                    Value storeMask = nullptr);
 Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
                               RankedTensorType tensorType);
 gpu::GlobalScratchAllocOp
 createThirdPartyScratchAlloc(OpBuilder &b, Location loc, Type ptrType,
                              int64_t sizeInBytes, int64_t alignment,
                              bool sharedClusterState = false);
+Region *getClusterBarrierGroupRegion(Operation *op);
 RankedTensorType getSlicedTensorType(RankedTensorType tensorType,
                                      ArrayRef<int> keptDims, Type elementType);
 Value reshapeAndBroadcast(OpBuilder &b, Location loc, Value tensor,
@@ -182,6 +184,7 @@ struct AuxDataMap {
   //       padded for the distributed layout.
   //   P = base-thread columns used by commit and proxy state, power-of-two
   //       padded.
+  //   F = mbarrier phase parity slots, with extent 2.
   //
   // Storage notation:
   //   tensor  = distributed tensor value.
@@ -203,8 +206,8 @@ struct AuxDataMap {
   // the latest write to the buffer row.
   RegionToValueMap writeVisibility[numMemTypes];
 
-  // scratch, <Cbuf x B x Cbar x K x i8>
-  // Per-memory-type buffer/barrier map for writes that a barrier tracks.
+  // scratch, <Cbuf x B x Cbar x K x F x i8>
+  // Per-memory-type buffer/barrier/phase map for writes that a barrier tracks.
   RegionToValueMap writeTracking[numMemTypes];
 
   // scratch, <Cbuf x B x Cthr x T x Cmask x i64>
@@ -212,9 +215,9 @@ struct AuxDataMap {
   // i64 value is a bitmask of reads visible to that lane's thread.
   RegionToValueMap readVisibility[numMemTypes];
 
-  // scratch, <Cbuf x B x Cbar x K x Cmask x i64>
-  // Per-memory-type buffer/barrier map for read visibility masks that a barrier
-  // tracks.
+  // scratch, <Cbuf x B x Cbar x K x Cmask x F x i64>
+  // Per-memory-type buffer/barrier/phase map for read visibility masks that a
+  // barrier tracks.
   RegionToValueMap readTracking[numMemTypes];
 
   // scratch, <Cbuf x B x Cthr x P x Cmask x i64>
@@ -224,8 +227,9 @@ struct AuxDataMap {
   // that consumer. CTA dimensions distinguish source and consumer CTAs.
   RegionToValueMap proxyAccessVisibility;
 
-  // scratch, <Cbuf x B x Cbar x K x Cmask x i64>
-  // Barrier publication table for packed proxyAccessVisibility state.
+  // scratch, <Cbuf x B x Cbar x K x Cmask x F x i64>
+  // Phase-specific barrier publication table for packed proxyAccessVisibility
+  // state.
   RegionToValueMap proxyAccessTracking;
 
   // scratch, <C x B x P x i8>
@@ -237,9 +241,15 @@ struct AuxDataMap {
   RegionToValueMap commits[CommitKind::NumCommitKinds];
 
   // State-lane plans and analysis-derived runtime-base, state-mask, and CTA
-  // cases for each memdesc.
+  // cases for each memdesc. bufferRegions preserves the ordered region list
+  // used to build each plan so static scratch can select its mask directly.
   triton::BufferStatePlan bufferStatePlans[numMemTypes];
+  SmallVector<triton::BufferRegion> bufferRegions[numMemTypes];
   DenseMap<Value, BufferStateCandidates> bufferCandidates[numMemTypes];
+
+  // Shared-memory state lanes occupied by each physical mbarrier. Virtual
+  // cluster barriers have no storage and therefore do not appear here.
+  SmallVector<llvm::SmallBitVector> barrierBufferMasks;
 
   // scratch pointer, i32
   // Shared-cluster lock used to serialize ConSan instrumentation updates.
@@ -273,6 +283,7 @@ struct AuxDataMap {
   bool hasAsyncProxyFenceTracking = false;
 
   LogicalResult populateAndPassToWarpSpecialize(ModuleOp module,
+                                                triton::FuncOp entryPoint,
                                                 FunctionBuilder &funcBuilder,
                                                 const ConSanTargetHooks &hooks);
 
@@ -280,7 +291,7 @@ struct AuxDataMap {
 
 private:
   LogicalResult
-  getBuffersAndBarriers(ModuleOp module,
+  getBuffersAndBarriers(ModuleOp module, triton::FuncOp entryPoint,
                         SmallVector<triton::BufferRegion> &barrierRegions,
                         const ConSanTargetHooks &hooks);
   void passToWarpSpecialize(triton::FuncOp func, ValueType value,

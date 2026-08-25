@@ -191,10 +191,10 @@ struct GluonLayouts {
     AMDWMMALayout = py::object(amdLayouts.attr("AMDWMMALayout")).release();
     PaddedSharedLayout =
         py::object(layouts.attr("PaddedSharedLayout")).release();
-    auto gfx1250Layouts = py::module_::import_(
-        "triton.experimental.gluon.language.amd.gfx1250._layouts");
+    auto cdna5Layouts = py::module_::import_(
+        "triton.experimental.gluon.language.amd.cdna5._layouts");
     PartitionedSharedLayout =
-        py::object(gfx1250Layouts.attr("PartitionedSharedLayout")).release();
+        py::object(cdna5Layouts.attr("PartitionedSharedLayout")).release();
 
     auto core = py::module_::import_("triton.language.core");
   }
@@ -682,11 +682,6 @@ void init_gluon_ir(py::module_ &m) {
           },
           py::arg("operand"), py::arg("numBins"), py::arg("mask").none(),
           py::arg("layout"))
-      .def("create_cat",
-           [](GluonOpBuilder &self, Value &lhs, Value &rhs,
-              Type retType) -> Value {
-             return self.create<triton::CatOp>(retType, lhs, rhs);
-           })
       .def("create_experimental_fpsan_embed",
            [](GluonOpBuilder &self, Value &src, Type &dstType) -> Value {
              return self.create<triton::instrument::ExperimentalFPSanEmbedOp>(
@@ -1174,6 +1169,17 @@ void init_gluon_ir(py::module_ &m) {
               Value scale) -> Value {
              return self.create<ttag::ScaledUpcastFp8Op>(resultType, input,
                                                          scale);
+           })
+      .def("create_scaled_downcast_fp4",
+           [](GluonOpBuilder &self, Value input, Value scale,
+              int axis) -> Value {
+             return self.create<ttag::ScaledDowncastFp4Op>(input, scale, axis);
+           })
+      .def("create_scaled_downcast_fp8",
+           [](GluonOpBuilder &self, Value input, Value scale, Type elemType,
+              int axis) -> Value {
+             return self.create<ttag::ScaledDowncastFp8Op>(input, scale,
+                                                           elemType, axis);
            })
       .def("create_extract_slice",
            [](GluonOpBuilder &self, Type resultType, Value source,

@@ -7,7 +7,7 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton._internal_testing import is_blackwell, is_compile_warmup, is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
 from triton._C.libtriton.gluon_ir import make_cga_layout
-from triton.experimental.gluon.language.amd.gfx1250 import PartitionedSharedLayout
+from triton.experimental.gluon.language.amd.cdna5 import PartitionedSharedLayout
 from triton.experimental.gluon.language.nvidia.blackwell import TensorMemoryLayout, allocate_tensor_memory
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size

@@ -352,7 +352,6 @@ lowerDsReadTr(Operation *op,
   }
 
   // Perform computation in bytes, LLVM optimises this better
-  assert(bitWidth >= 8);
   auto i8Tile =
       zerosLike(LinearLayout::identity1D(bitWidth / 8, kReg, kOffset));
   auto i8AddrLayout = i8Tile * addrLayout;

@@ -47,8 +47,11 @@ void tensormap_replace_generic(Location loc, MLIRContext *ctx,
                                ConversionPatternRewriter &rewriter,
                                std::string fieldName, Value descPtr,
                                int32_t newVal) {
+  // The descriptor is zero-initialized before its fields are populated.
+  if (newVal == 0)
+    return;
+
   PTXBuilder ptxBuilder;
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   // prepare asm operands
   auto *descAddrOpr = ptxBuilder.newAddrOperand(descPtr, "l");
@@ -61,9 +64,7 @@ void tensormap_replace_generic(Location loc, MLIRContext *ctx,
                       .o("b1024")
                       .o("b32");
 
-  Value threadId = getThreadId(rewriter, loc);
-  Value pred = b.icmp_eq(threadId, b.i32_val(0));
-  replace(descAddrOpr, newValOpr).predicate(pred);
+  replace(descAddrOpr, newValOpr);
 
   ptxBuilder.launch(rewriter, loc, void_ty(ctx));
 }
@@ -74,7 +75,6 @@ void tensormap_replace_generic(Location loc, MLIRContext *ctx,
                                Value newVal,
                                std::optional<int32_t> ord = std::nullopt) {
   PTXBuilder ptxBuilder;
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   auto newValTy = newVal.getType();
   int width = 0;
@@ -101,13 +101,10 @@ void tensormap_replace_generic(Location loc, MLIRContext *ctx,
                       .o("b32", width == 32)
                       .o("b64", width == 64);
 
-  Value threadId = getThreadId(rewriter, loc);
-  Value pred = b.icmp_eq(threadId, b.i32_val(0));
-
   if (ord) {
-    replace(descAddrOpr, ordOpr, newValOpr).predicate(pred);
+    replace(descAddrOpr, ordOpr, newValOpr);
   } else {
-    replace(descAddrOpr, newValOpr).predicate(pred);
+    replace(descAddrOpr, newValOpr);
   }
 
   ptxBuilder.launch(rewriter, loc, void_ty(ctx));
@@ -260,6 +257,11 @@ struct TensormapCreateOpConversion
     auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
 
     zero_fill_tma(loc, ctx, rewriter, targetInfo, smemBase);
+    Value isLeader = b.icmp_eq(getThreadId(rewriter, loc), b.i32_val(0));
+    auto [previousBlock, updateBlock, continuationBlock] =
+        createIfBlock(rewriter, loc, isLeader);
+    (void)previousBlock;
+    rewriter.setInsertionPointToStart(updateBlock);
     tensormap_replace_global_address(loc, ctx, rewriter, smemBase,
                                      adaptor.getGlobalAddress());
     tensormap_replace_rank(loc, ctx, rewriter, smemBase, op.getRank() - 1);
@@ -290,6 +292,7 @@ struct TensormapCreateOpConversion
     tensormap_replace_swizzle_mode(loc, ctx, rewriter, smemBase,
                                    op.getSwizzleMode());
     tensormap_replace_fill_mode(loc, ctx, rewriter, smemBase, op.getFillMode());
+    rewriter.setInsertionPointToStart(continuationBlock);
     tensormap_cp_fenceproxy(loc, ctx, rewriter, adaptor.getDescPtr(), smemBase);
     rewriter.eraseOp(op);
     return success();

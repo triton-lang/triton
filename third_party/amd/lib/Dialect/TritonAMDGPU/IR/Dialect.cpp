@@ -156,15 +156,24 @@ LogicalResult verifyTDMCommonLayout(Operation *op,
   return verifyTDMLayoutConsistency(op, descTy, smemTy);
 }
 
+// A v_cvt_scalef32 group applies one scale to `groupSize` register-consecutive
+// output values. Check that the first `groupSize` register in-dims of the scale
+// layout are all broadcast (zero), i.e. the whole group maps to a single scale.
+bool groupSharesSingleScale(const LinearLayout &scaleLL, StringAttr kRegister,
+                            int64_t groupSize) {
+  assert(llvm::isPowerOf2_64(groupSize));
+  if (scaleLL.getInDimSizeLog2(kRegister) < llvm::Log2_64(groupSize))
+    return false;
+  auto outDims = llvm::to_vector(scaleLL.getOutDimNames());
+  return scaleLL.resizeInDim(kRegister, /*newSize=*/groupSize)
+      .sublayoutIsZero({kRegister}, outDims);
+}
+
 // The v_cvt_scale_pk8 lowering upcasts 8 register-consecutive fp4 values with a
 // single scale, check that 8 elements in the scale layout are all broadcasts.
 bool pk8GroupSharesSingleScale(const LinearLayout &scaleLL,
                                StringAttr kRegister) {
-  if (scaleLL.getInDimSizeLog2(kRegister) < 3)
-    return false;
-  auto outDims = llvm::to_vector(scaleLL.getOutDimNames());
-  return scaleLL.resizeInDim(kRegister, /*newSize=*/8)
-      .sublayoutIsZero({kRegister}, outDims);
+  return groupSharesSingleScale(scaleLL, kRegister, /*groupSize=*/8);
 }
 
 // Validates the output/scale shape relationship and returns the number of
@@ -268,10 +277,140 @@ LogicalResult verifyScaledUpcastFp4ScaleLayout(ScaledUpcastFp4Op op) {
   return success();
 }
 
+template <typename OpT>
+std::optional<int64_t> scaledDowncastScaleBlock(OpT op) {
+  auto outputShape = op.getOutput().getType().getShape();
+  auto scaleShape = op.getScale().getType().getShape();
+  int64_t axis = op.getAxis();
+  if (axis < 0 || axis >= static_cast<int64_t>(outputShape.size()) ||
+      outputShape.size() != scaleShape.size())
+    return std::nullopt;
+  for (int64_t dim = 0; dim < static_cast<int64_t>(outputShape.size()); ++dim) {
+    if (dim != axis && outputShape[dim] != scaleShape[dim])
+      return std::nullopt;
+  }
+  if (scaleShape[axis] <= 0 || outputShape[axis] % scaleShape[axis] != 0)
+    return std::nullopt;
+  return outputShape[axis] / scaleShape[axis];
+}
+
+template <typename OpT>
+std::optional<Attribute> inferScaledDowncastScaleEncoding(OpT op,
+                                                          Attribute outputEnc) {
+  auto elementsPerScale = scaledDowncastScaleBlock(op);
+  if (!elementsPerScale || !outputEnc ||
+      !isa<gpu::LayoutEncodingTrait>(outputEnc))
+    return std::nullopt;
+  // Expanded scales have the same axis extent so we can reuse outputEnc
+  if (*elementsPerScale == 1)
+    return outputEnc;
+
+  auto outputLL =
+      gpu::toLinearLayout(op.getOutput().getType().getShape(),
+                          cast<gpu::LayoutEncodingTrait>(outputEnc));
+  auto compact =
+      OpT::computeScaleLayout(outputLL, op.getAxis(), *elementsPerScale);
+  if (!compact)
+    return std::nullopt;
+  auto kRegister = StringAttr::get(op.getContext(), "register");
+  return gpu::LinearEncodingAttr::get(
+      op.getContext(), compact->removeZeroBasesAlongDim(kRegister));
+}
+
+template <typename OpT>
+LogicalResult verifyScaledDowncastScaleLayout(OpT op, int64_t groupSize,
+                                              StringRef groupDescription,
+                                              StringRef blockDescription) {
+  auto scaleTy = op.getScale().getType();
+  auto outputTy = op.getOutput().getType();
+  auto scaleEnc = scaleTy.getEncoding();
+  auto outputEnc = outputTy.getEncoding();
+  if (!scaleEnc != !outputEnc)
+    return op.emitError()
+           << "scale and output must both have an encoding, or neither";
+  if (!scaleEnc)
+    return success();
+
+  auto elementsPerBlock = scaledDowncastScaleBlock(op);
+  if (!elementsPerBlock)
+    return op.emitError() << "scale shape is not compatible with the output "
+                             "shape along the scaled axis";
+  if (*elementsPerBlock == 1)
+    return op.emitError()
+           << "scaled_downcast requires compact scales along the scaled axis; "
+              "expanded scales (one scale per output element) are not "
+              "supported";
+  if (*elementsPerBlock % groupSize != 0)
+    return op.emitError()
+           << "each scale block along the scaled axis must cover "
+           << blockDescription << ", but got " << *elementsPerBlock
+           << " output elements per scale";
+  auto outputLL = gpu::toLinearLayout(
+      outputTy.getShape(), cast<gpu::LayoutEncodingTrait>(outputEnc));
+  auto compact =
+      OpT::computeScaleLayout(outputLL, op.getAxis(), *elementsPerBlock);
+  if (!compact)
+    return op.emitError() << "the scale block along the scaled axis must be a "
+                             "power of two";
+
+  auto kRegister = StringAttr::get(op.getContext(), "register");
+  if (!groupSharesSingleScale(*compact, kRegister, groupSize))
+    return op.emitError()
+           << "each v_cvt_scalef32_pk8 group of " << groupDescription
+           << " must share a single scale; the scale block along the scaled "
+              "axis must be a "
+           << blockDescription;
+
+  auto stripRegisters = [&](RankedTensorType type, Attribute enc) {
+    return gpu::toLinearLayout(type.getShape(),
+                               cast<gpu::LayoutEncodingTrait>(enc))
+        .removeZeroBasesAlongDim(kRegister);
+  };
+  auto actualLayout = stripRegisters(scaleTy, scaleEnc);
+  auto expectedLayout = compact->removeZeroBasesAlongDim(kRegister);
+  if (actualLayout != expectedLayout)
+    return op.emitError()
+           << "scale encoding is not compatible with the inferred scale "
+              "layout\nexpected: "
+           << expectedLayout.toString()
+           << "\nactual: " << actualLayout.toString();
+  return success();
+}
+
+template <typename OpT>
+LogicalResult verifyScaledDowncastScaleShapeAndAxis(OpT op,
+                                                    RankedTensorType outputTy,
+                                                    RankedTensorType scaleTy) {
+  auto outputShape = outputTy.getShape();
+  auto scaleShape = scaleTy.getShape();
+  if (outputShape.size() != scaleShape.size())
+    return op.emitError() << "scale and output must have the same rank";
+
+  int64_t axis = op.getAxis();
+  int64_t rank = outputTy.getRank();
+  if (axis < 0 || axis >= rank)
+    return op.emitError() << "axis out of range: " << axis << " for rank "
+                          << rank;
+
+  for (int64_t dim = 0; dim < rank; ++dim) {
+    if (dim == axis)
+      continue;
+    if (outputShape[dim] != scaleShape[dim])
+      return op.emitError()
+             << "scale and output must match on non-axis dimensions";
+  }
+  if (scaleShape[axis] <= 0 || outputShape[axis] % scaleShape[axis] != 0)
+    return op.emitError() << "expected output.shape[axis] to be divisible by "
+                             "scale.shape[axis], but got output["
+                          << axis << "]=" << outputShape[axis] << ", scale["
+                          << axis << "]=" << scaleShape[axis];
+  return success();
+}
+
 } // namespace
 
-// Derive the layout of a scale tensor from the upcast output layout. A compact
-// scale holds a single value per `elementsPerScale` consecutive output elements
+// Derive the layout of a scale tensor from an output layout. A compact scale
+// holds a single value per `elementsPerScale` consecutive output elements
 // along `axis`, so the scale that an output element at coordinate `k` needs is
 // `scale[..., k / elementsPerScale, ...]`, i.e. the output coordinate with its
 // low `log2(elementsPerScale)` bits dropped (right-shifted). Output positions
@@ -279,8 +418,8 @@ LogicalResult verifyScaledUpcastFp4ScaleLayout(ScaledUpcastFp4Op op) {
 // broadcast (zero) bases along the scaled axis. `elementsPerScale` must be a
 // power of two.
 std::optional<LinearLayout>
-ScaledUpcastFp4Op::computeScaleLayout(const LinearLayout &outputLayout,
-                                      int64_t axis, int64_t elementsPerScale) {
+computeScaledCastScaleLayout(const LinearLayout &outputLayout, int64_t axis,
+                             int64_t elementsPerScale) {
   // For expanded scales the scale layout is the same as the output layout.
   if (elementsPerScale == 1)
     return outputLayout;
@@ -318,6 +457,23 @@ ScaledUpcastFp4Op::computeScaleLayout(const LinearLayout &outputLayout,
   return outputLayout.compose(scaleDivisor);
 }
 
+std::optional<LinearLayout>
+ScaledUpcastFp4Op::computeScaleLayout(const LinearLayout &outputLayout,
+                                      int64_t axis, int64_t elementsPerScale) {
+  return computeScaledCastScaleLayout(outputLayout, axis, elementsPerScale);
+}
+
+std::optional<LinearLayout>
+ScaledDowncastFp4Op::computeScaleLayout(const LinearLayout &outputLayout,
+                                        int64_t axis, int64_t pairsPerScale) {
+  return computeScaledCastScaleLayout(outputLayout, axis, pairsPerScale);
+}
+
+std::optional<LinearLayout> ScaledDowncastFp8Op::computeScaleLayout(
+    const LinearLayout &outputLayout, int64_t axis, int64_t elementsPerScale) {
+  return computeScaledCastScaleLayout(outputLayout, axis, elementsPerScale);
+}
+
 LogicalResult ExtractSliceOp::verify() {
   // Basic type/rank checks.
   auto srcTypeVal = getSource().getType();
@@ -343,6 +499,8 @@ LogicalResult ExtractSliceOp::verify() {
   };
 
   for (size_t i = 0; i < rank; ++i) {
+    if (offsets[i] < 0)
+      return failDim("offset must be non-negative", i);
     if (dstShape[i] > srcShape[i])
       return failDim("result shape cannot exceed source shape", i);
     if (offsets[i] + dstShape[i] > srcShape[i])
@@ -438,6 +596,10 @@ struct CanonicalizeExtractSliceAndConcat
     // Calculate which concat operand contains our slice
     auto srcShape = concatItemType.getShape();
     auto rank = srcShape.size();
+    for (auto [dimOffset, dimSize] : llvm::zip_equal(offset, srcShape)) {
+      if (dimOffset % dimSize != 0)
+        return failure();
+    }
     std::vector<unsigned> defaultOrder(rank);
     std::iota(defaultOrder.rbegin(), defaultOrder.rend(), 0);
 
@@ -618,6 +780,69 @@ Attribute ScaledUpcastFp4Op::inferSrcEncoding(unsigned opIdx,
   return {};
 }
 
+LogicalResult ScaledDowncastFp4Op::verify() {
+  RankedTensorType inputTy = getInput().getType();
+  RankedTensorType outputTy = getOutput().getType();
+  RankedTensorType scaleTy = getScale().getType();
+  if (failed(verifyScaledDowncastScaleShapeAndAxis(*this, outputTy, scaleTy)))
+    return failure();
+
+  if (failed(verifyScaledDowncastScaleLayout(
+          *this, /*groupSize=*/4, /*groupDescription=*/"8 fp4 values",
+          /*blockDescription=*/"a multiple of 8 fp4 values (4 packed bytes)")))
+    return failure();
+
+  // Reuse fp4tofp verifier for packed/unpacked relationship
+  return mlir::triton::gpu::Fp4ToFpOp::verifyFp4ToFp(*this, outputTy, inputTy,
+                                                     getAxis());
+}
+
+Attribute ScaledDowncastFp4Op::inferDstEncoding(unsigned opIdx,
+                                                Attribute srcEnc) {
+  // The scale layout is a quotient of the output along the scaled axis
+  if (opIdx == 1) {
+    if (auto scaleEnc = inferScaledDowncastScaleEncoding(*this, srcEnc))
+      return *scaleEnc;
+    return {};
+  }
+  // opIdx == 0: infer the packed output encoding from the unpacked input.
+  Attribute dstEnc;
+  auto shape = getInput().getType().getShape();
+
+  auto iface =
+      srcEnc.getDialect()
+          .getRegisteredInterface<triton::DialectInferLayoutInterface>();
+  if (succeeded(iface->inferFp4ToFpOpEncoding(shape, getAxis(), srcEnc, dstEnc,
+                                              /*fwdInference=*/false,
+                                              std::nullopt))) {
+    return dstEnc;
+  }
+  return {};
+}
+
+Attribute ScaledDowncastFp4Op::inferSrcEncoding(unsigned opIdx,
+                                                Attribute dstEnc) {
+  // The scale layout is a quotient of the output along the scaled axis
+  if (opIdx == 1) {
+    if (auto scaleEnc = inferScaledDowncastScaleEncoding(*this, dstEnc)) {
+      return *scaleEnc;
+    }
+  }
+  // opIdx == 0: infer the unpacked input encoding from the packed output.
+  Attribute srcEnc;
+  auto shape = getInput().getType().getShape();
+
+  auto iface =
+      dstEnc.getDialect()
+          .getRegisteredInterface<triton::DialectInferLayoutInterface>();
+  if (succeeded(iface->inferFp4ToFpOpEncoding(shape, getAxis(), dstEnc, srcEnc,
+                                              /*fwdInference=*/true,
+                                              std::nullopt))) {
+    return srcEnc;
+  }
+  return {};
+}
+
 Attribute ScaledUpcastFp8Op::inferDstEncoding(unsigned opIdx,
                                               Attribute srcEnc) {
   return srcEnc;
@@ -625,6 +850,47 @@ Attribute ScaledUpcastFp8Op::inferDstEncoding(unsigned opIdx,
 
 Attribute ScaledUpcastFp8Op::inferSrcEncoding(unsigned opIdx,
                                               Attribute dstEnc) {
+  return dstEnc;
+}
+
+LogicalResult ScaledDowncastFp8Op::verify() {
+  RankedTensorType inputTy = getInput().getType();
+  RankedTensorType outputTy = getOutput().getType();
+  RankedTensorType scaleTy = getScale().getType();
+  auto inputShape = inputTy.getShape();
+  auto outputShape = outputTy.getShape();
+
+  // fp8 downcast is elementwise: input and output share shape (and encoding).
+  if (inputShape != outputShape)
+    return emitError() << "input and output must have the same shape";
+  if (inputTy.getEncoding() != outputTy.getEncoding())
+    return emitError() << "input and output must have the same encoding";
+  if (failed(verifyScaledDowncastScaleShapeAndAxis(*this, outputTy, scaleTy)))
+    return failure();
+
+  return verifyScaledDowncastScaleLayout(
+      *this, /*groupSize=*/8,
+      /*groupDescription=*/"8 elements",
+      /*blockDescription=*/"a multiple of 8 elements");
+}
+
+Attribute ScaledDowncastFp8Op::inferDstEncoding(unsigned opIdx,
+                                                Attribute srcEnc) {
+  if (opIdx == 1) {
+    if (auto scaleEnc = inferScaledDowncastScaleEncoding(*this, srcEnc))
+      return *scaleEnc;
+    return {};
+  }
+  return srcEnc;
+}
+
+Attribute ScaledDowncastFp8Op::inferSrcEncoding(unsigned opIdx,
+                                                Attribute dstEnc) {
+  if (opIdx == 1) {
+    if (auto scaleEnc = inferScaledDowncastScaleEncoding(*this, dstEnc)) {
+      return *scaleEnc;
+    }
+  }
   return dstEnc;
 }
 
@@ -741,6 +1007,25 @@ LogicalResult BufferLoadToLocalOp::verify() {
   if (features.getArch().empty() || features.supportsBufferLoadToLocal())
     return success();
   return emitError() << "BufferLoadToLocal unsupported on target architecture";
+}
+
+// A buffer write's scalar base must be global memory (address space 1).
+static LogicalResult verifyBufferWriteBase(Operation *op, Value ptr) {
+  if (triton::getAddressSpace(ptr.getType()) != triton::PtrAddrSpace::Global)
+    return op->emitOpError("buffer writes require a global address space base");
+  return success();
+}
+
+LogicalResult BufferStoreOp::verify() {
+  return verifyBufferWriteBase(getOperation(), getPtr());
+}
+
+LogicalResult BufferAtomicRMWOp::verify() {
+  return verifyBufferWriteBase(getOperation(), getPtr());
+}
+
+LogicalResult BufferAtomicCASOp::verify() {
+  return verifyBufferWriteBase(getOperation(), getPtr());
 }
 
 LogicalResult LocalLoadPackedTransposedOp::verify() {

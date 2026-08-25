@@ -2,12 +2,15 @@
 #define TRITONINSTRUMENT_CONSAN_TARGET_HOOKS_H
 
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/Interfaces/CallInterfaces.h"
+#include "triton/Analysis/BufferRegion.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <variant>
 
 namespace mlir::triton::instrument {
 
@@ -30,16 +33,36 @@ struct MemEffectsOpInfo {
     EffectWrites,
   };
   struct Effects {
-    enum RW { Read, Write } rw;
-    enum class Proxy { Generic, Async } proxy;
-    Value buf;
+    struct StaticSharedBuffer {
+      uint32_t offset;
+      uint32_t length;
+
+      triton::BufferRegion getRegion(unsigned numCTAs) const {
+        triton::BufferRegion region;
+        region.baseOffset = offset;
+        region.length = length;
+        for (unsigned cta = 0; cta < numCTAs; ++cta)
+          region.ctaAddresses.push_back(
+              {cta, triton::AddressSet::fromRange(offset, length)});
+        return region;
+      }
+    };
+
+    RW rw;
+    std::optional<gpu::SharedKind> sharedKind;
+    std::variant<Value, StaticSharedBuffer> buffer;
     std::string operandName = "";
     uint32_t length = 0;
 
     Effects(RW rw, Value buf, std::string operandName = "",
-            Proxy proxy = Proxy::Generic)
-        : rw(rw), proxy(proxy), buf(buf), operandName(operandName),
+            std::optional<gpu::SharedKind> sharedKind = std::nullopt)
+        : rw(rw), sharedKind(sharedKind), buffer(buf), operandName(operandName),
           length(getMemDescLength(buf)) {}
+
+    Effects(RW rw, StaticSharedBuffer buffer,
+            std::string operandName = "Scratch")
+        : rw(rw), sharedKind(gpu::SharedKind::Generic), buffer(buffer),
+          operandName(operandName), length(buffer.length) {}
   };
   struct BarrierInfo {
     Value barrier;
@@ -126,29 +149,32 @@ public:
   virtual Value getIssuerCTAPred(ImplicitLocOpBuilder &b,
                                  Operation *op) const = 0;
 
+  // Publish shared-cluster state initialization through the target's native
+  // cluster rendezvous, which may consist of multiple operations.
+  virtual SmallVector<Operation *>
+  createInitClusterBarrier(ImplicitLocOpBuilder &b) const = 0;
+
+  // A call-frame summary cannot represent target-specific synchronization or
+  // compiler scratch that crosses CTA boundaries.
+  virtual bool hasUnsummarizableCalleeState(Operation *op) const {
+    return false;
+  }
+
   virtual std::optional<MemEffectsOpInfo>
   getMemEffectsOpInfo(Operation *op) const {
     namespace ttg = triton::gpu;
-    if (auto copyOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
-      MemEffectsOpInfo info;
+    MemEffectsOpInfo info;
+    if (isa<ttg::AsyncCopyGlobalToLocalOp>(op)) {
       info.trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
       info.commitKind = CommitKind::AsyncCp;
-      info.operandEffects.emplace_back(MemEffectsOpInfo::Effects::Write,
-                                       copyOp.getResult());
-      return info;
+    } else {
+      info.trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
     }
-
-    MemEffectsOpInfo info;
-    info.trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
-    auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(op);
-    for (const auto &access : BufferRegionAnalysis::getMemoryAccesses(op)) {
-      if (barrierOp &&
-          llvm::is_contained(barrierOp.getBarriers(), access.value))
+    for (const auto &access : getMemoryAccesses(op)) {
+      if (access.isShared(ttg::SharedKind::Barrier))
         continue;
-      info.operandEffects.emplace_back(access.isWrite
-                                           ? MemEffectsOpInfo::Effects::Write
-                                           : MemEffectsOpInfo::Effects::Read,
-                                       access.value);
+      info.operandEffects.emplace_back(access.isWrite ? RW::Write : RW::Read,
+                                       access.value, "", access.sharedKind);
     }
     if (info.operandEffects.empty())
       return std::nullopt;
@@ -181,7 +207,38 @@ public:
 
   virtual SmallVector<CommitKind::Kind>
   getRequiredCommitKinds(ModuleOp module) const = 0;
+
+  // AMD barriers are ordinary LDS objects and have no invalidate operation.
+  virtual bool barrierWritesInvalidate() const { return false; }
 };
+
+inline std::optional<MemEffectsOpInfo>
+getConSanMemEffectsOpInfo(const ConSanTargetHooks &hooks, Operation *op) {
+  std::optional<MemEffectsOpInfo> info = hooks.getMemEffectsOpInfo(op);
+  auto sizeAttr = op->getAttrOfType<IntegerAttr>("allocation.size");
+  if (!sizeAttr)
+    return info;
+
+  uint32_t offset =
+      op->getAttrOfType<IntegerAttr>("allocation.offset").getInt();
+  uint32_t size = sizeAttr.getInt();
+
+  if (!info)
+    info.emplace();
+  if (info->trackingKind == MemEffectsOpInfo::TrackingKind::None)
+    info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+  assert(info->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier &&
+         !info->implicitCommit &&
+         "compiler scratch cannot be combined with asynchronous operation "
+         "effect tracking");
+  // A ConSan write performs both read- and write-conflict checks, so it is the
+  // conservative read/write summary for compiler-owned scratch.
+  StringRef name = isa<CallOpInterface>(op) ? "Callee scratch" : "Scratch";
+  info->operandEffects.emplace_back(
+      RW::Write, MemEffectsOpInfo::Effects::StaticSharedBuffer{offset, size},
+      name.str());
+  return info;
+}
 
 LogicalResult runConcurrencySanitizer(ModuleOp module,
                                       const ConSanTargetHooks &hooks);

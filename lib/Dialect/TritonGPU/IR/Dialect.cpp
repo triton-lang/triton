@@ -187,6 +187,34 @@ inferFp4ToFpResultType(RankedTensorType srcType, Type elemType, int32_t axis,
   return RankedTensorType::get(shape, elemType, outEnc);
 }
 
+FailureOr<RankedTensorType>
+inferFpToFp4ResultType(RankedTensorType srcType, int32_t axis,
+                       std::optional<Location> loc) {
+  auto rank = srcType.getRank();
+  if (axis < 0 || axis >= rank)
+    return failure();
+  if (srcType.getShape()[axis] % 2 != 0)
+    return failure();
+
+  // srcType is the unpacked (larger) tensor. Infer the packed encoding from
+  // the unpacked one using backward inference, then halve the axis extent.
+  Attribute inEnc = srcType.getEncoding();
+  assert(inEnc && "expected an encoding on the unpacked source type");
+  Attribute outEnc;
+  auto result =
+      inEnc.getDialect()
+          .getRegisteredInterface<triton::DialectInferLayoutInterface>()
+          ->inferFp4ToFpOpEncoding(srcType.getShape(), axis, inEnc, outEnc,
+                                   /*fwdInference=*/false, loc);
+  if (failed(result))
+    return failure();
+
+  auto shape = llvm::to_vector(srcType.getShape());
+  shape[axis] /= 2;
+  return RankedTensorType::get(shape, IntegerType::get(srcType.getContext(), 8),
+                               outEnc);
+}
+
 SmallVector<unsigned> getThreadsPerWarp(Attribute layout,
                                         ArrayRef<int64_t> shape) {
   return toGenericLinearEncoding(cast<DistributedEncodingTrait>(layout), shape)
@@ -531,16 +559,6 @@ static SmallVector<unsigned> orderPerDimImpl(const LinearLayout &ll,
     order.insert(i);
   }
   return order.takeVector();
-}
-
-bool isLegalCatEncoding(CatOp cat, Attribute targetEncoding) {
-  // Cat lowering concatenates the operands' unique register values. So the
-  // number of unique register values in the result must be equal to those in
-  // the operands.
-  int64_t operandRegs = getUniqueElemsPerThread(cat.getLhs().getType()) * 2;
-  int64_t resultRegs =
-      getUniqueElemsPerThread(targetEncoding, cat.getType().getShape());
-  return resultRegs == operandRegs;
 }
 
 static LogicalResult
@@ -3242,19 +3260,6 @@ struct TritonGPUInferLayoutInterface
 
       if (bLL != resLL.resizeOutDim(mDim, 1))
         return op->emitError("Incompatible CGA layout for operand 1");
-    }
-    return success();
-  }
-
-  LogicalResult verifyCatOpEncodingCompatibility(Operation *op) const override {
-    auto cat = cast<CatOp>(op);
-    int64_t operandRegs = getUniqueElemsPerThread(cat.getLhs().getType()) * 2;
-    int64_t resultRegs = getUniqueElemsPerThread(cat.getType());
-    if (resultRegs != operandRegs) {
-      return op->emitError("tt.cat result encoding requires ")
-             << resultRegs
-             << " non-broadcast register values, but operands provide "
-             << operandRegs;
     }
     return success();
   }

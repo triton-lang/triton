@@ -234,6 +234,12 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
         shift[subnormal_index] = (1 - bias_output) - (exponent[subnormal_index] - bias_input)
         significand_output[subnormal_index] = (significand_output[subnormal_index] >> shift[subnormal_index]) | (
             1 << (output_dtype.fp_mantissa_width - shift[subnormal_index]))
+    if output_dtype in (tl.float8e4b8, tl.float8e5b16):
+        # FNUZ formats have only unsigned zero; the sign bit alone encodes NaN.
+        zero_output = (exponent_output == 0) & (significand_output == 0)
+        if input_dtype in (tl.float8e4b8, tl.float8e5b16):
+            zero_output &= input_bin != 0x80
+        sign_output[zero_output] = 0
     output = (sign_output << (output_dtype.primitive_bitwidth - 1)) | (
         exponent_output << output_dtype.fp_mantissa_width) | significand_output
     return output.reshape(input.shape)
@@ -247,7 +253,8 @@ def _erf(x):
 def _umulhi_64(a, b):
     # Numpy does not support 128-bit multiplication
     # So we have to implement it manually
-    return (int(a) * int(b)) >> 64
+    mask = (1 << 64) - 1
+    return ((int(a) & mask) * (int(b) & mask)) >> 64
 
 
 def _e8m0_to_f32(scale):
@@ -486,6 +493,9 @@ class InterpreterBuilder:
     def get_fp16(self, value):
         return TensorHandle(np.array([value], dtype=np.float16), tl.float16)
 
+    def get_bf16(self, value):
+        return self.create_fp_trunc(self.get_fp32(value), tl.bfloat16)
+
     def get_fp32(self, value):
         return TensorHandle(np.array([value], dtype=np.float32), tl.float32)
 
@@ -642,15 +652,20 @@ class InterpreterBuilder:
         return self.binary_op(lhs, rhs, np.right_shift)
 
     def create_umulhi(self, lhs, rhs):
+        # umulhi multiplies the operands as unsigned integers, so signed inputs
+        # take part through their bit pattern: reinterpret them at their own
+        # width before widening, and reinterpret the high half back at the end.
         dtype = lhs.data.dtype
+        unsigned_dtype = getattr(np, f"uint{dtype.itemsize * 8}")
         if dtype == np.int64 or dtype == np.uint64:
-            return TensorHandle(np_umulhi_u64(lhs.data, rhs.data), lhs.dtype.scalar)
+            ret_data = np_umulhi_u64(lhs.data, rhs.data)
         else:
             compute_dtype = getattr(np, f"uint{dtype.itemsize * 8 * 2}")
-            lhs_data = lhs.data.astype(compute_dtype)
-            rhs_data = rhs.data.astype(compute_dtype)
+            lhs_data = lhs.data.view(unsigned_dtype).astype(compute_dtype)
+            rhs_data = rhs.data.view(unsigned_dtype).astype(compute_dtype)
             ret_data = np.multiply(lhs_data, rhs_data) >> (dtype.itemsize * 8)
-            return TensorHandle(ret_data.astype(dtype), lhs.dtype.scalar)
+            ret_data = ret_data.astype(unsigned_dtype)
+        return TensorHandle(ret_data.view(dtype), lhs.dtype.scalar)
 
     # ternary functions
     def ternary_op(self, lhs, rhs, other, op):
@@ -735,11 +750,16 @@ class InterpreterBuilder:
         # tl.store to write 8 bytes instead of 4 bytes which lead to silent data corruption
         dummy_weights = np.ones_like(data.data, dtype=np.int32)
 
+        # np.histogram's last bin is a closed interval [bins - 1, bins], so a
+        # value equal to `bins` would be counted there. The GPU drops every
+        # out-of-range value, so exclude such elements like masked ones.
+        valid = np.logical_and(mask.data, data.data < bins)
+
         # force all masked elements to zero
-        data = np.where(mask.data, data.data, np.zeros_like(data.data))
+        data = np.where(valid, data.data, np.zeros_like(data.data))
         histogram = np.histogram(data, bins=bins, range=(0, bins), weights=dummy_weights)[0]
         # remove overcounted elements
-        histogram[0] -= np.logical_not(mask.data).sum()
+        histogram[0] -= np.logical_not(valid).sum()
         return TensorHandle(histogram, tl.int32)
 
     def create_gather(self, src, indices, axis):
@@ -759,9 +779,6 @@ class InterpreterBuilder:
 
     def create_broadcast(self, arg, shape):
         return TensorHandle(np.broadcast_to(arg.data, shape), arg.dtype.scalar)
-
-    def create_cat(self, lhs, rhs):
-        return TensorHandle(np.concatenate([lhs.data, rhs.data]), lhs.dtype.scalar)
 
     def create_join(self, lhs, rhs):
         # Triton only supports joining two original tensors into a new one along the last axis
@@ -852,7 +869,6 @@ class InterpreterBuilder:
 
     def create_descriptor_load(self, desc: TensorDescHandle, indices: List[TensorHandle], cache_modifier,
                                eviction_policy):
-        assert isinstance(desc, TensorDescHandle)
         ptrs, mask = desc.materialize_pointers(indices)
         dtype_tt = ptrs.get_element_ty()
         dtype_np = _get_np_dtype(dtype_tt)
@@ -890,7 +906,9 @@ class InterpreterBuilder:
 
     def get_all_ones_value(self, type):
         np_type = _get_np_dtype(type)
-        if "int" in np_type.name:
+        if np.issubdtype(np_type, np.unsignedinteger):
+            return TensorHandle(np.full(1, np.iinfo(np_type).max, dtype=np_type), type.scalar)
+        elif np.issubdtype(np_type, np.signedinteger):
             return TensorHandle(np.full(1, -1, dtype=np_type), type.scalar)
         elif np_type == np.bool_:
             return TensorHandle(np.full(1, True, dtype=np_type), type.scalar)
@@ -958,7 +976,6 @@ def _patch_lang_tensor(tensor, scope: _LangPatchScope):
 
     def _get_transpose(self):
         handle = TensorHandle(np.transpose(self.handle.data), self.handle.dtype)
-        assert self.type.is_block()
         block_shape = list(self.type.shape)
         block_shape[-1], block_shape[-2] = block_shape[-2], block_shape[-1]
         res_ty = tl.core.block_type(self.dtype, block_shape)
@@ -1411,10 +1428,10 @@ class GridExecutor:
 
     def __call__(self, *args_dev, **kwargs):
         # Removes not used reserved keywords from kwargs
-        # Triton doesn't support keyword-only, variable positional or variable keyword arguments
-        # It's safe to inspect only positional or keyword arguments (i.e., argspec.args)
+        # Triton doesn't support variable positional or variable keyword arguments
+        # Keep both positional-or-keyword and keyword-only arguments.
         argspec = inspect.getfullargspec(self.fn)
-        kwargs = {k: v for k, v in kwargs.items() if k in argspec.args}
+        kwargs = {k: v for k, v in kwargs.items() if k in argspec.args or k in argspec.kwonlyargs}
         # copy arguments to the host
         args_hst, kwargs_hst = self._init_args_hst(args_dev, kwargs)
         # run pre-run hooks

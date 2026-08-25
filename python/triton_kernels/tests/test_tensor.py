@@ -126,8 +126,9 @@ def test_ragged_layout_storage_shape():
 
 
 @pytest.mark.parametrize("major_dim", [-1, -2])
-def test_strided_layout_rejects_odd_fp4_packing_dim(major_dim):
-    shape = [2, 2]
+@pytest.mark.parametrize("other_size", [0, 2])
+def test_strided_layout_rejects_odd_fp4_packing_dim(major_dim, other_size):
+    shape = [other_size, other_size]
     shape[major_dim] = 1
 
     with pytest.raises(ValueError):
@@ -210,6 +211,69 @@ def test_convert_layout_converts_different_parameterized_layout(storage_shape, l
     converted = convert_layout(tensor, layout)
 
     assert convert_layout(converted, different_layout) is not converted
+
+
+@pytest.mark.parametrize("layout", [
+    HopperMXValueLayout(-2, 3),
+    HopperMXValueLayout(-1, 3),
+    BlackwellMXValueLayout(),
+    BlackwellMX4ValueShuffledLayout(),
+])
+@pytest.mark.parametrize("major_dim", [-2, -1])
+@pytest.mark.parametrize("step", [1, 2])
+def test_mxfp4_value_convert_layout_to_strided_peak_allocation(layout, major_dim, step):
+    data = torch.empty((2048, 2048), dtype=torch.uint8, device="cuda")
+    source = convert_layout(wrap_torch_tensor(data, dtype=FP4), layout)
+    if step == 2:
+        contiguous_dim = source.data.stride().index(1)
+        storage = source.data.movedim(contiguous_dim, -1)
+        storage = torch.stack((storage, storage), dim=-2)[..., 1, :].movedim(-1, contiguous_dim)
+        source = wrap_torch_tensor(storage, dtype=FP4, shape=source.shape, layout=layout)
+    destination = StridedLayout(major_dim)
+    warm = convert_layout(source, destination)
+    torch.cuda.synchronize(source.device)
+    del warm
+    baseline = torch.cuda.memory_allocated(source.device)
+    torch.cuda.reset_peak_memory_stats(source.device)
+
+    actual = convert_layout(source, destination)
+    torch.cuda.synchronize(source.device)
+    peak = torch.cuda.max_memory_allocated(source.device) - baseline
+
+    # Public conversion should allocate only its final packed storage.
+    assert peak <= actual.data.nbytes + 1024**2
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [HopperMXValueLayout(-2, 3),
+     BlackwellMXValueLayout(), BlackwellMX4ValueShuffledLayout()])
+@pytest.mark.parametrize("inverse", [False, True])
+@pytest.mark.parametrize("major_dim", [-2, -1])
+def test_convert_layout_uses_input_device(layout, inverse, major_dim):
+    if torch.cuda.device_count() < 2:
+        pytest.skip("requires two CUDA devices")
+
+    data = torch.arange(2 * 256 * 257, dtype=torch.int32, device="cpu").to(torch.uint8).reshape(2, 256, 257)
+    canonical = wrap_torch_tensor(data, dtype=FP4, shape=[2, 256, 514])
+    canonical = convert_layout(canonical, StridedLayout(major_dim))
+    source = convert_layout(canonical, layout) if inverse else canonical
+    destination = canonical.storage.layout if inverse else layout
+    expected = convert_layout(source, destination)
+
+    stream = torch.cuda.Stream(device=1)
+    with torch.cuda.stream(stream), torch.cuda.device(0):
+        source_cuda = wrap_torch_tensor(source.storage.data.to("cuda:1"), dtype=FP4, shape=source.shape,
+                                        layout=source.storage.layout)
+        actual = convert_layout(source_cuda, destination)
+
+        assert torch.cuda.current_device() == 0
+        assert torch.cuda.current_stream(1) == stream
+        assert actual.device == torch.device("cuda:1")
+        assert actual.shape == expected.shape
+        assert actual.storage.data.stride() == expected.storage.data.stride()
+        stream.synchronize()
+        assert torch.equal(actual.storage.data.cpu(), expected.storage.data)
 
 
 @pytest.mark.parametrize("n_slices", [1, 7, 33, 911, 1025])

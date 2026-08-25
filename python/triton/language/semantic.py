@@ -597,8 +597,15 @@ class TritonSemantic(Generic[TensorTy]):
         # scalar
         if dtype is None:
             raise ValueError("dtype must be specified when value is not a tensor")
-        if value == 0:
-            value = self.builder.get_null_value(dtype.to_ir(self.builder))
+        if dtype.is_int() and value == 0:
+            # For BC, we explicitly allow e.g. tl.full((), 0.0, tl.int32)
+            # which raises a type error for non-zero values.
+            value = 0
+        if dtype.name == "fp8e4b15":
+            # Validate target support
+            dtype.to_ir(self.builder)
+            value = self.tensor(self.builder.get_fp32(value), tl.float32)
+            return self.cast(value, dtype)
         elif dtype.is_fp8():
             value = self.builder.get_fp32(value)
             value = self.builder.create_fp_trunc(value, dtype.to_ir(self.builder))
@@ -649,12 +656,6 @@ class TritonSemantic(Generic[TensorTy]):
 
         ret_ty = tl.block_type(input.type.scalar, dst_shape)
         return self.tensor(self.builder.create_expand_dims(input.handle, axis), ret_ty)
-
-    def cat(self, lhs: TensorTy, rhs: TensorTy, can_reorder: bool) -> TensorTy:
-        assert can_reorder, "current implementation of `cat` always may reorder elements"
-        assert len(lhs.shape) == 1, f"expected 1D input for cat, got {len(lhs.shape)}D"
-        ret_type = tl.block_type(lhs.type.scalar, [lhs.shape[0] + rhs.shape[0]])
-        return self.tensor(self.builder.create_cat(lhs.handle, rhs.handle), ret_type)
 
     def join(self, a: TensorTy, b: TensorTy) -> TensorTy:
         a, b = self.broadcast_impl_value(a, b)
@@ -1338,10 +1339,10 @@ class TritonSemantic(Generic[TensorTy]):
 
         i_type = tl.int32 if sca_ty == tl.float32 else tl.int64
         i_val = self.bitcast(val, i_type)
-        i_ptr = self.bitcast(ptr, tl.pointer_type(i_type, 1))
+        i_ptr = self.bitcast(ptr, tl.pointer_type(i_type))
         ui_type = tl.uint32 if sca_ty == tl.float32 else tl.uint64
         ui_val = self.bitcast(val, ui_type)
-        ui_ptr = self.bitcast(ptr, tl.pointer_type(ui_type, 1))
+        ui_ptr = self.bitcast(ptr, tl.pointer_type(ui_type))
         neg = self._signbit(val)
         pos = self.not_(neg)
         pos_ret = self.tensor(
@@ -1376,10 +1377,10 @@ class TritonSemantic(Generic[TensorTy]):
 
         i_type = tl.int32 if sca_ty == tl.float32 else tl.int64
         i_val = self.bitcast(val, i_type)
-        i_ptr = self.bitcast(ptr, tl.pointer_type(i_type, 1))
+        i_ptr = self.bitcast(ptr, tl.pointer_type(i_type))
         ui_type = tl.uint32 if sca_ty == tl.float32 else tl.uint64
         ui_val = self.bitcast(val, ui_type)
-        ui_ptr = self.bitcast(ptr, tl.pointer_type(ui_type, 1))
+        ui_ptr = self.bitcast(ptr, tl.pointer_type(ui_type))
         neg = self._signbit(val)
         pos = self.not_(neg)
         pos_ret = self.tensor(
@@ -1782,7 +1783,8 @@ class TritonSemantic(Generic[TensorTy]):
 
     def histogram(self, input: TensorTy, num_bins: int, mask: Optional[TensorTy]) -> TensorTy:
         assert len(input.shape) == 1, "histogram only supports 1D input"
-        assert input.dtype.is_int(), "histogram only supports integer input"
+        if not (input.dtype.is_int() and input.dtype.int_bitwidth == 32):
+            raise ValueError(f"histogram only supports 32-bit integer input, but got {input.dtype}")
         if mask is not None:
             mask = self.broadcast_impl_shape(mask, input.shape)
             if not mask.type.scalar.is_bool():

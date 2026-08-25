@@ -5,21 +5,18 @@
 
 namespace proton {
 
-class RocprofSDKProfiler : public GPUProfiler<RocprofSDKProfiler> {
+class RocprofSDKProfiler final : public GPUProfiler<RocprofSDKProfiler> {
 public:
-  RocprofSDKProfiler();
-  virtual ~RocprofSDKProfiler();
-
-  int64_t getTimestampOffsetNs() const override { return timestampOffsetNs; }
+  ~RocprofSDKProfiler() override;
 
   struct RocprofSDKProfilerPimpl;
 
 private:
-  int64_t timestampOffsetNs{};
-  bool isTimestampCalibrated{false};
+  friend class Singleton<RocprofSDKProfiler>;
 
-  virtual void
-  doSetMode(const std::vector<std::string> &modeAndOptions) override;
+  RocprofSDKProfiler();
+
+  void doSetMode(const std::vector<std::string> &modeAndOptions) override;
 };
 
 } // namespace proton

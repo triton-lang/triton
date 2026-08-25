@@ -2,6 +2,7 @@ import os
 import sys
 from concurrent.futures import Future, ThreadPoolExecutor
 from multiprocessing.connection import Client
+from pathlib import Path
 from types import SimpleNamespace
 
 import cloudpickle
@@ -18,7 +19,7 @@ from triton._compile_warmup import (
     pytest_xdist_setupnodes,
     summarize_compile_trace,
 )
-from triton._compile_warmup_pool import SharedWarmupCoordinator, _jit_dumps
+from triton._compile_warmup_pool import ProcessPoolWarmupDispatcher, SharedWarmupCoordinator, _jit_dumps
 from triton._internal_testing import is_compile_warmup, random_float, random_int
 from triton import _test_runner
 from triton.backends.driver import GPUDriver, expand_signature, wrap_handle_tensordesc_impl
@@ -114,17 +115,73 @@ def test_compile_warmup_coordinator_deduplicates_and_propagates_errors(monkeypat
         (4, "5,2,7,3", ["5", "2", "7", "3", "5"]),
     ],
 )
-def test_compile_warmup_assigns_gpu_before_xdist_worker_initialization(monkeypatch, num_gpus, visible, expected):
+@pytest.mark.parametrize(("hip", "variable"), [(None, "CUDA_VISIBLE_DEVICES"), ("7.2", "HIP_VISIBLE_DEVICES")])
+def test_compile_warmup_assigns_gpu_before_xdist_worker_initialization(monkeypatch, num_gpus, visible, expected, hip,
+                                                                       variable):
     monkeypatch.setenv("TRITON_TEST_NUM_GPUS", str(num_gpus))
+    monkeypatch.setattr(torch.version, "hip", hip)
     monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("HIP_VISIBLE_DEVICES", raising=False)
     monkeypatch.delenv("TRITON_TEST_VISIBLE_GPUS", raising=False)
     if visible is not None:
+        monkeypatch.setenv(variable, visible)
+        assert _test_runner._environment(num_gpus=num_gpus)["TRITON_TEST_VISIBLE_GPUS"] == visible
         monkeypatch.setenv("TRITON_TEST_VISIBLE_GPUS", visible)
     specs = [SimpleNamespace(env={}) for _ in expected]
 
     pytest_xdist_setupnodes(None, specs)
 
-    assert [spec.env["CUDA_VISIBLE_DEVICES"] for spec in specs] == expected
+    assert [spec.env[variable] for spec in specs] == expected
+
+
+def test_runner_assigns_unique_junit_reports(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("TRITON_TEST_JUNIT_DIR", raising=False)
+    assert not any(argument.startswith("--junitxml=") for argument in _test_runner._pytest("test.py"))
+
+    commands = []
+    monkeypatch.setattr(
+        _test_runner, "_unit", lambda args: commands.extend(
+            (_test_runner._pytest("first.py"), _test_runner._pytest("second.py"))) or 0)
+    assert _test_runner._suite(SimpleNamespace(name="unit", junit_dir="reports")) == 0
+
+    reports = [
+        Path(argument.removeprefix("--junitxml="))
+        for command in commands
+        for argument in command
+        if argument.startswith("--junitxml=")
+    ]
+    assert len(reports) == len(set(reports)) == 2
+    assert all(report.parent == (tmp_path / "reports").resolve() for report in reports)
+    assert reports[0].name.startswith("pytest-first-")
+    assert reports[1].name.startswith("pytest-second-")
+    assert all(report.name.endswith("-results.xml") for report in reports)
+    assert (tmp_path / "reports").is_dir()
+
+
+@pytest.mark.parametrize(("capability", "num_gpus", "kernel_workers"), [(8, 1, 6), (9, 1, 4), (10, 2, 6), (10, 4, 12)])
+def test_unit_runner_balances_requested_gpu_shards(monkeypatch, capability, num_gpus, kernel_workers):
+    concurrent = []
+    deferred = []
+    monkeypatch.setattr(_test_runner, "_validate_gpus", lambda count: None)
+    monkeypatch.setattr(_test_runner, "_capability", lambda: capability)
+    monkeypatch.setattr(_test_runner, "_concurrent", lambda commands: concurrent.extend(commands) or 0)
+    monkeypatch.setattr(_test_runner, "_run", lambda command, **kwargs: deferred.append((command, kwargs)) or 0)
+    options = SimpleNamespace(num_gpus=num_gpus, num_procs=24, debug_procs=4, kernel_procs=None)
+
+    assert _test_runner._unit(options) == 0
+    if capability >= 9:
+        assert all(environment["TRITON_TEST_NUM_GPUS"] == str(num_gpus) for _, _, environment in concurrent)
+        kernels = deferred[0]
+    else:
+        assert deferred[0][1]["num_gpus"] == num_gpus
+        kernels = deferred[1]
+    command, kwargs = kernels
+    assert command[command.index("-n") + 1] == str(kernel_workers)
+    assert kwargs["num_gpus"] == num_gpus
+    attention, kwargs = deferred[1 if capability >= 9 else 2]
+    assert attention[attention.index("-n") + 1] == str(num_gpus)
+    assert kwargs["num_gpus"] == num_gpus
 
 
 @pytest.mark.parametrize(("capability", "num_gpus"), [(8, 1), (10, 1), (10, 2), (10, 4), (10, 8)])
@@ -178,8 +235,10 @@ def test_gsan_runner_terminates_stalled_pytest_processes():
     assert _test_runner._run(command, timeout=0.05) == 1
 
 
-def test_compile_warmup_selects_eligible_markers(monkeypatch):
+@pytest.mark.parametrize("backend", ["cuda", "hip"])
+def test_compile_warmup_selects_eligible_markers(monkeypatch, backend):
     monkeypatch.setattr(torch.cuda, "get_device_capability", lambda: (8, 0))
+    monkeypatch.setattr(triton.runtime.driver.active, "get_current_target", lambda: SimpleNamespace(backend=backend))
     enabled = SimpleNamespace(kwargs={})
     unsupported = SimpleNamespace(kwargs={"min_capability": 9})
     excluded = object()
@@ -197,11 +256,26 @@ def test_compile_warmup_selects_eligible_markers(monkeypatch):
     config = SimpleNamespace(getoption=lambda _: True,
                              hook=SimpleNamespace(pytest_deselected=lambda items: deselected.extend(items)))
 
-    selected = items[1]
+    selected = [items[1]] if backend == "cuda" else [items[1], items[3]]
     pytest_collection_modifyitems(config, items)
 
-    assert items == [selected]
-    assert len(deselected) == 3
+    assert items == selected
+    assert len(deselected) == 4 - len(selected)
+
+
+def test_compile_warmup_spreads_prioritized_tests_across_capture_workers(monkeypatch):
+    monkeypatch.setenv("PYTEST_XDIST_WORKER_COUNT", "2")
+
+    def item(priority):
+        marker = SimpleNamespace(kwargs={"priority": priority})
+        return SimpleNamespace(get_closest_marker=lambda name: marker if name == "enable_warmup" else None)
+
+    low_a, high_a, low_b, high_b = items = [item(0), item(2), item(0), item(2)]
+    config = SimpleNamespace(getoption=lambda _: True, hook=SimpleNamespace(pytest_deselected=lambda items: None))
+
+    pytest_collection_modifyitems(config, items)
+
+    assert items == [high_a, low_a, high_b, low_b]
 
 
 def test_compile_warmup_serializes_patched_source_globals(monkeypatch):
@@ -220,10 +294,72 @@ def test_compile_warmup_serializes_patched_source_globals(monkeypatch):
     assert cloudpickle.loads(_jit_dumps(kernel)).cache_key == kernel.cache_key
 
 
+def test_compile_warmup_reuses_equivalent_kernel_payloads(monkeypatch):
+    dispatcher = ProcessPoolWarmupDispatcher(max_workers=1, trace_directory=None, phase="warmup")
+    dispatcher.current_test = "test"
+    serialized = []
+
+    def serialize(value):
+        if hasattr(value, "fn"):
+            serialized.append(value)
+        return _jit_dumps(value)
+
+    def submit(*args):
+        future = Future()
+        future.set_result((os.getpid(), 0))
+        return future
+
+    monkeypatch.setattr("triton._compile_warmup_pool._jit_dumps", serialize)
+    monkeypatch.setattr(dispatcher._executor, "submit", submit)
+
+    def make_kernel():
+
+        @triton.jit
+        def kernel(output, value: tl.constexpr):
+            tl.store(output, value)
+
+        return kernel
+
+    kernels = [make_kernel(), make_kernel(), make_kernel()]
+    kernels[-1]._unsafe_update_src(kernels[-1].src.replace("tl.store(output, value)", "tl.store(output, value + 1)"))
+    try:
+        with compile_warmup_only(dispatcher):
+            output = torch.empty(1, device="cuda")
+            for kernel in kernels:
+                kernel[(1, )](output, value=1)
+    finally:
+        dispatcher.finish()
+
+    assert len(serialized) == 2
+
+
 def _trace(directory, phase, test, digest, hit):
     source = SimpleNamespace(name="kernel", fn=SimpleNamespace(_fn_name="package.kernel"), hash=lambda: "source")
     CompilationTrace(str(directory), phase, test)(src=source, metadata={"hash": digest}, metadata_group={},
                                                   times=SimpleNamespace(total=125_000), cache_hit=hit)
+
+
+def test_compile_warmup_runner_discards_previous_job_traces(tmp_path, monkeypatch):
+    directory = tmp_path / "trace"
+    _trace(directory, "warmup-unit", "old.py::test", "old", False)
+    _trace(directory, "unit", "old.py::test", "old", False)
+    monkeypatch.setenv("TRITON_CI_COMPILE_TRACE_DIR", str(directory))
+    monkeypatch.setattr(_test_runner, "_validate_gpus", lambda count: None)
+    coordinator = SimpleNamespace(address="unused", close=lambda: None)
+    monkeypatch.setattr(_test_runner, "SharedWarmupCoordinator", lambda **kwargs: coordinator)
+
+    def run(command, **kwargs):
+        _trace(directory, "warmup-unit", "new.py::test", "new", False)
+        _trace(directory, "unit", "new.py::test", "new", True)
+        return 0
+
+    monkeypatch.setattr(_test_runner, "_run", run)
+    args = SimpleNamespace(warmup_procs=1, capture_procs=1, targets=[])
+
+    assert _test_runner._warmup(args) == 0
+    report = summarize_compile_trace(str(directory))
+    assert report["warmup_tests"] == 1
+    _require_complete_warmup(report)
 
 
 @pytest.mark.parametrize(

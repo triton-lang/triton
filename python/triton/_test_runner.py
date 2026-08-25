@@ -3,9 +3,11 @@
 import argparse
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 from triton._compile_warmup import _require_complete_warmup, summarize_compile_trace
@@ -38,6 +40,18 @@ def _pytest(*arguments, workers=None, import_mode=None, distribution="worksteal"
         command.append(f"--import-mode={import_mode}")
     if workers is not None:
         command.extend(("-n", str(workers), f"--dist={distribution}"))
+    if directory := os.environ.get("TRITON_TEST_JUNIT_DIR"):
+        directory = Path(directory).resolve()
+        directory.mkdir(parents=True, exist_ok=True)
+        label = "unit"
+        for target in arguments:
+            if target.startswith("-") or ("/" not in target and not target.endswith(".py")):
+                continue
+            path = Path(target.rstrip("/"))
+            label = path.stem.removeprefix("test_") if path.suffix else "-".join(path.parts[-2:])
+            label = label.replace("_", "-")
+            break
+        command.append(f"--junitxml={directory / f'pytest-{label}-{uuid.uuid4().hex}-results.xml'}")
     command.extend(arguments)
     return command
 
@@ -49,7 +63,7 @@ def _environment(phase=None, num_gpus=None):
         environment["TRITON_CI_CACHE_PHASE"] = phase
     if num_gpus is not None:
         environment["TRITON_TEST_NUM_GPUS"] = str(num_gpus)
-        visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+        visible = os.environ.get("HIP_VISIBLE_DEVICES") or os.environ.get("CUDA_VISIBLE_DEVICES")
         if visible:
             environment["TRITON_TEST_VISIBLE_GPUS"] = visible
     return environment
@@ -98,6 +112,8 @@ def _warmup(args):
         if str(entry) not in sys.path:
             sys.path.insert(0, str(entry))
     directory = os.environ.get("TRITON_CI_COMPILE_TRACE_DIR")
+    if directory and Path(directory).is_dir():
+        shutil.rmtree(directory)
     coordinator = SharedWarmupCoordinator(max_workers=args.warmup_procs, trace_directory=directory)
     environment = _environment("warmup-unit", 1)
     environment["TRITON_WARMUP_COORDINATOR"] = coordinator.address
@@ -116,6 +132,7 @@ def _warmup(args):
 
 
 def _unit(args):
+    _validate_gpus(args.num_gpus)
     capability = _capability()
     unit_directory = ROOT / "python" / "test" / "unit"
     if capability >= 9:
@@ -123,17 +140,22 @@ def _unit(args):
                        workers=args.num_procs)
         debug = _pytest("test_debug.py", "language/test_subprocess.py", workers=args.debug_procs)
         status = _concurrent(
-            ((main, unit_directory, _environment("unit")), (debug, unit_directory, _environment("unit"))))
+            ((main, unit_directory, _environment("unit", args.num_gpus)), (debug, unit_directory,
+                                                                           _environment("unit", args.num_gpus))))
     else:
-        status = _run(_pytest("--ignore-glob=plugins/*", workers=args.num_procs), phase="unit", cwd=unit_directory)
+        status = _run(_pytest("--ignore-glob=plugins/*", workers=args.num_procs), phase="unit", num_gpus=args.num_gpus,
+                      cwd=unit_directory)
     if status:
         return status
 
-    kernel_procs = args.kernel_procs or (3 if capability >= 9 else 6)
-    status = _run(_pytest("python/triton_kernels/tests/", workers=kernel_procs), phase="triton-kernels")
+    workers_per_gpu = 4 if capability == 9 else 3 if capability >= 10 else 6
+    kernel_procs = args.kernel_procs or workers_per_gpu * args.num_gpus
+    status = _run(_pytest("python/triton_kernels/tests/", workers=kernel_procs), phase="triton-kernels",
+                  num_gpus=args.num_gpus)
     if status:
         return status
-    status = _run(_pytest("python/tutorials/06-fused-attention.py", workers=1), phase="attention")
+    status = _run(_pytest("python/tutorials/06-fused-attention.py", workers=args.num_gpus), phase="attention",
+                  num_gpus=args.num_gpus)
     if status:
         return status
 
@@ -189,6 +211,8 @@ def _gsan(args):
 
 
 def _suite(args):
+    if args.junit_dir is not None:
+        os.environ["TRITON_TEST_JUNIT_DIR"] = args.junit_dir
     return {"unit": _unit, "gsan": _gsan, "gluon": _gluon}[args.name](args)
 
 
@@ -221,6 +245,8 @@ def _main(argv=None):
     suite.add_argument("--example-procs", type=int, default=4)
     suite.add_argument("--debug-procs", type=int, default=4)
     suite.add_argument("--kernel-procs", type=int)
+    suite.add_argument("--junit-dir", default=os.environ.get("TRITON_TEST_JUNIT_DIR"),
+                       help="write one JUnit XML report per pytest subprocess to this directory")
     suite.set_defaults(run=_suite)
 
     report = commands.add_parser("report", help="summarize cache coverage and validate completeness")

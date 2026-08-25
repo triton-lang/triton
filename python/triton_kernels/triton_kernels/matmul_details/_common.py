@@ -231,18 +231,20 @@ def make_matmul_repr(base_name, order):
         reorder = lambda L: [L[i] for i in order]
         layout = lambda stride: "N" if stride in constants else "T"
 
-        def convert_dtype(dtype):
+        def convert_dtype(i):
+            dtype = signature[i]
             if "tensordesc" in dtype:
-                ret = convert_dtype(dtype.split("<")[1].split("[")[0])
-                return ret
-            elif "u8" in dtype:
-                return "mxfp4"
+                dtype = dtype.split("<")[1].split("[")[0]
             elif dtype[0] == "*":
-                return dtype[1:]
-            else:
-                return dtype
+                dtype = dtype[1:]
 
-        dtypes = "x".join([convert_dtype(f"{signature[i]}") for i in reorder(["Y", "X", "W"])])
+            if "u8" in dtype:
+                scale_name = "YActualScale" if i == "Y" else f"{i}MxScale"
+                scale = signature[scale_name]
+                return "nvfp4" if "fp8e4nv" in scale else "mxfp4"
+            return dtype
+
+        dtypes = "x".join([convert_dtype(i) for i in reorder(["Y", "X", "W"])])
         layouts = "".join([f"{layout(i)}" for i in reorder(["stride_y_n", "stride_x_k", "stride_w_n"])])
         blocks = "x".join([f"{constants[i]}" for i in ["BLOCK_M", "BLOCK_N", "BLOCK_K", "SPLIT_K"]])
         suffix = "_acc" if "OutAcc" in signature and "OutAcc" not in constants else ""
@@ -301,6 +303,10 @@ def _matmul_flops_and_bytes_from_slices(
     slice_sizes,
     nbits,
     batch_size,
+    *,
+    flop_metric_name=None,
+    x_bytes_per_token=None,
+    w_bytes_per_active_slice=None,
 ):
     import torch
 
@@ -310,10 +316,8 @@ def _matmul_flops_and_bytes_from_slices(
     static_flops = 0.0
     flops_per_token = 0.0
     if ragged_k:
-        assert M is not None
         flops_per_token = 2.0 * M * N * z
     elif M is None:
-        assert K is not None
         flops_per_token = 2.0 * N * K * z
     elif K is None:
         flops_per_token = 2.0 * M * N * z
@@ -321,19 +325,22 @@ def _matmul_flops_and_bytes_from_slices(
         static_flops = 2.0 * M * N * K * z
 
     static_bytes = 0
-    x_bytes_per_token = 0
     y_bytes_per_token = 0
     w_bytes_per_token = 0
-    w_bytes_per_active_slice = 0
     if ragged_k:
-        x_bytes_per_token = X.shape[-2] * X.element_size()
+        if x_bytes_per_token is None:
+            x_bytes_per_token = X.shape[-2] * X.element_size()
+        if w_bytes_per_active_slice is None:
+            w_bytes_per_active_slice = 0
         # Here, we're computing dW = X.T@dY, so "W" is actually dY and "Y" is actually dW.
         static_bytes = Y.numel() * Y.element_size() * (2 if args["OutAcc"] is not None else 1)
         w_bytes_per_token = W.shape[-1] * W.element_size()
     else:
-        x_bytes_per_token = X.shape[-1] * X.element_size()
+        if x_bytes_per_token is None:
+            x_bytes_per_token = X.shape[-1] * X.element_size()
         y_bytes_per_token = Y.shape[-1] * Y.element_size()
-        w_bytes_per_active_slice = W.numel() * W.element_size() // slice_sizes.numel()
+        if w_bytes_per_active_slice is None:
+            w_bytes_per_active_slice = W.numel() * W.element_size() // slice_sizes.numel()
 
     flops = torch.empty((), dtype=torch.float64, device=slice_sizes.device)
     total_bytes = torch.empty((), dtype=torch.int64, device=slice_sizes.device)
@@ -352,10 +359,14 @@ def _matmul_flops_and_bytes_from_slices(
         W_BYTES_PER_ACTIVE_SLICE=w_bytes_per_active_slice,
         STATIC_BYTES=static_bytes,
     )
-    return {f"flops{nbits}": flops, "bytes": total_bytes}
+    if flop_metric_name is None:
+        flop_metric_name = f"flops{nbits}"
+    return {flop_metric_name: flops, "bytes": total_bytes}
 
 
 def matmul_launch_metadata(grid, kernel, args):
+    import torch
+
     from ..proton_opts import launch_metadata_allow_sync
 
     ret = dict()
@@ -383,6 +394,23 @@ def matmul_launch_metadata(grid, kernel, args):
 
     repr = lambda s, x: f"{s} = {x}" if x is not None else f"E_{len(slice_sizes)}({s}) = {n_rows}"
     nbits = X.dtype.itemsize * 8
+    flop_metric_name = f"flops{nbits}"
+    x_bytes_per_token = None
+    w_bytes_per_active_slice = None
+    # Ragged-K is the inner-expert dW path; its active-K bytes need a separate model.
+    fp4_x_fp4 = (args["RAGGED_DIMENSION"] != "K" and X.dtype == torch.uint8 and W.dtype == torch.uint8)
+    if fp4_x_fp4:
+        x_bytes_per_token = triton.cdiv(K, 2)
+        w_bytes_per_active_slice = N * triton.cdiv(K, 2)
+        if args["XMxScale"] is not None:
+            x_bytes_per_token += triton.cdiv(K, args["MX_BLOCK_SIZE"])
+        if args["WMxScale"] is not None:
+            w_bytes_per_active_slice += N * triton.cdiv(K, args["MX_BLOCK_SIZE"])
+        if args["XTensorScale"] is not None:
+            x_bytes_per_token += args["XTensorScale"].element_size()
+        if args["WTensorScale"] is not None:
+            w_bytes_per_active_slice += N * args["WTensorScale"].element_size()
+        flop_metric_name = "flops4"
     batch_repr = ""
     if batch_size > 1:
         batch_repr = repr("B", args["batch_size"]) + ", "
@@ -393,18 +421,22 @@ def matmul_launch_metadata(grid, kernel, args):
         ret["name"] += f" ep/{ep_subtile}"
 
     if slice_sizes is not None and not allow_sync:
-        ret.update(_matmul_flops_and_bytes_from_slices(
-            args,
-            M,
-            N,
-            K,
-            X,
-            Y,
-            W,
-            slice_sizes,
-            nbits,
-            batch_size,
-        ))
+        ret.update(
+            _matmul_flops_and_bytes_from_slices(
+                args,
+                M,
+                N,
+                K,
+                X,
+                Y,
+                W,
+                slice_sizes,
+                nbits,
+                batch_size,
+                flop_metric_name=flop_metric_name,
+                x_bytes_per_token=x_bytes_per_token,
+                w_bytes_per_active_slice=w_bytes_per_active_slice,
+            ))
         return ret
 
     if slice_sizes is not None and n_tokens is None:
@@ -412,14 +444,20 @@ def matmul_launch_metadata(grid, kernel, args):
 
     fM = M if M is not None else n_tokens
     Z = 1 if args["RAGGED_DIMENSION"] == "K" else batch_size
-    ret[f"flops{nbits}"] = 2.0 * fM * N * K * Z
+    flops = 2.0 * fM * N * K * Z
+    ret[flop_metric_name] = flops
 
     # sindx = args.get("WriteBackIndx", None)
     n_x_bytes = X.numel() * X.element_size()
     n_y_bytes = Y.numel() * Y.element_size()
     n_w_bytes = W.numel() * W.element_size()
+    if x_bytes_per_token is not None and M is not None:
+        # A 2-D X can be shared across batched W.
+        input_batch_size = batch_size if X.ndim == 3 else 1
+        n_x_bytes = M * input_batch_size * x_bytes_per_token
+    if w_bytes_per_active_slice is not None:
+        n_w_bytes = batch_size * w_bytes_per_active_slice
     if slice_sizes is not None:
-        assert n_tokens is not None
         n_read_rows = n_tokens
 
         if args["RAGGED_DIMENSION"] == "K":
@@ -428,9 +466,11 @@ def matmul_launch_metadata(grid, kernel, args):
             n_y_bytes = Y.numel() * Y.element_size() * (2 if args["OutAcc"] is not None else 1)
             n_w_bytes = n_read_rows * W.shape[-1] * W.element_size()
         else:
-            n_x_bytes = n_read_rows * X.shape[-1] * X.element_size()
+            n_x_bytes = n_read_rows * (x_bytes_per_token if x_bytes_per_token is not None else X.shape[-1] *
+                                       X.element_size())
             n_y_bytes = n_tokens * Y.shape[-1] * Y.element_size()
-            n_w_bytes = (W.numel() * W.element_size() // slice_sizes.numel()) * (slice_sizes > 0).sum()
+            n_w_bytes = (slice_sizes > 0).sum() * (w_bytes_per_active_slice if w_bytes_per_active_slice is not None else
+                                                   W.numel() * W.element_size() // slice_sizes.numel())
 
     ret["bytes"] = n_x_bytes + n_y_bytes + n_w_bytes
     return ret

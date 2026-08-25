@@ -2,30 +2,9 @@ import pytest
 import torch
 import triton.language as tl
 import triton
-from triton._internal_testing import ReplenishingProcessPool, is_hopper_or_newer, run_in_process as _run_in_process
+from triton._internal_testing import run_in_process
 
-_process_pool = None
-
-
-@pytest.fixture(scope="module", autouse=True)
-def debug_process_pool():
-    if not is_hopper_or_newer():
-        yield
-        return
-    global _process_pool
-    _process_pool = ReplenishingProcessPool(__name__)
-    _process_pool.start()
-    try:
-        yield
-    finally:
-        _process_pool.close()
-        _process_pool = None
-
-
-def run_in_process(client_fn, args=(), kwargs=None, env=None):
-    if _process_pool is None:
-        return _run_in_process(client_fn, args, kwargs, env)
-    return _process_pool.run(client_fn, args, kwargs, env)
+pytestmark = pytest.mark.usefixtures("process_pool")
 
 
 def _run_device_assert(cond, mask, opt_flag, jit_flag, device):
@@ -148,10 +127,14 @@ def _run_overflow(x, y, x_dtype, y_dtype, debug, op, device):
     assert int(z) == int(ref_func(x, y))
 
 
-def _assert_overflow_result(result, debug, should_overflow):
+def _assert_overflow_result(result, debug, should_overflow, dtype, op):
     if should_overflow and debug:
         assert isinstance(result.exc, RuntimeError)
-        assert "device-side assert" in str(result.exc)
+        # CUDA can report a device assertion as an unspecified launch failure.
+        # Check the diagnostic as well so unrelated launch failures cannot pass.
+        assert any(msg in str(result.exc)
+                   for msg in ["device-side assert", "unspecified launch failure"]), str(result.exc)
+        assert f"{dtype} overflow detected for operation {op}" in result.driver_stderr_output, result.driver_stderr_output
         return
 
     assert result.exc is None, result.exc
@@ -173,7 +156,7 @@ def _assert_overflow_result(result, debug, should_overflow):
 ])
 def test_sanitize_int_add_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, device):
     result = run_in_process(_run_overflow, (x, y, x_dtype, y_dtype, debug, "add", device))
-    _assert_overflow_result(result, debug, should_overflow)
+    _assert_overflow_result(result, debug, should_overflow, x_dtype, "add")
 
 
 # mul overflow
@@ -189,7 +172,7 @@ def test_sanitize_int_add_overflow(x, y, x_dtype, y_dtype, debug, should_overflo
 ])
 def test_sanitize_int_mul_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, device):
     result = run_in_process(_run_overflow, (x, y, x_dtype, y_dtype, debug, "mul", device))
-    _assert_overflow_result(result, debug, should_overflow)
+    _assert_overflow_result(result, debug, should_overflow, x_dtype, "mul")
 
 
 # sub overflow
@@ -204,4 +187,4 @@ def test_sanitize_int_mul_overflow(x, y, x_dtype, y_dtype, debug, should_overflo
 ])
 def test_sanitize_int_sub_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, device):
     result = run_in_process(_run_overflow, (x, y, x_dtype, y_dtype, debug, "sub", device))
-    _assert_overflow_result(result, debug, should_overflow)
+    _assert_overflow_result(result, debug, should_overflow, x_dtype, "sub")

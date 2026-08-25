@@ -102,7 +102,6 @@ def jit(
     """
 
     def decorator(fn: T) -> JITFunction[T]:
-        assert callable(fn)
         return GluonJITFunction(
             fn,
             version=version,
