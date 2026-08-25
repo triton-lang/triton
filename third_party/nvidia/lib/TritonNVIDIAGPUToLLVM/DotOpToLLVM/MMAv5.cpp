@@ -55,7 +55,7 @@ public:
   }
 
   MemDescOperand memLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                         Location loc) const override {
+                         Location loc, int kSize = 0) const override {
     return tmemLoad(a, b, rewriter, loc);
   }
 
@@ -329,7 +329,13 @@ static Value createScaleInstDescriptorFp4(
   desc.BScaleFactor = scaleFactorsubIdxB;
   desc.scaleType = static_cast<uint32_t>(getScaleKind(op, blockK));
 
-  assert(kSize == 64 || kSize == 128);
+  assert(kSize == 64 || kSize == 96 || kSize == 128);
+  if (kSize == 96) {
+    // K96 selectors are byte offsets into three (block32) or six (block16)
+    // consecutive scales, including across scale words.
+    desc.kSizeLower = 1;
+    return b.int_val(32, desc.descriptor);
+  }
   if (kSize == 128) {
     desc.kSizeUpper = 1;
   }
@@ -485,6 +491,14 @@ struct DotConversion {
 
   unsigned blockK;
   int mmaSizeK;
+  SmallVector<int> kOffsets;
+
+  int getKOffset(int k) const {
+    return kOffsets.empty() ? k * mmaSizeK : kOffsets[k];
+  }
+
+  int getKSize(int k) const { return getKOffset(k + 1) - getKOffset(k); }
+
   int numBitsPerElementA;
   int numBitsPerElementB;
   StringRef kind;
@@ -562,7 +576,8 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   int numRepN = ceil<unsigned>(N, mmaSizeN);
   assert((!twoCTAs || numRepN == 1) &&
          "grep for [Note: numRepN > 1 and two_ctas]");
-  int numRepK = ceil<unsigned>(K, mmaSizeK);
+  int numRepK = op.kOffsets.empty() ? ceil<unsigned>(K, mmaSizeK)
+                                    : op.kOffsets.size() - 1;
 
   // In A * B = C
   // For M=64 twoCTAs, B and C have the same split and A has a split half of C
@@ -645,9 +660,8 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
     // or byte-padded, and FP6 also occupies byte-sized containers. There is no
     // measured SMEM-versus-TMEM weighting here; equal sizes retain B priority.
     auto storageBits = [](MemDescType ty, int logicalBits) {
-      return logicalBits == 4 && !isFp4Padded(ty)
-                 ? 4u
-                 : std::max<unsigned>(8, ty.getElementTypeBitWidth());
+      return logicalBits == 4 && !isFp4Padded(ty) ? 4u
+                                                  : ty.getElementTypeBitWidth();
     };
     uint64_t aTileBits = uint64_t(aOperandShape[0]) * aOperandShape[1] *
                          storageBits(aTensorTy, op.numBitsPerElementA);
@@ -690,10 +704,10 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
     auto [m, n, k] = indices;
     MemDescOperand accAddress =
         dLoader.tmemLoad(m * mmaSizeM, n * mmaSizeN, rewriter, loc);
-    MemDescOperand a = aLoader->memLoad(m * aOperandShape[0],
-                                        k * aOperandShape[1], rewriter, loc);
-    Value b = bLoader->smemLoad(k * bOperandShape[0], n * bOperandShape[1],
-                                rewriter, loc);
+    MemDescOperand a = aLoader->memLoad(m * aOperandShape[0], op.getKOffset(k),
+                                        rewriter, loc, op.getKSize(k));
+    Value b = bLoader->smemLoad(op.getKOffset(k), n * bOperandShape[1],
+                                rewriter, loc, op.getKSize(k));
     Value useInitAcc = k == 0 ? useDFlag : tb.i1_val(1);
     createGen5MMA(rewriter, loc, op.kind, a, b, accAddress, elect,
                   op.getInstOperands(desc, m, n, k), useInitAcc, twoCTAs,
@@ -874,13 +888,40 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
   Value baseScaleB = tb.ptrtoint(i32_ty, adaptor.getBScale());
   bool twoCTAs = ttng::getModuleTwoCTAs(op);
   SmallVector<Value> commitDescs = op.getCompletionDescs();
+  unsigned instN = std::min<unsigned>(mmaSizeN, getShapePerCTA(dTensorTy)[1]);
+  bool useK96 =
+      targetFeatures.supportsK96Tcgen05MMA() && twoCTAs && mmaSizeM == 128 &&
+      opKindIsMXFP4 && !hasFp4PaddedOperand && blockK % 256 == 0 &&
+      isa<SharedMemorySpaceAttr>(aTensorTy.getMemorySpace()) &&
+      ttng::getNvmmaSmemAttrs(aTensorTy)->swizzlingByteWidth == 128 &&
+      ttng::getNvmmaSmemAttrs(bTensorTy)->swizzlingByteWidth == 128 &&
+      // K96 reads consecutive scale words with a fixed hardware stride.
+      // Repeated MN tiles or subviews must not interleave unrelated words.
+      ttng::getTMemSubSliceOffset(op.getAScale().getType(), 4, 1) == 4 &&
+      ttng::getTMemSubSliceOffset(op.getBScale().getType(), 4, 1) ==
+          std::max(2u, instN / 32);
+  if (useK96) {
+    // K96 tiles must come in pairs to leave a K64-aligned remainder.
+    int numK96 = 2 * (blockK / 192);
+    int numK64 = (blockK % 192) / 64;
+    // On a tie, keep 96+96+64 within each packed 128-byte sector to avoid
+    // absolute continuation descriptors. Otherwise minimize the MMA count.
+    bool crossSectors = numK96 + numK64 < 3 * (blockK / 256);
+    for (int offset = 0; offset < blockK;) {
+      int size = crossSectors ? (offset < numK96 * 96 ? 96 : 64)
+                              : (offset % 256 < 192 ? 96 : 64);
+      dot.kOffsets.push_back(offset);
+      offset += size;
+    }
+    dot.kOffsets.push_back(blockK);
+  }
   int mmasPerScaleWord =
       4 / getScaleFactorColsPerSet(mxfpInstKind, op, dot.mmaSizeK);
 
   dot.getInstOperands = [&](const DotConversion::InstDesc &desc, int m, int n,
                             int k) -> MMAInstOperands {
     auto [numRepM, numRepN, numRepK] = desc.repShape;
-    int numRepKWords = ceil<int>(numRepK, mmasPerScaleWord);
+    int numRepKWords = ceil<int>(blockK, dot.mmaSizeK * mmasPerScaleWord);
     int numColPerScaleBlockA = ceil<int>(
         ttng::getTmemAllocSizes(cast<MemDescType>(op.getAScale().getType()))
             .numCols,
@@ -890,25 +931,40 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
             .numCols,
         numRepN * numRepKWords);
     numColPerScaleBlockB = std::max(numColPerScaleBlockB, 2);
-    int subWordIdx = k % mmasPerScaleWord;
-    int wordIdx = k / mmasPerScaleWord;
+    int baseK = dot.getKOffset(k) / dot.mmaSizeK;
+    int subWordIdx = baseK % mmasPerScaleWord;
+    int wordIdx = baseK / mmasPerScaleWord;
     int scaleIdxA = linearizeScaleBlockIdx(op.getAScale(), m, wordIdx, numRepM,
                                            numRepKWords);
     int scaleIdxB = linearizeScaleBlockIdx(op.getBScale(), n, wordIdx, numRepN,
                                            numRepKWords);
-    Value scaleA =
-        tb.add(baseScaleA, tb.i32_val(scaleIdxA * numColPerScaleBlockA));
-    Value scaleB =
-        tb.add(baseScaleB, tb.i32_val(scaleIdxB * numColPerScaleBlockB));
+    int offsetA = scaleIdxA * numColPerScaleBlockA;
+    int offsetB = scaleIdxB * numColPerScaleBlockB;
+    if (useK96) {
+      offsetA =
+          ttng::getTMemSubSliceOffset(op.getAScale().getType(),
+                                      m * desc.mmaSizeM, 0) +
+          ttng::getTMemSubSliceOffset(op.getAScale().getType(), wordIdx * 4, 1);
+      offsetB =
+          ttng::getTMemSubSliceOffset(op.getBScale().getType(),
+                                      n * desc.mmaSizeN, 0) +
+          ttng::getTMemSubSliceOffset(op.getBScale().getType(), wordIdx * 4, 1);
+    }
+    Value scaleA = tb.add(baseScaleA, tb.i32_val(offsetA));
+    Value scaleB = tb.add(baseScaleB, tb.i32_val(offsetB));
     Value instDescriptor;
     if (mxfpInstKind == mxfpKind::mxf8f6f4) {
       instDescriptor = createScaleInstDescriptorFp8(
           rewriter, op, desc.mmaSizeM, desc.mmaSizeN, desc.transA, desc.transB,
           subWordIdx, subWordIdx, dot.mmaSizeK);
     } else {
+      // K96 selectors address individual scale bytes rather than K64 sets.
+      int scaleId = dot.getKSize(k) == 96
+                        ? (dot.getKOffset(k) / getScaleVecSize(op)) % 4
+                        : subWordIdx;
       instDescriptor = createScaleInstDescriptorFp4(
           rewriter, op, desc.mmaSizeM, desc.mmaSizeN, desc.transA, desc.transB,
-          subWordIdx, subWordIdx, mxfpInstKind, blockK, dot.mmaSizeK);
+          scaleId, scaleId, mxfpInstKind, blockK, dot.getKSize(k));
     }
 
     return {instDescriptor, scaleA, scaleB};

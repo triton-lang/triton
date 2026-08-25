@@ -390,29 +390,11 @@ void LayoutPropagation::resolveConflicts() {
     Attribute encoding = *info.encodings.begin();
     bool isLoadOrStore =
         op && isa<LoadOp, StoreOp, AtomicRMWOp, AtomicCASOp>(op);
-    bool foundPreferred = false;
     for (Attribute e : info.encodings) {
       if ((isLoadOrStore && isa<BlockedEncodingAttr>(e)) ||
           (!isLoadOrStore && isa<MmaEncodingTrait>(e))) {
         encoding = e;
-        foundPreferred = true;
         break;
-      }
-    }
-    // Otherwise the choice above is just insertion order. Prefer the candidate
-    // needing the fewest registers per thread: a layout degenerate along lane
-    // or warp replicates elements and multiplies the instructions emitted.
-    if (!foundPreferred) {
-      if (auto tensorType = dyn_cast<RankedTensorType>(it.first.getType())) {
-        ArrayRef<int64_t> shape = tensorType.getShape();
-        unsigned bestElems = getTotalElemsPerThread(encoding, shape);
-        for (Attribute e : info.encodings) {
-          unsigned elems = getTotalElemsPerThread(e, shape);
-          if (elems < bestElems) {
-            bestElems = elems;
-            encoding = e;
-          }
-        }
       }
     }
     info.encodings.clear();
@@ -1319,7 +1301,7 @@ bool LayoutRematerialization::hoistConvertDotOperand(
   // threads We do views and elementwise pure ops for now
   auto noDataMovement = [](Operation *op) {
     return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
-           isa<BroadcastOp, Fp4ToFpOp, ConvertLayoutOp, UpcastFpOpInterface>(
+           isa<BroadcastOp, Fp4ToFpOp, ConvertLayoutOp, CastFpOpInterface>(
                op) ||
            isView(op);
   };

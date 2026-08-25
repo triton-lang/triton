@@ -72,6 +72,9 @@ int TargetInfo::getAddressSpace(Attribute addressSpace) const {
 unsigned TargetInfo::getPtrAddressSpace(triton::PtrAddrSpace space) const {
   switch (space) {
   case triton::PtrAddrSpace::Global:
+  // Global memory read-only marking is not carried via a different LLVM
+  // address space. We channel it through other mechanisms.
+  case triton::PtrAddrSpace::Constant:
     return llvm::NVPTXAS::ADDRESS_SPACE_GLOBAL;
   case triton::PtrAddrSpace::Descriptor:
     return llvm::NVPTXAS::ADDRESS_SPACE_GENERIC;

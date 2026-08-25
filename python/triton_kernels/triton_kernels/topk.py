@@ -28,14 +28,16 @@ def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_
         x_shape_max = [x.shape[0], x.shape[1]]
         x = wrap_torch_tensor(x, shape=x_shape, shape_max=x_shape_max)
     cdiv = lambda a, b: (a + b - 1) // b
-    BLOCK_M = 32
-    BLOCK_N = 32
     use_provided_indx = y_indx is not None
     assert symm_mem_pool is not None or not all_gather
     assert len(x.shape) == 2
     assert x.shape_max[-1] < 32768
     assert dim == 1
     n_rows, n_cols = x.shape
+    assert 0 < k <= n_cols
+    k_pad = triton.next_power_of_2(k)
+    BLOCK_M = 32
+    BLOCK_N = max(32, k_pad)
     n_rows_max, _ = x.shape_max
     dev = x.device
     n_rows_out_max = n_rows_max * symm_mem_pool.mesh.world_size if all_gather else n_rows_max
@@ -50,7 +52,7 @@ def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_
         y_indx_bufs = (y_indx, )
     # create bitmatrix in transposed memory layout:
     n_cols_pad = cdiv(n_cols, BLOCK_N) * BLOCK_N
-    n_cols_words = n_cols_pad // 32
+    n_cols_words = cdiv(n_cols, 32)
     bitmatrix_bufs, bitmatrix_data, offset = make_empty(offset, (n_cols_words, cdiv(n_rows_out_max, 32) * 32),
                                                         torch.uint32, dev, all_gather=all_gather,
                                                         symm_mem_pool=symm_mem_pool)

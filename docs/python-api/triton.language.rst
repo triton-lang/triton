@@ -113,7 +113,6 @@ Math Ops
     fdiv
     floor
     fma
-    linear_apply
     log
     log2
     maximum
@@ -138,6 +137,7 @@ Reduction Ops
 
     argmax
     argmin
+    linear_apply
     max
     min
     reduce

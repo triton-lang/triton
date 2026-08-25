@@ -146,7 +146,6 @@ Math Ops
     floor
     fma
     fp4_to_fp
-    linear_apply
     log
     log2
     maximum
@@ -167,6 +166,7 @@ Reduction Ops
     :toctree: generated
     :nosignatures:
 
+    linear_apply
     reduce
     reduce_or
     sum

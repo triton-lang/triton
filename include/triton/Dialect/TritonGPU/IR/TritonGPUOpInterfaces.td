@@ -4,9 +4,10 @@
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 
-def UpcastFpOpInterface : OpInterface<"UpcastFpOpInterface"> {
+def CastFpOpInterface : OpInterface<"CastFpOpInterface"> {
     let description = [{
-        This interface is for operations that upcast floating-point numbers.
+        This interface is for operations that cast floating-point numbers,
+        either upcasting or downcasting.
     }];
 
     let cppNamespace = "::mlir::triton::gpu";
