@@ -156,6 +156,21 @@ tt.func @async_wait_existing_barrier(%arg: tensor<32x16xf16, #AL>) {
   tt.return
 }
 
+// Tensor-only and control-only barriers do not order shared-memory accesses.
+// CHECK-LABEL: shared_barrier_masks
+tt.func @shared_barrier_masks(%arg: tensor<32x16xf16, #AL>) {
+  // CHECK: ttg.local_alloc
+  // CHECK-NEXT: ttg.barrier tensor_read|tensor_write
+  // CHECK-NEXT: ttg.barrier none
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttg.local_load
+  %smem = ttg.local_alloc %arg : (tensor<32x16xf16, #AL>) -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory>
+  ttg.barrier tensor_read|tensor_write
+  ttg.barrier none
+  %loaded = ttg.local_load %smem : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<32x16xf16, #AL>
+  tt.return
+}
+
 // An acquire barrier follows the shared-memory write used to broadcast a
 // scalar atomic result, so it cannot replace the barrier after the wait.
 // CHECK-LABEL: async_wait_before_atomic_acquire
@@ -1040,7 +1055,7 @@ tt.func @warp_specialize_into_default(%arg0: tensor<1xi64>) {
   ttg.warp_specialize()
   // CHECK-NEXT: default
   default {
-    // CHECK-NEXT: ttg.barrier local
+    // The entry rendezvous already orders the default region's load.
     // CHECK-NEXT: local_load
     ttg.local_load %0 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
     // CHECK-NEXT: ttg.barrier local
@@ -1064,7 +1079,7 @@ tt.func @default_region_cfg(%arg0: tensor<1xi64>, %arg1: i1) {
   ttg.warp_specialize()
   // CHECK-NEXT: default
   default {
-    // CHECK-NEXT: ttg.barrier local
+    // The entry rendezvous already orders the default region's load.
     // CHECK-NEXT: local_load
     ttg.local_load %0 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
     cf.cond_br %arg1, ^bb1, ^bb2
@@ -1156,6 +1171,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:80"} {
 // CHECK-LABEL: @membar_alias_through_warp_specialize
 tt.func @membar_alias_through_warp_specialize() {
   %0 = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #shared, #ttg.shared_memory, mutable>
+  // Capture writes precede the entry rendezvous, so it cannot serve the wait.
+  // CHECK: ttg.async_wait
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttg.warp_specialize
+  ttg.async_wait {num = 0 : i32}
   ttg.warp_specialize(%0)
   default {
     ttg.warp_yield
@@ -1204,7 +1224,7 @@ tt.func @check_barrier_no_duplication(%arg0: tensor<1xi64>) {
   ttg.warp_specialize()
   // CHECK-NEXT: default
   default {
-    // CHECK-NEXT: ttg.barrier local
+    // The entry rendezvous already orders the default region's load.
     // CHECK-NEXT: local_load
     ttg.local_load %0 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
     // CHECK-NEXT: ttg.barrier

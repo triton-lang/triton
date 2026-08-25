@@ -112,41 +112,17 @@ void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
                                  triton::gpu::AddrSpace::Local);
 }
 
-bool containsLocalBarrier(Operation *op) {
-  if (isa<triton::AtomicPollOp>(op))
-    return true;
-  if (auto atomic = dyn_cast<triton::AtomicOpInterface>(op))
-    return atomic.getMemSemantic() != triton::MemSemantic::RELAXED;
-  if (isa<gpu::BarrierOp>(op))
-    return true;
-  if (isa<ttng::ClusterBarrierOp>(op))
-    return true;
-  if (isa<triton::gpu::WarpSpecializePartitionsOp>(op))
-    return true;
-  if (isa<triton::gpu::WarpYieldOp, triton::gpu::WarpReturnOp>(op))
-    return true;
-  if (isa<ttng::ArriveBarrierOp>(op))
-    return true;
-  if (isa<ttng::BarrierExpectOp>(op))
-    return true;
-  if (isa<ttng::TCGen5CommitOp>(op))
-    return true;
-  if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op))
-    return barrier.hasLocal();
-  if (auto wgWait = dyn_cast<ttng::WarpGroupDotWaitOp>(op))
-    return !wgWait.getWarpGroupLocal() && triton::gpu::lookupNumWarps(op) > 4;
-  return false;
-}
-
 static Allocation::BufferId getScratchBufferId(Operation *op,
                                                Allocation *allocation) {
   // A call's allocation belongs to the callee and is translated separately.
-  if (isa<triton::CallOp>(op))
+  if (isa<CallOpInterface>(op))
     return Allocation::InvalidBufferId;
   return allocation->getBufferId(op);
 }
 
 static bool scratchBufferUsesWarpSync(Operation *op) {
+  if (isa<ttng::TensormapCreateOp>(op))
+    return true;
   auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
   if (!cvt)
     return false;
@@ -159,9 +135,19 @@ static bool scratchBufferUsesWarpSync(Operation *op) {
   return mlir::isCvtDimSync(srcLayout, dstLayout, kWarp);
 }
 
-static triton::BarrierStages getLocalBarrierStages(Operation *op,
-                                                   Allocation *allocation) {
+triton::BarrierStages getLocalBarrierStages(Operation *op,
+                                            Allocation *allocation) {
   triton::BarrierStages stages;
+  // The local-memory mask guarantees ordering of local memory accesses.
+  if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op)) {
+    stages.beforeMemoryEffects = barrier.hasLocal();
+    return stages;
+  }
+
+  // Pure layout conversions and reductions can still use shared scratch and
+  // internal barriers even without descriptor memory effects. Call frames do
+  // not imply a rendezvous, and tensor-map creation and warp-only conversions
+  // only synchronize a warp.
   auto scratchBufferId = getScratchBufferId(op, allocation);
   bool hasScratchBarrier = scratchBufferId != Allocation::InvalidBufferId &&
                            !scratchBufferUsesWarpSync(op);
@@ -185,7 +171,21 @@ static triton::BarrierStages getLocalBarrierStages(Operation *op,
   // write and read phases. Other barrier-like operations behave as a barrier
   // immediately before the operation.
   stages.betweenMemoryEffects = hasScratchBarrier;
-  stages.beforeMemoryEffects = containsLocalBarrier(op);
+  stages.beforeMemoryEffects =
+      isa<gpu::BarrierOp, ttng::ClusterBarrierOp,
+          triton::gpu::WarpSpecializePartitionsOp, triton::gpu::WarpYieldOp,
+          triton::gpu::WarpReturnOp, ttng::ArriveBarrierOp,
+          ttng::BarrierExpectOp, ttng::TCGen5CommitOp>(op);
+
+  // Warp specialization writes its captures before the launch rendezvous.
+  if (isa<triton::gpu::WarpSpecializeOp>(op))
+    stages.beforeMemoryEffects = !hasScratchBarrier;
+  // Fused MMA completion synchronizes the partition before issuing the MMA.
+  if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op))
+    stages.beforeMemoryEffects = !mma.getCompletionBarriers().empty();
+  if (auto wgWait = dyn_cast<ttng::WarpGroupDotWaitOp>(op))
+    stages.beforeMemoryEffects =
+        !wgWait.getWarpGroupLocal() && triton::gpu::lookupNumWarps(op) > 4;
   return stages;
 }
 
