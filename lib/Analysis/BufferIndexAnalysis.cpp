@@ -304,7 +304,7 @@ void BufferIndexAnalysis::attachBufferIndex(AllocationSlice &slice,
     return;
 
   auto index = extractBufferIndex(value);
-  if (!index || triton::gpu::lookupNumCTAs(index) != 1)
+  if (!index)
     return;
   auto expr = analyzeBufferIndex(index.getIndex());
   expr.indexedSource = index.getSrc();

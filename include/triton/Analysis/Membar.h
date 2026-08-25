@@ -18,7 +18,7 @@ namespace mlir {
 class OpBuilder;
 struct AllocationSlice;
 
-// Complete MAY-addresses in a known single-CTA kernel allocation frame. Runtime
+// Complete MAY-addresses in a known kernel allocation frame. Runtime
 // indices may select several possible physical views across loop iterations.
 // Only the byte addresses are needed, not a runtime descriptor key.
 // Share geometry per descriptor across all of its read and write effects.

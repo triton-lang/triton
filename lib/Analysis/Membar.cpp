@@ -34,9 +34,10 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
     return false;
 
   // A MAY-set covers every runtime origin, including across loop iterations.
-  // The unions are disjoint exactly when every candidate pair is disjoint in
-  // the same physical allocation frame. Collection certifies the current
-  // function's frame, and call translation discards these footprints.
+  // Disjoint byte-address unions prove every candidate pair disjoint in the
+  // same physical allocation frame. Ignoring CTA identity can only add aliases.
+  // Collection certifies the current function's frame, and call translation
+  // discards these footprints.
   if (physicalFootprint && other.physicalFootprint &&
       !physicalFootprint->intersects(*other.physicalFootprint))
     return false;
@@ -364,8 +365,6 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
 SharedMemoryFootprints ModuleMembarAnalysis::getSharedMemoryFootprints() {
   ModuleOp module = moduleAllocation.getModuleOp();
   SharedMemoryFootprints footprints;
-  if (triton::gpu::lookupNumCTAs(module) != 1)
-    return footprints;
 
   // Physical footprints use the addresses assigned by the allocation passes.
   auto solver = createDataFlowSolver();

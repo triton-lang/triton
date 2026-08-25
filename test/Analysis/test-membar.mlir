@@ -2063,12 +2063,13 @@ tt.func @shared_subslice_shifted_source(%input: tensor<64xi32, #writer>) -> tens
 
 // -----
 
-#writer = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-#reader = #ttg.linear<{register = [], lane = [[1], [2], [4], [8], [16]], warp = [[64], [32]], block = []}>
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+// Exercise both index and physical-footprint proofs with replicated CTAs.
+#writer = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+#reader = #ttg.linear<{register = [], lane = [[1], [2], [4], [8], [16]], warp = [[64], [32]], block = [[0]]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 #smem = #ttg.shared_memory
 
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.num-ctas" = 1 : i32} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.num-ctas" = 2 : i32} {
 
 // Different descriptor SSA values select disjoint groups of physical stages.
 // Their complete MAY-sets remain disjoint across the loop backedge, even
