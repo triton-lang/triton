@@ -707,7 +707,15 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_arg(self, node):
         ast.NodeVisitor.generic_visit(self, node)
-        param = next(p for p in self.jit_fn.params if p.name == node.arg)
+        param = next((p for p in self.jit_fn.params if p.name == node.arg), None)
+        if param is None:
+            # Defensive: a bare next() here surfaces as StopIteration(), which the
+            # visitor's handler wraps into a CompilationError whose message names
+            # neither the parameter nor the function.
+            raise CompilationError(
+                self.jit_fn.src, node, f"parameter '{node.arg}' is not in the signature of "
+                f"'{self.jit_fn.__name__}', whose parameters are "
+                f"{[p.name for p in self.jit_fn.params]}.")
         if param.is_constexpr and (param.do_not_specialize or param.do_not_specialize_on_alignment):
             raise CompilationError(
                 self.jit_fn.src, node,

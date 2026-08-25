@@ -589,6 +589,30 @@ def test_err_nested_function_def():
     assert "nested function" in err_msg, "error should mention nested function"
 
 
+def test_err_unknown_parameter():
+    """A parameter present in the source but absent from the signature.
+
+    Reaching this is an internal inconsistency rather than user error, which is
+    exactly why it has to say what it found: the bare next() this replaces
+    surfaced as StopIteration() and named neither the parameter nor the function.
+    """
+
+    @triton.jit
+    def kernel(ptr, n, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        tl.store(ptr + offs, tl.load(ptr + offs))
+
+    kernel.params = [p for p in kernel.params if p.name != "n"]
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(
+            triton.compiler.ASTSource(fn=kernel, signature={"ptr": "*fp32", "n": "i32"}, constexprs={"BLOCK": 128}))
+
+    err_msg = format_exception(e.type, value=e.value, tb=e.tb)
+    assert "StopIteration" not in err_msg, "unknown parameter should not leak StopIteration"
+    assert "'n' is not in the signature" in err_msg, "error should name the missing parameter"
+
+
 @pytest.mark.parametrize("ptr_ty", ["*i8", "*i16", "*i64"])
 def test_err_histogram_non_32bit_int(ptr_ty):
 
