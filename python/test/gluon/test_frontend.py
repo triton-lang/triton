@@ -3918,7 +3918,7 @@ def test_amd_scaled_upcast_fp8_cdna(target):
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @kernel() attributes {noinline = false} {
     %cst = arith.constant 1.000000e+00 : f32
-    %0 = tt.fp_to_fp %cst, rounding = rtne : f32 -> f8E4M3FN
+    %0 = arith.truncf %cst : f32 to f8E4M3FN
     %1 = tt.splat %0 : f8E4M3FN -> tensor<16x64xf8E4M3FN, #blocked>
     %c2_i8 = arith.constant 2 : i8
     %cst_0 = arith.constant dense<2> : tensor<16x64xi8, #blocked>
