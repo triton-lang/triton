@@ -1091,6 +1091,51 @@ def test_async_tma_kernel_2bufs_1bar(FAILURE, device, run_wrapper, monkeypatch, 
     kernel[(1, )](a_desc, b_desc, output, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
 
 
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
+def test_tma_barrier_state_snapshot(device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_tma_barrier_state_snapshot, (device, False, monkeypatch))
+        assert result.exc is None
+        assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(input_desc, output, iterations):
+        block: ttgl.constexpr = input_desc.block_type.shape[0]
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [8], [0])
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [block], input_desc.layout)
+        bars = mbarrier.allocate_mbarrier(batch=4)
+        for i in ttgl.static_range(4):
+            mbarrier.init(bars.index(i), count=1)
+
+        # Four barrier-state rows are replicated across the eight-warp CTA.
+        # Every copy must agree on which phase to clear after TMA completion.
+        for iteration in range(iterations):
+            for i in ttgl.static_range(4):
+                bar = bars.index(i)
+                mbarrier.expect(bar, input_desc.nbytes_per_cta)
+                tma.async_load(input_desc, [ttgl.program_id(0) * block], bar, smem)
+                mbarrier.wait(bar, iteration & 1, deps=[smem])
+
+        for i in ttgl.static_range(4):
+            mbarrier.invalidate(bars.index(i))
+        offsets = ttgl.program_id(0) * block + ttgl.arange(0, block, layout=layout)
+        ttgl.store(output + offsets, smem.load(layout))
+
+    block, blocks = 128, 32
+    values = torch.arange(block * blocks, device=device, dtype=torch.int32)
+    output = torch.empty_like(values)
+    shared_layout = ttgl.NVMMASharedLayout.get_default_for([block], ttgl.int32)
+    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(values, [block], shared_layout)
+    kernel[(blocks, )](input_desc, output, 64, num_warps=8, num_ctas=1)
+    if is_compile_warmup():
+        return
+    torch.testing.assert_close(output, values)
+
+
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("EXPECT_DELTA", [-16, 16], ids=["under", "over"])
 def test_async_tma_expect_bytes_mismatch(EXPECT_DELTA, device, run_wrapper, monkeypatch, num_ctas):
