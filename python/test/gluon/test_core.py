@@ -5819,9 +5819,10 @@ def test_mma_scaled_tcgen05_copy(M, N, K, BLOCK_K, a_format, b_format, VEC_SIZE,
 @pytest.mark.parametrize("m, n, k, block_m, block_n, block_k", [
     (m, n, k, 256, block_n, block_k)
     for m, n, k, block_k in [(256, 256, 128, 128), (256, 256, 256, 256), (500, 384, 704, 256),
-                                (512, 512, 1024, 512)]
+                                (512, 512, 1024, 512), (256, 256, 1024, 1024),
+                                (500, 384, 2752, 1024)]
     for block_n in [128, 256]
-] + [(512, 256, 512, 512, 128, 256)])
+] + [(256, 256, 2048, 256, 128, 2048), (512, 256, 512, 512, 128, 256)])
 def test_tcgen05_mma_scaled_k96_subtiling(fmt, vec_size, block_n, m, n, k, block_m, block_k):
     torch.manual_seed(0)
     a, a_scale, a_ref = random_quantized_tensor(m, k, fmt)
@@ -5833,7 +5834,7 @@ def test_tcgen05_mma_scaled_k96_subtiling(fmt, vec_size, block_n, m, n, k, block
     torch.testing.assert_close(actual, a_ref @ b_ref.T, atol=1e-3, rtol=1e-3)
     # Repeated M tiles interleave A scale words, so they retain K64.
     use_k96 = block_k >= 256 and block_m == 256
-    expected_mmas = (block_k // 256 * 3 if use_k96 else block_k // 64) * (block_m // 256)
+    expected_mmas = (triton.cdiv(block_k, 96) if use_k96 else block_k // 64) * (block_m // 256)
     assert compiled.asm["ptx"].count("tcgen05.mma.") == expected_mmas
 
 

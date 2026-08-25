@@ -1659,3 +1659,53 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
     tt.return
   }
 }
+
+// -----
+
+#a = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, CGALayout = [[1, 0]]}>
+#b = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 8, CGALayout = [[0, 1]]}>
+#d = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
+#sa = #ttng.tensor_memory_scales_encoding<CGALayout = [[1, 0]]>
+#sb = #ttng.tensor_memory_scales_encoding<CGALayout = [[0, 0]]>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true} {
+  // CHECK-LABEL: @tc_gen5_mma_mxfp4_k1024_subslice
+  // SM100-COUNT-16: tcgen05.mma.cta_group::2.kind::mxf4.block_scale.block32
+  // SM100-NOT: tcgen05.mma
+  // The first two K96 tiles stay within a sector; K=192 crosses to K=256.
+  // The high word sets absolute mode (bit 52) and matrix base offset zero.
+  // SM103-COUNT-2: tcgen05.mma.cta_group::2.kind::mxf4.block_scale.block32
+  // SM103: %[[ABS_HIGH:.+]] = llvm.mlir.constant(1074806848 : i32)
+  // SM103: %[[ADESC:.+]] = llvm.bitcast
+  // SM103: %[[ANEXT:.+]] = llvm.bitcast
+  // SM103: %[[ADDR_MASK:.+]] = llvm.mlir.constant(16383 : i64)
+  // SM103: %[[AADDR:.+]] = llvm.and %[[ANEXT]], %[[ADDR_MASK]]
+  // SM103: %[[SHIFT:.+]] = llvm.mlir.constant(16 : i64)
+  // SM103: %[[ALEAD:.+]] = llvm.shl %[[AADDR]], %[[SHIFT]]
+  // SM103: %[[AABS:.+]] = llvm.or %[[ADESC]], %[[ALEAD]]
+  // SM103: llvm.insertelement %[[ABS_HIGH]],
+  // SM103: %[[BDESC:.+]] = llvm.bitcast
+  // SM103: %[[BNEXT:.+]] = llvm.bitcast
+  // SM103: %[[BADDR:.+]] = llvm.and %[[BNEXT]], %[[ADDR_MASK]]
+  // SM103: %[[BLEAD:.+]] = llvm.shl %[[BADDR]], %[[SHIFT]]
+  // SM103: %[[BABS:.+]] = llvm.or %[[BDESC]], %[[BLEAD]]
+  // SM103: tcgen05.mma.cta_group::2.kind::mxf4.block_scale.block32 {{.*}}, %[[AABS]], %[[BABS]],
+  // SM103-COUNT-8: tcgen05.mma.cta_group::2.kind::mxf4.block_scale.block32
+  // SM103-NOT: tcgen05.mma
+  // CHECK: llvm.return
+  tt.func @tc_gen5_mma_mxfp4_k1024_subslice(
+      %a: !ttg.memdesc<256x1024xi8, #a, #ttg.shared_memory>,
+      %b: !ttg.memdesc<1024x128xi8, #b, #ttg.shared_memory>,
+      %d: !ttg.memdesc<256x128xf32, #d, #ttng.tensor_memory, mutable>,
+      %sa: !ttg.memdesc<256x32xi8, #sa, #ttng.tensor_memory>,
+      %sb: !ttg.memdesc<128x32xi8, #sb, #ttng.tensor_memory>, %use: i1, %pred: i1) {
+    %a1 = ttg.memdesc_subslice %a [0, 512] : !ttg.memdesc<256x1024xi8, #a, #ttg.shared_memory> -> !ttg.memdesc<256x512xi8, #a, #ttg.shared_memory, 256x1024>
+    %b1 = ttg.memdesc_subslice %b [512, 0] : !ttg.memdesc<1024x128xi8, #b, #ttg.shared_memory> -> !ttg.memdesc<512x128xi8, #b, #ttg.shared_memory, 1024x128>
+    ttng.tc_gen5_mma_scaled %a1, %b1, %d, %sa, %sb, %use, %pred lhs = e2m1 rhs = e2m1 {two_ctas} :
+      !ttg.memdesc<256x512xi8, #a, #ttg.shared_memory, 256x1024>,
+      !ttg.memdesc<512x128xi8, #b, #ttg.shared_memory, 1024x128>,
+      !ttg.memdesc<256x128xf32, #d, #ttng.tensor_memory, mutable>,
+      !ttg.memdesc<256x32xi8, #sa, #ttng.tensor_memory>,
+      !ttg.memdesc<128x32xi8, #sb, #ttng.tensor_memory>
+    tt.return
+  }
+}

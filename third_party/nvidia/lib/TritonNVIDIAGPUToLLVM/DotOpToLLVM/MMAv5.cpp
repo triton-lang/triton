@@ -55,7 +55,7 @@ public:
   }
 
   MemDescOperand memLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                         Location loc) const override {
+                         Location loc, int kSize = 0) const override {
     return tmemLoad(a, b, rewriter, loc);
   }
 
@@ -491,16 +491,18 @@ struct DotConversion {
 
   unsigned blockK;
   int mmaSizeK;
-  bool useK96 = false;
+  struct KTile {
+    int offset;
+    int size;
+  };
+  SmallVector<KTile> kTiles;
 
-  // Keep each instruction inside its packed 128-byte swizzle sector:
-  // K256 = K96 + K96 + K64, instead of four K64 instructions.
   int getKOffset(int k) const {
-    return useK96 ? (k / 3) * 256 + (k % 3) * 96 : k * mmaSizeK;
+    return kTiles.empty() ? k * mmaSizeK : kTiles[k].offset;
   }
 
   int getKSize(int k) const {
-    return useK96 ? (k % 3 == 2 ? 64 : 96) : mmaSizeK;
+    return kTiles.empty() ? mmaSizeK : kTiles[k].size;
   }
 
   int numBitsPerElementA;
@@ -580,7 +582,8 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   int numRepN = ceil<unsigned>(N, mmaSizeN);
   assert((!twoCTAs || numRepN == 1) &&
          "grep for [Note: numRepN > 1 and two_ctas]");
-  int numRepK = op.useK96 ? K / 256 * 3 : ceil<unsigned>(K, mmaSizeK);
+  int numRepK =
+      op.kTiles.empty() ? ceil<unsigned>(K, mmaSizeK) : op.kTiles.size();
 
   // In A * B = C
   // For M=64 twoCTAs, B and C have the same split and A has a split half of C
@@ -607,8 +610,8 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
              << aTensorTy << " for MMAv5 instruction shape [" << mmaSizeM
              << ", " << mmaSizeK << "]";
     }
+    transA = loader->getDescriptor().transposed;
     aLoader = std::make_unique<DotOpMmaSmemLoader>(std::move(*loader));
-    transA = ((DotOpMmaSmemLoader *)aLoader.get())->getDescriptor().transposed;
   }
 
   auto isFp4b = op.numBitsPerElementB == 4;
@@ -708,9 +711,9 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
     MemDescOperand accAddress =
         dLoader.tmemLoad(m * mmaSizeM, n * mmaSizeN, rewriter, loc);
     MemDescOperand a = aLoader->memLoad(m * aOperandShape[0], op.getKOffset(k),
-                                        rewriter, loc);
+                                       rewriter, loc, op.getKSize(k));
     Value b = bLoader->smemLoad(op.getKOffset(k), n * bOperandShape[1],
-                                rewriter, loc);
+                                rewriter, loc, op.getKSize(k));
     Value useInitAcc = k == 0 ? useDFlag : tb.i1_val(1);
     createGen5MMA(rewriter, loc, op.kind, a, b, accAddress, elect,
                   op.getInstOperands(desc, m, n, k), useInitAcc, twoCTAs,
@@ -892,7 +895,7 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
   bool twoCTAs = ttng::getModuleTwoCTAs(op);
   SmallVector<Value> commitDescs = op.getCompletionDescs();
   unsigned instN = std::min<unsigned>(mmaSizeN, getShapePerCTA(dTensorTy)[1]);
-  dot.useK96 =
+  bool useK96 =
       targetFeatures.supportsK96Tcgen05MMA() && twoCTAs && mmaSizeM == 128 &&
       opKindIsMXFP4 && !hasFp4PaddedOperand && blockK % 256 == 0 &&
       isa<SharedMemorySpaceAttr>(aTensorTy.getMemorySpace()) &&
@@ -903,13 +906,27 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
       ttng::getTMemSubSliceOffset(op.getAScale().getType(), 4, 1) == 4 &&
       ttng::getTMemSubSliceOffset(op.getBScale().getType(), 4, 1) ==
           std::max(2u, instN / 32);
+  if (useK96) {
+    // K96 tiles must come in pairs to leave a K64-aligned remainder.
+    int numK96 = 2 * (blockK / 192);
+    int numK64 = (blockK % 192) / 64;
+    // On a tie, keep 96+96+64 within each packed 128-byte sector to avoid
+    // absolute continuation descriptors. Otherwise minimize the MMA count.
+    bool crossSectors = numK96 + numK64 < 3 * (blockK / 256);
+    for (int offset = 0; offset < blockK;) {
+      int size = crossSectors ? (offset < numK96 * 96 ? 96 : 64)
+                              : (offset % 256 < 192 ? 96 : 64);
+      dot.kTiles.push_back({offset, size});
+      offset += size;
+    }
+  }
   int mmasPerScaleWord =
       4 / getScaleFactorColsPerSet(mxfpInstKind, op, dot.mmaSizeK);
 
   dot.getInstOperands = [&](const DotConversion::InstDesc &desc, int m, int n,
                             int k) -> MMAInstOperands {
     auto [numRepM, numRepN, numRepK] = desc.repShape;
-    int numRepKWords = dot.useK96 ? blockK / (4 * getScaleVecSize(op))
+    int numRepKWords = useK96 ? blockK / (4 * getScaleVecSize(op))
                                   : ceil<int>(numRepK, mmasPerScaleWord);
     int numColPerScaleBlockA = ceil<int>(
         ttng::getTmemAllocSizes(cast<MemDescType>(op.getAScale().getType()))
@@ -921,15 +938,15 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
         numRepN * numRepKWords);
     numColPerScaleBlockB = std::max(numColPerScaleBlockB, 2);
     int scaleOffset = dot.getKOffset(k) / getScaleVecSize(op);
-    int subWordIdx = dot.useK96 ? scaleOffset % 4 : k % mmasPerScaleWord;
-    int wordIdx = dot.useK96 ? scaleOffset / 4 : k / mmasPerScaleWord;
+    int subWordIdx = useK96 ? scaleOffset % 4 : k % mmasPerScaleWord;
+    int wordIdx = useK96 ? scaleOffset / 4 : k / mmasPerScaleWord;
     int scaleIdxA = linearizeScaleBlockIdx(op.getAScale(), m, wordIdx, numRepM,
                                            numRepKWords);
     int scaleIdxB = linearizeScaleBlockIdx(op.getBScale(), n, wordIdx, numRepN,
                                            numRepKWords);
     int offsetA = scaleIdxA * numColPerScaleBlockA;
     int offsetB = scaleIdxB * numColPerScaleBlockB;
-    if (dot.useK96) {
+    if (useK96) {
       offsetA = ttng::getTMemSubSliceOffset(op.getAScale().getType(),
                                            m * desc.mmaSizeM, 0) +
                 ttng::getTMemSubSliceOffset(op.getAScale().getType(), wordIdx * 4,
@@ -949,7 +966,7 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
     } else {
       // The K64 block32 helper takes an index into pairs of scale bytes.
       int scaleId =
-          dot.useK96 && dot.getKSize(k) == 64 && getScaleVecSize(op) == 32
+          useK96 && dot.getKSize(k) == 64 && getScaleVecSize(op) == 32
               ? subWordIdx / 2
               : subWordIdx;
       instDescriptor = createScaleInstDescriptorFp4(
