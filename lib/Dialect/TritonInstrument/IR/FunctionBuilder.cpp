@@ -1439,6 +1439,9 @@ void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
 
         Value states = tti::createLoadScratchMemory(fb, fb.getLoc(), statesPtr,
                                                     barrierStatesType);
+        // Finish all replicated reads before any thread updates the state.
+        // Otherwise copies can disagree on entering phase-clearing collectives.
+        ttg::BarrierOp::create(fb, fb.getLoc(), ttg::AddrSpace::GlobalRead);
         Value descriptor = createBufferDescriptor(fb, mbarOffset, lengthVal);
         Value mask = createCmpIntTensorScalar(fb, barriers, descriptor);
         mask = convertAndBroadcast(fb, mask, {1}, barrierStatesType);
