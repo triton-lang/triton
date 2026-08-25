@@ -72,12 +72,8 @@ def test_compile_only_sm100() -> None:
     assert k.asm["cubin"] != b""
 
 
-@pytest.mark.parametrize(
-    ("target", "num_ctas"),
-    [(GPUTarget("cuda", 90, 32), 1), (GPUTarget("hip", "gfx1250", 32), 2)],
-    ids=["cuda", "amd-multi-cta"],
-)
-def test_compile_only_linear_apply(target, num_ctas) -> None:
+@pytest.mark.parametrize("target", [GPUTarget("cuda", 90, 32), GPUTarget("hip", "gfx1250", 32)], ids=["cuda", "amd"])
+def test_compile_only_linear_apply(target) -> None:
 
     @triton.jit
     def linear_apply_kernel(indices_ptr, bases_ptr, output_ptr):
@@ -95,46 +91,11 @@ def test_compile_only_linear_apply(target, num_ctas) -> None:
         },
         constexprs={},
     )
-    compiled = triton.compile(source, target=target, options={"num_ctas": num_ctas})
+    compiled = triton.compile(source, target=target)
     assert "tt.linear_apply" in compiled.asm["ttir"]
     assert "tt.linear_apply" in compiled.asm["ttgir"]
     assert "tt.linear_apply" not in compiled.asm["llir"]
     assert compiled.asm["cubin" if target.backend == "cuda" else "hsaco"]
-
-
-@pytest.mark.parametrize("producer", ["atomic_add", "atomic_cas", "loop_carried"])
-def test_compile_only_linear_apply_unsupported_cross_cta_basis(producer, capfd) -> None:
-
-    @triton.jit
-    def linear_apply_kernel(indices_ptr, bases_ptr, output_ptr, count, PRODUCER: tl.constexpr):
-        offsets = tl.arange(0, 128)
-        indices = tl.load(indices_ptr + offsets)
-        basis_offsets = tl.arange(0, 32)
-        if PRODUCER == "atomic_add":
-            bases = tl.atomic_add(bases_ptr + basis_offsets, tl.full((32, ), 1, tl.uint32), sem="relaxed")
-        elif PRODUCER == "atomic_cas":
-            bases = tl.atomic_cas(bases_ptr + basis_offsets, tl.full((32, ), 0, tl.uint32), tl.full(
-                (32, ), 1, tl.uint32), sem="relaxed")
-        else:
-            bases = tl.load(bases_ptr + basis_offsets)
-            for i in range(count):
-                bases = bases ^ i.to(tl.uint32)
-        tl.store(output_ptr + offsets, tl.linear_apply(indices, bases))
-
-    source = ASTSource(
-        fn=linear_apply_kernel,
-        signature={
-            "indices_ptr": "*u32",
-            "bases_ptr": "*u32",
-            "output_ptr": "*u32",
-            "count": "i32",
-            "PRODUCER": "constexpr",
-        },
-        constexprs={"PRODUCER": producer},
-    )
-    with pytest.raises(RuntimeError, match="PassManager::run failed"):
-        triton.compile(source, target=GPUTarget("hip", "gfx1250", 32), options={"num_ctas": 2})
-    assert "cross-CTA layout conversions are unsupported on this target" in capfd.readouterr().err
 
 
 @pytest.mark.parametrize("element_type", ["f32", "f16", "bf16"])

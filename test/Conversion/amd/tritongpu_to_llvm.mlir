@@ -1,7 +1,6 @@
 // RUN: triton-opt %s -split-input-file --tritongpu-decompose-linear-apply --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 --convert-builtin-func-to-llvm | FileCheck %s --enable-var-scope --check-prefixes=CHECK,COMMON
 // RUN: triton-opt %s -split-input-file --tritongpu-decompose-linear-apply --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck %s --enable-var-scope --check-prefixes=GFX950,COMMON
 // RUN: triton-opt %s -split-input-file --tritongpu-decompose-linear-apply --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s --enable-var-scope --check-prefixes=GFX1250,COMMON
-// RUN: sed -n 's@^// CROSS-CTA-INPUT: @@p' %s | not triton-opt --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 2>&1 | FileCheck %s --check-prefix=CROSS-CTA-ERROR
 
 // COMMON-DAG: [[$LOCAL_MMRA_TAG:#[A-Za-z0-9_]+]] = #llvm.mmra_tag<"amdgpu-synchronize-as":"local">
 // COMMON-DAG: [[$GLOBAL_MMRA_TAG:#[A-Za-z0-9_]+]] = #llvm.mmra_tag<"amdgpu-synchronize-as":"global">
@@ -1124,31 +1123,3 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return %result : tensor<128xi32, #index>
   }
 }
-
-// -----
-
-#replicated_src = #ttg.linear<{register = [[1]], lane = [[0], [0], [0], [0], [0]], warp = [], block = [[0]]}>
-#cta_selected_dst = #ttg.linear<{register = [], lane = [[0], [0], [0], [0], [0]], warp = [], block = [[1]]}>
-
-module attributes {"ttg.target" = "hip:gfx1250", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // A block-dependent conversion is valid when each CTA already owns the
-  // selected value and no cross-CTA shared-memory access is needed.
-  // COMMON-LABEL: @convert_layout_selects_cta_local_replica
-  // COMMON: llvm.return
-  tt.func private @convert_layout_selects_cta_local_replica(%src: tensor<2xf32, #replicated_src>) {
-    %result = ttg.convert_layout %src : tensor<2xf32, #replicated_src> -> tensor<2xf32, #cta_selected_dst>
-    tt.return
-  }
-}
-
-// Genuine cross-CTA transfers cannot access another CTA's LDS on AMD. Reject
-// them with an operation diagnostic instead of reaching report_fatal_error.
-// CROSS-CTA-INPUT: #src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
-// CROSS-CTA-INPUT: #dst = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
-// CROSS-CTA-INPUT: module attributes {"ttg.target" = "hip:gfx1250", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-// CROSS-CTA-INPUT:   tt.func private @unsupported_cross_cta_conversion(%src: tensor<32xi32, #src>) {
-// CROSS-CTA-INPUT:     %result = ttg.convert_layout %src : tensor<32xi32, #src> -> tensor<32xi32, #dst>
-// CROSS-CTA-INPUT:     tt.return
-// CROSS-CTA-INPUT:   }
-// CROSS-CTA-INPUT: }
-// CROSS-CTA-ERROR: error: 'ttg.convert_layout' op cross-CTA layout conversions are unsupported on this target; use num_ctas=1 or a CTA-local layout

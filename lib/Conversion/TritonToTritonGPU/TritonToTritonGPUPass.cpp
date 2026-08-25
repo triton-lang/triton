@@ -721,30 +721,6 @@ public:
     if (failed(
             applyPartialConversion(mod, target, std::move(patterns), config)))
       return signalPassFailure();
-
-    if (numCTAs <= 1 || !StringRef(this->target.getValue()).starts_with("hip:"))
-      return;
-
-    mod.walk([&](triton::LinearApplyOp op) {
-      RankedTensorType basisType = op.getBases().getType();
-      auto basisEncoding =
-          dyn_cast<BlockedEncodingAttr>(basisType.getEncoding());
-      if (!basisEncoding ||
-          basisEncoding.getCGALayout().getCTASplitNum()[0] == 1)
-        return;
-
-      auto replicatedCGA = CGAEncodingAttr::fromSplitParams(
-          context, {static_cast<unsigned>(numCTAs)}, {1}, {0});
-      auto replicatedEncoding = BlockedEncodingAttr::get(
-          context, basisEncoding.getSizePerThread(),
-          basisEncoding.getThreadsPerWarp(), basisEncoding.getWarpsPerCTA(),
-          basisEncoding.getOrder(), replicatedCGA);
-      OpBuilder builder(op);
-      auto replicatedBases = ConvertLayoutOp::create(
-          builder, op.getLoc(), basisType.cloneWithEncoding(replicatedEncoding),
-          op.getBases());
-      op.getBasesMutable().assign(replicatedBases);
-    });
   }
 };
 
