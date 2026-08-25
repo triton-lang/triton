@@ -634,16 +634,6 @@ void FunctionBuilder::createVerifyLocalScatterDestinationsCall(
         Value scratch = entryBlock->getArgument(0);
         Value indices = entryBlock->getArgument(1);
         auto indicesType = cast<RankedTensorType>(indices.getType());
-        LinearLayout layout = ttg::toLinearLayout(indicesType);
-        StringAttr registerDim = fb.getStringAttr("register");
-        if (layout.getFreeVariableMasks().lookup(registerDim)) {
-          auto encoding = ttg::LinearEncodingAttr::get(
-              fb.getContext(), layout.removeZeroBasesAlongDim(registerDim));
-          indicesType = RankedTensorType::get(
-              indicesType.getShape(), indicesType.getElementType(), encoding);
-          indices = ttg::ConvertLayoutOp::create(fb, indicesType, indices);
-        }
-
         auto offsetType =
             cast<RankedTensorType>(indicesType.clone(fb.getI32Type()));
         unsigned indexWidth =
@@ -682,28 +672,30 @@ void FunctionBuilder::createVerifyLocalScatterDestinationsCall(
                                   indicesType.getEncoding());
         Value pointers = triton::SplatOp::create(fb, pointerType, scratch);
         pointers = triton::AddPtrOp::create(fb, pointerType, pointers, offsets);
-        Value zero = tti::createConstIntTensor(fb, fb.getLoc(), 0, offsetType);
-        Value one = tti::createConstIntTensor(fb, fb.getLoc(), 1, offsetType);
-        auto emitAtomic = [&](triton::RMWOp operation, Value value) {
-          triton::AtomicRMWOp::create(
-              fb, offsetType, operation, pointers, value, Value(),
-              triton::MemSemantic::RELAXED, triton::MemSyncScope::CTA);
-        };
+        int axisDim = static_cast<int>(axis);
+        auto axisType =
+            tti::getSlicedTensorType(offsetType, {axisDim}, fb.getI32Type());
+        Value range = triton::MakeRangeOp::create(fb, axisType, 0,
+                                                  axisType.getShape().front());
+        Value sourcePosition = tti::reshapeAndBroadcast(fb, fb.getLoc(), range,
+                                                        {axisDim}, offsetType);
+        triton::StoreOp::create(fb, fb.getLoc(), pointers, sourcePosition,
+                                Value(), triton::CacheModifier::NONE,
+                                triton::EvictionPolicy::NORMAL,
+                                /*ignore_cta=*/false);
         auto globalMemory =
             ttg::AddrSpace::GlobalRead | ttg::AddrSpace::GlobalWrite;
-        emitAtomic(triton::RMWOp::XCHG, zero);
-        ttg::BarrierOp::create(fb, fb.getLoc(), globalMemory);
-        emitAtomic(triton::RMWOp::ADD, one);
         ttg::BarrierOp::create(fb, fb.getLoc(), globalMemory);
 
-        Value counts = triton::LoadOp::create(
+        Value winner = triton::LoadOp::create(
             fb, fb.getLoc(), pointers, triton::CacheModifier::NONE,
             triton::EvictionPolicy::NORMAL, /*isVolatile=*/false);
-        Value unique =
-            arith::CmpIOp::create(fb, arith::CmpIPredicate::eq, counts, one);
+        Value unique = arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
+                                             winner, sourcePosition);
 
-        uint32_t freeBlocks =
-            layout.getFreeVariableMasks().lookup(fb.getStringAttr("block"));
+        uint32_t freeBlocks = ttg::toLinearLayout(indicesType)
+                                  .getFreeVariableMasks()
+                                  .lookup(fb.getStringAttr("block"));
         if (freeBlocks) {
           Value cta = tti::ExperimentalClusterCTAIdOp::create(fb, fb.getLoc());
           Value blockBits = arith::AndIOp::create(
