@@ -313,9 +313,9 @@ def test_remap_ragged_tensor_metadata(n_slices):
     assert_equal(tri_metadata.block_schedule_data, ref_metadata.block_schedule_data)
 
 
-@pytest.mark.parametrize("n_rows", [7, 256, 17111])
+@pytest.mark.parametrize("n_rows", [0, 7, 256, 17111])
 @pytest.mark.parametrize("n_cols", [13, 32, 128, 811])
-@pytest.mark.parametrize("k", [1, 4, 8])
+@pytest.mark.parametrize("k", [1, 3, 4, 7, 8, 12, 18, 33, 63])
 def test_make_bitmatrix_metadata(n_rows, n_cols, k):
     if k > n_cols:
         pytest.skip("k must be <= n_cols")
