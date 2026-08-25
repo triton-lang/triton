@@ -145,9 +145,7 @@ triton::BarrierStages getLocalBarrierStages(Operation *op,
   }
 
   // Pure layout conversions and reductions can still use shared scratch and
-  // internal barriers even without descriptor memory effects. Call frames do
-  // not imply a rendezvous, and tensor-map creation and warp-only conversions
-  // only synchronize a warp.
+  // internal barriers even without descriptor memory effects.
   auto scratchBufferId = getScratchBufferId(op, allocation);
   bool hasScratchBarrier = scratchBufferId != Allocation::InvalidBufferId &&
                            !scratchBufferUsesWarpSync(op);

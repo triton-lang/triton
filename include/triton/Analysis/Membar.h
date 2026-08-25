@@ -292,8 +292,7 @@ inline BlockInfo translateBlockInfoToCallsite(const BlockInfo &calleeBlockInfo,
 }
 
 /// Classify the barriers that synchronize local memory accesses in `op`
-/// relative to its memory effects. Barriers that only synchronize execution
-/// are excluded.
+/// relative to its memory effects.
 triton::BarrierStages getLocalBarrierStages(Operation *op,
                                             Allocation *allocation);
 
