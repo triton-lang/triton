@@ -222,7 +222,7 @@ Compiler Hint Ops
     :nosignatures:
 
     assume
-    debug_barrier
+    barrier
     max_constancy
     max_contiguous
     multiple_of
