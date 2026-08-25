@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory -test-print-membar | FileCheck --dump-input=fail --dump-input-context=30 %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-tensor-memory-allocation -test-print-membar | FileCheck --dump-input=fail --dump-input-context=30 %s
 
 // -----
 

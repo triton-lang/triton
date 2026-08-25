@@ -7,6 +7,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
@@ -44,7 +45,7 @@ Value createMemDescToI32(RewriterBase &rewriter, Location loc,
   auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, sharedMemStruct,
                                                        srcElemTy, rewriter);
   auto offset = smemObj.getShmemOffset(loc, rewriter, memDescTy);
-  auto elemSize = srcElemTy.getIntOrFloatBitWidth() / 8;
+  auto elemSize = getIntOrFloatOrPtrBitWidth(srcElemTy) / 8;
   offset = b.mul(offset, b.i32_val(elemSize));
   return b.and_(b.add(offset, b.ptrtoint(i32Ty, smemObj.getBase())),
                 b.i32_val(kSharedMemoryObjectMask));

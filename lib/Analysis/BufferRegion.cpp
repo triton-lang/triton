@@ -64,14 +64,14 @@ unsigned getMemDescSize(ttg::MemDescType ty) {
                                              ty.getAllocShape());
   if (auto padded = ttg::getPaddedEncoding(ty.getEncoding()))
     numElems = padded.getPaddedSize({numElems});
-  return numElems * ty.getElementType().getIntOrFloatBitWidth() / 8;
+  return numElems * getIntOrFloatOrPtrBitWidth(ty.getElementType()) / 8;
 }
 
 uint32_t applySharedPadding(uint32_t byteOffset, ttg::MemDescType ty) {
   auto padded = ttg::getPaddedEncoding(ty.getEncoding());
   if (!padded)
     return byteOffset;
-  uint32_t elementSize = ty.getElementTypeBitWidth() / 8;
+  uint32_t elementSize = getIntOrFloatOrPtrBitWidth(ty.getElementType()) / 8;
   uint32_t elementOffset = byteOffset / elementSize;
   return (padded.getPaddedSize({elementOffset + 1}) - 1) * elementSize +
          byteOffset % elementSize;
@@ -119,7 +119,7 @@ MemDescFootprint getMemDescAddresses(
   SmallVector<StringAttr> dims = triton::standardOutDimNames(ctx, ty.getRank());
   ArrayRef<int64_t> shape = ty.getShape();
   uint64_t numPoints = product(shape);
-  uint32_t bitWidth = ty.getElementTypeBitWidth();
+  uint32_t bitWidth = getIntOrFloatOrPtrBitWidth(ty.getElementType());
 
   StringAttr offsetName = StringAttr::get(ctx, "offset");
   StringAttr blockName = StringAttr::get(ctx, "block");
@@ -211,8 +211,8 @@ uint32_t getMemDescStorageOffset(ttg::MemDescType ty, unsigned index) {
   if (auto partitioned =
           dyn_cast<ttg::PartitionedSharedEncodingAttr>(ty.getEncoding()))
     elems /= partitioned.getNumPartitions();
-  return applySharedPadding(index * elems * (ty.getElementTypeBitWidth() / 8),
-                            ty);
+  uint32_t elementSize = getIntOrFloatOrPtrBitWidth(ty.getElementType()) / 8;
+  return applySharedPadding(index * elems * elementSize, ty);
 }
 
 struct MemDescSubsliceOffsets {
@@ -272,7 +272,7 @@ getMemDescSubsliceUnpaddedOffsets(ttg::MemDescSubsliceOp op) {
   }
 
   uint32_t elementSizeBytes =
-      srcTy.getElementType().getIntOrFloatBitWidth() / 8;
+      getIntOrFloatOrPtrBitWidth(srcTy.getElementType()) / 8;
   assert(elementSizeBytes > 0 && "element size must be non-zero");
   return MemDescSubsliceOffsets{storageElementOffset * elementSizeBytes,
                                 elementOffset * elementSizeBytes,

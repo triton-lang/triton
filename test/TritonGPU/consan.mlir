@@ -1595,17 +1595,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
-#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 32, 16]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  // Pointer-valued storage is tracked by its bytes, not its pointee type.
   // CHECK-LABEL: @local_alloc_with_src
-  tt.func public @local_alloc_with_src(%acc: tensor<128x128xf16, #mma>) {
+  tt.func public @local_alloc_with_src(%src: tensor<16x!tt.ptr<i32>>) {
     // CHECK: %[[BUF:.*]] = ttg.local_alloc
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{[^,]+}}
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{[^,]+}}
-    %buf = ttg.local_alloc %acc {allocation.offset = 0 : i32} : (tensor<128x128xf16, #mma>) -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    %buf = ttg.local_alloc %src {allocation.offset = 0 : i32} : (tensor<16x!tt.ptr<i32>>) -> !ttg.memdesc<16x!tt.ptr<i32>, #shared1, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     tt.return
