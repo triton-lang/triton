@@ -33,11 +33,7 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
   if (!allocationInterval.intersects(other.allocationInterval))
     return false;
 
-  // A MAY-set covers every runtime origin, including across loop iterations.
-  // Disjoint byte-address unions prove every candidate pair disjoint in the
-  // same physical allocation frame. Ignoring CTA identity can only add aliases.
-  // Collection certifies the current function's frame, and call translation
-  // discards these footprints.
+  // Physical footprints include every possible origin across loop iterations.
   if (physicalFootprint && other.physicalFootprint &&
       !physicalFootprint->intersects(*other.physicalFootprint))
     return false;
@@ -48,11 +44,7 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
       areBufferIndicesProvablyDifferent(*this, other))
     return false;
 
-  // Logical offsets share coordinates only for the same source descriptor
-  // in the same dynamic iteration. Matching encodings or allocation IDs
-  // do not establish this after selection, indexing or reinterpretation.
-  // The subslice verifier guarantees known types, offsets and matching layouts
-  // for a common source. Otherwise, conservatively assume intersection.
+  // Compare logical offsets only for subslices of the same source descriptor.
   if (!subsliceSource || subsliceSource != other.subsliceSource)
     return true;
 
@@ -371,33 +363,28 @@ SharedMemoryFootprints ModuleMembarAnalysis::getSharedMemoryFootprints() {
   auto *regions = solver->load<triton::BufferRegionAnalysis>();
   if (failed(solver->initializeAndRun(module)))
     return footprints;
-  // Physical offsets must use the current kernel's allocation frame. Different
-  // unnormalized frames are unknown, not evidence of disjointness. Device-
-  // function frames and returned descriptors need callsite translation before
-  // comparing their offsets; use coarse intervals until that is supported.
+  // Device-function allocations need their callsite offsets before comparison.
   for (auto function : module.getOps<FunctionOpInterface>()) {
     if (!triton::isKernel(function))
       continue;
     uint32_t frame = regions->getOperationId(function.getOperation());
 
-    // Shared-memory effects access only their descriptor's logical elements,
-    // including gathers, scatters, and asynchronous copies. BufferRegion maps
-    // those elements through padding and partition bases, so no byte-level
-    // containment solve or register-layout size limit is needed here.
     function.walk([&](Operation *op) {
       for (const auto &access : triton::getMemoryAccesses(op)) {
         Value value = access.value;
         if (!access.isShared() || footprints.contains(value))
           continue;
         const auto &info = regions->getRegionInfo(value);
+        // BufferRegion joins callee arguments across call sites, so a returned
+        // descriptor can include views from another caller's allocation frame.
         if (info.kind != triton::RegionInfo::Kind::Exact ||
             info.views.empty() ||
             llvm::any_of(info.views, [&](const auto &view) {
               return view.allocationFrame != frame;
             }))
           continue;
-        // Preserve every possible runtime stage and origin, not only
-        // singletons.
+        // Union all possible origins. Merging CTA address sets only adds
+        // aliases.
         auto &footprint = footprints[value];
         for (const auto &view : info.views)
           for (const auto &entry : view.region.ctaAddresses)

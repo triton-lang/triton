@@ -18,10 +18,7 @@ namespace mlir {
 class OpBuilder;
 struct AllocationSlice;
 
-// Complete MAY-addresses in a known kernel allocation frame. Runtime
-// indices may select several possible physical views across loop iterations.
-// Only the byte addresses are needed, not a runtime descriptor key.
-// Share geometry per descriptor across all of its read and write effects.
+// Complete MAY-addresses in a known kernel allocation frame.
 using SharedMemoryFootprints = DenseMap<Value, triton::AddressSet>;
 
 /// Callback to allow backend to provide more information on whether a barrier
@@ -71,8 +68,7 @@ public:
   AllocationSlice translated(size_t offset,
                              bool invalidateBufferId = false) const {
     AllocationSlice shifted = *this;
-    // Calls retain the coarse translated interval until frame translation of
-    // these physical views is supported.
+    // TODO: Translate physical footprints into the caller's allocation frame.
     shifted.physicalFootprint = nullptr;
     shifted.allocationInterval = Interval<size_t>(
         allocationInterval.start() + offset, allocationInterval.end() + offset);
@@ -80,9 +76,6 @@ public:
       shifted.bufferId = Allocation::InvalidBufferId;
       shifted.invalidateIterationInfo();
     }
-    // Translations within a function preserve analysis payloads such as
-    // bufferIndexExpr. Cross-function translations invalidate both buffer IDs
-    // and iteration-relative payloads above.
     return shifted;
   }
 
