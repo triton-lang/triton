@@ -70,3 +70,25 @@ Assign the variable before the block so that it is defined on all paths:
         for _ in range(0, 1):
             value = 1.0
         tl.store(out_ptr, value)
+
+A name that is already defined cannot be reused as the loop variable of a dynamic loop (``range``/``tl.range``); choose a different name for it. Matching Python here would require the frontend to carry the loop variable's exit value, so Triton keeps the rule simple instead:
+
+.. code-block:: python
+
+    @triton.jit
+    def kernel(out_ptr, n):
+        i = -1
+        for i in range(n):  # error: `i` is already defined
+            pass
+
+The loop variable of a dynamic loop is local to the loop body, so it cannot be used after the loop:
+
+.. code-block:: python
+
+    @triton.jit
+    def kernel(out_ptr, n):
+        for i in range(n):
+            pass
+        tl.store(out_ptr, i)  # `i` is not defined here
+
+``tl.static_range`` loops are unrolled at compile time, so their loop variable stays defined after the loop with its last value.

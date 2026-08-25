@@ -1335,6 +1335,9 @@ class CodeGenerator(ast.NodeVisitor):
             raise TypeError(f"For upper bound must be a scalar, got {ub.type}")
         if _is_non_scalar_tensor(step):
             raise TypeError(f"For step must be a scalar, got {step.type}")
+        target_name = node.target.id
+        if target_name in self.lscope:
+            raise NameError(f"loop target '{target_name}' is already defined")
         iv_type = self.semantic.integer_promote_impl(lb.dtype, ub.dtype)
         iv_type = self.semantic.integer_promote_impl(iv_type, step.dtype)
         iv_ir_type = iv_type.to_ir(self.builder)
@@ -1349,7 +1352,7 @@ class CodeGenerator(ast.NodeVisitor):
         step = self.builder.create_int_cast(step, iv_ir_type, iv_is_signed)
         # Create placeholder for the loop induction variable
         iv_placeholder = self.builder.create_poison(iv_ir_type)
-        self.set_value(node.target.id, language.core.tensor(iv_placeholder, iv_type))
+        self.set_value(target_name, language.core.tensor(iv_placeholder, iv_type))
 
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
@@ -1410,6 +1413,10 @@ class CodeGenerator(ast.NodeVisitor):
         for name, val in zip(names, result_values):
             self.set_value(name, val)
             self._maybe_set_loc_to_name(val, name)
+
+        # The loop target stays local to the loop body.
+        self.lscope.pop(target_name, None)
+        self.local_defs.pop(target_name, None)
 
         for stmt in node.orelse:
             assert False, "Don't know what to do with else after for"
