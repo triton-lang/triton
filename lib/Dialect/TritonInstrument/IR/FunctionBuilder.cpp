@@ -616,102 +616,38 @@ void FunctionBuilder::createFillGlobalTensorCall(ImplicitLocOpBuilder &b,
 }
 
 void FunctionBuilder::createVerifyLocalScatterDestinationsCall(
-    ImplicitLocOpBuilder &b, Value scratch, Value indices,
-    ArrayRef<int64_t> destinationShape, unsigned axis) {
+    ImplicitLocOpBuilder &b, Value destination, Value indices, Value values,
+    unsigned axis) {
   auto indicesType = cast<RankedTensorType>(indices.getType());
   ManglingArgs specializationArgs{static_cast<uint64_t>(axis)};
-  for (int64_t dimension : destinationShape)
-    specializationArgs.append(static_cast<uint64_t>(dimension));
   specializationArgs.append(
       llvm::xxh3_64bits(mlir::debugString(indicesType.getEncoding())));
 
-  SmallVector<int64_t> shape(destinationShape.begin(), destinationShape.end());
   createCallToCachedFunction(
-      b, "verify_local_scatter_destinations", {scratch, indices},
+      b, "verify_local_scatter_destinations", {destination, indices, values},
       /*assertInfo=*/std::nullopt, std::move(specializationArgs),
-      [shape = std::move(shape), axis](ImplicitLocOpBuilder &fb,
-                                       Block *entryBlock) {
-        Value scratch = entryBlock->getArgument(0);
+      [axis](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+        Value destination = entryBlock->getArgument(0);
         Value indices = entryBlock->getArgument(1);
-        auto indicesType = cast<RankedTensorType>(indices.getType());
-        auto offsetType =
-            cast<RankedTensorType>(indicesType.clone(fb.getI32Type()));
-        unsigned indexWidth =
-            indicesType.getElementType().getIntOrFloatBitWidth();
-        if (indexWidth < 32)
-          indices = arith::ExtUIOp::create(fb, offsetType, indices);
-        else if (indexWidth > 32)
-          indices = arith::TruncIOp::create(fb, offsetType, indices);
+        Value values = entryBlock->getArgument(2);
+        auto valuesType = cast<RankedTensorType>(values.getType());
+        Value actual = ttg::LocalGatherOp::create(
+            fb, valuesType, destination, indices, fb.getI32IntegerAttr(axis));
 
-        Value offsets;
-        int64_t stride = 1;
-        for (int dim = indicesType.getRank() - 1; dim >= 0; --dim) {
-          Value coordinate;
-          if (dim == axis) {
-            coordinate = indices;
-          } else {
-            auto rangeType =
-                tti::getSlicedTensorType(offsetType, {dim}, fb.getI32Type());
-            Value range = triton::MakeRangeOp::create(
-                fb, rangeType, 0, rangeType.getShape().front());
-            coordinate = tti::reshapeAndBroadcast(fb, fb.getLoc(), range, {dim},
-                                                  offsetType);
-          }
-          if (stride != 1) {
-            Value scale =
-                tti::createConstIntTensor(fb, fb.getLoc(), stride, offsetType);
-            coordinate = arith::MulIOp::create(fb, coordinate, scale);
-          }
-          offsets = offsets ? arith::AddIOp::create(fb, offsets, coordinate)
-                            : coordinate;
-          stride *= shape[dim];
+        Type elementType = valuesType.getElementType();
+        if (auto floatType = dyn_cast<FloatType>(elementType)) {
+          auto bitType =
+              valuesType.clone(fb.getIntegerType(floatType.getWidth()));
+          actual = triton::BitcastOp::create(fb, bitType, actual);
+          values = triton::BitcastOp::create(fb, bitType, values);
         }
 
-        auto pointerType =
-            RankedTensorType::get(indicesType.getShape(), scratch.getType(),
-                                  indicesType.getEncoding());
-        Value pointers = triton::SplatOp::create(fb, pointerType, scratch);
-        pointers = triton::AddPtrOp::create(fb, pointerType, pointers, offsets);
-        int axisDim = static_cast<int>(axis);
-        auto axisType =
-            tti::getSlicedTensorType(offsetType, {axisDim}, fb.getI32Type());
-        Value range = triton::MakeRangeOp::create(fb, axisType, 0,
-                                                  axisType.getShape().front());
-        Value sourcePosition = tti::reshapeAndBroadcast(fb, fb.getLoc(), range,
-                                                        {axisDim}, offsetType);
-        triton::StoreOp::create(fb, fb.getLoc(), pointers, sourcePosition,
-                                Value(), triton::CacheModifier::NONE,
-                                triton::EvictionPolicy::NORMAL,
-                                /*ignore_cta=*/false);
-        auto globalMemory =
-            ttg::AddrSpace::GlobalRead | ttg::AddrSpace::GlobalWrite;
-        ttg::BarrierOp::create(fb, fb.getLoc(), globalMemory);
-
-        Value winner = triton::LoadOp::create(
-            fb, fb.getLoc(), pointers, triton::CacheModifier::NONE,
-            triton::EvictionPolicy::NORMAL, /*isVolatile=*/false);
-        Value unique = arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
-                                             winner, sourcePosition);
-
-        uint32_t freeBlocks = ttg::toLinearLayout(indicesType)
-                                  .getFreeVariableMasks()
-                                  .lookup(fb.getStringAttr("block"));
-        if (freeBlocks) {
-          Value cta = tti::ExperimentalClusterCTAIdOp::create(fb, fb.getLoc());
-          Value blockBits = arith::AndIOp::create(
-              fb, cta, arith::ConstantIntOp::create(fb, freeBlocks, 32));
-          Value replicated =
-              arith::CmpIOp::create(fb, arith::CmpIPredicate::ne, blockBits,
-                                    arith::ConstantIntOp::create(fb, 0, 32));
-          auto predicateType =
-              cast<RankedTensorType>(offsetType.clone(fb.getI1Type()));
-          unique = arith::OrIOp::create(
-              fb, unique,
-              triton::SplatOp::create(fb, predicateType, replicated));
-        }
-
+        Value matches =
+            arith::CmpIOp::create(fb, arith::CmpIPredicate::eq, actual, values);
         triton::AssertOp::create(
-            fb, unique, "Non-atomic local scatter has duplicate destinations");
+            fb, matches,
+            "Non-atomic local scatter has conflicting values for the same "
+            "destination");
         triton::ReturnOp::create(fb);
       });
 }

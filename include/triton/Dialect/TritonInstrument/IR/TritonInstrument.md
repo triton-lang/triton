@@ -345,8 +345,9 @@ The common hook implementation covers these TritonGPU operations:
   `ttg.local_atomic_scatter_rmw`: barrier-tracked shared-memory writes. Scatter
   and atomic scatter RMW conservatively cover their full destination
   descriptors because their indices are runtime values.
-- Non-atomic `ttg.local_scatter` additionally rejects duplicate destinations.
-  Atomic scatter collisions remain valid.
+- Non-atomic `ttg.local_scatter` additionally rejects conflicting values for the
+  same destination. Equal-value duplicates and atomic scatter collisions remain
+  valid.
 - `ttg.local_alloc` with a source: barrier-tracked shared-memory write.
 - Any operation with allocator-provided operation-local shared scratch: a
   synchronous generic-proxy write over its allocated byte interval in its owning

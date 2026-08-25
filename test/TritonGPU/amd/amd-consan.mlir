@@ -1002,34 +1002,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 512 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
   // CHECK: tt.func private @[[$SCATTER_HELPER:__triton_consan_verify_local_scatter_destinations[^ (]*]]
-  // CHECK: %[[POINTERS:.*]] = tt.addptr
-  // CHECK: %[[SOURCE_AXIS:.*]] = tt.make_range {end = 32 : i32, start = 0 : i32}
-  // CHECK: %[[SOURCE_RESHAPED:.*]] = tt.reshape %[[SOURCE_AXIS]]
-  // CHECK: %[[SOURCE_CONVERTED:.*]] = ttg.convert_layout %[[SOURCE_RESHAPED]]
-  // CHECK: %[[SOURCE_POSITION:.*]] = tt.broadcast %[[SOURCE_CONVERTED]]
-  // CHECK: tt.store %[[POINTERS]], %[[SOURCE_POSITION]]
-  // CHECK-NEXT: ttg.barrier global_read|global_write
-  // CHECK-NEXT: %[[WINNER:.*]] = tt.load %[[POINTERS]]
-  // CHECK-NEXT: arith.cmpi eq, %[[WINNER]], %[[SOURCE_POSITION]]
-  // CHECK-NOT: ttg.barrier
-  // CHECK-NOT: tt.atomic_rmw
-  // CHECK: tt.assert {{.*}}, "Non-atomic local scatter has duplicate destinations"
-  // CHECK-LABEL: @amd_local_scatter_duplicate_destinations
-  tt.func public @amd_local_scatter_duplicate_destinations(
+  // CHECK: %[[ACTUAL:.*]] = ttg.local_gather %arg0[%arg1] {axis = 1 : i32}
+  // CHECK-NEXT: %[[MATCH:.*]] = arith.cmpi eq, %[[ACTUAL]], %arg2
+  // CHECK-NEXT: tt.assert %[[MATCH]], "Non-atomic local scatter has conflicting values for the same destination"
+  // CHECK-LABEL: @amd_local_scatter_conflicting_values
+  tt.func public @amd_local_scatter_conflicting_values(
       %indices: tensor<4x32xi32, #scatter_blocked>,
       %values: tensor<4x32xi32, #scatter_blocked>) {
     %dst = ttg.local_alloc {allocation.offset = 0 : i32}
         : () -> !ttg.memdesc<4x32xi32, #scatter_shared, #ttg.shared_memory, mutable>
-    // CHECK: ttg.local_alloc
-    // CHECK: %[[WINNERS:.*]] = ttg.global_scratch_alloc {{.*}}shared_cluster_state, third_party_allocation
-    // CHECK: tt.call @[[$SCATTER_HELPER]](%[[WINNERS]], %arg0)
-    // CHECK: ttg.local_scatter
+    // CHECK: %[[DESTINATION:.*]] = ttg.local_alloc
+    // CHECK-NOT: ttg.global_scratch_alloc
+    // CHECK: tti.experimental_lock_release
+    // CHECK-NEXT: ttg.local_scatter %[[DESTINATION]][%arg0], %arg1
+    // CHECK-NEXT: amdg.cluster_barrier_arrive
+    // CHECK-NEXT: amdg.cluster_barrier_wait
+    // CHECK-NEXT: tt.call @[[$SCATTER_HELPER]](%[[DESTINATION]], %arg0, %arg1)
+    // CHECK-NEXT: amdg.cluster_barrier_arrive
+    // CHECK-NEXT: amdg.cluster_barrier_wait
     ttg.local_scatter %dst[%indices], %values {axis = 1 : i32}
         : !ttg.memdesc<4x32xi32, #scatter_shared, #ttg.shared_memory, mutable>,
         tensor<4x32xi32, #scatter_blocked>, tensor<4x32xi32, #scatter_blocked>
-    // CHECK: %[[OTHER_WINNERS:.*]] = ttg.global_scratch_alloc {{.*}}shared_cluster_state, third_party_allocation
-    // CHECK: tt.call @[[$SCATTER_HELPER]](%[[OTHER_WINNERS]], %arg0)
-    // CHECK: ttg.local_scatter
+    // CHECK: tti.experimental_lock_release
+    // CHECK-NEXT: ttg.local_scatter %[[DESTINATION]][%arg0], %arg1
+    // CHECK-NEXT: amdg.cluster_barrier_arrive
+    // CHECK-NEXT: amdg.cluster_barrier_wait
+    // CHECK-NEXT: tt.call @[[$SCATTER_HELPER]](%[[DESTINATION]], %arg0, %arg1)
+    // CHECK-NEXT: amdg.cluster_barrier_arrive
+    // CHECK-NEXT: amdg.cluster_barrier_wait
     ttg.local_scatter %dst[%indices], %values {axis = 1 : i32}
         : !ttg.memdesc<4x32xi32, #scatter_shared, #ttg.shared_memory, mutable>,
         tensor<4x32xi32, #scatter_blocked>, tensor<4x32xi32, #scatter_blocked>
