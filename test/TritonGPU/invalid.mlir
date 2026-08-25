@@ -663,6 +663,23 @@ tt.func @bad_argument_type(%arg0: i32) {
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @warp_specialize_tensor_capture(%arg0: tensor<128xf32, #blocked>) {
+    // expected-error @below {{'ttg.warp_specialize' op cannot capture ranked tensor operand}}
+    ttg.warp_specialize(%arg0)
+    default {
+      ttg.warp_yield
+    }
+    partition0(%arg1: tensor<128xf32, #blocked>) num_warps(2) {
+      ttg.warp_return
+    } : (tensor<128xf32, #blocked>) -> ()
+    tt.return
+  }
+}
+
+// -----
+
 tt.func @bad_default_yields(%arg0: i32) {
   ttg.warp_specialize()
   default {
