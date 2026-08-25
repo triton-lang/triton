@@ -165,6 +165,8 @@ PartitionedSharedEncoding additionally requires `K = popcount(hint)`
 to be a multiple of `numLogicalPieces` (the hinted path doesn't
 support multi-instruction slicing).
 
+Traits: `GlobalToLocalCopyTrait`
+
 Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`, `TDMOpInterface`
 
 #### Attributes:
@@ -254,7 +256,7 @@ and `warp_used_hint`.  Member hints must be legal and pairwise disjoint.
 Descriptors carry tile position and predicate state; destinations remain
 op-level operands.
 
-Traits: `SameVariadicOperandSize`
+Traits: `GlobalToLocalCopyTrait`, `SameVariadicOperandSize`
 
 Interfaces: `InferTypeOpInterface`
 
@@ -307,6 +309,8 @@ The descriptor must be positioned beforehand by amdg.update_tensor_descriptor
 (global offset / column via add_offsets, bounds, pred); this op only supplies the
 per-instruction row slices (src_row_indices) and the LDS destination, and inherits
 `pred` from the descriptor.
+
+Traits: `GlobalToLocalCopyTrait`
 
 Interfaces: `InferTypeOpInterface`, `MBarrierOpInterface`, `TDMOpInterface`
 
@@ -677,7 +681,7 @@ AMD Buffer load operation. Similar to amdg.buffer_load op but directly wirtes to
 Contiguity is the maximum number of elements that can be loaded in a single vector with the given layout and mask.
 This allows to use buffer_load_to_local even if the alignment cannot be proven based on IR.
 
-Traits: `AttrSizedOperandSegments`
+Traits: `AttrSizedOperandSegments`, `GlobalToLocalCopyTrait`
 
 Interfaces: `BufferOpInterface`, `InferTypeOpInterface`, `PredicatedOpInterface`
 

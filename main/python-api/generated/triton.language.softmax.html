@@ -160,7 +160,7 @@
 <h1>triton.language.softmax<a class="headerlink" href="#triton-language-softmax" title="Link to this heading"></a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.language.softmax">
-<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">softmax</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ieee_rounding</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.softmax" title="Link to this definition"></a></dt>
+<span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">softmax</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">keep_dims</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ieee_rounding</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.softmax" title="Link to this definition"></a></dt>
 <dd><p>Computes the softmax of <code class="code docutils literal notranslate"><span class="pre">x</span></code> along the given axis.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
@@ -168,7 +168,11 @@
 <li><p><strong>x</strong> (<em>Block</em>) – the input values</p></li>
 <li><p><strong>dim</strong> (<em>int</em><em> | </em><em>None</em>) – the axis along which to normalize. Defaults to 0 – note that
 this is <em>not</em> the last axis, unlike <code class="code docutils literal notranslate"><span class="pre">torch.softmax</span></code>.</p></li>
-<li><p><strong>ieee_rounding</strong> (<em>bool</em>) – whether the final division uses IEEE-compliant rounding</p></li>
+<li><p><strong>keep_dims</strong> (<em>bool</em><em> | </em><em>None</em>) – deprecated and ignored. Softmax always preserves the input shape.
+Defaults to <code class="code docutils literal notranslate"><span class="pre">None</span></code>; any other value emits a warning.
+Must be passed by keyword.</p></li>
+<li><p><strong>ieee_rounding</strong> (<em>bool</em>) – whether the final division uses IEEE-compliant rounding.
+Must be passed by keyword.</p></li>
 </ul>
 </dd>
 </dl>

@@ -56,7 +56,7 @@ The data will only be available in local memory after `ttg.async_wait` is issued
 completion of `async_copy_global_to_local`. The async copy operations must be committed using
 `ttg.async_commit_group` to close the batch and allow for them to be waited on.
 
-Traits: `AttrSizedOperandSegments`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AttrSizedOperandSegments`, `GlobalToLocalCopyTrait`, `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `InferTypeOpInterface`, `PredicatedOpInterface`
 
