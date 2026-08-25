@@ -1582,6 +1582,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
 #a = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, CGALayout = [[1, 0]]}>
 #b = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 8, CGALayout = [[0, 1]]}>
 #d = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
+#d256 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
 #sa = #ttng.tensor_memory_scales_encoding<CGALayout = [[1, 0]]>
 #sb = #ttng.tensor_memory_scales_encoding<CGALayout = [[0, 0]]>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true} {
@@ -1612,16 +1613,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
       !ttg.memdesc<128x8xi8, #sb, #ttng.tensor_memory>
     tt.return
   }
-}
 
-// -----
-
-#a = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, CGALayout = [[1, 0]]}>
-#b = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 8, CGALayout = [[0, 1]]}>
-#d = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
-#sa = #ttng.tensor_memory_scales_encoding<CGALayout = [[1, 0]]>
-#sb = #ttng.tensor_memory_scales_encoding<CGALayout = [[0, 0]]>
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true} {
   // CHECK-LABEL: @tc_gen5_mma_nvfp4_k512
   // SM100-COUNT-8: tcgen05.mma.cta_group::2.kind::mxf4nvf4.block_scale.block16
   // SM100-NOT: tcgen05.mma
@@ -1647,27 +1639,18 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
   tt.func @tc_gen5_mma_nvfp4_k512(
       %a: !ttg.memdesc<256x256xi8, #a, #ttg.shared_memory>,
       %b: !ttg.memdesc<256x256xi8, #b, #ttg.shared_memory>,
-      %d: !ttg.memdesc<256x256xf32, #d, #ttng.tensor_memory, mutable>,
+      %d: !ttg.memdesc<256x256xf32, #d256, #ttng.tensor_memory, mutable>,
       %sa: !ttg.memdesc<256x32xf8E4M3FN, #sa, #ttng.tensor_memory>,
       %sb: !ttg.memdesc<256x32xf8E4M3FN, #sb, #ttng.tensor_memory>, %use: i1, %pred: i1) {
     ttng.tc_gen5_mma_scaled %a, %b, %d, %sa, %sb, %use, %pred lhs = e2m1 rhs = e2m1 {two_ctas} :
       !ttg.memdesc<256x256xi8, #a, #ttg.shared_memory>,
       !ttg.memdesc<256x256xi8, #b, #ttg.shared_memory>,
-      !ttg.memdesc<256x256xf32, #d, #ttng.tensor_memory, mutable>,
+      !ttg.memdesc<256x256xf32, #d256, #ttng.tensor_memory, mutable>,
       !ttg.memdesc<256x32xf8E4M3FN, #sa, #ttng.tensor_memory>,
       !ttg.memdesc<256x32xf8E4M3FN, #sb, #ttng.tensor_memory>
     tt.return
   }
-}
 
-// -----
-
-#a = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, CGALayout = [[1, 0]]}>
-#b = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 8, CGALayout = [[0, 1]]}>
-#d = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
-#sa = #ttng.tensor_memory_scales_encoding<CGALayout = [[1, 0]]>
-#sb = #ttng.tensor_memory_scales_encoding<CGALayout = [[0, 0]]>
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true} {
   // CHECK-LABEL: @tc_gen5_mma_mxfp4_k1024_subslice
   // SM100-COUNT-16: tcgen05.mma.cta_group::2.kind::mxf4.block_scale.block32
   // SM100-NOT: tcgen05.mma

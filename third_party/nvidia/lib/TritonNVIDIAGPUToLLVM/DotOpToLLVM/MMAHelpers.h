@@ -54,9 +54,8 @@ class DotOpMmaSmemLoader : public DotOpMmaMemLoader {
 public:
   DotOpMmaSmemLoader() = default;
 
-  DotOpMmaSmemLoader(MMASMEMDescriptor desc, Value baseb128, LinearLayout llInv,
-                    unsigned kDim)
-      : desc(desc), baseb128(baseb128), ll(std::move(llInv)), kDim(kDim) {}
+  DotOpMmaSmemLoader(MMASMEMDescriptor desc, Value baseb128, LinearLayout llInv)
+      : desc(desc), baseb128(baseb128), ll(std::move(llInv)) {}
 
   static FailureOr<DotOpMmaSmemLoader>
   build(Location loc, RewriterBase &rewriter, gpu::MemDescType memTy,
@@ -156,7 +155,7 @@ public:
       return failure();
 
     Value baseb128 = b.and_(baseSrcb128, b.i32_val(0x7FFF));
-    return DotOpMmaSmemLoader{*desc, baseb128, ll, 1 - MNdim};
+    return DotOpMmaSmemLoader{*desc, baseb128, ll};
   }
 
   Value smemLoad(int a, int b, ConversionPatternRewriter &rewriter,
@@ -180,7 +179,7 @@ public:
     // address the second chunk through an absolute leading dimension.
     // The caller selects this only for K-major, 128-byte-swizzled operands
     // whose MN tile origins preserve a zero matrix base offset.
-    int k = kDim == 0 ? a : b;
+    int k = desc.transposed ? a : b;
     bool useAbsolute = kSize == 96 && k % 256 + kSize > 256;
     if (useAbsolute) {
       currDesc.leadDimensionAbsoluteMode = 1;
@@ -195,7 +194,8 @@ public:
     Value result = tb.bitcast(descWords, i64_ty);
     if (useAbsolute) {
       int nextK = (k / 256 + 1) * 256;
-      Value next = smemLoad(kDim == 0 ? nextK : a, kDim == 1 ? nextK : b,
+      Value next = smemLoad(desc.transposed ? nextK : a,
+                           desc.transposed ? b : nextK,
                            rewriter, loc);
       Value nextAddress = tb.and_(next, tb.i64_val(0x3fff));
       result = tb.or_(result, tb.shl(nextAddress, tb.i64_val(16)));
@@ -213,7 +213,6 @@ private:
   MMASMEMDescriptor desc;
   Value baseb128;
   LinearLayout ll;
-  unsigned kDim;
 
   static FailureOr<MMASMEMDescriptor>
   getDescriptor(Location loc, const LinearLayout &ll,
