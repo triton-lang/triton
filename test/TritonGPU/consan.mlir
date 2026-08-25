@@ -91,6 +91,71 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #blocked = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1], CGALayout = [[1, 0]]}>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK: tti.experimental_cluster_cta_id : i32
+  // Updating the active mask must not read or overwrite another CTA's entry.
+  // CHECK-LABEL: tt.func private @__triton_consan_set_active_mask_
+  // CHECK-SAME: (%[[ACTIVE_VALUE:[^:]+]]: i32,
+  // CHECK-NOT: tt.load
+  // CHECK: %[[ACTIVE_VALUES:.*]] = tt.splat %[[ACTIVE_VALUE]] : i32 -> tensor<2xi32
+  // CHECK-NOT: tt.load
+  // CHECK: %[[ACTIVE_CTA:.*]] = tti.experimental_cluster_cta_id : i32
+  // CHECK-NEXT: %[[ACTIVE_CTAS:.*]] = tt.splat %[[ACTIVE_CTA]] : i32 -> tensor<2xi32
+  // CHECK-NEXT: %[[ACTIVE_STORE_MASK:.*]] = arith.cmpi eq, {{.*}}, %[[ACTIVE_CTAS]] : tensor<2xi32
+  // CHECK-NOT: tt.load
+  // CHECK: tt.store %{{[^,]+}}, %[[ACTIVE_VALUES]], %[[ACTIVE_STORE_MASK]] {ignore_cta} : tensor<2x!tt.ptr<i32>
+  // CHECK-NEXT: tt.return
+
+  // Publishing and clearing overwrite selected entries without reading old
+  // values. The buffer and CTA predicates remain masks on all four stores.
+  // CHECK-LABEL: tt.func private @__triton_consan_publish_write_visibility_
+  // CHECK-SAME: (%[[PUBLISH_BUFFERS:[^:]+]]: tensor<2xi1, {{.*}}>, %[[PUBLISH_PRED:[^:]+]]: i1, %{{[^:]+}}: i64, %[[PUBLISH_CTAS:[^:]+]]: i32,
+  // CHECK-NOT: tt.load
+  // CHECK: cf.cond_br %[[PUBLISH_PRED]],
+  // CHECK-NOT: tt.load
+  // CHECK: %[[PUBLISH_RESHAPED:.*]] = tt.reshape %[[PUBLISH_BUFFERS]] : {{.*}} -> tensor<1x2x1xi1
+  // CHECK-NEXT: %[[PUBLISH_LAYOUT:.*]] = ttg.convert_layout %[[PUBLISH_RESHAPED]]
+  // CHECK-NEXT: %[[PUBLISH_BUFFER_MASK:.*]] = tt.broadcast %[[PUBLISH_LAYOUT]] : {{.*}} -> tensor<2x2x2xi1
+  // CHECK-NOT: tt.load
+  // CHECK: %[[PUBLISH_CTA_BITS:.*]] = tt.splat %[[PUBLISH_CTAS]] : i32 -> tensor<2x2x2xi32
+  // CHECK-NOT: tt.load
+  // CHECK: %[[PUBLISH_OWNER_MASK:.*]] = arith.cmpi ne, {{.*}} : tensor<2x2x2xi32
+  // CHECK-NOT: tt.load
+  // CHECK: %[[PUBLISH_RELATION_MASK:.*]] = arith.andi %[[PUBLISH_OWNER_MASK]], {{.*}} : tensor<2x2x2xi1
+  // CHECK-NEXT: %[[PUBLISH_STORE_MASK:.*]] = arith.andi %[[PUBLISH_BUFFER_MASK]], %[[PUBLISH_RELATION_MASK]] : tensor<2x2x2xi1
+  // CHECK-NOT: tt.load
+  // CHECK: tt.store %{{[^,]+}}, %{{[^,]+}}, %[[PUBLISH_STORE_MASK]] {ignore_cta} : tensor<2x2x2x!tt.ptr<i{{32|64}}>
+  // CHECK-NOT: tt.load
+  // CHECK: %[[CLEAR_WRITES_BUFFERS:.*]] = tt.broadcast {{.*}} -> tensor<2x2x2x1x2xi1
+  // CHECK-NOT: tt.load
+  // CHECK: tt.splat %[[PUBLISH_CTAS]] : i32 -> tensor<2x2x2x1x2xi32
+  // CHECK-NOT: tt.load
+  // CHECK: %[[CLEAR_WRITES_CTAS:.*]] = arith.cmpi ne, {{.*}} : tensor<2x2x2x1x2xi32
+  // CHECK-NEXT: %[[CLEAR_WRITES_MASK:.*]] = arith.andi %[[CLEAR_WRITES_BUFFERS]], %[[CLEAR_WRITES_CTAS]] : tensor<2x2x2x1x2xi1
+  // CHECK-NEXT: %[[CLEAR_WRITES_ZERO:.*]] = arith.constant dense<0> : tensor<2x2x2x1x2xi8
+  // CHECK-NOT: tt.load
+  // CHECK: tt.store %{{[^,]+}}, %[[CLEAR_WRITES_ZERO]], %[[CLEAR_WRITES_MASK]] {ignore_cta} : tensor<2x2x2x1x2x!tt.ptr<i8>
+  // CHECK-NOT: tt.load
+  // CHECK: %[[CLEAR_READS_BUFFERS:.*]] = tt.broadcast {{.*}} -> tensor<2x2x2x1x2xi1
+  // CHECK-NOT: tt.load
+  // CHECK: tt.splat %[[PUBLISH_CTAS]] : i32 -> tensor<2x2x2x1x2xi32
+  // CHECK-NOT: tt.load
+  // CHECK: %[[CLEAR_READS_CTAS:.*]] = arith.cmpi ne, {{.*}} : tensor<2x2x2x1x2xi32
+  // CHECK-NEXT: %[[CLEAR_READS_MASK:.*]] = arith.andi %[[CLEAR_READS_BUFFERS]], %[[CLEAR_READS_CTAS]] : tensor<2x2x2x1x2xi1
+  // CHECK-NEXT: %[[CLEAR_READS_ZERO:.*]] = arith.constant dense<0> : tensor<2x2x2x1x2xi{{32|64}}
+  // CHECK-NOT: tt.load
+  // CHECK: tt.store %{{[^,]+}}, %[[CLEAR_READS_ZERO]], %[[CLEAR_READS_MASK]] {ignore_cta} : tensor<2x2x2x1x2x!tt.ptr<i{{32|64}}>
+  // CHECK-NOT: tt.load
+  // CHECK: %[[CLEAR_TRACKING_BUFFERS:.*]] = tt.broadcast {{.*}} -> tensor<2x2x2x1x2x2xi1
+  // CHECK-NOT: tt.load
+  // CHECK: tt.splat %[[PUBLISH_CTAS]] : i32 -> tensor<2x2x2x1x2x2xi32
+  // CHECK-NOT: tt.load
+  // CHECK: %[[CLEAR_TRACKING_CTAS:.*]] = arith.cmpi ne, {{.*}} : tensor<2x2x2x1x2x2xi32
+  // CHECK-NEXT: %[[CLEAR_TRACKING_MASK:.*]] = arith.andi %[[CLEAR_TRACKING_BUFFERS]], %[[CLEAR_TRACKING_CTAS]] : tensor<2x2x2x1x2x2xi1
+  // CHECK-NEXT: %[[CLEAR_TRACKING_ZERO:.*]] = arith.constant dense<0> : tensor<2x2x2x1x2x2xi{{32|64}}
+  // CHECK-NOT: tt.load
+  // CHECK: tt.store %{{[^,]+}}, %[[CLEAR_TRACKING_ZERO]], %[[CLEAR_TRACKING_MASK]] {ignore_cta} : tensor<2x2x2x1x2x2x!tt.ptr<i{{32|64}}>
+  // CHECK-NOT: tt.load
+  // CHECK: tt.return
+
   // CHECK-LABEL: @single_local_alloc_multi_cta
   tt.func public @single_local_alloc_multi_cta() {
     // CHECK: %[[WRITE_VISIBILITY_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 16 : i32, nbytes = 64 : i32, shared_cluster_state, third_party_allocation, tt.divisibility = 16 : i64} : !tt.ptr<i64>

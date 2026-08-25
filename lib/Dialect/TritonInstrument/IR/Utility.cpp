@@ -369,9 +369,7 @@ Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
       if (storeMask) {
         storeMask = arith::AndIOp::create(b, loc, storeMask, currentCTAMask);
       } else {
-        Value oldTensor = createLoadScratchMemory(b, loc, alloc, tensorType);
-        tensor =
-            arith::SelectOp::create(b, loc, currentCTAMask, tensor, oldTensor);
+        storeMask = currentCTAMask;
       }
     }
   }

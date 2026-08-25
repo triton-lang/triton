@@ -507,15 +507,9 @@ Operation *createMaskedStoreScratchMemory(ImplicitLocOpBuilder &b, Location loc,
                                           RankedTensorType tensorType,
                                           Value mask) {
   int64_t numCTAs = ttg::lookupNumCTAs(b);
-  if (numCTAs > 1) {
-    // This should hopefully be folded with the previous load in the caller
-    // function
-    Value oldTensor = tti::createLoadScratchMemory(b, loc, alloc, tensorType);
-    // and this with the previous selectOp, if there is any
-    tensor = arith::SelectOp::create(b, loc, mask, tensor, oldTensor);
-  }
   return tti::createStoreScratchMemory(b, loc, alloc, tensor, tensorType,
-                                       /*currentCTAOnly=*/false);
+                                       /*currentCTAOnly=*/false,
+                                       numCTAs > 1 ? mask : Value{});
 }
 
 Operation *createCTAScopedStoreScratchMemory(ImplicitLocOpBuilder &b,
@@ -1697,8 +1691,6 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
 
         if (publishWrite) {
           Value visibilityPtr = entryBlock->getArgument(nextArg++);
-          Value visibility = tti::createLoadScratchMemory(
-              fb, fb.getLoc(), visibilityPtr, writeVisibilityType);
           Value visibilityMask =
               convertAndBroadcast(fb, bufferMask, {1}, writeVisibilityType);
           Value relationMask =
@@ -1711,25 +1703,22 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
               adjustIntegerWidth(fb, threadMaskVal, elemType);
           Value threadMaskTensor =
               triton::SplatOp::create(fb, writeVisibilityType, threadMaskElem);
-          Value updated = arith::SelectOp::create(fb, visibilityMask,
-                                                  threadMaskTensor, visibility);
-          tti::createStoreScratchMemory(fb, fb.getLoc(), visibilityPtr, updated,
-                                        writeVisibilityType,
-                                        /*currentCTAOnly=*/false);
+          tti::createStoreScratchMemory(fb, fb.getLoc(), visibilityPtr,
+                                        threadMaskTensor, writeVisibilityType,
+                                        /*currentCTAOnly=*/false,
+                                        visibilityMask);
         }
 
         auto clearTable = [&](RankedTensorType tableType) {
           Value tablePtr = entryBlock->getArgument(nextArg++);
-          Value table = tti::createLoadScratchMemory(fb, fb.getLoc(), tablePtr,
-                                                     tableType);
           Value tableMask = convertAndBroadcast(fb, bufferMask, {1}, tableType);
           Value ctaMask =
               createCTASetMask(fb, tableType, /*dim=*/0, effectCTAs);
           tableMask = arith::AndIOp::create(fb, tableMask, ctaMask);
           Value zero = tti::createConstIntTensor(fb, fb.getLoc(), 0, tableType);
-          Value updated = arith::SelectOp::create(fb, tableMask, zero, table);
-          tti::createStoreScratchMemory(fb, fb.getLoc(), tablePtr, updated,
-                                        tableType, /*currentCTAOnly=*/false);
+          tti::createStoreScratchMemory(fb, fb.getLoc(), tablePtr, zero,
+                                        tableType, /*currentCTAOnly=*/false,
+                                        tableMask);
         };
 
         if (clearWrites)
@@ -1984,8 +1973,6 @@ void FunctionBuilder::createTrackVisibleAccessesCall(
           Value trackingPtr = entryBlock->getArgument(nextArg++);
           Value visibility = tti::createLoadScratchMemory(
               fb, fb.getLoc(), visibilityPtr, writeVisibilityType);
-          Value tracking = tti::createLoadScratchMemory(
-              fb, fb.getLoc(), trackingPtr, writeTrackingType);
           Value barrierMask =
               convertAndBroadcast(fb, barriersEqBar, {3}, writeTrackingType);
           Value barrierCTAMask =
@@ -2023,10 +2010,9 @@ void FunctionBuilder::createTrackVisibleAccessesCall(
               arith::AndIOp::create(fb, barrierMask, visibleWrites);
           Value one =
               tti::createConstIntTensor(fb, fb.getLoc(), 1, writeTrackingType);
-          Value updated =
-              arith::SelectOp::create(fb, barAndVisible, one, tracking);
-          createMaskedStoreScratchMemory(fb, fb.getLoc(), trackingPtr, updated,
-                                         writeTrackingType, barrierCTAMask);
+          tti::createStoreScratchMemory(
+              fb, fb.getLoc(), trackingPtr, one, writeTrackingType,
+              /*currentCTAOnly=*/false, barAndVisible);
         }
 
         if (trackReads) {
@@ -2074,17 +2060,9 @@ void FunctionBuilder::createTrackVisibleAccessesCall(
           visibleReads = convertAndBroadcast(fb, visibleReads, {0, 1, 4},
                                              readTrackingType);
           Value withVisible = arith::OrIOp::create(fb, tracking, visibleReads);
-          if (filterBuffer) {
-            Value updated =
-                arith::SelectOp::create(fb, barrierMask, withVisible, tracking);
-            createMaskedStoreScratchMemory(fb, fb.getLoc(), trackingPtr,
-                                           updated, readTrackingType,
-                                           barrierMask);
-          } else {
-            tti::createStoreScratchMemory(
-                fb, fb.getLoc(), trackingPtr, withVisible, readTrackingType,
-                /*currentCTAOnly=*/false, barrierMask);
-          }
+          tti::createStoreScratchMemory(fb, fb.getLoc(), trackingPtr,
+                                        withVisible, readTrackingType,
+                                        /*currentCTAOnly=*/false, barrierMask);
         }
 
         fb.setInsertionPointToEnd(thenBlock);
