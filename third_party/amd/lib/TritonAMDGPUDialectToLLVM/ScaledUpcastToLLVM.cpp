@@ -56,6 +56,29 @@ SmallVector<int> computeFp4GroupScaleRegisters(amdgpu::ScaledUpcastFp4Op op,
   return groupScaleReg;
 }
 
+bool scaleIsPreShifted(RankedTensorType scaleTy) {
+  return scaleTy.getElementType().isBF16();
+}
+
+LogicalResult checkPk8ScaleType(Operation *op, RankedTensorType scaleTy) {
+  Type elemTy = scaleTy.getElementType();
+  if (elemTy.isInteger(8))
+    return success();
+  return op->emitOpError("v_cvt_scale_pk8 lowering requires a raw E8M0 scale "
+                         "in i8, but got ")
+         << elemTy;
+}
+
+// Materialize an E8M0 scale register as the f32 value 2^scale.
+Value scaleToF32(RewriterBase &rewriter, Location loc, Value scale,
+                 bool preShifted) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  if (preShifted)
+    return b.bitcast(
+        b.shl(b.zext(i32_ty, b.bitcast(scale, i16_ty)), b.i32_val(16)), f32_ty);
+  return b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
+}
+
 // Returns true if the scale layout gives lane `j` and lane `j^16` the same
 // scale value (i.e. the lane basis for the value-16 bit is all zeros). In that
 // case both output-lane halves of a v_cvt_scale_pk8 already share a scale.
@@ -95,9 +118,13 @@ struct ScaledUpcastFp4OpPattern
     results.reserve(inputVals.size() * 2);
 
     auto b = TritonLLVMOpBuilder(loc, rewriter);
+    bool preShifted = scaleIsPreShifted(upcastOp.getScale().getType());
+    auto groupScaleReg =
+        computeFp4GroupScaleRegisters(upcastOp, inputVals.size());
+
     if (targetInfo.supportsCvtPkScalePk8()) {
-      auto groupScaleReg =
-          computeFp4GroupScaleRegisters(upcastOp, inputVals.size());
+      if (failed(checkPk8ScaleType(upcastOp, upcastOp.getScale().getType())))
+        return failure();
 
       // FP4/FP6 v_cvt_scale_pk8 with opSel=0 sources the scale for output
       // lanes 16..31 from byte 1 of the *lower* 16 lanes' Vscale while output
@@ -138,19 +165,15 @@ struct ScaledUpcastFp4OpPattern
         results.append(converted.begin(), converted.end());
       }
     } else if (targetInfo.supportsHwScaledUpcast()) {
-      auto groupScaleReg =
-          computeFp4GroupScaleRegisters(upcastOp, inputVals.size());
-      bool useShiftedScale =
-          upcastOp.getScale().getType().getElementType().isBF16();
       for (int i = 0; i < inputVals.size(); i += 4) {
         int scaleIdx = groupScaleReg[i / 4];
         SmallVector<Value, 4> v4i32 =
             elemType.isF16() ? upcast8xMxfp4_HW<ROCDL::CvtScaleF32PkF16Fp4Op>(
                                    rewriter, loc, inputVals, i,
-                                   scaleVals[scaleIdx], useShiftedScale)
+                                   scaleVals[scaleIdx], preShifted)
                              : upcast8xMxfp4_HW<ROCDL::CvtScaleF32PkBf16Fp4Op>(
                                    rewriter, loc, inputVals, i,
-                                   scaleVals[scaleIdx], useShiftedScale);
+                                   scaleVals[scaleIdx], preShifted);
         for (int j = 0; j < 4; j++) {
           Value elements = b.bitcast(v4i32[j], vec_ty(elemType, 2));
           results.push_back(b.extract_element(elements, b.i32_val(0)));
@@ -158,11 +181,6 @@ struct ScaledUpcastFp4OpPattern
         }
       }
     } else {
-      if (!upcastOp.getScale().getType().getElementType().isBF16())
-        return upcastOp.emitOpError("software lowering requires a BF16 scale");
-
-      auto groupScaleReg =
-          computeFp4GroupScaleRegisters(upcastOp, inputVals.size());
       // Software emulation: upcast fp4 via LUT, then multiply by scale.
       bool toFp16 = elemType.isF16();
       auto isaFamily = targetInfo.getISAFamily();
@@ -175,12 +193,8 @@ struct ScaledUpcastFp4OpPattern
         SmallVector<Value> v8vals =
             upcast8xMxfp4_SW(rewriter, upcastOp, toFp16, packedVec, isaFamily);
 
-        // The bf16 scale was left-shifted by 7 (scaleTo16); shift by 16 more
-        // to get f32.
-        Value scaleBf16 = scaleVals[groupScaleReg[i / 4]];
-        Value scaleF32 = b.bitcast(
-            b.shl(b.zext(i32_ty, b.bitcast(scaleBf16, i16_ty)), b.i32_val(16)),
-            f32_ty);
+        Value scaleF32 = scaleToF32(
+            rewriter, loc, scaleVals[groupScaleReg[i / 4]], preShifted);
 
         for (int j : llvm::seq(8)) {
           Value vF32;
@@ -237,9 +251,13 @@ struct ScaledUpcastFp8OpPattern
     assert(inputVals.size() == scaleVals.size());
 
     auto b = TritonLLVMOpBuilder(loc, rewriter);
+    bool preShifted = scaleIsPreShifted(upcastOp.getScale().getType());
     SmallVector<Value> results;
     results.reserve(inputVals.size());
     if (targetInfo.supportsCvtPkScalePk8()) {
+      if (failed(checkPk8ScaleType(upcastOp, upcastOp.getScale().getType())))
+        return failure();
+
       // Broadcast layouts can use FP8 Block32 (opSel=0). Otherwise use Block16
       // (opSel=8) and pack lane j^16's scale into byte 1.
       bool broadcast = isScaleLane16Broadcast(upcastOp.getScale().getType());
@@ -282,17 +300,17 @@ struct ScaledUpcastFp8OpPattern
                 ? (isa<Float8E4M3FNType>(fp8ElemType)
                        ? upcast4xMxfp8_HW<ROCDL::CvtScaleF32PkF16Fp8Op>(
                              rewriter, loc, inputVals, i, scaleVals[i],
-                             /*useShiftedScale=*/true)
+                             preShifted)
                        : upcast4xMxfp8_HW<ROCDL::CvtScaleF32PkF16Bf8Op>(
                              rewriter, loc, inputVals, i, scaleVals[i],
-                             /*useShiftedScale=*/true))
+                             preShifted))
                 : (isa<Float8E4M3FNType>(fp8ElemType)
                        ? upcast4xMxfp8_HW<ROCDL::CvtScaleF32PkBf16Fp8Op>(
                              rewriter, loc, inputVals, i, scaleVals[i],
-                             /*useShiftedScale=*/true)
+                             preShifted)
                        : upcast4xMxfp8_HW<ROCDL::CvtScaleF32PkBf16Bf8Op>(
                              rewriter, loc, inputVals, i, scaleVals[i],
-                             /*useShiftedScale=*/true));
+                             preShifted));
         for (int j = 0; j < 2; j++) {
           Value elements = b.bitcast(v2i32[j], vec_ty(elemType, 2));
           results.push_back(b.extract_element(elements, b.i32_val(0)));
@@ -304,12 +322,7 @@ struct ScaledUpcastFp8OpPattern
       bool isE4M3FN = isa<Float8E4M3FNType>(fp8ElemType);
       bool toFp16 = elemType.isF16();
       for (size_t i = 0; i < inputVals.size(); i += 4) {
-        // The bf16 scale was left-shifted by 7 (scaleTo16); shift by 16 more
-        // to get f32.
-        Value scaleBf16 = scaleVals[i];
-        Value scaleF32 = b.bitcast(
-            b.shl(b.zext(i32_ty, b.bitcast(scaleBf16, i16_ty)), b.i32_val(16)),
-            f32_ty);
+        Value scaleF32 = scaleToF32(rewriter, loc, scaleVals[i], preShifted);
 
         for (int j : llvm::seq(4)) {
           Value f32Val =
