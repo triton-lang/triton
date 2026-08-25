@@ -494,6 +494,7 @@ class CUDABackend(BaseBackend):
             llvm.OPTIMIZE_O3,
             disable_slp_vectorizer=capability == 80,
             expand_masked_div_rem=True,
+            scalarize_packed_fops=True,
         )
 
         # Get some metadata
