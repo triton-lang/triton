@@ -107,9 +107,10 @@ updateEncoding(ArrayRef<Value> values, LayoutInfo info, FuncOp *func,
 }
 } // namespace
 
-LogicalResult inferLayout(
-    FuncOp func, llvm::function_ref<bool(Type)> typeCheck,
-    const llvm::SmallVector<std::pair<Value, Attribute>> &seedEncodings) {
+LogicalResult
+inferLayout(FuncOp func, llvm::function_ref<bool(Type)> typeCheck,
+            const llvm::SmallVector<std::pair<Value, Attribute>> &seedEncodings,
+            llvm::ArrayRef<std::pair<Value, Attribute>> fallbackSeedEncodings) {
   // Disallow auto encoding accross function call boundaries
   for (auto argTy : func.getArgumentTypes()) {
     if (typeCheck(argTy)) {
@@ -133,8 +134,19 @@ LogicalResult inferLayout(
       return failure();
   }
 
-  // Propagate encodings through the graph until fixed point, or conflict
-  while (!worklist.empty()) {
+  // Propagate all explicit encodings before considering fallback seeds. A
+  // fallback applies only when no explicit seed reached its connected value.
+  size_t nextFallbackSeed = 0;
+  while (!worklist.empty() || nextFallbackSeed < fallbackSeedEncodings.size()) {
+    if (worklist.empty()) {
+      auto [value, encoding] = fallbackSeedEncodings[nextFallbackSeed++];
+      if (valueToEncoding.contains(value))
+        continue;
+      if (failed(updateEncoding({value}, LayoutInfo{encoding, false}, &func,
+                                valueToEncoding, worklist, hashMemo)))
+        return failure();
+    }
+
     auto val = worklist.pop_back_val();
     auto info = valueToEncoding[val];
     assert(info);

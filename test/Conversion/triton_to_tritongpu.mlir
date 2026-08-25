@@ -1,5 +1,6 @@
 // RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu='target=cuda:80 num-warps=2' | FileCheck %s
 // RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu='target=cuda:80 num-warps=2 num-ctas=2' | FileCheck %s --check-prefixes=CHECK-TWO-CTAS
+// RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu='target=hip:gfx1250 num-warps=2 num-ctas=2' | FileCheck %s --check-prefix=CHECK-AMD-TWO-CTAS
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
 tt.func @ops() {
@@ -229,12 +230,21 @@ tt.func @call_into_dot(%b: tensor<32x128xf16>) {
 // -----
 
 // CHECK-DAG: #[[$LA_BASIS:.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
-// CHECK-TWO-CTAS-DAG: #[[$LA_CTA_BASIS:.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0], CGALayout = {{\[\[0\]\]}}}>
+// CHECK-TWO-CTAS-DAG: #[[$LA_CTA_BASIS:.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0], CGALayout = {{\[\[1\]\]}}}>
+// CHECK-AMD-TWO-CTAS-DAG: #[[$AMD_SHARDED:.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0], CGALayout = {{\[\[1\]\]}}}>
+// CHECK-AMD-TWO-CTAS-DAG: #[[$AMD_REPLICATED:.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0], CGALayout = {{\[\[0\]\]}}}>
 
 // CHECK-LABEL: @linear_apply_i32
+// CHECK-NOT: ttg.convert_layout
 // CHECK: tt.linear_apply {{.*}} : tensor<128xi32, #[[$LA_BASIS]]>, tensor<32xi32, #[[$LA_BASIS]]> -> tensor<128xi32, #[[$LA_BASIS]]>
 // CHECK-TWO-CTAS-LABEL: @linear_apply_i32
-// CHECK-TWO-CTAS: tt.linear_apply {{.*}} : tensor<128xi32, #{{.*}}>, tensor<32xi32, #[[$LA_CTA_BASIS]]> -> tensor<128xi32, #{{.*}}>
+// CHECK-TWO-CTAS-SAME: [[LA_INDEX:%[^:]+]]: tensor<128xi32, #[[$LA_CTA_BASIS]]>, [[LA_BASES:%[^:]+]]: tensor<32xi32, #[[$LA_CTA_BASIS]]>
+// CHECK-TWO-CTAS-NOT: ttg.convert_layout
+// CHECK-TWO-CTAS: tt.linear_apply [[LA_INDEX]], [[LA_BASES]] : tensor<128xi32, #[[$LA_CTA_BASIS]]>, tensor<32xi32, #[[$LA_CTA_BASIS]]> -> tensor<128xi32, #[[$LA_CTA_BASIS]]>
+// CHECK-AMD-TWO-CTAS-LABEL: @linear_apply_i32
+// CHECK-AMD-TWO-CTAS-SAME: [[AMD_INDEX:%[^:]+]]: tensor<128xi32, #[[$AMD_SHARDED]]>, [[AMD_BASES:%[^:]+]]: tensor<32xi32, #[[$AMD_SHARDED]]>
+// CHECK-AMD-TWO-CTAS: [[AMD_REPLICATED_BASES:%.*]] = ttg.convert_layout [[AMD_BASES]] : tensor<32xi32, #[[$AMD_SHARDED]]> -> tensor<32xi32, #[[$AMD_REPLICATED]]>
+// CHECK-AMD-TWO-CTAS: tt.linear_apply [[AMD_INDEX]], [[AMD_REPLICATED_BASES]] : tensor<128xi32, #[[$AMD_SHARDED]]>, tensor<32xi32, #[[$AMD_REPLICATED]]> -> tensor<128xi32, #[[$AMD_SHARDED]]>
 tt.func @linear_apply_i32(%index: tensor<128xi32>, %bases: tensor<32xi32>) -> tensor<128xi32> {
   %result = tt.linear_apply %index, %bases : tensor<128xi32>, tensor<32xi32> -> tensor<128xi32>
   tt.return %result : tensor<128xi32>

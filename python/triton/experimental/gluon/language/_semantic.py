@@ -588,18 +588,6 @@ class GluonSemantic(TritonSemantic[TensorTy]):
             lambda: f"linear_apply bases must contain exactly 32 elements, but got {bases.type.shape[0]}",
         )
 
-        basis_layout = bases.type.layout
-        if not isinstance(basis_layout, (AutoLayout, CoalescedLayout)):
-            linear_layout = ttgl._unwrap_if_constexpr(self.to_linear_layout(basis_layout, bases.type.shape))
-            reachable_basis_indices = {0}
-            for basis in linear_layout.reg_bases + linear_layout.lane_bases + linear_layout.warp_bases:
-                reachable_basis_indices.update(value ^ basis[0] for value in list(reachable_basis_indices))
-            _check(
-                all(value in reachable_basis_indices for value in range(32)),
-                lambda: "linear_apply bases layout must make all 32 values accessible within each CTA; "
-                "cross-CTA basis layouts are unsupported; use gl.convert_layout to select a CTA-local layout",
-            )
-
         result = self.builder.create_linear_apply(index.handle, bases.handle)
         return self.wrap_tensor(result, ttgl.uint32, index.type.shape, index.type.layout)
 

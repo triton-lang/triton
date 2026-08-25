@@ -1065,27 +1065,22 @@ def test_linear_apply_frontend_cta_local_basis_layouts(target, basis_kind):
     assert "ttg.convert_layout" not in text
 
 
-@pytest.mark.parametrize("cta_complete", [False, True], ids=["cross-cta-sharded", "redundant-cta-permutation"])
-def test_linear_apply_frontend_cta_complete_bases(cta_complete):
+@pytest.mark.parametrize("basis_kind", ["blocked-cross-cta", "generic-cross-cta", "redundant-cta-permutation"])
+def test_linear_apply_frontend_cross_cta_basis_layouts(basis_kind):
     index_layout = ttgl.BlockedLayout([2], [32], [4], [0], cga_layout=[[0]])
-    basis_layout = ttgl.DistributedLinearLayout(
-        reg_bases=[],
-        lane_bases=[[1], [2], [4], [8], [16] if cta_complete else [0]],
-        warp_bases=[[0], [0]],
-        block_bases=[[16]],
-        shape=[32],
-    )
-    args = make_args(index_layout, basis_layout, False, False, num_ctas=2)
-    if cta_complete:
-        module = run_parser(_linear_apply_target_frontend_kernel, *args, target=HOPPER_TARGET)
-        assert "tt.linear_apply" in module.str_nodebug()
+    if basis_kind == "blocked-cross-cta":
+        basis_layout = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1]])
     else:
-        with pytest.raises(CompilationError) as exc:
-            run_parser(_linear_apply_target_frontend_kernel, *args, target=HOPPER_TARGET)
-        message = str(exc.value.__cause__ or exc.value)
-        assert "all 32 values accessible within each CTA" in message
-        assert "cross-CTA basis layouts are unsupported" in message
-        assert "gl.convert_layout" in message
+        basis_layout = ttgl.DistributedLinearLayout(
+            reg_bases=[],
+            lane_bases=[[1], [2], [4], [8], [16] if basis_kind == "redundant-cta-permutation" else [0]],
+            warp_bases=[[0], [0]],
+            block_bases=[[16]],
+            shape=[32],
+        )
+    args = make_args(index_layout, basis_layout, False, False, num_ctas=2)
+    module = run_parser(_linear_apply_target_frontend_kernel, *args, target=HOPPER_TARGET)
+    assert "tt.linear_apply" in module.str_nodebug()
 
 
 @gluon.jit

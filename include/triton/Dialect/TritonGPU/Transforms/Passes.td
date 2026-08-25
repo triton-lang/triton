@@ -365,4 +365,13 @@ def TritonGPUCoalesceAsyncCopy: Pass<"tritongpu-coalesce-async-copy", "mlir::Mod
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonGPUDecomposeLinearApply
+    : Pass<"tritongpu-decompose-linear-apply", "mlir::ModuleOp"> {
+  let summary = "Decompose linear_apply into per-bit XOR reductions";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect",
+                           "mlir::arith::ArithDialect"];
+}
+
 #endif

@@ -36,6 +36,11 @@ struct ConvertLayoutOpConversion
   LogicalResult
   matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (!targetInfo.isCuda() && mlir::triton::hasCrossCTAScratch(op))
+      return op.emitOpError(
+          "cross-CTA layout conversions are unsupported on "
+          "this target; use num_ctas=1 or a CTA-local layout");
+
     MLIRContext *ctx = op.getContext();
 
     auto srcTy = op.getSrc().getType();

@@ -276,6 +276,54 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // -----
 
+#index = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#spt4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [1, 0]}>
+#cross_warp = #ttg.slice<{dim = 0, parent = #parent}>
+
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // A seed on arange propagates through pointer arithmetic and load. It must
+  // override the canonical basis fallback even though the basis is unseeded.
+  // CHECK-DAG: [[$UPSTREAM_INDEX:#.*]] = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+  // CHECK-DAG: [[$UPSTREAM_SPT4:#.*]] = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+  // CHECK-DAG: [[$UPSTREAM_PARENT:#.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [1, 0]}>
+  // CHECK-LABEL: @infer_linear_apply_upstream_spt4_basis
+  // CHECK-SAME: [[BASIS_POINTER:%[^:]+]]: !tt.ptr<i32>
+  // CHECK: [[OFFSETS:%.*]] = tt.make_range {{.*}} : tensor<32xi32, [[$UPSTREAM_SPT4]]>
+  // CHECK: [[SPLAT:%.*]] = tt.splat [[BASIS_POINTER]] : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, [[$UPSTREAM_SPT4]]>
+  // CHECK: [[POINTERS:%.*]] = tt.addptr [[SPLAT]], [[OFFSETS]]
+  // CHECK: [[BASES:%.*]] = tt.load [[POINTERS]] : tensor<32x!tt.ptr<i32>, [[$UPSTREAM_SPT4]]>
+  // CHECK: tt.linear_apply {{.*}}, [[BASES]] : tensor<128xi32, [[$UPSTREAM_INDEX]]>, tensor<32xi32, [[$UPSTREAM_SPT4]]> -> tensor<128xi32, [[$UPSTREAM_INDEX]]>
+  tt.func public @infer_linear_apply_upstream_spt4_basis(%pointer: !tt.ptr<i32>) -> tensor<128xi32, #index> {
+    %index = arith.constant dense<5> : tensor<128xi32, #index>
+    %offsets = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #gluon.auto_encoding>
+    %resolved_offsets = gluon.set_auto_layout %offsets : tensor<32xi32, #gluon.auto_encoding> -> tensor<32xi32, #spt4>
+    %splat = tt.splat %pointer : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #gluon.auto_encoding>
+    %pointers = tt.addptr %splat, %offsets : tensor<32x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<32xi32, #gluon.auto_encoding>
+    %bases = tt.load %pointers : tensor<32x!tt.ptr<i32>, #gluon.auto_encoding>
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #gluon.auto_encoding> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+
+  // The same upstream preference applies to layouts distributed across warps.
+  // CHECK-LABEL: @infer_linear_apply_upstream_cross_warp_basis
+  // CHECK: [[CROSS_OFFSETS:%.*]] = tt.make_range {{.*}} : tensor<32xi32, #ttg.slice<{dim = 0, parent = [[$UPSTREAM_PARENT]]}>>
+  // CHECK: [[CROSS_BASES:%.*]] = tt.load {{.*}} : tensor<32x!tt.ptr<i32>, #ttg.slice<{dim = 0, parent = [[$UPSTREAM_PARENT]]}>>
+  // CHECK: tt.linear_apply {{.*}}, [[CROSS_BASES]] : tensor<128xi32, [[$UPSTREAM_INDEX]]>, tensor<32xi32, #ttg.slice<{dim = 0, parent = [[$UPSTREAM_PARENT]]}>> -> tensor<128xi32, [[$UPSTREAM_INDEX]]>
+  tt.func public @infer_linear_apply_upstream_cross_warp_basis(%pointer: !tt.ptr<i32>) -> tensor<128xi32, #index> {
+    %index = arith.constant dense<5> : tensor<128xi32, #index>
+    %offsets = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #gluon.auto_encoding>
+    %resolved_offsets = gluon.set_auto_layout %offsets : tensor<32xi32, #gluon.auto_encoding> -> tensor<32xi32, #cross_warp>
+    %splat = tt.splat %pointer : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #gluon.auto_encoding>
+    %pointers = tt.addptr %splat, %offsets : tensor<32x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<32xi32, #gluon.auto_encoding>
+    %bases = tt.load %pointers : tensor<32x!tt.ptr<i32>, #gluon.auto_encoding>
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #gluon.auto_encoding> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+}
+
+// -----
+
 #index = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 
 module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {

@@ -681,8 +681,8 @@ void LayoutPropagation::rewriteOp(Operation *op) {
     if (canUseResultEncoding(op, encoding)) {
       setEncodingInPlace(op->getResult(0), encoding);
     } else if (auto linearApply = dyn_cast<LinearApplyOp>(op)) {
-      // The index and result move together; the canonical one-dimensional
-      // basis layout is independent and must remain untouched.
+      // The index and result move together; the one-dimensional basis has an
+      // independent layout and must remain untouched.
       linearApply.getIndexMutable().assign(
           getValueAs(linearApply.getIndex(), encoding));
       setEncodingInPlace(linearApply.getResult(), encoding);

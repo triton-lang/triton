@@ -34,16 +34,14 @@ LogicalResult inferAutoLayout(ModuleOp &mod) {
     func.walk([&](gluon::SetAutoLayoutOp op) {
       seedEncodings.push_back({op.getSrc(), op.getType().getEncoding()});
     });
+
+    llvm::SmallVector<std::pair<Value, Attribute>> fallbackSeedEncodings;
     func.walk([&](triton::LinearApplyOp op) {
       if (!isAutoEncodingTensorType(op.getBases().getType()))
         return;
 
-      // Preserve any layout the user explicitly selected for the basis. When
-      // it is unconstrained, prefer the one-basis-per-lane fast path.
-      for (const auto &seed : seedEncodings)
-        if (seed.first == op.getBases())
-          return;
-
+      // Explicit seeds may constrain any value in the basis-producing graph.
+      // Use the canonical layout only if none of them reaches the basis.
       unsigned threadsPerWarp =
           static_cast<unsigned>(ttg::TritonGPUDialect::getThreadsPerWarp(mod));
       unsigned numWarps =
@@ -54,10 +52,11 @@ LogicalResult inferAutoLayout(ModuleOp &mod) {
           mod.getContext(), {numCTAs}, {1}, {0});
       auto basisEncoding = ttg::BlockedEncodingAttr::get(
           mod.getContext(), {1}, {threadsPerWarp}, {numWarps}, {0}, cgaLayout);
-      seedEncodings.push_back({op.getBases(), basisEncoding});
+      fallbackSeedEncodings.push_back({op.getBases(), basisEncoding});
     });
 
-    if (failed(inferLayout(func, isAutoEncodingTensorType, seedEncodings)))
+    if (failed(inferLayout(func, isAutoEncodingTensorType, seedEncodings,
+                           fallbackSeedEncodings)))
       return failure();
   }
   return success();

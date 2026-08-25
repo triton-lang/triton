@@ -1,6 +1,7 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 --convert-builtin-func-to-llvm | FileCheck %s --enable-var-scope --check-prefixes=CHECK,COMMON
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck %s --enable-var-scope --check-prefixes=GFX950,COMMON
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s --enable-var-scope --check-prefixes=GFX1250,COMMON
+// RUN: triton-opt %s -split-input-file --tritongpu-decompose-linear-apply --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 --convert-builtin-func-to-llvm | FileCheck %s --enable-var-scope --check-prefixes=CHECK,COMMON
+// RUN: triton-opt %s -split-input-file --tritongpu-decompose-linear-apply --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck %s --enable-var-scope --check-prefixes=GFX950,COMMON
+// RUN: triton-opt %s -split-input-file --tritongpu-decompose-linear-apply --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s --enable-var-scope --check-prefixes=GFX1250,COMMON
+// RUN: sed -n 's@^// CROSS-CTA-INPUT: @@p' %s | not triton-opt --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 2>&1 | FileCheck %s --check-prefix=CROSS-CTA-ERROR
 
 // COMMON-DAG: [[$LOCAL_MMRA_TAG:#[A-Za-z0-9_]+]] = #llvm.mmra_tag<"amdgpu-synchronize-as":"local">
 // COMMON-DAG: [[$GLOBAL_MMRA_TAG:#[A-Za-z0-9_]+]] = #llvm.mmra_tag<"amdgpu-synchronize-as":"global">
@@ -1012,13 +1013,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #basis = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  // Wave64 lanes 32-63 duplicate the 32-element basis. The primitive remains
-  // wave-local and works for all supported AMD architecture families.
+  // Wave64 basis layouts are handled by the existing reduction lowering.
   // COMMON-LABEL: @linear_apply_wave64_i32
-  // COMMON-COUNT-32: rocdl.ds_bpermute
-  // COMMON-NOT: rocdl.ds_bpermute
   // COMMON: llvm.xor
-  // COMMON-NOT: rocdl.s.barrier
   // COMMON: llvm.return
   tt.func private @linear_apply_wave64_i32(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis>) -> tensor<128xi32, #index> {
     %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis> -> tensor<128xi32, #index>
@@ -1038,11 +1035,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #basis_generic_warp = #ttg.generic_linear<{register = [], lane = [[1], [2], [4], [8], [16], [0]], warp = [[1], [2]], block = []}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  // Wave-local register/lane layouts use exactly one broadcast per basis bit.
+  // Reduction lowering handles noncanonical register/lane basis layouts.
   // COMMON-LABEL: @linear_apply_wave64_basis_spt2
-  // COMMON-COUNT-32: rocdl.ds_bpermute
-  // COMMON-NOT: rocdl.ds_bpermute
-  // COMMON-NOT: rocdl.s.barrier
+  // COMMON: llvm.xor
   // COMMON: llvm.return
   tt.func private @linear_apply_wave64_basis_spt2(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis2>) -> tensor<128xi32, #index> {
     %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis2> -> tensor<128xi32, #index>
@@ -1050,9 +1045,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
 
   // COMMON-LABEL: @linear_apply_wave64_basis_spt4
-  // COMMON-COUNT-32: rocdl.ds_bpermute
-  // COMMON-NOT: rocdl.ds_bpermute
-  // COMMON-NOT: rocdl.s.barrier
+  // COMMON: llvm.xor
   // COMMON: llvm.return
   tt.func private @linear_apply_wave64_basis_spt4(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis4>) -> tensor<128xi32, #index> {
     %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis4> -> tensor<128xi32, #index>
@@ -1060,9 +1053,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
 
   // COMMON-LABEL: @linear_apply_wave64_basis_spt8
-  // COMMON-COUNT-32: rocdl.ds_bpermute
-  // COMMON-NOT: rocdl.ds_bpermute
-  // COMMON-NOT: rocdl.s.barrier
+  // COMMON: llvm.xor
   // COMMON: llvm.return
   tt.func private @linear_apply_wave64_basis_spt8(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis8>) -> tensor<128xi32, #index> {
     %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis8> -> tensor<128xi32, #index>
@@ -1070,9 +1061,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
 
   // COMMON-LABEL: @linear_apply_wave64_basis_slice
-  // COMMON-COUNT-32: rocdl.ds_bpermute
-  // COMMON-NOT: rocdl.ds_bpermute
-  // COMMON-NOT: rocdl.s.barrier
+  // COMMON: llvm.xor
   // COMMON: llvm.return
   tt.func private @linear_apply_wave64_basis_slice(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis_slice>) -> tensor<128xi32, #index> {
     %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis_slice> -> tensor<128xi32, #index>
@@ -1080,9 +1069,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
 
   // COMMON-LABEL: @linear_apply_wave64_basis_generic_linear
-  // COMMON-COUNT-32: rocdl.ds_bpermute
-  // COMMON-NOT: rocdl.ds_bpermute
-  // COMMON-NOT: rocdl.s.barrier
+  // COMMON: llvm.xor
   // COMMON: llvm.return
   tt.func private @linear_apply_wave64_basis_generic_linear(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis_generic>) -> tensor<128xi32, #index> {
     %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis_generic> -> tensor<128xi32, #index>
@@ -1090,9 +1077,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
 
   // COMMON-LABEL: @linear_apply_wave64_basis_generic_redundant_warp
-  // COMMON-COUNT-32: rocdl.ds_bpermute
-  // COMMON-NOT: rocdl.ds_bpermute
-  // COMMON-NOT: rocdl.s.barrier
+  // COMMON: llvm.xor
   // COMMON: llvm.return
   tt.func private @linear_apply_wave64_basis_generic_redundant_warp(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis_generic_warp>) -> tensor<128xi32, #index> {
     %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis_generic_warp> -> tensor<128xi32, #index>
@@ -1106,14 +1091,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #cross_warp_parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [1, 0]}>
 #cross_warp_basis = #ttg.slice<{dim = 0, parent = #cross_warp_parent}>
 
-// COMMON: module attributes {{.*}}ttg.shared = 128 : i32
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  // A genuinely cross-wave basis requires one CTA-wide LDS synchronization.
+  // Cross-wave basis communication uses the standard reduction lowering.
   // COMMON-LABEL: @linear_apply_wave64_basis_cross_warp
-  // COMMON: rocdl.s.barrier
-  // COMMON-COUNT-32: rocdl.ds_bpermute
-  // COMMON-NOT: rocdl.ds_bpermute
-  // COMMON-NOT: rocdl.s.barrier
+  // COMMON: llvm.xor
   // COMMON: llvm.return
   tt.func private @linear_apply_wave64_basis_cross_warp(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #cross_warp_basis>) -> tensor<128xi32, #index> {
     %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #cross_warp_basis> -> tensor<128xi32, #index>
@@ -1128,11 +1109,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #basis4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // AMD wave32 keeps the same fast path for canonical and register-rich bases.
+  // AMD wave32 supports canonical and register-rich basis distributions.
   // COMMON-LABEL: @linear_apply_wave32_i32
-  // COMMON-COUNT-32: rocdl.ds_bpermute
-  // COMMON-NOT: rocdl.ds_bpermute
-  // COMMON-NOT: rocdl.s.barrier
+  // COMMON: llvm.xor
   // COMMON: llvm.return
   tt.func private @linear_apply_wave32_i32(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis>) -> tensor<128xi32, #index> {
     %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis> -> tensor<128xi32, #index>
@@ -1140,9 +1119,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
 
   // COMMON-LABEL: @linear_apply_wave32_basis_spt4
-  // COMMON-COUNT-32: rocdl.ds_bpermute
-  // COMMON-NOT: rocdl.ds_bpermute
-  // COMMON-NOT: rocdl.s.barrier
+  // COMMON: llvm.xor
   // COMMON: llvm.return
   tt.func private @linear_apply_wave32_basis_spt4(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #basis4>) -> tensor<128xi32, #index> {
     %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #basis4> -> tensor<128xi32, #index>
@@ -1156,16 +1133,57 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #cross_warp_parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [1, 0]}>
 #cross_warp_basis = #ttg.slice<{dim = 0, parent = #cross_warp_parent}>
 
-// COMMON: module attributes {{.*}}ttg.shared = 128 : i32
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // COMMON-LABEL: @linear_apply_wave32_basis_cross_warp
-  // COMMON: rocdl.s.barrier
-  // COMMON-COUNT-32: rocdl.ds_bpermute
-  // COMMON-NOT: rocdl.ds_bpermute
-  // COMMON-NOT: rocdl.s.barrier
+  // COMMON: llvm.xor
   // COMMON: llvm.return
   tt.func private @linear_apply_wave32_basis_cross_warp(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #cross_warp_basis>) -> tensor<128xi32, #index> {
     %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #cross_warp_basis> -> tensor<128xi32, #index>
     tt.return %result : tensor<128xi32, #index>
   }
 }
+
+// -----
+
+#index = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+#redundant_block_basis = #ttg.generic_linear<{register = [], lane = [[1], [2], [4], [8], [16], [0]], warp = [[1], [2]], block = [[16]]}>
+
+module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // AMD may use nonzero block bases when every CTA independently owns all 32
+  // basis values and therefore no cross-CTA shared-memory transfer is needed.
+  // COMMON-LABEL: @linear_apply_wave64_generic_redundant_block_basis
+  // COMMON: llvm.xor
+  // COMMON: llvm.return
+  tt.func private @linear_apply_wave64_generic_redundant_block_basis(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #redundant_block_basis>) -> tensor<128xi32, #index> {
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #redundant_block_basis> -> tensor<128xi32, #index>
+    tt.return %result : tensor<128xi32, #index>
+  }
+}
+
+// -----
+
+#replicated_src = #ttg.linear<{register = [[1]], lane = [[0], [0], [0], [0], [0]], warp = [], block = [[0]]}>
+#cta_selected_dst = #ttg.linear<{register = [], lane = [[0], [0], [0], [0], [0]], warp = [], block = [[1]]}>
+
+module attributes {"ttg.target" = "hip:gfx1250", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // A block-dependent conversion is valid when each CTA already owns the
+  // selected value and no cross-CTA shared-memory access is needed.
+  // COMMON-LABEL: @convert_layout_selects_cta_local_replica
+  // COMMON: llvm.return
+  tt.func private @convert_layout_selects_cta_local_replica(%src: tensor<2xf32, #replicated_src>) {
+    %result = ttg.convert_layout %src : tensor<2xf32, #replicated_src> -> tensor<2xf32, #cta_selected_dst>
+    tt.return
+  }
+}
+
+// Genuine cross-CTA transfers cannot access another CTA's LDS on AMD. Reject
+// them with an operation diagnostic instead of reaching report_fatal_error.
+// CROSS-CTA-INPUT: #src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
+// CROSS-CTA-INPUT: #dst = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+// CROSS-CTA-INPUT: module attributes {"ttg.target" = "hip:gfx1250", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+// CROSS-CTA-INPUT:   tt.func private @unsupported_cross_cta_conversion(%src: tensor<32xi32, #src>) {
+// CROSS-CTA-INPUT:     %result = ttg.convert_layout %src : tensor<32xi32, #src> -> tensor<32xi32, #dst>
+// CROSS-CTA-INPUT:     tt.return
+// CROSS-CTA-INPUT:   }
+// CROSS-CTA-INPUT: }
+// CROSS-CTA-ERROR: error: 'ttg.convert_layout' op cross-CTA layout conversions are unsupported on this target; use num_ctas=1 or a CTA-local layout

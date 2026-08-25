@@ -993,8 +993,8 @@ LogicalResult getConvertBackwardSlice(
         continue;
       }
       if (auto linearApply = dyn_cast<LinearApplyOp>(definingOp)) {
-        // The basis has a separate rank and a fixed warp-local encoding, so
-        // only propagate a requested result encoding to the index operand.
+        // The basis has a separate rank and an independent encoding, so only
+        // propagate a requested result encoding to the index operand.
         enqueue(linearApply.getIndexMutable(), encoding);
         continue;
       }

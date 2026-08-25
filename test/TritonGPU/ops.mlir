@@ -1,4 +1,8 @@
 // RUN: triton-opt --split-input-file %s | FileCheck %s
+// RUN: triton-opt --split-input-file %s --tritongpu-decompose-linear-apply | FileCheck %s --check-prefix=DECOMPOSE
+// RUN: sed -n 's@^// GENERIC-CTA-INPUT: @@p' %s | not triton-opt --tritongpu-decompose-linear-apply 2>&1 | FileCheck %s --check-prefix=GENERIC-CTA-ERROR
+// RUN: sed -n 's@^// AMD-CTA-INPUT: @@p' %s | not triton-opt --tritongpu-decompose-linear-apply 2>&1 | FileCheck %s --check-prefix=AMD-CTA-ERROR
+// RUN: sed -n 's@^// UNKNOWN-CTA-INPUT: @@p' %s | not triton-opt --tritongpu-decompose-linear-apply 2>&1 | FileCheck %s --check-prefix=UNKNOWN-CTA-ERROR
 
 // CHECK: #[[$WMMA_GEN1:.*]] = #ttg.amd_wmma<{{.*}}version = 1{{.*}}>
 // CHECK: #[[$WMMA_GEN2:.*]] = #ttg.amd_wmma<{{.*}}version = 2{{.*}}>
@@ -218,6 +222,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 #generic_rank_one = #ttg.generic_linear<{register = [[1], [2]], lane = [[4], [8], [16], [32], [64]], warp = [[64], [128]], block = []}>
 #generic_rank_two = #ttg.generic_linear<{register = [[1, 0], [0, 1]], lane = [[2, 0], [4, 0], [8, 0], [0, 2], [0, 4]], warp = [[16, 8], [0, 8]], block = []}>
+#generic_basis = #ttg.generic_linear<{register = [[4]], lane = [[1], [8], [2], [16], [0]], warp = [[0], [0]], block = []}>
 #canonical_basis = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
@@ -227,6 +232,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-SAME: [[INDEX:%[^:]+]]: tensor<256xi32, [[INDEX_LAYOUT:#[^>]+]]>, [[BASES:%[^:]+]]: tensor<32xi32, [[BASIS_LAYOUT:#[^>]+]]>
   // CHECK: [[RESULT:%.*]] = tt.linear_apply [[INDEX]], [[BASES]] : tensor<256xi32, [[INDEX_LAYOUT]]>, tensor<32xi32, [[BASIS_LAYOUT]]> -> tensor<256xi32, [[INDEX_LAYOUT]]>
   // CHECK: tt.return [[RESULT]] : tensor<256xi32, [[INDEX_LAYOUT]]>
+  // DECOMPOSE-LABEL: @linear_apply_generic_linear_rank_one
+  // DECOMPOSE: tt.make_range
+  // DECOMPOSE-COUNT-32: "tt.reduce"
+  // DECOMPOSE: arith.xori {{.*}} : i32
+  // DECOMPOSE: tt.reduce.return
+  // DECOMPOSE-NOT: tt.linear_apply
+  // DECOMPOSE: tt.return
   tt.func @linear_apply_generic_linear_rank_one(%index: tensor<256xi32, #generic_rank_one>, %bases: tensor<32xi32, #canonical_basis>) -> tensor<256xi32, #generic_rank_one> {
     %result = tt.linear_apply %index, %bases : tensor<256xi32, #generic_rank_one>, tensor<32xi32, #canonical_basis> -> tensor<256xi32, #generic_rank_one>
     tt.return %result : tensor<256xi32, #generic_rank_one>
@@ -238,11 +250,100 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-SAME: [[INDEX:%[^:]+]]: tensor<32x16xi32, [[INDEX_LAYOUT:#[^>]+]]>, [[BASES:%[^:]+]]: tensor<32xi32, [[BASIS_LAYOUT:#[^>]+]]>
   // CHECK: [[RESULT:%.*]] = tt.linear_apply [[INDEX]], [[BASES]] : tensor<32x16xi32, [[INDEX_LAYOUT]]>, tensor<32xi32, [[BASIS_LAYOUT]]> -> tensor<32x16xi32, [[INDEX_LAYOUT]]>
   // CHECK: tt.return [[RESULT]] : tensor<32x16xi32, [[INDEX_LAYOUT]]>
+  // DECOMPOSE-LABEL: @linear_apply_generic_linear_rank_two
+  // DECOMPOSE-COUNT-32: "tt.reduce"
+  // DECOMPOSE-NOT: tt.linear_apply
+  // DECOMPOSE: tt.return
   tt.func @linear_apply_generic_linear_rank_two(%index: tensor<32x16xi32, #generic_rank_two>, %bases: tensor<32xi32, #canonical_basis>) -> tensor<32x16xi32, #generic_rank_two> {
     %result = tt.linear_apply %index, %bases : tensor<32x16xi32, #generic_rank_two>, tensor<32xi32, #canonical_basis> -> tensor<32x16xi32, #generic_rank_two>
     tt.return %result : tensor<32x16xi32, #generic_rank_two>
   }
+
+  // Standard reductions cannot consume GenericLinear bases directly. Bridge
+  // through existing shared-memory operations before emitting the reductions.
+  // DECOMPOSE-LABEL: @linear_apply_generic_linear_basis
+  // DECOMPOSE: [[SHARED:%.*]] = ttg.local_alloc
+  // DECOMPOSE: ttg.local_store {{.*}}, [[SHARED]]
+  // DECOMPOSE: ttg.barrier local
+  // DECOMPOSE: ttg.local_load [[SHARED]]
+  // DECOMPOSE-COUNT-32: "tt.reduce"
+  // DECOMPOSE-NOT: tt.linear_apply
+  // DECOMPOSE: tt.return
+  tt.func @linear_apply_generic_linear_basis(%index: tensor<256xi32, #generic_rank_one>, %bases: tensor<32xi32, #generic_basis>) -> tensor<256xi32, #generic_rank_one> {
+    %result = tt.linear_apply %index, %bases : tensor<256xi32, #generic_rank_one>, tensor<32xi32, #generic_basis> -> tensor<256xi32, #generic_rank_one>
+    tt.return %result : tensor<256xi32, #generic_rank_one>
+  }
 }
+
+// -----
+
+#replicated_index = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+#cross_cta_basis = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
+#redundant_block_basis = #ttg.generic_linear<{register = [], lane = [[1], [2], [4], [8], [16]], warp = [[1], [2]], block = [[16]]}>
+
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CUDA reductions can communicate ordinary basis values across CTAs.
+  // CHECK-LABEL: @linear_apply_cross_cta_blocked_basis
+  // DECOMPOSE-LABEL: @linear_apply_cross_cta_blocked_basis
+  // DECOMPOSE-NOT: ttg.local_alloc
+  // DECOMPOSE-COUNT-32: "tt.reduce"
+  // DECOMPOSE-NOT: tt.linear_apply
+  // DECOMPOSE: tt.return
+  tt.func @linear_apply_cross_cta_blocked_basis(%index: tensor<128xi32, #replicated_index>, %bases: tensor<32xi32, #cross_cta_basis>) -> tensor<128xi32, #replicated_index> {
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #replicated_index>, tensor<32xi32, #cross_cta_basis> -> tensor<128xi32, #replicated_index>
+    tt.return %result : tensor<128xi32, #replicated_index>
+  }
+
+  // A nonzero block basis is safe when each CTA already owns every basis.
+  // CHECK-LABEL: @linear_apply_generic_redundant_block_basis
+  // DECOMPOSE-LABEL: @linear_apply_generic_redundant_block_basis
+  // DECOMPOSE: ttg.local_alloc
+  // DECOMPOSE: ttg.local_store
+  // DECOMPOSE: ttg.barrier local
+  // DECOMPOSE: ttg.local_load
+  // DECOMPOSE-COUNT-32: "tt.reduce"
+  // DECOMPOSE-NOT: tt.linear_apply
+  // DECOMPOSE: tt.return
+  tt.func @linear_apply_generic_redundant_block_basis(%index: tensor<128xi32, #replicated_index>, %bases: tensor<32xi32, #redundant_block_basis>) -> tensor<128xi32, #replicated_index> {
+    %result = tt.linear_apply %index, %bases : tensor<128xi32, #replicated_index>, tensor<32xi32, #redundant_block_basis> -> tensor<128xi32, #replicated_index>
+    tt.return %result : tensor<128xi32, #replicated_index>
+  }
+}
+
+// The GenericLinear bridge uses CTA-local shared memory, so it must reject a
+// layout that makes half the basis values available only in another CTA.
+// GENERIC-CTA-INPUT: #index = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+// GENERIC-CTA-INPUT: #bases = #ttg.generic_linear<{register = [], lane = [[1], [2], [4], [8], [0]], warp = [[0], [0]], block = [[16]]}>
+// GENERIC-CTA-INPUT: module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+// GENERIC-CTA-INPUT:   tt.func @generic_cross_cta(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #bases>) -> tensor<128xi32, #index> {
+// GENERIC-CTA-INPUT:     %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #bases> -> tensor<128xi32, #index>
+// GENERIC-CTA-INPUT:     tt.return %result : tensor<128xi32, #index>
+// GENERIC-CTA-INPUT:   }
+// GENERIC-CTA-INPUT: }
+// GENERIC-CTA-ERROR: error: 'tt.linear_apply' op linear_apply with a generic cross-CTA basis layout is unsupported; use a CTA-local basis layout
+
+// AMD cannot transfer shared-memory reduction values between CTAs.
+// AMD-CTA-INPUT: #index = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+// AMD-CTA-INPUT: #bases = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
+// AMD-CTA-INPUT: module attributes {"ttg.target" = "hip:gfx950", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+// AMD-CTA-INPUT:   tt.func @amd_cross_cta(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #bases>) -> tensor<128xi32, #index> {
+// AMD-CTA-INPUT:     %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #bases> -> tensor<128xi32, #index>
+// AMD-CTA-INPUT:     tt.return %result : tensor<128xi32, #index>
+// AMD-CTA-INPUT:   }
+// AMD-CTA-INPUT: }
+// AMD-CTA-ERROR: error: 'tt.linear_apply' op linear_apply with a cross-CTA basis layout is unsupported on AMD; use a CTA-local basis layout
+
+// Standalone modules must explicitly identify CUDA before using cross-CTA
+// reductions; otherwise lowering cannot assume CUDA cluster support.
+// UNKNOWN-CTA-INPUT: #index = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+// UNKNOWN-CTA-INPUT: #bases = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
+// UNKNOWN-CTA-INPUT: module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+// UNKNOWN-CTA-INPUT:   tt.func @unknown_cross_cta(%index: tensor<128xi32, #index>, %bases: tensor<32xi32, #bases>) -> tensor<128xi32, #index> {
+// UNKNOWN-CTA-INPUT:     %result = tt.linear_apply %index, %bases : tensor<128xi32, #index>, tensor<32xi32, #bases> -> tensor<128xi32, #index>
+// UNKNOWN-CTA-INPUT:     tt.return %result : tensor<128xi32, #index>
+// UNKNOWN-CTA-INPUT:   }
+// UNKNOWN-CTA-INPUT: }
+// UNKNOWN-CTA-ERROR: error: 'tt.linear_apply' op linear_apply with a cross-CTA basis layout requires an explicit CUDA target; use a CTA-local basis layout
 
 // -----
 
