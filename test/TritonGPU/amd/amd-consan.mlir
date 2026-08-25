@@ -1001,6 +1001,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #scatter_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 512 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK: tt.func private @[[$SCATTER_HELPER:__triton_consan_verify_local_scatter_destinations[^ (]*]]
+  // CHECK: %[[POINTERS:.*]] = tt.addptr
+  // CHECK: tt.atomic_rmw exch, relaxed, cta, %[[POINTERS]]
+  // CHECK: ttg.barrier global_read|global_write
+  // CHECK: tt.atomic_rmw add, relaxed, cta, %[[POINTERS]]
+  // CHECK: ttg.barrier global_read|global_write
+  // CHECK: tt.assert {{.*}}, "Non-atomic local scatter has duplicate destinations"
   // CHECK-LABEL: @amd_local_scatter_duplicate_destinations
   tt.func public @amd_local_scatter_duplicate_destinations(
       %indices: tensor<4x32xi32, #scatter_blocked>,
@@ -1009,17 +1016,18 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
         : () -> !ttg.memdesc<4x32xi32, #scatter_shared, #ttg.shared_memory, mutable>
     // CHECK: ttg.local_alloc
     // CHECK: %[[COUNTS:.*]] = ttg.global_scratch_alloc {{.*}}shared_cluster_state, third_party_allocation
-    // CHECK: %[[POINTERS:.*]] = tt.addptr
-    // CHECK: tt.atomic_rmw exch, relaxed, cta, %[[POINTERS]]
-    // CHECK: ttg.barrier global_read|global_write
-    // CHECK: tt.atomic_rmw add, relaxed, cta, %[[POINTERS]]
-    // CHECK: ttg.barrier global_read|global_write
-    // CHECK: tt.assert {{.*}}, "Non-atomic local scatter has duplicate destinations"
+    // CHECK: tt.call @[[$SCATTER_HELPER]](%[[COUNTS]], %arg0)
     // CHECK: ttg.local_scatter
     ttg.local_scatter %dst[%indices], %values {axis = 1 : i32}
         : !ttg.memdesc<4x32xi32, #scatter_shared, #ttg.shared_memory, mutable>,
         tensor<4x32xi32, #scatter_blocked>, tensor<4x32xi32, #scatter_blocked>
-    // CHECK-NOT: tt.atomic_rmw
+    // CHECK: %[[OTHER_COUNTS:.*]] = ttg.global_scratch_alloc {{.*}}shared_cluster_state, third_party_allocation
+    // CHECK: tt.call @[[$SCATTER_HELPER]](%[[OTHER_COUNTS]], %arg0)
+    // CHECK: ttg.local_scatter
+    ttg.local_scatter %dst[%indices], %values {axis = 1 : i32}
+        : !ttg.memdesc<4x32xi32, #scatter_shared, #ttg.shared_memory, mutable>,
+        tensor<4x32xi32, #scatter_blocked>, tensor<4x32xi32, #scatter_blocked>
+    // CHECK-NOT: tt.call @[[$SCATTER_HELPER]]
     // CHECK: ttg.local_atomic_scatter_rmw
     %old = ttg.local_atomic_scatter_rmw add, %dst[%indices], %values
         {axis = 1 : i32} : (!ttg.memdesc<4x32xi32, #scatter_shared,

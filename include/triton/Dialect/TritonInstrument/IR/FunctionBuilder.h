@@ -82,6 +82,10 @@ public:
   // Create a function that fills a global tensor with a scalar value.
   void createFillGlobalTensorCall(ImplicitLocOpBuilder &b, Value ptr,
                                   RankedTensorType type, Value scalar);
+  // Verify that a non-atomic local scatter has no duplicate destinations.
+  void createVerifyLocalScatterDestinationsCall(
+      ImplicitLocOpBuilder &b, Value scratch, Value indices,
+      ArrayRef<int64_t> destinationShape, unsigned axis);
   // setWaiting: mark the base thread as waiting on the given barrier phase and
   // record that phase for deadlock detection.
   void createSetWaitingCall(ImplicitLocOpBuilder &b, Value mbar, int thread,

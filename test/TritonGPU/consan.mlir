@@ -373,9 +373,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]]{{.*}})
-    // CHECK: tt.atomic_rmw exch, relaxed, cta
-    // CHECK: tt.atomic_rmw add, relaxed, cta
-    // CHECK: tt.assert {{.*}}, "Non-atomic local scatter has duplicate destinations"
+    // CHECK: tt.call @__triton_consan_verify_local_scatter_destinations
     // CHECK: ttg.local_scatter
     ttg.local_scatter %dst[%indices], %values {axis = 0 : i32} : !ttg.memdesc<8x32xi32, #local_gather_scatter_shared, #local_gather_scatter_smem, mutable>, tensor<8x32xi32, #local_gather_scatter_blocked>, tensor<8x32xi32, #local_gather_scatter_blocked>
 
@@ -2293,15 +2291,13 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]])
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]])
     // CHECK: ttg.global_scratch_alloc {{.*}}third_party_allocation
-    // CHECK: tt.atomic_rmw exch, relaxed, cta
-    // CHECK: tt.atomic_rmw add, relaxed, cta
-    // CHECK: tt.assert {{.*}}, "Non-atomic local scatter has duplicate destinations"
+    // CHECK: tt.call @__triton_consan_verify_local_scatter_destinations
     // CHECK: ttg.local_scatter
     ttg.local_scatter %remote[%indices], %values {axis = 1 : i32} : !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32>, tensor<2x32xi32, #blocked>, tensor<2x32xi32, #blocked>
     // CHECK: %[[ATOMIC_CTAS:.*]] = arith.constant 2 : i32
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]])
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]])
-    // CHECK-NOT: tt.atomic_rmw
+    // CHECK-NOT: tt.call @__triton_consan_verify_local_scatter_destinations
     // CHECK: ttg.local_atomic_scatter_rmw
     %a = ttg.local_atomic_scatter_rmw add, %remote[%indices], %values {axis = 1 : i32} : (!ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32>, tensor<2x32xi32, #blocked>, tensor<2x32xi32, #blocked>) -> tensor<2x32xi32, #blocked>
     tt.return

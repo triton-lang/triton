@@ -962,7 +962,7 @@ private:
         return WalkResult::interrupt();
       }
       if (auto scatter = dyn_cast<ttg::LocalScatterOp>(op))
-        instrumentLocalScatter(b, scatter);
+        instrumentLocalScatter(b, scatter, funcBuilder);
       b.setLoc(op->getLoc());
       if (auto info = hooks.getAsyncProxyFenceInfo(op)) {
         funcBuilder.createFenceProxyAccessesCall(
@@ -1125,97 +1125,16 @@ private:
   }
 
   void instrumentLocalScatter(ImplicitLocOpBuilder &b,
-                              ttg::LocalScatterOp scatter) {
+                              ttg::LocalScatterOp scatter,
+                              tti::FunctionBuilder &funcBuilder) {
     auto destinationType = scatter.getDst().getType();
     Value scratch = tti::createThirdPartyScratchAlloc(
         b, b.getLoc(), tt::getPointerType(b.getI32Type()),
         destinationType.getNumElements() * sizeof(int32_t),
         /*alignment=*/16, /*sharedClusterState=*/true);
-
-    Value indices = scatter.getIndices();
-    auto indicesType = cast<RankedTensorType>(indices.getType());
-    LinearLayout layout = ttg::toLinearLayout(indicesType);
-    StringAttr registerDim = b.getStringAttr("register");
-    if (layout.getFreeVariableMasks().lookup(registerDim)) {
-      auto encoding = ttg::LinearEncodingAttr::get(
-          b.getContext(), layout.removeZeroBasesAlongDim(registerDim));
-      indicesType = RankedTensorType::get(
-          indicesType.getShape(), indicesType.getElementType(), encoding);
-      indices = ttg::ConvertLayoutOp::create(b, indicesType, indices);
-    }
-
-    auto offsetType = cast<RankedTensorType>(indicesType.clone(b.getI32Type()));
-    unsigned indexWidth = indicesType.getElementType().getIntOrFloatBitWidth();
-    if (indexWidth < 32)
-      indices = arith::ExtUIOp::create(b, offsetType, indices);
-    else if (indexWidth > 32)
-      indices = arith::TruncIOp::create(b, offsetType, indices);
-
-    Value offsets;
-    int64_t stride = 1;
-    for (int dim = indicesType.getRank() - 1; dim >= 0; --dim) {
-      Value coordinate;
-      if (dim == scatter.getAxis()) {
-        coordinate = indices;
-      } else {
-        auto rangeType =
-            tti::getSlicedTensorType(offsetType, {dim}, b.getI32Type());
-        Value range = tt::MakeRangeOp::create(b, rangeType, 0,
-                                              rangeType.getShape().front());
-        coordinate =
-            tti::reshapeAndBroadcast(b, b.getLoc(), range, {dim}, offsetType);
-      }
-      if (stride != 1) {
-        Value scale =
-            tti::createConstIntTensor(b, b.getLoc(), stride, offsetType);
-        coordinate = arith::MulIOp::create(b, coordinate, scale);
-      }
-      offsets =
-          offsets ? arith::AddIOp::create(b, offsets, coordinate) : coordinate;
-      stride *= destinationType.getShape()[dim];
-    }
-
-    auto pointerType = RankedTensorType::get(
-        indicesType.getShape(), scratch.getType(), indicesType.getEncoding());
-    Value pointers = tt::SplatOp::create(b, pointerType, scratch);
-    pointers = tt::AddPtrOp::create(b, pointerType, pointers, offsets);
-    Value zero = tti::createConstIntTensor(b, b.getLoc(), 0, offsetType);
-    Value one = tti::createConstIntTensor(b, b.getLoc(), 1, offsetType);
-    auto emitAtomic = [&](tt::RMWOp operation, Value value) {
-      tt::AtomicRMWOp::create(b, offsetType, operation, pointers, value,
-                              Value(), tt::MemSemantic::RELAXED,
-                              tt::MemSyncScope::CTA);
-    };
-    auto globalMemory =
-        ttg::AddrSpace::GlobalRead | ttg::AddrSpace::GlobalWrite;
-    emitAtomic(tt::RMWOp::XCHG, zero);
-    ttg::BarrierOp::create(b, b.getLoc(), globalMemory);
-    emitAtomic(tt::RMWOp::ADD, one);
-    ttg::BarrierOp::create(b, b.getLoc(), globalMemory);
-
-    Value counts =
-        tt::LoadOp::create(b, b.getLoc(), pointers, tt::CacheModifier::NONE,
-                           tt::EvictionPolicy::NORMAL, /*isVolatile=*/false);
-    Value unique =
-        arith::CmpIOp::create(b, arith::CmpIPredicate::eq, counts, one);
-
-    uint32_t freeBlocks =
-        layout.getFreeVariableMasks().lookup(b.getStringAttr("block"));
-    if (freeBlocks) {
-      Value cta = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
-      Value blockBits = arith::AndIOp::create(
-          b, cta, arith::ConstantIntOp::create(b, freeBlocks, 32));
-      Value replicated =
-          arith::CmpIOp::create(b, arith::CmpIPredicate::ne, blockBits,
-                                arith::ConstantIntOp::create(b, 0, 32));
-      auto predicateType =
-          cast<RankedTensorType>(offsetType.clone(b.getI1Type()));
-      unique = arith::OrIOp::create(
-          b, unique, tt::SplatOp::create(b, predicateType, replicated));
-    }
-
-    tt::AssertOp::create(b, unique,
-                         "Non-atomic local scatter has duplicate destinations");
+    funcBuilder.createVerifyLocalScatterDestinationsCall(
+        b, scratch, scatter.getIndices(), destinationType.getShape(),
+        scatter.getAxis());
   }
 
   void instrumentBarrierWait(Operation *op, Value alloc, Value phase,
