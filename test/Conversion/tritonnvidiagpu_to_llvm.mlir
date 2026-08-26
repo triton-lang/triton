@@ -88,7 +88,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @arrive_barrier(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>) {
     // CHECK-NEXT: [[BASE:%.*]] = llvm.extractvalue %arg0[0] : !llvm.struct<(ptr<3>, i32)>
     // CHECK-NEXT: llvm.extractvalue %arg0[1] : !llvm.struct<(ptr<3>, i32)>
-    // CHECK-NEXT: nvvm.barrier
+    // CHECK-NOT: nvvm.barrier
     // CHECK-NEXT: [[TID:%.*]] = nvvm.read.ptx.sreg.tid.x
     // CHECK-NEXT: [[C127:%.*]] = llvm.mlir.constant(127 : i32)
     // CHECK-NEXT: [[RTID:%.*]] = llvm.and [[TID]], [[C127]]
@@ -103,7 +103,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @arrive_barrier_pred(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>, %pred: i1) {
     // CHECK-NEXT: [[BASE:%.*]] = llvm.extractvalue %arg0[0] : !llvm.struct<(ptr<3>, i32)>
     // CHECK-NEXT: llvm.extractvalue %arg0[1] : !llvm.struct<(ptr<3>, i32)>
-    // CHECK-NEXT: nvvm.barrier
+    // CHECK-NOT: nvvm.barrier
     // CHECK-NEXT: [[TID:%.*]] = nvvm.read.ptx.sreg.tid.x
     // CHECK-NEXT: [[C127:%.*]] = llvm.mlir.constant(127 : i32)
     // CHECK-NEXT: [[RTID:%.*]] = llvm.and [[TID]], [[C127]]
@@ -123,7 +123,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: arrive_barrier_cluster_broadcast
   tt.func @arrive_barrier_cluster_broadcast(%alloc: !ttg.memdesc<1xi64, #shared0, #smem>, %phase: i32) {
-    // CHECK: nvvm.barrier
+    // CHECK-NOT: nvvm.barrier
     // CHECK-NOT: nvg.cluster_id
     // CHECK: llvm.ptrtoint
     // CHECK: llvm.and
@@ -532,7 +532,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: expect_barrier
-  // CHECK: nvvm.barrier
+  // CHECK-NOT: nvvm.barrier
   // CHECK: [[TID:%.*]] = nvvm.read.ptx.sreg.tid.x
   // CHECK: [[C127:%.*]] = llvm.mlir.constant(127 : i32)
   // CHECK: [[RTID:%.*]] = llvm.and [[TID]], [[C127]]
@@ -552,7 +552,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: expect_barrier_cluster_broadcast
-  // CHECK: nvvm.barrier
+  // CHECK-NOT: nvvm.barrier
   // CHECK-NOT: nvg.cluster_id
   // CHECK: llvm.ptrtoint
   // CHECK: llvm.and
