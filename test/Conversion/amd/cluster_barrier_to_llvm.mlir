@@ -1,5 +1,35 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s
 
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: fence_single_cta
+  tt.func @fence_single_cta() {
+    // CHECK: rocdl.s.barrier
+    // CHECK-NOT: rocdl.s.barrier.signal
+    // CHECK-NOT: rocdl.s.barrier.wait
+    // CHECK: llvm.return
+    ttg.fence
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: fence_multi_cta
+  tt.func @fence_multi_cta() {
+    // CHECK: rocdl.s.barrier{{$}}
+    // CHECK: llvm.fence syncscope("cluster") release
+    // CHECK: rocdl.s.barrier.signal id = -3
+    // CHECK: rocdl.s.barrier.wait id = -3
+    // CHECK: llvm.fence syncscope("cluster") acquire
+    // CHECK: llvm.return
+    ttg.fence
+    tt.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: cluster_barrier_arrive
   tt.func @cluster_barrier_arrive() {

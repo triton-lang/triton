@@ -495,7 +495,9 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
   Region *entryRegion = &entryPoint.getBody();
 
   int numMBarriers = barrierRegions.size();
-  entryPoint.walk([&](ClusterBarrierOp op) {
+  entryPoint.walk([&](Operation *op) {
+    if (!isa<ClusterBarrierOp>(op) && !(isa<FenceOp>(op) && numCTAs > 1))
+      return;
     Region *group = getClusterBarrierGroupRegion(op);
     clusterBarrierSlots.try_emplace(group,
                                     numMBarriers + clusterBarrierSlots.size());

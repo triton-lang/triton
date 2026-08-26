@@ -3182,7 +3182,7 @@ def map_elementwise(
 
 
 @builtin
-def fence(_semantic=None, _generator=None):
+def fence(_semantic=None):
     """
     Synchronize all threads executing the current program.
 
@@ -3194,7 +3194,7 @@ def fence(_semantic=None, _generator=None):
     insert a fence between writes and subsequent reads so all threads in the
     program observe the completed writes.
     """
-    return _semantic.fence(_generator)
+    return _semantic.fence()
 
 
 # `debug_barrier` is a regular synchronization fence kept for backward compatibility.

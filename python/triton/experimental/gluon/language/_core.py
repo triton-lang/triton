@@ -711,11 +711,7 @@ def barrier(*, cluster: bool = False, _semantic=None):
     num_ctas = _unwrap_if_constexpr(_semantic.num_ctas())
     if num_ctas == 1 or not cluster:
         return _semantic.barrier()
-    if _semantic.builder.options.backend_name == "hip":
-        _semantic.builder.create_amd_cluster_arrive()
-        _semantic.builder.create_amd_cluster_wait()
-    else:
-        _semantic.builder.create_cluster_barrier()
+    return _semantic.fence()
 
 
 @builtin

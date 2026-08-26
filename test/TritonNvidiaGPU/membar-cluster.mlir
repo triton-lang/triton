@@ -37,6 +37,21 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %ld = ttg.local_load %buf : !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> tensor<256x128xf16, #blockedSplitM>
     tt.return %ld : tensor<256x128xf16, #blockedSplitM>
   }
+
+  // CHECK-LABEL: @program_fence_synchronizes_cluster
+  // CHECK: ttg.convert_layout
+  // CHECK-NEXT: ttg.fence
+  // CHECK-NOT: ttng.cluster_barrier
+  // CHECK-NEXT: ttg.local_alloc
+  tt.func @program_fence_synchronizes_cluster() -> tensor<256x128xf16, #blockedSplitM> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<256x128xf16, #blockedSplitM>
+    %cvt = ttg.convert_layout %cst : tensor<256x128xf16, #blockedSplitM> -> tensor<256x128xf16, #blockedSplitN>
+    ttg.fence
+    %buf = ttg.local_alloc %cvt : (tensor<256x128xf16, #blockedSplitN>) -> !ttg.memdesc<256x128xf16, #shared, #smem, mutable>
+    ttg.local_store %cvt, %buf : tensor<256x128xf16, #blockedSplitN> -> !ttg.memdesc<256x128xf16, #shared, #smem, mutable>
+    %ld = ttg.local_load %buf : !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> tensor<256x128xf16, #blockedSplitM>
+    tt.return %ld : tensor<256x128xf16, #blockedSplitM>
+  }
 }
 
 // -----

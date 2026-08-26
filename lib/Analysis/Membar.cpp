@@ -143,6 +143,10 @@ triton::BarrierStages getLocalBarrierStages(Operation *op,
     stages.beforeMemoryEffects = barrier.hasLocal();
     return stages;
   }
+  if (isa<triton::gpu::FenceOp>(op)) {
+    stages.beforeMemoryEffects = true;
+    return stages;
+  }
 
   // Pure layout conversions and reductions can still use shared scratch and
   // internal barriers even without descriptor memory effects.

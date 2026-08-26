@@ -842,7 +842,7 @@ private:
         bool hasUnsupportedAllocation =
             isa<ttg::LocalAllocOp, ttng::TMEMAllocOp>(op);
         bool hasOpaqueEffects =
-            !isa<ttg::BarrierOp>(op) && hasUnknownEffects(op);
+            !isa<ttg::BarrierOp, ttg::FenceOp>(op) && hasUnknownEffects(op);
         bool hasUnsupportedResource = false;
         if (auto memoryEffects = dyn_cast<MemoryEffectOpInterface>(op)) {
           SmallVector<MemoryEffects::EffectInstance> effects;
@@ -878,6 +878,7 @@ private:
         bool hasControlState =
             isa<ttg::WarpSpecializeOp, ttg::WarpSpecializePartitionsOp,
                 ttng::ClusterBarrierOp>(op) ||
+            (isa<ttg::FenceOp>(op) && ttg::lookupNumCTAs(op) > 1) ||
             hooks.hasUnsummarizableCalleeState(op);
         if (!hasUnsupportedAllocation && !hasOpaqueEffects &&
             !hasUnsupportedResource && !hasMemoryState && !hasBarrierState &&
@@ -930,7 +931,7 @@ private:
 
   LogicalResult instrumentMemoryOperations(ImplicitLocOpBuilder &b,
                                            tti::FunctionBuilder &funcBuilder) {
-    SmallVector<ttng::ClusterBarrierOp> clusterBarriers;
+    SmallVector<Operation *> clusterBarriers;
     WalkResult walkResult = entryPoint.walk([&](Operation *op) -> WalkResult {
       CriticalSectionListener listener;
       b.setListener(&listener);
@@ -1056,9 +1057,10 @@ private:
             asyncWaitOp.getNum(), nullptr, CommitKind::AsyncCp,
             MemType::SHARED_MEM, op);
       }
-      if (auto clusterBarrier = dyn_cast<ttng::ClusterBarrierOp>(op)) {
+      if (isa<ttng::ClusterBarrierOp>(op) ||
+          (isa<ttg::FenceOp>(op) && ttg::lookupNumCTAs(op) > 1)) {
         if (!llvm::is_contained(auxData.internalClusterBarriers, op))
-          clusterBarriers.push_back(clusterBarrier);
+          clusterBarriers.push_back(op);
       }
 
       if (isa<ttg::WarpYieldOp, ttg::WarpReturnOp>(op) &&
@@ -1106,18 +1108,20 @@ private:
 
     // Cluster rendezvous polling introduces control-flow blocks, so add it
     // after the operation walk rather than invalidating the walk iterators.
-    for (ttng::ClusterBarrierOp clusterBarrier : clusterBarriers) {
-      Operation *op = clusterBarrier.getOperation();
+    for (Operation *op : clusterBarriers) {
       int thread = getCurrentThread(op, hooks, auxData.threadLayout);
       int baseThread = getBaseThread(thread, auxData.threadLayout);
       bool partitionScoped =
           static_cast<bool>(op->getParentOfType<ttg::WarpSpecializeOp>());
+      bool publishVisibility = true;
+      if (auto clusterBarrier = dyn_cast<ttng::ClusterBarrierOp>(op))
+        publishVisibility = !clusterBarrier.getRelaxed();
       b.setLoc(op->getLoc());
       b.setInsertionPoint(op);
       funcBuilder.createClusterBarrierRendezvousCall(
           b, auxData.getClusterBarrierSlot(op), baseThread,
           getThreadPeersMask(baseThread, auxData.threadLayout), partitionScoped,
-          /*publishVisibility=*/!clusterBarrier.getRelaxed(), op);
+          publishVisibility, op);
     }
     return success();
   }

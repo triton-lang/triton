@@ -787,6 +787,18 @@ def TTG_BarrierOp : TTG_Op<"barrier"> {
   }];
 }
 
+def TTG_FenceOp : TTG_Op<"fence"> {
+  let summary = "Synchronizes execution and memory accesses across a Triton program";
+  let description = [{
+    The `fence` operation synchronizes all threads executing a Triton program
+    and makes prior memory accesses visible to those threads. Single-CTA
+    programs synchronize within their CTA, while multi-CTA programs synchronize
+    across the entire CTA cluster.
+  }];
+
+  let assemblyFormat = "attr-dict";
+}
+
 def TTG_WarpIdOp : TTG_Op<"warp_id", [Pure]> {
   let summary = "Return the GPU warp ID";
 

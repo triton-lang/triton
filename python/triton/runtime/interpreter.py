@@ -861,6 +861,9 @@ class InterpreterBuilder:
         # Triton's barrier applies to each program in a grid, so it's a no-op in the interpreter
         pass
 
+    def create_fence(self):
+        return self.create_barrier()
+
     def create_make_tensor_descriptor(self, base: TensorHandle, shape: List[TensorHandle], strides: List[TensorHandle],
                                       tensor_shape: List[int], is_signed: bool, padding: str = "zero"):
         desc = TensorDescHandle(base, shape, strides, tensor_shape, padding)

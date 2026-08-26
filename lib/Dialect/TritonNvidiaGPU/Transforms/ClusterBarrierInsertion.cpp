@@ -282,6 +282,10 @@ void ClusterBarrierAnalysis::update(Operation *op, MembarInfo *membarInfo,
       membarInfo->sync();
     return;
   }
+  if (isa<ttg::FenceOp>(op)) {
+    membarInfo->sync();
+    return;
+  }
 
   // Any path from distributed shared memory use to kernel exit must include a
   // cluster barrier. Conservatively insert the barrier since we can't analyze
