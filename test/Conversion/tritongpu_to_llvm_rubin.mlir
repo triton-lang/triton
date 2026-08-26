@@ -228,7 +228,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107"} {
   // CHECK-LABEL: @arrive_barrier_fromCTA0_multicast
   tt.func @arrive_barrier_fromCTA0_multicast(%barrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>, %pred: i1) {
-    // CHECK: nvvm.barrier
+    // CHECK-NOT: nvvm.barrier
     // CHECK: nvvm.read.ptx.sreg.tid.x
     // CHECK: llvm.icmp "eq"
     // CHECK-NOT: llvm.icmp "ult"
@@ -249,7 +249,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107"} {
   // CHECK-LABEL: @expect_barrier_fromCTA0145_multicast
   tt.func @expect_barrier_fromCTA0145_multicast(%barrier: !ttg.memdesc<8xi64, #barrier, #smem, mutable>, %pred: i1) {
-    // CHECK: nvvm.barrier
+    // CHECK-NOT: nvvm.barrier
     // CHECK: nvvm.read.ptx.sreg.tid.x
     // CHECK: llvm.icmp "eq"
     // CHECK-NOT: llvm.icmp "ult"
