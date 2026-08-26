@@ -20,6 +20,23 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %ld = ttg.local_load %buf : !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> tensor<256x128xf16, #blockedSplitM>
     tt.return %ld : tensor<256x128xf16, #blockedSplitM>
   }
+
+  // A relaxed cluster barrier does not synchronize memory. A strong barrier
+  // is still required before reusing shared memory touched by convert_layout.
+  // CHECK-LABEL: @relaxed_cluster_barrier_does_not_sync_memory
+  // CHECK: ttg.convert_layout
+  // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttng.cluster_barrier{{$}}
+  // CHECK-NEXT: ttg.local_alloc
+  tt.func @relaxed_cluster_barrier_does_not_sync_memory() -> tensor<256x128xf16, #blockedSplitM> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<256x128xf16, #blockedSplitM>
+    %cvt = ttg.convert_layout %cst : tensor<256x128xf16, #blockedSplitM> -> tensor<256x128xf16, #blockedSplitN>
+    ttng.cluster_barrier {relaxed = true}
+    %buf = ttg.local_alloc %cvt : (tensor<256x128xf16, #blockedSplitN>) -> !ttg.memdesc<256x128xf16, #shared, #smem, mutable>
+    ttg.local_store %cvt, %buf : tensor<256x128xf16, #blockedSplitN> -> !ttg.memdesc<256x128xf16, #shared, #smem, mutable>
+    %ld = ttg.local_load %buf : !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> tensor<256x128xf16, #blockedSplitM>
+    tt.return %ld : tensor<256x128xf16, #blockedSplitM>
+  }
 }
 
 // -----
