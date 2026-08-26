@@ -1,0 +1,2575 @@
+{
+  "schema_version": 4,
+  "created_utc": "2026-08-26T20:34:32.379060+00:00",
+  "run": {
+    "requested_sizes": [
+      256,
+      512,
+      1024,
+      2048,
+      4096,
+      8192,
+      16384,
+      32768,
+      65536,
+      131072,
+      262144,
+      524288,
+      1048576,
+      2097152,
+      4194304,
+      8388608,
+      16777216,
+      33554432
+    ],
+    "complete": true
+  },
+  "method": {
+    "description": "The same standard Triton program with the one-hot reduction optimization disabled or enabled",
+    "program_source": "@triton.jit(do_not_specialize=[\"N\", \"seed\"])\ndef _classic_one_hot_xor_kernel(\n    indices_ptr,\n    output_ptr,\n    N,\n    seed,\n    BLOCK: tl.constexpr,\n    BENCHMARK_VARIANT: tl.constexpr,\n):\n    offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    mask = offsets < N\n    index = tl.load(indices_ptr + offsets, mask=mask, other=0).to(tl.uint32)\n    bits = tl.arange(0, 32)\n    bases = (bits.to(tl.uint32) * 0x9E3779B9) ^ seed.to(tl.uint32)\n\n    result = tl.full(index.shape, 0, tl.uint32)\n    for bit in tl.static_range(32):\n        basis = tl.xor_sum(tl.where(bits == bit, bases, 0), axis=0)\n        result ^= tl.where((index >> bit) & 1, basis, 0)\n\n    tl.store(output_ptr + offsets, result, mask=mask)\n",
+    "bases_source": "computed-in-registers-no-basis-buffer",
+    "basis_expression": "(bits.to(tl.uint32) * 0x9E3779B9) ^ seed.to(tl.uint32)",
+    "seed": 826366246,
+    "block_size": 128,
+    "pass_wrapper": "add_optimize_one_hot_xor_reduction",
+    "timing": "triton.testing.do_bench_cudagraph(..., return_mode='all')",
+    "timing_description": "Median steady-state GPU execution time from CUDA Graph replay; identical input/output buffers are reused without flushing L2.",
+    "timing_repetitions_ms": 100,
+    "timing_samples": 10,
+    "timing_cache_policy": {
+      "reuse_input_output_buffers": true,
+      "flush_l2": false
+    },
+    "effective_bandwidth_bytes_per_element": 8,
+    "global_memory_traffic": "one 32-bit input index load and one 32-bit output store per element",
+    "basis_global_memory_loads": 0,
+    "cache_policy": "reused input/output buffers, no L2 cache flush; bases are recomputed in registers for every block",
+    "source_compilation": "same checkout @triton.jit source compiled twice through the real NVIDIA pipeline",
+    "jit_cache_isolation": "fresh temporary compiler cache plus unused BENCHMARK_VARIANT constexpr",
+    "pre_pass_ir_identity": "exact byte equality of optimization-OFF and optimization-ON TTIR and TTGIR",
+    "optimization_verification": "32 source reductions; indexed shuffles 0 to 32; fused LOP3 increases",
+    "correctness": "bit-exact independent 32-bit PyTorch CUDA reference"
+  },
+  "environment": {
+    "gpu": "NVIDIA GB300",
+    "compute_capability": "10.3",
+    "gpu_memory_bytes": 297020948480,
+    "multiprocessors": 152,
+    "torch_version": "2.11.0+openai.65916849477.branchsuffix.unknown.cuda.130.os.noble.builderversion.242",
+    "triton_version": "3.8.0",
+    "triton_module": "/tmp/triton-reduction-warp-shuffle-cheng/python/triton/__init__.py",
+    "python_version": "3.12.13 (main, May  8 2026, 05:13:56) [GCC 13.3.0]",
+    "cuda_visible_devices": null,
+    "provenance": {
+      "checkout_root": "/tmp/triton-reduction-warp-shuffle-cheng",
+      "triton_module": "/tmp/triton-reduction-warp-shuffle-cheng/python/triton/__init__.py",
+      "nvidia_backend_module": "/tmp/triton-reduction-warp-shuffle-cheng/third_party/nvidia/backend/compiler.py",
+      "native_extension": "/tmp/triton-reduction-warp-shuffle-cheng/python/triton/_C/libtriton.so",
+      "kernel_source": "/tmp/triton-reduction-warp-shuffle-cheng/python/test/microbenchmark/one_hot_xor_reduction.py",
+      "kernel_source_sha256": "9a9f710ec18b355dfcdea6ae4c1138152404a908ba2f4c123b796a4f131833f2",
+      "benchmark_source_sha256": "888eb75a5755d168be5487766571a68a77e8bc8711894d9ed1e0cb5ffd490f78",
+      "nvidia_backend_sha256": "7dae3c25a7bbbe29f575d60f767b46314ba7042148d65464955d677df31f00e0",
+      "native_extension_sha256": "163fd217c2ae7d56fad85a1a983c9dd93e773c9f7a1376ae990c62ec0bd0e610",
+      "native_source_sha256": {
+        "lib/Dialect/TritonGPU/Transforms/OptimizeOneHotXorReduction.cpp": "347fb8303b5ba6a1b19625ecd5c86909d3abf4c98f48648e939843e8b8df0a6d",
+        "lib/Dialect/TritonGPU/Transforms/CMakeLists.txt": "fe8d20c02aa977e8bed17f6215bbe1689403c3d4983b76128e01af418780e3e3",
+        "include/triton/Dialect/TritonGPU/Transforms/Passes.td": "3a925b7dbc48f207264f881dc9b497ad0629a7ce4bbc0204ff26cc134d390c6f",
+        "python/src/passes.cc": "11f8fe4e247512a5be77f051da879e720c0b4d4421b803e236b76e76bd83c58f"
+      }
+    }
+  },
+  "cases": [
+    {
+      "frontend": "classic",
+      "basis_mode": "computed",
+      "basis_storage": "registers",
+      "basis_global_loads": 0,
+      "elements": 256,
+      "block_size": 128,
+      "seed": 826366246,
+      "measurement_order": [
+        "baseline",
+        "optimized"
+      ],
+      "variants": {
+        "baseline": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 212,
+            "ptx_shuffle": 0,
+            "ptx_shuffle_indexed": 0,
+            "ptx_lop3": 0,
+            "ptx_redux": 32,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 0,
+            "registers": 30,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              1.385251388112411,
+              1.2246224843118154,
+              1.2217853813265114,
+              1.2218836972598264,
+              1.2214578242696377,
+              1.2214971701694648,
+              1.2217198699151366,
+              1.2214971701694648,
+              1.2215037115473517,
+              1.2213202600690012
+            ],
+            "median_us": 1.2216117907312443,
+            "mean_us": 1.238253895715062,
+            "min_us": 1.2213202600690012,
+            "max_us": 1.385251388112411,
+            "p20_us": 1.2214578242696377,
+            "p80_us": 1.2218836972598264,
+            "relative_stddev": 0.03957815400616215,
+            "throughput_gigaelements_per_second": 0.2095592085328196,
+            "effective_bandwidth_gb_per_second": 1.6764736682625567
+          }
+        },
+        "optimized": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 117,
+            "ptx_shuffle": 32,
+            "ptx_shuffle_indexed": 32,
+            "ptx_lop3": 31,
+            "ptx_redux": 0,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 33,
+            "registers": 20,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              1.2535082177195802,
+              1.1603219253186838,
+              1.1587957056557259,
+              1.1584725794037325,
+              1.158457689817155,
+              1.1582240492397164,
+              1.1581047103144617,
+              1.1583632409470745,
+              1.158293608054623,
+              1.1580599674771843
+            ],
+            "median_us": 1.1584104653821148,
+            "mean_us": 1.1680601693947936,
+            "min_us": 1.1580599674771843,
+            "max_us": 1.2535082177195802,
+            "p20_us": 1.1581047103144617,
+            "p80_us": 1.1587957056557259,
+            "relative_stddev": 0.024390399174750287,
+            "throughput_gigaelements_per_second": 0.22099247861642504,
+            "effective_bandwidth_gb_per_second": 1.7679398289314003
+          }
+        }
+      },
+      "speedup": 1.054558662268544,
+      "optimization_observed": true
+    },
+    {
+      "frontend": "classic",
+      "basis_mode": "computed",
+      "basis_storage": "registers",
+      "basis_global_loads": 0,
+      "elements": 512,
+      "block_size": 128,
+      "seed": 826366246,
+      "measurement_order": [
+        "optimized",
+        "baseline"
+      ],
+      "variants": {
+        "baseline": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 212,
+            "ptx_shuffle": 0,
+            "ptx_shuffle_indexed": 0,
+            "ptx_lop3": 0,
+            "ptx_redux": 32,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 0,
+            "registers": 30,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              1.3287453917983156,
+              1.209023576345503,
+              1.2074782241205253,
+              1.2074832590470401,
+              1.2072198879644738,
+              1.2071850877370895,
+              1.2067677071375877,
+              1.2072397314983865,
+              1.2068124291319284,
+              1.2071552483931831
+            ],
+            "median_us": 1.2072298097314302,
+            "mean_us": 1.2195110543174033,
+            "min_us": 1.2067677071375877,
+            "max_us": 1.3287453917983156,
+            "p20_us": 1.2068124291319284,
+            "p80_us": 1.2074832590470401,
+            "relative_stddev": 0.02986141306152151,
+            "throughput_gigaelements_per_second": 0.4241114623518977,
+            "effective_bandwidth_gb_per_second": 3.3928916988151814
+          }
+        },
+        "optimized": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 117,
+            "ptx_shuffle": 32,
+            "ptx_shuffle_indexed": 32,
+            "ptx_lop3": 31,
+            "ptx_redux": 0,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 33,
+            "registers": 20,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              1.3093842380980547,
+              1.1656840525507313,
+              1.1640205530451115,
+              1.1634856440581267,
+              1.1635621096788304,
+              1.1634268715134621,
+              1.163456301580537,
+              1.1631682197632465,
+              1.1634210030179442,
+              1.1636737862726416
+            ],
+            "median_us": 1.1635238768684786,
+            "mean_us": 1.1783282779578685,
+            "min_us": 1.1631682197632465,
+            "max_us": 1.3093842380980547,
+            "p20_us": 1.1634210030179442,
+            "p80_us": 1.1640205530451115,
+            "relative_stddev": 0.03707840958299135,
+            "throughput_gigaelements_per_second": 0.4400425381711999,
+            "effective_bandwidth_gb_per_second": 3.5203403053695994
+          }
+        }
+      },
+      "speedup": 1.0375634172463932,
+      "optimization_observed": true
+    },
+    {
+      "frontend": "classic",
+      "basis_mode": "computed",
+      "basis_storage": "registers",
+      "basis_global_loads": 0,
+      "elements": 1024,
+      "block_size": 128,
+      "seed": 826366246,
+      "measurement_order": [
+        "baseline",
+        "optimized"
+      ],
+      "variants": {
+        "baseline": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 212,
+            "ptx_shuffle": 0,
+            "ptx_shuffle_indexed": 0,
+            "ptx_lop3": 0,
+            "ptx_redux": 32,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 0,
+            "registers": 30,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              1.3357770308486343,
+              1.2110099146994202,
+              1.2092474840616025,
+              1.2086051619440494,
+              1.2089130335797043,
+              1.208642340687307,
+              1.2081964330793455,
+              1.208345068948666,
+              1.2081804541301158,
+              1.2083078902054085
+            ],
+            "median_us": 1.2086237513156783,
+            "mean_us": 1.2215224812184253,
+            "min_us": 1.2081804541301158,
+            "max_us": 1.3357770308486343,
+            "p20_us": 1.2081964330793455,
+            "p80_us": 1.2092474840616025,
+            "relative_stddev": 0.031185005762817273,
+            "throughput_gigaelements_per_second": 0.8472446440716547,
+            "effective_bandwidth_gb_per_second": 6.777957152573237
+          }
+        },
+        "optimized": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 117,
+            "ptx_shuffle": 32,
+            "ptx_shuffle_indexed": 32,
+            "ptx_lop3": 31,
+            "ptx_redux": 0,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 33,
+            "registers": 20,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              1.2964624675615688,
+              1.1721104141488095,
+              1.1708009316573558,
+              1.1703800016813906,
+              1.170826871970444,
+              1.170208485879926,
+              1.1700681758879377,
+              1.1701981097546907,
+              1.1699642597680433,
+              1.1701513397573613
+            ],
+            "median_us": 1.1702942437806583,
+            "mean_us": 1.1831171058067527,
+            "min_us": 1.1699642597680433,
+            "max_us": 1.2964624675615688,
+            "p20_us": 1.1700681758879377,
+            "p80_us": 1.170826871970444,
+            "relative_stddev": 0.03193810093234144,
+            "throughput_gigaelements_per_second": 0.8749936227080364,
+            "effective_bandwidth_gb_per_second": 6.999948981664291
+          }
+        }
+      },
+      "speedup": 1.032752026029963,
+      "optimization_observed": true
+    },
+    {
+      "frontend": "classic",
+      "basis_mode": "computed",
+      "basis_storage": "registers",
+      "basis_global_loads": 0,
+      "elements": 2048,
+      "block_size": 128,
+      "seed": 826366246,
+      "measurement_order": [
+        "optimized",
+        "baseline"
+      ],
+      "variants": {
+        "baseline": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 212,
+            "ptx_shuffle": 0,
+            "ptx_shuffle_indexed": 0,
+            "ptx_lop3": 0,
+            "ptx_redux": 32,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 0,
+            "registers": 30,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              1.3655900161193422,
+              1.2845825578745589,
+              1.2835119480152692,
+              1.2828773200566068,
+              1.2829451715444529,
+              1.282727180594139,
+              1.2828096129336286,
+              1.2827611063380622,
+              1.2829548439905927,
+              1.2828289578259082
+            ],
+            "median_us": 1.2829112458005298,
+            "mean_us": 1.291358871529256,
+            "min_us": 1.282727180594139,
+            "max_us": 1.3655900161193422,
+            "p20_us": 1.2827611063380622,
+            "p80_us": 1.2835119480152692,
+            "relative_stddev": 0.01916548525244997,
+            "throughput_gigaelements_per_second": 1.5963692006784609,
+            "effective_bandwidth_gb_per_second": 12.770953605427687
+          }
+        },
+        "optimized": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 117,
+            "ptx_shuffle": 32,
+            "ptx_shuffle_indexed": 32,
+            "ptx_lop3": 31,
+            "ptx_redux": 0,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 33,
+            "registers": 20,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              1.4097742077715545,
+              1.242085942922629,
+              1.2405112442155903,
+              1.2394994915367845,
+              1.2392714251337964,
+              1.2395066053398573,
+              1.2392714251337964,
+              1.2396633213597879,
+              1.2395279467490754,
+              1.2396989965513165
+            ],
+            "median_us": 1.2395956340544316,
+            "mean_us": 1.2568810606714187,
+            "min_us": 1.2392714251337964,
+            "max_us": 1.4097742077715545,
+            "p20_us": 1.2392714251337964,
+            "p80_us": 1.2405112442155903,
+            "relative_stddev": 0.040553360585233685,
+            "throughput_gigaelements_per_second": 1.6521516724784386,
+            "effective_bandwidth_gb_per_second": 13.217213379827509
+          }
+        }
+      },
+      "speedup": 1.0349433400345425,
+      "optimization_observed": true
+    },
+    {
+      "frontend": "classic",
+      "basis_mode": "computed",
+      "basis_storage": "registers",
+      "basis_global_loads": 0,
+      "elements": 4096,
+      "block_size": 128,
+      "seed": 826366246,
+      "measurement_order": [
+        "baseline",
+        "optimized"
+      ],
+      "variants": {
+        "baseline": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 212,
+            "ptx_shuffle": 0,
+            "ptx_shuffle_indexed": 0,
+            "ptx_lop3": 0,
+            "ptx_redux": 32,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 0,
+            "registers": 30,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              1.3395364604400821,
+              1.2974391307015636,
+              1.2954930510897094,
+              1.2949963414919978,
+              1.2945201126737795,
+              1.295037201660987,
+              1.2948466898557,
+              1.2950984412194717,
+              1.2946357986609174,
+              1.2949827552323339
+            ],
+            "median_us": 1.2950167715764924,
+            "mean_us": 1.299658598302654,
+            "min_us": 1.2945201126737795,
+            "max_us": 1.3395364604400821,
+            "p20_us": 1.2946357986609174,
+            "p80_us": 1.2954930510897094,
+            "relative_stddev": 0.010245486368909373,
+            "throughput_gigaelements_per_second": 3.16289340022502,
+            "effective_bandwidth_gb_per_second": 25.30314720180016
+          }
+        },
+        "optimized": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 117,
+            "ptx_shuffle": 32,
+            "ptx_shuffle_indexed": 32,
+            "ptx_lop3": 31,
+            "ptx_redux": 0,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 33,
+            "registers": 20,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              1.3562960022012627,
+              1.2452495433804875,
+              1.244102183243927,
+              1.243803574512734,
+              1.243578271297512,
+              1.2432062789827059,
+              1.2431695871908992,
+              1.2433425070182436,
+              1.2429548231073666,
+              1.2430543593510976
+            ],
+            "median_us": 1.2434603891578777,
+            "mean_us": 1.2548757130286237,
+            "min_us": 1.2429548231073666,
+            "max_us": 1.3562960022012627,
+            "p20_us": 1.2430543593510976,
+            "p80_us": 1.244102183243927,
+            "relative_stddev": 0.026945201135528906,
+            "throughput_gigaelements_per_second": 3.294033357004624,
+            "effective_bandwidth_gb_per_second": 26.35226685603699
+          }
+        }
+      },
+      "speedup": 1.041462022327491,
+      "optimization_observed": true
+    },
+    {
+      "frontend": "classic",
+      "basis_mode": "computed",
+      "basis_storage": "registers",
+      "basis_global_loads": 0,
+      "elements": 8192,
+      "block_size": 128,
+      "seed": 826366246,
+      "measurement_order": [
+        "optimized",
+        "baseline"
+      ],
+      "variants": {
+        "baseline": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 212,
+            "ptx_shuffle": 0,
+            "ptx_shuffle_indexed": 0,
+            "ptx_lop3": 0,
+            "ptx_redux": 32,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 0,
+            "registers": 30,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              1.3790829572086303,
+              1.300894095901465,
+              1.299388230510281,
+              1.2993322836386192,
+              1.2988947154228563,
+              1.2988897120440897,
+              1.2992966535171,
+              1.299128812902114,
+              1.2989862924160374,
+              1.2990219225375566
+            ],
+            "median_us": 1.299212733209607,
+            "mean_us": 1.3072915676098749,
+            "min_us": 1.2988897120440897,
+            "max_us": 1.3790829572086303,
+            "p20_us": 1.2988947154228563,
+            "p80_us": 1.299388230510281,
+            "relative_stddev": 0.01831030663731191,
+            "throughput_gigaelements_per_second": 6.305356921619974,
+            "effective_bandwidth_gb_per_second": 50.44285537295979
+          }
+        },
+        "optimized": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 117,
+            "ptx_shuffle": 32,
+            "ptx_shuffle_indexed": 32,
+            "ptx_lop3": 31,
+            "ptx_redux": 0,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 33,
+            "registers": 20,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              1.4027058243417607,
+              1.299624683476296,
+              1.2979047472069576,
+              1.2972661260129357,
+              1.297271719165877,
+              1.2968907169267243,
+              1.2969243593242654,
+              1.297215704156571,
+              1.297204517850689,
+              1.2973109547163593
+            ],
+            "median_us": 1.2972689225894063,
+            "mean_us": 1.3080319353178436,
+            "min_us": 1.2968907169267243,
+            "max_us": 1.4027058243417607,
+            "p20_us": 1.2969243593242654,
+            "p80_us": 1.2979047472069576,
+            "relative_stddev": 0.02413318507464817,
+            "throughput_gigaelements_per_second": 6.31480478515465,
+            "effective_bandwidth_gb_per_second": 50.5184382812372
+          }
+        }
+      },
+      "speedup": 1.0014983867927096,
+      "optimization_observed": true
+    },
+    {
+      "frontend": "classic",
+      "basis_mode": "computed",
+      "basis_storage": "registers",
+      "basis_global_loads": 0,
+      "elements": 16384,
+      "block_size": 128,
+      "seed": 826366246,
+      "measurement_order": [
+        "baseline",
+        "optimized"
+      ],
+      "variants": {
+        "baseline": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 212,
+            "ptx_shuffle": 0,
+            "ptx_shuffle_indexed": 0,
+            "ptx_lop3": 0,
+            "ptx_redux": 32,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 0,
+            "registers": 30,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              1.462084277243762,
+              1.3538208021108762,
+              1.3517908785724608,
+              1.3514562283047569,
+              1.351668137463596,
+              1.3515399116470905,
+              1.3512778091031776,
+              1.3513447059160661,
+              1.3513614093438804,
+              1.3508873976411284
+            ],
+            "median_us": 1.3514980699759236,
+            "mean_us": 1.3627231557346795,
+            "min_us": 1.3508873976411284,
+            "max_us": 1.462084277243762,
+            "p20_us": 1.3512778091031776,
+            "p80_us": 1.3517908785724608,
+            "relative_stddev": 0.024310829930028165,
+            "throughput_gigaelements_per_second": 12.122843801243368,
+            "effective_bandwidth_gb_per_second": 96.98275040994695
+          }
+        },
+        "optimized": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 117,
+            "ptx_shuffle": 32,
+            "ptx_shuffle_indexed": 32,
+            "ptx_lop3": 31,
+            "ptx_redux": 0,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 33,
+            "registers": 20,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              1.41868077028215,
+              1.3288931003018383,
+              1.327137148594563,
+              1.3284510898499864,
+              1.3263742993660659,
+              1.3265316511170415,
+              1.3271190134443647,
+              1.3262713530656856,
+              1.32619258696557,
+              1.3271855992197201
+            ],
+            "median_us": 1.327128081019464,
+            "mean_us": 1.3362836612206985,
+            "min_us": 1.32619258696557,
+            "max_us": 1.41868077028215,
+            "p20_us": 1.3262713530656856,
+            "p80_us": 1.3284510898499864,
+            "relative_stddev": 0.02056387861397839,
+            "throughput_gigaelements_per_second": 12.345454997391249,
+            "effective_bandwidth_gb_per_second": 98.76363997912999
+          }
+        }
+      },
+      "speedup": 1.0183629517791073,
+      "optimization_observed": true
+    },
+    {
+      "frontend": "classic",
+      "basis_mode": "computed",
+      "basis_storage": "registers",
+      "basis_global_loads": 0,
+      "elements": 32768,
+      "block_size": 128,
+      "seed": 826366246,
+      "measurement_order": [
+        "optimized",
+        "baseline"
+      ],
+      "variants": {
+        "baseline": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 212,
+            "ptx_shuffle": 0,
+            "ptx_shuffle_indexed": 0,
+            "ptx_lop3": 0,
+            "ptx_redux": 32,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 0,
+            "registers": 30,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              1.5551387240108758,
+              1.514568039101685,
+              1.5119841738137734,
+              1.5116196170035883,
+              1.5119947247020162,
+              1.511709378291625,
+              1.5117728410970266,
+              1.5119207110083717,
+              1.5119260651904654,
+              1.5116777256268963
+            ],
+            "median_us": 1.5119233880994185,
+            "mean_us": 1.5164311999846323,
+            "min_us": 1.5116196170035883,
+            "max_us": 1.5551387240108758,
+            "p20_us": 1.5116777256268963,
+            "p80_us": 1.5119947247020162,
+            "relative_stddev": 0.008525926912339925,
+            "throughput_gigaelements_per_second": 21.673055829364085,
+            "effective_bandwidth_gb_per_second": 173.38444663491268
+          }
+        },
+        "optimized": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 117,
+            "ptx_shuffle": 32,
+            "ptx_shuffle_indexed": 32,
+            "ptx_lop3": 31,
+            "ptx_redux": 0,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 33,
+            "registers": 20,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              1.4658308809830358,
+              1.4153023925944392,
+              1.4116458975667345,
+              1.41142667674158,
+              1.411715359979356,
+              1.410924189472294,
+              1.4110043261547451,
+              1.4109562122817825,
+              1.4107476657264575,
+              1.4108225449327239
+            ],
+            "median_us": 1.4112155014481624,
+            "mean_us": 1.417037614643315,
+            "min_us": 1.4107476657264575,
+            "max_us": 1.4658308809830358,
+            "p20_us": 1.4108225449327239,
+            "p80_us": 1.411715359979356,
+            "relative_stddev": 0.011513087648295343,
+            "throughput_gigaelements_per_second": 23.219699589732468,
+            "effective_bandwidth_gb_per_second": 185.75759671785974
+          }
+        }
+      },
+      "speedup": 1.0713625144762877,
+      "optimization_observed": true
+    },
+    {
+      "frontend": "classic",
+      "basis_mode": "computed",
+      "basis_storage": "registers",
+      "basis_global_loads": 0,
+      "elements": 65536,
+      "block_size": 128,
+      "seed": 826366246,
+      "measurement_order": [
+        "baseline",
+        "optimized"
+      ],
+      "variants": {
+        "baseline": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 212,
+            "ptx_shuffle": 0,
+            "ptx_shuffle_indexed": 0,
+            "ptx_lop3": 0,
+            "ptx_redux": 32,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 0,
+            "registers": 30,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              1.9813054442571962,
+              1.9430070076361194,
+              1.9403737625483855,
+              1.939838235182077,
+              1.9396428782570811,
+              1.93996658883833,
+              1.9396653235208041,
+              1.9397657452933128,
+              1.939648531138315,
+              1.9392357045470254
+            ],
+            "median_us": 1.939801990237695,
+            "mean_us": 1.9442449221218645,
+            "min_us": 1.9392357045470254,
+            "max_us": 1.9813054442571962,
+            "p20_us": 1.9396428782570811,
+            "p80_us": 1.9403737625483855,
+            "relative_stddev": 0.006374804430239986,
+            "throughput_gigaelements_per_second": 33.784891617710684,
+            "effective_bandwidth_gb_per_second": 270.2791329416855
+          }
+        },
+        "optimized": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 117,
+            "ptx_shuffle": 32,
+            "ptx_shuffle_indexed": 32,
+            "ptx_lop3": 31,
+            "ptx_redux": 0,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 33,
+            "registers": 20,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              1.646255632841251,
+              1.5947062564568613,
+              1.5923575404923918,
+              1.591966979165056,
+              1.5918508960963593,
+              1.592035559406183,
+              1.5918403573895805,
+              1.5924630848543098,
+              1.5922361094232402,
+              1.591824470682347
+            ],
+            "median_us": 1.5921358344147116,
+            "mean_us": 1.597753688680758,
+            "min_us": 1.591824470682347,
+            "max_us": 1.646255632841251,
+            "p20_us": 1.5918403573895805,
+            "p80_us": 1.5924630848543098,
+            "relative_stddev": 0.0101315574659677,
+            "throughput_gigaelements_per_second": 41.1623170482133,
+            "effective_bandwidth_gb_per_second": 329.2985363857064
+          }
+        }
+      },
+      "speedup": 1.2183646321551387,
+      "optimization_observed": true
+    },
+    {
+      "frontend": "classic",
+      "basis_mode": "computed",
+      "basis_storage": "registers",
+      "basis_global_loads": 0,
+      "elements": 131072,
+      "block_size": 128,
+      "seed": 826366246,
+      "measurement_order": [
+        "optimized",
+        "baseline"
+      ],
+      "variants": {
+        "baseline": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 212,
+            "ptx_shuffle": 0,
+            "ptx_shuffle_indexed": 0,
+            "ptx_lop3": 0,
+            "ptx_redux": 32,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 0,
+            "registers": 30,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              2.6520809909050747,
+              2.6028206360939294,
+              2.6027126054699403,
+              2.6006721860022806,
+              2.6004741894778505,
+              2.6003241270713495,
+              2.599549847979878,
+              2.599645895074385,
+              2.600468108283785,
+              2.600462027089719
+            ],
+            "median_us": 2.6004711488808177,
+            "mean_us": 2.6059210613448194,
+            "min_us": 2.599549847979878,
+            "max_us": 2.6520809909050747,
+            "p20_us": 2.599645895074385,
+            "p80_us": 2.6027126054699403,
+            "relative_stddev": 0.005918453818298279,
+            "throughput_gigaelements_per_second": 50.40317407728609,
+            "effective_bandwidth_gb_per_second": 403.2253926182887
+          }
+        },
+        "optimized": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 117,
+            "ptx_shuffle": 32,
+            "ptx_shuffle_indexed": 32,
+            "ptx_lop3": 31,
+            "ptx_redux": 0,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 33,
+            "registers": 20,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              2.0214852681844024,
+              1.9327373994556982,
+              1.9307244017722824,
+              1.9303554632895772,
+              1.9302156532683532,
+              1.9582679757866932,
+              1.931915369855343,
+              1.9306740768301973,
+              1.9303218022355997,
+              1.9297795593165734
+            ],
+            "median_us": 1.9306992393012399,
+            "mean_us": 1.942647696999472,
+            "min_us": 1.9297795593165734,
+            "max_us": 2.0214852681844024,
+            "p20_us": 1.9302156532683532,
+            "p80_us": 1.9327373994556982,
+            "relative_stddev": 0.014173668667968669,
+            "throughput_gigaelements_per_second": 67.88835740539146,
+            "effective_bandwidth_gb_per_second": 543.1068592431317
+          }
+        }
+      },
+      "speedup": 1.346906393261947,
+      "optimization_observed": true
+    },
+    {
+      "frontend": "classic",
+      "basis_mode": "computed",
+      "basis_storage": "registers",
+      "basis_global_loads": 0,
+      "elements": 262144,
+      "block_size": 128,
+      "seed": 826366246,
+      "measurement_order": [
+        "baseline",
+        "optimized"
+      ],
+      "variants": {
+        "baseline": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 212,
+            "ptx_shuffle": 0,
+            "ptx_shuffle_indexed": 0,
+            "ptx_lop3": 0,
+            "ptx_redux": 32,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 0,
+            "registers": 30,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              4.058064507565235,
+              3.9699906065381754,
+              3.966475931226618,
+              3.9656673241681264,
+              3.9660300695585238,
+              3.965320027899978,
+              3.965408087896795,
+              3.965957458683955,
+              3.9657087278157523,
+              3.965656818764997
+            ],
+            "median_us": 3.965833093249854,
+            "mean_us": 3.9754279560118158,
+            "min_us": 3.965320027899978,
+            "max_us": 4.058064507565235,
+            "p20_us": 3.965408087896795,
+            "p80_us": 3.966475931226618,
+            "relative_stddev": 0.0069365808592220255,
+            "throughput_gigaelements_per_second": 66.10061337331337,
+            "effective_bandwidth_gb_per_second": 528.8049069865069
+          }
+        },
+        "optimized": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 117,
+            "ptx_shuffle": 32,
+            "ptx_shuffle_indexed": 32,
+            "ptx_lop3": 31,
+            "ptx_redux": 0,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 33,
+            "registers": 20,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              2.869481853547277,
+              2.778058173433369,
+              2.7758900967737494,
+              2.7761771944804283,
+              2.775327601814375,
+              2.7753686407201346,
+              2.7749290878443986,
+              2.775081543013456,
+              2.7744661340606975,
+              2.7744837720584923
+            ],
+            "median_us": 2.775348121267255,
+            "mean_us": 2.784926409774638,
+            "min_us": 2.7744661340606975,
+            "max_us": 2.869481853547277,
+            "p20_us": 2.7744837720584923,
+            "p80_us": 2.7761771944804283,
+            "relative_stddev": 0.01012684573792069,
+            "throughput_gigaelements_per_second": 94.45445707917251,
+            "effective_bandwidth_gb_per_second": 755.6356566333801
+          }
+        }
+      },
+      "speedup": 1.4289497821408472,
+      "optimization_observed": true
+    },
+    {
+      "frontend": "classic",
+      "basis_mode": "computed",
+      "basis_storage": "registers",
+      "basis_global_loads": 0,
+      "elements": 524288,
+      "block_size": 128,
+      "seed": 826366246,
+      "measurement_order": [
+        "optimized",
+        "baseline"
+      ],
+      "variants": {
+        "baseline": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 212,
+            "ptx_shuffle": 0,
+            "ptx_shuffle_indexed": 0,
+            "ptx_lop3": 0,
+            "ptx_redux": 32,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 0,
+            "registers": 30,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              6.303352270481343,
+              6.296159215554202,
+              6.292365887210737,
+              6.292770518091642,
+              6.292036392217429,
+              6.291579373011229,
+              6.291746877788162,
+              6.295291361586472,
+              6.292603013314708,
+              6.2911802566908825
+            ],
+            "median_us": 6.292484450262723,
+            "mean_us": 6.293908516594681,
+            "min_us": 6.2911802566908825,
+            "max_us": 6.303352270481343,
+            "p20_us": 6.291579373011229,
+            "p80_us": 6.295291361586472,
+            "relative_stddev": 0.0005562914094277584,
+            "throughput_gigaelements_per_second": 83.31971324587222,
+            "effective_bandwidth_gb_per_second": 666.5577059669778
+          }
+        },
+        "optimized": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 117,
+            "ptx_shuffle": 32,
+            "ptx_shuffle_indexed": 32,
+            "ptx_lop3": 31,
+            "ptx_redux": 0,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 33,
+            "registers": 20,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              4.312728115295286,
+              4.27808491506853,
+              4.275322925055743,
+              4.275128717608976,
+              4.275171803367034,
+              4.275279839297685,
+              4.2751988123496965,
+              4.27455156137231,
+              4.276914204284298,
+              4.275695263173881
+            ],
+            "median_us": 4.275301382176714,
+            "mean_us": 4.279407615687344,
+            "min_us": 4.27455156137231,
+            "max_us": 4.312728115295286,
+            "p20_us": 4.275128717608976,
+            "p80_us": 4.276914204284298,
+            "relative_stddev": 0.00260555162115124,
+            "throughput_gigaelements_per_second": 122.63182244547764,
+            "effective_bandwidth_gb_per_second": 981.0545795638211
+          }
+        }
+      },
+      "speedup": 1.47182242554769,
+      "optimization_observed": true
+    },
+    {
+      "frontend": "classic",
+      "basis_mode": "computed",
+      "basis_storage": "registers",
+      "basis_global_loads": 0,
+      "elements": 1048576,
+      "block_size": 128,
+      "seed": 826366246,
+      "measurement_order": [
+        "baseline",
+        "optimized"
+      ],
+      "variants": {
+        "baseline": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 212,
+            "ptx_shuffle": 0,
+            "ptx_shuffle_indexed": 0,
+            "ptx_lop3": 0,
+            "ptx_redux": 32,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 0,
+            "registers": 30,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              11.131138526132387,
+              11.050742994281284,
+              11.047052067200761,
+              11.046385282157331,
+              11.04569560320683,
+              11.046319462174504,
+              11.046325901085867,
+              11.04610983983789,
+              11.07494042318563,
+              11.049248451410337
+            ],
+            "median_us": 11.046718674679045,
+            "mean_us": 11.058395855067282,
+            "min_us": 11.04569560320683,
+            "max_us": 11.131138526132387,
+            "p20_us": 11.04610983983789,
+            "p80_us": 11.050742994281284,
+            "relative_stddev": 0.002320374561290745,
+            "throughput_gigaelements_per_second": 94.92194296606053,
+            "effective_bandwidth_gb_per_second": 759.3755437284842
+          }
+        },
+        "optimized": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 117,
+            "ptx_shuffle": 32,
+            "ptx_shuffle_indexed": 32,
+            "ptx_lop3": 31,
+            "ptx_redux": 0,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 33,
+            "registers": 20,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              7.378313945377387,
+              7.253957349200582,
+              7.250477230034002,
+              7.248584667049505,
+              7.247542912513842,
+              7.2469261397555025,
+              7.246735193668674,
+              7.246748711975706,
+              7.246572129090098,
+              7.246436946019777
+            ],
+            "median_us": 7.2472345261346724,
+            "mean_us": 7.261229522468507,
+            "min_us": 7.246436946019777,
+            "max_us": 7.378313945377387,
+            "p20_us": 7.246572129090098,
+            "p80_us": 7.250477230034002,
+            "relative_stddev": 0.005383776640884253,
+            "throughput_gigaelements_per_second": 144.68636225565342,
+            "effective_bandwidth_gb_per_second": 1157.4908980452274
+          }
+        }
+      },
+      "speedup": 1.5242667578705826,
+      "optimization_observed": true
+    },
+    {
+      "frontend": "classic",
+      "basis_mode": "computed",
+      "basis_storage": "registers",
+      "basis_global_loads": 0,
+      "elements": 2097152,
+      "block_size": 128,
+      "seed": 826366246,
+      "measurement_order": [
+        "optimized",
+        "baseline"
+      ],
+      "variants": {
+        "baseline": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 212,
+            "ptx_shuffle": 0,
+            "ptx_shuffle_indexed": 0,
+            "ptx_lop3": 0,
+            "ptx_redux": 32,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 0,
+            "registers": 30,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              20.602719074099948,
+              20.507782420719955,
+              20.498870359746814,
+              20.497445890984714,
+              20.496906612463917,
+              20.495995639982578,
+              20.497392177984633,
+              20.495941926982493,
+              20.497555465504874,
+              20.49742870282469
+            ],
+            "median_us": 20.4974372969047,
+            "mean_us": 20.508803827129462,
+            "min_us": 20.495941926982493,
+            "max_us": 20.602719074099948,
+            "p20_us": 20.495995639982578,
+            "p80_us": 20.498870359746814,
+            "relative_stddev": 0.0015346450932928134,
+            "throughput_gigaelements_per_second": 102.31288768555906,
+            "effective_bandwidth_gb_per_second": 818.5031014844725
+          }
+        },
+        "optimized": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 117,
+            "ptx_shuffle": 32,
+            "ptx_shuffle_indexed": 32,
+            "ptx_lop3": 31,
+            "ptx_redux": 0,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 33,
+            "registers": 20,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              13.318645581227138,
+              13.235864725892407,
+              13.230511061959984,
+              13.230717386655682,
+              13.229910564711307,
+              13.230381724091039,
+              13.230846724524628,
+              13.230834406632347,
+              13.230389422773714,
+              13.230866741099584
+            ],
+            "median_us": 13.230775896644015,
+            "mean_us": 13.239896833956783,
+            "min_us": 13.229910564711307,
+            "max_us": 13.318645581227138,
+            "p20_us": 13.230381724091039,
+            "p80_us": 13.230866741099584,
+            "relative_stddev": 0.001986320723461927,
+            "throughput_gigaelements_per_second": 158.5055945609314,
+            "effective_bandwidth_gb_per_second": 1268.0447564874512
+          }
+        }
+      },
+      "speedup": 1.5492241314512682,
+      "optimization_observed": true
+    },
+    {
+      "frontend": "classic",
+      "basis_mode": "computed",
+      "basis_storage": "registers",
+      "basis_global_loads": 0,
+      "elements": 4194304,
+      "block_size": 128,
+      "seed": 826366246,
+      "measurement_order": [
+        "baseline",
+        "optimized"
+      ],
+      "variants": {
+        "baseline": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 212,
+            "ptx_shuffle": 0,
+            "ptx_shuffle_indexed": 0,
+            "ptx_lop3": 0,
+            "ptx_redux": 32,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 0,
+            "registers": 30,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              39.51887447697291,
+              39.37918214730111,
+              39.3656382953936,
+              39.364073455159065,
+              39.3805489873427,
+              39.364875036585325,
+              39.362907808861905,
+              39.36245113099754,
+              39.362278679216594,
+              39.36271938932346
+            ],
+            "median_us": 39.364474245872195,
+            "mean_us": 39.382354940715416,
+            "min_us": 39.362278679216594,
+            "max_us": 39.51887447697291,
+            "p20_us": 39.36245113099754,
+            "p80_us": 39.37918214730111,
+            "relative_stddev": 0.001167292601433574,
+            "throughput_gigaelements_per_second": 106.55048950488192,
+            "effective_bandwidth_gb_per_second": 852.4039160390554
+          }
+        },
+        "optimized": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 117,
+            "ptx_shuffle": 32,
+            "ptx_shuffle_indexed": 32,
+            "ptx_lop3": 31,
+            "ptx_redux": 0,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 33,
+            "registers": 20,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              25.199864422547765,
+              25.17667795457059,
+              25.173731110575705,
+              25.172265402829563,
+              25.197190148765323,
+              25.172869685847708,
+              25.171522263288093,
+              25.17053998195647,
+              25.17060426738393,
+              25.17159683438395
+            ],
+            "median_us": 25.172567544338634,
+            "mean_us": 25.17768620721491,
+            "min_us": 25.17053998195647,
+            "max_us": 25.199864422547765,
+            "p20_us": 25.17060426738393,
+            "p80_us": 25.17667795457059,
+            "relative_stddev": 0.00041992295640386787,
+            "throughput_gigaelements_per_second": 166.62201790151946,
+            "effective_bandwidth_gb_per_second": 1332.9761432121556
+          }
+        }
+      },
+      "speedup": 1.5637846308898018,
+      "optimization_observed": true
+    },
+    {
+      "frontend": "classic",
+      "basis_mode": "computed",
+      "basis_storage": "registers",
+      "basis_global_loads": 0,
+      "elements": 8388608,
+      "block_size": 128,
+      "seed": 826366246,
+      "measurement_order": [
+        "optimized",
+        "baseline"
+      ],
+      "variants": {
+        "baseline": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 212,
+            "ptx_shuffle": 0,
+            "ptx_shuffle_indexed": 0,
+            "ptx_lop3": 0,
+            "ptx_redux": 32,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 0,
+            "registers": 30,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              77.38084816144993,
+              77.28355954867232,
+              77.27783596582897,
+              77.27899174840098,
+              77.28049180663275,
+              77.27979095975397,
+              77.28062091000517,
+              77.27564120849806,
+              77.27492191828037,
+              77.27649574986779
+            ],
+            "median_us": 77.27939135407748,
+            "mean_us": 77.28891979773903,
+            "min_us": 77.27492191828037,
+            "max_us": 77.38084816144993,
+            "p20_us": 77.27564120849806,
+            "p80_us": 77.28062091000517,
+            "relative_stddev": 0.0003977569271167388,
+            "throughput_gigaelements_per_second": 108.54909508235139,
+            "effective_bandwidth_gb_per_second": 868.3927606588111
+          }
+        },
+        "optimized": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 117,
+            "ptx_shuffle": 32,
+            "ptx_shuffle_indexed": 32,
+            "ptx_lop3": 31,
+            "ptx_redux": 0,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 33,
+            "registers": 20,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              49.179915543440934,
+              49.11963095033686,
+              49.122681111206504,
+              49.21693667137829,
+              49.41233860017865,
+              49.20002504645187,
+              49.11908000504889,
+              49.11546292946265,
+              49.113854009527486,
+              49.113686330526804
+            ],
+            "median_us": 49.12115603077169,
+            "mean_us": 49.1713611197559,
+            "min_us": 49.113686330526804,
+            "max_us": 49.41233860017865,
+            "p20_us": 49.113854009527486,
+            "p80_us": 49.20002504645187,
+            "relative_stddev": 0.0018027751978255703,
+            "throughput_gigaelements_per_second": 170.7738310300556,
+            "effective_bandwidth_gb_per_second": 1366.1906482404447
+          }
+        }
+      },
+      "speedup": 1.5732404853352029,
+      "optimization_observed": true
+    },
+    {
+      "frontend": "classic",
+      "basis_mode": "computed",
+      "basis_storage": "registers",
+      "basis_global_loads": 0,
+      "elements": 16777216,
+      "block_size": 128,
+      "seed": 826366246,
+      "measurement_order": [
+        "baseline",
+        "optimized"
+      ],
+      "variants": {
+        "baseline": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 212,
+            "ptx_shuffle": 0,
+            "ptx_shuffle_indexed": 0,
+            "ptx_lop3": 0,
+            "ptx_redux": 32,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 0,
+            "registers": 30,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              153.03702197724107,
+              152.75903263002493,
+              152.75453140664735,
+              152.74671097876322,
+              152.74691395170063,
+              152.7490153185825,
+              152.7481198497408,
+              152.75017345828442,
+              152.75127190006359,
+              152.75112862504892
+            ],
+            "median_us": 152.75065104166669,
+            "mean_us": 152.77939200960975,
+            "min_us": 152.74671097876322,
+            "max_us": 153.03702197724107,
+            "p20_us": 152.74691395170063,
+            "p80_us": 152.75453140664735,
+            "relative_stddev": 0.0005625704584386218,
+            "throughput_gigaelements_per_second": 109.83400650399572,
+            "effective_bandwidth_gb_per_second": 878.6720520319658
+          }
+        },
+        "optimized": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 117,
+            "ptx_shuffle": 32,
+            "ptx_shuffle_indexed": 32,
+            "ptx_lop3": 31,
+            "ptx_redux": 0,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 33,
+            "registers": 20,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              108.16338757895149,
+              108.0852415089087,
+              108.07166492487646,
+              108.0786061446226,
+              108.08841051131421,
+              108.14913131611915,
+              108.09557262667039,
+              108.09524977924033,
+              108.08933657367936,
+              108.09029661998451
+            ],
+            "median_us": 108.08981659683194,
+            "mean_us": 108.10068975843672,
+            "min_us": 108.07166492487646,
+            "max_us": 108.16338757895149,
+            "p20_us": 108.0786061446226,
+            "p80_us": 108.09557262667039,
+            "relative_stddev": 0.00026634515031944827,
+            "throughput_gigaelements_per_second": 155.21550991781154,
+            "effective_bandwidth_gb_per_second": 1241.7240793424924
+          }
+        }
+      },
+      "speedup": 1.4131826276606314,
+      "optimization_observed": true
+    },
+    {
+      "frontend": "classic",
+      "basis_mode": "computed",
+      "basis_storage": "registers",
+      "basis_global_loads": 0,
+      "elements": 33554432,
+      "block_size": 128,
+      "seed": 826366246,
+      "measurement_order": [
+        "optimized",
+        "baseline"
+      ],
+      "variants": {
+        "baseline": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 212,
+            "ptx_shuffle": 0,
+            "ptx_shuffle_indexed": 0,
+            "ptx_lop3": 0,
+            "ptx_redux": 32,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 0,
+            "registers": 30,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              304.0654813326322,
+              303.7432157076322,
+              303.75009390024036,
+              303.7474412184495,
+              303.7469482421875,
+              303.7517841045673,
+              303.7402578500601,
+              303.7355393629808,
+              303.73375525841345,
+              303.7345534104567
+            ],
+            "median_us": 303.74508197490985,
+            "mean_us": 303.774907038762,
+            "min_us": 303.73375525841345,
+            "max_us": 304.0654813326322,
+            "p20_us": 303.7345534104567,
+            "p80_us": 303.75009390024036,
+            "relative_stddev": 0.00031949596493469594,
+            "throughput_gigaelements_per_second": 110.46905445129704,
+            "effective_bandwidth_gb_per_second": 883.7524356103763
+          }
+        },
+        "optimized": {
+          "correct": true,
+          "instructions": {
+            "ptx_total": 117,
+            "ptx_shuffle": 32,
+            "ptx_shuffle_indexed": 32,
+            "ptx_lop3": 31,
+            "ptx_redux": 0,
+            "ptx_barrier": 0,
+            "ptx_global_load": 1,
+            "ptx_global_store": 1,
+            "ptx_shared_load": 0,
+            "ptx_shared_store": 0,
+            "ttgir_reduce": 32,
+            "ttgir_global_load": 1,
+            "llir_shuffle": 33,
+            "registers": 20,
+            "shared_bytes": 0
+          },
+          "timing": {
+            "samples_us": [
+              216.01242998281418,
+              215.67028995164097,
+              215.6635101185095,
+              215.66729149964178,
+              215.6769198621725,
+              215.68691470216976,
+              215.69614327110057,
+              215.66637530597538,
+              215.66847422237478,
+              215.66624204144208
+            ],
+            "median_us": 215.66938208700788,
+            "mean_us": 215.70745909578415,
+            "min_us": 215.6635101185095,
+            "max_us": 216.01242998281418,
+            "p20_us": 215.66624204144208,
+            "p80_us": 215.68691470216976,
+            "relative_stddev": 0.0004735054285706459,
+            "throughput_gigaelements_per_second": 155.58273351227518,
+            "effective_bandwidth_gb_per_second": 1244.6618680982015
+          }
+        }
+      },
+      "speedup": 1.4083829565217072,
+      "optimization_observed": true
+    }
+  ],
+  "boundary_correctness": {
+    "sizes": [
+      1,
+      31,
+      32,
+      33,
+      127,
+      128,
+      129,
+      255,
+      257,
+      1000,
+      4097
+    ],
+    "cases": [
+      {
+        "frontend": "classic",
+        "basis_mode": "computed",
+        "basis_storage": "registers",
+        "basis_global_loads": 0,
+        "elements": 1,
+        "block_size": 128,
+        "seed": 826366246,
+        "baseline_correct": true,
+        "optimized_correct": true,
+        "masked_store_guard_preserved": true,
+        "optimization_observed": true,
+        "variants": {
+          "baseline": {
+            "correct": true,
+            "instructions": {
+              "ptx_total": 212,
+              "ptx_shuffle": 0,
+              "ptx_shuffle_indexed": 0,
+              "ptx_lop3": 0,
+              "ptx_redux": 32,
+              "ptx_barrier": 0,
+              "ptx_global_load": 1,
+              "ptx_global_store": 1,
+              "ptx_shared_load": 0,
+              "ptx_shared_store": 0,
+              "ttgir_reduce": 32,
+              "ttgir_global_load": 1,
+              "llir_shuffle": 0,
+              "registers": 30,
+              "shared_bytes": 0
+            }
+          },
+          "optimized": {
+            "correct": true,
+            "instructions": {
+              "ptx_total": 117,
+              "ptx_shuffle": 32,
+              "ptx_shuffle_indexed": 32,
+              "ptx_lop3": 31,
+              "ptx_redux": 0,
+              "ptx_barrier": 0,
+              "ptx_global_load": 1,
+              "ptx_global_store": 1,
+              "ptx_shared_load": 0,
+              "ptx_shared_store": 0,
+              "ttgir_reduce": 32,
+              "ttgir_global_load": 1,
+              "llir_shuffle": 33,
+              "registers": 20,
+              "shared_bytes": 0
+            }
+          }
+        }
+      },
+      {
+        "frontend": "classic",
+        "basis_mode": "computed",
+        "basis_storage": "registers",
+        "basis_global_loads": 0,
+        "elements": 31,
+        "block_size": 128,
+        "seed": 826366246,
+        "baseline_correct": true,
+        "optimized_correct": true,
+        "masked_store_guard_preserved": true,
+        "optimization_observed": true,
+        "variants": {
+          "baseline": {
+            "correct": true,
+            "instructions": {
+              "ptx_total": 212,
+              "ptx_shuffle": 0,
+              "ptx_shuffle_indexed": 0,
+              "ptx_lop3": 0,
+              "ptx_redux": 32,
+              "ptx_barrier": 0,
+              "ptx_global_load": 1,
+              "ptx_global_store": 1,
+              "ptx_shared_load": 0,
+              "ptx_shared_store": 0,
+              "ttgir_reduce": 32,
+              "ttgir_global_load": 1,
+              "llir_shuffle": 0,
+              "registers": 30,
+              "shared_bytes": 0
+            }
+          },
+          "optimized": {
+            "correct": true,
+            "instructions": {
+              "ptx_total": 117,
+              "ptx_shuffle": 32,
+              "ptx_shuffle_indexed": 32,
+              "ptx_lop3": 31,
+              "ptx_redux": 0,
+              "ptx_barrier": 0,
+              "ptx_global_load": 1,
+              "ptx_global_store": 1,
+              "ptx_shared_load": 0,
+              "ptx_shared_store": 0,
+              "ttgir_reduce": 32,
+              "ttgir_global_load": 1,
+              "llir_shuffle": 33,
+              "registers": 20,
+              "shared_bytes": 0
+            }
+          }
+        }
+      },
+      {
+        "frontend": "classic",
+        "basis_mode": "computed",
+        "basis_storage": "registers",
+        "basis_global_loads": 0,
+        "elements": 32,
+        "block_size": 128,
+        "seed": 826366246,
+        "baseline_correct": true,
+        "optimized_correct": true,
+        "masked_store_guard_preserved": true,
+        "optimization_observed": true,
+        "variants": {
+          "baseline": {
+            "correct": true,
+            "instructions": {
+              "ptx_total": 212,
+              "ptx_shuffle": 0,
+              "ptx_shuffle_indexed": 0,
+              "ptx_lop3": 0,
+              "ptx_redux": 32,
+              "ptx_barrier": 0,
+              "ptx_global_load": 1,
+              "ptx_global_store": 1,
+              "ptx_shared_load": 0,
+              "ptx_shared_store": 0,
+              "ttgir_reduce": 32,
+              "ttgir_global_load": 1,
+              "llir_shuffle": 0,
+              "registers": 30,
+              "shared_bytes": 0
+            }
+          },
+          "optimized": {
+            "correct": true,
+            "instructions": {
+              "ptx_total": 117,
+              "ptx_shuffle": 32,
+              "ptx_shuffle_indexed": 32,
+              "ptx_lop3": 31,
+              "ptx_redux": 0,
+              "ptx_barrier": 0,
+              "ptx_global_load": 1,
+              "ptx_global_store": 1,
+              "ptx_shared_load": 0,
+              "ptx_shared_store": 0,
+              "ttgir_reduce": 32,
+              "ttgir_global_load": 1,
+              "llir_shuffle": 33,
+              "registers": 20,
+              "shared_bytes": 0
+            }
+          }
+        }
+      },
+      {
+        "frontend": "classic",
+        "basis_mode": "computed",
+        "basis_storage": "registers",
+        "basis_global_loads": 0,
+        "elements": 33,
+        "block_size": 128,
+        "seed": 826366246,
+        "baseline_correct": true,
+        "optimized_correct": true,
+        "masked_store_guard_preserved": true,
+        "optimization_observed": true,
+        "variants": {
+          "baseline": {
+            "correct": true,
+            "instructions": {
+              "ptx_total": 212,
+              "ptx_shuffle": 0,
+              "ptx_shuffle_indexed": 0,
+              "ptx_lop3": 0,
+              "ptx_redux": 32,
+              "ptx_barrier": 0,
+              "ptx_global_load": 1,
+              "ptx_global_store": 1,
+              "ptx_shared_load": 0,
+              "ptx_shared_store": 0,
+              "ttgir_reduce": 32,
+              "ttgir_global_load": 1,
+              "llir_shuffle": 0,
+              "registers": 30,
+              "shared_bytes": 0
+            }
+          },
+          "optimized": {
+            "correct": true,
+            "instructions": {
+              "ptx_total": 117,
+              "ptx_shuffle": 32,
+              "ptx_shuffle_indexed": 32,
+              "ptx_lop3": 31,
+              "ptx_redux": 0,
+              "ptx_barrier": 0,
+              "ptx_global_load": 1,
+              "ptx_global_store": 1,
+              "ptx_shared_load": 0,
+              "ptx_shared_store": 0,
+              "ttgir_reduce": 32,
+              "ttgir_global_load": 1,
+              "llir_shuffle": 33,
+              "registers": 20,
+              "shared_bytes": 0
+            }
+          }
+        }
+      },
+      {
+        "frontend": "classic",
+        "basis_mode": "computed",
+        "basis_storage": "registers",
+        "basis_global_loads": 0,
+        "elements": 127,
+        "block_size": 128,
+        "seed": 826366246,
+        "baseline_correct": true,
+        "optimized_correct": true,
+        "masked_store_guard_preserved": true,
+        "optimization_observed": true,
+        "variants": {
+          "baseline": {
+            "correct": true,
+            "instructions": {
+              "ptx_total": 212,
+              "ptx_shuffle": 0,
+              "ptx_shuffle_indexed": 0,
+              "ptx_lop3": 0,
+              "ptx_redux": 32,
+              "ptx_barrier": 0,
+              "ptx_global_load": 1,
+              "ptx_global_store": 1,
+              "ptx_shared_load": 0,
+              "ptx_shared_store": 0,
+              "ttgir_reduce": 32,
+              "ttgir_global_load": 1,
+              "llir_shuffle": 0,
+              "registers": 30,
+              "shared_bytes": 0
+            }
+          },
+          "optimized": {
+            "correct": true,
+            "instructions": {
+              "ptx_total": 117,
+              "ptx_shuffle": 32,
+              "ptx_shuffle_indexed": 32,
+              "ptx_lop3": 31,
+              "ptx_redux": 0,
+              "ptx_barrier": 0,
+              "ptx_global_load": 1,
+              "ptx_global_store": 1,
+              "ptx_shared_load": 0,
+              "ptx_shared_store": 0,
+              "ttgir_reduce": 32,
+              "ttgir_global_load": 1,
+              "llir_shuffle": 33,
+              "registers": 20,
+              "shared_bytes": 0
+            }
+          }
+        }
+      },
+      {
+        "frontend": "classic",
+        "basis_mode": "computed",
+        "basis_storage": "registers",
+        "basis_global_loads": 0,
+        "elements": 128,
+        "block_size": 128,
+        "seed": 826366246,
+        "baseline_correct": true,
+        "optimized_correct": true,
+        "masked_store_guard_preserved": true,
+        "optimization_observed": true,
+        "variants": {
+          "baseline": {
+            "correct": true,
+            "instructions": {
+              "ptx_total": 212,
+              "ptx_shuffle": 0,
+              "ptx_shuffle_indexed": 0,
+              "ptx_lop3": 0,
+              "ptx_redux": 32,
+              "ptx_barrier": 0,
+              "ptx_global_load": 1,
+              "ptx_global_store": 1,
+              "ptx_shared_load": 0,
+              "ptx_shared_store": 0,
+              "ttgir_reduce": 32,
+              "ttgir_global_load": 1,
+              "llir_shuffle": 0,
+              "registers": 30,
+              "shared_bytes": 0
+            }
+          },
+          "optimized": {
+            "correct": true,
+            "instructions": {
+              "ptx_total": 117,
+              "ptx_shuffle": 32,
+              "ptx_shuffle_indexed": 32,
+              "ptx_lop3": 31,
+              "ptx_redux": 0,
+              "ptx_barrier": 0,
+              "ptx_global_load": 1,
+              "ptx_global_store": 1,
+              "ptx_shared_load": 0,
+              "ptx_shared_store": 0,
+              "ttgir_reduce": 32,
+              "ttgir_global_load": 1,
+              "llir_shuffle": 33,
+              "registers": 20,
+              "shared_bytes": 0
+            }
+          }
+        }
+      },
+      {
+        "frontend": "classic",
+        "basis_mode": "computed",
+        "basis_storage": "registers",
+        "basis_global_loads": 0,
+        "elements": 129,
+        "block_size": 128,
+        "seed": 826366246,
+        "baseline_correct": true,
+        "optimized_correct": true,
+        "masked_store_guard_preserved": true,
+        "optimization_observed": true,
+        "variants": {
+          "baseline": {
+            "correct": true,
+            "instructions": {
+              "ptx_total": 212,
+              "ptx_shuffle": 0,
+              "ptx_shuffle_indexed": 0,
+              "ptx_lop3": 0,
+              "ptx_redux": 32,
+              "ptx_barrier": 0,
+              "ptx_global_load": 1,
+              "ptx_global_store": 1,
+              "ptx_shared_load": 0,
+              "ptx_shared_store": 0,
+              "ttgir_reduce": 32,
+              "ttgir_global_load": 1,
+              "llir_shuffle": 0,
+              "registers": 30,
+              "shared_bytes": 0
+            }
+          },
+          "optimized": {
+            "correct": true,
+            "instructions": {
+              "ptx_total": 117,
+              "ptx_shuffle": 32,
+              "ptx_shuffle_indexed": 32,
+              "ptx_lop3": 31,
+              "ptx_redux": 0,
+              "ptx_barrier": 0,
+              "ptx_global_load": 1,
+              "ptx_global_store": 1,
+              "ptx_shared_load": 0,
+              "ptx_shared_store": 0,
+              "ttgir_reduce": 32,
+              "ttgir_global_load": 1,
+              "llir_shuffle": 33,
+              "registers": 20,
+              "shared_bytes": 0
+            }
+          }
+        }
+      },
+      {
+        "frontend": "classic",
+        "basis_mode": "computed",
+        "basis_storage": "registers",
+        "basis_global_loads": 0,
+        "elements": 255,
+        "block_size": 128,
+        "seed": 826366246,
+        "baseline_correct": true,
+        "optimized_correct": true,
+        "masked_store_guard_preserved": true,
+        "optimization_observed": true,
+        "variants": {
+          "baseline": {
+            "correct": true,
+            "instructions": {
+              "ptx_total": 212,
+              "ptx_shuffle": 0,
+              "ptx_shuffle_indexed": 0,
+              "ptx_lop3": 0,
+              "ptx_redux": 32,
+              "ptx_barrier": 0,
+              "ptx_global_load": 1,
+              "ptx_global_store": 1,
+              "ptx_shared_load": 0,
+              "ptx_shared_store": 0,
+              "ttgir_reduce": 32,
+              "ttgir_global_load": 1,
+              "llir_shuffle": 0,
+              "registers": 30,
+              "shared_bytes": 0
+            }
+          },
+          "optimized": {
+            "correct": true,
+            "instructions": {
+              "ptx_total": 117,
+              "ptx_shuffle": 32,
+              "ptx_shuffle_indexed": 32,
+              "ptx_lop3": 31,
+              "ptx_redux": 0,
+              "ptx_barrier": 0,
+              "ptx_global_load": 1,
+              "ptx_global_store": 1,
+              "ptx_shared_load": 0,
+              "ptx_shared_store": 0,
+              "ttgir_reduce": 32,
+              "ttgir_global_load": 1,
+              "llir_shuffle": 33,
+              "registers": 20,
+              "shared_bytes": 0
+            }
+          }
+        }
+      },
+      {
+        "frontend": "classic",
+        "basis_mode": "computed",
+        "basis_storage": "registers",
+        "basis_global_loads": 0,
+        "elements": 257,
+        "block_size": 128,
+        "seed": 826366246,
+        "baseline_correct": true,
+        "optimized_correct": true,
+        "masked_store_guard_preserved": true,
+        "optimization_observed": true,
+        "variants": {
+          "baseline": {
+            "correct": true,
+            "instructions": {
+              "ptx_total": 212,
+              "ptx_shuffle": 0,
+              "ptx_shuffle_indexed": 0,
+              "ptx_lop3": 0,
+              "ptx_redux": 32,
+              "ptx_barrier": 0,
+              "ptx_global_load": 1,
+              "ptx_global_store": 1,
+              "ptx_shared_load": 0,
+              "ptx_shared_store": 0,
+              "ttgir_reduce": 32,
+              "ttgir_global_load": 1,
+              "llir_shuffle": 0,
+              "registers": 30,
+              "shared_bytes": 0
+            }
+          },
+          "optimized": {
+            "correct": true,
+            "instructions": {
+              "ptx_total": 117,
+              "ptx_shuffle": 32,
+              "ptx_shuffle_indexed": 32,
+              "ptx_lop3": 31,
+              "ptx_redux": 0,
+              "ptx_barrier": 0,
+              "ptx_global_load": 1,
+              "ptx_global_store": 1,
+              "ptx_shared_load": 0,
+              "ptx_shared_store": 0,
+              "ttgir_reduce": 32,
+              "ttgir_global_load": 1,
+              "llir_shuffle": 33,
+              "registers": 20,
+              "shared_bytes": 0
+            }
+          }
+        }
+      },
+      {
+        "frontend": "classic",
+        "basis_mode": "computed",
+        "basis_storage": "registers",
+        "basis_global_loads": 0,
+        "elements": 1000,
+        "block_size": 128,
+        "seed": 826366246,
+        "baseline_correct": true,
+        "optimized_correct": true,
+        "masked_store_guard_preserved": true,
+        "optimization_observed": true,
+        "variants": {
+          "baseline": {
+            "correct": true,
+            "instructions": {
+              "ptx_total": 212,
+              "ptx_shuffle": 0,
+              "ptx_shuffle_indexed": 0,
+              "ptx_lop3": 0,
+              "ptx_redux": 32,
+              "ptx_barrier": 0,
+              "ptx_global_load": 1,
+              "ptx_global_store": 1,
+              "ptx_shared_load": 0,
+              "ptx_shared_store": 0,
+              "ttgir_reduce": 32,
+              "ttgir_global_load": 1,
+              "llir_shuffle": 0,
+              "registers": 30,
+              "shared_bytes": 0
+            }
+          },
+          "optimized": {
+            "correct": true,
+            "instructions": {
+              "ptx_total": 117,
+              "ptx_shuffle": 32,
+              "ptx_shuffle_indexed": 32,
+              "ptx_lop3": 31,
+              "ptx_redux": 0,
+              "ptx_barrier": 0,
+              "ptx_global_load": 1,
+              "ptx_global_store": 1,
+              "ptx_shared_load": 0,
+              "ptx_shared_store": 0,
+              "ttgir_reduce": 32,
+              "ttgir_global_load": 1,
+              "llir_shuffle": 33,
+              "registers": 20,
+              "shared_bytes": 0
+            }
+          }
+        }
+      },
+      {
+        "frontend": "classic",
+        "basis_mode": "computed",
+        "basis_storage": "registers",
+        "basis_global_loads": 0,
+        "elements": 4097,
+        "block_size": 128,
+        "seed": 826366246,
+        "baseline_correct": true,
+        "optimized_correct": true,
+        "masked_store_guard_preserved": true,
+        "optimization_observed": true,
+        "variants": {
+          "baseline": {
+            "correct": true,
+            "instructions": {
+              "ptx_total": 212,
+              "ptx_shuffle": 0,
+              "ptx_shuffle_indexed": 0,
+              "ptx_lop3": 0,
+              "ptx_redux": 32,
+              "ptx_barrier": 0,
+              "ptx_global_load": 1,
+              "ptx_global_store": 1,
+              "ptx_shared_load": 0,
+              "ptx_shared_store": 0,
+              "ttgir_reduce": 32,
+              "ttgir_global_load": 1,
+              "llir_shuffle": 0,
+              "registers": 30,
+              "shared_bytes": 0
+            }
+          },
+          "optimized": {
+            "correct": true,
+            "instructions": {
+              "ptx_total": 117,
+              "ptx_shuffle": 32,
+              "ptx_shuffle_indexed": 32,
+              "ptx_lop3": 31,
+              "ptx_redux": 0,
+              "ptx_barrier": 0,
+              "ptx_global_load": 1,
+              "ptx_global_store": 1,
+              "ptx_shared_load": 0,
+              "ptx_shared_store": 0,
+              "ttgir_reduce": 32,
+              "ttgir_global_load": 1,
+              "llir_shuffle": 33,
+              "registers": 20,
+              "shared_bytes": 0
+            }
+          }
+        }
+      }
+    ],
+    "masked_store_guard_int32": -324508639,
+    "guard_elements_per_case": 128,
+    "passed": 11,
+    "total": 11
+  },
+  "summary": {
+    "performance_cases": 18,
+    "bit_exact_performance_cases": 18,
+    "optimized_cases": 18,
+    "geomean_speedup": 1.246934281634252,
+    "large_problem_geomean_speedup": 1.5037572105007857,
+    "large_problem_minimum_elements": 1048576,
+    "peak_speedup": 1.5732404853352029,
+    "peak_frontend": "classic",
+    "peak_basis_mode": "computed",
+    "peak_elements": 8388608
+  }
+}

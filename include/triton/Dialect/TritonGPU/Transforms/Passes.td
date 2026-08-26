@@ -365,4 +365,14 @@ def TritonGPUCoalesceAsyncCopy: Pass<"tritongpu-coalesce-async-copy", "mlir::Mod
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonGPUOptimizeOneHotXorReduction
+    : Pass<"tritongpu-optimize-one-hot-xor-reduction", "mlir::ModuleOp"> {
+  let summary = "Replace warp-local one-hot XOR reductions with shuffles";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect",
+                           "mlir::arith::ArithDialect",
+                           "mlir::LLVM::LLVMDialect"];
+}
+
 #endif

@@ -1,4 +1,5 @@
 // RUN: triton-opt --split-input-file %s | FileCheck %s
+// RUN: triton-opt --split-input-file %s --tritongpu-optimize-one-hot-xor-reduction | FileCheck %s --check-prefix=ONE-HOT
 
 // CHECK: #[[$WMMA_GEN1:.*]] = #ttg.amd_wmma<{{.*}}version = 1{{.*}}>
 // CHECK: #[[$WMMA_GEN2:.*]] = #ttg.amd_wmma<{{.*}}version = 2{{.*}}>
@@ -537,5 +538,348 @@ module attributes {"ttg.target" = "hip:gfx1260", "ttg.num-ctas" = 1 : i32, "ttg.
     // CHECK: tt.assert
     tt.assert %cond, "assert generic wmma slice layout" : tensor<64xi1, #ttg.slice<{dim = 1, parent = #mma_assert}>>
     tt.return
+  }
+}
+
+// -----
+
+#one_hot_basis = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#one_hot_index = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#one_hot_multiple_registers = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#one_hot_cross_warp_parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [1, 0]}>
+#one_hot_cross_warp = #ttg.slice<{dim = 0, parent = #one_hot_cross_warp_parent}>
+#one_hot_permuted = #ttg.linear<{register = [], lane = [[2], [1], [4], [8], [16]], warp = [[0], [0]], block = []}>
+
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // The reduction is useful on its own: recognizing it must not require a
+  // primitive, an accumulation chain, or any particular basis producer.
+  // CHECK-LABEL: @one_hot_xor_independent_reduction
+  // ONE-HOT-LABEL: @one_hot_xor_independent_reduction
+  // ONE-HOT: [[COMPUTED:%.*]] = arith.xori
+  // ONE-HOT-NOT: "tt.reduce"
+  // ONE-HOT: [[GATHERED:%.*]] = tt.gather [[COMPUTED]]
+  // ONE-HOT: [[SCALAR:%.*]] = tt.unsplat [[GATHERED]]
+  // ONE-HOT: tt.return [[SCALAR]]
+  tt.func @one_hot_xor_independent_reduction(%bases: tensor<32xi32, #one_hot_basis>) -> i32 {
+    %offsets = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #one_hot_basis>
+    %computed = arith.xori %bases, %offsets : tensor<32xi32, #one_hot_basis>
+    %bit = arith.constant dense<7> : tensor<32xi32, #one_hot_basis>
+    %zero = arith.constant dense<0> : tensor<32xi32, #one_hot_basis>
+    %condition = arith.cmpi eq, %offsets, %bit : tensor<32xi32, #one_hot_basis>
+    %selected = arith.select %condition, %computed, %zero : tensor<32xi1, #one_hot_basis>, tensor<32xi32, #one_hot_basis>
+    %reduced = "tt.reduce"(%selected) <{axis = 0 : i32}> ({
+      ^bb0(%left: i32, %right: i32):
+        %combined = arith.xori %left, %right : i32
+        tt.reduce.return %combined : i32
+    }) : (tensor<32xi32, #one_hot_basis>) -> i32
+    tt.return %reduced : i32
+  }
+
+  // Lane permutations and commuted equality comparisons still identify one
+  // basis value owned by the current warp.
+  // CHECK-LABEL: @one_hot_xor_permuted_commuted
+  // ONE-HOT-LABEL: @one_hot_xor_permuted_commuted
+  // ONE-HOT-NOT: "tt.reduce"
+  // ONE-HOT: tt.gather
+  // ONE-HOT: tt.unsplat
+  // ONE-HOT: tt.return
+  tt.func @one_hot_xor_permuted_commuted(%bases: tensor<32xi32, #one_hot_permuted>) -> i32 {
+    %offsets = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #one_hot_permuted>
+    %bit = arith.constant dense<11> : tensor<32xi32, #one_hot_permuted>
+    %zero = arith.constant dense<0> : tensor<32xi32, #one_hot_permuted>
+    %condition = arith.cmpi eq, %bit, %offsets : tensor<32xi32, #one_hot_permuted>
+    %selected = arith.select %condition, %bases, %zero : tensor<32xi1, #one_hot_permuted>, tensor<32xi32, #one_hot_permuted>
+    %reduced = "tt.reduce"(%selected) <{axis = 0 : i32}> ({
+      ^bb0(%left: i32, %right: i32):
+        %combined = arith.xori %left, %right : i32
+        tt.reduce.return %combined : i32
+    }) : (tensor<32xi32, #one_hot_permuted>) -> i32
+    tt.return %reduced : i32
+  }
+
+  // The ordinary user-written conditional XOR also combines into NVIDIA LOP3
+  // after its independent one-hot reduction has become a warp gather.
+  // CHECK-LABEL: @one_hot_xor_conditional_accumulation
+  // ONE-HOT-LABEL: @one_hot_xor_conditional_accumulation
+  // ONE-HOT-NOT: "tt.reduce"
+  // ONE-HOT: tt.gather
+  // ONE-HOT: [[SCALAR:%.*]] = tt.unsplat
+  // ONE-HOT: [[FROZEN:%.*]] = llvm.freeze [[SCALAR]] : i32
+  // ONE-HOT: [[BROADCAST:%.*]] = tt.splat [[FROZEN]]
+  // ONE-HOT: tt.elementwise_inline_asm "lop3.b32 $0, $1, $2, $3, 0x78;" {{.*}}, [[BROADCAST]],
+  // ONE-HOT: tt.return
+  tt.func @one_hot_xor_conditional_accumulation(%index: tensor<128xi32, #one_hot_index>, %bases: tensor<32xi32, #one_hot_basis>) -> tensor<128xi32, #one_hot_index> {
+    %offsets = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #one_hot_basis>
+    %bit = arith.constant 5 : i32
+    %basis_bit = tt.splat %bit : i32 -> tensor<32xi32, #one_hot_basis>
+    %zero_basis = arith.constant dense<0> : tensor<32xi32, #one_hot_basis>
+    %zero_index = arith.constant dense<0> : tensor<128xi32, #one_hot_index>
+    %is_basis_bit = arith.cmpi eq, %offsets, %basis_bit : tensor<32xi32, #one_hot_basis>
+    %selected = arith.select %is_basis_bit, %bases, %zero_basis : tensor<32xi1, #one_hot_basis>, tensor<32xi32, #one_hot_basis>
+    %reduced = "tt.reduce"(%selected) <{axis = 0 : i32}> ({
+      ^bb0(%left: i32, %right: i32):
+        %combined = arith.xori %left, %right : i32
+        tt.reduce.return %combined : i32
+    }) : (tensor<32xi32, #one_hot_basis>) -> i32
+    %broadcast = tt.splat %reduced : i32 -> tensor<128xi32, #one_hot_index>
+    %condition = arith.cmpi ne, %index, %zero_index : tensor<128xi32, #one_hot_index>
+    %contribution = arith.select %condition, %broadcast, %zero_index : tensor<128xi1, #one_hot_index>, tensor<128xi32, #one_hot_index>
+    %result = arith.xori %index, %contribution : tensor<128xi32, #one_hot_index>
+    tt.return %result : tensor<128xi32, #one_hot_index>
+  }
+
+  // The original select may mask a poison reduction result. Only the basis
+  // consumed by the eager LOP3 is frozen; other masked scalar and tensor uses
+  // must keep consuming the original value.
+  // CHECK-LABEL: @one_hot_xor_poison_masking
+  // ONE-HOT-LABEL: @one_hot_xor_poison_masking
+  // ONE-HOT: [[POISON:%.*]] = ub.poison
+  // ONE-HOT-NOT: "tt.reduce"
+  // ONE-HOT: [[GATHERED:%.*]] = tt.gather [[POISON]]
+  // ONE-HOT: [[SCALAR:%.*]] = tt.unsplat [[GATHERED]]
+  // ONE-HOT: [[ORIGINAL:%.*]] = tt.splat [[SCALAR]]
+  // ONE-HOT: [[FROZEN:%.*]] = llvm.freeze [[SCALAR]] : i32
+  // ONE-HOT: [[BROADCAST:%.*]] = tt.splat [[FROZEN]]
+  // ONE-HOT: [[FUSED:%.*]] = tt.elementwise_inline_asm "lop3.b32 $0, $1, $2, $3, 0x78;" {{.*}}, [[BROADCAST]],
+  // ONE-HOT: [[MASKED_TENSOR:%.*]] = arith.select {{.*}}, [[ORIGINAL]],
+  // ONE-HOT: [[MASKED_SCALAR:%.*]] = arith.select {{.*}}, [[SCALAR]],
+  // ONE-HOT: tt.return [[FUSED]], [[MASKED_TENSOR]], [[MASKED_SCALAR]]
+  tt.func @one_hot_xor_poison_masking(%index: tensor<128xi32, #one_hot_index>, %condition: tensor<128xi1, #one_hot_index>, %other_condition: tensor<128xi1, #one_hot_index>, %scalar_condition: i1) -> (tensor<128xi32, #one_hot_index>, tensor<128xi32, #one_hot_index>, i32) {
+    %poison = ub.poison : tensor<32xi32, #one_hot_basis>
+    %offsets = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #one_hot_basis>
+    %bit = arith.constant dense<7> : tensor<32xi32, #one_hot_basis>
+    %zero_basis = arith.constant dense<0> : tensor<32xi32, #one_hot_basis>
+    %zero_index = arith.constant dense<0> : tensor<128xi32, #one_hot_index>
+    %zero_scalar = arith.constant 0 : i32
+    %is_basis_bit = arith.cmpi eq, %offsets, %bit : tensor<32xi32, #one_hot_basis>
+    %selected = arith.select %is_basis_bit, %poison, %zero_basis : tensor<32xi1, #one_hot_basis>, tensor<32xi32, #one_hot_basis>
+    %reduced = "tt.reduce"(%selected) <{axis = 0 : i32}> ({
+      ^bb0(%left: i32, %right: i32):
+        %combined = arith.xori %left, %right : i32
+        tt.reduce.return %combined : i32
+    }) : (tensor<32xi32, #one_hot_basis>) -> i32
+    %broadcast = tt.splat %reduced : i32 -> tensor<128xi32, #one_hot_index>
+    %contribution = arith.select %condition, %broadcast, %zero_index : tensor<128xi1, #one_hot_index>, tensor<128xi32, #one_hot_index>
+    %result = arith.xori %index, %contribution : tensor<128xi32, #one_hot_index>
+    %masked_tensor = arith.select %other_condition, %broadcast, %zero_index : tensor<128xi1, #one_hot_index>, tensor<128xi32, #one_hot_index>
+    %masked_scalar = arith.select %scalar_condition, %reduced, %zero_scalar : i32
+    tt.return %result, %masked_tensor, %masked_scalar : tensor<128xi32, #one_hot_index>, tensor<128xi32, #one_hot_index>, i32
+  }
+
+  // An existing gather is unrelated to a one-hot reduction, even when the same
+  // module also contains reductions that this pass can optimize.
+  // CHECK-LABEL: @one_hot_xor_existing_gather_unchanged
+  // ONE-HOT-LABEL: @one_hot_xor_existing_gather_unchanged
+  // ONE-HOT: [[GATHERED:%.*]] = tt.gather
+  // ONE-HOT: [[SCALAR:%.*]] = tt.unsplat [[GATHERED]]
+  // ONE-HOT: [[BROADCAST:%.*]] = tt.splat [[SCALAR]]
+  // ONE-HOT: [[CONTRIBUTION:%.*]] = arith.select {{.*}}, [[BROADCAST]]
+  // ONE-HOT-NOT: tt.elementwise_inline_asm
+  // ONE-HOT: arith.xori {{.*}}, [[CONTRIBUTION]]
+  // ONE-HOT: tt.return
+  tt.func @one_hot_xor_existing_gather_unchanged(%index: tensor<128xi32, #one_hot_index>, %bases: tensor<32xi32, #one_hot_basis>) -> tensor<128xi32, #one_hot_index> {
+    %bit = arith.constant 7 : i32
+    %gather_index = tt.splat %bit : i32 -> tensor<1xi32, #one_hot_basis>
+    %gathered = tt.gather %bases[%gather_index] {axis = 0 : i32, efficient_layout} : (tensor<32xi32, #one_hot_basis>, tensor<1xi32, #one_hot_basis>) -> tensor<1xi32, #one_hot_basis>
+    %scalar = tt.unsplat %gathered : tensor<1xi32, #one_hot_basis>
+    %broadcast = tt.splat %scalar : i32 -> tensor<128xi32, #one_hot_index>
+    %zero = arith.constant dense<0> : tensor<128xi32, #one_hot_index>
+    %condition = arith.cmpi ne, %index, %zero : tensor<128xi32, #one_hot_index>
+    %contribution = arith.select %condition, %broadcast, %zero : tensor<128xi1, #one_hot_index>, tensor<128xi32, #one_hot_index>
+    %result = arith.xori %index, %contribution : tensor<128xi32, #one_hot_index>
+    tt.return %result : tensor<128xi32, #one_hot_index>
+  }
+
+  // A reused conditional contribution cannot disappear after fusion, so keep
+  // both of its users unchanged while still optimizing the original reduction.
+  // CHECK-LABEL: @one_hot_xor_shared_contribution
+  // ONE-HOT-LABEL: @one_hot_xor_shared_contribution
+  // ONE-HOT-NOT: "tt.reduce"
+  // ONE-HOT: tt.gather
+  // ONE-HOT: tt.unsplat
+  // ONE-HOT: [[CONTRIBUTION:%.*]] = arith.select
+  // ONE-HOT-NOT: tt.elementwise_inline_asm
+  // ONE-HOT: [[XOR:%.*]] = arith.xori {{.*}}, [[CONTRIBUTION]]
+  // ONE-HOT: arith.addi [[XOR]], [[CONTRIBUTION]]
+  // ONE-HOT: tt.return
+  tt.func @one_hot_xor_shared_contribution(%index: tensor<128xi32, #one_hot_index>, %bases: tensor<32xi32, #one_hot_basis>) -> tensor<128xi32, #one_hot_index> {
+    %offsets = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #one_hot_basis>
+    %bit = arith.constant dense<5> : tensor<32xi32, #one_hot_basis>
+    %zero_basis = arith.constant dense<0> : tensor<32xi32, #one_hot_basis>
+    %zero_index = arith.constant dense<0> : tensor<128xi32, #one_hot_index>
+    %is_basis_bit = arith.cmpi eq, %offsets, %bit : tensor<32xi32, #one_hot_basis>
+    %selected = arith.select %is_basis_bit, %bases, %zero_basis : tensor<32xi1, #one_hot_basis>, tensor<32xi32, #one_hot_basis>
+    %reduced = "tt.reduce"(%selected) <{axis = 0 : i32}> ({
+      ^bb0(%left: i32, %right: i32):
+        %combined = arith.xori %left, %right : i32
+        tt.reduce.return %combined : i32
+    }) : (tensor<32xi32, #one_hot_basis>) -> i32
+    %broadcast = tt.splat %reduced : i32 -> tensor<128xi32, #one_hot_index>
+    %condition = arith.cmpi ne, %index, %zero_index : tensor<128xi32, #one_hot_index>
+    %contribution = arith.select %condition, %broadcast, %zero_index : tensor<128xi1, #one_hot_index>, tensor<128xi32, #one_hot_index>
+    %xor = arith.xori %index, %contribution : tensor<128xi32, #one_hot_index>
+    %result = arith.addi %xor, %contribution : tensor<128xi32, #one_hot_index>
+    tt.return %result : tensor<128xi32, #one_hot_index>
+  }
+
+  // The yielded combiner can still be XOR when earlier region operations have
+  // observable effects. Replacing the reduction would incorrectly erase them.
+  // CHECK-LABEL: @one_hot_xor_side_effectful_combiner
+  // ONE-HOT-LABEL: @one_hot_xor_side_effectful_combiner
+  // ONE-HOT-NOT: tt.gather
+  // ONE-HOT: "tt.reduce"
+  // ONE-HOT: tt.assert
+  // ONE-HOT: arith.xori
+  // ONE-HOT: tt.reduce.return
+  // ONE-HOT: tt.return
+  tt.func @one_hot_xor_side_effectful_combiner(%bases: tensor<32xi32, #one_hot_basis>) -> i32 {
+    %offsets = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #one_hot_basis>
+    %bit = arith.constant dense<7> : tensor<32xi32, #one_hot_basis>
+    %zero = arith.constant dense<0> : tensor<32xi32, #one_hot_basis>
+    %condition = arith.cmpi eq, %offsets, %bit : tensor<32xi32, #one_hot_basis>
+    %selected = arith.select %condition, %bases, %zero : tensor<32xi1, #one_hot_basis>, tensor<32xi32, #one_hot_basis>
+    %reduced = "tt.reduce"(%selected) <{axis = 0 : i32}> ({
+      ^bb0(%left: i32, %right: i32):
+        %valid = arith.cmpi ne, %left, %right : i32
+        tt.assert %valid, "side effect must not disappear" : i1
+        %combined = arith.xori %left, %right : i32
+        tt.reduce.return %combined : i32
+    }) : (tensor<32xi32, #one_hot_basis>) -> i32
+    tt.return %reduced : i32
+  }
+
+  // More than one register value per lane would need register selection in
+  // addition to the shuffle, so leave the original reduction unchanged.
+  // CHECK-LABEL: @one_hot_xor_multiple_registers
+  // ONE-HOT-LABEL: @one_hot_xor_multiple_registers
+  // ONE-HOT-NOT: tt.gather
+  // ONE-HOT: "tt.reduce"
+  // ONE-HOT: tt.return
+  tt.func @one_hot_xor_multiple_registers(%bases: tensor<32xi32, #one_hot_multiple_registers>) -> i32 {
+    %offsets = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #one_hot_multiple_registers>
+    %bit = arith.constant dense<4> : tensor<32xi32, #one_hot_multiple_registers>
+    %zero = arith.constant dense<0> : tensor<32xi32, #one_hot_multiple_registers>
+    %condition = arith.cmpi eq, %offsets, %bit : tensor<32xi32, #one_hot_multiple_registers>
+    %selected = arith.select %condition, %bases, %zero : tensor<32xi1, #one_hot_multiple_registers>, tensor<32xi32, #one_hot_multiple_registers>
+    %reduced = "tt.reduce"(%selected) <{axis = 0 : i32}> ({
+      ^bb0(%left: i32, %right: i32):
+        %combined = arith.xori %left, %right : i32
+        tt.reduce.return %combined : i32
+    }) : (tensor<32xi32, #one_hot_multiple_registers>) -> i32
+    tt.return %reduced : i32
+  }
+
+  // A warp-local gather cannot fetch a basis value owned by another warp.
+  // CHECK-LABEL: @one_hot_xor_cross_warp
+  // ONE-HOT-LABEL: @one_hot_xor_cross_warp
+  // ONE-HOT-NOT: tt.gather
+  // ONE-HOT: "tt.reduce"
+  // ONE-HOT: tt.return
+  tt.func @one_hot_xor_cross_warp(%bases: tensor<32xi32, #one_hot_cross_warp>) -> i32 {
+    %offsets = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #one_hot_cross_warp>
+    %bit = arith.constant dense<4> : tensor<32xi32, #one_hot_cross_warp>
+    %zero = arith.constant dense<0> : tensor<32xi32, #one_hot_cross_warp>
+    %condition = arith.cmpi eq, %offsets, %bit : tensor<32xi32, #one_hot_cross_warp>
+    %selected = arith.select %condition, %bases, %zero : tensor<32xi1, #one_hot_cross_warp>, tensor<32xi32, #one_hot_cross_warp>
+    %reduced = "tt.reduce"(%selected) <{axis = 0 : i32}> ({
+      ^bb0(%left: i32, %right: i32):
+        %combined = arith.xori %left, %right : i32
+        tt.reduce.return %combined : i32
+    }) : (tensor<32xi32, #one_hot_cross_warp>) -> i32
+    tt.return %reduced : i32
+  }
+
+  // A nonzero inactive lane breaks the one-hot reduction identity.
+  // CHECK-LABEL: @one_hot_xor_nonzero_inactive
+  // ONE-HOT-LABEL: @one_hot_xor_nonzero_inactive
+  // ONE-HOT-NOT: tt.gather
+  // ONE-HOT: "tt.reduce"
+  // ONE-HOT: tt.return
+  tt.func @one_hot_xor_nonzero_inactive(%bases: tensor<32xi32, #one_hot_basis>) -> i32 {
+    %offsets = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #one_hot_basis>
+    %bit = arith.constant dense<4> : tensor<32xi32, #one_hot_basis>
+    %inactive = arith.constant dense<1> : tensor<32xi32, #one_hot_basis>
+    %condition = arith.cmpi eq, %offsets, %bit : tensor<32xi32, #one_hot_basis>
+    %selected = arith.select %condition, %bases, %inactive : tensor<32xi1, #one_hot_basis>, tensor<32xi32, #one_hot_basis>
+    %reduced = "tt.reduce"(%selected) <{axis = 0 : i32}> ({
+      ^bb0(%left: i32, %right: i32):
+        %combined = arith.xori %left, %right : i32
+        tt.reduce.return %combined : i32
+    }) : (tensor<32xi32, #one_hot_basis>) -> i32
+    tt.return %reduced : i32
+  }
+
+  // An out-of-range selected index has zero contribution, not the value of a
+  // wrapped warp lane.
+  // CHECK-LABEL: @one_hot_xor_out_of_range
+  // ONE-HOT-LABEL: @one_hot_xor_out_of_range
+  // ONE-HOT-NOT: tt.gather
+  // ONE-HOT: "tt.reduce"
+  // ONE-HOT: tt.return
+  tt.func @one_hot_xor_out_of_range(%bases: tensor<32xi32, #one_hot_basis>) -> i32 {
+    %offsets = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #one_hot_basis>
+    %bit = arith.constant dense<32> : tensor<32xi32, #one_hot_basis>
+    %zero = arith.constant dense<0> : tensor<32xi32, #one_hot_basis>
+    %condition = arith.cmpi eq, %offsets, %bit : tensor<32xi32, #one_hot_basis>
+    %selected = arith.select %condition, %bases, %zero : tensor<32xi1, #one_hot_basis>, tensor<32xi32, #one_hot_basis>
+    %reduced = "tt.reduce"(%selected) <{axis = 0 : i32}> ({
+      ^bb0(%left: i32, %right: i32):
+        %combined = arith.xori %left, %right : i32
+        tt.reduce.return %combined : i32
+    }) : (tensor<32xi32, #one_hot_basis>) -> i32
+    tt.return %reduced : i32
+  }
+}
+
+// -----
+
+#one_hot_cross_cta = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
+
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // A warp shuffle cannot communicate a basis value across CTAs.
+  // CHECK-LABEL: @one_hot_xor_cross_cta
+  // ONE-HOT-LABEL: @one_hot_xor_cross_cta
+  // ONE-HOT-NOT: tt.gather
+  // ONE-HOT: "tt.reduce"
+  // ONE-HOT: tt.return
+  tt.func @one_hot_xor_cross_cta(%bases: tensor<32xi32, #one_hot_cross_cta>) -> i32 {
+    %offsets = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #one_hot_cross_cta>
+    %bit = arith.constant dense<3> : tensor<32xi32, #one_hot_cross_cta>
+    %zero = arith.constant dense<0> : tensor<32xi32, #one_hot_cross_cta>
+    %condition = arith.cmpi eq, %offsets, %bit : tensor<32xi32, #one_hot_cross_cta>
+    %selected = arith.select %condition, %bases, %zero : tensor<32xi1, #one_hot_cross_cta>, tensor<32xi32, #one_hot_cross_cta>
+    %reduced = "tt.reduce"(%selected) <{axis = 0 : i32}> ({
+      ^bb0(%left: i32, %right: i32):
+        %combined = arith.xori %left, %right : i32
+        tt.reduce.return %combined : i32
+    }) : (tensor<32xi32, #one_hot_cross_cta>) -> i32
+    tt.return %reduced : i32
+  }
+}
+
+// -----
+
+#one_hot_amd = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+
+module attributes {"ttg.target" = "hip:gfx950", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // The optimization emits NVIDIA PTX and must never run on AMD targets.
+  // CHECK-LABEL: @one_hot_xor_amd_unchanged
+  // ONE-HOT-LABEL: @one_hot_xor_amd_unchanged
+  // ONE-HOT-NOT: tt.gather
+  // ONE-HOT: "tt.reduce"
+  // ONE-HOT-NOT: tt.elementwise_inline_asm
+  // ONE-HOT: tt.return
+  tt.func @one_hot_xor_amd_unchanged(%bases: tensor<32xi32, #one_hot_amd>) -> i32 {
+    %offsets = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #one_hot_amd>
+    %bit = arith.constant dense<3> : tensor<32xi32, #one_hot_amd>
+    %zero = arith.constant dense<0> : tensor<32xi32, #one_hot_amd>
+    %condition = arith.cmpi eq, %offsets, %bit : tensor<32xi32, #one_hot_amd>
+    %selected = arith.select %condition, %bases, %zero : tensor<32xi1, #one_hot_amd>, tensor<32xi32, #one_hot_amd>
+    %reduced = "tt.reduce"(%selected) <{axis = 0 : i32}> ({
+      ^bb0(%left: i32, %right: i32):
+        %combined = arith.xori %left, %right : i32
+        tt.reduce.return %combined : i32
+    }) : (tensor<32xi32, #one_hot_amd>) -> i32
+    tt.return %reduced : i32
   }
 }

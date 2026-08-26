@@ -10,6 +10,7 @@ add_triton_library(TritonGPUTransforms
   ReduceDataDuplication.cpp
   OptimizeAccumulatorInit.cpp
   OptimizeDotOperands.cpp
+  OptimizeOneHotXorReduction.cpp
   OptimizeThreadLocality.cpp
   Pipeliner/AssignLatencies.cpp
   Pipeliner/LowerLoops.cpp
@@ -43,6 +44,7 @@ add_triton_library(TritonGPUTransforms
   TritonGPUTransformsIncGen
 
   LINK_LIBS PUBLIC
+  MLIRLLVMDialect
   MLIRTransforms
   MLIRTransformUtils
   TritonAnalysis
