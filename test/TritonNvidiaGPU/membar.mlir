@@ -61,6 +61,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 	// CHECK: local_alloc
 	// CHECK-NEXT: ttg.barrier local
 	// CHECK-NEXT: init_barrier
+	// CHECK-NEXT: ttg.barrier local
 	// CHECK-NEXT: barrier_expect
   tt.func @barrier_expect(%pred : i1) {
   	%cst = arith.constant dense<0> : tensor<1xi64, #blocked0>
@@ -160,9 +161,10 @@ tt.func @wait_after_mma(
 ) {
   %phase = arith.constant 0 : i32
   %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared2, #smem, mutable>
-  // The fused MMA's leading barrier also synchronizes the preceding wait.
+  // The scheduled barrier synchronizes both the wait and the fused MMA.
   // CHECK: ttg.async_wait
   ttg.async_wait {num = 0 : i32}
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.tc_gen5_mma
   ttng.tc_gen5_mma %a, %b, %c, %useAcc, %pred, %barrier[%barrierPred] {is_async} :
      !ttg.memdesc<128x128xf16, #shared, #smem>,

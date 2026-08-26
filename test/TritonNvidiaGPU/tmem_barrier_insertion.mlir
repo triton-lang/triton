@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -triton-nvidia-gpu-tmem-barrier-insertion -test-print-membar -triton-nvidia-gpu-tmem-wait-insertion | FileCheck %s --check-prefixes=CHECK,WAIT
+// RUN: triton-opt %s -test-print-membar -triton-nvidia-gpu-tmem-barrier-insertion -triton-nvidia-gpu-tmem-wait-insertion | FileCheck %s --check-prefixes=CHECK,WAIT
 // RUN: triton-opt %s -triton-nvidia-gpu-tmem-wait-insertion | FileCheck %s --check-prefix=WAIT
 
 #shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
@@ -528,6 +528,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @wait_disjoint_mma_publication
   // CHECK: ttng.tmem_store
   // CHECK-NEXT: ttng.tmem_wait store
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.tc_gen5_mma
   // CHECK: ttng.wait_barrier
   // CHECK-NEXT: tt.return
@@ -626,6 +627,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.tmem_store
   // CHECK-NEXT: ttng.tmem_wait store
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.arrive_barrier
   tt.func @wait_disjoint_corrections(%data: tensor<128x64xf32, #blocked>, %bar: !ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>) {
     %true = arith.constant true
@@ -761,14 +763,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
-  // Reuse the descriptor acquire's trailing barrier for the following load.
+  // Complete stores before the barrier at the load; the descriptor acquire
+  // no longer provides an implicit trailing barrier.
   // WAIT-LABEL: @wait_tensormap_acquire_barrier
   // WAIT: ttng.tmem_store
   // WAIT-NEXT: %{{.*}} = ttg.global_scratch_alloc
   // WAIT-NEXT: ttng.tensormap_create
-  // WAIT-NEXT: ttng.tmem_wait store
   // WAIT-NEXT: ttng.tensormap_fenceproxy_acquire
   // WAIT-NEXT: %{{.*}} = ttng.reinterpret_tensor_descriptor
+  // WAIT-NEXT: ttng.tmem_wait store
+  // WAIT-NEXT: ttg.barrier local
   // WAIT-NEXT: %{{.*}} = ttng.tmem_load
   tt.func @wait_tensormap_acquire_barrier(%out: !tt.ptr<f32>, %value: f32) {
     %true = arith.constant true

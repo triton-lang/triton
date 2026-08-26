@@ -174,6 +174,7 @@ LogicalResult ConvertTritonGPUToLLVM::prepareModule(ModuleOp mod,
   ModuleMembarAnalysis membarPass(allocation, canSkipBarSync);
   membarPass.run();
   mlir::PassManager waitPm(mod.getContext());
+  waitPm.addPass(ttng::createTritonNvidiaGPUTMemBarrierInsertionPass());
   waitPm.addPass(ttng::createTritonNvidiaGPUTMemWaitInsertionPass());
   if (failed(waitPm.run(mod)))
     return failure();
@@ -346,14 +347,6 @@ createConvertTritonGPUToLLVMPass(int32_t computeCapability, int32_t ptxVersion,
 bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
                             bool /*beforeIsRead*/, bool /*afterIsRead*/,
                             Allocation * /*allocation*/) {
-  // These mbarrier ops are single threaded, so are always synchronized wrt.
-  // each other.
-  if (isa<ttng::InitBarrierOp, ttng::InvalBarrierOp, ttng::BarrierExpectOp>(
-          before) &&
-      isa<ttng::InitBarrierOp, ttng::InvalBarrierOp, ttng::BarrierExpectOp>(
-          after))
-    return true;
-
   // wait_barrier will never run ahead of the load it's waiting on
   if (isa<ttng::TMALoadLikeOpInterface>(before) &&
       isa<ttng::WaitBarrierOp>(after))

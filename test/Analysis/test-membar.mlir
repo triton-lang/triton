@@ -197,13 +197,14 @@ tt.func @async_wait_before_atomic_release(%ptr: !tt.ptr<i32>) -> i32 {
   tt.return %result : i32
 }
 
-// Without scratch, the acquire barrier follows the atomic and synchronizes
-// prior shared-memory effects before the later load.
+// Keep completion ordering conservative across global atomic effects,
+// even when the unused result does not need scratch.
 // CHECK-LABEL: async_wait_before_atomic_acquire_no_scratch
 tt.func @async_wait_before_atomic_acquire_no_scratch(%ptr: !tt.ptr<i32>, %arg: tensor<32x16xf16, #AL>) {
   %c0_i32 = arith.constant 0 : i32
   %smem = ttg.local_alloc %arg : (tensor<32x16xf16, #AL>) -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory>
   // CHECK: ttg.async_wait
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: %{{.*}} = tt.atomic_cas acquire
   // CHECK-NOT: ttg.barrier local
   // CHECK: ttg.local_load
@@ -229,19 +230,21 @@ tt.func @async_wait_scan_stops_at_memory_effect(%arg: tensor<32x16xf16, #AL>) {
   tt.return
 }
 
+// Completion publication can be deferred through empty branches.
 // CHECK-LABEL: async_wait_scan_stops_at_control_flow
 tt.func @async_wait_scan_stops_at_control_flow(%arg: tensor<32x16xf16, #AL>, %cond: i1) {
   %cst0 = ttg.local_alloc %arg : (tensor<32x16xf16, #AL>) -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory>
   // CHECK: ttg.async_wait
-  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: scf.if
+  // CHECK-NEXT: } else {
+  // CHECK-NEXT: }
   ttg.async_wait {num = 4 : i32}
   scf.if %cond {
     scf.yield
   } else {
     scf.yield
   }
-  // CHECK: ttg.async_wait
+  // CHECK-NEXT: ttg.async_wait
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttg.local_load
   ttg.async_wait {num = 0 : i32}
@@ -249,20 +252,22 @@ tt.func @async_wait_scan_stops_at_control_flow(%arg: tensor<32x16xf16, #AL>, %co
   tt.return
 }
 
+// A wait in one branch stays pending through the merge.
 // CHECK-LABEL: async_wait_scan_reaches_block_end
 tt.func @async_wait_scan_reaches_block_end(%arg: tensor<32x16xf16, #AL>, %cond: i1) {
   %cst0 = ttg.local_alloc %arg : (tensor<32x16xf16, #AL>) -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory>
   scf.if %cond {
     // CHECK: ttg.async_wait
-    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: } else {
+    // CHECK-NEXT: }
     ttg.async_wait {num = 4 : i32}
     scf.yield
   } else {
     scf.yield
   }
-  // CHECK: ttg.async_wait
+  // CHECK-NEXT: ttg.async_wait
   // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: tt.return
   ttg.async_wait {num = 0 : i32}
   tt.return
 }
