@@ -40,19 +40,10 @@ def test_fence_synchronizes_entire_program(target, use_legacy_alias, num_ctas):
 
     module = run_parser(kernel, args=(use_legacy_alias, ), kwargs={"num_ctas": num_ctas}, target=target)
     generated_ir = module.str_nodebug()
-    if num_ctas == 1:
-        assert "ttg.barrier" in generated_ir
-        assert "ttng.cluster_barrier" not in generated_ir
-        assert "amdg.cluster_barrier" not in generated_ir
-    elif target.backend == "cuda":
-        assert "ttng.cluster_barrier" in generated_ir
-        assert "ttg.barrier" not in generated_ir
-        assert "amdg.cluster_barrier" not in generated_ir
-    else:
-        assert "amdg.cluster_barrier_arrive" in generated_ir
-        assert "amdg.cluster_barrier_wait" in generated_ir
-        assert "ttg.barrier" not in generated_ir
-        assert "ttng.cluster_barrier" not in generated_ir
+    assert "ttg.fence" in generated_ir
+    assert "ttg.barrier" not in generated_ir
+    assert "ttng.cluster_barrier" not in generated_ir
+    assert "amdg.cluster_barrier" not in generated_ir
 
 
 def doesnt_compile(kernel):

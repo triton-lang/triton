@@ -1,6 +1,7 @@
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/DialectRegistry.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
@@ -53,6 +54,12 @@ bool hasBarriers(ModuleOp mod) {
   return result;
 }
 
+bool hasProgramFence(ModuleOp mod) {
+  bool result = false;
+  mod.walk([&](ttg::FenceOp) { result = true; });
+  return result;
+}
+
 bool hasCpAsync(ModuleOp mod) {
   bool result = false;
   mod.walk([&](Operation *op) {
@@ -85,6 +92,17 @@ public:
   using impl::TritonInstrumentPrepareConSanCapturesBase<
       PrepareConSanCaptures>::TritonInstrumentPrepareConSanCapturesBase;
 
+  void getDependentDialects(DialectRegistry &registry) const override {
+    impl::TritonInstrumentPrepareConSanCapturesBase<
+        PrepareConSanCaptures>::getDependentDialects(registry);
+    // Backend hooks may introduce their dialect after parsing target-neutral
+    // input, so preload the selected target before multithreaded execution.
+    if (target == "nvidia")
+      registry.addDialectToPreload("ttng");
+    else if (target == "amd")
+      registry.addDialectToPreload("amdg");
+  }
+
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     if (target.empty()) {
@@ -101,8 +119,10 @@ public:
     bool hasSharedBuffers = hasSharedMemoryBuffers(mod);
     int numActiveMemTypes =
         (hasSharedBuffers ? 1 : 0) + (hasTensorMemoryBuffers(mod) ? 1 : 0);
-    // NVIDIA inserts a terminal cluster barrier after this pass.
-    bool hasClusterBarriers = target == "nvidia" && ttg::lookupNumCTAs(mod) > 1;
+    // NVIDIA inserts a terminal cluster barrier after this pass. Explicit
+    // program fences also synchronize across CTAs on every target.
+    bool hasClusterBarriers = ttg::lookupNumCTAs(mod) > 1 &&
+                              (target == "nvidia" || hasProgramFence(mod));
     int totalCaptures = tti::estimateConSanCaptureCount(
         numActiveMemTypes, hasBarriers(mod), hasClusterBarriers,
         getNumCommitKinds(mod, *hooks),

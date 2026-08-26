@@ -267,6 +267,22 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: tt.func @program_fence
+  tt.func @program_fence() {
+    // CHECK: %[[SCRATCH:.*]] = ttg.global_scratch_alloc
+    // CHECK-NEXT: tti.experimental_gsan_cluster_barrier_init %[[SCRATCH]] : <i8>
+    // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+    // CHECK: ttg.fence
+    // CHECK-NEXT: tti.experimental_gsan_cluster_barrier_sync %[[SCRATCH]] : <i8>
+    // CHECK-NEXT: ttng.cluster_barrier
+    ttg.fence
+    tt.return
+  }
+}
+
+// -----
+
 #blockedSplitM = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
 #blockedSplitN = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
 

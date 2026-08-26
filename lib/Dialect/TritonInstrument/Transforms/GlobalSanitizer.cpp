@@ -317,6 +317,11 @@ static void instrumentClusterBarrierEquivalents(ModuleOp module) {
         addPoint(op, /*before=*/false, /*materializeBarrier=*/false);
       continue;
     }
+    if (isa<ttg::FenceOp>(op)) {
+      if (ttg::lookupNumCTAs(op) > 1)
+        addPoint(op, /*before=*/false, /*materializeBarrier=*/false);
+      continue;
+    }
 
     if (isa<tt::AtomicPollOp>(op)) {
       // instrumentAtomicPoll materializes the poll's post-operation cluster

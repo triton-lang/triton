@@ -316,6 +316,10 @@ private:
 
   void update(Operation *op, MembarInfo *membarInfo, FuncMapT *funcMap,
               OpBuilder *builder) override {
+    if (isa<ttg::FenceOp>(op)) {
+      membarInfo->sync();
+      return;
+    }
     if (op->hasTrait<OpTrait::ReturnLike>() &&
         isa<FunctionOpInterface>(op->getParentOp())) {
       // Any path from distributed shared memory use to kernel exit must include
