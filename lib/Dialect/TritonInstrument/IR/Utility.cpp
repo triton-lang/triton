@@ -5,8 +5,10 @@
 #include "triton/Analysis/BufferRegion.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/FunctionBuilder.h"
@@ -177,7 +179,8 @@ static Value createCurrentCTAMask(OpBuilder &b, Location loc,
 uint32_t getMemDescLength(Value buf) {
   auto memDescType = cast<MemDescType>(buf.getType());
   if (isa<SharedEncodingTrait>(memDescType.getEncoding())) {
-    unsigned elSize = memDescType.getElementType().getIntOrFloatBitWidth() / 8;
+    unsigned elSize =
+        getIntOrFloatOrPtrBitWidth(memDescType.getElementType()) / 8;
     return static_cast<uint32_t>(product(getShapePerCTA(memDescType)) * elSize);
   }
   if (isa<TensorMemorySpaceAttr>(memDescType.getMemorySpace())) {
@@ -391,8 +394,14 @@ Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
                               RankedTensorType tensorType,
                               ArrayRef<int64_t> strides) {
   auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType, strides);
-  return LoadOp::create(b, loc, ptrTensor, CacheModifier::NONE,
-                        EvictionPolicy::NORMAL, false);
+  Value value = LoadOp::create(b, loc, ptrTensor, CacheModifier::NONE,
+                               EvictionPolicy::NORMAL, false);
+  // Finish replicated reads before another thread can update the scratch.
+  auto freeVarMasks = toLinearLayout(tensorType).getFreeVariableMasks();
+  if (freeVarMasks.lookup(b.getStringAttr("lane")) ||
+      freeVarMasks.lookup(b.getStringAttr("warp")))
+    BarrierOp::create(b, loc, AddrSpace::GlobalRead);
+  return value;
 }
 
 FuncOp getEntryPoint(ModuleOp module) {

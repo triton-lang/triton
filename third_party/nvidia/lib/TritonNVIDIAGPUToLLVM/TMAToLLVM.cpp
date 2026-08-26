@@ -214,7 +214,7 @@ struct TensormapFenceproxyAcquireOpConversion
     // We run the fence on a single warp, then use a barrier to synchronize the
     // rest. This ends up being faster than running the fence on each warp.
     // TODO: Ideally we only emit one barrier after all fences are issued
-    b.barrier(triton::gpu::AddrSpace::None);
+    b.barrier(triton::gpu::AddrSpace::Local);
 
     rewriter.eraseOp(op);
     return success();

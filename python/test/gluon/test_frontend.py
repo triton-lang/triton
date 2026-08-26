@@ -249,6 +249,30 @@ def test_nvmma_layout_rank_mangling():
     assert "!ttg.memdesc<2x16x16xf16" in module_text
 
 
+@gluon.jit
+def anchor_tmem_linear_layout(ll: ttgl.constexpr):
+    pass
+
+
+@gluon.jit
+def tmem_linear_layout_kernel():
+    layout_a: ttgl.constexpr = ttgl.to_linear_layout(TensorMemoryLayout(block=(128, 128), col_stride=1), (128, 128))
+    layout_b: ttgl.constexpr = ttgl.to_linear_layout(TensorMemoryLayout(block=(64, 64), col_stride=1), (128, 128))
+    anchor_tmem_linear_layout(layout_a)
+    anchor_tmem_linear_layout(layout_b)
+
+
+def test_tmem_linear_layout_mangling():
+    # Layouts with the same shape but different bases must get distinct
+    # specializations of the nested function. The mangled names contain
+    # non-identifier characters, so the symbols are printed quoted.
+    module = run_parser(tmem_linear_layout_kernel, target=BLACKWELL_TARGET)
+    module_text = module.str_nodebug()
+
+    specializations = re.findall(r'tt\.func private @"?test_frontend\.anchor_tmem_linear_layout', module_text)
+    assert len(specializations) == 2
+
+
 @filecheck_test
 @gluon.jit
 def test_shared_atomic_scatter_rmw():
@@ -3918,7 +3942,7 @@ def test_amd_scaled_upcast_fp8_cdna(target):
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @kernel() attributes {noinline = false} {
     %cst = arith.constant 1.000000e+00 : f32
-    %0 = tt.fp_to_fp %cst, rounding = rtne : f32 -> f8E4M3FN
+    %0 = arith.truncf %cst : f32 to f8E4M3FN
     %1 = tt.splat %0 : f8E4M3FN -> tensor<16x64xf8E4M3FN, #blocked>
     %c2_i8 = arith.constant 2 : i8
     %cst_0 = arith.constant dense<2> : tensor<16x64xi8, #blocked>
@@ -4159,7 +4183,7 @@ def test_amd_wmma_scale_layout_for_multicta(target):
         a_layout: ttgl.constexpr = ttgl.DotOperandLayout(
             operand_index=0,  #
             parent=ttgl.amd.AMDWMMALayout(version=3, transposed=True, warp_bases=[[0, 1], [1, 0]],
-                                          instr_shape=[16, 16, 64], cga_layout=[[0, 0], [1, 0]]),  #
+                                          instr_shape=[16, 16, 64], cga_layout=[[0, 1], [1, 0]]),  #
             k_width=16)
         a_scale_layout: ttgl.constexpr = ttgl.amd.cdna5.get_wmma_scale_layout(a_layout, [64, 4])
         ttgl.full([64, 4], 0x02, ttgl.uint8, a_scale_layout)
@@ -4167,7 +4191,7 @@ def test_amd_wmma_scale_layout_for_multicta(target):
         b_layout: ttgl.constexpr = ttgl.DotOperandLayout(
             operand_index=1,  #
             parent=ttgl.amd.AMDWMMALayout(version=3, transposed=True, warp_bases=[[0, 1], [1, 0]],
-                                          instr_shape=[16, 16, 64], cga_layout=[[1, 0], [0, 0]]),  #
+                                          instr_shape=[16, 16, 64], cga_layout=[[0, 1], [1, 0]]),  #
             k_width=16,
         )
         b_scale_layout: ttgl.constexpr = ttgl.amd.cdna5.get_wmma_scale_layout(b_layout, [64, 4])

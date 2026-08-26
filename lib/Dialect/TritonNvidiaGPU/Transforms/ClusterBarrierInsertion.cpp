@@ -277,8 +277,9 @@ private:
 
 void ClusterBarrierAnalysis::update(Operation *op, MembarInfo *membarInfo,
                                     FuncMapT *funcMap, OpBuilder *builder) {
-  if (isa<ttng::ClusterBarrierOp>(op)) {
-    membarInfo->sync();
+  if (auto clusterBarrier = dyn_cast<ttng::ClusterBarrierOp>(op)) {
+    if (!clusterBarrier.getRelaxed())
+      membarInfo->sync();
     return;
   }
 

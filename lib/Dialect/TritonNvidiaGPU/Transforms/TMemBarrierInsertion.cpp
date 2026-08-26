@@ -244,10 +244,9 @@ void TMemBarrierAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
 
 void TMemBarrierAnalysis::update(Operation *op, MembarInfo *membarInfo,
                                  FuncMapT *funcMap, OpBuilder *builder) {
-  if (mlir::containsLocalBarrier(op)) {
+  auto stages = mlir::getLocalBarrierStages(op, &allocation);
+  if (stages.beforeMemoryEffects)
     membarInfo->sync();
-    return;
-  }
 
   BlockInfo curBlockInfo;
   if (isa<triton::CallOp>(op)) {
@@ -290,6 +289,11 @@ void TMemBarrierAnalysis::update(Operation *op, MembarInfo *membarInfo,
   }
 
   membarInfo->addBlockInfo(curBlockInfo);
+  // A leading or interior rendezvous must preserve the operation's own effects.
+  if (stages.afterMemoryEffects ||
+      (stages.betweenMemoryEffects && curBlockInfo.syncReadSlices.empty() &&
+       curBlockInfo.syncWriteSlices.empty()))
+    membarInfo->sync();
 }
 
 } // namespace

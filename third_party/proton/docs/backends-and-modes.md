@@ -8,7 +8,7 @@ Triton runtime when `backend=None`.
 | Backend | Platform | Notes |
 | --- | --- | --- |
 | `cupti` | NVIDIA GPUs | Default NVIDIA backend. Supports regular profiling, `pcsampling`, and `periodic_flushing`. |
-| `rocprofiler` | AMD GPUs | Preferred AMD backend when rocprofiler-sdk is available. Supports regular profiling and `periodic_flushing`. |
+| `rocprofiler` | AMD GPUs | Preferred AMD backend when rocprofiler-sdk is available. Supports regular profiling, `pcsampling`, and `periodic_flushing`. |
 | `roctracer` | AMD GPUs | **Deprecated** AMD fallback backend. Supports regular profiling and `periodic_flushing`. |
 | `instrumentation` | NVIDIA and AMD GPUs | Intra-kernel instrumentation backend for scope-level cycle metrics inside kernels. |
 
@@ -26,7 +26,8 @@ mapped correctly.
 
 ## Instruction Sampling
 
-NVIDIA instruction sampling is available through CUPTI:
+Instruction sampling is available through CUPTI on NVIDIA GPUs and
+rocprofiler-sdk on AMD GPUs:
 
 ```python
 proton.start(
@@ -39,6 +40,26 @@ proton.start(
 
 Proton currently uses the CUPTI backend's default sampling period; the sampling
 interval is not configurable through this mode.
+
+On AMD, source-line attribution requires both code-object address translation
+support in the build's rocprofiler-sdk package and usable DWARF line
+information in the sampled code object. Without either, Proton reports the
+samples at kernel level.
+
+AMD PC sampling uses `PROTON_PC_SAMPLING_INTERVAL` as an optional positive
+integer sampling interval. The default is `131072`, and rocprofiler-sdk clamps
+the requested value to the supported range reported by the GPU. Smaller values
+can produce more samples and overhead; larger values reduce both.
+
+By default, Proton prefers stochastic sampling and falls back to host-trap
+sampling. Set `PROTON_ROCPROFILER_PC_SAMPLING_METHOD` to `stochastic` or
+`host-trap` to require a specific method. Profiling fails to start if the
+selected method is invalid or unavailable on the visible GPU.
+
+Proton enables rocprofiler-sdk's PC-sampling feature during backend
+configuration because the SDK locks configuration before profiling sessions are
+started. If `ROCPROFILER_PC_SAMPLING_BETA_ENABLED` is already set, Proton
+preserves the user-provided value.
 
 Instruction sampling can add significant end-to-end overhead because Proton
 transfers and processes sample data on the CPU. Viewer filters such as
