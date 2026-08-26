@@ -203,16 +203,7 @@ struct WarpGroupDotWaitOpConversion
                                                         op.getPendings());
     auto outputs =
         unpackOutput(loc, rewriter, wait.getResult(), inputs.getTypes());
-    bool synchronizeWarpGroups =
-        !op.getWarpGroupLocal() && triton::gpu::lookupNumWarps(op) > 4;
     rewriter.replaceOp(op, outputs);
-
-    // WGMMA waits only synchronize the issuing warp group. Synchronize all
-    // warp groups before releasing shared-memory dependencies.
-    if (synchronizeWarpGroups) {
-      triton::gpu::BarrierOp::create(rewriter, loc,
-                                     triton::gpu::AddrSpace::Local);
-    }
     return success();
   }
 };
