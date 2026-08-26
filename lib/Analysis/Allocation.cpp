@@ -319,7 +319,8 @@ private:
       AliasInfo &info = latticeElement->getValue();
       if (!info.getAllocs().empty()) {
         for (auto alloc : info.getAllocs()) {
-          allocation->addAlias(value, alloc);
+          if (allocation->valueBuffer.count(alloc))
+            allocation->addAlias(value, alloc);
         }
       }
     }
@@ -336,7 +337,11 @@ private:
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     SharedMemoryAliasAnalysis *aliasAnalysis =
         solver->load<SharedMemoryAliasAnalysis>();
-    if (failed(solver->initializeAndRun(operation))) {
+    // Returned descriptors must keep their caller-owned allocations live.
+    Operation *analysisRoot = operation;
+    if (auto module = operation->getParentOfType<ModuleOp>())
+      analysisRoot = module;
+    if (failed(solver->initializeAndRun(analysisRoot))) {
       llvm_unreachable("failed to run SharedMemoryAliasAnalysis");
     }
     operation->walk<WalkOrder::PreOrder>([&](Operation *op) {
