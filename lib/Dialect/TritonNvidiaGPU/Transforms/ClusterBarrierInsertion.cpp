@@ -275,6 +275,8 @@ public:
                        AccessMode::AllocatorAliasesOnly) {}
 
 private:
+  llvm::SmallPtrSet<Operation *, 4> returnsWithExitBarrier;
+
   void insertBarrier(Operation *op, OpBuilder *builder) override {
     ttng::ClusterBarrierOp::create(*builder, op->getLoc());
   }
@@ -296,8 +298,11 @@ private:
       // a cluster barrier. Conservatively insert it because warp-specialized
       // memory effects are not fully modeled.
       if (isKernel(cast<FunctionOpInterface>(op->getParentOp()))) {
-        builder->setInsertionPoint(op);
-        insertBarrier(op, builder);
+        // The solver may revisit this return before convergence.
+        if (returnsWithExitBarrier.insert(op).second) {
+          builder->setInsertionPoint(op);
+          insertBarrier(op, builder);
+        }
         membarInfo->sync();
       }
       return;
