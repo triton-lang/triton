@@ -2809,8 +2809,6 @@ def minimum(x, y, propagate_nan: constexpr = PropagateNan.NONE, _semantic=None):
     """
     x = _semantic.to_tensor(x)
     y = _semantic.to_tensor(y)
-    x = _promote_bfloat16_to_float32(x, _semantic=_semantic)
-    y = _promote_bfloat16_to_float32(y, _semantic=_semantic)
     propagate_nan = _unwrap_if_constexpr(propagate_nan)
     return _semantic.minimum(x, y, propagate_nan)
 
@@ -2831,8 +2829,6 @@ def maximum(x, y, propagate_nan: constexpr = PropagateNan.NONE, _semantic=None):
     """
     x = _semantic.to_tensor(x)
     y = _semantic.to_tensor(y)
-    x = _promote_bfloat16_to_float32(x, _semantic=_semantic)
-    y = _promote_bfloat16_to_float32(y, _semantic=_semantic)
     propagate_nan = _unwrap_if_constexpr(propagate_nan)
     return _semantic.maximum(x, y, propagate_nan)
 
@@ -2858,9 +2854,6 @@ def clamp(x, min, max, propagate_nan: constexpr = PropagateNan.NONE, _semantic=N
     x = _semantic.to_tensor(x)
     min = _semantic.to_tensor(min)
     max = _semantic.to_tensor(max)
-    x = _promote_bfloat16_to_float32(x, _semantic=_semantic)
-    min = _promote_bfloat16_to_float32(min, _semantic=_semantic)
-    max = _promote_bfloat16_to_float32(max, _semantic=_semantic)
 
     propagate_nan = _unwrap_if_constexpr(propagate_nan)
 
@@ -2965,16 +2958,6 @@ def reduce(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=
 
 
 @builtin
-def _promote_bfloat16_to_float32(t, _semantic=None):
-    scalar_ty = t.type.scalar
-
-    # hardware doesn't support FMAX, FMIN, CMP for bfloat16
-    if scalar_ty is bfloat16:
-        return t.to(float32, _semantic=_semantic)
-    return t
-
-
-@builtin
 def _reduce_with_indices(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=None):
     axis = _unwrap_if_constexpr(axis)
     n = input.shape[axis]
@@ -3012,7 +2995,7 @@ def _add_scan_docstr(name: str, dtype_arg: str = None) -> Callable[[T], T]:
 
         if dtype_arg is not None:
             docstr += f"""
-    :param {dtype_arg}: the desired data type of the returned tensor. If specified, the input tensor is casted to :code:`{dtype_arg}` before the operation is performed. If not specified, small integer types (< 32 bits) are upcasted to prevent overflow. Note that :code:`tl.bfloat16` inputs are automatically promoted to :code:`tl.float32`.
+    :param {dtype_arg}: the desired data type of the returned tensor. If specified, the input tensor is casted to :code:`{dtype_arg}` before the operation is performed. If not specified, signed integer dtypes narrower than 32 bits are upcasted to :code:`tl.int32`, while unsigned integer and bool dtypes narrower than 32 bits are upcasted to :code:`tl.uint32`. Other dtypes are kept as-is.
     :type {dtype_arg}: tl.dtype"""
 
         func.__doc__ = docstr.format(name=name)
