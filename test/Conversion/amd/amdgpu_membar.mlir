@@ -94,7 +94,7 @@ tt.func @pipelined_async_copy_local_to_global_3(%A: !tt.ptr<f16>, %B: !tt.ptr<f1
   tt.return
 }
 
-// Check that we do not get a barrier for LocalLoad if the token comes from a previous loop iteration
+// The wait's publication barrier follows its token across the loop boundary.
 // CHECK-LABEL: async_wait_in_previous_loop_iteration
 tt.func @async_wait_in_previous_loop_iteration(%a_ptr: tensor<16x16x!tt.ptr<f16>, #AL>, %loopIterCount: i32) {
   %c0_i32 = arith.constant 0 : i32
@@ -104,19 +104,24 @@ tt.func @async_wait_in_previous_loop_iteration(%a_ptr: tensor<16x16x!tt.ptr<f16>
   %1 = ttg.async_copy_global_to_local %a_ptr, %alloc: tensor<16x16x!tt.ptr<f16>, #AL> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %2 = ttg.async_wait %1 {num = 4 : i32}
 
+  // CHECK: ttg.async_wait
+  // CHECK-NOT: ttg.barrier local
   // CHECK: cf.br
   %loop_result:1 = scf.for %arg14 = %c0_i32 to %loopIterCount step %c1_i32 iter_args(%arg10 = %2) -> (!ttg.async.token)  : i32 {
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: ttg.local_load
     %6 = ttg.local_load %alloc token %arg10 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL>
     %7 = ttg.async_copy_global_to_local %a_ptr, %alloc : tensor<16x16x!tt.ptr<f16>, #AL> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
 
     // CHECK-NOT: ttg.barrier local
     // CHECK: ttg.async_wait
     %8 = ttg.async_wait %7 {num = 4 : i32}
-    // CHECK: ttg.barrier local
     // CHECK-NOT: ttg.barrier local
+    // CHECK: cf.br
     scf.yield %8: !ttg.async.token
   }
-  // CHECK: tt.return
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: tt.return
   tt.return
 }
 
@@ -486,7 +491,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 //   prologue: load buf[0]; load buf[1]
 //   loop i:   load buf[i]; wait(2); j = (i+1)%3; read buf[j]; load buf[j]
 // no barrier between async loads
-// barrier after the async_wait
+// barrier before the first read after the async_wait
 // barrier before the refill of the same buf
 // CHECK-LABEL: no_barrier_between_async_loads_in_pipelined_loop
 tt.func @no_barrier_between_async_loads_in_pipelined_loop(%A: !tt.ptr<f16>, %ub: i32) {
@@ -518,13 +523,15 @@ tt.func @no_barrier_between_async_loads_in_pipelined_loop(%A: !tt.ptr<f16>, %ub:
     ttg.async_commit_group
 
     // CHECK: ttg.async_wait
-    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NOT: ttg.barrier local
     ttg.async_wait {num = 2 : i32}
 
     %ip1 = arith.addi %i, %c1_i32 : i32
     %j = arith.remsi %ip1, %c3_i32 : i32
     %sj = ttg.memdesc_index %alloc[%j] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
-    // CHECK: ttg.local_load
+    // CHECK: ttg.memdesc_index
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: ttg.local_load
     // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: amdg.buffer_load_to_local
     %v = ttg.local_load %sj : !ttg.memdesc<128x32xf16, #shared, #smem, mutable> -> tensor<128x32xf16, #AL>
