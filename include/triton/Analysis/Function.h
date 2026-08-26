@@ -2,6 +2,7 @@
 #define TRITON_ANALYSIS_FUNCTION_H
 
 #include "triton/Analysis/CallGraph.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include "mlir/IR/Builders.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
@@ -184,6 +185,14 @@ private:
 
   static void visitTerminator(Operation *operation,
                               SmallVector<VirtualBlock> &successors) {
+    // The parent continuation must retain worker memory effects even though
+    // the region value-flow interface has no successor for worker returns.
+    if (isa<gpu::WarpReturnOp>(operation)) {
+      auto ws = operation->getParentOfType<gpu::WarpSpecializeOp>();
+      successors.emplace_back(ws->getBlock(), ws->getIterator());
+      return;
+    }
+
     if (isa<BranchOpInterface>(operation)) {
       // Collect the block successors of the branch.
       for (Block *successor : operation->getSuccessors())
