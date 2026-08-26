@@ -14,4 +14,17 @@ struct BreakStructPhiNodesPass
   static StringRef name() { return "BreakStructPhiNodesPass"; }
 };
 
+// Form profitable packed arithmetic supported by the selected NVIDIA GPU.
+struct NVPTXVectorizerPass : OptionalPassInfoMixin<NVPTXVectorizerPass> {
+  explicit NVPTXVectorizerPass(unsigned computeCapability)
+      : computeCapability(computeCapability) {}
+
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+
+  static StringRef name() { return "NVPTXVectorizerPass"; }
+
+private:
+  unsigned computeCapability;
+};
+
 } // namespace llvm

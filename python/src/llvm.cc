@@ -1,3 +1,4 @@
+#include "lib/Target/LLVMIR/LLVMPasses.h"
 #include "mlir/IR/BuiltinOps.h" // mlir::ModuleOp
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
@@ -58,14 +59,6 @@
 #include <unordered_set>
 
 namespace py = nanobind;
-
-namespace llvm {
-struct BreakStructPhiNodesPass
-    : OptionalPassInfoMixin<BreakStructPhiNodesPass> {
-  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
-  static StringRef name() { return "BreakStructPhiNodesPass"; }
-};
-} // namespace llvm
 
 using namespace llvm;
 
@@ -770,7 +763,8 @@ void init_triton_llvm(py::module_ &m) {
       [](llvm::Module *mod, const llvm::OptimizationLevel &opt,
          std::string arch, std::string features, std::vector<std::string> flags,
          bool enable_fp_fusion, bool disable_slp_vectorizer,
-         bool disable_vector_combine, bool expand_masked_div_rem) {
+         bool disable_vector_combine, bool expand_masked_div_rem,
+         unsigned nvptx_compute_capability) {
         if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
           return;
         // Check to see if we are passing a list of flags to disable
@@ -824,12 +818,6 @@ void init_triton_llvm(py::module_ &m) {
         tuningOptions.LoopUnrolling = true;
         tuningOptions.LoopInterleaving = true;
         tuningOptions.LoopVectorization = true;
-        // TODO: currently we run SLP vectorizer with an empty target machine.
-        // This cause the vectorizer to create larger vector which could be bad.
-        // Disabling it would currently cause regressions as this pass also
-        // applies some scheduling that helps performance in some cases. We
-        // should work on using NVPTX target instead and address the performance
-        // regressions with some scheduling solution.
         tuningOptions.SLPVectorization = !disable_slp_vectorizer;
 
         std::string pluginFile =
@@ -879,6 +867,8 @@ void init_triton_llvm(py::module_ &m) {
               // sure all the struct are removed for the following passes.
               fpm.addPass(BreakStructPhiNodesPass());
               fpm.addPass(InstCombinePass());
+              if (nvptx_compute_capability != 0)
+                fpm.addPass(NVPTXVectorizerPass(nvptx_compute_capability));
             });
         bool enableAddressSanitizer =
             mlir::triton::tools::getBoolEnv("TRITON_ENABLE_ASAN");
@@ -901,6 +891,7 @@ void init_triton_llvm(py::module_ &m) {
       py::arg("disable_slp_vectorizer") = false,
       py::arg("disable_vector_combine") = false,
       py::arg("expand_masked_div_rem") = false,
+      py::arg("nvptx_compute_capability") = 0,
       py::call_guard<py::gil_scoped_release>());
 
   m.def(
