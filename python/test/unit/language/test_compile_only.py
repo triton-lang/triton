@@ -80,7 +80,6 @@ def test_compile_only_one_hot_xor_reduction_warp_shuffle() -> None:
 
     ptx = compiled.asm["ptx"]
     assert ptx.count("shfl.sync.idx.b32") == 32
-    assert ptx.count("lop3.b32") == 31
     assert "redux.sync.xor.b32" not in ptx
     assert "shfl.sync.bfly.b32" not in ptx
     assert len(re.findall(r"\bld\.global(?:\.[a-z0-9_]+)*\b", ptx)) == 1
@@ -108,14 +107,11 @@ def test_compile_only_one_hot_xor_reduction_masks_poison() -> None:
     source = ASTSource(fn=kernel, signature={"indices_ptr": "*i32", "output_ptr": "*i32", "seed": "i32"})
     compiled = triton.compile(source, target=GPUTarget("cuda", 90, 32), options={"num_warps": 4})
     assert "ub.poison" in compiled.asm["ttgir"]
-    # The select masks poison when indices are zero. Its LOP3 replacement
-    # must freeze the gathered value before eagerly consuming that operand.
-    llir = compiled.asm["llir"]
-    frozen = re.findall(r"(%[\w.]+) = freeze i32", llir)
-    lop3 = next(line for line in llir.splitlines() if "lop3.b32" in line)
-    assert any(f"i32 {value}," in lop3 for value in frozen), llir
+    # The ordinary select must keep masking the gathered poison value when
+    # indices are zero; only the one-hot reduction is rewritten.
+    assert "select i1" in compiled.asm["llir"]
     assert compiled.asm["ptx"].count("shfl.sync.idx.b32") == 1
-    assert compiled.asm["ptx"].count("lop3.b32") == 1
+    assert "redux.sync.xor.b32" not in compiled.asm["ptx"]
 
 
 def test_compile_only_sort_keeps_comparisons_boolean() -> None:

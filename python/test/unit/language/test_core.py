@@ -3067,7 +3067,6 @@ def test_one_hot_xor_reduction_computed_bases(block, num_warps, device):
 
     ptx = compiled.asm["ptx"]
     assert ptx.count("shfl.sync.idx.b32") == 32
-    assert ptx.count("lop3.b32") >= 31
     assert "redux.sync.xor.b32" not in ptx
     assert "shfl.sync.bfly.b32" not in ptx
 
@@ -6320,7 +6319,6 @@ def test_one_hot_xor_reduction_masks_poison(num_warps, device):
         torch.testing.assert_close(output, expected, rtol=0, atol=0)
 
     assert compiled.asm["ptx"].count("shfl.sync.idx.b32") == 1
-    assert "lop3.b32" in compiled.asm["ptx"]
     assert "redux.sync.xor.b32" not in compiled.asm["ptx"]
 
 

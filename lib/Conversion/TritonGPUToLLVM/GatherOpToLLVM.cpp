@@ -336,18 +336,11 @@ void GatherOpConversion::emitWarpLocalGather(
       int32_t srcRegIdx = srcBase ^ rest;
 
       Value value = srcValues[srcRegIdx];
-      if (!isThreadLocal) {
+      if (!isThreadLocal)
         value = targetInfo.shuffleIdx(rewriter, loc, value, srcLane);
-        if (auto origin = op->getAttrOfType<UnitAttr>(AttrOneHotXorReduction))
-          value.getDefiningOp()->setAttr(AttrOneHotXorReduction, origin);
-      }
       result = b.select(b.icmp_eq(b.i32_val(srcRegIdx), srcReg), value, result);
     }
 
-    // Register selection can survive LLVM canonicalization. Preserve the
-    // provenance on the selected result as well as its underlying shuffle.
-    if (auto origin = op->getAttrOfType<UnitAttr>(AttrOneHotXorReduction))
-      result.getDefiningOp()->setAttr(AttrOneHotXorReduction, origin);
     results.push_back(result);
   }
 

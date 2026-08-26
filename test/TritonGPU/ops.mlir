@@ -557,7 +557,7 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
   // ONE-HOT-LABEL: @one_hot_xor_independent_reduction
   // ONE-HOT: [[COMPUTED:%.*]] = arith.xori
   // ONE-HOT-NOT: "tt.reduce"
-  // ONE-HOT: [[GATHERED:%.*]] = tt.gather [[COMPUTED]]{{.*}}ttg.one_hot_xor_reduction
+  // ONE-HOT: [[GATHERED:%.*]] = tt.gather [[COMPUTED]]
   // ONE-HOT: [[SCALAR:%.*]] = tt.unsplat [[GATHERED]]
   // ONE-HOT: tt.return [[SCALAR]]
   tt.func @one_hot_xor_independent_reduction(%bases: tensor<32xi32, #one_hot_basis>) -> i32 {
@@ -597,8 +597,8 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     tt.return %reduced : i32
   }
 
-  // The shared pass replaces the reduction but leaves the conditional XOR
-  // for the separate NVIDIA LLVM optimization.
+  // The pass replaces only the reduction, leaving the ordinary select and XOR
+  // operations intact.
   // CHECK-LABEL: @one_hot_xor_conditional_accumulation
   // ONE-HOT-LABEL: @one_hot_xor_conditional_accumulation
   // ONE-HOT-NOT: "tt.reduce"
@@ -664,7 +664,7 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     tt.return %result, %masked_tensor, %masked_scalar : tensor<128xi32, #one_hot_index>, tensor<128xi32, #one_hot_index>, i32
   }
 
-  // The shared pass leaves an existing gather unmarked, even when the same
+  // The pass leaves an existing gather unchanged, even when the same
   // module also contains reductions that this pass can optimize.
   // CHECK-LABEL: @one_hot_xor_existing_gather_unchanged
   // ONE-HOT-LABEL: @one_hot_xor_existing_gather_unchanged

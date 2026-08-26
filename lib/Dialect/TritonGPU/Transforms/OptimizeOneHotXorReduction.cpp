@@ -101,7 +101,6 @@ public:
     auto gathered = triton::GatherOp::create(
         rewriter, reduction.getLoc(), singletonType, values, gatherIndex,
         /*axis=*/0, /*efficient_layout=*/true);
-    gathered->setAttr(AttrOneHotXorReduction, rewriter.getUnitAttr());
     Value result = triton::UnsplatOp::create(rewriter, reduction.getLoc(),
                                              valuesType.getElementType(),
                                              gathered.getResult());
@@ -131,7 +130,6 @@ private:
            layout.sublayout({kLane}, {kDim}).isSurjective() &&
            layout.sublayoutIsZero({kWarp, kBlock}, {kDim});
   }
-
 };
 
 class TritonGPUOptimizeOneHotXorReductionPass

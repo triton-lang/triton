@@ -53,10 +53,6 @@ constexpr static char AttrNumCTAsName[] = "ttg.num-ctas";
 constexpr static char AttrTargetName[] = "ttg.target";
 constexpr static char AttrNumThreadsPerWarp[] = "ttg.threads-per-warp";
 
-// Preserve the origin of one-hot XOR gathers through lowering so that backend
-// fusion can distinguish them from unrelated gathers. The backend consumes it.
-constexpr static char AttrOneHotXorReduction[] = "ttg.one_hot_xor_reduction";
-
 // Find the contextual number of warps on which this operation is executed.
 int lookupNumWarps(Operation *op);
 int lookupNumWarps(Region *region);
