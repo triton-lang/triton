@@ -13,22 +13,17 @@ def _compact_scaled_upcast_fp4_kernel(x_ptr, scale_ptr, out_ptr, M: ttgl.constex
                                       OUT_K: ttgl.constexpr, SCALE_K: ttgl.constexpr, SPT_PACKED: ttgl.constexpr,
                                       USE_CDNA4: ttgl.constexpr):
     packed_layout: ttgl.constexpr = ttgl.BlockedLayout([1, SPT_PACKED], [8, 8], [1, 1], [1, 0])
-    load_scale_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [8, 8], [1, 1], [1, 0])
 
     offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, packed_layout))
     offs_k_packed = ttgl.arange(0, K_PACKED, layout=ttgl.SliceLayout(0, packed_layout))
     x_offsets = offs_m[:, None] * K_PACKED + offs_k_packed[None, :]
     x = ttgl.load(x_ptr + x_offsets)
 
-    offs_scale_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, load_scale_layout))
-    offs_scale_k = ttgl.arange(0, SCALE_K, layout=ttgl.SliceLayout(0, load_scale_layout))
+    scale_layout: ttgl.constexpr = ttgl.amd.get_scaled_upcast_fp4_scale_layout(x, SCALE_K, ttgl.bfloat16, axis=1)
+    offs_scale_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, scale_layout))
+    offs_scale_k = ttgl.arange(0, SCALE_K, layout=ttgl.SliceLayout(0, scale_layout))
     scale_offsets = offs_scale_m[:, None] * SCALE_K + offs_scale_k[None, :]
     scale = ttgl.load(scale_ptr + scale_offsets)
-
-    # Ask for the required scale layout rather than hand-deriving one per shape,
-    # which is also how a caller who does not know the mapping would write this.
-    scale_layout: ttgl.constexpr = ttgl.amd.get_scaled_upcast_fp4_scale_layout(x, scale, ttgl.bfloat16, axis=1)
-    scale = ttgl.convert_layout(scale, scale_layout)
 
     if USE_CDNA4:
         out = ttgl.amd.cdna4.scaled_upcast(x, scale, ttgl.bfloat16, axis=1)

@@ -56,25 +56,29 @@ def _validate_scaled_upcast_fp4_args(src, scale, axis):
 
 
 @ttgl.builtin
-def get_scaled_upcast_fp4_scale_layout(src, scale, elem_type, axis, _semantic=None):
+def get_scaled_upcast_fp4_scale_layout(src, scale_size, elem_type, axis, _semantic=None):
     """Return the scale layout required by an FP4 scaled_upcast.
 
-    The caller must explicitly convert the scale tensor to the returned layout.
-    ``scale`` is only inspected for its shape and layout; if it already has a
-    compatible layout its own layout is returned so the convert is a no-op.
-    Raises if the layout of ``src`` admits no valid scale layout for the
-    requested ``scale`` shape.
+    ``scale_size`` is the scale tensor's extent along ``axis``. Raises if the layout
+    of ``src`` allows for no valid scale layout for the requested ``scale_size``.
     """
     _check(isinstance(src.type, ttgl.distributed_type),
            lambda: f"Expected src to have a distributed_type but got {src.type}")
-    _check(isinstance(scale.type, ttgl.distributed_type),
-           lambda: f"Expected scale to have a distributed_type but got {scale.type}")
     _check(elem_type in {ttgl.float16, ttgl.bfloat16},
            lambda: f"Expected elem_type to be fp16 or bf16 but got {elem_type}")
-    axis = _validate_scaled_upcast_fp4_args(src, scale, axis)
+    _check(src.dtype in {ttgl.int8, ttgl.uint8},
+           lambda: f"Expected packed fp4 input in int8/uint8, but got {src.dtype}")
+
+    axis = _normalize_axis(axis, len(src.type.shape), "axis is required for packed fp4 scaled_upcast")
+    scale_size = _unwrap_if_constexpr(scale_size)
+    _check(isinstance(scale_size, int), lambda: f"Expected scale_size to be an int but got {scale_size}")
+    output_size = src.type.shape[axis] * 2
+    _check(scale_size > 0 and output_size % scale_size == 0,
+           lambda: f"Expected output axis extent {output_size} to be divisible by scale_size {scale_size}")
+
     return _semantic.builder.get_scaled_upcast_fp4_scale_layout(
         src.handle,
-        scale.handle,
+        scale_size,
         elem_type.to_ir(_semantic.builder),
         axis,
     )

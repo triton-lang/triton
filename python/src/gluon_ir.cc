@@ -640,27 +640,23 @@ void init_gluon_ir(py::module_ &m) {
              return layoutToGluon(ty.getEncoding(), self.isRubin());
            })
       .def("get_scaled_upcast_fp4_scale_layout",
-           [](GluonOpBuilder &self, Value input, Value scale, Type elemType,
-              int32_t axis) -> py::object {
+           [](GluonOpBuilder &self, Value input, int64_t scaleSize,
+              Type elemType, int32_t axis) -> py::object {
              auto inputTy = cast<RankedTensorType>(input.getType());
-             auto scaleTy = cast<RankedTensorType>(scale.getType());
              auto resultTy = ttg::inferFp4ToFpResultType(
                  inputTy, elemType, axis, self.getLastLoc());
              check(succeeded(resultTy),
                    "failed to infer scaled_upcast_fp4 result type");
 
+             SmallVector<int64_t> scaleShape(resultTy->getShape());
+             scaleShape[axis] = scaleSize;
              auto scaleLayout = ttag::inferScaledUpcastFp4ScaleLayout(
-                 ttg::toLinearLayout(*resultTy), scaleTy.getShape(), axis,
+                 ttg::toLinearLayout(*resultTy), scaleShape, axis,
                  [&]() { return mlir::emitError(self.getLastLoc()); });
              check(succeeded(scaleLayout),
                    "failed to infer scaled_upcast_fp4 scale layout");
 
              auto *ctx = self.getContext();
-             auto kRegister = mlir::StringAttr::get(ctx, "register");
-             if (ttg::toLinearLayout(scaleTy).removeZeroBasesAlongDim(
-                     kRegister) == *scaleLayout)
-               return layoutToGluon(scaleTy.getEncoding(), self.isRubin());
-
              Attribute encoding;
              if (ttg::isPermutationMatrixLayout(*scaleLayout))
                encoding =
