@@ -142,15 +142,9 @@ public:
     if (!target || !target.getValue().starts_with("cuda:"))
       return;
 
-    GreedyRewriteConfig config;
-    config.enableFolding(false);
-    config.enableConstantCSE(false);
-    config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Disabled);
-
     RewritePatternSet reductionPatterns(&getContext());
     reductionPatterns.add<OptimizeOneHotXorReductionPattern>(&getContext());
-    if (failed(applyPatternsGreedily(module, std::move(reductionPatterns),
-                                     config)))
+    if (failed(applyPatternsGreedily(module, std::move(reductionPatterns))))
       signalPassFailure();
   }
 };
