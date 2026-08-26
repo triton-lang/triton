@@ -337,10 +337,8 @@ bool isWaitBoundary(Operation *op) {
     //   in impure inline asm or extern calls.
     if (!value)
       return isa<SideEffects::DefaultResource>(effect.getResource());
-    assert(!(isTensorMemory(value) &&
-             isa<MemoryEffects::Free>(effect.getEffect())) &&
-           "unexpected TMEM free");
-    return false;
+    return isTensorMemory(value) &&
+           isa<MemoryEffects::Free>(effect.getEffect());
   });
 }
 
