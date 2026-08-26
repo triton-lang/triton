@@ -649,21 +649,19 @@ void init_gluon_ir(py::module_ &m) {
              check(succeeded(resultTy),
                    "failed to infer scaled_upcast_fp4 result type");
 
-             auto outputShape = resultTy->getShape();
-             auto scaleShape = scaleTy.getShape();
-             check(outputShape[axis] % scaleShape[axis] == 0,
-                   "scaled_upcast_fp4 scale shape must divide output shape");
-             int64_t elementsPerScale = outputShape[axis] / scaleShape[axis];
-             auto outputLayout = ttg::toLinearLayout(*resultTy);
-             auto scaleLayout = ttag::ScaledUpcastFp4Op::computeScaleLayout(
-                 outputLayout, axis, elementsPerScale);
-             check(scaleLayout.has_value(),
+             auto scaleLayout = ttag::inferScaledUpcastFp4ScaleLayout(
+                 ttg::toLinearLayout(*resultTy), scaleTy.getShape(), axis,
+                 [&]() { return mlir::emitError(self.getLastLoc()); });
+             check(succeeded(scaleLayout),
                    "failed to infer scaled_upcast_fp4 scale layout");
-             if (ttg::toLinearLayout(scaleTy) == *scaleLayout)
+
+             auto *ctx = self.getContext();
+             auto kRegister = mlir::StringAttr::get(ctx, "register");
+             if (ttg::toLinearLayout(scaleTy).removeZeroBasesAlongDim(
+                     kRegister) == *scaleLayout)
                return layoutToGluon(scaleTy.getEncoding(), self.isRubin());
 
              Attribute encoding;
-             auto *ctx = self.getContext();
              if (ttg::isPermutationMatrixLayout(*scaleLayout))
                encoding =
                    ttg::LinearEncodingAttr::get(ctx, std::move(*scaleLayout));

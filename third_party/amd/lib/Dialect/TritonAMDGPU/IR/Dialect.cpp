@@ -196,18 +196,20 @@ std::optional<int64_t> scaledUpcastFp4ScaleBlock(ScaledUpcastFp4Op op) {
   return outputAxis / scaleAxis;
 }
 
-std::optional<LinearLayout>
-computeCompactScaleLayoutForOp(ScaledUpcastFp4Op op, Attribute outputEnc) {
-  auto scaleBlock = scaledUpcastFp4ScaleBlock(op);
-  if (!scaleBlock || *scaleBlock == 1)
-    return std::nullopt;
-  if (!outputEnc || !isa<gpu::LayoutEncodingTrait>(outputEnc))
-    return std::nullopt;
+// Derives the scale layout for `op` given the encoding of its output.
+FailureOr<LinearLayout>
+inferScaleLayoutForOp(ScaledUpcastFp4Op op, Attribute outputEnc,
+                      function_ref<InFlightDiagnostic()> emitError = nullptr) {
+  if (!outputEnc || !isa<gpu::LayoutEncodingTrait>(outputEnc)) {
+    if (emitError)
+      emitError() << "output must carry a distributed layout encoding";
+    return failure();
+  }
   auto outputLL =
       gpu::toLinearLayout(op.getOutput().getType().getShape(),
                           cast<gpu::LayoutEncodingTrait>(outputEnc));
-  return ScaledUpcastFp4Op::computeScaleLayout(outputLL, op.getAxis(),
-                                               *scaleBlock);
+  return inferScaledUpcastFp4ScaleLayout(
+      outputLL, op.getScale().getType().getShape(), op.getAxis(), emitError);
 }
 
 std::optional<Attribute>
@@ -219,15 +221,11 @@ inferScaledUpcastFp4ScaleEncoding(ScaledUpcastFp4Op op, Attribute outputEnc) {
   // outputEnc.
   if (*scaleBlock == 1)
     return outputEnc;
-  // Compact scales: drop the broadcast register bases so the inferred layout
-  // keeps a single register per distinct scale value.
-  auto compact = computeCompactScaleLayoutForOp(op, outputEnc);
-  if (!compact)
+  auto scaleLL = inferScaleLayoutForOp(op, outputEnc);
+  if (failed(scaleLL))
     return std::nullopt;
-
-  auto kRegister = StringAttr::get(outputEnc.getContext(), "register");
-  return gpu::LinearEncodingAttr::get(
-      outputEnc.getContext(), compact->removeZeroBasesAlongDim(kRegister));
+  return gpu::LinearEncodingAttr::get(outputEnc.getContext(),
+                                      std::move(*scaleLL));
 }
 
 LogicalResult verifyScaledUpcastFp4ScaleLayout(ScaledUpcastFp4Op op) {
@@ -240,38 +238,20 @@ LogicalResult verifyScaledUpcastFp4ScaleLayout(ScaledUpcastFp4Op op) {
   if (!scaleEnc)
     return success();
 
-  // Reduce a scale encoding to one register per distinct scale, so the final
+  auto expectedLL =
+      inferScaleLayoutForOp(op, outputEnc, [&]() { return op.emitError(); });
+  if (failed(expectedLL))
+    return failure();
+
+  // Reduce the scale encoding to one register per distinct scale, so the
   // comparison matches up to redundant register broadcasting (a thread may keep
   // one register per distinct scale rather than replicating it across every
   // output register it covers).
   auto kRegister = StringAttr::get(op.getContext(), "register");
-  auto stripped = [&](Attribute enc) {
-    return mlir::triton::gpu::toLinearLayout(
-               scaleTy.getShape(), cast<gpu::LayoutEncodingTrait>(enc))
-        .removeZeroBasesAlongDim(kRegister);
-  };
-
-  std::optional<LinearLayout> expectedLL;
-  if (auto compact = computeCompactScaleLayoutForOp(op, outputEnc)) {
-    // Compact scales: the 8 register-consecutive fp4 of a v_cvt_scale_pk8 group
-    // must share a single scale; otherwise the lowering has no single held
-    // scale to apply to the group (e.g. a group that spans two scale blocks
-    // along the scaled axis, or one that crosses rows of a non-scaled dim).
-    if (!pk8GroupSharesSingleScale(*compact, kRegister))
-      return op.emitError()
-             << "the 8 elements of a v_cvt_scale_pk8 group would not share a "
-                "single scale; the scaled axis must place 8 register-"
-                "consecutive elements within one scale block";
-    expectedLL = compact->removeZeroBasesAlongDim(kRegister);
-  } else if (auto expectedEnc =
-                 inferScaledUpcastFp4ScaleEncoding(op, outputEnc)) {
-    // Expanded scales reuse the output encoding.
-    expectedLL = stripped(*expectedEnc);
-  } else {
-    return op.emitError() << "could not infer expected scale encoding";
-  }
-
-  if (stripped(scaleEnc) != *expectedLL)
+  auto scaleLL = gpu::toLinearLayout(scaleTy.getShape(),
+                                     cast<gpu::LayoutEncodingTrait>(scaleEnc))
+                     .removeZeroBasesAlongDim(kRegister);
+  if (scaleLL != *expectedLL)
     return op.emitError()
            << "scale encoding is not compatible with the inferred scale layout";
   return success();
@@ -408,6 +388,55 @@ LogicalResult verifyScaledDowncastScaleShapeAndAxis(OpT op,
 }
 
 } // namespace
+
+FailureOr<LinearLayout>
+inferScaledUpcastFp4ScaleLayout(const LinearLayout &outputLL,
+                                ArrayRef<int64_t> scaleShape, int64_t axis,
+                                function_ref<InFlightDiagnostic()> emitError) {
+  auto *ctx = outputLL.getOutDimNames().begin()->getContext();
+  auto fail = [&](const llvm::Twine &reason) {
+    if (emitError)
+      emitError() << reason;
+    return failure();
+  };
+
+  int64_t rank = outputLL.getNumOutDims();
+  if (axis < 0 || axis >= rank ||
+      rank != static_cast<int64_t>(scaleShape.size()))
+    return fail("scaled axis or scale rank is out of range for the output");
+
+  auto axisDim = StringAttr::get(ctx, llvm::formatv("dim{0}", axis).str());
+  if (!outputLL.hasOutDim(axisDim))
+    return fail("output layout has no dimension for the scaled axis");
+
+  int64_t outputExtent = outputLL.getOutDimSize(axisDim);
+  int64_t scaleExtent = scaleShape[axis];
+  if (scaleExtent <= 0 || outputExtent % scaleExtent != 0)
+    return fail("expected output.shape[axis] to be divisible by "
+                "scale.shape[axis]");
+
+  // An `elementsPerScale` of 1 means the scales are expanded to the output
+  // shape; anything larger means compact scales.
+  int64_t elementsPerScale = outputExtent / scaleExtent;
+  auto scaleLL =
+      ScaledUpcastFp4Op::computeScaleLayout(outputLL, axis, elementsPerScale);
+  if (!scaleLL)
+    return fail("could not derive a scale layout from the output layout");
+
+  auto kRegister = StringAttr::get(ctx, "register");
+  // Compact scales: the 8 register-consecutive fp4 of a v_cvt_scale_pk8 group
+  // must share a single scale; otherwise the lowering has no single held scale
+  // to apply to the group (e.g. a group that spans two scale blocks along the
+  // scaled axis, or one that crosses rows of a non-scaled dim).
+  if (elementsPerScale > 1 && !pk8GroupSharesSingleScale(*scaleLL, kRegister))
+    return fail("the 8 elements of a v_cvt_scale_pk8 group would not share a "
+                "single scale; the scaled axis must place 8 register-"
+                "consecutive elements within one scale block");
+
+  // Drop the broadcast register bases so the layout keeps a single register per
+  // distinct scale value.
+  return scaleLL->removeZeroBasesAlongDim(kRegister);
+}
 
 // Derive the layout of a scale tensor from an output layout. A compact scale
 // holds a single value per `elementsPerScale` consecutive output elements

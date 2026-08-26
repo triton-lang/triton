@@ -60,6 +60,10 @@ def get_scaled_upcast_fp4_scale_layout(src, scale, elem_type, axis, _semantic=No
     """Return the scale layout required by an FP4 scaled_upcast.
 
     The caller must explicitly convert the scale tensor to the returned layout.
+    ``scale`` is only inspected for its shape and layout; if it already has a
+    compatible layout its own layout is returned so the convert is a no-op.
+    Raises if the layout of ``src`` admits no valid scale layout for the
+    requested ``scale`` shape.
     """
     _check(isinstance(src.type, ttgl.distributed_type),
            lambda: f"Expected src to have a distributed_type but got {src.type}")
