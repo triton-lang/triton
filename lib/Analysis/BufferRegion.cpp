@@ -21,7 +21,15 @@ using namespace mlir;
 
 namespace {
 // TODO: move to Utility.cpp/unify with TritonInstrument/Utility.cpp
-FailureOr<SmallVector<uint32_t, 2>> getAllocationOffsets(ttg::LocalAllocOp op) {
+FailureOr<SmallVector<uint32_t, 2>>
+getAllocationOffsets(ttg::LocalAllocOp op, Allocation *allocation) {
+  if (allocation) {
+    SmallVector<uint32_t, 2> offsets;
+    for (auto id : allocation->getBufferIds(op.getResult()))
+      offsets.push_back(allocation->getOffset(id));
+    assert(!offsets.empty() && "shared allocation must have allocated buffers");
+    return offsets;
+  }
   auto offsetAttr = op->getAttr("allocation.offset");
   if (!offsetAttr) {
     op.emitError("ConcurrencySanitizer should run after "
@@ -473,6 +481,7 @@ BufferRegionAnalysis::getAllocView(Value allocation, uint32_t storageBase,
   view.storageBase = storageBase;
   view.partitionBases = llvm::to_vector<2>(partitionBases);
   Operation *op = allocation.getDefiningOp();
+  view.allocation = op;
   // TMEM allocation assigns module-wide addresses; only shared allocations
   // need a per-function frame and translation by a call's shared-memory offset.
   auto memory = cast<ttg::MemDescType>(allocation.getType());
@@ -587,13 +596,21 @@ BufferRegionAnalysis::getScratchFootprint(Operation *op) {
   if (!inserted)
     return it->second.get();
 
-  auto offset = op->getAttrOfType<IntegerAttr>("allocation.offset");
-  auto size = op->getAttrOfType<IntegerAttr>("allocation.size");
-  if (!offset || !size)
-    return nullptr;
-
-  uint32_t base = offset.getInt();
-  uint32_t length = size.getInt();
+  uint32_t base, length;
+  if (auto *allocation = getAllocation(op)) {
+    auto id = allocation->getBufferId(op);
+    if (id == Allocation::InvalidBufferId)
+      return nullptr;
+    base = allocation->getOffset(id);
+    length = allocation->getAllocatedSize(id);
+  } else {
+    auto offset = op->getAttrOfType<IntegerAttr>("allocation.offset");
+    auto size = op->getAttrOfType<IntegerAttr>("allocation.size");
+    if (!offset || !size)
+      return nullptr;
+    base = offset.getInt();
+    length = size.getInt();
+  }
   BufferRegionView view{{base, length}, /*storageBase=*/base};
   view.allocationFrame =
       getOperationId(op->getParentOfType<FunctionOpInterface>());
@@ -624,17 +641,34 @@ const BufferRegionFootprint *BufferRegionAnalysis::translateToCallsite(
   if (inserted) {
     uint32_t callerFrame =
         getOperationId(call->getParentOfType<FunctionOpInterface>());
-    auto offset = call->getAttrOfType<IntegerAttr>("allocation.offset");
+    uint32_t offset = getCallOffset(call);
     RegionInfo info(RegionInfo::ViewList{});
     for (const BufferRegionView &view : footprint->regionInfo.views)
-      info.views.insert(
-          view.allocationFrame == calleeFrame
-              ? view.translated(offset ? offset.getInt() : 0, callerFrame)
-              : view);
+      info.views.insert(view.allocationFrame == calleeFrame
+                            ? view.translated(offset, callerFrame)
+                            : view);
     it->second = std::make_unique<BufferRegionFootprint>(
         BufferRegionFootprint{footprint->memorySpace, std::move(info)});
   }
   return it->second.get();
+}
+
+Allocation *BufferRegionAnalysis::getAllocation(Operation *op) const {
+  if (!moduleAllocation)
+    return nullptr;
+  auto *allocation =
+      moduleAllocation->getFuncData(op->getParentOfType<FunctionOpInterface>());
+  assert(allocation && "function allocation must be available");
+  return allocation;
+}
+
+uint32_t BufferRegionAnalysis::getCallOffset(CallOpInterface call) const {
+  if (auto *allocation = getAllocation(call)) {
+    auto id = allocation->getBufferId(call);
+    return id == Allocation::InvalidBufferId ? 0 : allocation->getOffset(id);
+  }
+  auto offset = call->getAttrOfType<IntegerAttr>("allocation.offset");
+  return offset ? offset.getInt() : 0;
 }
 
 LogicalResult BufferRegionAnalysis::visitOperation(
@@ -665,7 +699,7 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     if (mode == Mode::TensorMemoryOnly)
       return propagateRegions(RegionInfo::getPessimisticValueState());
     FailureOr<SmallVector<uint32_t, 2>> offsets =
-        getAllocationOffsets(localAllocOp);
+        getAllocationOffsets(localAllocOp, getAllocation(op));
     if (failed(offsets))
       return failure();
     ArrayRef<uint32_t> partitionBases = offsets->size() > 1

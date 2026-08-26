@@ -268,139 +268,43 @@ insertCrossCTAMBarrierInitSyncForFunction(FunctionOpInterface funcOp,
 
 class ClusterBarrierAnalysis : public MembarAnalysis {
 public:
-  using MembarAnalysis::MembarAnalysis;
+  ClusterBarrierAnalysis(Allocation &allocation, MembarFilterFn filter,
+                         BufferRegionAnalysis &regions)
+      : MembarAnalysis(allocation, std::move(filter), regions,
+                       isPreAllocAliasSliceFilter,
+                       AccessMode::AllocatorAliasesOnly) {}
 
 private:
+  void insertBarrier(Operation *op, OpBuilder *builder) override {
+    ttng::ClusterBarrierOp::create(*builder, op->getLoc());
+  }
+
+  BarrierStages getBarrierStages(Operation *op) override {
+    BarrierStages stages;
+    if (auto barrier = dyn_cast<ttng::ClusterBarrierOp>(op))
+      stages.beforeMemoryEffects = !barrier.getRelaxed();
+    // Distributed scratch synchronizes between its write and read phases.
+    stages.betweenMemoryEffects = isDistributedMultiCTAOp(op, /*isRead=*/true);
+    return stages;
+  }
+
   void update(Operation *op, MembarInfo *membarInfo, FuncMapT *funcMap,
-              OpBuilder *builder) override;
-};
-
-void ClusterBarrierAnalysis::update(Operation *op, MembarInfo *membarInfo,
-                                    FuncMapT *funcMap, OpBuilder *builder) {
-  if (auto clusterBarrier = dyn_cast<ttng::ClusterBarrierOp>(op)) {
-    if (!clusterBarrier.getRelaxed())
-      membarInfo->sync();
-    return;
-  }
-
-  // Any path from distributed shared memory use to kernel exit must include a
-  // cluster barrier. Conservatively insert the barrier since we can't analyze
-  // memory effects properly in warp specialized kernels.
-  if (op->hasTrait<OpTrait::ReturnLike>() &&
-      isa<FunctionOpInterface>(op->getParentOp())) {
-    auto funcOp = cast<FunctionOpInterface>(op->getParentOp());
-    if (isKernel(funcOp)) {
-      builder->setInsertionPoint(op);
-      ttng::ClusterBarrierOp::create(*builder, op->getLoc());
-      membarInfo->sync();
-    }
-    return;
-  }
-
-  BlockInfo curBlockInfo;
-  auto scratchBufferId = Allocation::InvalidBufferId;
-  if (isa<triton::CallOp>(op)) {
-    auto call = cast<CallOpInterface>(op);
-    if (auto callee = dyn_cast<FunctionOpInterface>(call.resolveCallable())) {
-      MembarInfo calleeMembarInfo = funcMap->lookup(callee);
-      auto callBufferId = allocation.getBufferId(op);
-      size_t callOffset = 0;
-      if (callBufferId != Allocation::InvalidBufferId)
-        callOffset = allocation.getAllocatedInterval(callBufferId).start();
-      calleeMembarInfo.pending =
-          translateBlockInfoToCallsite(calleeMembarInfo.pending, callOffset);
-      calleeMembarInfo.entryBlockInfo = translateBlockInfoToCallsite(
-          calleeMembarInfo.entryBlockInfo, callOffset);
-      if (membarInfo->pending.isIntersected(calleeMembarInfo.entryBlockInfo,
-                                            filter, &allocation,
-                                            isPreAllocAliasSliceFilter)) {
+              OpBuilder *builder) override {
+    if (op->hasTrait<OpTrait::ReturnLike>() &&
+        isa<FunctionOpInterface>(op->getParentOp())) {
+      // Any path from distributed shared memory use to kernel exit must include
+      // a cluster barrier. Conservatively insert it because warp-specialized
+      // memory effects are not fully modeled.
+      if (isKernel(cast<FunctionOpInterface>(op->getParentOp()))) {
         builder->setInsertionPoint(op);
-        ttng::ClusterBarrierOp::create(*builder, op->getLoc());
+        insertBarrier(op, builder);
         membarInfo->sync();
       }
-      membarInfo->applyCallSummary(calleeMembarInfo);
+      return;
     }
-    return;
-  } else {
-    if (auto memEffects = dyn_cast<MemoryEffectOpInterface>(op)) {
-      SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>>
-          effectInstances;
-      memEffects.getEffects(effectInstances);
-      for (auto effectInstance : effectInstances) {
-        if (auto value = effectInstance.getValue()) {
-          for (auto bufferId : allocation.getAllBufferIdsWithAliases(value)) {
-            if (bufferId != Allocation::InvalidBufferId) {
-              auto interval = allocation.getAllocatedInterval(bufferId);
-              auto slice = AllocationSlice(value, interval, bufferId);
-              if (isa<MemoryEffects::Write>(effectInstance.getEffect()))
-                curBlockInfo.syncWriteSlices[slice].insert(op);
-              else if (isa<MemoryEffects::Read>(effectInstance.getEffect()))
-                curBlockInfo.syncReadSlices[slice].insert(op);
-            }
-          }
-        }
-      }
-    }
-    scratchBufferId = allocation.getBufferId(op);
+    updateMemoryEffects(op, membarInfo, funcMap, builder);
   }
-
-  // Scratch buffer operations consist of a series of shared memory operations
-  // starting from a shared memory write, followed by a series of shared memory
-  // read/write operations, and ending with a shared memory read, i.e., shared
-  // memory write -> ... -> shared memory read.
-  if (scratchBufferId != Allocation::InvalidBufferId) {
-    if ((!curBlockInfo.syncReadSlices.empty() ||
-         !curBlockInfo.syncWriteSlices.empty()) &&
-        !isa<ttg::LocalAtomicScatterRMWOp>(op)) {
-      llvm::report_fatal_error(
-          "scratch buffer operations should not have any shared memory "
-          "dependencies except for local_atomic_scatter_rmw");
-    }
-
-    auto interval = allocation.getAllocatedInterval(scratchBufferId);
-    auto scratchSlice = AllocationSlice(interval);
-    curBlockInfo.syncWriteSlices[scratchSlice].insert(op);
-
-    auto insertClusterBarrierNeeded = membarInfo->pending.isIntersected(
-        curBlockInfo, filter, &allocation, isPreAllocAliasSliceFilter);
-    if (insertClusterBarrierNeeded) {
-      // The inserted barrier precedes the current operation, so it clears only
-      // incoming state. Keep curBlockInfo because all of the operation's
-      // scratch effects occur after the barrier.
-      // For example:
-      //   pending = R(scratch), curBlockInfo = W(scratch)
-      //   cluster_barrier
-      //   pending = {},         curBlockInfo = W(scratch)
-      builder->setInsertionPoint(op);
-      ttng::ClusterBarrierOp::create(*builder, op->getLoc());
-      membarInfo->sync();
-    }
-
-    bool hasClusterSync = isDistributedMultiCTAOp(op, /*isRead=*/true);
-    if (hasClusterSync) {
-      // A distributed scratch operation synchronizes between its write and
-      // read phases. Record the write before clearing the state, then retain
-      // only the read as an outgoing effect.
-      // For example:
-      //   pending = {},          curBlockInfo = W(scratch)
-      //   cluster_barrier
-      //   pending = {},          curBlockInfo = R(scratch)
-      membarInfo->addBlockInfo(curBlockInfo);
-      membarInfo->sync();
-      curBlockInfo.sync();
-    }
-
-    curBlockInfo.syncReadSlices[scratchSlice].insert(op);
-  } else if (membarInfo->pending.isIntersected(curBlockInfo, filter,
-                                               &allocation,
-                                               isPreAllocAliasSliceFilter)) {
-    builder->setInsertionPoint(op);
-    ttng::ClusterBarrierOp::create(*builder, op->getLoc());
-    membarInfo->sync();
-  }
-
-  membarInfo->addBlockInfo(curBlockInfo);
-}
+};
 
 } // namespace
 
@@ -422,7 +326,7 @@ void runClusterBarrierInsertion(ModuleAllocation &moduleAllocation,
   };
 
   ModuleMembarAnalysis analysis(moduleAllocation, filterFn);
-  analysis.runAnalysis<ClusterBarrierAnalysis>();
+  analysis.run<ClusterBarrierAnalysis>();
 }
 
 LogicalResult

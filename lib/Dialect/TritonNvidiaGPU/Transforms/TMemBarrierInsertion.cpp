@@ -71,7 +71,7 @@ static bool isTensorMemory(Value value) {
          isa<TensorMemorySpaceAttr>(memDescType.getMemorySpace());
 }
 
-static BlockInfo getTMemAccesses(Operation *op, BufferRegionAnalysis *regions) {
+static BlockInfo getTMemAccesses(Operation *op, BufferRegionAnalysis &regions) {
   BlockInfo accesses;
   for (const MemoryAccess &access : getMemoryAccesses(op)) {
     if (!isTensorMemory(access.value))
@@ -79,7 +79,7 @@ static BlockInfo getTMemAccesses(Operation *op, BufferRegionAnalysis *regions) {
     // Footprints preserve TMEM rows and columns; a full interval makes unknown
     // footprints alias all TMEM.
     AllocationSlice slice(Interval<size_t>{});
-    slice.physicalFootprint = regions->getFootprint(access.value);
+    slice.physicalFootprint = regions.getFootprint(access.value);
     if (access.isRead)
       accesses.syncReadSlices[slice].insert(op);
     if (access.isWrite)
@@ -103,29 +103,18 @@ void TMemBarrierAnalysis::update(Operation *op, MembarInfo *membarInfo,
   if (stages.beforeMemoryEffects)
     membarInfo->sync();
 
-  if (isa<triton::CallOp>(op)) {
-    auto call = cast<CallOpInterface>(op);
-    if (auto callee = dyn_cast<FunctionOpInterface>(call.resolveCallable())) {
+  if (auto call = dyn_cast<CallOpInterface>(op)) {
+    if (auto summary = getCallSummary(call, *funcMap)) {
       // Tensor-memory allocation attributes are physical addresses assigned
       // across the whole module, so callee slices need no call-frame offset.
-      MembarInfo calleeMembarInfo = funcMap->lookup(callee);
-      if (membarInfo->pending.isIntersected(calleeMembarInfo.entryBlockInfo,
-                                            filter, &allocation)) {
-        builder->setInsertionPoint(op);
-        insertBarrier(op, builder);
-        membarInfo->sync();
-      }
-      membarInfo->applyCallSummary(calleeMembarInfo);
+      syncIfNeeded(op, summary->entryBlockInfo, membarInfo, builder);
+      membarInfo->applyCallSummary(*summary);
     }
     return;
   }
 
   BlockInfo curBlockInfo = getTMemAccesses(op, regions);
-  if (membarInfo->pending.isIntersected(curBlockInfo, filter, &allocation)) {
-    builder->setInsertionPoint(op);
-    insertBarrier(op, builder);
-    membarInfo->sync();
-  }
+  syncIfNeeded(op, curBlockInfo, membarInfo, builder);
 
   membarInfo->addBlockInfo(curBlockInfo);
   // A leading or interior rendezvous must preserve the operation's own effects.
@@ -338,7 +327,7 @@ LogicalResult runTMemAnalysis(ModuleOp mod, MembarFilterFn filter = nullptr) {
     return failure();
   ModuleAllocation allocation(mod);
   ModuleMembarAnalysis analysis(allocation, std::move(filter));
-  analysis.runAnalysis<AnalysisT>(regions);
+  analysis.runAnalysis<AnalysisT>(*regions);
   return success();
 }
 

@@ -1,6 +1,8 @@
 #ifndef TRITON_ANALYSIS_FUNCTION_H
 #define TRITON_ANALYSIS_FUNCTION_H
 
+#include "triton/Analysis/CallGraph.h"
+
 #include "mlir/IR/Builders.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
@@ -53,7 +55,33 @@ public:
     resolve(function, &funcMap, &builder);
   }
 
+  template <typename Factory>
+  static void runModule(ModuleOp module, Factory makeAnalysis) {
+    CallGraph<StateT> callGraph(module);
+    FuncMapT summaries;
+    callGraph.template walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
+        [](CallOpInterface, FunctionOpInterface) {},
+        [&](FunctionOpInterface function) {
+          if (summaries.try_emplace(function).second)
+            makeAnalysis(function).run(function, summaries);
+        });
+  }
+
 protected:
+  /// Copy the callee summary before mapping its accesses into the caller.
+  static std::optional<StateT> getCallSummary(
+      CallOpInterface call, const FuncMapT &summaries,
+      llvm::function_ref<void(StateT &, FunctionOpInterface)> translate = {}) {
+    auto callee = dyn_cast_or_null<FunctionOpInterface>(call.resolveCallable());
+    auto it = summaries.find(callee);
+    if (it == summaries.end())
+      return std::nullopt;
+    StateT summary = it->second;
+    if (translate)
+      translate(summary, callee);
+    return summary;
+  }
+
   virtual void update(Operation *operation, StateT *state, FuncMapT *funcMap,
                       OpBuilder *builder) = 0;
 

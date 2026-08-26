@@ -147,8 +147,7 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
 }
 
 std::optional<uint16_t> getAtomicScratchBroadcastMask(Operation *op) {
-  if (!op->hasAttr("allocation.size") ||
-      !isa<AtomicOpInterface, AtomicPollOp, gpu::LocalAtomicScatterRMWOp>(op))
+  if (!isa<AtomicOpInterface, AtomicPollOp, gpu::LocalAtomicScatterRMWOp>(op))
     return std::nullopt;
 
   Type resultTy = op->getResult(0).getType();

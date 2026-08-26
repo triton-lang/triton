@@ -1,5 +1,4 @@
 #include "triton/Analysis/BufferRegion.h"
-#include "triton/Analysis/CallGraph.h"
 #include "triton/Analysis/Function.h"
 #include "triton/Analysis/MemoryFrontier.h"
 #include "triton/Analysis/Utility.h"
@@ -97,13 +96,16 @@ struct ProxyFenceFunctionAnalysis
     }
 
     if (auto call = dyn_cast<CallOpInterface>(op)) {
-      auto callee = cast<FunctionOpInterface>(call.resolveCallable());
-      ProxyBlockInfo effects = funcMap->lookup(callee);
-      for (auto *frontier : {&effects.generic, &effects.async})
-        frontier->transformAccesses([&](BufferAccess access) {
-          return regions.translateToCallsite(access, call, callee);
-        });
-      applyEffects(op, effects, *state, *builder);
+      auto effects = getCallSummary(
+          call, *funcMap,
+          [&](ProxyBlockInfo &effects, FunctionOpInterface callee) {
+            for (auto *frontier : {&effects.generic, &effects.async})
+              frontier->transformAccesses([&](BufferAccess access) {
+                return regions.translateToCallsite(access, call, callee);
+              });
+          });
+      if (effects)
+        applyEffects(op, *effects, *state, *builder);
       return;
     }
 
@@ -162,15 +164,9 @@ struct ProxyFenceInsertionPass
     if (failed(solver->initializeAndRun(module)))
       return signalPassFailure();
 
-    CallGraph<ProxyBlockInfo> callGraph(module);
-    CallGraph<ProxyBlockInfo>::FuncDataMapT summaries;
-    callGraph.walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
-        [](CallOpInterface, FunctionOpInterface) {},
-        [&](FunctionOpInterface function) {
-          if (summaries.try_emplace(function).second)
-            ProxyFenceFunctionAnalysis(*regions, scopes)
-                .run(function, summaries);
-        });
+    ProxyFenceFunctionAnalysis::runModule(module, [&](FunctionOpInterface) {
+      return ProxyFenceFunctionAnalysis(*regions, scopes);
+    });
   }
 };
 

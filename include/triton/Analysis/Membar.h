@@ -62,19 +62,10 @@ public:
 
   Allocation::BufferId getBufferId() const { return bufferId; }
 
-  AllocationSlice translated(size_t offset,
-                             bool invalidateBufferId = false) const {
-    AllocationSlice shifted = *this;
-    // TODO: Translate physical footprints into the caller's allocation frame.
-    shifted.physicalFootprint = nullptr;
-    shifted.allocationInterval = Interval<size_t>(
-        allocationInterval.start() + offset, allocationInterval.end() + offset);
-    if (invalidateBufferId) {
-      shifted.bufferId = Allocation::InvalidBufferId;
-      shifted.invalidateIterationInfo();
-    }
-    return shifted;
-  }
+  /// Translate shared-memory geometry and discard callee-local index facts.
+  AllocationSlice
+  translateToCallsite(CallOpInterface call, FunctionOpInterface callee,
+                      triton::BufferRegionAnalysis &regions) const;
 
   void print(raw_ostream &os) const;
 
@@ -139,6 +130,17 @@ struct BlockInfo {
       syncWriteSlices[slice.first].insert(slice.second.begin(),
                                           slice.second.end());
     return *this;
+  }
+
+  template <typename Transform> void transformSlices(Transform transform) {
+    for (auto *slices : {&syncReadSlices, &syncWriteSlices}) {
+      SliceMapT transformed;
+      for (const auto &[slice, ops] : *slices) {
+        auto &dst = transformed[transform(slice)];
+        dst.insert(ops.begin(), ops.end());
+      }
+      *slices = std::move(transformed);
+    }
   }
 
   /// Clears the buffer index and access origin of every slice, rebuilding both
@@ -262,31 +264,16 @@ struct MembarInfo {
     pending.join(callee.pending);
   }
 
+  template <typename Transform> void transformSlices(Transform transform) {
+    pending.transformSlices(transform);
+    entryBlockInfo.transformSlices(transform);
+  }
+
   bool operator==(const MembarInfo &other) const {
     return pending == other.pending && entryBlockInfo == other.entryBlockInfo &&
            allPathsFromEntrySynced == other.allPathsFromEntrySynced;
   }
 };
-
-inline BlockInfo translateBlockInfoToCallsite(const BlockInfo &calleeBlockInfo,
-                                              size_t callOffset) {
-  BlockInfo translatedBlockInfo;
-  auto translateSlices = [&](const BlockInfo::SliceMapT &srcSlices,
-                             BlockInfo::SliceMapT &dstSlices) {
-    for (const auto &[slice, ops] : srcSlices) {
-      auto translatedSlice =
-          slice.translated(callOffset, /*invalidateBufferId=*/true);
-      auto &dstOps = dstSlices[translatedSlice];
-      dstOps.insert(ops.begin(), ops.end());
-    }
-  };
-
-  translateSlices(calleeBlockInfo.syncReadSlices,
-                  translatedBlockInfo.syncReadSlices);
-  translateSlices(calleeBlockInfo.syncWriteSlices,
-                  translatedBlockInfo.syncWriteSlices);
-  return translatedBlockInfo;
-}
 
 /// Classify the barriers that synchronize local memory accesses in `op`
 /// relative to its memory effects.
@@ -299,6 +286,8 @@ triton::BarrierStages getLocalBarrierStages(Operation *op,
 
 class MembarAnalysis : public triton::PostOrderFunctionAnalysis<MembarInfo> {
 public:
+  enum class AccessMode { AllSharedAccesses, AllocatorAliasesOnly };
+
   /// Creates a new Membar analysis that generates the shared memory barrier
   /// in the following circumstances:
   /// - RAW: If a shared memory write is followed by a shared memory read, and
@@ -313,8 +302,11 @@ public:
   /// it is considered as the problem of the operation itself but not the membar
   /// analysis.
   MembarAnalysis(Allocation &allocation, MembarFilterFn filter,
-                 triton::BufferRegionAnalysis *regions = nullptr)
+                 triton::BufferRegionAnalysis &regions,
+                 MembarSliceFilterFn sliceFilter = nullptr,
+                 AccessMode accessMode = AccessMode::AllSharedAccesses)
       : allocation(allocation), filter(std::move(filter)), regions(regions),
+        sliceFilter(std::move(sliceFilter)), accessMode(accessMode),
         bufferIndexAnalysis(
             cast<FunctionOpInterface>(allocation.getOperation())) {}
 
@@ -329,13 +321,20 @@ private:
   void updateExitState(MembarInfo *membarInfo) override;
 
 protected:
-  void insertBarrier(Operation *operation, OpBuilder *builder);
+  void updateMemoryEffects(Operation *operation, MembarInfo *membarInfo,
+                           FuncMapT *funcMap, OpBuilder *builder);
+  void syncIfNeeded(Operation *operation, const BlockInfo &effects,
+                    MembarInfo *membarInfo, OpBuilder *builder);
+  virtual void insertBarrier(Operation *operation, OpBuilder *builder);
+  virtual triton::BarrierStages getBarrierStages(Operation *operation);
 
   Allocation &allocation;
   MembarFilterFn filter;
-  triton::BufferRegionAnalysis *regions;
+  triton::BufferRegionAnalysis &regions;
 
 private:
+  MembarSliceFilterFn sliceFilter;
+  AccessMode accessMode;
   BufferIndexAnalysis bufferIndexAnalysis;
 };
 
@@ -347,19 +346,23 @@ public:
                        MembarFilterFn filter = nullptr)
       : moduleAllocation(moduleAllocation), filter(std::move(filter)) {}
 
-  void run();
+  template <typename AnalysisT = MembarAnalysis> void run() {
+    // Geometry and interval slices use the same completed allocation, including
+    // backend scratch sizes and shared-memory partition offsets.
+    auto solver = createDataFlowSolver();
+    auto *regions = solver->load<triton::BufferRegionAnalysis>(
+        triton::BufferRegionAnalysis::Mode::AllMemory, &moduleAllocation);
+    if (failed(solver->initializeAndRun(moduleAllocation.getModuleOp())))
+      llvm::report_fatal_error("failed to analyze allocated buffer regions");
+    runAnalysis<AnalysisT>(*regions);
+  }
 
   template <typename AnalysisT>
-  void runAnalysis(triton::BufferRegionAnalysis *regions = nullptr) {
-    triton::CallGraph<MembarInfo> callGraph(moduleAllocation.getModuleOp());
-    triton::CallGraph<MembarInfo>::FuncDataMapT summaries;
-    callGraph.walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
-        [](CallOpInterface, FunctionOpInterface) {},
-        [&](FunctionOpInterface function) {
-          if (!summaries.try_emplace(function).second)
-            return;
+  void runAnalysis(triton::BufferRegionAnalysis &regions) {
+    AnalysisT::runModule(
+        moduleAllocation.getModuleOp(), [&](FunctionOpInterface function) {
           auto &allocation = *moduleAllocation.getFuncData(function);
-          AnalysisT(allocation, filter, regions).run(function, summaries);
+          return AnalysisT(allocation, filter, regions);
         });
   }
 

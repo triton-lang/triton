@@ -20,6 +20,11 @@
 #include "llvm/ADT/SparseBitVector.h"
 #include "llvm/ADT/UniqueVector.h"
 
+namespace mlir {
+class Allocation;
+class ModuleAllocation;
+} // namespace mlir
+
 namespace mlir::triton::gpu {
 enum class SharedKind : uint32_t;
 }
@@ -122,6 +127,8 @@ struct BufferRegionView {
   uint32_t affineCTAOffset = 0;
   /// Deterministically interned identity of the owning allocation frame.
   uint32_t allocationFrame = 0;
+  /// Descriptor allocation supplying these views; null for implicit scratch.
+  Operation *allocation = nullptr;
 
   bool contains(const BufferRegionView &other) const {
     return allocationFrame == other.allocationFrame &&
@@ -134,7 +141,8 @@ struct BufferRegionView {
 private:
   auto key() const {
     return std::tie(allocationFrame, region, storageBase, affineOffset,
-                    affinePartitionOffset, affineCTAOffset, partitionBases);
+                    affinePartitionOffset, affineCTAOffset, partitionBases,
+                    allocation);
   }
 
 public:
@@ -257,7 +265,7 @@ bool hasSharedAccess(Operation *op,
 //
 // Produces a RegionInfo lattice for each MemDesc/ptr-like SSA value,
 // and also collects a global list of all discovered BufferRegions.
-// Requires offsets from the shared- and tensor-memory allocation passes.
+// Requires completed allocation analyses or their materialized offsets.
 //
 class BufferRegionAnalysis : public dataflow::SparseForwardDataFlowAnalysis<
                                  dataflow::Lattice<RegionInfo>> {
@@ -269,8 +277,9 @@ public:
   enum class Mode { AllMemory, TensorMemoryOnly };
 
   explicit BufferRegionAnalysis(DataFlowSolver &solver,
-                                Mode mode = Mode::AllMemory)
-      : Base(solver), mode(mode) {}
+                                Mode mode = Mode::AllMemory,
+                                ModuleAllocation *allocation = nullptr)
+      : Base(solver), mode(mode), moduleAllocation(allocation) {}
 
   enum RegionType { SHARED_MEMORY, TENSOR_MEMORY, BARRIER, NUM_REGION_TYPES };
 
@@ -293,6 +302,9 @@ public:
   const BufferRegionFootprint *
   translateToCallsite(const BufferRegionFootprint *footprint,
                       CallOpInterface call, FunctionOpInterface callee);
+
+  /// Shared-memory offset of the callee frame in the caller's allocation.
+  uint32_t getCallOffset(CallOpInterface call) const;
 
   uint32_t getOperationId(Operation *operation) const {
     return operationInterner.idFor(operation);
@@ -332,6 +344,9 @@ public:
 
 private:
   const Mode mode;
+  ModuleAllocation *moduleAllocation;
+
+  Allocation *getAllocation(Operation *op) const;
 
   BufferRegionView getAllocView(Value allocation, uint32_t storageBase,
                                 llvm::ArrayRef<uint32_t> partitionBases = {});

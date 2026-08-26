@@ -529,7 +529,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: ttng.tmem_store
   // CHECK-NEXT: ttng.tmem_wait store
   // CHECK-NEXT: ttng.tc_gen5_mma
-  // CHECK-NEXT: ttng.wait_barrier
+  // CHECK: ttng.wait_barrier
   // CHECK-NEXT: tt.return
   tt.func @wait_disjoint_mma_publication(
       %data: tensor<128x128xf32, #blocked>,

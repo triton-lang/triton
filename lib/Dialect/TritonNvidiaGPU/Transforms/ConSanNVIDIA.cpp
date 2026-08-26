@@ -125,8 +125,9 @@ public:
     }
     if (auto storeOp = dyn_cast<ttng::TMAStoreLikeOpInterface>(op))
       mask = getBlockBroadcastMask(storeOp.getSrc().getType());
-    if (auto scratchMask = getAtomicScratchBroadcastMask(op))
-      mask = *scratchMask;
+    if (op->hasAttr("allocation.size"))
+      if (auto scratchMask = getAtomicScratchBroadcastMask(op))
+        mask = *scratchMask;
     if (isa<ttng::CLCTryCancelOp>(op) && ttg::lookupNumCTAs(op) > 1) {
       Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
       return arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId,
@@ -152,7 +153,8 @@ public:
   bool hasUnsummarizableCalleeState(Operation *op) const override {
     if (isa<ClusterBarrierOp>(op))
       return true;
-    return getAtomicScratchBroadcastMask(op).value_or(0) != 0;
+    return op->hasAttr("allocation.size") &&
+           getAtomicScratchBroadcastMask(op).value_or(0) != 0;
   }
 
   std::optional<MemEffectsOpInfo>
