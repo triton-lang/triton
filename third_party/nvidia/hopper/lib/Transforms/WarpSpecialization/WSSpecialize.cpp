@@ -372,7 +372,8 @@ Operation *SpecializeOp(Operation *op, IRMapping &mapping,
 
 } // namespace
 
-LogicalResult specializeRegion(triton::FuncOp funcOp, unsigned requestedRegisters) {
+LogicalResult specializeRegion(triton::FuncOp funcOp,
+                               unsigned requestedRegisters) {
 
   LLVM_DEBUG({
     LDBG("\n\n");
@@ -479,8 +480,9 @@ LogicalResult specializeRegion(triton::FuncOp funcOp, unsigned requestedRegister
     }
 
     if (isa<RankedTensorType>(capture.getType())) {
-      return mlir::emitError(capture.getLoc(),
-                             "capturing tensor values into warp partitions is not supported");
+      return mlir::emitError(
+          capture.getLoc(),
+          "capturing tensor values into warp partitions is not supported");
     }
     auto partOp = wsOp.getPartitionOp();
     partOp->insertOperands(partOp.getNumOperands(), capture);

@@ -18,7 +18,7 @@ namespace mlir {
 void doTaskPartition(triton::FuncOp &funcOp, unsigned numWarpGroups);
 int doTaskIdPropagate(triton::FuncOp &funcOp);
 bool doDataPartition(triton::FuncOp &funcOp, unsigned numConsumerGroups);
-void doCodePartition(triton::FuncOp &funcOp, unsigned numBuffers);
+LogicalResult doCodePartition(triton::FuncOp &funcOp, unsigned numBuffers);
 void doTokenLowering(triton::FuncOp &funcOp, unsigned numConsumerGroups);
 
 #define GEN_PASS_DEF_NVGPUWARPSPECIALIZATION
@@ -97,7 +97,9 @@ public:
       return signalPassFailure();
     }
 
-    doCodePartition(funcOp, numStages);
+    if (failed(doCodePartition(funcOp, numStages)))
+      return signalPassFailure();
+
     if (dumpIntermediateSteps) {
       ::mlir::triton::tools::mlirDumpsOrDbgs()
           << "// -----// WarpSpec internal IR Dump After: doCodePartition\n"
