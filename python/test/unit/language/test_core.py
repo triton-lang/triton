@@ -6141,6 +6141,23 @@ def test_while(device):
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("n", [0, 3])
+def test_while_condition(n, device):
+
+    @triton.jit
+    def kernel(Out, n):
+        i = 0
+        while tl.condition(i < n):
+            i += 1
+        tl.store(Out, i)
+
+    out = torch.full((1, ), -1, dtype=torch.int32, device=device)
+    kernel[(1, )](out, n)
+    assert out.item() == n
+    assert "__bool__" not in tl.condition.__dict__
+
+
+@pytest.mark.interpreter
 def test_nested_while(device):
 
     @triton.jit
