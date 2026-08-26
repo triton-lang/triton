@@ -2807,8 +2807,8 @@ def minimum(x, y, propagate_nan: constexpr = PropagateNan.NONE, _semantic=None):
 
     .. seealso:: :class:`tl.PropagateNan`
     """
-    x = _semantic.to_tensor(x)
-    y = _semantic.to_tensor(y)
+    x = _unwrap_if_constexpr(x)
+    y = _unwrap_if_constexpr(y)
     x = _promote_bfloat16_to_float32(x, _semantic=_semantic)
     y = _promote_bfloat16_to_float32(y, _semantic=_semantic)
     propagate_nan = _unwrap_if_constexpr(propagate_nan)
@@ -2829,8 +2829,8 @@ def maximum(x, y, propagate_nan: constexpr = PropagateNan.NONE, _semantic=None):
 
     .. seealso:: :class:`tl.PropagateNan`
     """
-    x = _semantic.to_tensor(x)
-    y = _semantic.to_tensor(y)
+    x = _unwrap_if_constexpr(x)
+    y = _unwrap_if_constexpr(y)
     x = _promote_bfloat16_to_float32(x, _semantic=_semantic)
     y = _promote_bfloat16_to_float32(y, _semantic=_semantic)
     propagate_nan = _unwrap_if_constexpr(propagate_nan)
@@ -2966,10 +2966,8 @@ def reduce(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=
 
 @builtin
 def _promote_bfloat16_to_float32(t, _semantic=None):
-    scalar_ty = t.type.scalar
-
     # hardware doesn't support FMAX, FMIN, CMP for bfloat16
-    if scalar_ty is bfloat16:
+    if isinstance(t, tensor) and t.dtype is bfloat16:
         return t.to(float32, _semantic=_semantic)
     return t
 
