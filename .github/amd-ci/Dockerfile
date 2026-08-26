@@ -13,6 +13,8 @@ ARG PYTORCH_VERSION
 ARG PYTORCH_INDEX_URL
 ARG HIP_PYTHON_VERSION
 ARG PYTORCH_GPU_TARGETS
+ARG PYTORCH_DEVICE_WHEEL_URL
+ARG PYTORCH_EXTRA_INDEX_URL
 
 LABEL org.opencontainers.image.title="Triton AMD CI image"
 LABEL org.opencontainers.image.description="ROCm, PyTorch, and OS dependencies for Triton AMD CI"

@@ -16,7 +16,7 @@ DOCKERFILE = SCRIPT_DIR / "Dockerfile"
 DEFAULT_IMAGE_REPOSITORY = "triton-amd-ci"
 IMAGE_REPOSITORY_ENV = "TRITON_AMD_CI_IMAGE_REPOSITORY"
 
-BUILD_ARGUMENTS = (
+REQUIRED_BUILD_ARGUMENTS = (
     "BASE_IMAGE",
     "ROCM_VERSION",
     "ROCM_RELEASE_TYPE",
@@ -26,6 +26,13 @@ BUILD_ARGUMENTS = (
     "HIP_PYTHON_VERSION",
     "PYTORCH_GPU_TARGETS",
 )
+
+OPTIONAL_BUILD_ARGUMENTS = (
+    "PYTORCH_DEVICE_WHEEL_URL",
+    "PYTORCH_EXTRA_INDEX_URL",
+)
+
+BUILD_ARGUMENTS = REQUIRED_BUILD_ARGUMENTS + OPTIONAL_BUILD_ARGUMENTS
 
 CONFIGURATIONS = {
     # Mirrors the ROCm and PyTorch versions used by the current gfx90a CI
@@ -75,11 +82,38 @@ CONFIGURATIONS = {
             "PYTORCH_GPU_TARGETS": "gfx90a,gfx942,gfx950",
         },
     },
+    "rocm-7.15-pytorch-2.11-nightly-gfx1250-73a658d5": {
+        "tag": ("rocm7.15.0.dev0-pytorch2.11.0.dev-gfx1250-"
+                "73a658d5-r1"),
+        "build_args": {
+            "BASE_IMAGE": ("ubuntu@sha256:"
+                           "4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90"),
+            "ROCM_VERSION": ("7.15.0.dev0+"
+                             "73a658d545d8b8aaf0aa3d08c0c80bb37667878a"),
+            "ROCM_RELEASE_TYPE": "prereleases",
+            "ROCM_REPO_DIRECTORY": "73a658d545d8b8aaf0aa3d08c0c80bb37667878a",
+            "PYTORCH_VERSION": ("2.11.0+devrocm7.15.0.dev0."
+                                "73a658d545d8b8aaf0aa3d08c0c80bb37667878a"),
+            "PYTORCH_INDEX_URL": ("https://rocm.nightlies.amd.com/"
+                                  "whl-multi-arch/"),
+            "PYTORCH_EXTRA_INDEX_URL": ("https://rocm.devreleases.amd.com/"
+                                        "whl-multi-arch/"),
+            "PYTORCH_DEVICE_WHEEL_URL": (
+                "https://rocm.devreleases.amd.com/whl-multi-arch/"
+                "amd_torch_device_gfx1250-2.11.0%2Bdevrocm7.15.0.dev0."
+                "73a658d545d8b8aaf0aa3d08c0c80bb37667878a-"
+                "cp312-cp312-linux_x86_64.whl"
+            ),
+            "HIP_PYTHON_VERSION": "7.2.2.562.43",
+            "PYTORCH_GPU_TARGETS": "gfx1250",
+        },
+    },
 }
 
 
 def validate_configurations() -> None:
-    expected_arguments = set(BUILD_ARGUMENTS)
+    required_arguments = set(REQUIRED_BUILD_ARGUMENTS)
+    allowed_arguments = set(BUILD_ARGUMENTS)
     tags = set()
 
     for name, configuration in CONFIGURATIONS.items():
@@ -100,8 +134,8 @@ def validate_configurations() -> None:
             raise ValueError(f"{name}: build_args must be a dictionary")
 
         actual_arguments = set(build_args)
-        missing = expected_arguments - actual_arguments
-        unexpected = actual_arguments - expected_arguments
+        missing = required_arguments - actual_arguments
+        unexpected = actual_arguments - allowed_arguments
         if missing:
             raise ValueError(f"{name}: missing build arguments: {', '.join(sorted(missing))}")
         if unexpected:
@@ -110,6 +144,14 @@ def validate_configurations() -> None:
         for argument, value in build_args.items():
             if not isinstance(value, str) or not value:
                 raise ValueError(f"{name}: {argument} must be a nonempty string")
+
+        device_wheel_url = build_args.get("PYTORCH_DEVICE_WHEEL_URL")
+        extra_index_url = build_args.get("PYTORCH_EXTRA_INDEX_URL")
+        if bool(device_wheel_url) != bool(extra_index_url):
+            raise ValueError(
+                f"{name}: PYTORCH_DEVICE_WHEEL_URL and "
+                "PYTORCH_EXTRA_INDEX_URL must be specified together"
+            )
 
         if build_args["ROCM_RELEASE_TYPE"] == "nightlies" and not re.fullmatch(r"[0-9]{8}-[0-9]+",
                                                                                build_args["ROCM_REPO_DIRECTORY"]):
@@ -135,6 +177,8 @@ def docker_command(configuration_name: str, image_repository: str) -> list[str]:
         str(DOCKERFILE),
     ]
     for argument in BUILD_ARGUMENTS:
+        if argument not in configuration["build_args"]:
+            continue
         command.extend([
             "--build-arg",
             f"{argument}={configuration['build_args'][argument]}",
@@ -167,7 +211,8 @@ def show_configuration(name: str, image_repository: str) -> None:
     print(f"name: {name}")
     print(f"image: {image_reference(name, image_repository)}")
     for argument in BUILD_ARGUMENTS:
-        print(f"{argument}={configuration['build_args'][argument]}")
+        if argument in configuration["build_args"]:
+            print(f"{argument}={configuration['build_args'][argument]}")
 
 
 def build_configuration(name: str, image_repository: str, dry_run: bool) -> None:

@@ -4,6 +4,16 @@ set -euxo pipefail
 
 if [ "${ROCM_RELEASE_TYPE}" = "pre-therock" ]; then
     python3 -m pip install --no-cache-dir --find-links "${PYTORCH_INDEX_URL}" "torch==${PYTORCH_VERSION}"
+elif [ -n "${PYTORCH_DEVICE_WHEEL_URL:-}" ]; then
+    # Some development builds are published as an architecture-specific
+    # PyTorch device wheel before they appear as a dated nightly. The wheel
+    # pins the matching torch, ROCm libraries, and device package. Add the
+    # development SDK at that same exact ROCm revision so Triton can build.
+    python3 -m pip install --no-cache-dir \
+        "${PYTORCH_DEVICE_WHEEL_URL}" \
+        "rocm[devel]==${ROCM_VERSION}" \
+        --extra-index-url "${PYTORCH_INDEX_URL}" \
+        --extra-index-url "${PYTORCH_EXTRA_INDEX_URL}"
 else
     if [ "${PYTORCH_GPU_TARGETS}" = "all" ]; then
         device_extras=(device-all)
