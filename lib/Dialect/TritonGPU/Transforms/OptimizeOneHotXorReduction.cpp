@@ -1,5 +1,4 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
@@ -8,7 +7,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
-#include "llvm/ADT/SmallPtrSet.h"
 
 namespace mlir::triton::gpu {
 
@@ -51,10 +49,7 @@ static std::optional<llvm::APInt> getSplatInteger(Value value) {
 class OptimizeOneHotXorReductionPattern
     : public OpRewritePattern<triton::ReduceOp> {
 public:
-  OptimizeOneHotXorReductionPattern(
-      MLIRContext *context,
-      llvm::SmallPtrSetImpl<Operation *> &optimizedGathers)
-      : OpRewritePattern(context), optimizedGathers(optimizedGathers) {}
+  using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(triton::ReduceOp reduction,
                                 PatternRewriter &rewriter) const override {
@@ -106,7 +101,7 @@ public:
     auto gathered = triton::GatherOp::create(
         rewriter, reduction.getLoc(), singletonType, values, gatherIndex,
         /*axis=*/0, /*efficient_layout=*/true);
-    optimizedGathers.insert(gathered.getOperation());
+    gathered->setAttr(AttrOneHotXorReduction, rewriter.getUnitAttr());
     Value result = triton::UnsplatOp::create(rewriter, reduction.getLoc(),
                                              valuesType.getElementType(),
                                              gathered.getResult());
@@ -137,81 +132,6 @@ private:
            layout.sublayoutIsZero({kWarp, kBlock}, {kDim});
   }
 
-  llvm::SmallPtrSetImpl<Operation *> &optimizedGathers;
-};
-
-// After a one-hot reduction becomes a gather, the surrounding source-level
-// accumulator update can be implemented with one NVIDIA ternary instruction:
-//
-//   accumulator ^ where(condition, splat(gathered_value), 0)
-//     => lop3(accumulator, splat(freeze(gathered_value)), sext(condition),
-//     0x78)
-class FuseOneHotXorAccumulationPattern
-    : public OpRewritePattern<arith::XOrIOp> {
-public:
-  FuseOneHotXorAccumulationPattern(
-      MLIRContext *context,
-      const llvm::SmallPtrSetImpl<Operation *> &optimizedGathers)
-      : OpRewritePattern(context), optimizedGathers(optimizedGathers) {}
-
-  LogicalResult matchAndRewrite(arith::XOrIOp accumulation,
-                                PatternRewriter &rewriter) const override {
-    auto contribution = accumulation.getRhs().getDefiningOp<arith::SelectOp>();
-    Value accumulator = accumulation.getLhs();
-    if (!contribution) {
-      contribution = accumulation.getLhs().getDefiningOp<arith::SelectOp>();
-      accumulator = accumulation.getRhs();
-    }
-    if (!contribution || !contribution->hasOneUse() ||
-        !isZero(contribution.getFalseValue()))
-      return failure();
-
-    auto broadcast =
-        contribution.getTrueValue().getDefiningOp<triton::SplatOp>();
-    auto unsplat = broadcast
-                       ? broadcast.getSrc().getDefiningOp<triton::UnsplatOp>()
-                       : triton::UnsplatOp{};
-    auto gathered = unsplat ? unsplat.getSrc().getDefiningOp<triton::GatherOp>()
-                            : triton::GatherOp{};
-    if (!gathered || gathered.getAxis() != 0 ||
-        !optimizedGathers.contains(gathered.getOperation()))
-      return failure();
-
-    auto accumulationType = dyn_cast<RankedTensorType>(accumulation.getType());
-    auto conditionType =
-        dyn_cast<RankedTensorType>(contribution.getCondition().getType());
-    if (!accumulationType || !accumulationType.getElementType().isInteger(32) ||
-        !conditionType || !conditionType.getElementType().isInteger(1) ||
-        conditionType.getShape() != accumulationType.getShape() ||
-        conditionType.getEncoding() != accumulationType.getEncoding())
-      return failure();
-
-    // Select masks a poison basis when the condition is false, whereas inline
-    // assembly eagerly consumes every operand. Freeze only the scalar used by
-    // this fusion: defined values are unchanged, and choosing a value for
-    // poison preserves the defined zero contribution of the original false
-    // branch. The scalar is already an LLVM-compatible i32 at this late TTGIR
-    // stage.
-    Value frozenBasis = LLVM::FreezeOp::create(rewriter, accumulation.getLoc(),
-                                               unsplat.getResult());
-    Value frozenBroadcast = triton::SplatOp::create(
-        rewriter, accumulation.getLoc(), accumulationType, frozenBasis);
-    Value signMask =
-        arith::ExtSIOp::create(rewriter, accumulation.getLoc(),
-                               accumulationType, contribution.getCondition());
-    auto fused = triton::ElementwiseInlineAsmOp::create(
-        rewriter, accumulation.getLoc(), TypeRange{accumulationType},
-        "lop3.b32 $0, $1, $2, $3, 0x78;", "=r,r,r,r", /*pure=*/true,
-        /*packed_element=*/1,
-        ValueRange{accumulator, frozenBroadcast, signMask});
-    rewriter.replaceOp(accumulation, fused.getResult());
-    if (contribution->use_empty())
-      rewriter.eraseOp(contribution);
-    return success();
-  }
-
-private:
-  const llvm::SmallPtrSetImpl<Operation *> &optimizedGathers;
 };
 
 class TritonGPUOptimizeOneHotXorReductionPass
@@ -229,21 +149,9 @@ public:
     config.enableConstantCSE(false);
     config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Disabled);
 
-    llvm::SmallPtrSet<Operation *, 32> optimizedGathers;
     RewritePatternSet reductionPatterns(&getContext());
-    reductionPatterns.add<OptimizeOneHotXorReductionPattern>(&getContext(),
-                                                             optimizedGathers);
+    reductionPatterns.add<OptimizeOneHotXorReductionPattern>(&getContext());
     if (failed(applyPatternsGreedily(module, std::move(reductionPatterns),
-                                     config)))
-      return signalPassFailure();
-    if (optimizedGathers.empty())
-      return;
-
-    // Only fuse accumulations that consume gathers created in this invocation.
-    RewritePatternSet accumulationPatterns(&getContext());
-    accumulationPatterns.add<FuseOneHotXorAccumulationPattern>(
-        &getContext(), optimizedGathers);
-    if (failed(applyPatternsGreedily(module, std::move(accumulationPatterns),
                                      config)))
       signalPassFailure();
   }

@@ -7,6 +7,7 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     DotOpToLLVM/WGMMA.cpp
     DotOpToLLVM.cpp
     ElementwiseOpToLLVM.cpp
+    OptimizeConditionalXor.cpp
     LoadStoreOpToLLVM.cpp
     BarrierOpToLLVM.cpp
     TritonGPUToLLVM.cpp
@@ -30,6 +31,7 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     TritonGPUToLLVM
     TritonInstrumentIR
     TritonInstrumentToLLVM
+    MLIRLLVMDialect
     MLIRReconcileUnrealizedCasts
     NVGPUIR
     MLIRUBToLLVM

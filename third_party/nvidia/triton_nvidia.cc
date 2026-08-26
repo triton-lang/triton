@@ -146,6 +146,9 @@ void init_triton_nvidia_passes_ttgpuir(py::module_ &m) {
           pm.addPass(mlir::triton::createConvertTritonGPUToLLVMPass(
               capability, ptxVersion, enableConcurrencySanitizer));
         });
+  m.def("add_optimize_conditional_xor", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::createNvidiaOptimizeConditionalXor());
+  });
 }
 
 std::unique_ptr<mlir::Pass>

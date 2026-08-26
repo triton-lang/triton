@@ -1,4 +1,5 @@
 // RUN: triton-opt %s --convert-nv-gpu-to-llvm -allow-unregistered-dialect -split-input-file | FileCheck %s
+// RUN: triton-opt %s --nvidia-optimize-conditional-xor -allow-unregistered-dialect -split-input-file | FileCheck %s --check-prefix=LOP3
 
 // CHECK-LABEL: @cluster_id
 llvm.func @cluster_id() -> i32 {
@@ -202,4 +203,216 @@ tt.func @one_contextual_warp() {
   tt.return
 }
 
+}
+
+// -----
+
+module attributes {ttg.target = "cuda:90"} {
+  // Only the value eagerly consumed by LOP3 is frozen. A separate select
+  // must still use the original, potentially poison, shuffle result.
+  // LOP3-LABEL: llvm.func @conditional_xor_masks_poison(
+  // LOP3-SAME: [[ACC:%.*]]: i32, [[SOURCE:%.*]]: i32, [[COND:%.*]]: i1, [[OTHER_COND:%.*]]: i1, [[OUT:%.*]]: !llvm.ptr
+  // LOP3: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // LOP3: [[FULL:%.*]] = llvm.mlir.constant(-1 : i32) : i32
+  // LOP3: [[CLAMP:%.*]] = llvm.mlir.constant(31 : i32) : i32
+  // LOP3-NEXT: [[BASIS:%.*]] = nvvm.shfl.sync idx [[FULL]], [[SOURCE]], [[ZERO]], [[CLAMP]] : i32 -> i32
+  // LOP3-NEXT: [[FROZEN:%.*]] = llvm.freeze [[BASIS]] : i32
+  // LOP3-NEXT: [[MASK:%.*]] = llvm.sext [[COND]] : i1 to i32
+  // LOP3-NEXT: [[FUSED:%.*]] = llvm.inline_asm asm_dialect = att {{.*}}"lop3.b32 $0, $1, $2, $3, 0x78;", "=r,r,r,r" [[ACC]], [[FROZEN]], [[MASK]] : (i32, i32, i32) -> i32
+  // LOP3-NEXT: [[OTHER:%.*]] = llvm.select [[OTHER_COND]], [[BASIS]], [[ZERO]] : i1, i32
+  // LOP3-NEXT: llvm.store [[OTHER]], [[OUT]] : i32, !llvm.ptr
+  // LOP3-NEXT: llvm.return [[FUSED]] : i32
+  llvm.func @conditional_xor_masks_poison(%acc: i32, %source: i32, %cond: i1, %other_cond: i1, %out: !llvm.ptr) -> i32 {
+    %zero = llvm.mlir.constant(0 : i32) : i32
+    %full = llvm.mlir.constant(-1 : i32) : i32
+    %clamp = llvm.mlir.constant(31 : i32) : i32
+    %basis = nvvm.shfl.sync idx %full, %source, %zero, %clamp {ttg.one_hot_xor_reduction} : i32 -> i32
+    %contribution = llvm.select %cond, %basis, %zero : i1, i32
+    %result = llvm.xor %acc, %contribution : i32
+    %other = llvm.select %other_cond, %basis, %zero : i1, i32
+    llvm.store %other, %out : i32, !llvm.ptr
+    llvm.return %result : i32
+  }
+
+  // The conditional contribution can be either XOR operand.
+  // LOP3-LABEL: llvm.func @conditional_xor_commuted(
+  // LOP3-SAME: [[ACC:%.*]]: i32, [[SOURCE:%.*]]: i32, [[COND:%.*]]: i1
+  // LOP3: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // LOP3: [[FULL:%.*]] = llvm.mlir.constant(-1 : i32) : i32
+  // LOP3: [[CLAMP:%.*]] = llvm.mlir.constant(31 : i32) : i32
+  // LOP3-NEXT: [[BASIS:%.*]] = nvvm.shfl.sync idx [[FULL]], [[SOURCE]], [[ZERO]], [[CLAMP]] : i32 -> i32
+  // LOP3-NEXT: [[FROZEN:%.*]] = llvm.freeze [[BASIS]] : i32
+  // LOP3-NEXT: [[MASK:%.*]] = llvm.sext [[COND]] : i1 to i32
+  // LOP3-NEXT: [[FUSED:%.*]] = llvm.inline_asm asm_dialect = att {{.*}}"lop3.b32 $0, $1, $2, $3, 0x78;", "=r,r,r,r" [[ACC]], [[FROZEN]], [[MASK]] : (i32, i32, i32) -> i32
+  // LOP3-NEXT: llvm.return [[FUSED]] : i32
+  llvm.func @conditional_xor_commuted(%acc: i32, %source: i32, %cond: i1) -> i32 {
+    %zero = llvm.mlir.constant(0 : i32) : i32
+    %full = llvm.mlir.constant(-1 : i32) : i32
+    %clamp = llvm.mlir.constant(31 : i32) : i32
+    %basis = nvvm.shfl.sync idx %full, %source, %zero, %clamp {ttg.one_hot_xor_reduction} : i32 -> i32
+    %contribution = llvm.select %cond, %basis, %zero : i1, i32
+    %result = llvm.xor %contribution, %acc : i32
+    llvm.return %result : i32
+  }
+
+  // Gather lowering may still select the owning register after its shuffle.
+  // Freeze the marked final result, not just the shuffle operand.
+  // LOP3-LABEL: llvm.func @conditional_xor_gather_register_select(
+  // LOP3-SAME: [[ACC:%.*]]: i32, [[SOURCE:%.*]]: i32, [[COND:%.*]]: i1
+  // LOP3: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // LOP3: [[FULL:%.*]] = llvm.mlir.constant(-1 : i32) : i32
+  // LOP3: [[CLAMP:%.*]] = llvm.mlir.constant(31 : i32) : i32
+  // LOP3-NEXT: [[UNDEF:%.*]] = llvm.mlir.undef : i32
+  // LOP3-NEXT: [[REG:%.*]] = llvm.xor [[ZERO]], [[ZERO]] : i32
+  // LOP3-NEXT: [[BASIS:%.*]] = nvvm.shfl.sync idx [[FULL]], [[SOURCE]], [[ZERO]], [[CLAMP]] : i32 -> i32
+  // LOP3-NEXT: [[OWNS:%.*]] = llvm.icmp "eq" [[REG]], [[ZERO]] : i32
+  // LOP3-NEXT: [[GATHERED:%.*]] = llvm.select [[OWNS]], [[BASIS]], [[UNDEF]] : i1, i32
+  // LOP3-NEXT: [[FROZEN:%.*]] = llvm.freeze [[GATHERED]] : i32
+  // LOP3-NEXT: [[MASK:%.*]] = llvm.sext [[COND]] : i1 to i32
+  // LOP3-NEXT: [[FUSED:%.*]] = llvm.inline_asm asm_dialect = att {{.*}}"lop3.b32 $0, $1, $2, $3, 0x78;", "=r,r,r,r" [[ACC]], [[FROZEN]], [[MASK]] : (i32, i32, i32) -> i32
+  // LOP3-NEXT: llvm.return [[FUSED]] : i32
+  llvm.func @conditional_xor_gather_register_select(%acc: i32, %source: i32, %cond: i1) -> i32 {
+    %zero = llvm.mlir.constant(0 : i32) : i32
+    %full = llvm.mlir.constant(-1 : i32) : i32
+    %clamp = llvm.mlir.constant(31 : i32) : i32
+    %undef = llvm.mlir.undef : i32
+    %reg = llvm.xor %zero, %zero : i32
+    %basis = nvvm.shfl.sync idx %full, %source, %zero, %clamp {ttg.one_hot_xor_reduction} : i32 -> i32
+    %owns = llvm.icmp "eq" %reg, %zero : i32
+    %gathered = llvm.select %owns, %basis, %undef {ttg.one_hot_xor_reduction} : i1, i32
+    %contribution = llvm.select %cond, %gathered, %zero : i1, i32
+    %result = llvm.xor %acc, %contribution : i32
+    llvm.return %result : i32
+  }
+
+  // A pre-existing shuffle is not evidence of a rewritten one-hot reduction.
+  // LOP3-LABEL: llvm.func @conditional_xor_untagged_shuffle(
+  // LOP3-SAME: [[ACC:%.*]]: i32, [[SOURCE:%.*]]: i32, [[COND:%.*]]: i1
+  // LOP3: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // LOP3: [[BASIS:%.*]] = nvvm.shfl.sync idx {{.*}} : i32 -> i32
+  // LOP3-NEXT: [[SELECT:%.*]] = llvm.select [[COND]], [[BASIS]], [[ZERO]] : i1, i32
+  // LOP3-NEXT: [[RESULT:%.*]] = llvm.xor [[ACC]], [[SELECT]] : i32
+  // LOP3-NEXT: llvm.return [[RESULT]] : i32
+  llvm.func @conditional_xor_untagged_shuffle(%acc: i32, %source: i32, %cond: i1) -> i32 {
+    %zero = llvm.mlir.constant(0 : i32) : i32
+    %full = llvm.mlir.constant(-1 : i32) : i32
+    %clamp = llvm.mlir.constant(31 : i32) : i32
+    %basis = nvvm.shfl.sync idx %full, %source, %zero, %clamp : i32 -> i32
+    %contribution = llvm.select %cond, %basis, %zero : i1, i32
+    %result = llvm.xor %acc, %contribution : i32
+    llvm.return %result : i32
+  }
+
+  // A reused select is left intact, but its shuffle's temporary marker is
+  // still removed from the NVIDIA LLVM module.
+  // LOP3-LABEL: llvm.func @conditional_xor_shared_select(
+  // LOP3-SAME: [[ACC:%.*]]: i32, [[SOURCE:%.*]]: i32, [[COND:%.*]]: i1
+  // LOP3: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // LOP3: [[FULL:%.*]] = llvm.mlir.constant(-1 : i32) : i32
+  // LOP3: [[CLAMP:%.*]] = llvm.mlir.constant(31 : i32) : i32
+  // LOP3-NEXT: [[BASIS:%.*]] = nvvm.shfl.sync idx [[FULL]], [[SOURCE]], [[ZERO]], [[CLAMP]] : i32 -> i32
+  // LOP3-NEXT: [[SELECT:%.*]] = llvm.select [[COND]], [[BASIS]], [[ZERO]] : i1, i32
+  // LOP3-NEXT: [[XOR:%.*]] = llvm.xor [[ACC]], [[SELECT]] : i32
+  // LOP3-NEXT: [[RESULT:%.*]] = llvm.add [[XOR]], [[SELECT]] : i32
+  // LOP3-NEXT: llvm.return [[RESULT]] : i32
+  llvm.func @conditional_xor_shared_select(%acc: i32, %source: i32, %cond: i1) -> i32 {
+    %zero = llvm.mlir.constant(0 : i32) : i32
+    %full = llvm.mlir.constant(-1 : i32) : i32
+    %clamp = llvm.mlir.constant(31 : i32) : i32
+    %basis = nvvm.shfl.sync idx %full, %source, %zero, %clamp {ttg.one_hot_xor_reduction} : i32 -> i32
+    %contribution = llvm.select %cond, %basis, %zero : i1, i32
+    %xor = llvm.xor %acc, %contribution : i32
+    %result = llvm.add %xor, %contribution : i32
+    llvm.return %result : i32
+  }
+
+  // A nonzero inactive contribution is not the supported mask/XOR identity.
+  // LOP3-LABEL: llvm.func @conditional_xor_nonzero_inactive(
+  // LOP3-SAME: [[ACC:%.*]]: i32, [[SOURCE:%.*]]: i32, [[COND:%.*]]: i1
+  // LOP3: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // LOP3: [[ONE:%.*]] = llvm.mlir.constant(1 : i32) : i32
+  // LOP3: [[FULL:%.*]] = llvm.mlir.constant(-1 : i32) : i32
+  // LOP3: [[CLAMP:%.*]] = llvm.mlir.constant(31 : i32) : i32
+  // LOP3-NEXT: [[BASIS:%.*]] = nvvm.shfl.sync idx [[FULL]], [[SOURCE]], [[ZERO]], [[CLAMP]] : i32 -> i32
+  // LOP3-NEXT: [[SELECT:%.*]] = llvm.select [[COND]], [[BASIS]], [[ONE]] : i1, i32
+  // LOP3-NEXT: [[RESULT:%.*]] = llvm.xor [[ACC]], [[SELECT]] : i32
+  // LOP3-NEXT: llvm.return [[RESULT]] : i32
+  llvm.func @conditional_xor_nonzero_inactive(%acc: i32, %source: i32, %cond: i1) -> i32 {
+    %zero = llvm.mlir.constant(0 : i32) : i32
+    %one = llvm.mlir.constant(1 : i32) : i32
+    %full = llvm.mlir.constant(-1 : i32) : i32
+    %clamp = llvm.mlir.constant(31 : i32) : i32
+    %basis = nvvm.shfl.sync idx %full, %source, %zero, %clamp {ttg.one_hot_xor_reduction} : i32 -> i32
+    %contribution = llvm.select %cond, %basis, %one : i1, i32
+    %result = llvm.xor %acc, %contribution : i32
+    llvm.return %result : i32
+  }
+
+  // Wider arithmetic is not fused through a cast of a marked shuffle.
+  // LOP3-LABEL: llvm.func @conditional_xor_i64(
+  // LOP3-SAME: [[ACC:%.*]]: i64, [[SOURCE:%.*]]: i32, [[COND:%.*]]: i1
+  // LOP3: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // LOP3: [[ZERO64:%.*]] = llvm.mlir.constant(0 : i64) : i64
+  // LOP3: [[FULL:%.*]] = llvm.mlir.constant(-1 : i32) : i32
+  // LOP3: [[CLAMP:%.*]] = llvm.mlir.constant(31 : i32) : i32
+  // LOP3-NEXT: [[BASIS:%.*]] = nvvm.shfl.sync idx [[FULL]], [[SOURCE]], [[ZERO]], [[CLAMP]] : i32 -> i32
+  // LOP3-NEXT: [[WIDE:%.*]] = llvm.zext [[BASIS]] : i32 to i64
+  // LOP3-NEXT: [[SELECT:%.*]] = llvm.select [[COND]], [[WIDE]], [[ZERO64]] : i1, i64
+  // LOP3-NEXT: [[RESULT:%.*]] = llvm.xor [[ACC]], [[SELECT]] : i64
+  // LOP3-NEXT: llvm.return [[RESULT]] : i64
+  llvm.func @conditional_xor_i64(%acc: i64, %source: i32, %cond: i1) -> i64 {
+    %zero = llvm.mlir.constant(0 : i32) : i32
+    %zero64 = llvm.mlir.constant(0 : i64) : i64
+    %full = llvm.mlir.constant(-1 : i32) : i32
+    %clamp = llvm.mlir.constant(31 : i32) : i32
+    %basis = nvvm.shfl.sync idx %full, %source, %zero, %clamp {ttg.one_hot_xor_reduction} : i32 -> i32
+    %wide = llvm.zext %basis : i32 to i64
+    %contribution = llvm.select %cond, %wide, %zero64 : i1, i64
+    %result = llvm.xor %acc, %contribution : i64
+    llvm.return %result : i64
+  }
+}
+
+// -----
+
+module attributes {ttg.target = "hip:gfx950"} {
+  // A non-CUDA module is untouched, including its attributes.
+  // LOP3-LABEL: llvm.func @conditional_xor_non_cuda(
+  // LOP3-SAME: [[ACC:%.*]]: i32, [[SOURCE:%.*]]: i32, [[COND:%.*]]: i1
+  // LOP3: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // LOP3: [[BASIS:%.*]] = nvvm.shfl.sync idx {{.*}} {ttg.one_hot_xor_reduction} : i32 -> i32
+  // LOP3-NEXT: [[SELECT:%.*]] = llvm.select [[COND]], [[BASIS]], [[ZERO]] : i1, i32
+  // LOP3-NEXT: [[RESULT:%.*]] = llvm.xor [[ACC]], [[SELECT]] : i32
+  // LOP3-NEXT: llvm.return [[RESULT]] : i32
+  llvm.func @conditional_xor_non_cuda(%acc: i32, %source: i32, %cond: i1) -> i32 {
+    %zero = llvm.mlir.constant(0 : i32) : i32
+    %full = llvm.mlir.constant(-1 : i32) : i32
+    %clamp = llvm.mlir.constant(31 : i32) : i32
+    %basis = nvvm.shfl.sync idx %full, %source, %zero, %clamp {ttg.one_hot_xor_reduction} : i32 -> i32
+    %contribution = llvm.select %cond, %basis, %zero : i1, i32
+    %result = llvm.xor %acc, %contribution : i32
+    llvm.return %result : i32
+  }
+}
+
+// -----
+
+module {
+  // An explicit CUDA target is required before emitting NVIDIA assembly.
+  // LOP3-LABEL: llvm.func @conditional_xor_missing_target(
+  // LOP3-SAME: [[ACC:%.*]]: i32, [[SOURCE:%.*]]: i32, [[COND:%.*]]: i1
+  // LOP3: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32) : i32
+  // LOP3: [[BASIS:%.*]] = nvvm.shfl.sync idx {{.*}} {ttg.one_hot_xor_reduction} : i32 -> i32
+  // LOP3-NEXT: [[SELECT:%.*]] = llvm.select [[COND]], [[BASIS]], [[ZERO]] : i1, i32
+  // LOP3-NEXT: [[RESULT:%.*]] = llvm.xor [[ACC]], [[SELECT]] : i32
+  // LOP3-NEXT: llvm.return [[RESULT]] : i32
+  llvm.func @conditional_xor_missing_target(%acc: i32, %source: i32, %cond: i1) -> i32 {
+    %zero = llvm.mlir.constant(0 : i32) : i32
+    %full = llvm.mlir.constant(-1 : i32) : i32
+    %clamp = llvm.mlir.constant(31 : i32) : i32
+    %basis = nvvm.shfl.sync idx %full, %source, %zero, %clamp {ttg.one_hot_xor_reduction} : i32 -> i32
+    %contribution = llvm.select %cond, %basis, %zero : i1, i32
+    %result = llvm.xor %acc, %contribution : i32
+    llvm.return %result : i32
+  }
 }

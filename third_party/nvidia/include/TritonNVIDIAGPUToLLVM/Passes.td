@@ -78,6 +78,18 @@ def SetMinimumSharedMemory : Pass<"set-minimum-shared-memory", "mlir::ModuleOp">
   ];
 }
 
+def NvidiaOptimizeConditionalXor
+    : Pass<"nvidia-optimize-conditional-xor", "mlir::ModuleOp"> {
+  let summary = "Fuse conditional XORs of one-hot reduction shuffles into LOP3";
+  let description = [{
+    After TritonGPU to LLVM conversion and LLVM canonicalization, replace
+    conditional XORs of shuffles originating from one-hot reductions with
+    NVIDIA LOP3 instructions. Freeze the selected value to preserve poison
+    masking, and remove the temporary gather provenance attributes.
+  }];
+  let dependentDialects = ["mlir::LLVM::LLVMDialect"];
+}
+
 
 def ConvertWarpSpecializeToLLVM : Pass<"convert-warp-specialize-to-llvm", "mlir::ModuleOp"> {
   let summary = "lower `ttg.warp_specialize` to LLVM";

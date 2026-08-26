@@ -371,8 +371,7 @@ def TritonGPUOptimizeOneHotXorReduction
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect",
-                           "mlir::arith::ArithDialect",
-                           "mlir::LLVM::LLVMDialect"];
+                           "mlir::arith::ArithDialect"];
 }
 
 #endif

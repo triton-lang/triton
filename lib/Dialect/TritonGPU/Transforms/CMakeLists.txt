@@ -44,7 +44,6 @@ add_triton_library(TritonGPUTransforms
   TritonGPUTransformsIncGen
 
   LINK_LIBS PUBLIC
-  MLIRLLVMDialect
   MLIRTransforms
   MLIRTransformUtils
   TritonAnalysis

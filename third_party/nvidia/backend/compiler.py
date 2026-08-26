@@ -431,6 +431,7 @@ class CUDABackend(BaseBackend):
         if options.min_shared_mem is not None:
             nvidia.passes.ttgpuir.add_set_minimum_shared_memory(pm, options.min_shared_mem)
         passes.ttgpuir.add_canonicalize_llvm_ir(pm)
+        nvidia.passes.ttgpuir.add_optimize_conditional_xor(pm)
         passes.common.add_cse(pm)
         nvidia.passes.ttnvgpuir.add_warp_specialize_to_llvm(pm)
         nvidia.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)

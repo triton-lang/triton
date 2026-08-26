@@ -1,5 +1,5 @@
 // RUN: triton-opt --split-input-file %s | FileCheck %s
-// RUN: triton-opt --split-input-file %s --tritongpu-optimize-one-hot-xor-reduction | FileCheck %s --check-prefix=ONE-HOT
+// RUN: triton-opt --split-input-file %s --tritongpu-optimize-one-hot-xor-reduction | FileCheck %s --check-prefix=ONE-HOT --implicit-check-not=llvm. --implicit-check-not=tt.elementwise_inline_asm
 
 // CHECK: #[[$WMMA_GEN1:.*]] = #ttg.amd_wmma<{{.*}}version = 1{{.*}}>
 // CHECK: #[[$WMMA_GEN2:.*]] = #ttg.amd_wmma<{{.*}}version = 2{{.*}}>
@@ -557,7 +557,7 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
   // ONE-HOT-LABEL: @one_hot_xor_independent_reduction
   // ONE-HOT: [[COMPUTED:%.*]] = arith.xori
   // ONE-HOT-NOT: "tt.reduce"
-  // ONE-HOT: [[GATHERED:%.*]] = tt.gather [[COMPUTED]]
+  // ONE-HOT: [[GATHERED:%.*]] = tt.gather [[COMPUTED]]{{.*}}ttg.one_hot_xor_reduction
   // ONE-HOT: [[SCALAR:%.*]] = tt.unsplat [[GATHERED]]
   // ONE-HOT: tt.return [[SCALAR]]
   tt.func @one_hot_xor_independent_reduction(%bases: tensor<32xi32, #one_hot_basis>) -> i32 {
@@ -597,16 +597,16 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     tt.return %reduced : i32
   }
 
-  // The ordinary user-written conditional XOR also combines into NVIDIA LOP3
-  // after its independent one-hot reduction has become a warp gather.
+  // The shared pass replaces the reduction but leaves the conditional XOR
+  // for the separate NVIDIA LLVM optimization.
   // CHECK-LABEL: @one_hot_xor_conditional_accumulation
   // ONE-HOT-LABEL: @one_hot_xor_conditional_accumulation
   // ONE-HOT-NOT: "tt.reduce"
   // ONE-HOT: tt.gather
   // ONE-HOT: [[SCALAR:%.*]] = tt.unsplat
-  // ONE-HOT: [[FROZEN:%.*]] = llvm.freeze [[SCALAR]] : i32
-  // ONE-HOT: [[BROADCAST:%.*]] = tt.splat [[FROZEN]]
-  // ONE-HOT: tt.elementwise_inline_asm "lop3.b32 $0, $1, $2, $3, 0x78;" {{.*}}, [[BROADCAST]],
+  // ONE-HOT: [[BROADCAST:%.*]] = tt.splat [[SCALAR]]
+  // ONE-HOT: [[CONTRIBUTION:%.*]] = arith.select {{.*}}, [[BROADCAST]],
+  // ONE-HOT: arith.xori {{.*}}, [[CONTRIBUTION]]
   // ONE-HOT: tt.return
   tt.func @one_hot_xor_conditional_accumulation(%index: tensor<128xi32, #one_hot_index>, %bases: tensor<32xi32, #one_hot_basis>) -> tensor<128xi32, #one_hot_index> {
     %offsets = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #one_hot_basis>
@@ -628,9 +628,8 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     tt.return %result : tensor<128xi32, #one_hot_index>
   }
 
-  // The original select may mask a poison reduction result. Only the basis
-  // consumed by the eager LOP3 is frozen; other masked scalar and tensor uses
-  // must keep consuming the original value.
+  // The original selects may mask a poison reduction result. Every scalar
+  // and tensor use must keep consuming the original value at this stage.
   // CHECK-LABEL: @one_hot_xor_poison_masking
   // ONE-HOT-LABEL: @one_hot_xor_poison_masking
   // ONE-HOT: [[POISON:%.*]] = ub.poison
@@ -638,12 +637,11 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
   // ONE-HOT: [[GATHERED:%.*]] = tt.gather [[POISON]]
   // ONE-HOT: [[SCALAR:%.*]] = tt.unsplat [[GATHERED]]
   // ONE-HOT: [[ORIGINAL:%.*]] = tt.splat [[SCALAR]]
-  // ONE-HOT: [[FROZEN:%.*]] = llvm.freeze [[SCALAR]] : i32
-  // ONE-HOT: [[BROADCAST:%.*]] = tt.splat [[FROZEN]]
-  // ONE-HOT: [[FUSED:%.*]] = tt.elementwise_inline_asm "lop3.b32 $0, $1, $2, $3, 0x78;" {{.*}}, [[BROADCAST]],
+  // ONE-HOT: [[CONTRIBUTION:%.*]] = arith.select {{.*}}, [[ORIGINAL]],
+  // ONE-HOT: [[RESULT:%.*]] = arith.xori {{.*}}, [[CONTRIBUTION]]
   // ONE-HOT: [[MASKED_TENSOR:%.*]] = arith.select {{.*}}, [[ORIGINAL]],
   // ONE-HOT: [[MASKED_SCALAR:%.*]] = arith.select {{.*}}, [[SCALAR]],
-  // ONE-HOT: tt.return [[FUSED]], [[MASKED_TENSOR]], [[MASKED_SCALAR]]
+  // ONE-HOT: tt.return [[RESULT]], [[MASKED_TENSOR]], [[MASKED_SCALAR]]
   tt.func @one_hot_xor_poison_masking(%index: tensor<128xi32, #one_hot_index>, %condition: tensor<128xi1, #one_hot_index>, %other_condition: tensor<128xi1, #one_hot_index>, %scalar_condition: i1) -> (tensor<128xi32, #one_hot_index>, tensor<128xi32, #one_hot_index>, i32) {
     %poison = ub.poison : tensor<32xi32, #one_hot_basis>
     %offsets = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #one_hot_basis>
@@ -666,15 +664,14 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     tt.return %result, %masked_tensor, %masked_scalar : tensor<128xi32, #one_hot_index>, tensor<128xi32, #one_hot_index>, i32
   }
 
-  // An existing gather is unrelated to a one-hot reduction, even when the same
+  // The shared pass leaves an existing gather unmarked, even when the same
   // module also contains reductions that this pass can optimize.
   // CHECK-LABEL: @one_hot_xor_existing_gather_unchanged
   // ONE-HOT-LABEL: @one_hot_xor_existing_gather_unchanged
-  // ONE-HOT: [[GATHERED:%.*]] = tt.gather
+  // ONE-HOT: [[GATHERED:%.*]] = tt.gather {{.*}}{axis = 0 : i32, efficient_layout} :
   // ONE-HOT: [[SCALAR:%.*]] = tt.unsplat [[GATHERED]]
   // ONE-HOT: [[BROADCAST:%.*]] = tt.splat [[SCALAR]]
   // ONE-HOT: [[CONTRIBUTION:%.*]] = arith.select {{.*}}, [[BROADCAST]]
-  // ONE-HOT-NOT: tt.elementwise_inline_asm
   // ONE-HOT: arith.xori {{.*}}, [[CONTRIBUTION]]
   // ONE-HOT: tt.return
   tt.func @one_hot_xor_existing_gather_unchanged(%index: tensor<128xi32, #one_hot_index>, %bases: tensor<32xi32, #one_hot_basis>) -> tensor<128xi32, #one_hot_index> {
@@ -690,15 +687,14 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     tt.return %result : tensor<128xi32, #one_hot_index>
   }
 
-  // A reused conditional contribution cannot disappear after fusion, so keep
-  // both of its users unchanged while still optimizing the original reduction.
+  // A reused conditional contribution keeps both of its users unchanged
+  // while the shared pass optimizes the original reduction.
   // CHECK-LABEL: @one_hot_xor_shared_contribution
   // ONE-HOT-LABEL: @one_hot_xor_shared_contribution
   // ONE-HOT-NOT: "tt.reduce"
   // ONE-HOT: tt.gather
   // ONE-HOT: tt.unsplat
   // ONE-HOT: [[CONTRIBUTION:%.*]] = arith.select
-  // ONE-HOT-NOT: tt.elementwise_inline_asm
   // ONE-HOT: [[XOR:%.*]] = arith.xori {{.*}}, [[CONTRIBUTION]]
   // ONE-HOT: arith.addi [[XOR]], [[CONTRIBUTION]]
   // ONE-HOT: tt.return
@@ -862,12 +858,11 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 2 : i32, "ttg.num-
 #one_hot_amd = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 
 module attributes {"ttg.target" = "hip:gfx950", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  // The optimization emits NVIDIA PTX and must never run on AMD targets.
+  // The optimization remains restricted to its supported CUDA layouts.
   // CHECK-LABEL: @one_hot_xor_amd_unchanged
   // ONE-HOT-LABEL: @one_hot_xor_amd_unchanged
   // ONE-HOT-NOT: tt.gather
   // ONE-HOT: "tt.reduce"
-  // ONE-HOT-NOT: tt.elementwise_inline_asm
   // ONE-HOT: tt.return
   tt.func @one_hot_xor_amd_unchanged(%bases: tensor<32xi32, #one_hot_amd>) -> i32 {
     %offsets = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32, #one_hot_amd>
