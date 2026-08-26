@@ -1013,9 +1013,6 @@ void FunctionBuilder::createClusterBarrierRendezvousCall(
         tti::createConstIntTensor(b, b.getLoc(), 0, statesType));
     Value result = arith::TruncIOp::create(b, b.getI1Type(),
                                            reduceAll<arith::OrIOp>(b, phase));
-    // Every warp must sample this phase before the elected warp can advance
-    // it; otherwise sibling warps can wait for opposite rendezvous epochs.
-    ttg::BarrierOp::create(b, b.getLoc(), ttg::AddrSpace::GlobalRead);
     return result;
   };
   auto updateWaiting = [&](Value phase, Value pred, bool markWaiting) {
@@ -1439,9 +1436,6 @@ void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
 
         Value states = tti::createLoadScratchMemory(fb, fb.getLoc(), statesPtr,
                                                     barrierStatesType);
-        // Finish all replicated reads before any thread updates the state.
-        // Otherwise copies can disagree on entering phase-clearing collectives.
-        ttg::BarrierOp::create(fb, fb.getLoc(), ttg::AddrSpace::GlobalRead);
         Value descriptor = createBufferDescriptor(fb, mbarOffset, lengthVal);
         Value mask = createCmpIntTensorScalar(fb, barriers, descriptor);
         mask = convertAndBroadcast(fb, mask, {1}, barrierStatesType);
