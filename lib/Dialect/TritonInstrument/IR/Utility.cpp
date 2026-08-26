@@ -8,6 +8,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/FunctionBuilder.h"
@@ -386,8 +387,14 @@ Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
 Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
                               RankedTensorType tensorType) {
   auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType);
-  return LoadOp::create(b, loc, ptrTensor, CacheModifier::NONE,
-                        EvictionPolicy::NORMAL, false);
+  Value value = LoadOp::create(b, loc, ptrTensor, CacheModifier::NONE,
+                               EvictionPolicy::NORMAL, false);
+  // Finish replicated reads before another thread can update the scratch.
+  auto freeVarMasks = toLinearLayout(tensorType).getFreeVariableMasks();
+  if (freeVarMasks.lookup(b.getStringAttr("lane")) ||
+      freeVarMasks.lookup(b.getStringAttr("warp")))
+    BarrierOp::create(b, loc, AddrSpace::GlobalRead);
+  return value;
 }
 
 FuncOp getEntryPoint(ModuleOp module) {
