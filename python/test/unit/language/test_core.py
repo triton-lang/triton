@@ -3052,7 +3052,7 @@ def test_one_hot_xor_reduction_computed_bases(block, num_warps, device):
         patterns = np.array([0, 0xFFFFFFFF] + [1 << bit for bit in range(32)], dtype=np.uint32)
         indices[:min(size, len(patterns))] = patterns[:size]
         indices_tri = to_triton(indices, device=device)
-        for seed in (0, -1, -(1 << 31), 0x6A09E667):
+        for seed in (0, 1, -1, -(1 << 31), 0x6A09E667):
             expected = np.zeros(size, dtype=np.uint32)
             for bit in range(32):
                 basis = np.uint32(((bit * 0x9E3779B9) & 0xFFFFFFFF) ^ (seed & 0xFFFFFFFF))
@@ -3070,20 +3070,6 @@ def test_one_hot_xor_reduction_computed_bases(block, num_warps, device):
     assert ptx.count("lop3.b32") >= 31
     assert "redux.sync.xor.b32" not in ptx
     assert "shfl.sync.bfly.b32" not in ptx
-
-
-@pytest.mark.skipif(not is_cuda(), reason="Requires the CUDA one-hot XOR reduction optimization")
-def test_one_hot_xor_benchmark_runtime_seed():
-    import pathlib
-    import runpy
-
-    path = pathlib.Path(__file__).resolve().parents[2] / "microbenchmark/one_hot_xor_reduction.py"
-    benchmark = runpy.run_path(str(path))
-    # Exercise the benchmark itself: JIT specializes a scalar 1 to constexpr
-    # unless the decorator explicitly keeps it a runtime tensor argument.
-    with benchmark["_isolated_compiler_cache"]():
-        for seed in (0, 1, -1):
-            benchmark["_run_boundary_case"](33, seed, 128)
 
 
 scan2d_shapes = [(8, 32), (16, 32), (32, 16), (2, 1024), (1024, 2), (32, 32), (1, 1024)]
