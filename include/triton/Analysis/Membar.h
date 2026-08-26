@@ -124,6 +124,10 @@ struct BlockInfo {
   SliceMapT syncReadSlices;
   SliceMapT syncWriteSlices;
 
+  // Thread ordering is independent of which physical addresses are accessed.
+  std::set<Operation *> threadEffects;
+  std::set<Operation *> threadDemands;
+
   BlockInfo() = default;
 
   /// Unions two BlockInfo objects.
@@ -135,6 +139,10 @@ struct BlockInfo {
     for (auto &slice : other.syncWriteSlices)
       syncWriteSlices[slice.first].insert(slice.second.begin(),
                                           slice.second.end());
+    threadEffects.insert(other.threadEffects.begin(),
+                         other.threadEffects.end());
+    threadDemands.insert(other.threadDemands.begin(),
+                         other.threadDemands.end());
     return *this;
   }
 
@@ -196,16 +204,23 @@ struct BlockInfo {
                          sliceFilter, allocation);
   }
 
-  /// Clears the slices because a barrier is inserted.
+  /// Whether pending thread effects must rendezvous before the other's demands.
+  bool requiresThreadSync(const BlockInfo &other) const;
+
+  /// Clears the effects because a barrier is inserted.
   void sync() {
     syncReadSlices.clear();
     syncWriteSlices.clear();
+    threadEffects.clear();
+    threadDemands.clear();
   }
 
   /// Compares two BlockInfo objects.
   bool operator==(const BlockInfo &other) const {
     return syncReadSlices == other.syncReadSlices &&
-           syncWriteSlices == other.syncWriteSlices;
+           syncWriteSlices == other.syncWriteSlices &&
+           threadEffects == other.threadEffects &&
+           threadDemands == other.threadDemands;
   }
 
   bool operator!=(const BlockInfo &other) const { return !(*this == other); }
@@ -229,13 +244,13 @@ private:
   }
 };
 
-/// Tracks the shared-memory state needed at the current program point and at
+/// Tracks memory and thread-ordering state at the current program point and at
 /// function boundaries.
 struct MembarInfo {
-  /// Buffers accessed since the most recent synchronization.
+  /// Effects since the most recent synchronization.
   BlockInfo pending;
 
-  /// Buffers reachable from the function entry block before the first
+  /// Effects reachable from the function entry block before the first
   /// synchronization.
   /// It keeps incrementing during the iterative algorithm until
   ///  we note all paths to a basic block has synchronized.
@@ -330,7 +345,7 @@ private:
 protected:
   void updateMemoryEffects(Operation *operation, MembarInfo *membarInfo,
                            FuncMapT *funcMap, OpBuilder *builder,
-                           bool cluster = false);
+                           bool cluster = false, BlockInfo effects = {});
   void syncIfNeeded(Operation *operation, const BlockInfo &effects,
                     MembarInfo *membarInfo, OpBuilder *builder,
                     bool cluster = false);
@@ -350,8 +365,9 @@ private:
   BufferIndexAnalysis bufferIndexAnalysis;
 };
 
-/// Inserts shared-memory barriers across a module. Function summaries retain
-/// entry-prefix and pending exit states for calls.
+/// Inserts shared-memory and operation rendezvous barriers across a module,
+/// before async-completion analyses consume the synchronization points.
+/// Function summaries retain entry-prefix and pending exit states for calls.
 class ModuleMembarAnalysis {
 public:
   ModuleMembarAnalysis(ModuleAllocation &moduleAllocation,

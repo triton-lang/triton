@@ -14,7 +14,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
   // CHECK: %[[WID:.+]] = ttg.warp_id
   // CHECK: %[[P0:.+]] = llvm.icmp "eq" %[[WID]], %[[C0]] : i32
   // CHECK: %[[P1:.+]] = llvm.and %{{.*}}, %[[P0]]  : i1
-  // CHECK: nvvm.barrier
+  // CHECK-NOT: nvvm.barrier
   // CHECK-NEXT: llvm.cond_br %[[P1]]
   // CHECK: %[[E:.+]] = nvvm.elect.sync -> i1
   // CHECK: %[[BASE:.+]] = llvm.and %{{.*}}, %[[MASK]] : i32
@@ -861,7 +861,7 @@ module attributes {"ttg.num-warps" = 1 : i32} {
 // CHECK-LABEL: @tc_gen5_commit
 // CHECK-DAG: [[IS_WARP_0:%.*]] = llvm.mlir.constant(true)
 tt.func @tc_gen5_commit(%arg0: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %pred: i1) {
-  // CHECK: nvvm.barrier
+  // CHECK-NOT: nvvm.barrier
   // CHECK: [[ELECT:%.*]] = nvvm.elect.sync
   // CHECK: [[WARP_PRED:%.*]] = llvm.and [[IS_WARP_0]], [[ELECT]]
   // CHECK: [[PRED:%.*]] = llvm.and %arg1, [[WARP_PRED]]
