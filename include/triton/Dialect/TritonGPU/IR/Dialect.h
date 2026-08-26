@@ -289,6 +289,16 @@ void printCGAAttr(AsmPrinter &printer, CGAEncodingAttr layout);
 
 CGAEncodingAttr getCGALayout(Attribute layout);
 
+// Projects the CGA layout of a dot accumulator onto operand `opIdx`.
+CGAEncodingAttr inferDotOperandCGALayout(CGAEncodingAttr accCGALayout,
+                                         int opIdx);
+
+// Derives the CGA layout of the scale for dot operand `opIdx`. For operand A,
+// the scale shares the same CGA layout. For operand B, the last two dimensions
+// are swapped.
+CGAEncodingAttr
+inferDotScaleCGALayoutFromOperand(CGAEncodingAttr operandCGALayout, int opIdx);
+
 SmallVector<unsigned> getCTAsPerCGA(Attribute layout);
 
 SmallVector<unsigned> getCTASplitNum(Attribute layout);
