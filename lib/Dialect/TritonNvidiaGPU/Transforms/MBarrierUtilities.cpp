@@ -2,6 +2,7 @@
 
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -10,6 +11,34 @@ namespace mlir::triton::nvidia_gpu {
 
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
+
+bool isCrossCTALoadStore(ttg::MemDescType memDescTy, RankedTensorType regTy) {
+  auto kRegister = StringAttr::get(memDescTy.getContext(), "register");
+  LinearLayout regLayout =
+      ttg::toLinearLayout(regTy).removeZeroBasesAlongDim(kRegister);
+  LinearLayout conversion = invertAndComposeBlockLocal(
+      ttg::toLinearLayoutIgnoringPadding(memDescTy), regLayout);
+  auto kBlock = StringAttr::get(memDescTy.getContext(), "block");
+  return !conversion.isIdentityOnOutDim(kBlock);
+}
+
+bool isCrossCTAGatherScatter(ttg::MemDescType memDescTy,
+                            RankedTensorType regTy, unsigned axis) {
+  MLIRContext *ctx = memDescTy.getContext();
+  LinearLayout sharedLayout = ttg::toLinearLayoutIgnoringPadding(memDescTy);
+  SmallVector<StringAttr> allDims =
+      standardOutDimNames(ctx, memDescTy.getRank());
+  StringAttr axisDim = allDims[axis];
+  auto kBlock = StringAttr::get(ctx, "block");
+
+  bool axisIsSharded =
+      !sharedLayout.sublayoutIsZero({kBlock}, {axisDim});
+  // (1) axisIsSharded: The runtime index may select any CTA shard along the
+  // indexed axis.
+  // (2) isCrossCTALoadStore: Access through the remaining coordinates may still
+  // cross CTAs when the memdesc is a subslice of a distributed allocation.
+  return axisIsSharded || isCrossCTALoadStore(memDescTy, regTy);
+}
 
 bool hasTCGen5CommitCrossCTA(Operation *op) {
   SmallVector<Value> descs;
@@ -42,8 +71,11 @@ bool requiresCrossCTAMBarrierInitSync(
           crossCTA = hasTCGen5CommitCrossCTA(op);
         else if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op))
           crossCTA = tma.getMulticast();
-        else if (isa<ttng::CLCTryCancelOp, ttng::AsyncSharedStoreOp>(op))
+        else if (isa<ttng::CLCTryCancelOp>(op))
           crossCTA = true;
+        else if (auto store = dyn_cast<ttng::AsyncSharedStoreOp>(op))
+          crossCTA = isCrossCTALoadStore(
+              store.getDst().getType(), store.getSrc().getType());
         else if (auto expect = dyn_cast<ttng::BarrierExpectOp>(op))
           crossCTA = expect.getFromCTA().has_value();
         else if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op))

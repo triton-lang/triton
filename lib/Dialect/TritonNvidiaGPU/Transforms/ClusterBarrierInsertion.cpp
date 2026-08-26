@@ -32,10 +32,35 @@ namespace ttng = mlir::triton::nvidia_gpu;
 bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
   // Scratch writes are CTA-local. When the scratch spans CTAs, only its read
   // phase accesses another CTA's shared memory.
-  if (hasCrossCTAScratch(op))
-    return isRead;
-  if (isa<ttng::CLCTryCancelOp, ttng::AsyncSharedStoreOp>(op)) {
+  if (hasCrossCTAScratch(op) && isRead)
+    return true;
+
+  if (auto load = dyn_cast<ttg::LocalLoadOp>(op)) {
+    return isCrossCTALoadStore(load.getSrc().getType(), load.getType());
+  } else if (auto store = dyn_cast<ttg::LocalStoreOp>(op)) {
+    return isCrossCTALoadStore(store.getDst().getType(),
+                              store.getSrc().getType());
+  } else if (auto alloc = dyn_cast<ttg::LocalAllocOp>(op)) {
+    return alloc.getSrc() &&
+           isCrossCTALoadStore(alloc.getType(), alloc.getSrc().getType());
+  } else if (auto gather = dyn_cast<ttg::LocalGatherOp>(op)) {
+    return isCrossCTAGatherScatter(
+        gather.getSrc().getType(), gather.getType(), gather.getAxis());
+  } else if (auto scatter = dyn_cast<ttg::LocalScatterOp>(op)) {
+    return isCrossCTAGatherScatter(
+        scatter.getDst().getType(), scatter.getValues().getType(),
+        scatter.getAxis());
+  } else if (auto atomic = dyn_cast<ttg::LocalAtomicScatterRMWOp>(op)) {
+    return isCrossCTAGatherScatter(
+        atomic.getDst().getType(), atomic.getValues().getType(),
+        atomic.getAxis());
+  }
+
+  if (isa<ttng::CLCTryCancelOp>(op)) {
     return ttg::lookupNumCTAs(op) > 1;
+  } else if (auto store = dyn_cast<ttng::AsyncSharedStoreOp>(op)) {
+    return isCrossCTALoadStore(store.getDst().getType(),
+                              store.getSrc().getType());
   } else if (isa<ttng::TMEMCopyOp>(op)) {
     return ttng::getModuleTwoCTAs(op);
   } else if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
@@ -375,7 +400,7 @@ void ClusterBarrierAnalysis::update(Operation *op, MembarInfo *membarInfo,
       membarInfo->sync();
     }
 
-    bool hasClusterSync = isDistributedMultiCTAOp(op, /*isRead=*/true);
+    bool hasClusterSync = hasCrossCTAScratch(op);
     if (hasClusterSync) {
       // A distributed scratch operation synchronizes between its write and
       // read phases. Record the write before clearing the state, then retain
