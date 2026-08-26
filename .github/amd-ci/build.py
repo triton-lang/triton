@@ -69,7 +69,7 @@ CONFIGURATIONS = {
     },
     "rocm-10.1-pytorch-2.15-nightly-20260820": {
         "tag": ("rocm10.1.0a20260820-pytorch2.15.0a0-"
-                "gfx90a-gfx942-gfx950-r1"),
+                "gfx90a-gfx942-gfx950-gfx1250-r1"),
         "build_args": {
             "BASE_IMAGE": ("ubuntu@sha256:"
                            "4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90"),
@@ -79,7 +79,7 @@ CONFIGURATIONS = {
             "PYTORCH_VERSION": "2.15.0a0+rocm10.1.0a20260820",
             "PYTORCH_INDEX_URL": ("https://rocm.nightlies.amd.com/whl-multi-arch/"),
             "HIP_PYTHON_VERSION": "7.2.2.562.43",
-            "PYTORCH_GPU_TARGETS": "gfx90a,gfx942,gfx950",
+            "PYTORCH_GPU_TARGETS": "gfx90a,gfx942,gfx950,gfx1250",
         },
     },
     "rocm-7.15-pytorch-2.11-nightly-gfx1250-73a658d5": {
