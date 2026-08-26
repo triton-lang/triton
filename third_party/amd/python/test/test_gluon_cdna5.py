@@ -1273,43 +1273,35 @@ def test_amd_wmma_scaled(wmma_shape, transposed, M, N, K, a_type, b_type, a_scal
 @pytest.mark.parametrize("a_type, b_type", get_test_mxfp_variants())
 @pytest.mark.parametrize("a_scale_type, b_scale_type", itertools.product(["e8m0", "e4m3"], repeat=2))
 @pytest.mark.parametrize("scale_factor", [16, 32])
-def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type, a_scale_type, b_scale_type, scale_factor):
+@pytest.mark.parametrize("ctas_per_cga", [(2, 1), (1, 2), (2, 2), (4, 1), (2, 4)])
+def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type, a_scale_type, b_scale_type, scale_factor, ctas_per_cga):
 
     @gluon.constexpr_function
-    def _get_wmma_layout(cga_layout=[[0, 1], [1, 0]], packed=False):
+    def _get_wmma_layout(cga_layout, packed=False):
         instr_shape = [16, 16, 64] if packed else [16, 16, 128]
         return ttgl.amd.AMDWMMALayout(version=3, transposed=True, warp_bases=[[0, 1], [1, 0]], instr_shape=instr_shape,
-                                      cga_layout=cga_layout)
+                                      cga_layout=[list(basis) for basis in cga_layout])
 
     @gluon.constexpr_function
-    def _get_wmma_operand_layout(operand_index, dtype, transposed=False):
-        cga_layout = [[0, 0], [1, 0]] if operand_index == 0 else [[0, 1], [0, 0]]
-        if transposed:
-            cga_layout = [list(reversed(row)) for row in cga_layout]
+    def _get_wmma_operand_layout(cga_layout, operand_index, dtype):
         wmma_layout = _get_wmma_layout(cga_layout, packed=(dtype == "e2m1"))
         return ttgl.DotOperandLayout(operand_index, wmma_layout, k_width=16)
-
-    @gluon.constexpr_function
-    def _get_wmma_scale_layout(operand_index, dtype, shape, scale_factor):
-        transposed = True if operand_index == 1 else False
-        operand_layout = _get_wmma_operand_layout(operand_index, dtype, transposed)
-        return get_wmma_scale_layout(operand_layout, shape, scale_factor)
 
     @gluon.jit
     def kernel(c_ptr, a_ptr, a_scale_ptr, b_ptr, b_scale_ptr,  #
                a_type: ttgl.constexpr, b_type: ttgl.constexpr,  #
                BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr,  #
-               SCALE_FACTOR: ttgl.constexpr):
+               SCALE_FACTOR: ttgl.constexpr, CGA_LAYOUT: ttgl.constexpr):
         DIV_FACTOR_A: ttgl.constexpr = 2 if a_type == "e2m1" else 1
         DIV_FACTOR_B: ttgl.constexpr = 2 if b_type == "e2m1" else 1
 
-        acc_layout: ttgl.constexpr = _get_wmma_layout()
-        a_layout: ttgl.constexpr = _get_wmma_operand_layout(0, a_type)
-        b_layout: ttgl.constexpr = _get_wmma_operand_layout(1, b_type)
-        a_scale_layout: ttgl.constexpr = _get_wmma_scale_layout(0, a_type, [BLOCK_M, BLOCK_K // SCALE_FACTOR],
-                                                                SCALE_FACTOR)
-        b_scale_layout: ttgl.constexpr = _get_wmma_scale_layout(1, b_type, [BLOCK_N, BLOCK_K // SCALE_FACTOR],
-                                                                SCALE_FACTOR)
+        acc_layout: ttgl.constexpr = _get_wmma_layout(CGA_LAYOUT)
+        a_layout: ttgl.constexpr = _get_wmma_operand_layout(CGA_LAYOUT, 0, a_type)
+        b_layout: ttgl.constexpr = _get_wmma_operand_layout(CGA_LAYOUT, 1, b_type)
+        a_scale_layout: ttgl.constexpr = get_wmma_scale_layout(a_layout, [BLOCK_M, BLOCK_K // SCALE_FACTOR],
+                                                               SCALE_FACTOR)
+        b_scale_layout: ttgl.constexpr = get_wmma_scale_layout(b_layout, [BLOCK_N, BLOCK_K // SCALE_FACTOR],
+                                                               SCALE_FACTOR)
 
         a_offs = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, a_layout))[:, None] * (BLOCK_K // DIV_FACTOR_A) + \
                  ttgl.arange(0, BLOCK_K // DIV_FACTOR_A, layout=ttgl.SliceLayout(0, a_layout))[None, :]
@@ -1341,7 +1333,11 @@ def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type, a_scale_type, b_scal
         pytest.skip(f"Invalid type combination: {a_type}, {a_scale_type}, {b_type}, {b_scale_type}")
 
     torch.manual_seed(42)
-    M, N = M * 2, N * 2
+    num_ctas = math.prod(ctas_per_cga)
+    M *= ctas_per_cga[0]
+    N *= ctas_per_cga[1]
+    # Tuples so that the layout can be passed as a constexpr kernel argument.
+    cga_layout = tuple(map(tuple, make_cga_layout(list(ctas_per_cga), list(ctas_per_cga), [1, 0])))
     a, a_ref = create_mxfp_operand(0, M, K, a_type)
     b, b_ref = create_mxfp_operand(1, K, N, b_type)
     a_scale, a_scale_ref = create_mxfp_scale(0, M, K, a_scale_type, scale_factor)
@@ -1351,7 +1347,8 @@ def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type, a_scale_type, b_scal
     a, a_scale = a.cuda(), a_scale.cuda()
     b, b_scale = b.cuda(), b_scale.cuda()
     c = torch.zeros((M, N), dtype=torch.float32).cuda()
-    pgm = kernel[(1, )](c, a, a_scale, b, b_scale, a_type, b_type, M, N, K, scale_factor, num_warps=4, num_ctas=4)
+    pgm = kernel[(1, )](c, a, a_scale, b, b_scale, a_type, b_type, M, N, K, scale_factor, cga_layout, num_warps=4,
+                        num_ctas=num_ctas)
     if scale_factor == 32:
         assert "v_wmma_scale_f32_16x16x128_f8f6f4" in pgm.asm["amdgcn"]
     else:
