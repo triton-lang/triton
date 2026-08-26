@@ -210,6 +210,9 @@ class CUDABackend(BaseBackend):
 
         args = {'arch': knobs.runtime.override_arch or f"sm{self.target.arch}"}
         args.update({k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts if opts[k] is not None})
+        if args.get("instrumentation_mode", ""):
+            # Instrumentation can require more registers than the user-specified limit.
+            args["maxnreg"] = None
         capability = int(self._parse_arch(args["arch"]))
 
         if args.get("clc", False) and capability < 100:
