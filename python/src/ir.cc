@@ -32,6 +32,7 @@
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Transforms/LocationSnapshot.h"
 
+#include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -1902,6 +1903,19 @@ void init_triton_ir(py::module_ &m) {
       .def("create_barrier",
            [](TritonOpBuilder &self) {
              self.create<triton::gpu::BarrierOp>(triton::gpu::AddrSpace::All);
+           })
+      .def(
+          "create_cluster_barrier",
+          [](TritonOpBuilder &self,
+             bool relaxed) { self.create<ttng::ClusterBarrierOp>(relaxed); },
+          py::arg("relaxed") = false)
+      .def("create_amd_cluster_arrive",
+           [](TritonOpBuilder &self) {
+             self.create<triton::amdgpu::ClusterBarrierArriveOp>();
+           })
+      .def("create_amd_cluster_wait",
+           [](TritonOpBuilder &self) {
+             self.create<triton::amdgpu::ClusterBarrierWaitOp>();
            })
       // Make a tensor descriptor
       .def("create_make_tensor_descriptor",

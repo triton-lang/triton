@@ -1814,6 +1814,16 @@ class TritonSemantic(Generic[TensorTy]):
     def barrier(self) -> TensorTy:
         return self.tensor(self.builder.create_barrier(), tl.void)
 
+    def fence(self, generator=None) -> TensorTy:
+        num_ctas = getattr(self.builder.options, "num_ctas", 1)
+        if num_ctas > 1:
+            generator.module.set_attr("ttg.num-ctas", self.builder.get_int32_attr(num_ctas))
+            if self.builder.options.backend_name == "hip":
+                self.builder.create_amd_cluster_arrive()
+                return self.tensor(self.builder.create_amd_cluster_wait(), tl.void)
+            return self.tensor(self.builder.create_cluster_barrier(), tl.void)
+        return self.barrier()
+
     def grid_dependency_wait(self) -> None:
         self.builder.create_grid_dependency_wait()
 

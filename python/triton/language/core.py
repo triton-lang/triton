@@ -3182,20 +3182,23 @@ def map_elementwise(
 
 
 @builtin
-def barrier(_semantic=None):
+def fence(_semantic=None, _generator=None):
     """
-    Synchronize all threads within a block.
+    Synchronize all threads executing the current program.
+
+    Kernels configured with multiple CTAs synchronize across the entire CTA
+    cluster. Other kernels synchronize threads within a single CTA.
 
     Triton does not automatically detect dependencies through global memory.
     When using global memory as scratch space within a kernel, explicitly
-    insert a barrier between writes and subsequent reads so all threads in the
-    block observe the completed writes.
+    insert a fence between writes and subsequent reads so all threads in the
+    program observe the completed writes.
     """
-    return _semantic.barrier()
+    return _semantic.fence(_generator)
 
 
-# `debug_barrier` is a regular block barrier, retained for backward compatibility.
-debug_barrier = barrier
+# `debug_barrier` is a regular synchronization fence kept for backward compatibility.
+debug_barrier = fence
 
 
 @builtin
