@@ -1211,6 +1211,20 @@ partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
   auto *ctx = partitioned.getContext();
   auto outDimNames = standardOutDimNames(ctx, baseLayout.getNumOutDims());
 
+  // Partitioning is local to each CTA.  The wrapped layout may carry a CGA
+  // block mapping, but that mapping must remain outside the partition/group
+  // bits.  Otherwise those bits are appended after the block basis and make
+  // each CTA own interleaved fragments of the clustered tile instead of one
+  // contiguous per-CTA tile.
+  LinearLayout localLayout = getLayoutWithinBlock(baseLayout);
+  auto localPieceShape =
+      getShapePerCTA(partitioned.getCGALayout().getCTASplitNum(),
+                     partitionShape);
+  llvm::SmallDenseMap<StringAttr, int64_t> localPieceShapeMap;
+  for (auto [dim, size] : llvm::zip(outDimNames, localPieceShape))
+    localPieceShapeMap[dim] = size;
+  localLayout = ensureLayoutNotLargerThan(localLayout, localPieceShapeMap);
+
   // partLayout maps "partition" -> piece selection along partitionDim.
   auto kPartition = StringAttr::get(ctx, "partition");
   LinearLayout partLayout = LinearLayout::identity1D(
@@ -1221,7 +1235,8 @@ partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
   LinearLayout extension = LinearLayout::identity1D(
       partitioned.getNumGroups(), kOffset, outDimNames[partitionDim]);
 
-  return baseLayout * partLayout * extension;
+  localLayout = localLayout * partLayout * extension;
+  return combineCtaCgaWithShape(localLayout, partitioned.getCGALayout(), shape);
 }
 
 LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,

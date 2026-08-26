@@ -207,9 +207,18 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     }
   }
 
-  // PaddedSharedEncodingAttr is also a SharedEncodingTrait but we have some
-  // additional rules to verify.
-  if (auto enc = dyn_cast<PaddedSharedEncodingAttr>(encoding)) {
+  // These encodings are also SharedEncodingTraits but have additional rules.
+  if (auto enc = dyn_cast<PartitionedSharedEncodingAttr>(encoding)) {
+    auto blockShape = getShapePerCTA(enc, layoutAllocShape);
+    unsigned partitionDim = enc.getPartitionDim();
+    unsigned numLogicalPieces = enc.getNumLogicalPieces();
+    if (blockShape[partitionDim] % numLogicalPieces != 0) {
+      return emitError()
+             << "per-CTA allocation extent along partitionDim must be "
+                "divisible by numPartitions * numGroups; got "
+             << blockShape[partitionDim] << " and " << numLogicalPieces;
+    }
+  } else if (auto enc = dyn_cast<PaddedSharedEncodingAttr>(encoding)) {
     auto rank = enc.getRank();
     // Ensure linear component's outDims match the alloc size ignoring
     // pipelining dimension
