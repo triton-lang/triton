@@ -67,6 +67,8 @@ def test_compile_only_sm100() -> None:
     ptx = k.asm["ptx"]
     assert ".target sm_100a" in ptx
     assert ".address_size 64" in ptx
+    assert "p3:32:32" in k.asm["llir"]
+    assert "p5:32:32" in k.asm["llir"]
     assert k.asm["cubin"] != b""
 
 

@@ -202,6 +202,34 @@ inferFp4ToFpResultType(RankedTensorType srcType, Type elemType, int32_t axis,
   return RankedTensorType::get(shape, elemType, outEnc);
 }
 
+FailureOr<RankedTensorType>
+inferFpToFp4ResultType(RankedTensorType srcType, int32_t axis,
+                       std::optional<Location> loc) {
+  auto rank = srcType.getRank();
+  if (axis < 0 || axis >= rank)
+    return failure();
+  if (srcType.getShape()[axis] % 2 != 0)
+    return failure();
+
+  // srcType is the unpacked (larger) tensor. Infer the packed encoding from
+  // the unpacked one using backward inference, then halve the axis extent.
+  Attribute inEnc = srcType.getEncoding();
+  assert(inEnc && "expected an encoding on the unpacked source type");
+  Attribute outEnc;
+  auto result =
+      inEnc.getDialect()
+          .getRegisteredInterface<triton::DialectInferLayoutInterface>()
+          ->inferFp4ToFpOpEncoding(srcType.getShape(), axis, inEnc, outEnc,
+                                   /*fwdInference=*/false, loc);
+  if (failed(result))
+    return failure();
+
+  auto shape = llvm::to_vector(srcType.getShape());
+  shape[axis] /= 2;
+  return RankedTensorType::get(shape, IntegerType::get(srcType.getContext(), 8),
+                               outEnc);
+}
+
 SmallVector<unsigned> getThreadsPerWarp(Attribute layout,
                                         ArrayRef<int64_t> shape) {
   return toGenericLinearEncoding(cast<DistributedEncodingTrait>(layout), shape)
@@ -359,6 +387,57 @@ CGAEncodingAttr getCGALayout(Attribute layout) {
   if (auto ttgLayout = dyn_cast<LayoutEncodingTrait>(layout))
     return ttgLayout.getCGALayout();
   llvm_unreachable("Unimplemented usage of getCGALayout");
+}
+
+CGAEncodingAttr inferDotOperandCGALayout(CGAEncodingAttr accCGALayout,
+                                         int opIdx) {
+  assert((opIdx == 0 || opIdx == 1) && "unknown dot operand index");
+  const auto &layout = accCGALayout.getLinearLayout();
+  auto rank = layout.getNumOutDims();
+  // Operand A does not carry N and operand B does not carry M.
+  auto broadcastDim = opIdx == 0 ? rank - 1 : rank - 2;
+  auto dims = layout.getOutDims();
+  return CGAEncodingAttr::get(accCGALayout.getContext(),
+                              layout.resizeOutDim(dims[broadcastDim].first, 1));
+}
+
+CGAEncodingAttr
+inferDotScaleCGALayoutFromOperand(CGAEncodingAttr operandCGALayout, int opIdx) {
+  assert((opIdx == 0 || opIdx == 1) && "unknown dot operand index");
+  if (opIdx == 0)
+    return operandCGALayout;
+
+  auto rank = operandCGALayout.getRank();
+  auto order = to_vector(llvm::seq<int>(rank));
+  std::swap(order[rank - 2], order[rank - 1]);
+  auto layout =
+      transposeLinearLayout(operandCGALayout.getLinearLayout(), order);
+  return CGAEncodingAttr::get(operandCGALayout.getContext(), std::move(layout));
+}
+
+static bool isDotOperandCGALayoutCompatible(CGAEncodingAttr expected,
+                                            CGAEncodingAttr actual) {
+  auto expectedLayout = expected.getLinearLayout();
+  const auto &actualLayout = actual.getLinearLayout();
+  auto expectedDims = expectedLayout.getOutDims();
+  auto actualDims = actualLayout.getOutDims();
+  if (expectedDims.size() != actualDims.size())
+    return false;
+
+  // A batched dot may explicitly broadcast an operand across a subset of the
+  // batch CTAs. Permit that by shrinking only leading batch dimensions in the
+  // expected layout. The trailing M/N dimensions must still match exactly.
+  int rank = expectedDims.size();
+  for (int dimIdx = 0; dimIdx < rank - 2; ++dimIdx) {
+    auto expectedDim = expectedDims[dimIdx].first;
+    if (expectedDim != actualDims[dimIdx].first)
+      return false;
+    int actualSize = actualLayout.getOutDimSize(expectedDim);
+    if (actualSize > expectedLayout.getOutDimSize(expectedDim))
+      return false;
+    expectedLayout = expectedLayout.resizeOutDim(expectedDim, actualSize);
+  }
+  return actualLayout == expectedLayout;
 }
 
 static LinearEncodingAttr
@@ -2874,12 +2953,7 @@ SmallVector<unsigned> DotOperandEncodingAttr::getRepOrder() const {
 }
 
 CGAEncodingAttr DotOperandEncodingAttr::getCGALayout() const {
-  const auto &layout = ::getCGALayout(getParent()).getLinearLayout();
-  auto rank = layout.getNumOutDims();
-  auto kDim = getOpIdx() == 0 ? rank - 1 : rank - 2;
-  auto dims = layout.getOutDims();
-  return CGAEncodingAttr::get(getContext(),
-                              layout.resizeOutDim(dims[kDim].first, 1));
+  return inferDotOperandCGALayout(::getCGALayout(getParent()), getOpIdx());
 }
 LogicalResult DotOperandEncodingAttr::verify(
     function_ref<::mlir::InFlightDiagnostic()> emitError, unsigned opIdx,
@@ -3236,31 +3310,62 @@ struct TritonGPUInferLayoutInterface
         return op->emitError("unsupported MMA version");
     }
 
-    // For AMDWmmaEncodingAttr verify multi-cta CGA layout compatibility
+    return verifyWmmaCGACompatibility(op, aEncoding, bEncoding,
+                                      /*scaleEncodingA=*/{},
+                                      /*scaleEncodingB=*/{}, resEnc);
+  }
+
+  LogicalResult verifyDotScaledOpEncodingCompatibility(
+      Operation *op, Attribute operandEncodingA, Attribute operandEncodingB,
+      Attribute scaleEncodingA, Attribute scaleEncodingB) const override {
+    auto aEncoding = dyn_cast<DotOperandEncodingAttr>(operandEncodingA);
+    auto bEncoding = dyn_cast<DotOperandEncodingAttr>(operandEncodingB);
+    if (!aEncoding || !bEncoding)
+      return success();
+    auto resEnc =
+        cast<RankedTensorType>(cast<DotOpInterface>(op).getD().getType())
+            .getEncoding();
+    return verifyWmmaCGACompatibility(op, aEncoding, bEncoding, scaleEncodingA,
+                                      scaleEncodingB, resEnc);
+  }
+
+  // For AMDWmmaEncodingAttr verify multi-cta CGA layout compatibility. The
+  // scale encodings are optional and only present for scaled dots.
+  LogicalResult verifyWmmaCGACompatibility(Operation *op,
+                                           DotOperandEncodingAttr aEncoding,
+                                           DotOperandEncodingAttr bEncoding,
+                                           Attribute scaleEncodingA,
+                                           Attribute scaleEncodingB,
+                                           Attribute resEnc) const {
     auto wmmaAParentEnc = dyn_cast<AMDWmmaEncodingAttr>(aEncoding.getParent());
     auto wmmaBParentEnc = dyn_cast<AMDWmmaEncodingAttr>(bEncoding.getParent());
     auto wmmaResEncoding = dyn_cast<AMDWmmaEncodingAttr>(resEnc);
-    if (wmmaAParentEnc && wmmaBParentEnc && wmmaResEncoding) {
-      auto resLL = wmmaResEncoding.getCGALayout().getLinearLayout();
+    if (!wmmaAParentEnc || !wmmaBParentEnc || !wmmaResEncoding)
+      return success();
 
-      if (!resLL.isInvertible())
-        return op->emitError("Accumulator CGA layout should not broadcast or "
-                             "have repeated rows");
+    auto accCGALayout = wmmaResEncoding.getCGALayout();
+    if (!accCGALayout.getLinearLayout().isInvertible())
+      return op->emitError("Accumulator CGA layout should not broadcast or "
+                           "have repeated rows");
 
-      auto aLL = aEncoding.getCGALayout().getLinearLayout();
-      auto bLL = bEncoding.getCGALayout().getLinearLayout();
-      // A broadcasts over N, B over M (the trailing two result dims). Batch
-      // dims (rank > 2) are shared across A/B/result, not broadcast.
-      auto ctx = op->getContext();
-      int rank = cast<RankedTensorType>(dotOp.getD().getType()).getRank();
-      auto mDim = StringAttr::get(ctx, "dim" + std::to_string(rank - 2));
-      auto nDim = StringAttr::get(ctx, "dim" + std::to_string(rank - 1));
-      // resizeOutDim(d, 1) makes d broadcast-only.
-      if (aLL != resLL.resizeOutDim(nDim, 1))
-        return op->emitError("Incompatible CGA layout for operand 0");
+    // A is multicast over N and B over M. Leading batch dimensions may also
+    // broadcast when the same operand is intentionally reused by multiple CTAs.
+    for (int opIdx : {0, 1}) {
+      auto expectedOperandCGALayout =
+          inferDotOperandCGALayout(accCGALayout, opIdx);
+      auto encoding = opIdx == 0 ? aEncoding : bEncoding;
+      auto operandCGALayout = encoding.getCGALayout();
+      if (!isDotOperandCGALayoutCompatible(expectedOperandCGALayout,
+                                           operandCGALayout))
+        return op->emitError("Incompatible CGA layout for operand ") << opIdx;
 
-      if (bLL != resLL.resizeOutDim(mDim, 1))
-        return op->emitError("Incompatible CGA layout for operand 1");
+      auto scaleEncoding = opIdx == 0 ? scaleEncodingA : scaleEncodingB;
+      if (scaleEncoding &&
+          getCGALayout(scaleEncoding) !=
+              inferDotScaleCGALayoutFromOperand(operandCGALayout, opIdx))
+        return op->emitError(
+                   "Incompatible CGA layout for the scale of operand ")
+               << opIdx;
     }
     return success();
   }

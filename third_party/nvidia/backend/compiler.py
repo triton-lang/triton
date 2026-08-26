@@ -480,8 +480,7 @@ class CUDABackend(BaseBackend):
         proc = sm_arch_from_capability(cap_llvm)
         features = get_features(options, cap_llvm)
         triple = 'nvptx64-nvidia-cuda'
-        nvidia.set_short_ptr()
-        llvm.attach_datalayout(llvm_mod, triple, proc, features)
+        llvm.attach_datalayout(llvm_mod, triple, proc, features, "shortptr")
         if options.enable_reflect_ftz:
             nvidia.set_nvvm_reflect_ftz(llvm_mod)
 
@@ -495,6 +494,7 @@ class CUDABackend(BaseBackend):
             llvm.OPTIMIZE_O3,
             disable_slp_vectorizer=capability == 80,
             expand_masked_div_rem=True,
+            scalarize_packed_fops=True,
         )
 
         # Get some metadata
@@ -531,7 +531,8 @@ class CUDABackend(BaseBackend):
         features = get_features(opt, cap_llvm)
         flags = ["nvptx-mad-wide-opt"]
         canonicalize_gep = "fpsan" in opt.instrumentation_mode
-        ret = llvm.translate_to_asm(src, triple, proc, features, flags, opt.enable_fp_fusion, False, canonicalize_gep)
+        ret = llvm.translate_to_asm(src, triple, proc, features, flags, opt.enable_fp_fusion, False, canonicalize_gep,
+                                    "shortptr")
         # Find kernel names (there should only be one)
         names = re.findall(r".visible .entry ([a-zA-Z_][a-zA-Z0-9_]*)", ret)
         assert len(names) == 1

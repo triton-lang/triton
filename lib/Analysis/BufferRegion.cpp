@@ -73,14 +73,14 @@ unsigned getMemDescSize(ttg::MemDescType ty) {
                                              ty.getAllocShape());
   if (auto padded = ttg::getPaddedEncoding(ty.getEncoding()))
     numElems = padded.getPaddedSize({numElems});
-  return numElems * ty.getElementType().getIntOrFloatBitWidth() / 8;
+  return numElems * getIntOrFloatOrPtrBitWidth(ty.getElementType()) / 8;
 }
 
 uint32_t applySharedPadding(uint32_t byteOffset, ttg::MemDescType ty) {
   auto padded = ttg::getPaddedEncoding(ty.getEncoding());
   if (!padded)
     return byteOffset;
-  uint32_t elementSize = ty.getElementTypeBitWidth() / 8;
+  uint32_t elementSize = getIntOrFloatOrPtrBitWidth(ty.getElementType()) / 8;
   uint32_t elementOffset = byteOffset / elementSize;
   return (padded.getPaddedSize({elementOffset + 1}) - 1) * elementSize +
          byteOffset % elementSize;
@@ -128,7 +128,7 @@ MemDescFootprint getMemDescAddresses(
   SmallVector<StringAttr> dims = triton::standardOutDimNames(ctx, ty.getRank());
   ArrayRef<int64_t> shape = ty.getShape();
   uint64_t numPoints = product(shape);
-  uint32_t bitWidth = ty.getElementTypeBitWidth();
+  uint32_t bitWidth = getIntOrFloatOrPtrBitWidth(ty.getElementType());
 
   StringAttr offsetName = StringAttr::get(ctx, "offset");
   StringAttr blockName = StringAttr::get(ctx, "block");
@@ -245,11 +245,12 @@ uint32_t getMemDescStorageOffset(ttg::MemDescType ty, unsigned index) {
   if (auto partitioned =
           dyn_cast<ttg::PartitionedSharedEncodingAttr>(ty.getEncoding()))
     elems /= partitioned.getNumPartitions();
-  return applySharedPadding(index * elems * (ty.getElementTypeBitWidth() / 8),
-                            ty);
+  uint32_t elementSize = getIntOrFloatOrPtrBitWidth(ty.getElementType()) / 8;
+  return applySharedPadding(index * elems * elementSize, ty);
 }
 
 struct MemDescSubsliceOffsets {
+  uint32_t storageOffset = 0;
   uint32_t byteOffset = 0;
   uint32_t partitionOffset = 0;
   uint32_t ctaOffset = 0;
@@ -291,19 +292,24 @@ getMemDescSubsliceUnpaddedOffsets(ttg::MemDescSubsliceOp op) {
     else if (dim == partitionDim)
       partitionOffset = static_cast<uint32_t>(offset);
   }
+  uint32_t storageElementOffset = 0;
   if (offsets.size() != layoutRank) {
     uint32_t stride = ttg::getAllocationElems(
         encoding, ttg::dropPipeliningDim(srcTy.getAllocShape(), encoding));
     if (auto partitioned =
             dyn_cast<ttg::PartitionedSharedEncodingAttr>(encoding))
       stride /= partitioned.getNumPartitions();
-    elementOffset += offsets.front() * stride;
+    // The pipeline prefix advances every base pointer by addition. Only the
+    // layout-ranked suffix composes by XOR; nested prefix offsets may carry.
+    // Padded pipeline subslices are rejected by the verifier.
+    storageElementOffset = offsets.front() * stride;
   }
 
   uint32_t elementSizeBytes =
-      srcTy.getElementType().getIntOrFloatBitWidth() / 8;
+      getIntOrFloatOrPtrBitWidth(srcTy.getElementType()) / 8;
   assert(elementSizeBytes > 0 && "element size must be non-zero");
-  return MemDescSubsliceOffsets{elementOffset * elementSizeBytes,
+  return MemDescSubsliceOffsets{storageElementOffset * elementSizeBytes,
+                                elementOffset * elementSizeBytes,
                                 partitionOffset, blockOffset};
 }
 
@@ -631,9 +637,9 @@ LogicalResult BufferRegionAnalysis::visitOperation(
         getMemDescSubsliceUnpaddedOffsets(memdescSubsliceOp);
     for (const BufferRegionView &view : in.views)
       regionInfo.views.insert(
-          getSubView(memdescSubsliceOp.getType(), view, /*storageOffset=*/0,
-                     relativeOffset.byteOffset, relativeOffset.partitionOffset,
-                     relativeOffset.ctaOffset));
+          getSubView(memdescSubsliceOp.getType(), view,
+                     relativeOffset.storageOffset, relativeOffset.byteOffset,
+                     relativeOffset.partitionOffset, relativeOffset.ctaOffset));
     return propagateRegions(regionInfo);
   }
   if (auto tmemSubsliceOp = dyn_cast<ttng::TMEMSubSliceOp>(op)) {

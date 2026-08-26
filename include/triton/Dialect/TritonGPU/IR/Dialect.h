@@ -178,6 +178,10 @@ FailureOr<RankedTensorType> inferFp4ToFpResultType(RankedTensorType srcType,
                                                    Type elemType, int32_t axis,
                                                    std::optional<Location> loc);
 
+FailureOr<RankedTensorType> inferFpToFp4ResultType(RankedTensorType srcType,
+                                                   int32_t axis,
+                                                   std::optional<Location> loc);
+
 // Returns the number of warps per CTA that have access to non-replicated
 // elements of the tensor. E.g. for a blocked layout with sizePerThread = [1,
 // 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4] and tensor shape = [2, 2],
@@ -284,6 +288,16 @@ std::optional<CGAEncodingAttr> parseCGAAttr(AsmParser &parser, Attribute attr,
 void printCGAAttr(AsmPrinter &printer, CGAEncodingAttr layout);
 
 CGAEncodingAttr getCGALayout(Attribute layout);
+
+// Projects the CGA layout of a dot accumulator onto operand `opIdx`.
+CGAEncodingAttr inferDotOperandCGALayout(CGAEncodingAttr accCGALayout,
+                                         int opIdx);
+
+// Derives the CGA layout of the scale for dot operand `opIdx`. For operand A,
+// the scale shares the same CGA layout. For operand B, the last two dimensions
+// are swapped.
+CGAEncodingAttr
+inferDotScaleCGALayoutFromOperand(CGAEncodingAttr operandCGALayout, int opIdx);
 
 SmallVector<unsigned> getCTAsPerCGA(Attribute layout);
 

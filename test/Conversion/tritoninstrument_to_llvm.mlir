@@ -103,6 +103,22 @@ tt.func private @experimental_memdesc_to_i32(
 
 // -----
 
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_pointer_memdesc_to_i32
+// CHECK: %[[POINTER_BYTES:.*]] = llvm.mlir.constant(8 : i32) : i32
+// CHECK: llvm.mul {{.*}}, %[[POINTER_BYTES]] : i32
+tt.func private @experimental_pointer_memdesc_to_i32(
+  %memdesc: !ttg.memdesc<4x!tt.ptr<i32>, #shared, #smem, mutable>
+) {
+  tti.experimental_memdesc_to_i32 %memdesc : !ttg.memdesc<4x!tt.ptr<i32>, #shared, #smem, mutable>
+  tt.return
+}
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
 // CHECK-LABEL: @experimental_memory_offset_to_i32_shared

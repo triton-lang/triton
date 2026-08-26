@@ -332,10 +332,12 @@ def make_default_opt_flags_nvidia(
         # the full 512-column TMEM budget, so leave headroom for that operand.
         block_n = min(block_n, 128)
     if (is_persistent and constraints.get("block_n", None) is None
-            and opt_flags_nvidia.is_blackwell_mx_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype)):
-        # Native Blackwell MX lhs + dense rhs persistent dots also stage an
-        # expanded operand in TMEM, so keep the accumulator tile below the
-        # 512-column budget.
+            and (opt_flags_nvidia.is_blackwell_mx_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype)
+                 or opt_flags_nvidia.is_blackwell_nvfp4_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype))):
+        # Native Blackwell MX/NVFP lhs + dense rhs persistent dots also stage
+        # an expanded operand in TMEM, so keep the accumulator tile below the
+        # 512-column budget, including MX output. Keep NVFP separate from the MX predicate because
+        # that predicate also controls block_k and num_warps.
         block_n = min(block_n, 128)
     # adjust block_m based on is_persistent signal
     if is_persistent and opt_flags_nvidia.is_x_scale_swizzled(precision_config):
@@ -390,7 +392,8 @@ def make_default_opt_flags_nvidia(
             and is_persistent
             and block_n <= 128
             and block_k >= 256
-            and opt_flags_nvidia.is_blackwell_mx_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype)):
+            and opt_flags_nvidia.is_blackwell_mx_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype)
+            and precision_config.c_mx_scale is None):
         num_warps = max(num_warps, 8)
 
     # Occupancy target and maxnreg (for Hopper)

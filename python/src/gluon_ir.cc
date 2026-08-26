@@ -1198,6 +1198,17 @@ void init_gluon_ir(py::module_ &m) {
              return self.create<ttag::ScaledUpcastFp8Op>(resultType, input,
                                                          scale);
            })
+      .def("create_scaled_downcast_fp4",
+           [](GluonOpBuilder &self, Value input, Value scale,
+              int axis) -> Value {
+             return self.create<ttag::ScaledDowncastFp4Op>(input, scale, axis);
+           })
+      .def("create_scaled_downcast_fp8",
+           [](GluonOpBuilder &self, Value input, Value scale, Type elemType,
+              int axis) -> Value {
+             return self.create<ttag::ScaledDowncastFp8Op>(input, scale,
+                                                           elemType, axis);
+           })
       .def("create_extract_slice",
            [](GluonOpBuilder &self, Type resultType, Value source,
               std::vector<int64_t> &offsets) -> Value {

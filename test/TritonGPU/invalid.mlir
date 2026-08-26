@@ -56,11 +56,8 @@ tt.func public @memdesc_zero_allocation_dimension(%arg0: !ttg.memdesc<2x4xi32, #
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
-tt.func public @local_alloc_i1() {
-    // expected-error @+1 {{element type bit width must be a multiple of 8}}
-    %0 = ttg.local_alloc : () -> !ttg.memdesc<8xi1, #shared, #smem, mutable>
-    tt.return
-}
+// expected-error @below {{shared-memory element type bit width must be a multiple of 8; got 1}}
+!i1_smem = !ttg.memdesc<8xi1, #shared, #smem>
 
 // -----
 

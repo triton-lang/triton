@@ -145,6 +145,9 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                          ArrayRef<unsigned> tilesPerWarp,
                                          ArrayRef<unsigned> warpsPerCTA);
 
+// Create LinearLayout for scale in scaled wmma. `ctaLayout` and `cgaLayout`
+// describe the dot operand itself, i.e. they are given in the operand's
+// dimension order (will be transposed for scale b)
 LinearLayout chooseScaledWmmaScaleLayout(
     MLIRContext *ctx, int dotOperandIdx, ArrayRef<int64_t> dotOperandShape,
     unsigned wmmaMDim, unsigned wmmaNDim, bool isTransposed,
