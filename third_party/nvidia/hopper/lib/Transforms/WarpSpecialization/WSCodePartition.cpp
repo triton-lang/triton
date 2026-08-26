@@ -1225,7 +1225,7 @@ void foldLocalLoads(triton::FuncOp funcOp) {
 
 } // namespace
 
-void doCodePartition(triton::FuncOp &funcOp, unsigned numBuffers) {
+LogicalResult doCodePartition(triton::FuncOp &funcOp, unsigned numBuffers) {
   // Step 1: collect all communications between producers and consumers.
   SmallVector<std::unique_ptr<Channel>> channelsOrigin;
   collectAsyncChannels(channelsOrigin, funcOp, numBuffers);
@@ -1234,7 +1234,7 @@ void doCodePartition(triton::FuncOp &funcOp, unsigned numBuffers) {
     channels.push_back(c.get());
   }
   if (channels.empty()) {
-    return;
+    return success();
   }
 
   // Step 2: group channels
@@ -1315,11 +1315,15 @@ void doCodePartition(triton::FuncOp &funcOp, unsigned numBuffers) {
     funcOp.dump();
   });
 
-  specializeRegion(funcOp, 0 /*requestedRegisters*/);
+  if (failed(specializeRegion(funcOp, 0 /*requestedRegisters*/)))
+    return failure();
+
   LLVM_DEBUG({
     LDBG("\n\nwith specializeRegion");
     funcOp.dump();
   });
+
+  return success();
 }
 
 #define GEN_PASS_DEF_NVGPUTESTWSCODEPARTITION
@@ -1331,18 +1335,27 @@ public:
   using impl::NVGPUTestWSCodePartitionBase<
       NVGPUTestWSCodePartitionPass>::NVGPUTestWSCodePartitionBase;
 
-  void runOnFuncOp(triton::FuncOp funcOp) {
+  LogicalResult runOnFuncOp(triton::FuncOp funcOp) {
     // Disable code partitioning when numBuffers is 0.
     if (numBuffers > 0)
-      doCodePartition(funcOp, numBuffers);
+      return doCodePartition(funcOp, numBuffers);
+    return success();
   }
+
   void runOnOperation() override {
-    getOperation()->walk([&](triton::FuncOp funcOp) { runOnFuncOp(funcOp); });
+    WalkResult result = getOperation()->walk([&](triton::FuncOp funcOp) {
+      if (failed(runOnFuncOp(funcOp)))
+        return WalkResult::interrupt();
+      return WalkResult::advance();
+    });
+
+    if (result.wasInterrupted())
+      return signalPassFailure();
+
     LLVM_DEBUG({
       LDBG("post pass");
       getOperation()->dump();
     });
-    return;
   }
 };
 

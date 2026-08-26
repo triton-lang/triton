@@ -1,6 +1,7 @@
 #ifndef NV_DIALECT_HOPPER_TRANSFORMS_CODEPARTITIONUTILITY_H_
 #define NV_DIALECT_HOPPER_TRANSFORMS_CODEPARTITIONUTILITY_H_
 
+#include "mlir/Support/LogicalResult.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -130,7 +131,7 @@ Operation *optimizeTMALoads(OpBuilderWithAsyncTaskIds &builder,
                             Value bufferIdx, Value bufferIdxExtract,
                             Value phase, Operation *headProducer,
                             Operation *headConsumer);
-void specializeRegion(triton::FuncOp funcOp, unsigned requestedRegisters);
+LogicalResult specializeRegion(triton::FuncOp funcOp, unsigned requestedRegisters);
 void invalidateWarpSpecializeBarriers(triton::FuncOp funcOp);
 
 } // namespace mlir
