@@ -300,6 +300,7 @@ int32_t TargetFeatures::getBufferAtomicCachePolicy(bool hasUsers) const {
 
 bool TargetFeatures::supportMaximumMinimum() const {
   return getISAFamily() == ISAFamily::CDNA4 ||
+         getISAFamily() == ISAFamily::RDNA4m ||
          getISAFamily() == ISAFamily::GFX1250;
 }
 
