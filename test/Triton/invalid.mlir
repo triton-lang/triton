@@ -204,6 +204,36 @@ tt.func public @fn(%v1: tensor<4x128xf32>, %v2: tensor<4x128xi64>) {
 
 // -----
 
+tt.func public @reduce_with_tensor_op(%v: tensor<4x128xi32>) {
+    %a = "tt.reduce" (%v) ({
+    ^bb0(%arg0: i32, %arg1: i32):
+      %condition = arith.cmpi sgt, %arg0, %arg1 : i32
+      // expected-error @+1 {{tensor operations are not allowed inside 'tt.reduce' combine region}}
+      %tensor_condition = tt.splat %condition : i1 -> tensor<1xi1>
+      tt.assert %tensor_condition, "unexpected value" : tensor<1xi1>
+      %add = arith.addi %arg0, %arg1 : i32
+      tt.reduce.return %add : i32
+    }) {axis = 1 : i32} : (tensor<4x128xi32>) -> tensor<4xi32>
+    tt.return
+}
+
+// -----
+
+tt.func public @scan_with_tensor_op(%v: tensor<4x128xi32>) {
+    %a = "tt.scan" (%v) ({
+    ^bb0(%arg0: i32, %arg1: i32):
+      %condition = arith.cmpi sgt, %arg0, %arg1 : i32
+      // expected-error @+1 {{tensor operations are not allowed inside 'tt.scan' combine region}}
+      %tensor_condition = tt.splat %condition : i1 -> tensor<1xi1>
+      tt.assert %tensor_condition, "unexpected value" : tensor<1xi1>
+      %add = arith.addi %arg0, %arg1 : i32
+      tt.scan.return %add : i32
+    }) {axis = 1 : i32, reverse = false} : (tensor<4x128xi32>) -> tensor<4x128xi32>
+    tt.return
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
 tt.func public @fn(%arg0: tensor<32xf32, #blocked>) {

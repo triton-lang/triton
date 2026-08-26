@@ -619,6 +619,22 @@ template <class ReturnOp, class Op> LogicalResult verifyRegionsImpl(Op &op) {
              << " to have type " << argElemTy << " but got " << resultTy;
     }
   }
+
+  auto walkRes = op.getCombineOp().walk([&](Operation *nestedOp) -> WalkResult {
+    auto hasTensorType = [](auto types) {
+      return llvm::any_of(
+          types, [](Type type) { return isa<RankedTensorType>(type); });
+    };
+    if (hasTensorType(nestedOp->getOperandTypes()) ||
+        hasTensorType(nestedOp->getResultTypes())) {
+      nestedOp->emitOpError() << "tensor operations are not allowed inside '"
+                              << op->getName() << "' combine region";
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  if (walkRes.wasInterrupted())
+    return failure();
   return success();
 }
 
