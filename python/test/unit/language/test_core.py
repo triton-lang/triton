@@ -6868,6 +6868,23 @@ def test_disable_licm():
     assert "llvm.licm.disable" in compiled_kernel3.asm["llir"]
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("disable_licm", [False, True])
+@pytest.mark.parametrize("n", [0, 3])
+def test_condition_while_loop(disable_licm, n, device):
+
+    @triton.jit
+    def kernel(output, n, DISABLE_LICM: tl.constexpr):
+        i = 0
+        while tl.condition(i < n, disable_licm=DISABLE_LICM):
+            i += 1
+        tl.store(output, i)
+
+    output = torch.empty(1, dtype=torch.int32, device=device)
+    kernel[(1, )](output, n, disable_licm)
+    assert output.item() == n
+
+
 @triton.jit(noinline=True)
 def maxnreg_noinline1(X):
     tl.store(X, 0)

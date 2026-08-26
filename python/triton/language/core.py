@@ -3654,6 +3654,9 @@ class condition(base_value):
         self.condition = arg1
         self.disable_licm = disable_licm
 
+    def __bool__(self):
+        return bool(self.condition)
+
 
 # -----------------------
 # Extern functions
