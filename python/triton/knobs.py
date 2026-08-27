@@ -499,6 +499,7 @@ class language_knobs(base_knobs):
 
 
 class nvidia_knobs(base_knobs):
+    codegen_path: env_opt_str = env_opt_str("TRITON_NVIDIA_CODEGEN_PATH")
     cuobjdump: env_nvidia_tool = env_nvidia_tool("cuobjdump")
     nvdisasm: env_nvidia_tool = env_nvidia_tool("nvdisasm")
     ptxas: env_nvidia_tool = env_nvidia_tool("ptxas")
