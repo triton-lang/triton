@@ -322,10 +322,13 @@ private:
 
 protected:
   void updateMemoryEffects(Operation *operation, MembarInfo *membarInfo,
-                           FuncMapT *funcMap, OpBuilder *builder);
+                           FuncMapT *funcMap, OpBuilder *builder,
+                           bool cluster = false);
   void syncIfNeeded(Operation *operation, const BlockInfo &effects,
-                    MembarInfo *membarInfo, OpBuilder *builder);
-  virtual void insertBarrier(Operation *operation, OpBuilder *builder);
+                    MembarInfo *membarInfo, OpBuilder *builder,
+                    bool cluster = false);
+  void insertBarrier(Operation *operation, OpBuilder *builder,
+                     bool cluster = false);
   virtual triton::BarrierStages getBarrierStages(Operation *operation);
 
   Allocation &allocation;

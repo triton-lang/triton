@@ -117,21 +117,26 @@ AllocationSlice AllocationSlice::translateToCallsite(
 }
 
 void MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
-                                  MembarInfo *membarInfo, OpBuilder *builder) {
+                                  MembarInfo *membarInfo, OpBuilder *builder,
+                                  bool cluster) {
   if (!membarInfo->pending.isIntersected(effects, filter, &allocation,
                                          sliceFilter))
     return;
   // The barrier clears incoming state. The operation's own effects still
   // follow it, including a scratch write that conflicts with a pending read.
   builder->setInsertionPoint(op);
-  insertBarrier(op, builder);
+  insertBarrier(op, builder, cluster);
   membarInfo->sync();
 }
 
-void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
+void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder,
+                                   bool cluster) {
   OpBuilder::InsertionGuard g(*builder);
-  triton::gpu::BarrierOp::create(*builder, op->getLoc(),
-                                 triton::gpu::AddrSpace::Local);
+  if (cluster)
+    ttng::ClusterBarrierOp::create(*builder, op->getLoc());
+  else
+    triton::gpu::BarrierOp::create(*builder, op->getLoc(),
+                                   triton::gpu::AddrSpace::Local);
 }
 
 static Allocation::BufferId getScratchBufferId(Operation *op,
@@ -282,8 +287,8 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
 }
 
 void MembarAnalysis::updateMemoryEffects(Operation *op, MembarInfo *membarInfo,
-                                         FuncMapT *funcMap,
-                                         OpBuilder *builder) {
+                                         FuncMapT *funcMap, OpBuilder *builder,
+                                         bool cluster) {
   auto barrierStages = getBarrierStages(op);
   if (barrierStages.beforeMemoryEffects) {
     // Model a leading barrier before handling the operation's effects.
@@ -298,7 +303,7 @@ void MembarAnalysis::updateMemoryEffects(Operation *op, MembarInfo *membarInfo,
           });
         });
     if (summary) {
-      syncIfNeeded(op, summary->entryBlockInfo, membarInfo, builder);
+      syncIfNeeded(op, summary->entryBlockInfo, membarInfo, builder, cluster);
       membarInfo->applyCallSummary(*summary);
     }
     return;
@@ -377,7 +382,7 @@ void MembarAnalysis::updateMemoryEffects(Operation *op, MembarInfo *membarInfo,
     curBlockInfo.syncWriteSlices[*scratchSlice].insert(op);
   }
 
-  syncIfNeeded(op, curBlockInfo, membarInfo, builder);
+  syncIfNeeded(op, curBlockInfo, membarInfo, builder, cluster);
 
   if (scratchSlice) {
     if (barrierStages.betweenMemoryEffects) {

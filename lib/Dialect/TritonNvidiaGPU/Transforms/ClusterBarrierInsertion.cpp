@@ -277,10 +277,6 @@ public:
 private:
   llvm::SmallPtrSet<Operation *, 4> returnsWithExitBarrier;
 
-  void insertBarrier(Operation *op, OpBuilder *builder) override {
-    ttng::ClusterBarrierOp::create(*builder, op->getLoc());
-  }
-
   BarrierStages getBarrierStages(Operation *op) override {
     BarrierStages stages;
     if (auto barrier = dyn_cast<ttng::ClusterBarrierOp>(op))
@@ -301,13 +297,13 @@ private:
         // The solver may revisit this return before convergence.
         if (returnsWithExitBarrier.insert(op).second) {
           builder->setInsertionPoint(op);
-          insertBarrier(op, builder);
+          insertBarrier(op, builder, /*cluster=*/true);
         }
         membarInfo->sync();
       }
       return;
     }
-    updateMemoryEffects(op, membarInfo, funcMap, builder);
+    updateMemoryEffects(op, membarInfo, funcMap, builder, /*cluster=*/true);
   }
 };
 
