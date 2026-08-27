@@ -74,6 +74,8 @@ void AllocationSlice::print(raw_ostream &os) const {
 
   if (bufferId != Allocation::InvalidBufferId)
     os << " buffer=" << bufferId;
+  if (argumentIndex)
+    os << " argument=" << *argumentIndex;
 
   os << " offsets=[";
   if (!subsliceOffsets.empty()) {
@@ -95,13 +97,14 @@ void AllocationSlice::print(raw_ostream &os) const {
 void BlockInfo::invalidateIterationInfo() {
   transformSlices([](AllocationSlice slice) {
     slice.invalidateIterationInfo();
-    return slice;
+    return SmallVector<AllocationSlice>{std::move(slice)};
   });
 }
 
 AllocationSlice AllocationSlice::translateToCallsite(
     CallOpInterface call, FunctionOpInterface callee,
     triton::BufferRegionAnalysis &regions) const {
+  assert(!argumentIndex && "argument effects must be bound to call operands");
   AllocationSlice shifted = *this;
   // Unknown accesses span the whole frame; shifting their endpoint overflows.
   if (allocationInterval != Interval<size_t>{}) {
@@ -286,6 +289,52 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
   updateMemoryEffects(op, membarInfo, funcMap, builder);
 }
 
+SmallVector<AllocationSlice> MembarAnalysis::getAllocationSlices(Value value) {
+  auto function = cast<FunctionOpInterface>(allocation.getOperation());
+  // Device-function views use their own frame until imported at a call;
+  // foreign or mixed frames, including returned descriptors, stay unknown.
+  auto *footprint = regions.getFootprint(value, function);
+  SmallVector<AllocationSlice> slices;
+  auto addSlice = [&](Interval<size_t> interval,
+                      Allocation::BufferId bufferId) {
+    auto slice = bufferIndexAnalysis.makeSlice(value, interval, bufferId);
+    slice.physicalFootprint = footprint;
+    slices.push_back(std::move(slice));
+  };
+  Allocation::BufferIdSetT bufferIds;
+  if (accessMode == AccessMode::AllocatorAliasesOnly) {
+    // Allocation identity survives unknown geometry. Direct argument effects
+    // have no local IDs; retain them until a caller binds their allocation.
+    bufferIds = allocation.getAllBufferIdsWithAliases(value);
+    auto argument = dyn_cast<BlockArgument>(value);
+    if (argument && argument.getOwner() == &function.getBlocks().front()) {
+      AllocationSlice slice(Interval<size_t>{});
+      slice.argumentIndex = argument.getArgNumber();
+      slices.push_back(std::move(slice));
+    }
+  } else if (footprint) {
+    // Use every lattice origin: function-local alias analysis can miss roots
+    // returned through calls or joined with descriptor arguments.
+    for (const auto &view : footprint->regionInfo.views) {
+      auto ids = view.allocation
+                     ? allocation.getBufferIds(view.allocation->getResult(0))
+                     : SmallVector<Allocation::BufferId>{};
+      if (ids.empty()) {
+        bufferIds.clear();
+        break;
+      }
+      bufferIds.insert(ids.begin(), ids.end());
+    }
+  }
+  // Unknown allocations use an unbounded interval. View disjointness and
+  // RAW/WAR/WAW checks still determine whether a barrier is needed.
+  if (accessMode == AccessMode::AllSharedAccesses && bufferIds.empty())
+    addSlice(Interval<size_t>{}, Allocation::InvalidBufferId);
+  for (auto bufferId : bufferIds)
+    addSlice(allocation.getAllocatedInterval(bufferId), bufferId);
+  return slices;
+}
+
 void MembarAnalysis::updateMemoryEffects(Operation *op, MembarInfo *membarInfo,
                                          FuncMapT *funcMap, OpBuilder *builder,
                                          bool cluster) {
@@ -299,7 +348,23 @@ void MembarAnalysis::updateMemoryEffects(Operation *op, MembarInfo *membarInfo,
     auto summary = getCallSummary(
         call, *funcMap, [&](MembarInfo &summary, FunctionOpInterface callee) {
           summary.transformSlices([&](const AllocationSlice &slice) {
-            return slice.translateToCallsite(call, callee, regions);
+            if (!slice.argumentIndex)
+              return SmallVector<AllocationSlice>{
+                  slice.translateToCallsite(call, callee, regions)};
+            Value actual = call.getArgOperands()[*slice.argumentIndex];
+            auto slices = getAllocationSlices(actual);
+            if (!actual.getDefiningOp<triton::gpu::LocalAllocOp>() &&
+                llvm::none_of(slices, [](const AllocationSlice &bound) {
+                  return bound.argumentIndex.has_value();
+                }))
+              return SmallVector<AllocationSlice>{};
+            // A callee can reinterpret the argument's view. Retain the caller's
+            // allocation IDs, but cover each whole allocation without shifting.
+            for (AllocationSlice &bound : slices) {
+              bound.physicalFootprint = nullptr;
+              bound.invalidateIterationInfo();
+            }
+            return slices;
           });
         });
     if (summary) {
@@ -312,7 +377,6 @@ void MembarAnalysis::updateMemoryEffects(Operation *op, MembarInfo *membarInfo,
   // Intra-function dependencies
   // Explicit buffer
   BlockInfo curBlockInfo;
-  auto function = cast<FunctionOpInterface>(allocation.getOperation());
   for (const auto &access : triton::getMemoryAccesses(op)) {
     Value value = access.value;
     auto memory = cast<triton::gpu::MemDescType>(value.getType());
@@ -320,44 +384,11 @@ void MembarAnalysis::updateMemoryEffects(Operation *op, MembarInfo *membarInfo,
       continue;
     // Shared effects cover only descriptor elements, including gather/scatter
     // and async copies. Footprints retain padding, partitions and CTA identity.
-    // Device-function views use their own frame until imported at a call;
-    // foreign or mixed frames, including returned descriptors, stay unknown.
-    auto *footprint = regions.getFootprint(value, function);
-    auto addSlice = [&](AllocationSlice slice) {
-      slice.physicalFootprint = footprint;
+    for (const AllocationSlice &slice : getAllocationSlices(value)) {
       if (access.isWrite)
         curBlockInfo.syncWriteSlices[slice].insert(op);
       if (access.isRead)
         curBlockInfo.syncReadSlices[slice].insert(op);
-    };
-    Allocation::BufferIdSetT bufferIds;
-    if (accessMode == AccessMode::AllocatorAliasesOnly) {
-      // Allocation identity survives unknown geometry. Argument-only effects
-      // have no local IDs and cannot introduce aliases in this allocation.
-      bufferIds = allocation.getAllBufferIdsWithAliases(value);
-    } else if (footprint) {
-      // Use every lattice origin: function-local alias analysis can miss roots
-      // returned through calls or joined with descriptor arguments.
-      for (const auto &view : footprint->regionInfo.views) {
-        auto ids = view.allocation
-                       ? allocation.getBufferIds(view.allocation->getResult(0))
-                       : SmallVector<Allocation::BufferId>{};
-        if (ids.empty()) {
-          bufferIds.clear();
-          break;
-        }
-        bufferIds.insert(ids.begin(), ids.end());
-      }
-    }
-    if (bufferIds.empty()) {
-      if (accessMode == AccessMode::AllSharedAccesses)
-        addSlice(bufferIndexAnalysis.makeSlice(value, Interval<size_t>{},
-                                               Allocation::InvalidBufferId));
-      continue;
-    }
-    for (auto bufferId : bufferIds) {
-      auto interval = allocation.getAllocatedInterval(bufferId);
-      addSlice(bufferIndexAnalysis.makeSlice(value, interval, bufferId));
     }
   }
 

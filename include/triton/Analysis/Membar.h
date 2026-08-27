@@ -9,6 +9,7 @@
 
 #include "llvm/Support/raw_ostream.h"
 #include <functional>
+#include <optional>
 #include <set>
 #include <tuple>
 #include <utility>
@@ -86,10 +87,14 @@ public:
   // BlockInfo::invalidateIterationInfo does.
   const BufferIndexExpr *bufferIndexExpr = nullptr;
 
+  // Parameters have no callee buffer ID. Bind this argument's effects to the
+  // caller's allocation when importing the function summary.
+  std::optional<unsigned> argumentIndex;
+
 private:
   std::tuple<Interval<size_t>, Allocation::BufferId, const void *,
              llvm::ArrayRef<int32_t>, const BufferIndexExpr *, const void *,
-             const void *>
+             const void *, std::optional<unsigned>>
   asTuple() const {
     return {allocationInterval,
             bufferId,
@@ -97,7 +102,8 @@ private:
             subsliceOffsets,
             bufferIndexExpr,
             subsliceSource.getAsOpaquePointer(),
-            physicalFootprint};
+            physicalFootprint,
+            argumentIndex};
   }
   // Offsets from subslice, borrowed from its immutable context-owned attribute.
   // Empty when offsets are unknown.
@@ -135,10 +141,11 @@ struct BlockInfo {
   template <typename Transform> void transformSlices(Transform transform) {
     for (auto *slices : {&syncReadSlices, &syncWriteSlices}) {
       SliceMapT transformed;
-      for (const auto &[slice, ops] : *slices) {
-        auto &dst = transformed[transform(slice)];
-        dst.insert(ops.begin(), ops.end());
-      }
+      for (const auto &[slice, ops] : *slices)
+        for (const AllocationSlice &mapped : transform(slice)) {
+          auto &dst = transformed[mapped];
+          dst.insert(ops.begin(), ops.end());
+        }
       *slices = std::move(transformed);
     }
   }
@@ -336,6 +343,8 @@ protected:
   triton::BufferRegionAnalysis &regions;
 
 private:
+  SmallVector<AllocationSlice> getAllocationSlices(Value value);
+
   MembarSliceFilterFn sliceFilter;
   AccessMode accessMode;
   BufferIndexAnalysis bufferIndexAnalysis;

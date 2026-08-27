@@ -50,6 +50,9 @@ bool isPreAllocAliasSliceFilter(const AllocationSlice &lhsSlice,
                                 const AllocationSlice &rhsSlice,
                                 bool /*lhsIsRead*/, bool /*rhsIsRead*/,
                                 Allocation *allocation) {
+  // Argument effects are checked after binding to the caller's allocation.
+  if (lhsSlice.argumentIndex || rhsSlice.argumentIndex)
+    return true;
   auto bufferId = lhsSlice.getBufferId();
   return bufferId != Allocation::InvalidBufferId &&
          bufferId == rhsSlice.getBufferId() &&

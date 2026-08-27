@@ -43,6 +43,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 #blockedCallSrc = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
 #blockedCallDst = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
+#sharedCall = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
 #keepLayout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
 #keepShared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 
@@ -82,6 +83,37 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.call @cluster_entry_b() : () -> ()
     %kept = ttg.local_load %keep : !ttg.memdesc<65536xi8, #keepShared, #ttg.shared_memory, mutable> -> tensor<65536xi8, #keepLayout>
     tt.return %kept : tensor<65536xi8, #keepLayout>
+  }
+
+  tt.func private @store_argument(%dst: !ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable>) attributes {noinline = true} {
+    %value = arith.constant dense<3.0> : tensor<256x128xf16, #blockedCallDst>
+    %staging = ttg.local_alloc %value : (tensor<256x128xf16, #blockedCallDst>) -> !ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable>
+    %loaded = ttg.local_load %staging : !ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable> -> tensor<256x128xf16, #blockedCallDst>
+    ttg.local_store %loaded, %dst : tensor<256x128xf16, #blockedCallDst> -> !ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable>
+    tt.return
+  }
+
+  tt.func private @forward_store_argument(%dst: !ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable>) attributes {noinline = true} {
+    tt.call @store_argument(%dst) : (!ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable>) -> ()
+    tt.return
+  }
+
+  // The nested call writes through an argument into the conversion's reused
+  // scratch, so it must wait for the conversion's cross-CTA read.
+  // The callee's local allocation puts its frame at a nonzero offset, but the
+  // argument still refers to the caller's allocation.
+  // CHECK-LABEL: @cluster_call_argument_reuses_scratch
+  // CHECK: ttg.convert_layout
+  // CHECK-NEXT: ttg.local_alloc
+  // CHECK-NEXT: ttng.cluster_barrier
+  // CHECK-NEXT: tt.call @forward_store_argument{{.*}}allocation.offset = {{[1-9][0-9]*}}
+  tt.func @cluster_call_argument_reuses_scratch() -> (tensor<256x128xf16, #blockedCallDst>, tensor<256x128xf16, #blockedCallDst>) {
+    %value = arith.constant dense<0.0> : tensor<256x128xf16, #blockedCallSrc>
+    %cvt = ttg.convert_layout %value : tensor<256x128xf16, #blockedCallSrc> -> tensor<256x128xf16, #blockedCallDst>
+    %dst = ttg.local_alloc : () -> !ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable>
+    tt.call @forward_store_argument(%dst) : (!ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable>) -> ()
+    %result = ttg.local_load %dst : !ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable> -> tensor<256x128xf16, #blockedCallDst>
+    tt.return %cvt, %result : tensor<256x128xf16, #blockedCallDst>, tensor<256x128xf16, #blockedCallDst>
   }
 }
 
