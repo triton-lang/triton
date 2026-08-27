@@ -22,8 +22,8 @@ bool isCrossCTALoadStore(ttg::MemDescType memDescTy, RankedTensorType regTy) {
   return !conversion.isIdentityOnOutDim(kBlock);
 }
 
-bool isCrossCTAGatherScatter(ttg::MemDescType memDescTy,
-                            RankedTensorType regTy, unsigned axis) {
+bool isCrossCTAGatherScatter(ttg::MemDescType memDescTy, RankedTensorType regTy,
+                             unsigned axis) {
   MLIRContext *ctx = memDescTy.getContext();
   LinearLayout sharedLayout = ttg::toLinearLayoutIgnoringPadding(memDescTy);
   SmallVector<StringAttr> allDims =
@@ -31,8 +31,7 @@ bool isCrossCTAGatherScatter(ttg::MemDescType memDescTy,
   StringAttr axisDim = allDims[axis];
   auto kBlock = StringAttr::get(ctx, "block");
 
-  bool axisIsSharded =
-      !sharedLayout.sublayoutIsZero({kBlock}, {axisDim});
+  bool axisIsSharded = !sharedLayout.sublayoutIsZero({kBlock}, {axisDim});
   // (1) axisIsSharded: The runtime index may select any CTA shard along the
   // indexed axis.
   // (2) isCrossCTALoadStore: Access through the remaining coordinates may still
@@ -74,8 +73,8 @@ bool requiresCrossCTAMBarrierInitSync(
         else if (isa<ttng::CLCTryCancelOp>(op))
           crossCTA = true;
         else if (auto store = dyn_cast<ttng::AsyncSharedStoreOp>(op))
-          crossCTA = isCrossCTALoadStore(
-              store.getDst().getType(), store.getSrc().getType());
+          crossCTA = isCrossCTALoadStore(store.getDst().getType(),
+                                         store.getSrc().getType());
         else if (auto expect = dyn_cast<ttng::BarrierExpectOp>(op))
           crossCTA = expect.getFromCTA().has_value();
         else if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op))

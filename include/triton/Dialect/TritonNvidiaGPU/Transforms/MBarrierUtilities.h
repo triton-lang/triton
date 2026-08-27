@@ -12,7 +12,7 @@ bool isCrossCTALoadStore(::mlir::triton::gpu::MemDescType memDescTy,
                          ::mlir::RankedTensorType regTy);
 
 bool isCrossCTAGatherScatter(::mlir::triton::gpu::MemDescType memDescTy,
-                            ::mlir::RankedTensorType regTy, unsigned axis);
+                             ::mlir::RankedTensorType regTy, unsigned axis);
 
 bool hasTCGen5CommitCrossCTA(Operation *op);
 
