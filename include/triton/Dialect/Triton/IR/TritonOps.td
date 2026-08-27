@@ -215,7 +215,7 @@ def TT_FenceOp : TT_Op<"fence"> {
   let summary = "Make prior memory accesses visible to later operations";
   let description = [{
     The `fence` operation makes prior memory accesses visible to later
-    operations on the same addresses within one Triton program.
+    operations on the same addresses within the same Triton program.
   }];
 
   let assemblyFormat = "attr-dict";
