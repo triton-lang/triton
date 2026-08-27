@@ -162,7 +162,7 @@ jobs:
         -DCMAKE_BUILD_TYPE=Release
         -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
         -DLLVM_DIR="${{ github.workspace }}/llvm-project/install/lib/cmake/llvm"
-        -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/${{ env.llvm_install_dir }}"
+        -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}"
         -DTRITON_NVIDIA_LLVM_REVISION="${{ env.llvm_commit_hash }}-${{ env.llvm_build_number }}"
         llvm-build/third_party/nvidia/backend/codegen
 
@@ -194,7 +194,7 @@ jobs:
         -DCMAKE_BUILD_TYPE=Release
         -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl
         -DLLVM_DIR="${{ github.workspace }}/llvm-project/install/lib/cmake/llvm"
-        -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/${{ env.llvm_install_dir }}"
+        -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}"
         -DTRITON_NVIDIA_LLVM_REVISION="${{ env.llvm_commit_hash }}-${{ env.llvm_build_number }}"
         llvm-build/third_party/nvidia/backend/codegen
 
