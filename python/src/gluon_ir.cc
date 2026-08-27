@@ -365,6 +365,61 @@ void init_gluon_ir(py::module_ &m) {
       .def(py::init<MLIRContext *, std::string>(), py::arg("context"),
            py::arg("arch") = "")
       .def("get_op_builder", &GluonOpBuilder::getBuilder, ret::reference)
+      .def("get_cache_policy",
+           [](GluonOpBuilder &self, const std::string &cacheModifier,
+              const std::string &evictionPolicy) -> Attribute {
+             auto modifier = tt::symbolizeCacheModifier(cacheModifier);
+             if (!modifier)
+               throw std::invalid_argument("invalid cache modifier '" +
+                                           cacheModifier + "'");
+             auto eviction = tt::symbolizeEvictionPolicy(evictionPolicy);
+             if (!eviction)
+               throw std::invalid_argument("invalid eviction policy '" +
+                                           evictionPolicy + "'");
+             return buildCachePolicy(self.getBuilder(), *modifier, *eviction);
+           })
+      .def(
+          "get_nvidia_cache_policy",
+          [](GluonOpBuilder &self, std::optional<std::string> cacheModifier,
+             std::optional<std::string> l1,
+             std::optional<std::string> l2Primary,
+             std::optional<std::string> l2Secondary,
+             std::optional<double> l2Fraction,
+             std::optional<int32_t> l2PrefetchSize) -> Attribute {
+            auto *ctx = self.getContext();
+            auto parseModifier = [](const std::optional<std::string> &value) {
+              if (!value)
+                return tt::CacheModifier::NONE;
+              auto parsed = tt::symbolizeCacheModifier(*value);
+              if (!parsed)
+                throw std::invalid_argument("invalid cache modifier '" +
+                                            *value + "'");
+              return *parsed;
+            };
+            auto parsePriority = [](const std::optional<std::string> &value) {
+              if (!value)
+                return ttng::CacheEvictionPriority::NONE;
+              auto parsed = ttng::symbolizeCacheEvictionPriority(*value);
+              if (!parsed)
+                throw std::invalid_argument(
+                    "invalid cache eviction priority '" + *value + "'");
+              return *parsed;
+            };
+            FloatAttr fractionAttr;
+            if (l2Fraction)
+              fractionAttr = FloatAttr::get(Float32Type::get(ctx), *l2Fraction);
+            IntegerAttr prefetchSizeAttr;
+            if (l2PrefetchSize)
+              prefetchSizeAttr =
+                  IntegerAttr::get(IntegerType::get(ctx, 32), *l2PrefetchSize);
+            return self.getChecked<ttng::CachePolicyAttr>(
+                ctx, parseModifier(cacheModifier), parsePriority(l1),
+                parsePriority(l2Primary), parsePriority(l2Secondary),
+                fractionAttr, prefetchSizeAttr);
+          },
+          py::arg("cacheModifier").none(), py::arg("l1").none(),
+          py::arg("l2Primary").none(), py::arg("l2Secondary").none(),
+          py::arg("l2Fraction").none(), py::arg("l2PrefetchSize").none())
       .def("get_distributed_ty",
            [](GluonOpBuilder &self, Type &elementType,
               std::vector<int64_t> &shape, Attribute layout) -> Type {
@@ -717,21 +772,16 @@ void init_gluon_ir(py::module_ &m) {
              return self.create<ttg::Fp4ToFpOp>(
                  cast<TypedValue<RankedTensorType>>(src), elemType, axis);
            })
-      .def("create_async_copy_global_to_local",
-           [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
-              Value other, tt::CacheModifier cacheModifier,
-              tt::EvictionPolicy evictionPolicy, bool isVolatile) {
-             self.create<ttg::AsyncCopyGlobalToLocalOp>(
-                 pointer, smem, mask, other, cacheModifier, evictionPolicy,
-                 isVolatile);
-           })
-      .def("create_async_copy_local_to_global",
-           [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
-              tt::CacheModifier cacheModifier,
-              tt::EvictionPolicy evictionPolicy) {
-             self.create<ttag::AsyncCopyLocalToGlobalOp>(
-                 smem, pointer, mask, cacheModifier, evictionPolicy);
-           })
+      .def(
+          "create_async_copy_global_to_local",
+          [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
+             Value other, Attribute cachePolicy, bool isVolatile) {
+            self.create<ttg::AsyncCopyGlobalToLocalOp>(
+                pointer, smem, mask, other, cachePolicy, isVolatile,
+                /*contiguity=*/1);
+          },
+          py::arg("smem"), py::arg("pointer"), py::arg("mask"),
+          py::arg("other"), py::arg("cachePolicy"), py::arg("isVolatile"))
       .def("create_async_copy_mbarrier_arrive",
            [](GluonOpBuilder &self, Value mbarrier, bool incrementCount) {
              self.create<ttng::AsyncCopyMbarrierArriveOp>(mbarrier,
@@ -1127,16 +1177,19 @@ void init_gluon_ir(py::module_ &m) {
            })
       .def("create_buffer_load",
            [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
-              Value mask, Value other, tt::CacheModifier cache) -> Value {
-             return self.create<ttag::BufferLoadOp>(resultType, ptr, offsets,
-                                                    Value() /*stride*/, cache,
-                                                    mask, other);
+              Value mask, Value other,
+              tt::CacheModifier cacheModifier) -> Value {
+             return self.create<ttag::BufferLoadOp>(
+                 resultType, ptr, offsets, Value() /*stride*/,
+                 buildCachePolicy(self.getBuilder(), cacheModifier), mask,
+                 other);
            })
       .def("create_buffer_store",
            [](GluonOpBuilder &self, Value storedValue, Value ptr, Value offsets,
-              Value mask, tt::CacheModifier cache) {
-             self.create<ttag::BufferStoreOp>(storedValue, ptr, offsets,
-                                              Value() /*stride*/, cache, mask);
+              Value mask, tt::CacheModifier cacheModifier) {
+             self.create<ttag::BufferStoreOp>(
+                 storedValue, ptr, offsets, Value() /*stride*/,
+                 buildCachePolicy(self.getBuilder(), cacheModifier), mask);
            })
       .def("create_buffer_atomic_rmw",
            [](GluonOpBuilder &self, tt::RMWOp op, Value ptr, Value offsets,
@@ -1151,7 +1204,8 @@ void init_gluon_ir(py::module_ &m) {
               Value mask, Value other, Value stride,
               tt::CacheModifier cacheModifier) {
              self.create<ttag::BufferLoadToLocalOp>(
-                 dest, ptr, offsets, mask, other, stride, cacheModifier);
+                 dest, ptr, offsets, mask, other, stride,
+                 buildCachePolicy(self.getBuilder(), cacheModifier));
            })
       .def("create_local_load_packed_transposed",
            [](GluonOpBuilder &self, Type resultType, Value memDesc) -> Value {

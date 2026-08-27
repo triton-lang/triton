@@ -270,13 +270,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.sha
 
     // CHECK: llvm.getelementptr
     // CHECK: rocdl.global.load.async.lds {{.*}}, {{.*}}, 4, 0, 0
-    %2 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = ca: tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
+    %2 = ttg.async_copy_global_to_local %1, %arg2 {cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_normal>}: tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     // CHECK: llvm.getelementptr
     // CHECK: rocdl.global.load.async.lds {{.*}}, {{.*}}, 4, 0, 3
-    %3 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = cg: tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
+    %3 = ttg.async_copy_global_to_local %1, %arg2 {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>}: tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     // CHECK: llvm.getelementptr
     // CHECK: rocdl.global.load.async.lds {{.*}}, {{.*}}, 4, 0, 17
-    %4 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = cv: tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
+    %4 = ttg.async_copy_global_to_local %1, %arg2 {cachePolicy = #tt.cache_policy<cache_modifier = cv, eviction_policy = evict_normal>}: tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     tt.return
   }
 }
