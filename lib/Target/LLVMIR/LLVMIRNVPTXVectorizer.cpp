@@ -6,8 +6,10 @@
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
@@ -48,6 +50,13 @@ struct LoopAccumulator {
   BinaryOperator *update;
   CallBase *contribution;
   unsigned backedgeIndex;
+};
+
+struct LoadedAccumulator {
+  BinaryOperator *update;
+  PHINode *phi;
+  Value *source;
+  unsigned lane;
 };
 
 struct ArithmeticPlan {
@@ -106,8 +115,10 @@ public:
 
   bool run() {
     bool changed = vectorizeLoopAccumulators();
-    for (BasicBlock &block : function)
+    for (BasicBlock &block : function) {
+      changed |= vectorizeInterleavedAccumulators(block);
       changed |= vectorizeArithmetic(block);
+    }
     return changed;
   }
 
@@ -287,6 +298,93 @@ private:
     return changed;
   }
 
+  std::optional<LoadedAccumulator>
+  getLoadedAccumulator(BinaryOperator &update) const {
+    if (update.getOpcode() != Instruction::FAdd ||
+        !update.getType()->isFloatTy() ||
+        !costModel.supportsPackedArithmetic(update.getOpcode(),
+                                            update.getType()))
+      return std::nullopt;
+
+    auto *phi = dyn_cast<PHINode>(update.getOperand(0));
+    auto *cast = dyn_cast<BitCastInst>(update.getOperand(1));
+    if (!phi || !cast || phi->getParent() != update.getParent() ||
+        !phi->hasOneUse())
+      return std::nullopt;
+
+    auto *lane = dyn_cast<ExtractValueInst>(cast->getOperand(0));
+    if (!lane || lane->getNumIndices() != 1)
+      return std::nullopt;
+    auto *load = dyn_cast<CallBase>(lane->getAggregateOperand());
+    auto *assembly =
+        load ? dyn_cast<InlineAsm>(load->getCalledOperand()) : nullptr;
+    if (!assembly || !assembly->getAsmString().contains("ld.global.v4.b32"))
+      return std::nullopt;
+
+    Value *pointer = nullptr;
+    for (Value *argument : load->args()) {
+      if (!argument->getType()->isPointerTy())
+        continue;
+      if (pointer)
+        return std::nullopt;
+      pointer = argument;
+    }
+    if (!pointer)
+      return std::nullopt;
+
+    return LoadedAccumulator{&update, phi, getUnderlyingObject(pointer),
+                             lane->getIndices().front()};
+  }
+
+  bool vectorizeInterleavedAccumulators(BasicBlock &block) const {
+    SmallVector<SmallVector<LoadedAccumulator, 8>, 8> groups;
+    for (Instruction &instruction : block) {
+      auto *arithmetic = dyn_cast<BinaryOperator>(&instruction);
+      if (!arithmetic)
+        continue;
+      auto accumulator = getLoadedAccumulator(*arithmetic);
+      if (!accumulator)
+        continue;
+
+      auto group = llvm::find_if(groups, [&](const auto &candidate) {
+        return candidate.front().source == accumulator->source;
+      });
+      if (group == groups.end()) {
+        groups.emplace_back();
+        groups.back().push_back(*accumulator);
+      } else {
+        group->push_back(*accumulator);
+      }
+    }
+
+    // Keep adjacent-lane packing for small groups. Pairing across four
+    // independent load streams exposes memory parallelism while retaining
+    // native-width arithmetic.
+    if (groups.size() < 4)
+      return false;
+
+    bool changed = false;
+    for (unsigned start = 0; start + 1 < groups.size(); start += 4) {
+      unsigned end = std::min<unsigned>(start + 4, groups.size());
+      for (unsigned left = start, right = end - 1; left < right;
+           ++left, --right) {
+        auto &firstGroup = groups[left];
+        auto &secondGroup = groups[right];
+        unsigned count = std::min(firstGroup.size(), secondGroup.size());
+        for (unsigned index = 0; index < count; ++index) {
+          const LoadedAccumulator &first = firstGroup[index];
+          const LoadedAccumulator &second = secondGroup[index];
+          if (first.lane != second.lane ||
+              !getLoopCarry({first.phi, second.phi}, *first.update,
+                            *second.update))
+            continue;
+          changed |= vectorizePair(*first.update, *second.update);
+        }
+      }
+    }
+    return changed;
+  }
+
   std::optional<ExtractedVector> getExtractedVector(ValuePair values) const {
     auto *first = dyn_cast<ExtractElementInst>(values.first);
     auto *second = dyn_cast<ExtractElementInst>(values.second);
@@ -441,6 +539,13 @@ private:
 
     for (User *user : first.users()) {
       auto *use = dyn_cast<Instruction>(user);
+      if (auto *phi = dyn_cast_or_null<PHINode>(use)) {
+        if (llvm::any_of(phi->incoming_values(), [&](const Use &incoming) {
+              return incoming.get() == &first &&
+                     phi->getIncomingBlock(incoming) == first.getParent();
+            }))
+          continue;
+      }
       if (use && use->getParent() == first.getParent() &&
           use->comesBefore(insertion))
         return nullptr;

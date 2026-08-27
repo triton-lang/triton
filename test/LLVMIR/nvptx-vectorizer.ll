@@ -316,6 +316,65 @@ exit:
   ret void
 }
 
+; HOPPER-ONLY-LABEL: define void @packed_f32_interleaved_accumulators(
+; HOPPER-ONLY-NOT: fadd <2 x float>
+; HOPPER-ONLY-COUNT-4: fadd float
+; BLACKWELL-LABEL: define void @packed_f32_interleaved_accumulators(
+; BLACKWELL: phi <2 x float>
+; BLACKWELL: phi <2 x float>
+; BLACKWELL: [[FIRST:%.*]] = call { i32, i32, i32, i32 } asm sideeffect
+; BLACKWELL: [[SECOND:%.*]] = call { i32, i32, i32, i32 } asm sideeffect
+; BLACKWELL: [[THIRD:%.*]] = call { i32, i32, i32, i32 } asm sideeffect
+; BLACKWELL: fadd <2 x float>
+; BLACKWELL: [[FOURTH:%.*]] = call { i32, i32, i32, i32 } asm sideeffect
+; BLACKWELL: fadd <2 x float>
+; PTX-LABEL: .visible .func packed_f32_interleaved_accumulators(
+; PTX-COUNT-2: add.rn.f32x2
+define void @packed_f32_interleaved_accumulators(ptr addrspace(1) %first,
+                                                   ptr addrspace(1) %second,
+                                                   ptr addrspace(1) %third,
+                                                   ptr addrspace(1) %fourth,
+                                                   i1 %continue) {
+entry:
+  br label %loop
+
+loop:
+  %first.acc = phi float [ 0.0, %entry ], [ %first.next, %loop ]
+  %second.acc = phi float [ 0.0, %entry ], [ %second.next, %loop ]
+  %third.acc = phi float [ 0.0, %entry ], [ %third.next, %loop ]
+  %fourth.acc = phi float [ 0.0, %entry ], [ %fourth.next, %loop ]
+  %first.load = call { i32, i32, i32, i32 } asm sideeffect
+      "ld.global.v4.b32 { $0, $1, $2, $3 }, [ $4 ];",
+      "=r,=r,=r,=r,l"(ptr addrspace(1) %first)
+  %first.bits = extractvalue { i32, i32, i32, i32 } %first.load, 0
+  %first.value = bitcast i32 %first.bits to float
+  %first.next = fadd float %first.acc, %first.value
+  %second.load = call { i32, i32, i32, i32 } asm sideeffect
+      "ld.global.v4.b32 { $0, $1, $2, $3 }, [ $4 ];",
+      "=r,=r,=r,=r,l"(ptr addrspace(1) %second)
+  %second.bits = extractvalue { i32, i32, i32, i32 } %second.load, 0
+  %second.value = bitcast i32 %second.bits to float
+  %second.next = fadd float %second.acc, %second.value
+  %third.load = call { i32, i32, i32, i32 } asm sideeffect
+      "ld.global.v4.b32 { $0, $1, $2, $3 }, [ $4 ];",
+      "=r,=r,=r,=r,l"(ptr addrspace(1) %third)
+  %third.bits = extractvalue { i32, i32, i32, i32 } %third.load, 0
+  %third.value = bitcast i32 %third.bits to float
+  %third.next = fadd float %third.acc, %third.value
+  %fourth.load = call { i32, i32, i32, i32 } asm sideeffect
+      "ld.global.v4.b32 { $0, $1, $2, $3 }, [ $4 ];",
+      "=r,=r,=r,=r,l"(ptr addrspace(1) %fourth)
+  %fourth.bits = extractvalue { i32, i32, i32, i32 } %fourth.load, 0
+  %fourth.value = bitcast i32 %fourth.bits to float
+  %fourth.next = fadd float %fourth.acc, %fourth.value
+  br i1 %continue, label %loop, label %exit
+
+exit:
+  call void asm sideeffect "", "f,f,f,f"(float %first.next, float %second.next,
+                                          float %third.next, float %fourth.next)
+  ret void
+}
+
 ; BLACKWELL-LABEL: define void @different_divisor_accumulators(
 ; BLACKWELL: phi float
 ; BLACKWELL: phi float
