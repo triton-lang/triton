@@ -1137,6 +1137,12 @@ struct AsyncCopyLocalToGlobalOpConversion
   matchAndRewrite(triton::amdgpu::AsyncCopyLocalToGlobalOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto cacheModifier = LLVM::AMD::getCacheModifier(op.getCachePolicyAttr());
+    if (failed(cacheModifier)) {
+      op.emitOpError("target cache policy is not supported on AMD targets");
+      return failure();
+    }
+
     // Only supported on GFX1250
     if (targetInfo.getISAFamily() != ISAFamily::GFX1250) {
       return rewriter.notifyMatchFailure(
@@ -1181,7 +1187,7 @@ struct AsyncCopyLocalToGlobalOpConversion
         freeVarMasks, rewriter, loc, targetInfo);
 
     auto emitGlobalStoreLds =
-        [this, &op, &b, threadPred, dstPtrTy](
+        [this, &op, &b, threadPred, dstPtrTy, cacheModifier = *cacheModifier](
             RewriterBase &rewriter, Location loc, ArrayRef<Value> storeValues,
             Value shmemAddr, int startIdx, VectorType vecTy,
             Value /*multicastMask*/) -> SmallVector<Value> {
@@ -1195,7 +1201,7 @@ struct AsyncCopyLocalToGlobalOpConversion
       auto [storeBlock, afterStoreBlock] = emitBranch(rewriter, loc, cond);
 
       emitAsyncStore(rewriter, loc, targetInfo, vecBits, dstElem, shmemAddr,
-                     op.getCache());
+                     cacheModifier);
 
       rewriter.setInsertionPointToStart(afterStoreBlock);
 

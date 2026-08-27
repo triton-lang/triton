@@ -1273,7 +1273,8 @@ LogicalResult AsyncCopyLocalToGlobalOp::verify() {
   if (!isa<gpu::SharedMemorySpaceAttr>(srcTy.getMemorySpace()))
     return emitOpError("source must be in shared memory");
 
-  return success();
+  return triton::verifyCachePolicy(getOperation(), getCachePolicyAttr(),
+                                   triton::CachePolicyOperation::Store);
 }
 
 LogicalResult AsyncTDMFusedCopyGlobalToLocalOp::verify() {

@@ -66,10 +66,10 @@ def shared_to_global(pointer, smem, mask=None, cache_modifier="", _semantic=None
     mask = _unwrap_if_constexpr(mask)
     if mask is not None:
         pointer, mask = _semantic.broadcast_impl_value(pointer, mask)
-    cache_modifier = _semantic._str_to_store_cache_modifier(cache_modifier)
     mask_handle = mask.handle if mask is not None else ir.value()
-    _semantic.builder.create_async_copy_local_to_global(smem.handle, pointer.handle, mask_handle, cache_modifier,
-                                                        ir.EVICTION_POLICY.NORMAL)
+    cache_policy = _normalize_cache_policy(None, cache_modifier, None)
+    cache_policy = cache_policy._to_ir(_semantic.builder)
+    _semantic.builder.create_async_copy_local_to_global(smem.handle, pointer.handle, mask_handle, cache_policy)
 
 
 @builtin

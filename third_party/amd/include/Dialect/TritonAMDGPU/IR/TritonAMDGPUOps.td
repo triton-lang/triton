@@ -831,8 +831,7 @@ def AsyncCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_copy_local_to_global", [
     Arg<TTG_MemDescType, "", GenericSharedRead>:$src,
     Arg<TT_PtrTensor, "", [MemWrite<GlobalMemory>]>:$dst,
     Optional<I1Tensor>:$mask,
-    DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
-    DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
+    OptionalAttr<AnyAttr>:$cachePolicy,
     DefaultValuedAttr<I32Attr, "1">:$contiguity
   );
 
@@ -840,7 +839,7 @@ def AsyncCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_copy_local_to_global", [
 
   let assemblyFormat = [{
     $src `,` $dst (`mask` $mask^)?
-    oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
+    oilist(`cachePolicy` `=` $cachePolicy)
     attr-dict `:` qualified(type($src)) `->` type($dst)
   }];
 }
