@@ -98,8 +98,6 @@ fi
 # Uninstall any triton that is installed by the base image.
 python3 -m pip uninstall -y triton pytorch-triton pytorch-triton-rocm || true
 
-python3 -m pip install --no-cache-dir "hip-python==${HIP_PYTHON_VERSION}"
-
 # Enforce the installation model in both directions: legacy images use only
 # system ROCm, and TheRock images use only wheel ROCm.
 if [ "${ROCM_RELEASE_TYPE}" = "pre-therock" ]; then

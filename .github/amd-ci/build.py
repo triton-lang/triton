@@ -23,7 +23,6 @@ REQUIRED_BUILD_ARGUMENTS = (
     "ROCM_REPO_DIRECTORY",
     "PYTORCH_VERSION",
     "PYTORCH_INDEX_URL",
-    "HIP_PYTHON_VERSION",
     "PYTORCH_GPU_TARGETS",
 )
 
@@ -35,22 +34,6 @@ OPTIONAL_BUILD_ARGUMENTS = (
 BUILD_ARGUMENTS = REQUIRED_BUILD_ARGUMENTS + OPTIONAL_BUILD_ARGUMENTS
 
 CONFIGURATIONS = {
-    # Mirrors the ROCm and PyTorch versions used by the current gfx90a CI
-    # runner while building the stack independently from an Ubuntu base.
-    "rocm-7.0-pytorch-2.8-gfx90a": {
-        "tag": "rocm7.0.0-pytorch2.8.0-gfx90a-r1",
-        "build_args": {
-            "BASE_IMAGE": ("ubuntu@sha256:"
-                           "4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90"),
-            "ROCM_VERSION": "7.0.0",
-            "ROCM_RELEASE_TYPE": "pre-therock",
-            "ROCM_REPO_DIRECTORY": "7.0",
-            "PYTORCH_VERSION": "2.8.0+rocm7.0.0.git64359f59",
-            "PYTORCH_INDEX_URL": ("https://repo.radeon.com/rocm/manylinux/rocm-rel-7.0/"),
-            "HIP_PYTHON_VERSION": "7.0.2.555.40",
-            "PYTORCH_GPU_TARGETS": "gfx90a",
-        },
-    },
     # Mirrors the ROCm and PyTorch versions shared by the current gfx942 and
     # gfx950 CI runners while building independently from an Ubuntu base.
     "rocm-7.2.4-pytorch-2.10-gfx942-gfx950": {
@@ -63,13 +46,12 @@ CONFIGURATIONS = {
             "ROCM_REPO_DIRECTORY": "7.2.4",
             "PYTORCH_VERSION": ("2.10.0+rocm7.2.4.lw.git3d3aa833"),
             "PYTORCH_INDEX_URL": ("https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.4/"),
-            "HIP_PYTHON_VERSION": "7.2.2.562.43",
             "PYTORCH_GPU_TARGETS": "gfx942,gfx950",
         },
     },
     "rocm-10.1-pytorch-2.15-nightly-20260820": {
         "tag": ("rocm10.1.0a20260820-pytorch2.15.0a0-"
-                "gfx90a-gfx942-gfx950-gfx1250-r1"),
+                "gfx942-gfx950-gfx1250-r1"),
         "build_args": {
             "BASE_IMAGE": ("ubuntu@sha256:"
                            "4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90"),
@@ -78,36 +60,7 @@ CONFIGURATIONS = {
             "ROCM_REPO_DIRECTORY": "20260820-32315755045",
             "PYTORCH_VERSION": "2.15.0a0+rocm10.1.0a20260820",
             "PYTORCH_INDEX_URL": ("https://rocm.nightlies.amd.com/whl-multi-arch/"),
-            "HIP_PYTHON_VERSION": "7.2.2.562.43",
-            "PYTORCH_GPU_TARGETS": "gfx90a,gfx942,gfx950,gfx1250",
-        },
-    },
-    "rocm-7.15-pytorch-2.11-nightly-gfx1250-73a658d5": {
-        "tag": ("rocm7.15.0.dev0-pytorch2.11.0.dev-gfx1250-"
-                "73a658d5-r1"),
-        "build_args": {
-            "BASE_IMAGE": ("ubuntu@sha256:"
-                           "4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90"),
-            "ROCM_VERSION": ("7.15.0.dev0+"
-                             "73a658d545d8b8aaf0aa3d08c0c80bb37667878a"),
-            "ROCM_RELEASE_TYPE":
-            "prereleases",
-            "ROCM_REPO_DIRECTORY":
-            "73a658d545d8b8aaf0aa3d08c0c80bb37667878a",
-            "PYTORCH_VERSION": ("2.11.0+devrocm7.15.0.dev0."
-                                "73a658d545d8b8aaf0aa3d08c0c80bb37667878a"),
-            "PYTORCH_INDEX_URL": ("https://rocm.nightlies.amd.com/"
-                                  "whl-multi-arch/"),
-            "PYTORCH_EXTRA_INDEX_URL": ("https://rocm.devreleases.amd.com/"
-                                        "whl-multi-arch/"),
-            "PYTORCH_DEVICE_WHEEL_URL": ("https://rocm.devreleases.amd.com/whl-multi-arch/"
-                                         "amd_torch_device_gfx1250-2.11.0%2Bdevrocm7.15.0.dev0."
-                                         "73a658d545d8b8aaf0aa3d08c0c80bb37667878a-"
-                                         "cp312-cp312-linux_x86_64.whl"),
-            "HIP_PYTHON_VERSION":
-            "7.2.2.562.43",
-            "PYTORCH_GPU_TARGETS":
-            "gfx1250",
+            "PYTORCH_GPU_TARGETS": "gfx942,gfx950,gfx1250",
         },
     },
 }
