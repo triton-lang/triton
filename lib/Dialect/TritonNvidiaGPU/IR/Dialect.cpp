@@ -59,6 +59,10 @@ CachePolicyAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                         CacheEvictionPriority secondary, FloatAttr fraction,
                         IntegerAttr prefetchSize) {
   using Priority = CacheEvictionPriority;
+  if (cacheModifier != triton::CacheModifier::NONE && l1 != Priority::NONE)
+    return emitError()
+           << "cache modifier cannot be combined with an L1 eviction priority";
+
   if (primary == Priority::NO_ALLOCATE)
     return emitError() << "invalid L2 primary eviction priority '"
                        << stringifyCacheEvictionPriority(primary) << "'";
@@ -604,6 +608,26 @@ TensorDescIm2ColType::verify(function_ref<InFlightDiagnostic()> emitError,
 
 namespace {
 //===----------------------------------------------------------------------===//
+// Cache Policy Interface
+//===----------------------------------------------------------------------===//
+class TritonNvidiaGPUCachePolicyInterface
+    : public triton::DialectCachePolicyInterface {
+public:
+  using DialectCachePolicyInterface::DialectCachePolicyInterface;
+
+  LogicalResult verifyCachePolicy(
+      Attribute cachePolicy, triton::CachePolicyOperation operation,
+      function_ref<InFlightDiagnostic()> emitError) const override {
+    auto policy = dyn_cast<CachePolicyAttr>(cachePolicy);
+    if (!policy)
+      return emitError() << "unsupported NVIDIA cache policy attribute "
+                         << cachePolicy;
+    return triton::verifyCacheModifier(policy.getCacheModifier(), operation,
+                                       emitError);
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // Verify Tensor/MemDesc Layout Interface
 //===----------------------------------------------------------------------===//
 class TritonNvidiaGPUVerifyTensorLayoutInterface
@@ -674,6 +698,7 @@ void TritonNvidiaGPUDialect::initialize() {
 #define GET_TYPEDEF_LIST
 #include "triton/Dialect/TritonNvidiaGPU/IR/Types.cpp.inc"
       >();
+  addInterfaces<TritonNvidiaGPUCachePolicyInterface>();
   addInterfaces<TritonNvidiaGPUVerifyTensorLayoutInterface>();
   addInterfaces<TritonGPUOpAsmInterface>();
   addInterfaces<TritonInlinerInterface>();

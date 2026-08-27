@@ -33,6 +33,24 @@ struct GlobalMemory : public SideEffects::Resource::Base<GlobalMemory> {
   SideEffects::Resource *getParent() const override { return nullptr; }
 };
 
+enum class CachePolicyOperation { Load, Store };
+
+// Allows memory operations to validate cache policy attributes without
+// depending on the dialect that defines the policy.
+class DialectCachePolicyInterface
+    : public DialectInterface::Base<DialectCachePolicyInterface> {
+public:
+  DialectCachePolicyInterface(Dialect *dialect) : Base(dialect) {}
+
+  virtual LogicalResult
+  verifyCachePolicy(Attribute cachePolicy, CachePolicyOperation operation,
+                    function_ref<InFlightDiagnostic()> emitError) const = 0;
+};
+
+LogicalResult verifyCacheModifier(CacheModifier modifier,
+                                  CachePolicyOperation operation,
+                                  function_ref<InFlightDiagnostic()> emitError);
+
 class DialectInferLayoutInterface
     : public DialectInterface::Base<DialectInferLayoutInterface> {
 public:
