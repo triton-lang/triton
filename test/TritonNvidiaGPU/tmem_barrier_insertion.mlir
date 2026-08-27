@@ -5,6 +5,8 @@
 #shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 16}>
 #shared_copy = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#shared_fp8 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+#shared_scales = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked_scales = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
 #linear64 = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 64]], warp = [[16, 0], [32, 0]], block = []}>
@@ -287,6 +289,95 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
+  // Slices of one allocation can be physically disjoint even though their
+  // root allocation is the same.
+  // CHECK-LABEL: @ld_then_st_disjoint_slices
+  // CHECK: ttng.tmem_load
+  // CHECK-NEXT: ttng.tmem_store
+  tt.func @ld_then_st_disjoint_slices(%data: tensor<128x64xf32, #blocked>) {
+    %true = arith.constant true
+    %parent = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %low = ttng.tmem_subslice %parent {offset = 0 : i32, dim = 1 : i32} : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable, 128x128>
+    %high = ttng.tmem_subslice %parent {offset = 64 : i32, dim = 1 : i32} : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable, 128x128>
+    %loaded = ttng.tmem_load %low : !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable, 128x128> -> tensor<128x64xf32, #blocked>
+    ttng.tmem_store %data, %high, %true : tensor<128x64xf32, #blocked> -> !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable, 128x128>
+    tt.return
+  }
+
+  // Both possible descriptors of arith.select must be included in the access.
+  // CHECK-LABEL: @ld_selected_then_st
+  // CHECK: ttng.tmem_load
+  // CHECK-NEXT: ttng.tmem_wait load
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.tmem_store
+  tt.func @ld_selected_then_st(%condition: i1, %data: tensor<128x64xf32, #blocked>) {
+    %true = arith.constant true
+    %parent = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %low = ttng.tmem_subslice %parent {offset = 0 : i32, dim = 1 : i32} : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable, 128x128>
+    %high = ttng.tmem_subslice %parent {offset = 64 : i32, dim = 1 : i32} : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable, 128x128>
+    %selected = arith.select %condition, %low, %high : !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable, 128x128>
+    %loaded = ttng.tmem_load %selected : !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable, 128x128> -> tensor<128x64xf32, #blocked>
+    ttng.tmem_store %data, %high, %true : tensor<128x64xf32, #blocked> -> !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable, 128x128>
+    tt.return
+  }
+
+  // Unknown descriptor origins must not become empty footprints.
+  // CHECK-LABEL: @ld_unknown_then_st
+  // CHECK: ttng.tmem_load
+  // CHECK-NEXT: ttng.tmem_wait load
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.tmem_store
+  tt.func @ld_unknown_then_st(%unknown: !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory>, %data: tensor<128x128xf32, #blocked>) {
+    %true = arith.constant true
+    %known = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %loaded = ttng.tmem_load %unknown : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory> -> tensor<128x128xf32, #blocked>
+    ttng.tmem_store %data, %known, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // Packed f16 elements occupy half as many physical columns as f32 elements.
+  // Allocation reuse must compare those columns, not logical element indices.
+  // CHECK-LABEL: @ld_packed_then_st_disjoint
+  // CHECK: ttng.tmem_load
+  // CHECK-NEXT: ttng.tmem_alloc
+  // CHECK-NEXT: ttng.tmem_store
+  tt.func @ld_packed_then_st_disjoint(%data: tensor<128x64xf32, #blocked>) {
+    %true = arith.constant true
+    %packed = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #tmem128, #ttng.tensor_memory, mutable>
+    %loaded = ttng.tmem_load %packed : !ttg.memdesc<128x128xf16, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf16, #blocked>
+    %other = ttng.tmem_alloc {tensor_memory_col_offset = 64 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %data, %other, %true : tensor<128x64xf32, #blocked> -> !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @ld_packed_then_st_overlap
+  // CHECK: ttng.tmem_load
+  // CHECK-NEXT: ttng.tmem_alloc
+  // CHECK-NEXT: ttng.tmem_wait load
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.tmem_store
+  tt.func @ld_packed_then_st_overlap(%data: tensor<128x64xf32, #blocked>) {
+    %true = arith.constant true
+    %packed = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #tmem128, #ttng.tensor_memory, mutable>
+    %loaded = ttng.tmem_load %packed : !ttg.memdesc<128x128xf16, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf16, #blocked>
+    %other = ttng.tmem_alloc {tensor_memory_col_offset = 32 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %data, %other, %true : tensor<128x64xf32, #blocked> -> !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // A 64-row allocation uses one 16-row half of every warp's TMEM rows.
+  // CHECK-LABEL: @ld_then_st_disjoint_row_groups
+  // CHECK: ttng.tmem_load
+  // CHECK-NEXT: ttng.tmem_store
+  tt.func @ld_then_st_disjoint_row_groups(%data: tensor<64x128xf32, #linear64>) {
+    %true = arith.constant true
+    %low = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<64x128xf32, #tmem64, #ttng.tensor_memory, mutable>
+    %high = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 16 : i32} : () -> !ttg.memdesc<64x128xf32, #tmem64, #ttng.tensor_memory, mutable>
+    %loaded = ttng.tmem_load %low : !ttg.memdesc<64x128xf32, #tmem64, #ttng.tensor_memory, mutable> -> tensor<64x128xf32, #linear64>
+    ttng.tmem_store %data, %high, %true : tensor<64x128xf32, #linear64> -> !ttg.memdesc<64x128xf32, #tmem64, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
   // CHECK-LABEL: @ld_then_alloc_then_st_aliases_second_row
   // CHECK: ttng.tmem_load
   // CHECK-NEXT: ttng.tmem_alloc
@@ -335,6 +426,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
       !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>,
       !ttg.memdesc<128x1xi8, #tmem_scales, #ttng.tensor_memory, mutable>,
       !ttg.memdesc<64x1xi8, #tmem_scales, #ttng.tensor_memory>
+    tt.return
+  }
+
+  // Shared scale arguments have unknown addresses, but cannot alias TMEM.
+  // CHECK-LABEL: @st_then_mma_scaled_shared_scales
+  // CHECK: ttng.tmem_store
+  // CHECK-NEXT: ttng.tc_gen5_mma_scaled
+  tt.func @st_then_mma_scaled_shared_scales(
+      %data: tensor<128x128xf32, #blocked>,
+      %a: !ttg.memdesc<128x128xf8E5M2, #shared_fp8, #ttg.shared_memory>,
+      %b: !ttg.memdesc<128x128xf8E5M2, #shared_fp8, #ttg.shared_memory>,
+      %a_scale: !ttg.memdesc<128x4xi8, #shared_scales, #ttg.shared_memory>,
+      %b_scale: !ttg.memdesc<128x4xi8, #shared_scales, #ttg.shared_memory>) {
+    %false = arith.constant false
+    %true = arith.constant true
+    %d = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %other = ttng.tmem_alloc {tensor_memory_col_offset = 128 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %data, %other, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttng.tc_gen5_mma_scaled %a, %b, %d, %a_scale, %b_scale, %false, %true lhs = e5m2 rhs = e5m2 :
+      !ttg.memdesc<128x128xf8E5M2, #shared_fp8, #ttg.shared_memory>,
+      !ttg.memdesc<128x128xf8E5M2, #shared_fp8, #ttg.shared_memory>,
+      !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>,
+      !ttg.memdesc<128x4xi8, #shared_scales, #ttg.shared_memory>,
+      !ttg.memdesc<128x4xi8, #shared_scales, #ttg.shared_memory>
     tt.return
   }
 
@@ -414,7 +529,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: ttng.tmem_store
   // CHECK-NEXT: ttng.tmem_wait store
   // CHECK-NEXT: ttng.tc_gen5_mma
-  // CHECK-NEXT: ttng.wait_barrier
+  // CHECK: ttng.wait_barrier
   // CHECK-NEXT: tt.return
   tt.func @wait_disjoint_mma_publication(
       %data: tensor<128x128xf32, #blocked>,
@@ -675,6 +790,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttng.async_tma_copy_local_to_global %desc[%c0, %c0] %smem : !tt.tensordesc<128x128xf32, #shared_copy>, !ttg.memdesc<128x128xf32, #shared_copy, #ttg.shared_memory, mutable>
     ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
     ttg.local_dealloc %smem : !ttg.memdesc<128x128xf32, #shared_copy, #ttg.shared_memory, mutable>
+    tt.return
+  }
+
+  // Tensor-memory offsets share one physical frame across functions. Calls
+  // still complete loads even when the callee's footprint is disjoint.
+  // CHECK-LABEL: @tmem_call_disjoint
+  // CHECK: ttng.tmem_load
+  // CHECK-NEXT: ttng.tmem_wait load
+  // CHECK-NEXT: tt.call @tmem_entry_b
+  tt.func @tmem_call_disjoint() {
+    %alloc = ttng.tmem_alloc {tensor_memory_col_offset = 128 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %loaded = ttng.tmem_load %alloc : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    tt.call @tmem_entry_b() : () -> ()
     tt.return
   }
 }
