@@ -295,13 +295,13 @@ bool isWaitBoundary(Operation *op) {
   if (isa<gpu::WarpSpecializeOp, gpu::WarpSpecializePartitionsOp,
           gpu::WarpYieldOp, gpu::WarpReturnOp, CallOpInterface>(op))
     return true;
-  // ClusterBarrier could be followed by a 2CTA MMA, in which
+  // A non-relaxed cluster barrier could be followed by a 2CTA MMA, in which
   // case we need to put the wait before the cluster barrier.
   // We could track barriers and cluster barriers separately
   // and place the wait before the previous relevant op, but
   // I don't think there are many use cases for that.
-  if (isa<ClusterBarrierOp>(op))
-    return true;
+  if (auto barrier = dyn_cast<ClusterBarrierOp>(op))
+    return !barrier.getRelaxed();
   // Atomic ops may synchronise as well
   if (auto atomic = dyn_cast<AtomicOpInterface>(op))
     if (atomic.getMemSemantic() == MemSemantic::RELEASE ||
