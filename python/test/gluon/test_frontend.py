@@ -2824,6 +2824,26 @@ def test_atomic_cas():
     ttgl.atomic_cas(offset + ptr, old, new)
 
 
+@pytest.mark.parametrize("op", ["CAS", "RMW"])
+def test_amd_multicta_scalar_atomic_unsupported(op):
+
+    @gluon.jit
+    def kernel(ptr, op: ttgl.constexpr):
+        if op == "CAS":
+            ttgl.atomic_cas(ptr, 0, 1)
+        else:
+            ttgl.atomic_add(ptr, 1)
+
+    ptr = MockTensor(ttgl.int32)
+    args = make_args(ptr, op, num_ctas=2)
+    with pytest.raises(CompilationError) as exc:
+        run_parser(kernel, *args, target=HIP_TARGET_CDNA5)
+    assert f"scalar atomic {op} is not supported in multi-CTA kernels on AMD" in str(exc.value.__cause__)
+
+    run_parser(kernel, *args, target=HOPPER_TARGET)
+    run_parser(kernel, *make_args(ptr, op), target=HIP_TARGET_CDNA5)
+
+
 @gluon.jit
 def amd_mfma_layout_kernel():
     ttgl.full([128, 32], 0, ttgl.float32, layout=amd_layouts.AMDMFMALayout(version=3, instr_shape=[32, 32, 8],

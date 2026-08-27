@@ -1275,6 +1275,9 @@ class TritonSemantic(Generic[TensorTy]):
         return self.tensor(handle, tl.int1)
 
     def atomic_cas(self, ptr: TensorTy, cmp: TensorTy, val: TensorTy, sem: str, scope: str) -> TensorTy:
+        is_hip = self.builder.options.backend_name == "hip"
+        if (is_hip and self.builder.options.num_ctas > 1 and not ptr.type.is_block()):
+            raise ValueError("scalar atomic CAS is not supported in multi-CTA kernels on AMD")
         sem = self._str_to_sem(sem)
         scope = self._str_to_scope(scope)
         element_ty = ptr.type.scalar.element_ty
@@ -1284,6 +1287,9 @@ class TritonSemantic(Generic[TensorTy]):
 
     def atom_red_typechecking_impl(self, ptr: TensorTy, val: TensorTy, mask: TensorTy,
                                    op: str) -> Tuple[TensorTy, TensorTy, TensorTy]:
+        is_hip = self.builder.options.backend_name == "hip"
+        if (is_hip and self.builder.options.num_ctas > 1 and not ptr.type.is_block()):
+            raise ValueError("scalar atomic RMW is not supported in multi-CTA kernels on AMD")
         if not ptr.type.scalar.is_ptr():
             raise ValueError("Pointer argument of store instruction is " + ptr.type.__repr__())
         if ptr.type.is_const() or ptr.type.element_ty.is_const():
