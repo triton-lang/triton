@@ -355,6 +355,10 @@ void initializeAllocation(ImplicitLocOpBuilder &b, Value alloc) {
   // Synchronize warps, so in case of re-used memory we won't start poisoning
   // memory that is still being used, and finish poisoning before the kernel's
   // first real use of the allocation.
+  if (isTensorMemory) {
+    ttng::TMEMWaitOp::create(b, b.getLoc(), ttng::TMEMWaitKind::LOAD);
+    ttng::TMEMWaitOp::create(b, b.getLoc(), ttng::TMEMWaitKind::STORE);
+  }
   ttg::BarrierOp::create(b, b.getLoc(), barrierSpace);
   for (Value leaf : leaves) {
     auto leafType = cast<ttg::MemDescType>(leaf.getType());
@@ -366,6 +370,8 @@ void initializeAllocation(ImplicitLocOpBuilder &b, Value alloc) {
       ttg::LocalStoreOp::create(b, poison, leaf);
     }
   }
+  if (isTensorMemory)
+    ttng::TMEMWaitOp::create(b, b.getLoc(), ttng::TMEMWaitKind::STORE);
   ttg::BarrierOp::create(b, b.getLoc(), barrierSpace);
 }
 

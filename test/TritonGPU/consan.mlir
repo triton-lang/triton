@@ -2130,13 +2130,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: ttg.local_store %[[SMEM_POISON]], %[[SMEM]]
     // CHECK: ttg.barrier local
     // CHECK: %[[TMEM:.*]] = ttng.tmem_alloc
-    // CHECK: ttg.barrier tensor_read|tensor_write
+    // CHECK-NEXT: ttng.tmem_wait load
+    // CHECK-NEXT: ttng.tmem_wait store
+    // CHECK-NEXT: ttg.barrier tensor_read|tensor_write
     // CHECK: %[[TMEM_POISON:.*]] = arith.constant dense<0x7FC00000> : tensor<128x128xf32
     // CHECK: %[[TRUE:.*]] = arith.constant true
     // CHECK: ttng.tmem_store %[[TMEM_POISON]], %[[TMEM]], %[[TRUE]]
-    // CHECK: ttg.barrier tensor_read|tensor_write
+    // CHECK-NEXT: ttng.tmem_wait store
+    // CHECK-NEXT: ttg.barrier tensor_read|tensor_write
     // NO-INIT-NOT: ttg.local_store
     // NO-INIT-NOT: ttng.tmem_store
+    // NO-INIT-NOT: ttng.tmem_wait
     %smem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #shared, #smem, mutable>
     %tmem = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
     // NO-INIT: tt.return
@@ -2163,10 +2167,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: %[[TMEM:.*]] = ttng.tmem_alloc
     // CHECK: %[[TMEM_0:.*]] = ttg.memdesc_index %[[TMEM]]
     // CHECK: %[[TMEM_1:.*]] = ttg.memdesc_index %[[TMEM]]
-    // CHECK: ttg.barrier tensor_read|tensor_write
+    // CHECK-NEXT: ttng.tmem_wait load
+    // CHECK-NEXT: ttng.tmem_wait store
+    // CHECK-NEXT: ttg.barrier tensor_read|tensor_write
     // CHECK: ttng.tmem_store {{.*}}, %[[TMEM_0]],
+    // CHECK-NOT: ttng.tmem_wait
     // CHECK: ttng.tmem_store {{.*}}, %[[TMEM_1]],
-    // CHECK: ttg.barrier tensor_read|tensor_write
+    // CHECK-NEXT: ttng.tmem_wait store
+    // CHECK-NEXT: ttg.barrier tensor_read|tensor_write
     %smem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x128x128xf32, #shared, #smem, mutable>
     %tmem = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable>
     tt.return

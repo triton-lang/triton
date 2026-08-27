@@ -332,9 +332,9 @@ private:
 
   void updateExitState(MembarInfo *membarInfo) override;
 
+protected:
   void insertBarrier(Operation *operation, OpBuilder *builder);
 
-protected:
   Allocation &allocation;
   MembarFilterFn filter;
 
