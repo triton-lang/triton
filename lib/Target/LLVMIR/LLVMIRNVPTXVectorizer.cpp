@@ -4,6 +4,7 @@
 
 #include "LLVMPasses.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -85,7 +86,14 @@ public:
 
   // Packing a 32-bit register tuple is cheaper than floating-point arithmetic,
   // but still consumes register bandwidth and can extend live ranges.
-  unsigned getScalarOperationCost(Type *) const { return 3; }
+  unsigned getScalarOperationCost(Type *elementType,
+                                  unsigned fusedConversionChainLength) const {
+    if (computeCapability >= 100 && computeCapability < 107 &&
+        elementType->isFloatTy() && fusedConversionChainLength > 1 &&
+        fusedConversionChainLength <= 8)
+      return 2;
+    return 3;
+  }
   unsigned getPackedOperationCost(Type *) const { return 3; }
 
   unsigned getPackCost(Type *elementType) const {
@@ -114,6 +122,7 @@ public:
       : function(function), costModel(computeCapability) {}
 
   bool run() {
+    collectFusedConversionChains();
     bool changed = vectorizeLoopAccumulators();
     for (BasicBlock &block : function) {
       changed |= vectorizeInterleavedAccumulators(block);
@@ -123,6 +132,40 @@ public:
   }
 
 private:
+  bool isFusedHalfAddition(Instruction &instruction) const {
+    if (instruction.getOpcode() != Instruction::FAdd ||
+        !instruction.getType()->isFloatTy())
+      return false;
+
+    return llvm::any_of(instruction.operands(), [](Value *operand) {
+      auto *extension = dyn_cast<FPExtInst>(operand);
+      return extension && extension->getSrcTy()->isHalfTy();
+    });
+  }
+
+  void collectFusedConversionChains() {
+    for (BasicBlock &block : function) {
+      for (Instruction &instruction : block) {
+        if (!isFusedHalfAddition(instruction) ||
+            fusedConversionChainLengths.contains(&instruction))
+          continue;
+
+        SmallVector<Instruction *, 8> chain;
+        Instruction *current = &instruction;
+        while (current && current->getParent() == &block &&
+               isFusedHalfAddition(*current)) {
+          chain.push_back(current);
+          if (!current->hasOneUse())
+            break;
+          current = dyn_cast<Instruction>(*current->user_begin());
+        }
+
+        for (Instruction *operation : chain)
+          fusedConversionChainLengths[operation] = chain.size();
+      }
+    }
+  }
+
   bool isPackedOperation(Instruction &instruction) const {
     Type *elementType = instruction.getType();
     if (!elementType->isFloatingPointTy())
@@ -566,6 +609,13 @@ private:
     plan.vectorCost += costModel.getPackCost(values.first->getType());
   }
 
+  unsigned getScalarPairCost(Instruction &first, Instruction &second) const {
+    return costModel.getScalarOperationCost(
+               first.getType(), fusedConversionChainLengths.lookup(&first)) +
+           costModel.getScalarOperationCost(
+               second.getType(), fusedConversionChainLengths.lookup(&second));
+  }
+
   void addInstructionCost(Instruction &first, Instruction &second,
                           ArithmeticPlan &plan, unsigned depth = 0) const {
     InstructionPair pair{&first, &second};
@@ -573,7 +623,7 @@ private:
       return;
 
     plan.instructions.push_back(pair);
-    plan.scalarCost += 2 * costModel.getScalarOperationCost(first.getType());
+    plan.scalarCost += getScalarPairCost(first, second);
     plan.vectorCost += costModel.getPackedOperationCost(first.getType());
 
     for (unsigned index = 0, count = getOperandCount(first); index < count;
@@ -589,7 +639,10 @@ private:
           firstOperand->hasOneUse() && secondOperand->hasOneUse() &&
           *firstOperand->user_begin() == &first &&
           *secondOperand->user_begin() == &second &&
-          canPair(*firstOperand, *secondOperand)) {
+          canPair(*firstOperand, *secondOperand) &&
+          costModel.getPackedOperationCost(firstOperand->getType()) +
+                  costModel.getPackCost(firstOperand->getType()) <
+              getScalarPairCost(*firstOperand, *secondOperand)) {
         addInstructionCost(*firstOperand, *secondOperand, plan, depth + 1);
         continue;
       }
@@ -786,6 +839,7 @@ private:
 
   Function &function;
   NVPTXCostModel costModel;
+  DenseMap<const Instruction *, unsigned> fusedConversionChainLengths;
 };
 
 } // namespace
