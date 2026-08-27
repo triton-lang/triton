@@ -857,12 +857,9 @@ class InterpreterBuilder:
     def create_assume(self, condition):
         assert condition, "Assume failed"
 
-    def create_barrier(self):
-        # Triton's barrier applies to each program in a grid, so it's a no-op in the interpreter
-        pass
-
     def create_fence(self):
-        return self.create_barrier()
+        # Triton's fence applies to each program in a grid, so it's a no-op in the interpreter
+        pass
 
     def create_make_tensor_descriptor(self, base: TensorHandle, shape: List[TensorHandle], strides: List[TensorHandle],
                                       tensor_shape: List[int], is_signed: bool, padding: str = "zero"):

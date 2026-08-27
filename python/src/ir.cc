@@ -1899,10 +1899,6 @@ void init_triton_ir(py::module_ &m) {
            [](TritonOpBuilder &self) {
              self.create<GridDependencyLaunchDependentsOp>();
            })
-      .def("create_barrier",
-           [](TritonOpBuilder &self) {
-             self.create<triton::gpu::BarrierOp>(triton::gpu::AddrSpace::All);
-           })
       .def("create_fence",
            [](TritonOpBuilder &self) { self.create<triton::FenceOp>(); })
       // Make a tensor descriptor

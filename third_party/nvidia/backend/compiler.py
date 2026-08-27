@@ -381,7 +381,6 @@ class CUDABackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
-        nvidia.passes.ttnvgpuir.add_lower_fence(pm)
         passes.gluon.add_inliner(pm)
         passes.gluon.add_infer_coalesced_encodings(pm)
         passes.gluon.add_resolve_auto_encodings(pm)

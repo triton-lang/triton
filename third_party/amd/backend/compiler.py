@@ -330,7 +330,6 @@ class HIPBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
-        amd.passes.ttgpuir.add_lower_fence(pm)
         passes.gluon.add_inliner(pm)
         passes.gluon.add_resolve_auto_encodings(pm)
         passes.common.add_sccp(pm)

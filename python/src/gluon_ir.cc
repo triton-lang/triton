@@ -365,6 +365,10 @@ void init_gluon_ir(py::module_ &m) {
       .def(py::init<MLIRContext *, std::string>(), py::arg("context"),
            py::arg("arch") = "")
       .def("get_op_builder", &GluonOpBuilder::getBuilder, ret::reference)
+      .def("create_barrier",
+           [](GluonOpBuilder &self) {
+             self.create<ttg::BarrierOp>(ttg::AddrSpace::All);
+           })
       .def("get_distributed_ty",
            [](GluonOpBuilder &self, Type &elementType,
               std::vector<int64_t> &shape, Attribute layout) -> Type {
