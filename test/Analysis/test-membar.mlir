@@ -2022,6 +2022,29 @@ tt.func @must_barrier_nonzero_wrap_arm(%cst: tensor<128x128xf16>, %phase: i32) {
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.num-ctas" = 1 : i32} {
 
+// Argument descriptors have no allocation IDs. Different slots are disjoint
+// only when their indexed source is the same.
+// CHECK-LABEL: @shared_argument_buffer_indices
+tt.func @shared_argument_buffer_indices(%first: !ttg.memdesc<2x128xi32, #shared, #smem, mutable>, %second: !ttg.memdesc<2x128xi32, #shared, #smem, mutable>) -> (tensor<128xi32, #reader>, tensor<128xi32, #reader>) {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %input = arith.constant dense<1> : tensor<128xi32, #writer>
+  %first0 = ttg.memdesc_index %first[%c0] : !ttg.memdesc<2x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  %first1 = ttg.memdesc_index %first[%c1] : !ttg.memdesc<2x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  %second1 = ttg.memdesc_index %second[%c1] : !ttg.memdesc<2x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  // CHECK: ttg.local_store
+  // CHECK-NEXT: {{.*}} = ttg.local_load
+  // CHECK-NEXT: ttg.barrier local{{$}}
+  // CHECK-NEXT: {{.*}} = ttg.local_load
+  // CHECK-NEXT: ttg.barrier local{{$}}
+  // CHECK-NEXT: ttg.local_store
+  ttg.local_store %input, %first0 : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  %disjoint = ttg.local_load %first1 : !ttg.memdesc<128xi32, #shared, #smem, mutable> -> tensor<128xi32, #reader>
+  %overlapping = ttg.local_load %first0 : !ttg.memdesc<128xi32, #shared, #smem, mutable> -> tensor<128xi32, #reader>
+  ttg.local_store %input, %second1 : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  tt.return %disjoint, %overlapping : tensor<128xi32, #reader>, tensor<128xi32, #reader>
+}
+
 // Different constant indices can name the same slot when their indexed
 // sources have different origins: allocation[1] equals prefix[0].
 // CHECK-LABEL: @shared_buffer_index_shifted_source

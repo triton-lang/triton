@@ -38,9 +38,9 @@ bool AllocationSlice::intersects(const AllocationSlice &other) const {
   if (!triton::mayOverlap(physicalFootprint, other.physicalFootprint))
     return false;
 
-  // For slices of the same allocation, compare dynamic buffer indices to prove
-  // that different slots do not overlap.
-  if (bufferId == other.bufferId && bufferId != Allocation::InvalidBufferId &&
+  // Compare indices of the same source descriptor to prove disjoint slots,
+  // including arguments without allocator IDs.
+  if (bufferId == other.bufferId &&
       areBufferIndicesProvablyDifferent(*this, other))
     return false;
 
