@@ -15,11 +15,15 @@ implementation:
 - `cuda:*` uses the NVIDIA hooks.
 - `hip:*` uses the AMD hooks.
 
-ConSan currently supports one public entry point in the module. It uses
-BufferRegion analysis to collect exact shared-memory and tensor-memory address
-sets plus barrier allocations, then creates auxiliary state in distributed
-tensors and shared-cluster global scratch memory. Most scratch state is
-CTA-qualified so cluster and multicast effects can be modeled explicitly.
+ConSan instruments the module's one public entry point. It uses BufferRegion
+analysis to collect exact shared-memory and tensor-memory address sets plus
+barrier allocations, then creates auxiliary state in distributed tensors and
+shared-cluster global scratch memory. Calls from the entry point are summarized
+as accesses to their allocator-provided shared-memory frames; ConSan does not
+instrument non-entry function bodies. A non-entry function that contains
+effects outside this call-frame model is rejected with a diagnostic asking the
+compiler to inline it. Most scratch state is CTA-qualified so cluster and
+multicast effects can be modeled explicitly.
 
 ## Visibility Model
 
@@ -341,12 +345,20 @@ The common hook implementation covers these TritonGPU operations:
   `ttg.local_atomic_scatter_rmw`: barrier-tracked shared-memory writes. Scatter
   and atomic scatter RMW conservatively cover their full destination
   descriptors because their indices are runtime values.
+- Non-atomic `ttg.local_scatter` additionally rejects conflicting values for the
+  same destination. Equal-value duplicates and atomic scatter collisions remain
+  valid.
 - `ttg.local_alloc` with a source: barrier-tracked shared-memory write.
 - Any operation with allocator-provided operation-local shared scratch: a
-  synchronous generic-proxy write over its allocated byte interval. Forced
-  warp-shuffle conversions publish no scratch metadata because allocation
-  reserves no scratch for them; convert, reduce, and scratch-backed atomic
-  broadcasts use CTA-aware routing.
+  synchronous generic-proxy write over its allocated byte interval in its owning
+  CTA. Cross-CTA scratch reads follow intrinsic synchronization, and atomic
+  writes are issued only by producer CTAs. Forced warp-shuffle conversions
+  publish no scratch metadata because allocation reserves no scratch for them.
+- Function calls with allocator-provided virtual shared-memory frames: a
+  synchronous generic-proxy write over the whole callee frame in the current
+  CTA. This includes nested callees because each virtual frame is sized from
+  the callee's peak shared-memory allocation. Callees requiring cross-CTA
+  scratch accesses must be inlined.
 
 These shared-memory effects are generic-proxy accesses for the proxy-ordering
 model.
@@ -395,4 +407,9 @@ AMD hooks additionally cover:
   commit flows where possible.
 - Global-memory race checking is handled by the separate global sanitizer, not
   by ConSan.
-- The pass expects exactly one public entry point in the module.
+- The pass expects exactly one public entry point in the module. Non-entry
+  functions may contain register and global-memory operations, calls, and
+  CTA-local compiler-owned shared scratch. Explicit shared/tensor-memory
+  allocations or accesses, cross-CTA scratch effects, barrier or asynchronous
+  state, warp specialization, and cluster barriers require inlining before
+  ConSan.

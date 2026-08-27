@@ -5,6 +5,7 @@ import re
 from typing import Optional
 import math
 import textwrap
+from fractions import Fraction
 
 import numpy as np
 import pytest
@@ -1045,8 +1046,9 @@ def test_where_broadcast(num_ctas, device):
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_x, expr",
-                         [(dtype_x, ' -x') for dtype_x in dtypes_with_bfloat16] + [(dtype_x, ' ~x')
-                                                                                   for dtype_x in int_dtypes])
+                         [(dtype_x, ' -x')
+                          for dtype_x in dtypes_with_bfloat16] + [(dtype_x, ' ~x')
+                                                                  for dtype_x in int_dtypes + uint_dtypes])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_unary_op(dtype_x, expr, num_ctas, device):
     _test_unary(dtype_x, expr, device=device, num_ctas=num_ctas)
@@ -1135,7 +1137,7 @@ def test_math_erf_op(dtype, member_fn, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("dtype", [dtype for dtype in ["float32", "float64"]])
+@pytest.mark.parametrize("dtype", ["float16", "float32", "float64"])
 def test_math_fma_op(dtype, device):
     check_type_supported(dtype, device)
     SIZE = 128
@@ -1149,14 +1151,67 @@ def test_math_fma_op(dtype, device):
         z = tl.math.fma(x, y, w)
         tl.store(Z + off, z)
 
-    torch_dtype = torch.float32 if dtype == "float32" else torch.float64
-    x = torch.randn(SIZE, dtype=torch_dtype, device=device)
-    y = torch.randn(SIZE, dtype=torch_dtype, device=device)
-    w = torch.randn(SIZE, dtype=torch_dtype, device=device)
-    z_ref = x * y + w
-    z_tri = torch.zeros_like(x)
-    kernel[(1, )](z_tri, x, y, w, SIZE=SIZE, num_warps=4)
-    torch.testing.assert_close(z_tri, z_ref)
+    def fma_ref(x, y, w):
+        # Rational arithmetic keeps the product exact, so the result is rounded
+        # once as an fma requires.
+        exact = [Fraction(float(a)) * Fraction(float(b)) + Fraction(float(c)) for a, b, c in zip(x, y, w)]
+        return np.array([float(e) for e in exact], dtype=x.dtype)
+
+    rs = RandomState(17)
+    x = numpy_random((SIZE, ), dtype_str=dtype, rs=rs)
+    y = numpy_random((SIZE, ), dtype_str=dtype, rs=rs)
+    w = numpy_random((SIZE, ), dtype_str=dtype, rs=rs)
+    # Let half of the addends cancel the rounded product, the sharpest case.
+    w[SIZE // 2:] = -(x[SIZE // 2:] * y[SIZE // 2:])
+
+    x_tri = to_triton(x, device=device, dst_type=dtype)
+    y_tri = to_triton(y, device=device, dst_type=dtype)
+    w_tri = to_triton(w, device=device, dst_type=dtype)
+    z_tri = to_triton(np.zeros_like(x), device=device, dst_type=dtype)
+    kernel[(1, )](z_tri, x_tri, y_tri, w_tri, SIZE=SIZE, num_warps=4)
+
+    np.testing.assert_equal(fma_ref(x, y, w), to_numpy(z_tri))
+
+
+@pytest.mark.interpreter
+def test_math_fma_op_special_values(device):
+    check_type_supported('float64', device)
+
+    @triton.jit
+    def kernel(Z, X, Y, W, SIZE: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        x = tl.load(X + off)
+        y = tl.load(Y + off)
+        w = tl.load(W + off)
+        z = tl.math.fma(x, y, w)
+        tl.store(Z + off, z)
+
+    finfo = np.finfo(np.float64)
+    inf, nan = float('inf'), float('nan')
+    cases = [
+        # x, y, w, expected
+        (nan, 1.0, 1.0, nan),
+        (inf, 0.0, 1.0, nan),
+        (2.0, 3.0, inf, inf),
+        (-finfo.max, finfo.max, inf, inf),
+        (-0.0, 1.0, -0.0, -0.0),
+        (1.0, 1.0, -1.0, 0.0),
+        (finfo.max, 2.0, finfo.max, inf),
+        (-finfo.smallest_subnormal, 0.5, 0.0, -0.0),
+    ]
+    x, y, w, expected = (np.array(column, dtype=np.float64) for column in zip(*cases))
+
+    x_tri = to_triton(x, device=device, dst_type='float64')
+    y_tri = to_triton(y, device=device, dst_type='float64')
+    w_tri = to_triton(w, device=device, dst_type='float64')
+    z_tri = to_triton(np.zeros_like(x), device=device, dst_type='float64')
+    kernel[(1, )](z_tri, x_tri, y_tri, w_tri, SIZE=len(cases))
+
+    z = to_numpy(z_tri)
+    np.testing.assert_equal(z, expected)
+    # assert_equal treats -0.0 and 0.0 as equal; NaN signs are unspecified.
+    finite = ~np.isnan(expected)
+    np.testing.assert_equal(np.signbit(z[finite]), np.signbit(expected[finite]))
 
 
 @pytest.mark.interpreter
@@ -2326,6 +2381,26 @@ def test_cat_nd(shape, dim, device):
     torch.testing.assert_close(z, z_ref, atol=0, rtol=0)
 
 
+@pytest.mark.parametrize("m1, m2", [
+    pytest.param(16, 8, id="non_broadcastable"),
+    pytest.param(1, 8, id="broadcastable"),
+])
+def test_cat_shape_mismatch(m1, m2, device):
+
+    @triton.jit
+    def kernel(X, Y, M1: tl.constexpr, M2: tl.constexpr):
+        x = tl.load(X + tl.arange(0, M1))
+        y = tl.load(Y + tl.arange(0, M2))
+        z = tl.cat(x, y, dim=0)
+        tl.store(X + tl.arange(0, 1), tl.sum(z))
+
+    x = torch.zeros(m1, device=device, dtype=torch.float32)
+    y = torch.zeros(m2, device=device, dtype=torch.float32)
+    with pytest.raises(triton.CompilationError) as exc_info:
+        kernel[(1, )](x, y, M1=m1, M2=m2)
+    assert "tl.cat requires tensors of the same shape" in str(exc_info.value)
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", list(torch_dtypes))
 @pytest.mark.parametrize("constant_field", ["value", "mask"])
@@ -2376,7 +2451,7 @@ def test_load_store_same_ptr(device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("dtype_str", ['int32'])
+@pytest.mark.parametrize("dtype_str", ['int32', 'uint32', 'int64', 'uint64'])
 def test_umulhi(dtype_str, device):
 
     @triton.jit
@@ -2387,29 +2462,31 @@ def test_umulhi(dtype_str, device):
         z = tl.umulhi(x, y)
         tl.store(Z + tl.arange(0, N), z)
 
-    def umulhi32(a, b):
-        # Convert to 64-bit unsigned integers to prevent overflow
-        a_64 = a.astype(np.int64)
-        b_64 = b.astype(np.int64)
+    def umulhi_ref(a, b):
+        # umulhi multiplies the unsigned bit patterns; Python ints keep the
+        # 2N-bit product exact where numpy would overflow.
+        bits = a.dtype.itemsize * 8
+        unsigned = np.dtype(f'uint{bits}')
+        product = a.view(unsigned).astype(object) * b.view(unsigned).astype(object)
+        return np.array((product >> bits).tolist(), dtype=unsigned).view(a.dtype)
 
-        # Perform the multiplication in 64-bit
-        product_64 = a_64 * b_64
-
-        # Shift right by 32 bits to get the high part of the product
-        result_high_32 = product_64 >> 32
-        return result_high_32
-
+    np_dtype = np.dtype(dtype_str)
+    unsigned = np.dtype(f'uint{np_dtype.itemsize * 8}')
+    iinfo = np.iinfo(np_dtype)
+    # Boundary values matter most here: operands whose top bit is set.
+    edges = np.array([0, 1, 2, 3, 7, 255, iinfo.max, iinfo.min], dtype=np_dtype)
     rs = RandomState(17)
-    N = 128
-    x = numpy_random((N, ), dtype_str=dtype_str, rs=rs, low=0)
-    x_tri = to_triton(x, device=device)
-    y = numpy_random((N, ), dtype_str=dtype_str, rs=rs, low=0)
-    y_tri = to_triton(y, device=device)
-    z_tri = torch.zeros_like(x_tri)
+    N = 32
+    random = np.frombuffer(rs.bytes((N - len(edges)) * np_dtype.itemsize), dtype=unsigned).view(np_dtype)
+    x = np.concatenate((edges, random))
+    y = np.roll(x, 1)
+
+    x_tri = to_triton(x, device=device, dst_type=dtype_str)
+    y_tri = to_triton(y, device=device, dst_type=dtype_str)
+    z_tri = to_triton(np.zeros_like(x), device=device, dst_type=dtype_str)
     kernel[(1, )](x_tri, y_tri, z_tri, N=N)
 
-    z_ref = umulhi32(x, y)
-    np.testing.assert_equal(z_ref, to_numpy(z_tri))
+    np.testing.assert_equal(umulhi_ref(x, y), to_numpy(z_tri))
 
 
 @pytest.mark.interpreter
@@ -3317,6 +3394,27 @@ def test_histogram_mask(M, N, device):
     z_torch = torch.histc(x1.float(), bins=N, min=0, max=N - 1)
     histogram_kernel[(1, )](x, z, M=M, N=N)
     assert (z_torch == z).all()
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("M, N", [[1024, 64], [4096, 128]])
+def test_histogram_compare_mask(M, N, device):
+
+    @triton.jit
+    def histogram_kernel(x_ptr, out_ptr, M: tl.constexpr, N: tl.constexpr):
+        offsets = tl.arange(0, M)
+        x = tl.load(x_ptr + offsets)
+        hist = tl.histogram(x, N)
+        bins = tl.arange(0, N)
+        mask = hist > 0
+        tl.store(out_ptr + bins, hist, mask=mask)
+
+    torch.manual_seed(17)
+    x = torch.randint(0, N, (M, ), device=device, dtype=torch.int32)
+    out = torch.zeros(N, dtype=torch.int32, device=device)
+    ref = torch.histc(x.float(), bins=N, min=0, max=N - 1).to(torch.int32)
+    histogram_kernel[(1, )](x, out, M=M, N=N)
+    assert (out == ref).all(), f"expected {ref}, got {out}"
 
 
 @pytest.mark.parametrize("M, N", [(1, 64), (2, 32), (4, 16), (8, 8), (16, 4), (32, 2), (64, 1)])
@@ -5157,6 +5255,16 @@ def _impl(value=10):
     return value
 
 
+@triton.jit
+def _keyword_only_impl(value=3, *, required, optional=5, REQUIRED: tl.constexpr, OPTIONAL: tl.constexpr = 2):
+    return value + required + optional + REQUIRED * OPTIONAL
+
+
+@triton.jit
+def _keyword_only_varargs(value, *values, scale: tl.constexpr = 2):
+    return value + values[0] + values[1] * scale
+
+
 @pytest.mark.interpreter
 def test_default(device):
     value = 5
@@ -5175,6 +5283,36 @@ def test_default(device):
     _kernel[(1, )](ret0, ret1)
     assert ret0.item() == 10
     assert ret1.item() == 3
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("args, kwargs, expected", [((), {}, [37, 37, 20]),
+                                                    ((13, ), {"optional": 17, "OPTIONAL": 19}, [37, 246, 343])])
+def test_keyword_only_arguments(device, args, kwargs, expected):
+
+    @triton.jit
+    def kernel(value=3, *, output, required, optional=5, REQUIRED: tl.constexpr, OPTIONAL: tl.constexpr = 2):
+        tl.store(output, _keyword_only_impl(required=required, REQUIRED=REQUIRED))
+        tl.store(output + 1,
+                 _keyword_only_impl(value, required=required, optional=optional, REQUIRED=REQUIRED, OPTIONAL=OPTIONAL))
+        tl.store(output + 2, _keyword_only_varargs(value, required, optional, scale=OPTIONAL))
+
+    output = torch.empty(3, dtype=torch.int32, device=device)
+    kernel[(1, )](*args, output=output, required=7, REQUIRED=11, **kwargs)
+    assert output.tolist() == expected
+
+
+@pytest.mark.interpreter
+def test_keyword_only_launch_errors():
+
+    @triton.jit
+    def kernel(*, MODE: tl.constexpr):
+        pass
+
+    with pytest.raises(TypeError, match="positional argument"):
+        kernel[(1, )](0)
+    with pytest.raises(TypeError, match="MODE"):
+        kernel[(1, )]()
 
 
 # ---------------
@@ -6054,6 +6192,23 @@ def test_while(device):
     assert out_init_i[0] == init_i[0]
     assert out_i[0] == init_i[0] + 1
     assert out_j[0] == bound[0]
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("n", [0, 3])
+def test_while_condition(n, device):
+
+    @triton.jit
+    def kernel(Out, n):
+        i = 0
+        while tl.condition(i < n):
+            i += 1
+        tl.store(Out, i)
+
+    out = torch.full((1, ), -1, dtype=torch.int32, device=device)
+    kernel[(1, )](out, n)
+    assert out.item() == n
+    assert "__bool__" not in tl.condition.__dict__
 
 
 @pytest.mark.interpreter

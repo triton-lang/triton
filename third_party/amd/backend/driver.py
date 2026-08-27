@@ -72,9 +72,25 @@ def _get_path_to_hip_runtime_dylib():
 
     # If we are told explicitly what HIP runtime dynamic library to use, obey that.
     if env_libhip_path := knobs.amd.libhip_path:
-        if env_libhip_path.endswith(lib_name) and os.path.exists(env_libhip_path):
+        if Path(env_libhip_path).name.startswith(lib_name) and os.path.isfile(env_libhip_path):
             return env_libhip_path
         raise RuntimeError(f"TRITON_LIBHIP_PATH '{env_libhip_path}' does not point to a valid {lib_name}")
+
+    # A TheRock installation is a coherent SDK and must take precedence over
+    # system ROCm. Do not silently mix it with a different HIP runtime that was
+    # loaded earlier in the process.
+    try:
+        import rocm_sdk
+
+        therock_libhip_path = str(rocm_sdk.find_libraries("amdhip64")[0])
+    except (ImportError, ModuleNotFoundError, FileNotFoundError):
+        therock_libhip_path = None
+    if therock_libhip_path is not None:
+        mmapped_path = _find_already_mmapped_dylib_on_linux(lib_name)
+        if mmapped_path and os.path.realpath(mmapped_path) != os.path.realpath(therock_libhip_path):
+            raise RuntimeError(f"TheRock provides '{therock_libhip_path}', but a different HIP runtime "
+                               f"'{mmapped_path}' is already loaded; refusing to mix ROCm installations")
+        return therock_libhip_path
 
     # If the shared object is already mmapped to address space, use it.
     mmapped_path = _find_already_mmapped_dylib_on_linux(lib_name)

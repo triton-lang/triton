@@ -21,6 +21,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/APInt.h"
 
 #include <cassert>
 
@@ -158,8 +159,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     Value llOther = adaptor.getOther();
 
     // Determine the vectorization size
-    Type valueElemTy =
-        typeConverter->convertType(getElementTypeOrSelf(op.getType()));
+    Type elemTy = getElementTypeOrSelf(op.getType());
+    Type valueElemTy = typeConverter->convertType(elemTy);
     unsigned vec = getVectorSize(ptr);
     unsigned numElems = getUniqueElemsPerThread(ptr.getType());
     unsigned vecOrig = vec;
@@ -190,24 +191,15 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     }
 
     // Get the LLVM values for `other`
-    // TODO: (goostavz) handle when other is const but not splat, which
-    //       should be rarely seen
-    bool otherIsSplatConstInt = false;
-    DenseElementsAttr constAttr;
-    int64_t splatVal = 0;
-    if (other && isa<IntegerType>(valueElemTy) &&
-        matchPattern(other, m_Constant(&constAttr)) && constAttr.isSplat() &&
-        isa<IntegerType>(constAttr.getElementType())) {
-      otherIsSplatConstInt = true;
-      splatVal = constAttr.getSplatValue<APInt>().getSExtValue();
-    }
-    // Preserve the existing initialization of proven integer constants.
-    // Tying them can add a dependency on a materialized constant register.
-    auto *otherInfo = other ? axisAnalysisPass.getAxisInfo(other) : nullptr;
-    bool otherIsConstInt = otherInfo && isa<IntegerType>(valueElemTy) &&
-                           otherInfo->getConstantValue().has_value();
+    std::optional<APInt> otherConstInt;
     SmallVector<Value> otherElems;
     if (other) {
+      // Use immediates for proven integer constants.
+      // Tying them can add a dependency on a materialized constant register.
+      // Check the original type because FP8 can lower to i8.
+      if (isa<IntegerType>(elemTy))
+        if (auto *otherInfo = axisAnalysisPass.getAxisInfo(other))
+          otherConstInt = otherInfo->getConstantValue();
       otherElems = unpackUniqueTensorElements(loc, llOther, rewriter);
     }
 
@@ -228,8 +220,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     Value l2PolicyReg =
         createCachePolicy(op.getEvict(), rewriter, loc, computeCapability);
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
+      // TODO: optimization when ptr is GEP with constant offset
       const size_t runStart = vecStart - vecStart % scalarizedContiguousRun;
-      const size_t inOff = (vecStart - runStart) * valueElemNBits / 8;
+      const size_t in_off = (vecStart - runStart) * valueElemNBits / 8;
 
       const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
       const size_t totalWidth = valueElemNBits * vec;
@@ -237,6 +230,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       const size_t nWords = std::max<size_t>(1, totalWidth / width);
       const size_t wordNElems = width / valueElemNBits;
       const size_t movWidth = width < 16 ? 16 : width;
+      assert(movWidth <= 64 && "load words must be at most 64 bits");
       assert(wordNElems * nWords * numVecs == numElems);
 
       PTXBuilder ptxBuilder;
@@ -260,45 +254,42 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
       if (other) {
         for (size_t ii = 0; ii < nWords; ++ii) {
-          size_t size = width / valueElemNBits;
-
-          auto vecTy = LLVM::getVectorType(valueElemTy, size);
-          Value v = b.undef(vecTy);
-          for (size_t s = 0; s < size; ++s) {
-            Value falseVal = otherElems[vecStart + ii * size + s];
-            Value sVal = createIndexAttrConstant(
-                rewriter, loc, typeConverter->getIndexType(), s);
-            v = b.insert_element(vecTy, v, falseVal, sVal);
-          }
-          v = b.bitcast(v, IntegerType::get(getContext(), width));
-
-          if (!otherIsConstInt && (width == 32 || width == 64)) {
-            // Match each fallback to its destination instead of moving it.
-            // The packed value and destination have the same register width.
-            ptxBuilder.newOperand(v, std::to_string(dstsOpr->listGet(ii)->idx));
-            continue;
+          PTXInstr::Operand *opr{};
+          if (otherConstInt) {
+            // Pack the declared element bits into their physical slots.
+            APInt bits = otherConstInt->zextOrTrunc(valueElemNBits);
+            APInt packed = APInt::getSplat(movWidth, bits);
+            opr = ptxBuilder.newConstantOperand(
+                packed.zextOrTrunc(64).getSExtValue());
+          } else {
+            auto elems = ArrayRef<Value>(otherElems)
+                             .slice(vecStart + ii * wordNElems, wordNElems);
+            Value v = b.bitcast(packLLVector(loc, elems, rewriter),
+                                IntegerType::get(getContext(), width));
+            auto tensorType = dyn_cast<RankedTensorType>(op.getType());
+            if (tensorType &&
+                ((valueElemNBits == 16 && nWords > 1) ||
+                 (valueElemNBits == 8 && width == 32 && nWords == 1 &&
+                  vec == 4 && tensorType.getRank() == 1 &&
+                  isa<FloatType>(tensorType.getElementType())))) {
+              // Match each fallback to its destination instead of moving it.
+              // Match the packed FP8 fallback to its 32-bit destination.
+              ptxBuilder.newOperand(v,
+                                    std::to_string(dstsOpr->listGet(ii)->idx));
+              continue;
+            }
+            opr = ptxBuilder.newOperand(v, readConstraint);
           }
 
           // PTX doesn't support mov.u8, so we need to use mov.u16
           PTXInstr &mov =
               ptxBuilder.create("mov")->o("u" + std::to_string(movWidth));
-
-          PTXInstr::Operand *opr{};
-
-          if (otherIsSplatConstInt) {
-            int64_t replicatedSplatVal = 0;
-            for (size_t s = 0; s < movWidth; s += valueElemNBits) {
-              replicatedSplatVal |= splatVal << s;
-            }
-            opr = ptxBuilder.newConstantOperand(replicatedSplatVal);
-          } else
-            opr = ptxBuilder.newOperand(v, readConstraint);
-
           mov(dstsOpr->listGet(ii), opr);
         }
       }
 
-      auto *addrOpr = ptxBuilder.newAddrOperand(ptrElems[runStart], "l", inOff);
+      auto *addrOpr =
+          ptxBuilder.newAddrOperand(ptrElems[runStart], "l", in_off);
 
       // Define the instruction opcode
       auto &ld = ptxBuilder.create("ld")
@@ -440,7 +431,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
       // TODO: optimization when ptr is AddPtr with constant offset
       const size_t runStart = vecStart - vecStart % scalarizedContiguousRun;
-      const size_t inOff = (vecStart - runStart) * valueElemNBits / 8;
+      const size_t in_off = (vecStart - runStart) * valueElemNBits / 8;
 
       const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
       const size_t totalWidth = valueElemNBits * vec;
@@ -486,7 +477,8 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
         pred = ttg::maybeAnd(rewriter, loc, pred, mask);
       }
 
-      auto *asmAddr = ptxBuilder.newAddrOperand(ptrElems[runStart], "l", inOff);
+      auto *asmAddr =
+          ptxBuilder.newAddrOperand(ptrElems[runStart], "l", in_off);
 
       auto &ptxStoreInstr =
           ptxBuilder.create("st")

@@ -373,7 +373,18 @@ LogicalResult DotScaledOp::verify() {
       return this->emitError("scales K dimension must match the operand K "
                              "divided by the scale factor");
   }
-  return success();
+
+  auto retEnc = getC().getType().getEncoding();
+  if (!retEnc)
+    return success();
+  auto scaleEncoding = [](TypedValue<RankedTensorType> scale) -> Attribute {
+    return scale ? scale.getType().getEncoding() : Attribute();
+  };
+  auto interface = cast<DialectInferLayoutInterface>(&retEnc.getDialect());
+  return interface->verifyDotScaledOpEncodingCompatibility(
+      getOperation(), getA().getType().getEncoding(),
+      getB().getType().getEncoding(), scaleEncoding(getAScale()),
+      scaleEncoding(getBScale()));
 }
 
 LogicalResult deduceScaleFactor(ArrayRef<int64_t> lhsShape,

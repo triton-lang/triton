@@ -210,6 +210,15 @@ static void analyzePipelineDependencies(ArrayRef<BlockInfo> clusterInfo,
   const int N = clusterInfo.size();
   const int maxDist = circular ? N : N - 1;
 
+  // A descriptor can change between iterations. Preserve same-iteration
+  // disjointness proofs only for pairs that do not wrap around the loop.
+  SmallVector<BlockInfo> previousIterationInfo;
+  if (circular) {
+    previousIterationInfo.assign(clusterInfo.begin(), clusterInfo.end());
+    for (BlockInfo &info : previousIterationInfo)
+      info.invalidateIterationInfo();
+  }
+
   // Modular wrap; a no-op in linear mode where indices stay in range.
   auto wrap = [&](int i) -> int { return circular ? (i % N + N) % N : i; };
 
@@ -236,7 +245,9 @@ static void analyzePipelineDependencies(ArrayRef<BlockInfo> clusterInfo,
       const int barrierLoc = (dist == 1) ? dst : wrap(dst - 1);
       if (isCovered(src, barrierLoc))
         continue;
-      if (!clusterInfo[src].isIntersected(
+      const BlockInfo &sourceInfo =
+          src + dist >= N ? previousIterationInfo[src] : clusterInfo[src];
+      if (!sourceInfo.isIntersected(
               clusterInfo[dst], mlir::triton::AMD::membarFilter, allocation))
         continue;
       bars[barrierLoc] = true;

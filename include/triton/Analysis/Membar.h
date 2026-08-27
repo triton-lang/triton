@@ -3,6 +3,7 @@
 
 #include "Allocation.h"
 #include "BufferIndexAnalysis.h"
+#include "BufferRegion.h"
 #include "CallGraph.h"
 #include "Function.h"
 
@@ -16,6 +17,9 @@ namespace mlir {
 
 class OpBuilder;
 struct AllocationSlice;
+
+// Complete MAY-addresses in a known kernel allocation frame.
+using SharedMemoryFootprints = DenseMap<Value, triton::AddressSet>;
 
 /// Callback to allow backend to provide more information on whether a barrier
 /// is needed between two operations. Even though two operations access the same
@@ -64,34 +68,54 @@ public:
   AllocationSlice translated(size_t offset,
                              bool invalidateBufferId = false) const {
     AllocationSlice shifted = *this;
+    // TODO: Translate physical footprints into the caller's allocation frame.
+    shifted.physicalFootprint = nullptr;
     shifted.allocationInterval = Interval<size_t>(
         allocationInterval.start() + offset, allocationInterval.end() + offset);
-    if (invalidateBufferId)
+    if (invalidateBufferId) {
       shifted.bufferId = Allocation::InvalidBufferId;
-    // This preserves analysis payloads such as bufferIndexExpr. Callers that
-    // translate slices across function boundaries must clear per-function
-    // payloads before translating.
+      shifted.invalidateIterationInfo();
+    }
     return shifted;
   }
 
   void print(raw_ostream &os) const;
 
+  void invalidateIterationInfo() {
+    bufferIndexExpr = nullptr;
+    subsliceSource = {};
+  }
+
+  // Immutable geometry covering every dynamic instance of this access. It
+  // remains valid across backedges, unlike the epoch-relative facts above.
+  // The owning module analysis outlives every slice using this pointer.
+  const triton::AddressSet *physicalFootprint = nullptr;
+
   // Buffer-index expression attached by BufferIndexAnalysis. It participates
   // in ordering/equality so accesses to different slots remain separate.
   // Must not be mutated after the slice is inserted into a sorted container
   // (e.g. BlockInfo::SliceMapT); rebuild the container instead, as
-  // BufferIndexAnalysis::invalidateBufferIndices does.
+  // BlockInfo::invalidateIterationInfo does.
   const BufferIndexExpr *bufferIndexExpr = nullptr;
 
 private:
   std::tuple<Interval<size_t>, Allocation::BufferId, const void *,
-             llvm::ArrayRef<int64_t>, const BufferIndexExpr *>
+             llvm::ArrayRef<int32_t>, const BufferIndexExpr *, const void *,
+             const void *>
   asTuple() const {
-    return {allocationInterval, bufferId, accessTy.getAsOpaquePointer(),
-            subsliceOffsets, bufferIndexExpr};
+    return {allocationInterval,
+            bufferId,
+            accessTy.getAsOpaquePointer(),
+            subsliceOffsets,
+            bufferIndexExpr,
+            subsliceSource.getAsOpaquePointer(),
+            physicalFootprint};
   }
-  // Offsets from subslice. Empty when offsets are unknown
-  SmallVector<int64_t> subsliceOffsets;
+  // Offsets from subslice, borrowed from its immutable context-owned attribute.
+  // Empty when offsets are unknown.
+  llvm::ArrayRef<int32_t> subsliceOffsets;
+  // The source descriptor supplying the coordinates for subslice offsets.
+  Value subsliceSource;
   // The allocated interval for this buffer
   Interval<size_t> allocationInterval;
   // Type of the memory descriptor for this access
@@ -119,6 +143,12 @@ struct BlockInfo {
                                           slice.second.end());
     return *this;
   }
+
+  /// Clears the buffer index and access origin of every slice, rebuilding both
+  /// maps. Used at loop backedges where the same SSA value can denote a value
+  /// from a different dynamic iteration, and before storing function summaries
+  /// where per-function SSA identity is no longer meaningful.
+  void invalidateIterationInfo();
 
   void dump() {
     auto &err = llvm::errs();
@@ -193,6 +223,54 @@ private:
   }
 };
 
+/// Tracks the shared-memory state needed at the current program point and at
+/// function boundaries.
+struct MembarInfo {
+  /// Buffers accessed since the most recent synchronization.
+  BlockInfo pending;
+
+  /// Buffers reachable from the function entry block before the first
+  /// synchronization.
+  /// It keeps incrementing during the iterative algorithm until
+  ///  we note all paths to a basic block has synchronized.
+  BlockInfo entryBlockInfo;
+
+  /// Whether every path from the function entry block to the current program
+  /// point has synchronized.
+  bool allPathsFromEntrySynced = false;
+
+  MembarInfo &join(const MembarInfo &other) {
+    pending.join(other.pending);
+    entryBlockInfo.join(other.entryBlockInfo);
+    allPathsFromEntrySynced &= other.allPathsFromEntrySynced;
+    return *this;
+  }
+
+  void addBlockInfo(const BlockInfo &blockInfo) {
+    if (!allPathsFromEntrySynced)
+      entryBlockInfo.join(blockInfo);
+    pending.join(blockInfo);
+  }
+
+  void sync() {
+    pending.sync();
+    allPathsFromEntrySynced = true;
+  }
+
+  void applyCallSummary(const MembarInfo &callee) {
+    if (!allPathsFromEntrySynced)
+      entryBlockInfo.join(callee.entryBlockInfo);
+    if (callee.allPathsFromEntrySynced)
+      sync();
+    pending.join(callee.pending);
+  }
+
+  bool operator==(const MembarInfo &other) const {
+    return pending == other.pending && entryBlockInfo == other.entryBlockInfo &&
+           allPathsFromEntrySynced == other.allPathsFromEntrySynced;
+  }
+};
+
 inline BlockInfo translateBlockInfoToCallsite(const BlockInfo &calleeBlockInfo,
                                               size_t callOffset) {
   BlockInfo translatedBlockInfo;
@@ -213,27 +291,16 @@ inline BlockInfo translateBlockInfoToCallsite(const BlockInfo &calleeBlockInfo,
   return translatedBlockInfo;
 }
 
-/// Returns true if `op` synchronizes local memory accesses for membar-style
-/// analyses.
-bool containsLocalBarrier(Operation *op);
+/// Classify the barriers that synchronize local memory accesses in `op`
+/// relative to its memory effects.
+triton::BarrierStages getLocalBarrierStages(Operation *op,
+                                            Allocation *allocation);
 
 //===----------------------------------------------------------------------===//
 // Shared Memory Barrier Analysis
 //===----------------------------------------------------------------------===//
 
-// Common class to analyze membar and fence placement.
-class MembarOrFenceAnalysis
-    : public triton::PostOrderFunctionAnalysis<BlockInfo> {
-public:
-  MembarOrFenceAnalysis(Allocation &allocation, MembarFilterFn filter)
-      : allocation(allocation), filter(std::move(filter)) {}
-
-protected:
-  Allocation &allocation;
-  MembarFilterFn filter;
-};
-
-class MembarAnalysis : public MembarOrFenceAnalysis {
+class MembarAnalysis : public triton::PostOrderFunctionAnalysis<MembarInfo> {
 public:
   /// Creates a new Membar analysis that generates the shared memory barrier
   /// in the following circumstances:
@@ -248,58 +315,66 @@ public:
   /// a shared memory read. If the temporary storage is written but not read,
   /// it is considered as the problem of the operation itself but not the membar
   /// analysis.
-  MembarAnalysis(Allocation &allocation, MembarFilterFn filter)
-      : MembarOrFenceAnalysis(allocation, std::move(filter)),
+  MembarAnalysis(Allocation &allocation, MembarFilterFn filter,
+                 const SharedMemoryFootprints &physicalFootprints)
+      : allocation(allocation), filter(std::move(filter)),
+        physicalFootprints(physicalFootprints),
         bufferIndexAnalysis(
             cast<FunctionOpInterface>(allocation.getOperation())) {}
 
 private:
   /// Updates the BlockInfo operation based on the operation.
-  void update(Operation *operation, BlockInfo *blockInfo, FuncMapT *funcMap,
+  void update(Operation *operation, MembarInfo *membarInfo, FuncMapT *funcMap,
               OpBuilder *builder) override;
 
   void updateSuccessor(Operation *terminator, Block *successor,
-                       BlockInfo *blockInfo) override;
+                       MembarInfo *membarInfo) override;
 
-  void updateExitState(BlockInfo *blockInfo) override;
+  void updateExitState(MembarInfo *membarInfo) override;
 
+protected:
   void insertBarrier(Operation *operation, OpBuilder *builder);
 
+  Allocation &allocation;
+  MembarFilterFn filter;
+
+private:
+  const SharedMemoryFootprints &physicalFootprints;
   BufferIndexAnalysis bufferIndexAnalysis;
 };
 
-/// Postorder traversal on the callgraph to insert membar instructions
-/// of each function.
-/// Each function maintains a BlockInfo map that includes all potential buffers
-/// after returning. This way users do not have to explicitly insert membars
-/// before and after function calls, but might be a bit conservative.
-template <typename AnalysisT>
-class ModuleMembarOrFenceAnalysis : public triton::CallGraph<BlockInfo> {
+/// Inserts shared-memory barriers across a module. Function summaries retain
+/// entry-prefix and pending exit states for calls.
+class ModuleMembarAnalysis {
 public:
-  ModuleMembarOrFenceAnalysis(ModuleAllocation &moduleAllocation,
-                              MembarFilterFn filter = nullptr)
-      : triton::CallGraph<BlockInfo>(moduleAllocation.getModuleOp()),
-        moduleAllocation(moduleAllocation), filter(std::move(filter)) {}
+  ModuleMembarAnalysis(ModuleAllocation &moduleAllocation,
+                       MembarFilterFn filter = nullptr)
+      : moduleAllocation(moduleAllocation), filter(std::move(filter)) {}
 
-  void run() {
-    walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
-        // Pre-order walk callback
-        [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
-        // Post-order walk callback
-        [&](FunctionOpInterface funcOp) {
-          auto &allocation = *moduleAllocation.getFuncData(funcOp);
-          if (!funcMap.try_emplace(funcOp).second)
+  void run();
+
+  template <typename AnalysisT>
+  void runAnalysis(const SharedMemoryFootprints &physicalFootprints =
+                       SharedMemoryFootprints{}) {
+    triton::CallGraph<MembarInfo> callGraph(moduleAllocation.getModuleOp());
+    triton::CallGraph<MembarInfo>::FuncDataMapT summaries;
+    callGraph.walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
+        [](CallOpInterface, FunctionOpInterface) {},
+        [&](FunctionOpInterface function) {
+          if (!summaries.try_emplace(function).second)
             return;
-          AnalysisT(allocation, filter).run(funcOp, funcMap);
+          auto &allocation = *moduleAllocation.getFuncData(function);
+          AnalysisT(allocation, filter, physicalFootprints)
+              .run(function, summaries);
         });
   }
 
 private:
+  SharedMemoryFootprints getSharedMemoryFootprints();
+
   ModuleAllocation &moduleAllocation;
   MembarFilterFn filter;
 };
-
-using ModuleMembarAnalysis = ModuleMembarOrFenceAnalysis<MembarAnalysis>;
 
 } // namespace mlir
 

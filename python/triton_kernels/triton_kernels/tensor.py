@@ -241,13 +241,9 @@ def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwarg
     shape = list(tensor.shape)
     if not layout_transformation_kwargs and tensor.storage.layout.can_preserve_storage_as(layout, len(shape)):
         return tensor
-    # convert `tensor` into canonical form
-    transformation = tensor.storage.layout.make_transformation(shape, tensor.dtype == FP4)
-    canonical_data = transformation.unswizzle_data(tensor.storage.data)
-    # convert canonical form to `layout`
-    transformation = layout.make_transformation(shape, tensor.dtype == FP4, **layout_transformation_kwargs)
-    # print("convert layout ", torch.cuda.memory_summary(0, abbreviated=True))
-    new_data = transformation.swizzle_data(canonical_data)
+    source = tensor.storage.layout.make_transformation(shape, tensor.dtype == FP4)
+    destination = layout.make_transformation(shape, tensor.dtype == FP4, **layout_transformation_kwargs)
+    new_data = source.convert_data(tensor.storage.data, destination)
     return Tensor(Storage(new_data, layout), shape=list(tensor.shape), dtype=tensor.dtype)
 
 
@@ -298,15 +294,9 @@ def empty(shape: tuple[int], dtype: DataType, device: torch.device, layout=None,
           allow_implicit_conversion: bool = False):
     storage_dtype = torch.uint8 if dtype == FP4 else dtype_to_torch_dtype(dtype)
     initial_layout = layout if isinstance(layout, StridedLayout) else StridedLayout()
-    storage_shape = initial_layout.storage_shape(list(shape), dtype == FP4)
-    order = initial_layout.order(len(shape))
-    # storage strides
-    strides = [0] * len(storage_shape)
-    running = 1
-    for d in order:  # iterate minor -> major
-        strides[d] = running
-        running *= storage_shape[d]
-    storage = torch.empty_strided(storage_shape, strides, device=device, dtype=storage_dtype)
+    transformation = initial_layout.make_transformation(list(shape), dtype == FP4)
+    storage = torch.empty_strided(transformation.storage_shape, transformation.storage_strides, device=device,
+                                  dtype=storage_dtype)
     ret = wrap_torch_tensor(storage, dtype=dtype, shape=shape, layout=initial_layout)
     if allow_implicit_conversion:
         ret = convert_layout(ret, layout)

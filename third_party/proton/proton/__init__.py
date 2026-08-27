@@ -1,31 +1,10 @@
 # ruff: noqa
 
+# Select a coherent ROCm runtime before libproton.so is loaded. TheRock keeps
+# its registered preload handles; HSA is retained here until it is registered.
+from ._rocm import configure_runtime
 
-# Point the C++ backend at custom rocprofiler-sdk include/lib paths before
-# libproton.so is loaded. Explicit Proton knobs win; TheRock environments can
-# still discover the SDK library through _rocm_sdk_core.
-def _ensure_rocprofiler_sdk_env():
-    import os
-    import triton
-
-    for key, value in (
-        ("TRITON_ROCPROFILER_SDK_INCLUDE_PATH", triton.knobs.proton.rocprofiler_sdk_include_path),
-        ("TRITON_ROCPROFILER_SDK_LIB_PATH", triton.knobs.proton.rocprofiler_sdk_lib_path),
-    ):
-        if not os.environ.get(key, None) and value is not None:
-            triton.knobs.setenv(key, value)
-
-    if not os.environ.get("TRITON_ROCPROFILER_SDK_LIB_PATH", None):
-        try:
-            import _rocm_sdk_core
-            lib_dir = os.path.join(os.path.dirname(_rocm_sdk_core.__file__), "lib")
-            if os.path.isdir(lib_dir):
-                triton.knobs.proton.rocprofiler_sdk_lib_path = lib_dir
-        except ImportError:
-            pass
-
-
-_ensure_rocprofiler_sdk_env()
+_hsa_runtime_handle = configure_runtime()
 
 from .scope import scope, cpu_timed_scope, enter_scope, exit_scope
 from .state import state, enter_state, exit_state, metadata_state

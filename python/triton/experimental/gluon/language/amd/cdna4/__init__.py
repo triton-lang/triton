@@ -7,7 +7,7 @@ from triton._C.libtriton.gluon_ir import (
 from ..._core import builtin, int8, uint8, _unwrap_if_constexpr
 from ..._layouts import DotOperandLayout
 from .._layouts import AMDMFMALayout
-from .._ops import _load_shared_fp4_repacked, _mma_scaled, _scaled_upcast
+from .._ops import _load_shared_fp4_repacked, _mma_scaled, _scaled_upcast, scaled_downcast
 from ..cdna3 import _buffer_atomic_rmw_impl, _convert_e8m0_scale_to_bf16
 from ..cdna3 import *  # NOQA: F403
 from ..cdna3 import __all__ as __cdna3_all
@@ -18,6 +18,7 @@ __all__ = [
     "async_copy",
     "mfma_scaled",
     "scaled_upcast",
+    "scaled_downcast",
     "load_shared_fp4_repacked",
     "get_mfma_scale_layout",
     "compute_efficient_padded_shared_layout",
