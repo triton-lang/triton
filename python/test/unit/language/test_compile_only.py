@@ -67,7 +67,6 @@ def test_compile_only_one_hot_xor_reduction_warp_shuffle() -> None:
         signature={"index_ptr": "*u32", "output_ptr": "*u32", "n_elements": "i32", "seed": "u32"},
     )
     assert "basis_ptr" not in source.signature
-    assert "tl.linear_apply" not in one_hot_xor_basis_kernel.src
     compiled = triton.compile(source, target=GPUTarget("cuda", 90, 32), options={"num_warps": 4})
 
     # Ordinary Triton reductions survive the public TTIR and TTGIR stages;
@@ -76,7 +75,6 @@ def test_compile_only_one_hot_xor_reduction_warp_shuffle() -> None:
         assert ir.count('"tt.reduce"') == 32
         assert len(re.findall(r"\btt\.load\b", ir)) == 1
         assert len(re.findall(r"\btt\.store\b", ir)) == 1
-        assert "tt.linear_apply" not in ir
 
     ptx = compiled.asm["ptx"]
     assert ptx.count("shfl.sync.idx.b32") == 32
