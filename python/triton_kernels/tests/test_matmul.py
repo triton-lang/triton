@@ -177,7 +177,13 @@ def _build_test_op_cases():
     ])
     test_cases.extend([
         Case(*shape, "plain", dtype, "mxfloat4_e2m1", b_hbm_swizzling=True)
-        for shape in [(64, 256, 32), (128, 258, 1504), (128, 3200, 256)]
+        for shape in [
+            (64, 256, 32),
+            (128, 256, 384),
+            (128, 256, 416),
+            (128, 258, 1504),
+            (128, 3200, 256),
+        ]
         for dtype in ["bfloat16", "float16"]
     ])
     test_cases.append(Case(128, 128, 128, "plain", "bfloat16", "nvfp4_e2m1"))
@@ -358,8 +364,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             pytest.skip("MXFP8/NVFP4 tensors use fp8e4nv, which is not supported on A100")
         if b_dtype.is_any_float8 and device_capability < 9:
             pytest.skip("Float8 not tested on A100")
-        if act_dtype_str == "float16" and b_dtype.has_mx_scale and device_capability >= 10:
-            pytest.skip("float16 x mx not supported with cuda capability >= 10")
+        if act_dtype_str == "float16" and b_dtype.has_mx_scale and device_capability != 9:
+            pytest.skip("float16 x mx only tested on Hopper")
         if b_dtype.has_mx_scale and a_dtype.has_global_scale and device_capability < 10:
             pytest.skip("float8 x mx not supported with cuda capability < 10")
         if swiglu_opts is not None and do_gamma:
