@@ -43,6 +43,13 @@ struct PackedLoopCarry {
   unsigned backedgeIndex;
 };
 
+struct LoopAccumulator {
+  PHINode *phi;
+  BinaryOperator *update;
+  CallBase *contribution;
+  unsigned backedgeIndex;
+};
+
 struct ArithmeticPlan {
   unsigned scalarCost = 0;
   unsigned vectorCost = 0;
@@ -98,7 +105,7 @@ public:
       : function(function), costModel(computeCapability) {}
 
   bool run() {
-    bool changed = false;
+    bool changed = vectorizeLoopAccumulators();
     for (BasicBlock &block : function)
       changed |= vectorizeArithmetic(block);
     return changed;
@@ -138,6 +145,146 @@ private:
 
   unsigned getOperandCount(Instruction &instruction) const {
     return isa<BinaryOperator>(instruction) ? 2 : 3;
+  }
+
+  std::optional<LoopAccumulator> getLoopAccumulator(PHINode &phi) const {
+    if (!costModel.supportsPackedArithmetic(Instruction::FAdd, phi.getType()) ||
+        !phi.hasOneUse() || phi.getNumIncomingValues() != 2)
+      return std::nullopt;
+
+    auto *update = dyn_cast<BinaryOperator>(*phi.user_begin());
+    if (!update || update->getOpcode() != Instruction::FAdd)
+      return std::nullopt;
+
+    unsigned backedgeIndex = phi.getNumIncomingValues();
+    for (unsigned index = 0; index < phi.getNumIncomingValues(); ++index) {
+      if (phi.getIncomingValue(index) == update &&
+          phi.getIncomingBlock(index) == update->getParent()) {
+        backedgeIndex = index;
+      } else if (!isa<Constant>(phi.getIncomingValue(index))) {
+        return std::nullopt;
+      }
+    }
+    if (backedgeIndex == phi.getNumIncomingValues())
+      return std::nullopt;
+
+    Value *contribution = nullptr;
+    if (update->getOperand(0) == &phi)
+      contribution = update->getOperand(1);
+    else if (update->getOperand(1) == &phi)
+      contribution = update->getOperand(0);
+    auto *call = dyn_cast_or_null<CallBase>(contribution);
+    if (!call || !call->getCalledFunction() || call->arg_empty())
+      return std::nullopt;
+
+    return LoopAccumulator{&phi, update, call, backedgeIndex};
+  }
+
+  bool canPairLoopAccumulators(const LoopAccumulator &first,
+                               const LoopAccumulator &second) const {
+    if (first.phi->getParent() != second.phi->getParent() ||
+        first.phi->getType() != second.phi->getType() ||
+        first.update->getParent() != second.update->getParent() ||
+        first.contribution->getCalledFunction() !=
+            second.contribution->getCalledFunction() ||
+        first.contribution->arg_size() != second.contribution->arg_size())
+      return false;
+
+    for (unsigned index = 1; index < first.contribution->arg_size(); ++index)
+      if (first.contribution->getArgOperand(index) !=
+          second.contribution->getArgOperand(index))
+        return false;
+
+    for (unsigned index = 0; index < first.phi->getNumIncomingValues(); ++index)
+      if (second.phi->getBasicBlockIndex(first.phi->getIncomingBlock(index)) <
+          0)
+        return false;
+
+    return getInsertionPoint(*first.update, *second.update) != nullptr;
+  }
+
+  bool vectorizeLoopAccumulatorPair(const LoopAccumulator &first,
+                                    const LoopAccumulator &second) const {
+    Instruction *insertion = getInsertionPoint(*first.update, *second.update);
+    if (!insertion)
+      return false;
+
+    auto *vectorType = FixedVectorType::get(first.phi->getType(), 2);
+    IRBuilder<> phiBuilder(first.phi);
+    PHINode *packedPhi = phiBuilder.CreatePHI(
+        vectorType, first.phi->getNumIncomingValues(), "nvptx.accumulator");
+    for (unsigned index = 0; index < first.phi->getNumIncomingValues();
+         ++index) {
+      BasicBlock *block = first.phi->getIncomingBlock(index);
+      int otherIndex = second.phi->getBasicBlockIndex(block);
+      if (index == first.backedgeIndex) {
+        packedPhi->addIncoming(PoisonValue::get(vectorType), block);
+        continue;
+      }
+
+      ValuePair initial{first.phi->getIncomingValue(index),
+                        second.phi->getIncomingValue(otherIndex)};
+      packedPhi->addIncoming(buildVector(initial, phiBuilder), block);
+    }
+
+    IRBuilder<> builder(insertion);
+    IRBuilder<>::FastMathFlagGuard guard(builder);
+    builder.setFastMathFlags(first.update->getFastMathFlags() &
+                             second.update->getFastMathFlags());
+    Value *contributions =
+        buildVector({first.contribution, second.contribution}, builder);
+    Value *packed = builder.CreateFAdd(packedPhi, contributions,
+                                       "nvptx.accumulator.update");
+    packedPhi->setIncomingValue(first.backedgeIndex, packed);
+
+    Value *firstLane =
+        builder.CreateExtractElement(packed, uint64_t(0), "nvptx.extract");
+    Value *secondLane =
+        builder.CreateExtractElement(packed, uint64_t(1), "nvptx.extract");
+    first.update->replaceAllUsesWith(firstLane);
+    second.update->replaceAllUsesWith(secondLane);
+    first.update->eraseFromParent();
+    second.update->eraseFromParent();
+    first.phi->eraseFromParent();
+    second.phi->eraseFromParent();
+    return true;
+  }
+
+  bool vectorizeLoopAccumulators() const {
+    bool changed = false;
+    for (BasicBlock &block : function) {
+      SmallVector<LoopAccumulator, 8> candidates;
+      for (PHINode &phi : block.phis())
+        if (auto accumulator = getLoopAccumulator(phi))
+          candidates.push_back(*accumulator);
+
+      llvm::sort(candidates, [](const LoopAccumulator &first,
+                                const LoopAccumulator &second) {
+        if (first.update->getParent() != second.update->getParent())
+          return first.update->getParent()->getNumber() <
+                 second.update->getParent()->getNumber();
+        return first.update->comesBefore(second.update);
+      });
+
+      SmallVector<bool, 8> paired(candidates.size(), false);
+      for (unsigned index = 0; index < candidates.size(); ++index) {
+        if (paired[index])
+          continue;
+        for (unsigned other = index + 1; other < candidates.size(); ++other) {
+          if (paired[other] ||
+              !canPairLoopAccumulators(candidates[index], candidates[other]))
+            continue;
+          if (vectorizeLoopAccumulatorPair(candidates[index],
+                                           candidates[other])) {
+            paired[index] = true;
+            paired[other] = true;
+            changed = true;
+          }
+          break;
+        }
+      }
+    }
+    return changed;
   }
 
   std::optional<ExtractedVector> getExtractedVector(ValuePair values) const {
@@ -302,7 +449,8 @@ private:
   }
 
   void addInputCost(ValuePair values, ArithmeticPlan &plan) const {
-    if ((isa<Constant>(values.first) && isa<Constant>(values.second)) ||
+    if (values.first == values.second ||
+        (isa<Constant>(values.first) && isa<Constant>(values.second)) ||
         getExtractedVector(values) || isRegisterTuple(values))
       return;
 
