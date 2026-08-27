@@ -587,6 +587,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #local_gather_scatter_smem = #ttg.shared_memory
 #local_gather_scatter_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1]]}>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 528 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK: tt.func private @[[$NVIDIA_SCATTER_HELPER:__triton_consan_verify_local_scatter_destinations[^ (]*]]
+  // CHECK: %[[SCATTER_ACTUAL:.*]] = ttg.local_gather %arg0[%arg1] {axis = 0 : i32}
+  // CHECK-NEXT: %[[SCATTER_MATCH:.*]] = arith.cmpi eq, %[[SCATTER_ACTUAL]], %arg2
+  // CHECK-NEXT: tt.assert %[[SCATTER_MATCH]], "Non-atomic local scatter has conflicting values for the same destination"
   // CHECK-LABEL: @local_gather_scatter_effects
   tt.func public @local_gather_scatter_effects(%out: !tt.tensordesc<8x32xi32, #local_gather_scatter_shared>) {
     %c0 = arith.constant 0 : i32
@@ -611,7 +615,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]]{{.*}})
-    // CHECK: ttg.local_scatter
+    // CHECK: tti.experimental_lock_release
+    // CHECK-NEXT: ttg.local_scatter
+    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK-NEXT: tt.call @[[$NVIDIA_SCATTER_HELPER]]
+    // CHECK-NEXT: ttng.cluster_barrier
     ttg.local_scatter %dst[%indices], %values {axis = 0 : i32} : !ttg.memdesc<8x32xi32, #local_gather_scatter_shared, #local_gather_scatter_smem, mutable>, tensor<8x32xi32, #local_gather_scatter_blocked>, tensor<8x32xi32, #local_gather_scatter_blocked>
 
     // An async-proxy consumer makes the generic-proxy classification above
@@ -2386,13 +2394,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: ttg.local_store %[[SMEM_POISON]], %[[SMEM]]
     // CHECK: ttg.barrier local
     // CHECK: %[[TMEM:.*]] = ttng.tmem_alloc
-    // CHECK: ttg.barrier tensor_read|tensor_write
+    // CHECK-NEXT: ttng.tmem_wait load
+    // CHECK-NEXT: ttng.tmem_wait store
+    // CHECK-NEXT: ttg.barrier tensor_read|tensor_write
     // CHECK: %[[TMEM_POISON:.*]] = arith.constant dense<0x7FC00000> : tensor<128x128xf32
     // CHECK: %[[TRUE:.*]] = arith.constant true
     // CHECK: ttng.tmem_store %[[TMEM_POISON]], %[[TMEM]], %[[TRUE]]
-    // CHECK: ttg.barrier tensor_read|tensor_write
+    // CHECK-NEXT: ttng.tmem_wait store
+    // CHECK-NEXT: ttg.barrier tensor_read|tensor_write
     // NO-INIT-NOT: ttg.local_store
     // NO-INIT-NOT: ttng.tmem_store
+    // NO-INIT-NOT: ttng.tmem_wait
     %smem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #shared, #smem, mutable>
     %tmem = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
     // NO-INIT: tt.return
@@ -2419,10 +2431,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: %[[TMEM:.*]] = ttng.tmem_alloc
     // CHECK: %[[TMEM_0:.*]] = ttg.memdesc_index %[[TMEM]]
     // CHECK: %[[TMEM_1:.*]] = ttg.memdesc_index %[[TMEM]]
-    // CHECK: ttg.barrier tensor_read|tensor_write
+    // CHECK-NEXT: ttng.tmem_wait load
+    // CHECK-NEXT: ttng.tmem_wait store
+    // CHECK-NEXT: ttg.barrier tensor_read|tensor_write
     // CHECK: ttng.tmem_store {{.*}}, %[[TMEM_0]],
+    // CHECK-NOT: ttng.tmem_wait
     // CHECK: ttng.tmem_store {{.*}}, %[[TMEM_1]],
-    // CHECK: ttg.barrier tensor_read|tensor_write
+    // CHECK-NEXT: ttng.tmem_wait store
+    // CHECK-NEXT: ttg.barrier tensor_read|tensor_write
     %smem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x128x128xf32, #shared, #smem, mutable>
     %tmem = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable>
     tt.return
@@ -2572,11 +2588,17 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: %[[SCATTER_CTAS:.*]] = arith.constant 2 : i32
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]])
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{.*}}%[[SCATTER_CTAS]])
-    // CHECK: ttg.local_scatter
+    // CHECK-NOT: ttg.global_scratch_alloc
+    // CHECK: tti.experimental_lock_release
+    // CHECK-NEXT: ttg.local_scatter
+    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK-NEXT: tt.call @__triton_consan_verify_local_scatter_destinations
+    // CHECK-NEXT: ttng.cluster_barrier
     ttg.local_scatter %remote[%indices], %values {axis = 1 : i32} : !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32>, tensor<2x32xi32, #blocked>, tensor<2x32xi32, #blocked>
     // CHECK: %[[ATOMIC_CTAS:.*]] = arith.constant 2 : i32
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]])
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]])
+    // CHECK-NOT: tt.call @__triton_consan_verify_local_scatter_destinations
     // CHECK: ttg.local_atomic_scatter_rmw
     %a = ttg.local_atomic_scatter_rmw add, %remote[%indices], %values {axis = 1 : i32} : (!ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32>, tensor<2x32xi32, #blocked>, tensor<2x32xi32, #blocked>) -> tensor<2x32xi32, #blocked>
     tt.return

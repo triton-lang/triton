@@ -17,6 +17,7 @@
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/Support/xxhash.h"
 
 namespace mlir::triton::instrument {
 
@@ -607,6 +608,43 @@ void FunctionBuilder::createFillGlobalTensorCall(ImplicitLocOpBuilder &b,
         Value tensor = triton::SplatOp::create(fb, type, scalar);
         createStoreScratchMemory(fb, fb.getLoc(), ptr, tensor, type,
                                  /*currentCTAOnly=*/false);
+        triton::ReturnOp::create(fb);
+      });
+}
+
+void FunctionBuilder::createVerifyLocalScatterDestinationsCall(
+    ImplicitLocOpBuilder &b, Value destination, Value indices, Value values,
+    unsigned axis) {
+  auto indicesType = cast<RankedTensorType>(indices.getType());
+  ManglingArgs specializationArgs{static_cast<uint64_t>(axis)};
+  specializationArgs.append(
+      llvm::xxh3_64bits(mlir::debugString(indicesType.getEncoding())));
+
+  createCallToCachedFunction(
+      b, "verify_local_scatter_destinations", {destination, indices, values},
+      /*assertInfo=*/std::nullopt, std::move(specializationArgs),
+      [axis](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+        Value destination = entryBlock->getArgument(0);
+        Value indices = entryBlock->getArgument(1);
+        Value values = entryBlock->getArgument(2);
+        auto valuesType = cast<RankedTensorType>(values.getType());
+        Value actual = ttg::LocalGatherOp::create(
+            fb, valuesType, destination, indices, fb.getI32IntegerAttr(axis));
+
+        Type elementType = valuesType.getElementType();
+        if (auto floatType = dyn_cast<FloatType>(elementType)) {
+          auto bitType =
+              valuesType.clone(fb.getIntegerType(floatType.getWidth()));
+          actual = triton::BitcastOp::create(fb, bitType, actual);
+          values = triton::BitcastOp::create(fb, bitType, values);
+        }
+
+        Value matches =
+            arith::CmpIOp::create(fb, arith::CmpIPredicate::eq, actual, values);
+        triton::AssertOp::create(
+            fb, matches,
+            "Non-atomic local scatter has conflicting values for the same "
+            "destination");
         triton::ReturnOp::create(fb);
       });
 }

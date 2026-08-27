@@ -997,6 +997,56 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
+#scatter_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
+#scatter_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 512 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK: tt.func private @[[$SCATTER_HELPER:__triton_consan_verify_local_scatter_destinations[^ (]*]]
+  // CHECK: %[[ACTUAL:.*]] = ttg.local_gather %arg0[%arg1] {axis = 1 : i32}
+  // CHECK-NEXT: %[[MATCH:.*]] = arith.cmpi eq, %[[ACTUAL]], %arg2
+  // CHECK-NEXT: tt.assert %[[MATCH]], "Non-atomic local scatter has conflicting values for the same destination"
+  // CHECK-LABEL: @amd_local_scatter_conflicting_values
+  tt.func public @amd_local_scatter_conflicting_values(
+      %indices: tensor<4x32xi32, #scatter_blocked>,
+      %values: tensor<4x32xi32, #scatter_blocked>) {
+    %dst = ttg.local_alloc {allocation.offset = 0 : i32}
+        : () -> !ttg.memdesc<4x32xi32, #scatter_shared, #ttg.shared_memory, mutable>
+    // CHECK: %[[DESTINATION:.*]] = ttg.local_alloc
+    // CHECK-NOT: ttg.global_scratch_alloc
+    // CHECK: tti.experimental_lock_release
+    // CHECK-NEXT: ttg.local_scatter %[[DESTINATION]][%arg0], %arg1
+    // CHECK-NEXT: amdg.cluster_barrier_arrive
+    // CHECK-NEXT: amdg.cluster_barrier_wait
+    // CHECK-NEXT: tt.call @[[$SCATTER_HELPER]](%[[DESTINATION]], %arg0, %arg1)
+    // CHECK-NEXT: amdg.cluster_barrier_arrive
+    // CHECK-NEXT: amdg.cluster_barrier_wait
+    ttg.local_scatter %dst[%indices], %values {axis = 1 : i32}
+        : !ttg.memdesc<4x32xi32, #scatter_shared, #ttg.shared_memory, mutable>,
+        tensor<4x32xi32, #scatter_blocked>, tensor<4x32xi32, #scatter_blocked>
+    // CHECK: tti.experimental_lock_release
+    // CHECK-NEXT: ttg.local_scatter %[[DESTINATION]][%arg0], %arg1
+    // CHECK-NEXT: amdg.cluster_barrier_arrive
+    // CHECK-NEXT: amdg.cluster_barrier_wait
+    // CHECK-NEXT: tt.call @[[$SCATTER_HELPER]](%[[DESTINATION]], %arg0, %arg1)
+    // CHECK-NEXT: amdg.cluster_barrier_arrive
+    // CHECK-NEXT: amdg.cluster_barrier_wait
+    ttg.local_scatter %dst[%indices], %values {axis = 1 : i32}
+        : !ttg.memdesc<4x32xi32, #scatter_shared, #ttg.shared_memory, mutable>,
+        tensor<4x32xi32, #scatter_blocked>, tensor<4x32xi32, #scatter_blocked>
+    // CHECK-NOT: tt.call @[[$SCATTER_HELPER]]
+    // CHECK: ttg.local_atomic_scatter_rmw
+    %old = ttg.local_atomic_scatter_rmw add, %dst[%indices], %values
+        {axis = 1 : i32} : (!ttg.memdesc<4x32xi32, #scatter_shared,
+        #ttg.shared_memory, mutable>, tensor<4x32xi32, #scatter_blocked>,
+        tensor<4x32xi32, #scatter_blocked>) -> tensor<4x32xi32, #scatter_blocked>
+    amdg.cluster_barrier_arrive
+    amdg.cluster_barrier_wait
+    tt.return
+  }
+}
+
+// -----
+
 #lifetime_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #lifetime_smem = #ttg.shared_memory
 #lifetime_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>

@@ -1,8 +1,4 @@
 # ruff: noqa: E402
-import hip
-
-hip.hip.hipInit(0)
-
 import pytest
 import subprocess
 import sys

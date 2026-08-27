@@ -972,6 +972,82 @@ def test_cluster_barrier_publishes_only_observed_tensor_reads(FINISHED, device, 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize(
+    "MODE,BLOCK,SIZE_PER_THREAD,NUM_CTAS,FAILURE",
+    [
+        pytest.param("lane-conflict", 128, 1, 1, True, id="conflicting-lanes"),
+        pytest.param("warp-conflict", 128, 1, 1, True, id="conflicting-warps"),
+        pytest.param("unique", 128, 1, 1, False, id="unique-destinations"),
+        pytest.param("same-thread", 256, 2, 1, True, id="conflicting-within-thread"),
+        pytest.param("unique", 1, 2, 1, False, id="replicated-registers-lanes-and-warps"),
+        pytest.param("identical", 128, 1, 1, False, id="identical-overlapping-values"),
+        pytest.param("cta-conflict", 256, 1, 2, True, id="conflicting-ctas"),
+        pytest.param("cta-identical", 256, 1, 2, False, id="identical-cross-cta-values"),
+        pytest.param("atomic", 128, 1, 1, False, id="colliding-atomics"),
+    ],
+)
+def test_local_scatter_conflicting_values(MODE, BLOCK, SIZE_PER_THREAD, NUM_CTAS, FAILURE, device, run_wrapper,
+                                          monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_local_scatter_conflicting_values,
+                                (MODE, BLOCK, SIZE_PER_THREAD, NUM_CTAS, FAILURE, device, False, monkeypatch))
+        if FAILURE:
+            assert_expected_cuda_failure(result.exc)
+            assert "Non-atomic local scatter has conflicting values for the same destination" in result.driver_stderr_output
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def kernel(output, MODE: ttgl.constexpr, BLOCK: ttgl.constexpr, SIZE_PER_THREAD: ttgl.constexpr):
+        cga_layout: ttgl.constexpr = default_cga_layout(ttgl.num_ctas(), 1)
+        layout: ttgl.constexpr = ttgl.BlockedLayout([SIZE_PER_THREAD], [32], [4], [0], cga_layout=cga_layout)
+        shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga_layout)
+        offsets = ttgl.arange(0, BLOCK, layout=layout)
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [BLOCK], shared_layout)
+        smem.store(ttgl.full([BLOCK], 0, ttgl.int32, layout))
+        ttgl.barrier(cluster=ttgl.num_ctas() > 1)
+
+        if MODE == "warp-conflict":
+            indices = offsets % 32
+        elif MODE == "cta-conflict" or MODE == "cta-identical":
+            indices = offsets % 128
+        elif MODE == "atomic":
+            indices = offsets * 0
+        elif MODE == "unique":
+            indices = offsets
+        else:
+            indices = offsets // 2
+
+        values = offsets + 1
+        if MODE == "identical" or MODE == "cta-identical":
+            values = indices + 1
+        if MODE == "atomic":
+            smem.atomic_scatter_add(values, indices, axis=0)
+        else:
+            smem.scatter(values, indices, axis=0)
+        ttgl.barrier(cluster=ttgl.num_ctas() > 1)
+        ttgl.store(output + offsets, smem.load(layout))
+
+    output = torch.empty(BLOCK, device=device, dtype=torch.int32)
+    kernel[(1, )](output, MODE=MODE, BLOCK=BLOCK, SIZE_PER_THREAD=SIZE_PER_THREAD, num_warps=4, num_ctas=NUM_CTAS)
+    if not FAILURE:
+        expected = torch.zeros_like(output)
+        if MODE == "unique":
+            expected.copy_(torch.arange(1, BLOCK + 1, device=device, dtype=torch.int32))
+        elif MODE == "identical" or MODE == "cta-identical":
+            expected[:BLOCK // 2] = torch.arange(1, BLOCK // 2 + 1, device=device, dtype=torch.int32)
+        elif MODE == "atomic":
+            expected[0] = BLOCK * (BLOCK + 1) // 2
+        torch.testing.assert_close(output, expected)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+@pytest.mark.parametrize(
     "OP,FAILURE",
     [
         pytest.param("gather", True, id="gather-missing-barrier"),
