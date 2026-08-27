@@ -2530,7 +2530,7 @@ def test_cluster_barrier_multi_cta():
         anonymize_ir(mod.str_nodebug()), """\
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @cluster_barrier_multi_cta_kernel() attributes {noinline = false} {
-    ttg.fence
+    tt.fence
     tt.return
   }
 }

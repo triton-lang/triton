@@ -298,6 +298,7 @@ class CUDABackend(BaseBackend):
         dump_enabled = pm.enable_debug()
         emuTF32 = (capability // 10 >= 8)
         passes.ttir.add_convert_to_ttgpuir(pm, f"cuda:{capability}", opt.num_warps, 32, opt.num_ctas)
+        nvidia.passes.ttnvgpuir.add_lower_fence(pm)
         if opt.clc:
             nvidia.passes.ttnvgpuir.add_to_clc(pm)
         # optimize TTGIR
@@ -380,6 +381,7 @@ class CUDABackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
+        nvidia.passes.ttnvgpuir.add_lower_fence(pm)
         passes.gluon.add_inliner(pm)
         passes.gluon.add_infer_coalesced_encodings(pm)
         passes.gluon.add_resolve_auto_encodings(pm)

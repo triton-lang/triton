@@ -1384,20 +1384,3 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return
   }
 }
-
-// -----
-
-#amd_program_fence_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
-#amd_program_fence_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CGALayout = [[1]]}>
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32, ttg.shared = 128 : i32, ttg.target = "hip:gfx1250", ttg.tensor_memory_size = 0 : i32} {
-  // CHECK-LABEL: @amd_program_fence_publish_protocol
-  tt.func public @amd_program_fence_publish_protocol() {
-    %buffer = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32xi32, #amd_program_fence_shared, #ttg.shared_memory, mutable>
-    // CHECK: ttg.local_load
-    ttg.local_load %buffer : !ttg.memdesc<32xi32, #amd_program_fence_shared, #ttg.shared_memory, mutable> -> tensor<32xi32, #amd_program_fence_blocked>
-    // CHECK: tt.call @__triton_consan_publish_cluster_visibility
-    // CHECK: ttg.fence
-    ttg.fence
-    tt.return
-  }
-}

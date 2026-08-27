@@ -45,7 +45,7 @@ def _topk_backward(
     s = tl.sum(y * dy, 0)
     # write-back input gradient
     tl.store(DX + offs_xn, 0, mask=mask_xn)
-    tl.fence()
+    tl.debug_barrier()
     if APPLY_SOFTMAX:
         dx = y * (dy - s)
     else:

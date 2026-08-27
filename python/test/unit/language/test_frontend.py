@@ -29,7 +29,8 @@ def test_jit_variadic_keyword_arguments(jit):
 @pytest.mark.parametrize("target", [GPUTarget("cuda", 90, 32), GPUTarget("hip", "gfx1250", 32)], ids=["cuda", "hip"])
 @pytest.mark.parametrize("use_legacy_alias", [False, True], ids=["fence", "debug_barrier"])
 @pytest.mark.parametrize("num_ctas", [1, 2], ids=["single_cta", "cluster"])
-def test_fence_synchronizes_entire_program(target, use_legacy_alias, num_ctas):
+def test_fence_is_target_independent(target, use_legacy_alias, num_ctas):
+    assert tl.debug_barrier is tl.fence
 
     @triton.jit
     def kernel(USE_LEGACY_ALIAS: tl.constexpr):
@@ -40,7 +41,7 @@ def test_fence_synchronizes_entire_program(target, use_legacy_alias, num_ctas):
 
     module = run_parser(kernel, args=(use_legacy_alias, ), kwargs={"num_ctas": num_ctas}, target=target)
     generated_ir = module.str_nodebug()
-    assert "ttg.fence" in generated_ir
+    assert "tt.fence" in generated_ir
     assert "ttg.barrier" not in generated_ir
     assert "ttng.cluster_barrier" not in generated_ir
     assert "amdg.cluster_barrier" not in generated_ir

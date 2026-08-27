@@ -9,6 +9,7 @@ add_triton_library(TritonNvidiaGPUTransforms
   FuseTMemLoadReduce.cpp
   HoistMBarrierLifecycle.cpp
   InterleaveTMem.cpp
+  LowerFence.cpp
   MBarrierUtilities.cpp
   MMALowering.cpp
   OptimizeDescriptorEncoding.cpp

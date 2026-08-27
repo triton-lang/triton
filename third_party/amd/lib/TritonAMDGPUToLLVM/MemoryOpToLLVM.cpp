@@ -672,33 +672,6 @@ private:
   const AMD::TargetInfo &targetInfo;
 };
 
-class FenceOpConversion : public ConvertOpToLLVMPattern<triton::gpu::FenceOp> {
-public:
-  FenceOpConversion(const LLVMTypeConverter &converter,
-                    const AMD::TargetInfo &targetInfo, PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::gpu::FenceOp>(converter, benefit),
-        targetInfo(targetInfo) {}
-
-  LogicalResult
-  matchAndRewrite(triton::gpu::FenceOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    if (triton::gpu::lookupNumCTAs(op) == 1)
-      return failure();
-
-    targetInfo.barrier(op.getLoc(), rewriter, triton::gpu::AddrSpace::All);
-    LLVM::FenceOp::create(rewriter, op.getLoc(), LLVM::AtomicOrdering::release,
-                          /*syncscope=*/"cluster");
-    targetInfo.clusterBarrier(op.getLoc(), rewriter, op);
-    LLVM::FenceOp::create(rewriter, op.getLoc(), LLVM::AtomicOrdering::acquire,
-                          /*syncscope=*/"cluster");
-    rewriter.eraseOp(op);
-    return success();
-  }
-
-private:
-  const AMD::TargetInfo &targetInfo;
-};
-
 /// Encodes the waitcnt value for AMDGPU architectures.
 ///
 /// Note: This function duplicates the bitpacking logic from AMDGPU backend
@@ -832,7 +805,6 @@ void mlir::triton::AMD::populateMemoryOpToLLVMPatterns(
       typeConverter, targetInfo, benefit);
   patterns.add<LocalAtomicScatterRMWOpConversion>(typeConverter, targetInfo,
                                                   benefit.getBenefit() + 1);
-  patterns.add<BarrierOpConversion, FenceOpConversion,
-               MemoryCounterWaitOpConversion>(typeConverter, targetInfo,
-                                              barrierBenefit);
+  patterns.add<BarrierOpConversion, MemoryCounterWaitOpConversion>(
+      typeConverter, targetInfo, barrierBenefit);
 }

@@ -32,7 +32,7 @@ namespace mlir {
 // as malformed input by the callers.
 static bool canSitBetweenStages(Operation *op) {
   return isa<ttg::AsyncWaitOp, gpu::BarrierOp, triton::gpu::BarrierOp,
-             ttg::FenceOp, tt::amdgpu::AsyncTDMWait>(op);
+             tt::amdgpu::AsyncTDMWait>(op);
 }
 
 // True if `op` carries the cluster-end marker emitted by the frontend.

@@ -262,6 +262,7 @@ class HIPBackend(BaseBackend):
         pm.enable_debug()
         passes.ttir.add_convert_to_ttgpuir(pm, f"hip:{options.arch}", options.num_warps, options.warp_size,
                                            options.num_ctas)
+        amd.passes.ttgpuir.add_lower_fence(pm)
         pm.run(mod, 'make_ttgir_early')
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
@@ -329,6 +330,7 @@ class HIPBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
+        amd.passes.ttgpuir.add_lower_fence(pm)
         passes.gluon.add_inliner(pm)
         passes.gluon.add_resolve_auto_encodings(pm)
         passes.common.add_sccp(pm)

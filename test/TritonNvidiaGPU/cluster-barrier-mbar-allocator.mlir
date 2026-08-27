@@ -50,8 +50,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     partition0() num_warps(4) {
       // CHECK: ttng.cluster_barrier {ttg.mbar_offset = 40 : i32}
       ttng.cluster_barrier
-      // CHECK: ttg.fence {ttg.mbar_offset = 40 : i32}
-      ttg.fence
       ttg.warp_return
     } : () -> ()
     tt.return
