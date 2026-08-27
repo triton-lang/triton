@@ -103,7 +103,6 @@ def add_expr_rewrites(rewrites: list[RewriteFn]) -> None:
     import triton.language as tl
 
     rewrites.append(expr_rewrite(triton.jit, "gluon.jit"))
-    rewrites.append(expr_rewrite(tl.fence, "gl.barrier"))
     rewrites.append(expr_rewrite(tl.load, "gl.load"))
     rewrites.append(expr_rewrite(tl.store, "gl.store"))
 
@@ -175,8 +174,6 @@ class Translator(ReferenceRewriter):
         elif value is tl.expand_dims:
             node.args[0] = parse_expr(
                 f"helpers.convert_to_expand_dims_layout({ast.unparse(node.args[0])}, [{ast.unparse(node.args[1])}])")
-        elif value is tl.fence:
-            node.keywords.append(ast.keyword(arg="cluster", value=ast.Constant(value=True)))
         elif value is tl.range:
             return ast.Call(
                 func=ast.Name("range", ast.Load()),

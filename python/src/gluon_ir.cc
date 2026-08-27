@@ -420,6 +420,10 @@ void init_gluon_ir(py::module_ &m) {
           py::arg("cacheModifier").none(), py::arg("l1").none(),
           py::arg("l2Primary").none(), py::arg("l2Secondary").none(),
           py::arg("l2Fraction").none(), py::arg("l2PrefetchSize").none())
+      .def("create_barrier",
+           [](GluonOpBuilder &self) {
+             self.create<ttg::BarrierOp>(ttg::AddrSpace::All);
+           })
       .def("get_distributed_ty",
            [](GluonOpBuilder &self, Type &elementType,
               std::vector<int64_t> &shape, Attribute layout) -> Type {
