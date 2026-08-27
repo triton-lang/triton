@@ -68,6 +68,178 @@ def test_knobs_utils(fresh_knobs) -> None:
     }
 
 
+@pytest.mark.parametrize(("arch", "enable_fp_fusion", "disable_opt", "expected_flags", "disable_optimization"), [
+    ("gfx90a", True, None, [], False),
+    ("gfx942", False, "1", ["amdgpu-use-amdgpu-trackers"], True),
+    ("gfx950", True, "disable-lsr", ["amdgpu-use-amdgpu-trackers"], False),
+    ("gfx1250", True, "0", ["amdgpu-expert-scheduling-mode"], False),
+])
+def test_amd_codegen_options(arch, enable_fp_fusion, disable_opt, expected_flags, disable_optimization, fresh_knobs,
+                             monkeypatch):
+    from triton.backends.compiler import GPUTarget
+    from triton.backends.amd import compiler
+
+    calls = []
+
+    def run_codegen(source, triple, processor, features, **kwargs):
+        calls.append((source, triple, processor, features, kwargs))
+        return ".text\n.globl test_kernel\ntest_kernel:\n  s_endpgm\n"
+
+    monkeypatch.setattr(compiler, "compile_amdgpu", run_codegen)
+    if disable_opt is not None:
+        monkeypatch.setenv("DISABLE_LLVM_OPT", disable_opt)
+    else:
+        monkeypatch.delenv("DISABLE_LLVM_OPT", raising=False)
+
+    warp_size = 32 if arch == "gfx1250" else 64
+    backend = compiler.HIPBackend(GPUTarget("hip", arch, warp_size))
+    options = compiler.HIPOptions(arch=arch, enable_fp_fusion=enable_fp_fusion)
+    source = "define amdgpu_kernel void @test_kernel() { ret void }"
+    metadata = {}
+    assembly = backend.make_amdgcn(source, metadata, options)
+
+    assert len(calls) == 1
+    actual_source, triple, processor, features, arguments = calls[0]
+    assert actual_source == source
+    assert triple == compiler.amd.TARGET_TRIPLE
+    assert processor == arch
+    assert features == ""
+    assert arguments["flags"] == expected_flags
+    assert arguments["enable_fp_fusion"] is enable_fp_fusion
+    assert arguments["disable_optimization"] is disable_optimization
+    assert arguments["disabled_passes"] == ("disable-lsr" if disable_opt == "disable-lsr" else "")
+    assert metadata["name"] == "test_kernel"
+    assert "s_endpgm" in assembly
+
+
+def test_amd_codegen_path_override(fresh_knobs, monkeypatch):
+    from triton.backends.amd import compiler
+
+    monkeypatch.delenv("TRITON_AMD_CODEGEN_PATH", raising=False)
+    library = Path(compiler.get_amd_codegen_path())
+    assert library.parent == Path(compiler.__file__).parent / "lib"
+    assert "triton_amd_codegen" in library.name
+
+    monkeypatch.setenv("TRITON_AMD_CODEGEN_PATH", "/custom/amd/codegen.so")
+    assert compiler.get_amd_codegen_path() == "/custom/amd/codegen.so"
+
+
+def test_amd_codegen_revision_invalidates_backend_hash(fresh_knobs, monkeypatch):
+    from triton.backends.compiler import GPUTarget
+    from triton.backends.amd import compiler
+
+    monkeypatch.setattr(compiler, "get_amd_codegen_revision", lambda: "first-revision-1")
+    backend = compiler.HIPBackend(GPUTarget("hip", "gfx942", 64))
+    first_hash = backend.hash()
+
+    monkeypatch.setattr(compiler, "get_amd_codegen_revision", lambda: "second-revision-1")
+    backend.hash.cache_clear()
+    second_hash = backend.hash()
+
+    assert first_hash != second_hash
+
+
+def test_amd_codegen_inlines_functions(fresh_knobs):
+    from triton.backends.compiler import GPUTarget
+    from triton.backends.amd import compiler
+
+    source = '''
+target triple = "amdgcn-amd-amdhsa"
+
+define internal i32 @helper(i32 %value) {
+  %result = add i32 %value, 1
+  ret i32 %result
+}
+
+define amdgpu_kernel void @inline_kernel(ptr addrspace(1) %out, i32 %value) {
+  %result = call i32 @helper(i32 %value)
+  store i32 %result, ptr addrspace(1) %out, align 4
+  ret void
+}
+'''
+    backend = compiler.HIPBackend(GPUTarget("hip", "gfx942", 64))
+    assembly = backend.make_amdgcn(source, {}, compiler.HIPOptions(arch="gfx942"))
+
+    assert "inline_kernel:" in assembly
+    assert "s_endpgm" in assembly
+    assert "helper:" not in assembly
+
+
+def test_amd_codegen_reports_invalid_llvm_ir(fresh_knobs):
+    from triton.backends.compiler import GPUTarget
+    from triton.backends.amd import compiler
+
+    source = "define amdgpu_kernel void @invalid_kernel() { invalid }"
+    backend = compiler.HIPBackend(GPUTarget("hip", "gfx942", 64))
+    with pytest.raises(RuntimeError, match="AMD LLVM .*error"):
+        backend.make_amdgcn(source, {}, compiler.HIPOptions(arch="gfx942"))
+
+
+def test_amd_codegen_assembles_object_with_private_llvm(fresh_knobs):
+    from triton.backends.compiler import GPUTarget
+    from triton.backends.amd import compiler
+
+    source = '''
+target triple = "amdgcn-amd-amdhsa"
+
+define amdgpu_kernel void @object_kernel() {
+  ret void
+}
+'''
+    backend = compiler.HIPBackend(GPUTarget("hip", "gfx942", 64))
+    assembly = backend.make_amdgcn(source, {}, compiler.HIPOptions(arch="gfx942"))
+    object_file = compiler.assemble_amdgcn(assembly, "gfx942", "")
+
+    assert object_file.startswith(b"\x7fELF")
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_amd_codegen_respects_mir_dump_knob(enabled, fresh_knobs, monkeypatch, tmp_path):
+    from triton.backends.compiler import GPUTarget
+    from triton.backends.amd import compiler
+
+    events = []
+    monkeypatch.setattr(compiler.llvm, "translate_to_mir", lambda *args: events.append("mir"))
+    monkeypatch.setattr(compiler.llvm, "dump_sched_dag", lambda *args: events.append("dag"))
+    monkeypatch.setattr(compiler, "compile_amdgpu", lambda *args, **kwargs: "s_endpgm")
+    backend = compiler.HIPBackend(GPUTarget("hip", "gfx942", 64))
+    source = "define amdgpu_kernel void @test_kernel() { ret void }"
+
+    with fresh_knobs.amd.scope():
+        if enabled:
+            fresh_knobs.amd.dump_mir = str(tmp_path)
+        else:
+            fresh_knobs.amd.dump_mir = None
+        backend.make_amdgcn(source, {}, compiler.HIPOptions(arch="gfx942"))
+
+    assert events == (["mir", "dag"] if enabled else [])
+
+
+def test_amd_codegen_preserves_mir_replacement(fresh_knobs, monkeypatch):
+    from triton.backends.compiler import GPUTarget
+    from triton.backends.amd import compiler
+
+    replacement_calls = []
+
+    def replace_mir(path, *args):
+        replacement_calls.append((path, args))
+        return ".text\n.globl test_kernel\ntest_kernel:\n  s_endpgm\n"
+
+    monkeypatch.setattr(compiler.llvm, "translate_mir_to_asm", replace_mir)
+    monkeypatch.setattr(compiler, "compile_amdgpu", lambda *args, **kwargs: pytest.fail("MIR replacement bypassed"))
+    backend = compiler.HIPBackend(GPUTarget("hip", "gfx942", 64))
+    source = "define amdgpu_kernel void @test_kernel() { ret void }"
+
+    with fresh_knobs.amd.scope():
+        fresh_knobs.amd.swap_mir = "/custom/mir"
+        assembly = backend.make_amdgcn(source, {}, compiler.HIPOptions(arch="gfx942"))
+
+    assert len(replacement_calls) == 1
+    assert replacement_calls[0][0].startswith("/custom/mir/test_kernel_")
+    assert replacement_calls[0][0].endswith(".txt")
+    assert "s_endpgm" in assembly
+
+
 def test_knobs_scope(fresh_knobs, monkeypatch):
     fresh_knobs.amd.use_buffer_atomics = True
 

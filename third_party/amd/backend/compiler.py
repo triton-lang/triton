@@ -2,15 +2,145 @@ from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, amd
 from triton import knobs
 from dataclasses import dataclass
+import ctypes
 from typing import Any, Dict, Tuple
 from types import ModuleType
 import os
+import sys
 import hashlib
 import tempfile
 import re
 import functools
 import warnings
 from pathlib import Path
+
+
+def get_amd_codegen_path() -> str:
+    if knobs.amd.codegen_path is not None:
+        return knobs.amd.codegen_path
+    if os.name == "nt":
+        library = "triton_amd_codegen.dll"
+    elif sys.platform == "darwin":
+        library = "libtriton_amd_codegen.dylib"
+    else:
+        library = "libtriton_amd_codegen.so"
+    return str(Path(__file__).parent / "lib" / library)
+
+
+class _AMDGPUCodegenOptions(ctypes.Structure):
+    _fields_ = [
+        ("abi_version", ctypes.c_uint32),
+        ("triple", ctypes.c_char_p),
+        ("processor", ctypes.c_char_p),
+        ("features", ctypes.c_char_p),
+        ("abi", ctypes.c_char_p),
+        ("flags", ctypes.c_char_p),
+        ("disabled_passes", ctypes.c_char_p),
+        ("enable_fp_fusion", ctypes.c_uint8),
+        ("disable_optimization", ctypes.c_uint8),
+        ("canonicalize_gep", ctypes.c_uint8),
+        ("dump_ir", ctypes.c_uint8),
+        ("enable_timing", ctypes.c_uint8),
+    ]
+
+
+@functools.lru_cache()
+def _load_amd_codegen(path: str):
+    mode = getattr(os, "RTLD_LOCAL", 0) | getattr(os, "RTLD_NOW", 0)
+    library = ctypes.CDLL(path, mode=mode)
+    library.triton_amdgpu_compile.argtypes = [
+        ctypes.c_char_p,
+        ctypes.c_size_t,
+        ctypes.POINTER(_AMDGPUCodegenOptions),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_size_t),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    library.triton_amdgpu_compile.restype = ctypes.c_int
+    library.triton_amdgpu_assemble.argtypes = [
+        ctypes.c_char_p,
+        ctypes.c_size_t,
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_size_t),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    library.triton_amdgpu_assemble.restype = ctypes.c_int
+    library.triton_amdgpu_free.argtypes = [ctypes.c_void_p]
+    library.triton_amdgpu_free.restype = None
+    library.triton_amdgpu_revision.argtypes = []
+    library.triton_amdgpu_revision.restype = ctypes.c_char_p
+    return library
+
+
+def get_amd_codegen_revision() -> str:
+    return _load_amd_codegen(get_amd_codegen_path()).triton_amdgpu_revision().decode("utf-8")
+
+
+def compile_amdgpu(src: str, triple: str, processor: str, features: str, *, flags: list[str], enable_fp_fusion: bool,
+                   disable_optimization: bool, canonicalize_gep: bool, disabled_passes: str, dump_ir: bool,
+                   enable_timing: bool) -> str:
+    library = _load_amd_codegen(get_amd_codegen_path())
+    llvm_ir = src.encode("utf-8")
+    options = _AMDGPUCodegenOptions(
+        1,
+        triple.encode("utf-8"),
+        processor.encode("utf-8"),
+        features.encode("utf-8"),
+        b"",
+        ",".join(flags).encode("utf-8"),
+        disabled_passes.encode("utf-8"),
+        enable_fp_fusion,
+        disable_optimization,
+        canonicalize_gep,
+        dump_ir,
+        enable_timing,
+    )
+    assembly = ctypes.c_void_p()
+    assembly_size = ctypes.c_size_t()
+    error = ctypes.c_void_p()
+    status = library.triton_amdgpu_compile(llvm_ir, len(llvm_ir), ctypes.byref(options), ctypes.byref(assembly),
+                                           ctypes.byref(assembly_size), ctypes.byref(error))
+    if status:
+        message = ctypes.string_at(error).decode("utf-8") if error.value else "unknown AMD code-generation failure"
+        if error.value:
+            library.triton_amdgpu_free(error)
+        revision = library.triton_amdgpu_revision().decode("utf-8")
+        raise RuntimeError(f"AMD LLVM {revision}: {message}")
+    try:
+        return ctypes.string_at(assembly, assembly_size.value).decode("utf-8")
+    finally:
+        library.triton_amdgpu_free(assembly)
+
+
+def assemble_amdgcn(assembly: str, processor: str, features: str) -> bytes:
+    library = _load_amd_codegen(get_amd_codegen_path())
+    source = assembly.encode("utf-8")
+    object_file = ctypes.c_void_p()
+    object_size = ctypes.c_size_t()
+    error = ctypes.c_void_p()
+    status = library.triton_amdgpu_assemble(
+        source,
+        len(source),
+        amd.TARGET_TRIPLE.encode("utf-8"),
+        processor.encode("utf-8"),
+        features.encode("utf-8"),
+        ctypes.byref(object_file),
+        ctypes.byref(object_size),
+        ctypes.byref(error),
+    )
+    if status:
+        message = ctypes.string_at(error).decode("utf-8") if error.value else "unknown AMD assembly failure"
+        if error.value:
+            library.triton_amdgpu_free(error)
+        revision = library.triton_amdgpu_revision().decode("utf-8")
+        raise RuntimeError(f"AMD LLVM {revision}: {message}")
+    try:
+        return ctypes.string_at(object_file, object_size.value)
+    finally:
+        library.triton_amdgpu_free(object_file)
 
 
 def get_min_dot_size(target: GPUTarget):
@@ -551,10 +681,11 @@ class HIPBackend(BaseBackend):
         features = ''
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
         dump_file_id = names[0] + '_' + ir_hash
-        _ = llvm.translate_to_mir(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
-                                  dump_file_id)
-        llvm.dump_sched_dag(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
-                            dump_file_id)
+        if knobs.amd.dump_mir:
+            _ = llvm.translate_to_mir(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
+                                      dump_file_id)
+            llvm.dump_sched_dag(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
+                                dump_file_id)
         if knobs.amd.swap_mir_enable_misched and not knobs.amd.swap_mir:
             raise ValueError("TRITON_SWAP_MIR_ENABLE_MISCHED requires TRITON_SWAP_MIR to be set")
         if knobs.amd.swap_mir:
@@ -562,8 +693,26 @@ class HIPBackend(BaseBackend):
                                                amd.TARGET_TRIPLE, options.arch, features, flags,
                                                options.enable_fp_fusion, False, knobs.amd.swap_mir_enable_misched)
         else:
-            amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags,
-                                           options.enable_fp_fusion, False, False, "")
+            disable_llvm_opt = knobs.getenv_bool("DISABLE_LLVM_OPT", False)
+            disabled_passes = ""
+            if not disable_llvm_opt:
+                requested_passes = os.environ.get("DISABLE_LLVM_OPT", "")
+                if requested_passes.lower() not in {"0", "false", "off"}:
+                    disabled_passes = requested_passes
+
+            amdgcn = compile_amdgpu(
+                src,
+                amd.TARGET_TRIPLE,
+                options.arch,
+                features,
+                flags=flags,
+                enable_fp_fusion=options.enable_fp_fusion,
+                disable_optimization=disable_llvm_opt,
+                canonicalize_gep=False,
+                disabled_passes=disabled_passes,
+                dump_ir=knobs.getenv_bool("LLVM_IR_ENABLE_DUMP", False),
+                enable_timing=knobs.getenv_bool("LLVM_ENABLE_TIMING", False),
+            )
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
@@ -574,7 +723,7 @@ class HIPBackend(BaseBackend):
         target_features = []
         if knobs.compilation.enable_asan:
             target_features.append('+xnack')
-        hsaco = amd.assemble_amdgcn(src, options.arch, ','.join(target_features))
+        hsaco = assemble_amdgcn(src, options.arch, ','.join(target_features))
         with tempfile.NamedTemporaryFile() as tmp_out:
             with tempfile.NamedTemporaryFile() as tmp_in:
                 with open(tmp_in.name, "wb") as fd_in:
@@ -598,4 +747,4 @@ class HIPBackend(BaseBackend):
 
     @functools.lru_cache()
     def hash(self):
-        return f'{self.target}'
+        return f'{self.target}-{get_amd_codegen_revision()}'
