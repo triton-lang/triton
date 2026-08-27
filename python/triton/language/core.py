@@ -2445,6 +2445,19 @@ def store(pointer, value, mask=None, *, cache_modifier="", eviction_policy="", _
 
 
 @builtin
+def fence(_semantic=None):
+    """
+    Make prior memory accesses visible to later operations on the same
+    addresses within the same Triton program.
+    """
+    return _semantic.fence()
+
+
+# Kept as an exact alias for backward compatibility.
+debug_barrier = fence
+
+
+@builtin
 def make_block_ptr(base: tensor, shape, strides, offsets, block_shape, order, _semantic=None):
     """
     Block pointers have been removed. Use a tensor descriptor instead.
@@ -3179,19 +3192,6 @@ def map_elementwise(
 # -----------------------
 # Compiler Hint Ops
 # -----------------------
-
-
-@builtin
-def fence(_semantic=None):
-    """
-    Make prior memory accesses visible to later operations on the same
-    addresses within one Triton program.
-    """
-    return _semantic.fence()
-
-
-# Kept as an exact alias for backward compatibility.
-debug_barrier = fence
 
 
 @builtin
