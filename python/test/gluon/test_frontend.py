@@ -3361,7 +3361,7 @@ def amd_async_copy_shared_to_global(ptr):
 
     # test mask
     mask = (y_offset < 64)[:, None]
-    # CHECK: amdg.async_copy_local_to_global {{.*}} mask {{.*}} {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>}
+    # CHECK: amdg.async_copy_local_to_global {{.*}} mask {{.*}} cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>
     cdna5_async_copy.shared_to_global(ptr + offsets, smem, mask, cache_modifier=".cg")
 
     cdna5_async_copy.commit_group()
@@ -3401,7 +3401,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %14 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x16x!tt.ptr<f16>, #blocked>
     %15 = tt.addptr %14, %8 : tensor<128x16x!tt.ptr<f16>, #blocked>, tensor<128x16xi32, #blocked>
     %16 = tt.broadcast %13 : tensor<128x1xi1, #blocked> -> tensor<128x16xi1, #blocked>
-    %17 = amdg.async_copy_local_to_global %0, %15 mask %16 {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>} : !ttg.memdesc<128x16xf16, #shared, #smem, mutable> -> tensor<128x16x!tt.ptr<f16>, #blocked>
+    %17 = amdg.async_copy_local_to_global %0, %15 mask %16 cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal> : !ttg.memdesc<128x16xf16, #shared, #smem, mutable> -> tensor<128x16x!tt.ptr<f16>, #blocked>
     %18 = ttg.async_commit_group
     tt.return
   }
