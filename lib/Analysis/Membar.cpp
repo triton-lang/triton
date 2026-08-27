@@ -435,4 +435,6 @@ void MembarAnalysis::updateMemoryEffects(Operation *op, MembarInfo *membarInfo,
   }
 }
 
+void ModuleMembarAnalysis::run() { run<MembarAnalysis>(); }
+
 } // namespace mlir
