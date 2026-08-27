@@ -253,6 +253,131 @@ define void @packed_f32_reduction_chain(ptr addrspace(1) %dst,
   ret void
 }
 
+; BLACKWELL-LABEL: define void @scalar_short_mixed_precision_reduction(
+; BLACKWELL-NOT: fadd <2 x float>
+; BLACKWELL-COUNT-6: fadd float
+; BLACKWELL: fmul <2 x float>
+define void @scalar_short_mixed_precision_reduction(ptr addrspace(1) %dst,
+                                                      <2 x half> %first,
+                                                      <2 x half> %second,
+                                                      <2 x half> %third) {
+  %first0 = extractelement <2 x half> %first, i64 0
+  %first1 = extractelement <2 x half> %first, i64 1
+  %first.ext0 = fpext half %first0 to float
+  %first.ext1 = fpext half %first1 to float
+  %first.sum0 = fadd float %first.ext0, 0.0
+  %first.sum1 = fadd float %first.ext1, 0.0
+  %second0 = extractelement <2 x half> %second, i64 0
+  %second1 = extractelement <2 x half> %second, i64 1
+  %second.ext0 = fpext half %second0 to float
+  %second.ext1 = fpext half %second1 to float
+  %second.sum0 = fadd float %first.sum0, %second.ext0
+  %second.sum1 = fadd float %first.sum1, %second.ext1
+  %third0 = extractelement <2 x half> %third, i64 0
+  %third1 = extractelement <2 x half> %third, i64 1
+  %third.ext0 = fpext half %third0 to float
+  %third.ext1 = fpext half %third1 to float
+  %result0 = fadd float %second.sum0, %third.ext0
+  %result1 = fadd float %second.sum1, %third.ext1
+  %scaled0 = fmul float %result0, 2.0
+  %scaled1 = fmul float %result1, 2.0
+  %packed0 = insertelement <2 x float> poison, float %scaled0, i64 0
+  %packed1 = insertelement <2 x float> %packed0, float %scaled1, i64 1
+  store <2 x float> %packed1, ptr addrspace(1) %dst, align 8
+  ret void
+}
+
+; BLACKWELL-LABEL: define void @packed_single_mixed_precision_add(
+; BLACKWELL: fadd <2 x float>
+define void @packed_single_mixed_precision_add(ptr addrspace(1) %dst,
+                                                 <2 x half> %input,
+                                                 <2 x float> %accumulator) {
+  %input0 = extractelement <2 x half> %input, i64 0
+  %input1 = extractelement <2 x half> %input, i64 1
+  %extended0 = fpext half %input0 to float
+  %extended1 = fpext half %input1 to float
+  %accumulator0 = extractelement <2 x float> %accumulator, i64 0
+  %accumulator1 = extractelement <2 x float> %accumulator, i64 1
+  %result0 = fadd float %accumulator0, %extended0
+  %result1 = fadd float %accumulator1, %extended1
+  %packed0 = insertelement <2 x float> poison, float %result0, i64 0
+  %packed1 = insertelement <2 x float> %packed0, float %result1, i64 1
+  store <2 x float> %packed1, ptr addrspace(1) %dst, align 8
+  ret void
+}
+
+; BLACKWELL-LABEL: define void @packed_long_mixed_precision_reduction(
+; BLACKWELL-COUNT-9: fadd <2 x float>
+define void @packed_long_mixed_precision_reduction(ptr addrspace(1) %dst,
+                                                     <2 x half> %first,
+                                                     <2 x half> %second,
+                                                     <2 x half> %third,
+                                                     <2 x half> %fourth,
+                                                     <2 x half> %fifth,
+                                                     <2 x half> %sixth,
+                                                     <2 x half> %seventh,
+                                                     <2 x half> %eighth,
+                                                     <2 x half> %ninth) {
+  %first0 = extractelement <2 x half> %first, i64 0
+  %first1 = extractelement <2 x half> %first, i64 1
+  %first.ext0 = fpext half %first0 to float
+  %first.ext1 = fpext half %first1 to float
+  %first.sum0 = fadd float %first.ext0, 0.0
+  %first.sum1 = fadd float %first.ext1, 0.0
+  %second0 = extractelement <2 x half> %second, i64 0
+  %second1 = extractelement <2 x half> %second, i64 1
+  %second.ext0 = fpext half %second0 to float
+  %second.ext1 = fpext half %second1 to float
+  %second.sum0 = fadd float %first.sum0, %second.ext0
+  %second.sum1 = fadd float %first.sum1, %second.ext1
+  %third0 = extractelement <2 x half> %third, i64 0
+  %third1 = extractelement <2 x half> %third, i64 1
+  %third.ext0 = fpext half %third0 to float
+  %third.ext1 = fpext half %third1 to float
+  %third.sum0 = fadd float %second.sum0, %third.ext0
+  %third.sum1 = fadd float %second.sum1, %third.ext1
+  %fourth0 = extractelement <2 x half> %fourth, i64 0
+  %fourth1 = extractelement <2 x half> %fourth, i64 1
+  %fourth.ext0 = fpext half %fourth0 to float
+  %fourth.ext1 = fpext half %fourth1 to float
+  %fourth.sum0 = fadd float %third.sum0, %fourth.ext0
+  %fourth.sum1 = fadd float %third.sum1, %fourth.ext1
+  %fifth0 = extractelement <2 x half> %fifth, i64 0
+  %fifth1 = extractelement <2 x half> %fifth, i64 1
+  %fifth.ext0 = fpext half %fifth0 to float
+  %fifth.ext1 = fpext half %fifth1 to float
+  %fifth.sum0 = fadd float %fourth.sum0, %fifth.ext0
+  %fifth.sum1 = fadd float %fourth.sum1, %fifth.ext1
+  %sixth0 = extractelement <2 x half> %sixth, i64 0
+  %sixth1 = extractelement <2 x half> %sixth, i64 1
+  %sixth.ext0 = fpext half %sixth0 to float
+  %sixth.ext1 = fpext half %sixth1 to float
+  %sixth.sum0 = fadd float %fifth.sum0, %sixth.ext0
+  %sixth.sum1 = fadd float %fifth.sum1, %sixth.ext1
+  %seventh0 = extractelement <2 x half> %seventh, i64 0
+  %seventh1 = extractelement <2 x half> %seventh, i64 1
+  %seventh.ext0 = fpext half %seventh0 to float
+  %seventh.ext1 = fpext half %seventh1 to float
+  %seventh.sum0 = fadd float %sixth.sum0, %seventh.ext0
+  %seventh.sum1 = fadd float %sixth.sum1, %seventh.ext1
+  %eighth0 = extractelement <2 x half> %eighth, i64 0
+  %eighth1 = extractelement <2 x half> %eighth, i64 1
+  %eighth.ext0 = fpext half %eighth0 to float
+  %eighth.ext1 = fpext half %eighth1 to float
+  %eighth.sum0 = fadd float %seventh.sum0, %eighth.ext0
+  %eighth.sum1 = fadd float %seventh.sum1, %eighth.ext1
+  %ninth0 = extractelement <2 x half> %ninth, i64 0
+  %ninth1 = extractelement <2 x half> %ninth, i64 1
+  %ninth.ext0 = fpext half %ninth0 to float
+  %ninth.ext1 = fpext half %ninth1 to float
+  %result0 = fadd float %eighth.sum0, %ninth.ext0
+  %result1 = fadd float %eighth.sum1, %ninth.ext1
+  %packed0 = insertelement <2 x float> poison, float %result0, i64 0
+  %packed1 = insertelement <2 x float> %packed0, float %result1, i64 1
+  store <2 x float> %packed1, ptr addrspace(1) %dst, align 8
+  ret void
+}
+
 ; BLACKWELL-LABEL: define void @packed_f32_loop_reduction(
 ; BLACKWELL: [[ACC:%.*]] = phi <2 x float> [ [[NEXT:%.*]], %loop ], [ zeroinitializer, %entry ]
 ; BLACKWELL: [[NEXT]] = fadd <2 x float> [[ACC]], %input
