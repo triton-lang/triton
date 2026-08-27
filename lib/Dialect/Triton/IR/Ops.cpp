@@ -65,8 +65,8 @@ verifyCacheModifier(CacheModifier modifier, CachePolicyOperation operation,
                                                                  : "stores");
 }
 
-static LogicalResult verifyCachePolicy(Operation *op, Attribute cachePolicy,
-                                       CachePolicyOperation operation) {
+LogicalResult verifyCachePolicy(Operation *op, Attribute cachePolicy,
+                                CachePolicyOperation operation) {
   if (!cachePolicy)
     return success();
   Dialect &dialect = cachePolicy.getDialect();

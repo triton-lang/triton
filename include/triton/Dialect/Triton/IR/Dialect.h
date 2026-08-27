@@ -50,6 +50,8 @@ public:
 LogicalResult verifyCacheModifier(CacheModifier modifier,
                                   CachePolicyOperation operation,
                                   function_ref<InFlightDiagnostic()> emitError);
+LogicalResult verifyCachePolicy(Operation *op, Attribute cachePolicy,
+                                CachePolicyOperation operation);
 
 class DialectInferLayoutInterface
     : public DialectInterface::Base<DialectInferLayoutInterface> {

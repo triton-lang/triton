@@ -782,6 +782,12 @@ void init_gluon_ir(py::module_ &m) {
           },
           py::arg("smem"), py::arg("pointer"), py::arg("mask"),
           py::arg("other"), py::arg("cachePolicy"), py::arg("isVolatile"))
+      .def("create_async_copy_local_to_global",
+           [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
+              Attribute cachePolicy) {
+             self.create<ttag::AsyncCopyLocalToGlobalOp>(
+                 smem, pointer, mask, cachePolicy, /*contiguity=*/1);
+           })
       .def("create_async_copy_mbarrier_arrive",
            [](GluonOpBuilder &self, Value mbarrier, bool incrementCount) {
              self.create<ttng::AsyncCopyMbarrierArriveOp>(mbarrier,
