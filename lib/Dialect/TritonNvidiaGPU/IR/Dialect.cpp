@@ -40,6 +40,8 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 
+#include <cmath>
+
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.cpp.inc"
 
 using namespace mlir;
@@ -49,6 +51,41 @@ using namespace mlir::triton::nvidia_gpu;
 namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
+
+LogicalResult
+CachePolicyAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                        triton::CacheModifier cacheModifier,
+                        CacheEvictionPriority l1, CacheEvictionPriority primary,
+                        CacheEvictionPriority secondary, FloatAttr fraction,
+                        IntegerAttr prefetchSize) {
+  using Priority = CacheEvictionPriority;
+  if (primary == Priority::NO_ALLOCATE)
+    return emitError() << "invalid L2 primary eviction priority '"
+                       << stringifyCacheEvictionPriority(primary) << "'";
+
+  if (primary != Priority::NONE) {
+    if (secondary == Priority::NONE || !fraction)
+      return emitError() << "L2 policy requires l2_secondary and l2_fraction";
+    if (secondary != Priority::EVICT_FIRST &&
+        secondary != Priority::EVICT_UNCHANGED)
+      return emitError() << "invalid L2 secondary eviction priority '"
+                         << stringifyCacheEvictionPriority(secondary) << "'";
+    double value = fraction.getValueAsDouble();
+    if (!fraction.getType().isF32() || !std::isfinite(value) || value <= 0.0 ||
+        value > 1.0)
+      return emitError() << "L2 fraction must be a finite f32 in (0, 1]";
+  } else if (secondary != Priority::NONE || fraction) {
+    return emitError() << "l2_secondary and l2_fraction require l2_primary";
+  }
+
+  if (prefetchSize) {
+    int64_t size = prefetchSize.getInt();
+    if (!prefetchSize.getType().isInteger(32) ||
+        (size != 64 && size != 128 && size != 256))
+      return emitError() << "L2 prefetch size must be 64, 128, or 256";
+  }
+  return success();
+}
 
 namespace {
 

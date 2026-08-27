@@ -142,7 +142,7 @@ def test_extract_slice(dtype, M, N, M_tile_size, N_tile_size, M_tile_offset, N_t
         %39 = tt.broadcast %44 : tensor<{M_tile_size}x1xi32, #blocked> -> tensor<{M_tile_size}x{N_tile_size}xi32, #blocked>
         %40 = arith.addi %38, %39 : tensor<{M_tile_size}x{N_tile_size}xi32, #blocked>
         %10 = tt.addptr %2, %9 : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>, tensor<{M}x{N}xi32, #blocked>
-        %11 = tt.load %10 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
+        %11 = tt.load %10 : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
         %12 = ttg.convert_layout %11 : tensor<{M}x{N}xf16, #blocked> -> tensor<{M}x{N}xf16, #src_extract_layout>
         %13 = amdg.extract_slice %12 [{M_tile_offset}, {N_tile_offset}] : tensor<{M}x{N}xf16, #src_extract_layout> to tensor<{M_tile_size}x{N_tile_size}xf16, #dst_extract_layout>
         %14 = ttg.convert_layout %13 : tensor<{M_tile_size}x{N_tile_size}xf16, #dst_extract_layout> -> tensor<{M_tile_size}x{N_tile_size}xf16, #blocked>
@@ -298,10 +298,10 @@ def test_concat_op(dtype, M, N, M_tile_size, N_tile_size, src_layout, dst_layout
         %200 = tt.addptr %100, %9 : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>, tensor<{M}x{N}xi32, #blocked>
         %201 = tt.addptr %101, %9 : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>, tensor<{M}x{N}xi32, #blocked>
         %202 = tt.addptr %102, %9 : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>, tensor<{M}x{N}xi32, #blocked>
-        %11 = tt.load %10 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
-        %300 = tt.load %200 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
-        %301 = tt.load %201 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
-        %302 = tt.load %202 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
+        %11 = tt.load %10 : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
+        %300 = tt.load %200 : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
+        %301 = tt.load %201 : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
+        %302 = tt.load %202 : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
 
         %12 = ttg.convert_layout %11 : tensor<{M}x{N}xf16, #blocked> -> tensor<{M}x{N}xf16, #src_layout>
         %400 = ttg.convert_layout %300 : tensor<{M}x{N}xf16, #blocked> -> tensor<{M}x{N}xf16, #src_layout>

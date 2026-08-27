@@ -41,15 +41,20 @@ namespace triton {
 
 //-- LoadOp --
 void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
-                   CacheModifier cache, EvictionPolicy evict, bool isVolatile) {
-  LoadOp::build(builder, state, ptr, /*mask=*/{}, /*other=*/{}, cache, evict,
-                isVolatile);
+                   bool isVolatile) {
+  LoadOp::build(builder, state, ptr, /*mask=*/{}, /*other=*/{},
+                /*cachePolicy=*/{}, isVolatile);
 }
 
 void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
-                   Value mask, CacheModifier cache, EvictionPolicy evict,
-                   bool isVolatile) {
-  LoadOp::build(builder, state, ptr, mask, /*other=*/{}, cache, evict,
+                   Value mask, bool isVolatile) {
+  LoadOp::build(builder, state, ptr, mask, /*other=*/{},
+                /*cachePolicy=*/{}, isVolatile);
+}
+
+void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                   Value mask, Value other, bool isVolatile) {
+  LoadOp::build(builder, state, ptr, mask, other, /*cachePolicy=*/{},
                 isVolatile);
 }
 
@@ -83,7 +88,7 @@ struct CanonicalizeMaskedLoadPattern : public OpRewritePattern<LoadOp> {
       // mask = splat(1)
       rewriter.replaceOpWithNewOp<LoadOp>(
           loadOp, loadOp.getType(), loadOp.getPtr(), Value(), Value(),
-          loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+          loadOp.getCachePolicyAttr(), loadOp.getIsVolatile());
     } else {
       // mask = splat(0)
 
@@ -105,8 +110,15 @@ void LoadOp::getCanonicalizationPatterns(RewritePatternSet &results,
 
 //-- StoreOp --
 void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
-                    Value value, CacheModifier cache, EvictionPolicy evict) {
-  return StoreOp::build(builder, state, ptr, value, /*mask=*/{}, cache, evict);
+                    Value value) {
+  StoreOp::build(builder, state, ptr, value, /*mask=*/{},
+                 /*cachePolicy=*/{});
+}
+
+void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                    Value value, Value mask, bool ignoreCTA) {
+  StoreOp::build(builder, state, ptr, value, mask, /*cachePolicy=*/{},
+                 ignoreCTA);
 }
 
 Value StoreOp::getPredicateOperand() { return getMask(); }
@@ -138,8 +150,8 @@ struct CanonicalizeMaskedStorePattern : public OpRewritePattern<StoreOp> {
     if (splatMask.getSplatValue<IntegerAttr>().getValue() == true) {
       // mask = splat(1)
       rewriter.replaceOpWithNewOp<StoreOp>(
-          storeOp, storeOp.getPtr(), storeOp.getValue(), storeOp.getCache(),
-          storeOp.getEvict());
+          storeOp, storeOp.getPtr(), storeOp.getValue(), Value(),
+          storeOp.getCachePolicyAttr(), storeOp.getIgnoreCta());
     } else {
       // mask = splat(0)
       rewriter.eraseOp(storeOp);

@@ -231,8 +231,7 @@ def TT_LoadOp : TT_Op<"load", [
       TT_PtrLike:$ptr,
       Optional<TT_BoolLike>:$mask,
       Optional<TT_Type>:$other,
-      DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
-      DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict,
+      OptionalAttr<AnyAttr>:$cachePolicy,
       DefaultValuedAttr<BoolAttr, "false">:$isVolatile
     );
 
@@ -240,32 +239,18 @@ def TT_LoadOp : TT_Op<"load", [
 
     let builders = [
         // A tensor of pointers or a pointer to a scalar
-        OpBuilder<(ins "Value":$ptr, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+        OpBuilder<(ins "Value":$ptr,
+                       CArg<"bool", "false">:$isVolatile)>,
         // A tensor of pointers or a pointer to a scalar with mask
-        OpBuilder<(ins "Value":$ptr, "Value":$mask, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>
+        OpBuilder<(ins "Value":$ptr, "Value":$mask,
+                       CArg<"bool", "false">:$isVolatile)>,
+        // A tensor of pointers or a pointer to a scalar with mask and other
+        OpBuilder<(ins "Value":$ptr, "Value":$mask, "Value":$other,
+                       CArg<"bool", "false">:$isVolatile)>
     ];
 
-    // Specify `cacheModifier` and `evictionPolicy` explicitly in the
-    // assemblyFormat instead of as part of attr-dict so that they get printed
-    // as strings rather than opaque integers.
-    //
-    // Note there's no comma between `other` and `cacheModifier` and between
-    // `cacheModifier` and `evictionPolicy`.  This is due to an apparent
-    // limitation in the MLIR custom-format parser.  In oilist, the initial
-    // keywords of each clause have to be unique, so they can't be `,`.
-    //
-    // Even if we gave up on order-independence and used vanilla optional
-    // clauses, the format (`,` `foo` `=` $foo^)? (`,` `bar` `=` $bar^)?  will
-    // not match the string ", bar = 0" because after the initial comma (first
-    // token of the first optional clause) we expect to see "foo".
     let assemblyFormat = [{
       $ptr (`,` $mask^)? (`,` $other^)?
-      oilist(
-        `cacheModifier` `=` $cache |
-        `evictionPolicy` `=` $evict
-      )
       attr-dict `:` type($ptr)
     }];
 
@@ -288,25 +273,20 @@ def TT_StoreOp : TT_Op<"store", [
       Arg<TT_PtrLike, "", [MemWrite<GlobalMemory>]>:$ptr,
       TT_Type:$value,
       Optional<TT_BoolLike>:$mask,
-      DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
-      DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
+      OptionalAttr<AnyAttr>:$cachePolicy,
       UnitAttr:$ignore_cta
     );
 
     let builders = [
         // A tensor of pointers or a pointer to a scalar
-        OpBuilder<(ins "Value":$ptr, "Value":$value, "triton::CacheModifier":$cache, "triton::EvictionPolicy":$evict)>
+        OpBuilder<(ins "Value":$ptr, "Value":$value)>,
+        // A tensor of pointers or a pointer to a scalar with mask
+        OpBuilder<(ins "Value":$ptr, "Value":$value, "Value":$mask,
+                       CArg<"bool", "false">:$ignore_cta)>
     ];
 
-    // Specify cacheModifier and evictionPolicy explicitly, instead of leaving
-    // them in attr-dict, because this way their values get printed as strings,
-    // rather than as opaque integers.
-    //
-    // Note there are no commas between mask, cacheModifier, and evictionPolicy,
-    // due to limitations in MLIR's asm parser.
     let assemblyFormat = [{
       $ptr `,` $value (`,` $mask^)?
-      oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
       attr-dict `:` type($ptr)
     }];
 
@@ -1268,18 +1248,13 @@ def TT_DescriptorLoadOp : TT_Op<"descriptor_load", [TT_DescriptorLoadLikeOpInter
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
     Variadic<I32>:$indices,
-    DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
-    DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict
+    OptionalAttr<AnyAttr>:$cachePolicy
   );
 
   let results = (outs TT_Tensor:$result);
 
   let assemblyFormat = [{
     $desc `[` $indices `]`
-    oilist(
-      `cacheModifier` `=` $cache |
-      `evictionPolicy` `=` $evict
-    )
     attr-dict `:` qualified(type($desc)) `->` type($result)
   }];
 

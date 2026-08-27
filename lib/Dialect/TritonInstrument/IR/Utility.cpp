@@ -380,15 +380,13 @@ Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
   }
   auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType);
   return StoreOp::create(b, loc, ptrTensor, tensor, storeMask,
-                         CacheModifier::NONE, EvictionPolicy::NORMAL,
                          /*ignore_cta=*/true);
 }
 
 Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
                               RankedTensorType tensorType) {
   auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType);
-  Value value = LoadOp::create(b, loc, ptrTensor, CacheModifier::NONE,
-                               EvictionPolicy::NORMAL, false);
+  Value value = LoadOp::create(b, loc, ptrTensor);
   // Finish replicated reads before another thread can update the scratch.
   auto freeVarMasks = toLinearLayout(tensorType).getFreeVariableMasks();
   if (freeVarMasks.lookup(b.getStringAttr("lane")) ||

@@ -192,13 +192,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // COMMON: %[[IMM0:.*]] = llvm.mlir.constant(0 : i32) : i32
     // COMMON: %[[IMM1:.*]] = llvm.mlir.constant(0 : i32) : i32
     // COMMON: rocdl.raw.ptr.buffer.load.async.lds {{.*}}, {{.*}}, {{.*}}, %[[VOFFSET]], %[[IMM0]], %[[IMM1]], 0
-    %1 = amdg.buffer_load_to_local %arg0[%0] cacheModifier = ca into %arg2: !tt.ptr<f32>[tensor<64xi32, #blocked>] -> <64xf32, #shared, #smem, mutable>
+    %1 = amdg.buffer_load_to_local %arg0[%0] cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_normal> into %arg2: !tt.ptr<f32>[tensor<64xi32, #blocked>] -> <64xf32, #shared, #smem, mutable>
     // COMMON: llvm.getelementptr
     // COMMON: rocdl.raw.ptr.buffer.load.async.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, 3
-    %2 = amdg.buffer_load_to_local %arg0[%0] cacheModifier = cg into %arg2: !tt.ptr<f32>[tensor<64xi32, #blocked>] -> <64xf32, #shared, #smem, mutable>
+    %2 = amdg.buffer_load_to_local %arg0[%0] cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal> into %arg2: !tt.ptr<f32>[tensor<64xi32, #blocked>] -> <64xf32, #shared, #smem, mutable>
     // COMMON: llvm.getelementptr
     // COMMON: rocdl.raw.ptr.buffer.load.async.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, 17
-    %3 = amdg.buffer_load_to_local %arg0[%0] cacheModifier = cv into %arg2: !tt.ptr<f32>[tensor<64xi32, #blocked>] -> <64xf32, #shared, #smem, mutable>
+    %3 = amdg.buffer_load_to_local %arg0[%0] cachePolicy = #tt.cache_policy<cache_modifier = cv, eviction_policy = evict_normal> into %arg2: !tt.ptr<f32>[tensor<64xi32, #blocked>] -> <64xf32, #shared, #smem, mutable>
 
     tt.return
   }

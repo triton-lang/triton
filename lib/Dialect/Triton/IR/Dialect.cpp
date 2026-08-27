@@ -14,6 +14,9 @@
 using namespace mlir;
 using namespace mlir::triton;
 
+#define GET_ATTRDEF_CLASSES
+#include "triton/Dialect/Triton/IR/AttrDefs.cpp.inc"
+
 //===----------------------------------------------------------------------===//
 // TritonDialect Dialect Interfaces
 //===----------------------------------------------------------------------===//
@@ -76,6 +79,11 @@ Value TritonInlinerInterface::handleResult(OpBuilder &, Operation *call,
 
 void TritonDialect::initialize() {
   registerTypes();
+
+  addAttributes<
+#define GET_ATTRDEF_LIST
+#include "triton/Dialect/Triton/IR/AttrDefs.cpp.inc"
+      >();
 
   addOperations<
 #define GET_OP_LIST
