@@ -21,6 +21,25 @@ using namespace mlir::triton;
 // TritonDialect Dialect Interfaces
 //===----------------------------------------------------------------------===//
 
+namespace {
+
+class TritonCachePolicyInterface : public DialectCachePolicyInterface {
+public:
+  using DialectCachePolicyInterface::DialectCachePolicyInterface;
+
+  LogicalResult verifyCachePolicy(
+      Attribute cachePolicy, CachePolicyOperation operation,
+      function_ref<InFlightDiagnostic()> emitError) const override {
+    auto policy = dyn_cast<CachePolicyAttr>(cachePolicy);
+    if (!policy)
+      return emitError() << "unsupported Triton cache policy attribute "
+                         << cachePolicy;
+    return verifyCacheModifier(policy.getCacheModifier(), operation, emitError);
+  }
+};
+
+} // namespace
+
 bool TritonInlinerInterface::isLegalToInline(Operation *call,
                                              Operation *callable,
                                              bool wouldBeCloned) const {
@@ -91,6 +110,7 @@ void TritonDialect::initialize() {
       >();
 
   // We can also add interface here.
+  addInterfaces<TritonCachePolicyInterface>();
   addInterfaces<TritonInlinerInterface>();
 }
 

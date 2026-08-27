@@ -155,9 +155,6 @@ LogicalResult verifyDetailedCachePolicySupport(Operation *op,
   const bool hasDetailedL1 =
       policy.detailed &&
       policy.detailed.getL1() != ttng::CacheEvictionPriority::NONE;
-  if (hasDetailedL1 && policy.modifier != CacheModifier::NONE)
-    return op->emitOpError(
-        "an L1 cache policy cannot be combined with cacheModifier");
   if (hasDetailedL1 && computeCapability < 70)
     return op->emitOpError(
         "L1 eviction priority requires compute capability 70 or newer");

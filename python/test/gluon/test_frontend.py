@@ -2595,13 +2595,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
-def detailed_cache_policy_kernel(inp, out, load_policy: ttgl.constexpr, store_policy: ttgl.constexpr):
+def detailed_cache_policy_kernel(inp, out, l1_load_policy: ttgl.constexpr, modifier_load_policy: ttgl.constexpr,
+                                 store_policy: ttgl.constexpr):
     layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
     offsets = ttgl.arange(0, 128, layout)
-    # CHECK: %[[VALUE:.*]] = tt.load {{.*}} {cachePolicy = #ttng.cache_policy<cache_modifier = cg, l1 = no_allocate, l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = {{.*}} : f32, l2_prefetch_size = 128 : i32>}
-    value = ttgl.load(inp + offsets, cache_policy=load_policy)
+    # CHECK: %[[L1_VALUE:.*]] = tt.load {{.*}} {cachePolicy = #ttng.cache_policy<l1 = no_allocate, l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = {{.*}} : f32, l2_prefetch_size = 128 : i32>}
+    l1_value = ttgl.load(inp + offsets, cache_policy=l1_load_policy)
+    # CHECK: %[[MODIFIER_VALUE:.*]] = tt.load {{.*}} {cachePolicy = #ttng.cache_policy<cache_modifier = cg, l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = {{.*}} : f32, l2_prefetch_size = 128 : i32>}
+    modifier_value = ttgl.load(inp + offsets, cache_policy=modifier_load_policy)
     # CHECK: tt.store {{.*}} {cachePolicy = #ttng.cache_policy<l1 = no_allocate, l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = {{.*}} : f32>}
-    ttgl.store(out + offsets, value, cache_policy=store_policy)
+    ttgl.store(out + offsets, l1_value + modifier_value, cache_policy=store_policy)
 
 
 @gluon.jit
@@ -2656,17 +2659,46 @@ def test_generic_cache_policy_validation():
 
 def test_detailed_cache_policy_frontend():
     l2_policy = ttgl.nvidia.ampere.FractionalEvictionPolicy("evict_last", 0.33, "evict_first")
-    load_policy = ttgl.nvidia.ampere.CachePolicy(
-        cache_modifier=".cg",
+    l1_load_policy = ttgl.nvidia.ampere.CachePolicy(
         l1="no_allocate",
+        l2=l2_policy,
+        l2_prefetch_size=128,
+    )
+    modifier_load_policy = ttgl.nvidia.ampere.CachePolicy(
+        cache_modifier=".cg",
         l2=l2_policy,
         l2_prefetch_size=128,
     )
     store_policy = ttgl.nvidia.ampere.CachePolicy(l1="no_allocate", l2=l2_policy)
     run_filecheck_test(
         detailed_cache_policy_kernel,
-        *make_args(MockTensor(ttgl.float32), MockTensor(ttgl.float32), load_policy, store_policy),
+        *make_args(
+            MockTensor(ttgl.float32),
+            MockTensor(ttgl.float32),
+            l1_load_policy,
+            modifier_load_policy,
+            store_policy,
+        ),
     )
+
+
+def test_detailed_cache_policy_rejects_cache_modifier_with_l1():
+    invalid_policy = ttgl.nvidia.ampere.CachePolicy(cache_modifier=".cg", l1="no_allocate")
+    valid_policy = ttgl.nvidia.ampere.CachePolicy(l1="no_allocate")
+    with pytest.raises(
+            CompilationError,
+            match="cache modifier cannot be combined with an L1 eviction priority",
+    ):
+        run_parser(
+            detailed_cache_policy_kernel,
+            *make_args(
+                MockTensor(ttgl.float32),
+                MockTensor(ttgl.float32),
+                invalid_policy,
+                valid_policy,
+                valid_policy,
+            ),
+        )
 
 
 def test_detailed_cache_policy_validation():

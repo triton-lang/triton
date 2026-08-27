@@ -254,6 +254,7 @@ def TT_LoadOp : TT_Op<"load", [
       attr-dict `:` type($ptr)
     }];
 
+    let hasVerifier = 1;
     let hasCanonicalizer = 1;
 }
 
@@ -290,6 +291,7 @@ def TT_StoreOp : TT_Op<"store", [
       attr-dict `:` type($ptr)
     }];
 
+    let hasVerifier = 1;
     let hasCanonicalizer = 1;
 }
 
