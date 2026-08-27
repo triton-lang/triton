@@ -89,8 +89,8 @@ static BlockInfo buildBlockInfoFromBlock(Block *block, Allocation *allocation) {
 // can appear after intermediate passes.
 static bool isWarpPipelineIgnorableBarrier(Operation *op) {
   return isa<ROCDL::BarrierOp, gpu::BarrierOp, triton::gpu::BarrierOp,
-             triton::gpu::FenceOp, triton::gpu::AsyncWaitOp,
-             triton::amdgpu::AsyncWaitOp, triton::amdgpu::AsyncTDMWait,
+             triton::gpu::AsyncWaitOp, triton::amdgpu::AsyncWaitOp,
+             triton::amdgpu::AsyncTDMWait,
              triton::amdgpu::AsyncTDMIntrinsicWait>(op);
 }
 

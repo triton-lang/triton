@@ -269,29 +269,6 @@ public:
   }
 };
 
-class FenceOpConversion : public ConvertOpToLLVMPattern<triton::gpu::FenceOp> {
-public:
-  FenceOpConversion(const LLVMTypeConverter &converter,
-                    const TargetInfoBase &targetInfo, PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::gpu::FenceOp>(converter, benefit),
-        targetInfo(targetInfo) {}
-  using OpAdaptor = typename triton::gpu::FenceOp::Adaptor;
-
-  LogicalResult
-  matchAndRewrite(triton::gpu::FenceOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    if (triton::gpu::lookupNumCTAs(op) == 1)
-      targetInfo.barrier(op.getLoc(), rewriter, triton::gpu::AddrSpace::All);
-    else
-      targetInfo.clusterBarrier(op.getLoc(), rewriter, op);
-    rewriter.eraseOp(op);
-    return success();
-  }
-
-private:
-  const TargetInfoBase &targetInfo;
-};
-
 struct LocalGatherOpConversion : public ConvertOpToLLVMPattern<LocalGatherOp> {
 public:
   LocalGatherOpConversion(LLVMTypeConverter &typeConverter,
@@ -677,7 +654,6 @@ void mlir::triton::populateMemoryOpToLLVMPatterns(
   patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<BarrierOpConversion>(typeConverter, benefit);
   patterns.add<AtomicLoadOpConversion>(typeConverter, targetInfo, benefit);
-  patterns.add<FenceOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<AtomicPollOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<AtomicStoreOpConversion>(typeConverter, targetInfo, benefit);
 }

@@ -24,6 +24,17 @@
 
 include "mlir/Pass/PassBase.td"
 
+def TritonNvidiaGPULowerFencePass
+    : Pass<"triton-nvidia-gpu-lower-fence", "mlir::ModuleOp"> {
+  let summary = "Lower Triton fences for NVIDIA GPUs";
+
+  let dependentDialects = [
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
 def TritonNvidiaGPUAssignCGALayoutsPass : Pass<"triton-nvidia-gpu-assign-cga-layouts", "mlir::ModuleOp"> {
   let summary = "Assign CGA layouts";
 

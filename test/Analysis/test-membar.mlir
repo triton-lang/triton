@@ -54,22 +54,6 @@ tt.func @raw_single_block(%A : !tt.ptr<f16>) {
   tt.return
 }
 
-// CHECK-LABEL: raw_single_block_fence
-tt.func @raw_single_block_fence(%A : !tt.ptr<f16>) {
-  %mask = arith.constant dense<true> : tensor<128x32xi1, #AL>
-  %other = arith.constant dense<0.000000e+00> : tensor<128x32xf16, #AL>
-  %ptrs = tt.splat %A : !tt.ptr<f16> -> tensor<128x32x!tt.ptr<f16>, #AL>
-  %value = tt.load %ptrs, %mask, %other : tensor<128x32x!tt.ptr<f16>, #AL>
-  // CHECK: ttg.local_alloc
-  %buffer = ttg.local_alloc %value : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
-  // CHECK-NEXT: ttg.fence
-  ttg.fence
-  // CHECK-NOT: ttg.barrier
-  // CHECK-NEXT: ttg.local_load
-  %result = ttg.local_load %buffer : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
-  tt.return
-}
-
 // CHECK-LABEL: war_single_block
 tt.func @war_single_block(%A : !tt.ptr<f16>) {
   %cst1 = arith.constant dense<true> : tensor<128x32xi1, #AL>

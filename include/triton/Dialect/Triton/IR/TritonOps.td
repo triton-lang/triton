@@ -211,6 +211,16 @@ def TT_AddPtrOp : TT_Op<"addptr",
 //
 // Load/Store Ops
 //
+def TT_FenceOp : TT_Op<"fence"> {
+  let summary = "Make prior memory accesses visible to later operations";
+  let description = [{
+    The `fence` operation makes prior memory accesses visible to later
+    operations on the same addresses within one Triton program.
+  }];
+
+  let assemblyFormat = "attr-dict";
+}
+
 def TT_LoadOp : TT_Op<"load", [
   SameLoadStoreOperandsAndResultShape,
   SameLoadStoreOperandsAndResultEncoding,

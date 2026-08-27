@@ -12,33 +12,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK-LABEL: @fence_single_cta
-  tt.func @fence_single_cta() {
-    // CHECK: nvvm.barrier
-    // CHECK-NOT: nvvm.cluster
-    // CHECK: llvm.return
-    ttg.fence
-    tt.return
-  }
-}
-
-// -----
-
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: @fence_multi_cta
-  tt.func @fence_multi_cta() {
-    // CHECK-NOT: nvvm.barrier
-    // CHECK: nvvm.cluster.arrive
-    // CHECK-NEXT: nvvm.cluster.wait
-    // CHECK: llvm.return
-    ttg.fence
-    tt.return
-  }
-}
-
-// -----
-
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: basic_load
