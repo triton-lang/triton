@@ -3,8 +3,10 @@ import functools
 import triton
 import triton.language as tl
 from triton.experimental import gluon
+from triton._C.libtriton import amd, ir, nvidia, passes
 from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
 from triton.backends.compiler import GPUTarget
+from triton.compiler import make_backend
 from triton.compiler.code_generator import CodeGenerator
 from triton.runtime.jit import MockTensor
 from triton.compiler.errors import CompilationError
@@ -26,10 +28,9 @@ def test_jit_variadic_keyword_arguments(jit):
         jit(kernel)
 
 
-@pytest.mark.parametrize("target", [GPUTarget("cuda", 90, 32), GPUTarget("hip", "gfx1250", 32)], ids=["cuda", "hip"])
 @pytest.mark.parametrize("use_legacy_alias", [False, True], ids=["fence", "debug_barrier"])
 @pytest.mark.parametrize("num_ctas", [1, 2], ids=["single_cta", "cluster"])
-def test_fence_is_target_independent(target, use_legacy_alias, num_ctas):
+def test_fence_is_target_independent(use_legacy_alias, num_ctas):
     assert tl.debug_barrier is tl.fence
 
     @triton.jit
@@ -39,12 +40,33 @@ def test_fence_is_target_independent(target, use_legacy_alias, num_ctas):
         else:
             tl.fence()
 
-    module = run_parser(kernel, args=(use_legacy_alias, ), kwargs={"num_ctas": num_ctas}, target=target)
-    generated_ir = module.str_nodebug()
-    assert "tt.fence" in generated_ir
-    assert "ttg.barrier" not in generated_ir
-    assert "ttng.cluster_barrier" not in generated_ir
-    assert "amdg.cluster_barrier" not in generated_ir
+    targets = [GPUTarget("cuda", 90, 32), GPUTarget("hip", "gfx1250", 32)]
+    modules = {
+        target.backend: run_parser(kernel, args=(use_legacy_alias, ), kwargs={"num_ctas": num_ctas}, target=target)
+        for target in targets
+    }
+    assert all("tt.fence" in module.str_nodebug() for module in modules.values())
+
+    gpu_irs = {}
+    gpu_targets = targets if num_ctas == 1 else [targets[0]]
+    for target in gpu_targets:
+        module = modules[target.backend]
+        backend = make_backend(target)
+        options = backend.parse_options({"num_ctas": num_ctas})
+        pm = ir.pass_manager(module.context)
+        passes.ttir.add_convert_to_ttgpuir(pm, backend.get_target_name(options), options.num_warps, options.warp_size,
+                                           options.num_ctas)
+        if target.backend == "cuda":
+            nvidia.passes.ttnvgpuir.add_lower_fence(pm)
+        else:
+            amd.passes.ttgpuir.add_lower_fence(pm)
+        pm.run(module, "test_fence_lowering")
+        gpu_irs[target.backend] = module.str_nodebug()
+
+    expected_gpu_irs = ({"cuda": "ttg.barrier", "hip": "ttg.barrier"}
+                        if num_ctas == 1 else {"cuda": "ttng.cluster_barrier"})
+    assert gpu_irs.keys() == expected_gpu_irs.keys()
+    assert all(expected_ir in gpu_irs[backend] for backend, expected_ir in expected_gpu_irs.items())
 
 
 def doesnt_compile(kernel):
