@@ -136,6 +136,26 @@ define void @unprofitable_f32_packing(float %lhs0, float %lhs1, float %rhs0,
   ret void
 }
 
+; HOPPER-ONLY-LABEL: define void @packed_f32_broadcast_fma(
+; HOPPER-ONLY-COUNT-2: call float @llvm.fma.f32
+; BLACKWELL-LABEL: define void @packed_f32_broadcast_fma(
+; BLACKWELL: [[SCALE:%.*]] = insertelement <2 x float> poison, float %scale, i64 0
+; BLACKWELL: [[BROADCAST:%.*]] = insertelement <2 x float> [[SCALE]], float %scale, i64 1
+; BLACKWELL: [[FIRST:%.*]] = insertelement <2 x float> poison, float %first, i64 0
+; BLACKWELL: [[INPUT:%.*]] = insertelement <2 x float> [[FIRST]], float %second, i64 1
+; BLACKWELL: [[RESULT:%.*]] = call <2 x float> @llvm.fma.v2f32(<2 x float> [[BROADCAST]], <2 x float> [[INPUT]], <2 x float> zeroinitializer)
+; PTX-LABEL: .visible .func packed_f32_broadcast_fma(
+; PTX: fma.rn.f32x2
+define void @packed_f32_broadcast_fma(float %scale, float %first,
+                                       float %second) {
+  %first.result = call float @llvm.fma.f32(float %scale, float %first,
+                                            float 0.0)
+  %second.result = call float @llvm.fma.f32(float %scale, float %second,
+                                             float 0.0)
+  call void asm sideeffect "", "f,f"(float %first.result, float %second.result)
+  ret void
+}
+
 ; BLACKWELL-LABEL: define void @packed_f32_register_tuple(
 ; BLACKWELL: [[SUM:%.*]] = fadd <2 x float>
 ; BLACKWELL: extractelement <2 x float> [[SUM]], i64 0
@@ -251,6 +271,74 @@ loop:
   %input.second = extractelement <2 x float> %input, i64 1
   %first.next = fadd float %first, %input.first
   %second.next = fadd float %second, %input.second
+  br i1 %continue, label %loop, label %exit
+
+exit:
+  call void asm sideeffect "", "f,f"(float %first.next, float %second.next)
+  ret void
+}
+
+; HOPPER-ONLY-LABEL: define void @packed_f32_cross_block_accumulators(
+; HOPPER-ONLY: phi float
+; HOPPER-ONLY: phi float
+; BLACKWELL-LABEL: define void @packed_f32_cross_block_accumulators(
+; BLACKWELL: [[ACC:%.*]] = phi <2 x float> [ zeroinitializer, %entry ], [ [[NEXT:%.*]], %latch ]
+; BLACKWELL: [[FIRST:%.*]] = call float @llvm.nvvm.div.full(float %first, float %divisor)
+; BLACKWELL: call void asm sideeffect "", ""()
+; BLACKWELL: [[SECOND:%.*]] = call float @llvm.nvvm.div.full(float %second, float %divisor)
+; BLACKWELL: [[PACK0:%.*]] = insertelement <2 x float> poison, float [[FIRST]], i64 0
+; BLACKWELL: [[PACK1:%.*]] = insertelement <2 x float> [[PACK0]], float [[SECOND]], i64 1
+; BLACKWELL: [[NEXT]] = fadd <2 x float> [[ACC]], [[PACK1]]
+; BLACKWELL: extractelement <2 x float> [[NEXT]], i64 0
+; BLACKWELL: extractelement <2 x float> [[NEXT]], i64 1
+; PTX-LABEL: .visible .func packed_f32_cross_block_accumulators(
+; PTX: add.rn.f32x2
+define void @packed_f32_cross_block_accumulators(float %first, float %second,
+                                                  float %divisor, i1 %continue) {
+entry:
+  br label %loop
+
+loop:
+  %first.acc = phi float [ 0.0, %entry ], [ %first.next, %latch ]
+  %second.acc = phi float [ 0.0, %entry ], [ %second.next, %latch ]
+  br label %latch
+
+latch:
+  %first.contribution = call float @llvm.nvvm.div.full(float %first, float %divisor)
+  %first.next = fadd float %first.acc, %first.contribution
+  call void asm sideeffect "", ""()
+  %second.contribution = call float @llvm.nvvm.div.full(float %second, float %divisor)
+  %second.next = fadd float %second.acc, %second.contribution
+  br i1 %continue, label %loop, label %exit
+
+exit:
+  call void asm sideeffect "", "f,f"(float %first.next, float %second.next)
+  ret void
+}
+
+; BLACKWELL-LABEL: define void @different_divisor_accumulators(
+; BLACKWELL: phi float
+; BLACKWELL: phi float
+; BLACKWELL-NOT: phi <2 x float>
+define void @different_divisor_accumulators(float %first, float %second,
+                                             float %first.divisor,
+                                             float %second.divisor,
+                                             i1 %continue) {
+entry:
+  br label %loop
+
+loop:
+  %first.acc = phi float [ 0.0, %entry ], [ %first.next, %latch ]
+  %second.acc = phi float [ 0.0, %entry ], [ %second.next, %latch ]
+  br label %latch
+
+latch:
+  %first.contribution = call float @llvm.nvvm.div.full(float %first,
+                                                       float %first.divisor)
+  %first.next = fadd float %first.acc, %first.contribution
+  %second.contribution = call float @llvm.nvvm.div.full(float %second,
+                                                        float %second.divisor)
+  %second.next = fadd float %second.acc, %second.contribution
   br i1 %continue, label %loop, label %exit
 
 exit:
