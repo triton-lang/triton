@@ -217,8 +217,9 @@ def test_mxfp4_value_convert_layout_compact_source(shape, mx_axis, mma_version, 
     destination = StridedLayout(major_dim)
     expected = convert_layout(canonical, destination)
 
-    out = wrap_torch_tensor(torch.empty_like(expected.data, device=device), dtype=FP4, shape=source.shape,
-                            layout=destination) if with_out else None
+    out = wrap_torch_tensor(
+        torch.empty_strided(expected.data.shape, expected.data.stride(), dtype=expected.data.dtype, device=device),
+        dtype=FP4, shape=source.shape, layout=destination) if with_out else None
     actual = convert_layout(source, destination, out=out)
 
     if with_out:
