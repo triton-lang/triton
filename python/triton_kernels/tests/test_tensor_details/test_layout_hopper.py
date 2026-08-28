@@ -8,6 +8,7 @@ from triton_kernels.target_info import cuda_capability_geq
 import triton.language as tl
 import triton
 import torch
+from torch._subclasses.fake_tensor import FakeTensorMode
 
 # ------------------------------------------------------------
 # Torch tests
@@ -187,24 +188,102 @@ def test_mxfp4_value_convert_layout_odd_source_packing(shape, mx_axis, major_dim
     assert str(actual.value) == str(expected.value)
 
 
+@pytest.mark.parametrize("shape", [(2, 2), (18, 34), (64, 32), (2, 3, 66, 34)])
+@pytest.mark.parametrize("mx_axis", [-2, -1])
 @pytest.mark.parametrize("mma_version", [2, 3])
 @pytest.mark.parametrize("major_dim", [-2, -1])
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_mxfp4_value_convert_layout_compact_source(mma_version, major_dim, device):
-    data = torch.randint(0, 256, (64, 32), dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
+@pytest.mark.parametrize(("device", "step"), [("cpu", 1), ("meta", 1), ("cuda", 1), ("cuda", 2)])
+def test_mxfp4_value_convert_layout_compact_source(shape, mx_axis, mma_version, major_dim, device, step):
+    data = torch.randint(0, 256, shape, dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
     canonical = wrap_torch_tensor(data, dtype=FP4)
-    layout = HopperMXValueLayout(-1, mma_version)
+    layout = HopperMXValueLayout(mx_axis, mma_version)
     full = convert_layout(canonical, layout)
-    compact = full.data[:16, :128].contiguous()
-    source = wrap_torch_tensor(compact.to(device), dtype=FP4, shape=canonical.shape, layout=layout)
+    m, k = (canonical.shape[-1], canonical.shape[-2]) if mx_axis == -2 else canonical.shape[-2:]
+    encoded = full.data.mT if mx_axis == -2 else full.data
+    compact = encoded[..., :triton.cdiv(m, 16) * 4, :triton.cdiv(k, 64) * 128].contiguous().to(device)
+    if step == 2:
+        compact = torch.stack((torch.zeros_like(compact), compact), dim=-1)[..., 1]
+    if mx_axis == -2:
+        compact = compact.mT
+    source = wrap_torch_tensor(compact, dtype=FP4, shape=canonical.shape, layout=layout)
     destination = StridedLayout(major_dim)
     expected = convert_layout(canonical, destination)
 
     actual = convert_layout(source, destination)
 
     assert actual.shape == expected.shape
+    assert actual.data.shape == expected.data.shape
     assert actual.data.stride() == expected.data.stride()
-    assert torch.equal(actual.data.cpu(), expected.data)
+    if device != "meta":
+        assert torch.equal(actual.data.cpu(), expected.data)
+
+
+@pytest.mark.parametrize("mx_axis", [-2, -1])
+@pytest.mark.parametrize("mma_version", [2, 3])
+@pytest.mark.parametrize("major_dim", [-2, -1])
+def test_mxfp4_value_convert_layout_compact_source_fake(mx_axis, mma_version, major_dim):
+    data = torch.empty((2, 3, 4, 128), dtype=torch.uint8)
+    shape = (2, 3, 64, 16) if mx_axis == -2 else (2, 3, 16, 64)
+    if mx_axis == -2:
+        data = data.mT
+    layout = HopperMXValueLayout(mx_axis, mma_version)
+    destination = StridedLayout(major_dim)
+    expected = convert_layout(wrap_torch_tensor(data, dtype=FP4, shape=shape, layout=layout), destination)
+
+    with FakeTensorMode():
+        data = torch.empty_strided(data.shape, data.stride(), dtype=data.dtype, device="cuda")
+        source = wrap_torch_tensor(data, dtype=FP4, shape=shape, layout=layout)
+        actual = convert_layout(source, destination)
+
+    assert actual.shape == expected.shape
+    assert actual.data.shape == expected.data.shape
+    assert actual.data.stride() == expected.data.stride()
+    assert actual.data.device.type == "cuda"
+
+
+@pytest.mark.parametrize("encoded_shape", [(3, 128), (4, 124), (4, 128), (8, 256)])
+@pytest.mark.parametrize("mx_axis", [-2, -1])
+@pytest.mark.parametrize("mma_version", [2, 3])
+@pytest.mark.parametrize("major_dim", [-2, -1])
+def test_mxfp4_value_convert_layout_invalid_source_storage(encoded_shape, mx_axis, mma_version, major_dim):
+    data = torch.empty(encoded_shape, dtype=torch.uint8)
+    shape = (130, 66) if mx_axis == -2 else (66, 130)
+    if mx_axis == -2:
+        data = data.mT
+    layout = HopperMXValueLayout(mx_axis, mma_version)
+    destination = StridedLayout(major_dim)
+    source_cpu = wrap_torch_tensor(data, dtype=FP4, shape=shape, layout=layout)
+    with pytest.raises((AssertionError, RuntimeError)) as expected:
+        convert_layout(source_cpu, destination)
+
+    source_cuda = wrap_torch_tensor(data.cuda(), dtype=FP4, shape=shape, layout=layout)
+    with pytest.raises(type(expected.value)) as actual:
+        convert_layout(source_cuda, destination)
+    assert str(actual.value) == str(expected.value)
+
+
+@pytest.mark.parametrize("mx_axis", [-2, -1])
+@pytest.mark.parametrize("mma_version", [2, 3])
+@pytest.mark.parametrize("major_dim", [-2, -1])
+def test_mxfp4_value_convert_layout_compact_source_peak_allocation(mx_axis, mma_version, major_dim):
+    data = torch.empty((1028, 8320), dtype=torch.uint8, device="cuda")
+    shape = (4160, 4112) if mx_axis == -2 else (4112, 4160)
+    if mx_axis == -2:
+        data = data.mT
+    layout = HopperMXValueLayout(mx_axis, mma_version)
+    source = wrap_torch_tensor(data, dtype=FP4, shape=shape, layout=layout)
+    destination = StridedLayout(major_dim)
+    warm = convert_layout(source, destination)
+    torch.cuda.synchronize(data.device)
+    del warm
+    baseline = torch.cuda.memory_allocated(data.device)
+    torch.cuda.reset_peak_memory_stats(data.device)
+
+    actual = convert_layout(source, destination)
+    torch.cuda.synchronize(data.device)
+    peak = torch.cuda.max_memory_allocated(data.device) - baseline
+
+    assert peak <= actual.data.nbytes + 1024**2
 
 
 @pytest.mark.parametrize("mx_axis", [-2, -1])
