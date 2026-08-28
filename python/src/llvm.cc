@@ -183,8 +183,7 @@ public:
 
 std::unique_ptr<TargetMachine>
 createTargetMachine(llvm::Module *module, std::string proc,
-                    bool enable_fp_fusion, const std::string &features,
-                    const std::string &abi = "") {
+                    bool enable_fp_fusion, const std::string &features) {
   std::string error;
   auto target =
       llvm::TargetRegistry::lookupTarget(module->getTargetTriple(), error);
@@ -195,7 +194,6 @@ createTargetMachine(llvm::Module *module, std::string proc,
   opt.TrapUnreachable = true;
   opt.MCOptions.AsmVerbose = true;
   opt.MCOptions.PreserveAsmComments = true;
-  opt.MCOptions.ABIName = abi;
   std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
       module->getTargetTriple(), proc, features, opt, llvm::Reloc::PIC_,
       std::nullopt,
@@ -382,13 +380,10 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
   return result;
 }
 
-std::string translateLLVMIRToASM(llvm::Module &module,
-                                 const std::string &triple,
-                                 const std::string &proc,
-                                 const std::string &features,
-                                 const std::vector<std::string> &flags,
-                                 bool enable_fp_fusion, bool isObject,
-                                 bool canonicalizeGEP, const std::string &abi) {
+std::string translateLLVMIRToASM(
+    llvm::Module &module, const std::string &triple, const std::string &proc,
+    const std::string &features, const std::vector<std::string> &flags,
+    bool enable_fp_fusion, bool isObject, bool canonicalizeGEP) {
   using namespace mlir;
 
   // Apply flags
@@ -416,8 +411,7 @@ std::string translateLLVMIRToASM(llvm::Module &module,
   // Set up target information before inlining so target-specific inline
   // compatibility checks use the backend's TTI.
   module.setTargetTriple(Triple(triple));
-  auto machine =
-      createTargetMachine(&module, proc, enable_fp_fusion, features, abi);
+  auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features);
   module.setDataLayout(machine->createDataLayout());
 
   // inline everything
@@ -720,25 +714,23 @@ void init_triton_llvm(py::module_ &m) {
 #endif
   });
 
-  m.def("attach_datalayout",
-        [](llvm::Module *mod, const std::string triple, const std::string proc,
-           const std::string features, const std::string abi) {
-          std::string error;
-          llvm::Triple targetTriple(triple);
-          auto target = llvm::TargetRegistry::lookupTarget(targetTriple, error);
-          if (!target) {
-            throw std::runtime_error("target lookup error: " + error);
-          }
-          llvm::TargetOptions opt;
-          opt.MCOptions.ABIName = abi;
-          // Target machine is only used to create the data layout.
-          std::unique_ptr<llvm::TargetMachine> machine{
-              target->createTargetMachine(targetTriple, proc, features, opt,
-                                          llvm::Reloc::PIC_, std::nullopt,
-                                          llvm::CodeGenOptLevel::None)};
-          // set data layout
-          mod->setDataLayout(machine->createDataLayout());
-        });
+  m.def("attach_datalayout", [](llvm::Module *mod, const std::string triple,
+                                const std::string proc,
+                                const std::string features) {
+    std::string error;
+    llvm::Triple targetTriple(triple);
+    auto target = llvm::TargetRegistry::lookupTarget(targetTriple, error);
+    if (!target) {
+      throw std::runtime_error("target lookup error: " + error);
+    }
+    llvm::TargetOptions opt;
+    // Target machine is only used to create the data layout.
+    std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
+        targetTriple, proc, features, opt, llvm::Reloc::PIC_, std::nullopt,
+        llvm::CodeGenOptLevel::None)};
+    // set data layout
+    mod->setDataLayout(machine->createDataLayout());
+  });
 
   m.def(
       "optimize_module",
@@ -783,7 +775,7 @@ void init_triton_llvm(py::module_ &m) {
           // registry name "vector-combine".
           const StringRef kVectorCombinePassName = "VectorCombinePass";
           passInstrCb.registerShouldRunOptionalPassCallback(
-              [kVectorCombinePassName](StringRef passName, IRUnitRef) {
+              [kVectorCombinePassName](StringRef passName, Any) {
                 return passName != kVectorCombinePassName;
               });
           enablePassInstrumentation = true;
@@ -894,8 +886,8 @@ void init_triton_llvm(py::module_ &m) {
   m.def("translate_to_asm",
         [](std::string llvmIR, std::string triple, std::string proc,
            std::string features, std::vector<std::string> flags,
-           bool enable_fp_fusion, bool isObject, bool canonicalizeGEP,
-           std::string abi) -> py::object {
+           bool enable_fp_fusion, bool isObject,
+           bool canonicalizeGEP) -> py::object {
           std::string obj;
           {
             // when allow_threads goes out of scope, gil will be released
@@ -914,7 +906,7 @@ void init_triton_llvm(py::module_ &m) {
             }
             obj = translateLLVMIRToASM(*module, triple, proc, features, flags,
                                        enable_fp_fusion, isObject,
-                                       canonicalizeGEP, abi);
+                                       canonicalizeGEP);
           }
           if (isObject)
             return py::object(py::bytes(obj.c_str(), obj.size()));
