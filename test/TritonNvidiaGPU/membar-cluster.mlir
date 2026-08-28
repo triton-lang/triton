@@ -418,6 +418,32 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#broadcastGatherBlocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CGALayout = [[1]]}>
+#broadcastGatherLocalBlocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CGALayout = [[0]]}>
+#broadcastGatherShared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // The indexed axis is replaced by the runtime indices, so its result extent
+  // may exceed the shared descriptor extent. Both CTA replicas remain local.
+  // CHECK-LABEL: @no_cluster_barrier_for_broadcast_gather_larger_index
+  // CHECK: ttg.local_gather
+  // CHECK: ttg.local_dealloc
+  // CHECK-NOT: ttng.cluster_barrier
+  // CHECK: ttg.local_alloc
+  tt.func @no_cluster_barrier_for_broadcast_gather_larger_index(
+      %indices: tensor<64xi32, #broadcastGatherBlocked>,
+      %replacement: tensor<32xi32, #broadcastGatherLocalBlocked>) -> tensor<64xi32, #broadcastGatherBlocked> {
+    %parent = ttg.local_alloc : () -> !ttg.memdesc<32xi32, #broadcastGatherShared, #smem, mutable>
+    %gathered = ttg.local_gather %parent[%indices] {axis = 0 : i32} : !ttg.memdesc<32xi32, #broadcastGatherShared, #smem, mutable>, tensor<64xi32, #broadcastGatherBlocked> -> tensor<64xi32, #broadcastGatherBlocked>
+    ttg.local_dealloc %parent : !ttg.memdesc<32xi32, #broadcastGatherShared, #smem, mutable>
+    %reuse = ttg.local_alloc %replacement : (tensor<32xi32, #broadcastGatherLocalBlocked>) -> !ttg.memdesc<32xi32, #broadcastGatherShared, #smem, mutable>
+    tt.return %gathered : tensor<64xi32, #broadcastGatherBlocked>
+  }
+}
+
+// -----
+
 #sharedA = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
 #sharedB = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1]]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>

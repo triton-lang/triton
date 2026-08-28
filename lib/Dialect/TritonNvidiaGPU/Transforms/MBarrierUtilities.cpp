@@ -29,14 +29,23 @@ bool isCrossCTAGatherScatter(ttg::MemDescType memDescTy, RankedTensorType regTy,
   SmallVector<StringAttr> allDims =
       standardOutDimNames(ctx, memDescTy.getRank());
   StringAttr axisDim = allDims[axis];
+  auto kRegister = StringAttr::get(ctx, "register");
   auto kBlock = StringAttr::get(ctx, "block");
 
-  bool axisIsSharded = !sharedLayout.sublayoutIsZero({kBlock}, {axisDim});
-  // (1) axisIsSharded: The runtime index may select any CTA shard along the
-  // indexed axis.
-  // (2) isCrossCTALoadStore: Access through the remaining coordinates may still
-  // cross CTAs when the memdesc is a subslice of a distributed allocation.
-  return axisIsSharded || isCrossCTALoadStore(memDescTy, regTy);
+  LinearLayout regLayout = ttg::toLinearLayout(regTy)
+                               .removeZeroBasesAlongDim(kRegister)
+                               .transposeOuts(allDims);
+  SmallVector<StringAttr> nonIndexedDims = allDims;
+  nonIndexedDims.erase(nonIndexedDims.begin() + axis);
+  LinearLayout indexedLayout =
+      regLayout.sublayout(llvm::to_vector(regLayout.getInDimNames()),
+                          nonIndexedDims) *
+      LinearLayout::identity1D(sharedLayout.getOutDimSize(axisDim), axisDim,
+                               axisDim);
+  indexedLayout = indexedLayout.transposeOuts(allDims);
+  LinearLayout conversion =
+      invertAndComposeBlockLocal(sharedLayout, indexedLayout);
+  return !conversion.isIdentityOnOutDim(kBlock);
 }
 
 bool hasTCGen5CommitCrossCTA(Operation *op) {
