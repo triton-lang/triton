@@ -1,5 +1,5 @@
 // RUN: split-file %s %t
-// RUN: triton-opt %t/success.mlir -split-input-file -tritoninstrument-fp-sanitizer | FileCheck %t/success.mlir
+// RUN: triton-opt %t/success.mlir -split-input-file -symbol-dce -tritoninstrument-fp-sanitizer | FileCheck %t/success.mlir
 // RUN: triton-opt %t/canonicalize.mlir -canonicalize | FileCheck %t/canonicalize.mlir
 // RUN: not triton-opt %t/unsupported.mlir -tritoninstrument-fp-sanitizer 2>&1 | FileCheck %t/unsupported.mlir --check-prefix=FPSANERR
 

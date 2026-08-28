@@ -1,9 +1,7 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Types.h"
-#include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -3339,11 +3337,6 @@ static FpSanRequiredCalls getFpSanRequiredCalls(ModuleOp module) {
 class FpSanitizerPass
     : public impl::TritonInstrumentFpSanitizerBase<FpSanitizerPass> {
   LogicalResult prepareForFpSan() {
-    OpPassManager cleanup;
-    cleanup.addPass(createSymbolDCEPass());
-    if (failed(runPipeline(cleanup, getOperation())))
-      return failure();
-
     auto calls = getFpSanRequiredCalls(getOperation());
     for (auto [call, requirement] : calls) {
       auto diagnostic = call.emitOpError("must be inlined before FPSan");
