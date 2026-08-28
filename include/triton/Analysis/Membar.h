@@ -208,9 +208,6 @@ struct BlockInfo {
                          sliceFilter, allocation);
   }
 
-  /// Whether pending thread effects must rendezvous before the other's demands.
-  bool requiresThreadSync(const BlockInfo &other) const;
-
   /// Clears the effects because a barrier is inserted.
   void sync() {
     syncReadSlices.clear();
@@ -229,11 +226,12 @@ struct BlockInfo {
 
   bool operator!=(const BlockInfo &other) const { return !(*this == other); }
 
-private:
-  bool isIntersected(const SliceMapT &lhsSlices, const SliceMapT &rhsSlices,
-                     bool lhsIsRead, bool rhsIsRead, MembarFilterFn filter,
-                     MembarSliceFilterFn sliceFilter,
-                     Allocation *allocation) const {
+  /// Checks one pair of access maps with the same alias and operation filters.
+  static bool isIntersected(const SliceMapT &lhsSlices,
+                            const SliceMapT &rhsSlices, bool lhsIsRead,
+                            bool rhsIsRead, MembarFilterFn filter,
+                            MembarSliceFilterFn sliceFilter,
+                            Allocation *allocation) {
     for (auto &lhs : lhsSlices)
       for (auto &rhs : rhsSlices)
         if (lhs.first.intersects(rhs.first))
@@ -306,6 +304,8 @@ struct MembarInfo {
 triton::BarrierStages getLocalBarrierStages(Operation *op,
                                             Allocation *allocation);
 
+bool requiresThreadSyncBefore(Operation *op);
+
 //===----------------------------------------------------------------------===//
 // Shared Memory Barrier Analysis
 //===----------------------------------------------------------------------===//
@@ -356,6 +356,10 @@ protected:
   void insertBarrier(Operation *operation, OpBuilder *builder,
                      bool cluster = false);
   virtual triton::BarrierStages getBarrierStages(Operation *operation);
+
+  /// Whether pending thread effects must rendezvous before upcoming demands.
+  virtual bool requiresThreadSync(const BlockInfo &pending,
+                                  const BlockInfo &effects);
 
   Allocation &allocation;
   MembarFilterFn filter;
