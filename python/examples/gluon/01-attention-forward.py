@@ -1091,9 +1091,51 @@ def select_kernel_config(
             split_exp_factor = _default_split_exp_factor(head_dim)
             use_selected_tmem_red = use_tmem_red and not causal
 
-    # if is_rubin() and is_fp8:
-    #     num_kv_buffers = 5
-    # if is_rubin() and dtype == torch.float16:
+    if is_rubin() and head_dim == 128:
+        maxnreg = 128
+        use_exp2_turnstile = False
+        if is_fp8:
+            cga_layout = ()
+            if causal:
+                group_size_n = 8
+                if use_tmem_red:
+                    split_exp_factor = 2 if n_ctx <= 1024 else 1
+                    num_kv_buffers = 5 if 1024 < n_ctx <= 8192 else 4
+                else:
+                    split_exp_factor = 2 if n_ctx <= 1024 else 1 if n_ctx <= 2048 else 2
+                    num_kv_buffers = 4 if n_ctx <= 1024 else 5 if n_ctx <= 2048 else 4
+            else:
+                group_size_n = 1
+                split_exp_factor = 2 if use_tmem_red and n_ctx <= 1024 else 1
+                num_kv_buffers = 4 if use_tmem_red else 6 if n_ctx <= 1024 else 5
+        elif dtype == torch.float16:
+            cga_layout = () if n_ctx <= 1024 else ((1, 0), )
+            if causal:
+                group_size_n = 8
+                split_exp_factor = 1
+                num_kv_buffers = 4 if n_ctx <= 4096 else 3
+                if use_tmem_red and (n_ctx == 2048 or n_ctx >= 8192):
+                    num_kv_buffers = 3
+            elif n_ctx <= 1024:
+                group_size_n = 1
+                split_exp_factor = 1
+                num_kv_buffers = 3 if use_tmem_red else 4
+            elif n_ctx <= 2048:
+                group_size_n = 1
+                split_exp_factor = 1 if use_tmem_red else 4
+                num_kv_buffers = 4 if use_tmem_red else 3
+            elif n_ctx <= 4096:
+                group_size_n = 1
+                split_exp_factor = 4
+                num_kv_buffers = 3
+            elif n_ctx <= 8192:
+                group_size_n = 1
+                split_exp_factor = 4 if use_tmem_red else 1
+                num_kv_buffers = 3
+            else:
+                group_size_n = 1 if use_tmem_red else 2
+                split_exp_factor = 8 if use_tmem_red else 2
+                num_kv_buffers = 4
 
     config = KernelConfig(
         BLOCK_M=block_m,
