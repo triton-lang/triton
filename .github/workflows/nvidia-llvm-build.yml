@@ -150,6 +150,9 @@ jobs:
         -DLLVM_INCLUDE_BENCHMARKS=OFF
         -DLLVM_INCLUDE_TESTS=OFF
         -DLLVM_ENABLE_PIC=ON
+        -DBUILD_SHARED_LIBS=OFF
+        -DLLVM_BUILD_LLVM_DYLIB=OFF
+        -DLLVM_LINK_LLVM_DYLIB=OFF
         -DLLVM_DISTRIBUTION_COMPONENTS="${{ env.LLVM_DISTRIBUTION_COMPONENTS }}"
         -DLLVM_TARGETS_TO_BUILD="NVPTX"
         -DLLVM_ENABLE_ZSTD=OFF
@@ -184,6 +187,9 @@ jobs:
         -DLLVM_INCLUDE_TESTS=OFF
         -DLLVM_DISTRIBUTION_COMPONENTS="${{ env.LLVM_DISTRIBUTION_COMPONENTS }}"
         -DLLVM_ENABLE_DIA_SDK=OFF
+        -DBUILD_SHARED_LIBS=OFF
+        -DLLVM_BUILD_LLVM_DYLIB=OFF
+        -DLLVM_LINK_LLVM_DYLIB=OFF
         -DLLVM_TARGETS_TO_BUILD="NVPTX"
         -DLLVM_ENABLE_ZSTD=OFF
         llvm-project/llvm
@@ -202,6 +208,27 @@ jobs:
 
         tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
 
+
+    - name: Verify Standalone Library
+      shell: bash
+      run: |
+        python3 - <<'PY'
+        import ctypes
+        import os
+        import pathlib
+        import sys
+
+        filename = {
+            "win32": "triton_nvidia_codegen.dll",
+            "darwin": "libtriton_nvidia_codegen.dylib",
+        }.get(sys.platform, "libtriton_nvidia_codegen.so")
+        path = pathlib.Path(os.environ["llvm_install_dir"]) / "lib" / filename
+        library = ctypes.CDLL(str(path.resolve()))
+        library.triton_nvptx_revision.restype = ctypes.c_char_p
+        expected = os.environ["llvm_commit_hash"] + "-" + os.environ["llvm_build_number"]
+        assert library.triton_nvptx_revision().decode() == expected
+        print("Loaded standalone backend without importing Triton:", path)
+        PY
 
     - name: Upload Build Artifacts
       uses: actions/upload-artifact@v7

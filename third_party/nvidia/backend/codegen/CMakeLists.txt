@@ -31,6 +31,13 @@ llvm_map_components_to_libnames(TRITON_NVIDIA_LLVM_LIBRARIES
 target_link_libraries(triton_nvidia_codegen PRIVATE
                       ${TRITON_NVIDIA_LLVM_LIBRARIES})
 
+foreach(llvm_library IN LISTS TRITON_NVIDIA_LLVM_LIBRARIES)
+  get_target_property(llvm_library_type ${llvm_library} TYPE)
+  if(NOT llvm_library_type STREQUAL "STATIC_LIBRARY")
+    message(FATAL_ERROR "Standalone NVIDIA code generation requires static LLVM libraries: ${llvm_library}")
+  endif()
+endforeach()
+
 set_target_properties(triton_nvidia_codegen PROPERTIES
     CXX_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN YES
@@ -48,7 +55,8 @@ elseif(UNIX)
       "{\n  global:\n    triton_nvptx_compile;\n    triton_nvptx_free;\n    triton_nvptx_revision;\n  local:\n    *;\n};\n")
   target_link_options(triton_nvidia_codegen PRIVATE
       "LINKER:--version-script,${TRITON_NVIDIA_EXPORTS}"
-      "LINKER:--exclude-libs,ALL")
+      "LINKER:--exclude-libs,ALL"
+      "LINKER:-z,defs")
 endif()
 
 install(TARGETS triton_nvidia_codegen

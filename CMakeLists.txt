@@ -399,6 +399,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRUBToLLVM
 
     # LLVM
+    LLVMBitWriter
     LLVMPasses
     LLVMNVPTXCodeGen
     LLVMAMDGPUCodeGen

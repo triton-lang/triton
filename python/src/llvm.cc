@@ -7,6 +7,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/ScopedNoAliasAA.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/CodeGen/MIRParser/MIRParser.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
@@ -703,6 +704,24 @@ void init_triton_llvm(py::module_ &m) {
         return llvmMod;
       },
       py::keep_alive<0, 2>(), py::call_guard<py::gil_scoped_release>());
+
+  m.def("to_bitcode", [](const std::string &llvmIR) {
+    std::string bitcode;
+    {
+      py::gil_scoped_release release;
+      llvm::LLVMContext context;
+      auto buffer = llvm::MemoryBuffer::getMemBuffer(llvmIR, "triton", false);
+      llvm::SMDiagnostic error;
+      auto module = llvm::parseIR(buffer->getMemBufferRef(), error, context);
+      if (!module)
+        throw std::runtime_error(
+            "failed to parse LLVM IR: " + error.getMessage().str() +
+            " at line " + std::to_string(error.getLineNo()));
+      llvm::raw_string_ostream stream(bitcode);
+      llvm::WriteBitcodeToFile(*module, stream);
+    }
+    return py::bytes(bitcode.data(), bitcode.size());
+  });
 
   // Add Triton and LLVM versions to the module.
   m.def("add_version_info", [](llvm::Module *mod) {

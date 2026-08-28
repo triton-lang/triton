@@ -97,7 +97,9 @@ def compile_nvptx(src: str, triple: str, processor: str, features: str, *, enabl
                   disable_optimization: bool, canonicalize_gep: bool, disabled_passes: str, dump_ir: bool,
                   enable_timing: bool) -> str:
     library = _load_nvidia_codegen(get_nvidia_codegen_path())
-    llvm_ir = src.encode("utf-8")
+    # Serialize with Triton's LLVM: newer backends support older bitcode,
+    # whereas textual IR has no backwards-compatibility guarantee.
+    llvm_bitcode = llvm.to_bitcode(src)
     options = _NVPTXCodegenOptions(
         1,
         triple.encode("utf-8"),
@@ -114,7 +116,7 @@ def compile_nvptx(src: str, triple: str, processor: str, features: str, *, enabl
     ptx = ctypes.c_void_p()
     ptx_size = ctypes.c_size_t()
     error = ctypes.c_void_p()
-    status = library.triton_nvptx_compile(llvm_ir, len(llvm_ir), ctypes.byref(options), ctypes.byref(ptx),
+    status = library.triton_nvptx_compile(llvm_bitcode, len(llvm_bitcode), ctypes.byref(options), ctypes.byref(ptx),
                                           ctypes.byref(ptx_size), ctypes.byref(error))
     if status:
         message = ctypes.string_at(error).decode("utf-8") if error.value else "unknown NVIDIA code-generation failure"

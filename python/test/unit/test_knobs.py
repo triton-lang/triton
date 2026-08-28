@@ -139,7 +139,7 @@ def test_nvidia_codegen_revision_invalidates_backend_hash(fresh_knobs, monkeypat
 
 
 @pytest.mark.skipif(is_hip(), reason="NVPTX code generation is unavailable on AMD")
-def test_nvidia_codegen_inlines_functions(fresh_knobs):
+def test_nvidia_codegen_inlines_functions_from_bitcode(fresh_knobs, monkeypatch):
     from triton.backends.compiler import GPUTarget
     from triton.backends.nvidia import compiler
 
@@ -157,9 +157,22 @@ define ptx_kernel void @inline_kernel(ptr addrspace(1) %out, i32 %value) {
   ret void
 }
 '''
+    library = compiler._load_nvidia_codegen(compiler.get_nvidia_codegen_path())
+    compile_bitcode = library.triton_nvptx_compile
+    inputs = []
+
+    def check_bitcode(bitcode, size, *args):
+        inputs.append(bitcode)
+        assert bitcode.startswith(b"BC\xc0\xde")
+        assert b"\x00" in bitcode
+        assert size == len(bitcode)
+        return compile_bitcode(bitcode, size, *args)
+
+    monkeypatch.setattr(library, "triton_nvptx_compile", check_bitcode)
     backend = compiler.CUDABackend(GPUTarget("cuda", 90, 32))
     ptx = backend.make_ptx(source, {}, compiler.CUDAOptions(ptx_version=80), 90)
 
+    assert len(inputs) == 1
     assert ".visible .entry inline_kernel" in ptx
     assert "call.uni" not in ptx
     assert "helper(" not in ptx
@@ -171,7 +184,7 @@ def test_nvidia_codegen_reports_invalid_llvm_ir(fresh_knobs):
     from triton.backends.nvidia import compiler
 
     backend = compiler.CUDABackend(GPUTarget("cuda", 90, 32))
-    with pytest.raises(RuntimeError, match="NVIDIA LLVM .*expected top-level entity"):
+    with pytest.raises(RuntimeError, match="failed to parse LLVM IR.*expected top-level entity"):
         backend.make_ptx("invalid LLVM IR", {}, compiler.CUDAOptions(ptx_version=80), 90)
 
 
