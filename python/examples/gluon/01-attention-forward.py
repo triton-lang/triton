@@ -4,7 +4,7 @@ import torch
 import triton
 import pytest
 import itertools
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
@@ -981,6 +981,10 @@ def is_blackwell_ultra():
     return is_cuda() and torch.cuda.get_device_capability()[0:2] == (10, 3)
 
 
+def is_rubin():
+    return is_cuda() and torch.cuda.get_device_capability()[0:2] == (10, 7)
+
+
 @dataclass(frozen=True, slots=True)
 class KernelConfig:
     BLOCK_M: int = 256
@@ -1087,6 +1091,10 @@ def select_kernel_config(
             split_exp_factor = _default_split_exp_factor(head_dim)
             use_selected_tmem_red = use_tmem_red and not causal
 
+    # if is_rubin() and is_fp8:
+    #     num_kv_buffers = 5
+    # if is_rubin() and dtype == torch.float16:
+
     config = KernelConfig(
         BLOCK_M=block_m,
         BLOCK_N=block_n,
@@ -1108,6 +1116,18 @@ def select_kernel_config(
     return KernelConfig(**values)
 
 
+def select_benchmark_kernel_config(
+    head_dim: int,
+    n_ctx: int,
+    dtype: torch.dtype,
+    causal: bool,
+    use_tmem_red: bool,
+    override: KernelConfig | None = None,
+) -> KernelConfig:
+    config = select_kernel_config(head_dim, n_ctx, dtype, causal, use_tmem_red, override)
+    return replace(config, USE_TMEM_RED=use_tmem_red)
+
+
 def torch_dtype_to_triton(dtype):
     if dtype == torch.float8_e5m2:
         return gl.float8e5
@@ -1120,7 +1140,7 @@ def make_tensor_desc(x, shape, strides, block_shape, cga_layout=()):
 
 
 def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red=False, p: KernelConfig | None = None,
-                      cga_layout=None):
+                      cga_layout=None, config_selector=select_kernel_config):
     if isinstance(o, bool) and M is None and use_tmem_red is False:
         use_tmem_red = o
         o = None
@@ -1131,7 +1151,7 @@ def attention_forward(q, k, v, causal, sm_scale, o=None, M=None, *, use_tmem_red
     assert HEAD_DIM_K in {16, 32, 64, 128, 256}
 
     stage = 3 if causal else 1
-    p = select_kernel_config(HEAD_DIM_K, q.shape[2], q.dtype, causal, use_tmem_red, override=p)
+    p = config_selector(HEAD_DIM_K, q.shape[2], q.dtype, causal, use_tmem_red, override=p)
     if cga_layout is None:
         cga_layout = p.CGA_LAYOUT
 
@@ -1251,11 +1271,11 @@ def test_op_consan(dtype, cga_layout):
 
 BATCH = [4]
 N_HEADS = [32]
-HEAD_DIM = [64, 128]
+HEAD_DIM = [128]
 causal = [False, True]
 providers = ["triton-fp16", "triton-fp8"]
-N_CTX = [2**i for i in range(10, 17)]
-use_tmem_reds = [False, True] if is_blackwell_ultra() else [False]
+N_CTX = [2**i for i in range(10, 15)]
+use_tmem_reds = [False, True] if is_blackwell_ultra() or is_rubin() else [False]
 
 bench_configs = []
 for Z, H, D, is_causal, use_tmem_red in itertools.product(BATCH, N_HEADS, HEAD_DIM, causal, use_tmem_reds):
@@ -1303,7 +1323,8 @@ def bench(Z, H, N_CTX, HEAD_DIM, causal, use_tmem_red, provider):
 
     with torch.nn.attention.sdpa_kernel([torch.nn.attention.SDPBackend.CUDNN_ATTENTION]):
         if provider == "triton":
-            fn = lambda: attention_forward(q, k, v, causal, sm_scale, o, M, use_tmem_red=use_tmem_red)
+            fn = lambda: attention_forward(q, k, v, causal, sm_scale, o, M, use_tmem_red=use_tmem_red,
+                                           config_selector=select_benchmark_kernel_config)
         elif provider == "cudnn":
             fn = lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
         else:
