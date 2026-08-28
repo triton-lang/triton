@@ -125,7 +125,11 @@ struct BlockInfo {
   SliceMapT syncWriteSlices;
 
   // Thread ordering is independent of which physical addresses are accessed.
+  // Effect: something whose effects may need to be ordered before later
+  // operations.
   std::set<Operation *> threadEffects;
+  // Demand: something that may require previous effects to be ordered before it
+  // executes.
   std::set<Operation *> threadDemands;
 
   BlockInfo() = default;
