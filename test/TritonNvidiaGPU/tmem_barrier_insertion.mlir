@@ -746,14 +746,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
-  // Complete stores before the backedge; the next iteration keeps its
-  // rendezvous before writing the same descriptor again.
+  // The backedge adds a barrier before the store. Move the disjoint load
+  // wait before that barrier, and complete the store before the next iteration.
   // CHECK-LABEL: @wait_cfg_backedge
   // CHECK: cf.br
   // CHECK-NOT: ttng.tmem_wait
   // CHECK: cf.cond_br
-  // CHECK-NOT: ttng.tmem_wait
-  // CHECK: ttg.barrier local
+  // CHECK: ttng.tmem_load
+  // CHECK-NEXT: ttng.tmem_wait load
+  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.tmem_store
   // CHECK-NEXT: %{{.*}} = arith.subi
   // CHECK-NEXT: ttng.tmem_wait store
@@ -765,12 +766,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %zero = arith.constant 0 : i32
     %one = arith.constant 1 : i32
     %mem = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %source = ttng.tmem_alloc %data {tensor_memory_col_offset = 128 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttg.barrier local
     cf.br ^header(%iterations : i32)
   ^header(%remaining: i32):
     %again = arith.cmpi sgt, %remaining, %zero : i32
     cf.cond_br %again, ^body, ^exit
   ^body:
-    ttng.tmem_store %data, %mem, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %loaded = ttng.tmem_load %source : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    ttng.tmem_store %loaded, %mem, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
     %next = arith.subi %remaining, %one : i32
     cf.br ^header(%next : i32)
   ^exit:
