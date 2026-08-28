@@ -409,30 +409,26 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 
 // -----
 
-#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-!barrier = !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>
+#rows = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#cols = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [1, 0]}>
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // The second launch rendezvous finishes capture reads before the default
-  // partition publishes. No additional CTA rendezvous is needed there.
-  // CHECK-LABEL: @capture_rendezvous_before_publication
-  tt.func @capture_rendezvous_before_publication(%ptr: !tt.ptr<i32>) {
-    %phase = arith.constant 0 : i32
-    %done = ttg.local_alloc : () -> !barrier
-    ttng.init_barrier %done, 1 : !barrier
-    ttg.warp_specialize(%ptr)
+  // The conversion reuses capture storage. The second launch rendezvous
+  // completes capture reads before the conversion starts writing its scratch.
+  // CHECK-LABEL: @capture_scratch_reused_in_default
+  tt.func @capture_scratch_reused_in_default(%ptr: !tt.ptr<i32>, %input: tensor<16x16xf32, #rows>) -> tensor<16x16xf32, #cols> {
+    // CHECK: ttg.warp_specialize{{.*}}allocation.offset = [[CAPTURE:[0-9]+]]
+    %result = ttg.warp_specialize(%ptr)
     default {
-      // CHECK: default {
-      // CHECK-NEXT: ttng.arrive_barrier
-      ttng.arrive_barrier %done, 1 : !barrier
-      ttg.warp_yield
+      // CHECK-NEXT: default {
+      // CHECK-NEXT: {{.*}} = ttg.convert_layout{{.*}}allocation.offset = [[CAPTURE]]
+      %converted = ttg.convert_layout %input : tensor<16x16xf32, #rows> -> tensor<16x16xf32, #cols>
+      ttg.warp_yield %converted : tensor<16x16xf32, #cols>
     }
     partition0(%address: !tt.ptr<i32>) num_warps(4) {
       %value = tt.load %address : !tt.ptr<i32>
       ttg.warp_return
-    } : (!tt.ptr<i32>) -> ()
-    ttng.wait_barrier %done, %phase : !barrier
-    ttng.inval_barrier %done : !barrier
-    tt.return
+    } : (!tt.ptr<i32>) -> tensor<16x16xf32, #cols>
+    tt.return %result : tensor<16x16xf32, #cols>
   }
 }

@@ -200,8 +200,7 @@ triton::BarrierStages getLocalBarrierStages(Operation *op,
   // immediately before the operation.
   stages.betweenMemoryEffects = hasScratchBarrier;
   stages.beforeMemoryEffects =
-      isa<gpu::BarrierOp, ttng::ClusterBarrierOp,
-          triton::gpu::WarpSpecializePartitionsOp, triton::gpu::WarpYieldOp,
+      isa<gpu::BarrierOp, ttng::ClusterBarrierOp, triton::gpu::WarpYieldOp,
           triton::gpu::WarpReturnOp, ttng::ArriveBarrierOp,
           ttng::BarrierExpectOp, ttng::TCGen5CommitOp>(op);
 
