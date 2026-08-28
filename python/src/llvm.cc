@@ -746,7 +746,7 @@ void init_triton_llvm(py::module_ &m) {
          std::string arch, std::string features, std::vector<std::string> flags,
          bool enable_fp_fusion, bool disable_slp_vectorizer,
          bool disable_vector_combine, bool expand_masked_div_rem,
-         bool scalarize_packed_fops) {
+         bool scalarize_packed_fops, bool vectorize_extracted_adds) {
         if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
           return;
         // Check to see if we are passing a list of flags to disable
@@ -863,10 +863,14 @@ void init_triton_llvm(py::module_ &m) {
           mpm.addPass(AddressSanitizerPass(Opts));
         }
         mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
-        if (scalarize_packed_fops) {
+        if (vectorize_extracted_adds || scalarize_packed_fops) {
           FunctionPassManager fpm;
-          fpm.addPass(ScalarizePackedFOpsPass());
-          fpm.addPass(InstSimplifyPass());
+          if (vectorize_extracted_adds)
+            fpm.addPass(VectorizeExtractedAddsPass());
+          if (scalarize_packed_fops) {
+            fpm.addPass(ScalarizePackedFOpsPass());
+            fpm.addPass(InstSimplifyPass());
+          }
           mpm.addPass(createModuleToFunctionPassAdaptor(std::move(fpm)));
         }
         if (expand_masked_div_rem)
@@ -884,6 +888,7 @@ void init_triton_llvm(py::module_ &m) {
       py::arg("disable_vector_combine") = false,
       py::arg("expand_masked_div_rem") = false,
       py::arg("scalarize_packed_fops") = false,
+      py::arg("vectorize_extracted_adds") = false,
       py::call_guard<py::gil_scoped_release>());
 
   m.def("translate_to_asm",

@@ -43,6 +43,11 @@ static cl::opt<bool>
                         llvm::cl::desc("run pass to break phi struct"),
                         cl::init(false));
 
+static cl::opt<bool> VectorizeExtractedAdds(
+    "vectorize-extracted-adds",
+    cl::desc("re-form full-lane vector adds extracted from vector multiplies"),
+    cl::init(false));
+
 static cl::opt<bool> ScalarizePackedFOps(
     "scalarize-packed-fops",
     cl::desc("scalarize FP32 arithmetic pairs with only one used lane"),
@@ -68,6 +73,8 @@ static std::function<Error(Module *)> makeOptimizingPipeline() {
     llvm::FunctionPassManager fpm;
     if (BreakStructPhiNodes)
       fpm.addPass(BreakStructPhiNodesPass());
+    if (VectorizeExtractedAdds)
+      fpm.addPass(VectorizeExtractedAddsPass());
     if (ScalarizePackedFOps) {
       fpm.addPass(ScalarizePackedFOpsPass());
       fpm.addPass(InstSimplifyPass());
