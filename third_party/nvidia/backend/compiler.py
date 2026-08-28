@@ -123,6 +123,8 @@ class CUDAOptions:
     launch_cooperative_grid: bool = False
     launch_pdl: bool = False
     clc: bool = False
+    # Loader-gated one-tile CLC lookahead; "none" retains stock scheduling.
+    clc_throttle: str = "none"
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4b15")
     deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
@@ -138,6 +140,10 @@ class CUDAOptions:
     min_shared_mem: Optional[int] = None
 
     def __post_init__(self):
+        if self.clc_throttle not in ("none", "load"):
+            raise ValueError("clc_throttle must be 'none' or 'load'")
+        if self.clc_throttle != "none" and not self.clc:
+            raise ValueError("clc_throttle requires clc=True")
         default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         if not extern_libs.get('libdevice', None):
@@ -333,7 +339,7 @@ class CUDABackend(BaseBackend):
             nvidia.passes.ttnvgpuir.add_promote_lhs_to_tmem(pm)
             passes.ttgpuir.add_assign_latencies(pm, opt.num_stages)
             passes.ttgpuir.add_schedule_loops(pm)
-            passes.ttgpuir.add_warp_specialize(pm, opt.num_stages)
+            passes.ttgpuir.add_warp_specialize(pm, opt.num_stages, opt.clc_throttle)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
             passes.ttgpuir.add_optimize_partition_warps(pm)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)

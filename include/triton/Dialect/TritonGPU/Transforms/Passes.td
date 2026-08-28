@@ -117,7 +117,9 @@ def TritonGPUAutomaticWarpSpecialization : Pass<"tritongpu-automatic-warp-specia
 
   let options = [
     Option<"numStages", "num-stages", "int32_t", /*default*/"3",
-           "number of pipeline stages">
+           "number of pipeline stages">,
+    Option<"clcThrottle", "clc-throttle", "std::string", /*default*/"\"none\"",
+           "limit CLC requests to one per loader tile admission: none or load">
   ];
 }
 
