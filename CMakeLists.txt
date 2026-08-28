@@ -31,6 +31,7 @@ set(TRITON_CACHE_PATH "" CACHE PATH "Path to triton cache")
 set(TRITON_LLVM_SYSTEM_SUFFIX "" CACHE STRING "Path to LLVM system suffix")
 set(LLVM_SYSPATH "" CACHE PATH "Path to system LLVM installation")
 set(JSON_SYSPATH "" CACHE PATH "Path to system nlohmann/json headers")
+set(TRITON_AMD_CODEGEN_PATH "" CACHE FILEPATH "Path override for AMD code-generation library")
 set(TRITON_PTXAS_PATH "" CACHE FILEPATH "Path override for ptxas")
 set(TRITON_PTXAS_BLACKWELL_PATH "" CACHE FILEPATH "Path override for ptxas-blackwell")
 set(TRITON_CUOBJDUMP_PATH "" CACHE FILEPATH "Path override for cuobjdump")
@@ -57,6 +58,9 @@ if(NOT "${LLVM_SYSPATH}" STREQUAL "")
 endif()
 if(NOT "${JSON_SYSPATH}" STREQUAL "")
   list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --json-syspath "${JSON_SYSPATH}")
+endif()
+if(NOT "${TRITON_AMD_CODEGEN_PATH}" STREQUAL "")
+  list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --triton-amd-codegen-path "${TRITON_AMD_CODEGEN_PATH}")
 endif()
 if(NOT "${TRITON_PTXAS_PATH}" STREQUAL "")
   list(APPEND TRITON_BUILD_HELPER_COMMON_ARGS --triton-ptxas-path "${TRITON_PTXAS_PATH}")
@@ -140,6 +144,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
     APPEND
     PROPERTY CMAKE_CONFIGURE_DEPENDS
       "${CMAKE_CURRENT_SOURCE_DIR}/python/build_helpers.py"
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/amd-llvm-info.json"
+      "${CMAKE_CURRENT_SOURCE_DIR}/third_party/amd/backend/codegen/CMakeLists.txt"
+      "${CMAKE_CURRENT_SOURCE_DIR}/third_party/amd/backend/codegen/amdgpu_codegen.cc"
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/nvidia-toolchain-version.json"
   )
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -392,6 +399,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRUBToLLVM
 
     # LLVM
+    LLVMBitWriter
     LLVMPasses
     LLVMNVPTXCodeGen
     LLVMAMDGPUCodeGen

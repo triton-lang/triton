@@ -64,10 +64,11 @@ jobs:
         run: |
           llvm_file="cmake/llvm-info.json"
           nvidia_file="cmake/nvidia-toolchain-version.json"
+          amd_file="cmake/amd-llvm-info.json"
           json_file="cmake/json-version.txt"
 
           # Check if files exist before proceeding
-          if [[ ! -f "$llvm_file" || ! -f "$nvidia_file" || ! -f "$json_file" ]]; then
+          if [[ ! -f "$llvm_file" || ! -f "$nvidia_file" || ! -f "$amd_file" || ! -f "$json_file" ]]; then
             echo "Error: Required dependency files are missing."
             exit 1
           fi
@@ -75,6 +76,7 @@ jobs:
           # Process the files if they exist
           echo "llvm=$(sha256sum $llvm_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
+          echo "amd=$(sha256sum $amd_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
         shell: bash
       - name: Restore build dependencies cache
@@ -87,8 +89,9 @@ jobs:
           path: |
             ~/.triton/llvm
             ~/.triton/nvidia
+            ~/.triton/amd
             ~/.triton/json
-          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
+          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-amd-${{ steps.cache-key.outputs.amd }}-json-${{ steps.cache-key.outputs.json }}
       - name: Install dependencies
         run: apt-get update && apt-get install -y clang lld ccache
       - name: Inspect cache directories
@@ -234,6 +237,7 @@ jobs:
           path: |
             ~/.triton/llvm
             ~/.triton/nvidia
+            ~/.triton/amd
             ~/.triton/json
           key: ${{ steps.restore-build-deps-cache.outputs.cache-primary-key }}
       - name: Clean up caches
@@ -277,15 +281,17 @@ jobs:
         run: |
           llvm_file="cmake/llvm-info.json"
           nvidia_file="cmake/nvidia-toolchain-version.json"
+          amd_file="cmake/amd-llvm-info.json"
           json_file="cmake/json-version.txt"
 
-          if [[ ! -f "$llvm_file" || ! -f "$nvidia_file" || ! -f "$json_file" ]]; then
+          if [[ ! -f "$llvm_file" || ! -f "$nvidia_file" || ! -f "$amd_file" || ! -f "$json_file" ]]; then
             echo "Error: Required dependency files are missing."
             exit 1
           fi
 
           echo "llvm=$(sha256sum $llvm_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
+          echo "amd=$(sha256sum $amd_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
         shell: bash
       - name: Restore build dependencies cache
@@ -295,8 +301,9 @@ jobs:
           path: |
             ~/.triton/llvm
             ~/.triton/nvidia
+            ~/.triton/amd
             ~/.triton/json
-          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
+          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-amd-${{ steps.cache-key.outputs.amd }}-json-${{ steps.cache-key.outputs.json }}
       - name: Install dependencies
         run: |
           for i in 1 2 3; do
@@ -359,6 +366,7 @@ jobs:
           path: |
             ~/.triton/llvm
             ~/.triton/nvidia
+            ~/.triton/amd
             ~/.triton/json
           key: ${{ steps.restore-build-deps-cache.outputs.cache-primary-key }}
       - name: Clean up caches
