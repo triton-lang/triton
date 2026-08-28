@@ -1,6 +1,5 @@
 import math
 import torch
-from torch._subclasses.fake_tensor import is_fake
 import triton
 import triton.language as tl
 from dataclasses import dataclass
@@ -86,7 +85,7 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
 
     def convert_data(self, data, destination: LayoutTransformation):
         if (not self.is_fp4 or self.N % 2 or self.shape[self.mx_axis] % 2 or data.device.type != "cuda"
-                or data.dtype != torch.uint8 or data.ndim != len(self.shape) or is_fake(data)
+                or data.dtype != torch.uint8 or data.ndim != len(self.shape)
                 or not isinstance(destination, strided.StridedLayoutTransformation)
                 or destination.order[0] < len(self.shape) - 2):
             return super().convert_data(data, destination)
@@ -332,7 +331,7 @@ def _convert_bits_kernel(X, Y, N, INVERSE: tl.constexpr, BLOCK_SIZE: tl.constexp
 
 def _convert_bits(x: torch.Tensor, inverse: bool) -> torch.Tensor:
     """Avoid full-size integer temporaries when re-encoding CUDA values."""
-    if x.device.type != "cuda" or x.dtype != torch.uint8 or is_fake(x):
+    if x.device.type != "cuda" or x.dtype != torch.uint8:
         return _unpack_bits(x) if inverse else _pack_bits(x)
     x = x.contiguous()
     shape = (*x.shape[:-1], x.shape[-1] // 4)

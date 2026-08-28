@@ -8,7 +8,6 @@ from triton_kernels.target_info import cuda_capability_geq
 import triton.language as tl
 import triton
 import torch
-from torch._subclasses.fake_tensor import FakeTensorMode
 
 # ------------------------------------------------------------
 # Torch tests
@@ -188,6 +187,7 @@ def test_mxfp4_value_convert_layout_odd_source_packing(shape, mx_axis, major_dim
     assert str(actual.value) == str(expected.value)
 
 
+@pytest.mark.enable_warmup
 @pytest.mark.parametrize("shape", [(2, 2), (18, 34), (64, 32), (2, 3, 66, 34)])
 @pytest.mark.parametrize("mx_axis", [-2, -1])
 @pytest.mark.parametrize("mma_version", [2, 3])
@@ -218,30 +218,7 @@ def test_mxfp4_value_convert_layout_compact_source(shape, mx_axis, mma_version, 
         assert torch.equal(actual.data.cpu(), expected.data)
 
 
-@pytest.mark.parametrize("mx_axis", [-2, -1])
-@pytest.mark.parametrize("mma_version", [2, 3])
-@pytest.mark.parametrize("major_dim", [-2, -1])
-def test_mxfp4_value_convert_layout_compact_source_fake(mx_axis, mma_version, major_dim):
-    data = torch.empty((2, 3, 4, 128), dtype=torch.uint8)
-    shape = (2, 3, 64, 16) if mx_axis == -2 else (2, 3, 16, 64)
-    if mx_axis == -2:
-        data = data.mT
-    layout = HopperMXValueLayout(mx_axis, mma_version)
-    destination = StridedLayout(major_dim)
-    expected = convert_layout(wrap_torch_tensor(data, dtype=FP4, shape=shape, layout=layout), destination)
-
-    with FakeTensorMode():
-        data = torch.empty_strided(data.shape, data.stride(), dtype=data.dtype, device="cuda")
-        source = wrap_torch_tensor(data, dtype=FP4, shape=shape, layout=layout)
-        actual = convert_layout(source, destination)
-
-    assert actual.shape == expected.shape
-    assert actual.data.shape == expected.data.shape
-    assert actual.data.stride() == expected.data.stride()
-    assert actual.data.device.type == "cuda"
-
-
-@pytest.mark.parametrize("encoded_shape", [(3, 128), (4, 124), (4, 128), (8, 256)])
+@pytest.mark.parametrize("encoded_shape", [(3, 128), (4, 124), (16, 384), (20, 256)])
 @pytest.mark.parametrize("mx_axis", [-2, -1])
 @pytest.mark.parametrize("mma_version", [2, 3])
 @pytest.mark.parametrize("major_dim", [-2, -1])
