@@ -92,11 +92,12 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
             return super().convert_data(data, destination)
 
         source = self._maybe_mT(data)
+        source_shape = tuple(source.shape)
         m, k = (self.N, self.K) if self.mx_axis == len(self.leading_shape) else (self.K, self.N)
         # Each 4x128 encoded tile covers 16x64 logical FP4 values. Compact
         # encodings must contain complete tiles covering the logical shape.
-        if (list(source.shape[:-2]) != self.leading_shape or source.shape[-2] % 4 or source.shape[-1] % 128
-                or 4 * source.shape[-2] < m or source.shape[-1] // 2 < k):
+        if (list(source_shape[:-2]) != self.leading_shape or source_shape[-2] % 4 or source_shape[-1] % 128
+                or 4 * source_shape[-2] < m or source_shape[-1] // 2 < k):
             return super().convert_data(data, destination)
 
         out = torch.empty_strided(destination.storage_shape, destination.storage_strides, dtype=data.dtype,
@@ -106,10 +107,9 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         grid = (math.prod(self.leading_shape) * triton.cdiv(m, 4 * block_m) * triton.cdiv(k, block_k // 2), )
         if grid[0] > 0:
             with torch.cuda.device(data.device):
-                _unswizzle_to_strided_kernel[grid](source, target, tuple(source.shape), source.stride(),
-                                                   target.stride(), m, k, MMA_VERSION=self.mma_version,
-                                                   PACK_M=destination.order[0] != self.mx_axis, BLOCK_M=block_m,
-                                                   BLOCK_K=block_k)
+                _unswizzle_to_strided_kernel[grid](source, target, source_shape, source.stride(), target.stride(), m, k,
+                                                   PACK_M=destination.order[0] != self.mx_axis,
+                                                   MMA_VERSION=self.mma_version, BLOCK_M=block_m, BLOCK_K=block_k)
         return out
 
     def swizzle_data(self, data):
@@ -399,7 +399,10 @@ def _unswizzle_to_strided_kernel(X, Y, X_SHAPE: tl.constexpr, X_STRIDES: tl.cons
     rows = tile_m * BLOCK_M + tl.arange(0, BLOCK_M)
     words = tile_k * (BLOCK_K // 4) + tl.arange(0, BLOCK_K // 4)
     offsets = rows[:, None] * X_STRIDES[-2] + 4 * words[None, :] * X_STRIDES[-1]
-    mask = (rows[:, None] < X_SHAPE[-2]) & (4 * words[None, :] < X_SHAPE[-1])
+    if X_SHAPE[-2] % BLOCK_M or X_SHAPE[-1] % BLOCK_K:
+        mask = (rows[:, None] < X_SHAPE[-2]) & (4 * words[None, :] < X_SHAPE[-1])
+    else:
+        mask = True
     a = tl.load(X + offsets, mask, other=0).to(tl.uint32)
     b = tl.load(X + offsets + X_STRIDES[-1], mask, other=0).to(tl.uint32)
     c = tl.load(X + offsets + 2 * X_STRIDES[-1], mask, other=0).to(tl.uint32)
