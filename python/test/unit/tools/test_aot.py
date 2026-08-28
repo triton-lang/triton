@@ -5,6 +5,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import types
 
 import numpy as np
 
@@ -27,6 +28,21 @@ elif is_hip():
 
     def library_names():
         return ["amdhip64"]
+
+
+@pytest.mark.skipif(not is_hip(), reason="HIP only")
+def test_hip_runtime_accepts_hardlink(monkeypatch, tmp_path):
+    from triton.backends.amd import driver
+
+    therock_path = tmp_path / "therock"
+    therock_path.touch()
+    loaded_path = tmp_path / "loaded"
+    os.link(therock_path, loaded_path)
+    monkeypatch.setitem(sys.modules, "rocm_sdk", types.SimpleNamespace(find_libraries=lambda _: [therock_path]))
+    monkeypatch.setattr(driver, "_find_already_mmapped_dylib_on_linux", lambda _: str(loaded_path))
+    driver._get_path_to_hip_runtime_dylib.cache_clear()
+    assert driver._get_path_to_hip_runtime_dylib() == str(therock_path)
+    driver._get_path_to_hip_runtime_dylib.cache_clear()
 
 
 kernel_utils_src = """
