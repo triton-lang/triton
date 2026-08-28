@@ -204,6 +204,62 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#wmma_acc = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, CGALayout = [[1, 0], [0, 1]], instrShape = [16, 16, 32]}>
+#wmma_a = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, CGALayout = [[1, 0], [0, 0]], instrShape = [16, 16, 32]}>
+#wmma_b = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, CGALayout = [[0, 0], [0, 1]], instrShape = [16, 16, 32]}>
+#a_scale = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0], [0, 0]]}>
+#b_scale = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 0], [1, 0]]}>
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @wmma_invalid_cga_split_a_scale(
+              %a: tensor<32x32xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #wmma_a, kWidth = 8}>>,
+              %b: tensor<32x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #wmma_b, kWidth = 8}>>,
+              %a_scale: tensor<32x1xi8, #b_scale>,
+              %b_scale: tensor<32x1xi8, #b_scale>,
+              %dst: tensor<32x32xf32, #wmma_acc>
+  ) {
+    // expected-error @+1 {{Incompatible CGA layout for the scale of operand 0}}
+    %0 = tt.dot_scaled %a scale %a_scale, %b scale %b_scale, %dst lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<32x32xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #wmma_a, kWidth = 8}>>, tensor<32x1xi8, #b_scale> * tensor<32x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #wmma_b, kWidth = 8}>>, tensor<32x1xi8, #b_scale> -> tensor<32x32xf32, #wmma_acc>
+    tt.return
+  }
+
+  tt.func @wmma_invalid_cga_split_b_scale(
+              %a: tensor<32x32xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #wmma_a, kWidth = 8}>>,
+              %b: tensor<32x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #wmma_b, kWidth = 8}>>,
+              %a_scale: tensor<32x1xi8, #a_scale>,
+              %b_scale: tensor<32x1xi8, #a_scale>,
+              %dst: tensor<32x32xf32, #wmma_acc>
+  ) {
+    // expected-error @+1 {{Incompatible CGA layout for the scale of operand 1}}
+    %0 = tt.dot_scaled %a scale %a_scale, %b scale %b_scale, %dst lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<32x32xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #wmma_a, kWidth = 8}>>, tensor<32x1xi8, #a_scale> * tensor<32x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #wmma_b, kWidth = 8}>>, tensor<32x1xi8, #a_scale> -> tensor<32x32xf32, #wmma_acc>
+    tt.return
+  }
+
+  tt.func @wmma_invalid_cga_split_scaled_operand_1(
+              %a: tensor<32x32xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #wmma_a, kWidth = 8}>>,
+              %b: tensor<32x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #wmma_a, kWidth = 8}>>,
+              %a_scale: tensor<32x1xi8, #a_scale>,
+              %b_scale: tensor<32x1xi8, #b_scale>,
+              %dst: tensor<32x32xf32, #wmma_acc>
+  ) {
+    // expected-error @+1 {{Incompatible CGA layout for operand 1}}
+    %0 = tt.dot_scaled %a scale %a_scale, %b scale %b_scale, %dst lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<32x32xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #wmma_a, kWidth = 8}>>, tensor<32x1xi8, #a_scale> * tensor<32x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #wmma_a, kWidth = 8}>>, tensor<32x1xi8, #b_scale> -> tensor<32x32xf32, #wmma_acc>
+    tt.return
+  }
+
+  tt.func @wmma_valid_cga_split_scaled(
+              %a: tensor<32x32xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #wmma_a, kWidth = 8}>>,
+              %b: tensor<32x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #wmma_b, kWidth = 8}>>,
+              %a_scale: tensor<32x1xi8, #a_scale>,
+              %b_scale: tensor<32x1xi8, #b_scale>,
+              %dst: tensor<32x32xf32, #wmma_acc>
+  ) {
+    %0 = tt.dot_scaled %a scale %a_scale, %b scale %b_scale, %dst lhs = e4m3 rhs = e4m3 {fastMath = false} : tensor<32x32xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #wmma_a, kWidth = 8}>>, tensor<32x1xi8, #a_scale> * tensor<32x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #wmma_b, kWidth = 8}>>, tensor<32x1xi8, #b_scale> -> tensor<32x32xf32, #wmma_acc>
+    tt.return
+  }
+}
+
+// -----
+
 #shared_32 = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [128, 64]}>
 #shared_2_intervals = #ttg.padded_shared<[64:+4, 128:+4] {order = [1, 0], shape = [128, 64]}>
 #smem = #ttg.shared_memory

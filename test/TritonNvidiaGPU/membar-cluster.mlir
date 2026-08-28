@@ -20,12 +20,32 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %ld = ttg.local_load %buf : !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> tensor<256x128xf16, #blockedSplitM>
     tt.return %ld : tensor<256x128xf16, #blockedSplitM>
   }
+
+  // A relaxed cluster barrier does not synchronize memory. A strong barrier
+  // is still required before reusing shared memory touched by convert_layout.
+  // CHECK-LABEL: @relaxed_cluster_barrier_does_not_sync_memory
+  // CHECK: ttg.convert_layout
+  // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+  // CHECK-NEXT: ttng.cluster_barrier{{$}}
+  // CHECK-NEXT: ttg.local_alloc
+  tt.func @relaxed_cluster_barrier_does_not_sync_memory() -> tensor<256x128xf16, #blockedSplitM> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<256x128xf16, #blockedSplitM>
+    %cvt = ttg.convert_layout %cst : tensor<256x128xf16, #blockedSplitM> -> tensor<256x128xf16, #blockedSplitN>
+    ttng.cluster_barrier {relaxed = true}
+    %buf = ttg.local_alloc %cvt : (tensor<256x128xf16, #blockedSplitN>) -> !ttg.memdesc<256x128xf16, #shared, #smem, mutable>
+    ttg.local_store %cvt, %buf : tensor<256x128xf16, #blockedSplitN> -> !ttg.memdesc<256x128xf16, #shared, #smem, mutable>
+    %ld = ttg.local_load %buf : !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> tensor<256x128xf16, #blockedSplitM>
+    tt.return %ld : tensor<256x128xf16, #blockedSplitM>
+  }
 }
 
 // -----
 
 #blockedCallSrc = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
 #blockedCallDst = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
+#sharedCall = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
+#keepLayout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+#keepShared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @cluster_entry_c
@@ -48,16 +68,52 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
   // CHECK-LABEL: @cluster_entry_a
   // CHECK-NOT: ttng.cluster_barrier
-  // CHECK: tt.call @cluster_entry_b
+  // CHECK: tt.call @cluster_entry_b{{.*}}allocation.offset = [[CLUSTER_FRAME:[1-9][0-9]*]]
   // CHECK: ttg.convert_layout
   // CHECK-NEXT: ttng.cluster_barrier
-  // CHECK-NEXT: tt.call @cluster_entry_b
-  tt.func @cluster_entry_a() {
+  // CHECK-NEXT: tt.call @cluster_entry_b{{.*}}allocation.offset = [[CLUSTER_FRAME]]
+  tt.func @cluster_entry_a() -> tensor<65536xi8, #keepLayout> {
+    // Keep a larger allocation live to exercise nested frame translation at
+    // a nonzero offset, while both calls reuse the conversion's scratch.
+    %zeros = arith.constant dense<0> : tensor<65536xi8, #keepLayout>
+    %keep = ttg.local_alloc %zeros : (tensor<65536xi8, #keepLayout>) -> !ttg.memdesc<65536xi8, #keepShared, #ttg.shared_memory, mutable>
     tt.call @cluster_entry_b() : () -> ()
     %cst = arith.constant dense<0.0> : tensor<256x128xf16, #blockedCallSrc>
     %cvt = ttg.convert_layout %cst : tensor<256x128xf16, #blockedCallSrc> -> tensor<256x128xf16, #blockedCallDst>
     tt.call @cluster_entry_b() : () -> ()
+    %kept = ttg.local_load %keep : !ttg.memdesc<65536xi8, #keepShared, #ttg.shared_memory, mutable> -> tensor<65536xi8, #keepLayout>
+    tt.return %kept : tensor<65536xi8, #keepLayout>
+  }
+
+  tt.func private @store_argument(%dst: !ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable>) attributes {noinline = true} {
+    %value = arith.constant dense<3.0> : tensor<256x128xf16, #blockedCallDst>
+    %staging = ttg.local_alloc %value : (tensor<256x128xf16, #blockedCallDst>) -> !ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable>
+    %loaded = ttg.local_load %staging : !ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable> -> tensor<256x128xf16, #blockedCallDst>
+    ttg.local_store %loaded, %dst : tensor<256x128xf16, #blockedCallDst> -> !ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable>
     tt.return
+  }
+
+  tt.func private @forward_store_argument(%dst: !ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable>) attributes {noinline = true} {
+    tt.call @store_argument(%dst) : (!ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable>) -> ()
+    tt.return
+  }
+
+  // The nested call writes through an argument into the conversion's reused
+  // scratch, so it must wait for the conversion's cross-CTA read.
+  // The callee's local allocation puts its frame at a nonzero offset, but the
+  // argument still refers to the caller's allocation.
+  // CHECK-LABEL: @cluster_call_argument_reuses_scratch
+  // CHECK: ttg.convert_layout
+  // CHECK-NEXT: ttg.local_alloc
+  // CHECK-NEXT: ttng.cluster_barrier
+  // CHECK-NEXT: tt.call @forward_store_argument{{.*}}allocation.offset = {{[1-9][0-9]*}}
+  tt.func @cluster_call_argument_reuses_scratch() -> (tensor<256x128xf16, #blockedCallDst>, tensor<256x128xf16, #blockedCallDst>) {
+    %value = arith.constant dense<0.0> : tensor<256x128xf16, #blockedCallSrc>
+    %cvt = ttg.convert_layout %value : tensor<256x128xf16, #blockedCallSrc> -> tensor<256x128xf16, #blockedCallDst>
+    %dst = ttg.local_alloc : () -> !ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable>
+    tt.call @forward_store_argument(%dst) : (!ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable>) -> ()
+    %result = ttg.local_load %dst : !ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable> -> tensor<256x128xf16, #blockedCallDst>
+    tt.return %cvt, %result : tensor<256x128xf16, #blockedCallDst>, tensor<256x128xf16, #blockedCallDst>
   }
 }
 
@@ -1002,6 +1058,34 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttng.async_shared_store %src, %dst, %barrier : tensor<128xi32, #blockedStore> -> !ttg.memdesc<128xi32, #sharedStoreRemote, #smem, mutable>, !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>
     tt.return
   }
+
+  tt.func private @async_store_arguments(%src: tensor<128xi32, #blockedStore>, %dst: !ttg.memdesc<128xi32, #sharedStore, #smem, mutable>, %barrier: !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>) attributes {noinline = true} {
+    ttng.async_shared_store %src, %dst, %barrier : tensor<128xi32, #blockedStore> -> !ttg.memdesc<128xi32, #sharedStore, #smem, mutable>, !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>
+    tt.return
+  }
+
+  // The helper only accesses caller-owned buffers. Their dependencies do not
+  // involve allocator reuse and need no additional cluster barriers.
+  // CHECK-LABEL: @cluster_call_without_allocator_reuse
+  // CHECK: ttng.barrier_expect
+  // CHECK-NOT: ttng.cluster_barrier
+  // CHECK: tt.call @async_store_arguments
+  // CHECK-NOT: ttng.cluster_barrier
+  // CHECK: ttng.wait_barrier
+  // CHECK: tt.return
+  tt.func @cluster_call_without_allocator_reuse(%src: tensor<128xi32, #blockedStore>) -> tensor<128xi32, #blockedStore> {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %dst = ttg.local_alloc : () -> !ttg.memdesc<128xi32, #sharedStore, #smem, mutable>
+    %barrier = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>
+    ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>
+    ttng.barrier_expect %barrier, 512 {fromCTA = 0 : i32}, %true : !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>
+    tt.call @async_store_arguments(%src, %dst, %barrier) : (tensor<128xi32, #blockedStore>, !ttg.memdesc<128xi32, #sharedStore, #smem, mutable>, !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>) -> ()
+    ttng.wait_barrier %barrier, %c0, %true deps %dst : !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>, !ttg.memdesc<128xi32, #sharedStore, #smem, mutable>
+    %result = ttg.local_load %dst : !ttg.memdesc<128xi32, #sharedStore, #smem, mutable> -> tensor<128xi32, #blockedStore>
+    ttng.inval_barrier %barrier : !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>
+    tt.return %result : tensor<128xi32, #blockedStore>
+  }
 }
 
 // -----
@@ -1442,6 +1526,50 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %offs = arith.constant dense<0> : tensor<2x32xi32, #local_subslice_blocked>
     %out_ptrs = tt.addptr %ptrs, %offs : tensor<2x32x!tt.ptr<i32>, #local_subslice_blocked>, tensor<2x32xi32, #local_subslice_blocked>
     tt.store %out_ptrs, %old : tensor<2x32x!tt.ptr<i32>, #local_subslice_blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#src = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
+#dst = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 32, rank = 1, CGALayout = [[0]]}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // Worker remote reads must finish before the parent reuses their scratch.
+  // CHECK-LABEL: @worker_scratch_reuse_requires_cluster_barrier
+  tt.func @worker_scratch_reuse_requires_cluster_barrier(%input: !tt.ptr<i32>, %desc: !tt.tensordesc<64xi32, #shared>) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %true = arith.constant true
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttng.arrive_barrier %bar, 1, %true : !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttg.warp_specialize(%input) attributes {warpGroupStartIds = array<i32: 4>}
+    default {
+      ttg.warp_yield
+    }
+    partition0(%in: !tt.ptr<i32>) num_warps(4) {
+      %ptrs = tt.splat %in : !tt.ptr<i32> -> tensor<16x16x!tt.ptr<i32>, #src>
+      %value = tt.load %ptrs : tensor<16x16x!tt.ptr<i32>, #src>
+      %converted = ttg.convert_layout %value : tensor<16x16xi32, #src> -> tensor<16x16xi32, #dst>
+      tt.print "converted" {hex = false, isSigned = array<i32: 1>} : %converted : tensor<16x16xi32, #dst>
+      // CHECK: ttg.warp_return
+      ttg.warp_return
+    } : (!tt.ptr<i32>) -> ()
+    %buffer = ttg.local_alloc : () -> !ttg.memdesc<2x64xi32, #shared, #smem, mutable>
+    %page = ttg.memdesc_index %buffer[%c1] : !ttg.memdesc<2x64xi32, #shared, #smem, mutable> -> !ttg.memdesc<64xi32, #shared, #smem, mutable>
+    ttng.barrier_expect %bar, 256, %true : !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttng.fence_async_shared {bCluster = true}
+    // CHECK: ttng.fence_async_shared
+    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK-NEXT: ttng.async_tma_copy_global_to_local
+    ttng.async_tma_copy_global_to_local %desc[%c0] %page, %bar, %true {multicast} : !tt.tensordesc<64xi32, #shared>, !ttg.memdesc<2xi64, #barrier, #smem, mutable> -> !ttg.memdesc<64xi32, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %c1, %true deps %page : !ttg.memdesc<2xi64, #barrier, #smem, mutable>, !ttg.memdesc<64xi32, #shared, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<2xi64, #barrier, #smem, mutable>
     tt.return
   }
 }
