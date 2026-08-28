@@ -670,7 +670,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %memory = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
     %result = scf.if %pred -> tensor<128x128xf32, #blocked> {
       // A multi-block callee cannot be inlined into a single-block SCF region,
-      // even without noinline. Preparation must identify the remaining call.
+      // even without noinline. FPSan must diagnose the remaining call.
       // expected-error @below {{must be inlined before FPSan}}
       %value = tt.call @early_return(%memory, %pred) : (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, i1) -> tensor<128x128xf32, #blocked>
       scf.yield %value : tensor<128x128xf32, #blocked>

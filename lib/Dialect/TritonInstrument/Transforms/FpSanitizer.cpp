@@ -259,13 +259,9 @@ static bool hasTwoCTAMma(ModuleOp module) {
 enum class FpSanMmaKind { Integer, Floating, Mixed };
 
 static FpSanMmaKind getFpSanMmaKind(ttng::TCGen5MMAOp mma) {
-  auto isFloatMemdesc = [](Value value) {
-    return isa<FloatType>(
-        cast<ttg::MemDescType>(value.getType()).getElementType());
-  };
-  bool aIsFloat = isFloatMemdesc(mma.getA());
-  bool bIsFloat = isFloatMemdesc(mma.getB());
-  bool dIsFloat = isFloatMemdesc(mma.getD());
+  bool aIsFloat = isa<FloatType>(mma.getA().getType().getElementType());
+  bool bIsFloat = isa<FloatType>(mma.getB().getType().getElementType());
+  bool dIsFloat = isa<FloatType>(mma.getD().getType().getElementType());
   if (aIsFloat && bIsFloat && dIsFloat)
     return FpSanMmaKind::Floating;
   if (!aIsFloat && !bIsFloat && !dIsFloat)
@@ -3271,10 +3267,11 @@ struct FpSanInliningRequirement {
   StringRef reason;
 };
 
-using FpSanRequiredCalls =
+using FpSanCallsRequiringInlining =
     SmallVector<std::pair<tt::CallOp, FpSanInliningRequirement>>;
 
-static FpSanRequiredCalls getFpSanRequiredCalls(ModuleOp module) {
+static FpSanCallsRequiringInlining
+getFpSanCallsRequiringInlining(ModuleOp module) {
   DenseMap<Operation *, FpSanInliningRequirement> functions;
   DenseMap<Operation *, FpSanInliningRequirement> producers;
   bool twoCTAs = hasTwoCTAMma(module);
@@ -3320,7 +3317,7 @@ static FpSanRequiredCalls getFpSanRequiredCalls(ModuleOp module) {
                             "context"});
   });
 
-  FpSanRequiredCalls calls;
+  FpSanCallsRequiringInlining calls;
   module.walk([&](tt::CallOp call) {
     auto producer = producers.find(call);
     if (producer != producers.end()) {
@@ -3336,21 +3333,17 @@ static FpSanRequiredCalls getFpSanRequiredCalls(ModuleOp module) {
 
 class FpSanitizerPass
     : public impl::TritonInstrumentFpSanitizerBase<FpSanitizerPass> {
-  LogicalResult prepareForFpSan() {
-    auto calls = getFpSanRequiredCalls(getOperation());
-    for (auto [call, requirement] : calls) {
-      auto diagnostic = call.emitOpError("must be inlined before FPSan");
-      diagnostic.attachNote(requirement.cause->getLoc()) << requirement.reason;
-    }
-    return success(calls.empty());
-  }
-
 public:
   using impl::TritonInstrumentFpSanitizerBase<
       FpSanitizerPass>::TritonInstrumentFpSanitizerBase;
 
   void runOnOperation() override {
-    if (failed(prepareForFpSan())) {
+    auto calls = getFpSanCallsRequiringInlining(getOperation());
+    for (auto [call, requirement] : calls) {
+      auto diagnostic = call.emitOpError("must be inlined before FPSan");
+      diagnostic.attachNote(requirement.cause->getLoc()) << requirement.reason;
+    }
+    if (!calls.empty()) {
       signalPassFailure();
       return;
     }
