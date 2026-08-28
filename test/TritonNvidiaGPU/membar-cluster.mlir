@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-tensor-memory-allocation -test-print-membar | FileCheck --dump-input=fail --dump-input-context=30 %s
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory --triton-tensor-memory-allocation -test-print-membar | FileCheck --dump-input=fail --dump-input-context=30 %s
 
 // -----
 
@@ -858,10 +858,10 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // and come out of the for loop analysis with a read dependency on the last reduce
 
   // CHECK-LABEL: @scf_for_reduce_cluster_barrier
-  // CHECK: scf.for
+  // CHECK: cf.cond_br
   // CHECK: ttng.cluster_barrier
   // CHECK: tt.reduce
-  // CHECK: scf.yield
+  // CHECK: cf.br
   // CHECK: ttng.cluster_barrier
   // CHECK-NEXT: ttg.local_alloc
   tt.func @scf_for_reduce_cluster_barrier() -> tensor<128xf16, #slice0> {
@@ -1343,7 +1343,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
   // CHECK: ttng.tmem_alloc
   // CHECK: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
-  // CHECK: scf.for
+  // CHECK: cf.cond_br
   // CHECK: ttng.barrier_expect
   // CHECK-NOT: ttng.cluster_barrier
   // CHECK: ttg.barrier local

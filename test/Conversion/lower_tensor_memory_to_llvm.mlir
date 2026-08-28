@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv=compute-capability=103 --triton-nvidia-gpu-tmem-barrier-insertion --test-print-membar --triton-nvidia-gpu-tmem-wait-insertion --convert-triton-gpu-to-llvm=compute-capability=103 --convert-warp-specialize-to-llvm --convert-nv-gpu-to-llvm -allow-unregistered-dialect | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory-nv=compute-capability=103 --triton-nvidia-gpu-tmem-barrier-insertion --test-print-membar --triton-nvidia-gpu-tmem-wait-insertion --convert-triton-gpu-to-llvm=compute-capability=103 --convert-warp-specialize-to-llvm --convert-nv-gpu-to-llvm -allow-unregistered-dialect | FileCheck %s
 
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1, CGALayout = [[0, 0]]>
 
