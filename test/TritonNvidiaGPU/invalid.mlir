@@ -1680,12 +1680,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
-#linear = #ttg.shared_linear<{offset = [[1]], block = []}, alignment = 16>
+#linear = #ttg.shared_linear<{offset = [[1]], block = [[0]]}, alignment = 16>
 #smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func @init_barrier_shared_linear(%barrier: !ttg.memdesc<1xi64, #linear, #smem, mutable, 2>) {
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @init_barrier_shared_linear(%barrier: !ttg.memdesc<2xi64, #linear, #smem>) {
     // expected-error @below {{barrier must have a contiguous shared-memory layout}}
-    ttng.init_barrier %barrier, 1 : !ttg.memdesc<1xi64, #linear, #smem, mutable, 2>
+    ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #linear, #smem>
     tt.return
   }
   tt.func @clc_load_result_shared_linear(%result: !ttg.memdesc<2xi64, #linear, #smem>) {
