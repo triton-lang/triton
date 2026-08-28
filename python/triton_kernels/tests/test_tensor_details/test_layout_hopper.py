@@ -1,3 +1,4 @@
+import math
 import pytest
 from triton_kernels.tensor import wrap_torch_tensor, convert_layout, empty, FP4
 from triton_kernels.tensor_details.layout import HopperMXScaleLayout, HopperMXValueLayout, StridedLayout
@@ -107,13 +108,19 @@ def test_mxfp4_value_convert_layout_roundtrip(mx_axis):
     assert torch.equal(roundtrip.storage.data, x)
 
 
-@pytest.mark.parametrize("shape", [(64, 64), (2, 34, 18)])
+@pytest.mark.parametrize("shape", [(64, 64), (130, 66), (2, 34, 18), (2, 3, 66, 34)])
+@pytest.mark.parametrize("step", [1, 2])
 @pytest.mark.parametrize("trans", [False, True])
 @pytest.mark.parametrize("mx_axis", [-2, -1])
 @pytest.mark.parametrize("mma_version", [2, 3])
-def test_mxfp4_value_convert_layout_matches_torch(shape, trans, mx_axis, mma_version):
-    data_cpu = torch.randint(0, 256, shape, dtype=torch.uint8)
+@pytest.mark.enable_warmup
+def test_mxfp4_value_convert_layout_matches_torch(shape, step, trans, mx_axis, mma_version):
+    input_shape = tuple(step * size for size in shape[:-1]) + shape[-1:]
+    data_cpu = torch.randint(0, 256, (math.prod(input_shape) + 1, ), dtype=torch.uint8)
     data_cuda = data_cpu.cuda()
+    data_cpu, data_cuda = data_cpu[1:].view(input_shape), data_cuda[1:].view(input_shape)
+    index = (slice(step - 1, None, step), ) * (len(shape) - 1) + (slice(None), )
+    data_cpu, data_cuda = data_cpu[index], data_cuda[index]
     if trans:
         data_cpu, data_cuda = data_cpu.mT, data_cuda.mT
     src_cpu = wrap_torch_tensor(data_cpu, dtype=FP4)
@@ -278,8 +285,7 @@ def test_mxfp4_value_swizzle_peak_allocation(mx_axis):
     torch.cuda.synchronize(data.device)
     peak = torch.cuda.max_memory_allocated(data.device) - baseline
 
-    # Allow overlapping byte buffers, but not whole-tensor int32 intermediates.
-    assert peak <= 2 * swizzled.nbytes + 1024**2
+    assert peak <= swizzled.nbytes + 1024**2
 
 
 @pytest.mark.parametrize("mx_axis", [0, 1])
