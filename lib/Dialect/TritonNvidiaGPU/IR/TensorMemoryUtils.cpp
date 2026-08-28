@@ -248,10 +248,9 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth,
   return info;
 }
 
-FailureOr<TMemLdStEncodingInfo>
-computeTMemLdStEncodingInfo(RankedTensorType regTy, MemDescType memTy,
-                            int maxnreg,
-                            std::function<InFlightDiagnostic()> emitError) {
+FailureOr<LinearLayout>
+computeTMemLdStLayout(RankedTensorType regTy, MemDescType memTy,
+                      std::function<InFlightDiagnostic()> emitError) {
   auto memLayout = toLinearLayout(memTy);
   auto regLayout = toLinearLayout(regTy);
   auto *ctx = regTy.getContext();
@@ -289,9 +288,18 @@ computeTMemLdStEncodingInfo(RankedTensorType regTy, MemDescType memTy,
   bases[kWarp][1] = {64, 0};
   cvt = LinearLayout(std::move(bases), cvt.getOutDims(),
                      /*isSurjective=*/cvt.isSurjective());
+  return cvt;
+}
 
+FailureOr<TMemLdStEncodingInfo>
+computeTMemLdStEncodingInfo(RankedTensorType regTy, MemDescType memTy,
+                            int maxnreg,
+                            std::function<InFlightDiagnostic()> emitError) {
+  auto layout = computeTMemLdStLayout(regTy, memTy, emitError);
+  if (failed(layout))
+    return failure();
   int bitwidth = memTy.getElementTypeBitWidth();
-  return lowerTMemLdSt(cvt, maxnreg, bitwidth, emitError);
+  return lowerTMemLdSt(*layout, maxnreg, bitwidth, emitError);
 }
 
 bool supportsTMemLoadReduce(RankedTensorType regTy, MemDescType memTy,
