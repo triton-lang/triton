@@ -349,7 +349,7 @@ def is_linux_os(os_id):
     return False
 
 
-def get_llvm_package_info(helper_args: BuildHelperArgs):
+def get_llvm_system_suffix(helper_args: BuildHelperArgs):
     system = platform.system()
     try:
         arch = {"x86_64": "x64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
@@ -380,11 +380,18 @@ def get_llvm_package_info(helper_args: BuildHelperArgs):
             print(
                 f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user-configured LLVM from source build."
             )
-            return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
+            return None
     else:
         print(
             f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user-configured LLVM from source build."
         )
+        return None
+    return system_suffix
+
+
+def get_llvm_package_info(helper_args: BuildHelperArgs):
+    system_suffix = get_llvm_system_suffix(helper_args)
+    if system_suffix is None:
         return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
     llvm_info_path = os.path.join(get_base_dir(), "cmake", "llvm-info.json")
     with open(llvm_info_path, "r") as llvm_info_file:
@@ -409,11 +416,10 @@ def get_llvm_package_info(helper_args: BuildHelperArgs):
 
 
 def get_amd_codegen_package_info(helper_args: BuildHelperArgs):
-    llvm_package = get_llvm_package_info(helper_args)
-    if llvm_package.sym_name is None:
+    system_suffix = get_llvm_system_suffix(helper_args)
+    if system_suffix is None:
         raise RuntimeError("AMD code generation is unavailable for this platform; set TRITON_AMD_CODEGEN_PATH")
 
-    system_suffix = llvm_package.sym_name.removeprefix("llvm-")
     amd_llvm_info_path = os.path.join(get_base_dir(), "cmake", "amd-llvm-info.json")
     with open(amd_llvm_info_path, "r") as amd_llvm_info_file:
         amd_llvm_info = json.load(amd_llvm_info_file)
@@ -517,12 +523,39 @@ def amd_codegen_library_name():
     return "libtriton_amd_codegen.so"
 
 
-def build_amd_codegen(llvm_path: str, amd_llvm_info: dict, helper_args: BuildHelperArgs):
+def download_codegen_llvm(backend: str, llvm_info: dict, helper_args: BuildHelperArgs):
+    # This SDK has its own pin and cache. Never consult llvm-info.json or
+    # LLVM_SYSPATH, which configure Triton's core LLVM rather than this backend.
+    system_suffix = get_llvm_system_suffix(helper_args)
+    bootstrap = llvm_info.get("bootstrap_llvm", {})
+    checksum = bootstrap.get("sha256sum", {}).get(system_suffix)
+    if checksum is None:
+        raise RuntimeError(
+            f"Missing {backend} code-generation artifact and bootstrap LLVM checksum for {system_suffix}")
+    revision = llvm_info["llvm_hash"][:8]
+    name = f"llvm-{revision}-{system_suffix}-{bootstrap['build_number']}"
+    package_root = os.path.join(helper_args.cache_path, backend, "llvm")
+    llvm_path = os.path.join(package_root, name)
+    llvm_config = os.path.join(llvm_path, "lib", "cmake", "llvm", "LLVMConfig.cmake")
+    if not os.path.isfile(llvm_config):
+        if helper_args.offline_build:
+            raise RuntimeError(f"Requested an offline build but {backend} bootstrap LLVM is missing from {llvm_path}")
+        url = f"https://oaitriton.blob.core.windows.net/public/llvm-builds/{name}.tar.gz"
+        _download_and_extract(url, package_root, name, helper_args.archives_path, checksum)
+    if not os.path.isfile(llvm_config):
+        raise RuntimeError(f"Cannot find independently pinned {backend} LLVM configuration at {llvm_config}")
+    return llvm_path
+
+
+def build_amd_codegen(amd_llvm_info: dict, helper_args: BuildHelperArgs):
+    llvm_path = download_codegen_llvm("amd", amd_llvm_info, helper_args)
     revision = f'{amd_llvm_info["llvm_hash"]}-{amd_llvm_info["build_number"]}'
-    system_suffix = get_llvm_package_info(helper_args).sym_name.removeprefix("llvm-")
-    build_path = os.path.join(helper_args.cache_path, "amd", f"codegen-bootstrap-{revision}-{system_suffix}")
-    install_path = os.path.join(build_path, "install")
+    system_suffix = get_llvm_system_suffix(helper_args)
     source_path = os.path.join(get_base_dir(), "third_party", "amd", "backend", "codegen")
+    checkout_hash = hashlib.sha256(os.path.realpath(source_path).encode()).hexdigest()[:12]
+    build_path = os.path.join(helper_args.cache_path, "amd",
+                              f"codegen-bootstrap-{revision}-{system_suffix}-{checkout_hash}")
+    install_path = os.path.join(build_path, "install")
     llvm_cmake_path = os.path.join(llvm_path, "lib", "cmake", "llvm")
     command = [
         "cmake",
@@ -567,27 +600,15 @@ def download_and_copy_amd_codegen(helper_args: BuildHelperArgs):
         return
 
     library = amd_codegen_library_name()
-    llvm_info_path = os.path.join(get_base_dir(), "cmake", "llvm-info.json")
     amd_llvm_info_path = os.path.join(get_base_dir(), "cmake", "amd-llvm-info.json")
-    with open(llvm_info_path, "r") as llvm_info_file:
-        llvm_info = json.load(llvm_info_file)
     with open(amd_llvm_info_path, "r") as amd_llvm_info_file:
         amd_llvm_info = json.load(amd_llvm_info_file)
 
-    same_llvm_revision = (amd_llvm_info["llvm_hash"] == llvm_info["llvm_hash"]
-                          and amd_llvm_info["build_number"] == llvm_info["build_number"])
     package = get_amd_codegen_package_info(helper_args)
-    if same_llvm_revision and package.sha256sum is None:
-        # Bootstrap against Triton's existing LLVM only until an independently
-        # built AMD code-generation artifact and checksum are published.
-        if helper_args.llvm_syspath is not None:
-            llvm_path = helper_args.llvm_syspath
-        else:
-            llvm_package = get_llvm_package_info(helper_args)
-            llvm_path = os.path.join(helper_args.cache_path, "llvm", llvm_package.name)
-        source_path = build_amd_codegen(llvm_path, amd_llvm_info, helper_args)
-    elif package.sha256sum is None:
-        raise RuntimeError(f"Missing SHA256 for AMD code-generation package {package.name}")
+    if package.sha256sum is None:
+        # Until standalone artifacts are published, use the SDK pinned in this
+        # backend's manifest, regardless of Triton's core LLVM configuration.
+        source_path = build_amd_codegen(amd_llvm_info, helper_args)
     else:
         package_root = os.path.join(helper_args.cache_path, package.package)
         source_path = os.path.join(package_root, package.name, "lib", library)

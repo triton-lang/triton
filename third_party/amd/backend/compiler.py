@@ -83,7 +83,9 @@ def compile_amdgpu(src: str, triple: str, processor: str, features: str, *, flag
                    disable_optimization: bool, canonicalize_gep: bool, disabled_passes: str, dump_ir: bool,
                    enable_timing: bool) -> str:
     library = _load_amd_codegen(get_amd_codegen_path())
-    llvm_ir = src.encode("utf-8")
+    # Serialize with Triton's LLVM: newer backends support older bitcode,
+    # whereas textual IR has no backwards-compatibility guarantee.
+    llvm_bitcode = llvm.to_bitcode(src)
     options = _AMDGPUCodegenOptions(
         1,
         triple.encode("utf-8"),
@@ -101,8 +103,8 @@ def compile_amdgpu(src: str, triple: str, processor: str, features: str, *, flag
     assembly = ctypes.c_void_p()
     assembly_size = ctypes.c_size_t()
     error = ctypes.c_void_p()
-    status = library.triton_amdgpu_compile(llvm_ir, len(llvm_ir), ctypes.byref(options), ctypes.byref(assembly),
-                                           ctypes.byref(assembly_size), ctypes.byref(error))
+    status = library.triton_amdgpu_compile(llvm_bitcode, len(llvm_bitcode), ctypes.byref(options),
+                                           ctypes.byref(assembly), ctypes.byref(assembly_size), ctypes.byref(error))
     if status:
         message = ctypes.string_at(error).decode("utf-8") if error.value else "unknown AMD code-generation failure"
         if error.value:

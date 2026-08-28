@@ -139,7 +139,7 @@ def test_amd_codegen_revision_invalidates_backend_hash(fresh_knobs, monkeypatch)
     assert first_hash != second_hash
 
 
-def test_amd_codegen_inlines_functions(fresh_knobs):
+def test_amd_codegen_inlines_functions_from_bitcode(fresh_knobs, monkeypatch):
     from triton.backends.compiler import GPUTarget
     from triton.backends.amd import compiler
 
@@ -157,9 +157,22 @@ define amdgpu_kernel void @inline_kernel(ptr addrspace(1) %out, i32 %value) {
   ret void
 }
 '''
+    library = compiler._load_amd_codegen(compiler.get_amd_codegen_path())
+    compile_bitcode = library.triton_amdgpu_compile
+    inputs = []
+
+    def check_bitcode(bitcode, size, *args):
+        inputs.append(bitcode)
+        assert bitcode.startswith(b"BC\xc0\xde")
+        assert b"\x00" in bitcode
+        assert size == len(bitcode)
+        return compile_bitcode(bitcode, size, *args)
+
+    monkeypatch.setattr(library, "triton_amdgpu_compile", check_bitcode)
     backend = compiler.HIPBackend(GPUTarget("hip", "gfx942", 64))
     assembly = backend.make_amdgcn(source, {}, compiler.HIPOptions(arch="gfx942"))
 
+    assert len(inputs) == 1
     assert "inline_kernel:" in assembly
     assert "s_endpgm" in assembly
     assert "helper:" not in assembly
@@ -171,7 +184,7 @@ def test_amd_codegen_reports_invalid_llvm_ir(fresh_knobs):
 
     source = "define amdgpu_kernel void @invalid_kernel() { invalid }"
     backend = compiler.HIPBackend(GPUTarget("hip", "gfx942", 64))
-    with pytest.raises(RuntimeError, match="AMD LLVM .*error"):
+    with pytest.raises(RuntimeError, match="failed to parse LLVM IR"):
         backend.make_amdgcn(source, {}, compiler.HIPOptions(arch="gfx942"))
 
 
