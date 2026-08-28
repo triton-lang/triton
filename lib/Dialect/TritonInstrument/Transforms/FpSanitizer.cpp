@@ -1,7 +1,9 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Types.h"
+#include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -26,6 +28,7 @@ namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
 #define GEN_PASS_DEF_TRITONINSTRUMENTFPSANITIZER
+#define GEN_PASS_DEF_TRITONINSTRUMENTPREPAREFPSANITIZER
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h.inc"
 
 namespace {
@@ -3216,6 +3219,151 @@ struct ElementwiseInlineAsmPattern
   }
 };
 
+// These are the operands whose scratch storage the FPSan patterns resolve.
+static SmallVector<Value> getFpSanTmemOperands(Operation *op) {
+  if (auto load = dyn_cast<ttng::TMEMLoadOp>(op))
+    return {load.getSrc()};
+  if (auto store = dyn_cast<ttng::TMEMStoreOp>(op))
+    return {store.getDst()};
+  if (auto copy = dyn_cast<ttng::TMEMCopyOp>(op))
+    return {copy.getDst()};
+  if (auto mma = dyn_cast<ttng::TCGen5MMAOp>(op)) {
+    auto isFloatMemdesc = [](Value value) {
+      return isa<FloatType>(
+          cast<ttg::MemDescType>(value.getType()).getElementType());
+    };
+    // Integer MMA is not emulated, and mixed types are diagnosed by its
+    // pattern.
+    if (isFloatMemdesc(mma.getA()) && isFloatMemdesc(mma.getB()) &&
+        isFloatMemdesc(mma.getD()))
+      return {mma.getA(), mma.getB(), mma.getD()};
+  }
+  if (auto mma = dyn_cast<ttng::TCGen5MMAScaledOp>(op))
+    return {mma.getA(), mma.getB(), mma.getD(), mma.getAScale(),
+            mma.getBScale()};
+  return {};
+}
+
+// Follow the same forwarding operations as TmemScratchManager. An unsupported
+// producer within a function is not necessarily something inlining can repair.
+static Value getFpSanTmemOrigin(Value value) {
+  while (true) {
+    if (auto arg = dyn_cast<BlockArgument>(value)) {
+      Operation *parent = arg.getOwner()->getParentOp();
+      if (auto partitions = dyn_cast<ttg::WarpSpecializePartitionsOp>(parent)) {
+        value = partitions.getExplicitCaptures()[arg.getArgNumber()];
+        continue;
+      }
+      if (auto loop = dyn_cast<scf::ForOp>(parent)) {
+        value = loop.getInitArgs()[arg.getArgNumber() - 1];
+        continue;
+      }
+    }
+    if (auto view = value.getDefiningOp<ttng::TMEMSubSliceOp>()) {
+      value = view.getSrc();
+      continue;
+    }
+    if (auto view = value.getDefiningOp<ttg::MemDescIndexOp>()) {
+      value = view.getSrc();
+      continue;
+    }
+    if (auto view = value.getDefiningOp<ttg::MemDescReinterpretOp>()) {
+      value = view.getSrc();
+      continue;
+    }
+    return value;
+  }
+}
+
+struct FpSanInliningRequirement {
+  Operation *cause;
+  StringRef reason;
+};
+
+using FpSanRequiredCalls =
+    SmallVector<std::pair<tt::CallOp, FpSanInliningRequirement>>;
+
+static FpSanRequiredCalls getFpSanRequiredCalls(ModuleOp module) {
+  DenseMap<Operation *, FpSanInliningRequirement> functions;
+  DenseMap<Operation *, FpSanInliningRequirement> producers;
+  bool twoCTAs = false;
+  module.walk([&](ttng::MMAv5OpInterface mma) { twoCTAs |= mma.getTwoCtas(); });
+
+  module.walk([&](Operation *op) {
+    auto operands = getFpSanTmemOperands(op);
+    for (Value operand : operands) {
+      auto type = cast<ttg::MemDescType>(operand.getType());
+      if (!isa<ttng::TensorMemorySpaceAttr>(type.getMemorySpace()))
+        continue;
+      Value origin = getFpSanTmemOrigin(operand);
+      if (auto arg = dyn_cast<BlockArgument>(origin)) {
+        if (auto function = dyn_cast<tt::FuncOp>(arg.getOwner()->getParentOp());
+            function && arg.getOwner()->isEntryBlock())
+          functions.try_emplace(
+              function, FpSanInliningRequirement{
+                            op, "FPSan needs the allocation behind this tensor "
+                                "memory argument"});
+      } else if (auto call = origin.getDefiningOp<tt::CallOp>()) {
+        producers.try_emplace(
+            call,
+            FpSanInliningRequirement{
+                op, "FPSan needs the allocation behind this tensor memory "
+                    "call result"});
+      }
+    }
+
+    auto function = op->getParentOfType<tt::FuncOp>();
+    if (!function || function.isPublic())
+      return;
+    if (isa<ttg::WarpSpecializeOp>(op))
+      functions.try_emplace(
+          function, FpSanInliningRequirement{
+                        op, "warp specialization requires kernel context"});
+    // A callee receives a per-CTA scratch base, not the cluster base needed by
+    // TMEM emulation. Its generated cluster barriers also need kernel context.
+    if (twoCTAs && (!operands.empty() || isa<ttng::TCGen5CommitOp>(op)))
+      functions.try_emplace(
+          function, FpSanInliningRequirement{
+                        op, "FPSan cluster scratch and barriers require kernel "
+                            "context"});
+  });
+
+  FpSanRequiredCalls calls;
+  module.walk([&](tt::CallOp call) {
+    auto producer = producers.find(call);
+    if (producer != producers.end()) {
+      calls.emplace_back(call, producer->second);
+      return;
+    }
+    auto function = functions.find(call.resolveCallable());
+    if (function != functions.end())
+      calls.emplace_back(call, function->second);
+  });
+  return calls;
+}
+
+class PrepareFpSanitizerPass
+    : public impl::TritonInstrumentPrepareFpSanitizerBase<
+          PrepareFpSanitizerPass> {
+public:
+  void runOnOperation() override {
+    OpPassManager cleanup;
+    cleanup.addPass(createSymbolDCEPass());
+    if (failed(runPipeline(cleanup, getOperation()))) {
+      signalPassFailure();
+      return;
+    }
+
+    auto calls = getFpSanRequiredCalls(getOperation());
+    for (auto [call, requirement] : calls) {
+      auto diagnostic = call.emitOpError("must be inlined before FPSan");
+      diagnostic.attachNote(requirement.cause->getLoc()) << requirement.reason;
+    }
+    if (!calls.empty())
+      signalPassFailure();
+  }
+};
+
 class FpSanitizerPass
     : public impl::TritonInstrumentFpSanitizerBase<FpSanitizerPass> {
 public:
@@ -3223,6 +3371,14 @@ public:
       FpSanitizerPass>::TritonInstrumentFpSanitizerBase;
 
   void runOnOperation() override {
+    // Keep direct pass invocations safe as well as prepared backend pipelines.
+    OpPassManager preparation;
+    preparation.addPass(createTritonInstrumentPrepareFpSanitizer());
+    if (failed(runPipeline(preparation, getOperation()))) {
+      signalPassFailure();
+      return;
+    }
+
     bool fpSanErrorEmitted = false;
     ScopedDiagnosticHandler diagnosticHandler(
         &getContext(), [&](Diagnostic &diagnostic) {

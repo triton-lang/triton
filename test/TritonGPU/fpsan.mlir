@@ -5,6 +5,26 @@
 
 //--- success.mlir
 
+module {
+  // CHECK-LABEL: @call_arithmetic
+  tt.func public @call_arithmetic(%x: f32, %y: f32) -> f32 {
+    // CHECK: tt.call @arithmetic
+    %result = tt.call @arithmetic(%x, %y) : (f32, f32) -> f32
+    tt.return %result : f32
+  }
+  // CHECK-LABEL: tt.func private @arithmetic
+  // CHECK-SAME: noinline = true
+  tt.func private @arithmetic(%x: f32, %y: f32) -> f32 attributes {noinline = true} {
+    // CHECK: tti.experimental_fpsan_embed
+    // CHECK: arith.addi
+    // CHECK: tti.experimental_fpsan_unembed
+    %result = arith.addf %x, %y : f32
+    tt.return %result : f32
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [64, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dot_operand_a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
 #dot_operand_b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
