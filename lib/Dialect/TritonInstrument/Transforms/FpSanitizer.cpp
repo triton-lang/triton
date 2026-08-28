@@ -1,7 +1,12 @@
+#include "mlir/Analysis/CallGraph.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Types.h"
+#include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "mlir/Transforms/Inliner.h"
+#include "mlir/Transforms/InliningUtils.h"
+#include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -12,7 +17,9 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/SCCIterator.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringSwitch.h"
 #include <cassert>
 #include <functional>
@@ -3331,6 +3338,59 @@ getFpSanCallsRequiringInlining(ModuleOp module) {
   return calls;
 }
 
+static void inlineFpSanRequiredCalls(ModuleOp module) {
+  auto calls = getFpSanCallsRequiringInlining(module);
+  if (calls.empty())
+    return;
+
+  // Only acyclic callees may be expanded. Keep the function definitions until
+  // the final DCE, so this set remains valid as requirements are rediscovered.
+  DenseSet<Operation *> recursiveFunctions;
+  const CallGraph callGraph(module);
+  for (auto scc = llvm::scc_begin(&callGraph); !scc.isAtEnd(); ++scc) {
+    if (!scc.hasCycle())
+      continue;
+    for (CallGraphNode *node : *scc)
+      if (!node->isExternal())
+        recursiveFunctions.insert(node->getCallableRegion()->getParentOp());
+  }
+
+  InlinerInterface interface(module.getContext());
+  InlinerConfig config;
+  while (!calls.empty()) {
+    bool inlined = false;
+    for (auto [call, requirement] : calls) {
+      auto callee = cast<tt::FuncOp>(call.resolveCallable());
+      if (recursiveFunctions.contains(callee))
+        continue;
+      // Do not inline a multi-block callee into a single-block region.
+      if (!llvm::hasSingleElement(callee.getBody()) &&
+          call->getParentOp()->hasTrait<OpTrait::SingleBlock>())
+        continue;
+
+      // Override noinline for this invocation only, retaining all other dialect
+      // legality checks and leaving unrelated calls and arithmetic unchanged.
+      Attribute noinline = callee->removeAttr("noinline");
+      auto restore = llvm::scope_exit([&] {
+        if (noinline)
+          callee->setAttr("noinline", noinline);
+      });
+      if (succeeded(inlineCall(interface, config.getCloneCallback(),
+                               cast<CallOpInterface>(call.getOperation()),
+                               cast<CallableOpInterface>(callee.getOperation()),
+                               &callee.getBody(),
+                               /*shouldCloneInlinedRegion=*/true))) {
+        call.erase();
+        inlined = true;
+        break;
+      }
+    }
+    if (!inlined)
+      break;
+    calls = getFpSanCallsRequiringInlining(module);
+  }
+}
+
 class FpSanitizerPass
     : public impl::TritonInstrumentFpSanitizerBase<FpSanitizerPass> {
 public:
@@ -3338,6 +3398,15 @@ public:
       FpSanitizerPass>::TritonInstrumentFpSanitizerBase;
 
   void runOnOperation() override {
+    inlineFpSanRequiredCalls(getOperation());
+
+    OpPassManager cleanup;
+    cleanup.addPass(createSymbolDCEPass());
+    if (failed(runPipeline(cleanup, getOperation()))) {
+      signalPassFailure();
+      return;
+    }
+
     auto calls = getFpSanCallsRequiringInlining(getOperation());
     for (auto [call, requirement] : calls) {
       auto diagnostic = call.emitOpError("must be inlined before FPSan");

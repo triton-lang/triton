@@ -2838,6 +2838,46 @@ def test_tcgen05_mma_scaled_two_ctas(device, fresh_knobs):
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("nested", [False, True], ids=["direct", "nested"])
+def test_tmem_noinline_consumer(device, nested, fresh_knobs):
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @gluon.jit(noinline=True)
+    def read_tmem(tmem, out_ptr):
+        layout: gl.constexpr = tmem.get_reg_layout()
+        rows = gl.arange(0, 128, layout=gl.SliceLayout(1, layout))[:, None]
+        cols = gl.arange(0, 128, layout=gl.SliceLayout(0, layout))[None, :]
+        gl.store(out_ptr + rows * 128 + cols, tmem.load())
+
+    @gluon.jit(noinline=True)
+    def forward_tmem(tmem, out_ptr):
+        read_tmem(tmem, out_ptr)
+
+    @gluon.jit
+    def kernel(x_ptr, out_ptr, NESTED: gl.constexpr):
+        tmem = allocate_tensor_memory(gl.float32, [128, 128], TensorMemoryLayout((128, 128), col_stride=1))
+        layout: gl.constexpr = tmem.get_reg_layout()
+        rows = gl.arange(0, 128, layout=gl.SliceLayout(1, layout))[:, None]
+        cols = gl.arange(0, 128, layout=gl.SliceLayout(0, layout))[None, :]
+        tmem.store(gl.load(x_ptr + rows * 128 + cols))
+        if NESTED:
+            forward_tmem(tmem, out_ptr)
+        else:
+            read_tmem(tmem, out_ptr)
+
+    rs = np.random.RandomState(0)
+    x_bits = rs.randint(-(2**31), 2**31 - 1, size=(128, 128), dtype=np.int32)
+    x = torch.tensor(x_bits, device=device, dtype=torch.int32)
+    out = torch.empty_like(x)
+    compiled = kernel[(1, )](triton.TensorWrapper(x, dtype=torch.float32),
+                             triton.TensorWrapper(out, dtype=torch.float32), nested, num_warps=4)
+
+    assert "tt.call" not in compiled.asm["ttgir"]
+    _assert_payload_equal(out, x_bits)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_index_subslice(device, fresh_knobs):
     _require_cuda_backend(device)
 

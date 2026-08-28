@@ -37,10 +37,11 @@ def TritonInstrumentFpSanitizer: Pass<"tritoninstrument-fp-sanitizer", "mlir::Mo
   let summary = "Replace floating-point ops with integer-payload equivalents";
 
   let description = [{
-    Diagnose calls that must be inlined to expose tensor memory allocations or
-    required kernel context. Then rewrite selected floating-point operations to
-    use integer payload semantics. Run symbol DCE before this pass to remove
-    unreachable private functions.
+    Inline calls that hide tensor memory allocations or required kernel context.
+    Remove helpers made unreachable by inlining and diagnose required calls that
+    cannot be inlined. Then rewrite selected floating-point operations to use
+    integer payload semantics. Run symbol DCE before this pass to remove
+    existing unreachable private functions.
   }];
 
   let dependentDialects = ["mlir::arith::ArithDialect",
