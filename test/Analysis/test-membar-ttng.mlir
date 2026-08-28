@@ -1,6 +1,5 @@
-// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory -test-print-membar | FileCheck %s --check-prefixes=CHECK,CF
-// RUN: triton-opt %s -split-input-file                     --allocate-shared-memory -test-print-membar | FileCheck %s --check-prefixes=CHECK,SCF
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory -test-print-membar -test-print-membar | FileCheck %s --check-prefixes=CHECK,SCF
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory -test-print-membar | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory -test-print-membar -test-print-membar | FileCheck %s
 
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #A_SHARED = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
@@ -238,8 +237,7 @@ tt.func @tma_special_cases_cf(%arg1: !tt.tensordesc<256x64xf16, #shared>, %i1 : 
   %c0 = arith.constant 0 : i32
   %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
   %alloc = ttg.local_alloc : () -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
-  // CF: cf.cond_br
-  // SCF: scf.if
+  // CHECK: cf.cond_br
   scf.if %i1 {
     //  CHECK-NOT: ttg.barrier local
     //      CHECK: ttng.async_tma_copy_global_to_local
@@ -247,16 +245,14 @@ tt.func @tma_special_cases_cf(%arg1: !tt.tensordesc<256x64xf16, #shared>, %i1 : 
     // CHECK-NEXT: ttng.barrier_expect
     // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: ttng.wait_barrier
-    // CF-NEXT: cf.br
-    // SCF-NEXT: } else {
+    // CHECK-NEXT: cf.br
     ttng.async_tma_copy_global_to_local %arg1[%c0, %c0] %alloc, %barrier, %true : !tt.tensordesc<256x64xf16, #shared>, !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable> -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
     ttng.barrier_expect %barrier, 49152, %true : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
     ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
   } else {
     //  CHECK-NOT: ttg.barrier local
     //      CHECK: ttg.local_store
-    // CF-NEXT: cf.br
-    // SCF-NEXT: }
+    // CHECK-NEXT: cf.br
     ttg.local_store %arg2, %alloc : tensor<256x64xf16, #blocked> -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
   }
   //      CHECK: ttg.barrier local

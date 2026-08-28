@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory -test-print-membar | FileCheck %s
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory -test-tritonamdgpu-membar | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory -test-print-membar | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory -test-tritonamdgpu-membar | FileCheck %s
 
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #sliceAd0 = #ttg.slice<{dim = 0, parent = #AL}>
@@ -235,9 +235,12 @@ tt.func @async_wait_scan_stops_at_memory_effect(%arg: tensor<32x16xf16, #AL>) {
 tt.func @async_wait_scan_stops_at_control_flow(%arg: tensor<32x16xf16, #AL>, %cond: i1) {
   %cst0 = ttg.local_alloc %arg : (tensor<32x16xf16, #AL>) -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory>
   // CHECK: ttg.async_wait
-  // CHECK-NEXT: scf.if
-  // CHECK-NEXT: } else {
-  // CHECK-NEXT: }
+  // CHECK-NEXT: cf.cond_br %{{.*}}, ^[[THEN:bb[0-9]+]], ^[[ELSE:bb[0-9]+]]
+  // CHECK-NEXT: ^[[THEN]]:
+  // CHECK-NEXT: cf.br ^[[JOIN:bb[0-9]+]]
+  // CHECK-NEXT: ^[[ELSE]]:
+  // CHECK-NEXT: cf.br ^[[JOIN]]
+  // CHECK-NEXT: ^[[JOIN]]:
   ttg.async_wait {num = 4 : i32}
   scf.if %cond {
     scf.yield
@@ -258,8 +261,10 @@ tt.func @async_wait_scan_reaches_block_end(%arg: tensor<32x16xf16, #AL>, %cond: 
   %cst0 = ttg.local_alloc %arg : (tensor<32x16xf16, #AL>) -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory>
   scf.if %cond {
     // CHECK: ttg.async_wait
-    // CHECK-NEXT: } else {
-    // CHECK-NEXT: }
+    // CHECK-NEXT: cf.br ^[[WAIT_JOIN:bb[0-9]+]]
+    // CHECK-NEXT: ^{{bb[0-9]+}}:
+    // CHECK-NEXT: cf.br ^[[WAIT_JOIN]]
+    // CHECK-NEXT: ^[[WAIT_JOIN]]:
     ttg.async_wait {num = 4 : i32}
     scf.yield
   } else {
@@ -2131,7 +2136,7 @@ tt.func @shared_dynamic_disjoint_stage_groups(%input: tensor<128xi32, #writer>, 
   %allocation = ttg.local_alloc : () -> !ttg.memdesc<4x128xi32, #shared, #smem, mutable>
   %low_group = ttg.memdesc_subslice %allocation [0, 0] : !ttg.memdesc<4x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<2x128xi32, #shared, #smem, mutable, 4x128>
   %high_group = ttg.memdesc_subslice %allocation [2, 0] : !ttg.memdesc<4x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<2x128xi32, #shared, #smem, mutable, 4x128>
-  // CHECK: scf.for
+  // CHECK: cf.cond_br
   %result = scf.for %i = %c0 to %ub step %c1 iter_args(%last = %input) -> (tensor<128xi32, #writer>) : i32 {
     %stage = arith.remui %i, %c2 : i32
     %low = ttg.memdesc_index %low_group[%stage] : !ttg.memdesc<2x128xi32, #shared, #smem, mutable, 4x128> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
@@ -2179,7 +2184,7 @@ tt.func @shared_buffer_index_structured_backedge(%input: tensor<128xi32, #writer
   %c1 = arith.constant 1 : i32
   %c2 = arith.constant 2 : i32
   %allocation = ttg.local_alloc : () -> !ttg.memdesc<2x128xi32, #shared, #smem, mutable>
-  // CHECK: scf.for
+  // CHECK: cf.cond_br
   scf.for %i = %c0 to %ub step %c1 : i32 {
     %next = arith.addi %i, %c1 : i32
     %read_index = arith.remsi %i, %c2 : i32
