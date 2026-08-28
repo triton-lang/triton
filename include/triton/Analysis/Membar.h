@@ -266,11 +266,12 @@ struct BlockInfo {
 
   bool operator==(const BlockInfo &) const = default;
 
-private:
-  bool isIntersected(const SliceMapT &lhsSlices, const SliceMapT &rhsSlices,
-                     bool lhsIsRead, bool rhsIsRead, MembarFilterFn filter,
-                     MembarSliceFilterFn sliceFilter,
-                     Allocation *allocation) const {
+  /// Checks one pair of access maps with the same alias and operation filters.
+  static bool isIntersected(const SliceMapT &lhsSlices,
+                            const SliceMapT &rhsSlices, bool lhsIsRead,
+                            bool rhsIsRead, MembarFilterFn filter,
+                            MembarSliceFilterFn sliceFilter,
+                            Allocation *allocation) {
     for (auto &lhs : lhsSlices)
       for (auto &rhs : rhsSlices)
         if (lhs.first.intersects(rhs.first))
@@ -284,6 +285,7 @@ private:
     return false;
   }
 
+private:
   void joinThreadState(const BlockInfo &other);
 };
 
@@ -342,6 +344,8 @@ struct MembarInfo {
 triton::BarrierStages getLocalBarrierStages(Operation *op,
                                             Allocation *allocation);
 
+bool requiresThreadSyncBefore(Operation *op);
+
 //===----------------------------------------------------------------------===//
 // Shared Memory Barrier Analysis
 //===----------------------------------------------------------------------===//
@@ -397,7 +401,8 @@ protected:
   virtual triton::BarrierStages getBarrierStages(Operation *operation);
 
   /// Whether pending thread effects must rendezvous before upcoming demands.
-  bool requiresThreadSync(const BlockInfo &pending, const BlockInfo &effects);
+  virtual bool requiresThreadSync(const BlockInfo &pending,
+                                  const BlockInfo &effects);
 
   Allocation &allocation;
   MembarFilterFn filter;

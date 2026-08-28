@@ -325,6 +325,10 @@ bool MembarAnalysis::mayNotifyPeer(Operation *op) {
   });
 }
 
+bool requiresThreadSyncBefore(Operation *op) {
+  return getThreadSyncInfo(op).requiresBefore();
+}
+
 bool MembarAnalysis::requiresThreadSync(const BlockInfo &pending,
                                         const BlockInfo &effects) {
   const auto &sync = pending.threadSync;
