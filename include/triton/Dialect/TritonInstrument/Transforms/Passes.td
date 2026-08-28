@@ -33,24 +33,14 @@ def TritonInstrumentPrepareConSanCaptures: Pass<"tritoninstrument-prepare-consan
   ];
 }
 
-def TritonInstrumentPrepareFpSanitizer: Pass<"tritoninstrument-prepare-fp-sanitizer", "mlir::ModuleOp"> {
-  let summary = "Eliminate dead symbols and validate calls before FPSan";
-
-  let description = [{
-    Remove unreachable private functions and diagnose calls that hide tensor
-    memory allocations or kernel execution context required by FPSan.
-    Ordinary arithmetic helpers do not need to be inlined.
-  }];
-
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::triton::TritonDialect",
-                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"];
-}
-
 def TritonInstrumentFpSanitizer: Pass<"tritoninstrument-fp-sanitizer", "mlir::ModuleOp"> {
   let summary = "Replace floating-point ops with integer-payload equivalents";
 
-  let description = "Rewrite selected floating-point operations to use integer payload semantics for fpsan.";
+  let description = [{
+    Remove dead symbols and diagnose calls that must be inlined to expose tensor
+    memory allocations or required kernel context. Then rewrite selected
+    floating-point operations to use integer payload semantics.
+  }];
 
   let dependentDialects = ["mlir::arith::ArithDialect",
                            "mlir::math::MathDialect",

@@ -390,7 +390,7 @@ class CUDABackend(BaseBackend):
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         if "fpsan" in options.instrumentation_mode:
-            passes.ttgpuir.add_prepare_fp_sanitizer(pm)
+            passes.common.add_symbol_dce(pm)
         nvidia.passes.ttnvgpuir.add_check_matmul_two_cta(pm)
 
         if "fpsan" in options.instrumentation_mode:

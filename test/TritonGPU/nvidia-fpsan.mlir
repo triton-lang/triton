@@ -1,9 +1,8 @@
 // RUN: split-file %s %t
 // RUN: triton-opt %t/success.mlir -split-input-file -allow-unregistered-dialect -tritoninstrument-fp-sanitizer -triton-nvidia-check-matmul-two-cta | FileCheck %t/success.mlir
-// RUN: triton-opt %t/preserve-calls.mlir -tritoninstrument-prepare-fp-sanitizer | FileCheck %t/preserve-calls.mlir
-// RUN: triton-opt %t/required-calls.mlir -split-input-file -tritoninstrument-prepare-fp-sanitizer -verify-diagnostics
+// RUN: triton-opt %t/preserve-calls.mlir -tritoninstrument-fp-sanitizer | FileCheck %t/preserve-calls.mlir
 // RUN: triton-opt %t/required-calls.mlir -split-input-file -tritoninstrument-fp-sanitizer -verify-diagnostics
-// RUN: triton-opt %t/blocked-call.mlir -inline -tritoninstrument-prepare-fp-sanitizer -verify-diagnostics
+// RUN: triton-opt %t/blocked-call.mlir -inline -tritoninstrument-fp-sanitizer -verify-diagnostics
 
 //--- success.mlir
 

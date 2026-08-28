@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritoninstrument-prepare-fp-sanitizer -tritonamdgpu-fp-sanitizer | FileCheck %s
+// RUN: triton-opt %s -split-input-file -symbol-dce -tritonamdgpu-fp-sanitizer | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [64, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
@@ -18,7 +18,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #unpacked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #scale = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
-  // Preparation removes dead functions before AMD-specific rewrites inspect them.
+  // Symbol DCE removes dead functions before AMD-specific rewrites inspect them.
   // CHECK-LABEL: @dead_scaled_upcast_kernel
   tt.func public @dead_scaled_upcast_kernel() {
     // CHECK: tt.return
