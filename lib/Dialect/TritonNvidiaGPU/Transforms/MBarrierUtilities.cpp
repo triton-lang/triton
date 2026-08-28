@@ -32,9 +32,15 @@ bool isCrossCTAGatherScatter(ttg::MemDescType memDescTy, RankedTensorType regTy,
   auto kRegister = StringAttr::get(ctx, "register");
   auto kBlock = StringAttr::get(ctx, "block");
 
+  // Runtime indices may select any shard of the indexed axis.
+  if (!sharedLayout.sublayoutIsZero({kBlock}, {axisDim}))
+    return true;
+
   LinearLayout regLayout = ttg::toLinearLayout(regTy)
                                .removeZeroBasesAlongDim(kRegister)
                                .transposeOuts(allDims);
+  // Replace `axis` with a descriptor-sized input, then check whether the
+  // remaining result coordinates select a remote CTA.
   SmallVector<StringAttr> nonIndexedDims = allDims;
   nonIndexedDims.erase(nonIndexedDims.begin() + axis);
   LinearLayout indexedLayout =

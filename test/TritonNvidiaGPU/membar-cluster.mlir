@@ -418,6 +418,30 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#runtimeIndexBlocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CGALayout = [[1]]}>
+#runtimeIndexShared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // Runtime indices may send CTA 0 to element 6 and CTA 1 to element 0.
+  // CHECK-LABEL: @cluster_barrier_for_runtime_index_on_sharded_axis
+  // CHECK: ttg.local_gather
+  // CHECK: ttg.local_dealloc
+  // CHECK-NEXT: ttng.cluster_barrier
+  // CHECK-NEXT: ttg.local_alloc
+  tt.func @cluster_barrier_for_runtime_index_on_sharded_axis(
+      %indices: tensor<8xi32, #runtimeIndexBlocked>,
+      %replacement: tensor<8xi32, #runtimeIndexBlocked>) -> tensor<8xi32, #runtimeIndexBlocked> {
+    %parent = ttg.local_alloc : () -> !ttg.memdesc<8xi32, #runtimeIndexShared, #smem, mutable>
+    %gathered = ttg.local_gather %parent[%indices] {axis = 0 : i32} : !ttg.memdesc<8xi32, #runtimeIndexShared, #smem, mutable>, tensor<8xi32, #runtimeIndexBlocked> -> tensor<8xi32, #runtimeIndexBlocked>
+    ttg.local_dealloc %parent : !ttg.memdesc<8xi32, #runtimeIndexShared, #smem, mutable>
+    %reuse = ttg.local_alloc %replacement : (tensor<8xi32, #runtimeIndexBlocked>) -> !ttg.memdesc<8xi32, #runtimeIndexShared, #smem, mutable>
+    tt.return %gathered : tensor<8xi32, #runtimeIndexBlocked>
+  }
+}
+
+// -----
+
 #broadcastGatherBlocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CGALayout = [[1]]}>
 #broadcastGatherLocalBlocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CGALayout = [[0]]}>
 #broadcastGatherShared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
