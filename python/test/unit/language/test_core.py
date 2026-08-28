@@ -1665,30 +1665,31 @@ def test_atomic_poll_waits_for_remote_cta(device):
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
     "op, dtype_x_str, mode, sem",
-    itertools.chain.from_iterable([[
-        ('add', 'bfloat16', mode, sem),
-        ('add', 'float16', mode, sem),
-        ('add', 'uint32', mode, sem),
-        ('add', 'int32', mode, sem),
-        ('add', 'float32', mode, sem),
-        ('add', 'uint64', mode, sem),
-        ('add', 'int64', mode, sem),
-        ('add', 'float64', mode, sem),
-        ('max', 'uint32', mode, sem),
-        ('max', 'int32', mode, sem),
-        ('max', 'float32', mode, sem),
-        ('max', 'uint64', mode, sem),
-        ('max', 'int64', mode, sem),
-        ('max', 'float64', mode, sem),
-        ('min', 'uint32', mode, sem),
-        ('min', 'int32', mode, sem),
-        ('min', 'float32', mode, sem),
-        ('min', 'uint64', mode, sem),
-        ('min', 'int64', mode, sem),
-        ('min', 'float64', mode, sem),
-    ]
-                                   for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']
-                                   for sem in [None, 'acquire', 'release', 'acq_rel', 'relaxed']]))
+    list(
+        itertools.chain.from_iterable([[
+            ('add', 'bfloat16', mode, sem),
+            ('add', 'float16', mode, sem),
+            ('add', 'uint32', mode, sem),
+            ('add', 'int32', mode, sem),
+            ('add', 'float32', mode, sem),
+            ('add', 'uint64', mode, sem),
+            ('add', 'int64', mode, sem),
+            ('add', 'float64', mode, sem),
+            ('max', 'uint32', mode, sem),
+            ('max', 'int32', mode, sem),
+            ('max', 'float32', mode, sem),
+            ('max', 'uint64', mode, sem),
+            ('max', 'int64', mode, sem),
+            ('max', 'float64', mode, sem),
+            ('min', 'uint32', mode, sem),
+            ('min', 'int32', mode, sem),
+            ('min', 'float32', mode, sem),
+            ('min', 'uint64', mode, sem),
+            ('min', 'int64', mode, sem),
+            ('min', 'float64', mode, sem),
+        ]
+                                       for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']
+                                       for sem in [None, 'acquire', 'release', 'acq_rel', 'relaxed']])))
 def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     check_type_supported(dtype_x_str, device)
     if is_interpreter():
@@ -7406,7 +7407,8 @@ def test_indirect_store(dtype, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("dtype", map(tl.dtype, tl.dtype.SINT_TYPES + tl.dtype.UINT_TYPES + tl.dtype.STANDARD_FP_TYPES))
+@pytest.mark.parametrize("dtype",
+                         list(map(tl.dtype, tl.dtype.SINT_TYPES + tl.dtype.UINT_TYPES + tl.dtype.STANDARD_FP_TYPES)))
 def test_dtype_tensor(device, dtype):
 
     @triton.jit
