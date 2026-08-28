@@ -152,11 +152,6 @@ bool isWaitBoundary(Operation *op) {
     if (!barrier.getBarriers().empty())
       return true;
 
-  // Carry pending accesses through structured control flow.
-  if (isa<RegionBranchOpInterface>(op) ||
-      (isa<RegionBranchTerminatorOpInterface>(op) &&
-       isa<RegionBranchOpInterface>(op->getParentOp())))
-    return false;
   if (op->hasTrait<OpTrait::ReturnLike>())
     return true;
 
@@ -235,7 +230,6 @@ private:
 
   void finishBlock(BlockInfo &pending, OpBuilder *builder) {
     // Complete accesses preceding lastBarrier before forgetting it.
-    // Leave later accesses pending across structured control flow.
     for (TMEMWaitKind kind : {TMEMWaitKind::LOAD, TMEMWaitKind::STORE})
       waitBeforeBarrier(kind, pending, builder);
     lastBarrier = nullptr;
@@ -307,13 +301,11 @@ private:
       afterBarrier.join(effects);
     }
 
-    if (op->hasTrait<OpTrait::IsTerminator>() ||
-        isa<RegionBranchOpInterface>(op))
+    if (op->hasTrait<OpTrait::IsTerminator>())
       finishBlock(pending, builder);
   }
 
-  // These snapshots track accesses before and after lastBarrier within one
-  // virtual block. Only MembarInfo::pending flows between virtual blocks.
+  // Track accesses before and after lastBarrier within one block.
   Operation *lastBarrier = nullptr;
   BlockInfo beforeBarrier;
   BlockInfo afterBarrier;
@@ -351,8 +343,8 @@ struct TMemWaitInsertionPass
             })
              .wasInterrupted())
       return;
-    // Run after TMEM and shared-memory barrier insertion. Calls and returns
-    // complete pending accesses, so this pass needs no call summaries.
+    // Run after control-flow lowering and TMEM/shared-memory barrier insertion.
+    // Calls and returns complete pending accesses, so no summaries are needed.
     if (failed(runTMemAnalysis<TMemWaitAnalysis>(mod)))
       return signalPassFailure();
   }
