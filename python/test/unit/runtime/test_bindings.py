@@ -8,6 +8,22 @@ import pytest
 _BLOCK_SIZE = 16
 
 
+def test_llvm_ir_to_bitcode():
+    from triton._C.libtriton import llvm
+
+    bitcode = llvm.to_bitcode("define void @kernel() { ret void }")
+    assert isinstance(bitcode, bytes)
+    assert bitcode.startswith(b"BC\xc0\xde")
+    assert b"\x00" in bitcode
+
+
+def test_llvm_ir_to_bitcode_reports_invalid_ir():
+    from triton._C.libtriton import llvm
+
+    with pytest.raises(RuntimeError, match="failed to parse LLVM IR.*expected top-level entity"):
+        llvm.to_bitcode("invalid LLVM IR")
+
+
 @triton.jit
 def add_helper(x, y):
     return x + y

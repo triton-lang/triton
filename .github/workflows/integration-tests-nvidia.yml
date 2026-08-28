@@ -39,17 +39,18 @@ jobs:
         run: |
           llvm_file="cmake/llvm-info.json"
           nvidia_file="cmake/nvidia-toolchain-version.json"
+          nvidia_llvm_file="cmake/nvidia-llvm-info.json"
           json_file="cmake/json-version.txt"
 
           # Check if files exist before proceeding
-          if [[ ! -f "$llvm_file" || ! -f "$nvidia_file" || ! -f "$json_file" ]]; then
+          if [[ ! -f "$llvm_file" || ! -f "$nvidia_file" || ! -f "$nvidia_llvm_file" || ! -f "$json_file" ]]; then
             echo "Error: Required dependency files are missing."
             exit 1
           fi
 
           # Process the files if they exist
           echo "llvm=$(sha256sum $llvm_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
-          echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
+          echo "nvidia=$(cat "$nvidia_file" "$nvidia_llvm_file" | sha256sum | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
           echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
         shell: bash
       - name: Restore build dependencies cache

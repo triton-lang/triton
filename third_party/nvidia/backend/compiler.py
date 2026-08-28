@@ -4,6 +4,7 @@ from triton import knobs
 from triton.runtime.errors import PTXASError
 
 from dataclasses import dataclass
+import ctypes
 import functools
 from typing import Any, Dict, Tuple, Optional
 from types import ModuleType
@@ -13,6 +14,7 @@ import tempfile
 import signal
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -37,6 +39,95 @@ def min_dot_size(target: GPUTarget):
 
 def get_ptxas(arch: int) -> knobs.NvidiaTool:
     return knobs.nvidia.ptxas_blackwell if arch >= 100 else knobs.nvidia.ptxas
+
+
+def get_nvidia_codegen_path() -> str:
+    if knobs.nvidia.codegen_path is not None:
+        return knobs.nvidia.codegen_path
+    if os.name == "nt":
+        library = "triton_nvidia_codegen.dll"
+    elif sys.platform == "darwin":
+        library = "libtriton_nvidia_codegen.dylib"
+    else:
+        library = "libtriton_nvidia_codegen.so"
+    return str(Path(__file__).parent / "lib" / library)
+
+
+class _NVPTXCodegenOptions(ctypes.Structure):
+    _fields_ = [
+        ("abi_version", ctypes.c_uint32),
+        ("triple", ctypes.c_char_p),
+        ("processor", ctypes.c_char_p),
+        ("features", ctypes.c_char_p),
+        ("abi", ctypes.c_char_p),
+        ("disabled_passes", ctypes.c_char_p),
+        ("enable_fp_fusion", ctypes.c_uint8),
+        ("disable_optimization", ctypes.c_uint8),
+        ("canonicalize_gep", ctypes.c_uint8),
+        ("dump_ir", ctypes.c_uint8),
+        ("enable_timing", ctypes.c_uint8),
+    ]
+
+
+@functools.lru_cache()
+def _load_nvidia_codegen(path: str):
+    mode = getattr(os, "RTLD_LOCAL", 0) | getattr(os, "RTLD_NOW", 0)
+    library = ctypes.CDLL(path, mode=mode)
+    library.triton_nvptx_compile.argtypes = [
+        ctypes.c_char_p,
+        ctypes.c_size_t,
+        ctypes.POINTER(_NVPTXCodegenOptions),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_size_t),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    library.triton_nvptx_compile.restype = ctypes.c_int
+    library.triton_nvptx_free.argtypes = [ctypes.c_void_p]
+    library.triton_nvptx_free.restype = None
+    library.triton_nvptx_revision.argtypes = []
+    library.triton_nvptx_revision.restype = ctypes.c_char_p
+    return library
+
+
+def get_nvidia_codegen_revision() -> str:
+    return _load_nvidia_codegen(get_nvidia_codegen_path()).triton_nvptx_revision().decode("utf-8")
+
+
+def compile_nvptx(src: str, triple: str, processor: str, features: str, *, enable_fp_fusion: bool,
+                  disable_optimization: bool, canonicalize_gep: bool, disabled_passes: str, dump_ir: bool,
+                  enable_timing: bool) -> str:
+    library = _load_nvidia_codegen(get_nvidia_codegen_path())
+    # Serialize with Triton's LLVM: newer backends support older bitcode,
+    # whereas textual IR has no backwards-compatibility guarantee.
+    llvm_bitcode = llvm.to_bitcode(src)
+    options = _NVPTXCodegenOptions(
+        1,
+        triple.encode("utf-8"),
+        processor.encode("utf-8"),
+        features.encode("utf-8"),
+        b"shortptr",
+        disabled_passes.encode("utf-8"),
+        enable_fp_fusion,
+        disable_optimization,
+        canonicalize_gep,
+        dump_ir,
+        enable_timing,
+    )
+    ptx = ctypes.c_void_p()
+    ptx_size = ctypes.c_size_t()
+    error = ctypes.c_void_p()
+    status = library.triton_nvptx_compile(llvm_bitcode, len(llvm_bitcode), ctypes.byref(options), ctypes.byref(ptx),
+                                          ctypes.byref(ptx_size), ctypes.byref(error))
+    if status:
+        message = ctypes.string_at(error).decode("utf-8") if error.value else "unknown NVIDIA code-generation failure"
+        if error.value:
+            library.triton_nvptx_free(error)
+        revision = library.triton_nvptx_revision().decode("utf-8")
+        raise RuntimeError(f"NVIDIA LLVM {revision}: {message}")
+    try:
+        return ctypes.string_at(ptx, ptx_size.value).decode("utf-8")
+    finally:
+        library.triton_nvptx_free(ptx)
 
 
 @functools.lru_cache()
@@ -533,10 +624,26 @@ class CUDABackend(BaseBackend):
 
         proc = sm_arch_from_capability(cap_llvm)
         features = get_features(opt, cap_llvm)
-        flags = ["nvptx-mad-wide-opt"]
         canonicalize_gep = "fpsan" in opt.instrumentation_mode
-        ret = llvm.translate_to_asm(src, triple, proc, features, flags, opt.enable_fp_fusion, False, canonicalize_gep,
-                                    "shortptr")
+        disable_llvm_opt = knobs.getenv_bool("DISABLE_LLVM_OPT", False)
+        disabled_passes = ""
+        if not disable_llvm_opt:
+            requested_passes = os.environ.get("DISABLE_LLVM_OPT", "")
+            if requested_passes.lower() not in {"0", "false", "off"}:
+                disabled_passes = requested_passes
+
+        ret = compile_nvptx(
+            src,
+            triple,
+            proc,
+            features,
+            enable_fp_fusion=opt.enable_fp_fusion,
+            disable_optimization=disable_llvm_opt,
+            canonicalize_gep=canonicalize_gep,
+            disabled_passes=disabled_passes,
+            dump_ir=knobs.getenv_bool("LLVM_IR_ENABLE_DUMP", False),
+            enable_timing=knobs.getenv_bool("LLVM_ENABLE_TIMING", False),
+        )
         # Find kernel names (there should only be one)
         names = re.findall(r".visible .entry ([a-zA-Z_][a-zA-Z0-9_]*)", ret)
         assert len(names) == 1
@@ -656,4 +763,4 @@ please share the reproducer above with Triton project.
     @functools.lru_cache()
     def hash(self):
         version = get_ptxas_version(self.target.arch)
-        return f'{version}-{self.target.arch}'
+        return f'{version}-{self.target.arch}-{get_nvidia_codegen_revision()}'
