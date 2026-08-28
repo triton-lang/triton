@@ -84,27 +84,31 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         return data
 
     def convert_data(self, data, destination: LayoutTransformation):
-        # The tiled path needs the full padded encoding and even packing extents.
-        # Keep compact or otherwise unsupported sources on the reference path.
         if (not self.is_fp4 or self.N % 2 or self.shape[self.mx_axis] % 2 or data.device.type != "cuda"
-                or data.dtype != torch.uint8 or list(data.shape) != self.storage_shape
+                or data.dtype != torch.uint8 or data.ndim != len(self.shape)
                 or not isinstance(destination, strided.StridedLayoutTransformation)
                 or destination.order[0] < len(self.shape) - 2):
             return super().convert_data(data, destination)
 
+        source = self._maybe_mT(data)
+        source_shape = tuple(source.shape)
+        m, k = (self.N, self.K) if self.mx_axis == len(self.leading_shape) else (self.K, self.N)
+        # Each 4x128 encoded tile covers 16x64 logical FP4 values. Compact
+        # encodings must contain complete tiles covering the logical shape.
+        if (list(source_shape[:-2]) != self.leading_shape or source_shape[-2] % 4 or source_shape[-1] % 128
+                or 4 * source_shape[-2] < m or source_shape[-1] // 2 < k):
+            return super().convert_data(data, destination)
+
         out = torch.empty_strided(destination.storage_shape, destination.storage_strides, dtype=data.dtype,
                                   device=data.device)
-        source = self._maybe_mT(data)
         target = self._maybe_mT(out)
-        m, k = (self.N, self.K) if self.mx_axis == len(self.leading_shape) else (self.K, self.N)
         block_m, block_k = 16, 256
         grid = (math.prod(self.leading_shape) * triton.cdiv(m, 4 * block_m) * triton.cdiv(k, block_k // 2), )
         if grid[0] > 0:
             with torch.cuda.device(data.device):
-                _unswizzle_to_strided_kernel[grid](source, target, tuple(self.leading_shape), source.stride(),
-                                                   target.stride(), m, k, MMA_VERSION=self.mma_version,
-                                                   PACK_M=destination.order[0] != self.mx_axis, BLOCK_M=block_m,
-                                                   BLOCK_K=block_k)
+                _unswizzle_to_strided_kernel[grid](source, target, source_shape, source.stride(), target.stride(), m, k,
+                                                   PACK_M=destination.order[0] != self.mx_axis,
+                                                   MMA_VERSION=self.mma_version, BLOCK_M=block_m, BLOCK_K=block_k)
         return out
 
     def swizzle_data(self, data):
@@ -371,7 +375,7 @@ def _unshuffle_triton(x, mma_version: tl.constexpr):
 
 
 @triton.jit
-def _unswizzle_to_strided_kernel(X, Y, LEADING_SHAPE: tl.constexpr, X_STRIDES: tl.constexpr, Y_STRIDES: tl.constexpr,
+def _unswizzle_to_strided_kernel(X, Y, X_SHAPE: tl.constexpr, X_STRIDES: tl.constexpr, Y_STRIDES: tl.constexpr,
                                  M: tl.constexpr, K: tl.constexpr, MMA_VERSION: tl.constexpr, PACK_M: tl.constexpr,
                                  BLOCK_M: tl.constexpr, BLOCK_K: tl.constexpr):
     tiles_m: tl.constexpr = triton.cdiv(M, 4 * BLOCK_M)
@@ -383,9 +387,9 @@ def _unswizzle_to_strided_kernel(X, Y, LEADING_SHAPE: tl.constexpr, X_STRIDES: t
         tile_m, tile_k = tile % tiles_m, tile // tiles_m
     else:
         tile_m, tile_k = tile // tiles_k, tile % tiles_k
-    for dim in tl.static_range(len(LEADING_SHAPE) - 1, -1, -1):
-        index = batch % LEADING_SHAPE[dim]
-        batch //= LEADING_SHAPE[dim]
+    for dim in tl.static_range(len(X_SHAPE) - 3, -1, -1):
+        index = batch % X_SHAPE[dim]
+        batch //= X_SHAPE[dim]
         X += index * X_STRIDES[dim]
         Y += index * Y_STRIDES[dim]
 
@@ -394,10 +398,14 @@ def _unswizzle_to_strided_kernel(X, Y, LEADING_SHAPE: tl.constexpr, X_STRIDES: t
     rows = tile_m * BLOCK_M + tl.arange(0, BLOCK_M)
     words = tile_k * (BLOCK_K // 4) + tl.arange(0, BLOCK_K // 4)
     offsets = rows[:, None] * X_STRIDES[-2] + 4 * words[None, :] * X_STRIDES[-1]
-    a = tl.load(X + offsets).to(tl.uint32)
-    b = tl.load(X + offsets + X_STRIDES[-1]).to(tl.uint32)
-    c = tl.load(X + offsets + 2 * X_STRIDES[-1]).to(tl.uint32)
-    d = tl.load(X + offsets + 3 * X_STRIDES[-1]).to(tl.uint32)
+    if X_SHAPE[-2] % BLOCK_M or X_SHAPE[-1] % BLOCK_K:
+        mask = (rows[:, None] < X_SHAPE[-2]) & (4 * words[None, :] < X_SHAPE[-1])
+    else:
+        mask = True
+    a = tl.load(X + offsets, mask, other=0).to(tl.uint32)
+    b = tl.load(X + offsets + X_STRIDES[-1], mask, other=0).to(tl.uint32)
+    c = tl.load(X + offsets + 2 * X_STRIDES[-1], mask, other=0).to(tl.uint32)
+    d = tl.load(X + offsets + 3 * X_STRIDES[-1], mask, other=0).to(tl.uint32)
     x = _unpack_bits_triton(a | (b << 8) | (c << 16) | (d << 24))
     shifts = 8 * tl.arange(0, 4)
     x = (x[:, :, None] >> shifts[None, None, :]).to(tl.uint8)
