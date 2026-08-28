@@ -292,10 +292,6 @@ bool comesFromLoadOrBlockArg(Value v);
 // `resultIdx`th result.
 SmallVector<Value> getTiedArgs(Operation *op, int resultIdx);
 
-// Verifies the provided memory descriptor type used for barrier allocation
-LogicalResult verifyBarrierType(Operation *op,
-                                mlir::triton::gpu::MemDescType barrierType);
-
 // Get a boolean if the Value is an arith::ConstantOp
 std::optional<bool> getBoolFromConstant(Value cst);
 

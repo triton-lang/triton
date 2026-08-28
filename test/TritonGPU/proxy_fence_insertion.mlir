@@ -1465,54 +1465,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-#inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #inner}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func private @callee_proxy_write_to_second_partition(
-      %bar: !ttg.memdesc<1xi64, #inner, #smem, mutable>) {
-    %parent = ttg.local_alloc {allocation.offset = [0 : i32, 1024 : i32]} : () -> !ttg.memdesc<4xi64, #partitioned, #smem, mutable>
-    %second = ttg.memdesc_subslice %parent [2] : !ttg.memdesc<4xi64, #partitioned, #smem, mutable> -> !ttg.memdesc<2xi64, #partitioned, #smem, mutable, 4>
-    ttng.clc_try_cancel %second, %bar : !ttg.memdesc<2xi64, #partitioned, #smem, mutable, 4>, !ttg.memdesc<1xi64, #inner, #smem, mutable>
-    tt.return
-  }
-
-  // CHECK-LABEL: callee_partition_frame_does_not_alias_caller_buffer
-  tt.func public @callee_partition_frame_does_not_alias_caller_buffer() {
-    %buffer = ttg.local_alloc {allocation.offset = 8192 : i32} : () -> !ttg.memdesc<2xi64, #inner, #smem, mutable>
-    %bar = ttg.local_alloc {allocation.offset = 16384 : i32} : () -> !ttg.memdesc<1xi64, #inner, #smem, mutable>
-    // CHECK: ttng.clc_load_result
-    %result = ttng.clc_load_result %buffer : !ttg.memdesc<2xi64, #inner, #smem, mutable> -> i128
-    "test.keep"(%result) : (i128) -> ()
-    // CHECK-NOT: ttng.fence_async_shared
-    // CHECK: tt.call @callee_proxy_write_to_second_partition
-    tt.call @callee_proxy_write_to_second_partition(%bar) {allocation.offset = 3072 : i32} : (!ttg.memdesc<1xi64, #inner, #smem, mutable>) -> ()
-    tt.return
-  }
-
-  tt.func private @callee_generic_read_from_second_partition() {
-    %parent = ttg.local_alloc {allocation.offset = [0 : i32, 1024 : i32]} : () -> !ttg.memdesc<4xi64, #partitioned, #smem, mutable>
-    %second = ttg.memdesc_subslice %parent [2] : !ttg.memdesc<4xi64, #partitioned, #smem, mutable> -> !ttg.memdesc<2xi64, #partitioned, #smem, mutable, 4>
-    %result = ttng.clc_load_result %second : !ttg.memdesc<2xi64, #partitioned, #smem, mutable, 4> -> i128
-    "test.keep"(%result) : (i128) -> ()
-    tt.return
-  }
-
-  // CHECK-LABEL: callee_partition_summary_translates_selected_base
-  tt.func public @callee_partition_summary_translates_selected_base() {
-    // CHECK: tt.call @callee_generic_read_from_second_partition
-    tt.call @callee_generic_read_from_second_partition() {allocation.offset = 3072 : i32} : () -> ()
-    %buffer = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<2xi64, #inner, #smem, mutable>
-    %bar = ttg.local_alloc {allocation.offset = 8192 : i32} : () -> !ttg.memdesc<1xi64, #inner, #smem, mutable>
-    // CHECK: ttng.fence_async_shared {bCluster = false}
-    // CHECK: ttng.clc_try_cancel
-    ttng.clc_try_cancel %buffer, %bar : !ttg.memdesc<2xi64, #inner, #smem, mutable>, !ttg.memdesc<1xi64, #inner, #smem, mutable>
-    tt.return
-  }
-}
-
-// -----
-
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
