@@ -406,3 +406,33 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+!barrier = !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // The second launch rendezvous finishes capture reads before the default
+  // partition publishes. No additional CTA rendezvous is needed there.
+  // CHECK-LABEL: @capture_rendezvous_before_publication
+  tt.func @capture_rendezvous_before_publication(%ptr: !tt.ptr<i32>) {
+    %phase = arith.constant 0 : i32
+    %done = ttg.local_alloc : () -> !barrier
+    ttng.init_barrier %done, 1 : !barrier
+    ttg.warp_specialize(%ptr)
+    default {
+      // CHECK: default {
+      // CHECK-NEXT: ttng.arrive_barrier
+      ttng.arrive_barrier %done, 1 : !barrier
+      ttg.warp_yield
+    }
+    partition0(%address: !tt.ptr<i32>) num_warps(4) {
+      %value = tt.load %address : !tt.ptr<i32>
+      ttg.warp_return
+    } : (!tt.ptr<i32>) -> ()
+    ttng.wait_barrier %done, %phase : !barrier
+    ttng.inval_barrier %done : !barrier
+    tt.return
+  }
+}
