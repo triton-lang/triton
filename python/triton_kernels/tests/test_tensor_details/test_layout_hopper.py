@@ -200,7 +200,8 @@ def test_mxfp4_value_convert_layout_odd_source_packing(shape, mx_axis, major_dim
 @pytest.mark.parametrize("mma_version", [2, 3])
 @pytest.mark.parametrize("major_dim", [-2, -1])
 @pytest.mark.parametrize(("device", "step"), [("cpu", 1), ("meta", 1), ("cuda", 1), ("cuda", 2)])
-def test_mxfp4_value_convert_layout_compact_source(shape, mx_axis, mma_version, major_dim, device, step):
+@pytest.mark.parametrize("with_out", [False, True])
+def test_mxfp4_value_convert_layout_compact_source(shape, mx_axis, mma_version, major_dim, device, step, with_out):
     data = torch.randint(0, 256, shape, dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
     canonical = wrap_torch_tensor(data, dtype=FP4)
     layout = HopperMXValueLayout(mx_axis, mma_version)
@@ -216,8 +217,12 @@ def test_mxfp4_value_convert_layout_compact_source(shape, mx_axis, mma_version, 
     destination = StridedLayout(major_dim)
     expected = convert_layout(canonical, destination)
 
-    actual = convert_layout(source, destination)
+    out = wrap_torch_tensor(torch.empty_like(expected.data, device=device), dtype=FP4, shape=source.shape,
+                            layout=destination) if with_out else None
+    actual = convert_layout(source, destination, out=out)
 
+    if with_out:
+        assert actual is out
     assert actual.shape == expected.shape
     assert actual.data.shape == expected.data.shape
     assert actual.data.stride() == expected.data.stride()
@@ -249,7 +254,8 @@ def test_mxfp4_value_convert_layout_invalid_source_storage(encoded_shape, mx_axi
 @pytest.mark.parametrize("mx_axis", [-2, -1])
 @pytest.mark.parametrize("mma_version", [2, 3])
 @pytest.mark.parametrize("major_dim", [-2, -1])
-def test_mxfp4_value_convert_layout_compact_source_peak_allocation(mx_axis, mma_version, major_dim):
+@pytest.mark.parametrize("with_out", [False, True])
+def test_mxfp4_value_convert_layout_compact_source_peak_allocation(mx_axis, mma_version, major_dim, with_out):
     data = torch.empty((1028, 8320), dtype=torch.uint8, device="cuda")
     shape = (4160, 4112) if mx_axis == -2 else (4112, 4160)
     if mx_axis == -2:
@@ -257,17 +263,20 @@ def test_mxfp4_value_convert_layout_compact_source_peak_allocation(mx_axis, mma_
     layout = HopperMXValueLayout(mx_axis, mma_version)
     source = wrap_torch_tensor(data, dtype=FP4, shape=shape, layout=layout)
     destination = StridedLayout(major_dim)
-    warm = convert_layout(source, destination)
+    out = convert_layout(source, destination) if with_out else None
+    warm = convert_layout(source, destination, out=out)
     torch.cuda.synchronize(data.device)
     del warm
     baseline = torch.cuda.memory_allocated(data.device)
     torch.cuda.reset_peak_memory_stats(data.device)
 
-    actual = convert_layout(source, destination)
+    actual = convert_layout(source, destination, out=out)
     torch.cuda.synchronize(data.device)
     peak = torch.cuda.max_memory_allocated(data.device) - baseline
 
-    assert peak <= actual.data.nbytes + 1024**2
+    if with_out:
+        assert actual is out
+    assert peak <= (0 if with_out else actual.data.nbytes) + 1024**2
 
 
 @pytest.mark.parametrize("mx_axis", [-2, -1])
