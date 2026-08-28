@@ -1,8 +1,9 @@
 // RUN: split-file %s %t
 // RUN: triton-opt %t/success.mlir -split-input-file -allow-unregistered-dialect -symbol-dce -tritoninstrument-fp-sanitizer -triton-nvidia-check-matmul-two-cta | FileCheck %t/success.mlir
-// RUN: triton-opt %t/preserve-calls.mlir -tritoninstrument-fp-sanitizer | FileCheck %t/preserve-calls.mlir
-// RUN: triton-opt %t/required-calls.mlir -split-input-file -tritoninstrument-fp-sanitizer -verify-diagnostics
+// RUN: triton-opt %t/preserve-calls.mlir -split-input-file -tritoninstrument-fp-sanitizer | FileCheck %t/preserve-calls.mlir
+// RUN: triton-opt %t/inlined-calls.mlir -split-input-file -tritoninstrument-fp-sanitizer | FileCheck %t/inlined-calls.mlir --implicit-check-not="tt.call" --implicit-check-not="tt.func private"
 // RUN: triton-opt %t/blocked-call.mlir -inline -tritoninstrument-fp-sanitizer -verify-diagnostics
+// RUN: triton-opt %t/recursive-call.mlir -tritoninstrument-fp-sanitizer -verify-diagnostics
 
 //--- success.mlir
 
@@ -548,19 +549,60 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   }
 }
 
-//--- required-calls.mlir
+// -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @call_allocating_wrapper
+  tt.func public @call_allocating_wrapper(%x: f32) -> tensor<128x128xf32, #blocked> {
+    // CHECK: tt.call @ordinary
+    %input = tt.call @ordinary(%x) : (f32) -> f32
+    // CHECK: tt.call @allocating_wrapper
+    %value = tt.call @allocating_wrapper(%input) : (f32) -> tensor<128x128xf32, #blocked>
+    tt.return %value : tensor<128x128xf32, #blocked>
+  }
+  // CHECK-LABEL: tt.func private @ordinary
+  // CHECK-SAME: noinline = false
+  tt.func private @ordinary(%x: f32) -> f32 attributes {noinline = false} {
+    // CHECK: arith.addi
+    %one = arith.constant 1.0 : f32
+    %value = arith.addf %x, %one : f32
+    tt.return %value : f32
+  }
+  // Inlining the consumer resolves its argument without requiring the wrapper
+  // to be inlined, since the wrapper owns the allocation.
+  // CHECK-LABEL: tt.func private @allocating_wrapper
+  // CHECK-SAME: noinline = true
+  tt.func private @allocating_wrapper(%x: f32) -> tensor<128x128xf32, #blocked> attributes {noinline = true} {
+    // CHECK: ttg.global_scratch_alloc
+    // CHECK-NOT: tt.call
+    // CHECK: tt.load
+    // CHECK: tt.return
+    %input = tt.splat %x : f32 -> tensor<128x128xf32, #blocked>
+    %memory = ttng.tmem_alloc %input : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %value = tt.call @consumer(%memory) : (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> tensor<128x128xf32, #blocked>
+    tt.return %value : tensor<128x128xf32, #blocked>
+  }
+  // CHECK-NOT: @consumer
+  tt.func private @consumer(%memory: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> tensor<128x128xf32, #blocked> attributes {noinline = true} {
+    %value = ttng.tmem_load %memory : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    tt.return %value : tensor<128x128xf32, #blocked>
+  }
+}
+
+//--- inlined-calls.mlir
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @call_tmem
   tt.func public @call_tmem() -> tensor<128x128xf32, #blocked> {
     %memory = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-    // expected-error @below {{must be inlined before FPSan}}
     %value = tt.call @read_tmem(%memory) : (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> tensor<128x128xf32, #blocked>
     tt.return %value : tensor<128x128xf32, #blocked>
   }
   tt.func private @read_tmem(%memory: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> tensor<128x128xf32, #blocked> attributes {noinline = true} {
-    // expected-note @below {{FPSan needs the allocation behind this tensor memory argument}}
     %value = ttng.tmem_load %memory : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
     tt.return %value : tensor<128x128xf32, #blocked>
   }
@@ -571,12 +613,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @call_tmem_result
   tt.func public @call_tmem_result() -> tensor<128x128xf32, #blocked> {
     %memory = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
     // A producer can hide provenance without doing any TMEM arithmetic itself.
-    // expected-error @below {{must be inlined before FPSan}}
     %alias = tt.call @identity(%memory) : (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-    // expected-note @below {{FPSan needs the allocation behind this tensor memory call result}}
     %value = ttng.tmem_load %alias : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
     tt.return %value : tensor<128x128xf32, #blocked>
   }
@@ -590,18 +631,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @call_forwarder
   tt.func public @call_forwarder() -> tensor<128x128xf32, #blocked> {
     %memory = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
     %value = tt.call @forward(%memory) : (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> tensor<128x128xf32, #blocked>
     tt.return %value : tensor<128x128xf32, #blocked>
   }
   tt.func private @forward(%memory: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> tensor<128x128xf32, #blocked> attributes {noinline = true} {
-    // expected-error @below {{must be inlined before FPSan}}
     %value = tt.call @read_tmem(%memory) : (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> tensor<128x128xf32, #blocked>
     tt.return %value : tensor<128x128xf32, #blocked>
   }
   tt.func private @read_tmem(%memory: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> tensor<128x128xf32, #blocked> attributes {noinline = true} {
-    // expected-note @below {{FPSan needs the allocation behind this tensor memory argument}}
     %value = ttng.tmem_load %memory : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
     tt.return %value : tensor<128x128xf32, #blocked>
   }
@@ -610,13 +650,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @call_warp_specialized_helper
   tt.func public @call_warp_specialized_helper() {
-    // expected-error @below {{must be inlined before FPSan}}
     tt.call @warp_specialized_helper() : () -> ()
     tt.return
   }
   tt.func private @warp_specialized_helper() attributes {noinline = true} {
-    // expected-note @below {{warp specialization requires kernel context}}
     ttg.warp_specialize()
     default {
       ttg.warp_yield
@@ -635,6 +674,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @call_commit_from_partition
   tt.func public @call_commit_from_partition() {
     %true = arith.constant true
     %a = ttg.local_alloc : () -> !ttg.memdesc<256x128xf16, #shared_a, #ttg.shared_memory, mutable>
@@ -647,7 +687,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
       ttg.warp_yield
     }
     partition0(%part_bar: !ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>) num_warps(4) {
-      // expected-error @below {{must be inlined before FPSan}}
       tt.call @commit(%part_bar) : (!ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>) -> ()
       ttg.warp_return
     } : (!ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>) -> ()
@@ -655,9 +694,30 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   }
   tt.func private @commit(%bar: !ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>) attributes {noinline = true} {
     %true = arith.constant true
-    // expected-note @below {{FPSan cluster scratch and barriers require kernel context}}
     ttng.tc_gen5_commit %bar, %true : !ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>
     tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @call_cfg_in_function
+  tt.func public @call_cfg_in_function(%pred: i1) -> tensor<128x128xf32, #blocked> {
+    %memory = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %value = tt.call @early_return(%memory, %pred) : (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, i1) -> tensor<128x128xf32, #blocked>
+    tt.return %value : tensor<128x128xf32, #blocked>
+  }
+  tt.func private @early_return(%memory: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, %pred: i1) -> tensor<128x128xf32, #blocked> attributes {noinline = true} {
+    cf.cond_br %pred, ^load, ^zero
+  ^load:
+    %value = ttng.tmem_load %memory : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    tt.return %value : tensor<128x128xf32, #blocked>
+  ^zero:
+    %zero = arith.constant dense<0.0> : tensor<128x128xf32, #blocked>
+    tt.return %zero : tensor<128x128xf32, #blocked>
   }
 }
 
@@ -689,5 +749,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   ^zero:
     %zero = arith.constant dense<0.0> : tensor<128x128xf32, #blocked>
     tt.return %zero : tensor<128x128xf32, #blocked>
+  }
+}
+
+//--- recursive-call.mlir
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func public @call_recursive_producer() -> tensor<128x128xf32, #blocked> {
+    %memory = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    // Only this invocation initially requires inlining. The unselected
+    // recursive invocation must not cause unbounded expansion.
+    // expected-error @below {{must be inlined before FPSan}}
+    %alias = tt.call @recursive_identity(%memory) : (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    // expected-note @below {{FPSan needs the allocation behind this tensor memory call result}}
+    %value = ttng.tmem_load %alias : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    tt.return %value : tensor<128x128xf32, #blocked>
+  }
+  tt.func private @recursive_identity(%memory: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> attributes {noinline = true} {
+    %alias = tt.call @recursive_identity(%memory) : (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return %alias : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
   }
 }
