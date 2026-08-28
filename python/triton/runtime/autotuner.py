@@ -5,6 +5,7 @@ import time
 import inspect
 import hashlib
 import json
+import threading
 from functools import cached_property
 from typing import Dict, Tuple, List, Optional
 
@@ -123,6 +124,27 @@ class Autotuner(KernelInterface):
                 quantiles=quantiles,
             )
             return
+
+    @property
+    def nargs(self):
+        tls = getattr(self, '_tls', None)
+        return getattr(tls, 'nargs', None) if tls is not None else None
+
+    @nargs.setter
+    def nargs(self, value):
+        if not hasattr(self, '_tls'):
+            self._tls = threading.local()
+        self._tls.nargs = value
+
+    def __getstate__(self):
+        # Strip the unpicklable threading.local object during serialization
+        state = self.__dict__.copy()
+        state.pop('_tls', None)
+        return state
+
+    def __setstate__(self, state):
+        # Restore state; _tls will be lazily recreated on next access
+        self.__dict__.update(state)
 
     @cached_property
     def do_bench(self):
