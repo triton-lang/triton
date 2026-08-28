@@ -75,7 +75,7 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
     # for -Wno-psabi, see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=111047
     cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-Wno-psabi", "-o", so]
     if language == "c++":
-        cc_cmd.insert(3, "-std=c++17")
+        cc_cmd.insert(3, "-std=c++20")
     cc_cmd += [_library_flag(lib) for lib in libraries]
     cc_cmd += [f"-L{dir}" for dir in library_dirs]
     cc_cmd += [f"-I{dir}" for dir in include_dirs if dir is not None]

@@ -31,7 +31,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
               "${PROJECT_SOURCE_DIR}/third_party/nvidia/backend/lib"
       COMMAND "${TRITON_GSAN_CLANGXX}"
               -x cuda
-              -std=c++17 -O3 -S -emit-llvm
+              -std=c++20 -O3 -S -emit-llvm
               --cuda-device-only
               -nocudainc
               -nocudalib
