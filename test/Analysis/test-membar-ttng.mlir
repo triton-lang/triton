@@ -601,16 +601,27 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
 !barrier = !ttg.memdesc<2xi64, #bar, #ttg.shared_memory, mutable>
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 2 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // A relaxed cluster rendezvous does not publish earlier memory accesses.
-  // CHECK-LABEL: @relaxed_cluster_keeps_publication_debt
-  tt.func private @relaxed_cluster_keeps_publication_debt(%src: !tt.ptr<i32>, %done: !barrier) -> i32 {
-    // CHECK: tt.load
+  // A relaxed cluster rendezvous preserves pending work without adding thread
+  // effects or demands.
+  // CHECK-LABEL: @relaxed_cluster_preserves_thread_state
+  tt.func private @relaxed_cluster_preserves_thread_state(%src: !tt.ptr<i32>, %read_done: !barrier, %next_done: !barrier) -> i32 {
+    // CHECK: ttg.async_wait
+    // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: tt.load
     // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
     // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: ttng.arrive_barrier
+    // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
+    // CHECK-NEXT: ttng.arrive_barrier
+    // CHECK-NEXT: tt.return
+    ttg.async_wait {num = 0 : i32}
+    ttng.cluster_barrier {relaxed = true}
     %value = tt.load %src : !tt.ptr<i32>
     ttng.cluster_barrier {relaxed = true}
-    ttng.arrive_barrier %done, 1 : !barrier
+    ttng.arrive_barrier %read_done, 1 : !barrier
+    ttng.cluster_barrier {relaxed = true}
+    ttng.arrive_barrier %next_done, 1 : !barrier
     tt.return %value : i32
   }
 
