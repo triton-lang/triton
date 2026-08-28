@@ -124,15 +124,16 @@ void TMemBarrierAnalysis::update(Operation *op, MembarInfo *membarInfo,
     membarInfo->sync();
 }
 
-// Ops before which we 100% need to flush reads and writes
+// Operations before which to flush pending TMEM accesses.
 bool isWaitBoundary(Operation *op) {
   // Defer waits at CTA barriers until a hazard or boundary requires them.
   if (isa<gpu::BarrierOp>(op))
     return false;
 
-  // Flush before starting or ending WS
-  if (isa<gpu::WarpSpecializeOp, gpu::WarpSpecializePartitionsOp,
-          gpu::WarpYieldOp, gpu::WarpReturnOp, CallOpInterface>(op))
+  // Flush before CFG branches, calls and warp specialization boundaries.
+  if (isa<BranchOpInterface, gpu::WarpSpecializeOp,
+          gpu::WarpSpecializePartitionsOp, gpu::WarpYieldOp, gpu::WarpReturnOp,
+          CallOpInterface>(op))
     return true;
   // A non-relaxed cluster barrier could be followed by a 2CTA MMA, in which
   // case we need to put the wait before the cluster barrier.
@@ -151,8 +152,8 @@ bool isWaitBoundary(Operation *op) {
     if (!barrier.getBarriers().empty())
       return true;
 
-  // Carry pending accesses through control-flow joins and backedges.
-  if (isa<BranchOpInterface, RegionBranchOpInterface>(op) ||
+  // Carry pending accesses through structured control flow.
+  if (isa<RegionBranchOpInterface>(op) ||
       (isa<RegionBranchTerminatorOpInterface>(op) &&
        isa<RegionBranchOpInterface>(op->getParentOp())))
     return false;
@@ -234,7 +235,7 @@ private:
 
   void finishBlock(BlockInfo &pending, OpBuilder *builder) {
     // Complete accesses preceding lastBarrier before forgetting it.
-    // Leave later accesses in pending for joins and backedges.
+    // Leave later accesses pending across structured control flow.
     for (TMEMWaitKind kind : {TMEMWaitKind::LOAD, TMEMWaitKind::STORE})
       waitBeforeBarrier(kind, pending, builder);
     lastBarrier = nullptr;
@@ -312,7 +313,7 @@ private:
   }
 
   // These snapshots track accesses before and after lastBarrier within one
-  // virtual block. Only MembarInfo::pending flows through joins and backedges.
+  // virtual block. Only MembarInfo::pending flows between virtual blocks.
   Operation *lastBarrier = nullptr;
   BlockInfo beforeBarrier;
   BlockInfo afterBarrier;
