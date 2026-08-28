@@ -1059,8 +1059,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 
-  tt.func private @async_store_arguments(%src: tensor<128xi32, #blockedStore>, %dst: !ttg.memdesc<128xi32, #sharedStore, #smem, mutable>, %barrier: !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>) attributes {noinline = true} {
-    ttng.async_shared_store %src, %dst, %barrier : tensor<128xi32, #blockedStore> -> !ttg.memdesc<128xi32, #sharedStore, #smem, mutable>, !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>
+  tt.func private @async_store_arguments(%src: tensor<128xi32, #blockedStore>, %dst: !ttg.memdesc<128xi32, #sharedStoreLocal, #smem, mutable>, %barrier: !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>) attributes {noinline = true} {
+    ttng.async_shared_store %src, %dst, %barrier : tensor<128xi32, #blockedStore> -> !ttg.memdesc<128xi32, #sharedStoreLocal, #smem, mutable>, !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>
     tt.return
   }
 
@@ -1076,13 +1076,13 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   tt.func @cluster_call_without_allocator_reuse(%src: tensor<128xi32, #blockedStore>) -> tensor<128xi32, #blockedStore> {
     %c0 = arith.constant 0 : i32
     %true = arith.constant true
-    %dst = ttg.local_alloc : () -> !ttg.memdesc<128xi32, #sharedStore, #smem, mutable>
+    %dst = ttg.local_alloc : () -> !ttg.memdesc<128xi32, #sharedStoreLocal, #smem, mutable>
     %barrier = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>
     ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>
     ttng.barrier_expect %barrier, 512 {fromCTA = 0 : i32}, %true : !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>
-    tt.call @async_store_arguments(%src, %dst, %barrier) : (tensor<128xi32, #blockedStore>, !ttg.memdesc<128xi32, #sharedStore, #smem, mutable>, !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>) -> ()
-    ttng.wait_barrier %barrier, %c0, %true deps %dst : !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>, !ttg.memdesc<128xi32, #sharedStore, #smem, mutable>
-    %result = ttg.local_load %dst : !ttg.memdesc<128xi32, #sharedStore, #smem, mutable> -> tensor<128xi32, #blockedStore>
+    tt.call @async_store_arguments(%src, %dst, %barrier) : (tensor<128xi32, #blockedStore>, !ttg.memdesc<128xi32, #sharedStoreLocal, #smem, mutable>, !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>) -> ()
+    ttng.wait_barrier %barrier, %c0, %true deps %dst : !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>, !ttg.memdesc<128xi32, #sharedStoreLocal, #smem, mutable>
+    %result = ttg.local_load %dst : !ttg.memdesc<128xi32, #sharedStoreLocal, #smem, mutable> -> tensor<128xi32, #blockedStore>
     ttng.inval_barrier %barrier : !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>
     tt.return %result : tensor<128xi32, #blockedStore>
   }
