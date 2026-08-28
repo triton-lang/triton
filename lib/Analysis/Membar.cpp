@@ -180,8 +180,7 @@ ThreadSyncInfo getThreadSyncInfo(Operation *op) {
   if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op))
     return {mma.getCompletionBarriers().empty() ? ThreadSyncKind::Ordinary
                                                 : ThreadSyncKind::Publication};
-  // A call without a summary may publish earlier work in its body.
-  if (isa<ttng::TCGen5CommitOp, CallOpInterface>(op))
+  if (isa<ttng::TCGen5CommitOp>(op))
     return {ThreadSyncKind::Publication};
   return {};
 }
@@ -190,8 +189,7 @@ ThreadSyncInfo getThreadSyncInfo(Operation *op) {
 bool haveSameThreadSyncIssuer(Operation *lhs, Operation *rhs) {
   // Equal issuer kinds in different regions can denote different physical
   // threads, including sibling warp-specialized partitions and callees.
-  auto *region = lhs->getParentRegion();
-  if (!region || region != rhs->getParentRegion())
+  if (lhs->getParentRegion() != rhs->getParentRegion())
     return false;
   auto issuer = getThreadSyncInfo(lhs).issuer;
   return issuer != ThreadSyncIssuer::Unknown &&
@@ -346,10 +344,12 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
   bool controlFlow = isa<BranchOpInterface, RegionBranchOpInterface,
                          RegionBranchTerminatorOpInterface>(op);
   bool isReturn = op->hasTrait<OpTrait::ReturnLike>();
+  // Cluster barriers contribute synchronization stages, not payload effects.
   bool hasEffects =
       sync.requiresBefore() || sync.requiresAfter() ||
       getScratchBufferId(op, &allocation) != Allocation::InvalidBufferId ||
-      (!controlFlow && !isReturn && !isMemoryEffectFree(op));
+      (!controlFlow && !isReturn && !isa<ttng::ClusterBarrierOp>(op) &&
+       !isMemoryEffectFree(op));
 
   BlockInfo effects;
   if (hasEffects) {
@@ -441,13 +441,9 @@ void MembarAnalysis::updateMemoryEffects(Operation *op, MembarInfo *membarInfo,
             return slices;
           });
         });
-    if (summary) {
-      syncIfNeeded(op, summary->entryBlockInfo, membarInfo, builder, cluster);
-      membarInfo->applyCallSummary(*summary);
-    } else {
-      syncIfNeeded(op, curBlockInfo, membarInfo, builder, cluster);
-      membarInfo->addBlockInfo(curBlockInfo);
-    }
+    assert(summary && "expected callee summary");
+    syncIfNeeded(op, summary->entryBlockInfo, membarInfo, builder, cluster);
+    membarInfo->applyCallSummary(*summary);
     return;
   }
 
