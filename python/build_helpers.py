@@ -342,7 +342,8 @@ class DependencyArchive:
                 or parsed.password is not None or parsed.query or parsed.fragment
                 or not parsed.path.endswith("/oaiartifacts")):
             raise ValueError("OAIARTIFACTS_BASE_URL must be an HTTP(S) URL ending in /oaiartifacts")
-        return f"{base}/wheels/triton_wheel/{self.mirror_path}"
+        base = base.removesuffix("/oaiartifacts")
+        return f"{base}/{self.mirror_path}"
 
 
 @dataclass
@@ -362,7 +363,7 @@ def get_json_archive():
     with open(json_version_path, "r") as json_version_file:
         version = json_version_file.read().strip()
     return DependencyArchive(f"https://github.com/nlohmann/json/releases/download/{version}/include.zip",
-                             f"json/json-{version}-include.zip")
+                             f"oaiartifacts/wheels/triton_wheel/json/json-{version}-include.zip")
 
 
 def get_json_package_info():
@@ -378,7 +379,7 @@ def get_llvm_archive(system_suffix, llvm_info=None):
     build_number = llvm_info["build_number"]
     filename = f"llvm-{rev}-{system_suffix}-{build_number}.tar.gz"
     return DependencyArchive(f"https://oaitriton.blob.core.windows.net/public/llvm-builds/{filename}",
-                             f"llvm/{filename}", llvm_info["sha256sum"][system_suffix])
+                             f"triton-llvm/{filename}", llvm_info["sha256sum"][system_suffix])
 
 
 def is_linux_os(os_id):
@@ -565,7 +566,7 @@ class NvidiaToolchainPackage:
     def archive(self, system, arch):
         filename = f"{self.component}-{system}-{arch}-{self.version}-archive.tar.xz"
         url = f"https://developer.download.nvidia.com/compute/cuda/redist/{self.component}/{system}-{arch}/{filename}"
-        return DependencyArchive(url, f"nvidia/{filename}")
+        return DependencyArchive(url, f"oaiartifacts/wheels/triton_wheel/nvidia/{filename}")
 
 
 def get_nvidia_toolchain_packages():
