@@ -175,7 +175,6 @@ LogicalResult ConvertTritonGPUToLLVM::prepareModule(ModuleOp mod,
   membarPass.run();
   mlir::PassManager waitPm(mod.getContext());
   waitPm.addPass(ttng::createTritonNvidiaGPUTMemBarrierInsertionPass());
-  waitPm.addPass(ttng::createTritonNvidiaGPUTMemWaitInsertionPass());
   if (failed(waitPm.run(mod)))
     return failure();
 

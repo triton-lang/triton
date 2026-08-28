@@ -306,6 +306,8 @@ struct MembarInfo {
 triton::BarrierStages getLocalBarrierStages(Operation *op,
                                             Allocation *allocation);
 
+bool requiresThreadSyncBefore(Operation *op);
+
 //===----------------------------------------------------------------------===//
 // Shared Memory Barrier Analysis
 //===----------------------------------------------------------------------===//
@@ -356,6 +358,10 @@ protected:
   void insertBarrier(Operation *operation, OpBuilder *builder,
                      bool cluster = false);
   virtual triton::BarrierStages getBarrierStages(Operation *operation);
+  virtual bool requiresThreadSync(const BlockInfo &pending,
+                                  const BlockInfo &effects) {
+    return pending.requiresThreadSync(effects);
+  }
 
   Allocation &allocation;
   MembarFilterFn filter;

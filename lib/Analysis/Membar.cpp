@@ -198,6 +198,10 @@ bool haveSameThreadSyncIssuer(Operation *lhs, Operation *rhs) {
 
 } // namespace
 
+bool requiresThreadSyncBefore(Operation *op) {
+  return getThreadSyncInfo(op).requiresBefore();
+}
+
 bool BlockInfo::requiresThreadSync(const BlockInfo &other) const {
   // Only effect -> demand edges require a rendezvous; independent completion
   // operations can publish together.
@@ -224,7 +228,7 @@ void MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
            (filter &&
             filter(before, after, beforeIsRead, afterIsRead, allocation));
   };
-  if (!pending.requiresThreadSync(effects) &&
+  if (!requiresThreadSync(pending, effects) &&
       !pending.isIntersected(effects, canSkip, &allocation, sliceFilter))
     return;
   // The barrier clears incoming state. The operation's own effects still

@@ -12,7 +12,6 @@ namespace triton {
 namespace nvidia_gpu {
 
 #define GEN_PASS_DEF_TRITONNVIDIAGPUTMEMBARRIERINSERTIONPASS
-#define GEN_PASS_DEF_TRITONNVIDIAGPUTMEMWAITINSERTIONPASS
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
 
 namespace {
@@ -326,30 +325,6 @@ LogicalResult runTMemAnalysis(ModuleOp mod, MembarFilterFn filter = nullptr) {
 
 } // namespace
 
-struct TMemWaitInsertionPass
-    : public impl::TritonNvidiaGPUTMemWaitInsertionPassBase<
-          TMemWaitInsertionPass> {
-  using impl::TritonNvidiaGPUTMemWaitInsertionPassBase<
-      TMemWaitInsertionPass>::TritonNvidiaGPUTMemWaitInsertionPassBase;
-
-  void runOnOperation() override {
-    ModuleOp mod = getOperation();
-    if (!mod.walk([](Operation *op) {
-              auto kind = getTMemAccessKind(op);
-              return kind == TMemAccessKind::Load ||
-                             kind == TMemAccessKind::Store
-                         ? WalkResult::interrupt()
-                         : WalkResult::advance();
-            })
-             .wasInterrupted())
-      return;
-    // Run after control-flow lowering and TMEM/shared-memory barrier insertion.
-    // Calls and returns complete pending accesses, so no summaries are needed.
-    if (failed(runTMemAnalysis<TMemWaitAnalysis>(mod)))
-      return signalPassFailure();
-  }
-};
-
 struct TMemBarrierInsertionPass
     : public impl::TritonNvidiaGPUTMemBarrierInsertionPassBase<
           TMemBarrierInsertionPass> {
@@ -366,6 +341,17 @@ struct TMemBarrierInsertionPass
              .wasInterrupted())
       return;
     if (failed(runTMemAnalysis<TMemBarrierAnalysis>(mod, filterFn)))
+      return signalPassFailure();
+    if (!mod.walk([](Operation *op) {
+              auto kind = getTMemAccessKind(op);
+              return kind == TMemAccessKind::Load ||
+                             kind == TMemAccessKind::Store
+                         ? WalkResult::interrupt()
+                         : WalkResult::advance();
+            })
+             .wasInterrupted())
+      return;
+    if (failed(runTMemAnalysis<TMemWaitAnalysis>(mod)))
       return signalPassFailure();
   }
 };
