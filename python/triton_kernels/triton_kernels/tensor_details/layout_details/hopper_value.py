@@ -1,6 +1,5 @@
 import math
 import torch
-from torch._subclasses.fake_tensor import is_fake
 import triton
 import triton.language as tl
 from dataclasses import dataclass
@@ -88,7 +87,7 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         # The tiled path needs the full padded encoding and even packing extents.
         # Keep compact or otherwise unsupported sources on the reference path.
         if (not self.is_fp4 or self.N % 2 or self.shape[self.mx_axis] % 2 or data.device.type != "cuda"
-                or data.dtype != torch.uint8 or is_fake(data) or list(data.shape) != self.storage_shape
+                or data.dtype != torch.uint8 or list(data.shape) != self.storage_shape
                 or not isinstance(destination, strided.StridedLayoutTransformation)
                 or destination.order[0] < len(self.shape) - 2):
             return super().convert_data(data, destination)
@@ -153,8 +152,7 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         Implementing it for fp8 is as easy as making the tile size (8, 8)
         """
         if (self.is_fp4 and self.N % 2 == 0 and self.shape[self.mx_axis] % 2 == 0 and data.device.type == "cuda"
-                and data.dtype == torch.uint8 and not is_fake(data)
-                and list(data.shape) == [*self.shape[:-1], self.N // 2]):
+                and data.dtype == torch.uint8 and list(data.shape) == [*self.shape[:-1], self.N // 2]):
             return self._swizzle_from_strided(data, len(self.shape) - 1)
         # re-pack as column-major
         data = repack(data, -1, self.mx_axis, self.is_fp4)
@@ -356,7 +354,7 @@ def _convert_bits_kernel(X, Y, N, INVERSE: tl.constexpr, BLOCK_SIZE: tl.constexp
 
 def _convert_bits(x: torch.Tensor, inverse: bool) -> torch.Tensor:
     """Avoid full-size integer temporaries when re-encoding CUDA values."""
-    if x.device.type != "cuda" or x.dtype != torch.uint8 or is_fake(x):
+    if x.device.type != "cuda" or x.dtype != torch.uint8:
         return _unpack_bits(x) if inverse else _pack_bits(x)
     x = x.contiguous()
     shape = (*x.shape[:-1], x.shape[-1] // 4)

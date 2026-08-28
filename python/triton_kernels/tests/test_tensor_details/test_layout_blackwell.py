@@ -124,6 +124,7 @@ def test_mxfp4_value_shuffled_matches_torch(shape, block_k, block_n, step):
 ])
 @pytest.mark.parametrize("trans", [False, True])
 @pytest.mark.parametrize("step", [1, 2])
+@pytest.mark.enable_warmup
 def test_mxfp4_value_convert_layout_matches_torch(shape, layout, trans, step):
     input_shape = tuple(step * size for size in shape[:-1]) + shape[-1:]
     data_cpu = torch.randint(0, 256, (math.prod(input_shape) + 1, ), dtype=torch.uint8)

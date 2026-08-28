@@ -1,6 +1,5 @@
 import pytest
 import torch
-from torch._subclasses.fake_tensor import FakeTensorMode
 import triton
 import triton.language as tl
 from triton_kernels.fpsan import embed, unembed
@@ -274,25 +273,22 @@ def test_mxfp4_value_convert_layout_forward_fallback(layout, major_dim, dtype):
 
 @pytest.mark.parametrize("layout", _FP4_VALUE_LAYOUTS)
 @pytest.mark.parametrize("major_dim", [-2, -1])
-@pytest.mark.parametrize("device", ["meta", "cuda"])
 @pytest.mark.parametrize("inverse", [False, True])
-def test_mxfp4_value_convert_layout_fake(layout, major_dim, device, inverse):
+def test_mxfp4_value_convert_layout_meta(layout, major_dim, inverse):
     shape = [2, 130, 66]
-    source = empty(shape, dtype=FP4, device="meta", layout=StridedLayout(major_dim))
+    source = empty(shape, dtype=FP4, device="cpu", layout=StridedLayout(major_dim))
     source = convert_layout(source, layout) if inverse else source
     destination = StridedLayout(major_dim) if inverse else layout
     expected = convert_layout(source, destination)
 
-    with FakeTensorMode():
-        source = empty(shape, dtype=FP4, device=device, layout=StridedLayout(major_dim))
-        source = convert_layout(source, layout) if inverse else source
-        actual = convert_layout(source, destination)
+    source_meta = wrap_torch_tensor(source.data.to("meta"), dtype=FP4, shape=source.shape, layout=source.storage.layout)
+    actual = convert_layout(source_meta, destination)
 
     assert actual.shape == expected.shape
     assert actual.data.shape == expected.data.shape
     assert actual.data.stride() == expected.data.stride()
     assert actual.data.dtype == expected.data.dtype
-    assert actual.device.type == device
+    assert actual.device.type == "meta"
 
 
 @pytest.mark.parametrize("layout", _FP4_VALUE_LAYOUTS)

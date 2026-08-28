@@ -113,6 +113,7 @@ def test_mxfp4_value_convert_layout_roundtrip(mx_axis):
 @pytest.mark.parametrize("trans", [False, True])
 @pytest.mark.parametrize("mx_axis", [-2, -1])
 @pytest.mark.parametrize("mma_version", [2, 3])
+@pytest.mark.enable_warmup
 def test_mxfp4_value_convert_layout_matches_torch(shape, step, trans, mx_axis, mma_version):
     input_shape = tuple(step * size for size in shape[:-1]) + shape[-1:]
     data_cpu = torch.randint(0, 256, (math.prod(input_shape) + 1, ), dtype=torch.uint8)

@@ -2,7 +2,6 @@ import math
 from dataclasses import dataclass
 
 import torch
-from torch._subclasses.fake_tensor import is_fake
 import triton
 import triton.language as tl
 
@@ -103,7 +102,7 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
         return self._convert_data(data, inverse=True, major_dim=-1)
 
     def convert_data(self, data, destination: LayoutTransformation):
-        if (data.device.type != "cuda" or data.dtype != torch.uint8 or is_fake(data)
+        if (data.device.type != "cuda" or data.dtype != torch.uint8
                 or not isinstance(destination, strided.StridedLayoutTransformation)
                 or destination.order[0] < len(self.shape) - 2):
             return super().convert_data(data, destination)
@@ -120,7 +119,7 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
         # Preserve the canonical path's even-N packing requirement.
         if self.shape[-1] % 2:
             raise ValueError(f"FP4 packing dimension -1 must have an even size, got {self.shape[-1]}")
-        if data.device.type != "cuda" or data.dtype != torch.uint8 or is_fake(data):
+        if data.device.type != "cuda" or data.dtype != torch.uint8:
             return self._unswizzle_data_torch(data) if inverse else self._swizzle_data_torch(data)
 
         if inverse:

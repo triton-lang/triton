@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from .base import Layout, LayoutTransformation
 from .torch_utils import repack
 import torch
-from torch._subclasses.fake_tensor import is_fake
 
 
 # ------------------- Layout Definition -------------------
@@ -66,8 +65,8 @@ class StridedLayoutTransformation(LayoutTransformation):
     def _can_convert_fp4(self, data):
         """Whether direct kernels can read this strided FP4 storage."""
         return (self.is_fp4 and len(self.shape) >= 2 and self.order[0] >= len(self.shape) - 2
-                and data.device.type == "cuda" and data.dtype == torch.uint8 and not is_fake(data)
-                and list(data.shape) == self.storage_shape and data.stride(self.order[0]) == 1)
+                and data.device.type == "cuda" and data.dtype == torch.uint8 and list(data.shape) == self.storage_shape
+                and data.stride(self.order[0]) == 1)
 
     @property
     def storage_shape(self) -> list[int]:
