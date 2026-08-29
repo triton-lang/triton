@@ -72,7 +72,7 @@ def _mix_config(bitwidth: int, one_bits: int) -> tuple[np.uint64, np.uint64, np.
         sign_mask = np.uint64(1 << (bitwidth - 1))
         mag_mask = sign_mask - np.uint64(1)
         shift = int((one_bits & -one_bits).bit_length() - 1)
-        y = (np.uint64(one_bits) * np.uint64(922291)) & mag_mask
+        y = (np.uint64(one_bits) * np.uint64(14940041)) & mag_mask
         z = y ^ (y >> np.uint64(shift))
         mul_b_pos = _inv_odd_u64(z) & full_mask
         mul_b_neg = (mul_b_pos * mag_mask) & full_mask
@@ -95,7 +95,7 @@ def _mix_float_bits_to_payload_u64(bits, bitwidth: int, one_bits: int) -> np.nda
     x = bits.astype(np.uint64) & full_mask
     neg = (x & sign_mask) != 0
     sign = np.where(neg, sign_mask, np.uint64(0))
-    y = (((x ^ sign) * np.uint64(922291)) & mag_mask)
+    y = (((x ^ sign) * np.uint64(14940041)) & mag_mask)
     z = _xor_shift_right_u64(y, shift)
     factor = np.where(neg, mul_b_neg, mul_b_pos)
     return (((z * factor) & mag_mask) ^ sign) & full_mask
@@ -109,7 +109,7 @@ def _unmix_payload_u64_to_float_bits(payload, bitwidth: int, one_bits: int) -> n
     factor = np.where(neg, _inv_odd_u64(mul_b_neg), _inv_odd_u64(mul_b_pos))
     z = (((v ^ sign) * factor) & mag_mask)
     y = _inverse_xor_shift_right_u64(z, shift, bitwidth)
-    x = (y * _inv_odd_u64(np.uint64(922291))) & mag_mask
+    x = (y * _inv_odd_u64(np.uint64(14940041))) & mag_mask
     return (x ^ sign) & full_mask
 
 
@@ -122,8 +122,27 @@ def _unmix_payload_u32_to_f32_bits_i32(v_u32: np.ndarray) -> np.ndarray:
     return _u32_to_i32(_unmix_payload_u64_to_float_bits(v_u32, 32, 0x3F800000).astype(np.uint32))
 
 
+@pytest.mark.parametrize(("constant", "trailing_zeros"), [
+    (240.0, 0),
+    (448.0, 0),
+    (57344.0, 2),
+    (1 / 240, 0),
+    (1 / 448, 0),
+    (1.702, 0),
+    (2.5, 1),
+    (2.827, 0),
+    (1e-5, 0),
+    (1e-6, 0),
+])
+def test_float_payload_common_constant_valuation(constant, trailing_zeros):
+    bits = np.asarray([constant], dtype=np.float32).view(np.int32)
+    payload = int(_mix_f32_bits_to_payload_u32(bits)[0])
+    assert payload & -payload == 1 << trailing_zeros
+
+
 def _cast_float_payload_u64(payload, src_bitwidth: int, dst_bitwidth: int) -> np.ndarray:
-    x = payload.astype(np.uint64) & _low_mask_u64(src_bitwidth)
+    src_mask = _low_mask_u64(src_bitwidth)
+    x = payload.astype(np.uint64) & src_mask
     if dst_bitwidth == src_bitwidth:
         return x
 
@@ -132,11 +151,17 @@ def _cast_float_payload_u64(payload, src_bitwidth: int, dst_bitwidth: int) -> np
         extension = _low_mask_u64(dst_bitwidth) ^ _low_mask_u64(src_bitwidth)
         return np.where((x & sign) != 0, x | extension, x) & _low_mask_u64(dst_bitwidth)
 
-    normalized = np.where((x & sign) != 0, (~x) & _low_mask_u64(src_bitwidth), x)
-    high = normalized >> np.uint64(dst_bitwidth)
+    dst_mask = _low_mask_u64(dst_bitwidth)
+    low = x & dst_mask
+    low_sign = np.uint64(1 << (dst_bitwidth - 1))
+    extension = src_mask ^ dst_mask
+    canonical = np.where((low & low_sign) != 0, low | extension, low)
+    residual = x ^ canonical
+    multiplier = (np.uint64(3511) & dst_mask) * (src_mask // dst_mask)
     with np.errstate(over="ignore"):
-        folded = x ^ (high * np.uint64(3511))
-    return folded & _low_mask_u64(dst_bitwidth)
+        high = ((residual * multiplier) & src_mask) >> np.uint64(src_bitwidth - dst_bitwidth)
+    high ^= high >> np.uint64(dst_bitwidth // 2)
+    return (low ^ high) & dst_mask
 
 
 @pytest.mark.parametrize(("src_bitwidth", "dst_bitwidth"), [(8, 16), (8, 32), (16, 32), (16, 64), (32, 64)])
@@ -147,6 +172,20 @@ def test_float_payload_upcast_downcast_identity(src_bitwidth, dst_bitwidth):
     widened = _cast_float_payload_u64(payload, src_bitwidth, dst_bitwidth)
     narrowed = _cast_float_payload_u64(widened, dst_bitwidth, src_bitwidth)
     np.testing.assert_array_equal(narrowed, payload)
+
+
+@pytest.mark.parametrize(("src_bitwidth", "dst_bitwidth"), [(16, 8), (32, 8), (32, 16), (64, 8), (64, 16), (64, 32)])
+def test_float_payload_downcast_mixes_every_discarded_bit(src_bitwidth, dst_bitwidth):
+    rng = np.random.default_rng(src_bitwidth * 257 + dst_bitwidth)
+    src_mask = _low_mask_u64(src_bitwidth)
+    payload = rng.integers(0, np.iinfo(np.uint64).max, size=512, dtype=np.uint64) & src_mask
+    payload[:5] = np.asarray([0, 1, src_mask, 1 << (src_bitwidth - 1), 1 << (dst_bitwidth - 1)], dtype=np.uint64)
+    expected = _cast_float_payload_u64(payload, src_bitwidth, dst_bitwidth)
+
+    for bit in range(dst_bitwidth, src_bitwidth):
+        flipped = payload ^ (np.uint64(1) << np.uint64(bit))
+        actual = _cast_float_payload_u64(flipped, src_bitwidth, dst_bitwidth)
+        assert np.all(actual != expected), f"{src_bitwidth}-to-{dst_bitwidth} discarded bit {bit}"
 
 
 @pytest.mark.parametrize(("src_bitwidth", "dst_bitwidth", "x", "y"), [
@@ -378,7 +417,7 @@ def _expected_exp2_i64(x_i64: np.ndarray) -> np.ndarray:
 
 def _expected_exp_i32(x_i32: np.ndarray) -> np.ndarray:
     x = _mix_f32_bits_to_payload_u32(x_i32).astype(np.uint64)
-    rcp_log2 = np.uint64(0x236ee9bf)
+    rcp_log2 = np.uint64(0x26a29a75)
     scaled = ((x * rcp_log2) & np.uint64(0xFFFFFFFF)).astype(np.uint32)
     return _expected_exp2_i32(_unmix_payload_u32_to_f32_bits_i32(scaled))
 
@@ -2022,6 +2061,66 @@ def test_dot_explicit_and_implicit_upcasts_match(device, src_type, mid_type, m, 
     _assert_payload_equal(explicit, explicit_expected)
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA dot acceleration")
+@pytest.mark.parametrize("homomorphic_casts", [
+    pytest.param(False, id="non-homomorphic", marks=pytest.mark.xfail(
+        strict=True, reason="FPSan downcasts are non-homomorphic by default")),
+    pytest.param(True, id="homomorphic"),
+])
+def test_bf16_dot_sharding(device, homomorphic_casts, fresh_knobs):
+    _require_cuda_backend(device)
+    if torch.cuda.get_device_capability()[0] < 8:
+        pytest.skip("dot acceleration requires Ampere or newer")
+
+    M = N = K = 64
+    HALF = K // 2
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    @triton.jit
+    def dot(a, b, out, K_START: tl.constexpr, BLOCK_K: tl.constexpr):
+        rows = tl.arange(0, 64)[:, None]
+        cols = tl.arange(0, 64)[None, :]
+        ka = tl.arange(0, BLOCK_K)[None, :] + K_START
+        kb = tl.arange(0, BLOCK_K)[:, None] + K_START
+        av = tl.load(a + rows * 64 + ka)
+        bv = tl.load(b + kb * 64 + cols)
+        tl.store(out + rows * 64 + cols, tl.dot(av, bv).to(tl.bfloat16))
+
+    @triton.jit
+    def add(left, right, out):
+        offsets = tl.arange(0, 4096)
+        tl.store(out + offsets, tl.load(left + offsets) + tl.load(right + offsets))
+
+    # The two non-zero products are 0x00ff * 0x0101 = 0xffff and 1.
+    # The whole dot therefore narrows 0x00010000 once, while sharding narrows
+    # 0xffff and 1 separately and adds them in the BF16 payload ring.
+    a_payload = np.zeros((M, K), dtype=np.uint64)
+    b_payload = np.zeros((K, N), dtype=np.uint64)
+    a_payload[:, 0] = 0x00FF
+    b_payload[0, :] = 0x0101
+    a_payload[:, HALF] = 1
+    b_payload[HALF, :] = 1
+    a_bits = _unmix_payload_to_float_bits(a_payload, "bf16")
+    b_bits = _unmix_payload_to_float_bits(b_payload, "bf16")
+    _, aw = _as_float_bits_tensor(a_bits, "bf16")
+    _, bw = _as_float_bits_tensor(b_bits, "bf16")
+    whole, wholew = _as_float_bits_tensor(np.empty((M, N), dtype=np.int16), "bf16")
+    left, leftw = _as_float_bits_tensor(np.empty((M, N), dtype=np.int16), "bf16")
+    right, rightw = _as_float_bits_tensor(np.empty((M, N), dtype=np.int16), "bf16")
+    split, splitw = _as_float_bits_tensor(np.empty((M, N), dtype=np.int16), "bf16")
+
+    # Ensure toggling the knob cannot reuse an in-process cached kernel.
+    fresh_knobs.compilation.fpsan_homomorphic_casts = False
+    dot[(1, )](aw, bw, wholew, K_START=0, BLOCK_K=K, num_warps=4)
+    fresh_knobs.compilation.fpsan_homomorphic_casts = homomorphic_casts
+
+    dot[(1, )](aw, bw, wholew, K_START=0, BLOCK_K=K, num_warps=4)
+    dot[(1, )](aw, bw, leftw, K_START=0, BLOCK_K=HALF, num_warps=4)
+    dot[(1, )](aw, bw, rightw, K_START=HALF, BLOCK_K=HALF, num_warps=4)
+    add[(1, )](leftw, rightw, splitw, num_warps=4)
+    torch.testing.assert_close(whole, split, atol=0, rtol=0)
+
+
 @pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA MMA v2")
 @pytest.mark.parametrize(("type_a", "type_b", "acc_type", "m", "n", "k", "instr_m"), _MMA_V2_CASES)
 def test_mma_v2(device, type_a, type_b, acc_type, m, n, k, instr_m, fresh_knobs):
@@ -2194,7 +2293,7 @@ def test_warpgroup_mma(device, use_acc, is_async, type_a, type_b, acc_type, m, n
     _assert_payload_equal(out, exp_bits)
 
 
-@pytest.mark.skipif(not (is_hip_cdna4() or is_hip_gfx1250()), reason="Requires DotScaledOp support (CDNA4, or GFX1250)")
+@pytest.mark.skipif(not (is_hip_cdna4() or is_hip_gfx1250()), reason="Requires DotScaledOp support (CDNA4, or CDNA5)")
 @pytest.mark.parametrize("type_a", ["e2m1", "e4m3", "e5m2", "bf16", "fp16"])
 @pytest.mark.parametrize("type_b", ["e2m1", "e4m3", "e5m2", "bf16", "fp16"])
 def test_dot_scaled(device, type_a, type_b, fresh_knobs):
@@ -2993,7 +3092,7 @@ def test_tmem_copy_scales_in_warp_specialize_partition(device, scale_shape, two_
         bar = mbarrier.allocate_mbarrier()
         mbarrier.init(bar, count=1)
         physical_layout: gl.constexpr = TensorMemoryLayout((TMEM_ROWS, TMEM_COLS), col_stride=1, cga_layout=cga_layout)
-        physical = tmem._reinterpret(shape=(TMEM_ROWS, TMEM_COLS), layout=physical_layout)
+        physical = tmem.reinterpret(shape=(TMEM_ROWS, TMEM_COLS), layout=physical_layout)
 
         gl.warp_specialize(
             [
@@ -3153,8 +3252,8 @@ def test_f32_loop_preserves_snan_payload(device, fresh_knobs):
     block = 128
     # The first two finite values sum to an sNaN; the zero row forces it through the next loop embed.
     input_bits = np.zeros((3, block), dtype=np.int32)
-    input_bits[0].fill(0x1B0F577C)
-    input_bits[1].fill(0x65E031B7)
+    input_bits[0].fill(0x1B0F5789)
+    input_bits[1].fill(0x4EBA6F3C)
     assert np.isfinite(input_bits.view(np.float32)).all()
     x = torch.tensor(input_bits, dtype=torch.int32, device="cuda")
     out = torch.empty((block, ), dtype=torch.int32, device="cuda")
@@ -3225,7 +3324,7 @@ def test_mfma_dot(device, type_a, type_b, acc_type, m, n, k, instr_m, instr_n, i
     _assert_payload_equal(out, exp_bits)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires gfx1250")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize(("type_a", "type_b", "acc_type", "m", "n", "k", "instr_k", "k_width"), _WMMA_DOT_CASES)
 def test_wmma_dot(device, type_a, type_b, acc_type, m, n, k, instr_k, k_width, fresh_knobs):
     _require_cuda_backend(device)
@@ -3250,7 +3349,7 @@ def test_wmma_dot(device, type_a, type_b, acc_type, m, n, k, instr_k, k_width, f
 
         a = gl.convert_layout(a, gl.DotOperandLayout(0, wmma, K_WIDTH))
         b = gl.convert_layout(b, gl.DotOperandLayout(1, wmma, K_WIDTH))
-        acc = gl.amd.gfx1250.wmma(a, b, c)
+        acc = gl.amd.cdna5.wmma(a, b, c)
 
         out_layout: gl.constexpr = gl.SliceLayout(1, wmma)
         offs_cm = gl.arange(0, BLOCK_M, layout=out_layout)[:, None]

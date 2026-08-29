@@ -1,5 +1,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
+#include "TritonNVIDIAGPUToLLVM/AtomicPTXBuilder.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -7,6 +8,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir::triton::gpu;
 
@@ -346,10 +348,10 @@ struct FpToFpOpConversion
 
   explicit FpToFpOpConversion(LLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                              int computeCapability,
+                              int computeCapability, int ptxVersion,
                               PatternBenefit benefit = patternBenefitDefault)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
-        computeCapability(computeCapability) {}
+        computeCapability(computeCapability), ptxVersion(ptxVersion) {}
 
   static Value convertFp16ToFp32(Location loc,
                                  ConversionPatternRewriter &rewriter,
@@ -416,6 +418,10 @@ struct FpToFpOpConversion
 
     auto undefRounding = static_cast<RoundingMode>(-1);
 
+    // Blackwell and newer can convert packed BF16/FP8 values directly.
+    // Require PTX 9.2 to support both directions.
+    bool hasPackedBf16 = computeCapability >= 100 && ptxVersion >= 92;
+
     DenseMap<std::tuple<TypeID, TypeID, RoundingMode>, Fp8ConversionDesc>
         srcMap = {
             // F8 -> F16
@@ -432,11 +438,20 @@ struct FpToFpOpConversion
              Fp8E5M2_to_Bf16(computeCapability >= 90)},
             // cvt with .bf16.f16' requires .target sm_90 or higher
             {{F8E4M3TyID, BF16TyID, undefRounding},
-             Fp8E4M3Nv_to_Bf16(computeCapability >= 90)},
+             hasPackedBf16
+                 ? Fp8ConversionDesc{"cvt.rn.bf16x2.e4m3x2 $0, $1;", 16, 32, 2}
+                 : Fp8E4M3Nv_to_Bf16(computeCapability >= 90)},
             // BF16 -> F8
             {{BF16TyID, F8E5M2TyID, RoundingMode::RTNE},
-             Bf16_to_Fp8E5M2(computeCapability >= 89)},
-            {{BF16TyID, F8E4M3TyID, RoundingMode::RTNE}, Bf16_to_Fp8E4M3Nv},
+             hasPackedBf16
+                 ? Fp8ConversionDesc{"cvt.rn.satfinite.e5m2x2.bf16x2 $0, $1;",
+                                     32, 16, 2}
+                 : Bf16_to_Fp8E5M2(computeCapability >= 89)},
+            {{BF16TyID, F8E4M3TyID, RoundingMode::RTNE},
+             hasPackedBf16
+                 ? Fp8ConversionDesc{"cvt.rn.satfinite.e4m3x2.bf16x2 $0, $1;",
+                                     32, 16, 2}
+                 : Bf16_to_Fp8E4M3Nv},
             // F32 -> F8
             {{F32TyID, F8E4M3TyID, RoundingMode::RTNE}, Fp32_to_Fp8E4M3Nv},
             {{F32TyID, F8E5M2TyID, RoundingMode::RTNE}, Fp32_to_Fp8E5M2},
@@ -546,6 +561,7 @@ struct FpToFpOpConversion
 
 private:
   int computeCapability;
+  int ptxVersion;
 };
 
 struct FDivOpConversion
@@ -652,6 +668,72 @@ struct ExpOpConversionApprox
     auto callOp =
         LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, resultTy, {prod});
     return {callOp.getResult(0)};
+  }
+};
+
+struct PackedArithOpConversion
+    : ConvertOpToLLVMPattern<nvidia_gpu::PackedArithOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(nvidia_gpu::PackedArithOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto tensorType = op.getResult().getType();
+    auto spec = nvidia_gpu::getPackedArithInstructionSpec(op);
+    const auto &resultInfo = *spec.result;
+    unsigned packWidth = resultInfo.lanes;
+
+    SmallVector<SmallVector<Value>> operandValues;
+    for (Value operand : adaptor.getOperands())
+      operandValues.push_back(
+          unpackUniqueTensorElements(loc, operand, rewriter));
+    unsigned packCount =
+        operandValues.front().size() / spec.operands.front()->storageLanes();
+
+    Type resultRegisterType = int_ty(resultInfo.registerBits);
+    Type resultVectorType =
+        vec_ty(getTypeConverter()->convertType(tensorType.getElementType()),
+               packWidth);
+    TritonLLVMOpBuilder b(loc, rewriter);
+    SmallVector<Value> packedResults;
+    packedResults.reserve(packCount * packWidth);
+    for (unsigned packIndex = 0; packIndex < packCount; ++packIndex) {
+      PTXBuilder ptxBuilder;
+      SmallVector<PTXBuilder::Operand *> asmOperands;
+      asmOperands.push_back(ptxBuilder.newOperand(
+          "=" +
+          NVIDIA::getPtxRegisterSizeCode(resultInfo.registerBits, false)));
+      for (auto [index, values] : llvm::enumerate(operandValues)) {
+        const auto &info = *spec.operands[index];
+        unsigned width = info.storageLanes();
+        auto lanes = ArrayRef(values).slice(packIndex * width, width);
+        Value packed = b.bitcast(packLLVector(loc, lanes, rewriter),
+                                 int_ty(info.registerBits));
+        asmOperands.push_back(ptxBuilder.newOperand(
+            packed, NVIDIA::getPtxRegisterSizeCode(info.registerBits, false)));
+      }
+
+      auto &instruction =
+          *ptxBuilder.create(stringifyPackedArithOpKind(op.getOpKind()).str());
+      instruction.o(spec.modifiers.str(), !spec.modifiers.empty())
+          .o(resultInfo.suffix.str());
+      for (const auto *info :
+           ArrayRef(spec.operands).take_front(spec.operandSuffixes))
+        instruction.o(info->suffix.str());
+      instruction(asmOperands);
+
+      Value packedResult = ptxBuilder.launch(rewriter, loc, resultRegisterType,
+                                             /*hasSideEffect=*/false);
+      Value resultVector = b.bitcast(packedResult, resultVectorType);
+      llvm::append_range(packedResults,
+                         unpackLLVector(loc, resultVector, rewriter));
+    }
+
+    rewriter.replaceOp(op, packUniqueTensorElements(loc, getTypeConverter(),
+                                                    packedResults, rewriter,
+                                                    tensorType));
+    return success();
   }
 };
 
@@ -841,7 +923,9 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, benefit);
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
-                                   computeCapability, benefit);
+                                   computeCapability,
+                                   targetInfo.getPtxVersion(), benefit);
+  patterns.add<PackedArithOpConversion>(typeConverter, benefit);
 
   // ExpOpConversionApprox will try using ex2.approx if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and

@@ -1,8 +1,59 @@
+import pytest
+import re
+from types import SimpleNamespace
+
 import triton
 import triton.language as tl
 from triton.backends.compiler import GPUTarget
-import re
 from triton.compiler import ASTSource
+from triton.compiler.errors import CompileTimeAssertionFailure
+from triton.runtime.driver import driver
+
+
+@triton.jit
+def topk_kernel(K: tl.constexpr):
+    x = tl.arange(0, 8)
+    tl.topk(x, K)
+
+
+@pytest.mark.parametrize(
+    "k, error",
+    [
+        (0, "topk: k must be greater than 0"),
+        (-1, "topk: k must be greater than 0"),
+        (3, "topk: k must be a power of two"),
+        (16, "topk: k must not exceed the size of the selected dimension"),
+    ],
+)
+def test_topk_invalid_k(k, error):
+    src = ASTSource(fn=topk_kernel, signature={"K": "constexpr"}, constexprs={"K": k})
+    with pytest.raises(triton.CompilationError) as exc_info:
+        triton.compile(src, target=GPUTarget("cuda", 90, 32))
+    cause = exc_info.value
+    while cause.__cause__ is not None:
+        cause = cause.__cause__
+    assert isinstance(cause, CompileTimeAssertionFailure)
+    assert cause.error_message == error
+
+
+@pytest.mark.parametrize("k", [1, 8])
+def test_topk_valid_k(k):
+    src = ASTSource(fn=topk_kernel, signature={"K": "constexpr"}, constexprs={"K": k})
+    triton.compile(src, target=GPUTarget("cuda", 90, 32))
+
+
+def test_compile_only_sort_keeps_comparisons_boolean() -> None:
+
+    @triton.jit
+    def sort_kernel(values, result):
+        offsets = tl.arange(0, 128)
+        loaded = tl.load(values + offsets)
+        sorted_values = tl.sort(loaded, descending=False)
+        tl.store(result + offsets, sorted_values)
+
+    source = ASTSource(fn=sort_kernel, signature={"values": "*i32", "result": "*i32"})
+    compiled = triton.compile(source, target=GPUTarget("cuda", 100, 32))
+    assert "arith.extui" not in compiled.asm["ttgir"]
 
 
 def test_compile_only_sm100() -> None:
@@ -21,12 +72,68 @@ def test_compile_only_sm100() -> None:
     assert k.asm["cubin"] != b""
 
 
+@pytest.mark.parametrize("element_type", ["f32", "f16", "bf16"])
+def test_compile_only_packed_arith_chains(element_type, tmp_path) -> None:
+    packed_type = f"{element_type}x2"
+    tensor_type = f"tensor<256x{element_type}, #blocked>"
+    pointer_type = f"!tt.ptr<{element_type}>"
+    operations = [
+        ("add", "%av, %bv", 2),
+        ("sub", "%add, %bv", 2),
+        ("mul", "%sub, %bv", 2),
+        ("fma", "%mul, %bv, %cv", 3),
+    ]
+    if element_type != "f32":
+        operations.extend([("min", "%fma, %bv", 2), ("max", "%min, %cv", 2)])
+
+    instructions = []
+    for name, operands, operand_count in operations:
+        tensor_types = ", ".join([tensor_type] * operand_count)
+        instructions.append(f"    %{name} = ttng.packed_arith {name} "
+                            f"{operands} : ({tensor_types}) -> {tensor_type}")
+    packed_operations = "\n".join(instructions)
+    result = operations[-1][0]
+    src = f"""
+#blocked = #ttg.blocked<{{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}}>
+module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32}} {{
+  tt.func public @packed_chain_{element_type}(%a: {pointer_type} {{tt.divisibility = 16 : i32}}, %b: {pointer_type} {{tt.divisibility = 16 : i32}}, %c: {pointer_type} {{tt.divisibility = 16 : i32}}, %out: {pointer_type} {{tt.divisibility = 16 : i32}}) attributes {{noinline = false}} {{
+    %offsets = tt.make_range {{start = 0 : i32, end = 256 : i32}} : tensor<256xi32, #blocked>
+    %ap = tt.splat %a : {pointer_type} -> tensor<256x{pointer_type}, #blocked>
+    %bp = tt.splat %b : {pointer_type} -> tensor<256x{pointer_type}, #blocked>
+    %cp = tt.splat %c : {pointer_type} -> tensor<256x{pointer_type}, #blocked>
+    %op = tt.splat %out : {pointer_type} -> tensor<256x{pointer_type}, #blocked>
+    %aa = tt.addptr %ap, %offsets : tensor<256x{pointer_type}, #blocked>, tensor<256xi32, #blocked>
+    %ba = tt.addptr %bp, %offsets : tensor<256x{pointer_type}, #blocked>, tensor<256xi32, #blocked>
+    %ca = tt.addptr %cp, %offsets : tensor<256x{pointer_type}, #blocked>, tensor<256xi32, #blocked>
+    %oa = tt.addptr %op, %offsets : tensor<256x{pointer_type}, #blocked>, tensor<256xi32, #blocked>
+    %av = tt.load %aa : tensor<256x{pointer_type}, #blocked>
+    %bv = tt.load %ba : tensor<256x{pointer_type}, #blocked>
+    %cv = tt.load %ca : tensor<256x{pointer_type}, #blocked>
+{packed_operations}
+    tt.store %oa, %{result} : tensor<256x{pointer_type}, #blocked>
+    tt.return
+  }}
+}}
+"""
+    source_file = tmp_path / f"packed_chain_{element_type}.ttgir"
+    source_file.write_text(src)
+    ptx = triton.compile(str(source_file), target=GPUTarget("cuda", 100, 32)).asm["ptx"]
+    pattern = re.compile(
+        rf"^\s*(?P<operation>add|sub|mul|fma|min|max)\.(?:rn\.)?{packed_type}\s+"
+        r"(?P<output>%\w+),\s*(?P<input>%\w+)", re.MULTILINE)
+    emitted_operations = list(pattern.finditer(ptx))
+    assert [match.group("operation") for match in emitted_operations] == [name for name, _, _ in operations]
+    for previous, current in zip(emitted_operations, emitted_operations[1:]):
+        assert current.group("input") == previous.group("output")
+    assert "prmt.b32" not in ptx
+
+
 def test_compile_only_ws_cluster_barrier_shared_memory(tmp_path) -> None:
     src = """
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @ws_cluster_barrier() {
-    %alloc = ttg.local_alloc : () -> !ttg.memdesc<5xi8, #shared, #ttg.shared_memory, mutable>
+    %alloc = ttg.local_alloc : () -> !ttg.memdesc<5x1xi8, #shared, #ttg.shared_memory, mutable>
     ttg.warp_specialize()
     default {
       ttng.cluster_barrier
@@ -48,6 +155,28 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     assert "mapa" not in ptx
     assert k.metadata.shared == 40
     assert k.asm["cubin"] != b""
+
+
+@pytest.mark.parametrize("instrumentation_mode", ["", "consan", "gsan", "iisan", "fpsan", "gsan,consan"])
+def test_maxnreg_instrumentation_mode(instrumentation_mode, monkeypatch):
+    if "gsan" in instrumentation_mode:
+        # GSan queries the shared memory limit even for compile-only tests.
+        utils = SimpleNamespace(get_device_properties=lambda _: {"max_shared_mem": 228 * 1024})
+        monkeypatch.setattr(driver, "_active", SimpleNamespace(get_current_device=lambda: 0, utils=utils))
+
+    @triton.jit
+    def kernel(out):
+        tl.store(out, 1)
+
+    src = ASTSource(fn=kernel, signature={"out": "*i32"})
+    compiled = triton.compile(src, target=GPUTarget("cuda", 90, 32),
+                              options={"maxnreg": 42, "instrumentation_mode": instrumentation_mode})
+    if instrumentation_mode:
+        assert compiled.metadata.maxnreg is None
+        assert ".maxnreg" not in compiled.asm["ptx"]
+    else:
+        assert compiled.metadata.maxnreg == 42
+        assert ".maxnreg 42" in compiled.asm["ptx"]
 
 
 def test_compile_only_expect_zero() -> None:

@@ -34,6 +34,15 @@ def TTG_TensorMemorySpace : AttrDef<TritonNvidiaGPU_Dialect, "TensorMemorySpace"
   }];
 }
 
+def TTNG_TMEMWaitKindAttr : I32EnumAttr<
+    "TMEMWaitKind", "tensor memory wait kind",
+    [
+        I32EnumAttrCase<"LOAD", 0, "load">,
+        I32EnumAttrCase<"STORE", 1, "store">,
+    ]> {
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
+}
+
 def TTNG_TMEMLoadReduceModifierAttr : I32EnumAttr<
     "TMEMLoadReduceModifier", "",
     [
@@ -45,6 +54,19 @@ def TTNG_TMEMLoadReduceModifierAttr : I32EnumAttr<
 }
 def TTNG_TMEMLoadReduceModifierEnum : EnumAttr<TritonNvidiaGPU_Dialect, TTNG_TMEMLoadReduceModifierAttr, "redOp"> {
   let assemblyFormat = "`<` $value `>`";
+}
+
+def TTNG_PackedArithOpKindAttr : I32EnumAttr<
+    "PackedArithOpKind", "packed arithmetic operation",
+    [
+        I32EnumAttrCase<"ADD", 0, "add">,
+        I32EnumAttrCase<"SUB", 1, "sub">,
+        I32EnumAttrCase<"MUL", 2, "mul">,
+        I32EnumAttrCase<"FMA", 3, "fma">,
+        I32EnumAttrCase<"MIN", 4, "min">,
+        I32EnumAttrCase<"MAX", 5, "max">,
+    ]> {
+  let cppNamespace = "::mlir::triton::nvidia_gpu";
 }
 
 def TTNG_TensorMemoryScalesBlockRepOrderAttr : I32EnumAttr<

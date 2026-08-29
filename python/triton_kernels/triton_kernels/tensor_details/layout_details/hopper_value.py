@@ -1,8 +1,10 @@
+import math
 import torch
 import triton
 import triton.language as tl
 from dataclasses import dataclass
 from .base import Layout, LayoutTransformation
+from triton_kernels.tensor_details.layout_details import strided
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from triton_kernels.target_info import cuda_capability_geq
 from .torch_utils import repack
@@ -81,6 +83,58 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
             return data.mT
         return data
 
+    def convert_data(self, data, destination: LayoutTransformation):
+        if (not self.is_fp4 or self.N % 2 or self.shape[self.mx_axis] % 2 or data.device.type != "cuda"
+                or data.dtype != torch.uint8 or data.ndim != len(self.shape)
+                or not isinstance(destination, strided.StridedLayoutTransformation)
+                or destination.order[0] < len(self.shape) - 2):
+            return super().convert_data(data, destination)
+
+        source = self._maybe_mT(data)
+        source_shape = tuple(source.shape)
+        m, k = (self.N, self.K) if self.mx_axis == len(self.leading_shape) else (self.K, self.N)
+        # Each 4x128 encoded tile covers 16x64 logical FP4 values. Compact
+        # encodings must contain complete tiles covering the logical shape.
+        if (list(source_shape[:-2]) != self.leading_shape or source_shape[-2] % 4 or source_shape[-1] % 128
+                or 4 * source_shape[-2] < m or source_shape[-1] // 2 < k):
+            return super().convert_data(data, destination)
+
+        out = torch.empty_strided(destination.storage_shape, destination.storage_strides, dtype=data.dtype,
+                                  device=data.device)
+        target = self._maybe_mT(out)
+        block_m, block_k = 16, 256
+        grid = (math.prod(self.leading_shape) * triton.cdiv(m, 4 * block_m) * triton.cdiv(k, block_k // 2), )
+        if grid[0] > 0:
+            with torch.cuda.device(data.device):
+                _unswizzle_to_strided_kernel[grid](source, target, source_shape, source.stride(), target.stride(), m, k,
+                                                   PACK_M=destination.order[0] != self.mx_axis,
+                                                   MMA_VERSION=self.mma_version, BLOCK_M=block_m, BLOCK_K=block_k)
+        return out
+
+    def _convert_data_from(self, data, source: LayoutTransformation):
+        if (not isinstance(source, strided.StridedLayoutTransformation) or not self.is_fp4 or self.N % 2
+                or self.shape[self.mx_axis] % 2 or not source._can_convert_fp4(data)):
+            return super()._convert_data_from(data, source)
+        return self._swizzle_from_strided(data, source.order[0])
+
+    def _swizzle_from_strided(self, data, major_dim):
+        shape = self.storage_shape
+        if self.mx_axis == len(self.leading_shape):
+            shape[-2:] = reversed(shape[-2:])
+        out = torch.empty((*shape[:-1], shape[-1] // 4), dtype=torch.int32, device=data.device)
+        source = self._maybe_mT(data)
+        m, k = (self.N, self.K) if self.mx_axis == len(self.leading_shape) else (self.K, self.N)
+        block_m, block_k = 16, 256
+        grid_m, grid_k = shape[-2] // block_m, shape[-1] // block_k
+        grid = (math.prod(self.leading_shape) * grid_m * grid_k, )
+        if grid[0] > 0:
+            with torch.cuda.device(data.device):
+                _swizzle_from_strided_kernel[grid](source, out, tuple(self.leading_shape), source.stride(),
+                                                   out.stride(), m, k, GRID_M=grid_m, GRID_K=grid_k,
+                                                   MMA_VERSION=self.mma_version, PACK_M=major_dim != self.mx_axis,
+                                                   BLOCK_M=block_m, BLOCK_K=block_k)
+        return self._maybe_mT(out.view(torch.uint8))
+
     def swizzle_data(self, data):
         """
         Given a uint8 tensor of shape (*, M, K), returns a tensor of shape
@@ -101,6 +155,9 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         WARNING: Assumes that the matmul will be done in bf16 or fp16!
         Implementing it for fp8 is as easy as making the tile size (8, 8)
         """
+        if (self.is_fp4 and self.N % 2 == 0 and self.shape[self.mx_axis] % 2 == 0 and data.device.type == "cuda"
+                and data.dtype == torch.uint8 and list(data.shape) == [*self.shape[:-1], self.N // 2]):
+            return self._swizzle_from_strided(data, len(self.shape) - 1)
         # re-pack as column-major
         data = repack(data, -1, self.mx_axis, self.is_fp4)
         batch = data.ndim - 2
@@ -159,13 +216,13 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         assert data.shape[-2] == init_shape[-2] // 4
         assert data.shape[-1] == init_shape[-1] * 4
         # twiddle the bits
-        data = _pack_bits(data, self.mx_axis)
+        data = _convert_bits(data, inverse=False)
         data = self._maybe_mT(data)
         return self._validate_storage_shape(data)
 
     def unswizzle_data(self, data):
         data = self._maybe_mT(data)
-        data = _unpack_bits(data, self.mx_axis)
+        data = _convert_bits(data, inverse=True)
         *batch, M, K = data.shape
         # We have two times the elements if we already upcasted to bfloat16
         mult = 2 if data.dtype == torch.bfloat16 else 1
@@ -211,9 +268,8 @@ def _compress_fourth(x):
     return ((x & 0x8) << 11) | ((x & 0x6) << 9) | ((x & 0x1) << 13)
 
 
-def _pack_bits(x: torch.Tensor, mx_axis: int):
+def _pack_bits(x: torch.Tensor):
     x = x.contiguous()
-    assert x.shape[-1] % 4 == 0, "Input tensor must have a last dimension divisible by 4"
     x = x.reshape(x.shape[:-1] + (x.shape[-1] // 4, 4))
     ret = _compress_fp4(x[..., 0]) | (_compress_fp4(x[..., 0] >> 4) << 16)
     ret |= right_shift_unsigned(_compress_fp4(x[..., 1]) | (_compress_fp4(x[..., 1] >> 4) << 16), 3)
@@ -247,7 +303,7 @@ def _bf16x2_to_fp4e2m1x2(x):
     return ret_lo | (ret_hi << 4)
 
 
-def _unpack_bits(x, mx_axis: int):
+def _unpack_bits(x):
     x = x.view(torch.int32)
     m = 0b10000001110000001000000111000000
     a = (x << 1) & 0b10000000000000001000000000000000
@@ -260,7 +316,105 @@ def _unpack_bits(x, mx_axis: int):
     return x
 
 
+@triton.jit
+def _compress_fp4x2_triton(x, FOURTH: tl.constexpr):
+    # Put the two nibbles in separate bf16 lanes before interleaving them.
+    x = (x & 0xF) | ((x & 0xF0) << 12)
+    if FOURTH:
+        return ((x & 0x00080008) << 11) | ((x & 0x00060006) << 9) | ((x & 0x00010001) << 13)
+    return ((x & 0x00080008) << 12) | ((x & 0x00070007) << 6)
+
+
+@triton.jit
+def _bf16x2_to_fp4e2m1x2_triton(x):
+    x = ((x >> 12) & 0x00080008) | ((x >> 6) & 0x00070007)
+    return (x & 0xF) | ((x >> 12) & 0xF0)
+
+
+@triton.jit
+def _unpack_bits_triton(x):
+    fourth = ((x << 1) & 0x80008000) | ((x >> 3) & 0x01800180) | ((x >> 7) & 0x00400040)
+    return (_bf16x2_to_fp4e2m1x2_triton(x) | (_bf16x2_to_fp4e2m1x2_triton(x << 3) << 8)
+            | (_bf16x2_to_fp4e2m1x2_triton(x << 6) << 16)
+            | (_bf16x2_to_fp4e2m1x2_triton(fourth) << 24))
+
+
+@triton.jit
+def _convert_bits_kernel(X, Y, N, INVERSE: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+    offsets = tl.program_id(0).to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < N
+    # Byte loads also support contiguous views with unaligned storage offsets.
+    a = tl.load(X + 4 * offsets, mask, other=0).to(tl.uint32)
+    b = tl.load(X + 4 * offsets + 1, mask, other=0).to(tl.uint32)
+    c = tl.load(X + 4 * offsets + 2, mask, other=0).to(tl.uint32)
+    d = tl.load(X + 4 * offsets + 3, mask, other=0).to(tl.uint32)
+    if INVERSE:
+        ret = _unpack_bits_triton(a | (b << 8) | (c << 16) | (d << 24))
+    else:
+        ret = (_compress_fp4x2_triton(a, False) | (_compress_fp4x2_triton(b, False) >> 3)
+               | (_compress_fp4x2_triton(c, False) >> 6) | _compress_fp4x2_triton(d, True))
+    tl.store(Y + offsets, ret, mask)
+
+
+def _convert_bits(x: torch.Tensor, inverse: bool) -> torch.Tensor:
+    """Avoid full-size integer temporaries when re-encoding CUDA values."""
+    if x.device.type != "cuda" or x.dtype != torch.uint8:
+        return _unpack_bits(x) if inverse else _pack_bits(x)
+    x = x.contiguous()
+    shape = (*x.shape[:-1], x.shape[-1] // 4)
+    x = x.reshape(*shape, 4)
+    out = torch.empty(shape, dtype=torch.int32, device=x.device)
+    block_size = 1024
+    with torch.cuda.device(x.device):
+        _convert_bits_kernel[(triton.cdiv(out.numel(), block_size), )](x, out, out.numel(), inverse,
+                                                                       BLOCK_SIZE=block_size)
+    return out.view(torch.uint8)
+
+
 # -----------------------------------------------------------------------
+
+
+@triton.jit
+def _swizzle_from_strided_kernel(X, Y, LEADING_SHAPE: tl.constexpr, X_STRIDES: tl.constexpr, Y_STRIDES: tl.constexpr,
+                                 M: tl.constexpr, K: tl.constexpr, GRID_M: tl.constexpr, GRID_K: tl.constexpr,
+                                 MMA_VERSION: tl.constexpr, PACK_M: tl.constexpr, BLOCK_M: tl.constexpr,
+                                 BLOCK_K: tl.constexpr):
+    pid = tl.program_id(0).to(tl.int64)
+    batch = pid // (GRID_M * GRID_K)
+    tile_m, tile_k = pid // GRID_K % GRID_M, pid % GRID_K
+    for dim in tl.static_range(len(LEADING_SHAPE) - 1, -1, -1):
+        index = batch % LEADING_SHAPE[dim]
+        batch //= LEADING_SHAPE[dim]
+        X += index * X_STRIDES[dim]
+        Y += index * Y_STRIDES[dim]
+
+    if PACK_M:
+        rows = tile_m * (2 * BLOCK_M) + tl.arange(0, 2 * BLOCK_M)
+        cols = tile_k * (BLOCK_K // 2) + tl.arange(0, BLOCK_K // 2)
+        mask = (rows[:, None] < M // 2) & (cols[None, :] < K)
+        x = tl.load(X + rows[:, None] * X_STRIDES[-2] + cols[None, :] * X_STRIDES[-1], mask, other=0)
+        even, odd = tl.split(x.reshape(2 * BLOCK_M, BLOCK_K // 4, 2))
+        x = tl.join((even & 0xF) | (odd << 4), (even >> 4) | (odd & 0xF0))
+        x = x.trans(0, 2, 1).reshape(4 * BLOCK_M, BLOCK_K // 4)
+    else:
+        rows = tile_m * (4 * BLOCK_M) + tl.arange(0, 4 * BLOCK_M)
+        cols = tile_k * (BLOCK_K // 4) + tl.arange(0, BLOCK_K // 4)
+        mask = (rows[:, None] < M) & (cols[None, :] < K // 2)
+        x = tl.load(X + rows[:, None] * X_STRIDES[-2] + cols[None, :] * X_STRIDES[-1], mask, other=0)
+
+    # Invert the MMA tile permutation used by _unshuffle_triton, then encode
+    # each group of four packed bytes directly into its final word.
+    u8_kwidth: tl.constexpr = 4 if MMA_VERSION == 2 else 1
+    x = x.reshape(BLOCK_M // 4, 2, 4, 2, BLOCK_K // 128, 8 // u8_kwidth, 4, u8_kwidth)
+    x = x.trans(0, 2, 4, 3, 6, 5, 1, 7).reshape(BLOCK_M, BLOCK_K // 4, 2, 2).to(tl.uint32)
+    even, odd = tl.split(x)
+    a, c = tl.split(even)
+    b, d = tl.split(odd)
+    encoded = (_compress_fp4x2_triton(a, False) | (_compress_fp4x2_triton(b, False) >> 3)
+               | (_compress_fp4x2_triton(c, False) >> 6) | _compress_fp4x2_triton(d, True))
+    rows = tile_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    words = tile_k * (BLOCK_K // 4) + tl.arange(0, BLOCK_K // 4)
+    tl.store(Y + rows[:, None] * Y_STRIDES[-2] + words[None, :] * Y_STRIDES[-1], encoded)
 
 
 @triton.jit
@@ -288,6 +442,57 @@ def _unshuffle_triton(x, mma_version: tl.constexpr):
     # if mx_axis == 0:
     #     x = x.trans()
     return x
+
+
+@triton.jit
+def _unswizzle_to_strided_kernel(X, Y, X_SHAPE: tl.constexpr, X_STRIDES: tl.constexpr, Y_STRIDES: tl.constexpr,
+                                 M: tl.constexpr, K: tl.constexpr, MMA_VERSION: tl.constexpr, PACK_M: tl.constexpr,
+                                 BLOCK_M: tl.constexpr, BLOCK_K: tl.constexpr):
+    tiles_m: tl.constexpr = triton.cdiv(M, 4 * BLOCK_M)
+    tiles_k: tl.constexpr = triton.cdiv(K, BLOCK_K // 2)
+    pid = tl.program_id(0).to(tl.int64)
+    batch = pid // (tiles_m * tiles_k)
+    tile = pid % (tiles_m * tiles_k)
+    if PACK_M:
+        tile_m, tile_k = tile % tiles_m, tile // tiles_m
+    else:
+        tile_m, tile_k = tile // tiles_k, tile % tiles_k
+    for dim in tl.static_range(len(X_SHAPE) - 3, -1, -1):
+        index = batch % X_SHAPE[dim]
+        batch //= X_SHAPE[dim]
+        X += index * X_STRIDES[dim]
+        Y += index * Y_STRIDES[dim]
+
+    # Each encoded word contains four packed FP4 bytes. Decode and undo the
+    # MMA tile permutation before selecting the destination packing axis.
+    rows = tile_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    words = tile_k * (BLOCK_K // 4) + tl.arange(0, BLOCK_K // 4)
+    offsets = rows[:, None] * X_STRIDES[-2] + 4 * words[None, :] * X_STRIDES[-1]
+    if X_SHAPE[-2] % BLOCK_M or X_SHAPE[-1] % BLOCK_K:
+        mask = (rows[:, None] < X_SHAPE[-2]) & (4 * words[None, :] < X_SHAPE[-1])
+    else:
+        mask = True
+    a = tl.load(X + offsets, mask, other=0).to(tl.uint32)
+    b = tl.load(X + offsets + X_STRIDES[-1], mask, other=0).to(tl.uint32)
+    c = tl.load(X + offsets + 2 * X_STRIDES[-1], mask, other=0).to(tl.uint32)
+    d = tl.load(X + offsets + 3 * X_STRIDES[-1], mask, other=0).to(tl.uint32)
+    x = _unpack_bits_triton(a | (b << 8) | (c << 16) | (d << 24))
+    shifts = 8 * tl.arange(0, 4)
+    x = (x[:, :, None] >> shifts[None, None, :]).to(tl.uint8)
+    x = _unshuffle_triton(x.reshape(BLOCK_M, BLOCK_K), MMA_VERSION)
+
+    if PACK_M:
+        even, odd = tl.split(x.reshape(2 * BLOCK_M, 2, BLOCK_K // 4).trans(0, 2, 1))
+        x = tl.join((even & 0xF) | (odd << 4), (even >> 4) | (odd & 0xF0))
+        x = x.reshape(2 * BLOCK_M, BLOCK_K // 2)
+        rows = tile_m * (2 * BLOCK_M) + tl.arange(0, 2 * BLOCK_M)
+        cols = tile_k * (BLOCK_K // 2) + tl.arange(0, BLOCK_K // 2)
+        mask = (rows[:, None] < M // 2) & (cols[None, :] < K)
+    else:
+        rows = tile_m * (4 * BLOCK_M) + tl.arange(0, 4 * BLOCK_M)
+        cols = tile_k * (BLOCK_K // 4) + tl.arange(0, BLOCK_K // 4)
+        mask = (rows[:, None] < M) & (cols[None, :] < K // 2)
+    tl.store(Y + rows[:, None] * Y_STRIDES[-2] + cols[None, :] * Y_STRIDES[-1], x, mask)
 
 
 @triton.jit

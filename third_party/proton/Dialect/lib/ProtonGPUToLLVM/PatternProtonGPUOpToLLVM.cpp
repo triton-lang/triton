@@ -114,7 +114,7 @@ struct InitializeOpConversion
     Block *prevBlock = op->getBlock();
 
     // Add the 'if' block.
-    Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
+    Block *ifBlock = prevBlock->splitBlock(op->getIterator());
     rewriter.setInsertionPointToStart(ifBlock);
 
     // Write back 'preamble'.
@@ -144,7 +144,7 @@ struct InitializeOpConversion
     b.store(initTime, gmemInitTimePtr);
 
     // Add the 'else' block and the condition.
-    Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
+    Block *thenBlock = ifBlock->splitBlock(op->getIterator());
     rewriter.setInsertionPointToEnd(prevBlock);
     cf::CondBranchOp::create(rewriter, loc, isFirstThread, ifBlock, thenBlock);
     rewriter.setInsertionPointToEnd(ifBlock);
@@ -258,7 +258,7 @@ private:
     //     └─ br continuation
     //   continuation
     Block *prevBlock = op->getBlock();
-    Block *continuation = rewriter.splitBlock(prevBlock, op->getIterator());
+    Block *continuation = prevBlock->splitBlock(op->getIterator());
     Block *leaderBlock = rewriter.createBlock(prevBlock->getParent(),
                                               Region::iterator(continuation));
     rewriter.setInsertionPointToEnd(prevBlock);
@@ -292,7 +292,7 @@ private:
                                 ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Block *afterStore = rewriter.splitBlock(continuation, op->getIterator());
+    Block *afterStore = continuation->splitBlock(op->getIterator());
     Block *storeBlock = rewriter.createBlock(op->getParentRegion(),
                                              Region::iterator(afterStore));
 
@@ -333,8 +333,8 @@ private:
     //   loopBody
     //     └─ br loopHeader (idx += threadStride)
     //   exitBlock
-    Block *copyBlock = rewriter.splitBlock(continuation, op->getIterator());
-    Block *exitBlock = rewriter.splitBlock(copyBlock, op->getIterator());
+    Block *copyBlock = continuation->splitBlock(op->getIterator());
+    Block *exitBlock = copyBlock->splitBlock(op->getIterator());
     Block *loopHeader = rewriter.createBlock(
         op->getParentRegion(), Region::iterator(exitBlock), {i32_ty}, {loc});
     Block *loopBody = rewriter.createBlock(
@@ -418,7 +418,7 @@ private:
     //     └─ ...body...
     //     └─ br continuation
     //   continuation
-    Block *continuation = rewriter.splitBlock(thenBlock, op->getIterator());
+    Block *continuation = thenBlock->splitBlock(op->getIterator());
     Block *leaderBlock = rewriter.createBlock(thenBlock->getParent(),
                                               Region::iterator(continuation));
     rewriter.setInsertionPointToEnd(thenBlock);
@@ -567,7 +567,7 @@ struct InitCtxOpConversion
     Block *prevBlock = op->getBlock();
 
     // Add the 'if' block.
-    Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
+    Block *ifBlock = prevBlock->splitBlock(op->getIterator());
     rewriter.setInsertionPointToStart(ifBlock);
 
     // Initialize the `warp_index` section.
@@ -579,7 +579,7 @@ struct InitCtxOpConversion
     }
 
     // Add the 'else' block and the condition.
-    Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
+    Block *thenBlock = ifBlock->splitBlock(op->getIterator());
     rewriter.setInsertionPointToEnd(prevBlock);
     cf::CondBranchOp::create(rewriter, loc, isFirstThread, ifBlock, thenBlock);
     rewriter.setInsertionPointToEnd(ifBlock);
@@ -673,7 +673,7 @@ struct SaveCtxOpConversion
     Block *prevBlock = op->getBlock();
 
     // Add the 'if' block.
-    Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
+    Block *ifBlock = prevBlock->splitBlock(op->getIterator());
     rewriter.setInsertionPointToStart(ifBlock);
 
     // Update the `warp_index` section.
@@ -684,7 +684,7 @@ struct SaveCtxOpConversion
     b.store(index, gmemWarpIndexPtr);
 
     // Add the 'else' block and the condition.
-    Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
+    Block *thenBlock = ifBlock->splitBlock(op->getIterator());
     rewriter.setInsertionPointToEnd(prevBlock);
     cf::CondBranchOp::create(rewriter, loc, isWarpMaster, ifBlock, thenBlock);
     rewriter.setInsertionPointToEnd(ifBlock);
@@ -751,7 +751,8 @@ void populateTypeConversions(LLVMTypeConverter &typeConverter,
   typeConverter.addConversion(
       [&](triton::PointerType type) -> std::optional<Type> {
         auto ctx = type.getContext();
-        return LLVM::LLVMPointerType::get(ctx, type.getAddressSpace());
+        return LLVM::LLVMPointerType::get(
+            ctx, targetInfo.getPtrAddressSpace(type.getAddressSpace()));
       });
 }
 

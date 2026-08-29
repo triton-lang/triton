@@ -62,6 +62,12 @@ class StridedLayoutTransformation(LayoutTransformation):
 
     order: list[int]
 
+    def _can_convert_fp4(self, data):
+        """Whether direct kernels can read this strided FP4 storage."""
+        return (self.is_fp4 and len(self.shape) >= 2 and self.order[0] >= len(self.shape) - 2
+                and data.device.type == "cuda" and data.dtype == torch.uint8 and list(data.shape) == self.storage_shape
+                and data.stride(self.order[0]) == 1)
+
     @property
     def storage_shape(self) -> list[int]:
         shape = list(self.shape)
@@ -73,18 +79,21 @@ class StridedLayoutTransformation(LayoutTransformation):
             shape[packing_dim] //= 2
         return shape
 
+    @property
+    def storage_strides(self) -> list[int]:
+        shape = self.storage_shape
+        strides, size = [0] * len(shape), 1
+        for dim in self.order:
+            strides[dim], size = size, size * shape[dim]
+        return strides
+
     def swizzle_data(self, data):
         assert data.numel() == 0 or data.stride(-1) == 1
         r = len(self.shape)
         if r == 0:
             return self._validate_storage_shape(data)
         pd = self.order[0]  # packed/contiguous dim in output
-        out_shape = self.storage_shape
-        # dense strides in minor->major `self.order`
-        stride, s = [0] * r, 1
-        for d in self.order:
-            stride[d], s = s, s * out_shape[d]
-        out = torch.empty_strided(out_shape, stride, dtype=data.dtype, device=data.device)
+        out = torch.empty_strided(self.storage_shape, self.storage_strides, dtype=data.dtype, device=data.device)
         repack(data, -1, pd, self.is_fp4, out=out)
         return self._validate_storage_shape(out)
 
@@ -95,5 +104,4 @@ class StridedLayoutTransformation(LayoutTransformation):
             out_shape[-1] //= 2
         ret = torch.empty(out_shape, dtype=data.dtype, device=data.device)
         repack(data, self.order[0], -1, self.is_fp4, out=ret)
-        assert ret.stride(-1) == 1
         return ret

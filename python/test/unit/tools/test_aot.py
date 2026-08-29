@@ -26,7 +26,7 @@ elif is_hip():
         return [os.path.dirname(hip_runtime_dylib)]
 
     def library_names():
-        return ["amdhip64"]
+        return [_get_path_to_hip_runtime_dylib()]
 
 
 kernel_utils_src = """
@@ -286,8 +286,13 @@ int main(int argc, char **argv) {{
         command.extend(["-I", inc_dir])
     for lib_dir in library_dirs():
         command.extend(["-L", lib_dir])
+        if is_hip():
+            command.append(f"-Wl,-rpath,{lib_dir}")
     for lib_name in library_names():
-        command.extend(["-l", lib_name])
+        if os.path.isabs(lib_name):
+            command.append(lib_name)
+        else:
+            command.extend(["-l", lib_name])
     command.extend(["-L", dir, "-l", "kernel", "-o", exe])
     subprocess.run(command, check=True, cwd=dir)
 
@@ -576,3 +581,29 @@ def test_gluon_kernel(target):
         kernel_path = write_triton_kernels(tmp_dir, gluon_kernel_src, kernel_utils_src)
         compile_aot_kernel_no_specialization(tmp_dir, kernel_path, dtype, BM, BN, BK, target=target)
         check_hasco_binary_str(tmp_dir, dtype)
+
+
+def test_aot_target_parsing_with_explicit_target():
+    """
+    Regression test for target parsing in compile.py CLI.
+
+    Previously, `GPUTarget(*args.target.split(":"))` passed arch and warp_size
+    as strings, causing TypeError in downstream integer comparisons (e.g.,
+    `arch >= 100`) and silent logic errors (e.g., `warp_size * 4` producing
+    string repetition instead of arithmetic).
+
+    This test exercises the `--target` CLI path by explicitly passing a target
+    to _compile_kernel, which formats it as a colon-separated string for the
+    CLI. The compile.py code must correctly parse the string back into proper
+    types (int for arch on CUDA, str for arch on HIP, int for warp_size).
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        dtype = "fp16"
+        BM, BN, BK = 16, 16, 16
+
+        kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
+
+        # Use the current machine's target but pass it explicitly through CLI
+        # to exercise the --target string parsing path in compile.py
+        target = triton.runtime.driver.active.get_current_target()
+        compile_aot_kernel_no_specialization(tmp_dir, kernel_path, dtype, BM, BN, BK, target=target)

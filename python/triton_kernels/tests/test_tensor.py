@@ -2,6 +2,7 @@ import pytest
 import torch
 import triton
 import triton.language as tl
+from triton_kernels.fpsan import embed, unembed
 from triton_kernels.tensor_details.bitmatrix import _keyed_add
 from triton_kernels.tensor_details.dtype import BIT, FP4, UINT8
 from triton_kernels.tensor import (
@@ -27,6 +28,65 @@ from triton_kernels.tensor_details.layout import (
     HopperMXValueLayout,
     StridedLayout,
 )
+
+_FP4_VALUE_LAYOUTS = [
+    HopperMXValueLayout(-2, 3),
+    HopperMXValueLayout(-1, 3),
+    BlackwellMXValueLayout(),
+    BlackwellMX4ValueShuffledLayout(),
+]
+
+
+@pytest.mark.parametrize("dtype", [
+    torch.float64,
+    torch.float32,
+    torch.float16,
+    torch.bfloat16,
+    torch.float8_e4m3fn,
+    torch.float8_e4m3fnuz,
+    torch.float8_e5m2,
+    torch.float8_e5m2fnuz,
+])
+@pytest.mark.parametrize("layout",
+                         ["contiguous", "transposed", "sliced", "expanded", "channels_last", "scalar", "empty"])
+def test_fpsan_embed_unembed_torch_tensor(dtype, layout, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = ""
+    integer_dtype = getattr(torch, f"int{dtype.itemsize * 8}")
+    storage = (torch.arange(17 * 19, device="cuda", dtype=torch.int64) * 37).to(integer_dtype)
+    one_bits = torch.tensor(1.0, dtype=dtype).view(integer_dtype).item()
+    storage[1] = one_bits
+    values = storage.reshape(17, 19)
+
+    if layout == "transposed":
+        values = values.T
+    elif layout == "sliced":
+        values = values[1::2, 1::3]
+    elif layout == "expanded":
+        values = values[:1, :].expand(7, -1)
+    elif layout == "channels_last":
+        values = storage[:210].reshape(2, 3, 5, 7).contiguous(memory_format=torch.channels_last)
+    elif layout == "scalar":
+        values = storage[1]
+    elif layout == "empty":
+        values = values[:0]
+
+    x = values.view(dtype)
+    payload = embed(x)
+    assert payload.dtype == integer_dtype
+    assert payload.shape == x.shape
+    if layout in ("transposed", "channels_last"):
+        assert payload.stride() == x.stride()
+
+    one_positions = values == one_bits
+    assert torch.equal(payload[one_positions], torch.ones_like(payload[one_positions]))
+
+    roundtrip = unembed(payload, dtype)
+    assert torch.equal(roundtrip.view(integer_dtype), values)
+
+    unsigned_dtype = getattr(torch, f"uint{dtype.itemsize * 8}")
+    unsigned_roundtrip = unembed(payload.view(unsigned_dtype), dtype)
+    assert torch.equal(unsigned_roundtrip.view(integer_dtype), values)
+    assert fresh_knobs.compilation.instrumentation_mode == ""
 
 
 @pytest.mark.parametrize(
@@ -73,8 +133,9 @@ def test_ragged_layout_storage_shape():
 
 
 @pytest.mark.parametrize("major_dim", [-1, -2])
-def test_strided_layout_rejects_odd_fp4_packing_dim(major_dim):
-    shape = [2, 2]
+@pytest.mark.parametrize("other_size", [0, 2])
+def test_strided_layout_rejects_odd_fp4_packing_dim(major_dim, other_size):
+    shape = [other_size, other_size]
     shape[major_dim] = 1
 
     with pytest.raises(ValueError):
@@ -159,6 +220,106 @@ def test_convert_layout_converts_different_parameterized_layout(storage_shape, l
     assert convert_layout(converted, different_layout) is not converted
 
 
+@pytest.mark.parametrize("layout", _FP4_VALUE_LAYOUTS)
+@pytest.mark.parametrize("major_dim", [-2, -1])
+@pytest.mark.parametrize("step", [1, 2])
+@pytest.mark.parametrize("inverse", [False, True])
+def test_mxfp4_value_convert_layout_peak_allocation(layout, major_dim, step, inverse):
+    data = torch.empty((2048, 2048), dtype=torch.uint8, device="cuda")
+    strided = convert_layout(wrap_torch_tensor(data, dtype=FP4), StridedLayout(major_dim))
+    source = convert_layout(strided, layout) if inverse else strided
+    destination = strided.storage.layout if inverse else layout
+    if step == 2:
+        contiguous_dim = source.data.stride().index(1)
+        storage = source.data.movedim(contiguous_dim, -1)
+        storage = torch.stack((storage, storage), dim=-2)[..., 1, :].movedim(-1, contiguous_dim)
+        source = wrap_torch_tensor(storage, dtype=FP4, shape=source.shape, layout=source.storage.layout)
+    warm = convert_layout(source, destination)
+    torch.cuda.synchronize(source.device)
+    del warm
+    baseline = torch.cuda.memory_allocated(source.device)
+    torch.cuda.reset_peak_memory_stats(source.device)
+
+    actual = convert_layout(source, destination)
+    torch.cuda.synchronize(source.device)
+    peak = torch.cuda.max_memory_allocated(source.device) - baseline
+
+    # Public conversion should allocate only its final packed storage.
+    assert peak <= actual.data.nbytes + 1024**2
+
+
+@pytest.mark.parametrize("layout", _FP4_VALUE_LAYOUTS)
+@pytest.mark.parametrize("major_dim", [-3, -2, -1])
+@pytest.mark.parametrize("dtype", [torch.uint8, torch.int32])
+def test_mxfp4_value_convert_layout_forward_fallback(layout, major_dim, dtype):
+    data = torch.randint(0, 256, (4, 66, 66), dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
+    source = convert_layout(wrap_torch_tensor(data, dtype=FP4), StridedLayout(major_dim))
+    source = wrap_torch_tensor(source.data.to(dtype), dtype=FP4, shape=source.shape, layout=source.storage.layout)
+    expected = convert_layout(source, layout)
+    source_cuda = wrap_torch_tensor(source.data.cuda(), dtype=FP4, shape=source.shape, layout=source.storage.layout)
+
+    actual = convert_layout(source_cuda, layout)
+
+    assert actual.shape == expected.shape
+    assert actual.data.shape == expected.data.shape
+    assert actual.data.stride() == expected.data.stride()
+    assert actual.data.dtype == expected.data.dtype
+    if isinstance(layout, BlackwellMXValueLayout):
+        assert torch.equal(actual.data[..., :source.shape[-2] // 2, :].cpu(),
+                           expected.data[..., :source.shape[-2] // 2, :])
+    else:
+        assert torch.equal(actual.data.cpu(), expected.data)
+
+
+@pytest.mark.parametrize("layout", _FP4_VALUE_LAYOUTS)
+@pytest.mark.parametrize("major_dim", [-2, -1])
+@pytest.mark.parametrize("inverse", [False, True])
+def test_mxfp4_value_convert_layout_meta(layout, major_dim, inverse):
+    shape = [2, 130, 66]
+    source = empty(shape, dtype=FP4, device="cpu", layout=StridedLayout(major_dim))
+    source = convert_layout(source, layout) if inverse else source
+    destination = StridedLayout(major_dim) if inverse else layout
+    expected = convert_layout(source, destination)
+
+    source_meta = wrap_torch_tensor(source.data.to("meta"), dtype=FP4, shape=source.shape, layout=source.storage.layout)
+    actual = convert_layout(source_meta, destination)
+
+    assert actual.shape == expected.shape
+    assert actual.data.shape == expected.data.shape
+    assert actual.data.stride() == expected.data.stride()
+    assert actual.data.dtype == expected.data.dtype
+    assert actual.device.type == "meta"
+
+
+@pytest.mark.parametrize("layout", _FP4_VALUE_LAYOUTS)
+@pytest.mark.parametrize("inverse", [False, True])
+@pytest.mark.parametrize("major_dim", [-2, -1])
+def test_convert_layout_uses_input_device(layout, inverse, major_dim):
+    if torch.cuda.device_count() < 2:
+        pytest.skip("requires two CUDA devices")
+
+    data = torch.arange(2 * 256 * 257, dtype=torch.int32, device="cpu").to(torch.uint8).reshape(2, 256, 257)
+    canonical = wrap_torch_tensor(data, dtype=FP4, shape=[2, 256, 514])
+    canonical = convert_layout(canonical, StridedLayout(major_dim))
+    source = convert_layout(canonical, layout) if inverse else canonical
+    destination = canonical.storage.layout if inverse else layout
+    expected = convert_layout(source, destination)
+
+    stream = torch.cuda.Stream(device=1)
+    with torch.cuda.stream(stream), torch.cuda.device(0):
+        source_cuda = wrap_torch_tensor(source.storage.data.to("cuda:1"), dtype=FP4, shape=source.shape,
+                                        layout=source.storage.layout)
+        actual = convert_layout(source_cuda, destination)
+
+        assert torch.cuda.current_device() == 0
+        assert torch.cuda.current_stream(1) == stream
+        assert actual.device == torch.device("cuda:1")
+        assert actual.shape == expected.shape
+        assert actual.storage.data.stride() == expected.storage.data.stride()
+        stream.synchronize()
+        assert torch.equal(actual.storage.data.cpu(), expected.storage.data)
+
+
 @pytest.mark.parametrize("n_slices", [1, 7, 33, 911, 1025])
 def test_make_ragged_tensor_metadata(n_slices):
     torch.manual_seed(0)
@@ -196,9 +357,9 @@ def test_remap_ragged_tensor_metadata(n_slices):
     assert_equal(tri_metadata.block_schedule_data, ref_metadata.block_schedule_data)
 
 
-@pytest.mark.parametrize("n_rows", [7, 256, 17111])
+@pytest.mark.parametrize("n_rows", [0, 7, 256, 17111])
 @pytest.mark.parametrize("n_cols", [13, 32, 128, 811])
-@pytest.mark.parametrize("k", [1, 4, 8])
+@pytest.mark.parametrize("k", [1, 3, 4, 7, 8, 12, 18, 33, 63])
 def test_make_bitmatrix_metadata(n_rows, n_cols, k):
     if k > n_cols:
         pytest.skip("k must be <= n_cols")

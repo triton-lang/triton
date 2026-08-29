@@ -55,7 +55,6 @@ public:
                     Operation *localLoadOp = nullptr) const override;
 
   // Describes the parameters of ds_read_tr for a particular data type.
-  using TileKind = amdgpu::TargetFeatures::TileKind;
   using LDSTransLoadParams = amdgpu::TargetFeatures::LDSTransLoadParams;
   // Get the ds_read_tr parameters for the instruction that operates on the
   // element granularity specified by bitWidth. Returns candidates ordered from
@@ -124,6 +123,7 @@ public:
   bool useAsyncMarks() const;
 
   bool supportsMultiCTALaunch() const;
+  unsigned getMaxMulticastMaskPopcount() const;
   bool supportsTDM() const;
   bool supportsClusterLoadBitWidth(int biwWidth) const;
 
@@ -149,6 +149,7 @@ public:
   bool supportsPermlaneSwap() const;
   bool supportsCvtPkScalePk8() const;
   bool supportsHwScaledUpcast() const;
+  bool supportsHwScaledDowncast() const;
 
   void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                              Operation *llLoadOp) const override;

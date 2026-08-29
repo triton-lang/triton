@@ -26,6 +26,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/GenericSwizzling.h"
@@ -190,10 +191,10 @@ struct GluonLayouts {
     AMDWMMALayout = py::object(amdLayouts.attr("AMDWMMALayout")).release();
     PaddedSharedLayout =
         py::object(layouts.attr("PaddedSharedLayout")).release();
-    auto gfx1250Layouts = py::module_::import_(
-        "triton.experimental.gluon.language.amd.gfx1250._layouts");
+    auto cdna5Layouts = py::module_::import_(
+        "triton.experimental.gluon.language.amd.cdna5._layouts");
     PartitionedSharedLayout =
-        py::object(gfx1250Layouts.attr("PartitionedSharedLayout")).release();
+        py::object(cdna5Layouts.attr("PartitionedSharedLayout")).release();
 
     auto core = py::module_::import_("triton.language.core");
   }
@@ -681,10 +682,34 @@ void init_gluon_ir(py::module_ &m) {
           },
           py::arg("operand"), py::arg("numBins"), py::arg("mask").none(),
           py::arg("layout"))
-      .def("create_cat",
-           [](GluonOpBuilder &self, Value &lhs, Value &rhs,
-              Type retType) -> Value {
-             return self.create<triton::CatOp>(retType, lhs, rhs);
+      .def("create_experimental_fpsan_embed",
+           [](GluonOpBuilder &self, Value &src, Type &dstType) -> Value {
+             return self.create<triton::instrument::ExperimentalFPSanEmbedOp>(
+                 dstType, src);
+           })
+      .def("create_experimental_fpsan_unembed",
+           [](GluonOpBuilder &self, Value &src, Type &dstType) -> Value {
+             return self.create<triton::instrument::ExperimentalFPSanUnembedOp>(
+                 dstType, src);
+           })
+      .def("create_packed_arith",
+           [](GluonOpBuilder &self, Type resultType,
+              const std::string &operation,
+              std::vector<Value> operands) -> Value {
+             auto kind = ttng::symbolizePackedArithOpKind(operation);
+             check(kind.has_value(), "unknown packed arithmetic operation");
+             auto resultTensorType = dyn_cast<RankedTensorType>(resultType);
+             if (!resultTensorType) {
+               auto operandType =
+                   cast<RankedTensorType>(operands.front().getType());
+               auto inferred = ttg::inferFp4ToFpResultType(
+                   operandType, resultType, operandType.getRank() - 1,
+                   self.getLastLoc());
+               check(succeeded(inferred), "cannot infer packed FP4 layout");
+               resultTensorType = *inferred;
+             }
+             return self.create<ttng::PackedArithOp>(resultTensorType, *kind,
+                                                     operands);
            })
       .def("create_fp4_to_fp",
            [](GluonOpBuilder &self, Value src, Type elemType,
@@ -1128,6 +1153,11 @@ void init_gluon_ir(py::module_ &m) {
              self.create<ttag::BufferLoadToLocalOp>(
                  dest, ptr, offsets, mask, other, stride, cacheModifier);
            })
+      .def("create_local_load_packed_transposed",
+           [](GluonOpBuilder &self, Type resultType, Value memDesc) -> Value {
+             return self.create<ttag::LocalLoadPackedTransposedOp>(resultType,
+                                                                   memDesc);
+           })
       .def("create_scaled_upcast_fp4",
            [](GluonOpBuilder &self, Value input, Value scale, Type elemType,
               int axis) -> Value {
@@ -1139,6 +1169,17 @@ void init_gluon_ir(py::module_ &m) {
               Value scale) -> Value {
              return self.create<ttag::ScaledUpcastFp8Op>(resultType, input,
                                                          scale);
+           })
+      .def("create_scaled_downcast_fp4",
+           [](GluonOpBuilder &self, Value input, Value scale,
+              int axis) -> Value {
+             return self.create<ttag::ScaledDowncastFp4Op>(input, scale, axis);
+           })
+      .def("create_scaled_downcast_fp8",
+           [](GluonOpBuilder &self, Value input, Value scale, Type elemType,
+              int axis) -> Value {
+             return self.create<ttag::ScaledDowncastFp8Op>(input, scale,
+                                                           elemType, axis);
            })
       .def("create_extract_slice",
            [](GluonOpBuilder &self, Type resultType, Value source,

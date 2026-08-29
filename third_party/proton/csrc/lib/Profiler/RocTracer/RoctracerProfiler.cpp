@@ -92,11 +92,10 @@ convertActivityToMetric(const roctracer_record_t *activity) {
 }
 
 void processActivityKernel(
-    RoctracerProfiler::CorrIdToExternIdMap &corrIdToExternId,
-    RoctracerProfiler::ExternIdToStateMap &externIdToState,
+    CorrIdToExternIdMap &corrIdToExternId, ExternIdToStateMap &externIdToState,
     ThreadSafeMap<uint64_t, bool, std::unordered_map<uint64_t, bool>>
         &corrIdToIsHipGraph,
-    std::map<Data *, std::pair<size_t, size_t>> &dataPhases, size_t externId,
+    DataPhases &dataPhases, size_t externId,
     const roctracer_record_t *activity) {
   if (externId == Scope::DummyScopeId)
     return;
@@ -143,12 +142,10 @@ void processActivityKernel(
 }
 
 void processActivity(
-    RoctracerProfiler::CorrIdToExternIdMap &corrIdToExternId,
-    RoctracerProfiler::ExternIdToStateMap &externIdToState,
+    CorrIdToExternIdMap &corrIdToExternId, ExternIdToStateMap &externIdToState,
     ThreadSafeMap<uint64_t, bool, std::unordered_map<uint64_t, bool>>
         &corrIdToIsHipGraph,
-    std::map<Data *, std::pair<size_t, size_t>> &dataPhases, size_t parentId,
-    const roctracer_record_t *record) {
+    DataPhases &dataPhases, size_t parentId, const roctracer_record_t *record) {
   switch (record->kind) {
   case kHipVdiCommandTask:
   case kHipVdiCommandKernel: {
@@ -257,7 +254,7 @@ struct RoctracerProfiler::RoctracerProfilerPimpl
         getIntEnv("TRITON_PROFILE_METRIC_BUFFER_SIZE", 64 * 1024 * 1024),
         runtime);
   }
-  virtual ~RoctracerProfilerPimpl() = default;
+  ~RoctracerProfilerPimpl() override = default;
 
   void doStart() override;
   void doFlush() override;
@@ -397,7 +394,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
         return;
       }
       // Track outstanding op for flush
-      profiler.correlation.submit(data->correlation_id);
+      profiler.correlation.submit(/*numNodes=*/1, data->correlation_id);
     }
   } else if (domain == ACTIVITY_DOMAIN_ROCTX) {
     const roctx_api_data_t *data =
@@ -423,7 +420,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
   const roctracer_record_t *endRecord =
       reinterpret_cast<const roctracer_record_t *>(end);
   uint64_t maxCorrelationId = 0;
-  std::map<Data *, std::pair<size_t, size_t>> dataPhases;
+  DataPhases dataPhases;
 
   while (record != endRecord) {
     // Log latest completed correlation id.  Used to ensure we have flushed all
@@ -466,10 +463,9 @@ void RoctracerProfiler::RoctracerProfilerPimpl::doStart() {
   roctracer::enableDomainActivity<true>(ACTIVITY_DOMAIN_HIP_OPS);
   roctracer::start();
 
-  if (!profiler.isTimestampCalibrated) {
+  if (!profiler.timestampOffsetNs) {
     profiler.timestampOffsetNs =
         detail::computeTimestampOffsetNs(roctracer::getTimestamp<true>);
-    profiler.isTimestampCalibrated = true;
   }
 }
 

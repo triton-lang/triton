@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import torch
+from triton_kernels.tensor_details.layout_details import strided
 from .base import Layout, LayoutTransformation
 from .torch_utils import repack
 
@@ -45,6 +46,27 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
         M += -M % 128
         return [*leading_shape, M, K]
 
+    def convert_data(self, data, destination: LayoutTransformation):
+        if (not self.is_fp4 or data.device.type != "cuda" or data.dtype != torch.uint8 or self.shape[-2] % 2
+                or self.shape[-1] % 2 or not isinstance(destination, strided.StridedLayoutTransformation)
+                or destination.order[0] < len(self.shape) - 2):
+            return super().convert_data(data, destination)
+
+        data = self._unpad_data(data)
+        out = torch.empty_strided(destination.storage_shape, destination.storage_strides, device=data.device,
+                                  dtype=data.dtype)
+        repack(data, -2, destination.order[0], True, out=out)
+        return out
+
+    def _convert_data_from(self, data, source: LayoutTransformation):
+        if (not isinstance(source, strided.StridedLayoutTransformation) or not self.is_fp4 or self.shape[-1] % 2
+                or self.shape[-2] % 2 or not source._can_convert_fp4(data)):
+            return super()._convert_data_from(data, source)
+        out = torch.empty_strided(self.storage_shape, strides_major_dim_m2(self.storage_shape), device=data.device,
+                                  dtype=data.dtype)
+        repack(data, source.order[0], -2, True, out=out[..., :self.shape[-2] // 2, :])
+        return out
+
     def swizzle_data(self, data):
         assert data.stride(-1) == 1
         # re-pack as column-major
@@ -56,16 +78,16 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
         repack(data, -1, -2, self.is_fp4, out=ret[..., :repacked_shape[-2], :])
         return self._validate_storage_shape(ret)
 
-    def unswizzle_data(self, data: torch.Tensor):
+    def _unpad_data(self, data: torch.Tensor):
         assert data.stride(-2) == 1
-        # unpad
         sizes = [self.shape[i] for i in range(data.ndim)]
         sizes[-2] //= 2
-        data = data[tuple(slice(0, s) for s in sizes)]
-        # repack
+        return data[tuple(slice(0, s) for s in sizes)]
+
+    def unswizzle_data(self, data: torch.Tensor):
+        data = self._unpad_data(data)
         out_shape = list(self.shape)
         out_shape[-1] //= 2
         out = torch.empty(out_shape, device=data.device, dtype=data.dtype)
         repack(data, -2, -1, self.is_fp4, out=out)
-        assert out.stride(-1) == 1
         return out

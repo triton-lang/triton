@@ -5,7 +5,6 @@ import triton.language as tl
 import pytest
 
 import pathlib
-import uuid
 from triton._internal_testing import is_cuda, is_hip_cdna2, is_rubin
 
 
@@ -263,6 +262,53 @@ def test_prune_configs_fractional_top_k_keeps_one(device: str):
     torch.testing.assert_close(src, dst)
 
 
+def test_prune_configs_fractional_top_k_after_early_prune():
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': block_size}) for block_size in range(1, 11)]
+    estimated = []
+    launched = []
+    benchmarked = []
+
+    class Kernel:
+
+        def __init__(self):
+            self.fn = lambda: None
+
+        def run(self, **kwargs):
+            launched.append(kwargs['BLOCK_SIZE'])
+
+    def do_bench(kernel_call, quantiles):
+        kernel_call()
+        benchmarked.append(launched[-1])
+        return [launched[-1]] * 3
+
+    def early_config_prune(configs, named_args, **kwargs):
+        return configs[:6]
+
+    def perf_model(*args, **kwargs):
+        estimated.append(kwargs['BLOCK_SIZE'])
+        return kwargs['BLOCK_SIZE']
+
+    tuner = triton.runtime.Autotuner(
+        Kernel(),
+        arg_names=[],
+        configs=configs,
+        key=[],
+        reset_to_zero=None,
+        restore_value=None,
+        do_bench=do_bench,
+        prune_configs_by={
+            'early_config_prune': early_config_prune,
+            'perf_model': perf_model,
+            'top_k': 0.5,
+        },
+    )
+
+    tuner.run()
+
+    assert estimated == list(range(1, 7))
+    assert benchmarked == [1, 2, 3]
+
+
 def test_config_ir_override_changes_disk_cache_key():
     # Autotuner derives persisted result-cache keys from Config.__str__().
     first = triton.Config(kwargs={"BLOCK_SIZE": 32}, ir_override="first.ttir")
@@ -318,7 +364,7 @@ def test_pruned_single_config_skips_benchmark(prune_kind: str, device: str, fres
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
                     reason="Requires compute capability >= 9 for NV")
-def test_override_ttir(device):
+def test_override_ttir(device, tmp_path: pathlib.Path):
     N = 1024
     src = torch.randn(N, device=device)
     dst = torch.empty(N, device=device)
@@ -346,7 +392,7 @@ module {
   }
 }
     """
-    temp_file = pathlib.Path(f"/tmp/test_override_{str(uuid.uuid4())}.ttir")
+    temp_file = tmp_path / "test_override.ttir"
     temp_file.write_text(ir_src)
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE': 32, 'ir_override': str(temp_file)})]
@@ -367,7 +413,7 @@ module {
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
                     reason="Requires compute capability >= 9 for NV")
-def test_override_ttgir(device):
+def test_override_ttgir(device, tmp_path: pathlib.Path):
     N = 1024
     src = torch.randn(N, device=device)
     dst = torch.empty(N, device=device)
@@ -396,7 +442,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
     """
-    temp_file = pathlib.Path(f"/tmp/test_override_{str(uuid.uuid4())}.ttgir")
+    temp_file = tmp_path / "test_override.ttgir"
     temp_file.write_text(ir_src)
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE': 32, 'ir_override': str(temp_file)})]
@@ -417,7 +463,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 9,
                     reason="PTX file in this unit test is only for SM90")
-def test_override_ptx(device):
+def test_override_ptx(device, tmp_path: pathlib.Path):
     N = 1024
     src = torch.randn(N, device=device)
     dst = torch.empty(N, device=device)
@@ -493,7 +539,7 @@ $L__func_end0:
                                         // -- End function
 }
     """
-    temp_file = pathlib.Path(f"/tmp/test_override_{str(uuid.uuid4())}.ptx")
+    temp_file = tmp_path / "test_override.ptx"
     temp_file.write_text(ir_src)
 
     configs = [triton.Config(kwargs={'BLOCK_SIZE': 32, 'ir_override': str(temp_file)})]

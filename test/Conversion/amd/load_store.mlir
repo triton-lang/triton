@@ -30,6 +30,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 // -----
 
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: volatile_load_in_loop
+  tt.func @volatile_load_in_loop(%flag: !tt.ptr<i32>) {
+    %c0_i32 = arith.constant 0 : i32
+    scf.while : () -> () {
+      // CHECK: scf.while
+      // CHECK: llvm.load volatile
+      %0 = tt.load %flag {isVolatile = true} : !tt.ptr<i32>
+      %1 = arith.cmpi eq, %0, %c0_i32 : i32
+      scf.condition(%1)
+    } do {
+      scf.yield
+    }
+    tt.return
+  }
+}
+
+// -----
+
 #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [1, 1], instrShape = [16, 16, 4], isTransposed = true}>
 module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: global_store_mfma_vec16

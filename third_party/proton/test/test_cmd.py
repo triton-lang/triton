@@ -1,13 +1,110 @@
 import pytest
 import subprocess
 import json
+import os
 import pathlib
 import sys
+from packaging.version import Version
+
+
+def clean_rocprofiler_env():
+    # TODO: Remove when fix is merged in rocprofsdk for this
+    # rocprofiler-sdk updates the native process environment directly. Passing
+    # an explicit Python environment prevents that parent-process bootstrap
+    # state from initializing the SDK before Proton in a fresh CLI subprocess.
+    # https://github.com/ROCm/rocm-systems/pull/5348
+    env = os.environ.copy()
+    env.pop("ROCPROFILER_REGISTER_FORCE_LOAD", None)
+    env.pop("ROCPROFILER_REGISTER_LIBRARY", None)
+    env.pop("ROCP_TOOL_LIBRARIES", None)
+    return env
+
+
+def test_configure_runtime_without_therock(monkeypatch):
+    from triton.profiler import _rocm
+
+    monkeypatch.setattr(_rocm, "find_therock_rocm_libraries", lambda: None)
+    assert _rocm.configure_runtime() is None
+
+
+def test_therock_runtime_library_variables():
+    try:
+        import rocm_sdk
+    except ImportError:
+        pytest.skip("Requires ROCm installed via TheRock wheels")
+    if Version(rocm_sdk.__version__).release[:2] <= (7, 12):
+        pytest.skip("Requires ROCm SDK newer than 7.12")
+
+    script = r"""
+import ctypes
+import os
+import pathlib
+
+import rocm_sdk
+
+settings = {
+    "hsa-runtime64": ("TRITON_HSA_RUNTIME_PATH", "TRITON_HSA_RUNTIME_LIBRARY"),
+    "rocprofiler-sdk": ("TRITON_ROCPROFILER_SDK_LIB_PATH", "TRITON_ROCPROFILER_SDK_LIBRARY"),
+    "roctracer64": ("TRITON_ROCTRACER_LIB_PATH", "TRITON_ROCTRACER_LIBRARY"),
+}
+
+amdhip = pathlib.Path(rocm_sdk.find_libraries("amdhip64")[0])
+expected = {
+    "amdhip64": amdhip,
+    "hsa-runtime64": amdhip.parent / "libhsa-runtime64.so.1",
+    "rocprofiler-sdk": pathlib.Path(rocm_sdk.find_libraries("rocprofiler-sdk")[0]),
+    "roctracer64": pathlib.Path(rocm_sdk.find_libraries("roctracer64")[0]),
+}
+roctx = pathlib.Path(rocm_sdk.find_libraries("roctx64")[0])
+
+import triton.profiler
+
+assert os.environ["TRITON_LIBHIP_PATH"] == str(amdhip)
+ctypes.CDLL(os.environ["TRITON_LIBHIP_PATH"])
+
+for name, (path_key, library_key) in settings.items():
+    library = expected[name]
+    assert os.environ[path_key] == str(library.parent)
+    assert os.environ[library_key] == library.name
+    ctypes.CDLL(str(pathlib.Path(os.environ[path_key]) / os.environ[library_key]))
+
+assert os.environ["TRITON_ROCTX_LIBRARY"] == str(roctx)
+ctypes.CDLL(os.environ["TRITON_ROCTX_LIBRARY"])
+"""
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, env=clean_rocprofiler_env(), text=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_help():
     # Only check if the viewer can be invoked
-    subprocess.check_call(["proton", "-h"], stdout=subprocess.DEVNULL)
+    subprocess.check_call(["proton", "-h"], env=clean_rocprofiler_env(), stdout=subprocess.DEVNULL)
+
+
+def test_rocprofiler_multi_client_shutdown(tmp_path: pathlib.Path):
+    script = """
+import pathlib
+import sys
+
+import torch
+
+if torch.version.hip is None:
+    raise SystemExit(77)
+
+import triton.profiler as proton
+
+session = proton.start(str(pathlib.Path(sys.argv[1]).with_suffix("")))
+proton.finalize(session)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path / "multi_client.hatchet")],
+        capture_output=True,
+        env=clean_rocprofiler_env(),
+        text=True,
+        timeout=30,
+    )
+    if result.returncode == 77:
+        pytest.skip("Requires a HIP PyTorch build")
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize("mode", ["script", "python", "pytest"])
@@ -16,13 +113,14 @@ def test_exec(mode, tmp_path: pathlib.Path):
     helper_file = file_path.replace("test_cmd.py", "helper.py")
     temp_file = tmp_path / "test_exec.hatchet"
     name = str(temp_file.with_suffix(""))
+    env = clean_rocprofiler_env()
     if mode == "script":
-        subprocess.check_call(["proton", "-n", name, helper_file, "test"], stdout=subprocess.DEVNULL)
+        subprocess.check_call(["proton", "-n", name, helper_file, "test"], env=env, stdout=subprocess.DEVNULL)
     elif mode == "python":
         subprocess.check_call([sys.executable, "-m", "triton.profiler.proton", "-n", name, helper_file, "test"],
-                              stdout=subprocess.DEVNULL)
+                              env=env, stdout=subprocess.DEVNULL)
     elif mode == "pytest":
-        subprocess.check_call(["proton", "-n", name, "pytest", "-k", "test_main", helper_file],
+        subprocess.check_call(["proton", "-n", name, "pytest", "-k", "test_main", helper_file], env=env,
                               stdout=subprocess.DEVNULL)
     with temp_file.open() as f:
         data = json.load(f, )

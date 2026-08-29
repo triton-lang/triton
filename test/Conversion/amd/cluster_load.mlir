@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 2>&1 | FileCheck %s --check-prefix=REMARK
 
 // CGA layout has no broadcasting so we should not emit cluster loads
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0], [2, 0], [4, 0]]}>
@@ -25,6 +26,85 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: %[[CTA_MASK:.*]] = llvm.shl %[[GROUP_MASK]], %[[SHIFT_AMOUNT]]
     // CHECK: llvm.amdgcn.cluster.load.b128{{.*}}, {{.*}}, %[[CTA_MASK]]
     // CHECK-NOT: llvm.amdgcn.cluster.load
+    // 4 CTAs fit into the mask limit so the group must not be split
+    // REMARK-NOT: exceeding the hardware limit
+    %6 = tt.load %arg0 : tensor<32x32x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// Volatile semantics cannot be represented by the cluster load intrinsic, so
+// volatile loads must use regular LLVM loads instead.
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0], [0, 0], [0, 0]]}>
+module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32} {
+  // CHECK-LABEL: volatile_load_no_cluster
+  tt.func public @volatile_load_no_cluster(%arg0: tensor<32x32x!tt.ptr<f16>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>}) {
+    // CHECK-NOT: llvm.amdgcn.cluster.load
+    // CHECK: llvm.load volatile
+    %6 = tt.load %arg0 {isVolatile = true} : tensor<32x32x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// 16 CTAs with communication groups {0,1,4,5,8,9,12,13} and
+// {2,3,6,7,10,11,14,15}. The eight-bit masks exceed gfx1250's limit of five
+// bits, so split each group into four-CTA subgroups selected by CTA id bit 3.
+// The retained free bits 0 and 2 give a mask of 0b110011 (51) and the shift is
+// taken from bit 1 (group offset) and bit 3 (subgroup) => -6 (~0b101).
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 0], [1, 0], [0, 0], [0, 0]]}>
+module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32} {
+  // CHECK-LABEL: cluster_load_split_multicast_mask
+  tt.func public @cluster_load_split_multicast_mask(%arg0: tensor<32x32x!tt.ptr<f16>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>}) {
+    // CHECK: %[[CTA_ID:.*]] = rocdl.cluster.workgroup.id.x
+    // CHECK: %[[SUBGROUP_SELECTOR:.*]] = llvm.mlir.constant(-6 : i32) : i32
+    // CHECK: %[[SHIFT_AMOUNT:.*]] = llvm.and %[[CTA_ID]], %[[SUBGROUP_SELECTOR]]
+    // CHECK: %[[SUBGROUP_MASK:.*]] = llvm.mlir.constant(51 : i32) : i32
+    // CHECK: %[[CTA_MASK:.*]] = llvm.shl %[[SUBGROUP_MASK]], %[[SHIFT_AMOUNT]]
+    // CHECK: llvm.amdgcn.cluster.load.b128{{.*}}, {{.*}}, %[[CTA_MASK]]
+    // REMARK: remark: Multicast group contains 8 workgroups, exceeding the hardware limit of 5 set mask bits; splitting it into subgroups of 4 workgroups
+    // REMARK-NEXT: {{.*}}%split_multicast_load = tt.load
+    %split_multicast_load = tt.load %arg0 : tensor<32x32x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// All 16 CTAs share the same data. Splitting into subgroups of 4 keeps the
+// broadcast mask constant (0b1111) and shifts it by the two dropped free bits.
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 0], [0, 0], [0, 0], [0, 0]]}>
+module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32} {
+  // CHECK-LABEL: cluster_load_split_full_broadcast
+  tt.func public @cluster_load_split_full_broadcast(%arg0: tensor<32x32x!tt.ptr<f16>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>}) {
+    // CHECK: %[[CTA_ID:.*]] = rocdl.cluster.workgroup.id.x
+    // CHECK: %[[SUBGROUP_SELECTOR:.*]] = llvm.mlir.constant(-4 : i32) : i32
+    // CHECK: %[[SHIFT_AMOUNT:.*]] = llvm.and %[[CTA_ID]], %[[SUBGROUP_SELECTOR]]
+    // CHECK: %[[SUBGROUP_MASK:.*]] = llvm.mlir.constant(15 : i32) : i32
+    // CHECK: %[[CTA_MASK:.*]] = llvm.shl %[[SUBGROUP_MASK]], %[[SHIFT_AMOUNT]]
+    // CHECK: llvm.amdgcn.cluster.load.b128{{.*}}, {{.*}}, %[[CTA_MASK]]
+    // REMARK: remark: Multicast group contains 16 workgroups, exceeding the hardware limit of 5 set mask bits; splitting it into subgroups of 4 workgroups
+    // REMARK-NEXT: {{.*}}%split_full_broadcast_load = tt.load
+    %split_full_broadcast_load = tt.load %arg0 : tensor<32x32x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// All 4 CTAs share the same data which fits into the mask limit, so the mask is
+// a constant and needs no shift by the cta id.
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 0], [0, 0]]}>
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32} {
+  // CHECK-LABEL: cluster_load_full_broadcast
+  tt.func public @cluster_load_full_broadcast(%arg0: tensor<32x32x!tt.ptr<f16>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>}) {
+    // CHECK: %[[CTA_MASK:.*]] = llvm.mlir.constant(15 : i32) : i32
+    // CHECK-NOT: llvm.shl
+    // CHECK: llvm.amdgcn.cluster.load.b128{{.*}}, {{.*}}, %[[CTA_MASK]]
+    // REMARK-NOT: exceeding the hardware limit
     %6 = tt.load %arg0 : tensor<32x32x!tt.ptr<f16>, #blocked>
     tt.return
   }
@@ -97,11 +177,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // Scalar load should produce a regular llvm.load, not a cluster load
     // CHECK: llvm.load %{{.*}} : !llvm.ptr<1> -> vector<1xi16>
     %1 = tt.load %arg1 : !tt.ptr<i16>
-    %2 = amdg.buffer_load %arg2[%0] : tensor<128xi32, #blocked>
+    %2 = amdg.buffer_load %arg2[%0] : !tt.ptr<i32> -> tensor<128xi32, #blocked>
     %3 = arith.extsi %1 : i16 to i32
     %4 = tt.splat %3 : i32 -> tensor<128xi32, #blocked>
     %5 = arith.ori %4, %2 : tensor<128xi32, #blocked>
-    amdg.buffer_store %5, %arg0[%0] : tensor<128xi32, #blocked>
+    amdg.buffer_store %5, %arg0[%0] : !tt.ptr<i32> -> tensor<128xi32, #blocked>
     tt.return
   }
 }

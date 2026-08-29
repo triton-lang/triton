@@ -14,6 +14,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttng.init_barrier %alloc, 1 : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
     tt.return
   }
+
+  // Tensor-map creation only synchronizes a warp; other shared writes stay pending.
+  // CHECK-LABEL: tensormap_create_before_shared_load
+  tt.func @tensormap_create_before_shared_load(%desc: !tt.ptr<i8>, %src: !tt.ptr<i16>, %size: i32, %data: tensor<128xi32, #blocked0>) -> tensor<128xi32, #blocked0> {
+    %c256 = arith.constant 256 : i32
+    %c1 = arith.constant 1 : i32
+    // CHECK: ttg.local_alloc
+    // CHECK-NEXT: ttng.tensormap_create
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: ttg.local_load
+    %mem = ttg.local_alloc %data : (tensor<128xi32, #blocked0>) -> !ttg.memdesc<128xi32, #shared0, #smem>
+    ttng.tensormap_create %desc, %src, [%c256], [%size], [], [%c1] {elem_type = 3 : i32, fill_mode = 0 : i32, interleave_layout = 0 : i32, swizzle_mode = 2 : i32} : (!tt.ptr<i8>, !tt.ptr<i16>, i32, i32, i32) -> ()
+    %loaded = ttg.local_load %mem : !ttg.memdesc<128xi32, #shared0, #smem> -> tensor<128xi32, #blocked0>
+    tt.return %loaded : tensor<128xi32, #blocked0>
+  }
 }
 
 // -----
@@ -145,7 +160,10 @@ tt.func @wait_after_mma(
 ) {
   %phase = arith.constant 0 : i32
   %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared2, #smem, mutable>
-  // CHECK: ttng.tc_gen5_mma
+  // The fused MMA's leading barrier also synchronizes the preceding wait.
+  // CHECK: ttg.async_wait
+  ttg.async_wait {num = 0 : i32}
+  // CHECK-NEXT: ttng.tc_gen5_mma
   ttng.tc_gen5_mma %a, %b, %c, %useAcc, %pred, %barrier[%barrierPred] {is_async} :
      !ttg.memdesc<128x128xf16, #shared, #smem>,
      !ttg.memdesc<128x128xf16, #shared1, #smem>,

@@ -45,6 +45,7 @@
 #include "triton/Tools/Sys/Dump.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "llvm/Support/SourceMgr.h"
+#include <memory>
 
 namespace {
 
@@ -336,11 +337,29 @@ void init_triton_ir(py::module_ &m) {
   py::class_<SourceMgrDiagnosticHandler>(m, "source_mgr_diag")
       .def(py::init<llvm::SourceMgr &, MLIRContext *>());
 
+  static std::vector<mlir::triton::plugin::TritonPlugin> plugins;
+  m.def(
+      "extend_dialects_with",
+      [](const std::string &libPath) {
+        // Load the plugin library.
+        auto pluginOrErr = mlir::triton::plugin::TritonPlugin::load(libPath);
+        if (!pluginOrErr) {
+          std::string errMsg = llvm::toString(pluginOrErr.takeError());
+          throw std::runtime_error(errMsg);
+        }
+        auto plugin = std::move(*pluginOrErr);
+
+        // Store the plugin for later (i.e., `load_dialects`)
+        plugins.push_back(std::move(plugin));
+      },
+      "Given a path to a Triton extension, register any dialects to be loaded "
+      "in `load_dialects`.");
+
   m.def("load_dialects", [](MLIRContext &context) {
     DialectRegistry registry;
 
     // Register plugin dialects.
-    for (const auto &plugin : mlir::triton::plugin::loadPlugins()) {
+    for (const auto &plugin : plugins) {
       plugin.registerDialects(registry);
     }
 
@@ -1062,8 +1081,14 @@ void init_triton_ir(py::module_ &m) {
              return self.getBuilder().getF64Type();
            })
       .def("get_ptr_ty",
-           [](TritonOpBuilder &self, Type &type, int addrSpace) -> Type {
-             return PointerType::get(type, addrSpace);
+           [](TritonOpBuilder &self, Type &type,
+              const std::string &addrSpace) -> Type {
+             std::optional<PtrAddrSpace> symbolized =
+                 symbolizePtrAddrSpace(addrSpace);
+             if (!symbolized)
+               throw std::invalid_argument("invalid pointer address space '" +
+                                           addrSpace + "'");
+             return PointerType::get(type, *symbolized);
            })
       .def("get_block_ty",
            [](TritonOpBuilder &self, Type &elementType,
@@ -1600,18 +1625,6 @@ void init_triton_ir(py::module_ &m) {
            [](TritonOpBuilder &self, Value &arg, int axis) -> Value {
              return self.create<ExpandDimsOp>(arg, axis);
            })
-      .def("create_cat",
-           [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-             auto lhsType = dyn_cast<RankedTensorType>(lhs.getType());
-             auto rhsType = dyn_cast<RankedTensorType>(rhs.getType());
-             if (!(lhsType.getShape().size() == 1 &&
-                   rhsType.getShape().size() == 1))
-               throw std::invalid_argument(
-                   "shape not supported by cat. Expecting rank-1 inputs");
-             std::vector<int64_t> shape{lhsType.getShape()[0] +
-                                        rhsType.getShape()[0]};
-             return self.create<CatOp>(lhsType.clone(shape), lhs, rhs);
-           })
       .def("create_join",
            [](TritonOpBuilder &self, Value &a, Value &b) -> Value {
              return self.create<JoinOp>(a, b);
@@ -1880,6 +1893,12 @@ void init_triton_ir(py::module_ &m) {
            [](TritonOpBuilder &self, Value src, Value indices, int axis)
                -> Value { return self.create<GatherOp>(src, indices, axis); })
       // Force GPU barrier
+      .def("create_grid_dependency_wait",
+           [](TritonOpBuilder &self) { self.create<GridDependencyWaitOp>(); })
+      .def("create_grid_dependency_launch_dependents",
+           [](TritonOpBuilder &self) {
+             self.create<GridDependencyLaunchDependentsOp>();
+           })
       .def("create_barrier",
            [](TritonOpBuilder &self) {
              self.create<triton::gpu::BarrierOp>(triton::gpu::AddrSpace::All);
@@ -1894,19 +1913,35 @@ void init_triton_ir(py::module_ &m) {
                                                   paddingOption);
            });
 
-  // Add custom operations.
-  for (const auto &plugin : mlir::triton::plugin::loadPlugins()) {
-    for (const auto &op : plugin.listOps()) {
-      std::string wrapped = std::string("create_") + op.name;
-      TritonOpBuilderBinding.def(
-          wrapped.c_str(),
-          [op](TritonOpBuilder &self, std::vector<Value> args) {
-            args.insert(args.begin(), Value());
-            op.addOp(self, args);
-            return args[0];
-          });
-    }
-  }
+  // Add an `extend_with` static method that dynamically loads a plugin and
+  // registers its custom operations as builder methods.
+  auto builderPtr =
+      std::make_shared<py::class_<TritonOpBuilder>>(TritonOpBuilderBinding);
+  TritonOpBuilderBinding.def_static(
+      "extend_with",
+      [builderPtr](const std::string &path) {
+        // Load the plugin library.
+        auto pluginOrErr = mlir::triton::plugin::TritonPlugin::load(path);
+        if (!pluginOrErr) {
+          std::string errMsg = llvm::toString(pluginOrErr.takeError());
+          throw std::runtime_error(errMsg);
+        }
+        auto plugin = std::move(*pluginOrErr);
+
+        // Extend the builder class with the ops defined in the plugin.
+        py::gil_scoped_acquire acquire;
+        for (const auto &op : plugin.listOps()) {
+          std::string wrapped = std::string("create_") + op.name;
+          builderPtr->def(wrapped.c_str(),
+                          [op](TritonOpBuilder &self, std::vector<Value> args) {
+                            args.insert(args.begin(), Value());
+                            op.addOp(self, args);
+                            return args[0];
+                          });
+        }
+      },
+      "Given a path to a Triton extension, load it and create builder methods "
+      "for each operation.");
 
   py::class_<PassManager>(m, "pass_manager")
       .def(py::init<MLIRContext *>())
@@ -2055,7 +2090,11 @@ PyObject *py_getenv(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
     PyErr_SetString(PyExc_TypeError, "name must be a string");
     return NULL;
   }
-  char *env_val = getenv(PyUnicode_AsUTF8(name));
+  Py_ssize_t name_size;
+  const char *name_cstr = PyUnicode_AsUTF8AndSize(name, &name_size);
+  if (!name_cstr)
+    return NULL;
+  char *env_val = getenv(name_cstr);
   if (!env_val) {
     Py_INCREF(default_val);
     return default_val;
@@ -2075,7 +2114,11 @@ PyObject *py_getenv_bool(PyObject *self, PyObject *const *args,
     PyErr_SetString(PyExc_TypeError, "name must be a string");
     return NULL;
   }
-  char *env_val = getenv(PyUnicode_AsUTF8(name));
+  Py_ssize_t name_size;
+  const char *name_cstr = PyUnicode_AsUTF8AndSize(name, &name_size);
+  if (!name_cstr)
+    return NULL;
+  char *env_val = getenv(name_cstr);
   PyObject *res = default_val;
   if (env_val) {
     res = is_truthy(env_val) ? Py_True : Py_False;

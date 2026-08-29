@@ -53,6 +53,7 @@ int getWmmaVersion(ISAFamily isaFamily) {
   switch (isaFamily) {
   case ISAFamily::RDNA3:
     return 1;
+  case ISAFamily::RDNA4m:
   case ISAFamily::RDNA4:
     return 2;
   case ISAFamily::GFX1250:
@@ -905,6 +906,33 @@ private:
   const TargetFeatures &targetFeatures;
 };
 
+static triton::amdgpu::LocalLoadPackedTransposedOp
+createLocalLoadPackedTransposed(OpBuilder &builder, Location loc,
+                                TypedValue<RankedTensorType> value,
+                                DotOperandEncodingAttr dstEncoding,
+                                unsigned opIdx) {
+  auto srcType = value.getType();
+  SmallVector<int64_t> dstShape(srcType.getShape());
+  dstShape[opIdx] *= 2;
+  dstShape[1 - opIdx] /= 2;
+  auto dstType =
+      RankedTensorType::get(dstShape, srcType.getElementType(), dstEncoding);
+
+  SmallVector<unsigned> order = {opIdx, 1 - opIdx};
+  auto sharedMemorySpace =
+      triton::gpu::SharedMemorySpaceAttr::get(value.getContext());
+  auto tmpType = triton::gpu::MemDescType::get(
+      srcType.getShape(), srcType.getElementType(),
+      triton::gpu::SwizzledSharedEncodingAttr::get(
+          value.getContext(), dstEncoding, srcType.getShape(), order,
+          triton::gpu::getCGALayout(srcType.getEncoding()),
+          srcType.getElementType()),
+      sharedMemorySpace);
+  auto tmp = triton::gpu::LocalAllocOp::create(builder, loc, tmpType, value);
+  return triton::amdgpu::LocalLoadPackedTransposedOp::create(builder, loc,
+                                                             dstType, tmp);
+}
+
 class ScaledBlockedToScaledMFMAF8F6F4 final
     : public OpRewritePattern<triton::DotScaledOp> {
   int mfmaVersion;
@@ -1021,36 +1049,9 @@ public:
 
       bool kPacked = opIdx == 0 ? dotOp.getLhsKPack() : dotOp.getRhsKPack();
       if (kPacked == false) {
-        // This is FP4 with M/N packing. Create local alloc + local load here
-        // so we have control of the shared layout
-        // A, M packed: tensor<16x64xi8> --> 32x32
-        // B, N packed: tensor<64x16xi8> --> 32x32
-        SmallVector<int64_t> newShape(vType.getShape());
-        newShape[opIdx == 0 ? 0 : 1] = newShape[opIdx == 0 ? 0 : 1] * 2;
-        newShape[opIdx == 0 ? 1 : 0] = newShape[opIdx == 0 ? 1 : 0] / 2;
-        auto newVType =
-            RankedTensorType::get(newShape, vType.getElementType(), newEnc);
         OpBuilder builder(dotOp);
-        auto srcEncoding = vType.getEncoding();
-        auto originalOrder = triton::gpu::getOrderForMemory(vType);
-        SmallVector<unsigned> newOrder = originalOrder;
-        if (opIdx == 1) {
-          newOrder = {1, 0};
-        } else {
-          newOrder = {0, 1};
-        }
-        auto sharedMemorySpace =
-            triton::gpu::SharedMemorySpaceAttr::get(vType.getContext());
-        auto tmpType = triton::gpu::MemDescType::get(
-            vType.getShape(), vType.getElementType(),
-            triton::gpu::SwizzledSharedEncodingAttr::get(
-                v.getContext(), newEnc, vType.getShape(), newOrder,
-                triton::gpu::getCGALayout(srcEncoding), vType.getElementType()),
-            sharedMemorySpace);
-        auto tmp = triton::gpu::LocalAllocOp::create(builder, dotOp.getLoc(),
-                                                     tmpType, v);
-        auto newConvert = triton::amdgpu::LocalLoadPackedTransposedOp::create(
-            builder, dotOp.getLoc(), newVType, tmp);
+        auto newConvert = createLocalLoadPackedTransposed(
+            builder, dotOp.getLoc(), v, newEnc, opIdx);
         if (opIdx == 0) {
           aShape = newConvert.getType().getShape();
           aEncLL *= newEnc.toLinearLayout(aShape);
@@ -1223,6 +1224,25 @@ public:
       auto parent = isFp4 ? wmmaPackedEnc : wmmaEnc;
       auto vType = v.getType();
       auto newEnc = DotOperandEncodingAttr::get(ctx, opIdx, parent, 16);
+      bool kPacked = opIdx == 0 ? dotOp.getLhsKPack() : dotOp.getRhsKPack();
+      if (isFp4 && !kPacked) {
+        auto newConvert = createLocalLoadPackedTransposed(
+            rewriter, dotOp.getLoc(), v, newEnc, opIdx);
+
+        if (opIdx == 0) {
+          aShape = newConvert.getType().getShape();
+          aShapePerCTA =
+              ttg::getShapePerCTA(aCgaLayout.getCTASplitNum(), aShape);
+          aEncLL *= newEnc.toLinearLayout(aShapePerCTA);
+        } else {
+          bShape = newConvert.getType().getShape();
+          bShapePerCTA =
+              ttg::getShapePerCTA(bCgaLayout.getCTASplitNum(), bShape);
+          bEncLL *= newEnc.toLinearLayout(bShapePerCTA);
+        }
+        return newConvert;
+      }
+
       auto newVType = RankedTensorType::get(vType.getShape(),
                                             vType.getElementType(), newEnc);
       if (opIdx == 0)
@@ -1256,10 +1276,10 @@ public:
       return {i8_ty, rewriter.getIntegerAttr(i8_ty, 0x7F)};
     };
 
-    auto convertScaleLayout = [&](TensorValue scale,
-                                  llvm::ArrayRef<int64_t> valShape,
-                                  LinearLayout dotLL, int idx,
-                                  ttg::CGAEncodingAttr cgaLayout) -> Value {
+    auto convertScaleLayout =
+        [&](TensorValue scale, llvm::ArrayRef<int64_t> valShape,
+            LinearLayout dotLL, int idx,
+            ttg::CGAEncodingAttr operandCgaLayout) -> Value {
       SmallVector<int64_t> shape;
       Type scaleType;
       // 0x7F is 1.0 in E8M0
@@ -1278,7 +1298,7 @@ public:
 
       LinearLayout newLL = ttg::chooseScaledWmmaScaleLayout(
           ctx, idx, shape, mDim, nDim, wmmaEnc.getIsTransposed(), scaleFactor,
-          ctaLayout, cgaLayout);
+          ctaLayout, operandCgaLayout);
       Attribute newScaleEncoding = ttg::LinearEncodingAttr::get(ctx, newLL);
       auto newScaleType =
           RankedTensorType::get(shape, scaleType, newScaleEncoding);
@@ -1302,46 +1322,22 @@ public:
     auto newAScale = convertScaleLayout(aScale, aShape, aEncLL,
                                         /*dotOperandIdx=*/0, aScaleCgaLayout);
 
-    auto bScaleCgaLayout = inferBScaleCgaLayout(ctx, cgaLayout);
+    auto bOperandCgaLayout =
+        ttg::inferDotOperandCGALayout(cgaLayout, /*opIdx=*/1);
     assert(!bScale || (ttg::getCGALayout(bScale.getType().getEncoding()) ==
-                       bScaleCgaLayout));
+                       ttg::inferDotScaleCGALayoutFromOperand(bOperandCgaLayout,
+                                                              /*opIdx=*/1)));
     auto newBScale = convertScaleLayout(bScale, bShape, bEncLL,
-                                        /*dotOperandIdx=*/1, bScaleCgaLayout);
+                                        /*dotOperandIdx=*/1, bOperandCgaLayout);
 
     auto newDot = triton::DotScaledOp::create(
         rewriter, dotOp.getLoc(), newRetType, a, b, newAcc, newAScale,
-        newBScale, aElemType, bElemType, dotOp.getFastMath(),
-        dotOp.getLhsKPack(), dotOp.getRhsKPack());
+        newBScale, aElemType, bElemType, dotOp.getFastMath());
 
     rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(dotOp, oldRetType,
                                                       newDot);
 
     return success();
-  }
-
-  // If Bscale were present, we could directly grab the CGA layout from it.
-  // Unfortunately, it is optional; on top of that, sometime we need to know
-  // its CGA layout even if it's not present.
-  //
-  // Note that split only take place along M and N dimension. For A and Ascale,
-  // their shapes are MxK and Mx(K/grp), respectively. Hence, A and A-scale can
-  // share the CGA layout. For B and Bscale, their shapes are KxN and Nx(K/grp),
-  // respectively. Since N shows up on different positions, we cannot "reuse"
-  // B's CGA layout for B-scale.
-  //
-  // We can grab N's split number from D's CGA layout, and construct Bscale's
-  // using that info.
-  //
-  static ttg::CGAEncodingAttr
-  inferBScaleCgaLayout(MLIRContext *ctx, ttg::CGAEncodingAttr dCgaLayout) {
-    auto resultSplit = dCgaLayout.getCTASplitNum();
-    unsigned nSplit = resultSplit[1];
-    unsigned numCtas = mlir::product(dCgaLayout.getCTAsPerCGA());
-
-    return ttg::CGAEncodingAttr::fromSplitParams(
-        ctx,
-        /*CTAsPerCGA=*/{nSplit, numCtas / nSplit},
-        /*CTASplitNum=*/{nSplit, 1}, /*CTAOrder*/ {0, 1});
   }
 };
 
@@ -1632,9 +1628,9 @@ public:
     }
 
     // Try I8 x I8 -> I32 v_dot
-    // if k % 4 != 0: can not use integer V_DOT instruction
+    // Partial K groups are zero-padded in the FMA lowering.
     if (dotTypes.a.isInteger(8) && dotTypes.b.isInteger(8) &&
-        dotTypes.c.isInteger(32) && dotTypes.d.isInteger(32) && k % 4 == 0) {
+        dotTypes.c.isInteger(32) && dotTypes.d.isInteger(32)) {
       return true;
     }
 
@@ -1780,6 +1776,7 @@ struct TritonAMDGPUAccelerateMatmulPass
                                         /*benefit=*/2);
       break;
     case ISAFamily::RDNA3:
+    case ISAFamily::RDNA4m:
     case ISAFamily::RDNA4:
       ttg::populateDecomposeScaledBlockedPatterns(mfmaPatterns,
                                                   /*benefit=*/3);

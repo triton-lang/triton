@@ -1,7 +1,7 @@
-"""User-facing manual + test suite for partial TDM copies on gfx1250.
+"""User-facing manual + test suite for partial TDM copies on CDNA5.
 
 This is the canonical reference for `async_load(..., warp_used_hint=H)`
-on AMD gfx1250.  `H` selects the active warp subset used for the
+on AMD CDNA5.  `H` selects the active warp subset used for the
 per-warp descriptor layout.  The data deposited in shared memory is
 unchanged -- only the work split changes.
 
@@ -94,9 +94,9 @@ What this file actually tests
     `tensor_load_to_lds` instruction per `async_load`, while explicit fused
     copies yield one instruction per fused op.
   * Compile-only tests for explicit fused cache modifier propagation.
-  * Runtime tests on gfx1250 compare against torch-on-CPU references.
+  * Runtime tests on CDNA5 compare against torch-on-CPU references.
 
-Runtime tests are skipped on non-gfx1250 hosts.
+Runtime tests are skipped on non-CDNA5 hosts.
 
 This file is the standalone per-`async_load` reference and the explicit
 fused-copy reference.  Hinted and unhinted `async_load`s stay as separate
@@ -142,14 +142,14 @@ def vector_add_tdm_kernel(
     off_m = pid_m * BLOCK_M
     off_n = pid_n * BLOCK_N
 
-    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(
+    a_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(
         base=a_ptr,
         shape=(M, N),
         strides=(N, 1),
         block_shape=(BLOCK_M, BLOCK_N),
         layout=SHARED_LAYOUT,
     )
-    b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(
+    b_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(
         base=b_ptr,
         shape=(M, N),
         strides=(N, 1),
@@ -161,15 +161,15 @@ def vector_add_tdm_kernel(
     b_buf = ttgl.allocate_shared_memory(b_desc.dtype, b_desc.block_shape, b_desc.layout)
 
     if HINT_A == 0:
-        ttgl.amd.gfx1250.tdm.async_load(a_desc, [off_m, off_n], a_buf)
+        ttgl.amd.cdna5.tdm.async_load(a_desc, [off_m, off_n], a_buf)
     else:
-        ttgl.amd.gfx1250.tdm.async_load(a_desc, [off_m, off_n], a_buf, warp_used_hint=HINT_A)
+        ttgl.amd.cdna5.tdm.async_load(a_desc, [off_m, off_n], a_buf, warp_used_hint=HINT_A)
     if HINT_B == 0:
-        ttgl.amd.gfx1250.tdm.async_load(b_desc, [off_m, off_n], b_buf)
+        ttgl.amd.cdna5.tdm.async_load(b_desc, [off_m, off_n], b_buf)
     else:
-        ttgl.amd.gfx1250.tdm.async_load(b_desc, [off_m, off_n], b_buf, warp_used_hint=HINT_B)
+        ttgl.amd.cdna5.tdm.async_load(b_desc, [off_m, off_n], b_buf, warp_used_hint=HINT_B)
 
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
     a = a_buf.load(layout=BLOCKED_LAYOUT)
     b = b_buf.load(layout=BLOCKED_LAYOUT)
@@ -268,11 +268,11 @@ def tdm_clamp_kernel(a_ptr, M, N, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constex
 
     off_m = ttgl.program_id(axis=0) * BLOCK_M
     off_n = ttgl.program_id(axis=1) * BLOCK_N
-    desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
-                                                       block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
+                                                     block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
     buf = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
-    ttgl.amd.gfx1250.tdm.async_load(desc, [off_m, off_n], buf)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    ttgl.amd.cdna5.tdm.async_load(desc, [off_m, off_n], buf)
+    ttgl.amd.cdna5.tdm.async_wait(0)
     buf.load(layout=BLOCKED_LAYOUT)
 
 
@@ -301,8 +301,8 @@ def test_compile_tdm_clamp_no_readfirstlane():
 @gluon.jit
 def _stage_input(ptr, M, N, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, layout: ttgl.constexpr):
     """Build a descriptor and independent staging buffer for one TDM copy."""
-    desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=ptr, shape=(M, N), strides=(N, 1),
-                                                       block_shape=(BLOCK_M, BLOCK_N), layout=layout)
+    desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=ptr, shape=(M, N), strides=(N, 1),
+                                                     block_shape=(BLOCK_M, BLOCK_N), layout=layout)
     buf = ttgl.allocate_shared_memory(desc.dtype, [1] + desc.block_shape, desc.layout).index(0)
     return desc, buf
 
@@ -321,7 +321,7 @@ def _store_tile(out_ptr, value, off_m, off_n, M, N, BLOCK_M: ttgl.constexpr, BLO
 @gluon.jit
 def _position_input(desc, off_m, off_n):
     """Position a descriptor before the adjacent TDM-copy run."""
-    return ttgl.amd.gfx1250.tdm.update_tensor_descriptor(desc, add_offsets=[off_m, off_n], pred=True)
+    return ttgl.amd.cdna5.tdm.update_tensor_descriptor(desc, add_offsets=[off_m, off_n], pred=True)
 
 
 @gluon.jit
@@ -352,8 +352,8 @@ def vector_add_tdm_explicit_fused_kernel(
     a_desc = _position_input(a_desc, off_m, off_n)
     b_desc = _position_input(b_desc, off_m, off_n)
 
-    ttgl.amd.gfx1250.tdm.async_load_fused([(a_desc, a_buf, HINT_A), (b_desc, b_buf, HINT_B)], cache_modifier=CACHE)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    ttgl.amd.cdna5.tdm.async_load_fused([(a_desc, a_buf, HINT_A), (b_desc, b_buf, HINT_B)], cache_modifier=CACHE)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
     c = a_buf.load(layout=BLOCKED_LAYOUT) + b_buf.load(layout=BLOCKED_LAYOUT)
     _store_tile(c_ptr, c, off_m, off_n, M, N, BLOCK_M, BLOCK_N, BLOCKED_LAYOUT)
@@ -382,8 +382,8 @@ def _tdm_load_llir_calls(llir: str) -> list[str]:
     return re.findall(r"(?:tail )?call void @llvm\.amdgcn\.tensor\.load\.to\.lds[^\n]+", llir)
 
 
-def _compile_gfx1250(fn, ptr_names, constexprs, *, ptr_ty="*fp16", num_warps=8):
-    """Compile `fn` for gfx1250.
+def _compile_cdna5(fn, ptr_names, constexprs, *, ptr_ty="*fp16", num_warps=8):
+    """Compile `fn` for CDNA5.
 
     The signature is `{ptrs: ptr_ty, M/N: i32, <constexpr keys>: constexpr}`,
     matching every fused-copy kernel below.
@@ -405,8 +405,8 @@ def _compile_gfx1250(fn, ptr_names, constexprs, *, ptr_ty="*fp16", num_warps=8):
 
 
 def _compile_amdgcn(fn, ptr_names, constexprs, *, ptr_ty="*fp16", num_warps=8) -> str:
-    """Compile `fn` for gfx1250 and return its AMDGCN asm."""
-    k = _compile_gfx1250(fn, ptr_names, constexprs, ptr_ty=ptr_ty, num_warps=num_warps)
+    """Compile `fn` for CDNA5 and return its AMDGCN asm."""
+    k = _compile_cdna5(fn, ptr_names, constexprs, ptr_ty=ptr_ty, num_warps=num_warps)
     return k.asm["amdgcn"]
 
 
@@ -422,19 +422,19 @@ def test_compile_vector_add_tdm_explicit_fused():
 
 def test_compile_vector_add_tdm_explicit_fused_cache_modifier():
     """Compile-only: explicit fused Gluon API propagates cache modifiers."""
-    default_kernel = _compile_gfx1250(
+    default_kernel = _compile_cdna5(
         vector_add_tdm_explicit_fused_kernel,
         ["a_ptr", "b_ptr", "c_ptr"],
         {"BLOCK_M": 64, "BLOCK_N": 64, "HINT_A": 0b00001111, "HINT_B": 0b11110000, "CACHE": ""},
     )
-    cg_kernel = _compile_gfx1250(
+    cg_kernel = _compile_cdna5(
         vector_add_tdm_explicit_fused_kernel,
         ["a_ptr", "b_ptr", "c_ptr"],
         {"BLOCK_M": 64, "BLOCK_N": 64, "HINT_A": 0b00001111, "HINT_B": 0b11110000, "CACHE": ".cg"},
     )
     _assert_tensor_load_count(cg_kernel.asm["amdgcn"], 1, "explicit async_load_fused cache modifier")
 
-    # On gfx1250, `.cg` lowers to DEV scope / regular cache behavior: aux = 16.
+    # On CDNA5, `.cg` lowers to DEV scope / regular cache behavior: aux = 16.
     # The default cache modifier lowers to aux = 0.
     default_calls = _tdm_load_llir_calls(default_kernel.asm["llir"])
     cg_calls = _tdm_load_llir_calls(cg_kernel.asm["llir"])
@@ -478,10 +478,10 @@ def vector_add_tdm_kernel_3way(
     b_desc = _position_input(b_desc, off_m, off_n)
     c_desc = _position_input(c_desc, off_m, off_n)
 
-    ttgl.amd.gfx1250.tdm.async_load(a_desc, dest=a_buf, warp_used_hint=HINT_A)
-    ttgl.amd.gfx1250.tdm.async_load(b_desc, dest=b_buf, warp_used_hint=HINT_B)
-    ttgl.amd.gfx1250.tdm.async_load(c_desc, dest=c_buf, warp_used_hint=HINT_C)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    ttgl.amd.cdna5.tdm.async_load(a_desc, dest=a_buf, warp_used_hint=HINT_A)
+    ttgl.amd.cdna5.tdm.async_load(b_desc, dest=b_buf, warp_used_hint=HINT_B)
+    ttgl.amd.cdna5.tdm.async_load(c_desc, dest=c_buf, warp_used_hint=HINT_C)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
     out = a_buf.load(layout=BLOCKED_LAYOUT) + b_buf.load(layout=BLOCKED_LAYOUT) + c_buf.load(layout=BLOCKED_LAYOUT)
     _store_tile(out_ptr, out, off_m, off_n, M, N, BLOCK_M, BLOCK_N, BLOCKED_LAYOUT)
@@ -553,11 +553,11 @@ def vector_add_tdm_kernel_4way(
     c_desc = _position_input(c_desc, off_m, off_n)
     d_desc = _position_input(d_desc, off_m, off_n)
 
-    ttgl.amd.gfx1250.tdm.async_load(a_desc, dest=a_buf, warp_used_hint=HINT_A)
-    ttgl.amd.gfx1250.tdm.async_load(b_desc, dest=b_buf, warp_used_hint=HINT_B)
-    ttgl.amd.gfx1250.tdm.async_load(c_desc, dest=c_buf, warp_used_hint=HINT_C)
-    ttgl.amd.gfx1250.tdm.async_load(d_desc, dest=d_buf, warp_used_hint=HINT_D)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    ttgl.amd.cdna5.tdm.async_load(a_desc, dest=a_buf, warp_used_hint=HINT_A)
+    ttgl.amd.cdna5.tdm.async_load(b_desc, dest=b_buf, warp_used_hint=HINT_B)
+    ttgl.amd.cdna5.tdm.async_load(c_desc, dest=c_buf, warp_used_hint=HINT_C)
+    ttgl.amd.cdna5.tdm.async_load(d_desc, dest=d_buf, warp_used_hint=HINT_D)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
     out = (a_buf.load(layout=BLOCKED_LAYOUT) + b_buf.load(layout=BLOCKED_LAYOUT) + c_buf.load(layout=BLOCKED_LAYOUT) +
            d_buf.load(layout=BLOCKED_LAYOUT))
@@ -626,11 +626,11 @@ def heterogeneous_tdm_kernel(
     as_desc = _position_input(as_desc, off_m, off_n)
     bs_desc = _position_input(bs_desc, off_m, off_n)
 
-    ttgl.amd.gfx1250.tdm.async_load(a_desc, dest=a_buf, warp_used_hint=HINT_A)
-    ttgl.amd.gfx1250.tdm.async_load(b_desc, dest=b_buf, warp_used_hint=HINT_B)
-    ttgl.amd.gfx1250.tdm.async_load(as_desc, dest=as_buf, warp_used_hint=HINT_AS)
-    ttgl.amd.gfx1250.tdm.async_load(bs_desc, dest=bs_buf, warp_used_hint=HINT_BS)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    ttgl.amd.cdna5.tdm.async_load(a_desc, dest=a_buf, warp_used_hint=HINT_A)
+    ttgl.amd.cdna5.tdm.async_load(b_desc, dest=b_buf, warp_used_hint=HINT_B)
+    ttgl.amd.cdna5.tdm.async_load(as_desc, dest=as_buf, warp_used_hint=HINT_AS)
+    ttgl.amd.cdna5.tdm.async_load(bs_desc, dest=bs_buf, warp_used_hint=HINT_BS)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
 
 def test_compile_heterogeneous_tdm_hints_stay_separate():
@@ -652,15 +652,15 @@ def tdm_gather_loop_kernel(ptr, optr, M, N, K, BLOCK_N: ttgl.constexpr, NUM_INDI
     BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([NUM_INDICES, 1], [1, 32], [1, num_warps], [1, 0])
     ROW_IDX_LAYOUT: ttgl.constexpr = ttgl.SliceLayout(1, BLOCKED_LAYOUT)
 
-    desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=ptr, shape=(M, N), strides=(N, 1),
-                                                       block_shape=(NUM_INDICES, BLOCK_N), layout=SHARED_LAYOUT)
+    desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=ptr, shape=(M, N), strides=(N, 1),
+                                                     block_shape=(NUM_INDICES, BLOCK_N), layout=SHARED_LAYOUT)
     row_indices = ttgl.arange(0, NUM_INDICES, layout=ROW_IDX_LAYOUT)
     buf = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
     acc = ttgl.zeros([NUM_INDICES, BLOCK_N], ttgl.float32, layout=BLOCKED_LAYOUT)
     for _ in range(0, K, BLOCK_N):
-        desc = ttgl.amd.gfx1250.tdm.update_tensor_descriptor(desc, add_offsets=[0, BLOCK_N])
-        ttgl.amd.gfx1250.tdm.async_gather(desc, src_row_indices=row_indices, dst=buf)
-        ttgl.amd.gfx1250.tdm.async_wait(0)
+        desc = ttgl.amd.cdna5.tdm.update_tensor_descriptor(desc, add_offsets=[0, BLOCK_N])
+        ttgl.amd.cdna5.tdm.async_gather(desc, src_row_indices=row_indices, dst=buf)
+        ttgl.amd.cdna5.tdm.async_wait(0)
         acc += buf.load(layout=BLOCKED_LAYOUT).to(ttgl.float32)
 
     offs_m = ttgl.arange(0, NUM_INDICES, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT))
@@ -709,7 +709,7 @@ def test_compile_tdm_gather_shared_descriptor_sgprs():
 _RUNTIME_BLOCK_SHAPES = [(64, 64), (128, 64)]
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="TDM is only tested on gfx1250.")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="TDM is only tested on CDNA5.")
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N", _RUNTIME_BLOCK_SHAPES)
 @pytest.mark.parametrize(
     "HINT_A,HINT_B",
@@ -723,7 +723,7 @@ def test_runtime_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B):
 
     torch.manual_seed(0)
     # FIXME: Switch to native GPU-side initialization once public PyTorch
-    # supports gfx1250 kernels.
+    # supports CDNA5 kernels.
     a_cpu = torch.randint(0, 128, (M, N), dtype=torch.int32)
     b_cpu = torch.randint(0, 128, (M, N), dtype=torch.int32)
     a = a_cpu.cuda()
@@ -748,7 +748,7 @@ def test_runtime_vector_add_tdm(BLOCK_M, BLOCK_N, HINT_A, HINT_B):
     assert torch.equal(c.cpu(), expected)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="TDM is only tested on gfx1250.")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="TDM is only tested on CDNA5.")
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N", _RUNTIME_BLOCK_SHAPES)
 def test_runtime_vector_add_tdm_explicit_fused(BLOCK_M, BLOCK_N):
     """Runtime: explicit fused TDM API produces the same result as two loads."""
@@ -795,13 +795,13 @@ def update_clamp_bounds_kernel(a_ptr, c_ptr, LOG_M, N, OFF_M, BLOCK_M: ttgl.cons
     BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [num_warps, 1], [1, 0])
     SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
 
-    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(LOG_M, N), strides=(N, 1),
-                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    a_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=a_ptr, shape=(LOG_M, N), strides=(N, 1),
+                                                       block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
     a_buf = ttgl.allocate_shared_memory(a_desc.dtype, a_desc.block_shape, a_desc.layout)
 
-    a_desc = ttgl.amd.gfx1250.tdm.update_tensor_descriptor(a_desc, add_offsets=[OFF_M, 0], pred=1, clamp_bounds=True)
-    ttgl.amd.gfx1250.tdm.async_load(a_desc, [0, 0], a_buf)
-    ttgl.amd.gfx1250.tdm.async_wait(0)
+    a_desc = ttgl.amd.cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[OFF_M, 0], pred=1, clamp_bounds=True)
+    ttgl.amd.cdna5.tdm.async_load(a_desc, [0, 0], a_buf)
+    ttgl.amd.cdna5.tdm.async_wait(0)
 
     a = a_buf.load(layout=BLOCKED_LAYOUT)
     rm = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT))
@@ -810,7 +810,7 @@ def update_clamp_bounds_kernel(a_ptr, c_ptr, LOG_M, N, OFF_M, BLOCK_M: ttgl.cons
     ttgl.store(c_ptr + offs, a)
 
 
-@pytest.mark.skipif(not is_hip_gfx1250(), reason="TDM is only tested on gfx1250.")
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="TDM is only tested on CDNA5.")
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N", _RUNTIME_BLOCK_SHAPES)
 def test_runtime_update_clamp_bounds(BLOCK_M, BLOCK_N):
     """Runtime: update_tensor_descriptor(clamp_bounds=True) shrinks tensor_dim to
@@ -830,7 +830,7 @@ def test_runtime_update_clamp_bounds(BLOCK_M, BLOCK_N):
 
     torch.manual_seed(0)
     # FIXME: Switch to native GPU-side initialization once public PyTorch
-    # supports gfx1250 kernels.  randint(1, ...) keeps every value non-zero so an
+    # supports CDNA5 kernels.  randint(1, ...) keeps every value non-zero so an
     # over-read is distinguishable from the hardware's OOB zero-fill.
     src_cpu = torch.randint(1, 128, (PHYS_M, N), dtype=torch.int32)
     src = src_cpu.cuda()

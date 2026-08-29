@@ -16,7 +16,7 @@ import inspect
 from .._C.libtriton import ir
 from .._utils import TRITON_MAX_TENSOR_NUMEL, validate_block_shape, get_primitive_bitwidth, _tuple_create
 
-T = TypeVar('T')
+T = TypeVar('T', bound=Callable)
 
 TRITON_BUILTIN = "__triton_builtin__"
 
@@ -33,7 +33,6 @@ def must_use_result(x, s=True):
 
 def builtin(fn: T) -> T:
     """Mark a function as a builtin."""
-    assert callable(fn)
 
     @wraps(fn)
     def wrapper(*args, **kwargs):
@@ -61,7 +60,6 @@ def _tensor_member_fn(fn: T) -> T:
     Unfortunately you still need to add a type stub to the body of class tensor
     in order for pytype to know about it.
     """
-    assert callable(fn)
     orig_sig = inspect.signature(fn)
     # Does fn take args other than _semantic, _generator, and the tensor itself?
     has_args = len(orig_sig.parameters.keys() - {"_semantic", "_generator"}) > 1
@@ -678,7 +676,7 @@ _DtypeClass = dtype
 
 class pointer_type(dtype):
 
-    def __init__(self, element_ty: dtype, address_space: int = 1, const: bool = False):
+    def __init__(self, element_ty: dtype, address_space: str = "global", const: bool = False):
         element_ty = _unwrap_if_constexpr(element_ty)
         if not isinstance(element_ty, dtype):
             raise TypeError(f'element_ty has type `{type(element_ty).__name__}`; expected `dtype`.')
@@ -688,7 +686,9 @@ class pointer_type(dtype):
         self.name = f'pointer<{element_ty}>' if not const else f'const_pointer<{element_ty}>'
 
     def to_ir(self, builder: ir.builder) -> ir.pointer_type:
-        return builder.get_ptr_ty(self.element_ty.to_ir(builder), self.address_space)
+        # const pointers live in the constant address space.
+        address_space = "constant" if self.const else self.address_space
+        return builder.get_ptr_ty(self.element_ty.to_ir(builder), address_space)
 
     def __str__(self):
         return self.name
@@ -1207,7 +1207,13 @@ class tensor(base_value):
     def exp(self) -> tensor:
         ...
 
+    def exp2(self) -> tensor:
+        ...
+
     def log(self) -> tensor:
+        ...
+
+    def log2(self) -> tensor:
         ...
 
     def cos(self) -> tensor:
@@ -1219,10 +1225,22 @@ class tensor(base_value):
     def sqrt(self) -> tensor:
         ...
 
+    def sqrt_rn(self) -> tensor:
+        ...
+
     def rsqrt(self) -> tensor:
         ...
 
     def abs(self) -> tensor:
+        ...
+
+    def erf(self) -> tensor:
+        ...
+
+    def floor(self) -> tensor:
+        ...
+
+    def ceil(self) -> tensor:
         ...
 
     def reduce(self, axis, combine_fn, keep_dims=False) -> tensor:
@@ -1243,7 +1261,7 @@ class tensor(base_value):
     def sigmoid(self) -> tensor:
         ...
 
-    def softmax(self, dim=None, keep_dims=False, ieee_rounding=False) -> tensor:
+    def softmax(self, dim=None, *, keep_dims=None, ieee_rounding=False) -> tensor:
         ...
 
     def ravel(self) -> tensor:
@@ -1979,21 +1997,17 @@ def cat(input, other, can_reorder=False, dim=0, _semantic=None):
     :type input: Tensor
     :param other: The second input tensor.
     :type other: Tensor
-    :param can_reorder: Compiler hint. If true, the compiler is
-        allowed to reorder elements while concatenating inputs.  Only use if the
-        order does not matter (e.g., result is only used in reduction ops).
+    :param can_reorder: Ignored.
     :type can_reorder: bool
-    :param dim: The dimension to concatenate along (used when can_reorder is False).
+    :param dim: The dimension to concatenate along.
     :type dim: int
     """
-    if can_reorder:
-        return _semantic.cat(input, other, can_reorder)
-
     rank = len(input.shape)
     assert rank == len(other.shape), f"tensors must have the same rank, got {rank} and {len(other.shape)}"
     dim = _wrap_axis(_unwrap_if_constexpr(dim), rank)
-    assert all(input.shape[i] == other.shape[i] for i in builtins.range(rank) if i !=
-               dim), f"tensor dims must match except in the concat dimension {dim}, got {input.shape} and {other.shape}"
+    assert all(input.shape[i] == other.shape[i] for i in builtins.range(rank)), (
+        f"tl.cat requires tensors of the same shape, got "
+        f"{[_unwrap_if_constexpr(s) for s in input.shape]} and {[_unwrap_if_constexpr(s) for s in other.shape]}")
 
     # Join introduces a new minor dim; move it before the concat dim and merge.
     c = join(input, other, _semantic=_semantic)
@@ -3329,7 +3343,7 @@ def device_print(prefix, *args, hex=False, _semantic=None):
 
     :param prefix: a prefix to print before the values. This is required to be a string literal.
     :param args: the values to print. They can be any tensor or scalar.
-    :param hex: print all values as hex instead of decimal
+    :param hex: print integers in hexadecimal and floating-point values in hexadecimal floating-point notation
     '''
     import string
     prefix = _unwrap_if_constexpr(prefix)
@@ -3563,7 +3577,8 @@ class range(base_value):
         :code:`triton.jit` functions. In addition, it allows user to pass extra attributes to the compiler.
     :param arg1: the start value.
     :param arg2: the end value.
-    :param step: the step value.
+    :param step: the step value. A negative step is supported only when it is a
+        :code:`constexpr`; a runtime (non-:code:`constexpr`) step must be positive.
     :param num_stages: pipeline the loop into this many stages (so there are
         :code:`num_stages` iterations of the loop in flight at once).
 

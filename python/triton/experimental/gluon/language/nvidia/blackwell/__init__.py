@@ -9,7 +9,7 @@ from triton.experimental.gluon.language._semantic import _check, _compute_tmem_r
 
 from . import tma
 from . import clc
-from ..hopper import async_store, fence_async_shared, mbarrier
+from ..hopper import async_store, cluster, fence_async_shared, mbarrier
 from ..ampere import async_copy, mma_v2
 
 from triton._C.libtriton import ir
@@ -19,13 +19,20 @@ if TYPE_CHECKING:
     from ..._semantic import GluonSemantic
 
 __all__ = [
+    "add2",
     "allocate_tensor_memory",
     "async_copy",
     "async_store",
     "clc",
+    "cluster",
     "fence_async_shared",
+    "fma2",
     "mbarrier",
+    "max2",
+    "min2",
     "mma_v2",
+    "mul2",
+    "sub2",
     "tensor_memory_descriptor",
     "tensor_memory_descriptor_type",
     "TensorMemoryLayout",
@@ -33,6 +40,87 @@ __all__ = [
     "tma",
     "_TensorMemoryLinearLayout",
 ]
+
+
+def _packed_arith(operation, operands, dtype, semantic):
+    """Build packed arithmetic with inferred result types and FP4 layouts."""
+    operands = tuple(semantic.to_tensor(operand) for operand in operands)
+    _check(any(isinstance(operand.type, ttgl.distributed_type) for operand in operands),
+           lambda: "packed arithmetic requires at least one distributed tensor operand")
+    floating = [
+        operand for operand in operands
+        if isinstance(operand.type, ttgl.distributed_type) and operand.dtype.is_floating()
+    ]
+    reference = max(floating, key=lambda operand: operand.numel.value, default=None)
+    dtype = _unwrap_if_constexpr(dtype)
+
+    if reference is None:
+        _check(dtype is not None, lambda: "packed FP4 operands require an explicit result dtype")
+        shape = list(operands[0].type.shape)
+        shape[-1] *= 2
+    else:
+        shape = reference.type.shape
+        if dtype is None:
+            addend = operands[-1]
+            dtype = addend.dtype if operation in ("add", "sub", "fma") and addend.dtype.is_fp8() else reference.dtype
+            for operand in operands:
+                if not operand.dtype.is_floating() or (dtype.is_fp8() and operand.dtype.is_fp8()):
+                    continue
+                dtype = semantic.computation_type_impl(dtype, False, operand.dtype, not operand.type.is_block(), False)
+
+    _check(isinstance(dtype, ttgl.dtype), lambda: f"expected 'dtype' to be a dtype but got {dtype}")
+    normalized = []
+    for operand in operands:
+        is_packed_fp4 = (isinstance(operand.type, ttgl.distributed_type) and operand.dtype.is_int()
+                         and operand.dtype.primitive_bitwidth == 8 and operand.type.shape != shape)
+        if not is_packed_fp4:
+            _check(reference is not None, lambda: "packed FP4 operands require a floating-point tensor operand")
+            if not operand.type.is_block():
+                operand = semantic.cast(operand, dtype)
+            _, operand = semantic.broadcast_impl_value(reference, operand)
+        normalized.append(operand.handle)
+
+    builder = semantic.builder
+    result_type = dtype if reference is None else reference.type.with_element_ty(dtype)
+    result_ir_type = result_type.to_ir(builder)
+    handle = builder.create_packed_arith(result_ir_type, operation, normalized)
+    return semantic._wrap_handle_infer_layout(handle, dtype, shape)
+
+
+@builtin
+def add2(lhs, rhs, dtype=None, _semantic=None):
+    """Add two tensors using a native two-lane packed instruction."""
+    return _packed_arith("add", (lhs, rhs), dtype, _semantic)
+
+
+@builtin
+def sub2(lhs, rhs, dtype=None, _semantic=None):
+    """Subtract two tensors using a native two-lane packed instruction."""
+    return _packed_arith("sub", (lhs, rhs), dtype, _semantic)
+
+
+@builtin
+def mul2(lhs, rhs, dtype=None, _semantic=None):
+    """Multiply two tensors using a native two-lane packed instruction."""
+    return _packed_arith("mul", (lhs, rhs), dtype, _semantic)
+
+
+@builtin
+def fma2(lhs, rhs, acc, dtype=None, _semantic=None):
+    """Perform a native two-lane packed fused multiply-add."""
+    return _packed_arith("fma", (lhs, rhs, acc), dtype, _semantic)
+
+
+@builtin
+def min2(lhs, rhs, dtype=None, _semantic=None):
+    """Select the minimum with a native packed half-precision instruction."""
+    return _packed_arith("min", (lhs, rhs), dtype, _semantic)
+
+
+@builtin
+def max2(lhs, rhs, dtype=None, _semantic=None):
+    """Select the maximum with a native packed half-precision instruction."""
+    return _packed_arith("max", (lhs, rhs), dtype, _semantic)
 
 
 @dataclass(frozen=True, eq=True)
@@ -130,7 +218,9 @@ class _TensorMemoryLinearLayout:
         raise RuntimeError("TensorMemoryLinearLayout is print-only; IR materialization is unsupported")
 
     def mangle(self):
-        return f"TMLL_{self.shape}_TMLL"
+        rows = "_".join("~".join(map(str, b)) for b in self.rows)
+        cols = "_".join("~".join(map(str, b)) for b in self.cols)
+        return f"TMLL_{rows}_{cols}_{self.shape}_TMLL"
 
     def __hash__(self):
         return hash((tuple(map(tuple, self.rows)), tuple(map(tuple, self.cols)), tuple(self.shape)))
@@ -371,7 +461,7 @@ class tensor_memory_descriptor(base_value):
         Args:
             start (int): The starting index for subslice.
             length (int): The length of the subslice.
-            dim (int): The dimension to slice (default: 1).
+            dim (int): The dimension to slice, including a leading pipeline-stage dimension (default: 1).
 
         Returns:
             tensor_memory_descriptor: Descriptor for the subslice.
@@ -381,7 +471,7 @@ class tensor_memory_descriptor(base_value):
         dim = _unwrap_if_constexpr(dim)
         _check(isinstance(start, int), lambda: "start must be a constant int")
         _check(isinstance(length, int), lambda: "length must be a constant int")
-        _check(isinstance(dim, int) and dim in (0, 1), lambda: "dim must be 0 or 1")
+        _check(isinstance(dim, int) and dim in range(len(self.shape)), lambda: "invalid slice dimension")
         shape = list(self.shape)
         shape[dim] = length
         layout = self.type.layout
@@ -410,8 +500,8 @@ class tensor_memory_descriptor(base_value):
         return ret
 
     @builtin
-    def _reinterpret(self, dtype=None, shape=None, layout=None,
-                     _semantic: GluonSemantic = None) -> tensor_memory_descriptor:
+    def reinterpret(self, dtype=None, shape=None, layout=None,
+                    _semantic: GluonSemantic = None) -> tensor_memory_descriptor:
         """
         Reinterpret tensor memory descriptor with a new dtype, shape, and layout.
 

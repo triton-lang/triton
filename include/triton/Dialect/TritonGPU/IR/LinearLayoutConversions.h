@@ -63,6 +63,12 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
 LinearLayout paddedLinearLayout(MemDescType type);
 LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding);
 
+// Convert to a linear layout, returning only the linear component of padded
+// encodings because padding cannot be represented by LinearLayout.
+LinearLayout toLinearLayoutIgnoringPadding(MemDescType type);
+LinearLayout toLinearLayoutIgnoringPadding(ArrayRef<int64_t> shape,
+                                           Attribute encoding);
+
 // Convert the shared encoding of a tensor with `nvmma_shared` layout to a
 // LinearLayout that maps from a linear shared memory offset to tensor index.
 //
@@ -127,13 +133,6 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
     MLIRContext *ctx, ArrayRef<unsigned> tensorShape,
     ArrayRef<unsigned> repShape, ArrayRef<unsigned> order);
 
-// The primary goal of this function is to efficiently load 2D tiles of a
-// tensor from shared memory using the `ds_read_tr` instruction for AMD GPUs.
-std::optional<LinearLayout>
-chooseDsReadTrLayout(Attribute enc, ArrayRef<int64_t> shape,
-                     int32_t elemBitWidth, unsigned instBitWidth,
-                     unsigned numLanesInShuffleGroup);
-
 // Create LinearLayout for scale in scaled mfma.
 LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                          ArrayRef<int64_t> dotOperandShape,
@@ -141,6 +140,9 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                          ArrayRef<unsigned> tilesPerWarp,
                                          ArrayRef<unsigned> warpsPerCTA);
 
+// Create LinearLayout for scale in scaled wmma. `ctaLayout` and `cgaLayout`
+// describe the dot operand itself, i.e. they are given in the operand's
+// dimension order (will be transposed for scale b)
 LinearLayout chooseScaledWmmaScaleLayout(
     MLIRContext *ctx, int dotOperandIdx, ArrayRef<int64_t> dotOperandShape,
     unsigned wmmaMDim, unsigned wmmaNDim, bool isTransposed,
@@ -192,4 +194,20 @@ LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
                                 std::optional<uint32_t> warpUsedHint = {});
 
 } // namespace mlir::triton::gpu
+
+namespace mlir {
+
+// Conversion from `srcLayout` to `dstLayout` involving the minimum amount of
+// data transfer. The output will be such that layout.getInDimNames() ==
+// layout.getOutDimNames() and the conversion will not include block (resp.
+// warp or lane) if it can be avoided.
+triton::LinearLayout minimalCvtLayout(const triton::LinearLayout &srcLayout,
+                                      const triton::LinearLayout &dstLayout);
+
+// Type-based convenience overload for layouts that can be converted to a
+// linear layout.
+triton::LinearLayout minimalCvtLayout(Type srcTy, Type dstTy);
+
+} // namespace mlir
+
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

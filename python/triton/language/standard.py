@@ -50,17 +50,43 @@ def sigmoid(x):
     return 1 / (1 + math.exp(-x))
 
 
+@constexpr_function
+def _softmax_keep_dims_warning():
+    import warnings
+
+    warnings.warn(
+        "The keep_dims argument to tl.softmax is deprecated and ignored; softmax always preserves the input shape.",
+        stacklevel=2)
+
+
 @core._tensor_member_fn
 @jit
-@math._add_math_1arg_docstr("softmax")
-def softmax(x, dim=None, keep_dims=False, ieee_rounding=False):
+def softmax(x, dim=None, *, keep_dims=None, ieee_rounding=False):
+    """
+    Computes the softmax of :code:`x` along the given axis.
+
+    :param x: the input values
+    :type x: Block
+    :param dim: the axis along which to normalize. Defaults to 0 -- note that
+        this is *not* the last axis, unlike :code:`torch.softmax`.
+    :type dim: int | None
+    :param keep_dims: deprecated and ignored. Softmax always preserves the input shape.
+        Defaults to :code:`None`; any other value emits a warning.
+        Must be passed by keyword.
+    :type keep_dims: bool | None
+    :param ieee_rounding: whether the final division uses IEEE-compliant rounding.
+        Must be passed by keyword.
+    :type ieee_rounding: bool
+    """
+    if keep_dims is not None:
+        _softmax_keep_dims_warning()
     if dim is None:
         _dim: core.constexpr = 0
     else:
         _dim: core.constexpr = dim
-    z = x - max(x, _dim, keep_dims=keep_dims)
+    z = x - max(x, _dim, keep_dims=True)
     num = math.exp(z)
-    den = sum(num, _dim, keep_dims=keep_dims)
+    den = sum(num, _dim, keep_dims=True)
     return math.fdiv(num, den, ieee_rounding)
 
 
@@ -273,12 +299,11 @@ def _pick_sum_dtype(in_dtype, dtype):
 
     # For integer bitwidths less than 32, pick int32 with the same sign to
     # avoid overflow.
-    out_dtype = None
-    if in_dtype.is_int_signed():
-        out_dtype = core.int32 if in_dtype.int_bitwidth < 32 else None
-    elif in_dtype.is_int_unsigned():
-        out_dtype = core.uint32 if in_dtype.int_bitwidth < 32 else None
-    return out_dtype
+    if in_dtype.is_int_signed() and in_dtype.int_bitwidth < 32:
+        return core.int32
+    if in_dtype.is_int_unsigned() and in_dtype.int_bitwidth < 32:
+        return core.uint32
+    return in_dtype
 
 
 @core._tensor_member_fn
@@ -287,9 +312,7 @@ def _pick_sum_dtype(in_dtype, dtype):
 def sum(input, axis=None, keep_dims=False, dtype: core.constexpr = None):
     # Pick a default dtype for the reduction if one was not specified.
     out_dtype: core.constexpr = _pick_sum_dtype(input.dtype, dtype)
-
-    if out_dtype is not None:
-        input = input.to(out_dtype)
+    input = input.to(out_dtype)
     return core.reduce(input, axis, _sum_combine, keep_dims=keep_dims)
 
 
@@ -336,10 +359,7 @@ def cumsum(input, axis=0, reverse=False, dtype: core.constexpr = None):
 
     input = core._promote_bfloat16_to_float32(input)
     out_dtype: core.constexpr = _pick_sum_dtype(input.dtype, dtype)
-
-    if out_dtype is not None:
-        input = input.to(out_dtype)
-
+    input = input.to(out_dtype)
     return core.associative_scan(input, axis, _sum_combine, reverse)
 
 
@@ -385,7 +405,7 @@ def _compare_and_swap(x, flip, i: core.constexpr):
     is_right = _indicator(n_dims, i)
 
     # conditional swap:
-    ret = core.where((x > y) != (flip ^ is_right), y, x)
+    ret = core.where((x > y) != (flip ^ is_right).to(core.int1), y, x)
     return ret
 
 
@@ -437,6 +457,11 @@ def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descendin
     _dim: core.constexpr = len(x.shape) - 1 if dim is None else dim
     core.static_assert(_dim == len(x.shape) - 1, "only minor dimension is currently supported")
 
+    if k is not None:
+        core.static_assert(k > 0, "topk: k must be greater than 0")
+        core.static_assert(_is_power_of_two(k), "topk: k must be a power of two")
+        core.static_assert(k <= x.shape[_dim], "topk: k must not exceed the size of the selected dimension")
+
     log_n: core.constexpr = _log2(x.shape[_dim])
     log_k: core.constexpr = log_n if k is None else _log2(k)
 
@@ -479,7 +504,7 @@ def topk(x, k: core.constexpr, dim: core.constexpr = None, descending: core.cons
 
     :param x: The input tensor.
     :type x: Tensor
-    :param k: The number of top elements to return. Must be a power of two.
+    :param k: The number of top elements to return. Must be a positive power of two no larger than the selected dimension.
     :type k: int
     :param dim: The dimension along which to find the top k elements.
                 If None, uses the last dimension. Currently only the last dimension is supported.

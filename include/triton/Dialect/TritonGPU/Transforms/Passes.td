@@ -121,6 +121,25 @@ def TritonGPUAutomaticWarpSpecialization : Pass<"tritongpu-automatic-warp-specia
   ];
 }
 
+def TritonGPUNormalizeWSWhileLoops : Pass<"tritongpu-normalize-ws-while-loops", "mlir::ModuleOp"> {
+  let summary = "normalize while loops used by warp specialization";
+
+  let description = [{
+    For CLC `scf.while` operations, promotes `tt.warp_specialize` from one or
+    more direct sibling `scf.for` operations to the enclosing loop. Then
+    normalizes every `scf.while` nested in a warp-specialized loop to use
+    matching state and result signatures.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+    "mlir::scf::SCFDialect",
+    "mlir::arith::ArithDialect"
+  ];
+}
+
 def TritonGPUPartitionLoops : Pass<"tritongpu-partition-loops", "mlir::ModuleOp"> {
   let summary = "split scheduled loops into `ttg.warp_specialize`";
 
@@ -264,7 +283,8 @@ def TritonGPURemoveLayoutConversions : Pass<"tritongpu-remove-layout-conversions
   let options = [
     Option<"disableRematSplitting", "disable-remat-splitting",
            "bool", /*default*/"false",
-           "prevent backward rematerialization from duplicating operations">
+           "prevent rematerialization from splitting or duplicating "
+           "convert-layout work">
   ];
 }
 

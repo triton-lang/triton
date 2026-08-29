@@ -170,6 +170,7 @@ Value TargetInfo::getGlobalTimer(RewriterBase &rewriter, Location loc) const {
   Value timer;
   switch (getISAFamily()) {
   case ISAFamily::RDNA3:
+  case ISAFamily::RDNA4m:
   case ISAFamily::RDNA4:
   case ISAFamily::GFX1250: {
     Value msg = b.i32_val(/*MSG_RTN_GET_REALTIME=*/131);
@@ -246,7 +247,8 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
   bool addAliasGroup = localLoadOp && requiresAliasInfoForAsyncOps() &&
                        isSyncedViaAsyncWait(localLoadOp);
   return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal, {},
-                                 triton::CacheModifier::NONE, addAliasGroup);
+                                 triton::CacheModifier::NONE,
+                                 /*isVolatile=*/false, addAliasGroup);
 }
 
 Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,
@@ -747,6 +749,10 @@ bool TargetInfo::supportsMultiCTALaunch() const {
   return targetFeatures.supportsMultiCTALaunch();
 }
 
+unsigned TargetInfo::getMaxMulticastMaskPopcount() const {
+  return targetFeatures.getMaxMulticastMaskPopcount();
+}
+
 bool TargetInfo::supportsTDM() const { return targetFeatures.supportsTDM(); }
 
 bool TargetInfo::supportsClusterLoadBitWidth(int biwWidth) const {
@@ -793,6 +799,10 @@ bool TargetInfo::supportsHwScaledUpcast() const {
   return targetFeatures.supportsHwScaledUpcast();
 }
 
+bool TargetInfo::supportsHwScaledDowncast() const {
+  return targetFeatures.supportsHwScaledDowncast();
+}
+
 void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                                        Operation *llLoadOp) const {
   if (requiresAliasInfoForAsyncOps())
@@ -807,16 +817,15 @@ std::pair<mlir::triton::gpu::LocalMemOpTile, mlir::triton::gpu::LocalMemOpTile>
 TargetInfo::getSharedLdStTiles(int32_t vecBitwidth) const {
   switch (getISAFamily()) {
   case ISAFamily::CDNA3:
-  case ISAFamily::RDNA1:
   case ISAFamily::RDNA2:
   case ISAFamily::RDNA3:
+  case ISAFamily::RDNA4m:
     if (vecBitwidth == 128)
-      return {/*load tile*/ {{}, {0, 1, 4}}, /*store tile*/ {}};
+      return {/*load tile*/ {{}, {}, {1, 2, 20}}, /*store tile*/ {}};
     break;
   case ISAFamily::CDNA4:
-  case ISAFamily::GFX1250:
     if (vecBitwidth == 128)
-      return {/*load tile*/ {{}, {0, 1, 3, 4}}, /*store tile*/ {}};
+      return {/*load tile*/ {{}, {}, {1, 2, 12, 20}}, /*store tile*/ {}};
     break;
   default:
     break;
