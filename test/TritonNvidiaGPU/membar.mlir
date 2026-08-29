@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file --triton-nvidia-tma-lowering --convert-scf-to-cf --allocate-shared-memory -test-print-membar | FileCheck %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-tma-lowering -triton-nvidia-gpu-optimize-mbarrier-arrivals -triton-nvidia-gpu-optimize-mbarrier-arrivals --convert-scf-to-cf --allocate-shared-memory -test-print-membar | FileCheck %s --check-prefix=ARRIVAL
 
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
@@ -177,4 +178,151 @@ tt.func @wait_after_mma(
   tt.return
 }
 
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#store = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#load = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // Distributed publication leaves the cross-warp payload dependency pending.
+  // ARRIVAL-LABEL: @distributed_arrival_keeps_payload_hazard
+  // ARRIVAL: ttng.init_barrier {{.*}}, 4 :
+  // ARRIVAL: ttg.local_store
+  // ARRIVAL-NEXT: ttng.arrive_barrier {{.*}}, 4 {arrivalWarps = 4 : i32}
+  // ARRIVAL-NEXT: ttg.barrier local
+  // ARRIVAL-NEXT: %{{.*}} = ttg.local_load
+  tt.func @distributed_arrival_keeps_payload_hazard(%data: tensor<512xi32, #store>) -> tensor<512xi32, #load> {
+    %phase = arith.constant 0 : i32
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    %mem = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttg.barrier local
+    ttg.local_store %data, %mem : tensor<512xi32, #store> -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
+    ttng.arrive_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    %loaded = ttg.local_load %mem : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> tensor<512xi32, #load>
+    ttng.wait_barrier %bar, %phase : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return %loaded : tensor<512xi32, #load>
+  }
+
+  // Counts already divisible by the warp count need no scaling.
+  // ARRIVAL-LABEL: @distributed_arrival_divisible_count
+  // ARRIVAL: ttng.init_barrier {{.*}}, 8 :
+  // ARRIVAL: ttng.arrive_barrier {{.*}}, 8 {arrivalWarps = 4 : i32}
+  tt.func @distributed_arrival_divisible_count() {
+    %phase = arith.constant 0 : i32
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 8 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.arrive_barrier %bar, 8 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %phase : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // Barrier-state dependencies remain ordered between partial contributions.
+  // ARRIVAL-LABEL: @distributed_arrival_keeps_barrier_hazards
+  // ARRIVAL: ttng.init_barrier {{.*}}, 8 :
+  // ARRIVAL-NEXT: ttg.barrier local
+  // ARRIVAL-NEXT: ttng.arrive_barrier {{.*}}, 4 {arrivalWarps = 4 : i32}
+  // ARRIVAL-NEXT: ttg.barrier local
+  // ARRIVAL-NEXT: ttng.arrive_barrier {{.*}}, 4 {arrivalWarps = 4 : i32}
+  // ARRIVAL-NEXT: ttng.wait_barrier
+  tt.func @distributed_arrival_keeps_barrier_hazards() {
+    %phase = arith.constant 0 : i32
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 2 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.arrive_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.arrive_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %phase : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // A transaction-count arrival cannot share the software-only count scale.
+  // ARRIVAL-LABEL: @arrival_with_expect_tx
+  // ARRIVAL: ttng.init_barrier {{.*}}, 2 :
+  // ARRIVAL: ttng.barrier_expect
+  // ARRIVAL: ttng.arrive_barrier {{.*}}, 1 :
+  tt.func @arrival_with_expect_tx() {
+    %phase = arith.constant 0 : i32
+    %true = arith.constant true
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 2 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.barrier_expect %bar, 0, %true : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.arrive_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %phase : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // Descriptor joins are rejected as a whole, including their direct users.
+  // ARRIVAL-LABEL: @arrival_with_selected_barrier
+  // ARRIVAL: ttng.init_barrier {{.*}}, 1 :
+  // ARRIVAL: ttng.init_barrier {{.*}}, 1 :
+  // ARRIVAL: arith.select
+  // ARRIVAL: ttng.arrive_barrier {{.*}}, 1 :
+  tt.func @arrival_with_selected_barrier(%condition: i1) {
+    %phase = arith.constant 0 : i32
+    %first = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    %second = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %first, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %second, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    %selected = arith.select %condition, %first, %second : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.arrive_barrier %selected, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.wait_barrier %selected, %phase : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#per_cta = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#broadcast = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107"} {
+  // Each barrier receives one local, one routed, and two multicast contributions.
+  // ARRIVAL-LABEL: @distributed_arrival_cta_routes
+  // ARRIVAL: ttng.init_barrier {{.*}}, 16 :
+  // ARRIVAL: ttng.arrive_barrier {{.*}}, 4 {arrivalWarps = 4 : i32} :
+  // ARRIVAL: ttng.arrive_barrier {{.*}}, 4 {arrivalWarps = 4 : i32, fromCTA = 0 : i32} :
+  // ARRIVAL: ttng.arrive_barrier {{.*}}, 4 {arrivalWarps = 4 : i32, multicastCTA = 1 : i32} :
+  // ARRIVAL-NEXT: ttng.wait_barrier
+  tt.func @distributed_arrival_cta_routes() {
+    %phase = arith.constant 0 : i32
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.init_barrier %bar, 4 : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.arrive_barrier %bar, 1 : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.arrive_barrier %bar, 1 {fromCTA = 0 : i32} : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.arrive_barrier %bar, 1 {multicastCTA = 1 : i32} : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.wait_barrier %bar, %phase : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    tt.return
+  }
+
+  // Both CTAs contribute their warps to the same physical barrier.
+  // ARRIVAL-LABEL: @distributed_arrival_broadcast
+  // ARRIVAL: ttng.init_barrier {{.*}}, 4 :
+  // ARRIVAL: ttng.arrive_barrier {{.*}}, 4 {arrivalWarps = 4 : i32} :
+  // ARRIVAL-NEXT: ttng.wait_barrier
+  tt.func @distributed_arrival_broadcast() {
+    %phase = arith.constant 0 : i32
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.arrive_barrier %bar, 1 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.wait_barrier %bar, %phase : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    tt.return
+  }
+
+  // Scaling fits the logical count but overflows the physical count: 131072 * 4 * 2.
+  // ARRIVAL-LABEL: @distributed_arrival_physical_count_overflow
+  // ARRIVAL: ttng.init_barrier {{.*}}, 131072 :
+  // ARRIVAL: ttng.arrive_barrier {{.*}}, 131071 :
+  // ARRIVAL: ttng.arrive_barrier {{.*}}, 1 :
+  tt.func @distributed_arrival_physical_count_overflow() {
+    %phase = arith.constant 0 : i32
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.init_barrier %bar, 131072 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.arrive_barrier %bar, 131071 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.arrive_barrier %bar, 1 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.wait_barrier %bar, %phase : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    tt.return
+  }
 }

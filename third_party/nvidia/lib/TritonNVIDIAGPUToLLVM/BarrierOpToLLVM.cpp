@@ -85,14 +85,13 @@ struct FromCTALowering {
 
 FromCTALowering getFromCTALowering(Location loc,
                                    ConversionPatternRewriter &rewriter,
-                                   Value barrierPtr, uint32_t fromCTA,
+                                   Value barrierPtr, Value id, uint32_t fromCTA,
                                    bool supportsMBarrierMulticast) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   uint32_t broadcastMask =
       (triton::gpu::lookupNumCTAs(rewriter) - 1) & ~fromCTA;
   Type i32Ty = rewriter.getIntegerType(32);
 
-  Value id = getThreadId(rewriter, loc);
   Value pred =
       supportsMBarrierMulticast
           ? b.icmp_eq(id, b.i32_val(0))
@@ -277,7 +276,7 @@ struct BarrierExpectConversion
     Value multicastMask;
     if (std::optional<uint32_t> fromCTA = op.getFromCTA()) {
       FromCTALowering lowering =
-          getFromCTALowering(loc, rewriter, smemObj.getBase(), *fromCTA,
+          getFromCTALowering(loc, rewriter, smemObj.getBase(), id, *fromCTA,
                              supportsMBarrierMulticast);
       pred = lowering.pred;
       barrierPtr = lowering.barrierPtr;
@@ -417,7 +416,15 @@ struct ArriveBarrierOpConversion
 
     // The partition-relative thread ID lowers the same or marginally better
     // than an elect: LOP3.LUT vs. ELECT + ISETP.EQ.U32.AND.
-    Value id = getThreadId(rewriter, loc);
+    Value id;
+    unsigned count = op.getCount();
+    if (auto numWarps = op.getArrivalWarps()) {
+      LLVM::NVIDIA::createSyncWarp(loc, rewriter);
+      id = getLaneId(rewriter, loc);
+      count /= *numWarps;
+    } else {
+      id = getThreadId(rewriter, loc);
+    }
     Value pred = b.icmp_eq(id, b.i32_val(0));
 
     bool isCrossClusterBarrier =
@@ -427,7 +434,7 @@ struct ArriveBarrierOpConversion
     Value multicastMask;
     if (std::optional<uint32_t> fromCTA = op.getFromCTA()) {
       FromCTALowering lowering =
-          getFromCTALowering(loc, rewriter, smemObj.getBase(), *fromCTA,
+          getFromCTALowering(loc, rewriter, smemObj.getBase(), id, *fromCTA,
                              supportsMBarrierMulticast && !op.isMulticast());
       pred = lowering.pred;
       barrierPtr = lowering.barrierPtr;
@@ -443,8 +450,8 @@ struct ArriveBarrierOpConversion
     if (op.isMulticast() || multicastMask)
       ptxAsm << ".multicast::cluster::32b";
     ptxAsm << ".b64 _, [$1]";
-    if (op.getCount() > 1) {
-      ptxAsm << ", " << op.getCount();
+    if (count > 1) {
+      ptxAsm << ", " << count;
     }
     if (op.isMulticast() || multicastMask)
       ptxAsm << ", $2";
