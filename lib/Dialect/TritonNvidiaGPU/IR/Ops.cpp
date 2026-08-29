@@ -466,6 +466,12 @@ static LogicalResult verifyBarrierCGALayout(Operation *op, Value barrier,
 LogicalResult ArriveBarrierOp::verify() {
   if (getCount() < 1)
     return emitOpError("count must be greater than or equal to 1");
+  if (getPerWarp()) {
+    int numWarps = gpu::lookupNumWarps(*this);
+    if (numWarps <= 1 || getCount() % numWarps != 0)
+      return emitOpError("per_warp requires multiple warps and count divisible "
+                         "by the warp count");
+  }
   if (isMulticast()) {
     int numCTAs = triton::gpu::lookupNumCTAs(getOperation());
     if (numCTAs <= 1)

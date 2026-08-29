@@ -126,6 +126,8 @@ namespace {
 enum class ThreadSyncKind {
   Ordinary,
   Publication,
+  // Each warp publishes its completed effects without a CTA rendezvous.
+  WarpPublication,
   // Completions only establish completion or acquire state; they do
   // not access payload or consume another completion's unpublished effects.
   Completion,
@@ -154,10 +156,9 @@ struct ThreadSyncInfo {
            kind == ThreadSyncKind::SharedCompletionNeedsSync;
   }
 
-  bool isCompletionOnly() const {
-    return kind == ThreadSyncKind::Completion ||
-           kind == ThreadSyncKind::CompletionNeedsSync ||
-           kind == ThreadSyncKind::SharedCompletionNeedsSync;
+  bool hasThreadDemand() const {
+    return kind == ThreadSyncKind::Ordinary ||
+           kind == ThreadSyncKind::Publication;
   }
 };
 
@@ -185,6 +186,9 @@ ThreadSyncInfo getThreadSyncInfo(Operation *op) {
     // SM90.
     return {ThreadSyncKind::Ordinary, ThreadSyncIssuer::Warp0Leader};
   }
+  if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op);
+      arrive && arrive.getPerWarp())
+    return {ThreadSyncKind::WarpPublication};
   if (isa<ttng::ArriveBarrierOp, ttng::BarrierExpectOp>(op)) {
     auto fromCTA = isa<ttng::ArriveBarrierOp>(op)
                        ? cast<ttng::ArriveBarrierOp>(op).getFromCTA()
@@ -477,7 +481,7 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
   BlockInfo effects;
   if (hasEffects) {
     effects.threadEffects.insert(op);
-    if (!sync.isCompletionOnly())
+    if (sync.hasThreadDemand())
       effects.threadDemands.insert(op);
   }
   if (isReturn && isa<FunctionOpInterface>(op->getParentOp()))

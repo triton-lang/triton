@@ -179,6 +179,8 @@ static BlockInfo getTMemAccesses(Operation *op, BufferRegionAnalysis &regions) {
 enum class TMemBoundary { None, Wait, Publication };
 
 static TMemBoundary getTMemBoundary(Operation *op) {
+  if (auto arrive = dyn_cast<ArriveBarrierOp>(op))
+    return arrive.getPerWarp() ? TMemBoundary::Wait : TMemBoundary::Publication;
   // An acquire does not publish earlier TMEM accesses. Keep them pending.
   if (isa<WaitBarrierOp>(op))
     return TMemBoundary::None;
