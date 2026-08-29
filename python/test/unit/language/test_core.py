@@ -2084,30 +2084,46 @@ def test_tensor_atomic_cas_multicta_result(size, device):
 @pytest.mark.parametrize("sem", [None, "acquire", "release", "acq_rel", "relaxed"])
 @pytest.mark.parametrize("dtype_str", ['float16', 'float32', 'uint32', 'int32', 'uint64', 'int64', 'float64'])
 @pytest.mark.parametrize("mask_type", ['const', 'scalar', 'dyn'])
-def test_atomic_cas_mask_false_is_noop(sem, dtype_str, mask_type, device):
+@pytest.mark.parametrize("scalar_offset", [False, True], ids=["block_offset", "scalar_offset"])
+def test_atomic_cas_mask_false_is_noop(sem, dtype_str, mask_type, scalar_offset, device):
 
     @triton.jit
-    def masked_noop_const(Lock, sem: tl.constexpr, triton_dtype: tl.constexpr):
+    def masked_noop_const(Lock, sem: tl.constexpr, triton_dtype: tl.constexpr, scalar_offset: tl.constexpr):
         offsets = tl.arange(0, 1)
         num0 = tl.full((1, ), 2, dtype=triton_dtype)
         num1 = tl.full((1, ), 1, dtype=triton_dtype)
         mask = tl.full((1, ), False, dtype=tl.int1)
+        if scalar_offset:
+            offsets = offsets.item()
+            num0 = num0.item()
+            num1 = num1.item()
+            mask = mask.item()
         tl.atomic_cas(Lock + offsets, num0, num1, mask=mask, sem=sem)
 
     @triton.jit
-    def masked_noop_scalar(Lock, sem: tl.constexpr, triton_dtype: tl.constexpr):
+    def masked_noop_scalar(Lock, sem: tl.constexpr, triton_dtype: tl.constexpr, scalar_offset: tl.constexpr):
         offsets = tl.arange(0, 1)
         num0 = tl.full((1, ), 2, dtype=triton_dtype)
         num1 = tl.full((1, ), 1, dtype=triton_dtype)
         mask = False
+        if scalar_offset:
+            offsets = offsets.item()
+            num0 = num0.item()
+            num1 = num1.item()
+            mask = mask.item()
         tl.atomic_cas(Lock + offsets, num0, num1, mask=mask, sem=sem)
 
     @triton.jit
-    def masked_noop_dyn(Lock, sem: tl.constexpr, triton_dtype: tl.constexpr):
+    def masked_noop_dyn(Lock, sem: tl.constexpr, triton_dtype: tl.constexpr, scalar_offset: tl.constexpr):
         offsets = tl.arange(0, 1)
         num0 = tl.full((1, ), 2, dtype=triton_dtype)
         num1 = tl.full((1, ), 1, dtype=triton_dtype)
         mask = offsets < 0
+        if scalar_offset:
+            offsets = offsets.item()
+            num0 = num0.item()
+            num1 = num1.item()
+            mask = mask.item()
         tl.atomic_cas(Lock + offsets, num0, num1, mask=mask, sem=sem)
 
     torch_dtype = getattr(torch, dtype_str)
@@ -2116,11 +2132,11 @@ def test_atomic_cas_mask_false_is_noop(sem, dtype_str, mask_type, device):
     Lock = torch.full((1, ), 2, device=device, dtype=torch_dtype)
 
     if mask_type == 'const':
-        masked_noop_const[(1, )](Lock, sem=sem, triton_dtype=tl_dtype)
+        masked_noop_const[(1, )](Lock, sem=sem, triton_dtype=tl_dtype, scalar_offset=scalar_offset)
     elif mask_type == 'scalar':
-        masked_noop_scalar[(1, )](Lock, sem=sem, triton_dtype=tl_dtype)
+        masked_noop_scalar[(1, )](Lock, sem=sem, triton_dtype=tl_dtype, scalar_offset=scalar_offset)
     elif mask_type == 'dyn':
-        masked_noop_dyn[(1, )](Lock, sem=sem, triton_dtype=tl_dtype)
+        masked_noop_dyn[(1, )](Lock, sem=sem, triton_dtype=tl_dtype, scalar_offset=scalar_offset)
     else:
         raise ValueError(f"Invalid mask_type: {mask_type}")
     assert Lock[0] == 2
