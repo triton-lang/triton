@@ -1403,7 +1403,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doFlush() {
   // Flush kernel dispatch records first so PC samples can be attached to the
   // Proton scopes that launched each dispatch.
   profiler.correlation.flush(
-      /*maxRetries=*/100, /*sleepUs=*/10,
+      /*maxRetries=*/250, /*sleepUs=*/10,
       [&state]() { rocprofiler::flushBuffer<true>(state.kernelBuffer); });
   profiler.pendingGraphPool->flushAll();
   if (pcSamplingModeEnabled) {
