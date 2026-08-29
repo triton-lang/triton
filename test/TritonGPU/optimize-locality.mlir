@@ -4,8 +4,8 @@
 // CHECK: %[[INIT_ARG:.*]] = arith.constant dense<0.000000e+00>
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[INIT_ARG]]) -> {{.*}}
 // CHECK: %[[LOAD:.*]] = tt.load
-// CHECK: %[[FACTORED:.*]] = tt.reshape %[[LOAD]] : {{.*}} -> tensor<{{32x2x32x2xf32.*}}>
-// CHECK-NEXT: %[[TRANSPOSED:.*]] = tt.trans %[[FACTORED]] {order = array<i32: 0, 2, 1, 3>}
+// CHECK: %[[FACTORED:.*]] = tt.reshape %[[LOAD]] : {{.*}} -> tensor<{{32x1x2x32x2xf32.*}}>
+// CHECK-NEXT: %[[TRANSPOSED:.*]] = tt.trans %[[FACTORED]] {order = array<i32: 0, 1, 3, 2, 4>}
 // CHECK-NEXT: tt.reshape %[[TRANSPOSED]] efficient_layout : {{.*}} -> tensor<{{32x32x4xf32.*}}>
 // CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.addf
@@ -109,8 +109,8 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // CHECK-LABEL: @row_major_register_grouping
 // CHECK: %[[LOAD:.*]] = tt.load
-// CHECK-NEXT: %[[FACTORED:.*]] = tt.reshape %[[LOAD]] : {{.*}} -> tensor<{{8x2x32x4xf32.*}}>
-// CHECK-NEXT: %[[TRANSPOSED:.*]] = tt.trans %[[FACTORED]] {order = array<i32: 0, 2, 1, 3>}
+// CHECK-NEXT: %[[FACTORED:.*]] = tt.reshape %[[LOAD]] : {{.*}} -> tensor<{{8x1x2x32x4xf32.*}}>
+// CHECK-NEXT: %[[TRANSPOSED:.*]] = tt.trans %[[FACTORED]] {order = array<i32: 0, 1, 3, 2, 4>}
 // CHECK-NEXT: %[[RESHAPED:.*]] = tt.reshape %[[TRANSPOSED]] efficient_layout : {{.*}} -> tensor<{{8x32x8xf32.*}}>
 // CHECK: %[[REDUCED:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: scf.yield
@@ -242,8 +242,8 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // CHECK-LABEL: @preserve_rows_when_reordering_registers
 // CHECK: %[[LOAD:.*]] = tt.load
-// CHECK-NEXT: %[[FACTORED:.*]] = tt.reshape %[[LOAD]] : {{.*}} -> tensor<{{256x2x2x1xf32.*}}>
-// CHECK-NEXT: %[[TRANSPOSED:.*]] = tt.trans %[[FACTORED]] {order = array<i32: 0, 2, 1, 3>}
+// CHECK-NEXT: %[[FACTORED:.*]] = tt.reshape %[[LOAD]] : {{.*}} -> tensor<{{256x1x2x2x1xf32.*}}>
+// CHECK-NEXT: %[[TRANSPOSED:.*]] = tt.trans %[[FACTORED]] {order = array<i32: 0, 1, 3, 2, 4>}
 // CHECK-NEXT: %[[RESHAPED:.*]] = tt.reshape %[[TRANSPOSED]] efficient_layout : {{.*}} -> tensor<{{256x2x2xf32.*}}>
 // CHECK-NEXT: %[[REORDERED:.*]] = ttg.convert_layout %[[RESHAPED]] : tensor<{{256x2x2xf32.*}}> -> tensor<{{256x2x2xf32.*}}>
 // CHECK-NEXT: "tt.reduce"(%[[REORDERED]]) <{axis = 2 : i32}>
@@ -403,7 +403,7 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // CHECK: %[[INIT_ARG:.*]] = arith.constant dense<0xFF800000>
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[INIT_ARG]]) -> {{.*}}
 // CHECK: %[[LOAD:.*]] = tt.load
-// CHECK: tt.reshape %[[LOAD]] : {{.*}} -> tensor<{{32x2x32x2xf32.*}}>
+// CHECK: tt.reshape %[[LOAD]] : {{.*}} -> tensor<{{32x1x2x32x2xf32.*}}>
 // CHECK: tt.reshape {{%.*}} efficient_layout : {{.*}} -> tensor<{{32x32x4xf32.*}}>
 // CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.maximumf
@@ -511,7 +511,7 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // CHECK: %[[CST:.*]] = arith.constant dense<0x7F800000>
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[CST]]) -> {{.*}}
 // CHECK: %[[LOAD:.*]] = tt.load
-// CHECK: tt.reshape %[[LOAD]] : {{.*}} -> tensor<{{32x2x32x2xf32.*}}>
+// CHECK: tt.reshape %[[LOAD]] : {{.*}} -> tensor<{{32x1x2x32x2xf32.*}}>
 // CHECK: tt.reshape {{%.*}} efficient_layout : {{.*}} -> tensor<{{32x32x4xf32.*}}>
 // CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.minimumf
@@ -619,7 +619,7 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // CHECK: %[[CST:.*]] = arith.constant dense<1.000000e+00>
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[CST]]) -> {{.*}}
 // CHECK: %[[LOAD:.*]] = tt.load
-// CHECK: tt.reshape %[[LOAD]] : {{.*}} -> tensor<{{32x2x32x2xf32.*}}>
+// CHECK: tt.reshape %[[LOAD]] : {{.*}} -> tensor<{{32x1x2x32x2xf32.*}}>
 // CHECK: tt.reshape {{%.*}} efficient_layout : {{.*}} -> tensor<{{32x32x4xf32.*}}>
 // CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.mulf
@@ -731,7 +731,7 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[INIT_ARG]]) -> {{.*}}
 // CHECK: %[[LOAD:.*]] = tt.load
 // CHECK: %[[MULF:.*]] = arith.mulf %[[LOAD]], %[[LOAD]]
-// CHECK: tt.reshape %[[MULF]] : {{.*}} -> tensor<{{32x2x32x2xf32.*}}>
+// CHECK: tt.reshape %[[MULF]] : {{.*}} -> tensor<{{32x1x2x32x2xf32.*}}>
 // CHECK: tt.reshape {{%.*}} efficient_layout : {{.*}} -> tensor<{{32x32x4xf32.*}}>
 // CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.maximumf
@@ -1392,5 +1392,141 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 2 : i32, "ttg.num-
     }
     tt.store %output, %result : tensor<32x!tt.ptr<f32>, #slice>
     tt.return
+  }
+}
+
+// -----
+
+// Reduce along a non-innermost axis
+// CHECK-LABEL: @reduce_axis_zero
+// CHECK: %[[INIT_ARG:.*]] = arith.constant dense<0.000000e+00> : tensor<4x8xf32
+// CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[INIT_ARG]]) -> {{.*}}
+// CHECK: tt.reshape {{.*}} -> tensor<{{1x1x4x2x8xf32.*}}>
+// CHECK: tt.trans {{.*}} {order = array<i32: 0, 2, 4, 1, 3>}
+// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
+// CHECK: arith.addf %[[FOR_ARG]], %[[REDUCE]]
+// CHECK: %[[FINAL_REDUCE:.*]] = "tt.reduce"(%[[LOOP_OUTPUT]]) <{axis = 0 : i32}>
+// CHECK: %[[CVT_OUTPUT:.*]] = ttg.convert_layout %[[FINAL_REDUCE]]
+// CHECK: arith.addf %[[CVT_OUTPUT]], {{.*}}
+#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [2, 2], warpsPerCTA = [2, 2], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 0, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 4 : i32} {
+  tt.func public @reduce_axis_zero(%values: tensor<8x8x!tt.ptr<f32>, #blocked>, %output: tensor<8x!tt.ptr<f32>, #slice>, %count: i32) {
+    %zero = arith.constant dense<0.000000e+00> : tensor<8xf32, #slice>
+    %start = arith.constant 0 : i32
+    %step = arith.constant 1 : i32
+    %result = scf.for %index = %start to %count step %step iter_args(%accumulator = %zero) -> (tensor<8xf32, #slice>) : i32 {
+      %v = tt.load %values : tensor<8x8x!tt.ptr<f32>, #blocked>
+      %reduced = "tt.reduce"(%v) <{axis = 0 : i32}> ({
+      ^bb0(%a: f32, %b: f32):
+        %sum = arith.addf %a, %b : f32
+        tt.reduce.return %sum : f32
+      }) : (tensor<8x8xf32, #blocked>) -> tensor<8xf32, #slice>
+      %updated = arith.addf %accumulator, %reduced : tensor<8xf32, #slice>
+      scf.yield %updated : tensor<8xf32, #slice>
+    }
+    tt.store %output, %result : tensor<8x!tt.ptr<f32>, #slice>
+    tt.return
+  }
+}
+
+// -----
+
+// Rank-3 reduce along the middle axis
+// CHECK-LABEL: @reduce_middle_axis
+// CHECK: %[[INIT_ARG:.*]] = arith.constant dense<0.000000e+00> : tensor<2x4x2xf32
+// CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[INIT_ARG]]) -> {{.*}}
+// CHECK: tt.reshape {{.*}} -> tensor<{{2x1x2x4x2x2xf32.*}}>
+// CHECK: tt.trans {{.*}} {order = array<i32: 0, 1, 3, 5, 2, 4>}
+// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 3 : i32}>
+// CHECK: arith.addf %[[FOR_ARG]], %[[REDUCE]]
+// CHECK: %[[FINAL_REDUCE:.*]] = "tt.reduce"(%[[LOOP_OUTPUT]]) <{axis = 1 : i32}>
+// CHECK: %[[CVT_OUTPUT:.*]] = ttg.convert_layout %[[FINAL_REDUCE]]
+// CHECK: arith.addf %[[CVT_OUTPUT]], {{.*}}
+#blocked = #ttg.blocked<{sizePerThread = [1, 2, 1], threadsPerWarp = [1, 4, 1], warpsPerCTA = [2, 1, 2], order = [2, 1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 4 : i32} {
+  tt.func public @reduce_middle_axis(%values: tensor<2x16x2x!tt.ptr<f32>, #blocked>, %output: tensor<2x2x!tt.ptr<f32>, #slice>, %count: i32) {
+    %zero = arith.constant dense<0.000000e+00> : tensor<2x2xf32, #slice>
+    %start = arith.constant 0 : i32
+    %step = arith.constant 1 : i32
+    %result = scf.for %index = %start to %count step %step iter_args(%accumulator = %zero) -> (tensor<2x2xf32, #slice>) : i32 {
+      %v = tt.load %values : tensor<2x16x2x!tt.ptr<f32>, #blocked>
+      %reduced = "tt.reduce"(%v) <{axis = 1 : i32}> ({
+      ^bb0(%a: f32, %b: f32):
+        %sum = arith.addf %a, %b : f32
+        tt.reduce.return %sum : f32
+      }) : (tensor<2x16x2xf32, #blocked>) -> tensor<2x2xf32, #slice>
+      %updated = arith.addf %accumulator, %reduced : tensor<2x2xf32, #slice>
+      scf.yield %updated : tensor<2x2xf32, #slice>
+    }
+    tt.store %output, %result : tensor<2x2x!tt.ptr<f32>, #slice>
+    tt.return
+  }
+}
+
+// -----
+
+// Rank-1 reduce accumulated into a scalar
+// CHECK-LABEL: @rank_one_reduce
+// CHECK: %[[INIT_ARG:.*]] = arith.constant dense<0.000000e+00> : tensor<4xf32
+// CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[INIT_ARG]]) -> {{.*}}
+// CHECK: tt.reshape {{.*}} -> tensor<{{1x1x4x2xf32.*}}>
+// CHECK: tt.trans {{.*}} {order = array<i32: 0, 2, 1, 3>}
+// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 1 : i32}>
+// CHECK: arith.addf %[[FOR_ARG]], %[[REDUCE]]
+// CHECK: %[[FINAL_REDUCE:.*]] = "tt.reduce"(%[[LOOP_OUTPUT]]) <{axis = 0 : i32}>
+// CHECK: %[[FINAL:.*]] = arith.addf %[[FINAL_REDUCE]], {{.*}} : f32
+// CHECK: tt.return %[[FINAL]] : f32
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [2], warpsPerCTA = [2], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 2 : i32} {
+  tt.func public @rank_one_reduce(%values: tensor<8x!tt.ptr<f32>, #blocked>, %count: i32) -> f32 {
+    %zero = arith.constant 0.0 : f32
+    %start = arith.constant 0 : i32
+    %step = arith.constant 1 : i32
+    %result = scf.for %index = %start to %count step %step iter_args(%accumulator = %zero) -> (f32) : i32 {
+      %v = tt.load %values : tensor<8x!tt.ptr<f32>, #blocked>
+      %reduced = "tt.reduce"(%v) <{axis = 0 : i32}> ({
+      ^bb0(%a: f32, %b: f32):
+        %sum = arith.addf %a, %b : f32
+        tt.reduce.return %sum : f32
+      }) : (tensor<8xf32, #blocked>) -> f32
+      %updated = arith.addf %accumulator, %reduced : f32
+      scf.yield %updated : f32
+    }
+    tt.return %result : f32
+  }
+}
+
+// -----
+
+// Rank-1 reduce with the CGA split on the reduced axis and non-trivial register wraparound
+// CHECK-LABEL: @rank_one_reduce_cta_split
+// CHECK: %[[INIT_ARG:.*]] = arith.constant dense<0.000000e+00> : tensor<8xf32
+// CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[INIT_ARG]]) -> {{.*}}
+// CHECK: tt.reshape {{.*}} -> tensor<{{2x2x4x2xf32.*}}>
+// CHECK: tt.trans {{.*}} {order = array<i32: 0, 2, 1, 3>}
+// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 1 : i32}>
+// CHECK: arith.addf %[[FOR_ARG]], %[[REDUCE]]
+// CHECK: %[[FINAL_REDUCE:.*]] = "tt.reduce"(%[[LOOP_OUTPUT]]) <{axis = 0 : i32}>
+// CHECK: %[[FINAL:.*]] = arith.addf %[[FINAL_REDUCE]], {{.*}} : f32
+// CHECK: tt.return %[[FINAL]] : f32
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [2], warpsPerCTA = [2], order = [0], CGALayout = [[1]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 2 : i32} {
+  tt.func public @rank_one_reduce_cta_split(%values: tensor<32x!tt.ptr<f32>, #blocked>, %count: i32) -> f32 {
+    %zero = arith.constant 0.0 : f32
+    %start = arith.constant 0 : i32
+    %step = arith.constant 1 : i32
+    %result = scf.for %index = %start to %count step %step iter_args(%accumulator = %zero) -> (f32) : i32 {
+      %v = tt.load %values : tensor<32x!tt.ptr<f32>, #blocked>
+      %reduced = "tt.reduce"(%v) <{axis = 0 : i32}> ({
+      ^bb0(%a: f32, %b: f32):
+        %sum = arith.addf %a, %b : f32
+        tt.reduce.return %sum : f32
+      }) : (tensor<32xf32, #blocked>) -> f32
+      %updated = arith.addf %accumulator, %reduced : f32
+      scf.yield %updated : f32
+    }
+    tt.return %result : f32
   }
 }

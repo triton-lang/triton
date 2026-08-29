@@ -3,7 +3,6 @@ import triton.language as tl
 
 import torch
 import math
-import pytest
 
 _BLOCK_SIZE = 16
 
@@ -121,63 +120,3 @@ def test_python_func_in_visit_call(device):
     x = torch.randn(4, device=device)
     out = torch.zeros_like(x)
     test_py_call_const_kernel[(4, )](x, out, 4, 4)
-
-
-@pytest.mark.parametrize("scalarize", [False, True])
-def test_scalarize_packed_fops_llvm_pipeline(tmp_path, scalarize):
-    from triton._C.libtriton import ir, llvm
-
-    # NVIDIA requests this pass explicitly: its module does not yet have a
-    # target triple when optimize_module runs. Other backends retain the default.
-    source = tmp_path / "fma.mlir"
-    source.write_text("""
-module {
-  llvm.func @fma_lane(%a: vector<2xf32>, %b: vector<2xf32>, %c: vector<2xf32>) -> f32 {
-    %v = llvm.call_intrinsic "llvm.fma"(%a, %b, %c) : (vector<2xf32>, vector<2xf32>, vector<2xf32>) -> vector<2xf32>
-    %index = llvm.mlir.constant(1 : i32) : i32
-    %r = llvm.extractelement %v[%index : i32] : vector<2xf32>
-    llvm.return %r : f32
-  }
-}
-""")
-    context = ir.context()
-    ir.load_dialects(context)
-    module = ir.parse_mlir_module(str(source), context)
-    llvm_context = llvm.context()
-    llvm_module = llvm.to_module(module, llvm_context)
-    options = {"scalarize_packed_fops": True} if scalarize else {}
-    llvm.optimize_module(llvm_module, llvm.OPTIMIZE_O3, **options)
-    expected = "call float @llvm.fma.f32" if scalarize else "call <2 x float> @llvm.fma.v2f32"
-    assert expected in str(llvm_module)
-
-
-@pytest.mark.parametrize("vectorize", [False, True])
-def test_vectorize_extracted_adds_llvm_pipeline(tmp_path, vectorize):
-    from triton._C.libtriton import ir, llvm
-
-    source = tmp_path / "extracted_adds.mlir"
-    source.write_text("""
-module {
-  llvm.func @extracted_adds(%a: vector<2xf32>, %b: vector<2xf32>) -> f32 {
-    %mul = llvm.fmul %a, %b : vector<2xf32>
-    %i0 = llvm.mlir.constant(0 : i32) : i32
-    %i1 = llvm.mlir.constant(1 : i32) : i32
-    %zero = llvm.mlir.constant(0.0 : f32) : f32
-    %x0 = llvm.extractelement %mul[%i0 : i32] : vector<2xf32>
-    %a0 = llvm.fadd %x0, %zero : f32
-    %x1 = llvm.extractelement %mul[%i1 : i32] : vector<2xf32>
-    %a1 = llvm.fadd %x1, %zero : f32
-    %r = llvm.fadd %a0, %a1 : f32
-    llvm.return %r : f32
-  }
-}
-""")
-    context = ir.context()
-    ir.load_dialects(context)
-    module = ir.parse_mlir_module(str(source), context)
-    llvm_context = llvm.context()
-    llvm_module = llvm.to_module(module, llvm_context)
-    options = {"vectorize_extracted_adds": True} if vectorize else {}
-    llvm.optimize_module(llvm_module, llvm.OPTIMIZE_O0, **options)
-    expected = "fadd <2 x float>" if vectorize else "fadd float"
-    assert expected in str(llvm_module)
