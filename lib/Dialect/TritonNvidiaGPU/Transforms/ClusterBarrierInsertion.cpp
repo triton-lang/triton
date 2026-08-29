@@ -310,7 +310,7 @@ private:
     if (auto barrier = dyn_cast<ttng::ClusterBarrierOp>(op))
       stages.beforeMemoryEffects = !barrier.getRelaxed();
     // Distributed scratch synchronizes between its write and read phases.
-    stages.betweenMemoryEffects = isDistributedMultiCTAOp(op, /*isRead=*/true);
+    stages.betweenMemoryEffects = hasCrossCTAScratch(op);
     return stages;
   }
 

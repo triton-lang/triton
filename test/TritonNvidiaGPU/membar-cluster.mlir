@@ -417,6 +417,28 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %old = ttg.local_atomic_scatter_rmw add, %second[%indices], %values {axis = 1 : i32} : (!ttg.memdesc<2x32xi32, #axisShared, #smem, mutable>, tensor<2x32xi32, #axisBlocked>, tensor<2x32xi32, #axisBlocked>) -> tensor<2x32xi32, #axisBlocked>
     tt.return %old : tensor<2x32xi32, #axisBlocked>
   }
+
+  // The result uses CTA-local scratch. Remote destination writes must finish
+  // before the next allocation reuses their storage.
+  // CHECK-LABEL: @cluster_barrier_after_sharded_axis_atomic
+  // CHECK: ttg.local_alloc{{.*}}allocation.offset = [[ATOMIC_REUSE_OFFSET:[0-9]+]] : i32
+  // CHECK: ttg.local_atomic_scatter_rmw{{.*}}allocation.size = {{[1-9][0-9]*}}
+  // CHECK: ttg.local_dealloc
+  // CHECK-NEXT: ttng.cluster_barrier
+  // CHECK-NEXT: ttg.local_alloc{{.*}}allocation.offset = [[ATOMIC_REUSE_OFFSET]] : i32
+  tt.func @cluster_barrier_after_sharded_axis_atomic(
+      %indices: tensor<2x32xi32, #axisBlocked>,
+      %initial: tensor<2x32xi32, #axisBlocked>,
+      %values: tensor<2x32xi32, #axisBlocked>,
+      %replacement: tensor<2x32xi32, #axisBlocked>) -> (tensor<2x32xi32, #axisBlocked>, tensor<2x32xi32, #axisBlocked>) {
+    %first = ttg.local_alloc %initial : (tensor<2x32xi32, #axisBlocked>) -> !ttg.memdesc<2x32xi32, #axisShared, #smem, mutable>
+    ttng.cluster_barrier
+    %old = ttg.local_atomic_scatter_rmw add, %first[%indices], %values {axis = 1 : i32} : (!ttg.memdesc<2x32xi32, #axisShared, #smem, mutable>, tensor<2x32xi32, #axisBlocked>, tensor<2x32xi32, #axisBlocked>) -> tensor<2x32xi32, #axisBlocked>
+    ttg.local_dealloc %first : !ttg.memdesc<2x32xi32, #axisShared, #smem, mutable>
+    %reuse = ttg.local_alloc %replacement : (tensor<2x32xi32, #axisBlocked>) -> !ttg.memdesc<2x32xi32, #axisShared, #smem, mutable>
+    %loaded = ttg.local_load %reuse : !ttg.memdesc<2x32xi32, #axisShared, #smem, mutable> -> tensor<2x32xi32, #axisBlocked>
+    tt.return %old, %loaded : tensor<2x32xi32, #axisBlocked>, tensor<2x32xi32, #axisBlocked>
+  }
 }
 
 // -----
