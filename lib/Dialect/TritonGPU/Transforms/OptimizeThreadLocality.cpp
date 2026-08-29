@@ -242,7 +242,7 @@ namespace {
 // A reduction accumulated into an scf.for iter_arg:
 //
 //   %res = scf.for ... iter_args(.., %acc = %init, ..)  (forOp)
-//     %red = tt.reduce %src {axis = rank-1}             (reduce)
+//     %red = tt.reduce %src {axis}                      (reduce)
 //              [%a, %b] {return ⊕(%a, %b);}             (combiner)
 //     %upd = ⊕(%acc, %red)                              (update)
 //     scf.yield .., %upd, ..                            (slot argIdx)
@@ -277,15 +277,9 @@ std::optional<AccumulatedReduce> matchAccumulatedReduce(scf::ForOp forOp,
       !arith::getNeutralElement(combiner))
     return std::nullopt;
   auto srcType = cast<RankedTensorType>(reduce.getOperands()[0].getType());
-  auto rank = srcType.getShape().size();
   unsigned axis = reduce.getAxis();
   // TODO: relax this restriction
-  if (!(isa<triton::gpu::BlockedEncodingAttr>(srcType.getEncoding()) &&
-        rank > 1))
-    return std::nullopt;
-  // The code currently assumes that the reduction is happening on the most
-  // inner dim.
-  if (axis != rank - 1)
+  if (!isa<triton::gpu::BlockedEncodingAttr>(srcType.getEncoding()))
     return std::nullopt;
   // only profitable when there are inter-thread/warp/cta communication that
   // can be deferred after the loop.
@@ -361,12 +355,15 @@ class TritonGPUOptimizeThreadLocalityPass
         // create post loop reduction on the original reduce axis
         auto newReduce2 = createPostLoopReduce(builder, newLoop, reduce);
         // add convert_layout to get back to original layout, the result layout
-        // should now match the layout of the old accumulator (%init)
+        // should now match the layout of the old accumulator (%init); a
+        // rank-one reduce yields a scalar, which needs no conversion
         Type destType = newLoop.getResult(argIdx).getType();
-        auto cvtLayout = createConvertLayout(builder, destType, newReduce2);
+        Operation *newResult = newReduce2;
+        if (isa<RankedTensorType>(destType))
+          newResult = createConvertLayout(builder, destType, newReduce2);
         // incorporate the original accumulator value into the final result
         auto finalOp = incorporateOriginalAccumulatorValue(builder, oldUpdate,
-                                                           cvtLayout, oldAccum);
+                                                           newResult, oldAccum);
         // Replace the old accumulator's uses with the final result
         newLoop.getResult(argIdx).replaceAllUsesWith(finalOp->getResult(0));
 
@@ -382,12 +379,12 @@ class TritonGPUOptimizeThreadLocalityPass
 private:
   Operation *incorporateOriginalAccumulatorValue(OpBuilder &builder,
                                                  Operation *oldUpdate,
-                                                 Operation *cvtLayout,
+                                                 Operation *newResult,
                                                  Value oldAccum) const {
-    builder.setInsertionPointAfter(cvtLayout);
+    builder.setInsertionPointAfter(newResult);
     IRMapping mapping;
     mapping.map(oldUpdate->getOperand(0), oldAccum);
-    mapping.map(oldUpdate->getOperand(1), cvtLayout->getResult(0));
+    mapping.map(oldUpdate->getOperand(1), newResult->getResult(0));
     auto finalOp = cloneWithInferType(builder, &(*oldUpdate), mapping);
     return finalOp;
   }
@@ -429,10 +426,9 @@ private:
     auto blockArgNum = loop.getBody()->getNumArguments() - 1;
     auto newArg = loop.getBody()->getArgument(blockArgNum);
     builder.setInsertionPointAfter(newReduce);
-    IRMapping mapping;
-    mapping.map(oldUpdate->getOperand(0), newArg);
-    mapping.map(oldUpdate->getOperand(1), newReduce->getResult(0));
-    auto newUpdate = cloneWithInferType(builder, oldUpdate, mapping);
+    Operation *newUpdate = builder.clone(*oldUpdate);
+    newUpdate->setOperands({newArg, newReduce->getResult(0)});
+    newUpdate->getResult(0).setType(newArg.getType());
     return newUpdate;
   }
 
@@ -447,16 +443,25 @@ private:
     int64_t sizePerThread = std::min<int64_t>(
         blocked.getSizePerThread()[reduce.getAxis()], elemsPerThread);
 
-    // Group register-owned elements without permuting non-reduction axes:
-    // [..., N] -> [..., R, H, S] -> [..., H, R, S] -> [..., H, R * S].
+    // [.., N, ..] -> [.., ctaSplit, R, H, S, ..] -> [.., ctaSplit, H, .., R, S]
+    //   -> [.., ctaSplit * H, .., R * S].
+    unsigned axis = reduce.getAxis();
+    int64_t ctaSplit =
+        std::min<int64_t>(getCTASplitNum(blocked)[axis], dstShape[axis]);
+    int64_t R = elemsPerThread / sizePerThread; // register wraparounds
+    int64_t H = dstShape[axis] / ctaSplit;      // warps & threads
     SmallVector<int64_t> factorShape(srcType.getShape().begin(),
                                      srcType.getShape().end());
-    factorShape.back() = elemsPerThread / sizePerThread;
-    factorShape.push_back(dstShape[rank - 1]);
-    factorShape.push_back(sizePerThread);
-    SmallVector<int32_t> transposeOrder(rank + 2);
+    // [.., ctaSplit, R, H, S, ..]
+    factorShape[axis] = ctaSplit;
+    factorShape.insert(factorShape.begin() + axis + 1, {R, H, sizePerThread});
+    SmallVector<int32_t> transposeOrder(rank + 3);
     std::iota(transposeOrder.begin(), transposeOrder.end(), 0);
-    std::swap(transposeOrder[rank - 1], transposeOrder[rank]);
+    // [.., ctaSplit, (R, H), S, ..] -> [.., ctaSplit, (H, R), S, ..]
+    std::swap(transposeOrder[axis + 1], transposeOrder[axis + 2]);
+    // [.., ctaSplit, H, (R, S), ..] -> [.., ctaSplit, H, .., (R, S)]
+    std::rotate(transposeOrder.begin() + axis + 2,
+                transposeOrder.begin() + axis + 4, transposeOrder.end());
 
     builder.setInsertionPointAfter(reduce);
     Value operand = reduce.getOperands()[0];
