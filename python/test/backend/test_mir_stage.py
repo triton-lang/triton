@@ -17,28 +17,298 @@ pytestmark = pytest.mark.skipif(not is_hip(), reason="MIR tests require AMD/HIP 
 
 
 def verify_mir_content(mir_content, kernel_name):
+    import re
+
     # Verify basic MIR format
     assert len(mir_content) > 0, f"MIR for {kernel_name} should not be empty"
     assert mir_content.strip().startswith("---"), f"MIR for {kernel_name} should start with YAML document marker"
     assert "name:" in mir_content, f"MIR for {kernel_name} should contain function names"
     assert "body:" in mir_content, f"MIR for {kernel_name} should contain machine basic blocks"
 
-    # Verify presence of Scheduling Units (SU)
-    import re
-    su_pattern = r'SU\(\d+\):'
-    su_matches = re.findall(su_pattern, mir_content)
-    assert len(su_matches) > 0, \
-        f"Scheduling DAG for {kernel_name} should contain Scheduling Units (SU)"
+    # The scheduling DAG is emitted after this marker as a (bb, position)-keyed
+    # edge list: `region <bb>` / `node <pos> <def-reg|-> <opcode>` /
+    # `edge <src-pos> <dst-pos> <Type> <latency> [<reg>]`.
+    assert "========== SCHEDULING DAG ==========" in mir_content, \
+        f"MIR for {kernel_name} should contain the scheduling DAG section"
+    dag_section = mir_content.split("========== SCHEDULING DAG ==========", 1)[1]
 
-    # Verify scheduling DAG structure with specific patterns
-    assert "# preds left" in mir_content, \
-        f"Scheduling DAG for {kernel_name} should contain predecessor info"
-    assert "# succs left" in mir_content, \
-        f"Scheduling DAG for {kernel_name} should contain successor info"
+    assert re.search(r'^region \d+$', dag_section, re.MULTILINE), \
+        f"Scheduling DAG for {kernel_name} should contain region headers"
+    assert re.search(r'^node \d+ \S+ \S+', dag_section, re.MULTILINE), \
+        f"Scheduling DAG for {kernel_name} should contain node entries"
+    edges = re.findall(r'^edge \d+ \d+ (Data|Anti|Output|Memory|Barrier)\b', dag_section, re.MULTILINE)
+    assert len(edges) > 0, \
+        f"Scheduling DAG for {kernel_name} should contain typed dependency edges"
 
-    # Verify no sched DAG from post-RA scheduler
+    # Artificial/Cluster edges are dropped (not real ordering constraints).
+    assert "Artificial" not in dag_section and "Cluster" not in dag_section, \
+        f"Scheduling DAG for {kernel_name} should not contain Artificial/Cluster edges"
+
+    # The DAG is built from the pre-RA MIR, so no post-RA physical-reg renaming.
     assert "renamable" not in mir_content, \
-        f"Scheduling DAG for {kernel_name} should not contain entries from post-RA scheduler"
+        f"MIR for {kernel_name} should not contain entries from post-RA scheduler"
+
+
+# --- DAG cross-check against LLVM's own machine-scheduler DAG -----------------
+#
+# Our emitted DAG and LLVM's `-misched-print-dags` output are both built by the
+# same ScheduleDAGInstrs machinery, so for the same MIR their dependency edges
+# must agree -- modulo edges we deliberately drop (Artificial/Cluster/Weak hint
+# edges; memory edges removed by alias analysis; barrier edges removed by
+# S_WAITCNT counter semantics).
+#
+# Two structural differences make a naive region/position comparison impossible,
+# so we key instructions by (opcode, ordinal-within-function) instead -- a
+# parse-invariant identity that survives both virtual-register renumbering and
+# region re-partitioning:
+#
+#  1. Region decomposition differs. We emit one DAG per basic block; LLVM's
+#     scheduler splits each block into sub-regions at scheduling boundaries
+#     (calls, terminators, isSchedulingBoundary instrs). So SU indices and our
+#     (bb, pos) indices do not correspond.
+#  2. Boundary/terminator instructions. LLVM excludes them from its DAGs; our
+#     per-block DAG includes them. Any edge touching such an instruction exists
+#     only on our side and is excluded from the subset check.
+
+def _find_llc():
+    import os
+    import shutil
+    for cand in (
+        os.path.join(os.environ.get("LLVM_SYSPATH", ""), "bin", "llc"),
+        os.path.join(os.environ.get("LLVM_BUILD_DIR", ""), "bin", "llc"),
+        shutil.which("llc") or "",
+    ):
+        if cand and os.path.isfile(cand):
+            return cand
+    return None
+
+
+def _our_edges_by_opkey(dag_section):
+    """Parse our DAG into a set of (src_key, dst_key, type) edges, where each key
+    is (opcode, ordinal) assigned in whole-file node order -- matching how the
+    LLVM side keys instructions, so the two are directly comparable."""
+    import re
+    from collections import Counter
+    seen = Counter()
+    key = {}          # (region, pos) -> (opcode, ordinal)
+    pending_edges = []  # (region, src_pos, dst_pos, type)
+    region_nodes = {}   # region -> {pos: opcode}
+    cur = None
+    for line in dag_section.split("\n"):
+        m = re.match(r'^region (\d+)', line)
+        if m:
+            cur = int(m.group(1))
+            region_nodes[cur] = {}
+            continue
+        m = re.match(r'^node (\d+) \S+ (\S+)', line)
+        if m and cur is not None:
+            pos, op = int(m.group(1)), m.group(2)
+            region_nodes[cur][pos] = op
+            key[(cur, pos)] = (op, seen[op])
+            seen[op] += 1
+            continue
+        m = re.match(r'^edge (\d+) (\d+) (\S+)', line)
+        if m and cur is not None:
+            pending_edges.append((cur, int(m.group(1)), int(m.group(2)),
+                                  m.group(3)))
+    edges = set()
+    for region, s, d, t in pending_edges:
+        sk, dk = key.get((region, s)), key.get((region, d))
+        if sk is None or dk is None:
+            continue
+        edges.add((sk, dk, t))
+    return edges, region_nodes
+
+
+def _llvm_edges_by_opkey(text):
+    """Parse `-misched-print-dags` into a set of (src_key, dst_key, type) edges,
+    keyed by (opcode, ordinal) in whole-output SU order. Types are mapped to our
+    vocabulary; hint edges become 'FILTERED'."""
+    import re
+    from collections import Counter
+
+    FLAGS = {"early-clobber", "dead", "undef", "renamable", "internal", "nuw",
+             "nsw", "disjoint", "exact", "nneg", "nofpexcept", "reassoc",
+             "nnan", "ninf", "nsz", "arcp", "contract", "afn", "killed"}
+
+    def opcode(mir_text):
+        t = mir_text.split("::", 1)[0]
+        rhs = t.split("=", 1)[1].strip() if "=" in t else t.strip()
+        for tok in rhs.split():
+            if tok in FLAGS or tok.startswith(("%", "$")):
+                continue
+            return tok
+        return "?"
+
+    # First pass: assign (opcode, ordinal) to each SU, per region (SU(0) resets),
+    # in whole-output order.
+    seen = Counter()
+    su_key = []      # list of dicts: region_index -> {su: key}
+    cur = None
+    pending = []     # (region_index, src_su, dst_su, type)
+    ri = -1
+    cur_su = None
+    in_succ = False  # only edges under "Successors:" define src->dst
+    for line in text.split("\n"):
+        m = re.match(r'^SU\((\d+)\):\s*(.*)$', line)
+        if m:
+            su = int(m.group(1))
+            op = opcode(m.group(2))
+            if su == 0:
+                ri += 1
+                su_key.append({})
+            cur_su = su
+            in_succ = False
+            su_key[ri][su] = (op, seen[op])
+            seen[op] += 1
+            continue
+        # Track Predecessors:/Successors: sections; the same edge is listed under
+        # both (mirrored), so only count it once, from the Successors side.
+        if re.match(r'^\s+Predecessors:', line):
+            in_succ = False
+            continue
+        if re.match(r'^\s+Successors:', line):
+            in_succ = True
+            continue
+        m = re.match(r'^\s+SU\((\d+)\): (Data|Anti|Out|Ord)\b\s*(.*)$', line)
+        if m and ri >= 0 and cur_su is not None and in_succ:
+            dst, kind, rest = int(m.group(1)), m.group(2), m.group(3)
+            if kind == "Data":
+                t = "Data"
+            elif kind == "Anti":
+                t = "Anti"
+            elif kind == "Out":
+                t = "Output"
+            elif "Barrier" in rest:
+                t = "Barrier"
+            elif "Memory" in rest:
+                t = "Memory"
+            else:
+                t = "FILTERED"
+            pending.append((ri, cur_su, dst, t))
+
+    edges = set()
+    for r, s, d, t in pending:
+        sk, dk = su_key[r].get(s), su_key[r].get(d)
+        if sk is None or dk is None:  # e.g. ExitSU
+            continue
+        edges.add((sk, dk, t))
+    allkeys = {k for region in su_key for k in region.values()}
+    return edges, allkeys
+
+
+def _our_opkeys(dag_section):
+    """The set of (opcode, ordinal) keys for all nodes in our DAG, assigned in
+    whole-file node order (same scheme as _our_edges_by_opkey)."""
+    import re
+    from collections import Counter
+    seen = Counter()
+    keys = set()
+    for line in dag_section.split("\n"):
+        m = re.match(r'^node (\d+) \S+ (\S+)', line)
+        if m:
+            op = m.group(2)
+            keys.add((op, seen[op]))
+            seen[op] += 1
+    return keys
+
+
+def _cross_check_dag_against_llvm(mir_content, llc_path):
+    import subprocess
+    import tempfile
+    import os
+
+    mir_only, _, dag_section = mir_content.partition(
+        "========== SCHEDULING DAG ==========")
+    assert dag_section, "dump should contain a scheduling DAG section"
+
+    mir_only = mir_only.rstrip()
+    if mir_only.endswith("---"):
+        mir_only = mir_only[:-3].rstrip()
+    if mir_only.endswith("..."):
+        mir_only = mir_only[:-3].rstrip()
+
+    arch = triton.runtime.driver.active.get_current_target().arch
+    with tempfile.NamedTemporaryFile("w", suffix=".mir", delete=False) as f:
+        f.write(mir_only)
+        mir_path = f.name
+    try:
+        proc = subprocess.run(
+            [llc_path, "-mtriple=amdgcn-amd-amdhsa", f"-mcpu={arch}",
+             "-start-before=machine-scheduler", "-stop-after=machine-scheduler",
+             "-misched-print-dags", mir_path, "-o", os.devnull],
+            capture_output=True, text=True, timeout=120)
+    finally:
+        os.unlink(mir_path)
+    assert proc.returncode == 0, f"llc failed: {proc.stderr[:800]}"
+
+    our_edges, our_nodes = _our_edges_by_opkey(dag_section)
+    llvm_edges, llvm_keys = _llvm_edges_by_opkey(proc.stderr)
+    assert our_edges, "our DAG produced no edges"
+    assert llvm_edges, "llc produced no DAG edges"
+
+    # LLVM's scheduling regions end at the first terminator / scheduling boundary,
+    # so a suffix of each block's instructions never appears as an SU. Any opkey we
+    # emitted that LLVM never emitted is such a boundary/terminator instruction;
+    # edges touching one exist only on our side and are excluded from the check.
+    # (This is self-calibrating -- no hardcoded opcode list needed.)
+    boundary_keys = _our_opkeys(dag_section) - llvm_keys
+
+    def touches_boundary(edge):
+        sk, dk, _ = edge
+        return sk in boundary_keys or dk in boundary_keys
+
+    KEPT = {"Data", "Anti", "Output", "Memory", "Barrier"}
+    llvm_kept = {e for e in llvm_edges if e[2] in KEPT}
+
+    # 1. Every real (non-boundary) edge we emit must exist in LLVM's DAG.
+    missing = {e for e in our_edges - llvm_kept if not touches_boundary(e)}
+    assert not missing, \
+        f"edges in our DAG but not LLVM's: {sorted(missing)[:10]}"
+
+    # 2. Every LLVM Data/Anti/Output edge must be one we emit (those are never
+    #    filtered). Missing Memory/Barrier edges are allowed (AA / waitcnt
+    #    filtering).
+    for e in llvm_kept - our_edges:
+        _, _, t = e
+        if t in ("Memory", "Barrier"):
+            continue
+        assert False, \
+            f"LLVM has a {t} edge {e} we did not emit (regdeps must match)"
+
+
+def test_dag_matches_llvm(tmp_path, monkeypatch):
+    llc_path = _find_llc()
+    if llc_path is None:
+        pytest.skip("llc not found (set LLVM_SYSPATH or LLVM_BUILD_DIR); "
+                    "DAG cross-check needs the LLVM tools")
+
+    monkeypatch.setenv("TRITON_DUMP_MIR", str(tmp_path))
+    monkeypatch.setenv("TRITON_ALWAYS_COMPILE", "1")
+
+    @triton.jit
+    def cc_kernel(a_ptr, b_ptr, c_ptr, out_ptr, n, BLOCK: tl.constexpr):
+        pid = tl.program_id(axis=0)
+        offs = pid * BLOCK + tl.arange(0, BLOCK)
+        mask = offs < n
+        a = tl.load(a_ptr + offs, mask=mask)
+        b = tl.load(b_ptr + offs, mask=mask)
+        c = tl.load(c_ptr + offs, mask=mask)
+        tl.store(out_ptr + offs, a * b + c, mask=mask)
+
+    # Compile only (no kernel launch): the MIR + scheduling DAG are dumped at
+    # compile time, so this cross-check does not depend on a working GPU runtime.
+    from triton.compiler import ASTSource
+    src = ASTSource(
+        fn=cc_kernel,
+        signature={"a_ptr": "*fp32", "b_ptr": "*fp32", "c_ptr": "*fp32",
+                   "out_ptr": "*fp32", "n": "i32", "BLOCK": "constexpr"},
+        constexprs={"BLOCK": 256})
+    triton.compile(src)
+
+    mir_files = list(tmp_path.glob("cc_kernel_*.txt"))
+    assert len(mir_files) == 1, "exactly one MIR file should have been dumped"
+    _cross_check_dag_against_llvm(mir_files[0].read_text(), llc_path)
 
 
 def test_mir_dump_pipeline(tmp_path, monkeypatch):
