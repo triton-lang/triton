@@ -2573,6 +2573,8 @@ def atomic_cas(pointer, cmp, val, sem=None, scope=None, _semantic=None, mask=Non
     sem = _unwrap_if_constexpr(sem)
     scope = _unwrap_if_constexpr(scope)
     mask = _unwrap_if_constexpr(mask)
+    if mask is not None:
+        mask = _semantic.to_tensor(mask)
     return _semantic.atomic_cas(pointer, cmp, val, mask, sem, scope)
 
 
