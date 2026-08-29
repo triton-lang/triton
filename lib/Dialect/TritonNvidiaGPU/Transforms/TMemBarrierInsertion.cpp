@@ -227,6 +227,8 @@ enum class TMemBoundary { None, Wait, Publication };
 static TMemBoundary getTMemBoundary(Operation *op) {
   if (requiresThreadSyncBefore(op))
     return TMemBoundary::Publication;
+  if (isa<ArriveBarrierOp>(op))
+    return TMemBoundary::Wait;
   // Defer completion at CTA barriers until a hazard or boundary needs it.
   if (isa<gpu::BarrierOp>(op))
     return TMemBoundary::None;
