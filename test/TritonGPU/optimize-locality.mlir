@@ -878,6 +878,28 @@ tt.func @set_warp_shuffle_layout_square_axis_0(%arg0: tensor<64x64xf32, #blocked
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+// CHECK: [[LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+
+// CHECK: narrow_wide_gather_indices
+tt.func @narrow_wide_gather_indices(%arg0: tensor<128x64xf32, #blocked>, %arg1: tensor<256x64xi64, #blocked>) -> tensor<256x64xf32, #blocked> {
+  // CHECK-NEXT: [[IDX32:%.*]] = arith.trunci %arg1 : tensor<256x64xi64, #blocked> to tensor<256x64xi32, #blocked>
+  // CHECK-NEXT: [[SRC:%.*]] = ttg.convert_layout %arg0
+  // CHECK-NEXT: [[IDX:%.*]] = ttg.convert_layout [[IDX32]]
+  // CHECK-NEXT: [[OUT:%.*]] = tt.gather [[SRC]][[[IDX]]] {axis = 0 : i32, efficient_layout} : (tensor<128x64xf32, [[LAYOUT]]>, tensor<256x64xi32, [[LAYOUT]]>) -> tensor<256x64xf32, [[LAYOUT]]>
+  %0 = tt.gather %arg0[%arg1] {axis = 0 : i32} : (tensor<128x64xf32, #blocked>, tensor<256x64xi64, #blocked>) -> tensor<256x64xf32, #blocked>
+  // CHECK-NEXT: [[RES:%.*]] = ttg.convert_layout [[OUT]]
+  // CHECK-NEXT: return [[RES]]
+  tt.return %0 : tensor<256x64xf32, #blocked>
+}
+
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [16, 2], warpsPerCTA = [2, 2], order = [1, 0]}>
 
 // CHECK: [[LAYOUT:#.*]] = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
