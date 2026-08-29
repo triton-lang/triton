@@ -1314,6 +1314,8 @@ static bool atomicNeedsClusterBarrier(Operation *op) {
 bool needsClusterBarrier(Operation *op) {
   if (isa<ClusterBarrierOp>(op))
     return true;
+  if (isa<ElementwiseInlineAsmOp>(op))
+    return hasCrossCTAScratch(op);
   if (auto cvt = dyn_cast<gpu::ConvertLayoutOp>(op)) {
     auto kBlock = StringAttr::get(op->getContext(), "block");
     return !isCvtDimSync(gpu::toLinearLayout(cvt.getSrc().getType()),

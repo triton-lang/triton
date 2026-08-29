@@ -3402,6 +3402,12 @@ def inline_asm_elementwise(asm: str, constraints: str, args: Sequence, dtype: Un
         time.  Exactly which set of inputs a block receives is unspecified.
         Input elements of size less than 4 bytes are packed into 4-byte
         registers.
+        Incomplete groups are padded with undefined inputs, and the corresponding
+        padded outputs are discarded.
+
+        When :code:`is_pure` is false, each logical group of packed elements
+        executes once, even if its tensor layout replicates those elements
+        across physical threads.
 
         This op does not support empty :code:`dtype` -- the inline asm must
         return at least one tensor, even if you don't need it.  You can work

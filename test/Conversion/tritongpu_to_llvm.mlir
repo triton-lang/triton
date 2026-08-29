@@ -2291,6 +2291,83 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // -----
 
+#replicated = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: inline_asm_replicated_side_effect_dead_result
+  // CHECK: llvm.cond_br
+  // CHECK: llvm.inline_asm has_side_effects
+  // CHECK-SAME: "red.global.add.u32 [$1], 1; mov.u32 $0, 0;"
+  // CHECK-NOT: st.shared
+  // CHECK-NOT: nvvm.barrier
+  // CHECK: llvm.return
+  tt.func public @inline_asm_replicated_side_effect_dead_result(%ptrs: tensor<32x!tt.ptr<i32>, #replicated>) {
+    %unused = tt.elementwise_inline_asm "red.global.add.u32 [$1], 1; mov.u32 $0, 0;" {constraints = "=r,l", packed_element = 1 : i32, pure = false} %ptrs : tensor<32x!tt.ptr<i32>, #replicated> -> tensor<32xi32, #replicated>
+    tt.return
+  }
+
+  // CHECK-LABEL: inline_asm_replicated_side_effect_live_result
+  // CHECK: llvm.cond_br
+  // CHECK: llvm.inline_asm has_side_effects
+  // CHECK-SAME: "red.global.add.u32 [$1], 1; mov.u32 $0, 7;"
+  // CHECK: st.shared
+  // CHECK: nvvm.barrier
+  // CHECK: llvm.load
+  // CHECK: llvm.return
+  tt.func public @inline_asm_replicated_side_effect_live_result(%ptrs: tensor<32x!tt.ptr<i32>, #replicated>, %out: tensor<32x!tt.ptr<i32>, #replicated>) {
+    %result = tt.elementwise_inline_asm "red.global.add.u32 [$1], 1; mov.u32 $0, 7;" {constraints = "=r,l", packed_element = 1 : i32, pure = false} %ptrs : tensor<32x!tt.ptr<i32>, #replicated> -> tensor<32xi32, #replicated>
+    tt.store %out, %result : tensor<32x!tt.ptr<i32>, #replicated>
+    tt.return
+  }
+
+  // CHECK-LABEL: inline_asm_scalar_unused_first_result
+  // CHECK: llvm.cond_br
+  // CHECK: llvm.inline_asm has_side_effects
+  // CHECK-SAME: "atom.global.add.u32 $0, [$2], 1; mov.u32 $1, $0;"
+  // CHECK: st.shared::cta.b8
+  // CHECK: nvvm.barrier
+  // CHECK: llvm.load
+  // CHECK: llvm.return
+  tt.func public @inline_asm_scalar_unused_first_result(%ptr: !tt.ptr<i32>, %out: !tt.ptr<i8>) {
+    %result:2 = tt.elementwise_inline_asm "atom.global.add.u32 $0, [$2], 1; mov.u32 $1, $0;" {constraints = "=r,=r,l", packed_element = 1 : i32, pure = false} %ptr : !tt.ptr<i32> -> i32, i8
+    tt.store %out, %result#1 : !tt.ptr<i8>
+    tt.return
+  }
+
+  // CHECK-LABEL: inline_asm_scalar_without_operands
+  // CHECK: llvm.cond_br
+  // CHECK: llvm.inline_asm has_side_effects
+  // CHECK-SAME: "mov.u32 $0, 7;"
+  // CHECK: st.shared::cta.b32
+  // CHECK: nvvm.barrier
+  // CHECK: llvm.load
+  // CHECK: llvm.return
+  tt.func public @inline_asm_scalar_without_operands(%out: !tt.ptr<i32>) {
+    %result = tt.elementwise_inline_asm "mov.u32 $0, 7;" {constraints = "=r", packed_element = 1 : i32, pure = false} -> i32
+    tt.store %out, %result : !tt.ptr<i32>
+    tt.return
+  }
+
+  // An impure asm may ignore padded inputs. Preserve padding and discard the
+  // extra result while still executing only on the canonical owner.
+  // CHECK-LABEL: inline_asm_side_effect_padded_pack
+  // CHECK: %[[PAD:.*]] = llvm.mlir.undef : !llvm.ptr<1>
+  // CHECK: llvm.cond_br
+  // CHECK: llvm.inline_asm has_side_effects
+  // CHECK-SAME: "atom.global.add.u32 $0, [$2], 1; mov.u32 $1, $0;"
+  // CHECK-SAME: %{{.*}}, %[[PAD]] : (!llvm.ptr<1>, !llvm.ptr<1>) -> !llvm.struct<(i32, i32)>
+  // CHECK: st.shared::cta.b32
+  // CHECK: nvvm.barrier
+  // CHECK: llvm.load
+  // CHECK: llvm.return
+  tt.func public @inline_asm_side_effect_padded_pack(%ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>) {
+    %result = tt.elementwise_inline_asm "atom.global.add.u32 $0, [$2], 1; mov.u32 $1, $0;" {constraints = "=r,=r,l,l", packed_element = 2 : i32, pure = false} %ptr : !tt.ptr<i32> -> i32
+    tt.store %out, %result : !tt.ptr<i32>
+    tt.return
+  }
+}
+
+// -----
+
 //  CHECK-LABEL: reduce_slice
 //  CHECK-NOT: st.shared
 //  CHECK-NOT: ld.shared
