@@ -1177,7 +1177,7 @@ class tensor(base_value):
     def store(self, value, mask=None, *, cache_modifier="", eviction_policy="") -> tensor:
         ...
 
-    def atomic_cas(self, cmp, val, sem=None, scope=None, mask=None) -> tensor:
+    def atomic_cas(self, cmp, val, sem=None, scope=None, *, mask=None) -> tensor:
         ...
 
     def atomic_xchg(self, val, mask=None, sem=None, scope=None) -> tensor:
