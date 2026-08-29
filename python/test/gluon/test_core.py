@@ -2,6 +2,7 @@ import torch
 import math
 import pytest
 import re
+from collections import Counter
 from itertools import product
 
 import triton
@@ -891,6 +892,149 @@ def test_async_copy_mbarrier():
     async_copy_mbarrier_kernel[(1, )](out, inp, inp.shape[0], XBLOCK=32, YBLOCK=32)
     torch.testing.assert_close(out[:20], inp)
     torch.testing.assert_close(out[20:], torch.zeros((12, 32), **tensor_opts))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("producer_warps", [1, 8])
+@pytest.mark.parametrize("num_ctas", [1, 2, 4])
+def test_mbarrier_automatic_warp_arrivals(producer_warps, num_ctas):
+
+    @gluon.jit
+    def producer(inp, buffers, ready, empty, iterations, BLOCK: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0],
+                                                    cga_layout=buffers.type.layout.cga_layout)
+        offsets = ttgl.arange(0, BLOCK, layout=layout)
+        inp += ttgl.program_id(0) * iterations * BLOCK
+        # Bootstrap and steady-state arrivals come from different partitions.
+        for bootstrap_slot in ttgl.static_range(2):
+            mbarrier.arrive(empty.index(bootstrap_slot))
+        for i in range(iterations):
+            slot = i % 2
+            phase = i // 2 & 1
+            mbarrier.wait(empty.index(slot), phase)
+            buffers.index(slot).store(ttgl.load(inp + i * BLOCK + offsets))
+            mbarrier.arrive(ready.index(slot))
+
+    @gluon.jit
+    def consumer(out, buffers, ready, empty, iterations, BLOCK: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0],
+                                                    cga_layout=buffers.type.layout.cga_layout)
+        offsets = ttgl.arange(0, BLOCK, layout=layout)
+        out += ttgl.program_id(0) * iterations * BLOCK
+        for i in range(iterations):
+            slot = i % 2
+            phase = i // 2 & 1
+            mbarrier.wait(ready.index(slot), phase)
+            values = buffers.index(slot).load(layout)
+            ttgl.store(out + i * BLOCK + offsets, values + 1)
+            mbarrier.arrive(empty.index(slot))
+
+    @gluon.jit
+    def kernel(inp, out, iterations, BLOCK: ttgl.constexpr, PRODUCER_WARPS: ttgl.constexpr):
+        cga_layout: ttgl.constexpr = ((1, ), (2, ))[:ttgl.num_ctas().bit_length() - 1]
+        buffers = ttgl.allocate_shared_memory(ttgl.int32, [2, BLOCK],
+                                              ttgl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga_layout))
+        ready = mbarrier.allocate_mbarrier(batch=2)
+        empty = mbarrier.allocate_mbarrier(batch=2)
+        for slot in ttgl.static_range(2):
+            mbarrier.init(ready.index(slot), count=1)
+            mbarrier.init(empty.index(slot), count=1)
+        ttgl.warp_specialize([
+            (consumer, (out, buffers, ready, empty, iterations, BLOCK)),
+            (producer, (inp, buffers, ready, empty, iterations, BLOCK)),
+        ], [PRODUCER_WARPS])
+        for slot in ttgl.static_range(2):
+            mbarrier.wait(empty.index(slot), iterations // 2 & 1)
+            mbarrier.invalidate(empty.index(slot))
+            mbarrier.invalidate(ready.index(slot))
+
+    block = 256
+    iterations = 64
+    inp = torch.arange(8 * iterations * block, device="cuda", dtype=torch.int32)
+    out = torch.empty_like(inp)
+    compiled = kernel.warmup(inp, out, iterations, block, producer_warps, grid=(8, ), num_warps=4, num_ctas=num_ctas)
+
+    # Each physical phase must collect every warp, including bootstrap arrivals.
+    scale = max(4, producer_warps)
+    ptx = compiled.asm["ptx"]
+    init_counts = re.findall(r"mbarrier\.init\.shared::cta\.b64\s+\[[^\]]+\],\s*(\d+)", ptx)
+    expected_inits = [scale, scale, producer_warps, producer_warps]
+    # Warp-specialization cluster barriers can introduce additional mbarriers.
+    assert Counter(expected_inits) <= Counter(map(int, init_counts))
+    arrive_counts = re.findall(r"mbarrier\.arrive\.shared::(?:cta|cluster)\.b64\s+_,\s*\[[^\]]+\](?:,\s*(\d+))?;", ptx)
+    expected_arrivals = [scale // producer_warps] * 2 + [1, scale // 4]
+    assert Counter(expected_arrivals) <= Counter(int(count or 1) for count in arrive_counts)
+    assert "bar.warp.sync" in ptx
+    kernel[(8, )](inp, out, iterations, block, producer_warps, num_warps=4, num_ctas=num_ctas)
+    torch.testing.assert_close(out, inp + 1)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_mbarrier_automatic_warp_arrivals_noinline():
+
+    @gluon.jit(noinline=True)
+    def arrive_and_wait():
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar, count=4)
+        mbarrier.arrive(bar, count=4)
+        mbarrier.wait(bar, phase=0)
+        mbarrier.invalidate(bar)
+
+    @gluon.jit
+    def worker():
+        arrive_and_wait()
+
+    @gluon.jit
+    def idle():
+        pass
+
+    @gluon.jit
+    def kernel():
+        ttgl.warp_specialize([(idle, ()), (worker, ())], [2])
+
+    # The helper has two warps even though the module has four.
+    compiled = kernel.warmup(grid=(1, ), num_warps=4)
+    arrive_counts = re.findall(r"mbarrier\.arrive\.shared::cta\.b64\s+_,\s*\[[^\]]+\](?:,\s*(\d+))?;",
+                               compiled.asm["ptx"])
+    assert arrive_counts == ["2"]
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("num_ctas,from_cta,two_ctas", [(2, 0, False), (4, 1, False), (8, 5, False), (2, None, True),
+                                                        (4, None, True)])
+def test_mbarrier_automatic_warp_arrivals_cross_cta(num_ctas, from_cta, two_ctas):
+
+    @gluon.jit
+    def kernel(out, FROM_CTA: ttgl.constexpr, TWO_CTAS: ttgl.constexpr):
+        bar = mbarrier.allocate_mbarrier(two_ctas=TWO_CTAS)
+        mbarrier.init(bar, count=1)
+        if TWO_CTAS:
+            ack = mbarrier.allocate_mbarrier()
+            mbarrier.init(ack, count=1)
+        for i in range(16 if TWO_CTAS else 1):
+            mbarrier.arrive(bar, from_cta=FROM_CTA)
+            mbarrier.wait(bar, phase=i & 1)
+            if TWO_CTAS:
+                # Each pair's leader releases both CTAs after observing the phase.
+                mbarrier.arrive(ack, from_cta=ttgl.num_ctas() - 2)
+                mbarrier.wait(ack, phase=i & 1)
+        if TWO_CTAS:
+            mbarrier.invalidate(ack)
+        mbarrier.invalidate(bar)
+        ttgl.store(out, 1)
+
+    out = torch.zeros((1, ), device="cuda", dtype=torch.int32)
+    compiled = kernel.warmup(out, from_cta, two_ctas, grid=(1, ), num_warps=4, num_ctas=num_ctas)
+    ptx = compiled.asm["ptx"]
+    init_counts = re.findall(r"mbarrier\.init\.shared::cta\.b64\s+\[[^\]]+\],\s*(\d+)", ptx)
+    assert sorted(map(int, init_counts)) == ([4, 8] if two_ctas else [4])
+    arrive_counts = re.findall(
+        r"mbarrier\.arrive\.shared::cluster(?:\.multicast::cluster::32b)?\.b64\s+_,\s*\[[^\]]+\](?:,\s*(\d+))?(?:,\s*%r\d+)?;",
+        ptx)
+    assert {int(count or 1) for count in arrive_counts} == {1}
+    assert "bar.warp.sync" in ptx
+    kernel[(1, )](out, from_cta, two_ctas, num_warps=4, num_ctas=num_ctas)
+    assert out.item() == 1
 
 
 # Equivalence-class multicast: multicast_cta selects which CTA-ID bits to multicast
