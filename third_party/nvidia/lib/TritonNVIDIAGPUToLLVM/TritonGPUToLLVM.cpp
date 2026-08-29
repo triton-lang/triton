@@ -352,6 +352,17 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
       isa<ttng::WaitBarrierOp>(after))
     return true;
 
+  // An expect cannot run ahead of the wait
+  if (auto wait = dyn_cast<ttng::WaitBarrierOp>(after)) {
+    if (before->getParentRegion() == after->getParentRegion() &&
+        isa<ttng::BarrierExpectOp, ttng::ArriveBarrierOp,
+            ttng::AsyncCopyMbarrierArriveOp, ttng::TCGen5CommitOp>(before)) {
+      auto signal = cast<triton::gpu::MBarrierOpInterface>(before);
+      if (signal.getBarrier() == wait.getAlloc())
+        return true;
+    }
+  }
+
   // Identical same-width commutative atomics can be freely reordered.
   auto beforeAtomic = dyn_cast<triton::gpu::LocalAtomicScatterRMWOp>(before);
   auto afterAtomic = dyn_cast<triton::gpu::LocalAtomicScatterRMWOp>(after);
