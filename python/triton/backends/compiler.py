@@ -46,7 +46,7 @@ class BaseBackend(metaclass=ABCMeta):
         raise NotImplementedError
 
     @abstractmethod
-    def add_stages(self, stages: dict, options: object) -> None:
+    def add_stages(self, stages: dict, options: object, language: Language) -> None:
         """
         Populates `stages` dictionary with entries of the form:
         ir_name [str] => Function[(src: str, metadata: dict) -> str|bytes]
