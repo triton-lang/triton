@@ -831,7 +831,8 @@ class InterpreterBuilder:
         if sem not in self.ir_sem_to_interpreter_sem:
             raise ValueError(f"unsupported semantic {sem}")
         sem = self.ir_sem_to_interpreter_sem[sem]
-        return TensorHandle(_interpreter.atomic_cas(ptr.data, cmp.data, val.data, mask.data, sem), cmp.dtype.scalar)
+        mask_data = mask.data.astype(np.bool_, copy=False) if mask is not None else None
+        return TensorHandle(_interpreter.atomic_cas(ptr.data, cmp.data, val.data, mask_data, sem), cmp.dtype.scalar)
 
     def create_atomic_poll(self, ptr, expected, timeout_ns, sem, scope):
         start_ns = time.perf_counter_ns()
