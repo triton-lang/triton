@@ -500,7 +500,7 @@ class CUDABackend(BaseBackend):
             disable_slp_vectorizer=capability == 80,
             expand_masked_div_rem=True,
             vectorize_extracted_adds=True,
-            scalarize_packed_fops=True,
+            scalarize_packed_fops=False,
         )
 
         # Get some metadata
