@@ -2,8 +2,6 @@ add_triton_library(TritonLLVMIR
         LLVMDIScope.cpp
         LLVMDILocalVariable.cpp
         LLVMIRBreakPhiStruct.cpp
-        LLVMIRScalarizePackedFOps.cpp
-        LLVMIRVectorizeExtractedAdds.cpp
         LLVMDIUtils.cpp
 
         DEPENDS
