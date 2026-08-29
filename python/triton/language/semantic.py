@@ -1293,6 +1293,13 @@ class TritonSemantic(Generic[TensorTy]):
             raise ValueError("atomic_cas only supports elements with width {16, 32, 64}")
         if ptr.type.is_block():
             ptr, cmp, val, mask = self._broadcast_ptr_cmp_val_mask(ptr, cmp, val, mask)
+        else:
+            if cmp.type.is_block():
+                raise ValueError("Compare argument cannot be block type if pointer argument is not a block")
+            if val.type.is_block():
+                raise ValueError("Value argument cannot be block type if pointer argument is not a block")
+            if mask is not None and mask.type.is_block():
+                raise ValueError("Mask argument cannot be block type if pointer argument is not a block")
         if mask is None:
             mask_ir = self.builder.get_int1(True)
             mask_ty = tl.int1
