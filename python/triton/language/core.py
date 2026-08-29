@@ -2550,6 +2550,9 @@ def _add_atomic_docstr(name: str, has_cmp: bool = False) -> Callable[[T], T]:
         docstr += """
     :param val: The values with which to perform the atomic operation
     :type val: Block of dtype=pointer.dtype.element_ty
+    :param mask: If :code:`mask[idx]` is false, do not perform the atomic operation at
+        :code:`pointer[idx]`
+    :type mask: Block of triton.int1, optional
     :param sem: Specifies the memory semantics for the operation. Acceptable values are "acquire",
         "release", "acq_rel" (stands for "ACQUIRE_RELEASE"), and "relaxed". If not provided,
         the function defaults to using "acq_rel" semantics.
