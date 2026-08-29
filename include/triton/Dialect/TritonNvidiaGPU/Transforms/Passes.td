@@ -167,6 +167,21 @@ def TritonNvidiaGPUTMemBarrierInsertionPass : Pass<"triton-nvidia-gpu-tmem-barri
   ];
 }
 
+def TritonNvidiaGPUTMemWaitInsertionPass : Pass<"triton-nvidia-gpu-tmem-wait-insertion", "mlir::ModuleOp"> {
+  let summary = "Insert tensor-memory completion waits";
+
+  let description = [{
+    This pass inserts load and store completion waits before dependent accesses
+    or synchronization boundaries, reusing existing CTA barriers where possible.
+    Run after tensor-memory allocation and barrier insertion, before lowering.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
 def TritonNvidiaGPUClusterBarrierMbarAllocatorPass : Pass<"triton-nvidia-gpu-cluster-barrier-mbar-allocator", "mlir::ModuleOp"> {
   let summary = "Allocate mbarriers for warp-specialized cluster barriers";
 

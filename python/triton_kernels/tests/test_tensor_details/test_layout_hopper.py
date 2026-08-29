@@ -1,3 +1,4 @@
+import math
 import pytest
 from triton_kernels.tensor import wrap_torch_tensor, convert_layout, empty, FP4
 from triton_kernels.tensor_details.layout import HopperMXScaleLayout, HopperMXValueLayout, StridedLayout
@@ -107,13 +108,19 @@ def test_mxfp4_value_convert_layout_roundtrip(mx_axis):
     assert torch.equal(roundtrip.storage.data, x)
 
 
-@pytest.mark.parametrize("shape", [(64, 64), (2, 34, 18)])
+@pytest.mark.parametrize("shape", [(64, 64), (130, 66), (2, 34, 18), (2, 3, 66, 34)])
+@pytest.mark.parametrize("step", [1, 2])
 @pytest.mark.parametrize("trans", [False, True])
 @pytest.mark.parametrize("mx_axis", [-2, -1])
 @pytest.mark.parametrize("mma_version", [2, 3])
-def test_mxfp4_value_convert_layout_matches_torch(shape, trans, mx_axis, mma_version):
-    data_cpu = torch.randint(0, 256, shape, dtype=torch.uint8)
+@pytest.mark.enable_warmup
+def test_mxfp4_value_convert_layout_matches_torch(shape, step, trans, mx_axis, mma_version):
+    input_shape = tuple(step * size for size in shape[:-1]) + shape[-1:]
+    data_cpu = torch.randint(0, 256, (math.prod(input_shape) + 1, ), dtype=torch.uint8)
     data_cuda = data_cpu.cuda()
+    data_cpu, data_cuda = data_cpu[1:].view(input_shape), data_cuda[1:].view(input_shape)
+    index = (slice(step - 1, None, step), ) * (len(shape) - 1) + (slice(None), )
+    data_cpu, data_cuda = data_cpu[index], data_cuda[index]
     if trans:
         data_cpu, data_cuda = data_cpu.mT, data_cuda.mT
     src_cpu = wrap_torch_tensor(data_cpu, dtype=FP4)
@@ -187,24 +194,80 @@ def test_mxfp4_value_convert_layout_odd_source_packing(shape, mx_axis, major_dim
     assert str(actual.value) == str(expected.value)
 
 
+@pytest.mark.enable_warmup
+@pytest.mark.parametrize("shape", [(2, 2), (18, 34), (64, 32), (2, 3, 66, 34)])
+@pytest.mark.parametrize("mx_axis", [-2, -1])
 @pytest.mark.parametrize("mma_version", [2, 3])
 @pytest.mark.parametrize("major_dim", [-2, -1])
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_mxfp4_value_convert_layout_compact_source(mma_version, major_dim, device):
-    data = torch.randint(0, 256, (64, 32), dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
+@pytest.mark.parametrize(("device", "step"), [("cpu", 1), ("meta", 1), ("cuda", 1), ("cuda", 2)])
+def test_mxfp4_value_convert_layout_compact_source(shape, mx_axis, mma_version, major_dim, device, step):
+    data = torch.randint(0, 256, shape, dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
     canonical = wrap_torch_tensor(data, dtype=FP4)
-    layout = HopperMXValueLayout(-1, mma_version)
+    layout = HopperMXValueLayout(mx_axis, mma_version)
     full = convert_layout(canonical, layout)
-    compact = full.data[:16, :128].contiguous()
-    source = wrap_torch_tensor(compact.to(device), dtype=FP4, shape=canonical.shape, layout=layout)
+    m, k = (canonical.shape[-1], canonical.shape[-2]) if mx_axis == -2 else canonical.shape[-2:]
+    encoded = full.data.mT if mx_axis == -2 else full.data
+    compact = encoded[..., :triton.cdiv(m, 16) * 4, :triton.cdiv(k, 64) * 128].contiguous().to(device)
+    if step == 2:
+        compact = torch.stack((torch.zeros_like(compact), compact), dim=-1)[..., 1]
+    if mx_axis == -2:
+        compact = compact.mT
+    source = wrap_torch_tensor(compact, dtype=FP4, shape=canonical.shape, layout=layout)
     destination = StridedLayout(major_dim)
     expected = convert_layout(canonical, destination)
 
     actual = convert_layout(source, destination)
 
     assert actual.shape == expected.shape
+    assert actual.data.shape == expected.data.shape
     assert actual.data.stride() == expected.data.stride()
-    assert torch.equal(actual.data.cpu(), expected.data)
+    if device != "meta":
+        assert torch.equal(actual.data.cpu(), expected.data)
+
+
+@pytest.mark.parametrize("encoded_shape", [(3, 128), (4, 124), (16, 384), (20, 256)])
+@pytest.mark.parametrize("mx_axis", [-2, -1])
+@pytest.mark.parametrize("mma_version", [2, 3])
+@pytest.mark.parametrize("major_dim", [-2, -1])
+def test_mxfp4_value_convert_layout_invalid_source_storage(encoded_shape, mx_axis, mma_version, major_dim):
+    data = torch.empty(encoded_shape, dtype=torch.uint8)
+    shape = (130, 66) if mx_axis == -2 else (66, 130)
+    if mx_axis == -2:
+        data = data.mT
+    layout = HopperMXValueLayout(mx_axis, mma_version)
+    destination = StridedLayout(major_dim)
+    source_cpu = wrap_torch_tensor(data, dtype=FP4, shape=shape, layout=layout)
+    with pytest.raises((AssertionError, RuntimeError)) as expected:
+        convert_layout(source_cpu, destination)
+
+    source_cuda = wrap_torch_tensor(data.cuda(), dtype=FP4, shape=shape, layout=layout)
+    with pytest.raises(type(expected.value)) as actual:
+        convert_layout(source_cuda, destination)
+    assert str(actual.value) == str(expected.value)
+
+
+@pytest.mark.parametrize("mx_axis", [-2, -1])
+@pytest.mark.parametrize("mma_version", [2, 3])
+@pytest.mark.parametrize("major_dim", [-2, -1])
+def test_mxfp4_value_convert_layout_compact_source_peak_allocation(mx_axis, mma_version, major_dim):
+    data = torch.empty((1028, 8320), dtype=torch.uint8, device="cuda")
+    shape = (4160, 4112) if mx_axis == -2 else (4112, 4160)
+    if mx_axis == -2:
+        data = data.mT
+    layout = HopperMXValueLayout(mx_axis, mma_version)
+    source = wrap_torch_tensor(data, dtype=FP4, shape=shape, layout=layout)
+    destination = StridedLayout(major_dim)
+    warm = convert_layout(source, destination)
+    torch.cuda.synchronize(data.device)
+    del warm
+    baseline = torch.cuda.memory_allocated(data.device)
+    torch.cuda.reset_peak_memory_stats(data.device)
+
+    actual = convert_layout(source, destination)
+    torch.cuda.synchronize(data.device)
+    peak = torch.cuda.max_memory_allocated(data.device) - baseline
+
+    assert peak <= actual.data.nbytes + 1024**2
 
 
 @pytest.mark.parametrize("mx_axis", [-2, -1])
@@ -222,8 +285,7 @@ def test_mxfp4_value_swizzle_peak_allocation(mx_axis):
     torch.cuda.synchronize(data.device)
     peak = torch.cuda.max_memory_allocated(data.device) - baseline
 
-    # Allow overlapping byte buffers, but not whole-tensor int32 intermediates.
-    assert peak <= 2 * swizzled.nbytes + 1024**2
+    assert peak <= swizzled.nbytes + 1024**2
 
 
 @pytest.mark.parametrize("mx_axis", [0, 1])

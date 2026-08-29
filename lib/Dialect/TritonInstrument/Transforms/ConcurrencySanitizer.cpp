@@ -355,6 +355,10 @@ void initializeAllocation(ImplicitLocOpBuilder &b, Value alloc) {
   // Synchronize warps, so in case of re-used memory we won't start poisoning
   // memory that is still being used, and finish poisoning before the kernel's
   // first real use of the allocation.
+  if (isTensorMemory) {
+    ttng::TMEMWaitOp::create(b, b.getLoc(), ttng::TMEMWaitKind::LOAD);
+    ttng::TMEMWaitOp::create(b, b.getLoc(), ttng::TMEMWaitKind::STORE);
+  }
   ttg::BarrierOp::create(b, b.getLoc(), barrierSpace);
   for (Value leaf : leaves) {
     auto leafType = cast<ttg::MemDescType>(leaf.getType());
@@ -366,6 +370,8 @@ void initializeAllocation(ImplicitLocOpBuilder &b, Value alloc) {
       ttg::LocalStoreOp::create(b, poison, leaf);
     }
   }
+  if (isTensorMemory)
+    ttng::TMEMWaitOp::create(b, b.getLoc(), ttng::TMEMWaitKind::STORE);
   ttg::BarrierOp::create(b, b.getLoc(), barrierSpace);
 }
 
@@ -1099,6 +1105,8 @@ private:
 
       listener.maybeWrapWithCriticalSection(b, auxData, nullptr);
       b.setListener(nullptr);
+      if (auto scatter = dyn_cast<ttg::LocalScatterOp>(op))
+        instrumentLocalScatter(b, scatter, funcBuilder);
       return WalkResult::advance();
     });
     if (walkResult.wasInterrupted())
@@ -1120,6 +1128,28 @@ private:
           /*publishVisibility=*/!clusterBarrier.getRelaxed(), op);
     }
     return success();
+  }
+
+  void instrumentLocalScatter(ImplicitLocOpBuilder &b,
+                              ttg::LocalScatterOp scatter,
+                              tti::FunctionBuilder &funcBuilder) {
+    b.setLoc(scatter.getLoc());
+    b.setInsertionPointAfter(scatter);
+    bool isMultiCTA = ttg::lookupNumCTAs(scatter) > 1;
+    auto synchronize = [&] {
+      if (isMultiCTA) {
+        SmallVector<Operation *> barriers = hooks.createInitClusterBarrier(b);
+        llvm::append_range(auxData.internalClusterBarriers, barriers);
+      } else {
+        ttg::BarrierOp::create(b, b.getLoc(), ttg::AddrSpace::Local);
+      }
+    };
+    synchronize();
+    funcBuilder.createVerifyLocalScatterDestinationsCall(
+        b, scatter.getDst(), scatter.getIndices(), scatter.getValues(),
+        scatter.getAxis());
+    if (isMultiCTA)
+      synchronize();
   }
 
   void instrumentBarrierWait(Operation *op, Value alloc, Value phase,

@@ -883,6 +883,22 @@ def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments,
   let hasVerifier = 1;
 }
 
+// Inserted by TMEM synchronization and instrumentation before lowering.
+def TTNG_TMEMWaitOp : TTNG_Op<"tmem_wait"> {
+  let summary = "Wait for tensor memory loads or stores to complete";
+  let description = [{
+    Waits for all prior tensor memory loads or stores issued by the executing
+    threads, as selected by `kind`. All threads in each executing warp must
+    execute this operation. It does not synchronize different warps or wait for
+    asynchronous MMA or tensor memory copy operations.
+
+    Lowers to `tcgen05.wait::ld.sync.aligned` or
+    `tcgen05.wait::st.sync.aligned`.
+  }];
+  let arguments = (ins TTNG_TMEMWaitKindAttr:$kind);
+  let assemblyFormat = "$kind attr-dict";
+}
+
 def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load", [AttrSizedResultSegments]> {
   let summary = "Load a buffer from tensor memory into a distributed tensor";
 

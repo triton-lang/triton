@@ -29,6 +29,13 @@ from triton_kernels.tensor_details.layout import (
     StridedLayout,
 )
 
+_FP4_VALUE_LAYOUTS = [
+    HopperMXValueLayout(-2, 3),
+    HopperMXValueLayout(-1, 3),
+    BlackwellMXValueLayout(),
+    BlackwellMX4ValueShuffledLayout(),
+]
+
 
 @pytest.mark.parametrize("dtype", [
     torch.float64,
@@ -213,23 +220,20 @@ def test_convert_layout_converts_different_parameterized_layout(storage_shape, l
     assert convert_layout(converted, different_layout) is not converted
 
 
-@pytest.mark.parametrize("layout", [
-    HopperMXValueLayout(-2, 3),
-    HopperMXValueLayout(-1, 3),
-    BlackwellMXValueLayout(),
-    BlackwellMX4ValueShuffledLayout(),
-])
+@pytest.mark.parametrize("layout", _FP4_VALUE_LAYOUTS)
 @pytest.mark.parametrize("major_dim", [-2, -1])
 @pytest.mark.parametrize("step", [1, 2])
-def test_mxfp4_value_convert_layout_to_strided_peak_allocation(layout, major_dim, step):
+@pytest.mark.parametrize("inverse", [False, True])
+def test_mxfp4_value_convert_layout_peak_allocation(layout, major_dim, step, inverse):
     data = torch.empty((2048, 2048), dtype=torch.uint8, device="cuda")
-    source = convert_layout(wrap_torch_tensor(data, dtype=FP4), layout)
+    strided = convert_layout(wrap_torch_tensor(data, dtype=FP4), StridedLayout(major_dim))
+    source = convert_layout(strided, layout) if inverse else strided
+    destination = strided.storage.layout if inverse else layout
     if step == 2:
         contiguous_dim = source.data.stride().index(1)
         storage = source.data.movedim(contiguous_dim, -1)
         storage = torch.stack((storage, storage), dim=-2)[..., 1, :].movedim(-1, contiguous_dim)
-        source = wrap_torch_tensor(storage, dtype=FP4, shape=source.shape, layout=layout)
-    destination = StridedLayout(major_dim)
+        source = wrap_torch_tensor(storage, dtype=FP4, shape=source.shape, layout=source.storage.layout)
     warm = convert_layout(source, destination)
     torch.cuda.synchronize(source.device)
     del warm
@@ -244,10 +248,50 @@ def test_mxfp4_value_convert_layout_to_strided_peak_allocation(layout, major_dim
     assert peak <= actual.data.nbytes + 1024**2
 
 
-@pytest.mark.parametrize(
-    "layout",
-    [HopperMXValueLayout(-2, 3),
-     BlackwellMXValueLayout(), BlackwellMX4ValueShuffledLayout()])
+@pytest.mark.parametrize("layout", _FP4_VALUE_LAYOUTS)
+@pytest.mark.parametrize("major_dim", [-3, -2, -1])
+@pytest.mark.parametrize("dtype", [torch.uint8, torch.int32])
+def test_mxfp4_value_convert_layout_forward_fallback(layout, major_dim, dtype):
+    data = torch.randint(0, 256, (4, 66, 66), dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
+    source = convert_layout(wrap_torch_tensor(data, dtype=FP4), StridedLayout(major_dim))
+    source = wrap_torch_tensor(source.data.to(dtype), dtype=FP4, shape=source.shape, layout=source.storage.layout)
+    expected = convert_layout(source, layout)
+    source_cuda = wrap_torch_tensor(source.data.cuda(), dtype=FP4, shape=source.shape, layout=source.storage.layout)
+
+    actual = convert_layout(source_cuda, layout)
+
+    assert actual.shape == expected.shape
+    assert actual.data.shape == expected.data.shape
+    assert actual.data.stride() == expected.data.stride()
+    assert actual.data.dtype == expected.data.dtype
+    if isinstance(layout, BlackwellMXValueLayout):
+        assert torch.equal(actual.data[..., :source.shape[-2] // 2, :].cpu(),
+                           expected.data[..., :source.shape[-2] // 2, :])
+    else:
+        assert torch.equal(actual.data.cpu(), expected.data)
+
+
+@pytest.mark.parametrize("layout", _FP4_VALUE_LAYOUTS)
+@pytest.mark.parametrize("major_dim", [-2, -1])
+@pytest.mark.parametrize("inverse", [False, True])
+def test_mxfp4_value_convert_layout_meta(layout, major_dim, inverse):
+    shape = [2, 130, 66]
+    source = empty(shape, dtype=FP4, device="cpu", layout=StridedLayout(major_dim))
+    source = convert_layout(source, layout) if inverse else source
+    destination = StridedLayout(major_dim) if inverse else layout
+    expected = convert_layout(source, destination)
+
+    source_meta = wrap_torch_tensor(source.data.to("meta"), dtype=FP4, shape=source.shape, layout=source.storage.layout)
+    actual = convert_layout(source_meta, destination)
+
+    assert actual.shape == expected.shape
+    assert actual.data.shape == expected.data.shape
+    assert actual.data.stride() == expected.data.stride()
+    assert actual.data.dtype == expected.data.dtype
+    assert actual.device.type == "meta"
+
+
+@pytest.mark.parametrize("layout", _FP4_VALUE_LAYOUTS)
 @pytest.mark.parametrize("inverse", [False, True])
 @pytest.mark.parametrize("major_dim", [-2, -1])
 def test_convert_layout_uses_input_device(layout, inverse, major_dim):

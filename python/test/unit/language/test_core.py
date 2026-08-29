@@ -5,6 +5,7 @@ import re
 from typing import Optional
 import math
 import textwrap
+from fractions import Fraction
 
 import numpy as np
 import pytest
@@ -1136,7 +1137,7 @@ def test_math_erf_op(dtype, member_fn, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("dtype", [dtype for dtype in ["float32", "float64"]])
+@pytest.mark.parametrize("dtype", ["float16", "float32", "float64"])
 def test_math_fma_op(dtype, device):
     check_type_supported(dtype, device)
     SIZE = 128
@@ -1150,14 +1151,67 @@ def test_math_fma_op(dtype, device):
         z = tl.math.fma(x, y, w)
         tl.store(Z + off, z)
 
-    torch_dtype = torch.float32 if dtype == "float32" else torch.float64
-    x = torch.randn(SIZE, dtype=torch_dtype, device=device)
-    y = torch.randn(SIZE, dtype=torch_dtype, device=device)
-    w = torch.randn(SIZE, dtype=torch_dtype, device=device)
-    z_ref = x * y + w
-    z_tri = torch.zeros_like(x)
-    kernel[(1, )](z_tri, x, y, w, SIZE=SIZE, num_warps=4)
-    torch.testing.assert_close(z_tri, z_ref)
+    def fma_ref(x, y, w):
+        # Rational arithmetic keeps the product exact, so the result is rounded
+        # once as an fma requires.
+        exact = [Fraction(float(a)) * Fraction(float(b)) + Fraction(float(c)) for a, b, c in zip(x, y, w)]
+        return np.array([float(e) for e in exact], dtype=x.dtype)
+
+    rs = RandomState(17)
+    x = numpy_random((SIZE, ), dtype_str=dtype, rs=rs)
+    y = numpy_random((SIZE, ), dtype_str=dtype, rs=rs)
+    w = numpy_random((SIZE, ), dtype_str=dtype, rs=rs)
+    # Let half of the addends cancel the rounded product, the sharpest case.
+    w[SIZE // 2:] = -(x[SIZE // 2:] * y[SIZE // 2:])
+
+    x_tri = to_triton(x, device=device, dst_type=dtype)
+    y_tri = to_triton(y, device=device, dst_type=dtype)
+    w_tri = to_triton(w, device=device, dst_type=dtype)
+    z_tri = to_triton(np.zeros_like(x), device=device, dst_type=dtype)
+    kernel[(1, )](z_tri, x_tri, y_tri, w_tri, SIZE=SIZE, num_warps=4)
+
+    np.testing.assert_equal(fma_ref(x, y, w), to_numpy(z_tri))
+
+
+@pytest.mark.interpreter
+def test_math_fma_op_special_values(device):
+    check_type_supported('float64', device)
+
+    @triton.jit
+    def kernel(Z, X, Y, W, SIZE: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        x = tl.load(X + off)
+        y = tl.load(Y + off)
+        w = tl.load(W + off)
+        z = tl.math.fma(x, y, w)
+        tl.store(Z + off, z)
+
+    finfo = np.finfo(np.float64)
+    inf, nan = float('inf'), float('nan')
+    cases = [
+        # x, y, w, expected
+        (nan, 1.0, 1.0, nan),
+        (inf, 0.0, 1.0, nan),
+        (2.0, 3.0, inf, inf),
+        (-finfo.max, finfo.max, inf, inf),
+        (-0.0, 1.0, -0.0, -0.0),
+        (1.0, 1.0, -1.0, 0.0),
+        (finfo.max, 2.0, finfo.max, inf),
+        (-finfo.smallest_subnormal, 0.5, 0.0, -0.0),
+    ]
+    x, y, w, expected = (np.array(column, dtype=np.float64) for column in zip(*cases))
+
+    x_tri = to_triton(x, device=device, dst_type='float64')
+    y_tri = to_triton(y, device=device, dst_type='float64')
+    w_tri = to_triton(w, device=device, dst_type='float64')
+    z_tri = to_triton(np.zeros_like(x), device=device, dst_type='float64')
+    kernel[(1, )](z_tri, x_tri, y_tri, w_tri, SIZE=len(cases))
+
+    z = to_numpy(z_tri)
+    np.testing.assert_equal(z, expected)
+    # assert_equal treats -0.0 and 0.0 as equal; NaN signs are unspecified.
+    finite = ~np.isnan(expected)
+    np.testing.assert_equal(np.signbit(z[finite]), np.signbit(expected[finite]))
 
 
 @pytest.mark.interpreter

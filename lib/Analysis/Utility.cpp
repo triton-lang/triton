@@ -1308,8 +1308,7 @@ static bool atomicNeedsClusterBarrier(Operation *op) {
 
   auto stages = getAtomicBarrierStages(atomic.getMemSemantic(),
                                        atomicResultHasCTABroadcast(op));
-  return stages.beforeMemoryEffects || stages.afterMemoryEffects ||
-         stages.betweenMemoryEffects;
+  return stages.hasBarrier();
 }
 
 bool needsClusterBarrier(Operation *op) {
