@@ -261,8 +261,6 @@ def _validate_conversion_out(tensor, out, layout, destination, same_encoding):
                 raise ValueError("out must have nonoverlapping physical strides")
             span += (size - 1) * stride
 
-    if not data.numel():
-        return False
     if data.device.type == "meta" or is_fake(data):
         if not torch._C._overlaps(data, out_data):
             return False
