@@ -313,10 +313,12 @@ def _bf16x2_to_fp4e2m1x2(x):
 
 def _unpack_bits(x):
     shape = (*x.shape[:-1], x.shape[-1] * x.element_size() // torch.int32.itemsize)
-    # Flatten before reinterpreting: empty tensors may have arbitrary outer strides.
-    x = x.reshape(-1)
-    if x.stride(0) != 1 or x.storage_offset() * x.element_size() % torch.int32.itemsize:
-        x = x.clone(memory_format=torch.contiguous_format)
+    # Reinterpret aligned row gaps directly; flatten unsupported byte layouts.
+    if (x.stride(-1) != 1 or x.storage_offset() * x.element_size() % torch.int32.itemsize
+            or any(stride * x.element_size() % torch.int32.itemsize for stride in x.stride()[:-1])):
+        x = x.reshape(-1)
+        if x.stride(0) != 1 or x.storage_offset() * x.element_size() % torch.int32.itemsize:
+            x = x.clone(memory_format=torch.contiguous_format)
     x = x.view(torch.int32).reshape(shape)
     m = 0b10000001110000001000000111000000
     a = (x << 1) & 0b10000000000000001000000000000000

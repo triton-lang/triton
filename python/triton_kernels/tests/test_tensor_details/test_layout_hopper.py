@@ -97,12 +97,25 @@ def test_mxfp4_value_zero_sized_roundtrip(shape, major_dim, mx_axis, mma_version
 
 
 @pytest.mark.parametrize("mx_axis", [-2, -1])
-def test_mxfp4_value_convert_layout_roundtrip(mx_axis):
-    x = torch.randint(0, 256, (64, 64), dtype=torch.uint8)
-    src = wrap_torch_tensor(x, dtype=FP4)
-    layout = HopperMXValueLayout(mx_axis=mx_axis, mma_version=3)
+@pytest.mark.parametrize("mma_version", [2, 3])
+@pytest.mark.parametrize("shape", [(64, 64), (0, 64), (64, 0)])
+@pytest.mark.parametrize("step", [(1, 1), (2, 1), (1, 2)])
+@pytest.mark.parametrize("transpose", [False, True])
+@pytest.mark.parametrize("offset", [0, 1])
+def test_mxfp4_value_convert_layout_roundtrip(mx_axis, mma_version, shape, step, transpose, offset):
+    x = torch.randint(0, 256, shape, dtype=torch.uint8)
+    src = wrap_torch_tensor(x, dtype=FP4, shape=[shape[0], 2 * shape[1]], layout=StridedLayout(-1))
+    layout = HopperMXValueLayout(mx_axis=mx_axis, mma_version=mma_version)
 
     swizzled = convert_layout(src, layout)
+    encoded = swizzled.data.mT if mx_axis == -2 else swizzled.data
+    strides = ((step[0], encoded.shape[0] * math.prod(step)) if transpose else
+               (encoded.shape[1] * math.prod(step), step[1]))
+    storage = torch.empty((encoded.numel() * math.prod(step) + offset, ), dtype=torch.uint8)
+    data = storage[offset:].as_strided(encoded.shape, strides)
+    data.copy_(encoded)
+    data = data.mT if mx_axis == -2 else data
+    swizzled = wrap_torch_tensor(data, dtype=FP4, shape=src.shape, layout=layout)
     roundtrip = convert_layout(swizzled, src.storage.layout)
 
     assert torch.equal(roundtrip.storage.data, x)

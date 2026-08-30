@@ -233,46 +233,48 @@ def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None, layo
 
 
 def _validate_conversion_out(tensor, out, layout, destination, same_encoding):
+    data, out_data = tensor.data, out.data
     if out.shape != tensor.shape:
         raise ValueError("out must have the same logical shape as the input")
     if not out.storage.layout.can_preserve_storage_as(layout, len(tensor.shape)):
         raise ValueError("out must have the requested layout")
-    if out.dtype != tensor.dtype or out.data.dtype != tensor.data.dtype:
+    if out.dtype != tensor.dtype or out_data.dtype != data.dtype:
         raise ValueError("out must have the same logical and storage dtypes as the input")
-    if out.device != tensor.device:
+    if out_data.device != data.device:
         raise ValueError("out must be on the input device")
-    if tensor.dtype == FP4 and tensor.data.dtype != torch.uint8:
+    if tensor.dtype == FP4 and data.dtype != torch.uint8:
         raise ValueError("FP4 conversion with out requires uint8 storage")
-    if (same_encoding and torch._C._overlaps(tensor.data, out.data)
-            and out.data.storage_offset() == tensor.data.storage_offset() and out.data.shape == tensor.data.shape
-            and out.data.stride() == tensor.data.stride()):
+    if (same_encoding and torch._C._overlaps(data, out_data) and out_data.storage_offset() == data.storage_offset()
+            and out_data.shape == data.shape and out_data.stride() == data.stride()):
         return True
-    if list(out.data.shape) != destination.storage_shape:
+    if list(out_data.shape) != destination.storage_shape:
         raise ValueError("out has an incorrect physical storage shape")
-    if not out.data.numel():
+    if not out_data.numel():
         return False
 
     # Increasing strides must separate the spans of the faster dimensions.
     # This permits sliced storage without permitting overlapping writes.
     span = 1
-    for size, stride in sorted(zip(out.data.shape, out.data.stride()), key=lambda item: item[1]):
+    for size, stride in sorted(zip(out_data.shape, out_data.stride()), key=lambda item: item[1]):
         if size > 1:
             if stride < span:
                 raise ValueError("out must have nonoverlapping physical strides")
             span += (size - 1) * stride
 
-    if tensor.device.type == "meta" or is_fake(tensor.data):
-        overlaps = torch._C._overlaps(tensor.data, out.data)
-    elif tensor.data.numel():
-        source_start = tensor.data.data_ptr()
-        source_end = source_start + tensor.data.element_size() * (1 + sum(
-            (size - 1) * stride for size, stride in zip(tensor.data.shape, tensor.data.stride())))
-        out_start = out.data.data_ptr()
-        out_end = out_start + out.data.element_size() * span
-        overlaps = source_start < out_end and out_start < source_end
+    if not data.numel():
+        return False
+    if data.device.type == "meta" or is_fake(data):
+        if not torch._C._overlaps(data, out_data):
+            return False
+        source_start = data.storage_offset() * data.element_size()
+        out_start = out_data.storage_offset() * out_data.element_size()
     else:
-        overlaps = False
-    if overlaps:
+        source_start = data.data_ptr()
+        out_start = out_data.data_ptr()
+    source_end = source_start + data.element_size() * (1 + sum(
+        (size - 1) * stride for size, stride in zip(data.shape, data.stride())))
+    out_end = out_start + out_data.element_size() * span
+    if source_start < out_end and out_start < source_end:
         raise ValueError("input and out storage must not overlap")
     return False
 

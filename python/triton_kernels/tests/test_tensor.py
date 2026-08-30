@@ -1,7 +1,9 @@
 import math
+from contextlib import nullcontext
 
 import pytest
 import torch
+from torch._subclasses.fake_tensor import FakeTensorMode
 import triton
 import triton.language as tl
 from triton_kernels.fpsan import embed, unembed
@@ -259,21 +261,25 @@ def test_convert_layout_out_requires_byte_fp4_storage():
 
 @pytest.mark.parametrize("offset", [0, 1, 32])
 @pytest.mark.parametrize("major_dim", [-2, -1])
-def test_convert_layout_out_shared_storage(offset, major_dim):
-    data = torch.arange(64, dtype=torch.uint8)
-    source = wrap_torch_tensor(data[:32].view(4, 8), dtype=FP4)
-    layout = StridedLayout(major_dim)
-    shape = layout.storage_shape(source.shape, True)
-    out = wrap_torch_tensor(data[offset:offset + 32].view(shape), dtype=FP4, shape=source.shape, layout=layout)
-    expected = convert_layout(source, layout)
+@pytest.mark.parametrize("mode", ["cpu", "meta", "fake"])
+def test_convert_layout_out_shared_storage(offset, major_dim, mode):
+    with FakeTensorMode() if mode == "fake" else nullcontext():
+        data = torch.arange(64, dtype=torch.uint8, device="meta" if mode == "meta" else "cpu")
+        source = wrap_torch_tensor(data[:32].view(4, 8), dtype=FP4)
+        layout = StridedLayout(major_dim)
+        shape = layout.storage_shape(source.shape, True)
+        out = wrap_torch_tensor(data[offset:offset + 32].view(shape), dtype=FP4, shape=source.shape, layout=layout)
+        expected = convert_layout(source, layout)
 
-    if offset == 1 or (offset == 0 and major_dim == -2):
-        with pytest.raises(ValueError, match="must not overlap"):
-            convert_layout(source, layout, out=out)
-        assert torch.equal(data, torch.arange(64, dtype=torch.uint8))
-    else:
-        assert convert_layout(source, layout, out=out) is out
-        assert torch.equal(out.data, expected.data)
+        if offset == 1 or (offset == 0 and major_dim == -2):
+            with pytest.raises(ValueError, match="must not overlap"):
+                convert_layout(source, layout, out=out)
+            if mode == "cpu":
+                assert torch.equal(data, torch.arange(64, dtype=torch.uint8))
+        else:
+            assert convert_layout(source, layout, out=out) is out
+            if mode == "cpu":
+                assert torch.equal(out.data, expected.data)
 
 
 @pytest.mark.parametrize(
