@@ -1031,8 +1031,9 @@ def test_mbarrier_automatic_warp_arrivals_cross_cta(num_ctas, from_cta, two_ctas
     arrive_counts = re.findall(
         r"mbarrier\.arrive\.shared::cluster(?:\.multicast::cluster::32b)?\.b64\s+_,\s*\[[^\]]+\](?:,\s*(\d+))?(?:,\s*%r\d+)?;",
         ptx)
-    assert {int(count or 1) for count in arrive_counts} == {1}
-    assert "bar.warp.sync" in ptx
+    # An arrival after a CTA barrier contributes for all four warps.
+    assert {int(count or 1) for count in arrive_counts} == ({1, 4} if two_ctas else {4})
+    assert ("bar.warp.sync" in ptx) == two_ctas
     kernel[(1, )](out, from_cta, two_ctas, num_warps=4, num_ctas=num_ctas)
     assert out.item() == 1
 

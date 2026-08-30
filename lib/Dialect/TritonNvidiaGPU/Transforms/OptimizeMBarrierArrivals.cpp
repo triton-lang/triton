@@ -1,3 +1,4 @@
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
@@ -103,6 +104,22 @@ static void distributeArrivals(gpu::LocalAllocOp alloc) {
   }
 }
 
+static void foldSynchronizedArrival(ArriveBarrierOp arrive) {
+  // Outlined helpers do not carry the caller's partition offset into lowering.
+  auto func = arrive->getParentOfType<triton::FuncOp>();
+  if (!func || !triton::isKernel(func))
+    return;
+  auto numWarps = arrive.getArrivalWarps();
+  if (!numWarps || *numWarps <= 1 || *numWarps != gpu::lookupNumWarps(arrive))
+    return;
+  auto barrier = dyn_cast_or_null<gpu::BarrierOp>(arrive->getPrevNode());
+  if (!barrier || !barrier.hasLocal())
+    return;
+  // The preceding rendezvous publishes every warp's effects. Keep the total
+  // count, but let one thread per routed target contribute it.
+  arrive.removeArrivalWarpsAttr();
+}
+
 struct OptimizeMBarrierArrivalsPass
     : impl::TritonNvidiaGPUOptimizeMBarrierArrivalsPassBase<
           OptimizeMBarrierArrivalsPass> {
@@ -113,7 +130,10 @@ struct OptimizeMBarrierArrivalsPass
     // Completing arrivals with an explicit count require SM90.
     if (computeCapability < 90)
       return;
-    mod.walk(distributeArrivals);
+    if (foldAfterSync)
+      mod.walk(foldSynchronizedArrival);
+    else
+      mod.walk(distributeArrivals);
   }
 };
 

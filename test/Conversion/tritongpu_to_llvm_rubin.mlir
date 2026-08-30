@@ -247,7 +247,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2], [4]]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107"} {
-  // Every warp contributes to the same routed targets, using lane zero as issuer.
+  // A local barrier lets one thread contribute each target's full count.
   // CHECK-LABEL: @distributed_arrival_multicast_routes
   tt.func @distributed_arrival_multicast_routes(%barrier: !ttg.memdesc<8xi64, #barrier, #smem, mutable>) {
     // CHECK: nvvm.bar.warp.sync
@@ -263,9 +263,11 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: @$0 mbarrier.arrive.shared::cluster.multicast::cluster::32b.b64 _, [$1], 2, $2;
     // CHECK-SAME: "b,r,r" %[[ROUTED_PRED]], %{{[^,]+}}, %[[MASK]]
     ttng.arrive_barrier %barrier, 8 {arrivalWarps = 4 : i32, fromCTA = 5 : i32} : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
-    // CHECK: nvvm.bar.warp.sync
-    // CHECK: @$0 mbarrier.arrive.shared::cluster.multicast::cluster::32b.b64 _, [$1], 3, $2;
-    // CHECK-SAME: "b,r,r" %[[LANE_ZERO]], %{{[^,]+}}, %[[MASK]]
+    // CHECK: nvvm.barrier
+    // CHECK-NOT: nvvm.bar.warp.sync
+    // CHECK: @$0 mbarrier.arrive.shared::cluster.multicast::cluster::32b.b64 _, [$1], 12, $2;
+    // CHECK-SAME: "b,r,r" %{{[^,]+}}, %{{[^,]+}}, %[[MASK]]
+    ttg.barrier local
     ttng.arrive_barrier %barrier, 12 {arrivalWarps = 4 : i32, multicastCTA = 2 : i32} : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
     tt.return
   }

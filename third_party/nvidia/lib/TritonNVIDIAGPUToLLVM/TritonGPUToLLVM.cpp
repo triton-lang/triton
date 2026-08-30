@@ -203,6 +203,14 @@ LogicalResult ConvertTritonGPUToLLVM::prepareModule(ModuleOp mod,
       return failure();
   }
 
+  // Check adjacency after instrumentation without rescaling its barrier counts.
+  arrivalOptions.foldAfterSync = true;
+  mlir::PassManager arrivalFoldPm(mod.getContext());
+  arrivalFoldPm.addPass(
+      ttng::createTritonNvidiaGPUOptimizeMBarrierArrivalsPass(arrivalOptions));
+  if (failed(arrivalFoldPm.run(mod)))
+    return failure();
+
   mlir::triton::nvidia_gpu::runClusterBarrierMbarAllocator(mod);
   mod.walk([&](triton::gpu::GlobalScratchAllocOp) -> WalkResult {
     mlir::triton::gpu::runGlobalScratchMemoryAllocation(mod);

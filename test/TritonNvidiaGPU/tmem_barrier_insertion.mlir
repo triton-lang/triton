@@ -1,6 +1,6 @@
 // RUN: triton-opt %s --convert-scf-to-cf -test-print-membar -triton-nvidia-gpu-tmem-barrier-insertion | FileCheck %s --check-prefixes=CHECK,WAIT
 // RUN: triton-opt %s --convert-scf-to-cf -triton-nvidia-gpu-tmem-barrier-insertion | FileCheck %s --check-prefix=WAIT
-// RUN: triton-opt %s -triton-nvidia-gpu-optimize-mbarrier-arrivals --convert-scf-to-cf -test-print-membar -triton-nvidia-gpu-tmem-barrier-insertion | FileCheck %s --check-prefix=ARRIVAL
+// RUN: triton-opt %s -triton-nvidia-gpu-optimize-mbarrier-arrivals --convert-scf-to-cf -test-print-membar -triton-nvidia-gpu-tmem-barrier-insertion -triton-nvidia-gpu-optimize-mbarrier-arrivals='fold-after-sync=true' | FileCheck %s --check-prefix=ARRIVAL
 
 #shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
 #shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 16}>

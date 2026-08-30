@@ -142,12 +142,16 @@ def TritonNvidiaGPUHoistMBarrierLifecyclePass : Pass<"triton-nvidia-gpu-hoist-mb
 }
 
 def TritonNvidiaGPUOptimizeMBarrierArrivalsPass : Pass<"triton-nvidia-gpu-optimize-mbarrier-arrivals", "mlir::ModuleOp"> {
-  let summary = "Distribute software mbarrier arrivals among partition warps";
+  let summary = "Optimize software mbarrier arrivals";
 
   let description = [{
     Scale counts of closed software-only mbarrier allocations and distribute
     each arrival across its partition's warps. Run after warp counts are final
     and before membar insertion, which retains barrier-storage dependencies.
+
+    With fold-after-sync, remove per-warp arrivals in kernel regions immediately
+    after local CTA barriers without changing counts. Keep outlined helpers
+    distributed. Run this mode after synchronization and sanitizer insertion.
   }];
 
   let dependentDialects = [
@@ -157,7 +161,9 @@ def TritonNvidiaGPUOptimizeMBarrierArrivalsPass : Pass<"triton-nvidia-gpu-optimi
 
   let options = [
     Option<"computeCapability", "compute-capability",
-           "int32_t", /*default*/"90", "device compute capability">
+           "int32_t", /*default*/"90", "device compute capability">,
+    Option<"foldAfterSync", "fold-after-sync", "bool", /*default*/"false",
+           "Fold arrivals immediately after local CTA barriers without rescaling">
   ];
 }
 
