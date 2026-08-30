@@ -263,7 +263,7 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: @$0 mbarrier.arrive.shared::cluster.multicast::cluster::32b.b64 _, [$1], 2, $2;
     // CHECK-SAME: "b,r,r" %[[ROUTED_PRED]], %{{[^,]+}}, %[[MASK]]
     ttng.arrive_barrier %barrier, 8 {arrivalWarps = 4 : i32, fromCTA = 5 : i32} : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
-    // CHECK: nvvm.bar.warp.sync
+    // CHECK: nvvm.barrier
     // CHECK: @$0 mbarrier.arrive.shared::cluster.multicast::cluster::32b.b64 _, [$1], 3, $2;
     // CHECK-SAME: "b,r,r" %[[LANE_ZERO]], %{{[^,]+}}, %[[MASK]]
     ttng.arrive_barrier %barrier, 12 {arrivalWarps = 4 : i32, multicastCTA = 2 : i32} : !ttg.memdesc<8xi64, #barrier, #smem, mutable>

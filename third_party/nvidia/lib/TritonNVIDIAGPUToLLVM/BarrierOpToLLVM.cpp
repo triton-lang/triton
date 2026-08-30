@@ -419,7 +419,6 @@ struct ArriveBarrierOpConversion
     Value id;
     unsigned count = op.getCount();
     if (auto numWarps = op.getArrivalWarps()) {
-      LLVM::NVIDIA::createSyncWarp(loc, rewriter);
       id = getLaneId(rewriter, loc);
       count /= *numWarps;
     } else {
