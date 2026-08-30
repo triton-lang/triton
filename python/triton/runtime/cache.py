@@ -1,4 +1,5 @@
 import json
+import errno
 import os
 import uuid
 from abc import ABC, abstractmethod
@@ -123,7 +124,13 @@ class FileCacheManager(CacheManager):
         # Replace is guaranteed to be atomic on POSIX systems if it succeeds
         # so filepath cannot see a partial write
         os.replace(temp_path, filepath)
-        os.removedirs(temp_dir)
+        try:
+            os.rmdir(temp_dir)
+        except OSError as e:
+            # Publishing has already succeeded. Some network filesystems can
+            # transiently report EBUSY while removing this private directory.
+            if e.errno != errno.EBUSY:
+                raise
         return filepath
 
 

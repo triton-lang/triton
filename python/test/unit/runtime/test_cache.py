@@ -1,4 +1,5 @@
 import expecttest
+import errno
 import importlib.util
 import itertools
 import multiprocessing
@@ -16,6 +17,32 @@ import triton
 import triton.language as tl
 from triton._internal_testing import is_hip
 from triton.runtime.cache import FileCacheManager, RemoteCacheManager
+
+
+def test_file_cache_manager_put_ignores_busy_temp_dir_cleanup(fresh_knobs, monkeypatch, tmp_path):
+    fresh_knobs.cache.dir = str(tmp_path)
+    manager = FileCacheManager("key")
+
+    def busy_rmdir(path):
+        raise OSError(errno.EBUSY, os.strerror(errno.EBUSY), path)
+
+    monkeypatch.setattr(os, "rmdir", busy_rmdir)
+    path = manager.put("published", "kernel.json", binary=False)
+
+    assert pathlib.Path(path).read_text() == "published"
+
+
+def test_file_cache_manager_put_propagates_unexpected_cleanup_error(fresh_knobs, monkeypatch, tmp_path):
+    fresh_knobs.cache.dir = str(tmp_path)
+    manager = FileCacheManager("key")
+
+    def denied_rmdir(path):
+        raise OSError(errno.EACCES, os.strerror(errno.EACCES), path)
+
+    monkeypatch.setattr(os, "rmdir", denied_rmdir)
+    with pytest.raises(OSError) as exc_info:
+        manager.put("published", "kernel.json", binary=False)
+    assert exc_info.value.errno == errno.EACCES
 
 
 def test_file_cache_manager_get_group_rejects_missing_child(fresh_knobs, tmp_path):
