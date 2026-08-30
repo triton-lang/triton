@@ -70,7 +70,6 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
         return out
 
     def swizzle_data(self, data):
-        assert data.stride(-1) == 1
         # re-pack as column-major
         ret = torch.empty_strided(self.storage_shape, strides_major_dim_m2(self.storage_shape), device=data.device,
                                   dtype=data.dtype)

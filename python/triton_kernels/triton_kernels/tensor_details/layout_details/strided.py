@@ -94,7 +94,6 @@ class StridedLayoutTransformation(LayoutTransformation):
         return strides
 
     def swizzle_data(self, data):
-        assert data.numel() == 0 or data.stride(-1) == 1
         r = len(self.shape)
         if r == 0:
             return self._validate_storage_shape(data)

@@ -249,6 +249,7 @@ def _validate_conversion_out(tensor, out, layout, destination, same_encoding):
         return True
     if list(out_data.shape) != destination.storage_shape:
         raise ValueError("out has an incorrect physical storage shape")
+    # Empty tensors have no spans to validate, regardless of strides or pointers.
     if not out_data.numel():
         return False
 

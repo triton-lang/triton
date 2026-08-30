@@ -239,7 +239,7 @@ def test_convert_layout_scalar(mode):
 
 
 @pytest.mark.parametrize("dtype", _STRIDED_DTYPES)
-@pytest.mark.parametrize("shape,source_dim,destination_dim", [((4, 6, 16), 2, 1), ((2, 4, 3), 0, 1), ((0, 4, 6), 2, 1)])
+@pytest.mark.parametrize("shape,source_dim,destination_dim", [((4, 6, 16), 2, 1), ((2, 4, 3), 0, 1), ((2, 0, 4), 2, 1)])
 @pytest.mark.parametrize("with_out", [False, True])
 @pytest.mark.parametrize("mode", ["cpu", "meta", "fake", "cuda"])
 def test_convert_layout_between_strided_layouts(dtype, shape, source_dim, destination_dim, with_out, mode):
@@ -313,7 +313,9 @@ def test_convert_layout_between_strided_layouts_peak_allocation(dtype, with_out)
         ((70, 65), None, UINT8, HopperMXScaleLayout(-2, 4), HopperMXScaleLayout(-2, 4)),
         ((64, 64), (64, 128), FP4, HopperMXValueLayout(-2, 3), HopperMXValueLayout(-2, 3)),
         ((10, 254, 60), None, UINT8, CDNA4MXScaleLayout(), CDNA4MXScaleLayout()),
+        ((8, 1), None, UINT8, CDNA4MXScaleLayout(), CDNA4MXScaleLayout()),
         ((10, 254, 60), None, UINT8, GFX1250MXScaleLayout(), GFX1250MXScaleLayout()),
+        ((4, 1), None, UINT8, GFX1250MXScaleLayout(), GFX1250MXScaleLayout()),
     ],
 )
 def test_convert_layout_noop_for_equivalent_layout(storage_shape, logical_shape, dtype, layout, equivalent_layout):
@@ -327,6 +329,8 @@ def test_convert_layout_noop_for_equivalent_layout(storage_shape, logical_shape,
                             layout=equivalent_layout)
     assert convert_layout(tensor, layout, out=out) is out
     assert torch.equal(out.data, converted.data)
+    restored = convert_layout(out, tensor.storage.layout)
+    assert torch.equal(restored.data, tensor.data)
 
 
 @pytest.mark.parametrize("shape,layout,dtype,message", [

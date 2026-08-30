@@ -94,7 +94,6 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
 
     def swizzle_data(self, data: torch.Tensor) -> torch.Tensor:
         """Convert canonical [..., K, N_packed] bytes to shuffled 5D storage."""
-        assert data.stride(-1) == 1
         return self._convert_data(data, inverse=False, major_dim=-1)
 
     def unswizzle_data(self, data: torch.Tensor) -> torch.Tensor:
