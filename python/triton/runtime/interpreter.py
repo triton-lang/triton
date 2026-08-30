@@ -1139,6 +1139,16 @@ class ReduceOps(ReduceScanOpInterface):
             raise ValueError("val_reduce_op and idx_reduce_op are both None")
 
     def sum(self, input):
+        # bfloat16/float8 are stored as raw uint bits (numpy has no native
+        # support for them), so np.sum on input.handle.data directly would
+        # perform integer addition on the bit patterns instead of float
+        # addition -- silently corrupting the result and losing NaN
+        # propagation. Compute in float32 for these dtypes, then cast back.
+        if input.dtype.is_floating() and np.issubdtype(_get_np_dtype(input.dtype), np.integer):
+            data = _convert_float(input.handle.data, input.dtype, tl.float32, None).view(np.float32)
+            result = np.sum(data, axis=self.axis, keepdims=self.keep_dims)
+            cast_back = _convert_float(result, tl.float32, input.dtype, None).view(_get_np_dtype(input.dtype))
+            return self.to_tensor(cast_back, input.dtype)
         return self.to_tensor(np.sum(input.handle.data, axis=self.axis, keepdims=self.keep_dims), input.dtype)
 
     def apply_impl(self, input):
