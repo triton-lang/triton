@@ -412,9 +412,10 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
     the specified count.
 
     The compiler-owned `arrivalWarps` attribute records the execution region's
-    warp count and divides the count equally among them. Each warp synchronizes
-    before contributing to every routed target. The count remains the total
-    decrement per source CTA and target barrier.
+    warp count and divides the count equally among them. Membar inserts the
+    required warp synchronization before each warp contributes to every routed
+    target. The count remains the total decrement per source CTA and target
+    barrier.
 
     When `multicastCTA` is non-zero, the arrive is multicast across the cluster.
     Each bit set in the mask identifies a CTA ID dimension to multicast

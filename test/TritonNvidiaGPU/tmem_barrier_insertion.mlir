@@ -1014,6 +1014,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // ARRIVAL: ttng.init_barrier {{.*}}, 4 :
   // ARRIVAL: ttng.tmem_load
   // ARRIVAL-NEXT: ttng.tmem_wait load
+  // ARRIVAL-NEXT: ttg.barrier warp local
   // ARRIVAL-NEXT: ttng.arrive_barrier {{.*}}, 4 {arrivalWarps = 4 : i32}
   tt.func @tmem_load_distributed_arrive(%data: tensor<128x128xf32, #blocked>) -> tensor<128x128xf32, #blocked> {
     %phase = arith.constant 0 : i32

@@ -736,23 +736,19 @@ def TTG_WarpReturnOp : TTG_Op<"warp_return", [
 }
 
 def TTG_BarrierOp : TTG_Op<"barrier"> {
-  let summary = "Synchronizes execution and reads/writes to the selected address spaces for all threads in the CTA.";
+  let summary = "Synchronizes execution and memory accesses within a CTA or warp.";
   let description = [{
-    The `barrier` op synchronises the execution and all operations between the selected address spaces for all
-    threads in the CTA. It is used to coordinate communication between threads in the CTA.
+    The `barrier` op synchronizes execution and accesses to the selected address
+    spaces. The default CTA scope waits for every thread in the CTA and makes
+    their preceding accesses visible throughout the CTA.
 
-    This operation waits until all threads in the CTA have reached a `barrier` (for synchronization) and operations
-    between the selected address spaces made by these threads prior to the op are visible to all threads in the CTA.
-
-    Data hazards between threads accessing the same memory can be avoided by synchronising the
-    specified scope in-between these accesses with a `barrier`.
-
-    A `barrier` operation only provides synchronization and memory guarantees on the selected address spaces in the CTA.
+    Warp scope synchronizes all lanes of each participating warp and orders
+    only their accesses. It supports the `none` and `local` address spaces.
 
     The mandatory `addrspace` attribute is a bitmask describing which address spaces will be visible when the `barrier` completes:
 
     * `none`         control-only synchronization (no memory ordering).
-    * `local`        shared-memory operations are complete and visible CTA-wide.
+    * `local`        shared-memory operations are complete and visible within the selected scope.
     * `global_read`  global memory reads are complete and visible CTA-wide.
     * `global_write` global memory writes are complete and visible CTA-wide.
     * `tensor_read`  tensor memory read operations are complete and visible CTA-wide.
@@ -766,13 +762,18 @@ def TTG_BarrierOp : TTG_Op<"barrier"> {
     ```mlir
     ttg.barrier local
     ttg.barrier local|global_read|global_write
+    ttg.barrier warp local
     ```
   }];
 
-  let arguments = (ins TTG_AddrSpace:$addrSpace);
+  let arguments = (ins TTG_AddrSpace:$addrSpace,
+    DefaultValuedAttr<TTG_BarrierScope, "::mlir::triton::gpu::BarrierScope::CTA">:$scope);
   let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
 
   let extraClassDeclaration = [{
+    bool isWarp() { return getScope() == BarrierScope::Warp; }
+
     /// Returns true if the barrier includes all of the given address spaces.
     /// For example, hasAddrSpaces(Local | GlobalRead) returns true only if
     /// both Local and GlobalRead are set.

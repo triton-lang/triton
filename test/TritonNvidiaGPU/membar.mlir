@@ -191,6 +191,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // ARRIVAL-LABEL: @distributed_arrival_keeps_payload_hazard
   // ARRIVAL: ttng.init_barrier {{.*}}, 4 :
   // ARRIVAL: ttg.local_store
+  // ARRIVAL-NEXT: ttg.barrier warp local
   // ARRIVAL-NEXT: ttng.arrive_barrier {{.*}}, 4 {arrivalWarps = 4 : i32}
   // ARRIVAL-NEXT: ttg.barrier local
   // ARRIVAL-NEXT: %{{.*}} = ttg.local_load
