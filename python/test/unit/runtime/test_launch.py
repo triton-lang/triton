@@ -3,12 +3,16 @@ import tracemalloc
 import pytest
 import pathlib
 import os
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event, Lock, get_ident
+from types import SimpleNamespace
 import numpy as np
 
 import torch
 import triton
 import triton.language as tl
 from triton._internal_testing import is_cuda, is_hip
+from triton.compiler import compiler
 
 
 def test_metadata() -> None:
@@ -100,6 +104,143 @@ def test_load_hook() -> None:
     assert start_hash == end_hash
     triton.knobs.runtime.kernel_load_start_hook.remove(hook_start)
     triton.knobs.runtime.kernel_load_end_hook.remove(hook_end)
+
+
+def test_concurrent_kernel_load(monkeypatch) -> None:
+    launcher_created = Event()
+    release_load = Event()
+    waiter_entered = Event()
+    end_hook_entered = Event()
+    release_end_hook = Event()
+    start_hook_reentered = Event()
+    module = object()
+    function = object()
+    launched_functions = []
+    load_calls = 0
+
+    def launcher(*args):
+        launched_functions.append(args[4])
+
+    class ObservableLock:
+
+        def __init__(self):
+            self.lock = Lock()
+            self.first_owner = None
+
+        def __enter__(self):
+            self.lock.acquire()
+            owner = get_ident()
+            if self.first_owner is None:
+                self.first_owner = owner
+            elif owner != self.first_owner:
+                waiter_entered.set()
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            self.lock.release()
+
+    def make_launcher(src, metadata):
+        launcher_created.set()
+        return launcher
+
+    def load_binary(name, kernel, shared, device):
+        nonlocal load_calls
+        load_calls += 1
+        assert release_load.wait(timeout=5)
+        return module, function, 32, 0, 1024
+
+    utils = SimpleNamespace(
+        get_device_properties=lambda _: {"max_shared_mem": 1},
+        load_binary=load_binary,
+        unload_module=lambda _: None,
+    )
+    fake_driver = SimpleNamespace(
+        get_current_device=lambda: 0,
+        get_current_stream=lambda _: 0,
+        get_current_target=lambda: SimpleNamespace(warp_size=32),
+        launcher_cls=make_launcher,
+        utils=utils,
+    )
+    monkeypatch.setattr(compiler.driver, "_active", fake_driver)
+    monkeypatch.setattr(compiler, "max_shared_mem", lambda _: 1)
+
+    compiled = object.__new__(compiler.CompiledKernel)
+    compiled.src = object()
+    compiled.metadata = SimpleNamespace(shared=0, num_warps=4, target=SimpleNamespace(arch=89))
+    compiled.metadata_group = {}
+    compiled.packed_metadata = ()
+    compiled.hash = "hash"
+    compiled.name = "kernel"
+    compiled.kernel = b""
+    compiled.module = None
+    compiled._module_pid = None
+    compiled.function = None
+    compiled._run = None
+    # Simulate a fork copying a lock held by a thread that does not survive in
+    # the child. The child must replace that lock before lazy initialization.
+    stale_lock = Lock()
+    stale_lock.acquire()
+    stale_state = SimpleNamespace(lock=stale_lock, event=Event(), owner=1, run=None, handles_ready=False)
+    current_state = SimpleNamespace(lock=ObservableLock(), event=Event(), owner=None, run=None, handles_ready=False)
+    compiled._init_states = {-1: stale_state}
+    compiled._handle_generation = getattr(compiler, "_handle_generation", 0)
+    if hasattr(compiler, "_HandleInitState"):
+        monkeypatch.setattr(compiler, "_HandleInitState", lambda: current_state)
+
+    def hook_start(module, function, name, metadata_group, hash):
+        assert compiled.run is launcher
+        start_hook_reentered.set()
+
+    def hook_end(module, function, name, metadata_group, hash):
+        end_hook_entered.set()
+        assert compiled.module is module
+        assert compiled.function is function
+        compiled[(1, 1, 1)]()
+        assert launched_functions[-1] is function
+        assert release_end_hook.wait(timeout=5)
+
+    triton.knobs.runtime.kernel_load_start_hook.add(hook_start)
+    triton.knobs.runtime.kernel_load_end_hook.add(hook_end)
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(lambda: compiled.run)
+            assert launcher_created.wait(timeout=5)
+            assert start_hook_reentered.wait(timeout=5)
+            second = pool.submit(lambda: compiled.run)
+            try:
+                assert waiter_entered.wait(timeout=5)
+                assert not second.done()
+                release_load.set()
+                assert end_hook_entered.wait(timeout=5)
+                assert not second.done()
+            finally:
+                release_load.set()
+                release_end_hook.set()
+            assert first.result(timeout=5) is launcher
+            assert second.result(timeout=5) is launcher
+        assert load_calls == 1
+        assert compiled.module is module
+        assert compiled.function is function
+
+        # A child must discard even fully published handles from its parent.
+        compiled.module = object()
+        compiled._module_pid = -1
+        compiled.function = object()
+        compiled._run = launcher
+        compiled._handle_generation = -1
+        assert compiled.run is launcher
+        assert load_calls == 2
+        assert compiled.module is module
+        assert compiled.function is function
+    finally:
+        release_load.set()
+        release_end_hook.set()
+        triton.knobs.runtime.kernel_load_start_hook.remove(hook_start)
+        triton.knobs.runtime.kernel_load_end_hook.remove(hook_end)
+        compiled.module = None
+        compiled._module_pid = None
+        stale_lock.release()
 
 
 def test_multiple_hooks() -> None:
