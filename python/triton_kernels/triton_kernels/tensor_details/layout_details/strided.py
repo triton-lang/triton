@@ -62,6 +62,13 @@ class StridedLayoutTransformation(LayoutTransformation):
 
     order: list[int]
 
+    def _convert_data_from(self, data, source: LayoutTransformation, *, out):
+        if (not isinstance(source, StridedLayoutTransformation) or (self.is_fp4 and data.dtype != torch.uint8)):
+            return super()._convert_data_from(data, source, out=out)
+        if out is None:
+            out = torch.empty_strided(self.storage_shape, self.storage_strides, dtype=data.dtype, device=data.device)
+        return repack(data, source.order[0], self.order[0], self.is_fp4, out=out)
+
     def _can_convert_fp4(self, data):
         """Packed shape identifies nibble pairs; readers use actual strides."""
         return (self.is_fp4 and len(self.shape) >= 2 and self.order[0] >= len(self.shape) - 2
