@@ -59,7 +59,7 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
         repack(data, -2, destination.order[0], True, out=out)
         return out
 
-    def _convert_data_from(self, data, source: LayoutTransformation, *, out=None):
+    def _convert_data_from(self, data, source: LayoutTransformation, *, out):
         if (not isinstance(source, strided.StridedLayoutTransformation) or not self.is_fp4 or self.shape[-1] % 2
                 or self.shape[-2] % 2 or not source._can_convert_fp4(data)):
             return super()._convert_data_from(data, source, out=out)

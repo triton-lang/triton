@@ -21,7 +21,7 @@ class LayoutTransformation(ABC):
         """Convert to another layout, using canonical storage by default."""
         return destination._convert_data_from(data, self, out=out)
 
-    def _convert_data_from(self, data, source: "LayoutTransformation", *, out=None):
+    def _convert_data_from(self, data, source: "LayoutTransformation", *, out):
         result = self.swizzle_data(source.unswizzle_data(data))
         return result if out is None else out.copy_(result)
 

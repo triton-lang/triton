@@ -112,7 +112,7 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
                                                    MMA_VERSION=self.mma_version, BLOCK_M=block_m, BLOCK_K=block_k)
         return out
 
-    def _convert_data_from(self, data, source: LayoutTransformation, *, out=None):
+    def _convert_data_from(self, data, source: LayoutTransformation, *, out):
         if (not isinstance(source, strided.StridedLayoutTransformation) or not self.is_fp4 or self.N % 2
                 or self.shape[self.mx_axis] % 2 or not source._can_convert_fp4(data)):
             return super()._convert_data_from(data, source, out=out)

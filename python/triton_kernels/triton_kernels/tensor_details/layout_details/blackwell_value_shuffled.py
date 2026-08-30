@@ -108,7 +108,7 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
             return super().convert_data(data, destination, out=out)
         return self._convert_data(data, inverse=True, major_dim=destination.order[0], out=out)
 
-    def _convert_data_from(self, data, source: LayoutTransformation, *, out=None):
+    def _convert_data_from(self, data, source: LayoutTransformation, *, out):
         if (not isinstance(source, strided.StridedLayoutTransformation) or not self.is_fp4
                 or not source._can_convert_fp4(data)):
             return super()._convert_data_from(data, source, out=out)

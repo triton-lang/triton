@@ -218,34 +218,34 @@ def test_convert_layout_noop_for_equivalent_layout(storage_shape, logical_shape,
     assert torch.equal(out.data, converted.data)
 
 
-@pytest.mark.parametrize("shape,layout,dtype", [
-    ([2, 16], StridedLayout(-2), FP4),
-    ([4, 8], StridedLayout(-1), FP4),
-    ([4, 8], StridedLayout(-2), UINT8),
+@pytest.mark.parametrize("shape,layout,dtype,message", [
+    ([2, 16], StridedLayout(-2), FP4, "out must have the same logical shape as the input"),
+    ([4, 8], StridedLayout(-1), FP4, "out must have the requested layout"),
+    ([4, 8], StridedLayout(-2), UINT8, "out must have the same logical and storage dtypes as the input"),
 ])
-def test_convert_layout_out_rejects_incompatible_metadata(shape, layout, dtype):
+def test_convert_layout_out_rejects_incompatible_metadata(shape, layout, dtype, message):
     source = wrap_torch_tensor(torch.zeros((4, 4), dtype=torch.uint8), dtype=FP4)
-    data = torch.full((2, 8), 0xAB, dtype=torch.uint8)
-    out = wrap_torch_tensor(data, dtype=dtype, shape=shape, layout=layout)
+    out = empty(shape, dtype=dtype, device="cpu", layout=layout)
+    out.data.fill_(0xAB)
 
-    with pytest.raises(ValueError, match="out must have"):
+    with pytest.raises(ValueError, match=message):
         convert_layout(source, StridedLayout(-2), out=out)
-    assert torch.all(data == 0xAB)
+    assert torch.all(out.data == 0xAB)
 
 
-@pytest.mark.parametrize("shape,strides,dtype,device", [
-    ((2, 8), (1, 2), torch.int16, "cpu"),
-    ((2, 7), (1, 2), torch.uint8, "cpu"),
-    ((2, 8), (0, 1), torch.uint8, "cpu"),
-    ((2, 8), (1, 2), torch.uint8, "meta"),
+@pytest.mark.parametrize("shape,strides,dtype,device,message", [
+    ((2, 8), (1, 2), torch.int16, "cpu", "out must have the same logical and storage dtypes as the input"),
+    ((2, 7), (1, 2), torch.uint8, "cpu", "out has an incorrect physical storage shape"),
+    ((2, 8), (0, 1), torch.uint8, "cpu", "out must have nonoverlapping physical strides"),
+    ((2, 8), (1, 2), torch.uint8, "meta", "out must be on the input device"),
 ])
-def test_convert_layout_out_rejects_incompatible_storage(shape, strides, dtype, device):
+def test_convert_layout_out_rejects_incompatible_storage(shape, strides, dtype, device, message):
     source = wrap_torch_tensor(torch.zeros((4, 4), dtype=torch.uint8), dtype=FP4)
     layout = StridedLayout(-2)
     data = torch.empty_strided(shape, strides, dtype=dtype, device=device).fill_(0xAB)
     out = wrap_torch_tensor(data, dtype=FP4, shape=source.shape, layout=layout)
 
-    with pytest.raises(ValueError, match="out"):
+    with pytest.raises(ValueError, match=message):
         convert_layout(source, layout, out=out)
     if device != "meta":
         assert torch.all(data == 0xAB)
@@ -305,17 +305,22 @@ def test_convert_layout_converts_different_parameterized_layout(storage_shape, l
 @pytest.mark.parametrize("inverse", [False, True])
 @pytest.mark.parametrize("with_out", [False, True])
 def test_mxfp4_value_convert_layout_peak_allocation(layout, major_dim, step, inverse, with_out):
-    data = torch.empty((2048, 2048), dtype=torch.uint8, device="cuda")
+    data = torch.randint(0, 256, (2048, 2048), dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
     strided = convert_layout(wrap_torch_tensor(data, dtype=FP4), StridedLayout(major_dim))
     source = convert_layout(strided, layout) if inverse else strided
     destination = strided.storage.layout if inverse else layout
+    expected = convert_layout(source, destination)
+    source = wrap_torch_tensor(source.data.cuda(), dtype=FP4, shape=source.shape, layout=source.storage.layout)
     if step == 2:
         contiguous_dim = source.data.stride().index(1)
         storage = source.data.movedim(contiguous_dim, -1)
         storage = torch.stack((storage, storage), dim=-2)[..., 1, :].movedim(-1, contiguous_dim)
         source = wrap_torch_tensor(storage, dtype=FP4, shape=source.shape, layout=source.storage.layout)
-    out = convert_layout(source, destination) if with_out else None
+    out = wrap_torch_tensor(torch.empty_like(expected.data, device="cuda"), dtype=FP4, shape=source.shape,
+                            layout=destination) if with_out else None
     warm = convert_layout(source, destination, out=out)
+    if with_out:
+        out.data.fill_(0xAB)
     torch.cuda.synchronize(source.device)
     del warm
     baseline = torch.cuda.memory_allocated(source.device)
@@ -329,13 +334,13 @@ def test_mxfp4_value_convert_layout_peak_allocation(layout, major_dim, step, inv
     if with_out:
         assert actual is out
     assert peak <= (0 if with_out else actual.data.nbytes) + 1024**2
+    assert torch.equal(actual.data.cpu(), expected.data)
 
 
 @pytest.mark.parametrize("layout", _FP4_VALUE_LAYOUTS + [HopperMXValueLayout(-2, 2), HopperMXValueLayout(-1, 2)])
-@pytest.mark.parametrize("shape", [(2, 130, 66), (0, 130, 66)])
+@pytest.mark.parametrize("shape,step", [((2, 130, 66), 1), ((2, 130, 66), 2), ((0, 130, 66), 1)])
 @pytest.mark.parametrize("major_dim", [-2, -1])
 @pytest.mark.parametrize("inverse", [False, True])
-@pytest.mark.parametrize("step", [1, 2])
 @pytest.mark.parametrize("device", ["cpu", "meta", "cuda"])
 def test_mxfp4_value_convert_layout_out(layout, shape, major_dim, inverse, step, device):
     strided = StridedLayout(major_dim)
@@ -344,9 +349,9 @@ def test_mxfp4_value_convert_layout_out(layout, shape, major_dim, inverse, step,
                          generator=torch.Generator().manual_seed(0))
     # Packing is explicit: C-order physical bytes may pack logical dimension -2.
     source = wrap_torch_tensor(data[1:].view(storage_shape), dtype=FP4, shape=shape, layout=strided)
+    expected = source if inverse else convert_layout(source, layout)
     source = convert_layout(source, layout) if inverse else source
     destination = strided if inverse else layout
-    expected = convert_layout(source, destination)
     source_data = source.data.to(device) if inverse else data.to(device)[1:].view(storage_shape)
     source = wrap_torch_tensor(source_data, dtype=FP4, shape=shape, layout=source.storage.layout)
 
@@ -433,7 +438,7 @@ def test_convert_layout_uses_input_device(layout, inverse, major_dim, with_out):
     with torch.cuda.stream(stream), torch.cuda.device(0):
         source_cuda = wrap_torch_tensor(source.storage.data.to("cuda:1"), dtype=FP4, shape=source.shape,
                                         layout=source.storage.layout)
-        out = wrap_torch_tensor(torch.empty_like(expected.data, device="cuda:1"), dtype=FP4, shape=source.shape,
+        out = wrap_torch_tensor(torch.full_like(expected.data, 0xAB, device="cuda:1"), dtype=FP4, shape=source.shape,
                                 layout=destination) if with_out else None
         actual = convert_layout(source_cuda, destination, out=out)
 
