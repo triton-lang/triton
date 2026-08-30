@@ -54,6 +54,7 @@ class BaseBackend(metaclass=ABCMeta):
         Stages will be run sequentially (in inseriton order) and can communicate using `metadata`.
         All stages are expected to return a `str` object, except for the last stage which returns
         a `bytes` object for execution by the launcher.
+        `language` is the frontend that produced `src` (e.g. `Language.TRITON` or `Language.GLUON`).
         """
         raise NotImplementedError
 
