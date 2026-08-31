@@ -132,9 +132,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: tt.join {{.*}} : tensor<64x64xf16,
     // CHECK: tt.join {{.*}} : tensor<64x64xf16,
     %0 = tt.join %r1, %r1 {async_task_id = array<i32: 0, 1, 2>} : tensor<128x64xf16, #blocked> -> tensor<128x64x2xf16, #blocked2>
+    // Keep the round-trip from folding away, so the partitioning of both ops
+    // stays under test.
+    %mid = arith.addf %0, %0 {async_task_id = array<i32: 0, 1, 2>} : tensor<128x64x2xf16, #blocked2>
     // CHECK: tt.split {{.*}} : tensor<64x64x2xf16,
     // CHECK: tt.split {{.*}} : tensor<64x64x2xf16,
-    %1:2 = tt.split %0 {async_task_id = array<i32: 0, 1, 2>} : tensor<128x64x2xf16, #blocked2> -> tensor<128x64xf16, #blocked>
+    %1:2 = tt.split %mid {async_task_id = array<i32: 0, 1, 2>} : tensor<128x64x2xf16, #blocked2> -> tensor<128x64xf16, #blocked>
     // CHECK: ttg.local_alloc {{.*}} : (tensor<64x64xf16,
     // CHECK: ttg.local_alloc {{.*}} : (tensor<64x64xf16,
     %2 = ttg.local_alloc %1#0 {async_task_id = array<i32: 1, 2>} : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
