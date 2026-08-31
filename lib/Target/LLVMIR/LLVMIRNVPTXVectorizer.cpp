@@ -534,8 +534,8 @@ private:
                                               Instruction &second) const {
     auto *firstPhi = dyn_cast<PHINode>(values.first);
     auto *secondPhi = dyn_cast<PHINode>(values.second);
-    if (!firstPhi || !secondPhi || firstPhi->getParent() != first.getParent() ||
-        secondPhi->getParent() != second.getParent() ||
+    if (!firstPhi || !secondPhi ||
+        firstPhi->getParent() != secondPhi->getParent() ||
         !firstPhi->hasOneUse() || !secondPhi->hasOneUse() ||
         firstPhi->getNumIncomingValues() != secondPhi->getNumIncomingValues())
       return std::nullopt;
@@ -551,11 +551,15 @@ private:
       Value *firstValue = firstPhi->getIncomingValue(index);
       Value *secondValue = secondPhi->getIncomingValue(otherIndex);
       if (firstValue == &first && secondValue == &second) {
-        if (backedge)
+        if (backedge || block != first.getParent())
           return std::nullopt;
         backedge = index;
       } else if (!isa<Constant>(firstValue) || !isa<Constant>(secondValue)) {
-        return std::nullopt;
+        // An already packed initial value is as cheap as a constant. Keep it
+        // packed across the loop instead of rebuilding it on every iteration.
+        ValuePair incoming{firstValue, secondValue};
+        if (!getExtractedVector(incoming) && !isRegisterTuple(incoming))
+          return std::nullopt;
       }
     }
 
@@ -774,7 +778,8 @@ private:
         int otherIndex = carry.second->getBasicBlockIndex(block);
         ValuePair incoming{carry.first->getIncomingValue(index),
                            carry.second->getIncomingValue(otherIndex)};
-        packedPhi->addIncoming(buildVector(incoming, phiBuilder), block);
+        IRBuilder<> incomingBuilder(block->getTerminator());
+        packedPhi->addIncoming(buildVector(incoming, incomingBuilder), block);
       }
       builtInputs.emplace_back(ValuePair{carry.first, carry.second}, packedPhi);
       packedCarries.emplace_back(carry, packedPhi);

@@ -403,6 +403,70 @@ exit:
   ret void
 }
 
+; BLACKWELL-LABEL: define void @packed_f32_loaded_loop_carry(
+; BLACKWELL: [[INITIAL:%.*]] = load <2 x float>
+; BLACKWELL: [[ACC:%.*]] = phi <2 x float> [ [[INITIAL]], %entry ], [ [[NEXT:%.*]], %latch ]
+; BLACKWELL-NOT: phi float
+; BLACKWELL: latch:
+; BLACKWELL: [[NEXT]] = call <2 x float> @llvm.fma.v2f32(<2 x float> [[ACC]],
+; BLACKWELL: extractelement <2 x float> [[NEXT]], i64 0
+; BLACKWELL: extractelement <2 x float> [[NEXT]], i64 1
+; PTX-LABEL: .visible .func packed_f32_loaded_loop_carry(
+; PTX: fma.rn.f32x2
+define void @packed_f32_loaded_loop_carry(ptr addrspace(1) %src,
+                                           float %scale, i1 %continue) {
+entry:
+  %initial = load <2 x float>, ptr addrspace(1) %src, align 8
+  %initial.first = extractelement <2 x float> %initial, i64 0
+  %initial.second = extractelement <2 x float> %initial, i64 1
+  br label %loop
+
+loop:
+  %first = phi float [ %initial.first, %entry ], [ %first.next, %latch ]
+  %second = phi float [ %initial.second, %entry ], [ %second.next, %latch ]
+  br label %latch
+
+latch:
+  %first.next = call float @llvm.fma.f32(float %first, float %scale, float 1.0)
+  %second.next = call float @llvm.fma.f32(float %second, float %scale, float 1.0)
+  br i1 %continue, label %loop, label %exit
+
+exit:
+  call void asm sideeffect "", "f,f"(float %first.next, float %second.next)
+  ret void
+}
+
+; BLACKWELL-LABEL: define void @packed_f32_register_tuple_loop_carry(
+; BLACKWELL: entry:
+; BLACKWELL: [[PACK0:%.*]] = insertelement <2 x float> poison, float %initial.first, i64 0
+; BLACKWELL: [[INITIAL:%.*]] = insertelement <2 x float> [[PACK0]], float %initial.second, i64 1
+; BLACKWELL: br label %loop
+; BLACKWELL: loop:
+; BLACKWELL: [[ACC:%.*]] = phi <2 x float> [ [[INITIAL]], %entry ], [ [[NEXT:%.*]], %loop ]
+; BLACKWELL: [[NEXT]] = fadd <2 x float> [[ACC]], splat (float 1.000000e+00)
+define void @packed_f32_register_tuple_loop_carry(ptr addrspace(1) %src,
+                                                    i1 %continue) {
+entry:
+  %initial = call { i32, i32 } asm sideeffect
+      "ld.global.v2.b32 { $0, $1 }, [ $2 ];", "=r,=r,l"(ptr addrspace(1) %src)
+  %bits.first = extractvalue { i32, i32 } %initial, 0
+  %bits.second = extractvalue { i32, i32 } %initial, 1
+  %initial.first = bitcast i32 %bits.first to float
+  %initial.second = bitcast i32 %bits.second to float
+  br label %loop
+
+loop:
+  %first = phi float [ %initial.first, %entry ], [ %first.next, %loop ]
+  %second = phi float [ %initial.second, %entry ], [ %second.next, %loop ]
+  %first.next = fadd float %first, 1.0
+  %second.next = fadd float %second, 1.0
+  br i1 %continue, label %loop, label %exit
+
+exit:
+  call void asm sideeffect "", "f,f"(float %first.next, float %second.next)
+  ret void
+}
+
 ; HOPPER-ONLY-LABEL: define void @packed_f32_cross_block_accumulators(
 ; HOPPER-ONLY: phi float
 ; HOPPER-ONLY: phi float
@@ -501,9 +565,10 @@ exit:
 }
 
 ; BLACKWELL-LABEL: define void @different_divisor_accumulators(
-; BLACKWELL: phi float
-; BLACKWELL: phi float
-; BLACKWELL-NOT: phi <2 x float>
+; BLACKWELL: [[ACC:%.*]] = phi <2 x float>
+; BLACKWELL: call float @llvm.nvvm.div.full(float %first, float %first.divisor)
+; BLACKWELL: call float @llvm.nvvm.div.full(float %second, float %second.divisor)
+; BLACKWELL: fadd <2 x float> [[ACC]],
 define void @different_divisor_accumulators(float %first, float %second,
                                              float %first.divisor,
                                              float %second.divisor,
