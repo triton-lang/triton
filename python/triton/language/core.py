@@ -10,6 +10,7 @@ from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple, TY
 from dataclasses import dataclass
 import builtins
 from .. import knobs
+from .._instrumentation import is_enabled
 from ..runtime.jit import JITCallable
 import inspect
 
@@ -2731,8 +2732,7 @@ def expect_zero(x, mask, _semantic=None):
     """
     x = _unwrap_if_constexpr(x)
     mask = _semantic.to_tensor(mask)
-    instrumentation_mode = getattr(_semantic.builder.options, "instrumentation_mode", "")
-    if "fpsan" in instrumentation_mode:
+    if is_enabled(_semantic.builder.options, "fpsan"):
         return _semantic.where(mask, 0, x)
     if _semantic.builder.options.debug:
         x_tensor = _semantic.to_tensor(x)

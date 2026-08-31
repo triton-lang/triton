@@ -5,6 +5,45 @@ import pathlib
 import hashlib
 import pytest
 from triton._internal_testing import is_cuda
+from triton._instrumentation import instrument, is_enabled, register_instrumentation, unregister_instrumentation
+
+
+def test_instrumentation_dispatch():
+    calls = []
+    options = {"instrumentation_mode": "gsan,consan"}
+
+    def callback(pm, callback_options):
+        calls.append((pm, callback_options))
+
+    assert is_enabled(options, "consan")
+    assert not is_enabled(options, "proton")
+    register_instrumentation(name="consan", point="prepare-captures", backend="test", callback=callback)
+    try:
+        assert instrument("pm", name="consan", point="prepare-captures", backend="test", options=options)
+        assert calls == [("pm", options)]
+    finally:
+        unregister_instrumentation(name="consan", point="prepare-captures", backend="test")
+
+
+def test_dynamic_instrumentation_and_dialect_loading():
+    calls = []
+    options = {"instrumentation_mode": "proton"}
+
+    assert not instrument("context", name="proton", point="load-dialects", backend="test")
+    register_instrumentation(name="proton", point="load-dialects", backend="test",
+                             callback=lambda context, _options: calls.append(("dialects", context)))
+    register_instrumentation(name="proton", point="pre-lower", backend="test",
+                             callback=lambda _pm, _options: calls.append("passes"))
+    try:
+        assert instrument("context", name="proton", point="load-dialects", backend="test")
+        assert instrument("pm", name="proton", point="pre-lower", backend="test", options=options)
+        assert calls == [("dialects", "context"), "passes"]
+    finally:
+        unregister_instrumentation(name="proton", point="load-dialects", backend="test")
+        unregister_instrumentation(name="proton", point="pre-lower", backend="test")
+
+    assert is_enabled(options, "proton")
+    assert not instrument("context", name="proton", point="load-dialects", backend="test")
 
 
 @pytest.mark.skipif(not is_cuda(), reason="only currently tested on CUDA")

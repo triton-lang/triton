@@ -1,6 +1,7 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, nvidia
 from triton import knobs
+from triton._instrumentation import instrument as _instrument, is_enabled, register_instrumentation
 from triton.runtime.errors import PTXASError
 
 from dataclasses import dataclass
@@ -14,6 +15,39 @@ import signal
 import os
 import subprocess
 from pathlib import Path
+
+
+instrument = functools.partial(_instrument, backend="nvidia")
+
+
+def _add_fpsan(pm, options):
+    passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
+    passes.ttgpuir.add_remove_layout_conversions(pm, True)
+    passes.common.add_canonicalizer(pm)
+    passes.common.add_cse(pm)
+
+
+def _add_consan_gluon_cleanup(pm, _options):
+    passes.ttgpuir.add_remove_layout_conversions(pm, True)
+    passes.common.add_canonicalizer(pm)
+    passes.common.add_cse(pm)
+
+
+def _add_gsan(pm, mod, options):
+    # GSan introduces layout conversions, so it must run before shared-memory allocation.
+    mod.set_attr("tti.gsan_launch_pdl", ir.builder(mod.context).get_int32_attr(int(options.launch_pdl)))
+    passes.ttgpuir.add_global_sanitizer(pm)
+
+
+def _prepare_consan_captures(pm, _options):
+    passes.ttgpuir.add_prepare_consan_captures(pm, "nvidia")
+
+
+register_instrumentation(name="fpsan", point="add", backend="nvidia", callback=_add_fpsan)
+register_instrumentation(name="consan", point="gluon-cleanup", backend="nvidia", callback=_add_consan_gluon_cleanup)
+register_instrumentation(name="gsan", point="add", backend="nvidia", callback=_add_gsan)
+register_instrumentation(name="consan", point="prepare-captures", backend="nvidia",
+                         callback=_prepare_consan_captures)
 
 
 def min_dot_size(target: GPUTarget):
@@ -142,7 +176,7 @@ class CUDAOptions:
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         if not extern_libs.get('libdevice', None):
             extern_libs['libdevice'] = knobs.nvidia.libdevice_path or str(default_libdir / 'libdevice.10.bc')
-        if "gsan" in self.instrumentation_mode:
+        if is_enabled(self, "gsan"):
             gsan_lib = default_libdir / "gsan.ll"
             if not gsan_lib.exists():
                 raise FileNotFoundError(f"GSan runtime is missing at {gsan_lib}. "
@@ -161,11 +195,10 @@ class CUDAOptions:
 
     @property
     def enable_iisan(self):
-        return "iisan" in self.instrumentation_mode
+        return is_enabled(self, "iisan")
 
 
 class CUDABackend(BaseBackend):
-    instrumentation = None
 
     @staticmethod
     def supports_target(target: GPUTarget):
@@ -205,7 +238,7 @@ class CUDABackend(BaseBackend):
 
     def parse_options(self, opts) -> Any:
         # Enable debug mode for ConSan, so device-side assertions are not optimized out
-        if any(mode in opts.get("instrumentation_mode", "") for mode in ["consan", "iisan"]):
+        if any(is_enabled(opts, mode) for mode in ["consan", "iisan"]):
             opts["debug"] = True
             opts["sanitize_overflow"] = False
 
@@ -237,7 +270,7 @@ class CUDABackend(BaseBackend):
         if "enable_fp_fusion" not in args:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
 
-        if "gsan" in args.get("instrumentation_mode", ""):
+        if is_enabled(args, "gsan"):
             from triton.runtime.driver import driver
             device = driver.active.get_current_device()
             device_max = driver.active.utils.get_device_properties(device)["max_shared_mem"]
@@ -270,8 +303,7 @@ class CUDABackend(BaseBackend):
 
     def load_dialects(self, ctx):
         nvidia.load_dialects(ctx)
-        if CUDABackend.instrumentation:
-            CUDABackend.instrumentation.load_dialects(ctx)
+        instrument(ctx, name="proton", point="load-dialects")
 
     @staticmethod
     def make_ttir(mod, metadata, opt, capability):
@@ -366,11 +398,7 @@ class CUDABackend(BaseBackend):
         passes.common.add_sccp(pm)
         passes.common.add_cse(pm)
         passes.common.add_canonicalizer(pm)
-        if "fpsan" in opt.instrumentation_mode:
-            passes.ttgpuir.add_fp_sanitizer(pm, opt.fpsan_homomorphic_casts)
-            passes.ttgpuir.add_remove_layout_conversions(pm, True)
-            passes.common.add_canonicalizer(pm)
-            passes.common.add_cse(pm)
+        instrument(pm, name="fpsan", point="add", options=opt)
 
         pm.run(mod, 'make_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
@@ -393,12 +421,8 @@ class CUDABackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         nvidia.passes.ttnvgpuir.add_check_matmul_two_cta(pm)
 
-        if "fpsan" in options.instrumentation_mode:
-            passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
-        if any(mode in options.instrumentation_mode for mode in ["consan", "fpsan"]):
-            passes.ttgpuir.add_remove_layout_conversions(pm, True)
-            passes.common.add_canonicalizer(pm)
-            passes.common.add_cse(pm)
+        instrument(pm, name="fpsan", point="add", options=options)
+        instrument(pm, name="consan", point="gluon-cleanup", options=options)
 
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
@@ -412,25 +436,20 @@ class CUDABackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
-        if "gsan" in options.instrumentation_mode:
-            # GSan introduces layout conversions, so must come before shared memory allocation
-            mod.set_attr("tti.gsan_launch_pdl", ir.builder(mod.context).get_int32_attr(int(options.launch_pdl)))
-            passes.ttgpuir.add_global_sanitizer(pm)
+        instrument(pm, mod, name="gsan", point="add", options=options)
 
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
-        passes.ttgpuir.add_allocate_warp_groups(pm, "consan" in options.instrumentation_mode)
+        passes.ttgpuir.add_allocate_warp_groups(pm, is_enabled(options, "consan"))
         passes.convert.add_scf_to_cf(pm)
         passes.gluon.add_inliner(pm)
-        if "consan" in options.instrumentation_mode:
-            passes.ttgpuir.add_prepare_consan_captures(pm, "nvidia")
+        instrument(pm, name="consan", point="prepare-captures", options=options)
         nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
-        if CUDABackend.instrumentation:
-            CUDABackend.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
+        instrument(pm, name="proton", point="pre-lower-to-llvm", options=options)
         nvidia.passes.ttnvgpuir.add_proxy_fence_insertion(pm, capability)
         nvidia.passes.ttnvgpuir.add_tmem_barrier_insertion(pm)
-        nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version, "consan" in options.instrumentation_mode)
+        nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version, is_enabled(options, "consan"))
         nvidia.passes.ttnvgpuir.add_initialize_ws_cluster_barriers(pm, capability, ptx_version)
         if options.min_shared_mem is not None:
             nvidia.passes.ttgpuir.add_set_minimum_shared_memory(pm, options.min_shared_mem)
@@ -446,8 +465,7 @@ class CUDABackend(BaseBackend):
         if not knobs.compilation.disable_line_info and not knobs.compilation.dump_ir_extract_di_local_variables:
             passes.llvmir.add_di_scope(pm)
 
-        if CUDABackend.instrumentation:
-            CUDABackend.instrumentation.patch("llvmir_to_llvm", pm, mod.context)
+        instrument(pm, name="proton", point="proton-to-llvm", options=options)
 
         pm.run(mod, 'make_llir')
 
@@ -535,7 +553,7 @@ class CUDABackend(BaseBackend):
         proc = sm_arch_from_capability(cap_llvm)
         features = get_features(opt, cap_llvm)
         flags = ["nvptx-mad-wide-opt"]
-        canonicalize_gep = "fpsan" in opt.instrumentation_mode
+        canonicalize_gep = is_enabled(opt, "fpsan")
         ret = llvm.translate_to_asm(src, triple, proc, features, flags, opt.enable_fp_fusion, False, canonicalize_gep,
                                     sched4reg=opt.sched4reg)
         # Find kernel names (there should only be one)
@@ -587,7 +605,7 @@ class CUDABackend(BaseBackend):
             # -Ofc mid miscompiles some large ConSan kernels into invalid global
             # accesses; -O1 keeps compile time reasonable without that ptxas bug.
             if (not knobs.nvidia.disable_ptxas_opt
-                    and any(mode in opt.instrumentation_mode for mode in ["consan", "fpsan"])):
+                    and any(is_enabled(opt, mode) for mode in ["consan", "fpsan"])):
                 ptx_extra_options += ["--opt-level", "1"]
 
             # Add --regAllocOptLevel=2 to work around ptxas 13.x bug

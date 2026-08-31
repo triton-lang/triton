@@ -5,6 +5,7 @@ import triton
 import ctypes
 import sys
 from triton import knobs
+from triton._instrumentation import is_enabled
 from triton.runtime.build import compile_module_from_file
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
@@ -278,7 +279,7 @@ class CudaLauncher(object):
         signature = {idx: value for idx, value in src.signature.items()}
         tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
 
-        self.gsan_enabled = "gsan" in getattr(metadata, "instrumentation_mode", "")
+        self.gsan_enabled = is_enabled(metadata, "gsan")
         if self.gsan_enabled:
             signature["_gsan_globals_ptr"] = "*i8"
             signature["_gsan_stream_clock_ptr"] = "*i32"

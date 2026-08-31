@@ -8,8 +8,8 @@ from triton._C.libtriton import nvidia as triton_nvidia
 from triton._C.libtriton import passes as triton_passes
 from triton._C.libproton import proton as libproton
 from triton.compiler import LazyDict
+from triton._instrumentation import register_instrumentation, unregister_instrumentation
 from triton.runtime._allocation import set_profile_allocator, NullAllocator
-from triton.backends import backends
 
 from .hook import Hook
 from ..flags import flags
@@ -42,25 +42,6 @@ class CudaAllocator:
             buffer = torch.zeros((aligned_size, ), dtype=torch.uint8, device="cuda")
         self.instrumentation_hook.buffer = buffer
         return buffer
-
-
-class Instrumentation:
-
-    def __init__(self, ir_map: Dict[str, Any]):
-        self.manager = ir_map
-
-    def register(self, ir: str, func):
-        if ir in self.manager:
-            raise RuntimeError(f"IR already registered: {ir}")
-        self.manager[ir] = func
-
-    def patch(self, ir: str, pm, context):
-        self.load_dialects(context)
-        if ir in self.manager:
-            self.manager[ir](pm)
-
-    def load_dialects(self, ctx):
-        triton_proton.load_dialects(ctx)
 
 
 def _interpret_mode(mode_obj: Union[str, mode.InstrumentationMode]) -> mode.InstrumentationMode:
@@ -144,14 +125,11 @@ class InstrumentationHook(Hook):
         self.allocator = CudaAllocator(self)
         self.buffer = None
         self.metadata_path: Dict[Any, Optional[str]] = {}
+        self._instrumentation_backend: Optional[str] = None
 
     def activate(self):
         if InstrumentationHook.active_count > 0:
             raise RuntimeError("Only one instance of the instrumentation hook can be active at a time.")
-
-        InstrumentationHook.active_count += 1
-
-        flags.instrumentation_on = True
 
         device = triton.runtime.driver.active.get_current_device()
         max_shared_mem = triton.runtime.driver.active.utils.get_device_properties(device)["max_shared_mem"]
@@ -182,18 +160,22 @@ class InstrumentationHook(Hook):
                 arch = triton.runtime.driver.active.utils.get_device_properties(device)["arch"].split(":")[0]
                 triton_proton.add_convert_proton_amd_gpu_to_llvm(pm, arch)
 
-        backends[backend_name].compiler.instrumentation = Instrumentation({
-            "ttgpuir_to_llvmir":
-            lambda pm: to_llvmir_passes(pm),
-            "llvmir_to_llvm":
-            lambda pm: to_llvm_passes(pm),
-        })
+        register_instrumentation(name="proton", point="load-dialects", backend=backend_name,
+                                 callback=lambda context, _options: triton_proton.load_dialects(context))
+        register_instrumentation(name="proton", point="pre-lower-to-llvm", backend=backend_name,
+                                 callback=lambda pm, _options: to_llvmir_passes(pm))
+        register_instrumentation(name="proton", point="proton-to-llvm", backend=backend_name,
+                                 callback=lambda pm, _options: to_llvm_passes(pm))
+        self._instrumentation_backend = backend_name
+
+        InstrumentationHook.active_count += 1
+        flags.instrumentation_on = True
 
         # Set up the profiling allocator
         set_profile_allocator(self.allocator)
 
         # Set the instrumentation mode
-        triton.knobs.compilation.instrumentation_mode = str(self.mode)
+        triton.knobs.compilation.instrumentation_mode = f"proton,{self.mode}"
 
     def deactivate(self):
         if InstrumentationHook.active_count == 0:
@@ -201,10 +183,12 @@ class InstrumentationHook(Hook):
 
         InstrumentationHook.active_count -= 1
 
-        backend_name = _get_backend_name()
-
-        # No instrumentation passes are registered anymore
-        backends[backend_name].compiler.instrumentation = {}
+        backend_name = self._instrumentation_backend
+        if backend_name is not None:
+            unregister_instrumentation(name="proton", point="load-dialects", backend=backend_name)
+            unregister_instrumentation(name="proton", point="pre-lower-to-llvm", backend=backend_name)
+            unregister_instrumentation(name="proton", point="proton-to-llvm", backend=backend_name)
+            self._instrumentation_backend = None
 
         # No runtime instrumentation hook is active anymore
         flags.instrumentation_on = False
