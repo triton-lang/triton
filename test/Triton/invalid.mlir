@@ -16,6 +16,20 @@ tt.func public @invalid_pointer_pointee(%arg0: !tt.ptr<index>) {
 
 // -----
 
+// expected-error @+1 {{invalid pointer address space 'bogus'}}
+tt.func public @invalid_pointer_address_space(%arg0: !tt.ptr<f32, "bogus">) {
+  tt.return
+}
+
+// -----
+
+// expected-error @+1 {{expected string}}
+tt.func public @invalid_pointer_integer_address_space(%arg0: !tt.ptr<f32, 1>) {
+  tt.return
+}
+
+// -----
+
 // Invalid bitcast between types of different bit width.
 tt.func public @fn(%arg0: tensor<128xf32>) {
     // expected-error @+1 {{Cannot bitcast data-type of size}}

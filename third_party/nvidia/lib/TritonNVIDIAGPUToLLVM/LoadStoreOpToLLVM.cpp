@@ -220,8 +220,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     Value l2PolicyReg =
         createCachePolicy(op.getEvict(), rewriter, loc, computeCapability);
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
+      // TODO: optimization when ptr is GEP with constant offset
       const size_t runStart = vecStart - vecStart % scalarizedContiguousRun;
-      const size_t inOff = (vecStart - runStart) * valueElemNBits / 8;
+      const size_t in_off = (vecStart - runStart) * valueElemNBits / 8;
 
       const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
       const size_t totalWidth = valueElemNBits * vec;
@@ -265,9 +266,14 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                              .slice(vecStart + ii * wordNElems, wordNElems);
             Value v = b.bitcast(packLLVector(loc, elems, rewriter),
                                 IntegerType::get(getContext(), width));
-            if (width == 32 || width == 64) {
+            auto tensorType = dyn_cast<RankedTensorType>(op.getType());
+            if (tensorType &&
+                ((valueElemNBits == 16 && nWords > 1) ||
+                 (valueElemNBits == 8 && width == 32 && nWords == 1 &&
+                  vec == 4 && tensorType.getRank() == 1 &&
+                  isa<FloatType>(tensorType.getElementType())))) {
               // Match each fallback to its destination instead of moving it.
-              // The packed value and destination have the same register width.
+              // Match the packed FP8 fallback to its 32-bit destination.
               ptxBuilder.newOperand(v,
                                     std::to_string(dstsOpr->listGet(ii)->idx));
               continue;
@@ -282,7 +288,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         }
       }
 
-      auto *addrOpr = ptxBuilder.newAddrOperand(ptrElems[runStart], "l", inOff);
+      auto *addrOpr =
+          ptxBuilder.newAddrOperand(ptrElems[runStart], "l", in_off);
 
       // Define the instruction opcode
       auto &ld = ptxBuilder.create("ld")
@@ -424,7 +431,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
       // TODO: optimization when ptr is AddPtr with constant offset
       const size_t runStart = vecStart - vecStart % scalarizedContiguousRun;
-      const size_t inOff = (vecStart - runStart) * valueElemNBits / 8;
+      const size_t in_off = (vecStart - runStart) * valueElemNBits / 8;
 
       const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
       const size_t totalWidth = valueElemNBits * vec;
@@ -470,7 +477,8 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
         pred = ttg::maybeAnd(rewriter, loc, pred, mask);
       }
 
-      auto *asmAddr = ptxBuilder.newAddrOperand(ptrElems[runStart], "l", inOff);
+      auto *asmAddr =
+          ptxBuilder.newAddrOperand(ptrElems[runStart], "l", in_off);
 
       auto &ptxStoreInstr =
           ptxBuilder.create("st")

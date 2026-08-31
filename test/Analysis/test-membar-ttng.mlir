@@ -107,6 +107,30 @@ tt.func @arrive_then_wait_barrier(%phase: i32) {
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 18944 : i32} {
+// An async-proxy read of one stage does not conflict with a generic-proxy write
+// to a disjoint stage. The store wait still synchronizes subsequent accesses.
+// CHECK-LABEL: @tma_store_disjoint_footprints
+tt.func @tma_store_disjoint_footprints(%desc: !tt.tensordesc<64x64xf16, #shared>, %input: tensor<64x64xf16, #blocked>) -> tensor<64x64xf16, #blocked> {
+  %c0 = arith.constant 0 : i32
+  %allocation = ttg.local_alloc : () -> !ttg.memdesc<3x64x64xf16, #shared, #ttg.shared_memory, mutable>
+  %low = ttg.memdesc_index %allocation[%c0] : !ttg.memdesc<3x64x64xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<64x64xf16, #shared, #ttg.shared_memory, mutable>
+  %prefix = ttg.memdesc_subslice %allocation [2, 0, 0] : !ttg.memdesc<3x64x64xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<1x64x64xf16, #shared, #ttg.shared_memory, mutable, 3x64x64>
+  %high = ttg.memdesc_index %prefix[%c0] : !ttg.memdesc<1x64x64xf16, #shared, #ttg.shared_memory, mutable, 3x64x64> -> !ttg.memdesc<64x64xf16, #shared, #ttg.shared_memory, mutable>
+  ttg.local_store %input, %low : tensor<64x64xf16, #blocked> -> !ttg.memdesc<64x64xf16, #shared, #ttg.shared_memory, mutable>
+  ttg.barrier local
+  ttng.fence_async_shared {bCluster = false}
+  // CHECK: ttng.async_tma_copy_local_to_global
+  // CHECK-NEXT: ttg.local_store
+  // CHECK-NEXT: ttng.async_tma_store_wait
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: {{.*}} = ttg.local_load
+  ttng.async_tma_copy_local_to_global %desc[%c0, %c0] %low : !tt.tensordesc<64x64xf16, #shared>, !ttg.memdesc<64x64xf16, #shared, #ttg.shared_memory, mutable>
+  ttg.local_store %input, %high : tensor<64x64xf16, #blocked> -> !ttg.memdesc<64x64xf16, #shared, #ttg.shared_memory, mutable>
+  ttng.async_tma_store_wait {pendings = 0 : i32}
+  %output = ttg.local_load %high : !ttg.memdesc<64x64xf16, #shared, #ttg.shared_memory, mutable> -> tensor<64x64xf16, #blocked>
+  tt.return %output : tensor<64x64xf16, #blocked>
+}
+
 // CHECK-LABEL: tma_special_cases
 tt.func @tma_special_cases(%arg1: !tt.tensordesc<256x64xf16, #shared>, %arg2: !tt.tensordesc<1x64xf16, #shared>) -> (tensor<256x64xf16, #blocked>){
   %true = arith.constant 1 : i1
@@ -380,5 +404,31 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
     %first = ttg.local_atomic_scatter_rmw fadd, %shared[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<128xf32, #shared, #smem, mutable>, tensor<128xf32, #blocked>, tensor<128xi32, #blocked>) -> tensor<128xf32, #blocked>
     %second = ttg.local_atomic_scatter_rmw fadd, %shared[%indices], %values {axis = 0 : i32} : (!ttg.memdesc<128xf32, #shared, #smem, mutable>, tensor<128xf32, #blocked>, tensor<128xi32, #blocked>) -> tensor<128xf32, #blocked>
     tt.return
+  }
+}
+
+// -----
+
+#rows = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#cols = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // The conversion reuses capture storage. The second launch rendezvous
+  // completes capture reads before the conversion starts writing its scratch.
+  // CHECK-LABEL: @capture_scratch_reused_in_default
+  tt.func @capture_scratch_reused_in_default(%ptr: !tt.ptr<i32>, %input: tensor<16x16xf32, #rows>) -> tensor<16x16xf32, #cols> {
+    // CHECK: ttg.warp_specialize{{.*}}allocation.offset = [[CAPTURE:[0-9]+]]
+    %result = ttg.warp_specialize(%ptr)
+    default {
+      // CHECK-NEXT: default {
+      // CHECK-NEXT: {{.*}} = ttg.convert_layout{{.*}}allocation.offset = [[CAPTURE]]
+      %converted = ttg.convert_layout %input : tensor<16x16xf32, #rows> -> tensor<16x16xf32, #cols>
+      ttg.warp_yield %converted : tensor<16x16xf32, #cols>
+    }
+    partition0(%address: !tt.ptr<i32>) num_warps(4) {
+      %value = tt.load %address : !tt.ptr<i32>
+      ttg.warp_return
+    } : (!tt.ptr<i32>) -> tensor<16x16xf32, #cols>
+    tt.return %result : tensor<16x16xf32, #cols>
   }
 }

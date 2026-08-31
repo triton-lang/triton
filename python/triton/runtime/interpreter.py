@@ -7,6 +7,7 @@ from typing import Tuple, List, Dict, Callable, TypeVar, Optional
 import math
 import numpy as np
 import time
+from fractions import Fraction
 
 import triton
 import triton.language as tl
@@ -234,6 +235,12 @@ def _convert_float(input, input_dtype, output_dtype, rounding_mode):
         shift[subnormal_index] = (1 - bias_output) - (exponent[subnormal_index] - bias_input)
         significand_output[subnormal_index] = (significand_output[subnormal_index] >> shift[subnormal_index]) | (
             1 << (output_dtype.fp_mantissa_width - shift[subnormal_index]))
+    if output_dtype in (tl.float8e4b8, tl.float8e5b16):
+        # FNUZ formats have only unsigned zero; the sign bit alone encodes NaN.
+        zero_output = (exponent_output == 0) & (significand_output == 0)
+        if input_dtype in (tl.float8e4b8, tl.float8e5b16):
+            zero_output &= input_bin != 0x80
+        sign_output[zero_output] = 0
     output = (sign_output << (output_dtype.primitive_bitwidth - 1)) | (
         exponent_output << output_dtype.fp_mantissa_width) | significand_output
     return output.reshape(input.shape)
@@ -247,7 +254,27 @@ def _erf(x):
 def _umulhi_64(a, b):
     # Numpy does not support 128-bit multiplication
     # So we have to implement it manually
-    return (int(a) * int(b)) >> 64
+    mask = (1 << 64) - 1
+    return ((int(a) & mask) * (int(b) & mask)) >> 64
+
+
+def _fma_fp64(a, b, c):
+    # Numpy has no fused multiply-add, and float64 has no wider type to hold the
+    # product exactly, so round the exact rational value instead.
+    if math.isnan(a) or math.isnan(b) or math.isnan(c) or math.isinf(a) or math.isinf(b):
+        return a * b + c
+    if math.isinf(c):
+        return c
+    exact = Fraction(a) * Fraction(b) + Fraction(c)
+    if exact == 0:
+        # Only zero operands can make this a negative zero.
+        return a * b + c if a * b == 0.0 and c == 0.0 else 0.0
+    sign = 1.0 if exact > 0 else -1.0
+    try:
+        ret = float(exact)
+    except OverflowError:
+        return math.copysign(math.inf, sign)
+    return ret if ret != 0.0 else math.copysign(0.0, sign)
 
 
 def _e8m0_to_f32(scale):
@@ -345,6 +372,7 @@ def _prepare_dot_scaled_operand(value_handle, scale_handle, format_enum, k_pack,
 np_erf_fp32 = np.vectorize(_erf, otypes=[np.float32])
 np_erf_fp64 = np.vectorize(_erf, otypes=[np.float64])
 np_umulhi_u64 = np.vectorize(_umulhi_64, otypes=[np.uint64])
+np_fma_fp64 = np.vectorize(_fma_fp64, otypes=[np.float64])
 
 
 class ExtraFunctions:
@@ -485,6 +513,9 @@ class InterpreterBuilder:
 
     def get_fp16(self, value):
         return TensorHandle(np.array([value], dtype=np.float16), tl.float16)
+
+    def get_bf16(self, value):
+        return self.create_fp_trunc(self.get_fp32(value), tl.bfloat16)
 
     def get_fp32(self, value):
         return TensorHandle(np.array([value], dtype=np.float32), tl.float32)
@@ -642,15 +673,20 @@ class InterpreterBuilder:
         return self.binary_op(lhs, rhs, np.right_shift)
 
     def create_umulhi(self, lhs, rhs):
+        # umulhi multiplies the operands as unsigned integers, so signed inputs
+        # take part through their bit pattern: reinterpret them at their own
+        # width before widening, and reinterpret the high half back at the end.
         dtype = lhs.data.dtype
+        unsigned_dtype = getattr(np, f"uint{dtype.itemsize * 8}")
         if dtype == np.int64 or dtype == np.uint64:
-            return TensorHandle(np_umulhi_u64(lhs.data, rhs.data), lhs.dtype.scalar)
+            ret_data = np_umulhi_u64(lhs.data, rhs.data)
         else:
             compute_dtype = getattr(np, f"uint{dtype.itemsize * 8 * 2}")
-            lhs_data = lhs.data.astype(compute_dtype)
-            rhs_data = rhs.data.astype(compute_dtype)
+            lhs_data = lhs.data.view(unsigned_dtype).astype(compute_dtype)
+            rhs_data = rhs.data.view(unsigned_dtype).astype(compute_dtype)
             ret_data = np.multiply(lhs_data, rhs_data) >> (dtype.itemsize * 8)
-            return TensorHandle(ret_data.astype(dtype), lhs.dtype.scalar)
+            ret_data = ret_data.astype(unsigned_dtype)
+        return TensorHandle(ret_data.view(dtype), lhs.dtype.scalar)
 
     # ternary functions
     def ternary_op(self, lhs, rhs, other, op):
@@ -671,7 +707,15 @@ class InterpreterBuilder:
     create_select = lambda self, cond, lhs, rhs: self.ternary_op(cond, lhs, rhs, np.where)
 
     def create_fma(self, x, y, z):
-        return TensorHandle(x.data * y.data + z.data, z.dtype.scalar)
+        # An fma rounds once, but multiplying and then adding rounds twice.
+        # float64 has the precision to round the narrower types correctly.
+        dtype = z.data.dtype
+        if dtype == np.float64:
+            ret = np_fma_fp64(x.data, y.data, z.data)
+        else:
+            product = np.multiply(x.data, y.data, dtype=np.float64)
+            ret = np.add(product, z.data, dtype=np.float64).astype(dtype)
+        return TensorHandle(ret, z.dtype.scalar)
 
     # unary functions
     def unary_op(self, arg, op):
@@ -891,7 +935,9 @@ class InterpreterBuilder:
 
     def get_all_ones_value(self, type):
         np_type = _get_np_dtype(type)
-        if "int" in np_type.name:
+        if np.issubdtype(np_type, np.unsignedinteger):
+            return TensorHandle(np.full(1, np.iinfo(np_type).max, dtype=np_type), type.scalar)
+        elif np.issubdtype(np_type, np.signedinteger):
             return TensorHandle(np.full(1, -1, dtype=np_type), type.scalar)
         elif np_type == np.bool_:
             return TensorHandle(np.full(1, True, dtype=np_type), type.scalar)
@@ -1261,6 +1307,7 @@ def _patch_lang_core(lang, scope: _LangPatchScope):
 
     scope.set_attr(lang, "range", _new_range)
     scope.set_attr(lang, "static_range", _new_range)
+    scope.set_attr(lang.condition, "__bool__", lambda self: bool(self.condition))
     scope.set_attr(lang, "static_assert", _new_static_assert)
     scope.set_attr(lang, "static_print", print)
     scope.set_attr(lang.dtype, "to_ir", _new_to_ir)
@@ -1411,10 +1458,10 @@ class GridExecutor:
 
     def __call__(self, *args_dev, **kwargs):
         # Removes not used reserved keywords from kwargs
-        # Triton doesn't support keyword-only, variable positional or variable keyword arguments
-        # It's safe to inspect only positional or keyword arguments (i.e., argspec.args)
+        # Triton doesn't support variable positional or variable keyword arguments
+        # Keep both positional-or-keyword and keyword-only arguments.
         argspec = inspect.getfullargspec(self.fn)
-        kwargs = {k: v for k, v in kwargs.items() if k in argspec.args}
+        kwargs = {k: v for k, v in kwargs.items() if k in argspec.args or k in argspec.kwonlyargs}
         # copy arguments to the host
         args_hst, kwargs_hst = self._init_args_hst(args_dev, kwargs)
         # run pre-run hooks

@@ -118,6 +118,7 @@ class CUDAOptions:
     ptx_options: Optional[str] = knobs.nvidia.ptxas_options
     ir_override: Optional[str] = None  # filename of a user-defined IR (*.{ttir|ttgir|llir|ptx})
     enable_fp_fusion: bool = True
+    sched4reg: bool = False
     enable_reflect_ftz: bool = True  # ftz in libdevice
     launch_cooperative_grid: bool = False
     launch_pdl: bool = False
@@ -210,6 +211,9 @@ class CUDABackend(BaseBackend):
 
         args = {'arch': knobs.runtime.override_arch or f"sm{self.target.arch}"}
         args.update({k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts if opts[k] is not None})
+        if args.get("instrumentation_mode", ""):
+            # Instrumentation can require more registers than the user-specified limit.
+            args["maxnreg"] = None
         capability = int(self._parse_arch(args["arch"]))
 
         if args.get("clc", False) and capability < 100:
@@ -386,6 +390,7 @@ class CUDABackend(BaseBackend):
         passes.ttir.add_loop_aware_cse(pm)
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
+        passes.common.add_symbol_dce(pm)
         nvidia.passes.ttnvgpuir.add_check_matmul_two_cta(pm)
 
         if "fpsan" in options.instrumentation_mode:
@@ -531,7 +536,8 @@ class CUDABackend(BaseBackend):
         features = get_features(opt, cap_llvm)
         flags = ["nvptx-mad-wide-opt"]
         canonicalize_gep = "fpsan" in opt.instrumentation_mode
-        ret = llvm.translate_to_asm(src, triple, proc, features, flags, opt.enable_fp_fusion, False, canonicalize_gep)
+        ret = llvm.translate_to_asm(src, triple, proc, features, flags, opt.enable_fp_fusion, False, canonicalize_gep,
+                                    sched4reg=opt.sched4reg)
         # Find kernel names (there should only be one)
         names = re.findall(r".visible .entry ([a-zA-Z_][a-zA-Z0-9_]*)", ret)
         assert len(names) == 1

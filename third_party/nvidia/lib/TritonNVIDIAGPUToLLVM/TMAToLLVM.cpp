@@ -214,7 +214,7 @@ struct TensormapFenceproxyAcquireOpConversion
     // We run the fence on a single warp, then use a barrier to synchronize the
     // rest. This ends up being faster than running the fence on each warp.
     // TODO: Ideally we only emit one barrier after all fences are issued
-    b.barrier(triton::gpu::AddrSpace::None);
+    b.barrier(triton::gpu::AddrSpace::Local);
 
     rewriter.eraseOp(op);
     return success();
@@ -293,6 +293,8 @@ struct TensormapCreateOpConversion
                                    op.getSwizzleMode());
     tensormap_replace_fill_mode(loc, ctx, rewriter, smemBase, op.getFillMode());
     rewriter.setInsertionPointToStart(continuationBlock);
+    // Make thread zero's field updates visible to the collective copy.
+    LLVM::NVIDIA::createSyncWarp(loc, rewriter);
     tensormap_cp_fenceproxy(loc, ctx, rewriter, adaptor.getDescPtr(), smemBase);
     rewriter.eraseOp(op);
     return success();

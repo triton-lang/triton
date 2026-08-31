@@ -578,7 +578,7 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
       return {};
   }
 
-  if (isa<triton::gpu::UpcastFpOpInterface>(op))
+  if (isa<triton::gpu::CastFpOpInterface>(op))
     return {};
 
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
@@ -614,7 +614,7 @@ Attribute inferDstEncoding(Operation *op, Attribute encoding) {
     if (!isa<triton::gpu::BlockedEncodingAttr>(encoding))
       return {};
   }
-  if (isa<triton::gpu::UpcastFpOpInterface>(op))
+  if (isa<triton::gpu::CastFpOpInterface>(op))
     return {};
 
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
@@ -978,9 +978,8 @@ LogicalResult getConvertBackwardSlice(
       }
       for (auto [i, operand] : llvm::enumerate(definingOp->getOpOperands())) {
         Attribute srcEncoding;
-        if (auto upcast =
-                dyn_cast<triton::gpu::UpcastFpOpInterface>(definingOp)) {
-          srcEncoding = upcast.inferSrcEncoding(i, encoding);
+        if (auto cast = dyn_cast<triton::gpu::CastFpOpInterface>(definingOp)) {
+          srcEncoding = cast.inferSrcEncoding(i, encoding);
         } else {
           srcEncoding = inferSrcEncoding(definingOp, encoding);
         }
@@ -1606,30 +1605,6 @@ SmallVector<Value> getTiedArgs(Operation *op, int resultIdx) {
     return values;
   }
   return {};
-}
-
-LogicalResult verifyBarrierType(Operation *op,
-                                mlir::triton::gpu::MemDescType barrierType) {
-  auto numCTAs = triton::gpu::lookupNumCTAs(op);
-  if (!(barrierType.getElementType().isInteger(64) &&
-        barrierType.getRank() == 1 && barrierType.getShape()[0] <= numCTAs))
-    return op->emitOpError("barrier allocation must be a descriptor of "
-                           "Nxi64 type with N <= number of CTAs");
-
-  auto kBlock = StringAttr::get(op->getContext(), "block");
-  auto ll = toLinearLayout(barrierType).flattenOuts();
-  const auto &blockBases = ll.getBases().lookup(kBlock);
-  int i = 0;
-  for (const auto &basis : blockBases) {
-    if (basis[0] != 0 && basis[0] != int64_t(1) << i) {
-      return op->emitOpError(
-          "broadcasted cluster barriers require bases to be the sequence"
-          "1, 2, 4, 8, ... perhaps with zero bases interleaved.");
-    }
-    if (basis[0] != 0)
-      ++i;
-  }
-  return success();
 }
 
 std::optional<bool> getBoolFromConstant(Value cst) {

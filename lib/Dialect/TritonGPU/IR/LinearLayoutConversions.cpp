@@ -1491,14 +1491,15 @@ LinearLayout chooseScaledWmmaScaleLayout(
   }
 
   if (dotOperandIdx == 1) {
-    // ctaLayout comes from the dot operand. For B in scaled dot,
+    // ctaLayout and cgaLayout come from the dot operand. For B in scaled dot,
     // - the operand is ordered as [K, N]
     // - the scale is ordered as [N, K / 32 or 16].
-    // Swap the last two dims of ctaLayout to match the tileLayout
+    // Swap the last two dims of both to match the tileLayout
     SmallVector<int32_t> order = {1, 0};
     if (hasBatchDim)
       order = {0, 2, 1};
     ctaLayout = transposeLinearLayout(ctaLayout, order);
+    cgaLayout = inferDotScaleCGALayoutFromOperand(cgaLayout, dotOperandIdx);
   }
 
   // Zero out M or N dim based on opIdx

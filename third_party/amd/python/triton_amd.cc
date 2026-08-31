@@ -553,22 +553,38 @@ void init_triton_amd(py::module_ &m) {
   });
 
   auto hipBlas = m.def_submodule("hipblas");
-  // For ROCm installed via TheRock wheels: Preload hipblaslt library via
-  // rocm_sdk if available. When using TheRock wheel installs, libhipblaslt
-  // resides within the Python wheel package rather than in the standard
-  // /opt/rocm/lib location. This preload ensures the library is properly
-  // loaded before HipblasLtInstance tries to dlopen it, allowing the dynamic
-  // linker to find it from the ROCm wheel's bundled libraries.
-  try {
-    py::module_::import_("rocm_sdk").attr("preload_libraries")("hipblaslt");
-  } catch (...) {
-  }
   py::class_<HipblasLtInstance>(hipBlas, "HipblasLt")
       .def(py::new_([](py::object workspace) {
+        // For ROCm installed via TheRock wheels, libhipblaslt resides within
+        // the Python wheel package rather than a standard loader path such as
+        // /opt/rocm/lib. Resolve its absolute path through rocm_sdk instead of
+        // merely preloading it: dlopen by bare soname cannot reliably reuse a
+        // preloaded library. Non-TheRock ROCm installations retain the
+        // libhipblaslt.so system-loader fallback.
+        std::string hipblasLtPath = "libhipblaslt.so";
+        try {
+          auto libraries = py::module_::import_("rocm_sdk")
+                               .attr("find_libraries")("hipblaslt");
+          auto path = libraries.attr("__getitem__")(0);
+          auto pathString = path.attr("__str__")();
+          const char *pathChars = PyUnicode_AsUTF8(pathString.ptr());
+          if (pathChars == nullptr)
+            throw py::python_error();
+          hipblasLtPath = pathChars;
+        } catch (py::python_error &e) {
+          e.restore();
+          if (PyErr_ExceptionMatches(PyExc_ImportError) ||
+              PyErr_ExceptionMatches(PyExc_FileNotFoundError) ||
+              PyErr_ExceptionMatches(PyExc_IndexError)) {
+            PyErr_Clear();
+          } else {
+            throw py::python_error();
+          }
+        }
         auto wrk_ptr = py::cast<uint64_t>(workspace.attr("data_ptr")());
         auto wrk_size = py::cast<size_t>(workspace.attr("numel")()) *
                         py::cast<size_t>(workspace.attr("element_size")());
-        return new HipblasLtInstance(wrk_ptr, wrk_size);
+        return new HipblasLtInstance(wrk_ptr, wrk_size, hipblasLtPath);
       }))
       .def("matmul",
            [](HipblasLtInstance &self, py::object &A, py::object &B,

@@ -2,6 +2,7 @@ import os
 import pytest
 import shutil
 import triton
+from concurrent.futures import ThreadPoolExecutor
 from triton._internal_testing import is_hip
 
 from pathlib import Path
@@ -66,6 +67,61 @@ def test_knobs_utils(fresh_knobs) -> None:
         "baz": None,
         "quux": True,
     }
+
+
+def _register_pressure_scheduler_kernel():
+    from triton.backends.compiler import GPUTarget
+    from triton.backends.nvidia import compiler
+
+    compiler.llvm.init_targets()
+    backend = compiler.CUDABackend(GPUTarget("cuda", 90, 32))
+    arithmetic = []
+    stores = []
+    for lane in range(32):
+        arithmetic.extend([
+            f"  %seed{lane} = add i32 %seed, {lane + 1}",
+            f"  %high{lane} = call i32 @llvm.nvvm.mulhi.ui(i32 %seed{lane}, i32 -766435501)",
+            f"  %low{lane} = mul i32 %seed{lane}, -845247145",
+            f"  %value{lane} = xor i32 %high{lane}, %low{lane}",
+        ])
+        stores.extend([
+            f"  %out{lane} = getelementptr i32, ptr addrspace(1) %out, i64 {lane}",
+            f"  store i32 %value{lane}, ptr addrspace(1) %out{lane}, align 4",
+        ])
+
+    source = ('target triple = "nvptx64-nvidia-cuda"\n'
+              'declare i32 @llvm.nvvm.mulhi.ui(i32, i32)\n'
+              'define ptx_kernel void @scheduler_kernel(ptr addrspace(1) %out, i32 %seed) {\n' +
+              "\n".join(arithmetic + stores) + "\n  ret void\n}\n")
+    return backend, source
+
+
+@pytest.mark.skipif(is_hip(), reason="NVPTX code generation is unavailable on AMD")
+def test_nvidia_register_pressure_scheduler_hook():
+    backend, source = _register_pressure_scheduler_kernel()
+    default_options = backend.parse_options({"ptx_version": 80, "sched4reg": False})
+    pressure_options = backend.parse_options({"ptx_version": 80, "sched4reg": True})
+
+    assert default_options.hash() != pressure_options.hash()
+    assert backend.make_ptx(source, {}, default_options, 90) != backend.make_ptx(source, {}, pressure_options, 90)
+
+
+@pytest.mark.skipif(is_hip(), reason="NVPTX code generation is unavailable on AMD")
+def test_nvidia_register_pressure_scheduler_concurrent():
+    backend, source = _register_pressure_scheduler_kernel()
+
+    def emit(pressure_sensitive):
+        options = backend.parse_options({"ptx_version": 80, "sched4reg": pressure_sensitive})
+        return backend.make_ptx(source, {}, options, 90)
+
+    expected = {False: emit(False), True: emit(True)}
+    assert expected[False] != expected[True]
+
+    scheduling_policies = [bool(index % 2) for index in range(24)]
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(emit, scheduling_policies))
+
+    assert results == [expected[policy] for policy in scheduling_policies]
 
 
 def test_knobs_scope(fresh_knobs, monkeypatch):

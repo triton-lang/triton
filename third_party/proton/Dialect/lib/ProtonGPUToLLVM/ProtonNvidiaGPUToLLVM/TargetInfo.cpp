@@ -6,6 +6,7 @@
 #include "third_party/nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h" // TODO(fywkevin): move Utility.h to include/
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/NVPTXAddrSpace.h"
 
 namespace mlir::triton::proton::gpu::NVIDIA {
 
@@ -66,6 +67,19 @@ int TargetInfo::getAddressSpace(Attribute addressSpace) const {
                              "and GlobalMemorySpace for now");
   }
   return spaceId;
+}
+
+unsigned TargetInfo::getPtrAddressSpace(triton::PtrAddrSpace space) const {
+  switch (space) {
+  case triton::PtrAddrSpace::Global:
+  // Global memory read-only marking is not carried via a different LLVM
+  // address space. We channel it through other mechanisms.
+  case triton::PtrAddrSpace::Constant:
+    return llvm::NVPTXAS::ADDRESS_SPACE_GLOBAL;
+  case triton::PtrAddrSpace::Descriptor:
+    return llvm::NVPTXAS::ADDRESS_SPACE_GENERIC;
+  }
+  llvm_unreachable("unknown PtrAddrSpace");
 }
 
 int TargetInfo::getIndexPtrAddrSpace() const {
