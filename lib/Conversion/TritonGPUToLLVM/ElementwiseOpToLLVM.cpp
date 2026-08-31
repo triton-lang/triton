@@ -274,46 +274,8 @@ struct ElementwiseInlineAsmOpConversion
     Type asmRetType =
         asmRetTypes.size() > 1 ? struct_ty(asmRetTypes) : asmRetTypes[0];
 
-    auto emitInlineAsm = [&]() -> Value {
-      return LLVM::InlineAsmOp::create(
-                 rewriter, loc, asmRetType,
-                 /*operands=*/packedOperands,
-                 /*asm_string=*/op.getAsmString(),
-                 /*constraints=*/op.getConstraints(),
-                 /*has_side_effects=*/!op.getPure(),
-                 /*is_align_stack=*/false, LLVM::TailCallKind::None,
-                 /*asm_dialect=*/
-                 LLVM::AsmDialectAttr::get(rewriter.getContext(),
-                                           LLVM::AsmDialect::AD_ATT),
-                 /*operand_attrs=*/ArrayAttr())
-          ->getResult(0);
-    };
-
-    Value asmResults;
-    if (!threadPred) {
-      asmResults = emitInlineAsm();
-    } else {
-      Block *currentBlock = rewriter.getInsertionBlock();
-      Block *continuation =
-          currentBlock->splitBlock(rewriter.getInsertionPoint());
-      Region *region = currentBlock->getParent();
-      Block *asmBlock =
-          rewriter.createBlock(region, Region::iterator(continuation));
-      BlockArgument mergedResult = continuation->addArgument(asmRetType, loc);
-
-      rewriter.setInsertionPointToEnd(currentBlock);
-      Value undef = b.undef(asmRetType);
-      LLVM::CondBrOp::create(rewriter, loc, threadPred, asmBlock, ValueRange{},
-                             continuation, ValueRange{undef});
-
-      rewriter.setInsertionPointToEnd(asmBlock);
-      Value executedResult = emitInlineAsm();
-      LLVM::BrOp::create(rewriter, loc, ValueRange{executedResult},
-                         continuation);
-
-      rewriter.setInsertionPointToStart(continuation);
-      asmResults = mergedResult;
-    }
+    Value asmResults =
+        createInlineAsm(op, asmRetType, packedOperands, threadPred, rewriter);
 
     // asmResults is a flat struct; pack its values into
     // [return_value][op.getPackedElement()].
@@ -407,18 +369,83 @@ struct ElementwiseInlineAsmOpConversion
       results.resize(numElemsPerThread);
     }
 
-    SmallVector<unsigned> usedResultIndices;
-    if (threadPred) {
-      for (auto [index, result] : llvm::enumerate(op->getResults())) {
-        if (!result.use_empty())
-          usedResultIndices.push_back(index);
-      }
-      if (!usedResultIndices.empty() && !op->hasAttr("allocation.offset")) {
-        return op.emitError(
-            "missing shared-memory allocation for replicated inline asm "
-            "result");
-      }
+    if (failed(broadcastResults(op, unpackedResults, threadPred, rewriter)))
+      return failure();
+
+    // Reorder and pack the results.
+    SmallVector<Value> outs;
+    for (int i = 0; i < unpackedResults.size(); i++) {
+      outs.push_back(packUniqueTensorElements(loc, getTypeConverter(),
+                                              unpackedResults[i], rewriter,
+                                              op->getResult(i).getType()));
     }
+
+    rewriter.replaceOp(op, outs);
+    return success();
+  }
+
+private:
+  Value createInlineAsm(ElementwiseInlineAsmOp op, Type asmRetType,
+                        ValueRange packedOperands, Value threadPred,
+                        ConversionPatternRewriter &rewriter) const {
+    Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto emitInlineAsm = [&]() -> Value {
+      return LLVM::InlineAsmOp::create(
+                 rewriter, loc, asmRetType,
+                 /*operands=*/packedOperands,
+                 /*asm_string=*/op.getAsmString(),
+                 /*constraints=*/op.getConstraints(),
+                 /*has_side_effects=*/!op.getPure(),
+                 /*is_align_stack=*/false, LLVM::TailCallKind::None,
+                 /*asm_dialect=*/
+                 LLVM::AsmDialectAttr::get(rewriter.getContext(),
+                                           LLVM::AsmDialect::AD_ATT),
+                 /*operand_attrs=*/ArrayAttr())
+          ->getResult(0);
+    };
+
+    if (!threadPred)
+      return emitInlineAsm();
+
+    Block *currentBlock = rewriter.getInsertionBlock();
+    Block *continuation =
+        currentBlock->splitBlock(rewriter.getInsertionPoint());
+    Region *region = currentBlock->getParent();
+    Block *asmBlock =
+        rewriter.createBlock(region, Region::iterator(continuation));
+    BlockArgument mergedResult = continuation->addArgument(asmRetType, loc);
+
+    rewriter.setInsertionPointToEnd(currentBlock);
+    Value undef = b.undef(asmRetType);
+    LLVM::CondBrOp::create(rewriter, loc, threadPred, asmBlock, ValueRange{},
+                           continuation, ValueRange{undef});
+
+    rewriter.setInsertionPointToEnd(asmBlock);
+    Value executedResult = emitInlineAsm();
+    LLVM::BrOp::create(rewriter, loc, ValueRange{executedResult}, continuation);
+
+    rewriter.setInsertionPointToStart(continuation);
+    return mergedResult;
+  }
+
+  LogicalResult
+  broadcastResults(ElementwiseInlineAsmOp op,
+                   SmallVector<SmallVector<Value>> &unpackedResults,
+                   Value threadPred,
+                   ConversionPatternRewriter &rewriter) const {
+    if (!threadPred || op->use_empty())
+      return success();
+    if (!op->hasAttr("allocation.offset"))
+      return op.emitError(
+          "missing shared-memory allocation for replicated inline asm result");
+
+    Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    SmallVector<unsigned> usedResultIndices;
+    for (auto [index, result] : llvm::enumerate(op->getResults()))
+      if (!result.use_empty())
+        usedResultIndices.push_back(index);
 
     for (auto [broadcastIndex, resultIndex] :
          llvm::enumerate(usedResultIndices)) {
@@ -448,19 +475,9 @@ struct ElementwiseInlineAsmOpConversion
       }
     }
 
-    // Reorder and pack the results.
-    SmallVector<Value> outs;
-    for (int i = 0; i < unpackedResults.size(); i++) {
-      outs.push_back(packUniqueTensorElements(loc, getTypeConverter(),
-                                              unpackedResults[i], rewriter,
-                                              op->getResult(i).getType()));
-    }
-
-    rewriter.replaceOp(op, outs);
     return success();
   }
 
-private:
   const TargetInfoBase &targetInfo;
 };
 
