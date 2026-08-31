@@ -230,6 +230,45 @@ Operation *storeFpSanScratchMemory(PatternRewriter &rewriter, Location loc,
   return createStoreScratchMemory(rewriter, loc, alloc, stored, storageTy);
 }
 
+// Return one forwarding step, preserving view operations for scratch emission.
+static Value getFpSanTmemSource(Value value) {
+  if (auto arg = dyn_cast<BlockArgument>(value)) {
+    Operation *parent = arg.getOwner()->getParentOp();
+    if (auto partitions = dyn_cast<ttg::WarpSpecializePartitionsOp>(parent))
+      return partitions.getExplicitCaptures()[arg.getArgNumber()];
+    if (auto loop = dyn_cast<scf::ForOp>(parent)) {
+      if (arg.getArgNumber() != 0)
+        return loop.getInitArgs()[arg.getArgNumber() - 1];
+    }
+  }
+  if (auto view = value.getDefiningOp<ttng::TMEMSubSliceOp>())
+    return view.getSrc();
+  if (auto view = value.getDefiningOp<ttg::MemDescIndexOp>())
+    return view.getSrc();
+  if (auto view = value.getDefiningOp<ttg::MemDescReinterpretOp>())
+    return view.getSrc();
+  return {};
+}
+
+static bool hasTwoCTAMma(ModuleOp module) {
+  bool twoCTAs = false;
+  module.walk([&](ttng::MMAv5OpInterface mma) { twoCTAs |= mma.getTwoCtas(); });
+  return twoCTAs;
+}
+
+enum class FpSanMmaKind { Integer, Floating, Mixed };
+
+static FpSanMmaKind getFpSanMmaKind(ttng::TCGen5MMAOp mma) {
+  bool aIsFloat = isa<FloatType>(mma.getA().getType().getElementType());
+  bool bIsFloat = isa<FloatType>(mma.getB().getType().getElementType());
+  bool dIsFloat = isa<FloatType>(mma.getD().getType().getElementType());
+  if (aIsFloat && bIsFloat && dIsFloat)
+    return FpSanMmaKind::Floating;
+  if (!aIsFloat && !bIsFloat && !dIsFloat)
+    return FpSanMmaKind::Integer;
+  return FpSanMmaKind::Mixed;
+}
+
 class TmemScratchManager {
 public:
   explicit TmemScratchManager(bool sharedClusterState)
@@ -287,19 +326,9 @@ public:
 
   std::optional<ScratchInfo>
   getOrCreate(Value memdesc, PatternRewriter &rewriter, Region *scope) {
-    if (auto arg = dyn_cast<BlockArgument>(memdesc)) {
-      if (auto wsPartitions = dyn_cast<ttg::WarpSpecializePartitionsOp>(
-              arg.getOwner()->getParentOp())) {
-        auto capture = wsPartitions.getExplicitCaptures()[arg.getArgNumber()];
-        return getOrCreate(capture, rewriter, scope);
-      }
-      if (auto forOp = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp())) {
-        unsigned argNum = arg.getArgNumber();
-        if (argNum == 0)
-          return std::nullopt;
-        Value init = forOp.getInitArgs()[argNum - 1];
-        return getOrCreate(init, rewriter, scope);
-      }
+    if (isa<BlockArgument>(memdesc)) {
+      if (Value source = getFpSanTmemSource(memdesc))
+        return getOrCreate(source, rewriter, scope);
       return std::nullopt;
     }
 
@@ -355,12 +384,13 @@ public:
       return info;
     }
 
+    Value source = getFpSanTmemSource(memdesc);
     if (auto subslice = memdesc.getDefiningOp<ttng::TMEMSubSliceOp>()) {
-      auto baseInfo = getOrCreate(subslice.getSrc(), rewriter, scope);
+      auto baseInfo = getOrCreate(source, rewriter, scope);
       if (!baseInfo || baseInfo->scaleSourceType)
         return std::nullopt;
 
-      auto baseTy = cast<ttg::MemDescType>(subslice.getSrc().getType());
+      auto baseTy = cast<ttg::MemDescType>(source.getType());
       if (baseTy.getRank() != memTy.getRank() ||
           baseTy.getRank() != baseInfo->tensorType.getRank())
         return std::nullopt;
@@ -391,11 +421,11 @@ public:
     }
 
     if (auto view = memdesc.getDefiningOp<ttg::MemDescIndexOp>()) {
-      auto baseInfo = getOrCreate(view.getSrc(), rewriter, scope);
+      auto baseInfo = getOrCreate(source, rewriter, scope);
       if (!baseInfo || baseInfo->scaleSourceType)
         return std::nullopt;
 
-      auto baseTy = cast<ttg::MemDescType>(view.getSrc().getType());
+      auto baseTy = cast<ttg::MemDescType>(source.getType());
       if (baseTy.getRank() < 2)
         return std::nullopt;
 
@@ -421,11 +451,11 @@ public:
     }
 
     if (auto view = memdesc.getDefiningOp<ttg::MemDescReinterpretOp>()) {
-      auto baseInfo = getOrCreate(view.getSrc(), rewriter, scope);
+      auto baseInfo = getOrCreate(source, rewriter, scope);
       if (!baseInfo)
         return std::nullopt;
 
-      auto baseTy = cast<ttg::MemDescType>(view.getSrc().getType());
+      auto baseTy = cast<ttg::MemDescType>(source.getType());
       if (isa<ttng::TensorMemoryScalesEncodingAttr>(baseTy.getEncoding()) &&
           !isa<ttng::TensorMemoryScalesEncodingAttr>(memTy.getEncoding()))
         return ScratchInfo{baseInfo->ptr, baseInfo->tensorType, baseTy};
@@ -2779,12 +2809,10 @@ struct TCGen5MMAPattern : public OpRewritePattern<ttng::TCGen5MMAOp> {
     auto bMemTy = cast<ttg::MemDescType>(op.getB().getType());
     auto dMemTy = cast<ttg::MemDescType>(op.getD().getType());
 
-    bool aIsFloat = isa<FloatType>(aMemTy.getElementType());
-    bool bIsFloat = isa<FloatType>(bMemTy.getElementType());
-    bool dIsFloat = isa<FloatType>(dMemTy.getElementType());
-    if (!aIsFloat && !bIsFloat && !dIsFloat)
+    auto kind = getFpSanMmaKind(op);
+    if (kind == FpSanMmaKind::Integer)
       return failure();
-    if (!aIsFloat || !bIsFloat || !dIsFloat)
+    if (kind == FpSanMmaKind::Mixed)
       return emitFpSanUnsupported(op.getOperation());
 
     auto scope = getScratchScopeRegion(op);
@@ -3216,6 +3244,93 @@ struct ElementwiseInlineAsmPattern
   }
 };
 
+// These are the operands whose scratch storage the FPSan patterns resolve.
+static SmallVector<Value> getFpSanTmemOperands(Operation *op) {
+  if (auto load = dyn_cast<ttng::TMEMLoadOp>(op))
+    return {load.getSrc()};
+  if (auto store = dyn_cast<ttng::TMEMStoreOp>(op))
+    return {store.getDst()};
+  if (auto copy = dyn_cast<ttng::TMEMCopyOp>(op))
+    return {copy.getDst()};
+  if (auto mma = dyn_cast<ttng::TCGen5MMAOp>(op)) {
+    if (getFpSanMmaKind(mma) == FpSanMmaKind::Floating)
+      return {mma.getA(), mma.getB(), mma.getD()};
+  }
+  if (auto mma = dyn_cast<ttng::TCGen5MMAScaledOp>(op))
+    return {mma.getA(), mma.getB(), mma.getD(), mma.getAScale(),
+            mma.getBScale()};
+  return {};
+}
+
+struct FpSanInliningRequirement {
+  Operation *cause;
+  StringRef reason;
+};
+
+using FpSanCallsRequiringInlining =
+    SmallVector<std::pair<tt::CallOp, FpSanInliningRequirement>>;
+
+static FpSanCallsRequiringInlining
+getFpSanCallsRequiringInlining(ModuleOp module) {
+  DenseMap<Operation *, FpSanInliningRequirement> functions;
+  DenseMap<Operation *, FpSanInliningRequirement> producers;
+  bool twoCTAs = hasTwoCTAMma(module);
+
+  module.walk([&](Operation *op) {
+    auto operands = getFpSanTmemOperands(op);
+    for (Value operand : operands) {
+      auto type = cast<ttg::MemDescType>(operand.getType());
+      if (!isa<ttng::TensorMemorySpaceAttr>(type.getMemorySpace()))
+        continue;
+      Value origin = operand;
+      while (Value source = getFpSanTmemSource(origin))
+        origin = source;
+      if (auto arg = dyn_cast<BlockArgument>(origin)) {
+        if (auto function = dyn_cast<tt::FuncOp>(arg.getOwner()->getParentOp());
+            function && arg.getOwner()->isEntryBlock())
+          functions.try_emplace(
+              function, FpSanInliningRequirement{
+                            op, "FPSan needs the allocation behind this tensor "
+                                "memory argument"});
+      } else if (auto call = origin.getDefiningOp<tt::CallOp>()) {
+        producers.try_emplace(
+            call,
+            FpSanInliningRequirement{
+                op, "FPSan needs the allocation behind this tensor memory "
+                    "call result"});
+      }
+    }
+
+    auto function = op->getParentOfType<tt::FuncOp>();
+    if (!function || function.isPublic())
+      return;
+    if (isa<ttg::WarpSpecializeOp>(op))
+      functions.try_emplace(
+          function, FpSanInliningRequirement{
+                        op, "warp specialization requires kernel context"});
+    // A callee receives a per-CTA scratch base, not the cluster base needed by
+    // TMEM emulation. Its generated cluster barriers also need kernel context.
+    if (twoCTAs && (!operands.empty() || isa<ttng::TCGen5CommitOp>(op)))
+      functions.try_emplace(
+          function, FpSanInliningRequirement{
+                        op, "FPSan cluster scratch and barriers require kernel "
+                            "context"});
+  });
+
+  FpSanCallsRequiringInlining calls;
+  module.walk([&](tt::CallOp call) {
+    auto producer = producers.find(call);
+    if (producer != producers.end()) {
+      calls.emplace_back(call, producer->second);
+      return;
+    }
+    auto function = functions.find(call.resolveCallable());
+    if (function != functions.end())
+      calls.emplace_back(call, function->second);
+  });
+  return calls;
+}
+
 class FpSanitizerPass
     : public impl::TritonInstrumentFpSanitizerBase<FpSanitizerPass> {
 public:
@@ -3223,6 +3338,16 @@ public:
       FpSanitizerPass>::TritonInstrumentFpSanitizerBase;
 
   void runOnOperation() override {
+    auto calls = getFpSanCallsRequiringInlining(getOperation());
+    for (auto [call, requirement] : calls) {
+      auto diagnostic = call.emitOpError("must be inlined before FPSan");
+      diagnostic.attachNote(requirement.cause->getLoc()) << requirement.reason;
+    }
+    if (!calls.empty()) {
+      signalPassFailure();
+      return;
+    }
+
     bool fpSanErrorEmitted = false;
     ScopedDiagnosticHandler diagnosticHandler(
         &getContext(), [&](Diagnostic &diagnostic) {
@@ -3231,9 +3356,7 @@ public:
           return failure();
         });
 
-    bool twoCTAs = false;
-    getOperation().walk(
-        [&](ttng::MMAv5OpInterface op) { twoCTAs |= op.getTwoCtas(); });
+    bool twoCTAs = hasTwoCTAMma(getOperation());
 
     getOperation()->setAttr(ttng::AttrTwoCTAsName,
                             BoolAttr::get(&getContext(), twoCTAs));

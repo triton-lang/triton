@@ -222,7 +222,9 @@ class _TensorMemoryLinearLayout:
         raise RuntimeError("TensorMemoryLinearLayout is print-only; IR materialization is unsupported")
 
     def mangle(self):
-        return f"TMLL_{self.shape}_TMLL"
+        rows = "_".join("~".join(map(str, b)) for b in self.rows)
+        cols = "_".join("~".join(map(str, b)) for b in self.cols)
+        return f"TMLL_{rows}_{cols}_{self.shape}_TMLL"
 
     def __hash__(self):
         return hash((tuple(map(tuple, self.rows)), tuple(map(tuple, self.cols)), tuple(self.shape)))

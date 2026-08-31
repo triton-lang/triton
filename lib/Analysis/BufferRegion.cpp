@@ -6,6 +6,7 @@
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "triton/Analysis/Allocation.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
@@ -29,7 +30,15 @@ triton::LinearLayout getMemDescLinearLayout(ttg::MemDescType ty) {
   return ttg::toLinearLayout(ty);
 }
 
-FailureOr<SmallVector<uint32_t, 2>> getAllocationOffsets(ttg::LocalAllocOp op) {
+FailureOr<SmallVector<uint32_t, 2>>
+getAllocationOffsets(ttg::LocalAllocOp op, Allocation *allocation) {
+  if (allocation) {
+    SmallVector<uint32_t, 2> offsets;
+    for (auto id : allocation->getBufferIds(op.getResult()))
+      offsets.push_back(allocation->getOffset(id));
+    assert(!offsets.empty() && "shared allocation must have allocated buffers");
+    return offsets;
+  }
   auto offsetAttr = op->getAttr("allocation.offset");
   if (!offsetAttr) {
     op.emitError("ConcurrencySanitizer should run after "
@@ -101,7 +110,7 @@ triton::AddressSet &getAddressesForCTA(MemDescFootprint &footprint,
 
 MemDescFootprint getMemDescAddresses(
     uint32_t storageBase, uint32_t affineOffset, ttg::MemDescType ty,
-    llvm::DenseMap<std::pair<Type, uint32_t>, triton::AddressSet> *cache =
+    llvm::DenseMap<std::pair<Type, uint32_t>, MemDescFootprint> *cache =
         nullptr,
     ArrayRef<uint32_t> partitionBases = {}, uint32_t affinePartitionOffset = 0,
     uint32_t affineCTAOffset = 0) {
@@ -120,6 +129,17 @@ MemDescFootprint getMemDescAddresses(
                affinePartitionOffset, affineCTAOffset))
         getAddressesForCTA(footprint, cta).insert(addresses);
     }
+    return footprint;
+  }
+  if (cache && partitionBases.empty()) {
+    auto [found, inserted] =
+        cache->try_emplace(std::make_pair(Type(ty), affineOffset));
+    if (inserted)
+      found->second = getMemDescAddresses(0, affineOffset, ty);
+    MemDescFootprint footprint;
+    for (const auto &[cta, addresses] : found->second)
+      getAddressesForCTA(footprint, cta ^ affineCTAOffset) =
+          addresses.translated(storageBase);
     return footprint;
   }
   triton::LinearLayout layout = getMemDescLinearLayout(ty);
@@ -170,7 +190,6 @@ MemDescFootprint getMemDescAddresses(
   };
   SmallVector<PhysicalBasis> bases;
   SmallVector<unsigned> basisCounts;
-  bool hasCTAAddressVariation = false;
   for (auto [dim, dimSize] : llvm::zip_equal(dims, shape)) {
     unsigned numBits = llvm::Log2_64_Ceil(dimSize);
     basisCounts.push_back(numBits);
@@ -181,21 +200,37 @@ MemDescFootprint getMemDescAddresses(
                    : 0;
       };
       uint32_t block = basis(blockName);
-      hasCTAAddressVariation |= block != 0;
       bases.push_back({basis(offsetName), basis(rowName), basis(colName),
                        basis(partitionName), block});
     }
   }
-
-  if (cache && partitionBases.empty() && !hasCTAAddressVariation) {
-    auto [found, inserted] =
-        cache->try_emplace(std::make_pair(Type(ty), affineOffset));
-    if (inserted)
-      found->second =
-          std::move(getMemDescAddresses(0, affineOffset, ty).front().second);
-    footprint.emplace_back(affineCTAOffset,
-                           found->second.translated(storageBase));
-    return footprint;
+  unsigned numLogicalBases = bases.size();
+  uint64_t numReplicas = 1;
+  // The pseudoinverse selects one representative of replicated storage. Zero
+  // block bases in the allocation layout denote a local copy in every replica
+  // CTA. A nonzero block basis excluded by a subview is not a replica.
+  uint32_t broadcastBits = layout.getFreeVariableMasks().lookup(blockName);
+  for (unsigned bit = 0; bit < layout.getInDimSizeLog2(blockName); ++bit) {
+    if (!(broadcastBits & (uint32_t{1} << bit)))
+      continue;
+    PhysicalBasis replica;
+    replica.block = uint32_t{1} << bit;
+    bases.push_back(replica);
+    numReplicas *= 2;
+  }
+  if (isTmem) {
+    // Zero row bases at 32 and 64 broadcast across warp-addressable storage;
+    // loads/stores still access every replica. The pseudoinverse chooses only
+    // one. Other zero row/column bases denote undefined storage, not replicas.
+    uint64_t rowBasisMask = triton::getInputBasisMask(layout, rowName, dims);
+    for (unsigned bit : {5, 6}) {
+      if (!(rowBasisMask & (uint64_t{1} << bit))) {
+        PhysicalBasis replica;
+        replica.row = uint32_t{1} << bit;
+        bases.push_back(replica);
+        numReplicas *= 2;
+      }
+    }
   }
 
   auto applyBasis = [](PhysicalBasis &physical, const PhysicalBasis &basis) {
@@ -208,7 +243,7 @@ MemDescFootprint getMemDescAddresses(
 
   if (ttg::isPositivePowerOfTwoShape(shape)) {
     PhysicalBasis physical;
-    for (uint64_t index = 0; index < numPoints; ++index) {
+    for (uint64_t index = 0; index < numPoints * numReplicas; ++index) {
       if (index != 0)
         applyBasis(physical, bases[llvm::countr_zero(index)]);
       addPhysicalAddress(physical.offset, physical.row, physical.col,
@@ -230,8 +265,14 @@ MemDescFootprint getMemDescAddresses(
             applyBasis(physical, bases[basisStart + bit]);
         basisStart += numBits;
       }
-      addPhysicalAddress(physical.offset, physical.row, physical.col,
-                         physical.partition, physical.block);
+      for (uint64_t replica = 0; replica < numReplicas; ++replica) {
+        PhysicalBasis replicated = physical;
+        for (unsigned bit = 0; bit < llvm::Log2_64(numReplicas); ++bit)
+          if (replica & (uint64_t{1} << bit))
+            applyBasis(replicated, bases[numLogicalBases + bit]);
+        addPhysicalAddress(replicated.offset, replicated.row, replicated.col,
+                           replicated.partition, replicated.block);
+      }
     }
   }
   return footprint;
@@ -481,8 +522,15 @@ BufferRegionAnalysis::getAllocView(Value allocation, uint32_t storageBase,
   BufferRegionView view;
   view.storageBase = storageBase;
   view.partitionBases = llvm::to_vector<2>(partitionBases);
-  view.allocationFrame = getOperationId(
-      allocation.getDefiningOp()->getParentOfType<FunctionOpInterface>());
+  Operation *op = allocation.getDefiningOp();
+  view.allocation = op;
+  // TMEM allocation assigns module-wide addresses; only shared allocations
+  // need a per-function frame and translation by a call's shared-memory offset.
+  auto memory = cast<ttg::MemDescType>(allocation.getType());
+  view.allocationFrame =
+      isa<ttng::TensorMemorySpaceAttr>(memory.getMemorySpace())
+          ? getOperationId(op->getParentOfType<ModuleOp>())
+          : getOperationId(op->getParentOfType<FunctionOpInterface>());
   return getSubView(allocation.getType(), view);
 }
 
@@ -521,7 +569,7 @@ BufferRegionAnalysis::getSubView(Type type, const BufferRegionView &view,
 
 LogicalResult BufferRegionAnalysis::initialize(Operation *top) {
   top->walk([&](Operation *operation) {
-    if (isa<FunctionOpInterface, CallOpInterface>(operation))
+    if (isa<ModuleOp, FunctionOpInterface, CallOpInterface>(operation))
       operationInterner.insert(operation);
   });
 
@@ -542,26 +590,127 @@ LogicalResult BufferRegionAnalysis::initialize(Operation *top) {
   return success();
 }
 
-SmallVector<BufferRegionAccess>
-BufferRegionAnalysis::getAccessRegions(Value value) {
-  const RegionInfo &info = getRegionInfo(value);
-  if (info.kind != RegionInfo::Kind::Exact || info.views.empty())
-    return {std::nullopt};
-  SmallVector<BufferRegionAccess> accesses;
-  for (const BufferRegionView &view : info.views)
-    accesses.push_back(view);
-  return accesses;
+bool mayOverlap(const BufferRegionFootprint *lhs,
+                const BufferRegionFootprint *rhs) {
+  if (!lhs || !rhs || !lhs->memorySpace || !rhs->memorySpace)
+    return true;
+  if (lhs->memorySpace != rhs->memorySpace)
+    return false;
+  const RegionInfo &left = lhs->regionInfo;
+  const RegionInfo &right = rhs->regionInfo;
+  if (left.kind != RegionInfo::Kind::Exact || left.views.empty() ||
+      right.kind != RegionInfo::Kind::Exact || right.views.empty())
+    return true;
+  return llvm::any_of(left.views, [&](const BufferRegionView &a) {
+    return llvm::any_of(right.views, [&](const BufferRegionView &b) {
+      bool sameFrame =
+          a.allocationFrame && a.allocationFrame == b.allocationFrame;
+      return !sameFrame || a.region.intersects(b.region);
+    });
+  });
 }
 
-BufferRegionAccess BufferRegionAnalysis::translateToCallsite(
-    BufferRegionAccess view, CallOpInterface call, FunctionOpInterface caller,
-    FunctionOpInterface callee) const {
-  uint32_t calleeFrame = getOperationId(callee.getOperation());
-  if (!view || view->allocationFrame != calleeFrame)
-    return view;
+const BufferRegionFootprint *
+BufferRegionAnalysis::getFootprint(Value value,
+                                   FunctionOpInterface allocationFrame) {
+  auto memory = dyn_cast<ttg::MemDescType>(value.getType());
+  if (!memory)
+    return nullptr;
+  auto [it, inserted] = valueFootprints.try_emplace(value);
+  if (inserted) {
+    const RegionInfo &info = getRegionInfo(value);
+    if (info.kind == RegionInfo::Kind::Exact && !info.views.empty())
+      it->second = std::make_unique<BufferRegionFootprint>(
+          BufferRegionFootprint{memory.getMemorySpace(), info});
+  }
+  const auto *footprint = it->second.get();
+  if (footprint && allocationFrame &&
+      llvm::any_of(footprint->regionInfo.views, [&](const auto &view) {
+        return view.allocationFrame != getOperationId(allocationFrame);
+      }))
+    return nullptr;
+  return footprint;
+}
+
+const BufferRegionFootprint *
+BufferRegionAnalysis::getScratchFootprint(Operation *op) {
+  auto [it, inserted] = scratchFootprints.try_emplace(op);
+  if (!inserted)
+    return it->second.get();
+
+  uint32_t base, length;
+  if (auto *allocation = getAllocation(op)) {
+    auto id = allocation->getBufferId(op);
+    if (id == Allocation::InvalidBufferId)
+      return nullptr;
+    base = allocation->getOffset(id);
+    length = allocation->getAllocatedSize(id);
+  } else {
+    auto offset = op->getAttrOfType<IntegerAttr>("allocation.offset");
+    auto size = op->getAttrOfType<IntegerAttr>("allocation.size");
+    if (!offset || !size)
+      return nullptr;
+    base = offset.getInt();
+    length = size.getInt();
+  }
+  BufferRegionView view{{base, length}, /*storageBase=*/base};
+  view.allocationFrame =
+      getOperationId(op->getParentOfType<FunctionOpInterface>());
+  AddressSet addresses = AddressSet::fromRange(base, length);
+  unsigned numCTAs = ttg::lookupNumCTAs(op);
+  uint32_t broadcastMask = getAtomicScratchBroadcastMask(op).value_or(0);
+  for (unsigned cta = 0; cta < numCTAs; ++cta)
+    if (!(cta & broadcastMask))
+      view.region.ctaAddresses.emplace_back(cta, addresses);
+  it->second = std::make_unique<BufferRegionFootprint>(
+      BufferRegionFootprint{ttg::SharedMemorySpaceAttr::get(op->getContext()),
+                            RegionInfo({std::move(view)})});
+  return it->second.get();
+}
+
+const BufferRegionFootprint *BufferRegionAnalysis::translateToCallsite(
+    const BufferRegionFootprint *footprint, CallOpInterface call,
+    FunctionOpInterface callee) {
+  if (!footprint)
+    return nullptr;
+  uint32_t calleeFrame = getOperationId(callee);
+  if (llvm::none_of(footprint->regionInfo.views, [&](const auto &view) {
+        return view.allocationFrame == calleeFrame;
+      }))
+    return footprint;
+  auto [it, inserted] =
+      callsiteFootprints.try_emplace({footprint, call.getOperation()});
+  if (inserted) {
+    uint32_t callerFrame =
+        getOperationId(call->getParentOfType<FunctionOpInterface>());
+    uint32_t offset = getCallOffset(call);
+    RegionInfo info(RegionInfo::ViewList{});
+    for (const BufferRegionView &view : footprint->regionInfo.views)
+      info.views.insert(view.allocationFrame == calleeFrame
+                            ? view.translated(offset, callerFrame)
+                            : view);
+    it->second = std::make_unique<BufferRegionFootprint>(
+        BufferRegionFootprint{footprint->memorySpace, std::move(info)});
+  }
+  return it->second.get();
+}
+
+Allocation *BufferRegionAnalysis::getAllocation(Operation *op) const {
+  if (!moduleAllocation)
+    return nullptr;
+  auto *allocation =
+      moduleAllocation->getFuncData(op->getParentOfType<FunctionOpInterface>());
+  assert(allocation && "function allocation must be available");
+  return allocation;
+}
+
+uint32_t BufferRegionAnalysis::getCallOffset(CallOpInterface call) const {
+  if (auto *allocation = getAllocation(call)) {
+    auto id = allocation->getBufferId(call);
+    return id == Allocation::InvalidBufferId ? 0 : allocation->getOffset(id);
+  }
   auto offset = call->getAttrOfType<IntegerAttr>("allocation.offset");
-  return view->translated(offset ? offset.getInt() : 0,
-                          getOperationId(caller.getOperation()));
+  return offset ? offset.getInt() : 0;
 }
 
 LogicalResult BufferRegionAnalysis::visitOperation(
@@ -587,8 +736,12 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     return success();
   }
   if (auto localAllocOp = dyn_cast<ttg::LocalAllocOp>(op)) {
+    // Descriptor views preserve memory space, so shared origins cannot
+    // contribute to a tensor-memory footprint.
+    if (mode == Mode::TensorMemoryOnly)
+      return propagateRegions(RegionInfo::getPessimisticValueState());
     FailureOr<SmallVector<uint32_t, 2>> offsets =
-        getAllocationOffsets(localAllocOp);
+        getAllocationOffsets(localAllocOp, getAllocation(op));
     if (failed(offsets))
       return failure();
     ArrayRef<uint32_t> partitionBases = offsets->size() > 1

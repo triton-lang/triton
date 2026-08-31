@@ -9,18 +9,18 @@
 
 namespace mlir::triton {
 
-/// Read and write frontiers keyed by exact physical buffer regions. Each access
-/// is associated with the scopes in which it remains live.
+/// Read and write frontiers keyed by cached physical buffer footprints. Each
+/// access is associated with the scopes in which it remains live.
 template <typename ScopeMaskT> class ScopedMemoryFrontier {
 public:
-  using AccessT = BufferRegionAccess;
+  using AccessT = const BufferRegionFootprint *;
   using AccessMap = std::map<AccessT, ScopeMaskT>;
 
   void addRead(AccessT access, ScopeMaskT scopes) {
-    add(/*isWrite=*/false, std::move(access), scopes);
+    add(/*isWrite=*/false, access, scopes);
   }
   void addWrite(AccessT access, ScopeMaskT scopes) {
-    add(/*isWrite=*/true, std::move(access), scopes);
+    add(/*isWrite=*/true, access, scopes);
   }
 
   ScopedMemoryFrontier &join(const ScopedMemoryFrontier &other) {
@@ -67,7 +67,7 @@ public:
 
 private:
   void add(bool isWrite, AccessT access, ScopeMaskT scopes) {
-    accesses[isWrite][std::move(access)] |= scopes;
+    accesses[isWrite][access] |= scopes;
   }
 
   bool intersects(const ScopedMemoryFrontier &other, bool lhsWrite,
@@ -76,8 +76,7 @@ private:
       if (!(leftScopes & scope))
         continue;
       for (const auto &[right, rightScopes] : other.accesses[rhsWrite])
-        if ((rightScopes & scope) &&
-            (!left || !right || left->intersects(*right)))
+        if ((rightScopes & scope) && mayOverlap(left, right))
           return true;
     }
     return false;

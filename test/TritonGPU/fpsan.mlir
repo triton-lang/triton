@@ -1,9 +1,29 @@
 // RUN: split-file %s %t
-// RUN: triton-opt %t/success.mlir -split-input-file -tritoninstrument-fp-sanitizer | FileCheck %t/success.mlir
+// RUN: triton-opt %t/success.mlir -split-input-file -symbol-dce -tritoninstrument-fp-sanitizer | FileCheck %t/success.mlir
 // RUN: triton-opt %t/canonicalize.mlir -canonicalize | FileCheck %t/canonicalize.mlir
 // RUN: not triton-opt %t/unsupported.mlir -tritoninstrument-fp-sanitizer 2>&1 | FileCheck %t/unsupported.mlir --check-prefix=FPSANERR
 
 //--- success.mlir
+
+module {
+  // CHECK-LABEL: @call_arithmetic
+  tt.func public @call_arithmetic(%x: f32, %y: f32) -> f32 {
+    // CHECK: tt.call @arithmetic
+    %result = tt.call @arithmetic(%x, %y) : (f32, f32) -> f32
+    tt.return %result : f32
+  }
+  // CHECK-LABEL: tt.func private @arithmetic
+  // CHECK-SAME: noinline = true
+  tt.func private @arithmetic(%x: f32, %y: f32) -> f32 attributes {noinline = true} {
+    // CHECK: tti.experimental_fpsan_embed
+    // CHECK: arith.addi
+    // CHECK: tti.experimental_fpsan_unembed
+    %result = arith.addf %x, %y : f32
+    tt.return %result : f32
+  }
+}
+
+// -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [64, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #dot_operand_a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>

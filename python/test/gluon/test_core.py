@@ -2646,6 +2646,44 @@ def test_tmem_subslice_unpacked_one_column():
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("pred", [False, True])
+def test_tmem_wait_predicated_store(pred):
+
+    @gluon.jit
+    def kernel(inp, out, pred_ptr):
+        parent = allocate_tensor_memory(ttgl.float32, [128, 64], TensorMemoryLayout([128, 64], col_stride=1))
+        layout: ttgl.constexpr = parent.get_reg_layout()
+        rows = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))
+        cols = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, layout))
+        offsets = rows[:, None] * 64 + cols[None, :]
+        pred_value = ttgl.load(pred_ptr)
+        parent.store(ttgl.load(inp + offsets))
+
+        a = parent.slice(0, 16)
+        b = parent.slice(16, 16)
+        c = parent.slice(32, 16)
+        values = a.load()
+        # Register users and disjoint stores need no load wait.
+        b.store(values + 1)
+        c.store(values + 2, pred=pred_value)
+        # Overwriting the loaded source and reading all stores require completion.
+        a.store(ttgl.full([128, 16], -7, ttgl.float32, layout=a.get_reg_layout()))
+        ttgl.store(out + offsets, parent.load())
+
+    inp = torch.arange(128 * 64, dtype=torch.float32, device="cuda").reshape(128, 64)
+    out = torch.empty_like(inp)
+    pred_tensor = torch.tensor(pred, dtype=torch.bool, device="cuda")
+    kernel[(1, )](inp, out, pred_tensor, num_warps=4)
+
+    expected = inp.clone()
+    expected[:, :16] = -7
+    expected[:, 16:32] = inp[:, :16] + 1
+    if pred:
+        expected[:, 32:48] = inp[:, :16] + 2
+    torch.testing.assert_close(out, expected, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_subslice_block_m_64():
 
     @gluon.jit

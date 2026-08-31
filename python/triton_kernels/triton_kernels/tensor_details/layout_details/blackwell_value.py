@@ -58,6 +58,15 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
         repack(data, -2, destination.order[0], True, out=out)
         return out
 
+    def _convert_data_from(self, data, source: LayoutTransformation):
+        if (not isinstance(source, strided.StridedLayoutTransformation) or not self.is_fp4 or self.shape[-1] % 2
+                or self.shape[-2] % 2 or not source._can_convert_fp4(data)):
+            return super()._convert_data_from(data, source)
+        out = torch.empty_strided(self.storage_shape, strides_major_dim_m2(self.storage_shape), device=data.device,
+                                  dtype=data.dtype)
+        repack(data, source.order[0], -2, True, out=out[..., :self.shape[-2] // 2, :])
+        return out
+
     def swizzle_data(self, data):
         assert data.stride(-1) == 1
         # re-pack as column-major

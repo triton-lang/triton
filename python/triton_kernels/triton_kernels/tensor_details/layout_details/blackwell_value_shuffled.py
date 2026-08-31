@@ -108,6 +108,12 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
             return super().convert_data(data, destination)
         return self._convert_data(data, inverse=True, major_dim=destination.order[0])
 
+    def _convert_data_from(self, data, source: LayoutTransformation):
+        if (not isinstance(source, strided.StridedLayoutTransformation) or not self.is_fp4
+                or not source._can_convert_fp4(data)):
+            return super()._convert_data_from(data, source)
+        return self._convert_data(data, inverse=False, major_dim=source.order[0])
+
     def _convert_data(self, data: torch.Tensor, inverse: bool, major_dim: int) -> torch.Tensor:
         storage_shape = self.storage_shape
         # Preserve the canonical path's even-N packing requirement.

@@ -402,6 +402,9 @@ bool areLayoutsEquivalent(ArrayRef<int64_t> shape, LayoutEncodingTrait lhs,
 // Return true if the innermost numElems are contiguous.
 bool isInnermostContiguous(MemDescType type, unsigned numElems);
 
+// Return true for a full buffer with rank-one swizzled_shared(1, 1, 1).
+bool isContiguousSharedMemoryLayout(MemDescType type);
+
 LinearLayout inferReshapeLinearLayout(TensorOrMemDesc srcTy,
                                       ArrayRef<int64_t> dstShape);
 

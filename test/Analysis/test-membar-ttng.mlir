@@ -406,3 +406,29 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#rows = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#cols = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // The conversion reuses capture storage. The second launch rendezvous
+  // completes capture reads before the conversion starts writing its scratch.
+  // CHECK-LABEL: @capture_scratch_reused_in_default
+  tt.func @capture_scratch_reused_in_default(%ptr: !tt.ptr<i32>, %input: tensor<16x16xf32, #rows>) -> tensor<16x16xf32, #cols> {
+    // CHECK: ttg.warp_specialize{{.*}}allocation.offset = [[CAPTURE:[0-9]+]]
+    %result = ttg.warp_specialize(%ptr)
+    default {
+      // CHECK-NEXT: default {
+      // CHECK-NEXT: {{.*}} = ttg.convert_layout{{.*}}allocation.offset = [[CAPTURE]]
+      %converted = ttg.convert_layout %input : tensor<16x16xf32, #rows> -> tensor<16x16xf32, #cols>
+      ttg.warp_yield %converted : tensor<16x16xf32, #cols>
+    }
+    partition0(%address: !tt.ptr<i32>) num_warps(4) {
+      %value = tt.load %address : !tt.ptr<i32>
+      ttg.warp_return
+    } : (!tt.ptr<i32>) -> tensor<16x16xf32, #cols>
+    tt.return %result : tensor<16x16xf32, #cols>
+  }
+}

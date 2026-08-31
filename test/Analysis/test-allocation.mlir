@@ -1117,4 +1117,81 @@ tt.func @partitioned_shared_padded_alloc() {
   %alloc = ttg.local_alloc : () -> !ttg.memdesc<64x32xf16, #PARTITIONED_SHARED_PADDED, #ttg.shared_memory, mutable>
   tt.return
 }
+
+// Returned descriptors retain their caller-owned shared allocation.
+// expected-remark @below {{returned_alias_identity}}
+// expected-remark @below {{size = 0}}
+tt.func private @returned_alias_identity(%arg: !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable> {
+  tt.return %arg : !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable>
+}
+
+// expected-remark @below {{returned_alias_forward}}
+// expected-remark @below {{size = 0}}
+tt.func private @returned_alias_forward(%arg: !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable> {
+  %result = tt.call @returned_alias_identity(%arg) : (!ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable>
+  tt.return %result : !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable>
+}
+
+// expected-remark @below {{returned_alias_direct}}
+// expected-remark @below {{size = 1024}}
+tt.func @returned_alias_direct() -> (tensor<16x16xf16, #AL>, tensor<16x16xf16, #AL>) {
+  %zeros = arith.constant dense<0.0> : tensor<16x16xf16, #AL>
+  %ones = arith.constant dense<1.0> : tensor<16x16xf16, #AL>
+  // expected-remark @below {{offset = 0, size = 512}}
+  %a = ttg.local_alloc %zeros : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable>
+  // The call forwards %a without allocating a new buffer.
+  %returned = tt.call @returned_alias_identity(%a) : (!ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable>
+  // expected-remark @below {{offset = 512, size = 512}}
+  %b = ttg.local_alloc %ones : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable>
+  %a_value = ttg.local_load %returned : !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable> -> tensor<16x16xf16, #AL>
+  %b_value = ttg.local_load %b : !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable> -> tensor<16x16xf16, #AL>
+  tt.return %a_value, %b_value : tensor<16x16xf16, #AL>, tensor<16x16xf16, #AL>
+}
+
+// expected-remark @below {{returned_alias_nested}}
+// expected-remark @below {{size = 1024}}
+tt.func @returned_alias_nested() -> (tensor<16x16xf16, #AL>, tensor<16x16xf16, #AL>) {
+  %zeros = arith.constant dense<0.0> : tensor<16x16xf16, #AL>
+  %ones = arith.constant dense<1.0> : tensor<16x16xf16, #AL>
+  // expected-remark @below {{offset = 0, size = 512}}
+  %a = ttg.local_alloc %zeros : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable>
+  // The call forwards %a without allocating a new buffer.
+  %returned = tt.call @returned_alias_forward(%a) : (!ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable>
+  // expected-remark @below {{offset = 512, size = 512}}
+  %b = ttg.local_alloc %ones : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable>
+  %a_value = ttg.local_load %returned : !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable> -> tensor<16x16xf16, #AL>
+  %b_value = ttg.local_load %b : !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable> -> tensor<16x16xf16, #AL>
+  tt.return %a_value, %b_value : tensor<16x16xf16, #AL>, tensor<16x16xf16, #AL>
+}
+
+// expected-remark @below {{returned_alias_choose}}
+// expected-remark @below {{size = 0}}
+tt.func private @returned_alias_choose(%a: !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable>, %b: !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable>, %take_first: i1) -> !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable> {
+  cf.cond_br %take_first, ^first, ^second
+^first:
+  tt.return %a : !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable>
+^second:
+  tt.return %b : !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable>
+}
+
+// Either returned root must remain live across the third allocation.
+// expected-remark @below {{returned_alias_branch}}
+// expected-remark @below {{size = 1536}}
+tt.func @returned_alias_branch(%take_first: i1) -> (tensor<16x16xf16, #AL>, tensor<16x16xf16, #AL>) {
+  %zeros = arith.constant dense<0.0> : tensor<16x16xf16, #AL>
+  %ones = arith.constant dense<1.0> : tensor<16x16xf16, #AL>
+  %twos = arith.constant dense<2.0> : tensor<16x16xf16, #AL>
+  // expected-remark @below {{offset = 0, size = 512}}
+  %a = ttg.local_alloc %zeros : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable>
+  // expected-remark @below {{offset = 512, size = 512}}
+  %b = ttg.local_alloc %ones : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable>
+  %returned = tt.call @returned_alias_choose(%a, %b, %take_first) : (!ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable>, !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable>, i1) -> !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable>
+  // expected-remark @below {{offset = 1024, size = 512}}
+  %third = ttg.local_alloc %twos : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable>
+  %selected_value = ttg.local_load %returned : !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable> -> tensor<16x16xf16, #AL>
+  %third_value = ttg.local_load %third : !ttg.memdesc<16x16xf16, #A_SHARED, #smem, mutable> -> tensor<16x16xf16, #AL>
+  tt.return %selected_value, %third_value : tensor<16x16xf16, #AL>, tensor<16x16xf16, #AL>
+}
+
+
 }
