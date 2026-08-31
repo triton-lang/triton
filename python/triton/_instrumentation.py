@@ -34,7 +34,7 @@ def unregister_instrumentation(*, name: str, point: str, backend: str) -> None:
 
 
 def instrument(*args: Any, name: str, point: str, backend: str, options: Any = None) -> bool:
-    if not is_enabled(options, name):
+    if options is not None and not is_enabled(options, name):
         return False
 
     key = (name, point, backend)
