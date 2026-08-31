@@ -710,8 +710,6 @@ getPaddedSharedShifts(Attribute enc, unsigned bitwidth, bool offsetInBytes) {
     return {};
 
   SmallVector<std::pair<unsigned, unsigned>> shifts;
-  assert(bitwidth >= 8 && (bitwidth % 8 == 0) &&
-         "bitwidth must be a positive multiple of 8 for padding");
   uint64_t offScale = offsetInBytes ? (bitwidth / 8) : 1;
   for (auto [interval, padding] :
        llvm::zip_equal(padded.getIntervals(), padded.getPaddings())) {
@@ -1206,6 +1204,13 @@ void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
     rewriter.setInsertionPointAfter(op);
     emitBarrier();
   }
+}
+
+bool atomicResultHasOrderingBarrier(Operation *op) {
+  if (!op->hasAttr("allocation.offset"))
+    return false;
+  return triton::gpu::lookupNumCTAs(op) == 1 ||
+         triton::atomicResultHasCTABroadcast(op);
 }
 
 Value broadcastScalarAtomicResult(Operation *op, Type valueElemTy,

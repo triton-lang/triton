@@ -102,11 +102,34 @@ def TritonGPUProxyFenceInsertion : Pass<"triton-nvidia-gpu-proxy-fence-insertion
   let summary = "Insert fences across generic and async proxy";
 
   let description = [{
-    This pass is to insert memory fences to ensure that memory operations are
-    properly ordered across generic and async operations.
+    Insert shared-memory fences between generic and asynchronous proxy
+    operations using fine-grained physical buffer-region alias analysis.
   }];
 
   let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+
+  let options = [
+    Option<"computeCapability", "compute-capability",
+           "int32_t", /*default*/"90",
+           "device compute capability">
+  ];
+}
+
+def TritonNvidiaGPUHoistMBarrierLifecyclePass : Pass<"triton-nvidia-gpu-hoist-mbarrier-lifecycle", "mlir::ModuleOp"> {
+  let summary = "Hoist cross-CTA mbarrier lifecycles to function scope";
+
+  let description = [{
+    This pass moves cross-CTA mbarrier initialization to the beginning of the
+    function and invalidation to function exits so cluster-visible mbarrier init
+    fences can be inserted outside loops.
+  }];
+
+  let dependentDialects = [
+    "mlir::arith::ArithDialect",
+    "mlir::scf::SCFDialect",
     "mlir::triton::gpu::TritonGPUDialect",
     "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
   ];
@@ -125,6 +148,21 @@ def TritonNvidiaGPUTMemBarrierInsertionPass : Pass<"triton-nvidia-gpu-tmem-barri
     This pass inserts CTA barriers between tensor-memory accesses that reuse
     aliasing physical tensor-memory storage and require ordering across logical
     allocation lifetimes.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
+def TritonNvidiaGPUTMemWaitInsertionPass : Pass<"triton-nvidia-gpu-tmem-wait-insertion", "mlir::ModuleOp"> {
+  let summary = "Insert tensor-memory completion waits";
+
+  let description = [{
+    This pass inserts load and store completion waits before dependent accesses
+    or synchronization boundaries, reusing existing CTA barriers where possible.
+    Run after tensor-memory allocation and barrier insertion, before lowering.
   }];
 
   let dependentDialects = [

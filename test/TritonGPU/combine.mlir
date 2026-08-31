@@ -4252,50 +4252,6 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 1 : i32} 
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-#blocked2 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-#linear = #ttg.linear<{register = [[1], [16]], lane = [[0], [0], [2], [4], [8]], warp = [[0], [0]], block = []}>
-
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: @cat_incompatible_target_keeps_convert
-  tt.func public @cat_incompatible_target_keeps_convert(%out: !tt.ptr<i32>) {
-    %lhs = arith.constant dense<0> : tensor<16xi32, #blocked>
-    %rhs = arith.constant dense<1> : tensor<16xi32, #blocked>
-    // CHECK: %[[CAT:[^ ]+]] = tt.cat
-    %cat = tt.cat %lhs, %rhs : tensor<16xi32, #blocked> -> tensor<32xi32, #blocked2>
-    // CHECK: %[[CVT:[^ ]+]] = ttg.convert_layout %[[CAT]]
-    %cvt = ttg.convert_layout %cat {allocation.offset = 0 : i32} : tensor<32xi32, #blocked2> -> tensor<32xi32, #linear>
-    %ptr = tt.splat %out : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #linear>
-    // CHECK: tt.store {{.*}}, %[[CVT]]
-    tt.store %ptr, %cvt : tensor<32x!tt.ptr<i32>, #linear>
-    tt.return
-  }
-}
-
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-#blocked2 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-#linear_bcast = #ttg.linear<{register = [[0]], lane = [[1], [2], [4], [8], [16]], warp = [[0], [0]], block = []}>
-
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: @cat_target_adds_broadcasting_keeps_convert
-  tt.func public @cat_target_adds_broadcasting_keeps_convert(%out: !tt.ptr<i32>) {
-    %lhs = arith.constant dense<0> : tensor<16xi32, #blocked>
-    %rhs = arith.constant dense<1> : tensor<16xi32, #blocked>
-    // CHECK: %[[CAT:[^ ]+]] = tt.cat
-    %cat = tt.cat %lhs, %rhs : tensor<16xi32, #blocked> -> tensor<32xi32, #blocked2>
-    // CHECK: %[[CVT:[^ ]+]] = ttg.convert_layout %[[CAT]]
-    %cvt = ttg.convert_layout %cat : tensor<32xi32, #blocked2> -> tensor<32xi32, #linear_bcast>
-    %ptr = tt.splat %out : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>, #linear_bcast>
-    // CHECK: tt.store {{.*}}, %[[CVT]]
-    tt.store %ptr, %cvt : tensor<32x!tt.ptr<i32>, #linear_bcast>
-    tt.return
-  }
-}
-
-// -----
-
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
 
@@ -4310,6 +4266,17 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.num-ctas" = 1 : i32} {
     %cvt = ttg.convert_layout %exp : tensor<1x32xf32, #blocked> -> tensor<1x32xf32, #blocked1>
     // CHECK: tt.return
     tt.return %cvt, %exp : tensor<1x32xf32, #blocked1>, tensor<1x32xf32, #blocked>
+  }
+
+  // CHECK-LABEL: @side_effecting_inline_asm
+  tt.func @side_effecting_inline_asm() -> (tensor<1x32xi32, #blocked1>, tensor<1x32xi32, #blocked>) {
+    %cst = arith.constant dense<0> : tensor<1x32xi32, #blocked>
+    // CHECK: %[[ASM:.+]] = tt.elementwise_inline_asm {{.*}}pure = false
+    %asm = tt.elementwise_inline_asm "mov.u32 $0, %clock;" {constraints = "=r,r", packed_element = 1 : i32, pure = false} %cst : tensor<1x32xi32, #blocked> -> tensor<1x32xi32, #blocked>
+    // CHECK-NEXT: %[[CONVERT:.+]] = ttg.convert_layout %[[ASM]]
+    %converted = ttg.convert_layout %asm : tensor<1x32xi32, #blocked> -> tensor<1x32xi32, #blocked1>
+    // CHECK-NEXT: tt.return %[[CONVERT]], %[[ASM]]
+    tt.return %converted, %asm : tensor<1x32xi32, #blocked1>, tensor<1x32xi32, #blocked>
   }
 }
 

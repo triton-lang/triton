@@ -138,13 +138,7 @@ struct FDivOpConversion
 
 struct FMulOpConversion
     : ElementwiseOpConversionBase<arith::MulFOp, FMulOpConversion> {
-
-  explicit FMulOpConversion(LLVMTypeConverter &typeConverter,
-                            ModuleAxisInfoAnalysis &axisAnalysisPass,
-                            ISAFamily isaFamily,
-                            PatternBenefit benefit = patternBenefitDefault)
-      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
-        isaFamily(isaFamily) {}
+  using ElementwiseOpConversionBase::ElementwiseOpConversionBase;
 
   SmallVector<Value> createDestOps(arith::MulFOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
@@ -153,30 +147,12 @@ struct FMulOpConversion
     auto lhsElemTy = getElementTypeOrSelf(op.getLhs());
     auto rhsElemTy = getElementTypeOrSelf(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
-      if (triton::amdgpu::isRDNA(isaFamily)) {
-        // To avoid casting to/from fp32, we compute a dot product with one
-        // element of each vector set to zero.
-        auto b = TritonLLVMOpBuilder(loc, rewriter);
-        Value aVal = packLLVector(
-            loc, ValueRange{operands[0][0], b.bf16_val(0.0)}, rewriter);
-        Value bVal = packLLVector(
-            loc, ValueRange{operands[0][1], b.bf16_val(0.0)}, rewriter);
-        return {LLVM::createLLVMIntrinsicCallOp(
-                    rewriter, loc, "llvm.amdgcn.fdot2.bf16.bf16", bf16_ty,
-                    ValueRange{aVal, bVal, b.bf16_val(0.0)})
-                    ->getResult(0)};
-      } else {
-        return {
-            EmitDualBF16ElementwiseOp<LLVM::FMulOp>(loc, rewriter, operands)};
-      }
+      return {EmitDualBF16ElementwiseOp<LLVM::FMulOp>(loc, rewriter, operands)};
     } else {
       return {LLVM::FMulOp::create(rewriter, loc, elemTy, operands[0][0],
                                    operands[0][1])};
     }
   }
-
-private:
-  ISAFamily isaFamily;
 };
 
 struct FAddOpConversion
@@ -586,8 +562,7 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FSubOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FAddOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<FMulOpConversion>(typeConverter, axisInfoAnalysis,
-                                 targetInfo.getISAFamily(), benefit);
+  patterns.add<FMulOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
   patterns.add<ExtFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis,

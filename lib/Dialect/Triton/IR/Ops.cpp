@@ -373,7 +373,18 @@ LogicalResult DotScaledOp::verify() {
       return this->emitError("scales K dimension must match the operand K "
                              "divided by the scale factor");
   }
-  return success();
+
+  auto retEnc = getC().getType().getEncoding();
+  if (!retEnc)
+    return success();
+  auto scaleEncoding = [](TypedValue<RankedTensorType> scale) -> Attribute {
+    return scale ? scale.getType().getEncoding() : Attribute();
+  };
+  auto interface = cast<DialectInferLayoutInterface>(&retEnc.getDialect());
+  return interface->verifyDotScaledOpEncodingCompatibility(
+      getOperation(), getA().getType().getEncoding(),
+      getB().getType().getEncoding(), scaleEncoding(getAScale()),
+      scaleEncoding(getBScale()));
 }
 
 LogicalResult deduceScaleFactor(ArrayRef<int64_t> lhsShape,
@@ -891,31 +902,6 @@ static OpFoldResult foldViewLikeOp(ViewLikeOp op, Attribute value) {
 
 OpFoldResult ExpandDimsOp::fold(FoldAdaptor adaptor) {
   return foldViewLikeOp(*this, adaptor.getSrc());
-}
-
-//-- CatOp --
-LogicalResult CatOp::verify() {
-  RankedTensorType lhsTy = getLhs().getType();
-  RankedTensorType resultTy = getType();
-
-  int64_t operandElements = lhsTy.getNumElements() * 2;
-  if (resultTy.getNumElements() != operandElements) {
-    return emitOpError("result element count must equal the sum of the "
-                       "operand element counts, expected ")
-           << operandElements << " but got " << resultTy.getNumElements();
-  }
-
-  Attribute operandEnc = lhsTy.getEncoding();
-  Attribute resultEnc = resultTy.getEncoding();
-  if (!!operandEnc != !!resultEnc) {
-    return emitOpError("requires that either (a) operands and result all have "
-                       "encodings, or (b) none do.");
-  }
-  if (!resultEnc)
-    return success();
-
-  auto interface = cast<DialectInferLayoutInterface>(&resultEnc.getDialect());
-  return interface->verifyCatOpEncodingCompatibility(getOperation());
 }
 
 //-- ReshapeOp --
@@ -1452,6 +1438,19 @@ LogicalResult JoinOp::verify() {
   return success();
 }
 
+OpFoldResult JoinOp::fold(FoldAdaptor adaptor) {
+  // join(split(x)[0], split(x)[1]) -> x
+  // Only fold when both operands are exactly the two results of a single split
+  // and the reconstructed type matches, so layout encodings are preserved.
+  auto lhsSplit = getLhs().getDefiningOp<SplitOp>();
+  auto rhsSplit = getRhs().getDefiningOp<SplitOp>();
+  if (lhsSplit && lhsSplit == rhsSplit && getLhs() == lhsSplit.getOutLHS() &&
+      getRhs() == lhsSplit.getOutRHS() &&
+      lhsSplit.getSrc().getType() == getType())
+    return lhsSplit.getSrc();
+  return {};
+}
+
 // -- SplitOp --
 bool SplitOp::isCompatibleReturnTypes(TypeRange lhs, TypeRange rhs) {
   for (auto [lhs, rhs] : llvm::zip_equal(lhs, rhs)) {
@@ -1502,6 +1501,21 @@ LogicalResult SplitOp::inferReturnTypes(
   inferredReturnTypes.push_back(retTy);
   inferredReturnTypes.push_back(retTy);
   return success();
+}
+
+LogicalResult SplitOp::fold(FoldAdaptor adaptor,
+                            SmallVectorImpl<OpFoldResult> &results) {
+  // split(join(a, b)) -> (a, b)
+  // Guard on exact type equality so we never silently drop a layout conversion.
+  if (auto join = getSrc().getDefiningOp<JoinOp>()) {
+    if (join.getLhs().getType() == getOutLHS().getType() &&
+        join.getRhs().getType() == getOutRHS().getType()) {
+      results.push_back(join.getLhs());
+      results.push_back(join.getRhs());
+      return success();
+    }
+  }
+  return failure();
 }
 
 // -- ElementwiseInlineAsmOp --

@@ -374,8 +374,6 @@ LogicalResult WarpGroupDotWaitOp::verify() {
 
 // -- InitBarrierOp --
 LogicalResult InitBarrierOp::verify() {
-  if (failed(verifyBarrierType(*this, getAlloc().getType())))
-    return failure();
   if (getCount() < 1)
     return emitOpError("count must be greater than or equal to 1");
   auto barrierTy = cast<MemDescType>(getAlloc().getType());
@@ -392,12 +390,6 @@ LogicalResult InitBarrierOp::verify() {
 TypedValue<MemDescType> InitBarrierOp::getBarrier() { return getAlloc(); }
 
 // -- InvalBarrierOp --
-LogicalResult InvalBarrierOp::verify() {
-  if (failed(verifyBarrierType(*this, getAlloc().getType())))
-    return failure();
-  return success();
-}
-
 TypedValue<MemDescType> InvalBarrierOp::getBarrier() { return getAlloc(); }
 
 static LogicalResult verifyBarrierFromCTA(Operation *op, Value barrier,
@@ -430,8 +422,6 @@ static LogicalResult canonicalizeBarrierFromCTA(BarrierOp op,
 
 // -- BarrierExpectOp --
 LogicalResult BarrierExpectOp::verify() {
-  if (failed(verifyBarrierType(*this, getAlloc().getType())))
-    return failure();
   if (failed(verifyBarrierFromCTA(*this, getAlloc(), getFromCTA())))
     return failure();
   return success();
@@ -455,12 +445,6 @@ Type BarrierExpectOp::getPredicateOperandTypeLike() {
 }
 
 // -- WaitBarrierOp --
-LogicalResult WaitBarrierOp::verify() {
-  if (failed(verifyBarrierType(*this, getAlloc().getType())))
-    return failure();
-  return success();
-}
-
 TypedValue<MemDescType> WaitBarrierOp::getBarrier() { return getAlloc(); }
 
 Value WaitBarrierOp::getPredicateOperand() { return getPred(); }
@@ -479,8 +463,6 @@ static LogicalResult verifyBarrierCGALayout(Operation *op, Value barrier,
 
 // -- ArriveBarrierOp --
 LogicalResult ArriveBarrierOp::verify() {
-  if (failed(verifyBarrierType(*this, getAlloc().getType())))
-    return failure();
   if (getCount() < 1)
     return emitOpError("count must be greater than or equal to 1");
   if (isMulticast()) {
@@ -530,8 +512,6 @@ LogicalResult AsyncSharedStoreOp::verify() {
   if (failed(triton::gpu::verifyMemoryOpTypes(*this, getSrc().getType(),
                                               getDst().getType())))
     return failure();
-  if (failed(verifyBarrierType(*this, getMbarrier().getType())))
-    return failure();
 
   auto srcTy = getSrc().getType();
   auto dstTy = getDst().getType();
@@ -566,24 +546,6 @@ static LogicalResult verifyClusterIsMultiCTA(Operation *op) {
 // -- FenceMBarrierInitReleaseClusterOp --
 LogicalResult FenceMBarrierInitReleaseClusterOp::verify() {
   return verifyClusterIsMultiCTA(getOperation());
-}
-
-static LogicalResult verifyClusterSyncOp(Operation *op) {
-  if (failed(verifyClusterIsMultiCTA(op)))
-    return failure();
-  if (op->getParentOfType<mlir::triton::gpu::WarpSpecializeOp>())
-    return op->emitOpError("cannot be used inside `ttg.warp_specialize`");
-  return success();
-}
-
-// -- ClusterArriveOp --
-LogicalResult ClusterArriveOp::verify() {
-  return verifyClusterSyncOp(getOperation());
-}
-
-// -- ClusterWaitOp --
-LogicalResult ClusterWaitOp::verify() {
-  return verifyClusterSyncOp(getOperation());
 }
 
 // -- ClusterBarrierOp --
@@ -702,8 +664,6 @@ static LogicalResult verifyAsyncTMALoadOp(Operation *op,
                                           TensorDescInterface desc,
                                           TypedValue<MemDescType> barrier,
                                           MemDescType resultType) {
-  if (failed(verifyBarrierType(op, barrier.getType())))
-    return failure();
   if (failed(verifyTMABarrierLayout(op, barrier)))
     return failure();
   if (!resultType.getMutableMemory())
@@ -1090,9 +1050,6 @@ LogicalResult TCGen5MMAOp::verify() {
     return emitOpError("The op is synchronous but a barrier is present.");
   }
   for (auto barrier : getBarriers()) {
-    auto barrierTy = cast<MemDescType>(barrier.getType());
-    if (failed(verifyBarrierType(*this, barrierTy)))
-      return failure();
     if (failed(verifyCompletionBarrierLayout(getOperation(), barrier)))
       return failure();
   }
@@ -1324,9 +1281,6 @@ LogicalResult TCGen5CommitOp::verify() {
   auto numDescs = getDescs().size();
   if (numDescs > 4)
     return emitOpError("expected 0 to 4 descriptors, got ") << numDescs;
-  auto barrierTy = getBarrier().getType();
-  if (failed(verifyBarrierType(*this, barrierTy)))
-    return failure();
   if (failed(verifyCompletionBarrierLayout(getOperation(), getBarrier())))
     return failure();
   return success();
@@ -1426,9 +1380,6 @@ LogicalResult TCGen5MMAScaledOp::verify() {
     return emitOpError("The op is synchronous but a barrier is present.");
   }
   for (auto barrier : getBarriers()) {
-    auto barrierTy = cast<MemDescType>(barrier.getType());
-    if (failed(verifyBarrierType(*this, barrierTy)))
-      return failure();
     if (failed(verifyCompletionBarrierLayout(getOperation(), barrier)))
       return failure();
   }
@@ -2024,6 +1975,10 @@ static LogicalResult verifyCLCResultMemdesc(Location loc, MemDescType desc) {
                              "single dimension equal to 2, but got "
                           << desc.getShape() << ".";
   }
+  if (!isContiguousSharedMemoryLayout(desc))
+    return emitError(loc)
+           << "CLC result buffer must have a contiguous shared-memory layout "
+              "without subviews";
   auto cgaLayout = getCGALayout(layout);
   auto kBlock = StringAttr::get(cgaLayout.getContext(), "block");
   if (!llvm::all_of(cgaLayout.getLinearLayout().getBases().lookup(kBlock),
@@ -2039,8 +1994,6 @@ static LogicalResult verifyCLCResultMemdesc(Location loc, MemDescType desc) {
 
 LogicalResult CLCTryCancelOp::verify() {
   if (failed(verifyCLCResultMemdesc(getLoc(), getResult().getType())))
-    return failure();
-  if (failed(verifyBarrierType(*this, getMbarrier().getType())))
     return failure();
   return verifyCompletionBarrierLayout(getOperation(), getMbarrier());
 }

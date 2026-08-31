@@ -1,3 +1,4 @@
+#include "triton/Analysis/Allocation.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -103,17 +104,12 @@ public:
                          Operation *op) const override {
     // mask = 0 means no CTA predication.
     uint32_t mask = 0;
-    auto getBarrierMask = [&](Value barrier) {
-      auto barrierTy = cast<ttg::MemDescType>(barrier.getType());
-      auto kBlock = StringAttr::get(op->getContext(), "block");
-      return toLinearLayout(barrierTy).getFreeVariableMasks().lookup(kBlock);
-    };
     if (auto initOp = dyn_cast<ttng::InitBarrierOp>(op))
-      mask = getBarrierMask(initOp.getAlloc());
+      mask = getBlockBroadcastMask(initOp.getAlloc().getType());
     if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op))
-      mask = getBarrierMask(waitOp.getAlloc());
+      mask = getBlockBroadcastMask(waitOp.getAlloc().getType());
     if (auto invalOp = dyn_cast<ttng::InvalBarrierOp>(op))
-      mask = getBarrierMask(invalOp.getAlloc());
+      mask = getBlockBroadcastMask(invalOp.getAlloc().getType());
     if (isa<ttng::BarrierExpectOp, ttng::ArriveBarrierOp>(op)) {
       std::optional<uint32_t> fromCTA;
       if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op))
@@ -129,6 +125,9 @@ public:
     }
     if (auto storeOp = dyn_cast<ttng::TMAStoreLikeOpInterface>(op))
       mask = getBlockBroadcastMask(storeOp.getSrc().getType());
+    if (op->hasAttr("allocation.size"))
+      if (auto scratchMask = getAtomicScratchBroadcastMask(op))
+        mask = *scratchMask;
     if (isa<ttng::CLCTryCancelOp>(op) && ttg::lookupNumCTAs(op) > 1) {
       Value ctaId = tti::ExperimentalClusterCTAIdOp::create(b, b.getLoc());
       return arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId,
@@ -144,6 +143,18 @@ public:
     if (!mask)
       return nullptr;
     return getLeaderCTAPredicate(b, mask);
+  }
+
+  SmallVector<Operation *>
+  createInitClusterBarrier(ImplicitLocOpBuilder &b) const override {
+    return {ClusterBarrierOp::create(b, b.getLoc()).getOperation()};
+  }
+
+  bool hasUnsummarizableCalleeState(Operation *op) const override {
+    if (isa<ClusterBarrierOp>(op))
+      return true;
+    return op->hasAttr("allocation.size") &&
+           getAtomicScratchBroadcastMask(op).value_or(0) != 0;
   }
 
   std::optional<MemEffectsOpInfo>
@@ -244,7 +255,8 @@ public:
       for (auto [value, name] : namedOperands)
         for (auto it = info->operandEffects.begin();
              it != info->operandEffects.end(); ++it)
-          if (it->buf == value) {
+          if (auto *buffer = std::get_if<Value>(&it->buffer);
+              buffer && *buffer == value) {
             effects.emplace_back(*it).operandName = name.str();
             break;
           }

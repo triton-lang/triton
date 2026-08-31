@@ -131,7 +131,7 @@ public:
   bool backwardRematerialization(ConvertLayoutOp convertOp,
                                  bool disableRematSplitting);
 
-  // TODO: Merge the three hoistConvert*(); functions as they are duplicate code
+  void runHoistConvertPass(std::function<bool(ConvertLayoutOp)> tryHoist);
   void hoistConvertDotOperand();
   void hoistConvertOnTopOfExtOrBroadcast(bool disableRematSplitting);
   void hoistConvertIntoConditionals();
@@ -227,14 +227,8 @@ bool isLayoutAnchor(Operation *op) {
     return true;
   if (auto gatherOp = dyn_cast<GatherOp>(op))
     return gatherOp.getEfficientLayout();
-
-  // Heuristic: Mark permuting reshape as a layout anchor.  Its dst can be
-  // anything, so it stops forward-propagation of layouts.  We rely on the
-  // backwards pass to fix it up if necessary.  (If we didn't do this, then
-  // anything following the reshape won't be covered by the forward pass at
-  // all.)
   if (auto reshape = dyn_cast<ReshapeOp>(op))
-    return reshape.getAllowReorder();
+    return reshape.getEfficientLayout();
 
   return false;
 }
@@ -686,7 +680,7 @@ bool canBeRemat(Operation *op) {
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;
 
-  return true;
+  return !hasEffect<MemoryEffects::Write>(op);
 }
 
 void LayoutRematerialization::updateRematMapping(
@@ -967,14 +961,13 @@ bool LayoutRematerialization::backwardRematerialization(
   return changed;
 }
 
-void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
-    bool disableRematSplitting) {
-  // Go through each ConvertLayoutOp.
+void LayoutRematerialization::runHoistConvertPass(
+    std::function<bool(ConvertLayoutOp)> tryHoist) {
   SmallVector<ConvertLayoutOp> convertOps;
   funcOp.walk(
       [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
   for (ConvertLayoutOp convertOp : convertOps) {
-    if (!hoistConvertOnTopOfExtOrBroadcast(convertOp, disableRematSplitting)) {
+    if (!tryHoist(convertOp)) {
       // If the conversion didn't get removed, consider it for reuse in future
       // backward slices.
       addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
@@ -983,19 +976,17 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   }
 }
 
+void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
+    bool disableRematSplitting) {
+  runHoistConvertPass([&](ConvertLayoutOp convertOp) {
+    return hoistConvertOnTopOfExtOrBroadcast(convertOp, disableRematSplitting);
+  });
+}
+
 void LayoutRematerialization::hoistConvertIntoConditionals() {
-  // Go through each ConvertLayoutOp.
-  SmallVector<ConvertLayoutOp> convertOps;
-  funcOp.walk(
-      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
-  for (ConvertLayoutOp convertOp : convertOps) {
-    if (!hoistConvertIntoConditionals(convertOp)) {
-      // If the conversion didn't get removed, consider it for reuse in future
-      // backward slices.
-      addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
-                    convertOp.getResult());
-    }
-  }
+  runHoistConvertPass([&](ConvertLayoutOp convertOp) {
+    return hoistConvertIntoConditionals(convertOp);
+  });
 }
 
 static bool isExpensiveMathOp(Operation *op) {
@@ -1249,18 +1240,9 @@ bool LayoutRematerialization::backwardRematerialization(
 }
 
 void LayoutRematerialization::hoistConvertDotOperand() {
-  // Go through each ConvertLayoutOp.
-  SmallVector<ConvertLayoutOp> convertOps;
-  funcOp.walk(
-      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
-  for (ConvertLayoutOp convertOp : convertOps) {
-    if (!hoistConvertDotOperand(convertOp)) {
-      // If the conversion didn't get removed, consider it for reuse in future
-      // backward slices.
-      addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
-                    convertOp.getResult());
-    }
-  }
+  runHoistConvertPass([&](ConvertLayoutOp convertOp) {
+    return hoistConvertDotOperand(convertOp);
+  });
 }
 
 bool LayoutRematerialization::hoistConvertDotOperand(
@@ -1306,7 +1288,7 @@ bool LayoutRematerialization::hoistConvertDotOperand(
   // threads We do views and elementwise pure ops for now
   auto noDataMovement = [](Operation *op) {
     return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
-           isa<BroadcastOp, Fp4ToFpOp, ConvertLayoutOp, UpcastFpOpInterface>(
+           isa<BroadcastOp, Fp4ToFpOp, ConvertLayoutOp, CastFpOpInterface>(
                op) ||
            isView(op);
   };
@@ -1590,7 +1572,6 @@ bool backwardRematerialization(ModuleOp module, bool disableRematSplitting) {
 }
 
 void hoistConvert(ModuleOp module, bool disableRematSplitting) {
-  SmallVector<ConvertLayoutOp> convertOps;
   module.walk([&](FuncOp funcOp) {
     LayoutRematerialization(funcOp).hoistConvertOnTopOfExtOrBroadcast(
         disableRematSplitting);

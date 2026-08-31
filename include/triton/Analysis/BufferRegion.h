@@ -2,6 +2,7 @@
 #define TRITON_ANALYSIS_BUFFER_REGION_H
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <set>
 #include <tuple>
@@ -9,6 +10,8 @@
 
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/IR/Value.h"
+#include "mlir/Interfaces/CallInterfaces.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
@@ -16,6 +19,11 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SparseBitVector.h"
 #include "llvm/ADT/UniqueVector.h"
+
+namespace mlir {
+class Allocation;
+class ModuleAllocation;
+} // namespace mlir
 
 namespace mlir::triton::gpu {
 enum class SharedKind : uint32_t;
@@ -119,21 +127,22 @@ struct BufferRegionView {
   uint32_t affineCTAOffset = 0;
   /// Deterministically interned identity of the owning allocation frame.
   uint32_t allocationFrame = 0;
-
-  bool intersects(const BufferRegionView &other) const {
-    return allocationFrame == other.allocationFrame &&
-           region.intersects(other.region);
-  }
+  /// Descriptor allocation supplying these views; null for implicit scratch.
+  Operation *allocation = nullptr;
 
   bool contains(const BufferRegionView &other) const {
     return allocationFrame == other.allocationFrame &&
            region.contains(other.region);
   }
 
+  BufferRegionView translated(uint32_t offset,
+                              uint32_t newAllocationFrame) const;
+
 private:
   auto key() const {
     return std::tie(allocationFrame, region, storageBase, affineOffset,
-                    affinePartitionOffset, affineCTAOffset, partitionBases);
+                    affinePartitionOffset, affineCTAOffset, partitionBases,
+                    allocation);
   }
 
 public:
@@ -215,6 +224,20 @@ struct RegionInfo {
   }
 };
 
+/// Complete MAY-views of a descriptor, shared by all of its memory effects.
+/// Runtime indices may select several physical views across loop iterations.
+/// Addresses, rather than runtime descriptor keys, define the geometry; the
+/// memory space distinguishes shared bytes from TMEM's 32-bit storage words.
+struct BufferRegionFootprint {
+  Attribute memorySpace;
+  RegionInfo regionInfo;
+};
+
+/// Prove disjointness only if every candidate pair is disjoint. Missing views
+/// and unnormalized allocation frames may overlap, never denote empty storage.
+bool mayOverlap(const BufferRegionFootprint *lhs,
+                const BufferRegionFootprint *rhs);
+
 enum class RW { Read, Write };
 
 struct MemoryAccess {
@@ -242,6 +265,7 @@ bool hasSharedAccess(Operation *op,
 //
 // Produces a RegionInfo lattice for each MemDesc/ptr-like SSA value,
 // and also collects a global list of all discovered BufferRegions.
+// Requires completed allocation analyses or their materialized offsets.
 //
 class BufferRegionAnalysis : public dataflow::SparseForwardDataFlowAnalysis<
                                  dataflow::Lattice<RegionInfo>> {
@@ -250,9 +274,37 @@ public:
   using Base =
       dataflow::SparseForwardDataFlowAnalysis<dataflow::Lattice<RegionInfo>>;
   using Base::getLatticeElement;
-  using Base::SparseForwardDataFlowAnalysis;
+  enum class Mode { AllMemory, TensorMemoryOnly };
+
+  explicit BufferRegionAnalysis(DataFlowSolver &solver,
+                                Mode mode = Mode::AllMemory,
+                                ModuleAllocation *allocation = nullptr)
+      : Base(solver), mode(mode), moduleAllocation(allocation) {}
 
   enum RegionType { SHARED_MEMORY, TENSOR_MEMORY, BARRIER, NUM_REGION_TYPES };
+
+  const RegionInfo &getRegionInfo(Value value) {
+    return getLatticeElement(value)->getValue();
+  }
+
+  /// Return an immutable footprint covering every possible view, owned by this
+  /// analysis. Call after solver convergence. Return null for unknown geometry
+  /// or views outside allocationFrame, when set.
+  const BufferRegionFootprint *
+  getFootprint(Value value, FunctionOpInterface allocationFrame = {});
+
+  /// Describe an operation's allocated shared scratch, including cross-CTA
+  /// accesses.
+  const BufferRegionFootprint *getScratchFootprint(Operation *op);
+
+  /// Translate callee-local views into the caller's allocation frame, caching
+  /// the complete footprint and preserving views already in other frames.
+  const BufferRegionFootprint *
+  translateToCallsite(const BufferRegionFootprint *footprint,
+                      CallOpInterface call, FunctionOpInterface callee);
+
+  /// Shared-memory offset of the callee frame in the caller's allocation.
+  uint32_t getCallOffset(CallOpInterface call) const;
 
   uint32_t getOperationId(Operation *operation) const {
     return operationInterner.idFor(operation);
@@ -291,6 +343,11 @@ public:
   LogicalResult initialize(Operation *top) override;
 
 private:
+  const Mode mode;
+  ModuleAllocation *moduleAllocation;
+
+  Allocation *getAllocation(Operation *op) const;
+
   BufferRegionView getAllocView(Value allocation, uint32_t storageBase,
                                 llvm::ArrayRef<uint32_t> partitionBases = {});
   BufferRegionView getSubView(Type type, const BufferRegionView &view,
@@ -301,7 +358,15 @@ private:
   // Global registry of all regions
   std::set<BufferRegion> usedBufferRegions[NUM_REGION_TYPES];
   bool usedUnknownBufferRegions[NUM_REGION_TYPES] = {};
-  llvm::DenseMap<std::pair<Type, uint32_t>, AddressSet> footprintCache;
+  llvm::DenseMap<std::pair<Type, uint32_t>,
+                 llvm::SmallVector<BufferRegion::CTAAddresses, 2>>
+      footprintCache;
+  llvm::DenseMap<Value, std::unique_ptr<BufferRegionFootprint>> valueFootprints;
+  llvm::DenseMap<Operation *, std::unique_ptr<BufferRegionFootprint>>
+      scratchFootprints;
+  llvm::DenseMap<std::pair<const BufferRegionFootprint *, Operation *>,
+                 std::unique_ptr<BufferRegionFootprint>>
+      callsiteFootprints;
   llvm::UniqueVector<Operation *> operationInterner;
 };
 

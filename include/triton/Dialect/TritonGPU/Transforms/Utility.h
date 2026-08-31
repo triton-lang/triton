@@ -155,6 +155,9 @@ scf::WhileOp replaceWhileOpWithNewSignature(OpBuilder &rewriter,
                                             scf::WhileOp loop,
                                             ValueRange newIterOperands,
                                             TypeRange newResultTypes);
+[[nodiscard]] scf::WhileOp addIterArgsToLoop(OpBuilder &rewriter,
+                                             scf::WhileOp loop,
+                                             ValueRange newIterOperands);
 
 // Replace IfOp with a new IfOp with extra results operands. The YieldOp is not
 // updated and needs to be updated separately for the bodies to be correct.
@@ -288,10 +291,6 @@ bool comesFromLoadOrBlockArg(Value v);
 // For structured control flow ops, returns the values associated with the
 // `resultIdx`th result.
 SmallVector<Value> getTiedArgs(Operation *op, int resultIdx);
-
-// Verifies the provided memory descriptor type used for barrier allocation
-LogicalResult verifyBarrierType(Operation *op,
-                                mlir::triton::gpu::MemDescType barrierType);
 
 // Get a boolean if the Value is an arith::ConstantOp
 std::optional<bool> getBoolFromConstant(Value cst);

@@ -79,6 +79,7 @@ public:
 
   bool supportsBufferAtomicRMW() const;
   bool supportsBufferAtomicFadd(Type elementType) const;
+  bool supportsBufferAtomicFMinMax(Type elementType) const;
   int32_t getBufferAtomicCachePolicy(bool hasUsers) const;
 
   bool supportMaximumMinimum() const;
@@ -86,6 +87,7 @@ public:
   bool supportsPermlaneSwap() const;
   bool supportsCvtPkScalePk8() const;
   bool supportsHwScaledUpcast() const;
+  bool supportsHwScaledDowncast() const;
 
   bool supportBitwidth16Elementwise() const;
   bool supportBitwidth32Elementwise() const;

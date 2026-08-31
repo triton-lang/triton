@@ -1,6 +1,7 @@
 import expecttest
 import importlib.util
 import itertools
+import multiprocessing
 import os
 import re
 import gc
@@ -145,6 +146,18 @@ def test_nochange():
 def test_toplevel_change():
     baseline = kernel.cache_key
     updated = apply_src_change(kernel, 'i + 1', 'i + 2', function_1)
+    assert baseline != updated
+
+
+def test_keyword_only_default_dependency_change():
+
+    @triton.jit
+    def with_default(i, *, function_1: tl.constexpr = function_1):
+        return function_1(i)
+
+    baseline = with_default.cache_key
+    with_default.hash = None
+    updated = apply_src_change(with_default, 'i + 1', 'i + 2', function_1)
     assert baseline != updated
 
 
@@ -417,6 +430,18 @@ def test_local_shadows_global():
     kernel[(1, )]()
     GLOBAL = 43
     kernel[(1, )]()
+
+
+def test_keyword_only_shadows_global(monkeypatch):
+    monkeypatch.setitem(globals(), "GLOBAL", 42)
+
+    @triton.jit
+    def kernel(*, GLOBAL: tl.constexpr):
+        tl.static_assert(GLOBAL == 1)
+
+    kernel[(1, )](GLOBAL=1)
+    monkeypatch.setitem(globals(), "GLOBAL", 43)
+    kernel[(1, )](GLOBAL=1)
 
 
 CONSTEXPR_GLOBAL = tl.constexpr(42)
@@ -1128,9 +1153,11 @@ def test_module_load_unload(device, fresh_knobs):
 
     # we should hit the kernel unload call to decrese the counter from 1 to 0
     counter = 1
+    owner_pid = os.getpid()
 
     def kernel_unload(*args, **kwargs):
         nonlocal counter
+        assert os.getpid() == owner_pid
         counter -= 1
 
     # turn off python garbage collector, so the callback is not called
@@ -1144,6 +1171,14 @@ def test_module_load_unload(device, fresh_knobs):
 
     assert counter == 1
     assert pre_compile.module is not None
+
+    if "fork" in multiprocessing.get_all_start_methods():
+        child = multiprocessing.get_context("fork").Process(target=pre_compile.__del__)
+        child.start()
+        child.join()
+        assert child.exitcode == 0
+        assert counter == 1
+
     pre_compile.__del__()
 
     assert counter == 0

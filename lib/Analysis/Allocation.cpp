@@ -146,6 +146,44 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   return 0;
 }
 
+std::optional<uint16_t> getAtomicScratchBroadcastMask(Operation *op) {
+  if (!isa<AtomicOpInterface, AtomicPollOp, gpu::LocalAtomicScatterRMWOp>(op))
+    return std::nullopt;
+
+  Type resultTy = op->getResult(0).getType();
+  if (auto tensorTy = dyn_cast<RankedTensorType>(resultTy)) {
+    auto block = StringAttr::get(op->getContext(), "block");
+    return gpu::toLinearLayout(tensorTy).getFreeVariableMasks().lookup(block);
+  }
+  return static_cast<uint16_t>(gpu::lookupNumCTAs(op) - 1);
+}
+
+bool hasCrossCTAScratch(Operation *op) {
+  if (gpu::lookupNumCTAs(op) == 1)
+    return false;
+  if (auto cvt = dyn_cast<gpu::ConvertLayoutOp>(op)) {
+    auto block = StringAttr::get(op->getContext(), "block");
+    return !isCvtDimSync(gpu::toLinearLayout(cvt.getSrc().getType()),
+                         gpu::toLinearLayout(cvt.getType()), block);
+  }
+  if (auto reduce = dyn_cast<ReduceOp>(op))
+    return !ReduceOpHelper(reduce).isReduceWithinCTA();
+  if (auto poll = dyn_cast<AtomicPollOp>(op))
+    return poll.getTimeout() && !poll.getResult().use_empty();
+  if (isa<AtomicOpInterface, gpu::LocalAtomicScatterRMWOp>(op)) {
+    Value result = op->getResult(0);
+    if (result.use_empty())
+      return false;
+    auto resultTy = dyn_cast<RankedTensorType>(result.getType());
+    if (!resultTy)
+      return true;
+    auto block = StringAttr::get(op->getContext(), "block");
+    return gpu::toLinearLayout(resultTy).getFreeVariableMasks().lookup(block) !=
+           0;
+  }
+  return false;
+}
+
 class AllocationAnalysis {
 public:
   AllocationAnalysis(Operation *operation,
@@ -281,7 +319,8 @@ private:
       AliasInfo &info = latticeElement->getValue();
       if (!info.getAllocs().empty()) {
         for (auto alloc : info.getAllocs()) {
-          allocation->addAlias(value, alloc);
+          if (allocation->valueBuffer.count(alloc))
+            allocation->addAlias(value, alloc);
         }
       }
     }
@@ -298,7 +337,11 @@ private:
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     SharedMemoryAliasAnalysis *aliasAnalysis =
         solver->load<SharedMemoryAliasAnalysis>();
-    if (failed(solver->initializeAndRun(operation))) {
+    // Returned descriptors must keep their caller-owned allocations live.
+    Operation *analysisRoot = operation;
+    if (auto module = operation->getParentOfType<ModuleOp>())
+      analysisRoot = module;
+    if (failed(solver->initializeAndRun(analysisRoot))) {
       llvm_unreachable("failed to run SharedMemoryAliasAnalysis");
     }
     operation->walk<WalkOrder::PreOrder>([&](Operation *op) {

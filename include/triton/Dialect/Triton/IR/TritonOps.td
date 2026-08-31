@@ -531,21 +531,6 @@ def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
     let hasVerifier = 1;
 }
 
-// Cat is not pure because it may reorder elements.
-def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
-                             SameTypeOperands,
-                             SameOperandsAndResultElementType]> {
-    let summary = "concatenate 2 tensors";
-
-    let arguments = (ins TT_Tensor:$lhs, TT_Tensor:$rhs);
-
-    let results = (outs TT_Tensor:$result);
-
-    let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
-
-    let hasVerifier = 1;
-}
-
 def TT_JoinOp : TT_Op<"join", [
     Pure, SameTypeOperands]> {
     let summary = "join two tensors along a new, minor dimension";
@@ -564,6 +549,7 @@ def TT_JoinOp : TT_Op<"join", [
     let results = (outs TT_Tensor:$result);
     let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
     let hasVerifier = 1;
+    let hasFolder = 1;
 }
 
 def TT_SplitOp : TT_Op<"split", [
@@ -584,6 +570,7 @@ def TT_SplitOp : TT_Op<"split", [
     let arguments = (ins TT_Tensor:$src);
     let results = (outs TT_Tensor:$outLHS, TT_Tensor:$outRHS);
     let assemblyFormat = "$src attr-dict `:` type($src) `->` type($outLHS)";
+    let hasFolder = 1;
 }
 
 def TT_TransOp : TT_Op<"trans", [Pure,

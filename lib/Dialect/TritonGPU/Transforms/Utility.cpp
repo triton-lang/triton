@@ -578,7 +578,7 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
       return {};
   }
 
-  if (isa<triton::gpu::UpcastFpOpInterface>(op))
+  if (isa<triton::gpu::CastFpOpInterface>(op))
     return {};
 
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
@@ -614,7 +614,7 @@ Attribute inferDstEncoding(Operation *op, Attribute encoding) {
     if (!isa<triton::gpu::BlockedEncodingAttr>(encoding))
       return {};
   }
-  if (isa<triton::gpu::UpcastFpOpInterface>(op))
+  if (isa<triton::gpu::CastFpOpInterface>(op))
     return {};
 
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
@@ -659,9 +659,6 @@ bool isExpensiveLoadOrStore(Operation *op) {
 }
 
 bool canUseResultEncoding(Operation *op, Attribute targetEncoding) {
-  if (isa<triton::CatOp>(op))
-    return triton::gpu::isLegalCatEncoding(cast<triton::CatOp>(op),
-                                           targetEncoding);
   if (auto convert = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
     if (mlir::isa<triton::gpu::NvidiaMmaEncodingAttr>(targetEncoding)) {
       auto srcEncoding = convert.getSrc().getType().getEncoding();
@@ -744,39 +741,21 @@ scf::WhileOp replaceWhileOpWithNewSignature(
   operands.append(newIterOperands.begin(), newIterOperands.end());
 
   // Result and operand types
-  SmallVector<Type> resultTypes;
-  SmallVector<Type> argsTypesBefore;
-  for (auto res : loop.getResults())
-    resultTypes.push_back(res.getType());
-  for (auto type : newResultTypes)
-    resultTypes.push_back(type);
-  for (Value operand : operands)
-    argsTypesBefore.push_back(operand.getType());
+  auto resultTypes = llvm::to_vector<4>(loop.getResults().getTypes());
+  resultTypes.append(newResultTypes.begin(), newResultTypes.end());
   scf::WhileOp newLoop =
       scf::WhileOp::create(rewriter, loop.getLoc(), resultTypes, operands);
   newLoop->setAttrs(loop->getAttrs());
 
-  SmallVector<Location> bbArgLocsBefore(argsTypesBefore.size(), loop.getLoc());
-  SmallVector<Location> bbArgLocsAfter(resultTypes.size(), loop.getLoc());
-  rewriter.createBlock(&newLoop.getBefore(), {}, argsTypesBefore,
-                       bbArgLocsBefore);
-  rewriter.createBlock(&newLoop.getAfter(), {}, resultTypes, bbArgLocsAfter);
-
   // Copy regions
-  for (int i = 0; i < loop.getNumRegions(); ++i)
-    newLoop->getRegion(i).front().getOperations().splice(
-        newLoop->getRegion(i).front().getOperations().begin(),
-        loop->getRegion(i).front().getOperations());
+  newLoop.getBefore().takeBody(loop.getBefore());
+  newLoop.getAfter().takeBody(loop.getAfter());
 
   // Remap arguments
-  for (auto [oldArg, newArg] : llvm::zip(
-           loop.getBeforeArguments(), newLoop.getBeforeArguments().take_front(
-                                          loop.getBeforeArguments().size())))
-    oldArg.replaceAllUsesWith(newArg);
-  for (auto [oldArg, newArg] : llvm::zip(loop.getAfterArguments(),
-                                         newLoop.getAfterArguments().take_front(
-                                             loop.getAfterArguments().size())))
-    oldArg.replaceAllUsesWith(newArg);
+  for (Value operand : newIterOperands)
+    newLoop.getBefore().front().addArgument(operand.getType(), loop.getLoc());
+  for (Type type : newResultTypes)
+    newLoop.getAfter().front().addArgument(type, loop.getLoc());
 
   // Stack the new results
   for (auto it : llvm::zip(loop.getResults(), newLoop.getResults().take_front(
@@ -797,6 +776,21 @@ scf::WhileOp replaceWhileOpWithNewSignature(OpBuilder &rewriter,
     std::get<0>(kv).replaceAllUsesWith(std::get<1>(kv));
   }
   return newWhileOp;
+}
+
+scf::WhileOp addIterArgsToLoop(OpBuilder &rewriter, scf::WhileOp loop,
+                               ValueRange newIterOperands) {
+  scf::WhileOp newLoop = replaceWhileOpWithNewSignature(
+      rewriter, loop, newIterOperands, newIterOperands.getTypes());
+
+  newLoop.getConditionOp().getArgsMutable().append(
+      newLoop.getBeforeArguments().take_back(newIterOperands.size()));
+
+  // Save the caller from insertion point invalidation.
+  if (rewriter.getInsertionPoint() == loop->getIterator())
+    rewriter.setInsertionPoint(newLoop);
+  loop.erase();
+  return newLoop;
 }
 
 scf::IfOp replaceIfOpWithNewSignature(
@@ -973,8 +967,6 @@ LogicalResult getConvertBackwardSlice(
         continue;
       if (stopPropagation && stopPropagation(definingOp))
         continue;
-      if (isa<triton::CatOp>(definingOp))
-        return failure();
       if (auto gather = dyn_cast<GatherOp>(definingOp)) {
         // Specially handle gather since its transfer function only applies
         // between its index operand and result.
@@ -986,9 +978,8 @@ LogicalResult getConvertBackwardSlice(
       }
       for (auto [i, operand] : llvm::enumerate(definingOp->getOpOperands())) {
         Attribute srcEncoding;
-        if (auto upcast =
-                dyn_cast<triton::gpu::UpcastFpOpInterface>(definingOp)) {
-          srcEncoding = upcast.inferSrcEncoding(i, encoding);
+        if (auto cast = dyn_cast<triton::gpu::CastFpOpInterface>(definingOp)) {
+          srcEncoding = cast.inferSrcEncoding(i, encoding);
         } else {
           srcEncoding = inferSrcEncoding(definingOp, encoding);
         }
@@ -1614,30 +1605,6 @@ SmallVector<Value> getTiedArgs(Operation *op, int resultIdx) {
     return values;
   }
   return {};
-}
-
-LogicalResult verifyBarrierType(Operation *op,
-                                mlir::triton::gpu::MemDescType barrierType) {
-  auto numCTAs = triton::gpu::lookupNumCTAs(op);
-  if (!(barrierType.getElementType().isInteger(64) &&
-        barrierType.getRank() == 1 && barrierType.getShape()[0] <= numCTAs))
-    return op->emitOpError("barrier allocation must be a descriptor of "
-                           "Nxi64 type with N <= number of CTAs");
-
-  auto kBlock = StringAttr::get(op->getContext(), "block");
-  auto ll = toLinearLayout(barrierType).flattenOuts();
-  const auto &blockBases = ll.getBases().lookup(kBlock);
-  int i = 0;
-  for (const auto &basis : blockBases) {
-    if (basis[0] != 0 && basis[0] != int64_t(1) << i) {
-      return op->emitOpError(
-          "broadcasted cluster barriers require bases to be the sequence"
-          "1, 2, 4, 8, ... perhaps with zero bases interleaved.");
-    }
-    if (basis[0] != 0)
-      ++i;
-  }
-  return success();
 }
 
 std::optional<bool> getBoolFromConstant(Value cst) {
