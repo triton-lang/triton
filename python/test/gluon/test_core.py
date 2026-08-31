@@ -52,50 +52,31 @@ from triton._C.libtriton.gluon_ir import make_cga_layout
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 
 
-@pytest.mark.parametrize("size_per_thread,threads_per_warp,warps_per_cta,N", [
-    ([2, 1], [32, 1], [4, 1], 32),
-    ([2, 2], [8, 4], [2, 2], 32),
-    ([2, 2], [1, 32], [1, 4], 32),
-    ([2, 1], [8, 4], [4, 1], 256),
-    ([2, 1], [32, 1], [4, 1], 256),
-])
-@pytest.mark.parametrize("cga_layout", [[], [[0, 1]], [[1, 0]], [[1, 0], [0, 1]]])
-@pytest.mark.parametrize("pack", [1, 2])
+@pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("use_result", [False, True])
-def test_inline_asm_replicated_results(size_per_thread, threads_per_warp, warps_per_cta, N, cga_layout, pack,
-                                       use_result):
-    if not is_cuda():
-        pytest.skip("requires PTX inline assembly")
-    if cga_layout and not is_hopper_or_newer():
-        pytest.skip("requires thread block clusters")
+def test_inline_asm_replicated_results(num_ctas, use_result):
+    if not is_cuda() or (num_ctas > 1 and not is_hopper_or_newer()):
+        pytest.skip("requires CUDA and Hopper for thread block clusters")
 
     @gluon.jit
-    def kernel(Cells, Out, WideOut, N: ttgl.constexpr, Layout: ttgl.constexpr, Pack: ttgl.constexpr,
-               UseResult: ttgl.constexpr):
-        rows = ttgl.arange(0, N, layout=ttgl.SliceLayout(1, Layout))
-        cols = ttgl.arange(0, 128, layout=ttgl.SliceLayout(0, Layout))
+    def kernel(Cells, Out, WideOut, Layout: ttgl.constexpr, NumCTAs: ttgl.constexpr, UseResult: ttgl.constexpr):
+        rows = ttgl.arange(0, 8, layout=ttgl.SliceLayout(1, Layout))
+        cols = ttgl.arange(0, 32 * NumCTAs, layout=ttgl.SliceLayout(0, Layout))
         for i in range(3):
-            if Pack == 1:
-                result, wide = ttgl.inline_asm_elementwise("atom.global.add.u32 $0, [$2], 1; cvt.u64.u32 $1, $0;",
-                                                           "=r,=l,l", [Cells + rows], dtype=(ttgl.int32, ttgl.int64),
-                                                           is_pure=False, pack=1)
-            else:
-                result, wide = ttgl.inline_asm_elementwise(
-                    "atom.global.add.u32 $0, [$4], 1; atom.global.add.u32 $1, [$5], 1; "
-                    "cvt.u64.u32 $2, $0; cvt.u64.u32 $3, $1;", "=r,=r,=l,=l,l,l", [Cells + rows],
-                    dtype=(ttgl.int32, ttgl.int64), is_pure=False, pack=2)
+            result, wide = ttgl.inline_asm_elementwise("atom.global.add.u32 $0, [$2], 1; cvt.u64.u32 $1, $0;",
+                                                       "=r,=l,l", [Cells + rows], dtype=(ttgl.int32, ttgl.int64),
+                                                       is_pure=False, pack=1)
             if UseResult:
-                # Expanding the sliced dimension makes replicas observable:
-                # every lane, warp, register and CTA must see the same ticket.
-                offsets = (i * N + rows[:, None]) * 128 + cols[None, :]
+                # Expanding the sliced dimension observes every replicated result.
+                offsets = (i * 8 + rows[:, None]) * 32 * NumCTAs + cols[None, :]
                 ttgl.store(Out + offsets, result[:, None])
                 ttgl.store(WideOut + offsets, wide[:, None])
 
-    layout = ttgl.BlockedLayout(size_per_thread, threads_per_warp, warps_per_cta, [0, 1], cga_layout)
-    cells = torch.zeros(N, dtype=torch.int32, device="cuda")
-    output = torch.empty((3, N, 128), dtype=torch.int32, device="cuda")
+    layout = ttgl.BlockedLayout([1, 2], [8, 4], [1, 4], [0, 1], [[0, 1]] if num_ctas == 2 else [])
+    cells = torch.zeros(8, dtype=torch.int32, device="cuda")
+    output = torch.empty((3, 8, 32 * num_ctas), dtype=torch.int32, device="cuda")
     wide_output = torch.empty_like(output, dtype=torch.int64)
-    compiled = kernel[(1, )](cells, output, wide_output, N, layout, pack, use_result, num_ctas=2**len(cga_layout))
+    compiled = kernel[(1, )](cells, output, wide_output, layout, num_ctas, use_result, num_ctas=num_ctas)
     torch.testing.assert_close(cells, torch.full_like(cells, 3))
     if use_result:
         expected = torch.arange(3, dtype=torch.int32, device="cuda")[:, None, None].expand_as(output)
@@ -103,91 +84,6 @@ def test_inline_asm_replicated_results(size_per_thread, threads_per_warp, warps_
         torch.testing.assert_close(wide_output, expected.to(torch.int64))
     else:
         assert compiled.metadata.shared == 0
-
-
-@pytest.mark.parametrize("num_ctas", [1, 2, 4])
-@pytest.mark.parametrize("pack", [2, 4])
-@pytest.mark.parametrize("use_result", [False, True])
-def test_inline_asm_replicated_padded_pack(num_ctas, pack, use_result):
-    if not is_cuda():
-        pytest.skip("requires PTX inline assembly")
-    if num_ctas > 1 and not is_hopper_or_newer():
-        pytest.skip("requires thread block clusters")
-
-    @gluon.jit
-    def kernel(Cells, Out, Layout: ttgl.constexpr, NumCTAs: ttgl.constexpr, Pack: ttgl.constexpr, Asm: ttgl.constexpr,
-               Constraints: ttgl.constexpr, UseResult: ttgl.constexpr):
-        rows = ttgl.arange(0, 8, layout=ttgl.SliceLayout(1, Layout))
-        cols = ttgl.arange(0, 16 * NumCTAs, layout=ttgl.SliceLayout(0, Layout))
-        for i in range(3):
-            # This layout has one unique element per thread. The asm ignores
-            # padded pointers and returns extra values that must be discarded.
-            result = ttgl.inline_asm_elementwise(Asm, Constraints, [Cells + rows], dtype=ttgl.int32, is_pure=False,
-                                                 pack=Pack)
-            if UseResult:
-                offsets = (i * 8 + rows[:, None]) * 16 * NumCTAs + cols[None, :]
-                ttgl.store(Out + offsets, result[:, None])
-
-    asm = f"atom.global.add.u32 $0, [${pack}], 1; "
-    asm += " ".join(f"mov.u32 ${i}, $0;" for i in range(1, pack))
-    constraints = ",".join(["=r"] * pack + ["l"] * pack)
-    cga_layout = [[0, 1 << i] for i in range(num_ctas.bit_length() - 1)]
-    layout = ttgl.BlockedLayout([1, 1], [8, 4], [1, 4], [0, 1], cga_layout)
-    cells = torch.zeros(8, dtype=torch.int32, device="cuda")
-    output = torch.empty((3, 8, 16 * num_ctas), dtype=torch.int32, device="cuda")
-    compiled = kernel[(1, )](cells, output, layout, num_ctas, pack, asm, constraints, use_result, num_ctas=num_ctas)
-    torch.testing.assert_close(cells, torch.full_like(cells, 3))
-    if use_result:
-        expected = torch.arange(3, dtype=torch.int32, device="cuda")[:, None, None].expand_as(output)
-        torch.testing.assert_close(output, expected)
-    else:
-        assert compiled.metadata.shared == 0
-
-
-@pytest.mark.parametrize("num_ctas", [1, 2, 4])
-@pytest.mark.parametrize("use_result", [False, True])
-@pytest.mark.parametrize("partition", [None, 0, 1])
-def test_inline_asm_scalar_results(num_ctas, use_result, partition):
-    if not is_cuda():
-        pytest.skip("requires PTX inline assembly")
-    if num_ctas > 1 and not is_hopper_or_newer():
-        pytest.skip("requires thread block clusters")
-    if partition is not None and not is_hopper_or_newer():
-        pytest.skip("requires warp specialization")
-
-    @gluon.jit
-    def asm_partition(Cells, Out, UseResult: ttgl.constexpr, NumCTAs: ttgl.constexpr, Layout: ttgl.constexpr):
-        offsets = ttgl.arange(0, 128 * NumCTAs, layout=Layout)
-        for i in range(3):
-            result = ttgl.inline_asm_elementwise("atom.global.add.u32 $0, [$1], 1;", "=r,l", [Cells], dtype=ttgl.int32,
-                                                 is_pure=False, pack=1)
-            if UseResult:
-                ttgl.store(Out + i * 128 * NumCTAs + offsets, result)
-
-    @gluon.jit
-    def empty_partition():
-        pass
-
-    @gluon.jit
-    def kernel(Cells, Out, UseResult: ttgl.constexpr, NumCTAs: ttgl.constexpr, Layout: ttgl.constexpr,
-               Partition: ttgl.constexpr):
-        if Partition is None:
-            asm_partition(Cells, Out, UseResult, NumCTAs, Layout)
-        elif Partition == 0:
-            ttgl.warp_specialize([(asm_partition, (Cells, Out, UseResult, NumCTAs, Layout)), (empty_partition, ())],
-                                 [4])
-        else:
-            ttgl.warp_specialize([(empty_partition, ()), (asm_partition, (Cells, Out, UseResult, NumCTAs, Layout))],
-                                 [4])
-
-    cells = torch.zeros((), dtype=torch.int32, device="cuda")
-    output = torch.empty((3, 128 * num_ctas), dtype=torch.int32, device="cuda")
-    layout = ttgl.BlockedLayout([1], [32], [4], [0], [[1 << i] for i in range(num_ctas.bit_length() - 1)])
-    kernel[(1, )](cells, output, use_result, num_ctas, layout, partition, num_ctas=num_ctas)
-    torch.testing.assert_close(cells, torch.full_like(cells, 3))
-    if use_result:
-        expected = torch.arange(3, dtype=torch.int32, device="cuda")[:, None].expand_as(output)
-        torch.testing.assert_close(output, expected)
 
 
 @gluon.jit

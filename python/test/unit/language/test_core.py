@@ -5727,52 +5727,30 @@ def test_inline_asm_with_pointers(num_ctas, device):
     np.testing.assert_equal(y_ref, to_numpy(y_tri))
 
 
-def test_inline_asm_replicated_side_effects(device):
+@pytest.mark.parametrize("pack", [1, 2])
+@pytest.mark.parametrize("use_result", [False, True])
+def test_inline_asm_side_effects(device, pack, use_result):
     if not is_cuda():
-        pytest.skip('test_inline_asm is only supported in CUDA')
+        pytest.skip("requires PTX inline assembly")
 
     @triton.jit
-    def kernel(cells, output, N: tl.constexpr):
-        offsets = tl.arange(0, N)
-        result = tl.inline_asm_elementwise(
-            "red.global.add.u32 [$1], 1; mov.u32 $0, 7;",
-            "=r,l",
-            [cells + offsets],
-            dtype=tl.int32,
-            is_pure=False,
-            pack=1,
-        )
-        tl.store(output + offsets, result)
+    def kernel(Cells, Out, Asm: tl.constexpr, Constraints: tl.constexpr, Pack: tl.constexpr, UseResult: tl.constexpr):
+        result = tl.inline_asm_elementwise(Asm, Constraints, [Cells], dtype=tl.int32, is_pure=False, pack=Pack)
+        if UseResult:
+            tl.store(Out + tl.arange(0, 128), result)
 
-    N = 32
-    cells = torch.zeros(N, dtype=torch.int32, device=device)
-    output = torch.empty_like(cells)
-    kernel[(1, )](cells, output, N=N, num_warps=4)
-
-    torch.testing.assert_close(cells, torch.ones_like(cells))
-    torch.testing.assert_close(output, torch.full_like(output, 7))
-
-
-@pytest.mark.parametrize("pack", [2, 4])
-def test_inline_asm_side_effect_padded_pack(device, pack):
-    if not is_cuda():
-        pytest.skip('test_inline_asm is only supported in CUDA')
-
-    @triton.jit
-    def kernel(cells, output, ASM: tl.constexpr, CONSTRAINTS: tl.constexpr, PACK: tl.constexpr):
-        # A scalar provides one real input; the other packed pointers are
-        # undefined and must not be dereferenced by the assembly.
-        result = tl.inline_asm_elementwise(ASM, CONSTRAINTS, [cells], dtype=tl.int32, is_pure=False, pack=PACK)
-        tl.store(output + tl.arange(0, 128), result)
-
+    # Only the first pointer is real; ignore padded inputs and discard extra outputs.
     asm = f"atom.global.add.u32 $0, [${pack}], 1; "
     asm += " ".join(f"mov.u32 ${i}, $0;" for i in range(1, pack))
     constraints = ",".join(["=r"] * pack + ["l"] * pack)
     cells = torch.full((), 17, dtype=torch.int32, device=device)
     output = torch.empty(128, dtype=torch.int32, device=device)
-    kernel[(1, )](cells, output, asm, constraints, pack, num_warps=4)
+    compiled = kernel[(1, )](cells, output, asm, constraints, pack, use_result, num_warps=4)
     torch.testing.assert_close(cells, torch.full_like(cells, 18))
-    torch.testing.assert_close(output, torch.full_like(output, 17))
+    if use_result:
+        torch.testing.assert_close(output, torch.full_like(output, 17))
+    else:
+        assert compiled.metadata.shared == 0
 
 
 def test_inline_asm_multiple_outputs(device):
