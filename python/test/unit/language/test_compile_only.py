@@ -74,13 +74,14 @@ def test_compile_only_sm100() -> None:
 
 @pytest.mark.parametrize("arch", [90, 100, 103])
 @pytest.mark.parametrize("lanes", [1, 2, 4, 8])
-def test_compile_only_nvptx_fabs_preserves_nan_payload(arch, lanes):
+@pytest.mark.parametrize("instrumentation_mode", ["", "consan", "fpsan"])
+def test_compile_only_nvptx_fabs_preserves_nan_payload(arch, lanes, instrumentation_mode):
     from triton._C.libtriton import llvm
     from triton.backends.nvidia.compiler import CUDABackend
 
     llvm.init_targets()
     backend = CUDABackend(GPUTarget("cuda", arch, 32))
-    options = backend.parse_options({"ptx_version": 93})
+    options = backend.parse_options({"ptx_version": 93, "instrumentation_mode": instrumentation_mode})
     value_type = "float" if lanes == 1 else f"<{lanes} x float>"
     suffix = "f32" if lanes == 1 else f"v{lanes}f32"
     source = f"""
@@ -94,8 +95,13 @@ define ptx_kernel void @abs_kernel(ptr addrspace(1) %input, ptr addrspace(1) %ou
 }}
 """
     ptx = backend.make_ptx(source, {}, options, arch)
-    assert "abs.f32" not in ptx
-    assert len(re.findall(r"\band\.b32\b", ptx)) == lanes
+    if instrumentation_mode == "fpsan":
+        assert "abs.f32" not in ptx
+        assert len(re.findall(r"\band\.b32\b", ptx)) == lanes
+    else:
+        # Keep ordinary and other sanitizer compilations on LLVM's lowering.
+        assert len(re.findall(r"\babs\.f32\b", ptx)) == lanes
+        assert "and.b32" not in ptx
 
 
 @pytest.mark.parametrize("element_type", ["f32", "f16", "bf16"])
