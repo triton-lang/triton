@@ -172,7 +172,7 @@ jobs:
           # TODO: uncomment
           # pytest --capture=tee-sys -rfs test_debug.py
           TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_DIR}/libGPUInstrumentationTestLib.so \
-          pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
+          env -u HIP_VISIBLE_DEVICES pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
 
           # Run test_tensor_atomic_cas with buffer ops disabled on gfx950 and gfx942
           if ${{ contains(matrix.runner, 'amd-gfx950') || contains(matrix.runner, 'amd-gfx942') }}; then
