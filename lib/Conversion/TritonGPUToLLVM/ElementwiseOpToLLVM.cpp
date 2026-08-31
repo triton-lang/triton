@@ -369,8 +369,7 @@ struct ElementwiseInlineAsmOpConversion
       results.resize(numElemsPerThread);
     }
 
-    if (failed(broadcastResults(op, unpackedResults, threadPred, rewriter)))
-      return failure();
+    broadcastResults(op, unpackedResults, threadPred, rewriter);
 
     // Reorder and pack the results.
     SmallVector<Value> outs;
@@ -429,16 +428,14 @@ private:
     return mergedResult;
   }
 
-  LogicalResult
-  broadcastResults(ElementwiseInlineAsmOp op,
-                   SmallVector<SmallVector<Value>> &unpackedResults,
-                   Value threadPred,
-                   ConversionPatternRewriter &rewriter) const {
+  void broadcastResults(ElementwiseInlineAsmOp op,
+                        SmallVector<SmallVector<Value>> &unpackedResults,
+                        Value threadPred,
+                        ConversionPatternRewriter &rewriter) const {
     if (!threadPred || op->use_empty())
-      return success();
-    if (!op->hasAttr("allocation.offset"))
-      return op.emitError(
-          "missing shared-memory allocation for replicated inline asm result");
+      return;
+    assert(op->hasAttr("allocation.offset") &&
+           "missing shared-memory allocation for replicated inline asm result");
 
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -474,8 +471,6 @@ private:
           targetInfo.barrier(loc, rewriter, AddrSpace::Local);
       }
     }
-
-    return success();
   }
 
   const TargetInfoBase &targetInfo;
