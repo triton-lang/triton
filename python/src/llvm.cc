@@ -228,6 +228,36 @@ createTargetMachine(llvm::Module *module, std::string proc,
   return machine;
 }
 
+void lowerNVPTXFAbs(llvm::Module &module) {
+  if (!module.getTargetTriple().isNVPTX())
+    return;
+
+  SmallVector<IntrinsicInst *> calls;
+  for (Function &function : module) {
+    if (function.getIntrinsicID() != Intrinsic::fabs ||
+        !function.getReturnType()->getScalarType()->isFloatTy())
+      continue;
+    for (User *user : function.users())
+      if (auto *call = dyn_cast<IntrinsicInst>(user))
+        if (!call->hasNoNaNs())
+          calls.push_back(call);
+  }
+
+  // LLVM fabs preserves NaN payloads, but PTX abs.f32 may canonicalize them.
+  // Rewrite after IR optimization: InstCombine can otherwise recreate fabs,
+  // and NVPTX does not consistently lower its scalar and vector forms alike.
+  for (IntrinsicInst *call : calls) {
+    IRBuilder<> builder(call);
+    Type *bitsType = builder.getInt32Ty();
+    if (auto *vectorType = dyn_cast<VectorType>(call->getType()))
+      bitsType = VectorType::get(bitsType, vectorType->getElementCount());
+    Value *bits = builder.CreateBitCast(call->getArgOperand(0), bitsType);
+    Value *magnitude = builder.CreateAnd(bits, 0x7fffffff);
+    call->replaceAllUsesWith(builder.CreateBitCast(magnitude, call->getType()));
+    call->eraseFromParent();
+  }
+}
+
 void dumpSchedulingDAG(llvm::Module &module, const std::string &triple,
                        const std::string &proc, const std::string &features,
                        const std::vector<std::string> &flags,
@@ -282,6 +312,7 @@ void dumpSchedulingDAG(llvm::Module &module, const std::string &triple,
   auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features);
   // set data layout
   module.setDataLayout(machine->createDataLayout());
+  lowerNVPTXFAbs(module);
 
   // Save original stderr file descriptor
   int saved_stderr_fd = dup(fileno(stderr));
@@ -375,6 +406,7 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
   auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features);
   // set data layout
   module.setDataLayout(machine->createDataLayout());
+  lowerNVPTXFAbs(module);
 
   // emit machine code
   std::string result;
@@ -478,6 +510,7 @@ std::string translateLLVMIRToASM(
     cleanup.add(llvm::createEarlyCSEPass());
     cleanup.run(module);
   }
+  lowerNVPTXFAbs(module);
   // emit machine code
   std::string result;
   {

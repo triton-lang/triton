@@ -3233,6 +3233,47 @@ def test_reduction_matches_loop(device, fresh_knobs):
     _assert_payload_equal(reduce_out, loop_out)
 
 
+@pytest.mark.parametrize("use_slp", [False, True])
+def test_abs_reduction_preserves_nan_payload(device, fresh_knobs, monkeypatch, use_slp):
+    _require_cuda_backend(device)
+    if not is_cuda():
+        pytest.skip("regression is specific to NVPTX fabs lowering")
+
+    from triton._C.libtriton import llvm
+
+    optimize_module = llvm.optimize_module
+
+    def optimize(module, level, *args, **kwargs):
+        # Exercise the vector fabs produced by SLP as well as scalar fabs.
+        kwargs["disable_slp_vectorizer"] = not use_slp
+        return optimize_module(module, level, *args, **kwargs)
+
+    monkeypatch.setattr(llvm, "optimize_module", optimize)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    fresh_knobs.compilation.always_compile = True
+
+    @triton.jit
+    def abs_max_kernel(x_ptr, out_ptr, BLOCK: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+        x = tl.load(x_ptr + offsets).to(tl.float32)
+        tl.store(out_ptr + tl.program_id(0), tl.max(tl.abs(x), axis=0))
+
+    block = 256
+    # These finite BF16 values include both signs of quiet/signaling-NaN carriers
+    # after FPSan widening. Constant rows keep the reduction from hiding them.
+    bits = np.array([0x02DE, 0x82DE, 0x0703, 0x8703, 0x01CA, 0x81CA, 0, 0x8000, 0x3F80, 0xBF80],
+                    dtype=np.uint16).view(np.int16)
+    input_bits = np.repeat(bits[:, None], block, axis=1)
+    _, x = _as_float_bits_tensor(input_bits, "bf16")
+    out = torch.empty((len(bits), ), dtype=torch.int32, device=device)
+    abs_max_kernel[(len(bits), )](x, triton.TensorWrapper(out, dtype=torch.float32), BLOCK=block, num_warps=1)
+
+    expected = _cast_float_bits(bits, "bf16", "f32").view(np.uint32) & np.uint32(0x7FFFFFFF)
+    assert expected[0] == 0x7FBD2A00
+    assert expected[4] == 0x7FCCB100
+    _assert_payload_equal(out, expected)
+
+
 def test_f32_loop_preserves_snan_payload(device, fresh_knobs):
     _require_cuda_backend(device)
     if not is_cuda():

@@ -72,6 +72,32 @@ def test_compile_only_sm100() -> None:
     assert k.asm["cubin"] != b""
 
 
+@pytest.mark.parametrize("arch", [90, 100, 103])
+@pytest.mark.parametrize("lanes", [1, 2, 4, 8])
+def test_compile_only_nvptx_fabs_preserves_nan_payload(arch, lanes):
+    from triton._C.libtriton import llvm
+    from triton.backends.nvidia.compiler import CUDABackend
+
+    llvm.init_targets()
+    backend = CUDABackend(GPUTarget("cuda", arch, 32))
+    options = backend.parse_options({"ptx_version": 93})
+    value_type = "float" if lanes == 1 else f"<{lanes} x float>"
+    suffix = "f32" if lanes == 1 else f"v{lanes}f32"
+    source = f"""
+target triple = "nvptx64-nvidia-cuda"
+declare {value_type} @llvm.fabs.{suffix}({value_type})
+define ptx_kernel void @abs_kernel(ptr addrspace(1) %input, ptr addrspace(1) %output) {{
+  %value = load {value_type}, ptr addrspace(1) %input, align 32
+  %absolute = call {value_type} @llvm.fabs.{suffix}({value_type} %value)
+  store {value_type} %absolute, ptr addrspace(1) %output, align 32
+  ret void
+}}
+"""
+    ptx = backend.make_ptx(source, {}, options, arch)
+    assert "abs.f32" not in ptx
+    assert len(re.findall(r"\band\.b32\b", ptx)) == lanes
+
+
 @pytest.mark.parametrize("element_type", ["f32", "f16", "bf16"])
 def test_compile_only_packed_arith_chains(element_type, tmp_path) -> None:
     packed_type = f"{element_type}x2"
