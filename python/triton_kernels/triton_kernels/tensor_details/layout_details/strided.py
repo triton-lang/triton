@@ -62,6 +62,12 @@ class StridedLayoutTransformation(LayoutTransformation):
 
     order: list[int]
 
+    def _can_convert_fp4(self, data):
+        """Whether direct kernels can read this strided FP4 storage."""
+        return (self.is_fp4 and len(self.shape) >= 2 and self.order[0] >= len(self.shape) - 2
+                and data.device.type == "cuda" and data.dtype == torch.uint8 and list(data.shape) == self.storage_shape
+                and data.stride(self.order[0]) == 1)
+
     @property
     def storage_shape(self) -> list[int]:
         shape = list(self.shape)
