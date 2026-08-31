@@ -127,8 +127,9 @@ class FileCacheManager(CacheManager):
         try:
             os.rmdir(temp_dir)
         except OSError as e:
-            # Publishing has already succeeded. Some network filesystems can
-            # transiently report EBUSY while removing this private directory.
+            # Linux's NFSv4 client can surface NFS4ERR_FILE_OPEN as EBUSY after
+            # retrying REMOVE. The cache file is already atomically published,
+            # so leave the empty private temp dir rather than fail the write.
             if e.errno != errno.EBUSY:
                 raise
         return filepath
