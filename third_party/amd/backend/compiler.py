@@ -13,7 +13,6 @@ import functools
 import warnings
 from pathlib import Path
 
-
 instrument = functools.partial(_instrument, backend="amd")
 
 
@@ -86,8 +85,7 @@ def _add_consan(pm, options):
 
 register_instrumentation(name="fpsan", point="add", backend="amd", callback=_add_fpsan)
 register_instrumentation(name="fpsan", point="gluon-prepare", backend="amd", callback=_prepare_fpsan_gluon)
-register_instrumentation(name="consan", point="prepare-captures", backend="amd",
-                         callback=_prepare_consan_captures)
+register_instrumentation(name="consan", point="prepare-captures", backend="amd", callback=_prepare_consan_captures)
 register_instrumentation(name="consan", point="add", backend="amd", callback=_add_consan)
 
 

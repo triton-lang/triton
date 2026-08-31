@@ -16,7 +16,6 @@ import os
 import subprocess
 from pathlib import Path
 
-
 instrument = functools.partial(_instrument, backend="nvidia")
 
 
@@ -46,8 +45,7 @@ def _prepare_consan_captures(pm, _options):
 register_instrumentation(name="fpsan", point="add", backend="nvidia", callback=_add_fpsan)
 register_instrumentation(name="consan", point="gluon-cleanup", backend="nvidia", callback=_add_consan_gluon_cleanup)
 register_instrumentation(name="gsan", point="add", backend="nvidia", callback=_add_gsan)
-register_instrumentation(name="consan", point="prepare-captures", backend="nvidia",
-                         callback=_prepare_consan_captures)
+register_instrumentation(name="consan", point="prepare-captures", backend="nvidia", callback=_prepare_consan_captures)
 
 
 def min_dot_size(target: GPUTarget):
@@ -604,8 +602,7 @@ class CUDABackend(BaseBackend):
 
             # -Ofc mid miscompiles some large ConSan kernels into invalid global
             # accesses; -O1 keeps compile time reasonable without that ptxas bug.
-            if (not knobs.nvidia.disable_ptxas_opt
-                    and any(is_enabled(opt, mode) for mode in ["consan", "fpsan"])):
+            if (not knobs.nvidia.disable_ptxas_opt and any(is_enabled(opt, mode) for mode in ["consan", "fpsan"])):
                 ptx_extra_options += ["--opt-level", "1"]
 
             # Add --regAllocOptLevel=2 to work around ptxas 13.x bug
