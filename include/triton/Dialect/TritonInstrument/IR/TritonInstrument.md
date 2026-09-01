@@ -349,11 +349,6 @@ The common hook implementation covers these TritonGPU operations:
   same destination. Equal-value duplicates and atomic scatter collisions remain
   valid.
 - `ttg.local_alloc` with a source: barrier-tracked shared-memory write.
-- Any operation with allocator-provided operation-local shared scratch: a
-  synchronous generic-proxy write over its allocated byte interval in its owning
-  CTA. Cross-CTA scratch reads follow intrinsic synchronization, and atomic
-  writes are issued only by producer CTAs. Forced warp-shuffle conversions
-  publish no scratch metadata because allocation reserves no scratch for them.
 - Function calls with allocator-provided virtual shared-memory frames: a
   synchronous generic-proxy write over the whole callee frame in the current
   CTA. This includes nested callees because each virtual frame is sized from
@@ -362,6 +357,11 @@ The common hook implementation covers these TritonGPU operations:
 
 These shared-memory effects are generic-proxy accesses for the proxy-ordering
 model.
+
+Operation-local compiler scratch is not instrumented. Races involving that
+scratch, including reuse while asynchronous accesses are pending, may therefore
+go undetected. Call-frame summaries and explicit shared-memory accesses remain
+instrumented.
 
 NVIDIA hooks additionally cover:
 
