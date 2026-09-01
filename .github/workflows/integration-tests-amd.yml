@@ -189,7 +189,7 @@ jobs:
           # Run tests under triton/python/triton_kernels/tests/ on gfx950 and gfx942
           if ${{ contains(matrix.runner, 'amd-gfx950') || contains(matrix.runner, 'amd-gfx942') }}; then
             cd ../../triton_kernels/
-            TRITON_CI_CACHE_PHASE=triton-kernels python3 -m pytest -s -n 12 tests/
+            TRITON_CI_CACHE_PHASE=triton-kernels python3 -m pytest -s -n 10 tests/
           fi
       - name: Run asan tests on AMD
         if: false
