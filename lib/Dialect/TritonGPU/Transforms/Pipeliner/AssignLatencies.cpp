@@ -25,6 +25,27 @@ namespace {
 // assignLatencies
 //===----------------------------------------------------------------------===//
 
+// Return the operations that define an operand. For an `scf.if` result, the
+// definitions are the values yielded by each branch rather than the `scf.if`
+// op itself.
+static SmallVector<Operation *> getOperandDefs(Value operand) {
+  SmallVector<Operation *> defs;
+  std::function<void(Value)> collectDefs = [&](Value value) {
+    auto result = dyn_cast<OpResult>(value);
+    auto ifOp = result ? dyn_cast<scf::IfOp>(result.getOwner()) : nullptr;
+    if (!ifOp) {
+      defs.push_back(value.getDefiningOp());
+      return;
+    }
+
+    unsigned resultNumber = result.getResultNumber();
+    for (scf::YieldOp yield : {ifOp.thenYield(), ifOp.elseYield()})
+      collectDefs(yield.getOperand(resultNumber));
+  };
+  collectDefs(operand);
+  return defs;
+}
+
 bool hasLoopCarriedAccumulatorCycle(ttng::MMAv5OpInterface mma,
                                     scf::ForOp forOp) {
   Value start = mma.getAccDep();
@@ -379,9 +400,13 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
               continue;
           }
           Value v = operand;
-          Operation *defOp = v.getDefiningOp();
-          if (defOp && defOp->getBlock() == op->getBlock()) {
-            dfs(defOp, finalUser, distance);
+          for (Operation *defOp : getOperandDefs(v)) {
+            if (!defOp)
+              continue;
+            auto ifOp = v.getDefiningOp<scf::IfOp>();
+            bool isBranchDef = ifOp && ifOp->isAncestor(defOp);
+            if (defOp->getBlock() == op->getBlock() || isBranchDef)
+              dfs(defOp, finalUser, distance);
           }
         }
       };

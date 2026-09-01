@@ -140,10 +140,30 @@ void scheduleRemainingToLastStage(scf::ForOp forOp, CoarseSchedule &schedule,
 }
 
 namespace {
+// Return the operation in the loop body that owns a latency operation nested
+// only in `scf.if` regions. Other nested region-bearing operations, including
+// nested loops, have their own scheduling semantics.
+Operation *getLatencyOwner(scf::ForOp forOp, Operation *op) {
+  Operation *owner = forOp.getBody()->findAncestorOpInBlock(*op);
+  if (!owner)
+    return nullptr;
+  if (owner == op)
+    return owner;
+  if (!isa<scf::IfOp>(owner))
+    return nullptr;
+  for (Operation *ancestor = op->getParentOp(); ancestor != owner;
+       ancestor = ancestor->getParentOp()) {
+    if (!ancestor || !isa<scf::IfOp>(ancestor))
+      return nullptr;
+  }
+  return owner;
+}
+
 bool hasLatenciesAssigned(scf::ForOp forOp,
                           const DenseMap<Operation *, int> &opLatency) {
-  for (auto &op : forOp.getBody()->without_terminator()) {
-    if (opLatency.count(&op))
+  for (auto [op, latency] : opLatency) {
+    (void)latency;
+    if (getLatencyOwner(forOp, op))
       return true;
   }
   return false;
@@ -151,13 +171,63 @@ bool hasLatenciesAssigned(scf::ForOp forOp,
 
 CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
                               const DenseMap<Operation *, int> &opLatency) {
+  // The pipeline expander assigns stages to operations in the loop body, not
+  // to operations in nested regions. Attribute a nested latency to its
+  // top-level ancestor so, for example, an `scf.if` containing a load is
+  // scheduled at the load's stage.
+  DenseMap<Operation *, int> topLevelLatency;
+  // A top-level op is one indivisible scheduling unit, so collapse nested
+  // latency chains to their longest path. Each nested op has exactly one
+  // top-level ancestor in this loop body, making an op-only memo sufficient.
+  DenseMap<Operation *, int> nestedDistance;
+  std::function<int(Value, Operation *)> computeValueDistance;
+  std::function<int(Operation *, Operation *)> computeNestedDistance =
+      [&](Operation *op, Operation *topLevel) {
+        auto it = nestedDistance.find(op);
+        if (it != nestedDistance.end())
+          return it->second;
+        int distance = opLatency.lookup(op);
+        int operandDistance = 0;
+        for (Value operand : op->getOperands())
+          operandDistance = std::max(operandDistance,
+                                     computeValueDistance(operand, topLevel));
+        return nestedDistance[op] = distance + operandDistance;
+      };
+  computeValueDistance = [&](Value value, Operation *topLevel) {
+    auto result = dyn_cast<OpResult>(value);
+    if (auto ifOp = result ? dyn_cast<scf::IfOp>(result.getOwner()) : nullptr) {
+      unsigned resultNumber = result.getResultNumber();
+      return std::max(computeValueDistance(
+                          ifOp.thenYield().getOperand(resultNumber), topLevel),
+                      computeValueDistance(
+                          ifOp.elseYield().getOperand(resultNumber), topLevel));
+    }
+    Operation *def = value.getDefiningOp();
+    if (!def || !topLevel->isProperAncestor(def))
+      return 0;
+    return computeNestedDistance(def, topLevel);
+  };
+  for (auto [op, latency] : opLatency) {
+    Operation *topLevel = getLatencyOwner(forOp, op);
+    if (!topLevel)
+      continue;
+    int projectedLatency =
+        topLevel == op
+            ? latency
+            : opLatency.lookup(topLevel) + computeNestedDistance(op, topLevel);
+    auto [it, inserted] =
+        topLevelLatency.try_emplace(topLevel, projectedLatency);
+    if (!inserted)
+      it->second = std::max(it->second, projectedLatency);
+  }
+
   llvm::MapVector<Operation *, int> opToStage;
   // Find terminator for later reference
   auto terminator = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
   // Determine all operations that have a non-zero latency
   SmallVector<Operation *> latOps;
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (opLatency.count(&op))
+    if (topLevelLatency.count(&op))
       latOps.push_back(&op);
   }
   // If no latency ops, nothing to schedule
@@ -184,8 +254,8 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
         maxDist = distUser;
     }
     int lat = 0;
-    if (opLatency.count(op))
-      lat = opLatency.lookup(op);
+    if (topLevelLatency.count(op))
+      lat = topLevelLatency.lookup(op);
     // If an op has no users (maxDist == -1) but has latency, we include its
     // latency otherwise it contributes 0 to the distance.
     int d = lat + (maxDist < 0 ? 0 : maxDist);
@@ -231,7 +301,7 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
     if (!ifOp)
       continue;
     // If the `scf.if` op itself is a latency op, skip it.
-    if (opLatency.contains(ifOp))
+    if (topLevelLatency.contains(ifOp))
       continue;
     // Ensure this does not create scheduling conflicts by ensuring the forward
     // slice of the `scf.if` does not contain ops that are already scheduled, as
