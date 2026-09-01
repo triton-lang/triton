@@ -895,7 +895,7 @@ def _reduce_cases():
         yield (M, N, layout)
 
 
-@pytest.mark.parametrize("M, N, src_layout", _reduce_cases())
+@pytest.mark.parametrize("M, N, src_layout", list(_reduce_cases()))
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("epilogue_kind", ['reduce1d', 'reduce2d', 'expand_reduce2d'])
 @pytest.mark.parametrize("dtype_str, sanitize_overflow", [("int32", False), ("int32", True), ("float32", False),
@@ -1018,7 +1018,7 @@ def _histogram_cases():
         yield (linear_layout.shape[0], bins, linear_layout, ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0]))
 
 
-@pytest.mark.parametrize("M, bins, src_layout, dst_layout", _histogram_cases())
+@pytest.mark.parametrize("M, bins, src_layout, dst_layout", list(_histogram_cases()))
 def test_histogram(M, bins, src_layout, dst_layout, device):
 
     @gluon.jit
@@ -2003,7 +2003,7 @@ def _gather_cases():
         yield (axis, s_layout, i_layout, shape_t, shape_t)
 
 
-@pytest.mark.parametrize("axis, src_layout, index_layout, src_shape, idx_shape", _gather_cases())
+@pytest.mark.parametrize("axis, src_layout, index_layout, src_shape, idx_shape", list(_gather_cases()))
 def test_gather_layouts(axis, src_layout, index_layout, src_shape, idx_shape, device):
     src = torch.randn(src_shape, device=device)
     indices = torch.randint(0, src.shape[axis], idx_shape, device=device)
