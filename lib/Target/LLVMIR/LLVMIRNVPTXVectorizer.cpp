@@ -91,12 +91,7 @@ public:
     Type *elementType = instruction.getType();
     // Scalar zero adds can use the zero register, without keeping a packed
     // constant live. Signed-zero semantics can prevent eliminating these adds.
-    if (elementType->isFloatTy() &&
-        instruction.getOpcode() == Instruction::FAdd &&
-        llvm::any_of(instruction.operands(), [](const Use &operand) {
-          auto *constant = dyn_cast<ConstantFP>(operand.get());
-          return constant && constant->isZero();
-        }))
+    if (isFloatZeroAdd(instruction))
       return 1;
     if (computeCapability >= 100 && computeCapability < 107 &&
         elementType->isFloatTy() && fusedConversionChainLength > 1 &&
@@ -104,7 +99,14 @@ public:
       return 2;
     return 3;
   }
-  unsigned getPackedOperationCost(Type *) const { return 3; }
+  unsigned getPackedOperationCost(const Instruction &instruction,
+                                  bool registerChain) const {
+    // An existing register pair feeding packed arithmetic can use a broadcast
+    // zero register without materializing a constant or repacking its result.
+    if (registerChain && isFloatZeroAdd(instruction))
+      return 1;
+    return 3;
+  }
 
   unsigned getPackCost(Type *elementType) const {
     return elementType->isFloatTy() ? 1 : 2;
@@ -115,6 +117,15 @@ public:
   }
 
 private:
+  static bool isFloatZeroAdd(const Instruction &instruction) {
+    return instruction.getType()->isFloatTy() &&
+           instruction.getOpcode() == Instruction::FAdd &&
+           llvm::any_of(instruction.operands(), [](const Use &operand) {
+             auto *constant = dyn_cast<ConstantFP>(operand.get());
+             return constant && constant->isZero();
+           });
+  }
+
   bool supportsPackedType(Type *elementType) const {
     if (elementType->isHalfTy())
       return computeCapability >= 53;
@@ -646,6 +657,20 @@ private:
                second, fusedConversionChainLengths.lookup(&second));
   }
 
+  unsigned getPackedPairCost(Instruction &first, Instruction &second) const {
+    bool registerChain = usesStayPacked(first, second);
+    for (unsigned index = 0, count = getOperandCount(first); index < count;
+         ++index) {
+      ValuePair operands{first.getOperand(index), second.getOperand(index)};
+      registerChain &=
+          operands.first == operands.second ||
+          (isa<Constant>(operands.first) && isa<Constant>(operands.second)) ||
+          getExtractedVector(operands).has_value() || isRegisterTuple(operands);
+    }
+    return std::max(costModel.getPackedOperationCost(first, registerChain),
+                    costModel.getPackedOperationCost(second, registerChain));
+  }
+
   void addInstructionCost(Instruction &first, Instruction &second,
                           ArithmeticPlan &plan, unsigned depth = 0) const {
     InstructionPair pair{&first, &second};
@@ -654,7 +679,7 @@ private:
 
     plan.instructions.push_back(pair);
     plan.scalarCost += getScalarPairCost(first, second);
-    plan.vectorCost += costModel.getPackedOperationCost(first.getType());
+    plan.vectorCost += getPackedPairCost(first, second);
 
     for (unsigned index = 0, count = getOperandCount(first); index < count;
          ++index) {
@@ -670,7 +695,7 @@ private:
           *firstOperand->user_begin() == &first &&
           *secondOperand->user_begin() == &second &&
           canPair(*firstOperand, *secondOperand) &&
-          costModel.getPackedOperationCost(firstOperand->getType()) +
+          getPackedPairCost(*firstOperand, *secondOperand) +
                   costModel.getPackCost(firstOperand->getType()) <
               getScalarPairCost(*firstOperand, *secondOperand)) {
         addInstructionCost(*firstOperand, *secondOperand, plan, depth + 1);
