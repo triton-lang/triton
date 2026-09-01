@@ -6646,10 +6646,16 @@ def test_override_arch(arch, env_var_override, device, fresh_knobs):
             h = simple.warmup(data, out, arch=arch, grid=(1, ))
         ttgir_gfx = re.search(r'hip:(\w+)', h.asm["ttgir"])
         ttgir_warp = re.search(r'"ttg.threads-per-warp" = (\d+)', h.asm["ttgir"])
-        amdgcn_gfx = re.search(r'\.amdgcn_target "amdgcn-amd-amdhsa-[^-]*-(\w+)"', h.asm["amdgcn"])
+        amdgcn_target = re.search(r'\.amdgcn_target "(amdgpu[^-]*)-amd-amdhsa-[^-]*-(\w+)"', h.asm["amdgcn"])
+        expected_triple_arch = {
+            "gfx942": "amdgpu9.42",
+            "gfx950": "amdgpu9.50",
+            "gfx1200": "amdgpu12.00",
+        }
         assert ttgir_gfx.group(1) == arch
         assert int(ttgir_warp.group(1)) == (32 if arch == "gfx1200" else 64)
-        assert amdgcn_gfx.group(1) == arch
+        assert amdgcn_target.group(1) == expected_triple_arch[arch]
+        assert amdgcn_target.group(2) == arch
 
 
 def test_num_ctas_pre_sm90(device, fresh_knobs):
