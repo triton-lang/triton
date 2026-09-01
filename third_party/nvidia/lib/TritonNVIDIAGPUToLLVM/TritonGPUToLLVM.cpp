@@ -233,7 +233,7 @@ void ConvertTritonGPUToLLVM::populateConversionPatterns(
                                                targetInfo, benefit);
   mlir::triton::populateScanOpToLLVMPatterns(typeConverter, patterns,
                                              targetInfo, benefit);
-  mlir::triton::populateGatherOpToLLVMPatterns(typeConverter, patterns,
+  mlir::triton::populateGatherOpToLLVMPatterns(getOperation(), typeConverter, patterns,
                                                targetInfo, benefit);
   populateBarrierOpToLLVMPatterns(typeConverter, patterns, benefit, targetInfo);
   populateClusterOpsToLLVMPatterns(typeConverter, patterns, benefit,

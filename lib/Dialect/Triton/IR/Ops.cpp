@@ -3,13 +3,17 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/IRMapping.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/OperationSupport.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/FunctionImplementation.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -658,10 +662,10 @@ llvm::SmallVector<Type> ReduceOp::getElementTypes() {
   return getElementTypesImpl(this->getOperands());
 }
 
-::mlir::Operation *ReduceOp::getSingleCombiner() {
-  if (getNumOperands() != 1 || getNumResults() != 1)
+static Operation *getSingleCombinerImpl(Operation *op) {
+  if (op->getNumOperands() != 1 || op->getNumResults() != 1)
     return nullptr;
-  Block *block = &(*getCombineOp().begin());
+  Block *block = &op->getRegion(0).front();
   Operation *yield = block->getTerminator();
   Operation *reduceOp = yield->getOperand(0).getDefiningOp();
   if (!reduceOp || reduceOp->getNumOperands() != 2 ||
@@ -677,6 +681,289 @@ llvm::SmallVector<Type> ReduceOp::getElementTypes() {
     return nullptr;
 
   return reduceOp;
+}
+
+Operation *ReduceOp::getSingleCombiner() { return getSingleCombinerImpl(*this); }
+
+namespace {
+
+static Attribute getSplatConstant(Value value) {
+  while (isa_and_nonnull<SplatOp, BroadcastOp, ExpandDimsOp, ReshapeOp, TransOp>(
+      value.getDefiningOp()))
+    value = value.getDefiningOp()->getOperand(0);
+  Attribute attr;
+  if (!matchPattern(value, m_Constant(&attr)))
+    return {};
+  if (auto dense = dyn_cast<DenseElementsAttr>(attr))
+    return dense.isSplat() ? dense.getSplatValue<Attribute>() : Attribute();
+  return attr;
+}
+
+static unsigned getSourceAxis(Operation *op, unsigned axis) {
+  if (auto trans = dyn_cast<TransOp>(op))
+    return trans.getOrder()[axis];
+  if (auto expand = dyn_cast<ExpandDimsOp>(op))
+    return axis - (expand.getAxis() < axis);
+  return axis;
+}
+
+// Recognize a coordinate range, including casts and rank-changing broadcasts.
+// Checking extension endpoints matters when a narrower range wraps around zero.
+static std::optional<APInt> getRangeStart(Value value, unsigned axis) {
+  auto type = dyn_cast<RankedTensorType>(value.getType());
+  auto *op = value.getDefiningOp();
+  if (!type || !op)
+    return std::nullopt;
+  if (auto range = dyn_cast<MakeRangeOp>(op))
+    return APInt(32, range.getStart());
+  if (isa<arith::ExtSIOp, arith::ExtUIOp, arith::TruncIOp>(op)) {
+    auto start = getRangeStart(op->getOperand(0), axis);
+    unsigned width = type.getElementTypeBitWidth();
+    if (!start || llvm::Log2_64_Ceil(type.getShape()[axis]) > width)
+      return std::nullopt;
+    APInt end = *start + (type.getShape()[axis] - 1);
+    if (isa<arith::ExtSIOp>(op))
+      return end.slt(*start) ? std::nullopt
+                            : std::optional<APInt>(start->sext(width));
+    if (isa<arith::ExtUIOp>(op))
+      return end.ult(*start) ? std::nullopt
+                            : std::optional<APInt>(start->zext(width));
+    return start->trunc(width);
+  }
+  if (!isa<BroadcastOp, ExpandDimsOp, TransOp>(op))
+    return std::nullopt;
+  if (auto expand = dyn_cast<ExpandDimsOp>(op); expand && expand.getAxis() == axis)
+    return std::nullopt;
+  unsigned srcAxis = getSourceAxis(op, axis);
+  Value src = op->getOperand(0);
+  if (cast<RankedTensorType>(src.getType()).getShape()[srcAxis] !=
+      type.getShape()[axis])
+    return std::nullopt;
+  return getRangeStart(src, srcAxis);
+}
+
+using AxisValue = std::pair<Value, unsigned>;
+
+// Collect only the axis-invariant part of an index expression. Materializing
+// this slice at extent one avoids introducing another gather for the index.
+static bool collectAxisSlice(Value value, unsigned axis,
+                             llvm::SetVector<AxisValue> &slice) {
+  auto type = dyn_cast<RankedTensorType>(value.getType());
+  if (!type || type.getShape()[axis] == 1 || slice.contains({value, axis}))
+    return true;
+  auto *op = value.getDefiningOp();
+  if (!op)
+    return false;
+  // Opaque assembly can depend on more than its explicit input elements.
+  if (isa<ElementwiseInlineAsmOp>(op))
+    return false;
+  if (auto constant = dyn_cast<arith::ConstantOp>(op);
+      constant && isa<SplatElementsAttr>(constant.getValue())) {
+    slice.insert({value, axis});
+    return true;
+  }
+  if (!isa<SplatOp, BroadcastOp, ExpandDimsOp, TransOp>(op) &&
+      !(op->hasTrait<OpTrait::Elementwise>() && op->getNumResults() == 1 &&
+        isMemoryEffectFree(op)))
+    return false;
+  for (Value operand : op->getOperands())
+    if (!collectAxisSlice(operand, getSourceAxis(op, axis), slice))
+      return false;
+  slice.insert({value, axis});
+  return true;
+}
+
+static Value materializeAxisSlice(Value value, unsigned axis,
+                                  const llvm::SetVector<AxisValue> &slice,
+                                  PatternRewriter &rewriter) {
+  DenseMap<AxisValue, Value> narrowed;
+  for (auto [original, dim] : slice) {
+    auto type = cast<RankedTensorType>(original.getType());
+    auto shape = type.getShape().vec();
+    shape[dim] = 1;
+    auto resultType = type.clone(shape);
+    auto *op = original.getDefiningOp();
+    Value result;
+    if (auto constant = dyn_cast<arith::ConstantOp>(op)) {
+      result = arith::ConstantOp::create(
+          rewriter, op->getLoc(),
+          cast<DenseElementsAttr>(constant.getValue()).resizeSplat(resultType));
+    } else {
+      IRMapping mapping;
+      for (Value operand : op->getOperands()) {
+        Value replacement = narrowed.lookup({operand, getSourceAxis(op, dim)});
+        mapping.map(operand, replacement ? replacement : operand);
+      }
+      Operation *copy = rewriter.clone(*op, mapping);
+      copy->getResult(0).setType(resultType);
+      result = copy->getResult(0);
+    }
+    narrowed[{original, dim}] = result;
+  }
+  Value result = narrowed.lookup({value, axis});
+  return result ? result : value;
+}
+
+template <typename Op>
+static LogicalResult canonicalizeSingleElement(Op op,
+                                                PatternRewriter &rewriter) {
+  Operation *combiner = getSingleCombinerImpl(op);
+  if (!combiner || !llvm::all_of(op.getCombineOp().front().without_terminator(),
+                                [](Operation &nested) {
+                                  return isMemoryEffectFree(&nested);
+                                }))
+    return failure();
+  auto identity = arith::getNeutralElement(combiner);
+  // The arithmetic helper also describes floating-point reduction seeds,
+  // which need not be exact identities (signed zero and NaN are significant).
+  if (!identity || !isa<IntegerAttr>(*identity))
+    return failure();
+  Location loc = op.getLoc();
+  auto makeIdentity = [&](Type type) -> Value {
+    Attribute attr = *identity;
+    if (auto tensor = dyn_cast<RankedTensorType>(type))
+      attr = DenseElementsAttr::get(tensor, attr);
+    return arith::ConstantOp::create(rewriter, loc, cast<TypedAttr>(attr));
+  };
+  if (getSplatConstant(op.getOperand(0)) == *identity) {
+    rewriter.replaceOp(op, makeIdentity(op->getResult(0).getType()));
+    return success();
+  }
+  // A singleton reduction is already a layout-correct squeeze with no combines.
+  if (cast<RankedTensorType>(op.getOperand(0).getType())
+          .getShape()[op.getAxis()] == 1)
+    return failure();
+  auto select = op.getOperand(0).template getDefiningOp<arith::SelectOp>();
+  if (!select)
+    return failure();
+  bool inverted = getSplatConstant(select.getTrueValue()) == *identity;
+  if (!inverted && getSplatConstant(select.getFalseValue()) != *identity)
+    return failure();
+  Value values = inverted ? select.getFalseValue() : select.getTrueValue();
+  auto type = cast<RankedTensorType>(values.getType());
+  unsigned axis = op.getAxis();
+  int64_t extent = type.getShape()[axis];
+  int64_t stride = product(type.getShape().drop_front(axis + 1));
+  auto shape = type.getShape().vec();
+  shape[axis] = 1;
+  auto singletonType = type.clone(shape);
+
+  Value selector, coordinates;
+  std::optional<APInt> start;
+  SmallVector<int32_t> constantIndices;
+  llvm::SetVector<AxisValue> slice;
+  DenseIntElementsAttr mask;
+  if (matchPattern(select.getCondition(), m_Constant(&mask))) {
+    constantIndices.assign(type.getNumElements() / extent, -1);
+    for (auto [linear, active] : llvm::enumerate(mask.getValues<bool>())) {
+      if (active == inverted)
+        continue;
+      int64_t row = linear / (extent * stride) * stride + linear % stride;
+      if (constantIndices[row] != -1)
+        return failure();
+      constantIndices[row] = linear / stride % extent;
+    }
+  } else {
+    auto cmp = select.getCondition().template getDefiningOp<arith::CmpIOp>();
+    if (!cmp || cmp.getPredicate() != (inverted ? arith::CmpIPredicate::ne
+                                                : arith::CmpIPredicate::eq))
+      return failure();
+    coordinates = cmp.getLhs();
+    selector = cmp.getRhs();
+    start = getRangeStart(coordinates, axis);
+    if (!start) {
+      std::swap(coordinates, selector);
+      start = getRangeStart(coordinates, axis);
+    }
+    if (!start || !collectAxisSlice(selector, axis, slice))
+      return failure();
+  }
+
+  auto normalize = [&](Value value) -> Value {
+    auto valueType = cast<RankedTensorType>(value.getType());
+    if (start && !start->isZero()) {
+      Value offset = arith::ConstantOp::create(
+          rewriter, loc, DenseElementsAttr::get(
+                             valueType, rewriter.getIntegerAttr(
+                                            valueType.getElementType(), *start)));
+      value = arith::SubIOp::create(rewriter, loc, value, offset);
+    }
+    if (valueType.getElementTypeBitWidth() < 32)
+      value = arith::ExtUIOp::create(rewriter, loc,
+                                     valueType.clone(rewriter.getI32Type()), value);
+    return value;
+  };
+  Value index;
+  if (selector) {
+    index = normalize(materializeAxisSlice(selector, axis, slice, rewriter));
+  } else {
+    auto indexType = singletonType.clone(rewriter.getI32Type());
+    index = arith::ConstantOp::create(
+        rewriter, loc, DenseIntElementsAttr::get(indexType, constantIndices));
+  }
+  auto indexType = cast<RankedTensorType>(index.getType());
+  auto indexConstant = [&](int64_t value) -> Value {
+    return arith::ConstantOp::create(
+        rewriter, loc, DenseElementsAttr::get(
+                           indexType, rewriter.getIntegerAttr(
+                                          indexType.getElementType(), value)));
+  };
+  Value valid = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ult,
+                                     index, indexConstant(extent));
+  // Out-of-range selectors mean no survivor. Clamp before gathering, then
+  // select the identity afterwards, so neither bounds nor poison masking rely
+  // on a speculative out-of-bounds gather.
+  Value safeIndex = arith::SelectOp::create(rewriter, loc, valid, index,
+                                            indexConstant(0));
+  Value gathered = GatherOp::create(rewriter, loc, singletonType, values,
+                                     safeIndex, axis, false);
+  Value neutral = makeIdentity(singletonType);
+  Value selected = arith::SelectOp::create(rewriter, loc, valid, gathered, neutral);
+  if constexpr (std::is_same_v<Op, ReduceOp>) {
+    if (type.getRank() > 1) {
+      // Unlike a reshape, a singleton reduction also preserves layouts that
+      // drop register replication when the axis disappears.
+      rewriter.modifyOpInPlace(op, [&] { op->setOperand(0, selected); });
+      return success();
+    }
+    selected = UnsplatOp::create(rewriter, loc, type.getElementType(), selected);
+  } else {
+    Value prefix;
+    if (coordinates) {
+      Value offsets = normalize(coordinates);
+      Value expandedIndex = BroadcastOp::create(rewriter, loc, offsets.getType(),
+                                                 index);
+      prefix = arith::CmpIOp::create(rewriter, loc,
+                                    op.getReverse() ? arith::CmpIPredicate::ule
+                                                    : arith::CmpIPredicate::uge,
+                                    offsets, expandedIndex);
+    } else {
+      SmallVector<bool> active;
+      for (int64_t i = 0; i < type.getNumElements(); ++i) {
+        int32_t k = constantIndices[i / (extent * stride) * stride + i % stride];
+        int64_t j = i / stride % extent;
+        active.push_back(k >= 0 && (op.getReverse() ? j <= k : j >= k));
+      }
+      prefix = arith::ConstantOp::create(
+          rewriter, loc,
+          DenseElementsAttr::get(type.clone(rewriter.getI1Type()), active));
+    }
+    selected = BroadcastOp::create(rewriter, loc, type, selected);
+    selected = arith::SelectOp::create(rewriter, loc, prefix, selected,
+                                        makeIdentity(type));
+  }
+  rewriter.replaceOp(op, selected);
+  return success();
+}
+
+} // namespace
+
+LogicalResult ReduceOp::canonicalize(ReduceOp op, PatternRewriter &rewriter) {
+  return canonicalizeSingleElement(op, rewriter);
+}
+
+LogicalResult ScanOp::canonicalize(ScanOp op, PatternRewriter &rewriter) {
+  return canonicalizeSingleElement(op, rewriter);
 }
 
 //-- ScanOp --

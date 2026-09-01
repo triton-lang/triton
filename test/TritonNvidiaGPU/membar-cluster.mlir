@@ -24,6 +24,26 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // Retire remote scratch reads before reusing the same storage locally.
+  // CHECK-LABEL: @gather_cluster_barrier_before_scratch_reuse
+  // CHECK: tt.gather
+  // CHECK-NEXT: ttng.cluster_barrier
+  // CHECK-NEXT: ttg.local_alloc
+  tt.func @gather_cluster_barrier_before_scratch_reuse(%src: tensor<256xi32, #blocked>, %indices: tensor<256xi32, #blocked>) -> tensor<256xi32, #blocked> {
+    %gather = tt.gather %src[%indices] {axis = 0 : i32} : (tensor<256xi32, #blocked>, tensor<256xi32, #blocked>) -> tensor<256xi32, #blocked>
+    %buf = ttg.local_alloc %gather : (tensor<256xi32, #blocked>) -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
+    %result = ttg.local_load %buf : !ttg.memdesc<256xi32, #shared, #smem, mutable> -> tensor<256xi32, #blocked>
+    tt.return %result : tensor<256xi32, #blocked>
+  }
+}
+
+// -----
+
 #blockedCallSrc = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
 #blockedCallDst = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
 

@@ -1474,7 +1474,17 @@ unsigned ModuleAxisInfoAnalysis::getContiguity(Value offsetsValue,
   LDBG("getContiguity uniqueContigPerThread = " << contiguity);
   contiguity = std::min(align, contiguity);
 
-  return contiguity;
+  // The register run must also start aligned in every thread. Other hardware
+  // coordinates can overlap its low logical bits in non-injective layouts.
+  auto layout = gpu::toGenericLinearEncoding(tensorTy).getLinearLayout();
+  auto kRegister = StringAttr::get(tensorTy.getContext(), "register");
+  unsigned vectorBits = llvm::Log2_32(contiguity);
+  unsigned baseMask = 0;
+  for (const auto &[dim, bases] : layout.getBases())
+    for (auto [bit, basis] : llvm::enumerate(bases))
+      if (dim != kRegister || bit >= vectorBits)
+        baseMask |= basis[order[0]];
+  return std::gcd(contiguity, baseMask);
 }
 
 unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {

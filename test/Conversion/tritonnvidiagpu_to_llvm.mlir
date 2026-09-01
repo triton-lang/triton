@@ -2,7 +2,7 @@
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=85' --initialize-ws-cluster-barriers='compute-capability=90 ptx-version=85' -reconcile-unrealized-casts | FileCheck --check-prefix=PTX85 %s
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=86' --initialize-ws-cluster-barriers='compute-capability=90 ptx-version=86' -reconcile-unrealized-casts | FileCheck --check-prefix=PTX86 %s
 // RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=94' --initialize-ws-cluster-barriers='compute-capability=107 ptx-version=94' -reconcile-unrealized-casts | FileCheck --check-prefix=RUBIN %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm=compute-capability=90 --initialize-ws-cluster-barriers=compute-capability=90 --canonicalize-llvm-ir -reconcile-unrealized-casts | FileCheck --check-prefix=CLUSTER-MASK %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm=compute-capability=90 --initialize-ws-cluster-barriers=compute-capability=90 --canonicalize-llvm-ir -reconcile-unrealized-casts | FileCheck --check-prefixes=CLUSTER-MASK,SHUFFLE %s
 
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -1136,5 +1136,189 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.tot
     // CHECK-NEXT: ttg.warp_return
     ttng.cluster_barrier {relaxed = true}
     llvm.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // SHUFFLE-LABEL: @shuffle_xor_constant
+  llvm.func @shuffle_xor_constant(%value: i32) -> i32 {
+    // SHUFFLE-DAG: [[ALL:%.*]] = llvm.mlir.constant(-1 : i32)
+    // SHUFFLE-DAG: [[CLAMP:%.*]] = llvm.mlir.constant(31 : i32)
+    // SHUFFLE-DAG: [[SEVEN:%.*]] = llvm.mlir.constant(7 : i32)
+    // SHUFFLE-NOT: nvvm.read
+    // SHUFFLE-NOT: llvm.xor
+    // SHUFFLE: nvvm.shfl.sync bfly [[ALL]], %arg0, [[SEVEN]], [[CLAMP]] : i32 -> i32
+    %all = llvm.mlir.constant(-1 : i32) : i32
+    %clamp = llvm.mlir.constant(31 : i32) : i32
+    %seven = llvm.mlir.constant(7 : i32) : i32
+    %lane = nvvm.read.ptx.sreg.laneid : i32
+    %index = llvm.xor %lane, %seven : i32
+    %result = nvvm.shfl.sync idx %all, %value, %index, %clamp : i32 -> i32
+    llvm.return %result : i32
+  }
+
+  // SHUFFLE-LABEL: @shuffle_xor_dynamic_predicate
+  llvm.func @shuffle_xor_dynamic_predicate(%value: f32, %delta: i32, %members: i32) -> !llvm.struct<(f32, i1)> {
+    // SHUFFLE: [[CLAMP:%.*]] = llvm.mlir.constant(31 : i32)
+    // SHUFFLE-NOT: nvvm.read
+    // SHUFFLE-NOT: llvm.xor
+    // SHUFFLE: nvvm.shfl.sync bfly %arg2, %arg0, %arg1, [[CLAMP]] return_value_and_is_valid : f32 -> !llvm.struct<(f32, i1)>
+    %clamp = llvm.mlir.constant(31 : i32) : i32
+    %lane = nvvm.read.ptx.sreg.laneid : i32
+    %index = llvm.xor %delta, %lane : i32
+    %result = nvvm.shfl.sync idx %members, %value, %index, %clamp return_value_and_is_valid : f32 -> !llvm.struct<(f32, i1)>
+    llvm.return %result : !llvm.struct<(f32, i1)>
+  }
+
+  // SHUFFLE-LABEL: @shuffle_xor_masked_reassociated_tid
+  llvm.func @shuffle_xor_masked_reassociated_tid(%value: i32, %delta0: i32, %delta1: i32) -> i32 {
+    // SHUFFLE-DAG: [[ALL:%.*]] = llvm.mlir.constant(-1 : i32)
+    // SHUFFLE-DAG: [[CLAMP:%.*]] = llvm.mlir.constant(31 : i32)
+    // SHUFFLE-NOT: nvvm.read
+    // SHUFFLE-NOT: llvm.and
+    // SHUFFLE: [[DELTA:%.*]] = llvm.xor %arg1, %arg2 : i32
+    // SHUFFLE: nvvm.shfl.sync bfly [[ALL]], %arg0, [[DELTA]], [[CLAMP]] : i32 -> i32
+    %all = llvm.mlir.constant(-1 : i32) : i32
+    %clamp = llvm.mlir.constant(31 : i32) : i32
+    %warpSize = llvm.mlir.constant(32 : i32) : i32
+    %groupStart = llvm.mlir.constant(128 : i32) : i32
+    %groupMask = llvm.mlir.constant(127 : i32) : i32
+    %zero = llvm.mlir.constant(0 : index) : i32
+    %five = llvm.mlir.constant(5 : i32) : i32
+    %tid = nvvm.read.ptx.sreg.tid.x : i32
+    %relativeTid = llvm.sub %tid, %groupStart : i32
+    %groupTid = llvm.and %groupMask, %relativeTid : i32
+    %lane = llvm.urem %groupTid, %warpSize : i32
+    %identity = llvm.or %zero, %lane : i32
+    %shiftedLane = llvm.shl %identity, %zero : i32
+    %highBits = llvm.shl %delta0, %five : i32
+    %packed = llvm.or %shiftedLane, %highBits : i32
+    %lowBits = llvm.and %packed, %clamp : i32
+    %unpacked = llvm.lshr %lowBits, %zero : i32
+    %first = llvm.xor %delta0, %unpacked : i32
+    %second = llvm.xor %first, %delta1 : i32
+    %index = llvm.and %clamp, %second : i32
+    %result = nvvm.shfl.sync idx %all, %value, %index, %clamp : i32 -> i32
+    llvm.return %result : i32
+  }
+
+  // Extract an index field packed above an unrelated lane field. Two logical
+  // elements per lane make the physical XOR mask delta >> 1, not delta.
+  // SHUFFLE-LABEL: @shuffle_xor_projected_index
+  llvm.func @shuffle_xor_projected_index(%value: i32, %delta: i32) -> i32 {
+    // SHUFFLE-DAG: [[ALL:%.*]] = llvm.mlir.constant(-1 : i32)
+    // SHUFFLE-DAG: [[CLAMP:%.*]] = llvm.mlir.constant(31 : i32)
+    // SHUFFLE-DAG: [[ONE:%.*]] = llvm.mlir.constant(1 : i32)
+    // SHUFFLE: [[DELTA:%.*]] = llvm.lshr %arg1, [[ONE]] : i32
+    // SHUFFLE: nvvm.shfl.sync bfly [[ALL]], %arg0, [[DELTA]], [[CLAMP]] : i32 -> i32
+    %all = llvm.mlir.constant(-1 : i32) : i32
+    %clamp = llvm.mlir.constant(31 : i32) : i32
+    %one = llvm.mlir.constant(1 : i32) : i32
+    %five = llvm.mlir.constant(5 : i64) : i64
+    %six = llvm.mlir.constant(6 : i64) : i64
+    %fieldMask = llvm.mlir.constant(1984 : i64) : i64
+    %lane = nvvm.read.ptx.sreg.laneid : i32
+    %logical = llvm.shl %lane, %one : i32
+    %index = llvm.xor %logical, %delta : i32
+    %wideIndex = llvm.zext %index : i32 to i64
+    %wideLane = llvm.zext %lane : i32 to i64
+    %highBits = llvm.shl %wideIndex, %five : i64
+    %packed = llvm.or %wideLane, %highBits : i64
+    %field = llvm.and %packed, %fieldMask : i64
+    %extracted = llvm.lshr %field, %six : i64
+    %sourceLane = llvm.trunc %extracted : i64 to i32
+    %result = nvvm.shfl.sync idx %all, %value, %sourceLane, %clamp : i32 -> i32
+    llvm.return %result : i32
+  }
+
+  // A partial dynamic mask leaves the upper lane bits in a separate field.
+  // SHUFFLE-LABEL: @shuffle_xor_split_fields
+  llvm.func @shuffle_xor_split_fields(%value: i32, %delta: i32) -> i32 {
+    // SHUFFLE-DAG: [[ALL:%.*]] = llvm.mlir.constant(-1 : i32)
+    // SHUFFLE-DAG: [[CLAMP:%.*]] = llvm.mlir.constant(31 : i32)
+    // SHUFFLE-DAG: [[MASK:%.*]] = llvm.mlir.constant(3 : i32)
+    // SHUFFLE-NOT: nvvm.read
+    // SHUFFLE: [[DELTA:%.*]] = llvm.and %arg1, [[MASK]] : i32
+    // SHUFFLE: nvvm.shfl.sync bfly [[ALL]], %arg0, [[DELTA]], [[CLAMP]] : i32 -> i32
+    %all = llvm.mlir.constant(-1 : i32) : i32
+    %clamp = llvm.mlir.constant(31 : i32) : i32
+    %low = llvm.mlir.constant(3 : i32) : i32
+    %high = llvm.mlir.constant(28 : i32) : i32
+    %lane = nvvm.read.ptx.sreg.laneid : i32
+    %index = llvm.xor %lane, %delta : i32
+    %lowBits = llvm.and %index, %low : i32
+    %highBits = llvm.and %lane, %high : i32
+    %sourceLane = llvm.or disjoint %lowBits, %highBits : i32
+    %result = nvvm.shfl.sync idx %all, %value, %sourceLane, %clamp : i32 -> i32
+    llvm.return %result : i32
+  }
+
+  // An overlapping OR field cannot be discarded like an out-of-field value.
+  // SHUFFLE-LABEL: @shuffle_packed_overlap
+  llvm.func @shuffle_packed_overlap(%value: i32, %other: i32) -> i32 {
+    // SHUFFLE: nvvm.shfl.sync idx
+    %all = llvm.mlir.constant(-1 : i32) : i32
+    %clamp = llvm.mlir.constant(31 : i32) : i32
+    %one = llvm.mlir.constant(1 : i32) : i32
+    %lane = nvvm.read.ptx.sreg.laneid : i32
+    %logical = llvm.shl %lane, %one : i32
+    %packed = llvm.or %logical, %other : i32
+    %sourceLane = llvm.lshr %packed, %one : i32
+    %result = nvvm.shfl.sync idx %all, %value, %sourceLane, %clamp : i32 -> i32
+    llvm.return %result : i32
+  }
+
+  // Keep the shuffle, including its convergence, when its source is this lane.
+  // SHUFFLE-LABEL: @shuffle_self
+  llvm.func @shuffle_self(%value: i32) -> i32 {
+    // SHUFFLE-DAG: [[ALL:%.*]] = llvm.mlir.constant(-1 : i32)
+    // SHUFFLE-DAG: [[CLAMP:%.*]] = llvm.mlir.constant(31 : i32)
+    // SHUFFLE-DAG: [[ZERO:%.*]] = llvm.mlir.constant(0 : i32)
+    // SHUFFLE: nvvm.shfl.sync bfly [[ALL]], %arg0, [[ZERO]], [[CLAMP]] : i32 -> i32
+    %all = llvm.mlir.constant(-1 : i32) : i32
+    %clamp = llvm.mlir.constant(31 : i32) : i32
+    %lane = nvvm.read.ptx.sreg.laneid : i32
+    %result = nvvm.shfl.sync idx %all, %value, %lane, %clamp : i32 -> i32
+    llvm.return %result : i32
+  }
+
+  // A partial lane mask is not an identity on the physical lane index.
+  // SHUFFLE-LABEL: @shuffle_partial_lane_mask
+  llvm.func @shuffle_partial_lane_mask(%value: i32, %delta: i32) -> i32 {
+    // SHUFFLE: nvvm.shfl.sync idx
+    %all = llvm.mlir.constant(-1 : i32) : i32
+    %clamp = llvm.mlir.constant(31 : i32) : i32
+    %fifteen = llvm.mlir.constant(15 : i32) : i32
+    %lane = nvvm.read.ptx.sreg.laneid : i32
+    %masked = llvm.and %lane, %fifteen : i32
+    %index = llvm.xor %masked, %delta : i32
+    %result = nvvm.shfl.sync idx %all, %value, %index, %clamp : i32 -> i32
+    llvm.return %result : i32
+  }
+
+  // With two 16-lane segments, idx(lane ^ 16) reads the current lane, but
+  // bfly(16) can read a different segment, even when both predicates are true.
+  // SHUFFLE-LABEL: @shuffle_segmented
+  llvm.func @shuffle_segmented(%value: i32) -> !llvm.struct<(i32, i1)> {
+    // SHUFFLE: nvvm.shfl.sync idx {{.*}} return_value_and_is_valid : i32 -> !llvm.struct<(i32, i1)>
+    %all = llvm.mlir.constant(-1 : i32) : i32
+    %segment = llvm.mlir.constant(4111 : i32) : i32
+    %sixteen = llvm.mlir.constant(16 : i32) : i32
+    %lane = nvvm.read.ptx.sreg.laneid : i32
+    %index = llvm.xor %lane, %sixteen : i32
+    %result = nvvm.shfl.sync idx %all, %value, %index, %segment return_value_and_is_valid : i32 -> !llvm.struct<(i32, i1)>
+    llvm.return %result : !llvm.struct<(i32, i1)>
+  }
+
+  // SHUFFLE-LABEL: @shuffle_broadcast
+  llvm.func @shuffle_broadcast(%value: i32) -> i32 {
+    // SHUFFLE: nvvm.shfl.sync idx
+    %all = llvm.mlir.constant(-1 : i32) : i32
+    %clamp = llvm.mlir.constant(31 : i32) : i32
+    %seven = llvm.mlir.constant(7 : i32) : i32
+    %result = nvvm.shfl.sync idx %all, %value, %seven, %clamp : i32 -> i32
+    llvm.return %result : i32
   }
 }

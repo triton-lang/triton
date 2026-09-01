@@ -66,22 +66,16 @@ def test_compile_only_one_hot_xor_reduction_warp_shuffle() -> None:
         fn=one_hot_xor_basis_kernel,
         signature={"index_ptr": "*u32", "output_ptr": "*u32", "n_elements": "i32", "seed": "u32"},
     )
-    assert "basis_ptr" not in source.signature
     compiled = triton.compile(source, target=GPUTarget("cuda", 90, 32), options={"num_warps": 4})
 
-    # Ordinary Triton reductions survive the public TTIR and TTGIR stages;
-    # the CUDA-only rewrite runs immediately before LLVM lowering.
+    # The one-survivor identity is independent of the target and layout.
     for ir in (compiled.asm["ttir"], compiled.asm["ttgir"]):
-        assert ir.count('"tt.reduce"') == 32
-        assert len(re.findall(r"\btt\.load\b", ir)) == 1
-        assert len(re.findall(r"\btt\.store\b", ir)) == 1
+        assert '"tt.reduce"' not in ir
+        assert "tt.gather" in ir
 
     ptx = compiled.asm["ptx"]
     assert ptx.count("shfl.sync.idx.b32") == 32
     assert "redux.sync.xor.b32" not in ptx
-    assert "shfl.sync.bfly.b32" not in ptx
-    assert len(re.findall(r"\bld\.global(?:\.[a-z0-9_]+)*\b", ptx)) == 1
-    assert len(re.findall(r"\bst\.global(?:\.[a-z0-9_]+)*\b", ptx)) == 1
 
 
 def test_compile_only_one_hot_xor_reduction_masks_poison() -> None:

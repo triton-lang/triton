@@ -1699,12 +1699,23 @@ def _gather_kernel_1d(
     idx_dim: ttgl.constexpr,
     src_layout: ttgl.constexpr,
     idx_layout: ttgl.constexpr,
+    index_kind: ttgl.constexpr = "load",
+    xor_mask: ttgl.constexpr = 0,
 ):
     src_offs = ttgl.arange(0, src_dim, layout=src_layout)
     src = ttgl.load(src_ptr + src_offs)
 
     idx_offs = ttgl.arange(0, idx_dim, layout=idx_layout)
-    idx = ttgl.load(idx_ptr + idx_offs)
+    if index_kind == "load":
+        idx = ttgl.load(idx_ptr + idx_offs)
+    else:
+        if index_kind == "uniform":
+            mask = ttgl.load(idx_ptr) & xor_mask
+        elif index_kind == "varying":
+            mask = xor_mask ^ (ttgl.load(idx_ptr + idx_offs) & 1)
+        else:
+            mask = xor_mask
+        idx = idx_offs ^ mask
 
     out = ttgl.gather(src, idx, axis)
 
@@ -1723,6 +1734,7 @@ def _gather_kernel_2d(
     idx_dim1: ttgl.constexpr,
     src_layout: ttgl.constexpr,
     idx_layout: ttgl.constexpr,
+    xor_mask: ttgl.constexpr = None,
 ):
     offs_src_dim0 = ttgl.arange(0, src_dim0, layout=ttgl.SliceLayout(1, src_layout))[:, None]
     offs_src_dim1 = ttgl.arange(0, src_dim1, layout=ttgl.SliceLayout(0, src_layout))[None, :]
@@ -1732,7 +1744,12 @@ def _gather_kernel_2d(
     offs_idx_dim0 = ttgl.arange(0, idx_dim0, layout=ttgl.SliceLayout(1, idx_layout))[:, None]
     offs_idx_dim1 = ttgl.arange(0, idx_dim1, layout=ttgl.SliceLayout(0, idx_layout))[None, :]
     idx_offs = offs_idx_dim0 * idx_dim1 + offs_idx_dim1
-    idx = ttgl.load(idx_ptr + idx_offs)
+    if xor_mask is None:
+        idx = ttgl.load(idx_ptr + idx_offs)
+    elif axis == 0:
+        idx, _ = ttgl.broadcast(offs_idx_dim0 ^ xor_mask, offs_idx_dim1)
+    else:
+        idx, _ = ttgl.broadcast(offs_idx_dim1 ^ xor_mask, offs_idx_dim0)
 
     out = ttgl.gather(src, idx, axis)
 
@@ -2044,6 +2061,141 @@ def test_gather_layouts(axis, src_layout, index_layout, src_shape, idx_shape, de
 
     torch.testing.assert_close(out, ref, rtol=0, atol=0)
     assert ("nvvm.shfl.sync.idx" in obj.asm["llir"]) or ("llvm.amdgcn.ds.bpermute" in obj.asm["llir"])
+
+
+@pytest.mark.parametrize("dtype", ["int16", "int32", "int64", "float32"])
+@pytest.mark.parametrize("layout_kind, size_per_thread, mask, index_kind, movement", [
+    pytest.param("blocked", 2, 1, "xor", "register", id="register-xor"),
+    pytest.param("blocked", 2, 3, "xor", "shuffle", id="register-lane-xor"),
+    pytest.param("blocked", 1, 1, "xor", "shuffle", id="wide-axis-local-xor"),
+    pytest.param("blocked", 1, THREADS_PER_WARP - 1, "uniform", "shuffle", id="dynamic-xor"),
+    pytest.param("blocked", 1, 3, "uniform", "shuffle", id="dynamic-partial-lane-xor"),
+    pytest.param("blocked", 2, 7, "uniform", "shuffle", id="dynamic-register-lane-xor"),
+    pytest.param("blocked", 1, THREADS_PER_WARP, "xor", "shared", id="cross-warp-xor"),
+    pytest.param("blocked", 1, 0, "load", "shared", id="unknown-indices"),
+    pytest.param("blocked", 2, 2, "varying", "shuffle", id="receiver-register-selection"),
+    pytest.param("replicated", 2, 1, "xor", "register", id="replicated-layout"),
+    pytest.param("dependent", 2, 2, "xor", "register", id="dependent-replica-layout"),
+    pytest.param("swizzled", 2, 3, "xor", "shuffle", id="swizzled-layout"),
+    pytest.param("swizzled", 2, 0, "load", "shared", id="swizzled-shared-fallback"),
+    pytest.param("dependent-wide", 2, 0, "load", "shared", id="dependent-replica-shared-fallback"),
+])
+def test_gather_structural_indices(dtype, layout_kind, size_per_thread, mask, index_kind, movement, device):
+    size = 4 * THREADS_PER_WARP * size_per_thread
+    layout = ttgl.BlockedLayout([size_per_thread], [THREADS_PER_WARP], [4], [0])
+    if layout_kind != "blocked":
+        lane_bases = [[2 << bit] for bit in range(int(math.log2(THREADS_PER_WARP)))]
+        reg_bases, warp_bases = [[1]], [[2 * THREADS_PER_WARP], [4 * THREADS_PER_WARP]]
+        if layout_kind in ("replicated", "dependent", "dependent-wide"):
+            # The dependent replica can use either a register or a lane bit.
+            reg_bases = [[1], [0 if layout_kind == "replicated" else 2]]
+            if layout_kind != "dependent-wide":
+                size = 2 * THREADS_PER_WARP
+                warp_bases = [[0], [0]]
+        else:
+            lane_bases[0] = [6]
+        layout = ttgl.DistributedLinearLayout(reg_bases, lane_bases, warp_bases, [], [size])
+
+    offsets = torch.arange(size, device=device, dtype=torch.int64)
+    src = offsets * 17 - 97
+    if dtype == "int64":
+        src += offsets << 40
+    src = src.to(getattr(torch, dtype))
+    out = torch.empty_like(src)
+    selectors = ((offsets >> 1) & 1).to(torch.int32)
+    if index_kind == "load":
+        selectors = ((offsets * 37 + 11) % size).to(torch.int32)
+        indices = selectors.long()
+    elif index_kind == "uniform":
+        selectors = torch.tensor([13], device=device, dtype=torch.int32)
+        indices = offsets ^ (13 & mask)
+    elif index_kind == "varying":
+        # Paired source/receiver lanes request opposite registers: selecting
+        # before the shuffle would read the sender's choice instead.
+        indices = offsets ^ mask ^ selectors.long()
+    else:
+        indices = offsets ^ mask
+
+    compiled = _gather_kernel_1d[(1, )](src, selectors, out, 0, size, size, layout, layout, index_kind, mask, num_warps=4)
+    torch.testing.assert_close(out, src[indices], rtol=0, atol=0)
+    if dtype == "int32" and is_cuda() and not triton.knobs.compilation.instrumentation_mode:
+        assert (compiled.metadata.shared > 0) == (movement == "shared")
+        if movement == "register":
+            assert "shfl.sync" not in compiled.asm["ptx"]
+        elif movement == "shuffle" and layout_kind == "blocked":
+            assert "shfl.sync.bfly" in compiled.asm["ptx"]
+            if size_per_thread == 2 and index_kind == "xor":
+                # One shuffle per output register, not per candidate register.
+                assert compiled.asm["ptx"].count("shfl.sync") == 2
+
+
+@pytest.mark.parametrize("axis", [0, 1])
+def test_gather_xor_multidimensional(axis, device):
+    shape = (4 * THREADS_PER_WARP, 8)
+    layout = ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP // 4, 4], [4, 1], [0, 1])
+    src = torch.arange(math.prod(shape), device=device, dtype=torch.float32).reshape(shape)
+    indices = torch.arange(shape[axis], device=device, dtype=torch.int64) ^ 1
+    indices = indices.reshape((-1, 1) if axis == 0 else (1, -1)).expand(shape)
+    out = torch.empty_like(src)
+    compiled = _gather_kernel_2d[(1, )](src, indices, out, axis, *shape, *shape, layout, layout, xor_mask=1, num_warps=4)
+    torch.testing.assert_close(out, torch.gather(src, axis, indices), rtol=0, atol=0)
+    if not triton.knobs.compilation.instrumentation_mode:
+        assert compiled.metadata.shared == 0
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("cga_layout, mask", [
+    pytest.param([[1]], THREADS_PER_WARP, id="partitioned-local"),
+    pytest.param([[0]], THREADS_PER_WARP, id="replicated-local"),
+    pytest.param([[1]], 4 * THREADS_PER_WARP, id="cross-cta"),
+])
+def test_gather_multi_cta_shared(cga_layout, mask, device):
+    size = 8 * THREADS_PER_WARP
+    layout = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0], cga_layout=cga_layout)
+    offsets = torch.arange(size, device=device, dtype=torch.int64)
+    src = (offsets * 17 - 13).to(torch.int32)
+    out = torch.empty_like(src)
+    compiled = _gather_kernel_1d[(1, )](src, out, out, 0, size, size, layout, layout, index_kind="xor",
+                                       xor_mask=mask, num_warps=4, num_ctas=2)
+    torch.testing.assert_close(out, src[offsets ^ mask], rtol=0, atol=0)
+    assert compiled.metadata.shared > 0
+
+
+@pytest.mark.parametrize("size, num_ctas, selected_index", [(256, 2, 153), (4096, 1, 2053)])
+def test_single_survivor_shared_collectives(size, num_ctas, selected_index, device):
+    if num_ctas > 1 and not is_hopper_or_newer():
+        pytest.skip("Multiple CTAs require Hopper or newer")
+
+    @gluon.jit(do_not_specialize=["selected_index"])
+    def kernel(Src, Reduced, Forward, Reverse, selected_index, SIZE: ttgl.constexpr, LAYOUT: ttgl.constexpr):
+        offsets = ttgl.arange(0, SIZE, layout=LAYOUT)
+        values = ttgl.load(Src + offsets)
+        selected = ttgl.where(offsets == selected_index, values, 0)
+        reduced = ttgl.sum(selected, 0)
+        forward = ttgl.associative_scan(selected, 0, _combine)
+        reverse = ttgl.associative_scan(selected, 0, _combine, reverse=True)
+        ttgl.store(Reduced, reduced)
+        ttgl.store(Forward + offsets, forward)
+        ttgl.store(Reverse + offsets, reverse)
+
+    layout = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0], cga_layout=[[1]] if num_ctas > 1 else [])
+    offsets = torch.arange(size, dtype=torch.int32)
+    host_src = offsets * 17 - 13
+    selected = torch.where(offsets == selected_index, host_src, 0)
+    expected_sum = selected.sum(dtype=torch.int32)
+    expected_forward = selected.cumsum(0, dtype=torch.int32)
+    expected_reverse = selected.flip((0, )).cumsum(0, dtype=torch.int32).flip((0, ))
+    src = host_src.to(device)
+    reduced = torch.empty((), dtype=torch.int32, device=device)
+    forward, reverse = torch.empty_like(src), torch.empty_like(src)
+    compiled = kernel[(1, )](src, reduced, forward, reverse, selected_index, size, layout,
+                              num_warps=4, num_ctas=num_ctas)
+    torch.testing.assert_close(reduced.cpu(), expected_sum, rtol=0, atol=0)
+    torch.testing.assert_close(forward.cpu(), expected_forward, rtol=0, atol=0)
+    torch.testing.assert_close(reverse.cpu(), expected_reverse, rtol=0, atol=0)
+    if not triton.knobs.compilation.instrumentation_mode:
+        # Selection must not materialize the entire input in shared memory.
+        assert compiled.metadata.shared < size * src.element_size()
 
 
 @pytest.mark.parametrize("M, N, M_tile_size, N_tile_size",

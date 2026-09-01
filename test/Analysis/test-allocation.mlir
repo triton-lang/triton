@@ -37,8 +37,42 @@
 #PARTITIONED_SHARED_PADDED = #ttg.partitioned_shared<{numPartitions = 4, numGroups = 1, partitionDim = 1, partitionLayout = #PADDED_SHARED_0_16x32}>
 
 #smem = #ttg.shared_memory
+#gather = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+
+// The axis spans warps, but the index preserves the receiver's warp bits.
+// expected-remark @below {{gather_warp_local}}
+// expected-remark @below {{size = 0}}
+tt.func @gather_warp_local(%src: tensor<128xi32, #gather>, %mask: i32) {
+  %range = tt.make_range {start = 0 : i32, end = 128 : i32} : tensor<128xi32, #gather>
+  %splat = tt.splat %mask : i32 -> tensor<128xi32, #gather>
+  %limit = arith.constant dense<31> : tensor<128xi32, #gather>
+  %delta = arith.andi %splat, %limit : tensor<128xi32, #gather>
+  %idx = arith.xori %range, %delta : tensor<128xi32, #gather>
+  %result = tt.gather %src[%idx] {axis = 0 : i32} : (tensor<128xi32, #gather>, tensor<128xi32, #gather>) -> tensor<128xi32, #gather>
+  tt.return
+}
+
+// expected-remark @below {{gather_cross_warp}}
+// expected-remark @below {{size = 512}}
+tt.func @gather_cross_warp(%src: tensor<128xi32, #gather>) {
+  %range = tt.make_range {start = 0 : i32, end = 128 : i32} : tensor<128xi32, #gather>
+  %delta = arith.constant dense<32> : tensor<128xi32, #gather>
+  %idx = arith.xori %range, %delta : tensor<128xi32, #gather>
+  // expected-remark @below {{scratch offset = 0, size = 512}}
+  %result = tt.gather %src[%idx] {axis = 0 : i32} : (tensor<128xi32, #gather>, tensor<128xi32, #gather>) -> tensor<128xi32, #gather>
+  tt.return
+}
+
+// A single selected value needs one slot, independent of source axis size.
+// expected-remark @below {{gather_single_column}}
+// expected-remark @below {{size = 4}}
+tt.func @gather_single_column(%src: tensor<128xi32, #gather>, %idx: tensor<1xi32, #gather>) {
+  // expected-remark @below {{scratch offset = 0, size = 4}}
+  %result = tt.gather %src[%idx] {axis = 0 : i32} : (tensor<128xi32, #gather>, tensor<1xi32, #gather>) -> tensor<1xi32, #gather>
+  tt.return
+}
 
 // expected-remark @below {{empty}}
 // expected-remark @below {{size = 0}}

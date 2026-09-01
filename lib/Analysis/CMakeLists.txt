@@ -3,6 +3,7 @@ add_triton_library(TritonAnalysis
   Allocation.cpp
   BufferRegion.cpp
   BufferIndexAnalysis.cpp
+  Gather.cpp
   Membar.cpp
   Alias.cpp
   Utility.cpp

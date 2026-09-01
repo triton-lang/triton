@@ -38,7 +38,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 // -----
 
-#call_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [2, 2], order = [1, 0], CGALayout = [[1, 0]]}>
+#call_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [2, 2], order = [1, 0], CGALayout = [[0, 1]]}>
 #call_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
 #call_smem = #ttg.shared_memory
 #call_load_blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
@@ -2613,6 +2613,33 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     }) {allocation.offset = 0 : i32, allocation.size = 32 : i32}
         : (tensor<8x256xf32, #reduce_groups>)
         -> tensor<8xf32, #ttg.slice<{dim = 1, parent = #reduce_groups}>>
+    ttng.cluster_barrier {relaxed = true}
+    tt.return
+  }
+}
+
+// -----
+
+#gather_split = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 1024 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {
+  // CHECK-LABEL: @gather_cross_cta_scratch
+  tt.func public @gather_cross_cta_scratch(
+      %value: tensor<256xi32, #gather_split>,
+      %indices: tensor<256xi32, #gather_split>) {
+    // Unknown indices can read either CTA, but scratch stores remain local.
+    // CHECK: tti.experimental_lock_acquire
+    // CHECK: arith.constant dense<true> : tensor<1xi1
+    // CHECK: %[[GATHER_CTA:.*]] = tti.experimental_cluster_cta_id
+    // CHECK: %[[GATHER_ONE:.*]] = arith.constant 1 : i32
+    // CHECK: %[[GATHER_OWNER:.*]] = arith.shli %[[GATHER_ONE]], %[[GATHER_CTA]] : i32
+    // CHECK: %[[GATHER_READERS:.*]] = arith.constant 3 : i32
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[GATHER_READERS]]
+    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[GATHER_OWNER]]
+    // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}%[[GATHER_OWNER]]
+    // CHECK: tt.gather
+    %gathered = tt.gather %value[%indices] {axis = 0 : i32, allocation.offset = 0 : i32, allocation.size = 1024 : i32}
+        : (tensor<256xi32, #gather_split>, tensor<256xi32, #gather_split>) -> tensor<256xi32, #gather_split>
     ttng.cluster_barrier {relaxed = true}
     tt.return
   }

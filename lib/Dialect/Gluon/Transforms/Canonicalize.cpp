@@ -58,6 +58,15 @@ void Canonicalize::runOnOperation() {
   BroadcastOp::getCanonicalizationPatterns(patterns, ctx);
   ExpandDimsOp::getCanonicalizationPatterns(patterns, ctx);
   ReshapeOp::getCanonicalizationPatterns(patterns, ctx);
+  auto module = dyn_cast<ModuleOp>(getOperation());
+  if (!module)
+    module = getOperation()->getParentOfType<ModuleOp>();
+  // ConSan also runs this cleanup after allocation. Do not introduce gathers
+  // requiring new scratch once shared-memory offsets have been assigned.
+  if (!module || !module->hasAttr("ttg.shared")) {
+    ReduceOp::getCanonicalizationPatterns(patterns, ctx);
+    ScanOp::getCanonicalizationPatterns(patterns, ctx);
+  }
   IntToPtrOp::getCanonicalizationPatterns(patterns, ctx);
   ttg::WarpSpecializeOp::getCanonicalizationPatterns(patterns, ctx);
   ttg::WarpSpecializePartitionsOp::getCanonicalizationPatterns(patterns, ctx);

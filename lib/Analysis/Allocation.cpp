@@ -156,6 +156,8 @@ bool hasCrossCTAScratch(Operation *op) {
   }
   if (auto reduce = dyn_cast<ReduceOp>(op))
     return !ReduceOpHelper(reduce).isReduceWithinCTA();
+  if (auto gather = dyn_cast<GatherOp>(op))
+    return !GatherLoweringHelper(gather).isCTALocal();
   if (auto poll = dyn_cast<AtomicPollOp>(op))
     return poll.getTimeout() && !poll.getResult().use_empty();
   if (isa<AtomicOpInterface, gpu::LocalAtomicScatterRMWOp>(op)) {

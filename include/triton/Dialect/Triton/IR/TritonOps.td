@@ -770,12 +770,13 @@ def TT_ReduceOp: TT_Op<"reduce",
     let regions = (region SizedRegion<1>:$combineOp);
     let hasVerifier = 1;
     let hasRegionVerifier = 1;
+    let hasCanonicalizeMethod = 1;
     let extraClassDeclaration = [{
       llvm::SmallVector<RankedTensorType> getInputTypes();
       llvm::SmallVector<Type> getElementTypes();
 
-      // Returns the CombineOp iff this ReduceOp's region contains only
-      // one CombineOp other than the return, or nullptr if not applicable.
+      // Returns the yielded binary combiner applied to the block arguments,
+      // or nullptr if not applicable. Other region operations may be present.
       ::mlir::Operation *getSingleCombiner();
     }];
 }
@@ -805,6 +806,7 @@ def TT_ScanOp: TT_Op<"scan",
     ];
     let hasVerifier = 1;
     let hasRegionVerifier = 1;
+    let hasCanonicalizeMethod = 1;
     let extraClassDeclaration = [{
       llvm::SmallVector<RankedTensorType> getInputTypes();
       llvm::SmallVector<Type> getElementTypes();

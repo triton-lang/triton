@@ -3071,6 +3071,81 @@ def test_one_hot_xor_reduction_computed_bases(block, num_warps, device):
     assert "shfl.sync.bfly.b32" not in ptx
 
 
+@pytest.mark.parametrize("op, dtype, identity", [("sum", "int16", 0), ("xor", "int32", 0),
+                                               ("prod", "int64", 1), ("max", "int32", -(1 << 31))])
+@pytest.mark.parametrize("axis, extent", [(0, 8), (1, 64)])
+@pytest.mark.parametrize("start, narrow", [(0, False), (124, True)])
+def test_single_survivor_collectives(op, dtype, identity, axis, extent, start, narrow, device):
+
+    @triton.jit
+    def kernel(Values, Indices, Reduced, Forward, Reverse, M: tl.constexpr, N: tl.constexpr, AXIS: tl.constexpr,
+               START: tl.constexpr, NARROW: tl.constexpr, IDENTITY: tl.constexpr, OP: tl.constexpr):
+        rows = tl.arange(0, M)
+        cols = tl.arange(0, N)
+        offsets = rows[:, None] * N + cols[None, :]
+        values = tl.load(Values + offsets)
+        if AXIS == 0:
+            coordinate = tl.arange(START, START + M)[:, None]
+            selected = tl.load(Indices + cols)[None, :]
+            output_offsets = cols
+        else:
+            coordinate = tl.arange(START, START + N)[None, :]
+            selected = tl.load(Indices + rows)[:, None]
+            output_offsets = rows
+        if NARROW:
+            coordinate = coordinate.to(tl.int8)
+            selected = selected.to(tl.int8)
+        masked = tl.where(coordinate == selected, values, IDENTITY)
+        if OP == "sum":
+            reduced = tl.reduce(masked, AXIS, tl.standard._sum_combine)
+            forward = tl.associative_scan(masked, AXIS, tl.standard._sum_combine)
+            reverse = tl.associative_scan(masked, AXIS, tl.standard._sum_combine, reverse=True)
+        elif OP == "xor":
+            reduced = tl.reduce(masked, AXIS, tl.standard._xor_combine)
+            forward = tl.associative_scan(masked, AXIS, tl.standard._xor_combine)
+            reverse = tl.associative_scan(masked, AXIS, tl.standard._xor_combine, reverse=True)
+        elif OP == "prod":
+            reduced = tl.reduce(masked, AXIS, tl.standard._prod_combine)
+            forward = tl.associative_scan(masked, AXIS, tl.standard._prod_combine)
+            reverse = tl.associative_scan(masked, AXIS, tl.standard._prod_combine, reverse=True)
+        else:
+            reduced = tl.reduce(masked, AXIS, tl.standard._elementwise_max)
+            forward = tl.associative_scan(masked, AXIS, tl.standard._elementwise_max)
+            reverse = tl.associative_scan(masked, AXIS, tl.standard._elementwise_max, reverse=True)
+        tl.store(Reduced + output_offsets, reduced)
+        tl.store(Forward + offsets, forward)
+        tl.store(Reverse + offsets, reverse)
+
+    reference_combine = {"sum": torch.add, "xor": torch.bitwise_xor, "prod": torch.mul, "max": torch.maximum}[op]
+    shape = (extent, 8) if axis == 0 else (8, extent)
+    host_values = torch.randint(-16, 17, shape, dtype=getattr(torch, dtype), generator=torch.Generator().manual_seed(0))
+    host_indices = torch.tensor([start - 1, start, start + 1, start + extent - 1, start + extent,
+                                 start + extent + 1, -1, start + 3], dtype=torch.int32)
+    coordinates = torch.arange(start, start + extent)
+    selected = host_indices
+    if narrow:
+        coordinates, selected = coordinates.to(torch.int8), selected.to(torch.int8)
+    mask = coordinates[:, None] == selected[None, :] if axis == 0 else coordinates[None, :] == selected[:, None]
+    masked = torch.where(mask, host_values, identity)
+    expected = []
+    for reverse in (False, True):
+        accumulator = torch.full((8, ), identity, dtype=host_values.dtype)
+        prefixes = []
+        slices = masked.unbind(axis)
+        for values in reversed(slices) if reverse else slices:
+            accumulator = reference_combine(accumulator, values)
+            prefixes.append(accumulator)
+        expected.append(torch.stack(prefixes[::-1] if reverse else prefixes, dim=axis))
+
+    values, indices = host_values.to(device), host_indices.to(device)
+    reduced = torch.empty((8, ), dtype=values.dtype, device=device)
+    forward, reverse = torch.empty_like(values), torch.empty_like(values)
+    kernel[(1, )](values, indices, reduced, forward, reverse, *shape, axis, start, narrow, identity, op)
+    torch.testing.assert_close(reduced.cpu(), expected[0].select(axis, extent - 1), rtol=0, atol=0)
+    torch.testing.assert_close(forward.cpu(), expected[0], rtol=0, atol=0)
+    torch.testing.assert_close(reverse.cpu(), expected[1], rtol=0, atol=0)
+
+
 scan2d_shapes = [(8, 32), (16, 32), (32, 16), (2, 1024), (1024, 2), (32, 32), (1, 1024)]
 
 scan_configs = [(op, type, shape, axis, reverse, num_warps)

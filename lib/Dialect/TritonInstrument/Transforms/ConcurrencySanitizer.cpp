@@ -645,6 +645,10 @@ Value getScratchReadCTAs(ImplicitLocOpBuilder &b, Operation *op,
     return getRecipientCTAsForBroadcastMasks(b, {groupMask});
   }
 
+  // Dynamic gather indices may read any source CTA in the cluster.
+  if (isa<tt::GatherOp>(op) && hasCrossCTAScratch(op))
+    return allCTAsMask(b);
+
   return ownerCTAs;
 }
 

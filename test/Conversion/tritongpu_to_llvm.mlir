@@ -2812,26 +2812,40 @@ tt.func @gather_thread_local(%idx: tensor<32x1xi32, #gather_thread_local_idx>, %
 
 // -----
 
+#gather_two_regs = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // A known register/lane XOR needs one shuffle per result, not one per
+  // possible source register. The logical axis spans all four warps.
+  // CHECK-LABEL: gather_known_register
+  // CHECK-NOT: nvvm.barrier
+  // CHECK: nvvm.shfl.sync idx
+  // CHECK: nvvm.shfl.sync idx
+  // CHECK-NOT: nvvm.shfl
+  // CHECK-NOT: llvm.select
+  // CHECK: llvm.return
+  tt.func @gather_known_register(%src: tensor<256xi32, #gather_two_regs>) {
+    %range = tt.make_range {start = 0 : i32, end = 256 : i32} : tensor<256xi32, #gather_two_regs>
+    %mask = arith.constant dense<3> : tensor<256xi32, #gather_two_regs>
+    %idx = arith.xori %range, %mask : tensor<256xi32, #gather_two_regs>
+    %result = tt.gather %src[%idx] {axis = 0 : i32} : (tensor<256xi32, #gather_two_regs>, tensor<256xi32, #gather_two_regs>) -> tensor<256xi32, #gather_two_regs>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
-tt.func @gather_in_shared(%arg0: tensor<16x4xi32, #blocked1>, %arg1: tensor<8x4xf32, #blocked>) {
-  // CHECK-LABEL: gather_in_shared
-  // CHECK: [[SMEM_BASE:%.*]] = llvm.mlir.addressof @global_smem
-  // CHECK-NEXT: [[SMEM:%.*]] = llvm.getelementptr [[SMEM_BASE]]
-  // CHECK: store
-  // CHECK-NEXT: nvvm.barrier
-
-  // CHECK: [[I0:%.*]] = llvm.extractvalue %arg0[0]
-
-  // CHECK: [[IDX:%.*]] = llvm.add {{.*}}, [[I0]]
-  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM]][[[IDX]]]
-  // CHECK: llvm.load [[PTR]]
-  // CHECK: llvm.load
-  // CHECK-NOT: llvm.load
-  // CHECK: return
+tt.func @gather_mismatched_columns(%arg0: tensor<16x4xi32, #blocked1>, %arg1: tensor<8x4xf32, #blocked>) {
+  // CHECK-LABEL: gather_mismatched_columns
+  // CHECK-NOT: llvm.mlir.addressof @global_smem
+  // CHECK-NOT: nvvm.barrier
+  // CHECK: nvvm.shfl.sync idx
+  // CHECK-NOT: nvvm.barrier
+  // CHECK: llvm.return
 
   %0 = tt.gather %arg1[%arg0] {axis = 0 : i32} : (tensor<8x4xf32, #blocked>, tensor<16x4xi32, #blocked1>) -> tensor<16x4xf32, #blocked1>
   tt.return
@@ -2847,24 +2861,13 @@ tt.func @gather_in_shared(%arg0: tensor<16x4xi32, #blocked1>, %arg1: tensor<8x4x
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
-tt.func @gather_in_shared_dot_input(%arg0: tensor<16x4xi32, #blocked>, %arg1: tensor<8x4xf32, #dot>) {
-  // CHECK-LABEL: gather_in_shared_dot_input
-
-  // CHECK: [[S0:%.*]] = llvm.extractvalue %arg1[0]
-
-  // CHECK: [[SMEM_BASE:%.*]] = llvm.mlir.addressof @global_smem
-  // CHECK-NEXT: [[SMEM:%.*]] = llvm.getelementptr [[SMEM_BASE]]
-  // CHECK: insertelement [[S0]]
-  // CHECK: nvvm.barrier
-
-  // CHECK: [[I0:%.*]] = llvm.extractvalue %arg0[0]
-
-  // CHECK: [[IDX:%.*]] = llvm.add {{.*}}, [[I0]]
-  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM]][[[IDX]]]
-  // CHECK: llvm.load [[PTR]]
-  // CHECK: llvm.load
-  // CHECK-NOT: llvm.load
-  // CHECK: return
+tt.func @gather_replicated_dot_input(%arg0: tensor<16x4xi32, #blocked>, %arg1: tensor<8x4xf32, #dot>) {
+  // CHECK-LABEL: gather_replicated_dot_input
+  // CHECK-NOT: llvm.mlir.addressof @global_smem
+  // CHECK-NOT: nvvm.barrier
+  // CHECK: nvvm.shfl.sync idx
+  // CHECK-NOT: nvvm.barrier
+  // CHECK: llvm.return
 
   %0 = tt.gather %arg1[%arg0] {axis = 0 : i32} : (tensor<8x4xf32, #dot>, tensor<16x4xi32, #blocked>) -> tensor<16x4xf32, #blocked>
   tt.return
