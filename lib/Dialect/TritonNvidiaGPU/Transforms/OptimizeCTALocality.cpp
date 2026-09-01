@@ -61,7 +61,8 @@ Value convertValue(OpBuilder &builder, Location loc, Value value,
 void rewriteUser(ttg::ConvertLayoutOp convert, OpOperand &use) {
   Operation *op = use.getOwner();
   // Other resultless users can constrain region or function signatures.
-  if (!isa<triton::StoreOp, triton::DescriptorStoreLikeOpInterface>(op))
+  if (!isa<triton::StoreOp, triton::DescriptorStoreLikeOpInterface>(op) ||
+      !isDistributedOpEncodingOperand(use))
     return;
 
   auto srcTy = cast<RankedTensorType>(convert.getSrc().getType());
@@ -82,7 +83,7 @@ void rewriteUser(ttg::ConvertLayoutOp convert, OpOperand &use) {
   for (OpOperand &operand : op->getOpOperands()) {
     if (&operand == &use)
       continue;
-    if (!isa<RankedTensorType>(operand.get().getType()))
+    if (!isDistributedOpEncodingOperand(operand))
       continue;
     // Rewriting a user may require extra conversions on its other tensor
     // operands. Only do that when layout propagation can rematerialize the
@@ -98,7 +99,7 @@ void rewriteUser(ttg::ConvertLayoutOp convert, OpOperand &use) {
   for (OpOperand &operand : op->getOpOperands()) {
     if (&operand == &use) {
       operand.set(convertValue(builder, loc, convert.getSrc(), targetLayout));
-    } else if (isa<RankedTensorType>(operand.get().getType())) {
+    } else if (isDistributedOpEncodingOperand(operand)) {
       operand.set(convertValue(builder, loc, operand.get(), targetLayout));
     }
   }

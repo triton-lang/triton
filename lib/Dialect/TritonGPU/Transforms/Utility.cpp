@@ -1300,14 +1300,17 @@ static Type getNewType(Type type, Attribute encoding) {
                                tensorType.getElementType(), encoding);
 }
 
-static bool skipOperand(Operation *op, unsigned operandNumber) {
+bool isDistributedOpEncodingOperand(OpOperand &operand) {
+  if (!isa<RankedTensorType>(operand.get().getType()))
+    return false;
+  Operation *op = operand.getOwner();
   if (auto gather = dyn_cast<DescriptorGatherOp>(op)) {
-    return operandNumber == gather.getXOffsetsMutable().getOperandNumber();
+    return &operand != &gather.getXOffsetsMutable();
   }
   if (auto scatter = dyn_cast<DescriptorScatterOp>(op)) {
-    return operandNumber == scatter.getXOffsetsMutable().getOperandNumber();
+    return &operand != &scatter.getXOffsetsMutable();
   }
-  return false;
+  return true;
 }
 
 Operation *convertDistributedOpEncoding(Attribute encoding, Operation *op) {
@@ -1316,10 +1319,8 @@ Operation *convertDistributedOpEncoding(Attribute encoding, Operation *op) {
   SmallVector<Value, 4> newArgs;
   for (auto &opOperand : op->getOpOperands()) {
     Value operand = opOperand.get();
-    auto tensorType = dyn_cast<RankedTensorType>(operand.getType());
-    bool skip = skipOperand(op, opOperand.getOperandNumber());
-    if (tensorType && !skip) {
-      Type newType = getNewType(tensorType, encoding);
+    if (isDistributedOpEncodingOperand(opOperand)) {
+      Type newType = getNewType(operand.getType(), encoding);
       newArgs.push_back(triton::gpu::ConvertLayoutOp::create(
           builder, op->getLoc(), newType, operand));
     } else {

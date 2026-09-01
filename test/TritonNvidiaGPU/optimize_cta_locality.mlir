@@ -2,6 +2,42 @@
 
 #orig = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [0, 2]]}>
 #planned = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [1, 0]]}>
+#offsets = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0], [0]]}>
+#offsets_split = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1], [2]]}>
+
+// CHECK-DAG: #[[$SCATTER_ORIG:.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 1\], \[0, 2\]\]}}}>
+// CHECK-DAG: #[[$SCATTER_TARGET:.*]] = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = {{\[\[0, 1\], \[1, 0\]\]}}}>
+// CHECK-DAG: #[[$SCATTER_OFFSETS:.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = {{\[\[0\], \[0\]\]}}}>
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @descriptor_scatter_keeps_offsets_layout
+  // CHECK: %[[OFFSETS:.*]] = tt.make_range {{.*}} : tensor<128xi32, #[[$SCATTER_OFFSETS]]>
+  // CHECK: %[[DATA:.*]] = ttg.convert_layout %arg2 : tensor<128x128xf32, {{.*}}> -> tensor<128x128xf32, #[[$SCATTER_TARGET]]>
+  // CHECK: tt.descriptor_scatter %arg0[%[[OFFSETS]], %arg1], %[[DATA]] : !tt.tensordesc<1x128xf32>, tensor<128xi32, #[[$SCATTER_OFFSETS]]>, i32, tensor<128x128xf32, #[[$SCATTER_TARGET]]>
+  tt.func @descriptor_scatter_keeps_offsets_layout(%desc: !tt.tensordesc<1x128xf32>, %y: i32, %src: tensor<128x128xf32, #planned>) {
+    %x = tt.make_range {start = 0 : i32, end = 128 : i32} : tensor<128xi32, #offsets>
+    %converted = ttg.convert_layout %src : tensor<128x128xf32, #planned> -> tensor<128x128xf32, #orig>
+    tt.descriptor_scatter %desc[%x, %y], %converted : !tt.tensordesc<1x128xf32>, tensor<128xi32, #offsets>, i32, tensor<128x128xf32, #orig>
+    tt.return
+  }
+
+  // CHECK-LABEL: tt.func @descriptor_scatter_does_not_propagate_offsets_layout
+  // CHECK: %[[OFFSETS:.*]] = tt.make_range
+  // CHECK: %[[CONVERT:.*]] = ttg.convert_layout %[[OFFSETS]] : tensor<128xi32, {{.*}}> -> tensor<128xi32, #[[$SCATTER_OFFSETS]]>
+  // CHECK: %[[DATA:.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #[[$SCATTER_ORIG]]>
+  // CHECK: tt.descriptor_scatter %arg0[%[[CONVERT]], %arg1], %[[DATA]] : !tt.tensordesc<1x128xf32>, tensor<128xi32, #[[$SCATTER_OFFSETS]]>, i32, tensor<128x128xf32, #[[$SCATTER_ORIG]]>
+  tt.func @descriptor_scatter_does_not_propagate_offsets_layout(%desc: !tt.tensordesc<1x128xf32>, %y: i32) {
+    %x = tt.make_range {start = 0 : i32, end = 128 : i32} : tensor<128xi32, #offsets_split>
+    %converted = ttg.convert_layout %x : tensor<128xi32, #offsets_split> -> tensor<128xi32, #offsets>
+    %data = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #orig>
+    tt.descriptor_scatter %desc[%converted, %y], %data : !tt.tensordesc<1x128xf32>, tensor<128xi32, #offsets>, i32, tensor<128x128xf32, #orig>
+    tt.return
+  }
+}
+
+// -----
+
+#orig = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [0, 2]]}>
+#planned = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [1, 0]]}>
 
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: tt.func @preserve_yield_layout
