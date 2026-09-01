@@ -8,6 +8,66 @@
 target datalayout = "e-p:64:64-p1:64:64-p3:32:32-p5:64:64"
 target triple = "nvptx64-nvidia-cuda"
 
+; Adding zero can still canonicalize signed zero, but the scalar form does not
+; need to materialize a packed zero operand.
+; CHECK-LABEL: define void @scalar_float_add_zero(
+; CHECK-NOT: fadd <2 x float>
+; CHECK-COUNT-2: fadd float
+; CHECK: ret void
+define void @scalar_float_add_zero(ptr addrspace(1) %dst, <2 x float> %src) {
+  %a = extractelement <2 x float> %src, i64 0
+  %b = extractelement <2 x float> %src, i64 1
+  %x = fadd float %a, 0.0
+  %y = fadd float 0.0, %b
+  %out0 = insertelement <2 x float> poison, float %x, i64 0
+  %out1 = insertelement <2 x float> %out0, float %y, i64 1
+  store <2 x float> %out1, ptr addrspace(1) %dst, align 8
+  ret void
+}
+
+; Keep negation visible to combines with packed arithmetic.
+; BLACKWELL-LABEL: define <2 x float> @packed_negated_float_multiply(
+; BLACKWELL: fneg <2 x float> %src
+; BLACKWELL: fmul <2 x float>
+; BLACKWELL: ret <2 x float>
+define <2 x float> @packed_negated_float_multiply(<2 x float> %src,
+                                                <2 x float> %scale) {
+  %a = extractelement <2 x float> %src, i64 0
+  %b = extractelement <2 x float> %src, i64 1
+  %c = extractelement <2 x float> %scale, i64 0
+  %d = extractelement <2 x float> %scale, i64 1
+  %na = fneg float %a
+  %nb = fneg float %b
+  %x = fmul float %na, %c
+  %y = fmul float %nb, %d
+  %out0 = insertelement <2 x float> poison, float %x, i64 0
+  %out1 = insertelement <2 x float> %out0, float %y, i64 1
+  ret <2 x float> %out1
+}
+
+; Do not duplicate negations that also have scalar users.
+; BLACKWELL-LABEL: define <2 x float> @shared_negated_float_multiply(
+; BLACKWELL-COUNT-2: fneg float
+; BLACKWELL: fmul <2 x float>
+; BLACKWELL: ret <2 x float>
+define <2 x float> @shared_negated_float_multiply(ptr addrspace(1) %dst,
+                                                <2 x float> %src,
+                                                <2 x float> %scale) {
+  %a = extractelement <2 x float> %src, i64 0
+  %b = extractelement <2 x float> %src, i64 1
+  %c = extractelement <2 x float> %scale, i64 0
+  %d = extractelement <2 x float> %scale, i64 1
+  %na = fneg float %a
+  %nb = fneg float %b
+  store volatile float %na, ptr addrspace(1) %dst
+  store volatile float %nb, ptr addrspace(1) %dst
+  %x = fmul float %na, %c
+  %y = fmul float %nb, %d
+  %out0 = insertelement <2 x float> poison, float %x, i64 0
+  %out1 = insertelement <2 x float> %out0, float %y, i64 1
+  ret <2 x float> %out1
+}
+
 ; CHECK-LABEL: define void @scalar_memory_unchanged(
 ; CHECK: load i32
 ; CHECK: load i32
@@ -307,7 +367,8 @@ define void @packed_single_mixed_precision_add(ptr addrspace(1) %dst,
 }
 
 ; BLACKWELL-LABEL: define void @packed_long_mixed_precision_reduction(
-; BLACKWELL-COUNT-9: fadd <2 x float>
+; BLACKWELL-COUNT-2: fadd float
+; BLACKWELL-COUNT-8: fadd <2 x float>
 define void @packed_long_mixed_precision_reduction(ptr addrspace(1) %dst,
                                                      <2 x half> %first,
                                                      <2 x half> %second,

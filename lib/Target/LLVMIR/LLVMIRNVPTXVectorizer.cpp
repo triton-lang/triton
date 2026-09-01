@@ -86,8 +86,18 @@ public:
 
   // Packing a 32-bit register tuple is cheaper than floating-point arithmetic,
   // but still consumes register bandwidth and can extend live ranges.
-  unsigned getScalarOperationCost(Type *elementType,
+  unsigned getScalarOperationCost(const Instruction &instruction,
                                   unsigned fusedConversionChainLength) const {
+    Type *elementType = instruction.getType();
+    // Scalar zero adds can use the zero register, without keeping a packed
+    // constant live. Signed-zero semantics can prevent eliminating these adds.
+    if (elementType->isFloatTy() &&
+        instruction.getOpcode() == Instruction::FAdd &&
+        llvm::any_of(instruction.operands(), [](const Use &operand) {
+          auto *constant = dyn_cast<ConstantFP>(operand.get());
+          return constant && constant->isZero();
+        }))
+      return 1;
     if (computeCapability >= 100 && computeCapability < 107 &&
         elementType->isFloatTy() && fusedConversionChainLength > 1 &&
         fusedConversionChainLength <= 8)
@@ -600,7 +610,23 @@ private:
     return insertion;
   }
 
+  std::optional<ValuePair> getNegatedOperands(ValuePair values) const {
+    auto *first = dyn_cast<UnaryOperator>(values.first);
+    auto *second = dyn_cast<UnaryOperator>(values.second);
+    if (!first || !second || first->getOpcode() != Instruction::FNeg ||
+        second->getOpcode() != Instruction::FNeg || !first->hasOneUse() ||
+        !second->hasOneUse())
+      return std::nullopt;
+    return ValuePair{first->getOperand(0), second->getOperand(0)};
+  }
+
   void addInputCost(ValuePair values, ArithmeticPlan &plan) const {
+    // Negating a packed input replaces the two existing scalar negations. It
+    // also keeps the sign visible to arithmetic combines, without extra packs.
+    if (auto operands = getNegatedOperands(values)) {
+      addInputCost(*operands, plan);
+      return;
+    }
     if (values.first == values.second ||
         (isa<Constant>(values.first) && isa<Constant>(values.second)) ||
         getExtractedVector(values) || isRegisterTuple(values))
@@ -615,9 +641,9 @@ private:
 
   unsigned getScalarPairCost(Instruction &first, Instruction &second) const {
     return costModel.getScalarOperationCost(
-               first.getType(), fusedConversionChainLengths.lookup(&first)) +
+               first, fusedConversionChainLengths.lookup(&first)) +
            costModel.getScalarOperationCost(
-               second.getType(), fusedConversionChainLengths.lookup(&second));
+               second, fusedConversionChainLengths.lookup(&second));
   }
 
   void addInstructionCost(Instruction &first, Instruction &second,
@@ -655,6 +681,15 @@ private:
   }
 
   Value *buildVector(ValuePair values, IRBuilder<> &builder) const {
+    if (auto operands = getNegatedOperands(values)) {
+      Value *packed = buildVector(*operands, builder);
+      IRBuilder<>::FastMathFlagGuard guard(builder);
+      builder.setFastMathFlags(
+          cast<Instruction>(values.first)->getFastMathFlags() &
+          cast<Instruction>(values.second)->getFastMathFlags());
+      return builder.CreateFNeg(packed, "nvptx.negate");
+    }
+
     auto *vectorType = FixedVectorType::get(values.first->getType(), 2);
 
     if (auto extracted = getExtractedVector(values)) {
