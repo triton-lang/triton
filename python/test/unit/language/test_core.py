@@ -4908,6 +4908,38 @@ def test_masked_load_scalar(num_ctas, mask_val, other_val, device):
     torch.testing.assert_close(output, reference_out)
 
 
+@pytest.mark.parametrize("masked", [False, True])
+def test_load_uniform_along_dim(masked, device):
+    # A group-quantized scale read: with one group per tile the scale address
+    # does not depend on the row, so triton-narrow-redundant-loads rewrites the
+    # load into a single-row load plus a broadcast. Check that the values the
+    # narrowed load produces still match a full-tile read.
+    K, N = 32, 128
+
+    @triton.jit
+    def kernel(x_ptr, scale_ptr, out_ptr, K: tl.constexpr, N: tl.constexpr, GROUP: tl.constexpr,
+               MASKED: tl.constexpr):
+        k = tl.arange(0, K)[:, None]
+        n = tl.arange(0, N)[None, :]
+        x = tl.load(x_ptr + k * N + n)
+        scale_ptrs = scale_ptr + (k // GROUP) * N + n
+        if MASKED:
+            scale = tl.load(scale_ptrs, mask=n < N // 2, other=1.0)
+        else:
+            scale = tl.load(scale_ptrs)
+        tl.store(out_ptr + k * N + n, x * scale)
+
+    x = torch.randn((K, N), device=device, dtype=torch.float32)
+    scale = torch.randn((1, N), device=device, dtype=torch.float32)
+    out = torch.empty_like(x)
+    kernel[(1, )](x, scale, out, K, N, K, masked)
+
+    expected_scale = scale.clone()
+    if masked:
+        expected_scale[:, N // 2:] = 1.0
+    torch.testing.assert_close(out, x * expected_scale)
+
+
 # Testing masked loads with a copy to shared memory.
 # FIXME: Shape too small for ldmatrix when num_ctas=4
 @pytest.mark.interpreter

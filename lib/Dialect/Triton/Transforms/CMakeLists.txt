@@ -8,6 +8,7 @@ add_triton_library(TritonTransforms
   LoopInvariantCodeMotion.cpp
   LoopPeeling.cpp
   LoopUnroll.cpp
+  NarrowRedundantLoads.cpp
   ReorderBroadcast.cpp
   RewriteTensorDescriptorToPointer.cpp
   ArithTypeConversion.cpp
@@ -22,5 +23,6 @@ add_triton_library(TritonTransforms
   MLIRTransformUtils
   MLIRTransforms
   MLIRSCFToControlFlow
+  TritonAnalysis
   TritonIR
 )
