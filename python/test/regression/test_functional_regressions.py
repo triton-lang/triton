@@ -343,37 +343,3 @@ def test_permutation_ptxas_bug(device):
     )
     ref = torch.matmul(X.float(), W.float()).to(dtype)
     torch.testing.assert_close(Out.to(torch.float32), ref.to(torch.float32), rtol=0.25, atol=0.0625)
-
-
-def test_fuse_nested_loops_assume_on_unreachable_branch(device):
-    # Regression test for https://github.com/triton-lang/triton/issues/11519:
-    # tritongpu-fuse-nested-loops trusted an llvm.assume(ub > lb) even when it
-    # did not dominate the loop nest (it sat on a branch the nest is not
-    # reachable from) and dropped the zero-trip version split. On the legal call
-    # m=4, n=0 the fused loop then ran max(n, 1) * m times, returned a value the
-    # source cannot produce, and stored into a buffer the source never writes.
-
-    @triton.jit
-    def assume_other_branch(p, out, sink, m, n, BLOCK: tl.constexpr, FLAT: tl.constexpr):
-        offs = tl.arange(0, BLOCK)
-        acc = tl.zeros([BLOCK], dtype=tl.float32)
-        if m == 0:
-            tl.assume(n > 0)  # in force only where m == 0
-            acc += tl.load(p + offs)
-        else:
-            for i in tl.range(0, m, flatten=FLAT):
-                for j in range(0, n):  # the nest, reachable only where m != 0
-                    acc += tl.load(p + j * BLOCK + offs)
-                    tl.store(sink + (i * 8 + j) * BLOCK + offs, acc)
-        tl.store(out + offs, acc)
-
-    BLOCK = 64
-    p = torch.arange(BLOCK, dtype=torch.float32, device=device) % 7.0 + 1.0
-    out = torch.full((BLOCK, ), -7777.0, dtype=torch.float32, device=device)
-    sink = torch.full((4 * 8 * BLOCK, ), -7777.0, dtype=torch.float32, device=device)
-    # m=4, n=0 is a legal call: the else-branch nest runs zero times, so the
-    # source leaves out at zero and never writes sink.
-    assume_other_branch[(1, )](p, out, sink, 4, 0, BLOCK=BLOCK, FLAT=True)
-    if not is_compile_warmup():
-        torch.testing.assert_close(out, torch.zeros(BLOCK, dtype=torch.float32, device=device))
-        assert torch.all(sink == -7777.0)

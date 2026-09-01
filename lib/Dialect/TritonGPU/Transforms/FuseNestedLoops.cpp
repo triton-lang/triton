@@ -1109,10 +1109,6 @@ static LogicalResult matchPositiveTripCount(scf::ForOp loop,
                                             mlir::DominanceInfo &domInfo) {
   for (Operation *user : loop.getUpperBound().getUsers()) {
     if (auto cmp = dyn_cast<arith::CmpIOp>(user)) {
-      // An llvm.assume only licenses its condition at program points that are
-      // reachable from the assume; only trust it if it properly dominates the
-      // loop. Otherwise an assume on a branch the loop is not reachable from
-      // would let us drop the zero-trip version split and miscompile.
       if (llvm::none_of(cmp->getUsers(), [&](Operation *op) {
             return isa<LLVM::AssumeOp>(op) &&
                    domInfo.properlyDominates(op, loop);
