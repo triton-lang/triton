@@ -4,10 +4,10 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
-#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
 
@@ -32,32 +32,6 @@ bool isCrossCTAConversion(ttg::ConvertLayoutOp convert) {
   LinearLayout conversion = minimalCvtLayout(srcTy, dstTy);
   auto kBlock = StringAttr::get(convert.getContext(), "block");
   return conversion.hasInDim(kBlock);
-}
-
-Attribute cloneWithCGALayout(Attribute layout, ttg::CGAEncodingAttr cgaLayout) {
-  if (auto blockedLayout = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
-    return ttg::BlockedEncodingAttr::get(
-        layout.getContext(), blockedLayout.getSizePerThread(),
-        blockedLayout.getThreadsPerWarp(), blockedLayout.getWarpsPerCTA(),
-        blockedLayout.getOrder(), cgaLayout);
-  }
-
-  if (auto sliceLayout = dyn_cast<ttg::SliceEncodingAttr>(layout)) {
-    // Lift logical CTA coordinates to the parent by inserting a broadcast axis.
-    const auto &cga = cgaLayout.getLinearLayout();
-    SmallVector<int64_t> shape(cga.getOutDimSizes());
-    auto parentShape = sliceLayout.paddedShape<int64_t>(shape);
-    auto parentCGA = ttg::CGAEncodingAttr::get(
-        layout.getContext(),
-        reshapeLayout(layout.getContext(), cga, parentShape));
-    Attribute parentLayout =
-        cloneWithCGALayout(sliceLayout.getParent(), parentCGA);
-    return ttg::SliceEncodingAttr::get(
-        layout.getContext(), sliceLayout.getDim(),
-        cast<ttg::DistributedEncodingTrait>(parentLayout));
-  }
-
-  llvm::report_fatal_error("cloneWithCGALayout not implemented for layout");
 }
 
 Value convertValue(OpBuilder &builder, Location loc, Value value,
@@ -93,8 +67,17 @@ void rewriteUser(ttg::ConvertLayoutOp convert, OpOperand &use) {
   auto srcTy = cast<RankedTensorType>(convert.getSrc().getType());
   auto dstTy = cast<RankedTensorType>(convert.getType());
 
-  ttg::CGAEncodingAttr cgaLayout = ttg::getCGALayout(srcTy.getEncoding());
-  Attribute targetLayout = cloneWithCGALayout(dstTy.getEncoding(), cgaLayout);
+  if (ttg::isGenericLinearEncoding(srcTy.getEncoding()) ||
+      ttg::isGenericLinearEncoding(dstTy.getEncoding()))
+    return;
+  auto cgaLayout =
+      ttg::maybeLinearToCGAEncodingAttr(ttg::toLinearLayout(srcTy));
+  if (failed(cgaLayout))
+    return;
+  auto maybeTargetLayout = cloneWithCGALayout(dstTy, *cgaLayout);
+  if (failed(maybeTargetLayout))
+    return;
+  Attribute targetLayout = *maybeTargetLayout;
 
   for (OpOperand &operand : op->getOpOperands()) {
     if (&operand == &use)

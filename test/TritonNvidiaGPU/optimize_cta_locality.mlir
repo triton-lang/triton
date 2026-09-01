@@ -140,6 +140,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 #blocked_src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0], [1]]}>
 #blocked_dst = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1], [0]]}>
+#linear_dst = #ttg.linear<{register = [], lane = [[1], [2], [4], [8], [16]], warp = [[32], [64]], block = [[128], [0]]}>
 #nested_src_parent = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 1], order = [0, 1, 2], CGALayout = [[0, 1, 0], [1, 0, 0]]}>
 #nested_src_middle = #ttg.slice<{dim = 1, parent = #nested_src_parent}>
 #nested_src = #ttg.slice<{dim = 1, parent = #nested_src_middle}>
@@ -150,6 +151,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // Preserve the replicated CTA basis before the split CTA basis.
 // CHECK-DAG: #[[$BLOCK_TARGET:.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = {{\[\[0\], \[1\]\]}}}>
 // CHECK-DAG: #[[$NESTED_TARGET_PARENT:.*]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 32, 1], warpsPerCTA = [1, 4, 1], order = [1, 0, 2], CGALayout = {{\[\[0, 0, 0\], \[0, 1, 0\]\]}}}>
+// CHECK-DAG: #[[$LINEAR_TARGET:.*]] = #ttg.linear<{register = [], lane = {{.*}}, warp = {{.*}}, block = {{\[\[0\], \[128\]\]}}}>
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: tt.func @store_nested_slice_as_blocked
   // CHECK: tt.descriptor_store %arg0[%arg1], %{{.*}} : !tt.tensordesc<256xf32>, tensor<256xf32, #[[$BLOCK_TARGET]]>
@@ -164,6 +166,14 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   tt.func @store_blocked_as_nested_slice(%desc: !tt.tensordesc<256xf32>, %i: i32, %src: tensor<256xf32, #blocked_src>) {
     %converted = ttg.convert_layout %src : tensor<256xf32, #blocked_src> -> tensor<256xf32, #nested_dst>
     tt.descriptor_store %desc[%i], %converted : !tt.tensordesc<256xf32>, tensor<256xf32, #nested_dst>
+    tt.return
+  }
+
+  // CHECK-LABEL: tt.func @store_blocked_as_linear
+  // CHECK: tt.descriptor_store %arg0[%arg1], %{{.*}} : !tt.tensordesc<256xf32>, tensor<256xf32, #[[$LINEAR_TARGET]]>
+  tt.func @store_blocked_as_linear(%desc: !tt.tensordesc<256xf32>, %i: i32, %src: tensor<256xf32, #blocked_src>) {
+    %converted = ttg.convert_layout %src : tensor<256xf32, #blocked_src> -> tensor<256xf32, #linear_dst>
+    tt.descriptor_store %desc[%i], %converted : !tt.tensordesc<256xf32>, tensor<256xf32, #linear_dst>
     tt.return
   }
 }

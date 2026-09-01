@@ -237,6 +237,11 @@ std::optional<StringRef> getAMDArch(Operation *module);
 std::optional<mlir::triton::gpu::SwizzledSharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible);
 
+// Replace the CGA layout while preserving intra-CTA layout choices and
+// recursing through Slice and DotOperand parents.
+FailureOr<Attribute> cloneWithCGALayout(RankedTensorType tensorTy,
+                                        triton::gpu::CGAEncodingAttr cgaLayout);
+
 // Convert \param op to use \param encoding attribute.
 // Skips operands if they're in shared encoding.
 Operation *convertDistributedOpEncoding(Attribute encoding, Operation *op);

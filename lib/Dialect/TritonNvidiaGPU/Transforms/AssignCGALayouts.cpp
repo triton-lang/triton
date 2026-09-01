@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <cassert>
 #include <deque>
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -10,7 +9,9 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
@@ -36,53 +37,26 @@ struct DotCGASplit {
   unsigned n;
 };
 
-// Clone an encoding with `cgaLayout` while retaining its existing intra-CTA
-// layout choices. The shape-aware blocked layout builder redistributes threads
-// and warps when the shape per CTA changes.
-Attribute cloneWithCGALayout(RankedTensorType tensorTy,
-                             ttg::CGAEncodingAttr cgaLayout, Operation *scope) {
-  Attribute layout = tensorTy.getEncoding();
-  int numWarps = ttg::lookupNumWarps(scope);
-  OpBuilder builder(scope);
-  int threadsPerWarp = ttg::lookupThreadsPerWarp(builder);
-  if (auto dot = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
-    auto parent = cast<ttg::BlockedEncodingAttr>(dot.getParent());
-    auto newParent = ttg::BlockedEncodingAttr::get(
-        tensorTy.getContext(), parent.getSizePerThread(),
-        parent.getThreadsPerWarp(), parent.getWarpsPerCTA(), parent.getOrder(),
-        cgaLayout);
-    return ttg::DotOperandEncodingAttr::get(
-        tensorTy.getContext(), dot.getOpIdx(), newParent, dot.getKWidth());
-  }
+FailureOr<ttg::CGAEncodingAttr> maybeGetCGA(RankedTensorType type) {
+  // NYI: CGA rematerialization for generic linear encodings.
+  if (ttg::isGenericLinearEncoding(type.getEncoding()))
+    return failure();
+  return ttg::maybeLinearToCGAEncodingAttr(ttg::toLinearLayout(type));
+}
 
-  if (auto blocked = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
+// Redistribute threads and warps for the new shape per CTA of blocked tensors.
+FailureOr<Attribute> getRematerializationLayout(RankedTensorType tensorTy,
+                                                ttg::CGAEncodingAttr cgaLayout,
+                                                Operation *scope) {
+  if (auto blocked =
+          dyn_cast<ttg::BlockedEncodingAttr>(tensorTy.getEncoding())) {
+    OpBuilder builder(scope);
     return ttg::BlockedEncodingAttr::get(
         tensorTy.getContext(), tensorTy.getShape(), blocked.getSizePerThread(),
-        blocked.getOrder(), numWarps, threadsPerWarp, cgaLayout);
+        blocked.getOrder(), ttg::lookupNumWarps(scope),
+        ttg::lookupThreadsPerWarp(builder), cgaLayout);
   }
-
-  if (auto slice = dyn_cast<ttg::SliceEncodingAttr>(layout)) {
-    if (auto parent = dyn_cast<ttg::BlockedEncodingAttr>(slice.getParent())) {
-      auto newParent = ttg::BlockedEncodingAttr::get(
-          tensorTy.getContext(), parent.getSizePerThread(),
-          parent.getThreadsPerWarp(), parent.getWarpsPerCTA(),
-          parent.getOrder(), cgaLayout);
-      return ttg::SliceEncodingAttr::get(tensorTy.getContext(), slice.getDim(),
-                                         newParent);
-    } else if (auto parent =
-                   dyn_cast<ttg::SliceEncodingAttr>(slice.getParent())) {
-      auto parentShape = slice.paddedShape(tensorTy.getShape());
-      auto newParent = cloneWithCGALayout(
-          RankedTensorType::get(parentShape, tensorTy.getElementType(), parent),
-          cgaLayout, scope);
-      return ttg::SliceEncodingAttr::get(
-          tensorTy.getContext(), slice.getDim(),
-          cast<ttg::DistributedEncodingTrait>(newParent));
-    }
-  }
-
-  assert(false && "cloneWithCGALayout not implemented for encoding");
-  return {};
+  return cloneWithCGALayout(tensorTy, cgaLayout);
 }
 
 Value convertValueToLayout(OpBuilder &builder, Location loc, Value value,
@@ -128,6 +102,10 @@ private:
       auto [value, encoding] = queue.front();
       queue.pop_front();
       auto tensorTy = cast<RankedTensorType>(value.getType());
+      auto oldCGA = maybeGetCGA(tensorTy);
+      auto newCGA = maybeGetCGA(tensorTy.cloneWithEncoding(encoding));
+      if (failed(oldCGA) || failed(newCGA))
+        return failure();
 
       auto [it, inserted] = layouts.try_emplace(value, encoding);
       if (!inserted) {
@@ -148,15 +126,11 @@ private:
       if (auto load = dyn_cast<triton::LoadOp>(op)) {
         if (load.getIsVolatile())
           return failure();
-        foundLoadWithDifferentCGALayout |=
-            ttg::getCGALayout(tensorTy.getEncoding()) !=
-            ttg::getCGALayout(encoding);
+        foundLoadWithDifferentCGALayout |= *oldCGA != *newCGA;
         continue;
       }
       if (isa<triton::DescriptorLoadLikeOpInterface>(op)) {
-        foundLoadWithDifferentCGALayout |=
-            ttg::getCGALayout(tensorTy.getEncoding()) !=
-            ttg::getCGALayout(encoding);
+        foundLoadWithDifferentCGALayout |= *oldCGA != *newCGA;
         continue;
       }
 
@@ -168,12 +142,24 @@ private:
         continue;
       }
 
-      for (Value operand : op->getOperands()) {
+      for (auto [i, operand] : llvm::enumerate(op->getOperands())) {
         auto operandTy = dyn_cast<RankedTensorType>(operand.getType());
         if (!operandTy)
           continue;
-        Attribute srcEncoding =
-            cloneWithCGALayout(operandTy, ttg::getCGALayout(encoding), op);
+        Attribute srcEncoding;
+        if (isa<ttg::ConvertLayoutOp>(op)) {
+          // Conversions can retain the source's intra-CTA layout choices.
+          auto layout = getRematerializationLayout(operandTy, *newCGA, op);
+          if (failed(layout))
+            return failure();
+          srcEncoding = *layout;
+        } else if (auto cast = dyn_cast<ttg::CastFpOpInterface>(op)) {
+          srcEncoding = cast.inferSrcEncoding(i, encoding);
+        } else {
+          srcEncoding = inferSrcEncoding(op, encoding);
+        }
+        if (!srcEncoding)
+          return failure();
         queue.emplace_back(operand, srcEncoding);
       }
     }
@@ -345,14 +331,13 @@ void assignDotCGALayout(triton::DotOp dot) {
 }
 
 ttg::CGAEncodingAttr getReduceCGALayout(triton::ReduceOp reduce,
-                                        RankedTensorType srcTy) {
+                                        RankedTensorType srcTy,
+                                        ttg::CGAEncodingAttr srcCGA) {
   unsigned rank = srcTy.getRank();
   auto order = ttg::getOrder(srcTy);
   auto sizePerThread = ttg::getContigPerThread(srcTy);
-  auto srcLayout = cast<ttg::DistributedEncodingTrait>(srcTy.getEncoding());
-
   SmallVector<unsigned> ctasPerCGA(rank, 0);
-  unsigned remainingCTAs = ttg::getNumCTAs(srcLayout);
+  unsigned remainingCTAs = srcCGA.getLinearLayout().getTotalInDimSize();
   // Keep the reduced dimension within a single CTA so reductions do not cross
   // CTAs. Assign CTAs to the remaining dimensions in layout order, bounded by
   // how many elements each CTA can cover in that dimension.
@@ -389,7 +374,7 @@ ttg::CGAEncodingAttr getReduceCGALayout(triton::ReduceOp reduce,
     ctaSplitNum[order[rank - 1]] = ctasPerCGA[order[rank - 1]];
   }
 
-  auto ctaOrder = ttg::getCTAOrder(srcLayout);
+  auto ctaOrder = srcCGA.getCTAOrder();
   return ttg::CGAEncodingAttr::fromSplitParams(reduce.getContext(), ctasPerCGA,
                                                ctaSplitNum, ctaOrder);
 }
@@ -399,15 +384,20 @@ void assignReduceCGALayout(triton::ReduceOp reduce) {
   Value src = reduce.getOperand(0);
   auto srcTy = cast<RankedTensorType>(src.getType());
 
-  auto cgaLayout = getReduceCGALayout(reduce, srcTy);
-  Attribute newSrcLayout = cloneWithCGALayout(srcTy, cgaLayout, reduce);
+  auto srcCGA = maybeGetCGA(srcTy);
+  if (failed(srcCGA))
+    return;
+  auto cgaLayout = getReduceCGALayout(reduce, srcTy, *srcCGA);
+  auto newSrcLayout = getRematerializationLayout(srcTy, cgaLayout, reduce);
+  if (failed(newSrcLayout))
+    return;
 
-  SmallVector<Attribute> operandLayouts(reduce.getNumOperands(), newSrcLayout);
+  SmallVector<Attribute> operandLayouts(reduce.getNumOperands(), *newSrcLayout);
   Attribute resultLayout;
   if (srcTy.getRank() > 1)
     resultLayout = ttg::SliceEncodingAttr::get(
         ctx, reduce.getAxis(),
-        cast<ttg::DistributedEncodingTrait>(newSrcLayout));
+        cast<ttg::DistributedEncodingTrait>(*newSrcLayout));
   SmallVector<Attribute> resultLayouts(reduce.getNumResults(), resultLayout);
 
   convertOpOperandsToLayouts(reduce.getOperation(), operandLayouts);

@@ -1,5 +1,6 @@
 // RUN: triton-opt %s -split-input-file -triton-nvidia-gpu-assign-cga-layouts | FileCheck %s
 // RUN: triton-opt %s -split-input-file -triton-nvidia-gpu-assign-cga-layouts -tritongpu-remove-layout-conversions | FileCheck %s --check-prefix=E2E
+// RUN: triton-opt %s -split-input-file -triton-nvidia-gpu-assign-cga-layouts -tritongpu-remove-layout-conversions -triton-nvidia-gpu-optimize-cta-locality -tritongpu-remove-layout-conversions | FileCheck %s --check-prefix=PIPELINE
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
 #slice = #ttg.slice<{dim = 1, parent = #blocked}>
@@ -339,5 +340,171 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %bd = ttg.convert_layout %b : tensor<32x128xf16, #desc_load_src_b> -> tensor<32x128xf16, #dot_b_desc_load>
     %dot = tt.dot %ad, %bd, %c : tensor<128x32xf16, #dot_a_desc_load> * tensor<32x128xf16, #dot_b_desc_load> -> tensor<128x128xf32, #dot_default_desc_load>
     tt.return %a, %dot : tensor<128x32xf16, #desc_load_src>, tensor<128x128xf32, #dot_default_desc_load>
+  }
+}
+
+// -----
+
+#transpose_src = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
+#transpose_dst = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1], CGALayout = [[1, 0]]}>
+#transpose_result = #ttg.slice<{dim = 0, parent = #transpose_dst}>
+
+// CHECK-DAG: #[[$PROP_TRANSPOSE_LOAD:.*]] = #ttg.blocked<{{.*}}order = [1, 0], CGALayout = {{\[\[1, 0\]\]}}}>
+// CHECK-DAG: #[[$PROP_TRANSPOSE_REDUCE:.*]] = #ttg.blocked<{{.*}}order = [0, 1], CGALayout = {{\[\[0, 1\]\]}}}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @reduce_rematerializes_transpose
+  // CHECK: %[[LOAD:.*]] = tt.load %{{.*}} : tensor<128x128x!tt.ptr<f32>, #[[$PROP_TRANSPOSE_LOAD]]>
+  // CHECK: %[[TRANSPOSE:.*]] = tt.trans %[[LOAD]] {{.*}} : tensor<128x128xf32, #[[$PROP_TRANSPOSE_LOAD]]> -> tensor<128x128xf32, #[[$PROP_TRANSPOSE_REDUCE]]>
+  // CHECK: "tt.reduce"(%[[TRANSPOSE]]) <{axis = 0 : i32}>
+  tt.func @reduce_rematerializes_transpose(%ptrs: tensor<128x128x!tt.ptr<f32>, #transpose_src>) -> tensor<128xf32, #transpose_result> {
+    %loaded = tt.load %ptrs : tensor<128x128x!tt.ptr<f32>, #transpose_src>
+    %transposed = tt.trans %loaded {order = array<i32: 1, 0>} : tensor<128x128xf32, #transpose_src> -> tensor<128x128xf32, #transpose_dst>
+    %sum = "tt.reduce"(%transposed) <{axis = 0 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %value = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %value : f32
+    }) : (tensor<128x128xf32, #transpose_dst>) -> tensor<128xf32, #transpose_result>
+    tt.return %sum : tensor<128xf32, #transpose_result>
+  }
+}
+
+// -----
+
+#broadcast_parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 0]]}>
+#broadcast_slice = #ttg.slice<{dim = 1, parent = #broadcast_parent}>
+
+// CHECK-DAG: #[[$PROP_BROADCAST:.*]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[1, 0\]\]}}}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @reduce_rematerializes_expand_broadcast
+  // CHECK: %[[LOAD:.*]] = tt.load %{{.*}} : tensor<128x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #[[$PROP_BROADCAST]]}>>
+  // CHECK: %[[EXPAND:.*]] = tt.expand_dims %[[LOAD]] {{.*}} -> tensor<128x1xf32, #[[$PROP_BROADCAST]]>
+  // CHECK: %[[BROADCAST:.*]] = tt.broadcast %[[EXPAND]] : tensor<128x1xf32, #[[$PROP_BROADCAST]]> -> tensor<128x128xf32, #[[$PROP_BROADCAST]]>
+  // CHECK: "tt.reduce"(%[[BROADCAST]]) <{axis = 1 : i32}>
+  tt.func @reduce_rematerializes_expand_broadcast(%ptrs: tensor<128x!tt.ptr<f32>, #broadcast_slice>) -> tensor<128xf32, #broadcast_slice> {
+    %loaded = tt.load %ptrs : tensor<128x!tt.ptr<f32>, #broadcast_slice>
+    %expanded = tt.expand_dims %loaded {axis = 1 : i32} : tensor<128xf32, #broadcast_slice> -> tensor<128x1xf32, #broadcast_parent>
+    %broadcast = tt.broadcast %expanded : tensor<128x1xf32, #broadcast_parent> -> tensor<128x128xf32, #broadcast_parent>
+    %sum = "tt.reduce"(%broadcast) <{axis = 1 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %value = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %value : f32
+    }) : (tensor<128x128xf32, #broadcast_parent>) -> tensor<128xf32, #broadcast_slice>
+    tt.return %sum : tensor<128xf32, #broadcast_slice>
+  }
+}
+
+// -----
+
+#reshape_src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
+#reshape_dst = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0], CGALayout = [[1, 0]]}>
+#reshape_result = #ttg.slice<{dim = 0, parent = #reshape_dst}>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // The requested column split becomes an interleaved block basis in 1D.
+  // CHECK-LABEL: tt.func @reduce_does_not_rematerialize_interleaved_reshape
+  // CHECK: %[[LOAD:.*]] = tt.load %{{.*}} : tensor<4096x!tt.ptr<f32>, {{.*}}>
+  // CHECK: %[[RESHAPE:.*]] = tt.reshape %[[LOAD]] : tensor<4096xf32, {{.*}}> -> tensor<64x64xf32, {{.*}}>
+  // CHECK: %[[CONVERT:.*]] = ttg.convert_layout %[[RESHAPE]] : tensor<64x64xf32, {{.*}}> -> tensor<64x64xf32, {{.*}}>
+  // CHECK: "tt.reduce"(%[[CONVERT]]) <{axis = 0 : i32}>
+  tt.func @reduce_does_not_rematerialize_interleaved_reshape(%ptrs: tensor<4096x!tt.ptr<f32>, #reshape_src>) -> tensor<64xf32, #reshape_result> {
+    %loaded = tt.load %ptrs : tensor<4096x!tt.ptr<f32>, #reshape_src>
+    %reshaped = tt.reshape %loaded : tensor<4096xf32, #reshape_src> -> tensor<64x64xf32, #reshape_dst>
+    %sum = "tt.reduce"(%reshaped) <{axis = 0 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %value = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %value : f32
+    }) : (tensor<64x64xf32, #reshape_dst>) -> tensor<64xf32, #reshape_result>
+    tt.return %sum : tensor<64xf32, #reshape_result>
+  }
+}
+
+// -----
+
+#factorable = #ttg.linear<{register = [[0, 8], [0, 16], [0, 32], [16, 0], [32, 0], [64, 0]], lane = [[0, 1], [0, 2], [0, 4], [1, 0], [2, 0]], warp = [[4, 0], [8, 0]], block = [[0, 64]]}>
+#factorable_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
+#factorable_result = #ttg.slice<{dim = 1, parent = #factorable_blocked}>
+#linear_result = #ttg.slice<{dim = 1, parent = #factorable}>
+
+// The ordinary linear layout factors as a 128x64 CTA tile and a column CGA.
+// CHECK-DAG: #[[$FACTORABLE_LOAD:.*]] = #ttg.linear<{{.*}}block = {{\[\[64, 0\]\]}}}>
+// CHECK-DAG: #[[$FACTORABLE_REDUCE:.*]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[1, 0\]\]}}}>
+// E2E-DAG: #[[$E2E_FACTORABLE_LOAD:.*]] = #ttg.linear<{{.*}}block = {{\[\[64, 0\]\]}}}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @reduce_rematerializes_factorable_linear_conversion
+  // CHECK-NOT: tt.load
+  // CHECK: %[[PTRS:.*]] = ttg.convert_layout %arg0 : tensor<128x128x!tt.ptr<f32>, {{.*}}> -> tensor<128x128x!tt.ptr<f32>, #[[$FACTORABLE_LOAD]]>
+  // CHECK: %[[LOAD:.*]] = tt.load %[[PTRS]] : tensor<128x128x!tt.ptr<f32>, #[[$FACTORABLE_LOAD]]>
+  // CHECK-NOT: tt.load
+  // CHECK: %[[CONVERT:.*]] = ttg.convert_layout %[[LOAD]] : tensor<128x128xf32, #[[$FACTORABLE_LOAD]]> -> tensor<128x128xf32, #[[$FACTORABLE_REDUCE]]>
+  // CHECK: "tt.reduce"(%[[CONVERT]]) <{axis = 1 : i32}>
+  // E2E-LABEL: tt.func @reduce_rematerializes_factorable_linear_conversion
+  // E2E: %[[LOAD:.*]] = tt.load %{{.*}} : tensor<128x128x!tt.ptr<f32>, #[[$E2E_FACTORABLE_LOAD]]>
+  // E2E-NOT: tt.load
+  // E2E: "tt.reduce"(%[[LOAD]]) <{axis = 1 : i32}>
+  tt.func @reduce_rematerializes_factorable_linear_conversion(%ptrs: tensor<128x128x!tt.ptr<f32>, #factorable>) -> tensor<128xf32, #factorable_result> {
+    %loaded = tt.load %ptrs : tensor<128x128x!tt.ptr<f32>, #factorable>
+    %converted = ttg.convert_layout %loaded : tensor<128x128xf32, #factorable> -> tensor<128x128xf32, #factorable_blocked>
+    %sum = "tt.reduce"(%converted) <{axis = 1 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %value = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %value : f32
+    }) : (tensor<128x128xf32, #factorable_blocked>) -> tensor<128xf32, #factorable_result>
+    tt.return %sum : tensor<128xf32, #factorable_result>
+  }
+
+  // CHECK-LABEL: tt.func @reduce_rematerializes_factorable_linear_input
+  // CHECK: %[[LOAD:.*]] = tt.load %{{.*}} : tensor<128x128x!tt.ptr<f32>, #[[$FACTORABLE_LOAD]]>
+  // CHECK-NOT: tt.load
+  // CHECK: "tt.reduce"(%[[LOAD]]) <{axis = 1 : i32}>
+  // E2E-LABEL: tt.func @reduce_rematerializes_factorable_linear_input
+  // E2E: %[[LOAD:.*]] = tt.load %{{.*}} : tensor<128x128x!tt.ptr<f32>, #[[$E2E_FACTORABLE_LOAD]]>
+  // E2E-NOT: tt.load
+  // E2E: "tt.reduce"(%[[LOAD]]) <{axis = 1 : i32}>
+  // PIPELINE-LABEL: tt.func @reduce_rematerializes_factorable_linear_input
+  // PIPELINE: %[[REDUCE:.*]] = "tt.reduce"
+  // PIPELINE: %[[CONVERT:.*]] = ttg.convert_layout %[[REDUCE]]
+  // PIPELINE: tt.store %arg1, %[[CONVERT]]
+  tt.func @reduce_rematerializes_factorable_linear_input(%ptrs: tensor<128x128x!tt.ptr<f32>, #factorable>, %out: tensor<128x!tt.ptr<f32>, #linear_result>) {
+    %loaded = tt.load %ptrs : tensor<128x128x!tt.ptr<f32>, #factorable>
+    %sum = "tt.reduce"(%loaded) <{axis = 1 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %value = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %value : f32
+    }) : (tensor<128x128xf32, #factorable>) -> tensor<128xf32, #linear_result>
+    tt.store %out, %sum : tensor<128x!tt.ptr<f32>, #linear_result>
+    tt.return
+  }
+}
+
+// -----
+
+#generic_parent = #ttg.generic_linear<{register = [[0, 0, 8], [0, 0, 16], [0, 0, 32], [0, 16, 0], [0, 32, 0], [0, 64, 0]], lane = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 1, 0], [0, 2, 0]], warp = [[0, 4, 0], [0, 8, 0]], block = [[0, 0, 64]]}>
+#generic_slice = #ttg.slice<{dim = 0, parent = #generic_parent}>
+#generic_default = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
+#generic_dot_a = #ttg.dot_op<{opIdx = 0, parent = #generic_default}>
+#generic_dot_b = #ttg.dot_op<{opIdx = 1, parent = #generic_default}>
+
+// Generic encodings remain excluded even when they factor and are wrapped.
+// CHECK-DAG: #[[$GENERIC_PARENT:.*]] = #ttg.generic_linear<
+// CHECK-DAG: #[[$GENERIC_DOT:.*]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[1, 0\]\]}}}>
+// E2E-DAG: #[[$E2E_GENERIC_PARENT:.*]] = #ttg.generic_linear<
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @dot_does_not_rematerialize_factorable_generic_slice
+  // CHECK: %[[LOAD:.*]] = tt.load %arg0 : tensor<128x128x!tt.ptr<f16>, #ttg.slice<{dim = 0, parent = #[[$GENERIC_PARENT]]}>>
+  // CHECK-NOT: tt.load
+  // CHECK: ttg.convert_layout %[[LOAD]]
+  // CHECK: tt.dot {{.*}} -> tensor<128x64xf32, #[[$GENERIC_DOT]]>
+  // E2E-LABEL: tt.func @dot_does_not_rematerialize_factorable_generic_slice
+  // E2E: %[[LOAD:.*]] = tt.load %arg0 : tensor<128x128x!tt.ptr<f16>, #ttg.slice<{dim = 0, parent = #[[$E2E_GENERIC_PARENT]]}>>
+  // E2E-NOT: tt.load
+  // E2E: ttg.convert_layout %[[LOAD]]
+  // E2E: tt.dot
+  tt.func @dot_does_not_rematerialize_factorable_generic_slice(%ptrs: tensor<128x128x!tt.ptr<f16>, #generic_slice>) -> tensor<128x64xf32, #generic_default> {
+    %loaded = tt.load %ptrs : tensor<128x128x!tt.ptr<f16>, #generic_slice>
+    %a = ttg.convert_layout %loaded : tensor<128x128xf16, #generic_slice> -> tensor<128x128xf16, #generic_dot_a>
+    %b = arith.constant dense<1.000000e+00> : tensor<128x64xf16, #generic_dot_b>
+    %c = arith.constant dense<0.000000e+00> : tensor<128x64xf32, #generic_default>
+    %dot = tt.dot %a, %b, %c : tensor<128x128xf16, #generic_dot_a> * tensor<128x64xf16, #generic_dot_b> -> tensor<128x64xf32, #generic_default>
+    tt.return %dot : tensor<128x64xf32, #generic_default>
   }
 }
