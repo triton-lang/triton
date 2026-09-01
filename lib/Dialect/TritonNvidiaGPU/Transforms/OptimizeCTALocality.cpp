@@ -7,6 +7,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
 
@@ -42,20 +43,21 @@ Attribute cloneWithCGALayout(Attribute layout, ttg::CGAEncodingAttr cgaLayout) {
   }
 
   if (auto sliceLayout = dyn_cast<ttg::SliceEncodingAttr>(layout)) {
+    // Lift logical CTA coordinates to the parent by inserting a broadcast axis.
+    const auto &cga = cgaLayout.getLinearLayout();
+    SmallVector<int64_t> shape(cga.getOutDimSizes());
+    auto parentShape = sliceLayout.paddedShape<int64_t>(shape);
+    auto parentCGA = ttg::CGAEncodingAttr::get(
+        layout.getContext(),
+        reshapeLayout(layout.getContext(), cga, parentShape));
     Attribute parentLayout =
-        cloneWithCGALayout(sliceLayout.getParent(), cgaLayout);
+        cloneWithCGALayout(sliceLayout.getParent(), parentCGA);
     return ttg::SliceEncodingAttr::get(
         layout.getContext(), sliceLayout.getDim(),
         cast<ttg::DistributedEncodingTrait>(parentLayout));
   }
 
   llvm::report_fatal_error("cloneWithCGALayout not implemented for layout");
-}
-
-ttg::CGAEncodingAttr getRootCGALayout(Attribute layout) {
-  if (auto slice = dyn_cast<ttg::SliceEncodingAttr>(layout))
-    return getRootCGALayout(slice.getParent());
-  return ttg::getCGALayout(layout);
 }
 
 Value convertValue(OpBuilder &builder, Location loc, Value value,
@@ -91,7 +93,7 @@ void rewriteUser(ttg::ConvertLayoutOp convert, OpOperand &use) {
   auto srcTy = cast<RankedTensorType>(convert.getSrc().getType());
   auto dstTy = cast<RankedTensorType>(convert.getType());
 
-  ttg::CGAEncodingAttr cgaLayout = getRootCGALayout(srcTy.getEncoding());
+  ttg::CGAEncodingAttr cgaLayout = ttg::getCGALayout(srcTy.getEncoding());
   Attribute targetLayout = cloneWithCGALayout(dstTy.getEncoding(), cgaLayout);
 
   for (OpOperand &operand : op->getOpOperands()) {

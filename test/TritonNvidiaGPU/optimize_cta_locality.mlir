@@ -118,8 +118,9 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[RED:.*]] = "tt.reduce"(%arg0) <{axis = 1 : i32}>
   // CHECK: }) : (tensor<128x64xf32, #[[$REDUCE_SRC_PLANNED]]>) -> tensor<128xf32, #[[$REDUCE_OUT_PLANNED]]>
   // CHECK: %[[RED_ORIG:.*]] = ttg.convert_layout %[[RED]] : tensor<128xf32, #[[$REDUCE_OUT_PLANNED]]> -> tensor<128xf32, #[[$REDUCE_OUT_ORIG:.*]]>
-  // CHECK: %[[RED_PLANNED:.*]] = ttg.convert_layout %[[RED_ORIG]] : tensor<128xf32, #[[$REDUCE_OUT_ORIG]]> -> tensor<128xf32, #[[$REDUCE_OUT_PLANNED]]>
-  // CHECK: tt.store %arg1, %[[RED_PLANNED]] : tensor<128x!tt.ptr<f32>, #[[$REDUCE_OUT_PLANNED]]>
+  // CHECK: %[[PTR_TARGET:.*]] = ttg.convert_layout %arg1 : tensor<128x!tt.ptr<f32>, #[[$REDUCE_OUT_PLANNED]]> -> tensor<128x!tt.ptr<f32>, #[[$REDUCE_OUT_TARGET:.*]]>
+  // CHECK: %[[RED_TARGET:.*]] = ttg.convert_layout %[[RED_ORIG]] : tensor<128xf32, #[[$REDUCE_OUT_ORIG]]> -> tensor<128xf32, #[[$REDUCE_OUT_TARGET]]>
+  // CHECK: tt.store %[[PTR_TARGET]], %[[RED_TARGET]] : tensor<128x!tt.ptr<f32>, #[[$REDUCE_OUT_TARGET]]>
   tt.func @store_reduce_result(
     %src: tensor<128x64xf32, #src_planned>,
     %out: tensor<128x!tt.ptr<f32>, #out_planned>) {
@@ -131,6 +132,57 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %out_orig = ttg.convert_layout %out : tensor<128x!tt.ptr<f32>, #out_planned> -> tensor<128x!tt.ptr<f32>, #out_orig>
     %red_orig = ttg.convert_layout %red : tensor<128xf32, #out_planned> -> tensor<128xf32, #out_orig>
     tt.store %out_orig, %red_orig : tensor<128x!tt.ptr<f32>, #out_orig>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked_src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0], [1]]}>
+#blocked_dst = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1], [0]]}>
+#nested_src_parent = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 1], order = [0, 1, 2], CGALayout = [[0, 1, 0], [1, 0, 0]]}>
+#nested_src_middle = #ttg.slice<{dim = 1, parent = #nested_src_parent}>
+#nested_src = #ttg.slice<{dim = 1, parent = #nested_src_middle}>
+#nested_dst_parent = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 32, 1], warpsPerCTA = [1, 4, 1], order = [1, 0, 2], CGALayout = [[0, 1, 0], [1, 0, 0]]}>
+#nested_dst_middle = #ttg.slice<{dim = 0, parent = #nested_dst_parent}>
+#nested_dst = #ttg.slice<{dim = 1, parent = #nested_dst_middle}>
+
+// Preserve the replicated CTA basis before the split CTA basis.
+// CHECK-DAG: #[[$BLOCK_TARGET:.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = {{\[\[0\], \[1\]\]}}}>
+// CHECK-DAG: #[[$NESTED_TARGET_PARENT:.*]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 32, 1], warpsPerCTA = [1, 4, 1], order = [1, 0, 2], CGALayout = {{\[\[0, 0, 0\], \[0, 1, 0\]\]}}}>
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @store_nested_slice_as_blocked
+  // CHECK: tt.descriptor_store %arg0[%arg1], %{{.*}} : !tt.tensordesc<256xf32>, tensor<256xf32, #[[$BLOCK_TARGET]]>
+  tt.func @store_nested_slice_as_blocked(%desc: !tt.tensordesc<256xf32>, %i: i32, %src: tensor<256xf32, #nested_src>) {
+    %converted = ttg.convert_layout %src : tensor<256xf32, #nested_src> -> tensor<256xf32, #blocked_dst>
+    tt.descriptor_store %desc[%i], %converted : !tt.tensordesc<256xf32>, tensor<256xf32, #blocked_dst>
+    tt.return
+  }
+
+  // CHECK-LABEL: tt.func @store_blocked_as_nested_slice
+  // CHECK: tt.descriptor_store %arg0[%arg1], %{{.*}} : !tt.tensordesc<256xf32>, tensor<256xf32, #ttg.slice<{dim = 1, parent = #ttg.slice<{dim = 0, parent = #[[$NESTED_TARGET_PARENT]]}>}>>
+  tt.func @store_blocked_as_nested_slice(%desc: !tt.tensordesc<256xf32>, %i: i32, %src: tensor<256xf32, #blocked_src>) {
+    %converted = ttg.convert_layout %src : tensor<256xf32, #blocked_src> -> tensor<256xf32, #nested_dst>
+    tt.descriptor_store %desc[%i], %converted : !tt.tensordesc<256xf32>, tensor<256xf32, #nested_dst>
+    tt.return
+  }
+}
+
+// -----
+
+#src_parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1], [1, 0]]}>
+#dst_parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 1], [1, 0]]}>
+#src = #ttg.slice<{dim = 1, parent = #src_parent}>
+#dst = #ttg.slice<{dim = 0, parent = #dst_parent}>
+
+// CTA coordinates belong to the logical tensor, not the source's parent axes.
+// CHECK-DAG: #[[$SLICE_TARGET_PARENT:.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = {{\[\[0, 0\], \[0, 1\]\]}}}>
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @store_between_slice_axes
+  // CHECK: tt.descriptor_store %arg0[%arg1], %{{.*}} : !tt.tensordesc<256xf32>, tensor<256xf32, #ttg.slice<{dim = 0, parent = #[[$SLICE_TARGET_PARENT]]}>>
+  tt.func @store_between_slice_axes(%desc: !tt.tensordesc<256xf32>, %i: i32, %src: tensor<256xf32, #src>) {
+    %converted = ttg.convert_layout %src : tensor<256xf32, #src> -> tensor<256xf32, #dst>
+    tt.descriptor_store %desc[%i], %converted : !tt.tensordesc<256xf32>, tensor<256xf32, #dst>
     tt.return
   }
 }
