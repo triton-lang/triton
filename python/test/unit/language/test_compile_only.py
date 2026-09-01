@@ -4,10 +4,15 @@ from types import SimpleNamespace
 
 import triton
 import triton.language as tl
+from triton._C.libtriton import llvm
 from triton.backends.compiler import GPUTarget
 from triton.compiler import ASTSource
 from triton.compiler.errors import CompileTimeAssertionFailure
 from triton.runtime.driver import driver
+
+
+class StopAfterOptimizeModuleCall(Exception):
+    pass
 
 
 @triton.jit
@@ -407,3 +412,43 @@ def test_fp8_compiles_for_multiple_architectures_cuda():
     src = ASTSource(fn=fp8_convert, signature={"src": "*fp32", "dst": "*fp8e5"}, constexprs={})
     triton.compile(src, target=GPUTarget("cuda", 90, 32))
     triton.compile(src, target=GPUTarget("cuda", 80, 32))
+
+
+@pytest.mark.parametrize(
+    "target, options, enable_asan, expected",
+    [
+        (GPUTarget("cuda", 90, 32), {"ptx_version": 83, "enable_fp_fusion": True}, False,
+         ("nvptx64-nvidia-cuda", "sm_90a", "+ptx83")),
+        (GPUTarget("hip", "gfx942", 64), {"enable_fp_fusion": True}, True, ("amdgcn-amd-amdhsa", "gfx942", "+xnack")),
+    ],
+)
+def test_optimize_module_target_info(monkeypatch, target, options, enable_asan, expected):
+
+    @triton.jit
+    def copy_kernel(src, dst):
+        value = tl.load(src)
+        tl.store(dst, value)
+
+    captured = {}
+
+    def optimize_module_wrapper(mod, opt, **kwargs):
+        captured["module"] = str(mod)
+        captured["kwargs"] = kwargs
+        raise StopAfterOptimizeModuleCall
+
+    monkeypatch.setattr(llvm, "optimize_module", optimize_module_wrapper)
+    # ASan bitcode is immaterial to this call-boundary test.
+    monkeypatch.setattr(llvm, "link_extern_libs", lambda mod, paths: None)
+
+    src = ASTSource(fn=copy_kernel, signature={"src": "*fp32", "dst": "*fp32"}, constexprs={})
+    with triton.knobs.compilation.scope():
+        triton.knobs.compilation.always_compile = True
+        triton.knobs.compilation.enable_asan = enable_asan
+        with pytest.raises(StopAfterOptimizeModuleCall):
+            triton.compile(src, target=target, options=options)
+
+    triple, arch, features = expected
+    assert f'target triple = "{triple}"' in captured["module"]
+    assert captured["kwargs"]["arch"] == arch
+    assert captured["kwargs"]["features"] == features
+    assert captured["kwargs"]["enable_fp_fusion"]
