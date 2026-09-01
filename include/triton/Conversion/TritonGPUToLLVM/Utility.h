@@ -726,6 +726,16 @@ std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp);
 
 std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering);
 
+/// Address spaces a CTA barrier must order to stand in for `memOrdering`.
+/// Only a subset of the threads runs the atomic, so the barrier has to carry
+/// its cache maintenance for the rest; a local-only annotation drops that.
+triton::gpu::AddrSpace atomicOrderingBarrierAddrSpace(MemSemantic memOrdering);
+
+/// Same, for the result-broadcast barrier. It sits after the atomic, so it
+/// only stands in for the acquire side; release-only stays local.
+triton::gpu::AddrSpace
+atomicResultBroadcastBarrierAddrSpace(MemSemantic memOrdering);
+
 /// Insert CTA or cluster barriers around an atomic operation according to its
 /// acquire/release semantics. `emitBarrierAfter` may be false when result
 /// staging already emits the required barrier after the atomic instruction.

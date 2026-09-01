@@ -1182,12 +1182,28 @@ std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering) {
   }
 }
 
+triton::gpu::AddrSpace atomicOrderingBarrierAddrSpace(MemSemantic memOrdering) {
+  if (memOrdering == MemSemantic::RELAXED)
+    return triton::gpu::AddrSpace::Local;
+  return triton::gpu::AddrSpace::Local | triton::gpu::AddrSpace::GlobalRead |
+         triton::gpu::AddrSpace::GlobalWrite;
+}
+
+triton::gpu::AddrSpace
+atomicResultBroadcastBarrierAddrSpace(MemSemantic memOrdering) {
+  bool acquires = memOrdering == MemSemantic::ACQUIRE ||
+                  memOrdering == MemSemantic::ACQUIRE_RELEASE;
+  return atomicOrderingBarrierAddrSpace(acquires ? MemSemantic::ACQUIRE
+                                                 : MemSemantic::RELAXED);
+}
+
 void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
                                   bool emitBarrierAfter, RewriterBase &rewriter,
                                   const TargetInfoBase &targetInfo) {
+  auto addrSpace = atomicOrderingBarrierAddrSpace(memOrdering);
   auto emitBarrier = [&] {
     if (triton::gpu::lookupNumCTAs(op) == 1)
-      targetInfo.barrier(op->getLoc(), rewriter, triton::gpu::AddrSpace::Local);
+      targetInfo.barrier(op->getLoc(), rewriter, addrSpace);
     else
       targetInfo.clusterBarrier(op->getLoc(), rewriter, op);
   };
@@ -1225,7 +1241,9 @@ Value broadcastScalarAtomicResult(Operation *op, Type valueElemTy,
   Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
   targetInfo.storeShared(rewriter, loc, smemBase, resultVal, threadPred);
   if (triton::gpu::lookupNumCTAs(op) == 1) {
-    targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
+    targetInfo.barrier(loc, rewriter,
+                       atomicResultBroadcastBarrierAddrSpace(
+                           cast<AtomicOpInterface>(op).getMemSemantic()));
     return targetInfo.loadShared(rewriter, loc, smemBase, valueElemTy,
                                  b.true_val());
   }

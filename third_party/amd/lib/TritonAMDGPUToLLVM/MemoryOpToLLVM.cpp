@@ -631,8 +631,6 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::BarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (!mlir::triton::amdgpu::isCDNA(targetInfo.getISAFamily()))
-      return failure();
     // Check no other memory addrspaces are selected.
     // TensorRead/Write are allowed but noop.
     auto mask = triton::gpu::AddrSpace::Local |
@@ -654,6 +652,9 @@ public:
       // Local/global barriers use LLVM fences so the AMDGPU memory legalizer
       // selects target-specific waits. Mixed local+global barriers are left
       // untagged so LLVM conservatively synchronizes every relevant space.
+      // The tag is load-bearing: an LDS-only fence drops buffer_gl0_inv, and
+      // on gfx10+ that L0 is per-CU while a work-group spans both CUs of a
+      // WGP. See atomicOrderingBarrierAddrSpace().
       createAMDGPUMemoryFence(rewriter, op->getLoc(),
                               LLVM::AtomicOrdering::release, mmraAddrSpace);
       ROCDL::SBarrierOp::create(rewriter, op->getLoc());

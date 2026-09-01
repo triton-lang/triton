@@ -384,6 +384,8 @@ struct AtomicPollOpConversion
     insertAtomicOrderingBarriers(op, op.getSem(),
                                  /*emitBarrierAfter=*/false, rewriter,
                                  targetInfo);
+    // The rendezvous carries the elected thread's acquire for the whole CTA.
+    auto rendezvousAddrSpace = atomicOrderingBarrierAddrSpace(op.getSem());
 
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
     Value threadPred =
@@ -451,7 +453,7 @@ struct AtomicPollOpConversion
       // Successful completion is the only possible result without a timeout,
       // so rendezvous and return true without a shared-memory broadcast.
       if (numCTAs == 1)
-        targetInfo.barrier(loc, rewriter, AddrSpace::Local);
+        targetInfo.barrier(loc, rewriter, rendezvousAddrSpace);
       else
         targetInfo.clusterBarrier(loc, rewriter, op);
       rewriter.replaceOp(op, b.true_val());
@@ -462,7 +464,7 @@ struct AtomicPollOpConversion
     // loop, preserving the scalar result convention used by Triton atomics.
     if (op.getResult().use_empty()) {
       if (numCTAs == 1)
-        targetInfo.barrier(loc, rewriter, AddrSpace::Local);
+        targetInfo.barrier(loc, rewriter, rendezvousAddrSpace);
       else
         targetInfo.clusterBarrier(loc, rewriter, op);
       rewriter.eraseOp(op);
@@ -475,7 +477,7 @@ struct AtomicPollOpConversion
                                         targetInfo.getSharedAddressSpace()));
     targetInfo.storeShared(rewriter, loc, atomPtr, matched, threadPred);
     if (numCTAs == 1)
-      targetInfo.barrier(loc, rewriter, AddrSpace::Local);
+      targetInfo.barrier(loc, rewriter, rendezvousAddrSpace);
     else
       targetInfo.clusterBarrier(loc, rewriter, op);
 

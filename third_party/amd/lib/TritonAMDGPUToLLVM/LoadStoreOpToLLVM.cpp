@@ -2236,7 +2236,7 @@ struct AtomicCASOpConversion
           return success();
         }
 
-        b.barrier(triton::gpu::AddrSpace::Local);
+        b.barrier(atomicResultBroadcastBarrierAddrSpace(memOrdering));
         Value atomPtr =
             getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
         Value ret = b.load(valueElemTy, atomPtr);
@@ -2454,7 +2454,7 @@ struct AtomicRMWOpConversion
             return success();
           }
           Value atomPtr = *atomicSharedMemBase;
-          b.barrier(triton::gpu::AddrSpace::Local);
+          b.barrier(atomicResultBroadcastBarrierAddrSpace(op.getSem()));
           Value ret = b.load(valueElemTy, atomPtr);
 
           rewriter.replaceOp(op, {ret});
