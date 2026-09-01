@@ -567,7 +567,8 @@ module attributes {{"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = {warp_si
             assert ".address_size 64" in ptx
         elif is_hip():
             amdgcn = k.asm["amdgcn"]
-            assert re.search(r'\.amdgcn_target "amdgcn-amd-amdhsa-[^-]*-gfx942"', amdgcn)
+            assert 'target triple = "amdgpu9.42-amd-amdhsa"' in k.asm["llir"]
+            assert re.search(r'\.amdgcn_target "amdgpu9\.42-amd-amdhsa-[^-]*-gfx942"', amdgcn)
             assert '.wavefront_size: 64' in amdgcn
 
 
