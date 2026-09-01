@@ -25,6 +25,30 @@ define void @scalar_float_add_zero(ptr addrspace(1) %dst, <2 x float> %src) {
   ret void
 }
 
+; Keep a register pair packed through zero canonicalization and arithmetic.
+; BLACKWELL-LABEL: define <2 x float> @packed_zero_add_chain(
+; BLACKWELL: fadd <2 x float> %src, zeroinitializer
+; BLACKWELL: fmul <2 x float>
+; BLACKWELL: ret <2 x float>
+; HOPPER-ONLY-LABEL: define <2 x float> @packed_zero_add_chain(
+; HOPPER-ONLY-COUNT-2: fadd float
+; HOPPER-ONLY-COUNT-2: fmul float
+; HOPPER-ONLY: ret <2 x float>
+; PTX-LABEL: packed_zero_add_chain(
+; PTX: add.rn.f32x2
+; PTX: mul.rn.f32x2
+define <2 x float> @packed_zero_add_chain(<2 x float> %src, float %scale) {
+  %a = extractelement <2 x float> %src, i64 0
+  %b = extractelement <2 x float> %src, i64 1
+  %x = fadd float %a, 0.0
+  %y = fadd float %b, 0.0
+  %u = fmul float %x, %scale
+  %v = fmul float %y, %scale
+  %out0 = insertelement <2 x float> poison, float %u, i64 0
+  %out1 = insertelement <2 x float> %out0, float %v, i64 1
+  ret <2 x float> %out1
+}
+
 ; Keep negation visible to combines with packed arithmetic.
 ; BLACKWELL-LABEL: define <2 x float> @packed_negated_float_multiply(
 ; BLACKWELL: fneg <2 x float> %src
