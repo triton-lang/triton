@@ -1,6 +1,36 @@
 // RUN: triton-opt %s -split-input-file -triton-nvidia-gpu-assign-cga-layouts | FileCheck %s
 // RUN: triton-opt %s -split-input-file -triton-nvidia-gpu-assign-cga-layouts -tritongpu-remove-layout-conversions | FileCheck %s --check-prefix=E2E
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1]]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @reduce_loaded_plus_constant
+  // CHECK: %[[LOAD:.*]] = tt.load %{{.*}} : tensor<128x128x!tt.ptr<f32>, #[[$PLANNED:.*]]>
+  // CHECK: %[[CONST:.*]] = arith.constant dense<1.000000e+00> : tensor<128x128xf32, #[[$ORIG:.*]]>
+  // CHECK: %[[CONVERT:.*]] = ttg.convert_layout %[[CONST]] : tensor<128x128xf32, #[[$ORIG]]> -> tensor<128x128xf32, #[[$PLANNED]]>
+  // CHECK: %[[SUM:.*]] = arith.addf %[[LOAD]], %[[CONVERT]] : tensor<128x128xf32, #[[$PLANNED]]>
+  // CHECK: "tt.reduce"(%[[SUM]])
+  // E2E-LABEL: tt.func @reduce_loaded_plus_constant
+  // E2E: %[[CONST:.*]] = arith.constant dense<1.000000e+00> : tensor<128x128xf32, #[[$PLANNED:.*]]>
+  // E2E: %[[LOAD:.*]] = tt.load %{{.*}} : tensor<128x128x!tt.ptr<f32>, #[[$PLANNED]]>
+  // E2E: %[[SUM:.*]] = arith.addf %[[LOAD]], %[[CONST]] : tensor<128x128xf32, #[[$PLANNED]]>
+  // E2E: "tt.reduce"(%[[SUM]])
+  tt.func @reduce_loaded_plus_constant(%ptrs: tensor<128x128x!tt.ptr<f32>, #blocked>) -> tensor<128xf32, #slice> {
+    %x = tt.load %ptrs : tensor<128x128x!tt.ptr<f32>, #blocked>
+    %c = arith.constant dense<1.000000e+00> : tensor<128x128xf32, #blocked>
+    %sum = arith.addf %x, %c : tensor<128x128xf32, #blocked>
+    %r = "tt.reduce"(%sum) <{axis = 1 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %v = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %v : f32
+    }) : (tensor<128x128xf32, #blocked>) -> tensor<128xf32, #slice>
+    tt.return %r : tensor<128xf32, #slice>
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0], [0]]}>
 
   // CHECK-DAG: #[[$ORIG:.*]] = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = {{\[\[0\], \[0\]\]}}}>

@@ -2,6 +2,7 @@
 #include <cassert>
 #include <deque>
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -82,6 +83,16 @@ Attribute cloneWithCGALayout(RankedTensorType tensorTy,
 
   assert(false && "cloneWithCGALayout not implemented for encoding");
   return {};
+}
+
+Value convertValueToLayout(OpBuilder &builder, Location loc, Value value,
+                           Attribute layout) {
+  auto tensorTy = cast<RankedTensorType>(value.getType());
+  if (tensorTy.getEncoding() == layout)
+    return value;
+
+  auto newTy = tensorTy.cloneWithEncoding(layout);
+  return ttg::ConvertLayoutOp::create(builder, loc, newTy, value);
 }
 
 // Rematerialize a dot/reduce operand's producer slice in the requested CGA
@@ -218,6 +229,13 @@ private:
       auto it = layouts.find(oldResult);
       if (it == layouts.end())
         continue;
+      // Keep the constant's typed value attribute and result type consistent.
+      // ConvertLayoutOp canonicalization folds splats into the new layout.
+      if (isa<arith::ConstantOp>(op)) {
+        rewritten[oldResult] =
+            convertValueToLayout(builder, op->getLoc(), newResult, it->second);
+        continue;
+      }
       auto oldType = cast<RankedTensorType>(oldResult.getType());
       newResult.setType(oldType.cloneWithEncoding(it->second));
       rewritten[oldResult] = newResult;
@@ -233,16 +251,6 @@ private:
   SmallVector<Operation *> originalOps;
   bool foundLoadWithDifferentCGALayout = false;
 };
-
-Value convertValueToLayout(OpBuilder &builder, Location loc, Value value,
-                           Attribute layout) {
-  auto tensorTy = cast<RankedTensorType>(value.getType());
-  if (tensorTy.getEncoding() == layout)
-    return value;
-
-  auto newTy = tensorTy.cloneWithEncoding(layout);
-  return ttg::ConvertLayoutOp::create(builder, loc, newTy, value);
-}
 
 void convertOpOperandsToLayouts(Operation *op,
                                 llvm::ArrayRef<Attribute> operandLayouts) {
