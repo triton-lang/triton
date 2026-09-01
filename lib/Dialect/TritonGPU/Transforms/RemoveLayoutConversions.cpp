@@ -1306,6 +1306,21 @@ bool LayoutRematerialization::hoistConvertDotOperand(
   if (result.failed())
     return false;
 
+  // Hoist only if rematerializing the slice in the dot-operand layout (plus
+  // converts inserted at each load leaf) is no more expensive than the convert
+  // we would eliminate.
+  int64_t newCvtCost = 0;
+  for (Value v : slice) {
+    if (Operation *op = v.getDefiningOp())
+      if (isa<LoadOp, DescriptorLoadLikeOpInterface>(op))
+        newCvtCost += getConvertCost(op->getResult(0), layout[v]);
+  }
+  if (!isRematBeneficial(convertOp, slice, layout, newCvtCost,
+                         /*disableRematSplitting=*/false)) {
+    LDBG("  skipped dot-operand hoist due to higher cost");
+    return false;
+  }
+
   IRMapping mapping;
   OpBuilder builder(convertOp.getContext());
   SetVector<Value> innerSlice;
