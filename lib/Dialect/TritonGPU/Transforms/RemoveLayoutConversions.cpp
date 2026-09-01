@@ -1052,23 +1052,26 @@ static unsigned getCostFactor(Value result, Attribute rematEncoding) {
   return std::max(1u, newElemsPerThread / oldElemsPerThread);
 }
 
-/// Determine whether rematerializing \p slice is beneficial given that it will
-/// eliminate \p convertOp and require creating new convert ops with cost \p
-/// newCvtCost.
-bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
-                       const DenseMap<Value, Attribute> &layout,
-                       int64_t newCvtCost, bool disableRematSplitting) {
-  // Identify all operations in the slice
+/// Collect the operations defining the values of \p slice.
+static SetVector<Operation *> getSliceOps(const SetVector<Value> &slice) {
   SetVector<Operation *> sliceOps;
   for (Value v : slice) {
     if (Operation *op = v.getDefiningOp()) {
       sliceOps.insert(op);
     }
   }
+  return sliceOps;
+}
 
-  // Determine which values used by operations outside the slice. We can use
-  // this to determine whether they will actually survive and therefore need to
-  // contribute to the cost.
+/// Determine which values of \p slice are used by operations outside the slice.
+/// Rematerializing the slice leaves those values, and everything they depend
+/// on, behind in the original layout, so they get duplicated rather than
+/// rewritten. \p convertOp is the conversion being eliminated and so does not
+/// count as an outside user.
+static SetVector<Value>
+getValuesUsedOutsideSlice(ConvertLayoutOp convertOp,
+                          const SetVector<Value> &slice,
+                          const SetVector<Operation *> &sliceOps) {
   SetVector<Value> nonSliceOnlyValues;
 
   // Identify values that directly have uses outside the slice.
@@ -1125,16 +1128,33 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
         nonSliceOnlyValues.insert(operand);
   }
 
-  if (disableRematSplitting && !nonSliceOnlyValues.empty()) {
-    LDBG("  skipped rematerialization because it would split the slice");
-    return false;
-  }
+  return nonSliceOnlyValues;
+}
 
-  int64_t convertLayoutCost =
-      getConvertCost(convertOp.getSrc(), convertOp.getType().getEncoding());
-  int64_t rematerialisationCost = newCvtCost;
+/// Estimated additional work caused by rematerializing a slice. Expensive math
+/// is tracked separately so transformations with benefits outside this cost
+/// model, such as enabling pipelining, can apply a more targeted policy.
+struct RematerializationCost {
+  int64_t totalCost = 0;
+  int64_t expensiveMathCost = 0;
+  bool splitsSlice = false;
+};
 
-  // Evaluate single-use status for every operation in slice
+/// Compute the additional cost of rematerializing \p slice in the layouts in
+/// \p layout. This includes operations duplicated because their original
+/// values survive and extra per-thread work introduced by the new layouts.
+static FailureOr<RematerializationCost>
+getRematerializationCost(ConvertLayoutOp convertOp,
+                         const SetVector<Value> &slice,
+                         const DenseMap<Value, Attribute> &layout) {
+  SetVector<Operation *> sliceOps = getSliceOps(slice);
+  SetVector<Value> nonSliceOnlyValues =
+      getValuesUsedOutsideSlice(convertOp, slice, sliceOps);
+
+  RematerializationCost rematCost;
+  rematCost.splitsSlice = !nonSliceOnlyValues.empty();
+
+  // Evaluate single-use status for every operation in slice.
   for (Operation *op : sliceOps) {
     auto dialect = op->getDialect();
     bool isOpUsedOutsideSlice = llvm::any_of(op->getResults(), [&](Value v) {
@@ -1150,7 +1170,8 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
       // as halves of a single-cycle FMA instruction) and expensive
       // operations which use the special function unit and/or involve
       // multiple instructions.
-      int64_t multiplier = isExpensiveMathOp(op) ? 8 : 1;
+      bool isExpensive = isExpensiveMathOp(op);
+      int64_t multiplier = isExpensive ? 8 : 1;
       for (Value result : op->getResults()) {
         Attribute rematEncoding = layout.lookup(result);
         int64_t cost = multiplier * getByteCount(result);
@@ -1159,7 +1180,10 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
         unsigned factor = getCostFactor(result, rematEncoding);
         if (!isOpUsedOutsideSlice)
           factor -= 1;
-        rematerialisationCost += cost * factor;
+        cost *= factor;
+        rematCost.totalCost += cost;
+        if (isExpensive)
+          rematCost.expensiveMathCost += cost;
       }
       continue;
     }
@@ -1173,7 +1197,7 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
     if (isa<LoadOp>(op) || isa<LocalLoadOp>(op)) {
       // optimistically assume L1-cached:
       for (Value result : op->getResults()) {
-        rematerialisationCost += 8 * getByteCount(result);
+        rematCost.totalCost += 8 * getByteCount(result);
       }
     } else if (isa<ReduceOp>(op)) {
       // Reduce op introduce much cost.
@@ -1184,12 +1208,35 @@ bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
         // use chain.
         LDBG("  skipped rematerialization due to non-associative reduce in the "
              "slice");
-        return false;
+        return failure();
       }
-      rematerialisationCost += helper.getIntraWarpSizeWithUniqueData();
-      rematerialisationCost += 8 * helper.getInterWarpSizeWithUniqueData();
+      rematCost.totalCost += helper.getIntraWarpSizeWithUniqueData();
+      rematCost.totalCost += 8 * helper.getInterWarpSizeWithUniqueData();
     }
   }
+
+  return rematCost;
+}
+
+/// Determine whether rematerializing \p slice is beneficial given that it will
+/// eliminate \p convertOp and require creating new convert ops with cost \p
+/// newCvtCost.
+bool isRematBeneficial(ConvertLayoutOp convertOp, const SetVector<Value> &slice,
+                       const DenseMap<Value, Attribute> &layout,
+                       int64_t newCvtCost, bool disableRematSplitting) {
+  FailureOr<RematerializationCost> rematCost =
+      getRematerializationCost(convertOp, slice, layout);
+  if (failed(rematCost))
+    return false;
+
+  if (disableRematSplitting && rematCost->splitsSlice) {
+    LDBG("  skipped rematerialization because it would split the slice");
+    return false;
+  }
+
+  int64_t convertLayoutCost =
+      getConvertCost(convertOp.getSrc(), convertOp.getType().getEncoding());
+  int64_t rematerialisationCost = newCvtCost + rematCost->totalCost;
 
   LLVM_DEBUG({
     DBGS() << "  convert layout cost: " << convertLayoutCost << "\n";
@@ -1306,18 +1353,16 @@ bool LayoutRematerialization::hoistConvertDotOperand(
   if (result.failed())
     return false;
 
-  // Hoist only if rematerializing the slice in the dot-operand layout (plus
-  // converts inserted at each load leaf) is no more expensive than the convert
-  // we would eliminate.
-  int64_t newCvtCost = 0;
-  for (Value v : slice) {
-    if (Operation *op = v.getDefiningOp())
-      if (isa<LoadOp, DescriptorLoadLikeOpInterface>(op))
-        newCvtCost += getConvertCost(op->getResult(0), layout[v]);
-  }
-  if (!isRematBeneficial(convertOp, slice, layout, newCvtCost,
-                         /*disableRematSplitting=*/false)) {
-    LDBG("  skipped dot-operand hoist due to higher cost");
+  // The payoff of this hoist is pipelining the loads, so the conversions moved
+  // next to the loads should not be treated as ordinary, fully exposed costs.
+  // Still reject additional expensive math, whether it comes from preserving
+  // the original slice or from a layout that increases per-thread work.
+  FailureOr<RematerializationCost> rematCost =
+      getRematerializationCost(convertOp, slice, layout);
+  if (failed(rematCost))
+    return false;
+  if (rematCost->expensiveMathCost > 0) {
+    LDBG("  skipped dot-operand hoist: would add expensive math");
     return false;
   }
 
