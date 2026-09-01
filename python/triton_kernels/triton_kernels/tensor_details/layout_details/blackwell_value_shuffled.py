@@ -94,27 +94,26 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
 
     def swizzle_data(self, data: torch.Tensor) -> torch.Tensor:
         """Convert canonical [..., K, N_packed] bytes to shuffled 5D storage."""
-        assert data.stride(-1) == 1
         return self._convert_data(data, inverse=False, major_dim=-1)
 
     def unswizzle_data(self, data: torch.Tensor) -> torch.Tensor:
         """Convert shuffled 5D storage back to canonical packed bytes."""
         return self._convert_data(data, inverse=True, major_dim=-1)
 
-    def convert_data(self, data, destination: LayoutTransformation):
+    def convert_data(self, data, destination: LayoutTransformation, *, out=None):
         if (data.device.type != "cuda" or data.dtype != torch.uint8
                 or not isinstance(destination, strided.StridedLayoutTransformation)
                 or destination.order[0] < len(self.shape) - 2):
-            return super().convert_data(data, destination)
-        return self._convert_data(data, inverse=True, major_dim=destination.order[0])
+            return super().convert_data(data, destination, out=out)
+        return self._convert_data(data, inverse=True, major_dim=destination.order[0], out=out)
 
-    def _convert_data_from(self, data, source: LayoutTransformation):
+    def _convert_data_from(self, data, source: LayoutTransformation, *, out):
         if (not isinstance(source, strided.StridedLayoutTransformation) or not self.is_fp4
                 or not source._can_convert_fp4(data)):
-            return super()._convert_data_from(data, source)
-        return self._convert_data(data, inverse=False, major_dim=source.order[0])
+            return super()._convert_data_from(data, source, out=out)
+        return self._convert_data(data, inverse=False, major_dim=source.order[0], out=out)
 
-    def _convert_data(self, data: torch.Tensor, inverse: bool, major_dim: int) -> torch.Tensor:
+    def _convert_data(self, data: torch.Tensor, inverse: bool, major_dim: int, out=None) -> torch.Tensor:
         storage_shape = self.storage_shape
         # Preserve the canonical path's even-N packing requirement.
         if self.shape[-1] % 2:
@@ -122,12 +121,13 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
         if data.device.type != "cuda" or data.dtype != torch.uint8:
             return self._unswizzle_data_torch(data) if inverse else self._swizzle_data_torch(data)
 
-        if inverse:
-            destination = strided.StridedLayout(major_dim).make_transformation(self.shape, True)
-            out = torch.empty_strided(destination.storage_shape, destination.storage_strides, dtype=data.dtype,
-                                      device=data.device)
-        else:
-            out = torch.empty(storage_shape, dtype=data.dtype, device=data.device)
+        if out is None:
+            if inverse:
+                destination = strided.StridedLayout(major_dim).make_transformation(self.shape, True)
+                out = torch.empty_strided(destination.storage_shape, destination.storage_strides, dtype=data.dtype,
+                                          device=data.device)
+            else:
+                out = torch.empty(storage_shape, dtype=data.dtype, device=data.device)
         strided_data, shuffled = (out, data) if inverse else (data, out)
         E, num_tiles_k, num_tiles_n, tile_n, tile_k = storage_shape
         K_packed, N_packed = self.shape[-2] // 2, self.shape[-1] // 2
