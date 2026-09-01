@@ -788,7 +788,7 @@ createIfBlock(RewriterBase &b, Location loc, Value cnd);
 SmallVector<Value>
 broadcastTensorResult(Operation *op, RankedTensorType tensorTy,
                       ConversionPatternRewriter &rewriter,
-                      SmallVector<Value> uniqueResultVals, Type valueElemTy,
+                      ArrayRef<Value> uniqueResultVals, Type valueElemTy,
                       TritonLLVMOpBuilder &b, Value threadPred,
                       const TargetInfoBase &targetInfo);
 

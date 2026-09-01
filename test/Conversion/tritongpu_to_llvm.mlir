@@ -2319,6 +2319,21 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
     tt.return
   }
 
+  // CHECK-LABEL: inline_asm_scalar_pointer_result
+  // CHECK: llvm.inline_asm has_side_effects
+  // CHECK: llvm.ptrtoint {{.*}} : !llvm.ptr<1> to i64
+  // CHECK: st.shared::cta.b64
+  // CHECK: nvvm.barrier
+  // CHECK: llvm.load {{.*}} -> i64
+  // CHECK: llvm.inttoptr {{.*}} : i64 to !llvm.ptr<1>
+  // CHECK: llvm.return
+  tt.func public @inline_asm_scalar_pointer_result(%ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>) {
+    %result = tt.elementwise_inline_asm "mov.u64 $0, $1;" {constraints = "=l,l", packed_element = 1 : i32, pure = false} %ptr : !tt.ptr<i32> -> !tt.ptr<i32>
+    %value = tt.load %result : !tt.ptr<i32>
+    tt.store %out, %value : !tt.ptr<i32>
+    tt.return
+  }
+
   // CHECK-LABEL: inline_asm_scalar_unused_first_result
   // CHECK: llvm.cond_br
   // CHECK: llvm.inline_asm has_side_effects
@@ -2362,6 +2377,29 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
   tt.func public @inline_asm_side_effect_padded_pack(%ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>) {
     %result = tt.elementwise_inline_asm "atom.global.add.u32 $0, [$2], 1; mov.u32 $1, $0;" {constraints = "=r,=r,l,l", packed_element = 2 : i32, pure = false} %ptr : !tt.ptr<i32> -> i32
     tt.store %out, %result : !tt.ptr<i32>
+    tt.return
+  }
+}
+
+// -----
+
+#replicated = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: inline_asm_replicated_bool_result
+  // CHECK: llvm.inline_asm has_side_effects
+  // CHECK: llvm.zext {{.*}} : i1 to i8
+  // CHECK: vector<4xi8>
+  // CHECK: st.shared::cta.v4.b8
+  // CHECK: nvvm.cluster.arrive
+  // CHECK: nvvm.cluster.wait
+  // CHECK: llvm.load {{.*}} -> vector<4xi8>
+  // CHECK: llvm.trunc {{.*}} : i8 to i1
+  // CHECK: llvm.return
+  tt.func public @inline_asm_replicated_bool_result(%out: tensor<128x!tt.ptr<i32>, #replicated>) {
+    %x = tt.make_range {start = 0 : i32, end = 128 : i32} : tensor<128xi32, #replicated>
+    %result = tt.elementwise_inline_asm "setp.eq.u32 $0, $1, 0;" {constraints = "=b,r", packed_element = 1 : i32, pure = false} %x : tensor<128xi32, #replicated> -> tensor<128xi1, #replicated>
+    %value = arith.extui %result : tensor<128xi1, #replicated> to tensor<128xi32, #replicated>
+    tt.store %out, %value : tensor<128x!tt.ptr<i32>, #replicated>
     tt.return
   }
 }

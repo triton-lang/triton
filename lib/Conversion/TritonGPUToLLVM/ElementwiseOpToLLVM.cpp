@@ -449,16 +449,33 @@ private:
       Type originalResultTy = op->getResult(resultIndex).getType();
       Type valueElemTy = getTypeConverter()->convertType(
           getElementTypeOrSelf(originalResultTy));
+      auto &resultVals = unpackedResults[resultIndex];
+      bool isPointer = isa<LLVM::LLVMPointerType>(valueElemTy);
+      Type storageTy = valueElemTy;
+      if (isPointer)
+        storageTy = i64_ty;
+      else if (valueElemTy.isInteger(1))
+        storageTy = i8_ty;
+      // Broadcast pointers as integers and widen booleans to whole bytes.
+      if (storageTy != valueElemTy)
+        for (Value &value : resultVals)
+          value = isPointer ? Value(b.ptrtoint(storageTy, value))
+                            : Value(b.zext(storageTy, value));
+
       if (auto tensorTy = dyn_cast<RankedTensorType>(originalResultTy)) {
-        unpackedResults[resultIndex] = broadcastTensorResult(
-            op, tensorTy, rewriter, unpackedResults[resultIndex], valueElemTy,
-            b, threadPred, targetInfo);
+        resultVals =
+            broadcastTensorResult(op, tensorTy, rewriter, resultVals, storageTy,
+                                  b, threadPred, targetInfo);
       } else {
-        assert(unpackedResults[resultIndex].size() == 1);
-        unpackedResults[resultIndex][0] = broadcastScalarAtomicResult(
-            op, valueElemTy, unpackedResults[resultIndex][0], rewriter, b,
-            threadPred, targetInfo);
+        assert(resultVals.size() == 1);
+        resultVals[0] = broadcastScalarAtomicResult(
+            op, storageTy, resultVals[0], rewriter, b, threadPred, targetInfo);
       }
+
+      if (storageTy != valueElemTy)
+        for (Value &value : resultVals)
+          value = isPointer ? Value(b.inttoptr(valueElemTy, value))
+                            : Value(b.trunc(valueElemTy, value));
 
       if (broadcastIndex + 1 != usedResultIndices.size()) {
         // Each result reuses the same scratch. Finish all readers before the

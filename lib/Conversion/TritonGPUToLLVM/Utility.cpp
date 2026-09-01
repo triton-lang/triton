@@ -2115,7 +2115,7 @@ std::tuple<Block *, Block *, Block *> createIfBlock(RewriterBase &b,
 SmallVector<Value>
 broadcastTensorResult(Operation *op, RankedTensorType tensorTy,
                       ConversionPatternRewriter &rewriter,
-                      SmallVector<Value> uniqueResultVals, Type valueElemTy,
+                      ArrayRef<Value> uniqueResultVals, Type valueElemTy,
                       TritonLLVMOpBuilder &b, Value threadPred,
                       const TargetInfoBase &targetInfo) {
   assert(op->hasAttr("allocation.offset"));

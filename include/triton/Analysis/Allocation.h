@@ -29,7 +29,7 @@ bool hasCrossCTAScratch(Operation *op);
 /// broadcast from each group leader. Physical scratch owners have these bits
 /// clear. Scalar results are broadcast from CTA0 across all CTAs. Callers check
 /// whether scratch has been allocated.
-std::optional<uint16_t> getAtomicScratchBroadcastMask(Operation *op);
+std::optional<uint16_t> getScratchBroadcastMask(Operation *op);
 
 unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
                                        const LinearLayout &dstLayout,

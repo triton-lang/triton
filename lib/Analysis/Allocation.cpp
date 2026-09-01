@@ -180,7 +180,7 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   return 0;
 }
 
-std::optional<uint16_t> getAtomicScratchBroadcastMask(Operation *op) {
+std::optional<uint16_t> getScratchBroadcastMask(Operation *op) {
   auto inlineAsm = dyn_cast<ElementwiseInlineAsmOp>(op);
   if (!isa<AtomicOpInterface, AtomicPollOp, gpu::LocalAtomicScatterRMWOp>(op) &&
       !(inlineAsm && !inlineAsm.getPure()))
@@ -208,7 +208,7 @@ bool hasCrossCTAScratch(Operation *op) {
     return poll.getTimeout() && !poll.getResult().use_empty();
   if (auto inlineAsm = dyn_cast<ElementwiseInlineAsmOp>(op)) {
     return !inlineAsm.getPure() && !inlineAsm->use_empty() &&
-           getAtomicScratchBroadcastMask(op).value_or(0) != 0;
+           getScratchBroadcastMask(op).value_or(0) != 0;
   }
   if (isa<AtomicOpInterface, gpu::LocalAtomicScatterRMWOp>(op)) {
     Value result = op->getResult(0);
