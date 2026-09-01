@@ -7,6 +7,7 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/Transforms/DescriptorMemoryLayouts.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "llvm/ADT/STLExtras.h"
 
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
@@ -131,6 +132,8 @@ public:
   ~AMDGPUAssignDescriptorMemoryLayouts() override = default;
 
 private:
+  Attribute getDesiredDescriptorEncoding(
+      TypedValue<tt::TensorDescType> descriptor) override;
   Attribute buildFallbackSharedEncoding(mlir::MLIRContext *ctx,
                                         ArrayRef<int64_t> shape,
                                         ArrayRef<unsigned> order,
@@ -138,6 +141,66 @@ private:
                                         Type elementType) override;
   bool isCompatibleSharedEncoding(Attribute enc) override;
 };
+
+Attribute AMDGPUAssignDescriptorMemoryLayouts::getDesiredDescriptorEncoding(
+    TypedValue<tt::TensorDescType> descriptor) {
+  SmallVector<Value> worklist{descriptor};
+  SmallVector<Value> visited;
+  Attribute desiredEncoding;
+
+  while (!worklist.empty()) {
+    Value value = worklist.pop_back_val();
+    if (llvm::is_contained(visited, value))
+      continue;
+    visited.push_back(value);
+
+    for (Operation *user : value.getUsers()) {
+      if (auto update =
+              dyn_cast<triton::amdgpu::UpdateTensorDescriptorOp>(user)) {
+        if (update.getDesc() == value)
+          worklist.push_back(update.getResult());
+        continue;
+      }
+
+      ttg::MemDescType memoryType;
+      if (auto load =
+              dyn_cast<triton::amdgpu::AsyncTDMCopyGlobalToLocalOp>(user)) {
+        if (load.getDesc() == value)
+          memoryType = load.getResult().getType();
+      } else if (auto store =
+                     dyn_cast<triton::amdgpu::AsyncTDMCopyLocalToGlobalOp>(
+                         user)) {
+        if (store.getDesc() == value)
+          memoryType = store.getSrc().getType();
+      } else if (auto gather =
+                     dyn_cast<triton::amdgpu::AsyncTDMGatherOp>(user)) {
+        if (gather.getDesc() == value)
+          memoryType = gather.getDst().getType();
+      } else if (auto scatter =
+                     dyn_cast<triton::amdgpu::AsyncTDMScatterOp>(user)) {
+        if (scatter.getDesc() == value)
+          memoryType = scatter.getSrc().getType();
+      }
+
+      if (!memoryType)
+        continue;
+
+      Attribute encoding = memoryType.getEncoding();
+      if (auto partitioned =
+              dyn_cast<ttg::PartitionedSharedEncodingAttr>(encoding))
+        encoding = partitioned.getPartitionLayout();
+      encoding = getCompatibleSharedEncoding(encoding, memoryType.getShape(),
+                                             memoryType.getElementType());
+      if (!encoding)
+        continue;
+      if (desiredEncoding && desiredEncoding != encoding)
+        return {};
+      desiredEncoding = encoding;
+    }
+  }
+
+  return desiredEncoding;
+}
 
 Attribute AMDGPUAssignDescriptorMemoryLayouts::buildFallbackSharedEncoding(
     mlir::MLIRContext *ctx, ArrayRef<int64_t> shape, ArrayRef<unsigned> order,
