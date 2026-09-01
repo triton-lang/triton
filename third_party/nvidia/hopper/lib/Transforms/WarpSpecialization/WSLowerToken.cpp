@@ -70,6 +70,14 @@ void processProducerCommitOp(OpBuilder &builder, ttnvws::ProducerCommitOp op,
     // Get the count from the barriers: trace the local_alloc for the barrier
     // then find the count from init_barrier
     arriveOp = ttng::ArriveBarrierOp::create(builder, loc, bufferFull, fullCnt);
+  } else if (loadType == ttnvws::TokenLoadType::AsyncLoadOp) {
+    // cp.async has no hardware mbarrier-arrive (unlike TMA). Drain the
+    // producer's pending cp.async batch with commit_group + wait(0) before
+    // signalling the consumer barrier, so the consumer never observes a
+    // partially-filled buffer.
+    ttg::AsyncCommitGroupOp::create(builder, loc, ValueRange{});
+    ttg::AsyncWaitOp::create(builder, loc, ValueRange{}, 0);
+    arriveOp = ttng::ArriveBarrierOp::create(builder, loc, bufferFull, fullCnt);
   } else {
     llvm::report_fatal_error("unsupported load type for producer commit");
   }
