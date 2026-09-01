@@ -1,10 +1,10 @@
 import functools
 import os
-import subprocess
 import triton
 import ctypes
 import sys
 from triton import knobs
+from triton._utils import find_library_dirs
 from triton.runtime.build import compile_module_from_file
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
@@ -27,21 +27,17 @@ def libcuda_dirs():
     if env_libcuda_path := knobs.nvidia.libcuda_path:
         return [env_libcuda_path]
 
-    libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode(errors="ignore")
-    # each line looks like the following:
-    # libcuda.so.1 (libc6,x86-64) => /lib/x86_64-linux-gnu/libcuda.so.1
-    locs = [line.split()[-1] for line in libs.splitlines() if "libcuda.so.1" in line]
-    dirs = [os.path.dirname(loc) for loc in locs]
+    dirs = find_library_dirs("libcuda.so.1")
     env_ld_library_path = os.getenv("LD_LIBRARY_PATH")
     if env_ld_library_path and not dirs:
         dirs = [dir for dir in env_ld_library_path.split(":") if os.path.exists(os.path.join(dir, "libcuda.so.1"))]
     msg = 'libcuda.so cannot found!\n'
-    if locs:
-        msg += 'Possible files are located at %s.' % str(locs)
-        msg += 'Please create a symlink of libcuda.so to any of the files.'
+    if dirs:
+        msg += 'libcuda.so.1 was found in directories: %s.' % str(dirs)
+        msg += 'Please create a libcuda.so symlink in one of the directories.'
     else:
-        msg += 'Please make sure GPU is set up and then run "/sbin/ldconfig"'
-        msg += ' (requires sudo) to refresh the linker cache.'
+        msg += 'Please make sure GPU is set up and the linker search paths'
+        msg += ' in /etc/ld.so.conf are up to date.'
     assert any(os.path.exists(os.path.join(path, 'libcuda.so.1')) for path in dirs), msg
     return dirs
 
