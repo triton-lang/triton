@@ -6,9 +6,14 @@
 
 // RUN: triton-tensor-layout -i %s -alias-names="mfma" -t "tensor<16x16xf16>" -use-hw-view | FileCheck %s --check-prefix=CHECK-HW
 
+// RUN: triton-tensor-layout -i %s -alias-names="tmem" -t "!ttg.memdesc<128x4xf32, #ttng.tensor_memory_encoding<blockM = 128, blockN = 4, colStride = 1>, #ttng.tensor_memory>" | FileCheck %s --check-prefix=CHECK-TMEM
+
+// RUN: triton-tensor-layout -i %s -alias-names="tmem" -t "!ttg.memdesc<128x4xf32, #ttng.tensor_memory_encoding<blockM = 128, blockN = 4, colStride = 1>, #ttng.tensor_memory>" -use-hw-view | FileCheck %s --check-prefix=CHECK-TMEM-HW
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [4, 1], instrShape = [16, 16, 16], isTransposed = true}>
-tt.func @print(%A : !tt.ptr<f16>) {
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 4, colStride = 1>
+tt.func @print(%A : !tt.ptr<f16>, %tmem : !ttg.memdesc<128x4xf32, #tmem, #ttng.tensor_memory>) {
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #blocked>
   %cst1 = arith.constant dense<0.00e+00> : tensor<16x16xf16, #mfma>
   tt.return
@@ -56,3 +61,13 @@ tt.func @print(%A : !tt.ptr<f16>) {
 // CHECK-HW: Warp1:
 // CHECK-HW: Warp2:
 // CHECK-HW: Warp3:
+
+// CHECK-TMEM: Print layout attribute: #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 4, colStride = 1>
+// CHECK-TMEM: R0:C0,   R0:C1,   R0:C2,   R0:C3
+// CHECK-TMEM: R127:C0, R127:C1, R127:C2, R127:C3
+
+// CHECK-TMEM-HW: (  0,0), (  0,1), (  0,2), (  0,3)
+// CHECK-TMEM-HW: ( 31,0), ( 31,1), ( 31,2), ( 31,3)
+// CHECK-TMEM-HW-EMPTY:
+// CHECK-TMEM-HW-NEXT: ( 32,0), ( 32,1), ( 32,2), ( 32,3)
+// CHECK-TMEM-HW: (127,0), (127,1), (127,2), (127,3)
