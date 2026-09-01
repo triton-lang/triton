@@ -51,9 +51,8 @@ llvm::Triple getAMDTargetTriple(const std::string &arch) {
   if (subArch == llvm::Triple::NoSubArch)
     throw std::invalid_argument("invalid AMD GPU architecture: " + arch);
 
-  llvm::Triple triple("amdgpu-amd-amdhsa");
-  triple.setArch(llvm::Triple::amdgpu, subArch);
-  return triple;
+  return llvm::Triple(llvm::Triple::amdgpu, subArch, llvm::Triple::AMD,
+                      llvm::Triple::AMDHSA);
 }
 
 void init_triton_amd_passes_ttgpuir(py::module_ &m) {
