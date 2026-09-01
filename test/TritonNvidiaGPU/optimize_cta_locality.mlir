@@ -2,6 +2,29 @@
 
 #orig = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [0, 2]]}>
 #planned = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [1, 0]]}>
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @preserve_yield_layout
+  // CHECK-SAME: %arg1: tensor<128x128xf32, #[[$SRC:[a-zA-Z0-9_]+]]>, %arg2: tensor<128x128xf32, #[[$DST:[a-zA-Z0-9_]+]]>
+  // CHECK: %[[RESULT:.*]] = scf.if %arg0
+  // CHECK: %[[YIELD:.*]] = ttg.convert_layout %arg1 : tensor<128x128xf32, #[[$SRC]]> -> tensor<128x128xf32, #[[$DST]]>
+  // CHECK: scf.yield %[[YIELD]] : tensor<128x128xf32, #[[$DST]]>
+  // CHECK: tt.return %[[RESULT]] : tensor<128x128xf32, #[[$DST]]>
+  tt.func @preserve_yield_layout(%cond: i1, %src: tensor<128x128xf32, #planned>, %init: tensor<128x128xf32, #orig>) -> tensor<128x128xf32, #orig> {
+    %result = scf.if %cond -> tensor<128x128xf32, #orig> {
+      %yield = ttg.convert_layout %src : tensor<128x128xf32, #planned> -> tensor<128x128xf32, #orig>
+      scf.yield %yield : tensor<128x128xf32, #orig>
+    } else {
+      scf.yield %init : tensor<128x128xf32, #orig>
+    }
+    tt.return %result : tensor<128x128xf32, #orig>
+  }
+}
+
+// -----
+
+#orig = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [0, 2]]}>
+#planned = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 1], [1, 0]]}>
 #dot_a = #ttg.dot_op<{opIdx = 0, parent = #planned}>
 #dot_b = #ttg.dot_op<{opIdx = 1, parent = #planned}>
 

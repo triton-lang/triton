@@ -2,6 +2,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -22,8 +23,8 @@ namespace {
 
 // AssignCGALayouts chooses preferred CGA layouts for Dot/Reduce ops and
 // materializes the boundary with ttg.convert_layout. This pass looks for
-// cross-CTA conversions that feed side-effecting users, such as stores, and
-// moves those users to a layout in the same CTA group as the conversion source.
+// cross-CTA conversions that feed stores and moves those stores to a layout
+// in the same CTA group as the conversion source.
 bool isCrossCTAConversion(ttg::ConvertLayoutOp convert) {
   auto srcTy = cast<RankedTensorType>(convert.getSrc().getType());
   auto dstTy = cast<RankedTensorType>(convert.getType());
@@ -83,7 +84,8 @@ Value convertValue(OpBuilder &builder, Location loc, Value value,
 // target layout.
 void rewriteUser(ttg::ConvertLayoutOp convert, OpOperand &use) {
   Operation *op = use.getOwner();
-  if (!op->getResults().empty())
+  // Other resultless users can constrain region or function signatures.
+  if (!isa<triton::StoreOp, triton::DescriptorStoreLikeOpInterface>(op))
     return;
 
   auto srcTy = cast<RankedTensorType>(convert.getSrc().getType());
