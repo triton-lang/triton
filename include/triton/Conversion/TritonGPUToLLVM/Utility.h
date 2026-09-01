@@ -783,6 +783,15 @@ SmallVector<Value> inlineRegion(RewriterBase &rewriter, Region &region,
 std::tuple</*prevBlock=*/Block *, /*ifBlock=*/Block *, /*thenBlock=*/Block *>
 createIfBlock(RewriterBase &b, Location loc, Value cnd);
 
+// Broadcast canonical owners' results to redundant threads and CTAs. Both the
+// input and returned values contain only unique registers.
+SmallVector<Value>
+broadcastTensorResult(Operation *op, RankedTensorType tensorTy,
+                      ConversionPatternRewriter &rewriter,
+                      ArrayRef<Value> uniqueResultVals, Type valueElemTy,
+                      TritonLLVMOpBuilder &b, Value threadPred,
+                      const TargetInfoBase &targetInfo);
+
 void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
                                  ConversionPatternRewriter &rewriter,
                                  SmallVector<Value> &resultVals,

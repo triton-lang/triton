@@ -198,9 +198,13 @@ struct ElementwiseInlineAsmOpConversion
     : public ConvertOpToLLVMPattern<ElementwiseInlineAsmOp> {
   using Base = ConvertOpToLLVMPattern<ElementwiseInlineAsmOp>;
 
-  using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
   typedef typename Base::OpAdaptor OpAdaptor;
+
+  explicit ElementwiseInlineAsmOpConversion(LLVMTypeConverter &typeConverter,
+                                            const TargetInfoBase &targetInfo,
+                                            PatternBenefit benefit = 1)
+      : Base(typeConverter, benefit), targetInfo(targetInfo) {}
 
   // If operand size is smaller than 32 bits, pack in groups of 32 bits.
   SmallVector<Value> packOperands(ElementwiseInlineAsmOp op,
@@ -236,7 +240,8 @@ struct ElementwiseInlineAsmOpConversion
   SmallVector<SmallVector<Value>>
   createDestOps(ElementwiseInlineAsmOp op, OpAdaptor adaptor,
                 ConversionPatternRewriter &rewriter,
-                MultipleOperandsRange operands, Location loc) const {
+                MultipleOperandsRange operands, Location loc,
+                Value threadPred) const {
     auto ctx = op->getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
@@ -269,18 +274,8 @@ struct ElementwiseInlineAsmOpConversion
     Type asmRetType =
         asmRetTypes.size() > 1 ? struct_ty(asmRetTypes) : asmRetTypes[0];
 
-    Value asmResults = LLVM::InlineAsmOp::create(
-                           rewriter, loc, asmRetType,
-                           /*operands=*/packedOperands,
-                           /*asm_string=*/op.getAsmString(),
-                           /*constraints=*/op.getConstraints(),
-                           /*has_side_effects=*/!op.getPure(),
-                           /*is_align_stack=*/false, LLVM::TailCallKind::None,
-                           /*asm_dialect=*/
-                           LLVM::AsmDialectAttr::get(rewriter.getContext(),
-                                                     LLVM::AsmDialect::AD_ATT),
-                           /*operand_attrs=*/ArrayAttr())
-                           ->getResult(0);
+    Value asmResults =
+        createInlineAsm(op, asmRetType, packedOperands, threadPred, rewriter);
 
     // asmResults is a flat struct; pack its values into
     // [return_value][op.getPackedElement()].
@@ -341,6 +336,11 @@ struct ElementwiseInlineAsmOpConversion
       }
     }
 
+    Value threadPred;
+    if (!op.getPure())
+      threadPred = emitRedundantThreadPredicate(getFreeVariableMasks(resultTy),
+                                                rewriter, loc, targetInfo);
+
     // Run the inline asm op on each block of elements.
     //
     // Layout is unpackedResults[result_idx][elem].
@@ -358,7 +358,7 @@ struct ElementwiseInlineAsmOpConversion
           block[j].push_back(os[i + j]);
         }
       }
-      auto cur = createDestOps(op, adaptor, rewriter, block, loc);
+      auto cur = createDestOps(op, adaptor, rewriter, block, loc, threadPred);
       assert(cur.size() == unpackedResults.size());
       for (unsigned j = 0; j < cur.size(); j++) {
         unpackedResults[j].insert(unpackedResults[j].end(), cur[j].begin(),
@@ -368,6 +368,9 @@ struct ElementwiseInlineAsmOpConversion
     for (auto &results : unpackedResults) {
       results.resize(numElemsPerThread);
     }
+
+    broadcastResults(op, unpackedResults, threadPred, rewriter);
+
     // Reorder and pack the results.
     SmallVector<Value> outs;
     for (int i = 0; i < unpackedResults.size(); i++) {
@@ -379,6 +382,115 @@ struct ElementwiseInlineAsmOpConversion
     rewriter.replaceOp(op, outs);
     return success();
   }
+
+private:
+  Value createInlineAsm(ElementwiseInlineAsmOp op, Type asmRetType,
+                        ValueRange packedOperands, Value threadPred,
+                        ConversionPatternRewriter &rewriter) const {
+    Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto emitInlineAsm = [&]() -> Value {
+      return LLVM::InlineAsmOp::create(
+                 rewriter, loc, asmRetType,
+                 /*operands=*/packedOperands,
+                 /*asm_string=*/op.getAsmString(),
+                 /*constraints=*/op.getConstraints(),
+                 /*has_side_effects=*/!op.getPure(),
+                 /*is_align_stack=*/false, LLVM::TailCallKind::None,
+                 /*asm_dialect=*/
+                 LLVM::AsmDialectAttr::get(rewriter.getContext(),
+                                           LLVM::AsmDialect::AD_ATT),
+                 /*operand_attrs=*/ArrayAttr())
+          ->getResult(0);
+    };
+
+    if (!threadPred)
+      return emitInlineAsm();
+
+    Block *currentBlock = rewriter.getInsertionBlock();
+    Block *continuation =
+        currentBlock->splitBlock(rewriter.getInsertionPoint());
+    Region *region = currentBlock->getParent();
+    Block *asmBlock =
+        rewriter.createBlock(region, Region::iterator(continuation));
+    BlockArgument mergedResult = continuation->addArgument(asmRetType, loc);
+
+    rewriter.setInsertionPointToEnd(currentBlock);
+    Value undef = b.undef(asmRetType);
+    LLVM::CondBrOp::create(rewriter, loc, threadPred, asmBlock, ValueRange{},
+                           continuation, ValueRange{undef});
+
+    rewriter.setInsertionPointToEnd(asmBlock);
+    Value executedResult = emitInlineAsm();
+    LLVM::BrOp::create(rewriter, loc, ValueRange{executedResult}, continuation);
+
+    rewriter.setInsertionPointToStart(continuation);
+    return mergedResult;
+  }
+
+  void broadcastResults(ElementwiseInlineAsmOp op,
+                        SmallVector<SmallVector<Value>> &unpackedResults,
+                        Value threadPred,
+                        ConversionPatternRewriter &rewriter) const {
+    if (!threadPred || op->use_empty())
+      return;
+    assert(op->hasAttr("allocation.offset") &&
+           "missing shared-memory allocation for replicated inline asm result");
+
+    Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    SmallVector<unsigned> usedResultIndices;
+    for (auto [index, result] : llvm::enumerate(op->getResults()))
+      if (!result.use_empty())
+        usedResultIndices.push_back(index);
+
+    for (auto [broadcastIndex, resultIndex] :
+         llvm::enumerate(usedResultIndices)) {
+      Type originalResultTy = op->getResult(resultIndex).getType();
+      Type valueElemTy = getTypeConverter()->convertType(
+          getElementTypeOrSelf(originalResultTy));
+      auto &resultVals = unpackedResults[resultIndex];
+      bool isPointer = isa<LLVM::LLVMPointerType>(valueElemTy);
+      Type storageTy = valueElemTy;
+      if (isPointer)
+        storageTy = i64_ty;
+      else if (valueElemTy.isInteger(1))
+        storageTy = i8_ty;
+      // Broadcast pointers as integers and widen booleans to whole bytes.
+      if (storageTy != valueElemTy)
+        for (Value &value : resultVals)
+          value = isPointer ? Value(b.ptrtoint(storageTy, value))
+                            : Value(b.zext(storageTy, value));
+
+      if (auto tensorTy = dyn_cast<RankedTensorType>(originalResultTy)) {
+        resultVals =
+            broadcastTensorResult(op, tensorTy, rewriter, resultVals, storageTy,
+                                  b, threadPred, targetInfo);
+      } else {
+        assert(resultVals.size() == 1);
+        resultVals[0] = broadcastScalarAtomicResult(
+            op, storageTy, resultVals[0], rewriter, b, threadPred, targetInfo);
+      }
+
+      if (storageTy != valueElemTy)
+        for (Value &value : resultVals)
+          value = isPointer ? Value(b.inttoptr(valueElemTy, value))
+                            : Value(b.trunc(valueElemTy, value));
+
+      if (broadcastIndex + 1 != usedResultIndices.size()) {
+        // Each result reuses the same scratch. Finish all readers before the
+        // next result overwrites it; membar handles reuse after this operation.
+        if (getFreeVariableMasks(originalResultTy)
+                    .lookup(StringAttr::get(op->getContext(), "block")) != 0 &&
+            lookupNumCTAs(op) > 1)
+          targetInfo.clusterBarrier(loc, rewriter, op);
+        else
+          targetInfo.barrier(loc, rewriter, AddrSpace::Local);
+      }
+    }
+  }
+
+  const TargetInfoBase &targetInfo;
 };
 
 struct AbsIOpConversion
@@ -706,7 +818,8 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
                                     benefit);
   patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
                                               benefit);
-  patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter, benefit);
+  patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter, targetInfo,
+                                                 benefit);
   patterns.add<AbsIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SelectOpConversion>(typeConverter, axisInfoAnalysis, benefit);

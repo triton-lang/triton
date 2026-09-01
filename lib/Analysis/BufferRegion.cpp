@@ -616,7 +616,7 @@ BufferRegionAnalysis::getScratchFootprint(Operation *op) {
       getOperationId(op->getParentOfType<FunctionOpInterface>());
   AddressSet addresses = AddressSet::fromRange(base, length);
   unsigned numCTAs = ttg::lookupNumCTAs(op);
-  uint32_t broadcastMask = getAtomicScratchBroadcastMask(op).value_or(0);
+  uint32_t broadcastMask = getScratchBroadcastMask(op).value_or(0);
   for (unsigned cta = 0; cta < numCTAs; ++cta)
     if (!(cta & broadcastMask))
       view.region.ctaAddresses.emplace_back(cta, addresses);
