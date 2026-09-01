@@ -1,6 +1,7 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, amd
 from triton import knobs
+from . import spill_cost_model
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 from types import ModuleType
@@ -564,8 +565,22 @@ class HIPBackend(BaseBackend):
                                                amd.TARGET_TRIPLE, options.arch, features, flags,
                                                options.enable_fp_fusion, False, knobs.amd.swap_mir_enable_misched)
         else:
-            amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags,
-                                           options.enable_fp_fusion, False, False)
+
+            def translate(llvm_ir):
+                return llvm.translate_to_asm(llvm_ir, amd.TARGET_TRIPLE, options.arch, features, flags,
+                                             options.enable_fp_fusion, False, False)
+
+            amdgcn = translate(src)
+            if knobs.amd.use_spill_cost_model:
+                log = None
+                if knobs.amd.dump_spill_cost_model:
+
+                    def log(label, stats):
+                        print(f"// spill cost model: {label:<18} occupancy={stats.occupancy} "
+                              f"loop_spill_ops={stats.loop_spill_ops} "
+                              f"loop_issue_slots={stats.loop_issue_slots} cost={stats.cost:.0f}")
+
+                amdgcn = spill_cost_model.select_best(src, names[0], translate, amdgcn, log)
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
