@@ -2862,10 +2862,7 @@ def get_reduced_dtype(dtype_str, op):
 
 
 def get_reduce_input(dtype_str, shape):
-    # limit the range of integers so that reduce ops do not overflow
-    low = 0 if dtype_str in uint_dtypes else -10 if dtype_str in integral_dtypes else None
-    high = 10 if dtype_str in integral_dtypes else None
-    return numpy_random(shape, dtype_str=dtype_str, low=low, high=high)
+    return numpy_random(shape, dtype_str=dtype_str)
 
 
 @pytest.mark.interpreter
@@ -2927,7 +2924,10 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, device):
     kernel[(1, )](x_tri, z_tri, BLOCK=shape, num_ctas=num_ctas)
     z_tri = to_numpy(z_tri)
     # compare
-    if op == 'sum':
+    if op == 'sum' and dtype_str in integral_dtypes:
+        # Integer sums wrap around, so a relative tolerance is meaningless.
+        np.testing.assert_equal(z_ref, z_tri)
+    elif op == 'sum':
         np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
     else:
         if 'tie-break-left' in op:
@@ -3061,7 +3061,10 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
     z_tri = to_numpy(z_tri)
 
     # compare
-    if op == 'sum':
+    if op == 'sum' and dtype_str in integral_dtypes:
+        # Integer sums wrap around, so a relative tolerance is meaningless.
+        np.testing.assert_equal(z_ref, z_tri)
+    elif op == 'sum':
         np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
     else:
         if op in ('argmin', 'argmax'):
