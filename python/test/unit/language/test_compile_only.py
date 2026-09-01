@@ -16,6 +16,16 @@ def topk_kernel(K: tl.constexpr):
     tl.topk(x, K)
 
 
+@triton.jit
+def _apply_one_hot_xor_basis(index, bases):
+    bits = tl.arange(0, 32)
+    result = tl.full(index.shape, 0, tl.uint32)
+    for bit in tl.static_range(32):
+        basis = tl.xor_sum(tl.where(bits == bit, bases, 0), axis=0)
+        result ^= tl.where((index >> bit) & 1, basis, 0)
+    return result
+
+
 @pytest.mark.parametrize(
     "k, error",
     [
@@ -40,6 +50,68 @@ def test_topk_invalid_k(k, error):
 def test_topk_valid_k(k):
     src = ASTSource(fn=topk_kernel, signature={"K": "constexpr"}, constexprs={"K": k})
     triton.compile(src, target=GPUTarget("cuda", 90, 32))
+
+
+def test_compile_only_one_hot_xor_reduction_warp_shuffle() -> None:
+
+    @triton.jit
+    def one_hot_xor_basis_kernel(index_ptr, output_ptr, n_elements, seed):
+        index_offsets = tl.program_id(0) * 128 + tl.arange(0, 128)
+        mask = index_offsets < n_elements
+        index = tl.load(index_ptr + index_offsets, mask=mask, other=0)
+        bits = tl.arange(0, 32)
+        bases = (bits.to(tl.uint32) * 0x9E3779B9) ^ seed.to(tl.uint32)
+        result = _apply_one_hot_xor_basis(index, bases)
+        tl.store(output_ptr + index_offsets, result, mask=mask)
+
+    source = ASTSource(
+        fn=one_hot_xor_basis_kernel,
+        signature={"index_ptr": "*u32", "output_ptr": "*u32", "n_elements": "i32", "seed": "u32"},
+    )
+    assert "basis_ptr" not in source.signature
+    compiled = triton.compile(source, target=GPUTarget("cuda", 90, 32), options={"num_warps": 4})
+
+    # Ordinary Triton reductions survive the public TTIR and TTGIR stages;
+    # the CUDA-only rewrite runs immediately before LLVM lowering.
+    for ir in (compiled.asm["ttir"], compiled.asm["ttgir"]):
+        assert ir.count('"tt.reduce"') == 32
+        assert len(re.findall(r"\btt\.load\b", ir)) == 1
+        assert len(re.findall(r"\btt\.store\b", ir)) == 1
+
+    ptx = compiled.asm["ptx"]
+    assert ptx.count("shfl.sync.idx.b32") == 32
+    assert "redux.sync.xor.b32" not in ptx
+    assert "shfl.sync.bfly.b32" not in ptx
+    assert len(re.findall(r"\bld\.global(?:\.[a-z0-9_]+)*\b", ptx)) == 1
+    assert len(re.findall(r"\bst\.global(?:\.[a-z0-9_]+)*\b", ptx)) == 1
+
+
+def test_compile_only_one_hot_xor_reduction_masks_poison() -> None:
+
+    @triton.jit
+    def return_poison(value):
+        branch = False
+        if branch:
+            return value
+
+    @triton.jit
+    def kernel(indices_ptr, output_ptr, seed):
+        offsets = tl.arange(0, 128)
+        indices = tl.load(indices_ptr + offsets)
+        bits = tl.arange(0, 32)
+        bases = tl.where(bits == 7, return_poison(seed), bits ^ seed)
+        basis = tl.xor_sum(tl.where(bits == 7, bases, 0), axis=0)
+        contribution = tl.where(indices != 0, basis, 0)
+        tl.store(output_ptr + offsets, indices ^ contribution)
+
+    source = ASTSource(fn=kernel, signature={"indices_ptr": "*i32", "output_ptr": "*i32", "seed": "i32"})
+    compiled = triton.compile(source, target=GPUTarget("cuda", 90, 32), options={"num_warps": 4})
+    assert "ub.poison" in compiled.asm["ttgir"]
+    # The ordinary select must keep masking the gathered poison value when
+    # indices are zero; only the one-hot reduction is rewritten.
+    assert "select i1" in compiled.asm["llir"]
+    assert compiled.asm["ptx"].count("shfl.sync.idx.b32") == 1
+    assert "redux.sync.xor.b32" not in compiled.asm["ptx"]
 
 
 def test_compile_only_sort_keeps_comparisons_boolean() -> None:

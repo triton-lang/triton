@@ -3079,6 +3079,52 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
             np.testing.assert_equal(z_ref, z_tri)
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires the CUDA one-hot XOR reduction optimization")
+@pytest.mark.parametrize("block, num_warps", [(32, 1), (64, 2), (128, 4), (256, 4)])
+def test_one_hot_xor_reduction_computed_bases(block, num_warps, device):
+
+    @triton.jit(do_not_specialize=["n_elements", "seed"])
+    def kernel(indices_ptr, output_ptr, n_elements, seed, BLOCK: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+        mask = offsets < n_elements
+        index = tl.load(indices_ptr + offsets, mask=mask, other=0)
+        bits = tl.arange(0, 32)
+        bases = (bits.to(tl.uint32) * 0x9E3779B9) ^ seed.to(tl.uint32)
+        result = tl.full(index.shape, 0, tl.uint32)
+        for bit in tl.static_range(32):
+            basis = tl.xor_sum(tl.where(bits == bit, bases, 0), axis=0)
+            result ^= tl.where((index >> bit) & 1, basis, 0)
+        tl.store(output_ptr + offsets, result, mask=mask)
+
+    # Cover every input bit and dense bit patterns, including the high bit.
+    # Keep the basis seed dynamic, including for zero and negative arguments.
+    rng = np.random.default_rng(0)
+    guard = np.uint32(0xA5A5A5A5)
+    sizes = sorted({1, 31, 32, 33, block - 1, block, block + 1, 2 * block + 1})
+    for size in sizes:
+        indices = rng.integers(0, 1 << 32, size=size, dtype=np.uint32)
+        patterns = np.array([0, 0xFFFFFFFF] + [1 << bit for bit in range(32)], dtype=np.uint32)
+        indices[:min(size, len(patterns))] = patterns[:size]
+        indices_tri = to_triton(indices, device=device)
+        for seed in (0, 1, -1, -(1 << 31), 0x6A09E667):
+            expected = np.zeros(size, dtype=np.uint32)
+            for bit in range(32):
+                basis = np.uint32(((bit * 0x9E3779B9) & 0xFFFFFFFF) ^ (seed & 0xFFFFFFFF))
+                expected ^= np.where((indices >> bit) & 1, basis, np.uint32(0))
+
+            output = to_triton(np.full(size + block, guard, dtype=np.uint32), device=device)
+            compiled = kernel[(triton.cdiv(size, block), )](indices_tri, output, size, seed, BLOCK=block,
+                                                            num_warps=num_warps)
+            actual = to_numpy(output)
+            np.testing.assert_array_equal(actual[:size], expected)
+            np.testing.assert_array_equal(actual[size:], guard)
+
+    ptx = compiled.asm["ptx"]
+    assert ptx.count("shfl.sync.idx.b32") == 32
+    assert "redux.sync.xor.b32" not in ptx
+    assert "shfl.sync.bfly.b32" not in ptx
+
+
 scan2d_shapes = [(8, 32), (16, 32), (32, 16), (2, 1024), (1024, 2), (32, 32), (1, 1024)]
 
 scan_configs = [(op, type, shape, axis, reverse, num_warps)
@@ -6315,6 +6361,36 @@ def test_poison_return(device):
     # hip/xpu uses llvm.store, which in this case is removed by the optimizer
     if not (is_hip() or is_xpu()):
         assert "poison" in h.asm["llir"], h.asm["llir"]
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Requires the CUDA one-hot XOR reduction optimization")
+@pytest.mark.parametrize("num_warps", [1, 4])
+def test_one_hot_xor_reduction_masks_poison(num_warps, device):
+
+    @triton.jit(do_not_specialize=["seed", "valid_count"])
+    def kernel(indices_ptr, output_ptr, seed, valid_count):
+        offsets = tl.arange(0, 128)
+        indices = tl.load(indices_ptr + offsets)
+        bits = tl.arange(0, 32)
+        bases = tl.where(bits < valid_count, bits ^ seed, return_poison(seed))
+        basis = tl.xor_sum(tl.where(bits == 7, bases, 0), axis=0)
+        # When basis is poison, the false select arm defines the contribution
+        # as zero. No executed output consumes an unmasked poison value.
+        contribution = tl.where((indices != 0) & (valid_count > 7), basis, 0)
+        tl.store(output_ptr + offsets, indices ^ contribution)
+
+    indices = torch.arange(128, dtype=torch.int32, device=device)
+    seed = 0x235A97
+    for valid_count in (0, 7, 8, 32):
+        output = torch.full_like(indices, -123456789)
+        compiled = kernel[(1, )](indices, output, seed, valid_count, num_warps=num_warps)
+        expected = indices
+        if valid_count > 7:
+            expected = torch.where(indices != 0, indices ^ (seed ^ 7), indices)
+        torch.testing.assert_close(output, expected, rtol=0, atol=0)
+
+    assert compiled.asm["ptx"].count("shfl.sync.idx.b32") == 1
+    assert "redux.sync.xor.b32" not in compiled.asm["ptx"]
 
 
 # -----------------------
