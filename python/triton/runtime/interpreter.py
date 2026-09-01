@@ -1039,7 +1039,9 @@ class ReduceScanOpInterface:
             ret = ret.astype(np_dtype)
             ret_type = tl.block_type(dtype, list(ret.shape))
         else:
-            ret = np.array([ret], dtype=np_dtype)
+            # Match the shaped path above. NumPy 2 rejects out-of-range Python
+            # integers in array(..., dtype=...), while astype narrows instead.
+            ret = np.array([ret]).astype(np_dtype)
             ret_type = dtype
         return tl.core.tensor(TensorHandle(ret, dtype.scalar), ret_type)
 
