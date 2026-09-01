@@ -4,6 +4,7 @@
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Tools/GenericSwizzling.h"
 #include "llvm/ADT/ArrayRef.h"
+#include <optional>
 
 namespace mlir::triton {
 enum class ProgramIDDim : uint32_t;
@@ -76,6 +77,16 @@ public:
   virtual bool warpReduce(RewriterBase &rewriter, Location loc,
                           SmallVector<Value> &acc, triton::ReduceOp op,
                           unsigned reduceLaneIdMask) const = 0;
+
+  // Try to combine a group of absolute values as part of an in-thread
+  // reduction. The values are the results of LLVM fabs operations and a
+  // successful result replaces them in the reduction tree. Targets without a
+  // fused instruction should leave this unhandled.
+  virtual std::optional<Value>
+  tryReduceAbs(RewriterBase &rewriter, Location loc, triton::ReduceOp op,
+               ValueRange values) const {
+    return std::nullopt;
+  }
 
   virtual std::string getMulhiFuncName(Type resultElementTy) const = 0;
   // Emits LLVM code with |rewriter| to print a message following the given

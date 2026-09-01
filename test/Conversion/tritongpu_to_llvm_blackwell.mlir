@@ -1024,6 +1024,40 @@ module attributes {"ttg.target" = "cuda:100", "ttg.num-ctas" = 1 : i32, "ttg.num
 
 // -----
 
+// CHECK-LABEL: @max_abs_within_thread
+// CHECK-COUNT-2: llvm.inline_asm "max.abs.f32
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.target" = "cuda:100", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @max_abs_within_thread(%arg0: tensor<1x128xf32, #blocked>) {
+    %0 = math.absf %arg0 : tensor<1x128xf32, #blocked>
+    %1 = "tt.reduce"(%0) <{axis = 1 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %2 = arith.maxnumf %lhs, %rhs : f32
+      tt.reduce.return %2 : f32
+    }) {allocation.offset = 0 : i32} : (tensor<1x128xf32, #blocked>) -> tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: @max_abs_across_threads
+// CHECK: nvvm.redux.sync fmax {{.*}} abs = true : f32 -> f32
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.target" = "cuda:100", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @max_abs_across_threads(%arg0: tensor<1x32xf32, #blocked>) {
+    %0 = math.absf %arg0 : tensor<1x32xf32, #blocked>
+    %1 = "tt.reduce"(%0) <{axis = 1 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %2 = arith.maxnumf %lhs, %rhs : f32
+      tt.reduce.return %2 : f32
+    }) {allocation.offset = 0 : i32} : (tensor<1x32xf32, #blocked>) -> tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    tt.return
+  }
+}
+
+// -----
+
 // CHECK-LABEL: maxnum_reduction
 //       CHECK:  %[[M:.+]] = llvm.mlir.constant(-1 : i32) : i32
 //       CHECK:   nvvm.redux.sync  fmax %{{.*}}, %[[M]] : f32 -> f32

@@ -521,6 +521,20 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   if (auto kind = matchReduxKind(op, targetFeatures.getComputeCapability(),
                                  useNanQualifier)) {
     assert(acc.size() == 1);
+    bool useAbs = false;
+    Value reduxInput = acc.front();
+    // redux.sync.{min,max}.abs.f32 is available on Blackwell. Only absorb a
+    // direct fabs when each thread contributes one value to this reduction;
+    // otherwise the in-thread reduction has already consumed the fabs.
+    if (targetFeatures.getComputeCapability() >= 100 &&
+        (ptxVersion == 0 || ptxVersion >= 88) && reduxInput.getType().isF32() &&
+        (*kind == NVVM::ReductionKind::FMIN ||
+         *kind == NVVM::ReductionKind::FMAX)) {
+      if (auto abs = reduxInput.getDefiningOp<LLVM::FAbsOp>()) {
+        reduxInput = abs.getOperand();
+        useAbs = true;
+      }
+    }
     Value mask = b.i32_val(0xFFFFFFFF);
     // Even though we currently don't use redux for partitioned reduction
     // the code below supports it in case we want to tweak the heuristic.
@@ -542,8 +556,8 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
             acc[i] = b.zext(i32_ty, acc[i]);
         }
       }
-      acc[i] = NVVM::ReduxOp::create(rewriter, loc, acc[i].getType(), acc[0],
-                                     *kind, mask, /*abs=*/false,
+      acc[i] = NVVM::ReduxOp::create(rewriter, loc, acc[i].getType(),
+                                     reduxInput, *kind, mask, useAbs,
                                      /*nan=*/useNanQualifier);
       if (acc[i].getType().isInteger()) {
         if (bitwidth < 32)
@@ -553,6 +567,50 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     return true;
   }
   return false;
+}
+
+std::optional<Value>
+TargetInfo::tryReduceAbs(RewriterBase &rewriter, Location loc,
+                         triton::ReduceOp op, ValueRange values) const {
+  // max.abs.f32 and min.abs.f32 take two or three input values on Blackwell.
+  // PTX 8.8 introduced the ternary form used for three-element reduction
+  // groups; use zero as the identity for the two-element case.
+  if (targetFeatures.getComputeCapability() < 100 ||
+      (ptxVersion != 0 && ptxVersion < 88) || values.size() < 2 ||
+      values.size() > 3 || !llvm::all_of(values, [](Value value) {
+        return value.getType().isF32() && value.getDefiningOp<LLVM::FAbsOp>();
+      })) {
+    return std::nullopt;
+  }
+
+  Operation *combiner = op.getSingleCombiner();
+  bool isMax = isa<arith::MaxNumFOp, arith::MaximumFOp>(combiner);
+  bool isMin = isa<arith::MinNumFOp, arith::MinimumFOp>(combiner);
+  if (!isMax && !isMin)
+    return std::nullopt;
+
+  bool propagateNan =
+      isa<arith::MaximumFOp, arith::MinimumFOp>(combiner);
+  PTXBuilder builder;
+  TritonLLVMOpBuilder llvmBuilder(loc, rewriter);
+  auto *dst = builder.newOperand("=r");
+  auto toRegister = [&](Value value) {
+    return llvmBuilder.bitcast(i32_ty, value);
+  };
+  auto *lhs = builder.newOperand(
+      toRegister(values[0].getDefiningOp<LLVM::FAbsOp>().getOperand()), "r");
+  auto *rhs = builder.newOperand(
+      toRegister(values[1].getDefiningOp<LLVM::FAbsOp>().getOperand()), "r");
+  auto *third = builder.newOperand(
+      values.size() == 3
+          ? toRegister(values[2].getDefiningOp<LLVM::FAbsOp>().getOperand())
+          : llvmBuilder.i32_val(0),
+      "r");
+  auto &minmax = *builder.create(isMax ? "max" : "min");
+  minmax.o("NaN", propagateNan).o("abs").o("f32");
+  minmax(dst, lhs, rhs, third);
+  Value result = builder.launch(rewriter, loc, i32_ty, /*hasSideEffect=*/false);
+  return llvmBuilder.bitcast(values.front().getType(), result);
 }
 
 unsigned TargetInfo::getReductionTreeArity(Operation *combinerOp) const {

@@ -196,13 +196,24 @@ def _elementwise_max(a, b):
     return core.maximum(a, b)
 
 
+@jit
+def _elementwise_max_nan(a, b):
+    return core.maximum(a, b, propagate_nan=core.PropagateNan.ALL)
+
+
 @core._tensor_member_fn
 @jit
 @core._add_reduction_docstr("maximum", return_indices_arg="return_indices",
-                            tie_break_arg="return_indices_tie_break_left")
-def max(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False):
+                            tie_break_arg="return_indices_tie_break_left", propagate_nan_arg=True)
+def max(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False,
+        propagate_nan=core.PropagateNan.NONE):
     input = core._promote_bfloat16_to_float32(input)
+    propagate_nan = core._unwrap_if_constexpr(propagate_nan)
+    assert propagate_nan in (core.PropagateNan.NONE, core.PropagateNan.ALL), \
+        "propagate_nan must be tl.PropagateNan.NONE or tl.PropagateNan.ALL"
     if return_indices:
+        assert propagate_nan == core.PropagateNan.NONE, \
+            "propagate_nan is not supported when return_indices is true"
         if return_indices_tie_break_left:
             return core._reduce_with_indices(input, axis, _argmax_combine_tie_break_left, keep_dims=keep_dims)
         else:
@@ -214,7 +225,8 @@ def max(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
             else:
                 assert input.dtype.is_int(), "Expecting input to be integer type"
                 input = input.to(core.int32)
-        return core.reduce(input, axis, _elementwise_max, keep_dims=keep_dims)
+        combine_fn = _elementwise_max_nan if propagate_nan == core.PropagateNan.ALL else _elementwise_max
+        return core.reduce(input, axis, combine_fn, keep_dims=keep_dims)
 
 
 @core._tensor_member_fn
@@ -255,13 +267,24 @@ def _elementwise_min(a, b):
     return core.minimum(a, b)
 
 
+@jit
+def _elementwise_min_nan(a, b):
+    return core.minimum(a, b, propagate_nan=core.PropagateNan.ALL)
+
+
 @core._tensor_member_fn
 @jit
 @core._add_reduction_docstr("minimum", return_indices_arg="return_indices",
-                            tie_break_arg="return_indices_tie_break_left")
-def min(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False):
+                            tie_break_arg="return_indices_tie_break_left", propagate_nan_arg=True)
+def min(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False,
+        propagate_nan=core.PropagateNan.NONE):
     input = core._promote_bfloat16_to_float32(input)
+    propagate_nan = core._unwrap_if_constexpr(propagate_nan)
+    assert propagate_nan in (core.PropagateNan.NONE, core.PropagateNan.ALL), \
+        "propagate_nan must be tl.PropagateNan.NONE or tl.PropagateNan.ALL"
     if return_indices:
+        assert propagate_nan == core.PropagateNan.NONE, \
+            "propagate_nan is not supported when return_indices is true"
         if return_indices_tie_break_left:
             return core._reduce_with_indices(input, axis, _argmin_combine_tie_break_left, keep_dims=keep_dims)
         else:
@@ -273,7 +296,8 @@ def min(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
             else:
                 assert input.dtype.is_int(), "Expecting input to be integer type"
                 input = input.to(core.int32)
-        return core.reduce(input, axis, _elementwise_min, keep_dims=keep_dims)
+        combine_fn = _elementwise_min_nan if propagate_nan == core.PropagateNan.ALL else _elementwise_min
+        return core.reduce(input, axis, combine_fn, keep_dims=keep_dims)
 
 
 @core._tensor_member_fn

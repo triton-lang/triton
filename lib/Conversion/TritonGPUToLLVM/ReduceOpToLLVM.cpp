@@ -112,7 +112,7 @@ private:
   // instructions (e.g. v_maximum3_f32 on AMD).
   SmallVector<Value> treeReduce(Location loc,
                                 ConversionPatternRewriter &rewriter,
-                                Region &combineOp,
+                                triton::ReduceOp op, Region &combineOp,
                                 SmallVector<SmallVector<Value>> values,
                                 unsigned arity) const {
     assert(!values.empty() && arity >= 2);
@@ -124,6 +124,21 @@ private:
         if (groupSize == 1) {
           next.push_back(std::move(values[i]));
         } else {
+          SmallVector<Value> group;
+          ArrayRef<SmallVector<Value>> groupValues(values.data() + i,
+                                                    groupSize);
+          if (llvm::all_of(groupValues, [](const SmallVector<Value> &values) {
+                             return values.size() == 1;
+                           })) {
+            group.reserve(groupSize);
+            for (const auto &values : groupValues)
+              group.push_back(values.front());
+            if (auto result =
+                    targetInfo.tryReduceAbs(rewriter, loc, op, group)) {
+              next.push_back({*result});
+              continue;
+            }
+          }
           SmallVector<Value> acc = std::move(values[i]);
           for (size_t j = 1; j < groupSize; ++j)
             accumulate(loc, rewriter, combineOp, acc, values[i + j]);
@@ -293,8 +308,8 @@ private:
         }
         vals.push_back(std::move(cur));
       }
-      auto acc =
-          treeReduce(loc, rewriter, combineRegion, std::move(vals), arity);
+      auto acc = treeReduce(loc, rewriter, op, combineRegion, std::move(vals),
+                            arity);
       for (unsigned opIdx = 0; opIdx < numOperands; ++opIdx) {
         reduced[opIdx].push_back(acc[opIdx]);
       }

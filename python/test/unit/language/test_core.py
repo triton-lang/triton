@@ -6712,6 +6712,24 @@ def test_propagate_nan(dtype, propagate_nan, func, device):
             assert not torch.isnan(C[0])
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("func", ["min", "max"])
+@pytest.mark.parametrize("propagate_nan", ["NONE", "ALL"])
+def test_reduce_propagate_nan(func, propagate_nan, device):
+
+    @triton.jit
+    def kernel(x_ptr, out_ptr, propagate_nan: tl.constexpr, func: tl.constexpr):
+        x = tl.load(x_ptr + tl.arange(0, 2))
+        result = getattr(tl, func)(x, axis=0, propagate_nan=getattr(tl.PropagateNan, propagate_nan))
+        tl.store(out_ptr, result)
+
+    x = torch.tensor([torch.nan, 1.0], device=device)
+    out = torch.empty((), device=device)
+    kernel[(1, )](x, out, propagate_nan, func)
+
+    assert torch.isnan(out) == (propagate_nan == "ALL")
+
+
 # -----------------------
 # test clamp
 # -----------------------
