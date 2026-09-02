@@ -237,8 +237,17 @@ std::optional<StringRef> getAMDArch(Operation *module);
 std::optional<mlir::triton::gpu::SwizzledSharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible);
 
+// Replace the CGA layout while preserving intra-CTA layout choices and
+// recursing through Slice and DotOperand parents.
+FailureOr<Attribute> cloneWithCGALayout(RankedTensorType tensorTy,
+                                        triton::gpu::CGAEncodingAttr cgaLayout);
+
+// Whether the operand follows the operation's distributed data encoding.
+// Descriptor gather/scatter offsets have an independent encoding.
+bool isDistributedOpEncodingOperand(OpOperand &operand);
+
 // Convert \param op to use \param encoding attribute.
-// Skips operands if they're in shared encoding.
+// Leaves descriptor indices and non-tensor operands unchanged.
 Operation *convertDistributedOpEncoding(Attribute encoding, Operation *op);
 
 // Returns the original memory allocation for a memdesc value

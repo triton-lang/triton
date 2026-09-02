@@ -2,7 +2,9 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
@@ -22,39 +24,14 @@ namespace {
 
 // AssignCGALayouts chooses preferred CGA layouts for Dot/Reduce ops and
 // materializes the boundary with ttg.convert_layout. This pass looks for
-// cross-CTA conversions that feed side-effecting users, such as stores, and
-// moves those users to a layout in the same CTA group as the conversion source.
+// cross-CTA conversions that feed stores and moves those stores to a layout
+// in the same CTA group as the conversion source.
 bool isCrossCTAConversion(ttg::ConvertLayoutOp convert) {
   auto srcTy = cast<RankedTensorType>(convert.getSrc().getType());
   auto dstTy = cast<RankedTensorType>(convert.getType());
   LinearLayout conversion = minimalCvtLayout(srcTy, dstTy);
   auto kBlock = StringAttr::get(convert.getContext(), "block");
   return conversion.hasInDim(kBlock);
-}
-
-Attribute cloneWithCGALayout(Attribute layout, ttg::CGAEncodingAttr cgaLayout) {
-  if (auto blockedLayout = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
-    return ttg::BlockedEncodingAttr::get(
-        layout.getContext(), blockedLayout.getSizePerThread(),
-        blockedLayout.getThreadsPerWarp(), blockedLayout.getWarpsPerCTA(),
-        blockedLayout.getOrder(), cgaLayout);
-  }
-
-  if (auto sliceLayout = dyn_cast<ttg::SliceEncodingAttr>(layout)) {
-    Attribute parentLayout =
-        cloneWithCGALayout(sliceLayout.getParent(), cgaLayout);
-    return ttg::SliceEncodingAttr::get(
-        layout.getContext(), sliceLayout.getDim(),
-        cast<ttg::DistributedEncodingTrait>(parentLayout));
-  }
-
-  llvm::report_fatal_error("cloneWithCGALayout not implemented for layout");
-}
-
-ttg::CGAEncodingAttr getRootCGALayout(Attribute layout) {
-  if (auto slice = dyn_cast<ttg::SliceEncodingAttr>(layout))
-    return getRootCGALayout(slice.getParent());
-  return ttg::getCGALayout(layout);
 }
 
 Value convertValue(OpBuilder &builder, Location loc, Value value,
@@ -83,19 +60,30 @@ Value convertValue(OpBuilder &builder, Location loc, Value value,
 // target layout.
 void rewriteUser(ttg::ConvertLayoutOp convert, OpOperand &use) {
   Operation *op = use.getOwner();
-  if (!op->getResults().empty())
+  // Other resultless users can constrain region or function signatures.
+  if (!isa<triton::StoreOp, triton::DescriptorStoreLikeOpInterface>(op) ||
+      !isDistributedOpEncodingOperand(use))
     return;
 
   auto srcTy = cast<RankedTensorType>(convert.getSrc().getType());
   auto dstTy = cast<RankedTensorType>(convert.getType());
 
-  ttg::CGAEncodingAttr cgaLayout = getRootCGALayout(srcTy.getEncoding());
-  Attribute targetLayout = cloneWithCGALayout(dstTy.getEncoding(), cgaLayout);
+  if (ttg::isGenericLinearEncoding(srcTy.getEncoding()) ||
+      ttg::isGenericLinearEncoding(dstTy.getEncoding()))
+    return;
+  auto cgaLayout =
+      ttg::maybeLinearToCGAEncodingAttr(ttg::toLinearLayout(srcTy));
+  if (failed(cgaLayout))
+    return;
+  auto maybeTargetLayout = cloneWithCGALayout(dstTy, *cgaLayout);
+  if (failed(maybeTargetLayout))
+    return;
+  Attribute targetLayout = *maybeTargetLayout;
 
   for (OpOperand &operand : op->getOpOperands()) {
     if (&operand == &use)
       continue;
-    if (!isa<RankedTensorType>(operand.get().getType()))
+    if (!isDistributedOpEncodingOperand(operand))
       continue;
     // Rewriting a user may require extra conversions on its other tensor
     // operands. Only do that when layout propagation can rematerialize the
@@ -111,7 +99,7 @@ void rewriteUser(ttg::ConvertLayoutOp convert, OpOperand &use) {
   for (OpOperand &operand : op->getOpOperands()) {
     if (&operand == &use) {
       operand.set(convertValue(builder, loc, convert.getSrc(), targetLayout));
-    } else if (isa<RankedTensorType>(operand.get().getType())) {
+    } else if (isDistributedOpEncodingOperand(operand)) {
       operand.set(convertValue(builder, loc, operand.get(), targetLayout));
     }
   }

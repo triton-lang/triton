@@ -15,6 +15,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "ttg-utility"
@@ -1234,20 +1235,82 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
   return attr;
 }
 
+FailureOr<Attribute> cloneWithCGALayout(RankedTensorType tensorTy,
+                                        ttg::CGAEncodingAttr cgaLayout) {
+  Attribute layout = tensorTy.getEncoding();
+  // NYI: CGA rematerialization for generic linear encodings.
+  if (ttg::isGenericLinearEncoding(layout))
+    return failure();
+
+  if (auto blocked = dyn_cast<ttg::BlockedEncodingAttr>(layout)) {
+    return ttg::BlockedEncodingAttr::get(
+        layout.getContext(), blocked.getSizePerThread(),
+        blocked.getThreadsPerWarp(), blocked.getWarpsPerCTA(),
+        blocked.getOrder(), cgaLayout);
+  }
+
+  if (auto slice = dyn_cast<ttg::SliceEncodingAttr>(layout)) {
+    // Lift logical CTA coordinates to the parent by inserting a broadcast axis.
+    const auto &cga = cgaLayout.getLinearLayout();
+    SmallVector<int64_t> shape(cga.getOutDimSizes());
+    auto parentShape = slice.paddedShape<int64_t>(shape);
+    auto parentCGA = ttg::CGAEncodingAttr::get(
+        layout.getContext(),
+        reshapeLayout(layout.getContext(), cga, parentShape));
+    auto parentTy =
+        RankedTensorType::get(slice.paddedShape(tensorTy.getShape()),
+                              tensorTy.getElementType(), slice.getParent());
+    auto parentLayout = cloneWithCGALayout(parentTy, parentCGA);
+    if (failed(parentLayout))
+      return failure();
+    return ttg::SliceEncodingAttr::get(
+        layout.getContext(), slice.getDim(),
+        cast<ttg::DistributedEncodingTrait>(*parentLayout));
+  }
+
+  if (auto dot = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
+    if (!isa<ttg::BlockedEncodingAttr>(dot.getParent()))
+      return failure();
+    auto parentLayout = cloneWithCGALayout(
+        tensorTy.cloneWithEncoding(dot.getParent()), cgaLayout);
+    if (failed(parentLayout))
+      return failure();
+    return ttg::DotOperandEncodingAttr::get(layout.getContext(), dot.getOpIdx(),
+                                            *parentLayout, dot.getKWidth());
+  }
+
+  auto ll = ttg::toLinearLayout(tensorTy);
+  auto oldCGA = ttg::maybeLinearToCGAEncodingAttr(ll);
+  if (failed(oldCGA))
+    return failure();
+  auto ctaLayout = divideRight(ll, oldCGA->getLinearLayout());
+  if (!ctaLayout)
+    return failure();
+  auto outDims = standardOutDimNames(tensorTy.getContext(), tensorTy.getRank());
+  auto repOrder = cast<ttg::DistributedEncodingTrait>(layout).getRepOrder();
+  *ctaLayout = ctaLayout->transposeOuts(applyPermutation(outDims, repOrder));
+  return ttg::LinearEncodingAttr::get(
+      tensorTy.getContext(),
+      ttg::combineCtaCgaWithShape(*ctaLayout, cgaLayout, tensorTy.getShape()));
+}
+
 static Type getNewType(Type type, Attribute encoding) {
   RankedTensorType tensorType = cast<RankedTensorType>(type);
   return RankedTensorType::get(tensorType.getShape(),
                                tensorType.getElementType(), encoding);
 }
 
-static bool skipOperand(Operation *op, unsigned operandNumber) {
+bool isDistributedOpEncodingOperand(OpOperand &operand) {
+  if (!isa<RankedTensorType>(operand.get().getType()))
+    return false;
+  Operation *op = operand.getOwner();
   if (auto gather = dyn_cast<DescriptorGatherOp>(op)) {
-    return operandNumber == gather.getXOffsetsMutable().getOperandNumber();
+    return &operand != &gather.getXOffsetsMutable();
   }
   if (auto scatter = dyn_cast<DescriptorScatterOp>(op)) {
-    return operandNumber == scatter.getXOffsetsMutable().getOperandNumber();
+    return &operand != &scatter.getXOffsetsMutable();
   }
-  return false;
+  return true;
 }
 
 Operation *convertDistributedOpEncoding(Attribute encoding, Operation *op) {
@@ -1256,10 +1319,8 @@ Operation *convertDistributedOpEncoding(Attribute encoding, Operation *op) {
   SmallVector<Value, 4> newArgs;
   for (auto &opOperand : op->getOpOperands()) {
     Value operand = opOperand.get();
-    auto tensorType = dyn_cast<RankedTensorType>(operand.getType());
-    bool skip = skipOperand(op, opOperand.getOperandNumber());
-    if (tensorType && !skip) {
-      Type newType = getNewType(tensorType, encoding);
+    if (isDistributedOpEncodingOperand(opOperand)) {
+      Type newType = getNewType(operand.getType(), encoding);
       newArgs.push_back(triton::gpu::ConvertLayoutOp::create(
           builder, op->getLoc(), newType, operand));
     } else {
