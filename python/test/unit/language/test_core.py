@@ -1604,6 +1604,26 @@ def test_atomic_poll(dtype, bit_width, sem, scope, device):
         assert "%globaltimer" not in ptx
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("block_size", [1, 16, 128, 512])
+@pytest.mark.parametrize("timeout", [None, 0])
+def test_atomic_poll_tensor_results(block_size, timeout, device):
+
+    @triton.jit
+    def kernel(flags, out, BLOCK: tl.constexpr, TIMEOUT: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        matched = tl.atomic_poll(flags + offsets, offsets + 1, timeout_ns=TIMEOUT)
+        tl.store(out + offsets, matched)
+
+    expected = torch.arange(1, block_size + 1, dtype=torch.int32, device=device)
+    flags = expected.clone()
+    if timeout is not None:
+        flags[::2] = 0
+    out = torch.empty(block_size, dtype=torch.bool, device=device)
+    kernel[(1, )](flags, out, block_size, timeout, num_warps=4)
+    assert torch.equal(out, flags == expected)
+
+
 def test_atomic_poll_no_timeout_uses_no_shared_memory(device):
 
     @triton.jit

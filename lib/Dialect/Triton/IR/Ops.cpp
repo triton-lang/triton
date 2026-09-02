@@ -160,7 +160,8 @@ LogicalResult AtomicPollOp::verify() {
   if (getSem() != MemSemantic::ACQUIRE && getSem() != MemSemantic::RELAXED)
     return emitOpError("only supports acquire and relaxed semantics");
 
-  unsigned bitWidth = getExpected().getType().getIntOrFloatBitWidth();
+  unsigned bitWidth =
+      getElementTypeOrSelf(getExpected().getType()).getIntOrFloatBitWidth();
   if (bitWidth != 16 && bitWidth != 32 && bitWidth != 64)
     return emitOpError(
         "only supports integer elements with width {16, 32, 64}");

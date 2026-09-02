@@ -52,6 +52,53 @@ from triton._C.libtriton.gluon_ir import make_cga_layout
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 
 
+@pytest.mark.parametrize("block_size", [1, 16, 128, 512])
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("timeout", [None, 0])
+def test_atomic_poll_tensor_results(block_size, num_warps, timeout, device):
+
+    @gluon.jit
+    def kernel(Flags, Out, BLOCK: ttgl.constexpr, TIMEOUT: ttgl.constexpr, Layout: ttgl.constexpr):
+        offsets = ttgl.arange(0, BLOCK, layout=Layout)
+        matched = ttgl.atomic_poll(Flags + offsets, offsets + 1, timeout_ns=TIMEOUT)
+        ttgl.store(Out + offsets, matched)
+
+    expected = torch.arange(1, block_size + 1, dtype=torch.int32, device=device)
+    flags = expected.clone()
+    if timeout is not None:
+        flags[::2] = 0
+    out = torch.empty(block_size, dtype=torch.bool, device=device)
+    layout = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [num_warps], [0])
+    kernel[(1, )](flags, out, block_size, timeout, layout, num_warps=num_warps)
+    assert torch.equal(out, flags == expected)
+
+
+@pytest.mark.parametrize("block_size", [16, 128, 512])
+@pytest.mark.parametrize("use_result", [False, True])
+def test_atomic_poll_tensor_acquire(block_size, use_result, device):
+    if not is_cuda():
+        pytest.skip("requires concurrent CUDA CTAs")
+
+    @gluon.jit
+    def kernel(Flags, Payload, Out, BLOCK: ttgl.constexpr, UseResult: ttgl.constexpr):
+        offsets = ttgl.arange(0, BLOCK, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+        if ttgl.program_id(0) == 0:
+            matched = ttgl.atomic_poll(Flags + offsets, 1, scope="gpu")
+            values = ttgl.load(Payload + offsets)
+            if UseResult:
+                values = ttgl.where(matched, values, -1)
+            ttgl.store(Out + offsets, values)
+        else:
+            ttgl.store(Payload + offsets, offsets + 1)
+            ttgl.atomic_xchg(Flags + offsets, 1, sem="release", scope="gpu")
+
+    flags = torch.zeros(block_size, dtype=torch.int32, device=device)
+    payload = torch.zeros_like(flags)
+    out = torch.zeros_like(flags)
+    kernel[(2, )](flags, payload, out, block_size, use_result, num_warps=4)
+    torch.testing.assert_close(out, torch.arange(1, block_size + 1, dtype=torch.int32, device=device))
+
+
 @pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("use_result", [False, True])
 @pytest.mark.parametrize("scalar", [False, True])
