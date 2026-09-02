@@ -30,7 +30,7 @@ class Autotuner(KernelInterface):
                 and return pruned configs. It should return at least one config.
         """
         if not configs:
-            self.configs = [Config({}, num_warps=4, num_stages=3, num_ctas=1)]
+            self.configs = [Config({})]
         else:
             self.configs = configs
         self.keys = key
@@ -325,17 +325,33 @@ class Autotuner(KernelInterface):
         return ret
 
 
+def _freeze_for_hash(value):
+    """Convert nested autotune configuration values into a stable key."""
+    if isinstance(value, dict):
+        return tuple(
+            sorted(
+                ((key, _freeze_for_hash(item)) for key, item in value.items()),
+                key=lambda item: repr(item[0]),
+            ))
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_for_hash(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return tuple(sorted((_freeze_for_hash(item) for item in value), key=repr))
+    return value
+
+
 class Config:
     """
     An object that represents a possible kernel configuration for the auto-tuner to try.
 
     :ivar kwargs: a dictionary of meta-parameters to pass to the kernel as keyword arguments.
     :type kwargs: dict[Str, Any]
-    :ivar num_warps: the number of warps to use for the kernel when compiled for GPUs. For example, if
+    :ivar num_warps: optional number of warps to use when compiled for a SIMT GPU. For example, if
                       `num_warps=8`, then each kernel instance will be automatically parallelized to
-                      cooperatively execute using `8 * 32 = 256` threads.
-    :type num_warps: int
-    :ivar num_stages: the number of stages that the compiler should use when software-pipelining loops.
+                      cooperatively execute using `8 * 32 = 256` threads. When omitted, the backend
+                      chooses its default; non-SIMT backends do not receive this option.
+    :type num_warps: Optional[int]
+    :ivar num_stages: optional number of stages that the compiler should use when software-pipelining loops.
                        Mostly useful for matrix multiplication workloads on SM80+ GPUs.
     :type num_stages: int
     :ivar num_ctas: number of blocks in a block cluster. SM90+ only.
@@ -346,9 +362,15 @@ class Config:
     :ivar pre_hook: a function that will be called before the kernel is called. Parameters of this
                     function are args.
     :ivar ir_override: filename of a user-defined IR (*.{ttgir|llir|ptx|amdgcn}).
+    :ivar backend_options: target-specific scheduling options. These are kept
+                           under a namespace until the active backend parses
+                           them, preventing Gaudi/TPC knobs from becoming
+                           CUDA-shaped global launch arguments.
     """
 
-    def __init__(self, kwargs, num_warps=4, num_stages=3, num_ctas=1, maxnreg=None, pre_hook=None, ir_override=None):
+    def __init__(self, kwargs, num_warps=None, num_stages=None, num_ctas=None, maxnreg=None, pre_hook=None,
+                 ir_override=None,
+                 backend_options=None):
         self.kwargs = kwargs
         self.num_warps = num_warps
         self.num_ctas = num_ctas
@@ -356,18 +378,20 @@ class Config:
         self.maxnreg = maxnreg
         self.pre_hook = pre_hook
         self.ir_override = ir_override
+        self.backend_options = dict(backend_options or {})
 
     def __setstate__(self, state):
         self.kwargs = state.get("kwargs", {})
-        self.num_warps = state.get("num_warps", 4)
-        self.num_stages = state.get("num_stages", 3)
-        self.num_ctas = state.get("num_ctas", 1)
+        self.num_warps = state.get("num_warps")
+        self.num_stages = state.get("num_stages")
+        self.num_ctas = state.get("num_ctas")
         self.maxnreg = state.get("maxnreg", None)
         self.pre_hook = state.get("pre_hook", None)
         self.ir_override = state.get("ir_override", None)
+        self.backend_options = dict(state.get("backend_options", {}))
 
     def all_kwargs(self):
-        return {
+        result = {
             **self.kwargs, **{
                 k: v
                 for (k, v) in (
@@ -379,6 +403,9 @@ class Config:
                 ) if v is not None
             }
         }
+        if self.backend_options:
+            result["backend_options"] = self.backend_options
+        return result
 
     def __str__(self):
         res = []
@@ -389,20 +416,18 @@ class Config:
         res.append(f"num_stages: {self.num_stages}")
         res.append(f"maxnreg: {self.maxnreg}")
         res.append(f"ir_override: {self.ir_override}")
+        if self.backend_options:
+            res.append(f"backend_options: {self.backend_options}")
         return ", ".join(res)
 
     def __hash__(self):
-        return hash((*self.all_kwargs().items(), self.pre_hook))
+        return hash((_freeze_for_hash(self.all_kwargs()), self.pre_hook))
 
     def __eq__(self, other):
-        self_tuple = tuple((
-            *self.all_kwargs().items(),
-            self.pre_hook,
-        ))
-        other_tuple = tuple((
-            *other.all_kwargs().items(),
-            other.pre_hook,
-        ))
+        if not isinstance(other, Config):
+            return NotImplemented
+        self_tuple = (_freeze_for_hash(self.all_kwargs()), self.pre_hook)
+        other_tuple = (_freeze_for_hash(other.all_kwargs()), other.pre_hook)
         return self_tuple == other_tuple
 
 

@@ -667,3 +667,29 @@ def test_prune_all_configs(device):
         assert e is not None and str(
             e
         ) == "Autotuner error: No valid autotuner configs after pruning. `early_config_prune` should return at least one config."
+
+
+def test_config_backend_options_are_namespaced_and_hash_stable():
+    first = triton.Config(
+        kwargs={"BLOCK_SIZE": 256},
+        backend_options={"unroll": 4, "index_space": [8, 2], "mapping": {"fcd": 0, "batch": 1}},
+    )
+    second = triton.Config(
+        kwargs={"BLOCK_SIZE": 256},
+        backend_options={"mapping": {"batch": 1, "fcd": 0}, "index_space": [8, 2], "unroll": 4},
+    )
+
+    assert first == second
+    assert hash(first) == hash(second)
+    assert first.all_kwargs()["backend_options"] == {
+        "unroll": 4,
+        "index_space": [8, 2],
+        "mapping": {"fcd": 0, "batch": 1},
+    }
+
+
+def test_config_without_backend_options_preserves_legacy_kwargs():
+    config = triton.Config(kwargs={"BLOCK_SIZE": 128}, num_warps=8)
+
+    assert "backend_options" not in config.all_kwargs()
+    assert config.all_kwargs()["num_warps"] == 8

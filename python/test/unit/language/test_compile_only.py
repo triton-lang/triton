@@ -1,13 +1,73 @@
+import json
 import pytest
 import re
 from types import SimpleNamespace
 
 import triton
 import triton.language as tl
-from triton.backends.compiler import GPUTarget
-from triton.compiler import ASTSource
+from triton.backends.compiler import BaseBackend, GPUTarget, Target
+from triton.compiler import ASTSource, CompiledKernel
+from triton.compiler import compiler as compiler_module
 from triton.compiler.errors import CompileTimeAssertionFailure
 from triton.runtime.driver import driver
+
+
+def test_target_allows_non_simt_backend_without_warp_size():
+    target = Target("gaudi", "gaudi2")
+
+    assert isinstance(target, GPUTarget)
+    assert target.warp_size is None
+    assert GPUTarget.from_dict({"backend": "gaudi", "arch": "gaudi2"}) == target
+
+
+def test_non_simt_target_skips_thread_resource_check():
+    metadata = SimpleNamespace(target=Target("gaudi", "gaudi2"), shared=0)
+
+    BaseBackend.validate_kernel_resources(None, metadata, {"max_shared_mem": 0}, n_max_threads=0)
+
+
+def test_backend_options_are_flattened_with_explicit_values_winning():
+    normalized = BaseBackend.normalize_options(
+        None,
+        {
+            "backend_options": {
+                "unroll": 2,
+                "pipeline_depth": 3,
+            },
+            "unroll": 4,
+        },
+    )
+
+    assert normalized == {"unroll": 4, "pipeline_depth": 3}
+
+
+def test_compiled_kernel_retains_backend_for_lazy_resource_validation(monkeypatch, tmp_path):
+    class FakeBackend:
+        binary_ext = "testbin"
+
+        @staticmethod
+        def pack_metadata(metadata):
+            return metadata.name
+
+    backend = FakeBackend()
+    monkeypatch.setattr(compiler_module, "make_backend", lambda target: backend)
+    metadata = tmp_path / "kernel.json"
+    metadata.write_text(
+        json.dumps({
+            "name": "test_kernel",
+            "shared": 0,
+            "target": {
+                "backend": "test",
+                "arch": "unit",
+            },
+        }))
+    binary = tmp_path / "kernel.testbin"
+    binary.write_bytes(b"test")
+
+    kernel = CompiledKernel(None, {"metadata.json": str(metadata), "kernel.testbin": str(binary)}, "hash")
+
+    assert kernel.backend is backend
+    assert kernel.kernel == b"test"
 
 
 @triton.jit

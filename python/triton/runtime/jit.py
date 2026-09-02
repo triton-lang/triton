@@ -640,6 +640,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
     def _call_hook(
         self,
         hook,
+        backend,
         key,
         signature,
         target,
@@ -655,7 +656,9 @@ class JITFunction(JITCallable, KernelInterface[T]):
         name = self.fn.__qualname__
         module = self.fn.__module__
         arg_reprs = ", ".join([f"{param.name}: {ty}" for param, ty in zip(self.params, key[1])])
-        repr = f"{name}[num_warps={options.num_warps}, num_ctas={options.num_ctas}, num_stages={options.num_stages}, enable_fp_fusion={options.enable_fp_fusion}, launch_cooperative_grid={options.launch_cooperative_grid}]({arg_reprs})"
+        launch_options = backend.get_launch_options(options)
+        option_repr = ", ".join(f"{key}={value}" for key, value in launch_options.items())
+        repr = f"{name}[{option_repr}]({arg_reprs})"
         full_name = get_full_name(self.fn)
 
         specialization_data = serialize_specialization_data(full_name, signature, constants, configs[0], options, key,
@@ -665,16 +668,14 @@ class JITFunction(JITCallable, KernelInterface[T]):
             'signature': signature,
             'device': device,
             'constants': constants,
-            'num_warps': options.num_warps,
-            'num_ctas': options.num_ctas,
-            'num_stages': options.num_stages,
-            'enable_fp_fusion': options.enable_fp_fusion,
-            'launch_cooperative_grid': options.launch_cooperative_grid,
-            'extern_libs': options.extern_libs,
             'configs': configs,
             'specialization_data': specialization_data,
             'is_warmup': is_warmup,
+            'backend_options': launch_options,
         }
+        # Preserve the legacy CUDA/HIP hook payload while allowing non-SIMT
+        # backends to expose their own fields without fabricating warp knobs.
+        kwargs.update({key: value for key, value in vars(options).items() if key not in kwargs})
 
         return hook(
             key=key,
@@ -708,7 +709,8 @@ class JITFunction(JITCallable, KernelInterface[T]):
 
     def _pack_args(self, backend, kwargs, bound_args, specialization, options):
         # options
-        options = backend.parse_options(kwargs)
+        normalized_kwargs = backend.normalize_options(kwargs)
+        options = backend.parse_options(normalized_kwargs)
         # signature
         sigkeys = [x.name for x in self.params]
         sigvals = [x[0] for x in specialization]
@@ -717,7 +719,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
         assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
         assert "device" not in kwargs, "device option is deprecated; current device will be used"
         assert "stream" not in kwargs, "stream option is deprecated; current stream will be used"
-        for k in kwargs:
+        for k in normalized_kwargs:
             if k not in options.__dict__ and k not in sigkeys:
                 raise KeyError("Keyword argument %s was specified but unrecognised" % k)
         # constexprs
@@ -845,7 +847,8 @@ class JITFunction(JITCallable, KernelInterface[T]):
         deserialized_target = deserialized_obj['target']
         # TODO: we could support loading a kernel signature serialized on a different target however
         # currently options are target specific so we would need to change that.
-        if target.__dict__ != deserialized_target:
+        from triton.backends.compiler import GPUTarget
+        if target != GPUTarget.from_dict(deserialized_target):
             raise RuntimeError(f"Specialization data is for {deserialized_target} but trying to preload for {target}")
 
         def _decode_constant(value):
@@ -887,8 +890,8 @@ class JITFunction(JITCallable, KernelInterface[T]):
     def _do_compile(self, key, signature, device, constexprs, options, attrs, warmup):
         kernel_cache, _, target, backend, _ = self.device_caches[device]
 
-        if self._call_hook(knobs.runtime.jit_cache_hook, key, signature, target, device, constexprs, options, [attrs],
-                           warmup):
+        if self._call_hook(knobs.runtime.jit_cache_hook, backend, key, signature, target, device, constexprs, options,
+                           [attrs], warmup):
             return None
         src = self.ASTSource(self, signature, constexprs, attrs)
 
@@ -903,16 +906,16 @@ class JITFunction(JITCallable, KernelInterface[T]):
 
             def finalize_compile(kernel):
                 kernel_cache[key] = kernel
-                self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, target, device, constexprs,
-                                options, [attrs], warmup)
+                self._call_hook(knobs.runtime.jit_post_compile_hook, backend, key, signature, target, device,
+                                constexprs, options, [attrs], warmup)
 
             kernel = async_mode.submit(cache_key, async_compile, finalize_compile)
             kernel_cache[key] = kernel
         else:
             kernel = self.compile(src, target=target, options=options.__dict__)
             kernel_cache[key] = kernel
-            self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, target, device, constexprs, options,
-                            [attrs], warmup)
+            self._call_hook(knobs.runtime.jit_post_compile_hook, backend, key, signature, target, device, constexprs,
+                            options, [attrs], warmup)
         return kernel
 
     def __call__(self: "JITFunction[Callable[P, R]]", *args: P.args, **kwargs: P.kwargs) -> R:

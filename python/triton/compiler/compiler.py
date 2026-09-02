@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import functools
 import os
+import sys
 import time
 import copy
 
@@ -135,14 +136,14 @@ def max_shared_mem(device):
     return driver.active.utils.get_device_properties(device)["max_shared_mem"]
 
 
-def parse(full_name, ext, context):
+def parse(full_name, ext, context, binary_ext=None):
     if ext == "ttir" or ext == "ttgir":
         module = ir.parse_mlir_module(full_name, context)
         module.context = context
         return module
     if ext == "llir" or ext == "ptx" or ext == "amdgcn":
         return Path(full_name).read_text()
-    if ext == "cubin" or ext == "hsaco":
+    if ext in ("cubin", "hsaco") or ext == binary_ext:
         return Path(full_name).read_bytes()
 
 
@@ -240,7 +241,8 @@ def compile(src, target=None, options=None, _env_vars=None):
         src = IRSource(src, context, backend)
 
     extra_options = src.parse_options()
-    options = backend.parse_options(dict(options or dict(), **extra_options))
+    raw_options = dict(options or dict(), **extra_options)
+    options = backend.parse_options(backend.normalize_options(raw_options))
     # create cache manager
     env_vars = get_cache_invalidating_env_vars() if _env_vars is None else _env_vars
     key = get_cache_key(src, backend, options, env_vars=env_vars)
@@ -330,12 +332,12 @@ def compile(src, target=None, options=None, _env_vars=None):
             # Users can override kernels at scale by setting `ir_override` in autotune config
             # without TRITON_KERNEL_OVERRIDE
             if (ir_override := metadata.get("ir_override", None)) and ir_override.endswith(f".{ext}"):
-                next_module = parse(ir_override, ext, context)
+                next_module = parse(ir_override, ext, context, backend.binary_ext)
         elif full_name := fn_override_manager.get_file(ir_filename):
             print(f"\nOverriding kernel with file {full_name}")
-            next_module = parse(full_name, ext, context)
-        # If TRITON_STORE_BINARY_ONLY is 1, only store cubin/hsaco/json
-        if (not store_only_binary) or (ext in ("cubin", "hsaco", "json")):
+            next_module = parse(full_name, ext, context, backend.binary_ext)
+        # If TRITON_STORE_BINARY_ONLY is 1, only store the target binary/json.
+        if (not store_only_binary) or (ext in (backend.binary_ext, "json")):
             metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
         if fn_dump_manager is not None:
             fn_dump_manager.put(next_module, ir_filename)
@@ -410,19 +412,20 @@ class CompiledKernel:
         from collections import namedtuple
         metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
         metadata = json.loads(metadata_path.read_text())
-        # JSON serialization dumps the target as a dict. Restore it to a GPUTarget.
+        # JSON serialization dumps the target as a dict. Restore it to a target
+        # object while accepting older metadata without optional fields.
         target = metadata['target']
-        metadata['target'] = GPUTarget(target['backend'], target['arch'], target['warp_size'])
+        metadata['target'] = GPUTarget.from_dict(target)
         KernelMetadata = namedtuple('KernelMetadata', sorted(list(metadata.keys())))
         self.metadata = KernelMetadata(**metadata)
-        backend = make_backend(self.metadata.target)
-        self.packed_metadata = backend.pack_metadata(self.metadata)
+        self.backend = make_backend(self.metadata.target)
+        self.packed_metadata = self.backend.pack_metadata(self.metadata)
         self.src = src
         self.hash = hash
         self.name = self.metadata.name
         # stores the text of each level of IR that was generated during compilation
         asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
-        binary_ext = backend.binary_ext
+        binary_ext = self.backend.binary_ext
         self.asm = AsmDict({
             file.suffix[1:]: file.read_bytes() if file.suffix[1:] == binary_ext else file.read_text()
             for file in asm_files
@@ -438,6 +441,13 @@ class CompiledKernel:
         self._run = None
 
     def __del__(self):
+
+        # Runtime libraries may already have torn down their device context by
+        # the time Python destroys module globals.  The process owns those
+        # resources and will reclaim them; calling into a half-finalized
+        # backend here is unsafe (notably for Synapse recipe destruction).
+        if sys.is_finalizing():
+            return
 
         # Forked children inherit module handles that are still owned by the
         # parent's GPU runtime and must not unload them.
@@ -466,26 +476,22 @@ class CompiledKernel:
         device = driver.active.get_current_device()
         # create launcher
         self._run = driver.active.launcher_cls(self.src, self.metadata)
-        # not enough shared memory to run the kernel
-        max_shared = max_shared_mem(device)
-        if self.metadata.shared > max_shared:
-            raise_(OutOfResources(self.metadata.shared, max_shared, "shared memory"))
-        if hasattr(self.metadata, "tmem_size") and self.metadata.tmem_size is not None:
-            # Use blackwell max tmem size for now, this should be moved in device properties
-            max_tmem_size = 512  # tmem size in number of columns
-            if self.metadata.target.arch == 107:
-                max_tmem_size = 576
-            if self.metadata.tmem_size > max_tmem_size:
-                raise_(OutOfResources(self.metadata.tmem_size, max_tmem_size, "tensor memory"))
+        device_properties = driver.active.utils.get_device_properties(device)
+        try:
+            self.backend.validate_kernel_resources(self.metadata, device_properties)
+        except OutOfResources as e:
+            raise_(e)
         if knobs.runtime.kernel_load_start_hook is not None:
             knobs.runtime.kernel_load_start_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, device)
         self._module_pid = os.getpid()
-        warp_size = driver.active.get_current_target().warp_size
-        if self.metadata.num_warps * warp_size > self.n_max_threads:
-            raise_(OutOfResources(self.metadata.num_warps * warp_size, self.n_max_threads, "threads"))
+        try:
+            self.backend.validate_kernel_resources(
+                self.metadata, device_properties, n_max_threads=self.n_max_threads)
+        except OutOfResources as e:
+            raise_(e)
         if knobs.runtime.kernel_load_end_hook is not None:
             knobs.runtime.kernel_load_end_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
 
