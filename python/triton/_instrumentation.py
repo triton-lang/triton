@@ -40,8 +40,6 @@ def instrument(*args: Any, point: str, backend: str, context: Any = None) -> boo
 
     load_dialects = _callbacks.get(("load-dialects", backend))
     if point != "load-dialects" and load_dialects is not None:
-        if context is None:
-            raise RuntimeError(f"Instrumentation point '{point}' requires an MLIR context")
         load_dialects(context)
 
     callback(*args)
