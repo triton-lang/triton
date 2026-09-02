@@ -137,6 +137,7 @@ public:
   // type restrictions for BUFFER_ATOMIC_ADD_{F32,F64} and
   // BUFFER_ATOMIC_PK_ADD_{F16,BF16}:
   //   - CDNA3 (gfx942): no BUFFER_ATOMIC_PK_ADD_BF16
+  //   - RDNA3: BUFFER_ATOMIC_ADD_F32 only
   //   - RDNA4: no BUFFER_ATOMIC_ADD_F64
   //   - CDNA4, GFX1250: all float types supported (GFX1250 adds PK_ADD_BF16)
   bool supportsBufferAtomicFadd(mlir::Type elementType) const;
