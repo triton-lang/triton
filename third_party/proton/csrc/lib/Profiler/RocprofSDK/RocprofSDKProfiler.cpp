@@ -151,6 +151,14 @@ struct RocprofilerRuntimeState {
   std::atomic<bool> profilingActive{false};
   std::atomic<bool> nvtxEnabled{false};
   std::atomic<RocprofSDKProfiler::RocprofSDKProfilerPimpl *> pimpl{nullptr};
+  // rocprofiler-sdk provides a terminal client-finalization callback during
+  // tool initialization. Invoking it before Proton static destruction drains
+  // SDK callbacks and prevents the SDK atexit handler from finalizing this
+  // client again.
+  rocprofiler_client_finalize_t clientFinalize{};
+  std::optional<rocprofiler_client_id_t> clientId;
+  std::once_flag registerShutdownFlag;
+  bool clientFinalized{false};
 };
 
 RocprofilerRuntimeState &getRuntimeState() {
@@ -165,6 +173,26 @@ using RoctxRegisterTracerCallbackFn = void (*)(RoctxTracerCallbackFn);
 // registerRoctxCallback is defined after the Pimpl class (needs access to
 // the static roctxCallback member).
 void registerRoctxCallback(bool enable);
+
+void finalizeRocprofilerClient() {
+  auto &state = getRuntimeState();
+  rocprofiler_client_finalize_t finalize = nullptr;
+  std::optional<rocprofiler_client_id_t> clientId;
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    if (state.clientFinalized)
+      return;
+    state.clientFinalized = true;
+    state.profilingActive.store(false, std::memory_order_relaxed);
+    state.nvtxEnabled.store(false, std::memory_order_relaxed);
+    finalize = state.clientFinalize;
+    if (state.clientId)
+      clientId.emplace(*state.clientId);
+  }
+  registerRoctxCallback(false);
+  if (finalize && clientId)
+    finalize(*clientId);
+}
 
 // ---- Agent (GPU) ID mapping ----
 
@@ -1202,8 +1230,9 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::pcSamplingBufferCallback(
 
 namespace {
 
-int protonToolInit(rocprofiler_client_finalize_t, void *toolData) {
+int protonToolInit(rocprofiler_client_finalize_t finalize, void *toolData) {
   auto *state = static_cast<RocprofilerRuntimeState *>(toolData);
+  state->clientFinalize = finalize;
   auto *impl = state->pimpl.load();
 
   // Context 1: always-active context for code object tracking. Kernel symbol
@@ -1364,6 +1393,7 @@ protonConfigure(uint32_t version, const char *runtimeVersion, uint32_t priority,
                 rocprofiler_client_id_t *id) {
   auto &state = getRuntimeState();
   id->name = "ProtonRocprofSDK";
+  state.clientId.emplace(*id);
   static rocprofiler_tool_configure_result_t config{
       sizeof(rocprofiler_tool_configure_result_t), &protonToolInit,
       &protonToolFini, static_cast<void *>(&state)};
@@ -1377,6 +1407,15 @@ protonConfigure(uint32_t version, const char *runtimeVersion, uint32_t priority,
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStart() {
   {
     auto &state = getRuntimeState();
+    // SessionManager has been constructed before a profiler can start.
+    // Registering here makes this handler run before SessionManager and
+    // RocprofSDKProfiler static destruction, while callback destinations are
+    // still alive.
+    std::call_once(state.registerShutdownFlag, []() {
+      if (std::atexit(&finalizeRocprofilerClient) != 0)
+        throw std::runtime_error(
+            "[PROTON] Failed to register ROCprofiler shutdown handler");
+    });
     std::lock_guard<std::mutex> lock(state.mutex);
     if (!state.profilingStarted) {
       rocprofiler::startContext<true>(state.profilingContext);
