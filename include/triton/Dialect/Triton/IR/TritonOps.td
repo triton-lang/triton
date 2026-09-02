@@ -331,27 +331,32 @@ def TT_GridDependencyLaunchDependentsOp
 }
 
 def TT_AtomicPollOp : TT_Op<"atomic_poll", [
+  SameOperandsAndResultShape,
+  SameOperandsAndResultEncoding,
   TypesMatchWith<"ptr type matches expected type", "expected", "ptr",
-                 "getPointerTypeSameShape($_self)">
+                 "getPointerTypeSameShape($_self)">,
+  TypesMatchWith<"result type matches ptr type", "ptr", "result",
+                 "getI1SameShape(getPointeeType($_self))">
 ]> {
     let summary = "poll an atomic value";
 
     let description = [{
-        Repeatedly load from $ptr with relaxed semantics on a single thread
-        until the loaded value equals $expected. For acquire semantics, issue
-        an acquire fence only after a successful poll. Other threads wait for
-        the polling thread to finish.
+        Repeatedly load from $ptr with relaxed semantics until the loaded value
+        equals $expected. For a scalar pointer, one thread polls and other
+        threads wait for completion. For a tensor of pointers, each logical
+        pointer element polls independently. For acquire semantics, issue an
+        acquire fence only after a successful poll.
     }];
 
     let arguments = (ins
-      Arg<TT_Ptr, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
-      TT_Int:$expected,
+      Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+      TT_Type:$expected,
       Optional<I64>:$timeout,
       TT_MemSemanticAttr:$sem,
       TT_MemSyncScopeAttr:$scope
     );
 
-    let results = (outs I1:$result);
+    let results = (outs TT_BoolLike:$result);
 
     let assemblyFormat = [{
       $sem `,` $scope `,` $ptr `,` $expected (`timeout` $timeout^)?

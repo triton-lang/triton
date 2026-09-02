@@ -1619,6 +1619,21 @@ def test_atomic_poll_no_timeout_uses_no_shared_memory(device):
     assert compiled.metadata.shared == 0
 
 
+def test_atomic_poll_tensor_pointer(device):
+
+    @triton.jit
+    def kernel(flags, out, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        matched = tl.atomic_poll(flags + offsets, 1, sem="acquire", scope="gpu")
+        tl.store(out + offsets, matched)
+
+    block = 32
+    flags = torch.ones(block, dtype=torch.int32, device=device)
+    out = torch.zeros(block, dtype=torch.bool, device=device)
+    kernel[(1, )](flags, out, BLOCK=block, num_warps=1)
+    assert torch.all(out)
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("initial_value, expected", [(1, True), (0, False)])
 def test_atomic_poll_timeout(initial_value, expected, device):

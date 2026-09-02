@@ -379,6 +379,64 @@ struct AtomicPollOpConversion
       return rewriter.notifyMatchFailure(
           op, "multi-CTA atomic_poll requires cross-CTA shared memory");
 
+    if (auto resultTy = dyn_cast<RankedTensorType>(op.getType())) {
+      if (adaptor.getTimeout())
+        return rewriter.notifyMatchFailure(
+            op, "tensor atomic_poll does not support timeout");
+
+      auto ptrs = unpackUniqueTensorElements(loc, adaptor.getPtr(), rewriter);
+      auto expected =
+          unpackUniqueTensorElements(loc, adaptor.getExpected(), rewriter);
+      if (ptrs.size() != expected.size())
+        return rewriter.notifyMatchFailure(
+            op, "tensor atomic_poll pointer and expected layouts differ");
+
+      // A tensor poll has one independent polling loop per unique logical
+      // element.  Unlike the scalar form, it deliberately has no CTA-wide
+      // rendezvous: callers may synchronize at the scope appropriate for the
+      // layout after every element has completed its acquire.
+      StringRef syncScope = targetInfo.getAtomicSyncScope(op.getScope());
+      SmallVector<Value> results;
+      results.reserve(ptrs.size());
+      for (auto [ptr, expectedValue] : llvm::zip(ptrs, expected)) {
+        Block *currentBlock = rewriter.getInsertionBlock();
+        Block *continuation =
+            currentBlock->splitBlock(rewriter.getInsertionPoint());
+        Region *region = currentBlock->getParent();
+        Block *pollLoop =
+            rewriter.createBlock(region, Region::iterator(continuation));
+        Block *pollSuccess =
+            rewriter.createBlock(region, Region::iterator(continuation));
+
+        rewriter.setInsertionPointToEnd(currentBlock);
+        LLVM::BrOp::create(rewriter, loc, pollLoop);
+
+        rewriter.setInsertionPointToEnd(pollLoop);
+        unsigned bitWidth = expectedValue.getType().getIntOrFloatBitWidth();
+        Value loaded = LLVM::LoadOp::create(
+            rewriter, loc, expectedValue.getType(), ptr, bitWidth / 8,
+            /*isVolatile=*/false, /*isNonTemporal=*/false,
+            /*isInvariant=*/false, /*isInvariantGroup=*/false,
+            LLVM::AtomicOrdering::monotonic, syncScope);
+        Value matched = b.icmp_eq(loaded, expectedValue);
+        LLVM::CondBrOp::create(rewriter, loc, matched, pollSuccess, pollLoop);
+
+        rewriter.setInsertionPointToEnd(pollSuccess);
+        if (op.getSem() == triton::MemSemantic::ACQUIRE)
+          LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::acquire,
+                                syncScope);
+        LLVM::BrOp::create(rewriter, loc, continuation);
+
+        rewriter.setInsertionPointToStart(continuation);
+        results.push_back(b.true_val());
+      }
+
+      Value result = packUniqueTensorElements(loc, getTypeConverter(), results,
+                                              rewriter, resultTy);
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
     // Every lowering path emits a rendezvous barrier after the poll, so use it
     // as the post-atomic ordering barrier instead of emitting a duplicate.
     insertAtomicOrderingBarriers(op, op.getSem(),

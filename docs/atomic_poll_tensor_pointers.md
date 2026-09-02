@@ -24,13 +24,12 @@ The tensor form does not add a CTA-wide rendezvous.  Callers that need a
 warp- or CTA-wide rendezvous may use an explicit synchronization operation
 after the poll.
 
-## Initial scope
+## Scope
 
-The initial implementation should support `acquire` and `relaxed` semantics,
-the existing 16-, 32-, and 64-bit integer element types, and no timeout for
-tensor pointers.  Scalar timeout behavior remains unchanged.  Tensor timeout
-and masked polling can be added once their result and synchronization
-semantics are settled.
+The implementation supports `acquire` and `relaxed` semantics, the existing
+16-, 32-, and 64-bit integer element types, and no timeout for tensor pointers.
+Scalar timeout behavior remains unchanged. Tensor timeout and masked polling
+can be added once their result and synchronization semantics are settled.
 
 ## Example
 

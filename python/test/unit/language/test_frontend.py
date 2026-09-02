@@ -915,10 +915,10 @@ def test_atomic_poll_timeout():
     tl.atomic_poll(ptr, 1, timeout_ns=1000)
 
 
-@doesnt_compile
 @triton.jit
-def test_atomic_poll_rejects_tensor_pointer():
+def test_atomic_poll_tensor_pointer():
     ptrs = tl.full((1, ), 0, tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    # CHECK: %{{.*}} = tt.atomic_poll acquire, gpu, %{{.*}}, %{{.*}} : tensor<1x!tt.ptr<i32>>, tensor<1xi32> -> tensor<1xi1>
     tl.atomic_poll(ptrs, 1)
 
 
