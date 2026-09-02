@@ -341,11 +341,11 @@ def TT_AtomicPollOp : TT_Op<"atomic_poll", [
     let summary = "poll an atomic value";
 
     let description = [{
-        Repeatedly load from $ptr with relaxed semantics until the loaded value
-        equals $expected. For a scalar pointer, one thread polls and other
-        threads wait for completion. For a tensor of pointers, each logical
-        pointer element polls independently. For acquire semantics, issue an
-        acquire fence only after a successful poll.
+        Repeatedly load each logical element of $ptr with relaxed semantics
+        until the loaded value equals the corresponding element of $expected.
+        A logical element represented by multiple physical threads elects one
+        polling owner and shares completion with its replicas. For acquire
+        semantics, issue an acquire fence only after a successful poll.
     }];
 
     let arguments = (ins

@@ -375,11 +375,15 @@ struct AtomicPollOpConversion
     auto moduleOp = op->getParentOfType<ModuleOp>();
     assert(moduleOp && "Parent ModuleOp not found for AtomicPollOp");
     int numCTAs = TritonGPUDialect::getNumCTAs(moduleOp);
-    if (numCTAs != 1 && !targetInfo.isCuda())
+    auto resultTensorTy = dyn_cast<RankedTensorType>(op.getType());
+    // A scalar is the one-logical-element case. Its replicas use the existing
+    // owner-and-rendezvous path below. Tensor elements are independently
+    // owned, so they do not need cross-CTA scratch or a CTA-wide rendezvous.
+    if (!resultTensorTy && numCTAs != 1 && !targetInfo.isCuda())
       return rewriter.notifyMatchFailure(
           op, "multi-CTA atomic_poll requires cross-CTA shared memory");
 
-    if (auto resultTy = dyn_cast<RankedTensorType>(op.getType())) {
+    if (resultTensorTy) {
       if (adaptor.getTimeout())
         return rewriter.notifyMatchFailure(
             op, "tensor atomic_poll does not support timeout");
@@ -391,10 +395,9 @@ struct AtomicPollOpConversion
         return rewriter.notifyMatchFailure(
             op, "tensor atomic_poll pointer and expected layouts differ");
 
-      // A tensor poll has one independent polling loop per unique logical
-      // element.  Unlike the scalar form, it deliberately has no CTA-wide
-      // rendezvous: callers may synchronize at the scope appropriate for the
-      // layout after every element has completed its acquire.
+      // Every entry here is one unique logical pointer element. Its loop owns
+      // that element. Non-replicated tensor layouts need no post-poll
+      // rendezvous; callers select any wider synchronization explicitly.
       StringRef syncScope = targetInfo.getAtomicSyncScope(op.getScope());
       SmallVector<Value> results;
       results.reserve(ptrs.size());
@@ -432,7 +435,7 @@ struct AtomicPollOpConversion
       }
 
       Value result = packUniqueTensorElements(loc, getTypeConverter(), results,
-                                              rewriter, resultTy);
+                                              rewriter, resultTensorTy);
       rewriter.replaceOp(op, result);
       return success();
     }
