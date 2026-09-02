@@ -160,12 +160,9 @@ class InstrumentationHook(Hook):
                 arch = triton.runtime.driver.active.utils.get_device_properties(device)["arch"].split(":")[0]
                 triton_proton.add_convert_proton_amd_gpu_to_llvm(pm, arch)
 
-        register_instrumentation(name="proton", point="load-dialects", backend=backend_name,
-                                 callback=lambda context, _options: triton_proton.load_dialects(context))
-        register_instrumentation(name="proton", point="pre-lower-to-llvm", backend=backend_name,
-                                 callback=lambda pm, _options: to_llvmir_passes(pm))
-        register_instrumentation(name="proton", point="proton-to-llvm", backend=backend_name,
-                                 callback=lambda pm, _options: to_llvm_passes(pm))
+        register_instrumentation(point="load-dialects", backend=backend_name, callback=triton_proton.load_dialects)
+        register_instrumentation(point="ttgpuir-to-llvmir", backend=backend_name, callback=to_llvmir_passes)
+        register_instrumentation(point="llvmir-to-llvm", backend=backend_name, callback=to_llvm_passes)
         self._instrumentation_backend = backend_name
 
         InstrumentationHook.active_count += 1
@@ -175,7 +172,7 @@ class InstrumentationHook(Hook):
         set_profile_allocator(self.allocator)
 
         # Set the instrumentation mode
-        triton.knobs.compilation.instrumentation_mode = f"proton,{self.mode}"
+        triton.knobs.compilation.instrumentation_mode = str(self.mode)
 
     def deactivate(self):
         if InstrumentationHook.active_count == 0:
@@ -185,9 +182,9 @@ class InstrumentationHook(Hook):
 
         backend_name = self._instrumentation_backend
         if backend_name is not None:
-            unregister_instrumentation(name="proton", point="load-dialects", backend=backend_name)
-            unregister_instrumentation(name="proton", point="pre-lower-to-llvm", backend=backend_name)
-            unregister_instrumentation(name="proton", point="proton-to-llvm", backend=backend_name)
+            unregister_instrumentation(point="load-dialects", backend=backend_name)
+            unregister_instrumentation(point="ttgpuir-to-llvmir", backend=backend_name)
+            unregister_instrumentation(point="llvmir-to-llvm", backend=backend_name)
             self._instrumentation_backend = None
 
         # No runtime instrumentation hook is active anymore

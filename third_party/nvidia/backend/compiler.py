@@ -1,7 +1,7 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, nvidia
 from triton import knobs
-from triton._instrumentation import instrument as _instrument, is_enabled, register_instrumentation
+from triton._instrumentation import instrument as _instrument, is_enabled
 from triton.runtime.errors import PTXASError
 
 from dataclasses import dataclass
@@ -17,35 +17,6 @@ import subprocess
 from pathlib import Path
 
 instrument = functools.partial(_instrument, backend="nvidia")
-
-
-def _add_fpsan(pm, options):
-    passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
-    passes.ttgpuir.add_remove_layout_conversions(pm, True)
-    passes.common.add_canonicalizer(pm)
-    passes.common.add_cse(pm)
-
-
-def _add_consan_gluon_cleanup(pm, _options):
-    passes.ttgpuir.add_remove_layout_conversions(pm, True)
-    passes.common.add_canonicalizer(pm)
-    passes.common.add_cse(pm)
-
-
-def _add_gsan(pm, mod, options):
-    # GSan introduces layout conversions, so it must run before shared-memory allocation.
-    mod.set_attr("tti.gsan_launch_pdl", ir.builder(mod.context).get_int32_attr(int(options.launch_pdl)))
-    passes.ttgpuir.add_global_sanitizer(pm)
-
-
-def _prepare_consan_captures(pm, _options):
-    passes.ttgpuir.add_prepare_consan_captures(pm, "nvidia")
-
-
-register_instrumentation(name="fpsan", point="add", backend="nvidia", callback=_add_fpsan)
-register_instrumentation(name="consan", point="gluon-cleanup", backend="nvidia", callback=_add_consan_gluon_cleanup)
-register_instrumentation(name="gsan", point="add", backend="nvidia", callback=_add_gsan)
-register_instrumentation(name="consan", point="prepare-captures", backend="nvidia", callback=_prepare_consan_captures)
 
 
 def min_dot_size(target: GPUTarget):
@@ -301,7 +272,7 @@ class CUDABackend(BaseBackend):
 
     def load_dialects(self, ctx):
         nvidia.load_dialects(ctx)
-        instrument(ctx, name="proton", point="load-dialects")
+        instrument(ctx, point="load-dialects")
 
     @staticmethod
     def make_ttir(mod, metadata, opt, capability):
@@ -396,7 +367,11 @@ class CUDABackend(BaseBackend):
         passes.common.add_sccp(pm)
         passes.common.add_cse(pm)
         passes.common.add_canonicalizer(pm)
-        instrument(pm, name="fpsan", point="add", options=opt)
+        if is_enabled(opt, "fpsan"):
+            passes.ttgpuir.add_fp_sanitizer(pm, opt.fpsan_homomorphic_casts)
+            passes.ttgpuir.add_remove_layout_conversions(pm, True)
+            passes.common.add_canonicalizer(pm)
+            passes.common.add_cse(pm)
 
         pm.run(mod, 'make_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
@@ -419,8 +394,12 @@ class CUDABackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         nvidia.passes.ttnvgpuir.add_check_matmul_two_cta(pm)
 
-        instrument(pm, name="fpsan", point="add", options=options)
-        instrument(pm, name="consan", point="gluon-cleanup", options=options)
+        if is_enabled(options, "fpsan"):
+            passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
+        if any(is_enabled(options, mode) for mode in ["consan", "fpsan"]):
+            passes.ttgpuir.add_remove_layout_conversions(pm, True)
+            passes.common.add_canonicalizer(pm)
+            passes.common.add_cse(pm)
 
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
@@ -434,17 +413,21 @@ class CUDABackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
-        instrument(pm, mod, name="gsan", point="add", options=options)
+        if is_enabled(options, "gsan"):
+            # GSan introduces layout conversions, so it must run before shared-memory allocation.
+            mod.set_attr("tti.gsan_launch_pdl", ir.builder(mod.context).get_int32_attr(int(options.launch_pdl)))
+            passes.ttgpuir.add_global_sanitizer(pm)
 
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         passes.ttgpuir.add_allocate_warp_groups(pm, is_enabled(options, "consan"))
         passes.convert.add_scf_to_cf(pm)
         passes.gluon.add_inliner(pm)
-        instrument(pm, name="consan", point="prepare-captures", options=options)
+        if is_enabled(options, "consan"):
+            passes.ttgpuir.add_prepare_consan_captures(pm, "nvidia")
         nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
-        # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
-        instrument(pm, name="proton", point="pre-lower-to-llvm", options=options)
+        # Instrumentation point here so an extension can override IRs above (e.g., ttir and ttgir).
+        instrument(pm, point="ttgpuir-to-llvmir")
         nvidia.passes.ttnvgpuir.add_proxy_fence_insertion(pm, capability)
         nvidia.passes.ttnvgpuir.add_tmem_barrier_insertion(pm)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version, is_enabled(options, "consan"))
@@ -463,7 +446,7 @@ class CUDABackend(BaseBackend):
         if not knobs.compilation.disable_line_info and not knobs.compilation.dump_ir_extract_di_local_variables:
             passes.llvmir.add_di_scope(pm)
 
-        instrument(pm, name="proton", point="proton-to-llvm", options=options)
+        instrument(pm, point="llvmir-to-llvm")
 
         pm.run(mod, 'make_llir')
 
