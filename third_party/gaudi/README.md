@@ -56,11 +56,16 @@ elementwise add/subtract/multiply with `program_id(0) * BLOCK + arange`. It
 also recognizes the exact Triton TTIR DAG for BF16 residual-add plus RMSNorm,
 including the rounded residual output, FP32 reduction, runtime epsilon, and
 static hidden sizes up to 8192. Strict matchers also cover BF16 SiLU-and-mul
-and row-wise BF16-to-E4M3 dynamic quantization with an FP32 scale output. The
-quantization kernel accepts static row widths up to 16384 and uses the Gaudi2
-bias-7 FP8 encoding and linear-lane RNE conversion. Rows requiring at most
-8 KiB cache their BF16 input in VLM across reduction and conversion; wider
-rows reread HBM rather than risking the 16 KiB VLM limit. The
+and row-wise BF16-to-E4M3 dynamic quantization with an FP32 scale output. A
+single Triton kernel can also express the common
+`SiLU(gate) * up -> BF16 rounding -> dynamic E4M3 quantization` fast path.
+For row widths up to 4096 columns, the backend keeps the rounded intermediate in
+VLM, machine-unrolls four 2048-bit vectors to hide sigmoid latency, and emits
+one recipe instead of writing BF16 to HBM and launching a second kernel. The
+standalone quantization kernel accepts static row widths up to 16384 and uses
+the Gaudi2 bias-7 FP8 encoding and linear-lane RNE conversion. Rows requiring
+at most 8 KiB cache their BF16 input in VLM across reduction and conversion;
+wider rows reread HBM rather than risking the 16 KiB VLM limit. The
 shape-specialized Qwen3.5 packed decode GDN has an in-place FP32 recurrent
 state. Generated kernels use the full 2048-bit TPC vector, native reduction
 intrinsics, VLM row residency where profitable, and partial tensor
@@ -74,7 +79,7 @@ slice because it has not met the hardware-safety gate for the generated
 stateful/reduction kernels.
 
 Scan, gather/scatter, generic reductions, MME partitioning, complete
-attention, MoE, broader quantization and fused quantization epilogues,
+attention, MoE, broader quantization and MME-side quantization epilogues,
 DMA/HCCL scheduling, standalone lazy-mode HPUGraph capture, and graph-level
 epilogues remain subsequent backend work;
 they must not silently take CUDA semantics. vLLM exposes `off`, `hybrid`, and

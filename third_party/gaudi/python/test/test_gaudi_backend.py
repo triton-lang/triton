@@ -1,17 +1,50 @@
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
 import shutil
 import struct
 import subprocess
+from pathlib import Path
 
 import pytest
-
+import triton
 import triton.backends.gaudi.driver as driver_module
+import triton.language as tl
 from triton._C.libtriton import ir
+from triton.backends.compiler import GPUTarget
 from triton.backends.gaudi.artifact import ArtifactError, GaudiKernelArtifactV1
 from triton.backends.gaudi.compiler import GaudiConfig, GaudiOptions
 from triton.backends.gaudi.lowering import GaudiLoweringError, emit_tpc_c, lower_ttir
+from triton.compiler import ASTSource
+
+
+@triton.jit
+def _gaudi_silu_and_mul_dynamic_quant_bf16_fp8(
+    input_ptr,
+    output_ptr,
+    scale_ptr,
+    N_COLS: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+):
+    row = tl.program_id(0)
+    columns = tl.arange(0, BLOCK_SIZE)
+    mask = columns < N_COLS
+    input_row = row * (2 * N_COLS)
+    gate = tl.load(
+        input_ptr + input_row + columns, mask=mask, other=0.0
+    ).to(tl.float32)
+    up = tl.load(
+        input_ptr + input_row + N_COLS + columns, mask=mask, other=0.0
+    ).to(tl.float32)
+    sigmoid = 1.0 / (1.0 + tl.exp(-gate))
+    rounded = (gate * sigmoid * up).to(tl.bfloat16)
+    values = rounded.to(tl.float32)
+    maximum = tl.max(tl.abs(values), axis=0)
+    scale = (maximum + 1.0e-8) / 240.0
+    tl.store(scale_ptr + row, scale)
+    quantized = (values / scale).to(
+        tl.float8e4nv, fp_downcast_rounding="rtne"
+    )
+    tl.store(output_ptr + row * N_COLS + columns, quantized, mask=mask)
 
 
 def _parse_elementwise_add():
@@ -45,6 +78,15 @@ def _parse_dynamic_quant_bf16_fp8():
     context = ir.context()
     ir.load_dialects(context)
     path = Path(__file__).parents[2] / "test" / "dynamic_quant_bf16_fp8.mlir"
+    module = ir.parse_mlir_module(str(path), context)
+    module.context = context
+    return module
+
+
+def _parse_silu_and_mul_dynamic_quant_bf16_fp8():
+    context = ir.context()
+    ir.load_dialects(context)
+    path = Path(__file__).parents[2] / "test" / "silu_and_mul_dynamic_quant_bf16_fp8.mlir"
     module = ir.parse_mlir_module(str(path), context)
     module.context = context
     return module
@@ -191,6 +233,69 @@ def test_dynamic_quant_wide_rows_retain_hbm_reread_fallback(tmp_path):
     assert source.count("v_bf16_ld_tnsr_b(") == 3
 
 
+def test_silu_and_mul_dynamic_quant_lowers_to_one_row_program():
+    program = lower_ttir(_parse_silu_and_mul_dynamic_quant_bf16_fp8())
+
+    assert program.kind == "silu_and_mul_dynamic_quant"
+    assert program.input_args == (0,)
+    assert program.output_args == (1, 2)
+    assert program.tensor_dtype == "fp8e4nv"
+    assert program.block_size == 4096
+    assert program.vector_lanes == 256
+    assert program.index_space_rank == 1
+    assert program.program_id_axes == (0,)
+    assert program.parameters == {
+        "n_cols": 3584,
+        "input_row_stride": 7168,
+        "fp8_max": 240.0,
+        "scale_epsilon": 1.0e-8,
+        "vlm_bytes": 7168,
+    }
+    assert program.access_patterns[0]["mapping"][0]["a"] == 7168
+    assert program.access_patterns[1]["mapping"][0]["a"] == 3584
+    assert program.access_patterns[2]["mapping"][0]["a"] == 1
+    assert "gaudi.execute_silu_and_mul_dynamic_quant" in str(program)
+
+
+def test_silu_and_mul_dynamic_quant_emits_one_fused_tpc_kernel():
+    source = str(emit_tpc_c(lower_ttir(_parse_silu_and_mul_dynamic_quant_bf16_fp8())))
+
+    assert "#define TRITON_GAUDI_CACHE_CHUNKS 28" in source
+    assert "__local__ bfloat128 triton_gaudi_values[TRITON_GAUDI_CACHE_CHUNKS]" in source
+    assert "gate_f32.v1 * v_sigmoid_f32(gate_f32.v1) * up_f32.v1" in source
+    assert "v_f32_reduce_max" in source
+    assert "SW_RHNE | SW_FP8_BIAS7 | SW_LINEAR" in source
+    assert "v_f8_st_tnsr_partial" in source
+    assert "threadIdx" not in source
+
+
+@pytest.mark.skipif(shutil.which("tpc-clang") is None, reason="tpc-clang is not installed")
+def test_triton_frontend_compiles_fused_silu_dynamic_quant_to_one_artifact():
+    compiled = triton.compile(
+        ASTSource(
+            fn=_gaudi_silu_and_mul_dynamic_quant_bf16_fp8,
+            signature={
+                "input_ptr": "*bf16",
+                "output_ptr": "*fp8e4nv",
+                "scale_ptr": "*fp32",
+                "N_COLS": "constexpr",
+                "BLOCK_SIZE": "constexpr",
+            },
+            constexprs={"N_COLS": 3584, "BLOCK_SIZE": 4096},
+        ),
+        target=GPUTarget("gaudi", "gaudi2"),
+    )
+
+    assert compiled.metadata.index_space_rank == 1
+    assert compiled.metadata.block_size == 4096
+    assert compiled.metadata.vlm_bytes == 7168
+    assert "gaudi.execute_silu_and_mul_dynamic_quant" in compiled.asm["gtir"]
+    assert "#pragma loop_unroll(4)" in compiled.asm["tpc_c"]
+    artifact = GaudiKernelArtifactV1.from_bytes(compiled.asm["gabin"])
+    assert artifact.manifest["kind"] == "silu_and_mul_dynamic_quant"
+    assert artifact.manifest["output_args"] == [1, 2]
+
+
 def test_silu_and_mul_lowers_to_asymmetric_row_access_pattern():
     program = lower_ttir(_parse_silu_and_mul_bf16())
 
@@ -237,6 +342,7 @@ def test_silu_and_mul_emits_native_f32_sigmoid_tpc_c():
         _parse_elementwise_add_bf16,
         _parse_fused_add_rms_norm_bf16,
         _parse_dynamic_quant_bf16_fp8,
+        _parse_silu_and_mul_dynamic_quant_bf16_fp8,
         _parse_silu_and_mul_bf16,
     ],
 )
@@ -314,6 +420,24 @@ def test_dynamic_quant_reversed_scale_division_fails_closed(tmp_path):
         lower_ttir(module)
 
 
+def test_silu_and_mul_dynamic_quant_rejects_unrounded_quantization(tmp_path):
+    original = (
+        Path(__file__).parents[2] / "test" / "silu_and_mul_dynamic_quant_bf16_fp8.mlir"
+    ).read_text()
+    path = tmp_path / "unrounded_silu_quant.mlir"
+    path.write_text(original.replace(
+        "%quantized = arith.divf %rounded_f32, %scale_splat",
+        "%quantized = arith.divf %result, %scale_splat",
+    ))
+    context = ir.context()
+    ir.load_dialects(context)
+    module = ir.parse_mlir_module(str(path), context)
+    module.context = context
+
+    with pytest.raises(GaudiLoweringError, match="divide the BF16-rounded result by scale"):
+        lower_ttir(module)
+
+
 def test_silu_and_mul_wrong_up_offset_fails_closed(tmp_path):
     original = (Path(__file__).parents[2] / "test" / "silu_and_mul_bf16.mlir").read_text()
     path = tmp_path / "wrong_silu_up_offset.mlir"
@@ -362,7 +486,7 @@ def test_runtime_keeps_deduplicated_artifact_handle_until_last_release(monkeypat
         def _triton_gaudi_launch_abi():
             return {
                 "major": 1,
-                "minor": 8,
+                "minor": 9,
                 "target": "gaudi2",
                 "kernel_guid": "triton_gaudi2_v1",
                 "graph_op": True,
@@ -499,7 +623,7 @@ def test_runtime_packs_f32_scalar_parameters_as_ieee_bits(monkeypatch):
         def _triton_gaudi_launch_abi():
             return {
                 "major": 1,
-                "minor": 8,
+                "minor": 9,
                 "target": "gaudi2",
                 "kernel_guid": "triton_gaudi2_v1",
                 "graph_op": True,

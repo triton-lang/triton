@@ -12,7 +12,7 @@ namespace triton::gaudi {
 
 inline constexpr std::uint32_t kLaunchParamsMagic = 0x31475452U;
 inline constexpr std::uint16_t kLaunchAbiMajor = 1;
-inline constexpr std::uint16_t kLaunchAbiMinor = 8;
+inline constexpr std::uint16_t kLaunchAbiMinor = 9;
 inline constexpr std::size_t kArtifactHashChars = 64;
 inline constexpr std::size_t kMaxIndexSpaceRank = 5;
 inline constexpr std::size_t kMaxScalarParams = 32;
@@ -27,6 +27,7 @@ enum class KernelKind : std::uint32_t {
   GdnQkConvPacked = 5,
   GdnDecodeValueConvPacked = 6,
   DynamicQuant = 7,
+  SiluAndMulDynamicQuant = 8,
 };
 
 // This is copied byte-for-byte through Synapse nodeParams.  Keep the layout

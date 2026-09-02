@@ -95,6 +95,7 @@ class GaudiProgram:
             "elementwise": "      gaudi.execute_elementwise\n",
             "fused_add_rms_norm": "      gaudi.execute_fused_add_rms_norm\n",
             "dynamic_quant": "      gaudi.execute_dynamic_quant\n",
+            "silu_and_mul_dynamic_quant": "      gaudi.execute_silu_and_mul_dynamic_quant\n",
             "silu_and_mul": "      gaudi.execute_silu_and_mul\n",
             "gdn_decode_packed": "      gaudi.execute_gdn_decode_packed\n",
             "gdn_decode_conv_packed": "      gaudi.execute_gdn_decode_conv_packed\n",
@@ -465,6 +466,351 @@ def _match_dynamic_quant(
         kind="dynamic_quant",
         parameters={
             "n_cols": n_cols,
+            "fp8_max": 240.0,
+            "scale_epsilon": 1.0e-8,
+            "vlm_bytes": vlm_bytes,
+        },
+    )
+
+
+def _match_silu_and_mul_dynamic_quant(
+    name: str,
+    source: str,
+    arguments: tuple[Argument, ...],
+    argument_values: dict[int, int],
+    operations: tuple[Operation, ...],
+    producers: dict[int, Operation],
+) -> GaudiProgram | None:
+    if "silu_and_mul_dynamic_quant" not in name:
+        return None
+
+    expected_arguments = (
+        Argument(0, "tensor", "bf16"),
+        Argument(1, "tensor", "fp8e4nv"),
+        Argument(2, "tensor", "f32"),
+    )
+    if arguments != expected_arguments:
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization requires BF16 input, "
+            "E4M3 output, and f32 scale tensors")
+
+    expected_counts = {
+        "arith.addf": 2,
+        "arith.cmpi": 1,
+        "arith.constant": 7,
+        "arith.divf": 3,
+        "arith.extf": 3,
+        "arith.maxnumf": 1,
+        "arith.mulf": 2,
+        "arith.muli": 2,
+        "arith.negf": 1,
+        "arith.truncf": 1,
+        "builtin.module": 1,
+        "math.absf": 1,
+        "math.exp": 1,
+        "tt.addptr": 7,
+        "tt.fp_to_fp": 1,
+        "tt.func": 1,
+        "tt.get_program_id": 1,
+        "tt.load": 2,
+        "tt.make_range": 1,
+        "tt.reduce": 1,
+        "tt.reduce.return": 1,
+        "tt.return": 1,
+        "tt.splat": 4,
+        "tt.store": 2,
+    }
+    actual_counts: dict[str, int] = {}
+    for operation in operations:
+        actual_counts[operation.name] = actual_counts.get(operation.name, 0) + 1
+    if actual_counts != expected_counts:
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization TTIR must match the canonical operation set")
+    if source.count("rounding = rtne") != 1:
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization requires deterministic FP8 RNE")
+    if source.count("arith.constant dense<0.000000e+00>") != 1:
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization requires one zero BF16 load constant")
+    if source.count("arith.constant dense<1.000000e+00>") != 1:
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization requires one sigmoid constant")
+
+    program_id = next(operation for operation in operations if operation.name == "tt.get_program_id")
+    if program_id.attributes.get("axis") != 0:
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization supports row program_id(0) only")
+    row_value = program_id.results[0]
+    columns = next(operation for operation in operations if operation.name == "tt.make_range")
+    block_size = columns.attributes.get("end")
+    if (columns.attributes.get("start") != 0 or not isinstance(block_size, int) or
+            block_size < 128 or block_size > 8192 or block_size & (block_size - 1)):
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization BLOCK_SIZE must be a power of two in [128, 8192]")
+    columns_value = columns.results[0]
+
+    compare = next(operation for operation in operations if operation.name == "arith.cmpi")
+    if compare.attributes.get("predicate") != 2 or compare.operands[0] != columns_value:
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization requires columns < n_cols")
+    n_cols = _constant(compare.operands[1], producers)
+    if (n_cols <= 0 or n_cols > 4096 or n_cols > block_size or
+            (n_cols != 1 and n_cols <= block_size // 2)):
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization requires a canonical block and n_cols <= 4096")
+    mask_value = compare.results[0]
+
+    row_products: dict[int, Operation] = {}
+    for multiply in (operation for operation in operations if operation.name == "arith.muli"):
+        if multiply.operands[0] == row_value:
+            stride = _constant(multiply.operands[1], producers)
+        elif multiply.operands[1] == row_value:
+            stride = _constant(multiply.operands[0], producers)
+        else:
+            raise GaudiLoweringError(
+                "fused SiLU-and-mul dynamic quantization row offsets must derive from program_id(0)")
+        if stride in row_products:
+            raise GaudiLoweringError(
+                "fused SiLU-and-mul dynamic quantization has duplicate row strides")
+        row_products[stride] = multiply
+    if set(row_products) != {n_cols, 2 * n_cols}:
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization requires 2*n_cols input and n_cols output strides")
+
+    argument_ids = {index: value for value, index in argument_values.items()}
+
+    def match_scalar_pointer(base: int, offset: int, description: str) -> int:
+        matches = [
+            operation for operation in operations
+            if operation.name == "tt.addptr" and operation.operands == (base, offset)
+        ]
+        if len(matches) != 1:
+            raise GaudiLoweringError(
+                f"fused SiLU-and-mul dynamic quantization requires canonical {description}")
+        return matches[0].results[0]
+
+    gate_base = match_scalar_pointer(
+        argument_ids[0], row_products[2 * n_cols].results[0], "input row pointer")
+    output_base = match_scalar_pointer(
+        argument_ids[1], row_products[n_cols].results[0], "output row pointer")
+    up_bases = []
+    for operation in operations:
+        if (operation.name != "tt.addptr" or len(operation.operands) != 2 or
+                operation.operands[0] != gate_base):
+            continue
+        offset = producers.get(operation.operands[1])
+        if (offset is not None and offset.name == "arith.constant" and
+                _constant(operation.operands[1], producers) == n_cols):
+            up_bases.append(operation.results[0])
+    if len(up_bases) != 1:
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization up projection must begin at n_cols")
+    up_base = up_bases[0]
+
+    def match_vector_pointer(base: int, description: str) -> int:
+        splats = [
+            operation for operation in operations
+            if operation.name == "tt.splat" and operation.operands == (base,)
+        ]
+        if len(splats) != 1:
+            raise GaudiLoweringError(
+                f"fused SiLU-and-mul dynamic quantization requires canonical {description} splat")
+        pointers = [
+            operation for operation in operations
+            if operation.name == "tt.addptr" and
+            operation.operands == (splats[0].results[0], columns_value)
+        ]
+        if len(pointers) != 1:
+            raise GaudiLoweringError(
+                f"fused SiLU-and-mul dynamic quantization requires contiguous {description}")
+        return pointers[0].results[0]
+
+    gate_pointer = match_vector_pointer(gate_base, "gate pointer")
+    up_pointer = match_vector_pointer(up_base, "up pointer")
+    output_pointer = match_vector_pointer(output_base, "output pointer")
+
+    def match_load_extension(expected_pointer: int) -> tuple[int, int]:
+        matches = []
+        for extension in (operation for operation in operations if operation.name == "arith.extf"):
+            load = producers.get(extension.operands[0])
+            if load is None or load.name != "tt.load" or len(load.operands) != 3:
+                continue
+            if load.operands[0] == expected_pointer and load.operands[1] == mask_value:
+                _producer(load.operands[2], producers, "arith.constant")
+                matches.append((extension.results[0], load.operands[2]))
+        if len(matches) != 1:
+            raise GaudiLoweringError(
+                "fused SiLU-and-mul dynamic quantization requires canonical masked BF16 loads")
+        return matches[0]
+
+    gate_value, gate_zero = match_load_extension(gate_pointer)
+    up_value, up_zero = match_load_extension(up_pointer)
+    if gate_zero != up_zero:
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization masked loads must share one zero")
+    rounded = next(operation for operation in operations if operation.name == "arith.truncf")
+    output_multiply = _producer(rounded.operands[0], producers, "arith.mulf")
+    if up_value == output_multiply.operands[0]:
+        gated_value = output_multiply.operands[1]
+    elif up_value == output_multiply.operands[1]:
+        gated_value = output_multiply.operands[0]
+    else:
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization result must multiply the up projection")
+    gated_multiply = _producer(gated_value, producers, "arith.mulf")
+    if gate_value == gated_multiply.operands[0]:
+        sigmoid_value = gated_multiply.operands[1]
+    elif gate_value == gated_multiply.operands[1]:
+        sigmoid_value = gated_multiply.operands[0]
+    else:
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization must multiply gate by sigmoid")
+    sigmoid_divide = _producer(sigmoid_value, producers, "arith.divf")
+    one_value = sigmoid_divide.operands[0]
+    denominator = _producer(sigmoid_divide.operands[1], producers, "arith.addf")
+    if one_value not in denominator.operands:
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization sigmoid must be 1/(1+exp(-gate))")
+    exponential_value = denominator.operands[0] if denominator.operands[1] == one_value else denominator.operands[1]
+    exponential = _producer(exponential_value, producers, "math.exp")
+    if _expect_unary(exponential.operands[0], producers, "arith.negf") != gate_value:
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization sigmoid exponent must use the gate")
+    _producer(one_value, producers, "arith.constant")
+
+    rounded_f32_extensions = [
+        operation for operation in operations
+        if operation.name == "arith.extf" and operation.operands == (rounded.results[0],)
+    ]
+    if len(rounded_f32_extensions) != 1:
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization must quantize the rounded BF16 intermediate")
+    rounded_f32 = rounded_f32_extensions[0].results[0]
+    absolute = next(operation for operation in operations if operation.name == "math.absf")
+    reduction = next(operation for operation in operations if operation.name == "tt.reduce")
+    if absolute.operands != (rounded_f32,) or reduction.operands != (absolute.results[0],) or \
+            reduction.attributes.get("axis") != 0:
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization scale must use row max-abs")
+    reduce_return = next(operation for operation in operations if operation.name == "tt.reduce.return")
+    reducer_max = _producer(reduce_return.operands[0], producers, "arith.maxnumf")
+    if any(value in producers or value in argument_values for value in reducer_max.operands):
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization reducer must be a pure scalar maximum")
+
+    scale_adds = [
+        operation for operation in operations
+        if operation.name == "arith.addf" and reduction.results[0] in operation.operands
+    ]
+    if len(scale_adds) != 1:
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization scale must add epsilon")
+    scale_add = scale_adds[0]
+    scale_epsilon = scale_add.operands[0] if scale_add.operands[1] == reduction.results[0] else scale_add.operands[1]
+    _producer(scale_epsilon, producers, "arith.constant")
+    scale_divides = [
+        operation for operation in operations
+        if operation.name == "arith.divf" and operation.operands[0] == scale_add.results[0]
+    ]
+    if len(scale_divides) != 1:
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization scale must divide max-abs once")
+    scale_divide = scale_divides[0]
+    _producer(scale_divide.operands[1], producers, "arith.constant")
+    scalar_f32_constants = [
+        float(value) for value in re.findall(
+            r"arith\.constant\s+([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)\s*:\s*f32",
+            source,
+        )
+    ]
+    if (len(scalar_f32_constants) != 2 or
+            not any(abs(value - 1.0e-8) <= 1.0e-14 for value in scalar_f32_constants) or
+            240.0 not in scalar_f32_constants):
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul Gaudi2 E4M3 scale must be (max_abs+1e-8)/240")
+    scale_value = scale_divide.results[0]
+
+    scale_stores = [
+        operation for operation in operations
+        if operation.name == "tt.store" and len(operation.operands) == 2
+    ]
+    output_stores = [
+        operation for operation in operations
+        if operation.name == "tt.store" and len(operation.operands) == 3
+    ]
+    if len(scale_stores) != 1 or len(output_stores) != 1:
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization requires one scale and one FP8 store")
+    scale_pointer = _producer(scale_stores[0].operands[0], producers, "tt.addptr")
+    if (scale_pointer.operands[0] not in argument_values or
+            argument_values[scale_pointer.operands[0]] != 2 or
+            scale_pointer.operands[1] != row_value or scale_stores[0].operands[1] != scale_value):
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization requires one scale per row")
+    output_store = output_stores[0]
+    if (output_store.operands[0] != output_pointer or
+            output_store.operands[2] != mask_value):
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization requires contiguous masked FP8 output")
+    cast = _producer(output_store.operands[1], producers, "tt.fp_to_fp")
+    quantized = _producer(cast.operands[0], producers, "arith.divf")
+    if quantized is scale_divide or quantized.operands[0] != rounded_f32:
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization must divide the BF16-rounded result by scale")
+    scale_splat = _producer(quantized.operands[1], producers, "tt.splat")
+    if scale_splat.operands != (scale_value,):
+        raise GaudiLoweringError(
+            "fused SiLU-and-mul dynamic quantization output must use the emitted scale")
+
+    input_mapping = [{
+        "tensor_dim": 0,
+        "index_space_dim": 0,
+        "a": 2 * n_cols,
+        "start_b": 0,
+        "end_b": 2 * n_cols - 1,
+    }]
+    output_mapping = [{
+        "tensor_dim": 0,
+        "index_space_dim": 0,
+        "a": n_cols,
+        "start_b": 0,
+        "end_b": n_cols - 1,
+    }]
+    scale_mapping = [{
+        "tensor_dim": 0,
+        "index_space_dim": 0,
+        "a": 1,
+        "start_b": 0,
+        "end_b": 0,
+    }]
+    vlm_bytes = ((n_cols + 127) // 128) * 128 * 2
+    return GaudiProgram(
+        name=name,
+        source_hash=hashlib.sha256(source.encode("utf-8")).hexdigest(),
+        arguments=arguments,
+        operations=operations,
+        block_size=block_size,
+        vector_lanes=256,
+        output_arg=1,
+        additional_output_args=(2,),
+        input_args=(0,),
+        bound_arg=None,
+        expression={
+            "op": "silu_and_mul_dynamic_quant",
+            "input": 0,
+            "output": 1,
+            "scale": 2,
+            "n_cols": n_cols,
+        },
+        access_patterns=(
+            {"arg": 0, "role": "input", "mapping": input_mapping},
+            {"arg": 1, "role": "output", "mapping": output_mapping},
+            {"arg": 2, "role": "output", "mapping": scale_mapping},
+        ),
+        kind="silu_and_mul_dynamic_quant",
+        parameters={
+            "n_cols": n_cols,
+            "input_row_stride": 2 * n_cols,
             "fp8_max": 240.0,
             "scale_epsilon": 1.0e-8,
             "vlm_bytes": vlm_bytes,
@@ -1984,6 +2330,17 @@ def lower_ttir(module) -> GaudiProgram:
     arguments, argument_values = _parse_arguments(module)
     operations, producers = _collect_operations(module)
 
+    silu_quant_program = _match_silu_and_mul_dynamic_quant(
+        name,
+        source,
+        arguments,
+        argument_values,
+        operations,
+        producers,
+    )
+    if silu_quant_program is not None:
+        return silu_quant_program
+
     qk_conv_program = _match_gdn_qk_conv_packed(
         name,
         source,
@@ -2310,6 +2667,157 @@ void main(tensor arg0, tensor arg1, tensor arg2)
                 v_f8_st_tnsr_partial(
                     output_coords, arg1, quantized, remaining - 1, 0);
             }}
+        }}
+    }}
+}}
+"""
+    return TpcCSource(program, source)
+
+
+def _emit_silu_and_mul_dynamic_quant_tpc_c(program: GaudiProgram) -> TpcCSource:
+    if program.input_args != (0,) or program.output_args != (1, 2):
+        raise GaudiLoweringError(
+            "TPC-C fused SiLU-and-mul dynamic quantization requires one input and FP8/scale outputs")
+    expected = (
+        ("tensor", "bf16"),
+        ("tensor", "fp8e4nv"),
+        ("tensor", "f32"),
+    )
+    if tuple((argument.kind, argument.dtype) for argument in program.arguments) != expected:
+        raise GaudiLoweringError(
+            "TPC-C fused SiLU-and-mul dynamic quantization requires the canonical mixed tensor ABI")
+    parameters = program.parameters or {}
+    n_cols = int(parameters.get("n_cols", 0))
+    input_row_stride = int(parameters.get("input_row_stride", 0))
+    cache_chunks = (n_cols + 127) // 128
+    expected_vlm_bytes = cache_chunks * 256
+    if (n_cols <= 0 or n_cols > 4096 or input_row_stride != 2 * n_cols or
+            n_cols > program.block_size or
+            (n_cols != 1 and n_cols <= program.block_size // 2) or
+            int(parameters.get("vlm_bytes", -1)) != expected_vlm_bytes or
+            expected_vlm_bytes > 8192 or program.index_space_rank != 1):
+        raise GaudiLoweringError(
+            "TPC-C fused SiLU-and-mul dynamic quantization has invalid row or VLM metadata")
+
+    source = f"""// Generated by Triton Gaudi2 backend. Do not edit.
+#define TRITON_GAUDI_BLOCK_SIZE {program.block_size}
+#define TRITON_GAUDI_N_COLS {n_cols}
+#define TRITON_GAUDI_BF16_LANES 128
+#define TRITON_GAUDI_FP8_LANES 256
+#define TRITON_GAUDI_CACHE_CHUNKS {cache_chunks}
+
+__local__ bfloat128 triton_gaudi_values[TRITON_GAUDI_CACHE_CHUNKS];
+
+void main(tensor arg0, tensor arg1, tensor arg2)
+{{
+    const int5 index_space_start = get_index_space_offset();
+    const int5 index_space_end = get_index_space_size() + index_space_start;
+    const int n_cols = TRITON_GAUDI_N_COLS;
+    const int full_columns = n_cols - n_cols % TRITON_GAUDI_BF16_LANES;
+    const int tail_columns = n_cols - full_columns;
+    const uchar256 broadcast_lane_zero = 0x80;
+
+    for (int row = index_space_start[0]; row < index_space_end[0]; ++row)
+    {{
+        float128 maximum = {{0}};
+        #pragma loop_unroll(4)
+        for (int lane = 0;
+             lane < full_columns;
+             lane += TRITON_GAUDI_BF16_LANES)
+        {{
+            int5 gate_coords = {{row * 2 * n_cols + lane, 0, 0, 0, 0}};
+            int5 up_coords = {{row * 2 * n_cols + n_cols + lane, 0, 0, 0, 0}};
+            const bfloat128 gate_values = v_bf16_ld_tnsr_b(gate_coords, arg0);
+            const bfloat128 up_values = v_bf16_ld_tnsr_b(up_coords, arg0);
+            const float128 gate_f32 =
+                convert_bfloat128_to_float128(gate_values, SW_LINEAR);
+            const float128 up_f32 =
+                convert_bfloat128_to_float128(up_values, SW_LINEAR);
+            float128 result_f32 = {{0}};
+            result_f32.v1 =
+                gate_f32.v1 * v_sigmoid_f32(gate_f32.v1) * up_f32.v1;
+            result_f32.v2 =
+                gate_f32.v2 * v_sigmoid_f32(gate_f32.v2) * up_f32.v2;
+            const bfloat128 result = convert_float128_to_bfloat128(
+                result_f32, SW_RHNE | SW_LINEAR);
+            triton_gaudi_values[lane / TRITON_GAUDI_BF16_LANES] = result;
+            const float128 rounded_f32 =
+                convert_bfloat128_to_float128(result, SW_LINEAR);
+            maximum.v1 = v_f32_max_b(
+                maximum.v1, v_f32_abs_b(rounded_f32.v1));
+            maximum.v2 = v_f32_max_b(
+                maximum.v2, v_f32_abs_b(rounded_f32.v2));
+        }}
+        if (tail_columns > 0)
+        {{
+            int5 gate_coords = {{row * 2 * n_cols + full_columns, 0, 0, 0, 0}};
+            int5 up_coords = {{
+                row * 2 * n_cols + n_cols + full_columns, 0, 0, 0, 0}};
+            const bfloat128 gate_values = v_bf16_ld_tnsr_partial_b(
+                gate_coords, arg0, tail_columns - 1, 0);
+            const bfloat128 up_values = v_bf16_ld_tnsr_partial_b(
+                up_coords, arg0, tail_columns - 1, 0);
+            const float128 gate_f32 =
+                convert_bfloat128_to_float128(gate_values, SW_LINEAR);
+            const float128 up_f32 =
+                convert_bfloat128_to_float128(up_values, SW_LINEAR);
+            float128 result_f32 = {{0}};
+            result_f32.v1 =
+                gate_f32.v1 * v_sigmoid_f32(gate_f32.v1) * up_f32.v1;
+            result_f32.v2 =
+                gate_f32.v2 * v_sigmoid_f32(gate_f32.v2) * up_f32.v2;
+            const bfloat128 result = convert_float128_to_bfloat128(
+                result_f32, SW_RHNE | SW_LINEAR);
+            triton_gaudi_values[
+                full_columns / TRITON_GAUDI_BF16_LANES] = result;
+            const float128 rounded_f32 =
+                convert_bfloat128_to_float128(result, SW_LINEAR);
+            maximum.v1 = v_f32_max_b(
+                maximum.v1, v_f32_abs_b(rounded_f32.v1));
+            maximum.v2 = v_f32_max_b(
+                maximum.v2, v_f32_abs_b(rounded_f32.v2));
+        }}
+
+        float64 row_maximum = v_f32_max_b(maximum.v1, maximum.v2);
+        row_maximum = v_f32_reduce_max(row_maximum);
+        row_maximum = v_f32_shuffle_b(
+            row_maximum, broadcast_lane_zero, 0, row_maximum);
+        const float64 scale = (row_maximum + 1.0e-8f) / 240.0f;
+        const float64 inverse_scale = 1.0f / scale;
+        int5 scale_coords = {{row, 0, 0, 0, 0}};
+        v_f32_st_tnsr_partial(scale_coords, arg2, scale, 0, 0);
+
+        for (int lane = 0;
+             lane < n_cols;
+             lane += TRITON_GAUDI_FP8_LANES)
+        {{
+            const bfloat128 first =
+                triton_gaudi_values[lane / TRITON_GAUDI_BF16_LANES];
+            bfloat128 second = {{0}};
+            const int second_start = lane + TRITON_GAUDI_BF16_LANES;
+            if (second_start < n_cols)
+            {{
+                second = triton_gaudi_values[
+                    second_start / TRITON_GAUDI_BF16_LANES];
+            }}
+            const float128 first_f32 =
+                convert_bfloat128_to_float128(first, SW_LINEAR);
+            const float128 second_f32 =
+                convert_bfloat128_to_float128(second, SW_LINEAR);
+            float256 scaled = {{0}};
+            scaled.v1 = first_f32.v1 * inverse_scale;
+            scaled.v2 = first_f32.v2 * inverse_scale;
+            scaled.v3 = second_f32.v1 * inverse_scale;
+            scaled.v4 = second_f32.v2 * inverse_scale;
+            const minifloat256 quantized = v_convert_f32_to_f8_all_b(
+                scaled, SW_RHNE | SW_FP8_BIAS7 | SW_LINEAR);
+            int5 output_coords = {{row * n_cols + lane, 0, 0, 0, 0}};
+            const int remaining = n_cols - lane;
+            if (remaining >= TRITON_GAUDI_FP8_LANES)
+                v_f8_st_tnsr(output_coords, arg1, quantized);
+            else
+                v_f8_st_tnsr_partial(
+                    output_coords, arg1, quantized, remaining - 1, 0);
         }}
     }}
 }}
@@ -3413,6 +3921,8 @@ void main(
 
 
 def emit_tpc_c(program: GaudiProgram) -> TpcCSource:
+    if program.kind == "silu_and_mul_dynamic_quant":
+        return _emit_silu_and_mul_dynamic_quant_tpc_c(program)
     if program.kind == "dynamic_quant":
         return _emit_dynamic_quant_tpc_c(program)
     if program.kind == "fused_add_rms_norm":
