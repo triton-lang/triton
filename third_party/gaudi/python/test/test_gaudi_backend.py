@@ -148,7 +148,7 @@ def test_dynamic_quant_lowers_to_mixed_dtype_tpc_program():
         "n_cols": 769,
         "fp8_max": 240.0,
         "scale_epsilon": 1.0e-8,
-        "vlm_bytes": 0,
+        "vlm_bytes": 1792,
     }
     assert program.access_patterns[0]["mapping"][0]["a"] == 769
     assert program.access_patterns[1]["mapping"][0]["a"] == 769
@@ -161,12 +161,34 @@ def test_dynamic_quant_emits_native_fp8_reduction_tpc_c():
     source = str(emit_tpc_c(lower_ttir(_parse_dynamic_quant_bf16_fp8())))
 
     assert "v_f32_reduce_max" in source
+    assert "#define TRITON_GAUDI_CACHE_CHUNKS 7" in source
+    assert "__local__ bfloat128 triton_gaudi_values[TRITON_GAUDI_CACHE_CHUNKS]" in source
+    assert source.count("v_bf16_ld_tnsr_b(") == 1
     assert "v_f32_st_tnsr_partial(scale_coords, arg2, scale, 0, 0)" in source
     assert "scaled, SW_RHNE | SW_FP8_BIAS7 | SW_LINEAR" in source
     assert "v_f8_st_tnsr_partial" in source
     assert "1.0e-8f" in source
     assert "/ 240.0f" in source
     assert "threadIdx" not in source
+
+
+def test_dynamic_quant_wide_rows_retain_hbm_reread_fallback(tmp_path):
+    original = (Path(__file__).parents[2] / "test" / "dynamic_quant_bf16_fp8.mlir").read_text()
+    path = tmp_path / "dynamic_quant_wide.mlir"
+    path.write_text(original.replace("1024", "8192").replace("769", "5000"))
+    context = ir.context()
+    ir.load_dialects(context)
+    module = ir.parse_mlir_module(str(path), context)
+    module.context = context
+
+    program = lower_ttir(module)
+    source = str(emit_tpc_c(program))
+
+    assert program.block_size == 8192
+    assert program.parameters["n_cols"] == 5000
+    assert program.parameters["vlm_bytes"] == 0
+    assert "triton_gaudi_values" not in source
+    assert source.count("v_bf16_ld_tnsr_b(") == 3
 
 
 def test_silu_and_mul_lowers_to_asymmetric_row_access_pattern():

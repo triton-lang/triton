@@ -57,9 +57,10 @@ also recognizes the exact Triton TTIR DAG for BF16 residual-add plus RMSNorm,
 including the rounded residual output, FP32 reduction, runtime epsilon, and
 static hidden sizes up to 8192. Strict matchers also cover BF16 SiLU-and-mul
 and row-wise BF16-to-E4M3 dynamic quantization with an FP32 scale output. The
-quantization kernel accepts static row widths up to 16384, uses the Gaudi2
-bias-7 FP8 encoding and linear-lane RNE conversion, and rereads HBM for its
-conversion pass instead of exceeding the 16 KiB VLM limit. The
+quantization kernel accepts static row widths up to 16384 and uses the Gaudi2
+bias-7 FP8 encoding and linear-lane RNE conversion. Rows requiring at most
+8 KiB cache their BF16 input in VLM across reduction and conversion; wider
+rows reread HBM rather than risking the 16 KiB VLM limit. The
 shape-specialized Qwen3.5 packed decode GDN has an in-place FP32 recurrent
 state. Generated kernels use the full 2048-bit TPC vector, native reduction
 intrinsics, VLM row residency where profitable, and partial tensor
