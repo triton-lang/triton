@@ -41,6 +41,15 @@ def _parse_fused_add_rms_norm_bf16():
     return module
 
 
+def _parse_dynamic_quant_bf16_fp8():
+    context = ir.context()
+    ir.load_dialects(context)
+    path = Path(__file__).parents[2] / "test" / "dynamic_quant_bf16_fp8.mlir"
+    module = ir.parse_mlir_module(str(path), context)
+    module.context = context
+    return module
+
+
 def _parse_silu_and_mul_bf16():
     context = ir.context()
     ir.load_dialects(context)
@@ -126,6 +135,40 @@ def test_fused_add_rms_norm_emits_native_reduction_tpc_c():
     assert "threadIdx" not in source
 
 
+def test_dynamic_quant_lowers_to_mixed_dtype_tpc_program():
+    program = lower_ttir(_parse_dynamic_quant_bf16_fp8())
+
+    assert program.kind == "dynamic_quant"
+    assert program.input_args == (0,)
+    assert program.output_args == (1, 2)
+    assert program.tensor_dtype == "fp8e4nv"
+    assert program.block_size == 1024
+    assert program.vector_lanes == 256
+    assert program.parameters == {
+        "n_cols": 769,
+        "fp8_max": 240.0,
+        "scale_epsilon": 1.0e-8,
+        "vlm_bytes": 0,
+    }
+    assert program.access_patterns[0]["mapping"][0]["a"] == 769
+    assert program.access_patterns[1]["mapping"][0]["a"] == 769
+    assert program.access_patterns[2]["mapping"][0]["a"] == 1
+    assert program.manifest()["output_args"] == [1, 2]
+    assert "gaudi.execute_dynamic_quant" in str(program)
+
+
+def test_dynamic_quant_emits_native_fp8_reduction_tpc_c():
+    source = str(emit_tpc_c(lower_ttir(_parse_dynamic_quant_bf16_fp8())))
+
+    assert "v_f32_reduce_max" in source
+    assert "v_f32_st_tnsr_partial(scale_coords, arg2, scale, 0, 0)" in source
+    assert "scaled, SW_RHNE | SW_FP8_BIAS7 | SW_LINEAR" in source
+    assert "v_f8_st_tnsr_partial" in source
+    assert "1.0e-8f" in source
+    assert "/ 240.0f" in source
+    assert "threadIdx" not in source
+
+
 def test_silu_and_mul_lowers_to_asymmetric_row_access_pattern():
     program = lower_ttir(_parse_silu_and_mul_bf16())
 
@@ -171,6 +214,7 @@ def test_silu_and_mul_emits_native_f32_sigmoid_tpc_c():
         _parse_elementwise_add,
         _parse_elementwise_add_bf16,
         _parse_fused_add_rms_norm_bf16,
+        _parse_dynamic_quant_bf16_fp8,
         _parse_silu_and_mul_bf16,
     ],
 )
@@ -216,6 +260,35 @@ def test_fused_add_rms_norm_mismatched_divisor_fails_closed(tmp_path):
     module.context = context
 
     with pytest.raises(GaudiLoweringError, match="divide an axis-0 sum by n_cols"):
+        lower_ttir(module)
+
+
+def test_dynamic_quant_wrong_fp8_max_fails_closed(tmp_path):
+    original = (Path(__file__).parents[2] / "test" / "dynamic_quant_bf16_fp8.mlir").read_text()
+    path = tmp_path / "wrong_dynamic_quant_max.mlir"
+    path.write_text(original.replace("2.400000e+02 : f32", "4.480000e+02 : f32"))
+    context = ir.context()
+    ir.load_dialects(context)
+    module = ir.parse_mlir_module(str(path), context)
+    module.context = context
+
+    with pytest.raises(GaudiLoweringError, match="scale=\\(max_abs\\+1e-8\\)/240"):
+        lower_ttir(module)
+
+
+def test_dynamic_quant_reversed_scale_division_fails_closed(tmp_path):
+    original = (Path(__file__).parents[2] / "test" / "dynamic_quant_bf16_fp8.mlir").read_text()
+    path = tmp_path / "reversed_dynamic_quant_division.mlir"
+    path.write_text(original.replace(
+        "%quantized = arith.divf %input_f32, %scale_splat",
+        "%quantized = arith.divf %scale_splat, %input_f32",
+    ))
+    context = ir.context()
+    ir.load_dialects(context)
+    module = ir.parse_mlir_module(str(path), context)
+    module.context = context
+
+    with pytest.raises(GaudiLoweringError, match="divide the loaded BF16 values by scale"):
         lower_ttir(module)
 
 
@@ -267,7 +340,7 @@ def test_runtime_keeps_deduplicated_artifact_handle_until_last_release(monkeypat
         def _triton_gaudi_launch_abi():
             return {
                 "major": 1,
-                "minor": 7,
+                "minor": 8,
                 "target": "gaudi2",
                 "kernel_guid": "triton_gaudi2_v1",
                 "graph_op": True,
@@ -404,7 +477,7 @@ def test_runtime_packs_f32_scalar_parameters_as_ieee_bits(monkeypatch):
         def _triton_gaudi_launch_abi():
             return {
                 "major": 1,
-                "minor": 7,
+                "minor": 8,
                 "target": "gaudi2",
                 "kernel_guid": "triton_gaudi2_v1",
                 "graph_op": True,

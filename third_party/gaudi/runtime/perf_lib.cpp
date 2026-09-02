@@ -57,7 +57,8 @@ const LaunchParamsV1* getLaunchParams(const tpc_lib_api::HabanaKernelParams* par
        launch->kernel_kind != triton::gaudi::KernelKind::GdnDecodeConvPacked &&
        launch->kernel_kind != triton::gaudi::KernelKind::GdnQkConvPacked &&
        launch->kernel_kind !=
-           triton::gaudi::KernelKind::GdnDecodeValueConvPacked) ||
+           triton::gaudi::KernelKind::GdnDecodeValueConvPacked &&
+       launch->kernel_kind != triton::gaudi::KernelKind::DynamicQuant) ||
       !isLowerHexHash(launch->artifact_hash)) {
     return nullptr;
   }
@@ -410,7 +411,7 @@ extern "C" TRITON_GAUDI_PERF_EXPORT tpc_lib_api::GlueCodeReturn GetKernelGuids(
 extern "C" TRITON_GAUDI_PERF_EXPORT std::uint64_t GetLibVersion() {
   // Bump when the fixed GUID or LaunchParams contract changes so Synapse's
   // recipe coherency checks cannot reuse an incompatible perf library.
-  return 0x545249544F4E0007ULL;
+  return 0x545249544F4E0008ULL;
 }
 
 extern "C" TRITON_GAUDI_PERF_EXPORT tpc_lib_api::GlueCodeReturn InstantiateTpcKernel(
@@ -442,6 +443,32 @@ extern "C" TRITON_GAUDI_PERF_EXPORT tpc_lib_api::GlueCodeReturn InstantiateTpcKe
         elements_per_program > launch->block_size) {
       return tpc_lib_api::GLUE_KERNEL_INVALID_SCALAR_ARGUMENT;
     }
+  } else if (launch->kernel_kind == triton::gaudi::KernelKind::DynamicQuant) {
+    const auto rows = launch->grid[0];
+    const auto n_cols = launch->logical_size;
+    const auto fp8e4m3 = static_cast<tpc_lib_api::TensorDataType>(1U << 5);
+    if (launch->input_count != 1 || launch->output_count != 2 ||
+        launch->scalar_count != 0 || launch->index_space_rank != 1 ||
+        launch->abi_minor < 8 ||
+        launch->tensor_dtype != static_cast<std::uint32_t>(fp8e4m3) ||
+        rows == 0 || n_cols == 0 || n_cols > launch->block_size ||
+        (n_cols != 1 && n_cols <= launch->block_size / 2) ||
+        launch->block_size > 16384 ||
+        (launch->block_size & (launch->block_size - 1)) != 0 ||
+        rows > std::numeric_limits<std::uint64_t>::max() / n_cols) {
+      return tpc_lib_api::GLUE_KERNEL_INVALID_SCALAR_ARGUMENT;
+    }
+    const auto elements = rows * n_cols;
+    const auto bf16 = static_cast<tpc_lib_api::TensorDataType>(1U << 8);
+    const auto f32 = static_cast<tpc_lib_api::TensorDataType>(1U << 12);
+    if (!hasGeometry(params->inputTensors[0], bf16, {elements})) {
+      return tpc_lib_api::GLUE_INCOMPATIBLE_INPUT_SIZE;
+    }
+    if (!hasGeometry(params->outputTensors[0], fp8e4m3, {elements}) ||
+        !hasGeometry(params->outputTensors[1], f32, {rows})) {
+      return tpc_lib_api::GLUE_INCOMPATIBLE_OUTPUT_SIZE;
+    }
+    elements_per_program = n_cols;
   } else if (launch->kernel_kind == triton::gaudi::KernelKind::SiluAndMul) {
     if (launch->input_count != 1 || launch->output_count != 1 ||
         launch->scalar_count != 0) {
@@ -467,8 +494,8 @@ extern "C" TRITON_GAUDI_PERF_EXPORT tpc_lib_api::GlueCodeReturn InstantiateTpcKe
         params->outputTensors[0].geometry.maxSizes[1] != launch->grid[1]) {
       return tpc_lib_api::GLUE_INCOMPATIBLE_OUTPUT_SIZE;
     }
-  } else if (
-      launch->kernel_kind == triton::gaudi::KernelKind::GdnDecodePacked) {
+  } else if (launch->kernel_kind ==
+             triton::gaudi::KernelKind::GdnDecodePacked) {
     const auto batch = launch->grid[2];
     const auto state_slots = launch->scalar_params[0];
     if (launch->input_count != 7 || launch->output_count != 1 ||
@@ -495,9 +522,8 @@ extern "C" TRITON_GAUDI_PERF_EXPORT tpc_lib_api::GlueCodeReturn InstantiateTpcKe
     if (!hasGeometry(params->outputTensors[0], bf16, {128, 48, batch})) {
       return tpc_lib_api::GLUE_INCOMPATIBLE_OUTPUT_SIZE;
     }
-  } else if (
-      launch->kernel_kind ==
-      triton::gaudi::KernelKind::GdnDecodeConvPacked) {
+  } else if (launch->kernel_kind ==
+             triton::gaudi::KernelKind::GdnDecodeConvPacked) {
     const auto batch = launch->grid[1];
     const auto conv_slots = launch->scalar_params[0];
     const auto state_slots = launch->scalar_params[1];
@@ -526,8 +552,8 @@ extern "C" TRITON_GAUDI_PERF_EXPORT tpc_lib_api::GlueCodeReturn InstantiateTpcKe
     if (!hasGeometry(params->outputTensors[0], bf16, {128, 48, batch})) {
       return tpc_lib_api::GLUE_INCOMPATIBLE_OUTPUT_SIZE;
     }
-  } else if (
-      launch->kernel_kind == triton::gaudi::KernelKind::GdnQkConvPacked) {
+  } else if (launch->kernel_kind ==
+             triton::gaudi::KernelKind::GdnQkConvPacked) {
     const auto batch = launch->grid[1];
     const auto conv_slots = launch->scalar_params[0];
     if (launch->input_count != 4 || launch->output_count != 1 ||
@@ -550,9 +576,8 @@ extern "C" TRITON_GAUDI_PERF_EXPORT tpc_lib_api::GlueCodeReturn InstantiateTpcKe
     if (!hasGeometry(params->outputTensors[0], bf16, {4096, batch})) {
       return tpc_lib_api::GLUE_INCOMPATIBLE_OUTPUT_SIZE;
     }
-  } else if (
-      launch->kernel_kind ==
-      triton::gaudi::KernelKind::GdnDecodeValueConvPacked) {
+  } else if (launch->kernel_kind ==
+             triton::gaudi::KernelKind::GdnDecodeValueConvPacked) {
     const auto batch = launch->grid[2];
     const auto conv_slots = launch->scalar_params[0];
     const auto state_slots = launch->scalar_params[1];
@@ -604,6 +629,13 @@ extern "C" TRITON_GAUDI_PERF_EXPORT tpc_lib_api::GlueCodeReturn InstantiateTpcKe
       launch->kernel_kind ==
       triton::gaudi::KernelKind::GdnDecodeValueConvPacked) {
     setGdnValueConvAccessPatterns(params, instance, launch->block_size);
+  } else if (launch->kernel_kind == triton::gaudi::KernelKind::DynamicQuant) {
+    setAccessPattern(instance->inputTensorAccessPattern[0],
+                     params->inputTensors[0], elements_per_program);
+    setAccessPattern(instance->outputTensorAccessPattern[0],
+                     params->outputTensors[0], elements_per_program);
+    setAccessPattern(instance->outputTensorAccessPattern[1],
+                     params->outputTensors[1], 1);
   }
   for (std::uint16_t index = 0;
        index < launch->input_count &&
@@ -611,7 +643,8 @@ extern "C" TRITON_GAUDI_PERF_EXPORT tpc_lib_api::GlueCodeReturn InstantiateTpcKe
        launch->kernel_kind != triton::gaudi::KernelKind::GdnDecodeConvPacked &&
        launch->kernel_kind != triton::gaudi::KernelKind::GdnQkConvPacked &&
        launch->kernel_kind !=
-           triton::gaudi::KernelKind::GdnDecodeValueConvPacked;
+           triton::gaudi::KernelKind::GdnDecodeValueConvPacked &&
+       launch->kernel_kind != triton::gaudi::KernelKind::DynamicQuant;
        ++index) {
     if (params->inputTensors[index].geometry.dataType !=
         static_cast<tpc_lib_api::TensorDataType>(launch->tensor_dtype)) {
@@ -638,7 +671,8 @@ extern "C" TRITON_GAUDI_PERF_EXPORT tpc_lib_api::GlueCodeReturn InstantiateTpcKe
        launch->kernel_kind != triton::gaudi::KernelKind::GdnDecodeConvPacked &&
        launch->kernel_kind != triton::gaudi::KernelKind::GdnQkConvPacked &&
        launch->kernel_kind !=
-           triton::gaudi::KernelKind::GdnDecodeValueConvPacked;
+           triton::gaudi::KernelKind::GdnDecodeValueConvPacked &&
+       launch->kernel_kind != triton::gaudi::KernelKind::DynamicQuant;
        ++index) {
     if (params->outputTensors[index].geometry.dataType !=
         static_cast<tpc_lib_api::TensorDataType>(launch->tensor_dtype)) {

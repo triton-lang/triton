@@ -94,6 +94,7 @@ class GaudiProgram:
         execution = {
             "elementwise": "      gaudi.execute_elementwise\n",
             "fused_add_rms_norm": "      gaudi.execute_fused_add_rms_norm\n",
+            "dynamic_quant": "      gaudi.execute_dynamic_quant\n",
             "silu_and_mul": "      gaudi.execute_silu_and_mul\n",
             "gdn_decode_packed": "      gaudi.execute_gdn_decode_packed\n",
             "gdn_decode_conv_packed": "      gaudi.execute_gdn_decode_conv_packed\n",
@@ -189,7 +190,11 @@ def _parse_arguments(module) -> tuple[tuple[Argument, ...], dict[int, int]]:
     values: dict[int, int] = {}
     for index, dtype in enumerate(signature):
         if dtype.startswith("*"):
-            arguments.append(Argument(index, "tensor", dtype[1:]))
+            tensor_dtype = {
+                "f8E4M3FN": "fp8e4nv",
+                "f8E5M2": "fp8e5",
+            }.get(dtype[1:], dtype[1:])
+            arguments.append(Argument(index, "tensor", tensor_dtype))
         else:
             arguments.append(Argument(index, "scalar", dtype))
         values[function.args(index).id()] = index
@@ -243,6 +248,226 @@ def _match_fused_load(
     tensor_arg, offset = _trace_pointer(load.operands[0], producers, argument_values)
     if tensor_arg != expected_arg or offset != expected_offset or load.operands[1] != expected_mask:
         raise GaudiLoweringError("fused add+RMSNorm load access does not match the canonical row layout")
+
+
+def _match_dynamic_quant(
+    name: str,
+    source: str,
+    arguments: tuple[Argument, ...],
+    argument_values: dict[int, int],
+    operations: tuple[Operation, ...],
+    producers: dict[int, Operation],
+) -> GaudiProgram | None:
+    if "dynamic_quant" not in name:
+        return None
+
+    expected_arguments = (
+        Argument(0, "tensor", "bf16"),
+        Argument(1, "tensor", "fp8e4nv"),
+        Argument(2, "tensor", "f32"),
+    )
+    if arguments != expected_arguments:
+        raise GaudiLoweringError(
+            "dynamic FP8 quantization ABI requires BF16 input, E4M3 output, and f32 scale tensors; "
+            f"got {arguments!r}")
+
+    expected_counts = {
+        "arith.addf": 1,
+        "arith.addi": 1,
+        "arith.cmpi": 1,
+        "arith.constant": 5,
+        "arith.divf": 2,
+        "arith.extf": 1,
+        "arith.maxnumf": 1,
+        "arith.muli": 1,
+        "builtin.module": 1,
+        "math.absf": 1,
+        "tt.addptr": 3,
+        "tt.fp_to_fp": 1,
+        "tt.func": 1,
+        "tt.get_program_id": 1,
+        "tt.load": 1,
+        "tt.make_range": 1,
+        "tt.reduce": 1,
+        "tt.reduce.return": 1,
+        "tt.return": 1,
+        "tt.splat": 4,
+        "tt.store": 2,
+    }
+    actual_counts: dict[str, int] = {}
+    for operation in operations:
+        actual_counts[operation.name] = actual_counts.get(operation.name, 0) + 1
+    if actual_counts != expected_counts:
+        raise GaudiLoweringError(
+            "dynamic FP8 quantization TTIR must match the canonical strict-mode operation set")
+    if source.count("rounding = rtne") != 1:
+        raise GaudiLoweringError("dynamic FP8 quantization requires deterministic round-to-nearest-even")
+
+    program_id = next(operation for operation in operations if operation.name == "tt.get_program_id")
+    if program_id.attributes.get("axis") != 0:
+        raise GaudiLoweringError("dynamic FP8 quantization supports tl.program_id(0) only")
+    row_value = program_id.results[0]
+    columns = next(operation for operation in operations if operation.name == "tt.make_range")
+    block_size = columns.attributes.get("end")
+    if (columns.attributes.get("start") != 0 or not isinstance(block_size, int) or
+            block_size <= 0 or block_size > 16384 or block_size & (block_size - 1)):
+        raise GaudiLoweringError(
+            "dynamic FP8 quantization BLOCK_SIZE must be a power of two no larger than 16384")
+    columns_value = columns.results[0]
+
+    row_multiply = next(operation for operation in operations if operation.name == "arith.muli")
+    if row_multiply.operands[0] == row_value:
+        n_cols_value = row_multiply.operands[1]
+    elif row_multiply.operands[1] == row_value:
+        n_cols_value = row_multiply.operands[0]
+    else:
+        raise GaudiLoweringError("dynamic FP8 quantization row stride must equal n_cols")
+    n_cols = _constant(n_cols_value, producers)
+    if (n_cols <= 0 or n_cols > block_size or
+            (n_cols != 1 and n_cols <= block_size // 2)):
+        raise GaudiLoweringError("dynamic FP8 quantization n_cols must match the constexpr Triton block")
+
+    row_splats = [
+        operation for operation in operations
+        if operation.name == "tt.splat" and operation.operands == (row_multiply.results[0],)
+    ]
+    if len(row_splats) != 1:
+        raise GaudiLoweringError("dynamic FP8 quantization requires one canonical row-offset splat")
+    row_offset = next(operation for operation in operations if operation.name == "arith.addi")
+    if not _is_commutative_pair(row_offset, row_splats[0].results[0], columns_value):
+        raise GaudiLoweringError("dynamic FP8 quantization requires contiguous row-major offsets")
+    row_offset_value = row_offset.results[0]
+
+    compare = next(operation for operation in operations if operation.name == "arith.cmpi")
+    if (compare.attributes.get("predicate") != 2 or compare.operands[0] != columns_value or
+            _constant(compare.operands[1], producers) != n_cols):
+        raise GaudiLoweringError("dynamic FP8 quantization requires the canonical columns < n_cols mask")
+    mask_value = compare.results[0]
+
+    load = next(operation for operation in operations if operation.name == "tt.load")
+    if len(load.operands) != 3 or load.operands[1] != mask_value:
+        raise GaudiLoweringError("dynamic FP8 quantization requires a zero-masked BF16 input load")
+    input_arg, input_offset = _trace_pointer(load.operands[0], producers, argument_values)
+    _producer(load.operands[2], producers, "arith.constant")
+    if (input_arg != 0 or input_offset != row_offset_value or
+            source.count("arith.constant dense<0.000000e+00>") != 1):
+        raise GaudiLoweringError("dynamic FP8 quantization input must use the canonical contiguous row layout")
+    values_f32 = next(
+        operation.results[0] for operation in operations
+        if operation.name == "arith.extf" and operation.operands == (load.results[0],)
+    )
+
+    absolute = next(operation for operation in operations if operation.name == "math.absf")
+    reduction = next(operation for operation in operations if operation.name == "tt.reduce")
+    if absolute.operands != (values_f32,) or reduction.operands != (absolute.results[0],) or \
+            reduction.attributes.get("axis") != 0:
+        raise GaudiLoweringError("dynamic FP8 scale must reduce the row-wise absolute maximum")
+    reduce_return = next(operation for operation in operations if operation.name == "tt.reduce.return")
+    reducer_max = _producer(reduce_return.operands[0], producers, "arith.maxnumf")
+    if any(value in producers or value in argument_values for value in reducer_max.operands):
+        raise GaudiLoweringError("dynamic FP8 reduction body must be a pure scalar maximum")
+
+    scale_add = next(operation for operation in operations if operation.name == "arith.addf")
+    if reduction.results[0] == scale_add.operands[0]:
+        scale_epsilon_value = scale_add.operands[1]
+    elif reduction.results[0] == scale_add.operands[1]:
+        scale_epsilon_value = scale_add.operands[0]
+    else:
+        raise GaudiLoweringError("dynamic FP8 scale must add the reference epsilon after max-abs")
+    _producer(scale_epsilon_value, producers, "arith.constant")
+
+    divides = [operation for operation in operations if operation.name == "arith.divf"]
+    scale_divides = [operation for operation in divides if operation.operands[0] == scale_add.results[0]]
+    if len(scale_divides) != 1:
+        raise GaudiLoweringError("dynamic FP8 scale must divide max-abs plus epsilon exactly once")
+    scale_divide = scale_divides[0]
+    _producer(scale_divide.operands[1], producers, "arith.constant")
+    scalar_f32_constants = [
+        float(value) for value in re.findall(
+            r"arith\.constant\s+([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)\s*:\s*f32",
+            source,
+        )
+    ]
+    if (len(scalar_f32_constants) != 2 or
+            not any(abs(value - 1.0e-8) <= 1.0e-14 for value in scalar_f32_constants) or
+            240.0 not in scalar_f32_constants):
+        raise GaudiLoweringError(
+            "Gaudi2 E4M3 dynamic quantization must use scale=(max_abs+1e-8)/240")
+    scale_value = scale_divide.results[0]
+
+    scale_stores = []
+    output_stores = []
+    for store in (operation for operation in operations if operation.name == "tt.store"):
+        if len(store.operands) == 2:
+            scale_stores.append(store)
+        elif len(store.operands) == 3:
+            output_stores.append(store)
+    if len(scale_stores) != 1 or len(output_stores) != 1:
+        raise GaudiLoweringError("dynamic FP8 quantization requires one scale and one data output")
+    scale_store = scale_stores[0]
+    scale_pointer = _producer(scale_store.operands[0], producers, "tt.addptr")
+    if (len(scale_pointer.operands) != 2 or scale_pointer.operands[0] not in argument_values or
+            argument_values[scale_pointer.operands[0]] != 2 or scale_pointer.operands[1] != row_value or
+            scale_store.operands[1] != scale_value):
+        raise GaudiLoweringError("dynamic FP8 scale output must contain one f32 value per row")
+
+    output_store = output_stores[0]
+    output_arg, output_offset = _trace_pointer(output_store.operands[0], producers, argument_values)
+    if output_arg != 1 or output_offset != row_offset_value or output_store.operands[2] != mask_value:
+        raise GaudiLoweringError("dynamic FP8 output must use the input row layout and mask")
+    cast = _producer(output_store.operands[1], producers, "tt.fp_to_fp")
+    quantized = _producer(cast.operands[0], producers, "arith.divf")
+    if quantized is scale_divide or quantized.operands[0] != values_f32:
+        raise GaudiLoweringError("dynamic FP8 output must divide the loaded BF16 values by scale")
+    scale_splat = _producer(quantized.operands[1], producers, "tt.splat")
+    if scale_splat.operands != (scale_value,):
+        raise GaudiLoweringError("dynamic FP8 output must divide by the emitted per-row scale")
+
+    row_mapping = [{
+        "tensor_dim": 0,
+        "index_space_dim": 0,
+        "a": n_cols,
+        "start_b": 0,
+        "end_b": n_cols - 1,
+    }]
+    scale_mapping = [{
+        "tensor_dim": 0,
+        "index_space_dim": 0,
+        "a": 1,
+        "start_b": 0,
+        "end_b": 0,
+    }]
+    return GaudiProgram(
+        name=name,
+        source_hash=hashlib.sha256(source.encode("utf-8")).hexdigest(),
+        arguments=arguments,
+        operations=operations,
+        block_size=block_size,
+        vector_lanes=256,
+        output_arg=1,
+        additional_output_args=(2,),
+        input_args=(0,),
+        bound_arg=None,
+        expression={
+            "op": "dynamic_quant",
+            "input": 0,
+            "output": 1,
+            "scale": 2,
+            "n_cols": n_cols,
+        },
+        access_patterns=(
+            {"arg": 0, "role": "input", "mapping": row_mapping},
+            {"arg": 1, "role": "output", "mapping": row_mapping},
+            {"arg": 2, "role": "output", "mapping": scale_mapping},
+        ),
+        kind="dynamic_quant",
+        parameters={
+            "n_cols": n_cols,
+            "fp8_max": 240.0,
+            "scale_epsilon": 1.0e-8,
+            "vlm_bytes": 0,
+        },
+    )
 
 
 def _match_fused_add_rms_norm(
@@ -1801,6 +2026,17 @@ def lower_ttir(module) -> GaudiProgram:
     if gdn_program is not None:
         return gdn_program
 
+    dynamic_quant_program = _match_dynamic_quant(
+        name,
+        source,
+        arguments,
+        argument_values,
+        operations,
+        producers,
+    )
+    if dynamic_quant_program is not None:
+        return dynamic_quant_program
+
     fused_program = _match_fused_add_rms_norm(
         name,
         source,
@@ -1914,6 +2150,135 @@ def _emit_expression(
     intrinsic = f"v_{intrinsic_prefix}_{operation}_b"
     lines.append(f"        {vector_type} {name} = {intrinsic}({lhs}, {rhs});")
     return name
+
+
+def _emit_dynamic_quant_tpc_c(program: GaudiProgram) -> TpcCSource:
+    if program.input_args != (0,) or program.output_args != (1, 2):
+        raise GaudiLoweringError("TPC-C dynamic quantization requires one input and FP8/scale outputs")
+    expected = (
+        ("tensor", "bf16"),
+        ("tensor", "fp8e4nv"),
+        ("tensor", "f32"),
+    )
+    if tuple((argument.kind, argument.dtype) for argument in program.arguments) != expected:
+        raise GaudiLoweringError("TPC-C dynamic quantization requires the canonical mixed tensor ABI")
+    n_cols = int((program.parameters or {}).get("n_cols", 0))
+    if n_cols <= 0 or n_cols > program.block_size or program.block_size > 16384:
+        raise GaudiLoweringError("TPC-C dynamic quantization has invalid constexpr n_cols metadata")
+
+    source = f"""// Generated by Triton Gaudi2 backend. Do not edit.
+#define TRITON_GAUDI_BLOCK_SIZE {program.block_size}
+#define TRITON_GAUDI_N_COLS {n_cols}
+#define TRITON_GAUDI_BF16_LANES 128
+#define TRITON_GAUDI_FP8_LANES 256
+void main(tensor arg0, tensor arg1, tensor arg2)
+{{
+    const int5 index_space_start = get_index_space_offset();
+    const int5 index_space_end = get_index_space_size() + index_space_start;
+    const int n_cols = TRITON_GAUDI_N_COLS;
+    const int full_columns = n_cols - n_cols % TRITON_GAUDI_BF16_LANES;
+    const int tail_columns = n_cols - full_columns;
+    const uchar256 broadcast_lane_zero = 0x80;
+
+    for (int row = index_space_start[0]; row < index_space_end[0]; ++row)
+    {{
+        float128 maximum = {{0}};
+        for (int lane = 0;
+             lane < full_columns;
+             lane += TRITON_GAUDI_BF16_LANES)
+        {{
+            int5 coords = {{row * n_cols + lane, 0, 0, 0, 0}};
+            const bfloat128 values = v_bf16_ld_tnsr_b(coords, arg0);
+            const float128 values_f32 =
+                convert_bfloat128_to_float128(values, SW_LINEAR);
+            maximum.v1 = v_f32_max_b(
+                maximum.v1, v_f32_abs_b(values_f32.v1));
+            maximum.v2 = v_f32_max_b(
+                maximum.v2, v_f32_abs_b(values_f32.v2));
+        }}
+        if (tail_columns > 0)
+        {{
+            int5 coords = {{row * n_cols + full_columns, 0, 0, 0, 0}};
+            const bfloat128 values = v_bf16_ld_tnsr_partial_b(
+                coords, arg0, tail_columns - 1, 0);
+            const float128 values_f32 =
+                convert_bfloat128_to_float128(values, SW_LINEAR);
+            maximum.v1 = v_f32_max_b(
+                maximum.v1, v_f32_abs_b(values_f32.v1));
+            maximum.v2 = v_f32_max_b(
+                maximum.v2, v_f32_abs_b(values_f32.v2));
+        }}
+
+        float64 row_maximum = v_f32_max_b(maximum.v1, maximum.v2);
+        row_maximum = v_f32_reduce_max(row_maximum);
+        row_maximum = v_f32_shuffle_b(
+            row_maximum, broadcast_lane_zero, 0, row_maximum);
+        const float64 scale = (row_maximum + 1.0e-8f) / 240.0f;
+        const float64 inverse_scale = 1.0f / scale;
+        int5 scale_coords = {{row, 0, 0, 0, 0}};
+        v_f32_st_tnsr_partial(scale_coords, arg2, scale, 0, 0);
+
+        for (int lane = 0;
+             lane < n_cols;
+             lane += TRITON_GAUDI_FP8_LANES)
+        {{
+            int5 first_coords = {{row * n_cols + lane, 0, 0, 0, 0}};
+            const int first_remaining = n_cols - lane;
+            bfloat128 first = {{0}};
+            if (first_remaining >= TRITON_GAUDI_BF16_LANES)
+            {{
+                first = v_bf16_ld_tnsr_b(first_coords, arg0);
+            }}
+            else
+            {{
+                first = v_bf16_ld_tnsr_partial_b(
+                    first_coords, arg0, first_remaining - 1, 0);
+            }}
+            bfloat128 second = {{0}};
+            const int second_start = lane + TRITON_GAUDI_BF16_LANES;
+            if (second_start < n_cols)
+            {{
+                int5 second_coords = {{
+                    row * n_cols + second_start, 0, 0, 0, 0}};
+                const int second_remaining = n_cols - second_start;
+                if (second_remaining >= TRITON_GAUDI_BF16_LANES)
+                {{
+                    second = v_bf16_ld_tnsr_b(second_coords, arg0);
+                }}
+                else
+                {{
+                    second = v_bf16_ld_tnsr_partial_b(
+                        second_coords, arg0, second_remaining - 1, 0);
+                }}
+            }}
+            const float128 first_f32 =
+                convert_bfloat128_to_float128(first, SW_LINEAR);
+            const float128 second_f32 =
+                convert_bfloat128_to_float128(second, SW_LINEAR);
+            float256 scaled = {{0}};
+            scaled.v1 = first_f32.v1 * inverse_scale;
+            scaled.v2 = first_f32.v2 * inverse_scale;
+            scaled.v3 = second_f32.v1 * inverse_scale;
+            scaled.v4 = second_f32.v2 * inverse_scale;
+            const minifloat256 quantized =
+                v_convert_f32_to_f8_all_b(
+                    scaled, SW_RHNE | SW_FP8_BIAS7 | SW_LINEAR);
+            int5 output_coords = {{row * n_cols + lane, 0, 0, 0, 0}};
+            const int remaining = n_cols - lane;
+            if (remaining >= TRITON_GAUDI_FP8_LANES)
+            {{
+                v_f8_st_tnsr(output_coords, arg1, quantized);
+            }}
+            else
+            {{
+                v_f8_st_tnsr_partial(
+                    output_coords, arg1, quantized, remaining - 1, 0);
+            }}
+        }}
+    }}
+}}
+"""
+    return TpcCSource(program, source)
 
 
 def _emit_fused_add_rms_norm_tpc_c(program: GaudiProgram) -> TpcCSource:
@@ -3012,6 +3377,8 @@ void main(
 
 
 def emit_tpc_c(program: GaudiProgram) -> TpcCSource:
+    if program.kind == "dynamic_quant":
+        return _emit_dynamic_quant_tpc_c(program)
     if program.kind == "fused_add_rms_norm":
         return _emit_fused_add_rms_norm_tpc_c(program)
     if program.kind == "silu_and_mul":

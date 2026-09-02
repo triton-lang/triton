@@ -56,21 +56,26 @@ elementwise add/subtract/multiply with `program_id(0) * BLOCK + arange`. It
 also recognizes the exact Triton TTIR DAG for BF16 residual-add plus RMSNorm,
 including the rounded residual output, FP32 reduction, runtime epsilon, and
 static hidden sizes up to 8192. Strict matchers also cover BF16 SiLU-and-mul
-and the shape-specialized Qwen3.5 packed decode GDN with an in-place FP32
-recurrent state. Generated kernels use the full 2048-bit TPC vector, native
-reduction intrinsics, VLM row residency, and partial tensor loads/stores for
-tails. Unsupported or near-matching TTIR fails closed with a Gaudi lowering
-diagnostic. The state-mutating GDN path additionally requires the matching
-Bridge reinplace pass so AOTAutograd cannot materialize and copy the complete
-state cache.
+and row-wise BF16-to-E4M3 dynamic quantization with an FP32 scale output. The
+quantization kernel accepts static row widths up to 16384, uses the Gaudi2
+bias-7 FP8 encoding and linear-lane RNE conversion, and rereads HBM for its
+conversion pass instead of exceeding the 16 KiB VLM limit. The
+shape-specialized Qwen3.5 packed decode GDN has an in-place FP32 recurrent
+state. Generated kernels use the full 2048-bit TPC vector, native reduction
+intrinsics, VLM row residency where profitable, and partial tensor
+loads/stores for tails. Unsupported or near-matching TTIR fails closed with a
+Gaudi lowering diagnostic. The state-mutating GDN path additionally requires
+the matching Bridge reinplace pass so AOTAutograd cannot materialize and copy
+the complete state cache.
 
 TPC-C is compiled at `-O2`. `-O3` is intentionally rejected on this Gaudi2
 slice because it has not met the hardware-safety gate for the generated
 stateful/reduction kernels.
 
 Scan, gather/scatter, generic reductions, MME partitioning, complete
-attention, MoE, quantization, DMA/HCCL scheduling, standalone lazy-mode
-HPUGraph capture, and graph-level epilogues remain subsequent backend work;
+attention, MoE, broader quantization and fused quantization epilogues,
+DMA/HCCL scheduling, standalone lazy-mode HPUGraph capture, and graph-level
+epilogues remain subsequent backend work;
 they must not silently take CUDA semantics. vLLM exposes `off`, `hybrid`, and
 `strict` rollout modes so this subset can be measured without claiming
 unsupported coverage. Canonical TP1 GDN decode clears the hybrid compiled
