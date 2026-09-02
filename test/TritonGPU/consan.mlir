@@ -340,24 +340,24 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 // -----
 
-// Different CTA footprints can produce the same packed barrier descriptor.
-// Retain both K entries: choosing one matching index would lose a frontier.
+// Replicated and distributed allocations cover the same physical CTA storage.
+// Deduplicate their barrier descriptor and retain compact tracking views.
 #duplicate_key_distributed = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
 #duplicate_key_replicated = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 #duplicate_key_smem = #ttg.shared_memory
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32, ttg.shared = 32 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 0 : i32} {
-  // CHECK-LABEL: tt.func private @__triton_consan_track_visible_accesses_{{.*}}_I0(
-  // K=4 includes the two real barriers, a cluster rendezvous, and padding.
-  // Full tracking tensors retain every K entry and both phases, despite B=1.
-  // CHECK: tt.store {{.*}} : tensor<2x1x2x4x2x!tt.ptr<i8>,
-  // CHECK: tt.load {{.*}} : tensor<2x1x2x4x2x2x!tt.ptr<i{{32|64}}>,
-  // CHECK: tt.store {{.*}} : tensor<2x1x2x4x2x2x!tt.ptr<i{{32|64}}>,
+  // CHECK-LABEL: tt.func private @__triton_consan_track_visible_accesses_{{.*}}_I1(
+  // K=2 includes one real barrier and a cluster rendezvous. The compact views
+  // remove K while retaining both recipient CTAs and both phases.
+  // CHECK: tt.store {{.*}} : tensor<2x1x2x2x!tt.ptr<i8>,
+  // CHECK: tt.load {{.*}} : tensor<2x1x2x2x2x!tt.ptr<i{{32|64}}>,
+  // CHECK: tt.store {{.*}} : tensor<2x1x2x2x2x!tt.ptr<i{{32|64}}>,
   // CHECK: tt.return
-  // CHECK-LABEL: @duplicate_barrier_descriptor_tracking
-  tt.func public @duplicate_barrier_descriptor_tracking() {
-    // The collision is between nonempty descriptors, not the padded entries.
-    // CHECK: tti.experimental_buffer_descriptors [16, 16, 0, 0], [8, 8, 0, 0], shared_mem : tensor<4xi64,
+  // CHECK-LABEL: @equivalent_barrier_descriptor_tracking
+  tt.func public @equivalent_barrier_descriptor_tracking() {
+    // Both lifetimes use the same nonempty descriptor.
+    // CHECK: tti.experimental_buffer_descriptors [16, 0], [8, 0], shared_mem : tensor<2xi64,
     // CHECK: %[[DUP_DISTRIBUTED:.*]] = ttg.local_alloc
     %distributed = ttg.local_alloc {allocation.offset = 16 : i32} : () -> !ttg.memdesc<2xi64, #duplicate_key_distributed, #duplicate_key_smem, mutable>
     %zero = arith.constant 0 : i32
@@ -365,7 +365,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // Both CTAs execute each lifetime; the layouts select the barrier owners.
     // CHECK: ttng.init_barrier %[[DUP_DISTRIBUTED]]
     ttng.init_barrier %distributed, 1 : !ttg.memdesc<2xi64, #duplicate_key_distributed, #duplicate_key_smem, mutable>
-    // CHECK: tt.call @__triton_consan_track_visible_accesses_{{.*}}_I0(
+    // CHECK: tt.call @__triton_consan_track_visible_accesses_{{.*}}_I1(
     // CHECK: ttng.arrive_barrier %[[DUP_DISTRIBUTED]]
     ttng.arrive_barrier %distributed, 1 : !ttg.memdesc<2xi64, #duplicate_key_distributed, #duplicate_key_smem, mutable>
     ttng.wait_barrier %distributed, %zero, %true : !ttg.memdesc<2xi64, #duplicate_key_distributed, #duplicate_key_smem, mutable>
@@ -383,7 +383,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     ttng.fence_mbarrier_init_release_cluster
     // CHECK: ttng.cluster_barrier {relaxed = true}
     ttng.cluster_barrier {relaxed = true}
-    // CHECK: tt.call @__triton_consan_track_visible_accesses_{{.*}}_I0(
+    // CHECK: tt.call @__triton_consan_track_visible_accesses_{{.*}}_I1(
     // CHECK: ttng.arrive_barrier %[[DUP_REPLICATED]]
     ttng.arrive_barrier %replicated, 1 : !ttg.memdesc<1xi64, #duplicate_key_replicated, #duplicate_key_smem, mutable>
     ttng.wait_barrier %replicated, %zero, %true : !ttg.memdesc<1xi64, #duplicate_key_replicated, #duplicate_key_smem, mutable>
