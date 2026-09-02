@@ -620,7 +620,8 @@ void init_triton_llvm(py::module_ &m) {
           "__iter__",
           [](llvm::Module::FunctionListType &s) {
             return py::make_iterator<py::rv_policy::reference>(
-                py::handle(), "iterator", s.begin(), s.end());
+                py::type<llvm::Module::FunctionListType>(), "iterator",
+                s.begin(), s.end());
           },
           py::keep_alive<0, 1>());
 

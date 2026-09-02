@@ -87,7 +87,7 @@ def _get_path_to_hip_runtime_dylib():
         therock_libhip_path = None
     if therock_libhip_path is not None:
         mmapped_path = _find_already_mmapped_dylib_on_linux(lib_name)
-        if mmapped_path and os.path.realpath(mmapped_path) != os.path.realpath(therock_libhip_path):
+        if mmapped_path and not os.path.samefile(mmapped_path, therock_libhip_path):
             raise RuntimeError(f"TheRock provides '{therock_libhip_path}', but a different HIP runtime "
                                f"'{mmapped_path}' is already loaded; refusing to mix ROCm installations")
         return therock_libhip_path

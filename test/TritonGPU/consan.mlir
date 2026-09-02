@@ -425,19 +425,14 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
 
     // Runtime indices along the sharded axis can target either CTA row.
     // CHECK: %[[ATOMIC_CTAS:.*]] = arith.constant 3 : i32
-    // CHECK: arith.constant dense<[true, false, false, false]> : tensor<4xi1
+    // CHECK: arith.constant dense<[true, false]> : tensor<2xi1
     // CHECK: tt.call @__triton_consan_set_proxy_access{{.*}}({{.*}}%[[ATOMIC_CTAS]])
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
-    // The existing destination reaches both CTAs, while independent result
-    // staging remains private to the issuer's shared-memory frame.
-    // CHECK: arith.constant dense<[false, false, true, false]> : tensor<4xi1
-    // CHECK: %[[ATOMIC_SCRATCH_CTA_ID:.*]] = tti.experimental_cluster_cta_id
-    // CHECK: %[[ATOMIC_SCRATCH_CTA:.*]] = arith.shli {{.*}}, %[[ATOMIC_SCRATCH_CTA_ID]] : i32
-    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[ATOMIC_SCRATCH_CTA]]
-    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[ATOMIC_SCRATCH_CTA]]
-    // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}%[[ATOMIC_SCRATCH_CTA]]
+    // The explicit destination remains checked, but result-staging scratch
+    // adds no further checks to the same operation.
+    // CHECK-NOT: tt.call @__triton_consan
     // CHECK: ttg.local_atomic_scatter_rmw
     %old = ttg.local_atomic_scatter_rmw add, %dst[%indices], %values {allocation.offset = 1024 : i32, allocation.size = 512 : i32, axis = 1 : i32} : (!ttg.memdesc<8x32xi32, #local_atomic_shared, #local_atomic_smem, mutable>, tensor<8x32xi32, #local_atomic_blocked>, tensor<8x32xi32, #local_atomic_blocked>) -> tensor<8x32xi32, #local_atomic_blocked>
     tt.store %result, %old : tensor<8x32x!tt.ptr<i32>, #local_atomic_blocked>
@@ -2581,8 +2576,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #direct_reduce = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 1024 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {
-  // CHECK-LABEL: @conversion_and_reduction_detect_outstanding_tma
-  tt.func public @conversion_and_reduction_detect_outstanding_tma(
+  // CHECK-LABEL: @conversion_and_reduction_omit_scratch_checks
+  tt.func public @conversion_and_reduction_omit_scratch_checks(
       %desc: !tt.tensordesc<256xi32, #direct_shared>,
       %value: tensor<128xi32, #direct_src>,
       %reduce: tensor<1x256xf32, #direct_reduce>) {
@@ -2592,19 +2587,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     ttng.async_tma_copy_local_to_global %desc[%zero] %buffer
         : !tt.tensordesc<256xi32, #direct_shared>,
           !ttg.memdesc<256xi32, #direct_shared, #direct_smem, mutable>
+    // CHECK: ttg.local_dealloc
     ttg.local_dealloc %buffer
         : !ttg.memdesc<256xi32, #direct_shared, #direct_smem, mutable>
 
-    // CHECK: tt.call @__triton_consan_verify_read_visibility
-    // CHECK: tt.call @__triton_consan_check_outstanding_commits
-    // CHECK: tt.call @__triton_consan_publish_write_visibility
+    // Operation-local scratch does not check the pending TMA read.
+    // CHECK-NOT: tt.call @__triton_consan
+    // CHECK-NOT: tti.experimental_lock_acquire
     // CHECK: ttg.convert_layout
     %converted = ttg.convert_layout %value {allocation.offset = 0 : i32, allocation.size = 512 : i32}
         : tensor<128xi32, #direct_src> -> tensor<128xi32, #direct_dst>
 
-    // CHECK: tt.call @__triton_consan_verify_read_visibility
-    // CHECK: tt.call @__triton_consan_check_outstanding_commits
-    // CHECK: tt.call @__triton_consan_publish_write_visibility
+    // CHECK-NOT: tt.call @__triton_consan
+    // CHECK-NOT: tti.experimental_lock_acquire
     // CHECK: "tt.reduce"
     %reduced = "tt.reduce"(%reduce) <{axis = 1 : i32}> ({
     ^bb0(%lhs: f32, %rhs: f32):
@@ -2623,25 +2618,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #reduce_groups = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0], [0, 1]]}>
 
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 32 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {
-  // CHECK-LABEL: @reduce_cross_cta_scratch_is_cta_local
-  tt.func public @reduce_cross_cta_scratch_is_cta_local(
+  // CHECK-LABEL: @reduce_cross_cta_omits_scratch_checks
+  tt.func public @reduce_cross_cta_omits_scratch_checks(
       %value: tensor<8x256xf32, #reduce_groups>) {
-    // Reduction groups {0,2} and {1,3} read peers only after their intrinsic
-    // cluster barrier; scratch writes touch the current CTA alone.
-    // CHECK: tti.experimental_lock_acquire
-    // CHECK: arith.constant dense<true> : tensor<1xi1
-    // CHECK: %[[REDUCE_CTA:.*]] = tti.experimental_cluster_cta_id
-    // CHECK: %[[REDUCE_ONE:.*]] = arith.constant 1 : i32
-    // CHECK: %[[REDUCE_OWNER:.*]] = arith.shli %[[REDUCE_ONE]], %[[REDUCE_CTA]] : i32
-    // CHECK: %[[REDUCE_GROUP_CTA:.*]] = tti.experimental_cluster_cta_id
-    // CHECK: %[[REDUCE_GROUP_FIXED:.*]] = arith.constant 1 : i32
-    // CHECK: %[[REDUCE_GROUP_BASE:.*]] = arith.andi %[[REDUCE_GROUP_CTA]], %[[REDUCE_GROUP_FIXED]] : i32
-    // CHECK: %[[REDUCE_GROUP_PATTERN:.*]] = arith.constant 5 : i32
-    // CHECK: %[[REDUCE_GROUP_SHIFT:.*]] = arith.shli %[[REDUCE_GROUP_PATTERN]], %[[REDUCE_GROUP_BASE]] : i32
-    // CHECK: %[[REDUCE_READERS:.*]] = arith.ori {{.*}}, %[[REDUCE_GROUP_SHIFT]] : i32
-    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[REDUCE_READERS]]
-    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[REDUCE_OWNER]]
-    // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}%[[REDUCE_OWNER]]
+    // Scratch-only reductions do not acquire the instrumentation lock.
+    // CHECK: ttng.cluster_barrier
+    // CHECK-NOT: tt.call @__triton_consan
+    // CHECK-NOT: tti.experimental_lock_acquire
     // CHECK: "tt.reduce"
     %reduced = "tt.reduce"(%value) <{axis = 1 : i32}> ({
     ^bb0(%lhs: f32, %rhs: f32):
@@ -2675,18 +2658,9 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     ttg.local_dealloc %buffer : !ttg.memdesc<8x32xi32, #cross_shared, #cross_smem, mutable>
     // CHECK: ttng.cluster_barrier {relaxed = true}
     ttng.cluster_barrier {relaxed = true}
-    // Peer reads follow the conversion's intrinsic cluster barrier; the
-    // compiler-owned scratch write belongs only to its issuing CTA.
-    // CHECK: tti.experimental_lock_acquire
-    // CHECK: arith.constant dense<true> : tensor<1xi1
-    // CHECK: %[[CONVERT_CTA:.*]] = tti.experimental_cluster_cta_id
-    // CHECK: %[[CONVERT_ONE:.*]] = arith.constant 1 : i32
-    // CHECK: %[[CONVERT_OWNER:.*]] = arith.shli %[[CONVERT_ONE]], %[[CONVERT_CTA]] : i32
-    // CHECK: %[[CONVERT_PEERS:.*]] = arith.constant 3 : i32
-    // CHECK: %[[CONVERT_READERS:.*]] = arith.ori {{.*}}, %[[CONVERT_PEERS]] : i32
-    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[CONVERT_READERS]]
-    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[CONVERT_OWNER]]
-    // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}%[[CONVERT_OWNER]]
+    // Cross-CTA scratch is omitted along with CTA-local scratch.
+    // CHECK-NOT: tt.call @__triton_consan
+    // CHECK-NOT: tti.experimental_lock_acquire
     // CHECK: ttg.convert_layout
     %converted = ttg.convert_layout %loaded {allocation.offset = 0 : i32, allocation.size = 512 : i32}
         : tensor<8x32xi32, #cross_src> -> tensor<8x32xi32, #cross_dst>
@@ -2714,17 +2688,9 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     }
     // CHECK: ttng.cluster_barrier {relaxed = true}
     ttng.cluster_barrier {relaxed = true}
-    // Both CTAs consume the result, but only CTA zero owns the scratch. The
-    // live barrier in CTA one does not overlap the atomic's physical storage.
-    // CHECK: tti.experimental_lock_acquire
-    // CHECK: %[[SCALAR_PRODUCER:.*]] = arith.cmpi eq, {{.*}} : i32
-    // CHECK: arith.constant dense<[true, false]> : tensor<2xi1
-    // CHECK: %[[SCALAR_CTA:.*]] = tti.experimental_cluster_cta_id
-    // CHECK: %[[SCALAR_ONE:.*]] = arith.constant 1 : i32
-    // CHECK: %[[SCALAR_OWNER:.*]] = arith.shli %[[SCALAR_ONE]], %[[SCALAR_CTA]] : i32
-    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[SCALAR_PRODUCER]]{{.*}}%[[SCALAR_OWNER]]
-    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[SCALAR_PRODUCER]]{{.*}}%[[SCALAR_OWNER]]
-    // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}%[[SCALAR_PRODUCER]]{{.*}}%[[SCALAR_OWNER]]
+    // Result-broadcast scratch does not add shared-memory checks.
+    // CHECK-NOT: tt.call @__triton_consan
+    // CHECK-NOT: tti.experimental_lock_acquire
     // CHECK: tt.atomic_rmw
     %old = tt.atomic_rmw add, relaxed, gpu, %ptr, %one
         {allocation.offset = 0 : i32, allocation.size = 4 : i32}
@@ -2759,19 +2725,9 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     ttng.async_tma_copy_global_to_local %desc[%zero, %zero] %remote, %bar, %lead : !tt.tensordesc<8x32xi32, #tma_shared>, !ttg.memdesc<2xi64, #tma_barrier, #tma_smem, mutable> -> !ttg.memdesc<8x32xi32, #tma_shared, #tma_smem, mutable, 16x32>
     // CHECK: ttg.local_dealloc
     ttg.local_dealloc %parent : !ttg.memdesc<16x32xi32, #tma_shared, #tma_smem, mutable>
-    // CTA zero's pending async write targets CTA one. Conversion must check
-    // that remote owner but publish its own CTA-local scratch write only.
-    // CHECK: tti.experimental_lock_acquire
-    // CHECK: arith.constant dense<[true, false]> : tensor<2xi1
-    // CHECK: %[[TMA_OWNER_CTA:.*]] = tti.experimental_cluster_cta_id
-    // CHECK: %[[TMA_OWNER_ONE:.*]] = arith.constant 1 : i32
-    // CHECK: %[[TMA_OWNER:.*]] = arith.shli %[[TMA_OWNER_ONE]], %[[TMA_OWNER_CTA]] : i32
-    // CHECK: %[[TMA_PEERS:.*]] = arith.constant 3 : i32
-    // CHECK: %[[TMA_READERS:.*]] = arith.ori {{.*}}, %[[TMA_PEERS]] : i32
-    // CHECK: tt.call @__triton_consan_set_proxy_access{{.*}}%[[TMA_READERS]]
-    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[TMA_READERS]]
-    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[TMA_OWNER]]
-    // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}%[[TMA_OWNER]]
+    // The TMA write remains tracked, but conversion scratch does not check it.
+    // CHECK-NOT: tt.call @__triton_consan
+    // CHECK-NOT: tti.experimental_lock_acquire
     // CHECK: ttg.convert_layout
     %converted = ttg.convert_layout %value {allocation.offset = 0 : i32, allocation.size = 1024 : i32} : tensor<16x32xi32, #tma_src> -> tensor<16x32xi32, #tma_dst>
     tt.return

@@ -52,6 +52,49 @@ from triton._C.libtriton.gluon_ir import make_cga_layout
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 
 
+@pytest.mark.parametrize("num_ctas", [1, 2])
+@pytest.mark.parametrize("use_result", [False, True])
+@pytest.mark.parametrize("scalar", [False, True])
+def test_inline_asm_replicated_results(num_ctas, use_result, scalar):
+    if not is_cuda() or (num_ctas > 1 and not is_hopper_or_newer()):
+        pytest.skip("requires CUDA and Hopper for thread block clusters")
+
+    @gluon.jit
+    def kernel(Cells, Out, WideOut, Layout: ttgl.constexpr, NumCTAs: ttgl.constexpr, UseResult: ttgl.constexpr,
+               Scalar: ttgl.constexpr):
+        rows = ttgl.arange(0, 8, layout=ttgl.SliceLayout(1, Layout))
+        cols = ttgl.arange(0, 32 * NumCTAs, layout=ttgl.SliceLayout(0, Layout))
+        for i in range(3):
+            if Scalar:
+                # Only the first pointer is real; padded inputs are ignored.
+                result, wide = ttgl.inline_asm_elementwise(
+                    "atom.global.add.u32 $0, [$4], 1; mov.u32 $1, $0; "
+                    "cvt.u64.u32 $2, $0; mov.u64 $3, $2;", "=r,=r,=l,=l,l,l", [Cells], dtype=(ttgl.int32, ttgl.int64),
+                    is_pure=False, pack=2)
+            else:
+                result, wide = ttgl.inline_asm_elementwise("atom.global.add.u32 $0, [$2], 1; cvt.u64.u32 $1, $0;",
+                                                           "=r,=l,l", [Cells + rows], dtype=(ttgl.int32, ttgl.int64),
+                                                           is_pure=False, pack=1)
+            if UseResult:
+                # Expanding the sliced dimension observes every replicated result.
+                offsets = (i * 8 + rows[:, None]) * 32 * NumCTAs + cols[None, :]
+                ttgl.store(Out + offsets, result if Scalar else result[:, None])
+                ttgl.store(WideOut + offsets, wide if Scalar else wide[:, None])
+
+    layout = ttgl.BlockedLayout([1, 2], [8, 4], [1, 4], [0, 1], [[0, 1]] if num_ctas == 2 else [])
+    cells = torch.zeros(1 if scalar else 8, dtype=torch.int32, device="cuda")
+    output = torch.empty((3, 8, 32 * num_ctas), dtype=torch.int32, device="cuda")
+    wide_output = torch.empty_like(output, dtype=torch.int64)
+    compiled = kernel[(1, )](cells, output, wide_output, layout, num_ctas, use_result, scalar, num_ctas=num_ctas)
+    torch.testing.assert_close(cells, torch.full_like(cells, 3))
+    if use_result:
+        expected = torch.arange(3, dtype=torch.int32, device="cuda")[:, None, None].expand_as(output)
+        torch.testing.assert_close(output, expected)
+        torch.testing.assert_close(wide_output, expected.to(torch.int64))
+    else:
+        assert compiled.metadata.shared == 0
+
+
 @gluon.jit
 def copy_kernel(Out, In, numel, XBLOCK: ttgl.constexpr, layout: ttgl.constexpr):
     xbase = ttgl.program_id(0) * XBLOCK

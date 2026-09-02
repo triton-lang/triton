@@ -45,6 +45,15 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
       // CHECK: tt.atomic_cas {{.*}}ttg.mbar_offset = 8 : i32
       %tensor_cas = tt.atomic_cas acq_rel, gpu, %ptrs, %zeros, %ones {allocation.offset = 0 : i32} : (tensor<128x!tt.ptr<i32>, #blockedBroadcast>, tensor<128xi32, #blockedBroadcast>, tensor<128xi32, #blockedBroadcast>) -> tensor<128xi32, #blockedBroadcast>
       tt.store %ptrs, %tensor_cas : tensor<128x!tt.ptr<i32>, #blockedBroadcast>
+      // Only live impure results need a cluster broadcast. An unused first
+      // result must not hide the live second result from the allocator.
+      // CHECK: tt.elementwise_inline_asm {{.*}}ttg.mbar_offset = 8 : i32
+      %asm:2 = tt.elementwise_inline_asm "mov.u32 $0, 0; atom.global.add.u32 $1, [$2], 1;" {constraints = "=r,=r,l", packed_element = 1 : i32, pure = false} %ptr : !tt.ptr<i32> -> i32, i32
+      tt.store %ptr, %asm#1 : !tt.ptr<i32>
+      // CHECK: tt.elementwise_inline_asm
+      // CHECK-NOT: ttg.mbar_offset
+      // CHECK: ttg.warp_yield
+      %unused = tt.elementwise_inline_asm "mov.u32 $0, 0;" {constraints = "=r", packed_element = 1 : i32, pure = false} -> i32
       ttg.warp_yield
     }
     partition0() num_warps(4) {
