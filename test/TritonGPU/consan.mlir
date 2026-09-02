@@ -47,7 +47,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 1024 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {
   // Lanes read distinct entries, but each warp loads its own copy.
   // CHECK-LABEL: tt.func private @__triton_consan_set_read_visibility_
-  // CHECK: tt.load {{.*}} : tensor<2x4x2x1x2x!tt.ptr<i64>,
+  // CHECK: tt.load {{.*}} : tensor<2x4x2x1x2x!tt.ptr<i32>,
   // CHECK-NEXT: ttg.barrier global_read
   // Scratch in a non-entry function is summarized by the call's virtual
   // shared-memory frame. The callee body itself is not instrumented.
