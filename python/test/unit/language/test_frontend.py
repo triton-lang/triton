@@ -917,6 +917,28 @@ def test_atomic_poll_timeout():
 
 @filecheck_test
 @triton.jit
+def test_atomic_poll_mask():
+    ptr = tl.full((), 0, tl.int64).to(tl.pointer_type(tl.int32))
+    # CHECK: tt.atomic_poll acquire, gpu, {{.*}} mask {{.*}} : i1 timeout {{.*}}
+    tl.atomic_poll(ptr, 1, mask=False, timeout_ns=0)
+
+
+@doesnt_compile
+@triton.jit
+def test_atomic_poll_rejects_nonboolean_mask():
+    ptr = tl.full((), 0, tl.int64).to(tl.pointer_type(tl.int32))
+    tl.atomic_poll(ptr, 1, mask=1)
+
+
+@doesnt_compile
+@triton.jit
+def test_atomic_poll_rejects_mismatched_mask_shape():
+    ptrs = tl.full((32, ), 0, tl.int64).to(tl.pointer_type(tl.int32))
+    tl.atomic_poll(ptrs, 1, mask=tl.arange(0, 64) < 32)
+
+
+@filecheck_test
+@triton.jit
 def test_atomic_poll_tensor_pointer():
     # CHECK-LABEL: test_atomic_poll_tensor_pointer
     ptrs = tl.full((1, ), 0, tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)

@@ -833,10 +833,12 @@ class InterpreterBuilder:
         sem = self.ir_sem_to_interpreter_sem[sem]
         return TensorHandle(_interpreter.atomic_cas(ptr.data, cmp.data, val.data, sem), cmp.dtype.scalar)
 
-    def create_atomic_poll(self, ptr, expected, timeout_ns, sem, scope):
+    def create_atomic_poll(self, ptr, expected, mask, timeout_ns, sem, scope):
         matched = np.zeros(ptr.data.shape, dtype=np.bool_)
         start_ns = time.perf_counter_ns() if timeout_ns is not None else None
         for index in np.ndindex(ptr.data.shape):
+            if mask is not None and not mask.data[index]:
+                continue
             element_ptr = TensorHandle(np.asarray(ptr.data[index]), ptr.dtype)
             while True:
                 value = self.create_load(element_ptr, None, None, True)

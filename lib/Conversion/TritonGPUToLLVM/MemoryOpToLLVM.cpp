@@ -381,6 +381,9 @@ struct AtomicPollOpConversion
     auto ptrs = unpackUniqueTensorElements(loc, adaptor.getPtr(), rewriter);
     auto expected =
         unpackUniqueTensorElements(loc, adaptor.getExpected(), rewriter);
+    SmallVector<Value> masks(ptrs.size(), b.true_val());
+    if (adaptor.getMask())
+      masks = unpackUniqueTensorElements(loc, adaptor.getMask(), rewriter);
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
     Value threadPred =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
@@ -391,9 +394,11 @@ struct AtomicPollOpConversion
     if (adaptor.getTimeout())
       start = targetInfo.getGlobalTimer(rewriter, loc);
     SmallVector<Value> results;
-    for (auto [ptr, value] : llvm::zip_equal(ptrs, expected))
+    for (auto [ptr, value, mask] : llvm::zip_equal(ptrs, expected, masks)) {
+      Value pred = adaptor.getMask() ? b.and_(threadPred, mask) : threadPred;
       results.push_back(emitPoll(op, ptr, value, start, adaptor.getTimeout(),
-                                 threadPred, rewriter));
+                                 pred, rewriter));
+    }
 
     auto rendezvous = [&] {
       if (numCTAs == 1)
@@ -406,7 +411,7 @@ struct AtomicPollOpConversion
     // result is unused. Without a timeout every element's result is known.
     if (!adaptor.getTimeout() || op.getResult().use_empty()) {
       rendezvous();
-      results.assign(ptrs.size(), b.true_val());
+      results = masks;
     } else if (op->hasAttr("allocation.offset")) {
       // Reuse the existing atomic result transport for physical replicas.
       if (auto tensorTy = dyn_cast<RankedTensorType>(op.getType())) {

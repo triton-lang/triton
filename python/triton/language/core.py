@@ -1198,7 +1198,7 @@ class tensor(base_value):
     def atomic_or(self, val, mask=None, sem=None, scope=None) -> tensor:
         ...
 
-    def atomic_poll(self, expected_value, sem="acquire", scope="gpu", timeout_ns=None) -> tensor:
+    def atomic_poll(self, expected_value, sem="acquire", scope="gpu", timeout_ns=None, mask=None) -> tensor:
         ...
 
     def atomic_xor(self, val, mask=None, sem=None, scope=None) -> tensor:
@@ -2577,7 +2577,7 @@ def atomic_cas(pointer, cmp, val, sem=None, scope=None, _semantic=None):
 
 @_tensor_member_fn
 @builtin
-def atomic_poll(pointer, expected_value, sem=None, scope=None, timeout_ns=None, _semantic=None):
+def atomic_poll(pointer, expected_value, sem=None, scope=None, timeout_ns=None, mask=None, _semantic=None):
     """
     Wait until the value at :code:`pointer` equals :code:`expected_value`.
 
@@ -2599,17 +2599,21 @@ def atomic_poll(pointer, expected_value, sem=None, scope=None, timeout_ns=None, 
     :type scope: str, optional
     :param timeout_ns: Shared polling time budget for the entire operation, measured
         in nanoseconds by the GPU global timer. If omitted, polling has no timeout.
-        Each element is loaded at least once, even with a zero timeout.
+        Each unmasked element is loaded at least once, even with a zero timeout.
     :type timeout_ns: int, optional
+    :param mask: Boolean scalar or block broadcast to the shape of :code:`pointer`.
+        Masked-out elements are not accessed, do not acquire memory, and return false.
+    :type mask: triton.language.tensor, optional
     :return: A boolean with the shape of :code:`pointer`, true for each element
-        whose expected value was observed and false if its timeout expired first.
+        whose expected value was observed and false if masked out or timed out.
     :rtype: triton.language.tensor
     """
     expected_value = _semantic.to_tensor(expected_value)
     sem = _unwrap_if_constexpr(sem)
     scope = _unwrap_if_constexpr(scope)
     timeout_ns = _unwrap_if_constexpr(timeout_ns)
-    return _semantic.atomic_poll(pointer, expected_value, sem, scope, timeout_ns)
+    mask = _unwrap_if_constexpr(mask)
+    return _semantic.atomic_poll(pointer, expected_value, sem, scope, timeout_ns, mask)
 
 
 @_tensor_member_fn

@@ -29,7 +29,7 @@ def test_atomic_poll_tensor_shares_timeout(monkeypatch) -> None:
         return original_load(element_ptr, *args)
 
     monkeypatch.setattr(builder, "create_load", load)
-    result = builder.create_atomic_poll(ptr, expected, timeout, None, None)
+    result = builder.create_atomic_poll(ptr, expected, None, timeout, None, None)
 
     np.testing.assert_array_equal(result.data, [False, False, True])
     # The first element exhausts the budget; later elements still get one load.

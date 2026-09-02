@@ -946,6 +946,34 @@ def test_atomic_poll_acquire_synchronizes_cross_sm(with_gsan, capfd, scope, expe
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("block_size", [16, 256])
+@pytest.mark.parametrize("timeout", [None, 0])
+def test_atomic_poll_tensor_mask_does_not_record_read(with_gsan, block_size, timeout):
+
+    @gluon.jit
+    def kernel(Flags, Out, BLOCK: gl.constexpr, TIMEOUT: gl.constexpr):
+        offsets = gl.arange(0, BLOCK, layout=gl.BlockedLayout([1], [32], [4], [0]))
+        mask = offsets % 2 != 0
+        null = gl.full((), 0, gl.int64).to(gl.pointer_type(gl.int32))
+        ptrs = gl.where(mask, Flags + offsets, null)
+        matched = gl.atomic_poll(ptrs, 1, timeout_ns=TIMEOUT, mask=mask)
+        gl.store(Out + offsets, matched)
+
+    flags = torch.ones(block_size, dtype=torch.int32, device="cuda")
+    out = torch.empty(block_size, dtype=torch.bool, device="cuda")
+    kernel[(1, )](flags, out, block_size, timeout, num_warps=4)
+    torch.testing.assert_close(out, torch.arange(block_size, device="cuda") % 2 != 0)
+    for index in range(block_size):
+        address = flags.data_ptr() + index * flags.element_size()
+        if index % 2:
+            _assert_atomic_read_only_shadow(address, AtomicScope.GPU)
+        else:
+            cell = shadow_cell_from_address(address)
+            assert cell.write_clock == ScalarClock(0, 0, AtomicScope.NON_ATOMIC)
+            assert cell.num_reads == 0
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 @pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES)
 @pytest.mark.parametrize("sem, is_release", ATOMIC_SEMANTIC_CASES)
 def test_atomic_cas_success_updates_atomic_shadow(with_gsan, sem, is_release, scope, expected_scope):

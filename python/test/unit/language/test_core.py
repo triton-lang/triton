@@ -1624,6 +1624,31 @@ def test_atomic_poll_tensor_results(block_size, timeout, device):
     assert torch.equal(out, flags == expected)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("block_size", [None, 16, 512])
+@pytest.mark.parametrize("timeout", [None, 0])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_atomic_poll_mask(block_size, timeout, enabled, device):
+
+    @triton.jit
+    def kernel(Flags, Out, BLOCK: tl.constexpr, TIMEOUT: tl.constexpr, ENABLED: tl.constexpr):
+        if BLOCK is None:
+            offsets = 0
+            mask = ENABLED
+        else:
+            offsets = tl.arange(0, BLOCK)
+            mask = ENABLED & (offsets % 2 == 0)
+        ptrs = tl.where(mask, Flags + offsets, tl.full((), 0, tl.int64).to(tl.pointer_type(tl.int32)))
+        matched = tl.atomic_poll(ptrs, 1, timeout_ns=TIMEOUT, mask=mask)
+        tl.store(Out + offsets, matched)
+
+    size = block_size or 1
+    flags = torch.ones(size, dtype=torch.int32, device=device)
+    out = torch.empty(size, dtype=torch.bool, device=device)
+    kernel[(1, )](flags, out, block_size, timeout, enabled, num_warps=4)
+    torch.testing.assert_close(out, enabled & (torch.arange(size, device=device) % 2 == 0))
+
+
 def test_atomic_poll_no_timeout_uses_no_shared_memory(device):
 
     @triton.jit

@@ -1,5 +1,13 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+tt.func @atomic_poll_mismatched_mask(%ptr: tensor<32x!tt.ptr<i32>>, %expected: tensor<32xi32>, %mask: tensor<16xi1>) {
+  // expected-error @+1 {{mask must have the same shape and encoding as the result}}
+  %matched = tt.atomic_poll acquire, gpu, %ptr, %expected mask %mask : tensor<16xi1> : tensor<32x!tt.ptr<i32>>, tensor<32xi32> -> tensor<32xi1>
+  tt.return
+}
+
+// -----
+
 tt.func @atomic_poll_mismatched_result(%ptr: tensor<32x!tt.ptr<i32>>, %expected: tensor<32xi32>) {
   // expected-error @+1 {{result type matches expected shape}}
   %matched = tt.atomic_poll acquire, gpu, %ptr, %expected : tensor<32x!tt.ptr<i32>>, tensor<32xi32> -> i1

@@ -129,6 +129,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 
+  // CHECK-POLL-LABEL: @atomic_poll_masked
+  // CHECK-POLL: llvm.and
+  // CHECK-POLL: llvm.cond_br %{{.*}}, ^[[LOOP:bb[0-9]+]], ^[[DONE:bb[0-9]+]]
+  // CHECK-POLL: ^[[LOOP]]:
+  // CHECK-POLL: llvm.load %{{.*}} atomic syncscope("device") monotonic
+  // CHECK-POLL: llvm.fence syncscope("device") acquire
+  // CHECK-POLL: ^[[DONE]]{{(\(.*\))?}}:
+  // CHECK-POLL: nvvm.barrier
+  // CHECK-POLL: llvm.return
+  tt.func public @atomic_poll_masked(%ptr: tensor<16x!tt.ptr<i32>, #poll>, %expected: tensor<16xi32, #poll>, %mask: tensor<16xi1, #poll>) {
+    %matched = tt.atomic_poll acquire, gpu, %ptr, %expected mask %mask : tensor<16xi1, #poll> : tensor<16x!tt.ptr<i32>, #poll>, tensor<16xi32, #poll> -> tensor<16xi1, #poll>
+    tt.return
+  }
+
   // CHECK-POLL-LABEL: @atomic_poll_replicated_tensor
   // CHECK-POLL: llvm.cond_br
   // CHECK-POLL: llvm.load %{{.*}} atomic syncscope("device") monotonic

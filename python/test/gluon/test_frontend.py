@@ -43,6 +43,8 @@ def test_atomic_poll_tensor():
     ttgl.static_assert(result.type.layout == layout)
     # CHECK: tt.atomic_poll acquire, gpu, {{.*}} timeout {{.*}} : tensor<128x!tt.ptr<i32>, #blocked>, tensor<128xi32, #blocked> -> tensor<128xi1, #blocked>
     ttgl.atomic_poll(ptrs, offsets, timeout_ns=0)
+    # CHECK: tt.atomic_poll acquire, gpu, {{.*}} mask {{.*}} : tensor<128xi1, #blocked> timeout {{.*}}
+    ttgl.atomic_poll(ptrs, 1, mask=offsets < 100, timeout_ns=0)
 
 
 TARGET_PAT = re.compile('ttg.target = "[^"]*"')

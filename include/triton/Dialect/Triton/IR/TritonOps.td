@@ -332,6 +332,7 @@ def TT_GridDependencyLaunchDependentsOp
 
 def TT_AtomicPollOp : TT_Op<"atomic_poll", [
   SameOperandsAndResultEncoding,
+  AttrSizedOperandSegments,
   TypesMatchWith<"ptr type matches expected type", "expected", "ptr",
                  "getPointerTypeSameShape($_self)">,
   TypesMatchWith<"result type matches expected shape", "expected", "result",
@@ -346,12 +347,14 @@ def TT_AtomicPollOp : TT_Op<"atomic_poll", [
         For acquire semantics, issue an acquire fence after each successful
         poll. The block waits for all elements to finish. The result has the
         same shape and encoding as $ptr. All elements share one timeout budget,
-        and each element is loaded at least once, even with a zero timeout.
+        and each unmasked element is loaded at least once, even with a zero timeout.
+        Masked-out elements are not accessed, do not acquire memory, and return false.
     }];
 
     let arguments = (ins
       Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
       TT_IntLike:$expected,
+      Optional<TT_BoolLike>:$mask,
       Optional<I64>:$timeout,
       TT_MemSemanticAttr:$sem,
       TT_MemSyncScopeAttr:$scope
@@ -360,7 +363,7 @@ def TT_AtomicPollOp : TT_Op<"atomic_poll", [
     let results = (outs TT_BoolLike:$result);
 
     let assemblyFormat = [{
-      $sem `,` $scope `,` $ptr `,` $expected (`timeout` $timeout^)?
+      $sem `,` $scope `,` $ptr `,` $expected (`mask` $mask^ `:` type($mask))? (`timeout` $timeout^)?
       attr-dict `:` qualified(type($ptr)) `,` type($expected) `->` type($result)
     }];
 
