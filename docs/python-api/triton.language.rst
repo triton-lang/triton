@@ -76,6 +76,7 @@ Memory/Pointer Ops
 
     load
     store
+    fence
     make_tensor_descriptor
     load_tensor_descriptor
     store_tensor_descriptor
@@ -220,7 +221,6 @@ Compiler Hint Ops
     :nosignatures:
 
     assume
-    debug_barrier
     max_constancy
     max_contiguous
     multiple_of

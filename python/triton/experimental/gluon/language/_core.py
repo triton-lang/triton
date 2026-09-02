@@ -710,7 +710,7 @@ def barrier(*, cluster: bool = False, _semantic=None):
     cluster = _unwrap_if_constexpr(cluster)
     num_ctas = _unwrap_if_constexpr(_semantic.num_ctas())
     if num_ctas == 1 or not cluster:
-        return _semantic.debug_barrier()
+        return _semantic.barrier()
     _semantic.builder.create_cluster_barrier()
 
 

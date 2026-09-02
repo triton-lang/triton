@@ -57,6 +57,7 @@ llvm::Triple getAMDTargetTriple(const std::string &arch) {
 
 void init_triton_amd_passes_ttgpuir(py::module_ &m) {
   using namespace mlir::triton;
+  ADD_PASS_WRAPPER_0("add_lower_fence", mlir::createTritonAMDGPULowerFence);
   m.def("add_to_llvmir",
         [](mlir::PassManager &pm, const std::string &arch, bool ftz) {
           pm.addPass(createConvertTritonAMDGPUToLLVMPass(arch, ftz));

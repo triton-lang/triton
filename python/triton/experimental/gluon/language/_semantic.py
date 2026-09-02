@@ -637,6 +637,9 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         mlir_results = [ws_op.get_result(i) for i in range(len(result_types))]
         return next(unflatten_ir_values(mlir_results, [default_result.type]))
 
+    def barrier(self) -> TensorTy:
+        return self.tensor(self.builder.create_barrier(), ttgl.void)
+
     def num_ctas(self):
         return ttgl.constexpr(self.builder.options.num_ctas)
 
