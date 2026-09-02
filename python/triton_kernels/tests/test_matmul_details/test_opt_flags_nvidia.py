@@ -13,7 +13,7 @@ from triton_kernels.tensor import FP4, UINT8, Storage, Tensor, convert_layout, w
 from triton_kernels.tensor_details import layout
 from triton_kernels.tensor_details.layout import BlackwellMX4ValueShuffledLayout
 from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellMXScaleLayout
-from triton_kernels.tensor_details.ragged_tensor import make_ragged_tensor_metadata_torch
+from triton_kernels.tensor_details.ragged_tensor import make_ragged_tensor_metadata
 from triton_kernels.testing import assert_close
 
 
@@ -211,19 +211,111 @@ def test_matmul_clc(device, split_k):
     assert_close(ref_y, tri_y, maxtol=3e-2, rmstol=None)
 
 
-def test_matmul_clc_rejects_ragged_m_grid(device):
+def _assert_ragged_m_output(output, a, b, slice_sizes, sentinel):
+    offset = 0
+    for expert, size in enumerate(slice_sizes):
+        expected = (a[offset:offset + size].float() @ b[expert].float()).to(output.dtype)
+        torch.testing.assert_close(output[offset:offset + size], expected, rtol=0.02, atol=0.02)
+        offset += size
+    # Capacity-only tasks must not write output rows outside the useful range.
+    tail = output[offset:]
+    torch.testing.assert_close(tail, torch.full_like(tail, sentinel), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("slice_sizes,capacity,split_k", [
+    pytest.param((512, 256, 256, 0), 1024, 1, id="balanced-empty-expert"),
+    pytest.param((0, 0, 1024, 0), 1024, 1, id="one-hot-expert"),
+    pytest.param((1, 127, 129, 255), 1024, 1, id="partial-tiles-capacity-tail"),
+    pytest.param((0, 0, 0, 0), 1024, 1, id="zero-useful-tiles"),
+    pytest.param((16384, 8192, 4096, 0), 32768, 1, id="multiple-waves"),
+    pytest.param((1, 127, 129, 255), 512, 2, id="split-k-capacity-tail"),
+])
+@pytest.mark.parametrize("transpose_rhs", [False, True])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float8_e4m3fn])
+def test_matmul_clc_ragged_m_capacity(device, slice_sizes, capacity, split_k, transpose_rhs, dtype):
     if device != "cuda" or not torch.cuda.is_available() or not is_cuda():
         pytest.skip("requires CUDA")
     if torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("requires Blackwell or newer")
 
-    slice_sizes = torch.tensor([64, 0, 64], dtype=torch.int32, device=device)
-    metadata = make_ragged_tensor_metadata_torch(slice_sizes, 128)
-    a = torch.randn((128, 64), device=device, dtype=torch.bfloat16)
-    b = torch.randn((3, 64, 128), device=device, dtype=torch.bfloat16)
-    with scoped_opt_flags_constraints({"clc": True}):
-        with pytest.raises(InapplicableConstraint, match="host-known grid"):
-            matmul(a, b, None, a_ragged_metadata=metadata)
+    torch.manual_seed(0)
+    n, k = 512, 256
+    a = torch.randn((capacity, k), device=device, dtype=torch.bfloat16).to(dtype)
+    weight_shape = (len(slice_sizes), n, k) if transpose_rhs else (len(slice_sizes), k, n)
+    b = torch.randn(weight_shape, device=device, dtype=torch.bfloat16).to(dtype)
+    if transpose_rhs:
+        b = b.mT
+    sizes = torch.tensor(slice_sizes, device=device, dtype=torch.int32)
+    metadata = make_ragged_tensor_metadata(sizes, capacity)
+    sentinel = 123.0
+    precision = PrecisionConfig(out_dtype=torch.bfloat16)
+    constraints = {
+        "block_m": 128,
+        "block_n": 128,
+        "block_k": 64,
+        "is_persistent": True,
+        "split_k": split_k,
+        "idle_sms": 0,
+    }
+    outputs = []
+    for use_clc in (False, True):
+        output = torch.full((capacity, n), sentinel, device=device, dtype=torch.bfloat16)
+        with scoped_opt_flags_constraints({**constraints, "clc": use_clc}):
+            matmul(a, b, None, a_ragged_metadata=metadata, c=output, precision_config=precision)
+        outputs.append(output)
+
+    # Keep tile shape and reduction order fixed while changing the scheduler.
+    torch.testing.assert_close(outputs[1], outputs[0], rtol=0, atol=0)
+    _assert_ragged_m_output(outputs[1], a, b, slice_sizes, sentinel)
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float8_e4m3fn])
+def test_matmul_clc_ragged_m_graph_replay(device, dtype):
+    if device != "cuda" or not torch.cuda.is_available() or not is_cuda():
+        pytest.skip("requires CUDA")
+    if torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("requires Blackwell or newer")
+
+    torch.manual_seed(0)
+    capacity, n, k = 1024, 512, 256
+    a = torch.randn((capacity, k), device=device, dtype=torch.bfloat16).to(dtype)
+    b = torch.randn((4, k, n), device=device, dtype=torch.bfloat16).to(dtype)
+    sizes = torch.tensor((256, 256, 256, 256), device=device, dtype=torch.int32)
+    sentinel = 123.0
+    output = torch.full((capacity, n), sentinel, device=device, dtype=torch.bfloat16)
+    precision = PrecisionConfig(out_dtype=torch.bfloat16)
+    constraints = {
+        "block_m": 128,
+        "block_n": 128,
+        "block_k": 64,
+        "is_persistent": True,
+        "split_k": 1,
+        "idle_sms": 0,
+        "clc": True,
+    }
+
+    def run():
+        metadata = make_ragged_tensor_metadata(sizes, capacity)
+        matmul(a, b, None, a_ragged_metadata=metadata, c=output, precision_config=precision)
+
+    with scoped_opt_flags_constraints(constraints):
+        warmup = torch.cuda.Stream(device=device)
+        warmup.wait_stream(torch.cuda.current_stream(device))
+        with torch.cuda.stream(warmup):
+            for _ in range(3):
+                run()
+        torch.cuda.current_stream(device).wait_stream(warmup)
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            run()
+
+    # Reuse the same launch while the device-computed useful count changes.
+    for values in ((1, 127, 129, 255), (0, 0, 0, 0), (0, 0, 1024, 0)):
+        sizes.copy_(torch.tensor(values, device=device, dtype=torch.int32))
+        a.copy_(torch.randn(a.shape, device=device, dtype=torch.bfloat16).to(dtype))
+        output.fill_(sentinel)
+        graph.replay()
+        _assert_ragged_m_output(output, a, b, values, sentinel)
 
 
 def test_matmul_blackwell_shuffled_mxfp4_weight(device):
