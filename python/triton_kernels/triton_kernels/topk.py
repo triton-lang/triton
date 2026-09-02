@@ -22,7 +22,8 @@ def make_empty(offset, shape, dtype, device, all_gather, symm_mem_pool):
     return (ret, ), ret, 0
 
 
-def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_gather=False, symm_mem_pool=None):
+def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_gather=False, symm_mem_pool=None,
+                 disable_lsr=None):
     if not isinstance(x, Tensor):
         x_shape = [x.shape[0] if n_rows is None else n_rows, x.shape[1]]
         x_shape_max = [x.shape[0], x.shape[1]]
@@ -59,13 +60,24 @@ def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_
     bitmatrix_data = torch.transpose(bitmatrix_data, 0, 1)[:n_rows_max]
     pids = cdiv(n_rows_max, BLOCK_M)
     _topk_forward[(pids, )](
-        x.storage.data, x.stride(0),  # inputs
-        y_vals_bufs, y_indx_bufs, y_vals.stride(0), use_provided_indx,  # output [topk]
-        bitmatrix_bufs, bitmatrix_data.stride(0), bitmatrix_data.stride(1),  # output [bitmatrix]
-        n_rows, n_cols,  # shapes
-        symm_mem_pool.mesh.local_rank * n_rows_max if all_gather else 0, BLOCK_M=BLOCK_M,
+        x.storage.data,
+        x.stride(0),  # inputs
+        y_vals_bufs,
+        y_indx_bufs,
+        y_vals.stride(0),
+        use_provided_indx,  # output [topk]
+        bitmatrix_bufs,
+        bitmatrix_data.stride(0),
+        bitmatrix_data.stride(1),  # output [bitmatrix]
+        n_rows,
+        n_cols,  # shapes
+        symm_mem_pool.mesh.local_rank * n_rows_max if all_gather else 0,
+        BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,  # tunable parameter
-        APPLY_SOFTMAX=apply_softmax, N_EXPTS_PAD=n_cols_pad, N_EXPTS_ACT=k,  # constants
+        APPLY_SOFTMAX=apply_softmax,
+        N_EXPTS_PAD=n_cols_pad,
+        N_EXPTS_ACT=k,  # constants
+        **({"disable_lsr": disable_lsr} if disable_lsr is not None else {}),
     )
     if all_gather:
         symm_mem_pool.hdl.barrier(channel=0)
@@ -90,8 +102,9 @@ def topk_backward(x, y_indx, dy_vals, k, n_rows, apply_softmax):
 class TopK(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, x, k, apply_softmax, dim, y_indx, n_rows, all_gather, symm_mem_pool):
-        y_vals, y_indx, bitmatrix = topk_forward(x, k, apply_softmax, dim, y_indx, n_rows, all_gather, symm_mem_pool)
+    def forward(ctx, x, k, apply_softmax, dim, y_indx, n_rows, all_gather, symm_mem_pool, disable_lsr):
+        y_vals, y_indx, bitmatrix = topk_forward(x, k, apply_softmax, dim, y_indx, n_rows, all_gather, symm_mem_pool,
+                                                 disable_lsr)
         ctx.save_for_backward(x, y_indx)
         ctx.apply_softmax = apply_softmax
         ctx.k = k
@@ -102,7 +115,7 @@ class TopK(torch.autograd.Function):
     def backward(ctx, dy_vals, _0, _1):
         x, y_indx = ctx.saved_tensors
         dx = topk_backward(x, y_indx, dy_vals, ctx.k, ctx.n_rows, ctx.apply_softmax)
-        return dx, None, None, None, None, None, None, None
+        return dx, None, None, None, None, None, None, None, None
 
 
 def topk(
@@ -114,6 +127,8 @@ def topk(
     n_rows: Optional[int] = None,
     all_gather: bool = False,
     symm_mem_pool: SymmetricMemoryPool | None = None,
+    *,
+    disable_lsr: bool | None = None,
 ):
     """
     Computes the top-k values and indices along a specified dimension of a tensor.
@@ -134,12 +149,16 @@ def topk(
         If provided, we skip the computation of top-k indices and use this tensor instead.
     n_rows : int, optional
         Number of rows to apply top-k on. If None, we consider all rows in `x`.
+    disable_lsr : bool, optional
+        Override loop strength reduction for the CUDA forward kernel. If None,
+        use the compiler default without passing a backend-specific option.
 
     Returns
     -------
     SparseMatrix: sparse matrix equal to `x` with non-selected entries set to 0
     """
-    y_vals, y_indx, bitmatrix = TopK.apply(x, k, apply_softmax, dim, y_indx, n_rows, all_gather, symm_mem_pool)
+    y_vals, y_indx, bitmatrix = TopK.apply(x, k, apply_softmax, dim, y_indx, n_rows, all_gather, symm_mem_pool,
+                                           disable_lsr)
     return SparseMatrix(vals=y_vals, indx=y_indx, mask=bitmatrix)
 
 
