@@ -373,7 +373,7 @@ class HIPBackend(BaseBackend):
             passes.common.add_cse(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         # Instrumentation point here so an extension can override IRs above (e.g., ttir and ttgir).
-        instrument(pm, point="ttgpuir-to-llvmir")
+        instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         ## __HIP_FTZ is used to control the denorm flushing behavior of exp2 op as follows:
         ## 1. If __HIP_FTZ = 1, exp2 flushes denorms in input and output regardless
@@ -395,7 +395,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
 
         # This can not be moved below the di_scope pass
-        instrument(pm, point="llvmir-to-llvm")
+        instrument(pm, point="llvmir-to-llvm", context=mod.context)
 
         if not knobs.compilation.disable_line_info and not knobs.compilation.dump_ir_extract_di_local_variables:
             passes.llvmir.add_di_scope(pm)

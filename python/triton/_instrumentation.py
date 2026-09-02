@@ -33,10 +33,16 @@ def unregister_instrumentation(*, point: str, backend: str) -> None:
     _callbacks.pop((point, backend), None)
 
 
-def instrument(*args: Any, point: str, backend: str) -> bool:
+def instrument(*args: Any, point: str, backend: str, context: Any = None) -> bool:
     callback = _callbacks.get((point, backend))
     if callback is None:
         return False
+
+    load_dialects = _callbacks.get(("load-dialects", backend))
+    if point != "load-dialects" and load_dialects is not None:
+        if context is None:
+            raise RuntimeError(f"Instrumentation point '{point}' requires an MLIR context")
+        load_dialects(context)
 
     callback(*args)
     return True

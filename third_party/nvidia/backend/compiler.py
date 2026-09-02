@@ -427,7 +427,7 @@ class CUDABackend(BaseBackend):
         nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         # Instrumentation point here so an extension can override IRs above (e.g., ttir and ttgir).
-        instrument(pm, point="ttgpuir-to-llvmir")
+        instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
         nvidia.passes.ttnvgpuir.add_proxy_fence_insertion(pm, capability)
         nvidia.passes.ttnvgpuir.add_tmem_barrier_insertion(pm)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version, is_enabled(options, "consan"))
@@ -446,7 +446,7 @@ class CUDABackend(BaseBackend):
         if not knobs.compilation.disable_line_info and not knobs.compilation.dump_ir_extract_di_local_variables:
             passes.llvmir.add_di_scope(pm)
 
-        instrument(pm, point="llvmir-to-llvm")
+        instrument(pm, point="llvmir-to-llvm", context=mod.context)
 
         pm.run(mod, 'make_llir')
 
