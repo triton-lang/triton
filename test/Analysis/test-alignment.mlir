@@ -1072,7 +1072,7 @@ tt.func @permute_2d(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32
 
 // -----
 
-tt.func @load_constancy(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 1 : i32}) {
+tt.func @load_constancy(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 1 : i32}) {
   // expected-remark @below {{divisibility = [16]}}
   %sixteen = arith.constant dense<16> : tensor<1024xi32>
   // expected-remark @below {{divisibility = [8]}}
@@ -1082,7 +1082,7 @@ tt.func @load_constancy(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1:
   // expected-remark @below {{constancy = [16]}}
   %2 = arith.divsi %1, %sixteen : tensor<1024xi32>
   // expected-remark @below {{constancy = [1024]}}
-  %3 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+  %3 = tt.splat %arg0 : !tt.ptr<i32> -> tensor<1024x!tt.ptr<i32>>
   // expected-remark @below {{constancy = [1024]}}
   %4 = tt.splat %arg1 : i32 -> tensor<1024xi32>
   // expected-remark @below {{constancy = [8]}}
@@ -1090,11 +1090,15 @@ tt.func @load_constancy(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1:
   // expected-remark @below {{constancy = [8]}}
   %6 = arith.cmpi slt, %5, %4 : tensor<1024xi32>
   // expected-remark @below {{constancy = [16]}}
-  %7 = tt.addptr %3, %2 : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+  %7 = tt.addptr %3, %2 : tensor<1024x!tt.ptr<i32>>, tensor<1024xi32>
   // expected-remark @below {{constancy = [16]}}
-  %8 = tt.load %7 : tensor<1024x!tt.ptr<f32>>
+  %8 = tt.load %7 : tensor<1024x!tt.ptr<i32>>
   // expected-remark @below {{constancy = [8]}}
-  %9 = tt.load %7, %6 : tensor<1024x!tt.ptr<f32>>
+  %9 = tt.load %7, %6 : tensor<1024x!tt.ptr<i32>>
+  // expected-remark @below {{constancy = [1]}}
+  %10 = tt.load %7, %6, %1 : tensor<1024x!tt.ptr<i32>>
+  // expected-remark @below {{constancy = [8]}}
+  %11 = tt.load %7, %6, %5 : tensor<1024x!tt.ptr<i32>>
   tt.return
 }
 
