@@ -19,8 +19,8 @@ def test_dynamic_instrumentation_and_dialect_loading():
     calls = []
 
     assert not instrument("context", point="load-dialects", backend="test")
-    register_instrumentation(point="load-dialects", backend="test",
-                             callback=lambda context: calls.append(("dialects", context)))
+    register_instrumentation(point="load-dialects", backend="test", callback=lambda context: calls.append(
+        ("dialects", context)))
     register_instrumentation(point="ttgpuir-to-llvmir", backend="test", callback=lambda _pm: calls.append("passes"))
     try:
         assert instrument("context", point="load-dialects", backend="test")
