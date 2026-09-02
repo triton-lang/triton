@@ -424,12 +424,32 @@ actionAdditiveStrides(const LinearLayout &layout, const LinearLayout addrLayout,
   blockBits |= getOutputBasisMask(addrLayout, addrInDims, addrOutDims[1]);
   SmallVector<size_t> front, back;
   auto layoutNamedBases = layout.getBases();
-  assert(layoutNamedBases.lookup(kReg).size() >= regBasisPerVec &&
+  const auto &regBases = layoutNamedBases.lookup(kReg);
+  assert(regBases.size() >= regBasisPerVec &&
          "layout must have at least log2(regsPerInst) register bases");
-  for (auto [idx, basis] : llvm::enumerate(layoutNamedBases.lookup(kReg))) {
-    bool isAdditive =
-        (basis[0] & offsetBits) == 0 && (basis[1] & blockBits) == 0;
-    if (idx < regBasisPerVec || isAdditive) {
+
+  // If a register basis overlaps the dynamic address, it must remain in the
+  // outer xor offset. Any other register basis that overlaps it must remain
+  // there as well; otherwise the inner loop would add two non-disjoint values.
+  // Compute this transitive closure before partitioning the register bases.
+  SmallVector<bool> isAdditive(regBases.size(), true);
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (auto [idx, basis] : llvm::enumerate(regBases)) {
+      if (idx < regBasisPerVec || !isAdditive[idx])
+        continue;
+      if ((basis[0] & offsetBits) == 0 && (basis[1] & blockBits) == 0)
+        continue;
+      isAdditive[idx] = false;
+      offsetBits |= basis[0];
+      blockBits |= basis[1];
+      changed = true;
+    }
+  }
+
+  for (size_t idx = 0; idx < regBases.size(); ++idx) {
+    if (idx < regBasisPerVec || isAdditive[idx]) {
       front.push_back(idx);
     } else {
       back.push_back(idx);
