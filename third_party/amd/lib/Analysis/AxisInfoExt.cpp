@@ -51,7 +51,8 @@ public:
       newConst = std::min(newConst, outputShape[dim]);
       newConstancy.push_back(newConst);
     }
-    return AxisInfo(newContiguity, newDivisibility, newConstancy, constant);
+    return AxisInfo(newContiguity, newDivisibility, newConstancy, constant,
+                    srcInfo.isNonNegative());
   }
 
   virtual bool match(Operation *op) final {

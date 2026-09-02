@@ -1544,3 +1544,155 @@ tt.func @negative_constants() {
   %sum = arith.addi %neg8_dense, %sixteen : tensor<128xi32>
   tt.return
 }
+
+// -----
+
+// Signed division and remainder only keep the group structure of a
+// non-negative dividend (#7749).
+tt.func @signed_div_rem_negative_run() {
+  // expected-remark @below {{contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>, non_negative = true}}
+  %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [128], constant_value = 64, non_negative = true}}
+  %c64 = arith.constant dense<64> : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [32], constancy = [128], constant_value = 32, non_negative = true}}
+  %c32 = arith.constant dense<32> : tensor<128xi32>
+  // expected-remark @below {{contiguity = [128], divisibility = [64], constancy = [1], constant_value = <none>, non_negative = false}}
+  %1 = arith.subi %0, %c64 : tensor<128xi32>
+  // [-64, -63, ..., 63] / 32 = [-2, -1, ..., -1, -1, 0, ..., 0, 1, ..., 1]
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>, non_negative = false}}
+  %2 = arith.divsi %1, %c32 : tensor<128xi32>
+  // [-64, -63, ..., 63] % 32 = [0, -31, ..., -1, 0, -31, ..., -1, 0, 1, ..., 31]
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>, non_negative = false}}
+  %3 = arith.remsi %1, %c32 : tensor<128xi32>
+  // expected-remark @below {{contiguity = [128], divisibility = [64], constancy = [1], constant_value = <none>, non_negative = true}}
+  %4 = arith.addi %0, %c64 : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [32], constant_value = <none>, non_negative = true}}
+  %5 = arith.divsi %4, %c32 : tensor<128xi32>
+  // expected-remark @below {{contiguity = [32], divisibility = [32], constancy = [1], constant_value = <none>, non_negative = true}}
+  %6 = arith.remsi %4, %c32 : tensor<128xi32>
+  // The unsigned operations never split a group.
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [32], constant_value = <none>, non_negative = false}}
+  %7 = arith.divui %1, %c32 : tensor<128xi32>
+  // expected-remark @below {{contiguity = [32], divisibility = [32], constancy = [1], constant_value = <none>, non_negative = false}}
+  %8 = arith.remui %1, %c32 : tensor<128xi32>
+  // A range that starts below zero is the same negative run.
+  // expected-remark @below {{contiguity = [128], divisibility = [64], constancy = [1], constant_value = <none>, non_negative = false}}
+  %9 = tt.make_range {end = 64 : i32, start = -64 : i32} : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>, non_negative = false}}
+  %10 = arith.divsi %9, %c32 : tensor<128xi32>
+  tt.return
+}
+
+// -----
+
+tt.func @program_id_offsets() {
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>, non_negative = true}}
+  %pid = tt.get_program_id x : i32
+  // expected-remark @below {{contiguity = [1], divisibility = [128], constancy = [1], constant_value = 128, non_negative = true}}
+  %c128 = arith.constant 128 : i32
+  // expected-remark @below {{contiguity = [1], divisibility = [128], constancy = [1], constant_value = <none>, non_negative = true}}
+  %start = arith.muli %pid, %c128 : i32
+  // expected-remark @below {{contiguity = [1], divisibility = [128], constancy = [128], constant_value = <none>, non_negative = true}}
+  %splat = tt.splat %start : i32 -> tensor<128xi32>
+  %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  // expected-remark @below {{contiguity = [128], divisibility = [128], constancy = [1], constant_value = <none>, non_negative = true}}
+  %offs = arith.addi %splat, %range : tensor<128xi32>
+  %c4 = arith.constant dense<4> : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [4], constant_value = <none>, non_negative = true}}
+  %q = arith.divsi %offs, %c4 : tensor<128xi32>
+  // expected-remark @below {{contiguity = [4], divisibility = [4], constancy = [1], constant_value = <none>, non_negative = true}}
+  %r = arith.remsi %offs, %c4 : tensor<128xi32>
+  tt.return
+}
+
+// -----
+
+tt.func @loop_offsets(%n: i32) {
+  %c0 = arith.constant 0 : i32
+  %c4 = arith.constant 4 : i32
+  %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  %c4_tensor = arith.constant dense<4> : tensor<128xi32>
+  scf.for %i = %c0 to %n step %c4 : i32 {
+    // expected-remark @below {{contiguity = [1], divisibility = [4], constancy = [128], constant_value = <none>, non_negative = true}}
+    %s = tt.splat %i : i32 -> tensor<128xi32>
+    // expected-remark @below {{contiguity = [128], divisibility = [4], constancy = [1], constant_value = <none>, non_negative = true}}
+    %offs = arith.addi %s, %range : tensor<128xi32>
+    // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [4], constant_value = <none>, non_negative = true}}
+    %q = arith.divsi %offs, %c4_tensor : tensor<128xi32>
+  }
+  tt.return
+}
+
+// -----
+
+tt.func @sign_through_casts_and_bits(%arg0: i32) {
+  %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  %c0 = arith.constant dense<0> : tensor<128xi32>
+  %splat = tt.splat %arg0 : i32 -> tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = <none>, non_negative = false}}
+  %arg_tensor = arith.addi %splat, %c0 : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>, non_negative = true}}
+  %and = arith.andi %arg_tensor, %range : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>, non_negative = false}}
+  %or = arith.ori %arg_tensor, %range : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>, non_negative = true}}
+  %max = arith.maxsi %arg_tensor, %range : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>, non_negative = false}}
+  %min = arith.minsi %arg_tensor, %range : tensor<128xi32>
+  // expected-remark @below {{contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>, non_negative = true}}
+  %ext = arith.extsi %range : tensor<128xi32> to tensor<128xi64>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = <none>, non_negative = true}}
+  %zext = arith.extui %arg_tensor : tensor<128xi32> to tensor<128xi64>
+  // expected-remark @below {{contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>, non_negative = false}}
+  %trunc = arith.trunci %range : tensor<128xi32> to tensor<128xi8>
+  tt.return
+}
+
+// -----
+
+// An `llvm.intr.assume` in the entry block holds on every execution of the
+// function, so its non-negativity facts apply wherever the value is used.
+tt.func @assume_non_negative(%n: i32 {tt.divisibility = 16 : i32}, %m: i32 {tt.divisibility = 16 : i32}, %k: i32 {tt.divisibility = 16 : i32}) {
+  %c0 = arith.constant 0 : i32
+  %n_nonneg = arith.cmpi sge, %n, %c0 : i32
+  llvm.intr.assume %n_nonneg : i1
+  %m_pos = arith.cmpi slt, %c0, %m : i32
+  llvm.intr.assume %m_pos : i1
+  %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [16], constancy = [128], constant_value = <none>, non_negative = true}}
+  %n_splat = tt.splat %n : i32 -> tensor<128xi32>
+  // expected-remark @below {{contiguity = [128], divisibility = [16], constancy = [1], constant_value = <none>, non_negative = true}}
+  %n_offs = arith.addi %n_splat, %range : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [16], constancy = [128], constant_value = <none>, non_negative = true}}
+  %m_splat = tt.splat %m : i32 -> tensor<128xi32>
+  // expected-remark @below {{contiguity = [16], divisibility = [16], constancy = [1], constant_value = <none>, non_negative = true}}
+  %n_rem = arith.remsi %n_offs, %m_splat : tensor<128xi32>
+  // Without the assumption the same shape keeps nothing.
+  // expected-remark @below {{contiguity = [1], divisibility = [16], constancy = [128], constant_value = <none>, non_negative = false}}
+  %k_splat = tt.splat %k : i32 -> tensor<128xi32>
+  // expected-remark @below {{contiguity = [128], divisibility = [16], constancy = [1], constant_value = <none>, non_negative = false}}
+  %k_offs = arith.addi %k_splat, %range : tensor<128xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>, non_negative = false}}
+  %k_rem = arith.remsi %k_offs, %m_splat : tensor<128xi32>
+  // The assumption can also be about a value the function computes.
+  %pid = tt.get_program_id x : i32
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>, non_negative = true}}
+  %pid_n = arith.divsi %pid, %k : i32
+  %pid_n_nonneg = arith.cmpi sge, %pid_n, %c0 : i32
+  llvm.intr.assume %pid_n_nonneg : i1
+  tt.return
+}
+
+// -----
+
+// Assumptions outside the entry block are not used.
+tt.func @assume_in_branch(%n: i32, %flag: i1) {
+  %c0 = arith.constant 0 : i32
+  scf.if %flag {
+    %n_nonneg = arith.cmpi sge, %n, %c0 : i32
+    llvm.intr.assume %n_nonneg : i1
+  }
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = <none>, non_negative = false}}
+  %n_splat = tt.splat %n : i32 -> tensor<128xi32>
+  tt.return
+}
