@@ -534,6 +534,69 @@ def test_mxfp4_value_convert_layout_meta(layout, major_dim, inverse):
     assert actual.device.type == "meta"
 
 
+@pytest.mark.parametrize("shape", [(256, 512), (130, 66), (2, 130, 66), (2, 3, 130, 66),
+                                  (2, 1, 3, 130, 66), (0, 130, 66)])
+@pytest.mark.parametrize("tiles", [(128, 256), (192, 48)])
+@pytest.mark.parametrize("step", [1, 2])
+@pytest.mark.parametrize("with_out", [False, True])
+@pytest.mark.parametrize("device", ["cpu", "meta", "cuda"])
+def test_blackwell_fp4_shuffle_conversion(shape, tiles, step, with_out, device):
+    data = torch.randint(0, 256, (*shape[:-1], shape[-1] // 2), dtype=torch.uint8,
+                         generator=torch.Generator().manual_seed(0))
+    canonical = wrap_torch_tensor(data, dtype=FP4)
+    source = convert_layout(canonical, BlackwellMXValueLayout())
+    destination = BlackwellMX4ValueShuffledLayout(*tiles)
+    expected = convert_layout(canonical, destination)
+    # Source padding is unspecified and must not leak into destination padding.
+    source.data[..., shape[-2] // 2:, :].fill_(0xAB)
+    source_data = source.data.to(device)
+    if step == 2:
+        storage = torch.empty(tuple(2 * size for size in source_data.shape), dtype=torch.uint8, device=device)
+        source_view = storage[tuple(slice(None, None, 2) for _ in shape)]
+        source_view.copy_(source_data)
+        source_data = source_view
+    source = wrap_torch_tensor(source_data, dtype=FP4, shape=shape, layout=source.storage.layout)
+    out = None
+    if with_out:
+        storage = torch.full((expected.data.numel() * step + 1,), 0xCD, dtype=torch.uint8, device=device)
+        out_data = storage[1:].as_strided(expected.data.shape, tuple(step * s for s in expected.data.stride()))
+        out = wrap_torch_tensor(out_data, dtype=FP4, shape=shape, layout=destination)
+
+    actual = convert_layout(source, destination, out=out)
+
+    assert actual.shape == list(shape)
+    assert actual.data.shape == expected.data.shape
+    assert actual.data.dtype == expected.data.dtype
+    if with_out:
+        assert actual is out
+    if device != "meta":
+        assert torch.equal(actual.data.cpu(), expected.data)
+        assert torch.equal(convert_layout(actual, StridedLayout()).data.cpu(), data)
+        if with_out:
+            assert storage[0].item() == 0xCD
+            if step == 2:
+                assert torch.all(storage[2::2] == 0xCD)
+
+
+@pytest.mark.parametrize("with_out", [False, True])
+def test_blackwell_fp4_shuffle_peak_allocation(with_out):
+    canonical = empty((8, 1024, 2048), dtype=FP4, device="cuda")
+    source = convert_layout(canonical, BlackwellMXValueLayout())
+    destination = BlackwellMX4ValueShuffledLayout()
+    warm = convert_layout(source, destination)
+    out = warm if with_out else None
+    torch.cuda.synchronize()
+    del warm
+    baseline = torch.cuda.memory_allocated()
+    torch.cuda.reset_peak_memory_stats()
+
+    actual = convert_layout(source, destination, out=out)
+    torch.cuda.synchronize()
+    peak = torch.cuda.max_memory_allocated() - baseline
+
+    assert peak <= (0 if with_out else actual.data.nbytes) + 1024**2
+
+
 @pytest.mark.parametrize("layout", _FP4_VALUE_LAYOUTS)
 @pytest.mark.parametrize("inverse", [False, True])
 @pytest.mark.parametrize("major_dim", [-2, -1])

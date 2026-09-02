@@ -7,6 +7,7 @@ import triton.language as tl
 
 from triton_kernels.tensor_details.layout_details import strided
 from .base import Layout, LayoutTransformation
+from .blackwell_value import BlackwellMXValueLayoutTransformation
 from .torch_utils import repack
 
 
@@ -108,6 +109,11 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
         return self._convert_data(data, inverse=True, major_dim=destination.order[0], out=out)
 
     def _convert_data_from(self, data, source: LayoutTransformation, *, out):
+        if (isinstance(source, BlackwellMXValueLayoutTransformation) and self.is_fp4
+                and data.device.type == "cuda" and data.dtype == torch.uint8
+                and list(data.shape) == source.storage_shape):
+            # Blackwell values already pack K; only their physical tiling changes.
+            return self._convert_data(data, inverse=False, major_dim=len(self.shape) - 2, out=out)
         if (not isinstance(source, strided.StridedLayoutTransformation) or not self.is_fp4
                 or not source._can_convert_fp4(data)):
             return super()._convert_data_from(data, source, out=out)
