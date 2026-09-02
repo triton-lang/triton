@@ -157,10 +157,14 @@ void AtomicRMWOp::setPredicateOperand(Value pred) {
 Type AtomicRMWOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
 
 LogicalResult AtomicPollOp::verify() {
+  if (getMask() && getMask().getType() != getType())
+    return emitOpError(
+        "mask must have the same shape and encoding as the result");
   if (getSem() != MemSemantic::ACQUIRE && getSem() != MemSemantic::RELAXED)
     return emitOpError("only supports acquire and relaxed semantics");
 
-  unsigned bitWidth = getExpected().getType().getIntOrFloatBitWidth();
+  unsigned bitWidth =
+      getElementTypeOrSelf(getExpected().getType()).getIntOrFloatBitWidth();
   if (bitWidth != 16 && bitWidth != 32 && bitWidth != 64)
     return emitOpError(
         "only supports integer elements with width {16, 32, 64}");

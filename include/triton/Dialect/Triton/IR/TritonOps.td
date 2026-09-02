@@ -331,30 +331,39 @@ def TT_GridDependencyLaunchDependentsOp
 }
 
 def TT_AtomicPollOp : TT_Op<"atomic_poll", [
+  SameOperandsAndResultEncoding,
+  AttrSizedOperandSegments,
   TypesMatchWith<"ptr type matches expected type", "expected", "ptr",
-                 "getPointerTypeSameShape($_self)">
+                 "getPointerTypeSameShape($_self)">,
+  TypesMatchWith<"result type matches expected shape", "expected", "result",
+                 "getI1SameShape($_self)">
 ]> {
     let summary = "poll an atomic value";
 
     let description = [{
-        Repeatedly load from $ptr with relaxed semantics on a single thread
-        until the loaded value equals $expected. For acquire semantics, issue
-        an acquire fence only after a successful poll. Other threads wait for
-        the polling thread to finish.
+        Repeatedly load each logical element of $ptr with relaxed semantics
+        until it equals $expected or the operation's timeout expires. One thread polls
+        each element; threads replicating that element wait for its result.
+        For acquire semantics, issue an acquire fence after each successful
+        poll. The block waits for all elements to finish. The result has the
+        same shape and encoding as $ptr. All elements share one timeout budget,
+        and each unmasked element is loaded at least once, even with a zero timeout.
+        Masked-out elements are not accessed, do not acquire memory, and return false.
     }];
 
     let arguments = (ins
-      Arg<TT_Ptr, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
-      TT_Int:$expected,
+      Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+      TT_IntLike:$expected,
+      Optional<TT_BoolLike>:$mask,
       Optional<I64>:$timeout,
       TT_MemSemanticAttr:$sem,
       TT_MemSyncScopeAttr:$scope
     );
 
-    let results = (outs I1:$result);
+    let results = (outs TT_BoolLike:$result);
 
     let assemblyFormat = [{
-      $sem `,` $scope `,` $ptr `,` $expected (`timeout` $timeout^)?
+      $sem `,` $scope `,` $ptr `,` $expected (`mask` $mask^ `:` type($mask))? (`timeout` $timeout^)?
       attr-dict `:` qualified(type($ptr)) `,` type($expected) `->` type($result)
     }];
 

@@ -765,6 +765,29 @@ def atomic_poll_timeout_kernel(ptr, out_ptr):
     tl.store(out_ptr, matched)
 
 
+@gluon.jit
+def _atomic_poll_tensor_kernel(ptr, out_ptr, BLOCK: gl.constexpr, STRIDE: gl.constexpr, sem: gl.constexpr,
+                               scope: gl.constexpr, TIMEOUT: gl.constexpr):
+    offsets = gl.arange(0, BLOCK, layout=gl.BlockedLayout([1], [32], [4], [0]))
+    matched = gl.atomic_poll(ptr + offsets * STRIDE, offsets + 1, sem=sem, scope=scope, timeout_ns=TIMEOUT)
+    gl.store(out_ptr + offsets, matched)
+
+
+@gluon.jit
+def _atomic_poll_tensor_sync_kernel(payload_ptr, flag_ptr, out_ptr, BLOCK: gl.constexpr, STRIDE: gl.constexpr,
+                                    scope: gl.constexpr):
+    offsets = gl.arange(0, BLOCK, layout=gl.BlockedLayout([1], [32], [4], [0]))
+    pid = gl.program_id(0)
+    if pid < 2:
+        mask = offsets % 2 == pid
+        gl.store(payload_ptr + offsets * STRIDE, offsets + 1000, mask)
+        gl.atomic_xchg(flag_ptr + offsets * STRIDE, 1, mask=mask, sem="release", scope=scope)
+    else:
+        gl.atomic_poll(flag_ptr + offsets * STRIDE, 1, sem="acquire", scope=scope)
+        result = gl.load(payload_ptr + offsets * STRIDE)
+        gl.store(out_ptr + offsets, result)
+
+
 @triton.jit
 def _cross_sm_atomic_sync_kernel(payload_ptr, flag_ptr, out_ptr, producer_sem: tl.constexpr, consumer_sem: tl.constexpr,
                                  scope: tl.constexpr):
@@ -859,6 +882,55 @@ def test_atomic_poll_timeout_does_not_record_read(with_gsan):
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("block_size", [16, 256])
+@pytest.mark.parametrize("dtype", [torch.int16, torch.int32, torch.int64])
+@pytest.mark.parametrize("sem", ["relaxed", "acquire"])
+@pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES)
+@pytest.mark.parametrize("timeout", [None, 0])
+def test_atomic_poll_tensor_only_records_matched_reads(with_gsan, block_size, dtype, sem, scope, expected_scope,
+                                                       timeout):
+    # Separate shadow cells let us check successful and timed-out elements independently.
+    stride = max(1, SHADOW_GRANULARITY_BYTES // torch.empty((), dtype=dtype).element_size())
+    target = torch.zeros(block_size * stride, dtype=dtype, device="cuda")
+    expected = torch.arange(1, block_size + 1, dtype=dtype, device="cuda")
+    target[::stride] = expected
+    if timeout is not None:
+        target[::2 * stride] = 0
+    out = torch.empty(block_size, dtype=torch.bool, device="cuda")
+
+    _atomic_poll_tensor_kernel[(1, )](target, out, block_size, stride, sem, scope, timeout, num_warps=4)
+    torch.testing.assert_close(out, target[::stride] == expected)
+
+    for index in range(block_size):
+        for byte_offset in range(0, target.element_size(), SHADOW_GRANULARITY_BYTES):
+            address = target.data_ptr() + index * stride * target.element_size() + byte_offset
+            if timeout is None or index % 2:
+                _assert_atomic_read_only_shadow(address, expected_scope)
+            else:
+                cell = shadow_cell_from_address(address)
+                assert cell.write_clock == ScalarClock(0, 0, AtomicScope.NON_ATOMIC)
+                assert cell.num_reads == 0
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("block_size", [16, 256])
+@pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES[1:])
+def test_atomic_poll_tensor_acquires_all_producers(with_gsan, capfd, block_size, scope, expected_scope):
+    stride = SHADOW_GRANULARITY_BYTES // 4
+    payload = torch.zeros(block_size * stride, dtype=torch.int32, device="cuda")
+    flags = torch.zeros_like(payload)
+    out = torch.full((block_size, ), -1, dtype=torch.int32, device="cuda")
+
+    _atomic_poll_tensor_sync_kernel[(3, )](payload, flags, out, block_size, stride, scope, num_warps=4)
+    torch.cuda.synchronize()
+
+    torch.testing.assert_close(out, torch.arange(1000, 1000 + block_size, dtype=torch.int32, device="cuda"))
+    for index in range(block_size):
+        _assert_cross_sm_sync(payload[index * stride:], flags[index * stride:], expected_scope)
+    _assert_no_gsan_runtime_output(capfd)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 @pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES[1:])
 def test_atomic_poll_acquire_synchronizes_cross_sm(with_gsan, capfd, scope, expected_scope):
     payload = torch.zeros(1, dtype=torch.int32, device="cuda")
@@ -871,6 +943,34 @@ def test_atomic_poll_acquire_synchronizes_cross_sm(with_gsan, capfd, scope, expe
     assert out.item() == 1000
     _assert_cross_sm_sync(payload, flag, expected_scope)
     _assert_no_gsan_runtime_output(capfd)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("block_size", [16, 256])
+@pytest.mark.parametrize("timeout", [None, 0])
+def test_atomic_poll_tensor_mask_does_not_record_read(with_gsan, block_size, timeout):
+
+    @gluon.jit
+    def kernel(Flags, Out, BLOCK: gl.constexpr, TIMEOUT: gl.constexpr):
+        offsets = gl.arange(0, BLOCK, layout=gl.BlockedLayout([1], [32], [4], [0]))
+        mask = offsets % 2 != 0
+        null = gl.full((), 0, gl.int64).to(gl.pointer_type(gl.int32))
+        ptrs = gl.where(mask, Flags + offsets, null)
+        matched = gl.atomic_poll(ptrs, 1, timeout_ns=TIMEOUT, mask=mask)
+        gl.store(Out + offsets, matched)
+
+    flags = torch.ones(block_size, dtype=torch.int32, device="cuda")
+    out = torch.empty(block_size, dtype=torch.bool, device="cuda")
+    kernel[(1, )](flags, out, block_size, timeout, num_warps=4)
+    torch.testing.assert_close(out, torch.arange(block_size, device="cuda") % 2 != 0)
+    for index in range(block_size):
+        address = flags.data_ptr() + index * flags.element_size()
+        if index % 2:
+            _assert_atomic_read_only_shadow(address, AtomicScope.GPU)
+        else:
+            cell = shadow_cell_from_address(address)
+            assert cell.write_clock == ScalarClock(0, 0, AtomicScope.NON_ATOMIC)
+            assert cell.num_reads == 0
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")

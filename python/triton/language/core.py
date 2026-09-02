@@ -1198,7 +1198,7 @@ class tensor(base_value):
     def atomic_or(self, val, mask=None, sem=None, scope=None) -> tensor:
         ...
 
-    def atomic_poll(self, expected_value, sem="acquire", scope="gpu", timeout_ns=None) -> tensor:
+    def atomic_poll(self, expected_value, sem="acquire", scope="gpu", timeout_ns=None, mask=None) -> tensor:
         ...
 
     def atomic_xor(self, val, mask=None, sem=None, scope=None) -> tensor:
@@ -2577,17 +2577,18 @@ def atomic_cas(pointer, cmp, val, sem=None, scope=None, _semantic=None):
 
 @_tensor_member_fn
 @builtin
-def atomic_poll(pointer, expected_value, sem=None, scope=None, timeout_ns=None, _semantic=None):
+def atomic_poll(pointer, expected_value, sem=None, scope=None, timeout_ns=None, mask=None, _semantic=None):
     """
     Wait until the value at :code:`pointer` equals :code:`expected_value`.
 
-    This will spin-wait on the specified pointer until either the value equals
-    the expected value, or the operation times out. In the event of a timeout,
-    the operation returns false and no results may be acquired.
+    This will spin-wait on each specified pointer until either its value equals
+    the expected value, or the operation times out. The block waits for all polls to
+    finish. Timed-out elements return false and acquire no results.
 
-    :param pointer: A pointer to a scalar 16-, 32-, or 64-bit integer.
+    :param pointer: A pointer, or block of pointers, to 16-, 32-, or 64-bit integers.
     :type pointer: triton.PointerDType
-    :param expected_value: The value that ends the polling loop.
+    :param expected_value: The value that ends each polling loop, broadcast to
+        the shape of :code:`pointer`.
     :type expected_value: pointer.dtype.element_ty
     :param sem: Specifies whether a successful poll has acquire semantics.
         Acceptable values are "acquire" (default) and "relaxed".
@@ -2596,19 +2597,23 @@ def atomic_poll(pointer, expected_value, sem=None, scope=None, timeout_ns=None, 
         effect of the poll. Acceptable values are "gpu" (default), "cta"
         (cooperative thread array, thread block), and "sys" (system).
     :type scope: str, optional
-    :param timeout_ns: Maximum wall time to poll, measured in nanoseconds by
-        the GPU global timer. If omitted, polling has no timeout. A timeout of
-        zero still performs one load.
+    :param timeout_ns: Shared polling time budget for the entire operation, measured
+        in nanoseconds by the GPU global timer. If omitted, polling has no timeout.
+        Each unmasked element is loaded at least once, even with a zero timeout.
     :type timeout_ns: int, optional
-    :return: True if the expected value was observed, or False if the timeout
-        expired first.
+    :param mask: Boolean scalar or block broadcast to the shape of :code:`pointer`.
+        Masked-out elements are not accessed, do not acquire memory, and return false.
+    :type mask: triton.language.tensor, optional
+    :return: A boolean with the shape of :code:`pointer`, true for each element
+        whose expected value was observed and false if masked out or timed out.
     :rtype: triton.language.tensor
     """
     expected_value = _semantic.to_tensor(expected_value)
     sem = _unwrap_if_constexpr(sem)
     scope = _unwrap_if_constexpr(scope)
     timeout_ns = _unwrap_if_constexpr(timeout_ns)
-    return _semantic.atomic_poll(pointer, expected_value, sem, scope, timeout_ns)
+    mask = _unwrap_if_constexpr(mask)
+    return _semantic.atomic_poll(pointer, expected_value, sem, scope, timeout_ns, mask)
 
 
 @_tensor_member_fn
