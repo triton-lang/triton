@@ -771,13 +771,8 @@ public:
   AxisInfo
   getAxisInfo(triton::LoadOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
-    // If pointers and mask both have constancy properties, those properties
-    // will also extend to output.
+    // Repeated pointers, masks, and fallback values produce repeated results.
     AxisInfo ptrInfo = operands[0]->getValue();
-    std::optional<AxisInfo> maskInfo;
-    if (operands.size() > 1) {
-      maskInfo = operands[1]->getValue();
-    }
     AxisInfo::DimVectorT contiguity;
     AxisInfo::DimVectorT divisibility;
     AxisInfo::DimVectorT constancy;
@@ -785,9 +780,11 @@ public:
     for (int d = 0; d < ptrInfo.getRank(); ++d) {
       contiguity.push_back(1);
       divisibility.push_back(1);
-      constancy.push_back(
-          gcd(ptrInfo.getConstancy(d),
-              maskInfo.has_value() ? maskInfo->getConstancy(d) : 0));
+      int64_t resultConstancy = ptrInfo.getConstancy(d);
+      for (const auto *operand : operands.drop_front())
+        resultConstancy =
+            gcd(resultConstancy, operand->getValue().getConstancy(d));
+      constancy.push_back(resultConstancy);
     }
 
     return AxisInfo(contiguity, divisibility, constancy);
