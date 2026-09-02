@@ -408,6 +408,8 @@ def test_elementwise_generic_linear(src_layout, device):
         def kernel(x_ptr, y_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl.constexpr):
             offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))[:, None]
             offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout))[None, :]
+            offs_m = ttgl.convert_layout(offs_m, layout)
+            offs_n = ttgl.convert_layout(offs_n, layout)
             x = ttgl.load(x_ptr + offs_m * N + offs_n)
             y = x * x + x
             ttgl.store(y_ptr + offs_m * N + offs_n, y)
@@ -430,6 +432,8 @@ def test_expand_dims_generic_linear(src_layout, device):
         x = ttgl.load(x_ptr + offs)
         x_2d = ttgl.expand_dims(x, axis=1)
         offs_2d = ttgl.expand_dims(offs, axis=1)
+        x_2d = ttgl.convert_layout(x_2d, layout)
+        offs_2d = ttgl.convert_layout(offs_2d, layout)
         ttgl.store(y_ptr + offs_2d, x_2d)
 
     torch.manual_seed(17)
@@ -469,6 +473,8 @@ def test_reshape_generic_linear(src_layout, device):
         def kernel(x_ptr, y_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl.constexpr):
             offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))[:, None]
             offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout))[None, :]
+            offs_m = ttgl.convert_layout(offs_m, layout)
+            offs_n = ttgl.convert_layout(offs_n, layout)
             x = ttgl.load(x_ptr + offs_m * N + offs_n)
             flat = x.reshape([M * N])
             y = flat.reshape([M, N])
@@ -491,6 +497,8 @@ def test_permute_generic_linear(src_layout, device):
     def kernel(x_ptr, y_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl.constexpr):
         offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))[:, None]
         offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout))[None, :]
+        offs_m = ttgl.convert_layout(offs_m, layout)
+        offs_n = ttgl.convert_layout(offs_n, layout)
         x = ttgl.load(x_ptr + offs_m * N + offs_n)
         xt = ttgl.permute(x, [1, 0])
         y = ttgl.permute(xt, [1, 0])
@@ -562,6 +570,8 @@ def test_broadcast_generic_linear(src_layout, device):
     def kernel(x_ptr, y_ptr, z_ptr, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl.constexpr):
         offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))[:, None]
         offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, layout))[None, :]
+        offs_m = ttgl.convert_layout(offs_m, layout)
+        offs_n = ttgl.convert_layout(offs_n, layout)
         col = ttgl.load(x_ptr + offs_m)
         row = ttgl.load(y_ptr + offs_n)
         result = col + row
@@ -622,6 +632,8 @@ def test_local_load_store_generic_linear(src_layout, shared_kind, device):
         else:
             offs_m = ttgl.arange(0, shape[0], layout=ttgl.SliceLayout(1, layout))[:, None]
             offs_n = ttgl.arange(0, shape[1], layout=ttgl.SliceLayout(0, layout))[None, :]
+            offs_m = ttgl.convert_layout(offs_m, layout)
+            offs_n = ttgl.convert_layout(offs_n, layout)
             offs = offs_m * shape[1] + offs_n
         x = ttgl.load(x_ptr + offs)
         smem = ttgl.allocate_shared_memory(x.dtype, shape, shared_layout)
@@ -802,6 +814,8 @@ def test_reduce_funky_layout(src_layout, axis, device):
     def kernel(x_ptr, y_ptr, shape: ttgl.constexpr, axis: ttgl.constexpr, layout: ttgl.constexpr):
         x_offs_m = ttgl.arange(0, shape[0], layout=ttgl.SliceLayout(1, layout))[:, None]
         x_offs_n = ttgl.arange(0, shape[1], layout=ttgl.SliceLayout(0, layout))[None, :]
+        x_offs_m = ttgl.convert_layout(x_offs_m, layout)
+        x_offs_n = ttgl.convert_layout(x_offs_n, layout)
         x = ttgl.load(x_ptr + x_offs_m * shape[1] + x_offs_n)
         y = ttgl.sum(x, axis=axis)
         y_offs = ttgl.arange(0, shape[1 - axis])
