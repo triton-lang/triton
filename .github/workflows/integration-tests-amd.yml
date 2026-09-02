@@ -9,6 +9,7 @@ on:
 
 jobs:
   integration-tests-amd:
+    name: integration-tests-amd (${{ join(matrix.runner, ', ') }}${{ matrix.image_variant != 'default' && format(', {0}', matrix.image_variant) || '' }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     continue-on-error: true
