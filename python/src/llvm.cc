@@ -25,6 +25,7 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/OptBisect.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
@@ -188,6 +189,31 @@ void installTritonDAGScheduler() {
   static_cast<SchedulerOption *>(option->second)
       ->setInitialValue(createTritonDAGScheduler);
 }
+
+class ScopedLSRPassGate : public llvm::OptPassGate {
+  llvm::LLVMContext &context;
+  llvm::OptPassGate &previousGate;
+
+public:
+  ScopedLSRPassGate(llvm::LLVMContext &context, bool disableLSR)
+      : context(context), previousGate(context.getOptPassGate()) {
+    // The gate belongs to this compilation's context, not LLVM's global
+    // command-line state, so concurrent compilations can choose independently.
+    if (disableLSR)
+      context.setOptPassGate(*this);
+  }
+
+  ~ScopedLSRPassGate() override { context.setOptPassGate(previousGate); }
+
+  bool isEnabled() const override { return true; }
+
+  bool shouldRunPass(llvm::StringRef passName,
+                     llvm::StringRef irDescription) const override {
+    return passName != "Loop Strength Reduction" &&
+           (!previousGate.isEnabled() ||
+            previousGate.shouldRunPass(passName, irDescription));
+  }
+};
 
 std::unique_ptr<TargetMachine>
 createTargetMachine(llvm::Module *module, std::string proc,
@@ -823,7 +849,7 @@ void init_triton_llvm(py::module_ &m) {
       [](std::string llvmIR, std::string triple, std::string proc,
          std::string features, std::vector<std::string> flags,
          bool enable_fp_fusion, bool isObject, bool canonicalizeGEP,
-         bool sched4reg, bool enableFpSan) -> py::object {
+         bool sched4reg, bool enableFpSan, bool disableLSR) -> py::object {
         std::string obj;
         {
           // when allow_threads goes out of scope, gil will be released
@@ -832,6 +858,7 @@ void init_triton_llvm(py::module_ &m) {
                                                 sched4reg);
           // create LLVM module from C++
           llvm::LLVMContext context;
+          ScopedLSRPassGate lsrGate(context, disableLSR);
           std::unique_ptr<llvm::MemoryBuffer> buffer =
               llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
           llvm::SMDiagnostic error;
@@ -854,7 +881,8 @@ void init_triton_llvm(py::module_ &m) {
       py::arg("llvm_ir"), py::arg("triple"), py::arg("proc"),
       py::arg("features"), py::arg("flags"), py::arg("enable_fp_fusion"),
       py::arg("is_object"), py::arg("canonicalize_gep"),
-      py::arg("sched4reg") = false, py::arg("enable_fpsan") = false);
+      py::arg("sched4reg") = false, py::arg("enable_fpsan") = false,
+      py::arg("disable_lsr") = false);
 
   m.def("translate_to_mir",
         [](std::string llvmIR, std::string triple, std::string proc,
