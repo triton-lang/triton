@@ -10,45 +10,6 @@ from triton.compiler.errors import CompileTimeAssertionFailure
 from triton.runtime.driver import driver
 
 
-@pytest.mark.parametrize("instruction", ["bar.sync 0;", "membar.cta;", "fence.sc.sys;"])
-@pytest.mark.parametrize("arch", [80, 90, 100])
-@pytest.mark.parametrize("num_warps", [4, 8])
-@pytest.mark.parametrize("use_gluon", [False, True])
-def test_inline_asm_unused_scalar_is_unpredicated(instruction, arch, num_warps, use_gluon):
-    from triton._filecheck import run_parser
-    from triton.backends.compiler import Language
-    from triton.backends.nvidia.compiler import CUDABackend
-    from triton.experimental import gluon
-    from triton.experimental.gluon import language as gl
-
-    @triton.jit
-    def triton_kernel(ASM: tl.constexpr):
-        tl.inline_asm_elementwise(ASM, constraints="=r", args=[], dtype=tl.int32, is_pure=False, pack=1)
-
-    @gluon.jit
-    def gluon_kernel(ASM: gl.constexpr):
-        gl.inline_asm_elementwise(ASM, constraints="=r", args=[], dtype=gl.int32, is_pure=False, pack=1)
-
-    target = GPUTarget("cuda", arch, 32)
-    backend = CUDABackend(target)
-    options = backend.parse_options({"num_warps": num_warps, "ptx_version": 86})
-    asm = instruction + " mov.u32 $0, 0;"
-    kernel = gluon_kernel if use_gluon else triton_kernel
-    module = run_parser(kernel, args=(asm, ), kwargs={"num_warps": num_warps, "ptx_version": 86}, target=target)
-    stages = {}
-    backend.add_stages(stages, options, Language.GLUON if use_gluon else Language.TRITON)
-    metadata = {}
-    # Stop before ptxas so this regression also runs without a CUDA toolkit.
-    for name, stage in stages.items():
-        if name == "cubin":
-            break
-        module = stage(module, metadata)
-    ptx = module
-    assert ptx.count(instruction) == 1
-    assert not re.search(r"\bbra\b|%tid|%laneid|%warpid", ptx)
-    assert re.search(r"^\s*" + re.escape(instruction), ptx, re.MULTILINE)
-
-
 @triton.jit
 def topk_kernel(K: tl.constexpr):
     x = tl.arange(0, 8)

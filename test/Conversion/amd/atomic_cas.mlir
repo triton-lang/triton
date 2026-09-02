@@ -1,20 +1,6 @@
 // RUN: triton-opt %s -split-input-file -convert-triton-amdgpu-to-llvm="gfx-arch=gfx942" -cse | FileCheck %s
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
-  // CHECK-LABEL: @inline_asm_unused_scalar
-  // CHECK-NOT: llvm.cond_br
-  // CHECK: llvm.inline_asm has_side_effects
-  // CHECK-SAME: "s_barrier; s_mov_b32 $0, 0;"
-  // CHECK-NEXT: llvm.return
-  tt.func public @inline_asm_unused_scalar() {
-    %unused = tt.elementwise_inline_asm "s_barrier; s_mov_b32 $0, 0;" {constraints = "=s", packed_element = 1 : i32, pure = false} -> i32
-    tt.return
-  }
-}
-
-// -----
-
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @atomic_cas_0(%arg3: !tt.ptr<i32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     // CHECK-LABEL: @atomic_cas_0
     %c64_i32 = arith.constant 64 : i32

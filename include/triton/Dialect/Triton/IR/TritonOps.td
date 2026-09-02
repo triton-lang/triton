@@ -920,9 +920,7 @@ def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [
 
     When `pure` is false, each logical group of packed elements executes the
     asm block once, even if the tensor layout replicates those elements across
-    physical threads. As a compatibility exception, operand-free asm whose
-    results are all unused scalars executes on every thread in the current
-    execution region.
+    physical threads.
   }];
 
   let arguments = (ins StrAttr:$asm_string, StrAttr:$constraints, BoolAttr:$pure, I32Attr:$packed_element, Variadic<AnyTypeOf<[TT_Type]>>:$args);
