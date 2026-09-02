@@ -55,7 +55,7 @@ jobs:
       TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
       TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
       TRITON_DISABLE_LINE_INFO: 1
-      PROTON_SKIP_PC_SAMPLING_TEST: 1
+      PROTON_SKIP_PC_SAMPLING_TEST: ${{ matrix.image_variant == 'rocm10.1' && '0' || '1' }}
       PROTON_SKIP_CUDAGRAPH_TEST: 1
       PYTHON: "python3"
       PYTEST_ADDOPTS: "-p triton._compile_warmup"
