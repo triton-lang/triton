@@ -2581,13 +2581,14 @@ def atomic_poll(pointer, expected_value, sem=None, scope=None, timeout_ns=None, 
     """
     Wait until the value at :code:`pointer` equals :code:`expected_value`.
 
-    This will spin-wait on the specified pointer until either the value equals
-    the expected value, or the operation times out. In the event of a timeout,
-    the operation returns false and no results may be acquired.
+    This will spin-wait on each specified pointer until either its value equals
+    the expected value, or its poll times out. The block waits for all polls to
+    finish. Timed-out elements return false and acquire no results.
 
-    :param pointer: A pointer to a scalar 16-, 32-, or 64-bit integer.
+    :param pointer: A pointer, or block of pointers, to 16-, 32-, or 64-bit integers.
     :type pointer: triton.PointerDType
-    :param expected_value: The value that ends the polling loop.
+    :param expected_value: The value that ends each polling loop, broadcast to
+        the shape of :code:`pointer`.
     :type expected_value: pointer.dtype.element_ty
     :param sem: Specifies whether a successful poll has acquire semantics.
         Acceptable values are "acquire" (default) and "relaxed".
@@ -2596,12 +2597,12 @@ def atomic_poll(pointer, expected_value, sem=None, scope=None, timeout_ns=None, 
         effect of the poll. Acceptable values are "gpu" (default), "cta"
         (cooperative thread array, thread block), and "sys" (system).
     :type scope: str, optional
-    :param timeout_ns: Maximum wall time to poll, measured in nanoseconds by
+    :param timeout_ns: Maximum wall time to poll each element, measured in nanoseconds by
         the GPU global timer. If omitted, polling has no timeout. A timeout of
         zero still performs one load.
     :type timeout_ns: int, optional
-    :return: True if the expected value was observed, or False if the timeout
-        expired first.
+    :return: A boolean with the shape of :code:`pointer`, true for each element
+        whose expected value was observed and false if its timeout expired first.
     :rtype: triton.language.tensor
     """
     expected_value = _semantic.to_tensor(expected_value)

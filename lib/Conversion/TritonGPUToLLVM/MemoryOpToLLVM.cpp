@@ -2,6 +2,7 @@
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/IR/PatternMatch.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -372,27 +373,84 @@ struct AtomicPollOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto moduleOp = op->getParentOfType<ModuleOp>();
-    assert(moduleOp && "Parent ModuleOp not found for AtomicPollOp");
-    int numCTAs = TritonGPUDialect::getNumCTAs(moduleOp);
+    int numCTAs = lookupNumCTAs(op);
     if (numCTAs != 1 && !targetInfo.isCuda())
       return rewriter.notifyMatchFailure(
           op, "multi-CTA atomic_poll requires cross-CTA shared memory");
 
-    // Every lowering path emits a rendezvous barrier after the poll, so use it
-    // as the post-atomic ordering barrier instead of emitting a duplicate.
-    insertAtomicOrderingBarriers(op, op.getSem(),
-                                 /*emitBarrierAfter=*/false, rewriter,
-                                 targetInfo);
-
+    auto ptrs = unpackUniqueTensorElements(loc, adaptor.getPtr(), rewriter);
+    auto expected =
+        unpackUniqueTensorElements(loc, adaptor.getExpected(), rewriter);
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
     Value threadPred =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
-    StringRef syncScope = targetInfo.getAtomicSyncScope(op.getScope());
-    unsigned bitWidth = adaptor.getExpected().getType().getIntOrFloatBitWidth();
+    if (!threadPred)
+      threadPred = b.true_val();
 
-    // Split the block at the poll and branch only the elected thread into the
-    // polling loop. All other threads skip directly to the rendezvous block.
+    // Scalars are one logical element replicated across the execution region.
+    // The layout elects owners in exactly the same way for every input shape.
+    SmallVector<Value> results;
+    for (auto [ptr, value] : llvm::zip_equal(ptrs, expected))
+      results.push_back(
+          emitPoll(op, ptr, value, adaptor.getTimeout(), threadPred, rewriter));
+
+    auto rendezvous = [&] {
+      if (numCTAs == 1)
+        targetInfo.barrier(loc, rewriter, AddrSpace::Local);
+      else
+        targetInfo.clusterBarrier(loc, rewriter, op);
+    };
+
+    // All elements have completed before the block continues, even when the
+    // result is unused. Without a timeout every element's result is known.
+    if (!adaptor.getTimeout() || op.getResult().use_empty()) {
+      rendezvous();
+      results.assign(ptrs.size(), b.true_val());
+    } else if (op->hasAttr("allocation.offset")) {
+      // Reuse the existing atomic result transport for physical replicas.
+      if (auto tensorTy = dyn_cast<RankedTensorType>(op.getType())) {
+        SmallVector<Value> bytes;
+        for (Value result : results)
+          bytes.push_back(b.zext(i8_ty, result));
+        bytes = broadcastTensorResult(op, tensorTy, rewriter, bytes, i8_ty, b,
+                                      threadPred, targetInfo);
+        for (auto [result, byte] : llvm::zip_equal(results, bytes))
+          result = b.trunc(i1_ty, byte);
+        if (numCTAs != 1 && !atomicResultHasCTABroadcast(op))
+          rendezvous();
+      } else {
+        Value scratch =
+            LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
+        targetInfo.storeShared(rewriter, loc, scratch, results.front(),
+                               threadPred);
+        rendezvous();
+        results.front() =
+            numCTAs == 1
+                ? b.load(i1_ty, scratch)
+                : targetInfo.loadDShared(rewriter, loc, scratch, b.i32_val(0),
+                                         i1_ty, b.true_val());
+      }
+    } else {
+      rendezvous();
+    }
+
+    rewriter.replaceOp(op, packUniqueTensorElements(loc, getTypeConverter(),
+                                                    results, rewriter,
+                                                    op.getType()));
+    return success();
+  }
+
+private:
+  // Emit the polling state machine for one logical element. Both successful
+  // and timed-out polls use this path regardless of the input's shape.
+  Value emitPoll(triton::AtomicPollOp op, Value ptr, Value expected,
+                 Value timeout, Value threadPred,
+                 ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    StringRef syncScope = targetInfo.getAtomicSyncScope(op.getScope());
+    unsigned bitWidth = expected.getType().getIntOrFloatBitWidth();
+
     Block *currentBlock = rewriter.getInsertionBlock();
     Block *doneBlock = currentBlock->splitBlock(rewriter.getInsertionPoint());
     Region *region = currentBlock->getParent();
@@ -403,9 +461,8 @@ struct AtomicPollOpConversion
     Block *pollSuccessBlock =
         rewriter.createBlock(region, Region::iterator(doneBlock));
     Block *timeoutCheckBlock =
-        adaptor.getTimeout()
-            ? rewriter.createBlock(region, Region::iterator(doneBlock))
-            : nullptr;
+        timeout ? rewriter.createBlock(region, Region::iterator(doneBlock))
+                : nullptr;
     BlockArgument matched = doneBlock->addArgument(i1_ty, loc);
 
     rewriter.setInsertionPointToEnd(currentBlock);
@@ -414,24 +471,24 @@ struct AtomicPollOpConversion
 
     rewriter.setInsertionPointToEnd(pollInitBlock);
     Value start;
-    if (adaptor.getTimeout())
+    if (timeout)
       start = targetInfo.getGlobalTimer(rewriter, loc);
     LLVM::BrOp::create(rewriter, loc, pollLoopBlock);
 
     rewriter.setInsertionPointToEnd(pollLoopBlock);
     Value loaded = LLVM::LoadOp::create(
-        rewriter, loc, adaptor.getExpected().getType(), adaptor.getPtr(),
-        bitWidth / 8, /*isVolatile=*/false, /*isNonTemporal=*/false,
+        rewriter, loc, expected.getType(), ptr, bitWidth / 8,
+        /*isVolatile=*/false, /*isNonTemporal=*/false,
         /*isInvariant=*/false, /*isInvariantGroup=*/false,
         LLVM::AtomicOrdering::monotonic, syncScope);
-    Value pollMatched = b.icmp_eq(loaded, adaptor.getExpected());
-    if (adaptor.getTimeout()) {
+    Value pollMatched = b.icmp_eq(loaded, expected);
+    if (timeout) {
       LLVM::CondBrOp::create(rewriter, loc, pollMatched, pollSuccessBlock,
                              timeoutCheckBlock);
 
       rewriter.setInsertionPointToEnd(timeoutCheckBlock);
       Value elapsed = b.sub(targetInfo.getGlobalTimer(rewriter, loc), start);
-      Value timedOut = b.icmp_uge(elapsed, adaptor.getTimeout());
+      Value timedOut = b.icmp_uge(elapsed, timeout);
       LLVM::CondBrOp::create(rewriter, loc, timedOut, doneBlock,
                              ValueRange{b.false_val()}, pollLoopBlock,
                              ValueRange{});
@@ -445,53 +502,10 @@ struct AtomicPollOpConversion
       LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::acquire,
                             syncScope);
     LLVM::BrOp::create(rewriter, loc, ValueRange{b.true_val()}, doneBlock);
-
     rewriter.setInsertionPointToStart(doneBlock);
-    if (!adaptor.getTimeout()) {
-      // Successful completion is the only possible result without a timeout,
-      // so rendezvous and return true without a shared-memory broadcast.
-      if (numCTAs == 1)
-        targetInfo.barrier(loc, rewriter, AddrSpace::Local);
-      else
-        targetInfo.clusterBarrier(loc, rewriter, op);
-      rewriter.replaceOp(op, b.true_val());
-      return success();
-    }
-
-    // Broadcast the elected thread's result after every thread has left the
-    // loop, preserving the scalar result convention used by Triton atomics.
-    if (op.getResult().use_empty()) {
-      if (numCTAs == 1)
-        targetInfo.barrier(loc, rewriter, AddrSpace::Local);
-      else
-        targetInfo.clusterBarrier(loc, rewriter, op);
-      rewriter.eraseOp(op);
-      return success();
-    }
-
-    Value atomPtr =
-        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
-    atomPtr = b.bitcast(atomPtr, ptr_ty(rewriter.getContext(),
-                                        targetInfo.getSharedAddressSpace()));
-    targetInfo.storeShared(rewriter, loc, atomPtr, matched, threadPred);
-    if (numCTAs == 1)
-      targetInfo.barrier(loc, rewriter, AddrSpace::Local);
-    else
-      targetInfo.clusterBarrier(loc, rewriter, op);
-
-    Value result;
-    if (numCTAs == 1) {
-      result = b.load(i1_ty, atomPtr);
-    } else {
-      // Scalar operations are issued by CTA 0, so read CTA 0's scratch.
-      result = targetInfo.loadDShared(rewriter, loc, atomPtr, b.i32_val(0),
-                                      i1_ty, b.true_val());
-    }
-    rewriter.replaceOp(op, result);
-    return success();
+    return matched;
   }
 
-private:
   const TargetInfoBase &targetInfo;
 };
 

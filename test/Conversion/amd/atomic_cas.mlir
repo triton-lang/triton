@@ -113,6 +113,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#poll = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: @atomic_poll_tensor
+  // CHECK: llvm.load %{{.*}} atomic syncscope("agent") monotonic
+  // CHECK: llvm.fence syncscope("agent") acquire
+  // CHECK: llvm.load %{{.*}} atomic syncscope("agent") monotonic
+  // CHECK: llvm.fence syncscope("agent") acquire
+  // CHECK: rocdl.s.barrier
+  // CHECK: llvm.return
+  tt.func public @atomic_poll_tensor(%ptr: tensor<512x!tt.ptr<i32>, #poll>, %expected: tensor<512xi32, #poll>) {
+    %matched = tt.atomic_poll acquire, gpu, %ptr, %expected : tensor<512x!tt.ptr<i32>, #poll>, tensor<512xi32, #poll> -> tensor<512xi1, #poll>
+    tt.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @atomic_cas_f32(%arg3: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     // CHECK-LABEL: @atomic_cas_f32
