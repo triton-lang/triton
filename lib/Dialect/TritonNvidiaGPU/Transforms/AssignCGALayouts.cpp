@@ -44,7 +44,7 @@ FailureOr<ttg::CGAEncodingAttr> maybeGetCGA(RankedTensorType type) {
   return ttg::maybeLinearToCGAEncodingAttr(ttg::toLinearLayout(type));
 }
 
-// Redistribute threads and warps for the new shape per CTA of blocked tensors.
+// Redistribute blocked layouts for the new shape per CTA
 FailureOr<Attribute> getRematerializationLayout(RankedTensorType tensorTy,
                                                 ttg::CGAEncodingAttr cgaLayout,
                                                 Operation *scope) {
