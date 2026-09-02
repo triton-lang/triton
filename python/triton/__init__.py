@@ -67,6 +67,16 @@ __all__ = [
 
 @constexpr_function
 def cdiv(x: int, y: int):
+    """
+    Returns the ceiling division of :code:`x` by :code:`y` (that is, :code:`x / y`
+    rounded up to the nearest integer).
+
+    Commonly used on the host to size a launch grid, e.g.
+    ``grid = (triton.cdiv(n_elements, BLOCK_SIZE), )``.
+
+    :param x: the dividend.
+    :param y: the divisor.
+    """
     return (x + y - 1) // y
 
 
