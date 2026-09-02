@@ -215,10 +215,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %4 = tt.addptr %3, %1 : tensor<16x!tt.ptr<bf16>, #blocked>, tensor<16xi32, #blocked>
     %5 = tt.splat %arg1 : !tt.ptr<bf16> -> tensor<16x!tt.ptr<bf16>, #blocked>
     %6 = tt.addptr %5, %1 : tensor<16x!tt.ptr<bf16>, #blocked>, tensor<16xi32, #blocked>
-    // COMMON: %[[loaded:.*]] = amdg.buffer_load %arg1[%1]
-    %7 = tt.load %6 : tensor<16x!tt.ptr<bf16>, #blocked>
-    // COMMON: amdg.buffer_store %[[loaded]], %[[ptr]][%[[range]]]
-    tt.store %4, %7 : tensor<16x!tt.ptr<bf16>, #blocked>
+    // COMMON: %[[loaded:.*]] = amdg.buffer_load %arg1[%1] {cachePolicy = #ttng.cache_policy<l1 = evict_last>}
+    %7 = tt.load %6 {cachePolicy = #ttng.cache_policy<l1 = evict_last>} : tensor<16x!tt.ptr<bf16>, #blocked>
+    // COMMON: amdg.buffer_store %[[loaded]], %[[ptr]][%[[range]]] {cachePolicy = #ttng.cache_policy<l1 = evict_last>}
+    tt.store %4, %7 {cachePolicy = #ttng.cache_policy<l1 = evict_last>} : tensor<16x!tt.ptr<bf16>, #blocked>
     tt.return
   }
 }
@@ -791,17 +791,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     // CDNA: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] mask = %arg11 other = %arg12 stride = %arg[[#stride]] into %arg10
     %15 = ttg.async_copy_global_to_local %11, %arg10 mask %arg11 other %arg12 : tensor<256x64x!tt.ptr<f16>, #blocked> -> <256x64xf16, #shared, #smem, mutable>
 
-    // CDNA: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] mask = %arg11 other = %arg12 stride = %arg[[#stride]] cacheModifier = ca into %arg10
-    %16 = ttg.async_copy_global_to_local %11, %arg10 mask %arg11 other %arg12 cacheModifier = ca: tensor<256x64x!tt.ptr<f16>, #blocked> -> <256x64xf16, #shared, #smem, mutable>
+    // CDNA: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] mask = %arg11 other = %arg12 stride = %arg[[#stride]] cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_normal> into %arg10
+    %16 = ttg.async_copy_global_to_local %11, %arg10 mask %arg11 other %arg12 {cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_normal>}: tensor<256x64x!tt.ptr<f16>, #blocked> -> <256x64xf16, #shared, #smem, mutable>
 
-    // CDNA: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] mask = %arg11 other = %arg12 stride = %arg[[#stride]] cacheModifier = cg into %arg10
-    %17 = ttg.async_copy_global_to_local %11, %arg10 mask %arg11 other %arg12 cacheModifier = cg: tensor<256x64x!tt.ptr<f16>, #blocked> -> <256x64xf16, #shared, #smem, mutable>
+    // CDNA: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] mask = %arg11 other = %arg12 stride = %arg[[#stride]] cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal> into %arg10
+    %17 = ttg.async_copy_global_to_local %11, %arg10 mask %arg11 other %arg12 {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>}: tensor<256x64x!tt.ptr<f16>, #blocked> -> <256x64xf16, #shared, #smem, mutable>
 
-    // CDNA: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] mask = %arg11 other = %arg12 stride = %arg[[#stride]] cacheModifier = cv into %arg10
-    %18 = ttg.async_copy_global_to_local %11, %arg10 mask %arg11 other %arg12 cacheModifier = cv: tensor<256x64x!tt.ptr<f16>, #blocked> -> <256x64xf16, #shared, #smem, mutable>
+    // CDNA: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] mask = %arg11 other = %arg12 stride = %arg[[#stride]] cachePolicy = #tt.cache_policy<cache_modifier = cv, eviction_policy = evict_normal> into %arg10
+    %18 = ttg.async_copy_global_to_local %11, %arg10 mask %arg11 other %arg12 {cachePolicy = #tt.cache_policy<cache_modifier = cv, eviction_policy = evict_normal>}: tensor<256x64x!tt.ptr<f16>, #blocked> -> <256x64xf16, #shared, #smem, mutable>
+
+    // CDNA: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] stride = %arg[[#stride]] cachePolicy = #ttng.cache_policy<l1 = evict_last> into %arg10
+    %19 = ttg.async_copy_global_to_local %11, %arg10 {cachePolicy = #ttng.cache_policy<l1 = evict_last>} : tensor<256x64x!tt.ptr<f16>, #blocked> -> <256x64xf16, #shared, #smem, mutable>
 
     // CDNA: %[[buffer:.*]] = amdg.buffer_load_to_local %[[ptr]][%[[offset]]] stride = %arg[[#stride]] into %arg10 {contiguity = 8 : i32
-    %19 = ttg.async_copy_global_to_local %11, %arg10 {contiguity = 8 : i32} : tensor<256x64x!tt.ptr<f16>, #blocked> -> <256x64xf16, #shared, #smem, mutable>
+    %20 = ttg.async_copy_global_to_local %11, %arg10 {contiguity = 8 : i32} : tensor<256x64x!tt.ptr<f16>, #blocked> -> <256x64xf16, #shared, #smem, mutable>
     tt.return
   }
 }

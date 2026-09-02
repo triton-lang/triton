@@ -1459,7 +1459,7 @@ class tensor_descriptor_base(base_value):
 
         :note: Offset must be a multiple of 16-bytes
         """
-        return _semantic.descriptor_load(self, offsets, "", "")
+        return _semantic.descriptor_load(self, offsets, _CachePolicy())
 
     @builtin
     def store(self, offsets: Sequence[constexpr | tensor], value: tensor, _semantic=None) -> tensor:
@@ -2343,6 +2343,50 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
 # -----------------------
 
 
+@dataclass(frozen=True)
+class _CachePolicy:
+    """Target-neutral cache hints for Triton and Gluon memory operations."""
+
+    cache_modifier: str = "none"
+    eviction_policy: str = "evict_normal"
+
+    def __post_init__(self):
+        cache_modifier = _unwrap_if_constexpr(self.cache_modifier)
+        eviction_policy = _unwrap_if_constexpr(self.eviction_policy)
+        if not isinstance(cache_modifier, str):
+            raise TypeError("cache_modifier must be a string")
+        if not isinstance(eviction_policy, str):
+            raise TypeError("eviction_policy must be a string")
+        cache_modifier = cache_modifier.removeprefix(".")
+        object.__setattr__(self, "cache_modifier", cache_modifier)
+        object.__setattr__(self, "eviction_policy", eviction_policy)
+        if cache_modifier not in {"none", "ca", "cg", "wb", "cs", "wt", "cv"}:
+            raise ValueError(f"Unsupported cache modifier {cache_modifier!r}")
+        if eviction_policy not in {"evict_normal", "evict_first", "evict_last"}:
+            raise ValueError(f"Unsupported eviction policy {eviction_policy!r}")
+
+    @property
+    def type(self):
+        return constexpr_type(self)
+
+    def mangle(self) -> str:
+        return f"CP_{self.cache_modifier}_{self.eviction_policy}_CP"
+
+    def _to_ir(self, builder):
+        return builder.get_cache_policy(self.cache_modifier, self.eviction_policy)
+
+
+def _normalize_cache_policy(cache_policy, cache_modifier, eviction_policy):
+    cache_modifier = _unwrap_if_constexpr(cache_modifier)
+    eviction_policy = _unwrap_if_constexpr(eviction_policy)
+    cache_policy = _unwrap_if_constexpr(cache_policy)
+    if cache_policy is not None:
+        assert eviction_policy is None, "cache_policy and eviction_policy are mutually exclusive"
+        assert cache_modifier is None, "cache_policy and cache_modifier are mutually exclusive"
+        return cache_policy
+    return _CachePolicy(cache_modifier or "none", eviction_policy or "evict_normal")
+
+
 @builtin
 def load(pointer, mask=None, other=None, *, cache_modifier="", eviction_policy="", volatile=False, _semantic=None):
     """
@@ -2383,10 +2427,9 @@ def load(pointer, mask=None, other=None, *, cache_modifier="", eviction_policy="
         mask = _semantic.to_tensor(mask)
     if other is not None:
         other = _semantic.to_tensor(other)
-    cache_modifier = _unwrap_if_constexpr(cache_modifier)
-    eviction_policy = _unwrap_if_constexpr(eviction_policy)
     volatile = _unwrap_if_constexpr(volatile)
-    return _semantic.load(pointer, mask, other, cache_modifier, eviction_policy, volatile)
+    cache_policy = _normalize_cache_policy(None, cache_modifier, eviction_policy)
+    return _semantic.load(pointer, mask, other, cache_policy, volatile)
 
 
 @builtin
@@ -2439,9 +2482,8 @@ def store(pointer, value, mask=None, *, cache_modifier="", eviction_policy="", _
     mask = _unwrap_if_constexpr(mask)
     if mask is not None:
         mask = _semantic.to_tensor(mask)
-    cache_modifier = _unwrap_if_constexpr(cache_modifier)
-    eviction_policy = _unwrap_if_constexpr(eviction_policy)
-    return _semantic.store(pointer, value, mask, cache_modifier, eviction_policy)
+    cache_policy = _normalize_cache_policy(None, cache_modifier, eviction_policy)
+    return _semantic.store(pointer, value, mask, cache_policy)
 
 
 @builtin

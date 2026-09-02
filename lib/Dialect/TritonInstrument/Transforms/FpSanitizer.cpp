@@ -1058,9 +1058,7 @@ static Value loadScratchStrided2D(PatternRewriter &rewriter, Location loc,
   auto storageTy = getScratchStorageType(tensorTy);
   auto ptrTensor = createPointerTensorStrided2D(rewriter, loc, base, storageTy,
                                                 stride0, stride1);
-  Value stored =
-      tt::LoadOp::create(rewriter, loc, ptrTensor, CacheModifier::NONE,
-                         EvictionPolicy::NORMAL, false);
+  Value stored = tt::LoadOp::create(rewriter, loc, ptrTensor);
   if (isFloatLike(tensorTy))
     return unembedToFloat(rewriter, loc, stored, tensorTy);
   return stored;
@@ -1085,7 +1083,6 @@ static Operation *storeScratchStrided2D(PatternRewriter &rewriter, Location loc,
   if (isFloatLike(tensorTy))
     stored = embedToInt(rewriter, loc, tensor);
   return tt::StoreOp::create(rewriter, loc, ptrTensor, stored, Value(),
-                             CacheModifier::NONE, EvictionPolicy::NORMAL,
                              ignoreCTA);
 }
 

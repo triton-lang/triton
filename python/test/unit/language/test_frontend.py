@@ -1521,3 +1521,16 @@ def test_const_ptr_is_constant_addrspace():
         tl.store(Out + offs, tl.load(In + offs, mask=mask), mask=mask)
 
     run_filecheck_test(kernel, args=(MockTensor(tl.float32), MockTensor(tl.float32), 8, 128))
+
+
+def test_cache_policy_ir_attrs():
+
+    @triton.jit
+    def kernel(In, Out, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        # CHECK: %[[VALUE:.*]] = tt.load {{.*}} {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_first>}
+        value = tl.load(In + offsets, cache_modifier=".cg", eviction_policy="evict_first")
+        # CHECK: tt.store {{.*}} {cachePolicy = #tt.cache_policy<cache_modifier = wt, eviction_policy = evict_last>}
+        tl.store(Out + offsets, value, cache_modifier=".wt", eviction_policy="evict_last")
+
+    run_filecheck_test(kernel, args=(MockTensor(tl.float32), MockTensor(tl.float32), 128))

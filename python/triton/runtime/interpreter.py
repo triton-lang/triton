@@ -536,16 +536,19 @@ class InterpreterBuilder:
         return TensorHandle(np.array([self.grid_dim[axis]], dtype=np.int32), tl.int32)
 
     # memory ops
-    def create_load(self, ptr, _0, _1, is_volatile):
+    def get_cache_policy(self, cache_modifier, eviction_policy):
+        return None
+
+    def create_load(self, ptr, cache_policy, is_volatile):
         mask = TensorHandle(np.ones_like(ptr.data, dtype=bool), tl.int1)
         other = None
-        return self.create_masked_load(ptr, mask, other, _0, _1, is_volatile)
+        return self.create_masked_load(ptr, mask, other, cache_policy, is_volatile)
 
-    def create_store(self, ptr, val, _0, _1):
+    def create_store(self, ptr, val, cache_policy):
         mask = TensorHandle(np.ones_like(ptr.data, dtype=bool), tl.int1)
-        return self.create_masked_store(ptr, val, mask, None, None)
+        return self.create_masked_store(ptr, val, mask, cache_policy)
 
-    def create_masked_load(self, ptrs, mask, other, cache_modifier, eviction_policy, is_volatile):
+    def create_masked_load(self, ptrs, mask, other, cache_policy, is_volatile):
         dtype_tt = ptrs.get_element_ty()
         dtype_np = _get_np_dtype(dtype_tt)
         if other is None:
@@ -553,7 +556,7 @@ class InterpreterBuilder:
         ret = _interpreter.load(ptrs.data, mask.data, other.data, dtype_np)
         return TensorHandle(ret, dtype_tt)
 
-    def create_masked_store(self, ptrs, value, mask, cache_modifier, eviction_policy):
+    def create_masked_store(self, ptrs, value, mask, cache_policy):
         return _interpreter.store(ptrs.data, value.data, mask.data)
 
     # casting ops
@@ -836,7 +839,7 @@ class InterpreterBuilder:
     def create_atomic_poll(self, ptr, expected, timeout_ns, sem, scope):
         start_ns = time.perf_counter_ns()
         while True:
-            value = self.create_load(ptr, None, None, True)
+            value = self.create_load(ptr, None, True)
             if np.array_equal(value.data, expected.data):
                 return TensorHandle(np.array(True, dtype=np.bool_), tl.int1)
             if timeout_ns is not None and time.perf_counter_ns() - start_ns >= timeout_ns.data.item():
@@ -896,8 +899,7 @@ class InterpreterBuilder:
         desc.validate()
         return desc
 
-    def create_descriptor_load(self, desc: TensorDescHandle, indices: List[TensorHandle], cache_modifier,
-                               eviction_policy):
+    def create_descriptor_load(self, desc: TensorDescHandle, indices: List[TensorHandle], cache_policy):
         ptrs, mask = desc.materialize_pointers(indices)
         dtype_tt = ptrs.get_element_ty()
         dtype_np = _get_np_dtype(dtype_tt)
@@ -908,22 +910,20 @@ class InterpreterBuilder:
             other = TensorHandle(np.full_like(ptrs.data, float('nan'), dtype=dtype_np), dtype_tt)
         else:
             raise ValueError(f"unsupported padding {padding}")
-        return self.create_masked_load(ptrs, mask, other, cache_modifier=cache_modifier,
-                                       eviction_policy=eviction_policy, is_volatile=False)
+        return self.create_masked_load(ptrs, mask, other, cache_policy=cache_policy, is_volatile=False)
 
     def create_descriptor_store(self, desc: TensorDescHandle, value: TensorHandle, indices: List[TensorHandle]):
         ptrs, mask = desc.materialize_pointers(indices)
-        return self.create_masked_store(ptrs, value, mask, None, None)
+        return self.create_masked_store(ptrs, value, mask, None)
 
     def create_descriptor_gather(self, desc: TensorDescHandle, x_offsets: TensorHandle, y_offset: TensorHandle, type):
         dtype = desc.base.dtype.element_ty
         np_dtype = _get_np_dtype(dtype)
         result = np.zeros([x_offsets.data.shape[0], desc.block_shape[-1]], dtype=np_dtype)
-        cache_modifier = None
-        eviction_policy = None
+        cache_policy = None
         for i, x_offset in enumerate(x_offsets.data):
             indices = [TensorHandle(x_offset, tl.int32), y_offset]
-            result[i, :] = self.create_descriptor_load(desc, indices, cache_modifier, eviction_policy).data
+            result[i, :] = self.create_descriptor_load(desc, indices, cache_policy).data
         return TensorHandle(result, dtype)
 
     def create_descriptor_scatter(self, desc: TensorDescHandle, value: TensorHandle, x_offsets: TensorHandle,

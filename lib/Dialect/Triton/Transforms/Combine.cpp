@@ -102,7 +102,7 @@ public:
 
     rewriter.replaceOpWithNewOp<LoadOp>(
         op, loadOp.getPtr(), loadOp.getMask(), /*other=*/falseValue,
-        loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+        loadOp.getCachePolicyAttr(), loadOp.getIsVolatile());
     return success();
   }
 };

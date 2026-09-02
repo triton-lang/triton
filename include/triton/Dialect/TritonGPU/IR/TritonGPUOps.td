@@ -119,8 +119,7 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
     Arg<TTG_MemDescType, "", GenericSharedWrite>:$result,
     Optional<I1Tensor>:$mask,
     Optional<TT_Type>:$other,
-    DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
-    DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
+    OptionalAttr<AnyAttr>:$cachePolicy,
     DefaultValuedAttr<BoolAttr, "false">:$isVolatile,
     DefaultValuedAttr<I32Attr, "1">:$contiguity
   );
@@ -137,15 +136,8 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
     }
   }];
 
-  // Specify cacheModifier and evictionPolicy explicitly, instead of leaving
-  // them in attr-dict, because this way their values get printed as strings,
-  // rather than as opaque integers.
-  //
-  // Note there are no commas between other, cacheModifier, and evictionPolicy,
-  // due to limitations in MLIR's asm parser.
   let assemblyFormat = [{
     $src `,` $result (`mask` $mask^)? (`other` $other^)?
-    oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
     attr-dict `:` type($src) `->` type($result)
   }];
 }

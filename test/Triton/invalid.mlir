@@ -1,5 +1,37 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+tt.func @load_with_store_cache_modifier(%ptr: !tt.ptr<f32>) {
+  // expected-error @+1 {{'tt.load' op invalid cache policy: cache modifier 'wb' is not supported for loads}}
+  %value = tt.load %ptr {cachePolicy = #tt.cache_policy<cache_modifier = wb, eviction_policy = evict_normal>} : !tt.ptr<f32>
+  tt.return
+}
+
+// -----
+
+tt.func @store_with_load_cache_modifier(%ptr: !tt.ptr<f32>, %value: f32) {
+  // expected-error @+1 {{'tt.store' op invalid cache policy: cache modifier 'ca' is not supported for stores}}
+  tt.store %ptr, %value {cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_normal>} : !tt.ptr<f32>
+  tt.return
+}
+
+// -----
+
+tt.func @load_with_nvidia_store_cache_modifier(%ptr: !tt.ptr<f32>) {
+  // expected-error @+1 {{'tt.load' op invalid cache policy: cache modifier 'wt' is not supported for loads}}
+  %value = tt.load %ptr {cachePolicy = #ttng.cache_policy<cache_modifier = wt>} : !tt.ptr<f32>
+  tt.return
+}
+
+// -----
+
+tt.func @store_with_nvidia_load_cache_modifier(%ptr: !tt.ptr<f32>, %value: f32) {
+  // expected-error @+1 {{'tt.store' op invalid cache policy: cache modifier 'cv' is not supported for stores}}
+  tt.store %ptr, %value {cachePolicy = #ttng.cache_policy<cache_modifier = cv>} : !tt.ptr<f32>
+  tt.return
+}
+
+// -----
+
 tt.func @fn(%v: i32) {
   %b = tt.splat %v : i32 -> tensor<128xi32>
   // expected-error @+1 {{rank of source must be same as rank of result}}

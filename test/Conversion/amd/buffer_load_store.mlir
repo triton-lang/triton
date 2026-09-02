@@ -9,7 +9,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         // CHECK: %[[c_mask:.*]] = llvm.mlir.constant(true) : i1
         // CHECK: %[[offset:.*]] = llvm.select %[[c_mask]]
         // CHECK: rocdl.raw.ptr.buffer.load {{.*}}, %[[offset]], {{.*}}, {{.*}}
-        %ret = amdg.buffer_load %arg0[%offset] cacheModifier = cs : !tt.ptr<f32> -> tensor<128xf32, #blocked0>
+        %ret = amdg.buffer_load %arg0[%offset] {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_normal>} : !tt.ptr<f32> -> tensor<128xf32, #blocked0>
         tt.return
   }
 }
@@ -70,7 +70,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         // CHECK: %[[offset:.*]] = llvm.select %[[mask]]
         // CHECK: rocdl.raw.ptr.buffer.store {{.*}}, {{.*}}, %[[offset]], {{.*}}, {{.*}}
         %c256_i32 = arith.constant 256 : i32
-        amdg.buffer_store %value, %arg0[%offset] cacheModifier = cs stride = %c256_i32 : !tt.ptr<f32> -> tensor<128xf32, #blocked0>
+        amdg.buffer_store %value, %arg0[%offset] stride = %c256_i32 {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_normal>} : !tt.ptr<f32> -> tensor<128xf32, #blocked0>
         tt.return
   }
 }

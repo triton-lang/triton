@@ -1,9 +1,22 @@
 #pragma once
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/DialectRegistry.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include <memory>
 #include <string>
+
+inline mlir::Attribute
+buildCachePolicy(mlir::OpBuilder &builder,
+                 mlir::triton::CacheModifier cacheModifier,
+                 mlir::triton::EvictionPolicy evictionPolicy =
+                     mlir::triton::EvictionPolicy::NORMAL) {
+  if (cacheModifier == mlir::triton::CacheModifier::NONE &&
+      evictionPolicy == mlir::triton::EvictionPolicy::NORMAL)
+    return {};
+  return mlir::triton::CachePolicyAttr::get(builder.getContext(), cacheModifier,
+                                            evictionPolicy);
+}
 
 // A custom op builder that keeps track of the last location
 class TritonOpBuilder {

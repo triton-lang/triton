@@ -329,8 +329,9 @@ struct RewriteLoadPattern : OpConversionPattern<triton::DescriptorLoadOp> {
     auto newLoad = triton::LoadOp::create(
         rewriter, loc, generatePtr(rewriter, loc, blockShape, desc, offsets),
         generateMask(rewriter, loc, blockShape, desc, offsets), other,
-        triton::CacheModifier::NONE, triton::EvictionPolicy::NORMAL, false);
-    newLoad->setAttrs(filterSegmentSizes(op->getAttrs()));
+        op.getCachePolicyAttr());
+    auto attrs = filterSegmentSizes(op->getAttrs());
+    newLoad->setAttrs(attrs);
 
     Value result = newLoad.getResult();
     if (descTy.getElementType().isF32()) {
@@ -370,8 +371,7 @@ struct RewriteStorePattern : OpConversionPattern<triton::DescriptorStoreOp> {
 
     auto newStore = rewriter.replaceOpWithNewOp<triton::StoreOp>(
         op, generatePtr(rewriter, loc, blockShape, desc, offsets), op.getSrc(),
-        generateMask(rewriter, loc, blockShape, desc, offsets),
-        triton::CacheModifier::NONE, triton::EvictionPolicy::NORMAL);
+        generateMask(rewriter, loc, blockShape, desc, offsets));
     newStore->setAttrs(attrs);
 
     return llvm::success();
@@ -414,9 +414,7 @@ struct RewriteGatherPattern : OpConversionPattern<triton::DescriptorGatherOp> {
     auto other = generateOther(rewriter, loc,
                                descTy.getSignlessBlockType().getElementType(),
                                blockShape, desc.paddingOption);
-    auto newLoad = triton::LoadOp::create(
-        rewriter, loc, ptr, mask, other, triton::CacheModifier::NONE,
-        triton::EvictionPolicy::NORMAL, false);
+    auto newLoad = triton::LoadOp::create(rewriter, loc, ptr, mask, other);
     newLoad->setAttrs(filterSegmentSizes(op->getAttrs()));
 
     Value result = newLoad.getResult();
@@ -450,8 +448,7 @@ struct RewriteScatterPattern
     auto attrs = filterSegmentSizes(op->getAttrs());
 
     auto newStore = rewriter.replaceOpWithNewOp<triton::StoreOp>(
-        op, ptr, op.getSrc(), mask, triton::CacheModifier::NONE,
-        triton::EvictionPolicy::NORMAL);
+        op, ptr, op.getSrc(), mask);
     newStore->setAttrs(attrs);
 
     return llvm::success();

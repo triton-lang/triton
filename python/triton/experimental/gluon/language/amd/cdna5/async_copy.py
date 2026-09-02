@@ -1,4 +1,4 @@
-from ..._core import ir, builtin, _unwrap_if_constexpr
+from ..._core import ir, builtin, _unwrap_if_constexpr, _normalize_cache_policy
 from ..._semantic import _check
 from triton.experimental.gluon.language._layouts import DistributedLayout
 from ..cdna4.async_copy import commit_group, wait_group
@@ -35,11 +35,12 @@ def global_to_shared(smem, pointer, mask=None, other=None, cache_modifier="", _s
         other = _semantic.to_tensor(other)
         other = _semantic.cast(other, pointer.dtype.element_ty)
         pointer, other = _semantic.broadcast_impl_value(pointer, other)
-    cache_modifier = _semantic._str_to_load_cache_modifier(cache_modifier)
     mask_handle = mask.handle if mask is not None else ir.value()
     other_handle = other.handle if other is not None else ir.value()
+    cache_policy = _normalize_cache_policy(None, cache_modifier, None)
+    cache_policy = cache_policy._to_ir(_semantic.builder)
     _semantic.builder.create_async_copy_global_to_local(smem.handle, pointer.handle, mask_handle, other_handle,
-                                                        cache_modifier, ir.EVICTION_POLICY.NORMAL, False)
+                                                        cache_policy, False)
 
 
 @builtin
@@ -65,10 +66,10 @@ def shared_to_global(pointer, smem, mask=None, cache_modifier="", _semantic=None
     mask = _unwrap_if_constexpr(mask)
     if mask is not None:
         pointer, mask = _semantic.broadcast_impl_value(pointer, mask)
-    cache_modifier = _semantic._str_to_store_cache_modifier(cache_modifier)
     mask_handle = mask.handle if mask is not None else ir.value()
-    _semantic.builder.create_async_copy_local_to_global(smem.handle, pointer.handle, mask_handle, cache_modifier,
-                                                        ir.EVICTION_POLICY.NORMAL)
+    cache_policy = _normalize_cache_policy(None, cache_modifier, None)
+    cache_policy = cache_policy._to_ir(_semantic.builder)
+    _semantic.builder.create_async_copy_local_to_global(smem.handle, pointer.handle, mask_handle, cache_policy)
 
 
 @builtin
