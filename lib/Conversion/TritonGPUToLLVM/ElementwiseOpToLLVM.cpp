@@ -337,7 +337,13 @@ struct ElementwiseInlineAsmOpConversion
     }
 
     Value threadPred;
-    if (!op.getPure())
+    // Operand-free asm with only unused scalar results can represent a
+    // block-wide side effect, such as a fence or barrier. Keep it unpredicated.
+    bool unusedScalarSideEffect =
+        op.getNumOperands() == 0 && op->use_empty() &&
+        llvm::none_of(op.getResultTypes(),
+                      [](Type type) { return isa<RankedTensorType>(type); });
+    if (!op.getPure() && !unusedScalarSideEffect)
       threadPred = emitRedundantThreadPredicate(getFreeVariableMasks(resultTy),
                                                 rewriter, loc, targetInfo);
 

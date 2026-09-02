@@ -2362,6 +2362,55 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
     tt.return
   }
 
+  // CHECK-LABEL: inline_asm_scalar_without_operands_dead_result
+  // CHECK-NOT: llvm.cond_br
+  // CHECK: llvm.inline_asm has_side_effects
+  // CHECK-SAME: "bar.sync 0; membar.cta; mov.u32 $0, 0;"
+  // CHECK-NEXT: llvm.return
+  tt.func public @inline_asm_scalar_without_operands_dead_result() {
+    %unused = tt.elementwise_inline_asm "bar.sync 0; membar.cta; mov.u32 $0, 0;" {constraints = "=r", packed_element = 1 : i32, pure = false} -> i32
+    tt.return
+  }
+
+  // CHECK-LABEL: inline_asm_without_operands_dead_scalar_results
+  // CHECK-NOT: llvm.cond_br
+  // CHECK: llvm.inline_asm has_side_effects
+  // CHECK-SAME: "fence.sc.sys; mov.u32 $0, 0; mov.u32 $1, 0;"
+  // CHECK-NOT: llvm.cond_br
+  // CHECK-NOT: st.shared
+  // CHECK-NOT: nvvm.barrier
+  // CHECK: llvm.return
+  tt.func public @inline_asm_without_operands_dead_scalar_results() {
+    %unused:2 = tt.elementwise_inline_asm "fence.sc.sys; mov.u32 $0, 0; mov.u32 $1, 0;" {constraints = "=r,=r", packed_element = 1 : i32, pure = false} -> i32, i32
+    tt.return
+  }
+
+  // CHECK-LABEL: inline_asm_scalar_with_operand_dead_result
+  // CHECK: llvm.cond_br
+  // CHECK: llvm.inline_asm has_side_effects
+  // CHECK-SAME: "red.global.add.u32 [$1], 1; mov.u32 $0, 0;"
+  // CHECK-NOT: st.shared
+  // CHECK-NOT: nvvm.barrier
+  // CHECK: llvm.return
+  tt.func public @inline_asm_scalar_with_operand_dead_result(%ptr: !tt.ptr<i32>) {
+    %unused = tt.elementwise_inline_asm "red.global.add.u32 [$1], 1; mov.u32 $0, 0;" {constraints = "=r,l", packed_element = 1 : i32, pure = false} %ptr : !tt.ptr<i32> -> i32
+    tt.return
+  }
+
+  // CHECK-LABEL: inline_asm_without_operands_live_second_result
+  // CHECK: llvm.cond_br
+  // CHECK: llvm.inline_asm has_side_effects
+  // CHECK-SAME: "mov.u32 $0, 7; mov.u32 $1, 9;"
+  // CHECK: st.shared::cta.b32
+  // CHECK: nvvm.barrier
+  // CHECK: llvm.load
+  // CHECK: llvm.return
+  tt.func public @inline_asm_without_operands_live_second_result(%out: !tt.ptr<i32>) {
+    %result:2 = tt.elementwise_inline_asm "mov.u32 $0, 7; mov.u32 $1, 9;" {constraints = "=r,=r", packed_element = 1 : i32, pure = false} -> i32, i32
+    tt.store %out, %result#1 : !tt.ptr<i32>
+    tt.return
+  }
+
   // An impure asm may ignore padded inputs. Preserve padding and discard the
   // extra result while still executing only on the canonical owner.
   // CHECK-LABEL: inline_asm_side_effect_padded_pack

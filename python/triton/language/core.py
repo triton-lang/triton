@@ -3408,7 +3408,9 @@ def inline_asm_elementwise(asm: str, constraints: str, args: Sequence, dtype: Un
 
         When :code:`is_pure` is false, each logical group of packed elements
         executes once, even if its tensor layout replicates those elements
-        across physical threads.
+        across physical threads. As a compatibility exception, asm with no
+        inputs and only unused scalar outputs executes on every thread in the
+        current execution region.
 
         This op does not support empty :code:`dtype` -- the inline asm must
         return at least one tensor, even if you don't need it.  You can work
