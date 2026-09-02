@@ -72,13 +72,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK-LABEL: @atomic_poll
     // CHECK: %[[WARP_ELECTED:.*]] = llvm.and %{{.*}}, %{{.*}} : i1
     // CHECK: %[[ELECTED:.*]] = llvm.and %[[WARP_ELECTED]], %{{.*}} : i1
-    // CHECK: %[[FALSE:.*]] = llvm.mlir.constant(false) : i1
-    // CHECK: llvm.cond_br %[[ELECTED]], ^[[INIT:bb[0-9]+]], ^[[DONE:bb[0-9]+]](%[[FALSE]] : i1)
-    // CHECK: ^[[INIT]]:
     // CHECK: %[[START_RAW:.*]] = llvm.call_intrinsic "llvm.amdgcn.s.memrealtime"() : () -> i64
     // CHECK: %[[TEN:.*]] = llvm.mlir.constant(10 : i64) : i64
     // CHECK: %[[START:.*]] = llvm.mul %[[START_RAW]], %[[TEN]] : i64
-    // CHECK: llvm.br ^[[LOOP:bb[0-9]+]]
+    // CHECK: %[[FALSE:.*]] = llvm.mlir.constant(false) : i1
+    // CHECK: llvm.cond_br %[[ELECTED]], ^[[LOOP:bb[0-9]+]], ^[[DONE:bb[0-9]+]](%[[FALSE]] : i1)
     // CHECK: ^[[LOOP]]:
     // CHECK: %[[LOADED:.*]] = llvm.load %{{.*}} atomic syncscope("agent") monotonic
     // CHECK: %[[MATCHED:.*]] = llvm.icmp "eq" %[[LOADED]], %{{.*}} : i32

@@ -835,9 +835,9 @@ class InterpreterBuilder:
 
     def create_atomic_poll(self, ptr, expected, timeout_ns, sem, scope):
         matched = np.zeros(ptr.data.shape, dtype=np.bool_)
+        start_ns = time.perf_counter_ns() if timeout_ns is not None else None
         for index in np.ndindex(ptr.data.shape):
             element_ptr = TensorHandle(np.asarray(ptr.data[index]), ptr.dtype)
-            start_ns = time.perf_counter_ns()
             while True:
                 value = self.create_load(element_ptr, None, None, True)
                 if value.data.item() == expected.data[index]:

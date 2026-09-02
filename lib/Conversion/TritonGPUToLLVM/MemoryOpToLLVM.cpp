@@ -387,12 +387,13 @@ struct AtomicPollOpConversion
     if (!threadPred)
       threadPred = b.true_val();
 
-    // Scalars are one logical element replicated across the execution region.
-    // The layout elects owners in exactly the same way for every input shape.
+    Value start;
+    if (adaptor.getTimeout())
+      start = targetInfo.getGlobalTimer(rewriter, loc);
     SmallVector<Value> results;
     for (auto [ptr, value] : llvm::zip_equal(ptrs, expected))
-      results.push_back(
-          emitPoll(op, ptr, value, adaptor.getTimeout(), threadPred, rewriter));
+      results.push_back(emitPoll(op, ptr, value, start, adaptor.getTimeout(),
+                                 threadPred, rewriter));
 
     auto rendezvous = [&] {
       if (numCTAs == 1)
@@ -444,7 +445,7 @@ private:
   // Emit the polling state machine for one logical element. Both successful
   // and timed-out polls use this path regardless of the input's shape.
   Value emitPoll(triton::AtomicPollOp op, Value ptr, Value expected,
-                 Value timeout, Value threadPred,
+                 Value start, Value timeout, Value threadPred,
                  ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -454,8 +455,6 @@ private:
     Block *currentBlock = rewriter.getInsertionBlock();
     Block *doneBlock = currentBlock->splitBlock(rewriter.getInsertionPoint());
     Region *region = currentBlock->getParent();
-    Block *pollInitBlock =
-        rewriter.createBlock(region, Region::iterator(doneBlock));
     Block *pollLoopBlock =
         rewriter.createBlock(region, Region::iterator(doneBlock));
     Block *pollSuccessBlock =
@@ -466,14 +465,8 @@ private:
     BlockArgument matched = doneBlock->addArgument(i1_ty, loc);
 
     rewriter.setInsertionPointToEnd(currentBlock);
-    LLVM::CondBrOp::create(rewriter, loc, threadPred, pollInitBlock,
+    LLVM::CondBrOp::create(rewriter, loc, threadPred, pollLoopBlock,
                            ValueRange{}, doneBlock, ValueRange{b.false_val()});
-
-    rewriter.setInsertionPointToEnd(pollInitBlock);
-    Value start;
-    if (timeout)
-      start = targetInfo.getGlobalTimer(rewriter, loc);
-    LLVM::BrOp::create(rewriter, loc, pollLoopBlock);
 
     rewriter.setInsertionPointToEnd(pollLoopBlock);
     Value loaded = LLVM::LoadOp::create(

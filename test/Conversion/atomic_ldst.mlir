@@ -29,10 +29,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
   // CHECK-POLL-LABEL: @atomic_poll
   // CHECK-POLL: nvvm.read.ptx.sreg.tid.x
-  // CHECK-POLL: llvm.cond_br %[[ELECTED:.*]], ^[[INIT:bb[0-9]+]], ^[[DONE:bb[0-9]+]](%{{.*}} : i1)
-  // CHECK-POLL: ^[[INIT]]:
   // CHECK-POLL: %[[START:.*]] = llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"() : () -> i64
-  // CHECK-POLL: llvm.br ^[[LOOP:bb[0-9]+]]
+  // CHECK-POLL: llvm.cond_br %[[ELECTED:.*]], ^[[LOOP:bb[0-9]+]], ^[[DONE:bb[0-9]+]](%{{.*}} : i1)
   // CHECK-POLL: ^[[LOOP]]:
   // CHECK-POLL: %[[LOADED:.*]] = llvm.load %{{.*}} atomic monotonic
   // CHECK-POLL: %[[MATCHED:.*]] = llvm.icmp "eq" %[[LOADED]], %{{.*}} : i32
@@ -112,6 +110,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %matched = tt.atomic_poll acquire, gpu, %ptr, %expected timeout %timeout : tensor<128x!tt.ptr<i32>, #poll>, tensor<128xi32, #poll> -> tensor<128xi1, #poll>
     %result = arith.extui %matched : tensor<128xi1, #poll> to tensor<128xi32, #poll>
     tt.store %out, %result : tensor<128x!tt.ptr<i32>, #poll>
+    tt.return
+  }
+
+  // CHECK-POLL-LABEL: @atomic_poll_shared_timeout
+  // CHECK-POLL: %[[START:.*]] = llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"() : () -> i64
+  // CHECK-POLL: llvm.load %{{.*}} atomic syncscope("device") monotonic
+  // CHECK-POLL: %[[NOW0:.*]] = llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"() : () -> i64
+  // CHECK-POLL: llvm.sub %[[NOW0]], %[[START]] : i64
+  // CHECK-POLL-NOT: llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"
+  // CHECK-POLL: llvm.load %{{.*}} atomic syncscope("device") monotonic
+  // CHECK-POLL: %[[NOW1:.*]] = llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"() : () -> i64
+  // CHECK-POLL: llvm.sub %[[NOW1]], %[[START]] : i64
+  // CHECK-POLL: nvvm.barrier
+  // CHECK-POLL: llvm.return
+  tt.func public @atomic_poll_shared_timeout(%ptr: tensor<256x!tt.ptr<i32>, #poll>, %expected: tensor<256xi32, #poll>, %timeout: i64) {
+    %matched = tt.atomic_poll acquire, gpu, %ptr, %expected timeout %timeout : tensor<256x!tt.ptr<i32>, #poll>, tensor<256xi32, #poll> -> tensor<256xi1, #poll>
     tt.return
   }
 

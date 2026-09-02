@@ -341,11 +341,12 @@ def TT_AtomicPollOp : TT_Op<"atomic_poll", [
 
     let description = [{
         Repeatedly load each logical element of $ptr with relaxed semantics
-        until it equals $expected or its timeout expires. One thread polls
+        until it equals $expected or the operation's timeout expires. One thread polls
         each element; threads replicating that element wait for its result.
         For acquire semantics, issue an acquire fence after each successful
         poll. The block waits for all elements to finish. The result has the
-        same shape and encoding as $ptr.
+        same shape and encoding as $ptr. All elements share one timeout budget,
+        and each element is loaded at least once, even with a zero timeout.
     }];
 
     let arguments = (ins
