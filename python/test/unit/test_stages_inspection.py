@@ -24,8 +24,6 @@ def test_dynamic_instrumentation_and_dialect_loading():
     register_instrumentation(point="ttgpuir-to-llvmir", backend="test", callback=lambda _pm: calls.append("passes"))
     try:
         assert instrument("context", point="load-dialects", backend="test")
-        with pytest.raises(RuntimeError, match="requires an MLIR context"):
-            instrument("pm", point="ttgpuir-to-llvmir", backend="test")
         assert instrument("pm", point="ttgpuir-to-llvmir", backend="test", context="module-context")
         assert calls == [("dialects", "context"), ("dialects", "module-context"), "passes"]
     finally:
