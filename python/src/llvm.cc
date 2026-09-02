@@ -203,15 +203,17 @@ ScheduleDAGSDNodes *createTritonDAGScheduler(SelectionDAGISel *selector,
 }
 
 void installTritonDAGScheduler() {
-  static RegisterScheduler scheduler("triton-nvptx",
-                                     "Triton compilation-local NVPTX scheduler",
-                                     createTritonDAGScheduler);
   auto options = llvm::cl::getRegisteredOptions();
   auto option = options.find("pre-RA-sched");
   if (option == options.end())
     throw std::runtime_error("LLVM SelectionDAG scheduler option is missing");
-  if (option->second->addOccurrence(1, "pre-RA-sched", "triton-nvptx"))
-    throw std::runtime_error("failed to install Triton's LLVM scheduler");
+  using SchedulerOption =
+      llvm::cl::opt<RegisterScheduler::FunctionPassCtor, false,
+                    RegisterPassParser<RegisterScheduler>>;
+  // LLD resets LLVM options when linking HSACO. Make the dispatcher the default
+  // so subsequent NVIDIA compilations retain their per-compilation policy.
+  static_cast<SchedulerOption *>(option->second)
+      ->setInitialValue(createTritonDAGScheduler);
 }
 
 std::unique_ptr<TargetMachine>
