@@ -474,6 +474,51 @@ tt.func @rem() {
   %15 = arith.remsi %12, %4 : tensor<128xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
   %16 = arith.remsi %4, %12 : tensor<128xi32>
+  %short_range = tt.make_range {end = 36 : i32, start = 32 : i32} : tensor<4xi32>
+  %large_divisor = arith.constant dense<64> : tensor<4xi32>
+  // Preserving the input group preserves divisibility larger than contiguity.
+  // expected-remark @below {{contiguity = [4], divisibility = [32]}}
+  %preserved_group = arith.remui %short_range, %large_divisor : tensor<4xi32>
+  tt.return
+}
+
+// -----
+
+tt.func @rem_partial_groups(%divisor: tensor<32xi32> {tt.divisibility = 2 : i32, tt.constancy = 16 : i32}) {
+  %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
+  // Inferred unit contiguity exposes odd elements within the input group.
+  // expected-remark @below {{contiguity = [1], divisibility = [1]}}
+  %partial_rhs_signed = arith.remsi %range, %divisor : tensor<32xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1]}}
+  %partial_rhs_unsigned = arith.remui %range, %divisor : tensor<32xi32>
+
+  %eight = arith.constant dense<8> : tensor<32xi32>
+  %two = arith.constant dense<2> : tensor<32xi32>
+  %partial_range = arith.remui %range, %eight : tensor<32xi32>
+  // The same issue occurs with a partially contiguous dividend.
+  // expected-remark @below {{contiguity = [1], divisibility = [1]}}
+  %partial_lhs_signed = arith.remsi %partial_range, %two : tensor<32xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1]}}
+  %partial_lhs_unsigned = arith.remui %partial_range, %two : tensor<32xi32>
+  tt.return
+}
+
+// -----
+
+tt.func @rem_unit_contiguity(
+    %lhs: tensor<8xi32> {tt.divisibility = 4 : i32},
+    %rhs: tensor<8xi32> {tt.divisibility = 2 : i32},
+    %scalar_lhs: i32 {tt.divisibility = 8 : i32},
+    %scalar_rhs: i32 {tt.divisibility = 4 : i32}) {
+  // Divisibility holds for every element, even when the divisor varies.
+  // expected-remark @below {{contiguity = [1], divisibility = [2]}}
+  %tensor_signed = arith.remsi %lhs, %rhs : tensor<8xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [2]}}
+  %tensor_unsigned = arith.remui %lhs, %rhs : tensor<8xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [4]}}
+  %scalar_signed = arith.remsi %scalar_lhs, %scalar_rhs : i32
+  // expected-remark @below {{contiguity = [1], divisibility = [4]}}
+  %scalar_unsigned = arith.remui %scalar_lhs, %scalar_rhs : i32
   tt.return
 }
 
