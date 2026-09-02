@@ -144,7 +144,12 @@ tuple of tensors.</p>
 <p>Each invocation of the inline asm processes <code class="code docutils literal notranslate"><span class="pre">pack</span></code> elements at a
 time.  Exactly which set of inputs a block receives is unspecified.
 Input elements of size less than 4 bytes are packed into 4-byte
-registers.</p>
+registers.
+Incomplete groups are padded with undefined inputs, and the corresponding
+padded outputs are discarded.</p>
+<p>When <code class="code docutils literal notranslate"><span class="pre">is_pure</span></code> is false, each logical group of packed elements
+executes once, even if its tensor layout replicates those elements
+across physical threads.</p>
 <p>This op does not support empty <code class="code docutils literal notranslate"><span class="pre">dtype</span></code> – the inline asm must
 return at least one tensor, even if you don’t need it.  You can work
 around this by returning a dummy tensor of arbitrary type; it shouldn’t

@@ -649,6 +649,12 @@ Runs an inline asm block to generate one or more tensors.
 
 The asm block is given `packed_element` elements at a time.  Exactly which
 elems it receives is unspecified.
+Incomplete groups are padded with undefined inputs, and the corresponding
+padded outputs are discarded.
+
+When `pure` is false, each logical group of packed elements executes the
+asm block once, even if the tensor layout replicates those elements across
+physical threads.
 
 Traits: `Elementwise`, `SameOperandsAndResultEncoding`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 

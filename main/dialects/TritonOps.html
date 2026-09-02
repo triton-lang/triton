@@ -1207,7 +1207,12 @@ Where scale(x, s) is a function that applies the scale per block following micro
 </div>
 <p>Runs an inline asm block to generate one or more tensors.</p>
 <p>The asm block is given <code class="docutils literal notranslate"><span class="pre">packed_element</span></code> elements at a time.  Exactly which
-elems it receives is unspecified.</p>
+elems it receives is unspecified.
+Incomplete groups are padded with undefined inputs, and the corresponding
+padded outputs are discarded.</p>
+<p>When <code class="docutils literal notranslate"><span class="pre">pure</span></code> is false, each logical group of packed elements executes the
+asm block once, even if the tensor layout replicates those elements across
+physical threads.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">Elementwise</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id36">
