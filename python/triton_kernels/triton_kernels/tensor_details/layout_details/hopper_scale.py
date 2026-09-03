@@ -1,8 +1,11 @@
+import math
 from dataclasses import dataclass
 import torch
+from torch._subclasses.fake_tensor import is_fake
 import triton
 import triton.language as tl
 from .base import Layout, LayoutTransformation
+from .strided import StridedLayoutTransformation
 
 # ------------------- Hopper MX Scale Layout -------------------
 
@@ -73,7 +76,53 @@ class HopperMXScaleLayoutTransformation(LayoutTransformation):
             return data.contiguous().mT
         return data
 
+    def _can_convert(self, data):
+        return not self.is_fp4 and data.device.type == "cuda" and data.dtype.itemsize == 1 and not is_fake(data)
+
+    def convert_data(self, data, destination: LayoutTransformation, *, out=None):
+        if isinstance(destination, StridedLayoutTransformation) and self._can_convert(data):
+            if out is None:
+                out = torch.empty_strided(destination.storage_shape, destination.storage_strides, dtype=data.dtype,
+                                          device=data.device)
+            return self._convert(data, out, inverse=True)
+        return super().convert_data(data, destination, out=out)
+
+    def _convert_data_from(self, data, source: LayoutTransformation, *, out):
+        if isinstance(source, StridedLayoutTransformation) and self._can_convert(data):
+            return self._convert(data, out, inverse=False)
+        return super()._convert_data_from(data, source, out=out)
+
+    def _convert(self, data, out, inverse):
+        transpose = self.mx_axis == len(self.leading_shape)
+        if out is None:
+            if inverse:
+                out = torch.empty(self.shape, dtype=data.dtype, device=data.device)
+            else:
+                shape = self.storage_shape
+                if transpose:
+                    shape[-2:] = reversed(shape[-2:])
+                out = torch.empty(shape, dtype=data.dtype, device=data.device)
+                if transpose:
+                    out = out.mT
+        matrix, encoded = (out, data) if inverse else (data, out)
+        if transpose:
+            matrix, encoded = matrix.mT, encoded.mT
+        *_, m_pad, k_pad = self._padded_shape
+        large = math.prod(self.leading_shape) * m_pad * k_pad >= 1024 * 1024
+        block_m = 32 * self.num_warps
+        block_k = min(64 if large else 32, max(2, triton.next_power_of_2(k_pad)))
+        num_warps = 8 if large else 4
+        grid = (math.prod(self.leading_shape) * triton.cdiv(m_pad, block_m) * triton.cdiv(k_pad, block_k), )
+        if grid[0]:
+            with torch.cuda.device(data.device):
+                _convert_scale_kernel[grid](matrix, encoded, tuple(self.leading_shape), matrix.stride(),
+                                            encoded.stride(), matrix.shape[-2], matrix.shape[-1], m_pad, k_pad,
+                                            self.num_warps, inverse, block_m, block_k, num_warps=num_warps)
+        return out
+
     def swizzle_data(self, data):
+        if self._can_convert(data):
+            return self._convert(data, None, inverse=False)
         assert data.shape == (*self.leading_shape, self.M, self.K)
         data = self._maybe_mT(data).contiguous()
         *batch, M_in, K_in = data.shape
@@ -98,6 +147,8 @@ class HopperMXScaleLayoutTransformation(LayoutTransformation):
         return self._validate_storage_shape(data)
 
     def unswizzle_data(self, data):
+        if self._can_convert(data):
+            return self._convert(data, None, inverse=True)
         data = self._maybe_mT(data)
         *batch, M, K = data.shape
         b = len(batch)
@@ -132,3 +183,40 @@ def unswizzle_mxfp4_scale_hopper(x, mx_axis: tl.constexpr, num_warps: tl.constex
     # implementation assumed mxfp data is packed along the last dimension
     x = x.trans() if mx_axis == 0 else x
     return x
+
+
+@triton.jit
+def _convert_scale_kernel(Matrix, Encoded, LEADING_SHAPE: tl.constexpr, MATRIX_STRIDES: tl.constexpr,
+                          ENCODED_STRIDES: tl.constexpr, M: tl.constexpr, K: tl.constexpr, M_PAD: tl.constexpr,
+                          K_PAD: tl.constexpr, LAYOUT_WARPS: tl.constexpr, INVERSE: tl.constexpr, BLOCK_M: tl.constexpr,
+                          BLOCK_K: tl.constexpr):
+    Matrix = Matrix.to(tl.pointer_type(tl.uint8))
+    Encoded = Encoded.to(tl.pointer_type(tl.uint8))
+    tiles_m: tl.constexpr = triton.cdiv(M_PAD, BLOCK_M)
+    tiles_k: tl.constexpr = triton.cdiv(K_PAD, BLOCK_K)
+    pid = tl.program_id(0).to(tl.int64)
+    batch = pid // (tiles_m * tiles_k)
+    tile_m, tile_k = pid // tiles_k % tiles_m, pid % tiles_k
+    for dim in tl.static_range(len(LEADING_SHAPE) - 1, -1, -1):
+        index = batch % LEADING_SHAPE[dim]
+        batch //= LEADING_SHAPE[dim]
+        Matrix += index * MATRIX_STRIDES[dim]
+        Encoded += index * ENCODED_STRIDES[dim]
+    rows = tile_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    cols = tile_k * BLOCK_K + tl.arange(0, BLOCK_K)
+    matrix_offsets = rows[:, None] * MATRIX_STRIDES[-2] + cols[None, :] * MATRIX_STRIDES[-1]
+    matrix_mask = (rows[:, None] < M) & (cols[None, :] < K)
+    enc_rows = tile_m * (BLOCK_M // 32) + tl.arange(0, BLOCK_M // 32)
+    enc_cols = tile_k * (BLOCK_K * 32) + tl.arange(0, BLOCK_K * 32)
+    enc_offsets = enc_rows[:, None] * ENCODED_STRIDES[-2] + enc_cols[None, :] * ENCODED_STRIDES[-1]
+    enc_mask = (enc_rows[:, None] < M_PAD // 32) & (enc_cols[None, :] < K_PAD * 32)
+    if INVERSE:
+        x = tl.load(Encoded + enc_offsets, enc_mask, other=0)
+        x = x.reshape(BLOCK_M // (32 * LAYOUT_WARPS), LAYOUT_WARPS, BLOCK_K // 2, 2, 8, 2, 2)
+        x = x.trans(0, 3, 1, 6, 4, 2, 5).reshape(BLOCK_M, BLOCK_K)
+        tl.store(Matrix + matrix_offsets, x, matrix_mask)
+    else:
+        x = tl.load(Matrix + matrix_offsets, matrix_mask, other=0)
+        x = x.reshape(BLOCK_M // (32 * LAYOUT_WARPS), 2, LAYOUT_WARPS, 2, 8, BLOCK_K // 2, 2)
+        x = x.trans(0, 2, 5, 1, 4, 6, 3).reshape(BLOCK_M // 32, BLOCK_K * 32)
+        tl.store(Encoded + enc_offsets, x, enc_mask)
