@@ -540,19 +540,27 @@ def test_mxfp4_value_convert_layout_meta(layout, major_dim, inverse):
 @pytest.mark.parametrize("step", [1, 2])
 @pytest.mark.parametrize("with_out", [False, True])
 @pytest.mark.parametrize("device", ["cpu", "meta", "cuda"])
-def test_blackwell_fp4_shuffle_conversion(shape, tiles, step, with_out, device):
+@pytest.mark.parametrize("inverse", [False, True])
+def test_blackwell_fp4_shuffle_conversion(shape, tiles, step, with_out, device, inverse):
     data = torch.randint(0, 256, (*shape[:-1], shape[-1] // 2), dtype=torch.uint8,
                          generator=torch.Generator().manual_seed(0))
     canonical = wrap_torch_tensor(data, dtype=FP4)
-    source = convert_layout(canonical, BlackwellMXValueLayout())
-    destination = BlackwellMX4ValueShuffledLayout(*tiles)
+    plain, shuffled = BlackwellMXValueLayout(), BlackwellMX4ValueShuffledLayout(*tiles)
+    source_layout, destination = (shuffled, plain) if inverse else (plain, shuffled)
+    source = convert_layout(canonical, source_layout)
     expected = convert_layout(canonical, destination)
-    # Source padding is unspecified and must not leak into destination padding.
-    source.data[..., shape[-2] // 2:, :].fill_(0xAB)
+    # Padding bytes must not leak into logical values or shuffled destination padding.
+    if inverse:
+        _, tiles_k, tiles_n, tile_n, tile_k = source.data.shape
+        k = torch.arange(tiles_k * tile_k).reshape(1, tiles_k, 1, 1, tile_k)
+        n = torch.arange(tiles_n * tile_n).reshape(1, 1, tiles_n, tile_n, 1)
+        source.data.masked_fill_((k >= shape[-2] // 2) | (n >= shape[-1]), 0xAB)
+    else:
+        source.data[..., shape[-2] // 2:, :].fill_(0xAB)
     source_data = source.data.to(device)
     if step == 2:
         storage = torch.empty(tuple(2 * size for size in source_data.shape), dtype=torch.uint8, device=device)
-        source_view = storage[tuple(slice(None, None, 2) for _ in shape)]
+        source_view = storage[tuple(slice(None, None, 2) for _ in range(source_data.ndim))]
         source_view.copy_(source_data)
         source_data = source_view
     source = wrap_torch_tensor(source_data, dtype=FP4, shape=shape, layout=source.storage.layout)
@@ -570,7 +578,13 @@ def test_blackwell_fp4_shuffle_conversion(shape, tiles, step, with_out, device):
     if with_out:
         assert actual is out
     if device != "meta":
-        assert torch.equal(actual.data.cpu(), expected.data)
+        actual_data, expected_data = actual.data.cpu(), expected.data
+        if inverse:
+            actual_data = actual_data[..., :shape[-2] // 2, :]
+            expected_data = expected_data[..., :shape[-2] // 2, :]
+            if device == "cuda" and with_out:
+                assert torch.all(out.data[..., shape[-2] // 2:, :] == 0xCD)
+        assert torch.equal(actual_data, expected_data)
         assert torch.equal(convert_layout(actual, StridedLayout()).data.cpu(), data)
         if with_out:
             assert storage[0].item() == 0xCD
@@ -579,10 +593,12 @@ def test_blackwell_fp4_shuffle_conversion(shape, tiles, step, with_out, device):
 
 
 @pytest.mark.parametrize("with_out", [False, True])
-def test_blackwell_fp4_shuffle_peak_allocation(with_out):
+@pytest.mark.parametrize("inverse", [False, True])
+def test_blackwell_fp4_shuffle_peak_allocation(with_out, inverse):
     canonical = empty((8, 1024, 2048), dtype=FP4, device="cuda")
-    source = convert_layout(canonical, BlackwellMXValueLayout())
-    destination = BlackwellMX4ValueShuffledLayout()
+    plain, shuffled = BlackwellMXValueLayout(), BlackwellMX4ValueShuffledLayout()
+    source_layout, destination = (shuffled, plain) if inverse else (plain, shuffled)
+    source = convert_layout(canonical, source_layout)
     warm = convert_layout(source, destination)
     out = warm if with_out else None
     torch.cuda.synchronize()
