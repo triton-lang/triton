@@ -188,6 +188,19 @@ struct DotOpMFMAConversionHelper {
     return processSubBlocks(numSubBlocks, acc, false, true);
   }
 
+  SmallVector<int64_t> getAccumulatorShape(RankedTensorType type,
+                                           unsigned elemsPerVec) const {
+    // Count unique tiles and values within each tile; the instruction may
+    // require more accumulator registers than the tensor layout provides.
+    auto elemsPerThread = triton::gpu::getElemsPerThread(type);
+    unsigned rank = type.getRank();
+    unsigned registerDim = rank - (mfmaLayout.getIsTransposed() ? 1 : 2);
+    unsigned elemsPerTile = std::min(elemsPerVec, elemsPerThread[registerDim]);
+    elemsPerThread[registerDim] /= elemsPerTile;
+    return {rank == 3 ? elemsPerThread[0] : 1, elemsPerThread[rank - 2],
+            elemsPerThread[rank - 1], elemsPerTile};
+  }
+
   /// Dot operand layout minimal tile is kDimInstrSize elements across
   /// K dimension. If dot operand K dimension is smaller, layout
   /// assigns tensor elements to multiple different hardware locations.
@@ -315,8 +328,11 @@ struct DotOpMFMAConversionHelper {
     Value loadedB = adaptor.getB();
     Value loadedC = adaptor.getC();
 
-    auto numRepM = repA[1];
-    auto numRepN = repB[2];
+    int warpSize = triton::gpu::lookupThreadsPerWarp(rewriter);
+    int elemsPerVec = mDim * nDim / warpSize;
+    auto accShape = getAccumulatorShape(dTensorTy, elemsPerVec);
+    auto numRepM = accShape[1];
+    auto numRepN = accShape[2];
     auto numRepK = repA[2];
     auto numRepB = repA[0];
     assert(repA[0] == repB[0]);
@@ -343,14 +359,11 @@ struct DotOpMFMAConversionHelper {
         loadedB, numRepB, numRepN, numRepKB, kWidth, kBase, bTensorTy,
         bTensorTy.getElementType(), allowXF32, preserveBF16);
 
-    int warpSize = triton::gpu::lookupThreadsPerWarp(rewriter);
-    int elemsPerVec = mDim * nDim / warpSize;
     int numVecInKBase = numRepK * kWidth / kBase;
 
     auto dstElemTy = dTensorTy.getElementType();
     auto fc = unpackTensorElements(loc, loadedC, rewriter, op.getC().getType());
-    SmallVector<int64_t> fcStrides =
-        computeStrides({numRepB, numRepM, numRepN, elemsPerVec});
+    SmallVector<int64_t> fcStrides = computeStrides(accShape);
 
     Value firstMfma;
     auto vecTy = vec_ty(dstElemTy, elemsPerVec);
@@ -360,7 +373,7 @@ struct DotOpMFMAConversionHelper {
           Value acc = tb.undef(vecTy);
 
           for (int v = 0; v < elemsPerVec; ++v) {
-            int linearIdx = linearize({b, m, n, v}, fcStrides);
+            int linearIdx = linearize({b, m, n, v % accShape[3]}, fcStrides);
             Value c = fc[linearIdx];
             acc = tb.insert_element(vecTy, acc, c, tb.i32_val(v));
           }
@@ -396,7 +409,7 @@ struct DotOpMFMAConversionHelper {
           }
 
           adjustAccForSmallKDim(fc, acc, dstElemTy, b, m, n, numRepM, numRepN,
-                                kDimInstrSize, kDimOperandSize, elemsPerVec);
+                                kDimInstrSize, kDimOperandSize, accShape[3]);
         }
       }
     }
@@ -490,8 +503,15 @@ struct DotOpMFMAConversionHelper {
     }
     ValueTable dotOpVals;
 
+    int elemsInK = numVecInKBase * kBase;
+    int elemsInNonK = nonKRep;
+    if (auto dot = dyn_cast<DotOperandEncodingAttr>(tensorType.getEncoding())) {
+      auto elemsPerThread = triton::gpu::getElemsPerThread(tensorType);
+      elemsInK = elemsPerThread[tensorType.getRank() - 1 - dot.getOpIdx()];
+      elemsInNonK = elemsPerThread[tensorType.getRank() - 2 + dot.getOpIdx()];
+    }
     SmallVector<int64_t> strides =
-        computeStrides({batch, nonKRep, numVecInKBase, kBase});
+        computeStrides({batch, elemsInNonK, elemsInK});
     for (int b = 0; b < batch; ++b) {
       for (int nonK = 0; nonK < nonKRep; nonK++) {
         for (int kBaseVec = 0; kBaseVec < numVecInKBase; kBaseVec++) {
@@ -504,7 +524,11 @@ struct DotOpMFMAConversionHelper {
           Type ty = vec_ty(elemTy, kBase);
           Value rawElems = tb.undef(ty);
           for (int k = 0; k < kBase; ++k) {
-            auto index = linearize({b, nonK, kBaseVec, k}, strides);
+            // Reuse the compact registers when the operand is smaller than
+            // the instruction's register footprint.
+            auto index = linearize(
+                {b, nonK % elemsInNonK, (kBaseVec * kBase + k) % elemsInK},
+                strides);
             rawElems =
                 tb.insert_element(ty, rawElems, elems[index], tb.i32_val(k));
           }
@@ -673,8 +697,13 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     Value loadedBScale = adaptor.getBScale();
     Value loadedC = adaptor.getC();
 
-    auto numRepM = repA[1];
-    auto numRepN = repB[2];
+    unsigned warpSize = triton::gpu::lookupThreadsPerWarp(rewriter);
+    const int subBlocks =
+        getNumSubmatrices(aTensorTy.getElementType(), mDim, nDim);
+    auto elemsPerVec = mDim * nDim * subBlocks / warpSize;
+    auto accShape = getAccumulatorShape(dTensorTy, elemsPerVec);
+    auto numRepM = accShape[1];
+    auto numRepN = accShape[2];
     auto numRepK = repA[2];
     auto numRepB = repA[0];
     assert(repA[0] == repB[0]);
@@ -729,13 +758,7 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
 
     auto dstElemTy = dTensorTy.getElementType();
     auto fc = unpackTensorElements(loc, loadedC, rewriter, op.getC().getType());
-
-    unsigned warpSize = triton::gpu::lookupThreadsPerWarp(rewriter);
-    // compute number of output elements that each thread holds for one MFMA
-    // instruction. subBlocks
-    const int subBlocks =
-        getNumSubmatrices(aTensorTy.getElementType(), mDim, nDim);
-    auto elemsPerVec = mDim * nDim * subBlocks / warpSize;
+    SmallVector<int64_t> fcStrides = computeStrides(accShape);
     int numVecInKBase = numRepK * aKWidth / aKBase;
 
     Value firstMfma;
@@ -775,11 +798,8 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
             }
             Value acc = tb.undef(vecTy);
             for (unsigned v = 0; v < elemsPerVec; ++v) {
-              acc = tb.insert_element(
-                  vecTy, acc,
-                  fc[b * numRepM * numRepN * elemsPerVec +
-                     m * numRepN * elemsPerVec + n * elemsPerVec + v],
-                  tb.i32_val(v));
+              auto linearIdx = linearize({b, m, n, v % accShape[3]}, fcStrides);
+              acc = tb.insert_element(vecTy, acc, fc[linearIdx], tb.i32_val(v));
             }
             acc = zeroAuxiliarBlocks(subBlocks, acc);
             for (innerK = 0; innerK < innerKBound; innerK++) {
@@ -827,7 +847,7 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
             }
             acc = reduceSubBlocks(subBlocks, acc);
             adjustAccForSmallKDim(fc, acc, dstElemTy, b, m, n, numRepM, numRepN,
-                                  kDimInstrSize, kDimOperandSize, elemsPerVec);
+                                  kDimInstrSize, kDimOperandSize, accShape[3]);
           }
         }
       }
