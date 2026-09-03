@@ -16,6 +16,20 @@ protected:
   MLIRContext ctx;
 };
 
+TEST_F(LayoutUtilsTest, ClampOmitsNewRegisterBroadcasts) {
+  LinearLayout layout({{S("register"), {{0, 0}, {4, 0}, {0, 2}, {1, 4}}},
+                       {S("lane"), {{0, 1}, {2, 0}, {4, 0}}}},
+                      {{S("dim0"), 8}, {S("dim1"), 8}},
+                      /*requireSurjective=*/false);
+  auto clamped =
+      ensureLayoutNotLargerThan(layout, {{S("dim0"), 4}, {S("dim1"), 2}});
+  LinearLayout expected({{S("register"), {{0, 0}, {1, 0}}},
+                         {S("lane"), {{0, 1}, {2, 0}, {0, 0}}}},
+                        {{S("dim0"), 4}, {S("dim1"), 2}},
+                        /*requireSurjective=*/false);
+  EXPECT_EQ(clamped, expected);
+}
+
 TEST_F(LayoutUtilsTest, SquareSublayoutIsIdentity) {
   EXPECT_TRUE(squareSublayoutIsIdentity(
       LinearLayout::identity1D(4, S("in"), S("in")), {S("in")}));
