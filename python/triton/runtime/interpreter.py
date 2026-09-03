@@ -835,13 +835,18 @@ class InterpreterBuilder:
         return TensorHandle(_interpreter.atomic_cas(ptr.data, cmp.data, val.data, mask_data, sem), cmp.dtype.scalar)
 
     def create_atomic_poll(self, ptr, expected, timeout_ns, sem, scope):
-        start_ns = time.perf_counter_ns()
-        while True:
-            value = self.create_load(ptr, None, None, True)
-            if np.array_equal(value.data, expected.data):
-                return TensorHandle(np.array(True, dtype=np.bool_), tl.int1)
-            if timeout_ns is not None and time.perf_counter_ns() - start_ns >= timeout_ns.data.item():
-                return TensorHandle(np.array(False, dtype=np.bool_), tl.int1)
+        matched = np.zeros(ptr.data.shape, dtype=np.bool_)
+        start_ns = time.perf_counter_ns() if timeout_ns is not None else None
+        for index in np.ndindex(ptr.data.shape):
+            element_ptr = TensorHandle(np.asarray(ptr.data[index]), ptr.dtype)
+            while True:
+                value = self.create_load(element_ptr, None, None, True)
+                if value.data.item() == expected.data[index]:
+                    matched[index] = True
+                    break
+                if timeout_ns is not None and time.perf_counter_ns() - start_ns >= timeout_ns.data.item():
+                    break
+        return TensorHandle(matched, tl.int1)
 
     def create_atomic_rmw(self, rmwOp, ptr, val, mask, sem, scope):
         if rmwOp not in self.ir_rmw_op_to_interpreter_rmw_op:
@@ -1040,7 +1045,9 @@ class ReduceScanOpInterface:
             ret = ret.astype(np_dtype)
             ret_type = tl.block_type(dtype, list(ret.shape))
         else:
-            ret = np.array([ret], dtype=np_dtype)
+            # Match the shaped path above. NumPy 2 rejects out-of-range Python
+            # integers in array(..., dtype=...), while astype narrows instead.
+            ret = np.array([ret]).astype(np_dtype)
             ret_type = dtype
         return tl.core.tensor(TensorHandle(ret, dtype.scalar), ret_type)
 

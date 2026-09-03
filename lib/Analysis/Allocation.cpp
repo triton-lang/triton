@@ -92,6 +92,32 @@ static SmallVector<unsigned> getRepShapeForAtomic(Value result) {
   return smemShape;
 }
 
+static unsigned getResultBroadcastScratchSize(Value result) {
+  if (result.use_empty())
+    return 0;
+
+  SmallVector<unsigned> smemShape;
+  if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
+    auto freeVariableMasks =
+        gpu::toLinearLayout(tensorTy).getFreeVariableMasks();
+    auto *ctx = tensorTy.getContext();
+    bool hasThreadReplication =
+        freeVariableMasks.lookup(StringAttr::get(ctx, "lane")) != 0 ||
+        freeVariableMasks.lookup(StringAttr::get(ctx, "warp")) != 0 ||
+        freeVariableMasks.lookup(StringAttr::get(ctx, "block")) != 0;
+    if (!hasThreadReplication)
+      return 0;
+    smemShape = convertType<unsigned>(gpu::getShapePerCTA(tensorTy));
+  } else {
+    smemShape.push_back(1);
+  }
+
+  unsigned elems = getNumScratchElements(smemShape);
+  Type elemTy = getElementTypeOrSelf(result.getType());
+  unsigned bitWidth = getIntOrFloatOrPtrBitWidth(elemTy);
+  return elems * std::max(8u, bitWidth) / 8;
+}
+
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
     return ReduceOpHelper(reduceOp).getScratchSizeInBytes();
@@ -125,9 +151,9 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     // need to be broadcast through shared memory.
     if (!poll.getTimeout())
       return 0;
+    return getResultBroadcastScratchSize(poll.getResult());
   }
-  if (isa<gpu::LocalAtomicScatterRMWOp, AtomicPollOp>(op) ||
-      isa<AtomicOpInterface>(op)) {
+  if (isa<gpu::LocalAtomicScatterRMWOp>(op) || isa<AtomicOpInterface>(op)) {
     auto value = op->getOperand(0);
     auto smemShape = getRepShapeForAtomic(op->getResult(0));
     auto elems = getNumScratchElements(smemShape);
@@ -169,7 +195,8 @@ bool hasCrossCTAScratch(Operation *op) {
   if (auto reduce = dyn_cast<ReduceOp>(op))
     return !ReduceOpHelper(reduce).isReduceWithinCTA();
   if (auto poll = dyn_cast<AtomicPollOp>(op))
-    return poll.getTimeout() && !poll.getResult().use_empty();
+    return poll.getTimeout() && !poll.getResult().use_empty() &&
+           getAtomicScratchBroadcastMask(op).value_or(0) != 0;
   if (isa<AtomicOpInterface, gpu::LocalAtomicScatterRMWOp>(op)) {
     Value result = op->getResult(0);
     if (result.use_empty())

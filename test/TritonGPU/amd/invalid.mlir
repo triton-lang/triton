@@ -808,3 +808,16 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32}
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#padded = #ttg.padded_shared<[1:+1] {order = [0], shape = [1]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @tdm_copy_padded_barrier(%desc: !tt.tensordesc<16x64xf16, #shared>, %dst: !ttg.memdesc<16x64xf16, #shared, #smem, mutable>, %barrier: !ttg.memdesc<1xi64, #padded, #smem>) {
+    // expected-error @below {{barrier must have a contiguous shared-memory layout}}
+    %0 = amdg.async_tdm_copy_global_to_local %desc into %dst, barrier = %barrier : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #padded, #smem> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}

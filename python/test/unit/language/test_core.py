@@ -1604,6 +1604,26 @@ def test_atomic_poll(dtype, bit_width, sem, scope, device):
         assert "%globaltimer" not in ptx
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("block_size", [1, 16, 128, 512])
+@pytest.mark.parametrize("timeout", [None, 0])
+def test_atomic_poll_tensor_results(block_size, timeout, device):
+
+    @triton.jit
+    def kernel(flags, out, BLOCK: tl.constexpr, TIMEOUT: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        matched = tl.atomic_poll(flags + offsets, offsets + 1, timeout_ns=TIMEOUT)
+        tl.store(out + offsets, matched)
+
+    expected = torch.arange(1, block_size + 1, dtype=torch.int32, device=device)
+    flags = expected.clone()
+    if timeout is not None:
+        flags[::2] = 0
+    out = torch.empty(block_size, dtype=torch.bool, device=device)
+    kernel[(1, )](flags, out, block_size, timeout, num_warps=4)
+    assert torch.equal(out, flags == expected)
+
+
 def test_atomic_poll_no_timeout_uses_no_shared_memory(device):
 
     @triton.jit
@@ -1665,30 +1685,31 @@ def test_atomic_poll_waits_for_remote_cta(device):
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
     "op, dtype_x_str, mode, sem",
-    itertools.chain.from_iterable([[
-        ('add', 'bfloat16', mode, sem),
-        ('add', 'float16', mode, sem),
-        ('add', 'uint32', mode, sem),
-        ('add', 'int32', mode, sem),
-        ('add', 'float32', mode, sem),
-        ('add', 'uint64', mode, sem),
-        ('add', 'int64', mode, sem),
-        ('add', 'float64', mode, sem),
-        ('max', 'uint32', mode, sem),
-        ('max', 'int32', mode, sem),
-        ('max', 'float32', mode, sem),
-        ('max', 'uint64', mode, sem),
-        ('max', 'int64', mode, sem),
-        ('max', 'float64', mode, sem),
-        ('min', 'uint32', mode, sem),
-        ('min', 'int32', mode, sem),
-        ('min', 'float32', mode, sem),
-        ('min', 'uint64', mode, sem),
-        ('min', 'int64', mode, sem),
-        ('min', 'float64', mode, sem),
-    ]
-                                   for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']
-                                   for sem in [None, 'acquire', 'release', 'acq_rel', 'relaxed']]))
+    list(
+        itertools.chain.from_iterable([[
+            ('add', 'bfloat16', mode, sem),
+            ('add', 'float16', mode, sem),
+            ('add', 'uint32', mode, sem),
+            ('add', 'int32', mode, sem),
+            ('add', 'float32', mode, sem),
+            ('add', 'uint64', mode, sem),
+            ('add', 'int64', mode, sem),
+            ('add', 'float64', mode, sem),
+            ('max', 'uint32', mode, sem),
+            ('max', 'int32', mode, sem),
+            ('max', 'float32', mode, sem),
+            ('max', 'uint64', mode, sem),
+            ('max', 'int64', mode, sem),
+            ('max', 'float64', mode, sem),
+            ('min', 'uint32', mode, sem),
+            ('min', 'int32', mode, sem),
+            ('min', 'float32', mode, sem),
+            ('min', 'uint64', mode, sem),
+            ('min', 'int64', mode, sem),
+            ('min', 'float64', mode, sem),
+        ]
+                                       for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']
+                                       for sem in [None, 'acquire', 'release', 'acq_rel', 'relaxed']])))
 def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
     check_type_supported(dtype_x_str, device)
     if is_interpreter():
@@ -2991,10 +3012,7 @@ def get_reduced_dtype(dtype_str, op):
 
 
 def get_reduce_input(dtype_str, shape):
-    # limit the range of integers so that reduce ops do not overflow
-    low = 0 if dtype_str in uint_dtypes else -10 if dtype_str in integral_dtypes else None
-    high = 10 if dtype_str in integral_dtypes else None
-    return numpy_random(shape, dtype_str=dtype_str, low=low, high=high)
+    return numpy_random(shape, dtype_str=dtype_str)
 
 
 @pytest.mark.interpreter
@@ -3056,7 +3074,10 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, device):
     kernel[(1, )](x_tri, z_tri, BLOCK=shape, num_ctas=num_ctas)
     z_tri = to_numpy(z_tri)
     # compare
-    if op == 'sum':
+    if op == 'sum' and dtype_str in integral_dtypes:
+        # Integer sums wrap around, so a relative tolerance is meaningless.
+        np.testing.assert_equal(z_ref, z_tri)
+    elif op == 'sum':
         np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
     else:
         if 'tie-break-left' in op:
@@ -3190,7 +3211,10 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
     z_tri = to_numpy(z_tri)
 
     # compare
-    if op == 'sum':
+    if op == 'sum' and dtype_str in integral_dtypes:
+        # Integer sums wrap around, so a relative tolerance is meaningless.
+        np.testing.assert_equal(z_ref, z_tri)
+    elif op == 'sum':
         np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
     else:
         if op in ('argmin', 'argmax'):
@@ -6771,10 +6795,16 @@ def test_override_arch(arch, env_var_override, device, fresh_knobs):
             h = simple.warmup(data, out, arch=arch, grid=(1, ))
         ttgir_gfx = re.search(r'hip:(\w+)', h.asm["ttgir"])
         ttgir_warp = re.search(r'"ttg.threads-per-warp" = (\d+)', h.asm["ttgir"])
-        amdgcn_gfx = re.search(r'\.amdgcn_target "amdgcn-amd-amdhsa-[^-]*-(\w+)"', h.asm["amdgcn"])
+        amdgcn_target = re.search(r'\.amdgcn_target "(amdgpu[^-]*)-amd-amdhsa-[^-]*-(\w+)"', h.asm["amdgcn"])
+        expected_triple_arch = {
+            "gfx942": "amdgpu9.42",
+            "gfx950": "amdgpu9.50",
+            "gfx1200": "amdgpu12.00",
+        }
         assert ttgir_gfx.group(1) == arch
         assert int(ttgir_warp.group(1)) == (32 if arch == "gfx1200" else 64)
-        assert amdgcn_gfx.group(1) == arch
+        assert amdgcn_target.group(1) == expected_triple_arch[arch]
+        assert amdgcn_target.group(2) == arch
 
 
 def test_num_ctas_pre_sm90(device, fresh_knobs):
@@ -7535,7 +7565,8 @@ def test_indirect_store(dtype, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("dtype", map(tl.dtype, tl.dtype.SINT_TYPES + tl.dtype.UINT_TYPES + tl.dtype.STANDARD_FP_TYPES))
+@pytest.mark.parametrize("dtype",
+                         list(map(tl.dtype, tl.dtype.SINT_TYPES + tl.dtype.UINT_TYPES + tl.dtype.STANDARD_FP_TYPES)))
 def test_dtype_tensor(device, dtype):
 
     @triton.jit

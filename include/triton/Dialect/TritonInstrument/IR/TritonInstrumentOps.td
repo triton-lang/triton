@@ -303,15 +303,19 @@ def TTI_ExperimentalGSanTensorAccessOp
 }
 
 def TTI_ExperimentalGSanAtomicPollOp
-    : TTI_Op<"experimental_gsan_atomic_poll"> {
+    : TTI_Op<"experimental_gsan_atomic_poll", [
+        SameOperandsEncoding,
+        TypesMatchWith<"matched type matches pointer shape", "ptr", "matched",
+                       "getI1SameShape($_self)">
+      ]> {
   let summary = "Instrument a completed atomic poll for GSan";
   let description = [{
     Records the successful read performed by an atomic poll after the hardware
     polling loop has completed.
   }];
   let arguments = (ins
-    Arg<TT_Ptr, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
-    I1:$matched,
+    Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+    TT_BoolLike:$matched,
     TT_MemSemanticAttr:$sem,
     TT_MemSyncScopeAttr:$scope
   );

@@ -1341,7 +1341,6 @@ def WaitBarrierOp : TT_AMDGPU_Op<"wait_barrier", [
   let assemblyFormat = [{
     $alloc `,` $phase attr-dict `:` qualified(type($alloc))
   }];
-  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1393,7 +1392,6 @@ def AsyncCopyMbarrierArriveOp : TT_AMDGPU_Op<"async_copy_mbarrier_arrive", [
     Arg<TTG_MemDescType, "", BarrierSharedReadWrite>:$barrier
   );
   let assemblyFormat = "$barrier attr-dict `:` qualified(type($barrier))";
-  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//

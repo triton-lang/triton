@@ -200,17 +200,19 @@ triton::BarrierStages getLocalBarrierStages(Operation *op,
   // immediately before the operation.
   stages.betweenMemoryEffects = hasScratchBarrier;
   stages.beforeMemoryEffects =
-      isa<gpu::BarrierOp, ttng::ClusterBarrierOp,
-          triton::gpu::WarpSpecializePartitionsOp, triton::gpu::WarpYieldOp,
+      isa<gpu::BarrierOp, ttng::ClusterBarrierOp, triton::gpu::WarpYieldOp,
           triton::gpu::WarpReturnOp, ttng::ArriveBarrierOp,
           ttng::BarrierExpectOp, ttng::TCGen5CommitOp>(op);
 
   // Tensor-map acquire ends with a CTA barrier after the descriptor fence.
   stages.afterMemoryEffects = isa<ttng::TensormapFenceproxyAcquireOp>(op);
 
-  // Warp specialization writes its captures before the launch rendezvous.
-  if (isa<triton::gpu::WarpSpecializeOp>(op))
+  // The first launch rendezvous publishes captures. The second finishes their
+  // reads before any partition starts its body and reuses capture storage.
+  if (isa<triton::gpu::WarpSpecializeOp>(op)) {
     stages.beforeMemoryEffects = !hasScratchBarrier;
+    stages.afterMemoryEffects = true;
+  }
   // Fused MMA completion synchronizes the partition before issuing the MMA.
   if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op))
     stages.beforeMemoryEffects = !mma.getCompletionBarriers().empty();

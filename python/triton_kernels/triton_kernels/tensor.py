@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 import torch
+from torch._subclasses.fake_tensor import is_fake
 from triton.tools.ragged_tma import create_ragged_descriptor
 from triton.tools.tensor_descriptor import TensorDescriptor
 
@@ -231,18 +232,79 @@ def wrap_torch_tensor(torch_tensor, dtype=None, shape=None, shape_max=None, layo
     return Tensor(Storage(torch_tensor, layout), dtype=dtype, shape=shape, shape_max=shape_max)
 
 
-def convert_layout(tensor: Tensor, layout: Layout, **layout_transformation_kwargs):
+def _validate_conversion_out(tensor, out, layout, destination, same_encoding):
+    data, out_data = tensor.data, out.data
+    if out.shape != tensor.shape:
+        raise ValueError("out must have the same logical shape as the input")
+    if not out.storage.layout.can_preserve_storage_as(layout, len(tensor.shape)):
+        raise ValueError("out must have the requested layout")
+    if out.dtype != tensor.dtype or out_data.dtype != data.dtype:
+        raise ValueError("out must have the same logical and storage dtypes as the input")
+    if out_data.device != data.device:
+        raise ValueError("out must be on the input device")
+    if tensor.dtype == FP4 and data.dtype != torch.uint8:
+        raise ValueError("FP4 conversion with out requires uint8 storage")
+    if (same_encoding and torch._C._overlaps(data, out_data) and out_data.storage_offset() == data.storage_offset()
+            and out_data.shape == data.shape and out_data.stride() == data.stride()):
+        return True
+    if list(out_data.shape) != destination.storage_shape:
+        raise ValueError("out has an incorrect physical storage shape")
+    # Empty tensors have no spans to validate, regardless of strides or pointers.
+    if not out_data.numel():
+        return False
+
+    # Increasing strides must separate the spans of the faster dimensions.
+    # This permits sliced storage without permitting overlapping writes.
+    span = 1
+    for size, stride in sorted(zip(out_data.shape, out_data.stride()), key=lambda item: item[1]):
+        if size > 1:
+            if stride < span:
+                raise ValueError("out must have nonoverlapping physical strides")
+            span += (size - 1) * stride
+
+    if data.device.type == "meta" or is_fake(data):
+        if not torch._C._overlaps(data, out_data):
+            return False
+        source_start = data.storage_offset() * data.element_size()
+        out_start = out_data.storage_offset() * out_data.element_size()
+    else:
+        source_start = data.data_ptr()
+        out_start = out_data.data_ptr()
+    source_end = source_start + data.element_size() * (1 + sum(
+        (size - 1) * stride for size, stride in zip(data.shape, data.stride())))
+    out_end = out_start + out_data.element_size() * span
+    if source_start < out_end and out_start < source_end:
+        raise ValueError("input and out storage must not overlap")
+    return False
+
+
+def convert_layout(tensor: Tensor, layout: Layout, *, out: Tensor | None = None, **layout_transformation_kwargs):
     """Convert `tensor` storage encoding to `layout`.
 
-    Returns `tensor` unchanged when its existing storage is already valid for
-    `layout`. This operation does not clone, densify, or canonicalize physical
-    strides of a tensor that is already in the requested encoding.
+    Without `out`, returns `tensor` unchanged when its storage is already valid
+    for `layout`, without cloning or canonicalizing its physical strides.
+
+    With `out`, writes into and returns that tensor. Its storage must have the
+    destination shape, matching input dtype/device, and nonoverlapping strides.
+    Slices with gaps are supported; interleaved strides are not. Input and output
+    spans must be disjoint unless they are identical views in the same encoding.
+    FP4 storage must be uint8. Reference paths may still allocate intermediates.
     """
     shape = list(tensor.shape)
-    if not layout_transformation_kwargs and tensor.storage.layout.can_preserve_storage_as(layout, len(shape)):
+    same_encoding = not layout_transformation_kwargs and tensor.storage.layout.can_preserve_storage_as(
+        layout, len(shape))
+    if out is None and same_encoding:
         return tensor
     source = tensor.storage.layout.make_transformation(shape, tensor.dtype == FP4)
     destination = layout.make_transformation(shape, tensor.dtype == FP4, **layout_transformation_kwargs)
+    if out is not None:
+        if _validate_conversion_out(tensor, out, layout, destination, same_encoding):
+            return out
+        if same_encoding and tensor.data.shape == out.data.shape:
+            out.data.copy_(tensor.data)
+        else:
+            source.convert_data(tensor.data, destination, out=out.data)
+        return out
     new_data = source.convert_data(tensor.storage.data, destination)
     return Tensor(Storage(new_data, layout), shape=list(tensor.shape), dtype=tensor.dtype)
 

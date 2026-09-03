@@ -51,6 +51,20 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
     tt.return
   }
 
+  // CHECK-LABEL: llvm.func @atomic_poll_tensor
+  // CHECK: llvm.load %{{.*}} atomic monotonic
+  // CHECK: llvm.load %{{.*}} atomic monotonic
+  // CHECK: nvvm.barrier
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  // CHECK: nvvm.barrier
+  tt.func @atomic_poll_tensor(%ptr: tensor<256x!tt.ptr<i32>, #blocked>, %expected: tensor<256xi32, #blocked>) {
+    %matched = tt.atomic_poll acquire, sys, %ptr, %expected : tensor<256x!tt.ptr<i32>, #blocked>, tensor<256xi32, #blocked> -> tensor<256xi1, #blocked>
+    tt.return
+  }
+
   // CHECK-LABEL: llvm.func @atomic_tensor_desc
   // CHECK: llvm.alloca %{{.*}} x !llvm.array<2 x i32>
   // CHECK: llvm.alloca %{{.*}} x !llvm.array<2 x i16>

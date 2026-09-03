@@ -30,6 +30,21 @@ from triton.runtime.jit import MockTensor
 import triton.language as tl
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 
+
+@filecheck_test
+@gluon.jit
+def test_atomic_poll_tensor():
+    # CHECK-LABEL: test_atomic_poll_tensor
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    offsets = ttgl.arange(0, 128, layout=layout)
+    ptrs = offsets.to(ttgl.int64).to(ttgl.pointer_type(ttgl.int32), bitcast=True)
+    # CHECK: tt.atomic_poll acquire, gpu, {{.*}} : tensor<128x!tt.ptr<i32>, #blocked>, tensor<128xi32, #blocked> -> tensor<128xi1, #blocked>
+    result = ttgl.atomic_poll(ptrs, 1)
+    ttgl.static_assert(result.type.layout == layout)
+    # CHECK: tt.atomic_poll acquire, gpu, {{.*}} timeout {{.*}} : tensor<128x!tt.ptr<i32>, #blocked>, tensor<128xi32, #blocked> -> tensor<128xi1, #blocked>
+    ttgl.atomic_poll(ptrs, offsets, timeout_ns=0)
+
+
 TARGET_PAT = re.compile('ttg.target = "[^"]*"')
 # HIP backend can add this attribute to function parameters
 PTRRANGE_PAT = re.compile('(, )?tt.pointer_range = 32 : i32')

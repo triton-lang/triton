@@ -83,12 +83,12 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
             return data.mT
         return data
 
-    def convert_data(self, data, destination: LayoutTransformation):
+    def convert_data(self, data, destination: LayoutTransformation, *, out=None):
         if (not self.is_fp4 or self.N % 2 or self.shape[self.mx_axis] % 2 or data.device.type != "cuda"
                 or data.dtype != torch.uint8 or data.ndim != len(self.shape)
                 or not isinstance(destination, strided.StridedLayoutTransformation)
                 or destination.order[0] < len(self.shape) - 2):
-            return super().convert_data(data, destination)
+            return super().convert_data(data, destination, out=out)
 
         source = self._maybe_mT(data)
         source_shape = tuple(source.shape)
@@ -97,10 +97,11 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         # encodings must contain complete tiles covering the logical shape.
         if (list(source_shape[:-2]) != self.leading_shape or source_shape[-2] % 4 or source_shape[-1] % 128
                 or 4 * source_shape[-2] < m or source_shape[-1] // 2 < k):
-            return super().convert_data(data, destination)
+            return super().convert_data(data, destination, out=out)
 
-        out = torch.empty_strided(destination.storage_shape, destination.storage_strides, dtype=data.dtype,
-                                  device=data.device)
+        if out is None:
+            out = torch.empty_strided(destination.storage_shape, destination.storage_strides, dtype=data.dtype,
+                                      device=data.device)
         target = self._maybe_mT(out)
         block_m, block_k = 16, 256
         grid = (math.prod(self.leading_shape) * triton.cdiv(m, 4 * block_m) * triton.cdiv(k, block_k // 2), )
@@ -111,17 +112,24 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
                                                    MMA_VERSION=self.mma_version, BLOCK_M=block_m, BLOCK_K=block_k)
         return out
 
-    def _convert_data_from(self, data, source: LayoutTransformation):
+    def _convert_data_from(self, data, source: LayoutTransformation, *, out):
         if (not isinstance(source, strided.StridedLayoutTransformation) or not self.is_fp4 or self.N % 2
                 or self.shape[self.mx_axis] % 2 or not source._can_convert_fp4(data)):
-            return super()._convert_data_from(data, source)
-        return self._swizzle_from_strided(data, source.order[0])
+            return super()._convert_data_from(data, source, out=out)
+        return self._swizzle_from_strided(data, source.order[0], out=out)
 
-    def _swizzle_from_strided(self, data, major_dim):
+    def _swizzle_from_strided(self, data, major_dim, out=None):
         shape = self.storage_shape
         if self.mx_axis == len(self.leading_shape):
             shape[-2:] = reversed(shape[-2:])
-        out = torch.empty((*shape[:-1], shape[-1] // 4), dtype=torch.int32, device=data.device)
+        if out is None:
+            target = torch.empty((*shape[:-1], shape[-1] // 4), dtype=torch.int32, device=data.device)
+            out = self._maybe_mT(target.view(torch.uint8))
+        else:
+            target = self._maybe_mT(out)
+            if (target.stride(-1) == 1 and target.storage_offset() % 4 == 0 and target.data_ptr() % 4 == 0
+                    and all(stride % 4 == 0 for stride in target.stride()[:-1])):
+                target = target.view(torch.int32)
         source = self._maybe_mT(data)
         m, k = (self.N, self.K) if self.mx_axis == len(self.leading_shape) else (self.K, self.N)
         block_m, block_k = 16, 256
@@ -129,11 +137,11 @@ class HopperMXValueLayoutTransformation(LayoutTransformation):
         grid = (math.prod(self.leading_shape) * grid_m * grid_k, )
         if grid[0] > 0:
             with torch.cuda.device(data.device):
-                _swizzle_from_strided_kernel[grid](source, out, tuple(self.leading_shape), source.stride(),
-                                                   out.stride(), m, k, GRID_M=grid_m, GRID_K=grid_k,
+                _swizzle_from_strided_kernel[grid](source, target, tuple(self.leading_shape), source.stride(),
+                                                   target.stride(), m, k, GRID_M=grid_m, GRID_K=grid_k,
                                                    MMA_VERSION=self.mma_version, PACK_M=major_dim != self.mx_axis,
                                                    BLOCK_M=block_m, BLOCK_K=block_k)
-        return self._maybe_mT(out.view(torch.uint8))
+        return out
 
     def swizzle_data(self, data):
         """
@@ -304,7 +312,14 @@ def _bf16x2_to_fp4e2m1x2(x):
 
 
 def _unpack_bits(x):
-    x = x.view(torch.int32)
+    shape = (*x.shape[:-1], x.shape[-1] * x.element_size() // torch.int32.itemsize)
+    # Reinterpret aligned row gaps directly; flatten unsupported byte layouts.
+    if (x.stride(-1) != 1 or x.storage_offset() * x.element_size() % torch.int32.itemsize
+            or any(stride * x.element_size() % torch.int32.itemsize for stride in x.stride()[:-1])):
+        x = x.reshape(-1)
+        if x.stride(0) != 1 or x.storage_offset() * x.element_size() % torch.int32.itemsize:
+            x = x.clone(memory_format=torch.contiguous_format)
+    x = x.view(torch.int32).reshape(shape)
     m = 0b10000001110000001000000111000000
     a = (x << 1) & 0b10000000000000001000000000000000
     b = right_shift_unsigned(x, 3) & 0b00000001100000000000000110000000
@@ -414,7 +429,12 @@ def _swizzle_from_strided_kernel(X, Y, LEADING_SHAPE: tl.constexpr, X_STRIDES: t
                | (_compress_fp4x2_triton(c, False) >> 6) | _compress_fp4x2_triton(d, True))
     rows = tile_m * BLOCK_M + tl.arange(0, BLOCK_M)
     words = tile_k * (BLOCK_K // 4) + tl.arange(0, BLOCK_K // 4)
-    tl.store(Y + rows[:, None] * Y_STRIDES[-2] + words[None, :] * Y_STRIDES[-1], encoded)
+    if Y.dtype.element_ty == tl.uint8:
+        offsets = rows[:, None] * Y_STRIDES[-2] + 4 * words[None, :] * Y_STRIDES[-1]
+        for byte in tl.static_range(4):
+            tl.store(Y + offsets + byte * Y_STRIDES[-1], encoded >> (8 * byte))
+    else:
+        tl.store(Y + rows[:, None] * Y_STRIDES[-2] + words[None, :] * Y_STRIDES[-1], encoded)
 
 
 @triton.jit

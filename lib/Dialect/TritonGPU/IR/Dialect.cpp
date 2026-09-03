@@ -4488,6 +4488,38 @@ bool triton::gpu::isInnermostContiguous(MemDescType type, unsigned numElems) {
   return actual.getNumConsecutiveInOut() >= numElems;
 }
 
+bool triton::gpu::isContiguousSharedMemoryLayout(MemDescType type) {
+  auto layout = dyn_cast<SwizzledSharedEncodingAttr>(type.getEncoding());
+  return layout && layout.getOrder().size() == 1 && layout.getVec() == 1 &&
+         layout.getPerPhase() == 1 && layout.getMaxPhase() == 1 &&
+         type.getShape() == dropPipeliningDim(type.getAllocShape(), layout);
+}
+
+LogicalResult triton::gpu::verifyMBarrierOpInterface(Operation *op) {
+  for (Value barrier : cast<MBarrierOpInterface>(op).getBarriers()) {
+    auto type = cast<MemDescType>(barrier.getType());
+    if (!(type.getElementType().isInteger(64) && type.getRank() == 1 &&
+          type.getShape()[0] <= lookupNumCTAs(op)))
+      return op->emitOpError("barrier allocation must be a descriptor of "
+                             "Nxi64 type with N <= number of CTAs");
+    if (!isContiguousSharedMemoryLayout(type))
+      return op->emitOpError("barrier must have a contiguous shared-memory "
+                             "layout without subviews");
+    auto cgaLayout = getCGALayout(type.getEncoding()).getLinearLayout();
+    auto kBlock = StringAttr::get(op->getContext(), "block");
+    int i = 0;
+    for (const auto &basis : cgaLayout.getBases().lookup(kBlock)) {
+      if (basis[0] != 0 && basis[0] != int64_t(1) << i)
+        return op->emitOpError(
+            "broadcasted cluster barriers require bases to be the sequence "
+            "1, 2, 4, 8, ... perhaps with zero bases interleaved.");
+      if (basis[0] != 0)
+        ++i;
+    }
+  }
+  return success();
+}
+
 LinearLayout triton::gpu::inferReshapeLinearLayout(TensorOrMemDesc srcTy,
                                                    ArrayRef<int64_t> dstShape) {
   auto *ctx = srcTy.getContext();

@@ -91,10 +91,10 @@ def test_mxfp4_value_shuffled_rejects_odd_n(k, destination):
 @pytest.mark.parametrize("block_n", [128, 256])
 @pytest.mark.parametrize("step", [1, 2])
 def test_mxfp4_value_shuffled_matches_torch(shape, block_k, block_n, step):
-    input_shape = tuple(step * size for size in shape[:-1]) + shape[-1:]
+    input_shape = tuple(step * size for size in shape)
     data_cpu = torch.randint(0, 256, input_shape, dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
     data_cuda = data_cpu.cuda()
-    index = (slice(step - 1, None, step), ) * (len(shape) - 1) + (slice(None), )
+    index = (slice(step - 1, None, step), ) * len(shape)
     data_cpu, data_cuda = data_cpu[index], data_cuda[index]
     logical_shape = list(data_cpu.shape)
     logical_shape[-1] *= 2

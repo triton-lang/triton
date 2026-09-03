@@ -97,8 +97,19 @@ def _register_pressure_scheduler_kernel():
 
 
 @pytest.mark.skipif(is_hip(), reason="NVPTX code generation is unavailable on AMD")
-def test_nvidia_register_pressure_scheduler_hook():
+@pytest.mark.parametrize("link_hip_first", [False, True])
+def test_nvidia_register_pressure_scheduler_hook(link_hip_first, fresh_triton_cache):
     backend, source = _register_pressure_scheduler_kernel()
+    if link_hip_first:
+        from triton.backends.compiler import GPUTarget
+
+        @triton.jit
+        def empty_kernel():
+            return
+
+        # HIP linking resets LLVM command-line options.
+        triton.compile(triton.compiler.ASTSource(empty_kernel, {}), target=GPUTarget("hip", "gfx942", 64))
+
     default_options = backend.parse_options({"ptx_version": 80, "sched4reg": False})
     pressure_options = backend.parse_options({"ptx_version": 80, "sched4reg": True})
 

@@ -315,7 +315,6 @@ def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier", [
     https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-mbarrier-inval
   }];
 
-  let hasVerifier = 1;
   let arguments = (ins Arg<TTG_MemDescType, "", GenericSharedWrite>:$alloc);
   let assemblyFormat = "$alloc attr-dict `:` qualified(type($alloc))";
 }
@@ -400,7 +399,6 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
     $alloc `,` $phase (`,` $pred^)? (`deps` $deps^)?
     attr-dict `:` qualified(type($alloc)) (`,` type($deps)^)?
   }];
-  let hasVerifier = 1;
 }
 
 def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [

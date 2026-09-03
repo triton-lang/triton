@@ -1161,9 +1161,9 @@ def get_test_mxfp_variants():
     # Add non-square test cases
     [(32, 64, 128), (64, 32, 128)])
 @pytest.mark.parametrize("a_type, b_type", get_test_mxfp_variants())
-@pytest.mark.parametrize("a_scale_type, b_scale_type", itertools.product(["e8m0", "e4m3"], repeat=2))
+@pytest.mark.parametrize("a_scale_type, b_scale_type", list(itertools.product(["e8m0", "e4m3"], repeat=2)))
 @pytest.mark.parametrize("scale_factor", [16, 32])
-@pytest.mark.parametrize("with_a_scale, with_b_scale", itertools.product([True, False], repeat=2))
+@pytest.mark.parametrize("with_a_scale, with_b_scale", list(itertools.product([True, False], repeat=2)))
 def test_amd_wmma_scaled(wmma_shape, transposed, M, N, K, a_type, b_type, a_scale_type, b_scale_type, scale_factor,
                          with_a_scale, with_b_scale):
     instr_m, instr_n = wmma_shape
@@ -1271,7 +1271,7 @@ def test_amd_wmma_scaled(wmma_shape, transposed, M, N, K, a_type, b_type, a_scal
 @pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires CDNA5")
 @pytest.mark.parametrize("M, N, K", get_test_mxfp_block_mnk())
 @pytest.mark.parametrize("a_type, b_type", get_test_mxfp_variants())
-@pytest.mark.parametrize("a_scale_type, b_scale_type", itertools.product(["e8m0", "e4m3"], repeat=2))
+@pytest.mark.parametrize("a_scale_type, b_scale_type", list(itertools.product(["e8m0", "e4m3"], repeat=2)))
 @pytest.mark.parametrize("scale_factor", [16, 32])
 @pytest.mark.parametrize("ctas_per_cga", [(2, 1), (1, 2), (2, 2), (4, 1), (2, 4)])
 def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type, a_scale_type, b_scale_type, scale_factor, ctas_per_cga):
@@ -1362,7 +1362,7 @@ def test_amd_wmma_scaled_multi_cta(M, N, K, a_type, b_type, a_scale_type, b_scal
 @pytest.mark.parametrize("B", [4])
 @pytest.mark.parametrize("M, N, K", get_test_mxfp_block_mnk())
 @pytest.mark.parametrize("a_type, b_type", get_test_mxfp_variants())
-@pytest.mark.parametrize("a_scale_type, b_scale_type", itertools.product(["e8m0", "e4m3"], repeat=2))
+@pytest.mark.parametrize("a_scale_type, b_scale_type", list(itertools.product(["e8m0", "e4m3"], repeat=2)))
 @pytest.mark.parametrize("scale_factor", [16, 32])
 def test_amd_wmma_scaled_batched(B, M, N, K, a_type, b_type, a_scale_type, b_scale_type, scale_factor):
 
