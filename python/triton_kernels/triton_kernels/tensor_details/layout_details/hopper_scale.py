@@ -98,9 +98,10 @@ class HopperMXScaleLayoutTransformation(ScaleLayoutTransformation):
         grid = (math.prod(self.leading_shape) * triton.cdiv(m_pad, block_m) * triton.cdiv(k_pad, block_k), )
         if grid[0]:
             with torch.cuda.device(data.device):
-                _convert_scale_kernel[grid](matrix, encoded, tuple(self.leading_shape), matrix.stride(),
-                                            encoded.stride(), matrix.shape[-2], matrix.shape[-1], m_pad, k_pad,
-                                            self.num_warps, inverse, block_m, block_k, num_warps=num_warps)
+                _convert_scale_kernel[grid](matrix.view(torch.uint8), encoded.view(torch.uint8),
+                                            tuple(self.leading_shape), matrix.stride(), encoded.stride(),
+                                            matrix.shape[-2], matrix.shape[-1], m_pad, k_pad, self.num_warps, inverse,
+                                            block_m, block_k, num_warps=num_warps)
         return out
 
     def swizzle_data(self, data):
@@ -173,8 +174,6 @@ def _convert_scale_kernel(Matrix, Encoded, LEADING_SHAPE: tl.constexpr, MATRIX_S
                           ENCODED_STRIDES: tl.constexpr, M: tl.constexpr, K: tl.constexpr, M_PAD: tl.constexpr,
                           K_PAD: tl.constexpr, LAYOUT_WARPS: tl.constexpr, INVERSE: tl.constexpr, BLOCK_M: tl.constexpr,
                           BLOCK_K: tl.constexpr):
-    Matrix = Matrix.to(tl.pointer_type(tl.uint8))
-    Encoded = Encoded.to(tl.pointer_type(tl.uint8))
     tiles_m: tl.constexpr = triton.cdiv(M_PAD, BLOCK_M)
     tiles_k: tl.constexpr = triton.cdiv(K_PAD, BLOCK_K)
     pid = tl.program_id(0).to(tl.int64)

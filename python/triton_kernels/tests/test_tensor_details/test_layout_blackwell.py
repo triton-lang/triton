@@ -226,26 +226,63 @@ def test_mxfp4_value_conversion_strided_storage(shape, step, inverse):
     assert torch.equal(source_cuda.cpu(), source)
 
 
+@pytest.mark.parametrize("shape", [(256, 256), (2, 130, 66), (2, 3, 130, 66)])
+@pytest.mark.parametrize("layout", [
+    BlackwellMXValueLayout(),
+    BlackwellMX4ValueShuffledLayout(),
+    BlackwellMX4ValueShuffledLayout(block_k=256, block_n=128),
+])
+@pytest.mark.parametrize("major", [-2, -1])
+@pytest.mark.parametrize("inverse", [False, True])
+def test_mxfp4_value_convert_layout_out(shape, layout, major, inverse):
+    data = torch.randint(0, 256, (*shape[:-1], shape[-1] // 2), dtype=torch.uint8,
+                         generator=torch.Generator().manual_seed(0))
+    strided = StridedLayout(major)
+    source = convert_layout(wrap_torch_tensor(data, dtype=FP4), layout if inverse else strided)
+    destination = strided if inverse else layout
+    expected = convert_layout(source, destination)
+    source_gpu = wrap_torch_tensor(source.data.cuda(), dtype=FP4, shape=shape, layout=source.storage.layout)
+    storage = torch.full((expected.data.numel() * 2 + 1, ), 0xAB, dtype=torch.uint8, device="cuda")
+    out_data = storage[1:].as_strided(expected.data.shape, tuple(s * 2 for s in expected.data.stride()))
+    out = wrap_torch_tensor(out_data, dtype=FP4, shape=shape, layout=destination)
+
+    actual = convert_layout(source_gpu, destination, out=out)
+
+    assert actual is out
+    actual_data, expected_data = actual.data.cpu(), expected.data
+    if isinstance(destination, BlackwellMXValueLayout):
+        # Plain Blackwell padding is unspecified; only logical bytes must match.
+        actual_data = actual_data[..., :shape[-2] // 2, :]
+        expected_data = expected_data[..., :shape[-2] // 2, :]
+    assert torch.equal(actual_data, expected_data)
+    assert torch.all(storage[::2] == 0xAB)
+    assert torch.equal(source_gpu.data.cpu(), source.data)
+
+
 @pytest.mark.parametrize("inverse", [False, True])
 @pytest.mark.parametrize("layout", [BlackwellMXValueLayout(), BlackwellMX4ValueShuffledLayout()])
-def test_mxfp4_value_peak_allocation(inverse, layout):
+@pytest.mark.parametrize("with_out", [False, True])
+def test_mxfp4_value_peak_allocation(inverse, layout, with_out):
     data = torch.empty((4096, 1024), dtype=torch.uint8, device="cuda").mT
     source = wrap_torch_tensor(data, dtype=FP4, shape=[2048, 4096], layout=StridedLayout(-2))
     if inverse:
         source = convert_layout(source, layout)
         layout = StridedLayout(-2)
-    warm = convert_layout(source, layout)
+    out = convert_layout(source, layout) if with_out else None
+    warm = convert_layout(source, layout, out=out)
     torch.cuda.synchronize(data.device)
     del warm
     baseline = torch.cuda.memory_allocated(data.device)
     torch.cuda.reset_peak_memory_stats(data.device)
 
-    actual = convert_layout(source, layout)
+    actual = convert_layout(source, layout, out=out)
     torch.cuda.synchronize(data.device)
     peak = torch.cuda.max_memory_allocated(data.device) - baseline
 
     # Conversion should allocate its output, not another whole weight tensor.
-    assert peak <= actual.data.nbytes + 1024**2
+    assert peak <= (0 if with_out else actual.data.nbytes) + 1024**2
+    if with_out:
+        assert actual is out
 
 
 @pytest.mark.parametrize(("slice_sizes", "shape"), [([0], (0, 64)), ([2, 0], (2, 0))])
@@ -361,12 +398,11 @@ def test_act_scale_roundtrip_ragged(slice_sizes, m, k, align_m):
     (BlackwellMXScaleLayout(), (8, 524416)),
     (BlackwellMXScaleLayout(), (2, 3, 9, 130)),
 ])
-@pytest.mark.parametrize("inverse,major", [(False, None), (True, -1), (True, -2)])
+@pytest.mark.parametrize("inverse", [False, True])
+@pytest.mark.parametrize("major", [-2, -1])
 @pytest.mark.parametrize("step", [1, 2])
 @pytest.mark.parametrize("with_out", [False, True])
 def test_scale_convert_layout_strided_storage(layout, shape, inverse, major, step, with_out):
-    if major is None:
-        major = -1 if isinstance(layout, BlackwellActMXScaleLayout) else -2
     strided = StridedLayout(major)
     data = torch.randint(0, 256, shape, dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
     source = convert_layout(wrap_torch_tensor(data), layout if inverse else strided)
