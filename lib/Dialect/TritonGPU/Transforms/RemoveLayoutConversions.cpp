@@ -115,12 +115,17 @@ public:
   LayoutRematerialization(FuncOp F) : funcOp(F) {}
   ~LayoutRematerialization();
 
-  // Map the original value to the remat'ed one.
-  void addRematValue(Value old, Attribute encoding, Value newV);
-  // Get the remat'ed value in the given encoding, if one already exists and
-  // is different then the layout conversion root.
+  // Record equivalent values in both directions.
+  void addRematValue(Value old, Value newV);
+  // Get the most recently recorded equivalent value in the given encoding.
   Value getRematValue(Value value, Attribute encoding) const {
-    return rematMapping.lookup(value).lookup(encoding);
+    auto it = rematMapping.find(value);
+    if (it == rematMapping.end())
+      return {};
+    auto remats = it->second.find(encoding);
+    if (remats == it->second.end() || remats->second.empty())
+      return {};
+    return remats->second.back();
   }
 
   bool backwardRematerialization(bool disableRematSplitting);
@@ -180,14 +185,12 @@ public:
 
 private:
   void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
-  // Map values to their rematerializations for a given encoding. We have to be
-  // careful about what we put in this map because updateRematMapping only
-  // updates keys, and doesn't search for rematerialized values that may be
-  // replaced. This means it is only safe to add something to the map as a value
-  // if it is either guaranteed to outlive the map, or if it is mapped to some
-  // key that we know will always be replaced at the same time (e.g. different
-  // block args or results of an scf op).
-  DenseMap<Value, DenseMap<Attribute, Value>> rematMapping;
+  // Every recorded equivalence has an entry in both directions, so replacing
+  // a value can update all references to it through its own entry. Keep all
+  // equivalent values indexed by encoding and in insertion order within each
+  // encoding. Values are never mapped to themselves.
+  DenseMap<Value, DenseMap<Attribute, llvm::SmallSetVector<Value, 4>>>
+      rematMapping;
   FuncOp funcOp;
   DominanceInfo domInfo;
   PostDominanceInfo postDomInfo;
@@ -203,16 +206,34 @@ LayoutRematerialization::~LayoutRematerialization() {
   });
   for (const auto &[key, remats] : rematMapping) {
     assert(live.contains(key) && "remat mapping: key not present");
-    for (const auto &[encoding, remat] : remats)
-      assert(live.contains(remat) && "remat mapping: value not present");
+    auto keyEncoding = cast<RankedTensorType>(key.getType()).getEncoding();
+    for (const auto &[encoding, values] : remats) {
+      for (Value remat : values) {
+        assert(live.contains(remat) && "remat mapping: value not present");
+        auto it = rematMapping.find(remat);
+        assert(it != rematMapping.end() &&
+               "remat mapping: missing reverse key");
+        auto reverse = it->second.find(keyEncoding);
+        assert(reverse != it->second.end() && reverse->second.contains(key) &&
+               "remat mapping: missing reverse mapping");
+      }
+    }
   }
 #endif
 }
 
-void LayoutRematerialization::addRematValue(Value old, Attribute encoding,
-                                            Value newV) {
-  LDBG("addRematValue " << old << " encoding " << encoding << " " << newV);
-  rematMapping[old][encoding] = newV;
+void LayoutRematerialization::addRematValue(Value old, Value newV) {
+  LDBG("addRematValue " << old << " " << newV);
+  if (old == newV)
+    return;
+  auto oldEncoding = cast<RankedTensorType>(old.getType()).getEncoding();
+  auto newEncoding = cast<RankedTensorType>(newV.getType()).getEncoding();
+  auto &oldRemats = rematMapping[old][newEncoding];
+  oldRemats.remove(newV);
+  oldRemats.insert(newV);
+  auto &newRemats = rematMapping[newV][oldEncoding];
+  newRemats.remove(old);
+  newRemats.insert(old);
 }
 
 // Return true if the op is an op with a layout we don't want to change. We will
@@ -685,23 +706,19 @@ bool canBeRemat(Operation *op) {
 
 void LayoutRematerialization::updateRematMapping(
     SmallVector<std::tuple<Value, Value>> &values) {
+  // Replacement destinations must survive the entire batch.
   for (auto [old, newV] : values) {
     auto it = rematMapping.find(old);
     if (it == rematMapping.end())
       continue;
     auto remats = std::move(it->second);
     rematMapping.erase(it);
-    auto &newRemats = rematMapping[newV];
-    for (auto [encoding, replacedValue] : remats) {
-      // Loop through the replacement value to find the new version of remat
-      // value. This should be okay as the number of values should be small.
-      for (auto [before, after] : values) {
-        if (before == replacedValue) {
-          replacedValue = after;
-          break;
-        }
+    auto oldEncoding = cast<RankedTensorType>(old.getType()).getEncoding();
+    for (const auto &[encoding, rematValues] : remats) {
+      for (Value remat : rematValues) {
+        rematMapping[remat][oldEncoding].remove(old);
+        addRematValue(newV, remat);
       }
-      newRemats[encoding] = replacedValue;
     }
   }
 }
@@ -779,10 +796,9 @@ void LayoutRematerialization::rewriteSlice(
         });
         // The result is not in the layout/slice, the argument is.
         Value oldArg = loopBody.getArgument(m.first + numIndVars);
-        addRematValue(newForOp.getResult(m.first), layout[oldArg],
+        addRematValue(newForOp.getResult(m.first),
                       newForOp.getResult(m.second));
-        addRematValue(oldArg, layout[oldArg],
-                      loopBody.getArgument(m.second + numIndVars));
+        addRematValue(oldArg, loopBody.getArgument(m.second + numIndVars));
       }
       continue;
     }
@@ -806,8 +822,7 @@ void LayoutRematerialization::rewriteSlice(
         if (slice.count(res)) {
           // Why can't we use res instead of ifOp.getResult(oldIdx)?
           mapping.map(ifOp.getResult(oldIdx), newIfOp.getResult(newIdx));
-          addRematValue(ifOp.getResult(oldIdx), layout[res],
-                        newIfOp.getResult(newIdx));
+          addRematValue(ifOp.getResult(oldIdx), newIfOp.getResult(newIdx));
           ++newIdx;
         }
         ++oldIdx;
@@ -836,8 +851,7 @@ void LayoutRematerialization::rewriteSlice(
       auto cvt = ConvertLayoutOp::create(builder, op->getLoc(), newType,
                                          newOp->getResult(0));
       mapping.map(op->getResult(0), cvt.getResult());
-      addRematValue(op->getResult(0), layout[op->getResult(0)],
-                    cvt.getResult());
+      addRematValue(op->getResult(0), cvt.getResult());
       continue;
     }
     Operation *newOp = builder.clone(*op, mapping);
@@ -848,7 +862,7 @@ void LayoutRematerialization::rewriteSlice(
       auto newType =
           cast<RankedTensorType>(old.getType()).cloneWithEncoding(it->second);
       newV.setType(newType);
-      addRematValue(old, it->second, newV);
+      addRematValue(old, newV);
     }
   }
   // Add the rewritten convert to the replacements so it is removed from the
@@ -952,8 +966,7 @@ bool LayoutRematerialization::backwardRematerialization(
     if (!backwardRematerialization(convertOp, disableRematSplitting)) {
       // If the conversion didn't get removed, consider it for reuse in future
       // backward slices.
-      addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
-                    convertOp.getResult());
+      addRematValue(convertOp.getSrc(), convertOp.getResult());
     } else {
       changed = true;
     }
@@ -970,8 +983,7 @@ void LayoutRematerialization::runHoistConvertPass(
     if (!tryHoist(convertOp)) {
       // If the conversion didn't get removed, consider it for reuse in future
       // backward slices.
-      addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
-                    convertOp.getResult());
+      addRematValue(convertOp.getSrc(), convertOp.getResult());
     }
   }
 }
