@@ -658,23 +658,33 @@ void init_triton_llvm(py::module_ &m) {
 #endif
   });
 
-  m.def("attach_datalayout", [](llvm::Module *mod, const std::string triple,
-                                const std::string proc,
-                                const std::string features) {
-    std::string error;
-    llvm::Triple targetTriple(triple);
-    auto target = llvm::TargetRegistry::lookupTarget(targetTriple, error);
-    if (!target) {
-      throw std::runtime_error("target lookup error: " + error);
-    }
-    llvm::TargetOptions opt;
-    // Target machine is only used to create the data layout.
-    std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
-        targetTriple, proc, features, opt, llvm::Reloc::PIC_, std::nullopt,
-        llvm::CodeGenOptLevel::None)};
-    // set data layout
-    mod->setDataLayout(machine->createDataLayout());
-  });
+  m.def(
+      "attach_datalayout",
+      [](llvm::Module *mod, const std::string triple, const std::string proc,
+         const std::string features, const std::vector<std::string> &flags) {
+        LLVMOptionSettings options;
+        options.enable(flags);
+        options.enableFlagsFromDisableLLVMOptEnv();
+        options.enablePrintAfterAllIfRequested();
+        ScopedLLVMOptions optionScope(options.settings);
+
+        std::string error;
+        llvm::Triple targetTriple(triple);
+        auto target = llvm::TargetRegistry::lookupTarget(targetTriple, error);
+        if (!target) {
+          throw std::runtime_error("target lookup error: " + error);
+        }
+        llvm::TargetOptions opt;
+        // Target machine is only used to create the data layout.
+        std::unique_ptr<llvm::TargetMachine> machine{
+            target->createTargetMachine(targetTriple, proc, features, opt,
+                                        llvm::Reloc::PIC_, std::nullopt,
+                                        llvm::CodeGenOptLevel::None)};
+        mod->setDataLayout(machine->createDataLayout());
+      },
+      py::arg("mod"), py::arg("triple"), py::arg("proc"), py::arg("features"),
+      py::arg("flags") = std::vector<std::string>{},
+      py::call_guard<py::gil_scoped_release>());
 
   m.def(
       "optimize_module",

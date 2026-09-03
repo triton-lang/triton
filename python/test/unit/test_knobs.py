@@ -135,6 +135,49 @@ def test_nvidia_register_pressure_scheduler_concurrent():
     assert results == [expected[policy] for policy in scheduling_policies]
 
 
+def _nvidia_short_pointer_kernel():
+    from triton.backends.compiler import GPUTarget
+    from triton.backends.nvidia import compiler
+
+    compiler.llvm.init_targets()
+    backend = compiler.CUDABackend(GPUTarget("cuda", 90, 32))
+    source = '''
+target triple = "nvptx64-nvidia-cuda"
+@shared = external addrspace(3) global [0 x i8]
+define ptx_kernel void @short_pointer_kernel(ptr addrspace(1) %out, i64 %offset) {
+  %ptr = getelementptr i8, ptr addrspace(3) @shared, i64 %offset
+  %value = ptrtoint ptr addrspace(3) %ptr to i64
+  store i64 %value, ptr addrspace(1) %out
+  ret void
+}
+'''
+    return backend, source
+
+
+@pytest.mark.skipif(is_hip(), reason="NVPTX code generation is unavailable on AMD")
+@pytest.mark.parametrize("link_hip_first", [False, True])
+def test_nvidia_short_pointer_option(link_hip_first, fresh_triton_cache):
+    from triton.backends.compiler import GPUTarget
+
+    if link_hip_first:
+        # HIP linking resets every LLVM command-line option.
+        _compile_empty_hip_kernel("gfx942", 64)
+
+    @triton.jit
+    def empty_kernel():
+        return
+
+    compiled = triton.compile(triton.compiler.ASTSource(empty_kernel, {}), target=GPUTarget("cuda", 90, 32))
+    data_layout = next(line for line in compiled.asm["llir"].splitlines() if line.startswith("target datalayout"))
+    assert "p3:32:32" in data_layout
+
+    backend, source = _nvidia_short_pointer_kernel()
+    options = backend.parse_options({"ptx_version": 80})
+    ptx = backend.make_ptx(source, {}, options, 90)
+    assert "\tadd.s32 " in ptx
+    assert "\tadd.s64 " not in ptx
+
+
 def _compile_empty_hip_kernel(arch, warp_size):
     from triton.backends.compiler import GPUTarget
 

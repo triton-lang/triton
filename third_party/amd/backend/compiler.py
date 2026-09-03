@@ -447,7 +447,7 @@ class HIPBackend(BaseBackend):
         target_features = ''
         if knobs.compilation.enable_asan:
             target_features = '+xnack'
-        llvm.attach_datalayout(llvm_mod, target_triple, options.arch, target_features)
+        llvm.attach_datalayout(llvm_mod, target_triple, options.arch, target_features, get_llvm_flags(options.arch))
 
         # Set various control constants on the LLVM module so that device
         # libraries can resolve references to them.
@@ -461,8 +461,8 @@ class HIPBackend(BaseBackend):
         # Set kernel attributes first given this may affect later optimizations.
         # The kernel is the only non-declaration function with external linkage;
         # instrumentation helpers (e.g. ConSan) use internal linkage.
-        fns = [fn for fn in llvm_mod.get_functions() if not fn.is_declaration()]
-        kernel_fn = next((fn for fn in fns if fn.is_external_linkage()), None)
+        kernel_fn = next(
+            (fn for fn in llvm_mod.get_functions() if not fn.is_declaration() and fn.is_external_linkage()), None)
         if not kernel_fn:
             raise RuntimeError("Could not find kernel function")
         kernel_fn.set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
@@ -486,12 +486,6 @@ class HIPBackend(BaseBackend):
 
         if is_coexec_scheduler_enabled(options.arch) and options.num_warps <= 4:
             kernel_fn.add_fn_attr("amdgpu-sched-strategy", "coexec")
-
-        if is_expert_scheduling_enabled(options.arch):
-            # LLVM reads this attribute per function, so cover every function in
-            # the module rather than only the kernel.
-            for fn in fns:
-                fn.add_fn_attr("amdgpu-expert-scheduling-mode", "true")
 
         denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
         kernel_fn.add_fn_attr("denormal-fp-math-f32", denormal_mode)
@@ -524,6 +518,13 @@ class HIPBackend(BaseBackend):
             paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
             if len(paths) > 0:
                 llvm.link_extern_libs(llvm_mod, paths)
+
+        if is_expert_scheduling_enabled(options.arch):
+            # LLVM reads this attribute per function. Apply it after linking so
+            # external device-library definitions are covered as well.
+            for fn in llvm_mod.get_functions():
+                if not fn.is_declaration():
+                    fn.add_fn_attr("amdgpu-expert-scheduling-mode", "true")
 
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', get_llvm_flags(options.arch),
                              options.enable_fp_fusion, disable_vector_combine=True)

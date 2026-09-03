@@ -10,6 +10,11 @@
 
 #include <gtest/gtest.h>
 
+#ifndef _WIN32
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
 using mlir::triton::tools::ExclusiveLLVMOptionAccess;
 using mlir::triton::tools::ScopedLLVMOptions;
 
@@ -132,6 +137,18 @@ TEST(LLVMOptions, ExclusiveAccessWaitsForScopes) {
   exclusive.join();
 }
 
+TEST(LLVMOptions, ExclusiveAccessRestoresDefaults) {
+  {
+    ExclusiveLLVMOptionAccess access;
+    bool parseFailed =
+        boolOption.addOccurrence(0, "triton-test-bool-option", "true");
+    EXPECT_FALSE(parseFailed);
+    EXPECT_TRUE(boolOption.getValue());
+  }
+  EXPECT_FALSE(boolOption.getValue());
+  EXPECT_EQ(boolOption.getNumOccurrences(), 0);
+}
+
 TEST(LLVMOptions, ScopesWaitForExclusiveAccess) {
   auto exclusive = std::make_unique<ExclusiveLLVMOptionAccess>();
   BackgroundTask scope([] {
@@ -143,5 +160,37 @@ TEST(LLVMOptions, ScopesWaitForExclusiveAccess) {
   scope.join();
   EXPECT_FALSE(boolOption.getValue());
 }
+
+#ifndef _WIN32
+TEST(LLVMOptions, ForkedChildStartsWithFreshRegistry) {
+  auto parentScope = std::make_unique<ScopedLLVMOptions>(
+      Settings{{"triton-test-bool-option", "true"}});
+
+  pid_t child = fork();
+  ASSERT_NE(child, -1);
+  if (child == 0) {
+    // This guard belongs to the parent's registry generation. Destroying it
+    // must not underflow the child's freshly reset user count.
+    parentScope.reset();
+    bool succeeded = !boolOption.getValue();
+    {
+      ScopedLLVMOptions childScope(
+          Settings{{"triton-test-bool-option", "true"}});
+      succeeded &= boolOption.getValue();
+    }
+    succeeded &= !boolOption.getValue();
+    _exit(succeeded ? 0 : 1);
+  }
+
+  int status = 0;
+  ASSERT_EQ(waitpid(child, &status, 0), child);
+  EXPECT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(WEXITSTATUS(status), 0);
+  // The child reset must not affect the parent's registry.
+  EXPECT_TRUE(boolOption.getValue());
+  parentScope.reset();
+  EXPECT_FALSE(boolOption.getValue());
+}
+#endif
 
 } // namespace

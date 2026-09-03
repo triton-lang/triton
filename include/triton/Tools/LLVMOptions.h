@@ -1,6 +1,7 @@
 #ifndef TRITON_TOOLS_LLVMOPTIONS_H
 #define TRITON_TOOLS_LLVMOPTIONS_H
 
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
@@ -24,7 +25,8 @@ namespace mlir::triton::tools {
 // the registry is never rewritten underneath it.
 //
 // A thread must not request an ExclusiveLLVMOptionAccess while it holds a
-// scope; the exclusive access would wait for that scope forever.
+// scope; the exclusive access would wait for that scope forever. Likewise, it
+// must not fork while it holds exclusive access.
 class ScopedLLVMOptions {
 public:
   // An option name and its value, spelled as on the command line.
@@ -37,11 +39,17 @@ public:
 
   ScopedLLVMOptions(const ScopedLLVMOptions &) = delete;
   ScopedLLVMOptions &operator=(const ScopedLLVMOptions &) = delete;
+
+private:
+  // A forked child starts with a fresh registry. Objects inherited from the
+  // parent must therefore leave that registry alone when they are destroyed.
+  std::uint64_t registryGeneration = 0;
 };
 
 // Exclusive access to the option registry for code that rewrites it wholesale,
 // such as LLD. Construction waits until no ScopedLLVMOptions is alive; scopes
 // requested in the meantime wait until the exclusive access is released.
+// Destruction restores every registered option to its built-in default.
 class ExclusiveLLVMOptionAccess {
 public:
   ExclusiveLLVMOptionAccess();
@@ -50,6 +58,9 @@ public:
   ExclusiveLLVMOptionAccess(const ExclusiveLLVMOptionAccess &) = delete;
   ExclusiveLLVMOptionAccess &
   operator=(const ExclusiveLLVMOptionAccess &) = delete;
+
+private:
+  std::uint64_t registryGeneration = 0;
 };
 
 } // namespace mlir::triton::tools
