@@ -226,13 +226,16 @@ def test_mxfp4_value_conversion_strided_storage(shape, step, inverse):
     assert torch.equal(source_cuda.cpu(), source)
 
 
-@pytest.mark.parametrize("shape", [(256, 256), (2, 130, 66), (2, 3, 130, 66)])
+@pytest.mark.parametrize("shape,major", [(shape, major)
+                                         for shape in [(256, 256), (2, 130, 66), (2, 4, 130, 66)]
+                                         for major in range(-len(shape), len(shape))])
 @pytest.mark.parametrize("layout", [
     BlackwellMXValueLayout(),
-    BlackwellMX4ValueShuffledLayout(),
-    BlackwellMX4ValueShuffledLayout(block_k=256, block_n=128),
+] + [
+    BlackwellMX4ValueShuffledLayout(block_k, block_n)
+    for block_k in [64, 128, 192, 256]
+    for block_n in [32, 48, 128, 256]
 ])
-@pytest.mark.parametrize("major", [-2, -1])
 @pytest.mark.parametrize("inverse", [False, True])
 def test_mxfp4_value_convert_layout_out(shape, layout, major, inverse):
     data = torch.randint(0, 256, (*shape[:-1], shape[-1] // 2), dtype=torch.uint8,
@@ -385,7 +388,7 @@ def test_act_scale_roundtrip_ragged(slice_sizes, m, k, align_m):
     torch.testing.assert_close(res_useful_rows, x_useful_rows)
 
 
-@pytest.mark.parametrize("layout,shape", [
+@pytest.mark.parametrize("layout,shape,major", [(layout, shape, major) for layout, shape in [
     (BlackwellActMXScaleLayout(None), (130, 9)),
     (BlackwellActMXScaleLayout(None), (2, 130, 9)),
     (BlackwellActMXScaleLayout(None), (130, 259)),
@@ -397,9 +400,8 @@ def test_act_scale_roundtrip_ragged(slice_sizes, m, k, align_m):
     (BlackwellMXScaleLayout(), (2, 259, 130)),
     (BlackwellMXScaleLayout(), (8, 524416)),
     (BlackwellMXScaleLayout(), (2, 3, 9, 130)),
-])
+] for major in range(-len(shape), len(shape))])
 @pytest.mark.parametrize("inverse", [False, True])
-@pytest.mark.parametrize("major", [-2, -1])
 @pytest.mark.parametrize("step", [1, 2])
 @pytest.mark.parametrize("with_out", [False, True])
 def test_scale_convert_layout_strided_storage(layout, shape, inverse, major, step, with_out):
@@ -409,8 +411,8 @@ def test_scale_convert_layout_strided_storage(layout, shape, inverse, major, ste
     destination = strided if inverse else layout
     expected = convert_layout(source, destination)
     storage = torch.empty(tuple(step * size + 1 for size in source.data.shape), dtype=torch.uint8, device="cuda")
-    if source.data.stride(-2) == 1:
-        storage = storage.mT.contiguous().mT
+    if not inverse:
+        storage = storage.movedim(major, -1).contiguous().movedim(-1, major)
     source_data = storage[(slice(1, None, step), ) * storage.ndim]
     source_data.copy_(source.data)
     if not inverse:
@@ -442,7 +444,8 @@ def test_scale_convert_layout_strided_storage(layout, shape, inverse, major, ste
 ])
 @pytest.mark.parametrize("step", [1, 2])
 @pytest.mark.parametrize("with_out", [False, True])
-def test_act_scale_convert_layout_ragged_padding(sizes, shape, step, with_out):
+@pytest.mark.parametrize("major", [-2, -1, 0, 1])
+def test_act_scale_convert_layout_ragged_padding(sizes, shape, step, with_out, major):
     metadata = make_ragged_tensor_metadata(torch.tensor(sizes, dtype=torch.int32, device="cuda"), shape[0])
     layout = BlackwellActMXScaleLayout(metadata)
     transformation = layout.make_transformation(list(shape), False)
@@ -456,7 +459,8 @@ def test_act_scale_convert_layout_ragged_padding(sizes, shape, step, with_out):
         source_start += size
         padded_start += (size + 127) // 128 * 128
     expected = BlackwellActMXScaleLayout(None).make_transformation(list(padded.shape), False).swizzle_data(padded)
-    source = wrap_torch_tensor(storage.cuda()[1::step, 1::step], layout=StridedLayout(-1))
+    source_storage = storage.cuda().movedim(major, -1).contiguous().movedim(-1, major)
+    source = wrap_torch_tensor(source_storage[1::step, 1::step], layout=StridedLayout(major))
     out_storage = torch.full((expected.numel() * step + 1, ), 0xAB, dtype=torch.uint8, device="cuda")
     out_data = out_storage[1:].as_strided(expected.shape, tuple(s * step for s in expected.stride()))
     out = wrap_torch_tensor(out_data, shape=shape, layout=layout) if with_out else None
@@ -472,8 +476,8 @@ def test_act_scale_convert_layout_ragged_padding(sizes, shape, step, with_out):
 
     restored_expected = data.clone()
     restored_expected[sum(sizes):] = 0
-    for major in [-1, -2]:
-        destination = StridedLayout(major)
+    for destination_major in [-2, -1, 0, 1]:
+        destination = StridedLayout(destination_major)
         strides = destination.make_transformation(list(shape), False).storage_strides
         restored_storage = torch.full((data.numel() * step + 1, ), 0xAB, dtype=torch.uint8, device="cuda")
         restored_data = restored_storage[1:].as_strided(shape, tuple(s * step for s in strides))
