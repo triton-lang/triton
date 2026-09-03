@@ -229,25 +229,23 @@ def test_mxfp4_value_conversion_strided_storage(shape, step, inverse):
 @pytest.mark.parametrize("inverse", [False, True])
 @pytest.mark.parametrize("layout", [BlackwellMXValueLayout(), BlackwellMX4ValueShuffledLayout()])
 def test_mxfp4_value_peak_allocation(inverse, layout):
-    data = torch.empty((2048, 2048), dtype=torch.uint8, device="cuda")
-    transformation = layout.make_transformation([2048, 4096], is_fp4=True)
+    data = torch.empty((4096, 1024), dtype=torch.uint8, device="cuda").mT
+    source = wrap_torch_tensor(data, dtype=FP4, shape=[2048, 4096], layout=StridedLayout(-2))
     if inverse:
-        data = transformation.swizzle_data(data)
-        convert = transformation.unswizzle_data
-    else:
-        convert = transformation.swizzle_data
-    warm = convert(data)
+        source = convert_layout(source, layout)
+        layout = StridedLayout(-2)
+    warm = convert_layout(source, layout)
     torch.cuda.synchronize(data.device)
     del warm
     baseline = torch.cuda.memory_allocated(data.device)
     torch.cuda.reset_peak_memory_stats(data.device)
 
-    actual = convert(data)
+    actual = convert_layout(source, layout)
     torch.cuda.synchronize(data.device)
     peak = torch.cuda.max_memory_allocated(data.device) - baseline
 
     # Conversion should allocate its output, not another whole weight tensor.
-    assert peak <= actual.nbytes + 1024**2
+    assert peak <= actual.data.nbytes + 1024**2
 
 
 @pytest.mark.parametrize(("slice_sizes", "shape"), [([0], (0, 64)), ([2, 0], (2, 0))])
@@ -366,10 +364,14 @@ def test_act_scale_roundtrip_ragged(slice_sizes, m, k, align_m):
 def test_scale_convert_layout_strided_storage(layout, shape, step, with_out):
     storage_shape = tuple(step * size + 1 for size in shape)
     storage = torch.randint(0, 256, storage_shape, dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
+    major = -1 if isinstance(layout, BlackwellActMXScaleLayout) else -2
+    if major == -2:
+        storage = storage.mT.contiguous().mT
     index = (slice(1, None, step), ) * len(shape)
     data = storage[index]
-    expected = convert_layout(wrap_torch_tensor(data, layout=StridedLayout(-1)), layout)
-    source = wrap_torch_tensor(storage.cuda()[index], layout=StridedLayout(-1))
+    assert data.stride(major) == step
+    expected = convert_layout(wrap_torch_tensor(data, layout=StridedLayout(major)), layout)
+    source = wrap_torch_tensor(storage.cuda()[index], layout=StridedLayout(major))
     out_storage = torch.full((expected.data.numel() * step + 1, ), 0xAB, dtype=torch.uint8, device="cuda")
     out_data = out_storage[1:].as_strided(expected.data.shape, tuple(s * step for s in expected.data.stride()))
     out = wrap_torch_tensor(out_data, shape=shape, layout=layout) if with_out else None
@@ -468,10 +470,14 @@ def test_scale_convert_layout_peak_allocation(kind, with_out, inverse):
         layout = BlackwellActMXScaleLayout(make_ragged_tensor_metadata(sizes, shape[0]))
     else:
         layout = BlackwellMXScaleLayout() if kind == "mx" else BlackwellActMXScaleLayout(None)
-    source = wrap_torch_tensor(data)
+    major = -2 if kind == "mx" else -1
+    if major == -2:
+        data = data.mT
+    source = wrap_torch_tensor(data, layout=StridedLayout(major))
+    assert source.data.stride(major) == 1
     if inverse:
         source = convert_layout(source, layout)
-        layout = StridedLayout()
+        layout = StridedLayout(major)
     out = convert_layout(source, layout) if with_out else None
     warm = convert_layout(source, layout, out=out)
     torch.cuda.synchronize()
@@ -531,8 +537,10 @@ def test_scale_convert_layout_fake(layout):
 @pytest.mark.parametrize("layout,shape", [
     (BlackwellActMXScaleLayout(None), (130, 9)),
     (BlackwellActMXScaleLayout(None), (2, 130, 259)),
+    (BlackwellActMXScaleLayout(None), (524416, 8)),
     (BlackwellMXScaleLayout(), (9, 130)),
     (BlackwellMXScaleLayout(), (2, 259, 130)),
+    (BlackwellMXScaleLayout(), (8, 524416)),
     (BlackwellMXScaleLayout(), (2, 3, 9, 130)),
 ])
 @pytest.mark.parametrize("major", [-1, -2])

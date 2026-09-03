@@ -266,7 +266,9 @@ def _convert_mx_scale(data, shape, storage_shape, out=None, *, ragged_metadata=N
     if k_pad == 8:
         block_k = 8
         if ragged_metadata is None and size >= 2**22:
-            block_n = 512 if size < 2**25 else 1024
+            block_n = 512 if inverse or size < 2**25 else 1024
+            if inverse:
+                num_warps = 8
     elif matrix.stride(-1) == 1 and k_pad <= 32 and size >= 2**22:
         block_k, num_warps = 32, 2
     grid = (batch * triton.cdiv(n_pad, block_n) * triton.cdiv(k_pad, block_k), )
