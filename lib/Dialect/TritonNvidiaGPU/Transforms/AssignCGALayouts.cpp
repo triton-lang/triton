@@ -39,6 +39,10 @@ struct DotCGASplit {
 
 FailureOr<ttg::CGAEncodingAttr> maybeGetCGA(RankedTensorType type) {
   // NYI: CGA rematerialization for generic linear encodings.
+  // This function is a bit misleading, it tells you whether the encoding is a
+  // generic linear encoding but not a distributed encoding.
+  // We don't handle special AMD generic linear encodings well yet, see
+  // `isPermutationMatrixLayout`.
   if (ttg::isGenericLinearEncoding(type.getEncoding()))
     return failure();
   return ttg::maybeLinearToCGAEncodingAttr(ttg::toLinearLayout(type));
