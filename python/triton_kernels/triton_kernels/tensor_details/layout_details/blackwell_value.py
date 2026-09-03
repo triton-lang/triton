@@ -61,13 +61,24 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
         if (not isinstance(source, strided.StridedLayoutTransformation) or not self.is_fp4 or self.shape[-1] % 2
                 or self.shape[-2] % 2 or not source._can_convert_fp4(data)):
             return super()._convert_data_from(data, source, out=out)
+        return self._swizzle_mxfp4(data, source.order[0], out=out)
+
+    def _swizzle_mxfp4(self, data, major_dim, out=None):
         if out is None:
             out = torch.empty_strided(self.storage_shape, strides_major_dim_m2(self.storage_shape), device=data.device,
                                       dtype=data.dtype)
-        repack(data, source.order[0], -2, True, out=out[..., :self.shape[-2] // 2, :])
+        if major_dim % len(self.shape) == len(self.shape) - 1:
+            # N-to-K repacking is K-to-N repacking with the matrix axes exchanged.
+            shape = [*self.shape[:-2], self.shape[-1], self.shape[-2]]
+            unswizzle_mxfp4(data.mT, shape, -1, out=out.mT)
+        else:
+            unswizzle_mxfp4(data, self.shape, -2, out=out)
         return out
 
     def swizzle_data(self, data):
+        if (self.is_fp4 and data.device.type == "cuda" and data.dtype == torch.uint8 and self.shape[-2] % 2 == 0
+                and self.shape[-1] % 2 == 0):
+            return self._swizzle_mxfp4(data, -1)
         # re-pack as column-major
         ret = torch.empty_strided(self.storage_shape, strides_major_dim_m2(self.storage_shape), device=data.device,
                                   dtype=data.dtype)
