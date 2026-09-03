@@ -355,16 +355,16 @@ public:
             cast<FunctionOpInterface>(allocation.getOperation())) {}
 
 private:
-  /// Updates the BlockInfo operation based on the operation.
-  void update(Operation *operation, MembarInfo *membarInfo, FuncMapT *funcMap,
-              OpBuilder *builder) override;
-
   void updateSuccessor(Operation *terminator, Block *successor,
                        MembarInfo *membarInfo) override;
 
   void updateExitState(MembarInfo *membarInfo) override;
 
 protected:
+  /// A null builder analyzes existing synchronization without inserting any.
+  void update(Operation *operation, MembarInfo *membarInfo, FuncMapT *funcMap,
+              OpBuilder *builder) override;
+
   void updateMemoryEffects(Operation *operation, MembarInfo *membarInfo,
                            FuncMapT *funcMap, OpBuilder *builder,
                            bool cluster = false, BlockInfo effects = {});

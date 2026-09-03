@@ -27,4 +27,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttg.barrier local
     tt.return
   }
+
+  // TAGGED-LABEL: llvm.func @lower_warp_barrier
+  // GENERIC-LABEL: llvm.func @lower_warp_barrier
+  // RDNA4-LABEL: llvm.func @lower_warp_barrier
+  tt.func @lower_warp_barrier() {
+    // TAGGED: llvm.call_intrinsic "llvm.amdgcn.wave.barrier"
+    // TAGGED-NEXT: llvm.return
+    // GENERIC: llvm.call_intrinsic "llvm.amdgcn.wave.barrier"
+    // GENERIC-NEXT: llvm.return
+    // RDNA4: llvm.call_intrinsic "llvm.amdgcn.wave.barrier"
+    // RDNA4-NEXT: llvm.return
+    ttg.barrier warp local
+    tt.return
+  }
 }

@@ -1,5 +1,7 @@
 // RUN: triton-opt %s -split-input-file --triton-nvidia-tma-lowering --convert-scf-to-cf --allocate-shared-memory -test-print-membar | FileCheck %s
 // RUN: triton-opt %s -split-input-file --triton-nvidia-tma-lowering -triton-nvidia-gpu-optimize-mbarrier-arrivals -triton-nvidia-gpu-optimize-mbarrier-arrivals --convert-scf-to-cf --allocate-shared-memory -test-print-membar | FileCheck %s --check-prefix=ARRIVAL
+// RUN: triton-opt %s -split-input-file --triton-nvidia-tma-lowering -triton-nvidia-gpu-optimize-mbarrier-arrivals --convert-scf-to-cf --allocate-shared-memory -test-print-membar -triton-nvidia-gpu-optimize-synchronization | FileCheck %s --check-prefix=FOLD
+// RUN: triton-opt %s -split-input-file -triton-nvidia-gpu-optimize-synchronization | FileCheck %s --check-prefix=CLEANUP
 
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
@@ -195,6 +197,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // ARRIVAL-NEXT: ttng.arrive_barrier {{.*}}, 4 {arrivalWarps = 4 : i32}
   // ARRIVAL-NEXT: ttg.barrier local
   // ARRIVAL-NEXT: %{{.*}} = ttg.local_load
+  // FOLD-LABEL: @distributed_arrival_keeps_payload_hazard
+  // FOLD: ttg.local_store
+  // FOLD-NEXT: ttg.barrier warp local
+  // FOLD-NEXT: ttng.arrive_barrier {{.*}}, 4 {arrivalWarps = 4 : i32}
+  // FOLD-NEXT: ttg.barrier local
+  // FOLD-NEXT: %{{.*}} = ttg.local_load
   tt.func @distributed_arrival_keeps_payload_hazard(%data: tensor<512xi32, #store>) -> tensor<512xi32, #load> {
     %phase = arith.constant 0 : i32
     %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
@@ -206,6 +214,111 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %loaded = ttg.local_load %mem : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> tensor<512xi32, #load>
     ttng.wait_barrier %bar, %phase : !ttg.memdesc<1xi64, #shared, #smem, mutable>
     tt.return %loaded : tensor<512xi32, #load>
+  }
+
+  // Tensor arithmetic preserves synchronization across CFG edges.
+  // CLEANUP-LABEL: @arrival_after_tensor_arithmetic
+  // CLEANUP: ttg.barrier local
+  // CLEANUP-NEXT: %[[SUM:.*]] = arith.addi
+  // CLEANUP-NEXT: cf.br ^[[PUBLISH:bb[0-9]+]]
+  // CLEANUP: ^[[PUBLISH]]:
+  // CLEANUP-NEXT: ttng.arrive_barrier {{.*}}, 4 :
+  // CLEANUP-NEXT: tt.return %[[SUM]]
+  tt.func @arrival_after_tensor_arithmetic(%bar: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %data: tensor<512xi32, #store>) -> tensor<512xi32, #store> {
+    ttg.barrier local
+    %sum = arith.addi %data, %data : tensor<512xi32, #store>
+    cf.br ^publish
+  ^publish:
+    ttg.barrier warp local
+    ttng.arrive_barrier %bar, 4 {arrivalWarps = 4 : i32} : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return %sum : tensor<512xi32, #store>
+  }
+
+  // A pure layout conversion can access shared scratch after the CTA barrier.
+  // CLEANUP-LABEL: @arrival_after_scratch_conversion
+  // CLEANUP: ttg.barrier local
+  // CLEANUP-NEXT: %[[CONVERTED:.*]] = ttg.convert_layout
+  // CLEANUP-NEXT: ttg.barrier warp local
+  // CLEANUP-NEXT: ttng.arrive_barrier {{.*}}, 4 {arrivalWarps = 4 : i32}
+  // CLEANUP-NEXT: tt.return %[[CONVERTED]]
+  tt.func @arrival_after_scratch_conversion(%bar: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %data: tensor<512xi32, #store>) -> tensor<512xi32, #load> {
+    ttg.barrier local
+    %converted = ttg.convert_layout %data : tensor<512xi32, #store> -> tensor<512xi32, #load>
+    ttg.barrier warp local
+    ttng.arrive_barrier %bar, 4 {arrivalWarps = 4 : i32} : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return %converted : tensor<512xi32, #load>
+  }
+
+  tt.func private @store_before_arrival(%out: !tt.ptr<i32>, %value: i32) attributes {noinline = true} {
+    tt.store %out, %value : !tt.ptr<i32>
+    tt.return
+  }
+
+  // The callee's store remains pending after the caller's earlier CTA barrier.
+  // CLEANUP-LABEL: @arrival_after_call
+  // CLEANUP: ttg.barrier local
+  // CLEANUP-NEXT: tt.call @store_before_arrival
+  // CLEANUP-NEXT: ttg.barrier warp local
+  // CLEANUP-NEXT: ttng.arrive_barrier {{.*}}, 4 {arrivalWarps = 4 : i32}
+  tt.func @arrival_after_call(%bar: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %out: !tt.ptr<i32>, %value: i32) {
+    ttg.barrier local
+    tt.call @store_before_arrival(%out, %value) : (!tt.ptr<i32>, i32) -> ()
+    ttg.barrier warp local
+    ttng.arrive_barrier %bar, 4 {arrivalWarps = 4 : i32} : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // The store ends warp coverage on one path through the join.
+  // ARRIVAL-LABEL: @distributed_arrival_cfg_join
+  // ARRIVAL: ttg.barrier local
+  // ARRIVAL-NEXT: cf.cond_br %{{.*}}, ^[[THEN:bb[0-9]+]], ^[[JOIN:bb[0-9]+]]
+  // ARRIVAL: ^[[THEN]]:
+  // ARRIVAL-NEXT: tt.store
+  // ARRIVAL-NEXT: cf.br ^[[JOIN]]
+  // ARRIVAL: ^[[JOIN]]:
+  // ARRIVAL-NEXT: ttg.barrier warp local
+  // ARRIVAL-NEXT: ttng.arrive_barrier {{.*}}, 4 {arrivalWarps = 4 : i32}
+  // FOLD-LABEL: @distributed_arrival_cfg_join
+  // FOLD: cf.cond_br %{{.*}}, ^{{bb[0-9]+}}, ^[[JOIN:bb[0-9]+]]
+  // FOLD: ^[[JOIN]]:
+  // FOLD-NEXT: ttg.barrier warp local
+  // FOLD-NEXT: ttng.arrive_barrier {{.*}}, 4 {arrivalWarps = 4 : i32}
+  tt.func @distributed_arrival_cfg_join(%bar: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %condition: i1, %out: !tt.ptr<i32>, %value: i32) {
+    ttg.barrier local
+    scf.if %condition {
+      tt.store %out, %value : !tt.ptr<i32>
+    }
+    ttng.arrive_barrier %bar, 4 {arrivalWarps = 4 : i32} : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // Backedge effects revoke cleanup candidates from the first traversal.
+  // CLEANUP-LABEL: @arrival_after_loop
+  // CLEANUP: ttg.barrier local
+  // CLEANUP-NEXT: cf.br ^[[LOOP:bb[0-9]+]]
+  // CLEANUP: ^[[LOOP]](
+  // CLEANUP-NEXT: ttg.barrier warp local
+  // CLEANUP-NEXT: %{{.*}} = arith.cmpi
+  // CLEANUP-NEXT: cf.cond_br %{{.*}}, ^{{bb[0-9]+}}, ^[[EXIT:bb[0-9]+]]
+  // CLEANUP: tt.store
+  // CLEANUP: ^[[EXIT]]:
+  // CLEANUP-NEXT: ttng.arrive_barrier {{.*}}, 4 {arrivalWarps = 4 : i32}
+  tt.func @arrival_after_loop(%bar: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %out: !tt.ptr<i32>, %value: i32, %count: i32) {
+    %zero = arith.constant 0 : i32
+    %one = arith.constant 1 : i32
+    ttg.barrier local
+    cf.br ^loop(%zero : i32)
+  ^loop(%i: i32):
+    ttg.barrier warp local
+    %more = arith.cmpi slt, %i, %count : i32
+    cf.cond_br %more, ^store, ^exit
+  ^store:
+    tt.store %out, %value : !tt.ptr<i32>
+    %next = arith.addi %i, %one : i32
+    cf.br ^loop(%next : i32)
+  ^exit:
+    ttng.arrive_barrier %bar, 4 {arrivalWarps = 4 : i32} : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
   }
 
   // Counts already divisible by the warp count need no scaling.
@@ -229,6 +342,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // ARRIVAL-NEXT: ttg.barrier local
   // ARRIVAL-NEXT: ttng.arrive_barrier {{.*}}, 4 {arrivalWarps = 4 : i32}
   // ARRIVAL-NEXT: ttng.wait_barrier
+  // FOLD-LABEL: @distributed_arrival_keeps_barrier_hazards
+  // FOLD: ttng.init_barrier {{.*}}, 8 :
+  // FOLD-NEXT: ttg.barrier local
+  // FOLD-NEXT: ttng.arrive_barrier {{.*}}, 4 :
+  // FOLD-NEXT: ttg.barrier local
+  // FOLD-NEXT: ttng.arrive_barrier {{.*}}, 4 :
+  // FOLD-NEXT: ttng.wait_barrier
   tt.func @distributed_arrival_keeps_barrier_hazards() {
     %phase = arith.constant 0 : i32
     %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
@@ -324,6 +444,59 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttng.arrive_barrier %bar, 131071 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
     ttng.arrive_barrier %bar, 1 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
     ttng.wait_barrier %bar, %phase : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    tt.return
+  }
+
+  // Pure scalar operations preserve coverage; memory effects end it.
+  // Warp barriers keep per-warp issuers; CTA barriers preserve the full count.
+  // CLEANUP-LABEL: @arrival_with_scoped_barriers
+  // CLEANUP: ttg.barrier none
+  // CLEANUP-NEXT: ttg.barrier warp local
+  // CLEANUP-NEXT: arith.constant true
+  // CLEANUP-NEXT: ttng.arrive_barrier {{.*}}, 4 {arrivalWarps = 4 : i32}
+  // CLEANUP-NEXT: ttg.barrier warp local
+  // CLEANUP-NEXT: %[[PRED:.*]] = arith.xori
+  // CLEANUP-NEXT: ttg.barrier local
+  // CLEANUP-NEXT: ttng.arrive_barrier {{.*}}, 8, %[[PRED]] {fromCTA = 0 : i32}
+  // CLEANUP-NEXT: ttg.barrier local
+  // CLEANUP-NEXT: ttng.arrive_barrier {{.*}}, 12, %[[PRED]] {multicastCTA = 1 : i32}
+  // CLEANUP-NEXT: ttg.barrier warp local
+  // CLEANUP-NEXT: ttng.arrive_barrier {{.*}}, 4 {arrivalWarps = 4 : i32}
+  // CLEANUP-NEXT: ttg.barrier local
+  // CLEANUP-NEXT: tt.store
+  // CLEANUP-NEXT: ttg.barrier warp local
+  // CLEANUP-NEXT: ttng.arrive_barrier {{.*}}, 16, %[[PRED]] {arrivalWarps = 4 : i32}
+  // CLEANUP-NEXT: tt.return
+  tt.func @arrival_with_scoped_barriers(%bar: !ttg.memdesc<2xi64, #per_cta, #smem, mutable>, %pred: i1, %out: !tt.ptr<i32>, %value: i32) {
+    ttg.barrier none
+    ttg.barrier warp local
+    %true = arith.constant true
+    ttg.barrier warp local
+    ttng.arrive_barrier %bar, 4 {arrivalWarps = 4 : i32} : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttg.barrier warp local
+    %not_pred = arith.xori %pred, %true : i1
+    ttg.barrier local
+    ttg.barrier warp local
+    ttng.arrive_barrier %bar, 8, %not_pred {arrivalWarps = 4 : i32, fromCTA = 0 : i32} : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttg.barrier local
+    ttg.barrier warp local
+    ttng.arrive_barrier %bar, 12, %not_pred {arrivalWarps = 4 : i32, multicastCTA = 1 : i32} : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttg.barrier warp local
+    ttng.arrive_barrier %bar, 4 {arrivalWarps = 4 : i32} : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttg.barrier local
+    tt.store %out, %value : !tt.ptr<i32>
+    ttg.barrier warp local
+    ttng.arrive_barrier %bar, 16, %not_pred {arrivalWarps = 4 : i32} : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    tt.return
+  }
+
+  // An outlined helper does not have its caller's partition offset.
+  // CLEANUP-LABEL: @outlined_arrival_keeps_warp_issuers
+  // CLEANUP: ttg.barrier local
+  // CLEANUP-NEXT: ttng.arrive_barrier {{.*}}, 4 {arrivalWarps = 2 : i32}
+  tt.func private @outlined_arrival_keeps_warp_issuers(%bar: !ttg.memdesc<2xi64, #per_cta, #smem, mutable>) attributes {noinline = true, "ttg.num-warps" = 2 : i32} {
+    ttg.barrier local
+    ttng.arrive_barrier %bar, 4 {arrivalWarps = 2 : i32} : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
     tt.return
   }
 }

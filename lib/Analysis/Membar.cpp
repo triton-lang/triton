@@ -227,6 +227,8 @@ bool MembarAnalysis::requiresThreadSync(const BlockInfo &pending,
 void MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
                                   MembarInfo *membarInfo, OpBuilder *builder,
                                   bool cluster) {
+  if (!builder)
+    return;
   auto &pending = membarInfo->pending;
   auto canSkip = [&](Operation *before, Operation *after, bool beforeIsRead,
                      bool afterIsRead, Allocation *allocation) {
@@ -510,7 +512,7 @@ void MembarAnalysis::updateMemoryEffects(Operation *op, MembarInfo *membarInfo,
 
   syncIfNeeded(op, curBlockInfo, membarInfo, builder, cluster);
 
-  if (!cluster && getThreadSyncInfo(op).requiresWarpBefore() &&
+  if (builder && !cluster && getThreadSyncInfo(op).requiresWarpBefore() &&
       !membarInfo->warpsSynced) {
     builder->setInsertionPoint(op);
     triton::gpu::BarrierOp::create(*builder, op->getLoc(),
