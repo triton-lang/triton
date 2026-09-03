@@ -200,10 +200,30 @@ def test_mxfp4_value_convert_layout_odd_source_packing(shape, major_dim):
     assert str(actual.value) == str(expected.value)
 
 
+@pytest.mark.parametrize("shape", [(258, 130), (2, 3, 2, 66, 34)])
+@pytest.mark.parametrize("step", [1, 2])
+def test_mxfp4_value_unswizzle_strided_storage(shape, step):
+    data = torch.randint(0, 256, shape, dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
+    logical_shape = [*shape[:-1], 2 * shape[-1]]
+    transformation = BlackwellMXValueLayout().make_transformation(logical_shape, True)
+    source = transformation.swizzle_data(data)
+    # Slice every physical axis, including the packed axis and the batch axes.
+    storage = torch.full(tuple(step * size + 1 for size in source.shape), 0xAB, dtype=torch.uint8)
+    index = (slice(1, None, step), ) * source.ndim
+    storage[index] = source
+    source_cuda = storage.cuda()[index]
+
+    actual = transformation.unswizzle_data(source_cuda)
+
+    assert actual.is_contiguous()
+    assert torch.equal(actual.cpu(), data)
+    assert torch.equal(source_cuda.cpu(), source)
+
+
 @pytest.mark.parametrize("inverse", [False, True])
-def test_mxfp4_value_shuffled_peak_allocation(inverse):
+@pytest.mark.parametrize("layout", [BlackwellMXValueLayout(), BlackwellMX4ValueShuffledLayout()])
+def test_mxfp4_value_peak_allocation(inverse, layout):
     data = torch.empty((2048, 2048), dtype=torch.uint8, device="cuda")
-    layout = BlackwellMX4ValueShuffledLayout()
     transformation = layout.make_transformation([2048, 4096], is_fp4=True)
     if inverse:
         data = transformation.swizzle_data(data)
@@ -220,7 +240,7 @@ def test_mxfp4_value_shuffled_peak_allocation(inverse):
     torch.cuda.synchronize(data.device)
     peak = torch.cuda.max_memory_allocated(data.device) - baseline
 
-    # Shuffling should allocate its output, not another whole weight tensor.
+    # Conversion should allocate its output, not another whole weight tensor.
     assert peak <= actual.nbytes + 1024**2
 
 
