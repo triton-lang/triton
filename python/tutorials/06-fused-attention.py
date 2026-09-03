@@ -615,7 +615,7 @@ class _attention(torch.autograd.Function):
             CAUSAL=ctx.causal,  #
         )
 
-        return dq, dk, dv, None, None, None, None
+        return dq, dk, dv, None, None, None
 
 
 attention = _attention.apply
