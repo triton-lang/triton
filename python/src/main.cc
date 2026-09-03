@@ -1,6 +1,8 @@
+#include "plugin_registration.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Signals.h"
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/string.h>
 
 namespace py = nanobind;
 
@@ -72,4 +74,17 @@ NB_MODULE(libtriton, m) {
   auto gluon_m = m.def_submodule("gluon_ir");
   init_gluon_ir(gluon_m);
   FOR_EACH_P(INIT_BACKEND, TRITON_BACKENDS_TUPLE)
+
+  // Single, top-level entry point for extending Triton with a plugin. This must
+  // be defined after the module tree (`ir`, `passes`, ...) has been built so
+  // that it can append the plugin's dialects, operations, and passes in each
+  // place. The top-level module is captured by value (its lifetime is owned by
+  // nanobind, which cleans it up while the interpreter is still valid) and
+  // forwarded so that `extendTritonWith` can walk the module tree at call time.
+  // See `extendTritonWith` in `ir.cc`.
+  m.def(
+      "extend_with",
+      [m](const std::string &path) { extendTritonWith(m, path); },
+      "Given a path to a Triton extension, load it once and register its "
+      "dialects, custom operations, and passes.");
 }
