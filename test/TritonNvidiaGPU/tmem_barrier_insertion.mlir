@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -triton-nvidia-gpu-tmem-barrier-insertion -test-print-membar -triton-nvidia-gpu-tmem-wait-insertion | FileCheck %s --check-prefixes=CHECK,WAIT
+// RUN: triton-opt %s -triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-membar='compute-capability=100 ptx-version=87' -triton-nvidia-gpu-tmem-wait-insertion | FileCheck %s --check-prefixes=CHECK,WAIT
 // RUN: triton-opt %s -triton-nvidia-gpu-tmem-wait-insertion | FileCheck %s --check-prefix=WAIT
 
 #shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
