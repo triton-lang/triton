@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import triton
 from triton_kernels import target_info
 from triton_kernels.target_info import get_cdna_version, get_rdna_version, cuda_capability_geq
-from triton_kernels.tensor import FP4, FP32, Tensor, torch_dtype_to_dtype
+from triton_kernels.tensor import FP4, FP16, FP32, BF16, Tensor, torch_dtype_to_dtype
 import torch
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
 from triton_kernels.tensor_details.layout_details.strided import StridedLayout
@@ -432,6 +432,13 @@ def make_default_opt_flags_nvidia(
 
     if constraints.get("num_stages", None):
         num_stages = constraints["num_stages"]
+    elif (is_hopper_scale and not is_persistent and routing_data is None and split_k == 1
+          and lhs_dtype in [FP16, BF16] and rhs_dtype == FP4
+          and (block_m, block_n, block_k, num_warps) == (128, 256, 128, 8)
+          and triton.cdiv(k, block_k) > 3):
+        # Register pressure limits this tile to one CTA/SM, leaving room for
+        # a third stage to overlap weight decoding with the next loads.
+        num_stages = 3
     elif is_large_ragged_nvfp4 and not any(
         key in constraints
         for key in (
