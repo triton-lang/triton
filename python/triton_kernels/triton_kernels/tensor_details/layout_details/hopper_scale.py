@@ -1,11 +1,10 @@
 import math
 from dataclasses import dataclass
 import torch
-from torch._subclasses.fake_tensor import is_fake
 import triton
 import triton.language as tl
 from .base import Layout, LayoutTransformation
-from .strided import StridedLayoutTransformation
+from .scale import ScaleLayoutTransformation
 
 # ------------------- Hopper MX Scale Layout -------------------
 
@@ -42,7 +41,7 @@ class HopperMXScaleLayout(Layout):
 
 
 @dataclass(frozen=True)
-class HopperMXScaleLayoutTransformation(LayoutTransformation):
+class HopperMXScaleLayoutTransformation(ScaleLayoutTransformation):
     mx_axis: int
     num_warps: int
 
@@ -75,22 +74,6 @@ class HopperMXScaleLayoutTransformation(LayoutTransformation):
         if self.mx_axis == len(self.leading_shape):
             return data.contiguous().mT
         return data
-
-    def _can_convert(self, data):
-        return not self.is_fp4 and data.device.type == "cuda" and data.dtype.itemsize == 1 and not is_fake(data)
-
-    def convert_data(self, data, destination: LayoutTransformation, *, out=None):
-        if isinstance(destination, StridedLayoutTransformation) and self._can_convert(data):
-            if out is None:
-                out = torch.empty_strided(destination.storage_shape, destination.storage_strides, dtype=data.dtype,
-                                          device=data.device)
-            return self._convert(data, out, inverse=True)
-        return super().convert_data(data, destination, out=out)
-
-    def _convert_data_from(self, data, source: LayoutTransformation, *, out):
-        if isinstance(source, StridedLayoutTransformation) and self._can_convert(data):
-            return self._convert(data, out, inverse=False)
-        return super()._convert_data_from(data, source, out=out)
 
     def _convert(self, data, out, inverse):
         transpose = self.mx_axis == len(self.leading_shape)

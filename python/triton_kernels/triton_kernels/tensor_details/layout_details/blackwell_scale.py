@@ -2,13 +2,12 @@ import math
 from dataclasses import dataclass
 
 import torch
-from torch._subclasses.fake_tensor import is_fake
 import triton
 import triton.language as tl
 
 from triton_kernels.tensor_details.ragged_tensor import RaggedTensorMetadata
 from .base import Layout, LayoutTransformation
-from .strided import StridedLayoutTransformation
+from .scale import ScaleLayoutTransformation
 from triton_kernels import target_info
 
 # ------------------- Blackwell MX Scale Layout -------------------
@@ -57,7 +56,7 @@ class BlackwellActMXScaleLayout(Layout):
 
 
 @dataclass(frozen=True)
-class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
+class BlackwellActMXScaleLayoutTransformation(ScaleLayoutTransformation):
 
     ragged_metadata: RaggedTensorMetadata | None
     added_leading_batch_dim: bool = False
@@ -101,28 +100,19 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
     def storage_shape(self) -> list[int]:
         return [1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256]
 
-    def convert_data(self, data, destination: LayoutTransformation, *, out=None):
-        if isinstance(destination, StridedLayoutTransformation) and not self.is_fp4 and _can_convert_scale(data):
-            if out is None:
-                out = torch.empty_strided(destination.storage_shape, destination.storage_strides, dtype=data.dtype,
-                                          device=data.device)
-            return self._unswizzle_data(data, out)
-        return super().convert_data(data, destination, out=out)
-
-    def _convert_data_from(self, data, source: LayoutTransformation, *, out):
-        if isinstance(source, StridedLayoutTransformation) and not self.is_fp4 and _can_convert_scale(data):
-            return self._swizzle_data(data, out=out)
-        return super()._convert_data_from(data, source, out=out)
-
-    def _swizzle_data(self, data, out=None):
+    def _convert(self, data, out, inverse):
+        if inverse and out is None:
+            out = torch.empty(self.shape, dtype=data.dtype, device=data.device)
         # Activation scales use the same encoding with the matrix axes exchanged.
         shape = [*self.shape[:-2], self.shape[-1], self.shape[-2]]
         metadata = self.ragged_metadata if self.mode == "ragged" else None
-        return _convert_mx_scale(data.mT, shape, self.storage_shape, out=out, ragged_metadata=metadata)
+        result = _convert_mx_scale(data if inverse else data.mT, shape, self.storage_shape,
+                                   out=out.mT if inverse else out, ragged_metadata=metadata, inverse=inverse)
+        return out if inverse else result
 
     def swizzle_data(self, data):
-        if not self.is_fp4 and _can_convert_scale(data):
-            return self._swizzle_data(data)
+        if self._can_convert(data):
+            return self._convert(data, None, inverse=False)
         if self.mode == "batched":
             # value of padding on left, right, top, bottom
             data = torch.nn.functional.pad(data, (0, self.K_pad - self.K, 0, self.M_pad - self.M))
@@ -142,17 +132,9 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
         data = data.view(*self.storage_shape)
         return self._validate_storage_shape(data)
 
-    def _unswizzle_data(self, data, out=None):
-        if out is None:
-            out = torch.empty(self.shape, dtype=data.dtype, device=data.device)
-        shape = [*self.shape[:-2], self.shape[-1], self.shape[-2]]
-        metadata = self.ragged_metadata if self.mode == "ragged" else None
-        _convert_mx_scale(data, shape, self.storage_shape, out=out.mT, ragged_metadata=metadata, inverse=True)
-        return out
-
     def unswizzle_data(self, data):
-        if not self.is_fp4 and _can_convert_scale(data):
-            return self._unswizzle_data(data)
+        if self._can_convert(data):
+            return self._convert(data, None, inverse=True)
         data = data.reshape(self.B, self.M_pad // 128, self.K_pad // 4, 32, 4, 4)
         data = data.transpose(2, 4)  # [B, M//128, 4, 32, K//4, 4]
         data = data.reshape(self.B, self.M_pad, self.K_pad)
@@ -176,7 +158,7 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
 
 
 @dataclass(frozen=True)
-class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
+class BlackwellMXScaleLayoutTransformation(ScaleLayoutTransformation):
 
     def __post_init__(self) -> None:
         *leading_shape, K, N = self.shape
@@ -194,21 +176,13 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
     def storage_shape(self) -> list[int]:
         return [1, self.B * self.N_pad // 128, self.K_pad // self.SWIZZLE_K, 2, 256]
 
-    def convert_data(self, data, destination: LayoutTransformation, *, out=None):
-        if isinstance(destination, StridedLayoutTransformation) and not self.is_fp4 and _can_convert_scale(data):
-            if out is None:
-                out = torch.empty_strided(destination.storage_shape, destination.storage_strides, dtype=data.dtype,
-                                          device=data.device)
-            return self._unswizzle_data(data, out)
-        return super().convert_data(data, destination, out=out)
-
-    def _convert_data_from(self, data, source: LayoutTransformation, *, out):
-        if isinstance(source, StridedLayoutTransformation) and not self.is_fp4 and _can_convert_scale(data):
-            return _convert_mx_scale(data, self.shape, self.storage_shape, out=out)
-        return super()._convert_data_from(data, source, out=out)
+    def _convert(self, data, out, inverse):
+        if inverse and out is None:
+            out = torch.empty(self.shape, dtype=data.dtype, device=data.device)
+        return _convert_mx_scale(data, self.shape, self.storage_shape, out=out, inverse=inverse)
 
     def swizzle_data(self, data):
-        if not _can_convert_scale(data):
+        if not self._can_convert(data):
             data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_pad - self.K))
             data = data.transpose(-1, -2).contiguous()
             data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.ALIGN_N // 32, 32,
@@ -219,14 +193,9 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
 
         return _convert_mx_scale(data, self.shape, self.storage_shape)
 
-    def _unswizzle_data(self, data, out=None):
-        if out is None:
-            out = torch.empty(self.shape, dtype=data.dtype, device=data.device)
-        return _convert_mx_scale(data, self.shape, self.storage_shape, out=out, inverse=True)
-
     def unswizzle_data(self, data):
-        if not self.is_fp4 and _can_convert_scale(data):
-            return self._unswizzle_data(data)
+        if self._can_convert(data):
+            return self._convert(data, None, inverse=True)
         data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.K_pad // self.SWIZZLE_K, 32, self.ALIGN_N // 32,
                             self.SWIZZLE_K)
         data = data.transpose(2, 4)
@@ -234,10 +203,6 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
         data = data.transpose(-1, -2).contiguous()
         data = data[..., :self.K, :self.N]
         return data
-
-
-def _can_convert_scale(data):
-    return data.device.type == "cuda" and data.dtype.itemsize == 1 and not is_fake(data)
 
 
 def _convert_mx_scale(data, shape, storage_shape, out=None, *, ragged_metadata=None, inverse=False):
