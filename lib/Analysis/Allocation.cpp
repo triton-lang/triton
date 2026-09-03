@@ -153,14 +153,6 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
       return 0;
     return getResultBroadcastScratchSize(poll.getResult());
   }
-  if (auto inlineAsm = dyn_cast<ElementwiseInlineAsmOp>(op)) {
-    if (inlineAsm.getPure())
-      return 0;
-    unsigned bytes = 0;
-    for (Value result : inlineAsm.getResults())
-      bytes = std::max(bytes, getResultBroadcastScratchSize(result));
-    return bytes;
-  }
   if (isa<gpu::LocalAtomicScatterRMWOp>(op) || isa<AtomicOpInterface>(op)) {
     auto value = op->getOperand(0);
     auto smemShape = getRepShapeForAtomic(op->getResult(0));
@@ -180,10 +172,8 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   return 0;
 }
 
-std::optional<uint16_t> getScratchBroadcastMask(Operation *op) {
-  auto inlineAsm = dyn_cast<ElementwiseInlineAsmOp>(op);
-  if (!isa<AtomicOpInterface, AtomicPollOp, gpu::LocalAtomicScatterRMWOp>(op) &&
-      !(inlineAsm && !inlineAsm.getPure()))
+std::optional<uint16_t> getAtomicScratchBroadcastMask(Operation *op) {
+  if (!isa<AtomicOpInterface, AtomicPollOp, gpu::LocalAtomicScatterRMWOp>(op))
     return std::nullopt;
 
   Type resultTy = op->getResult(0).getType();
@@ -206,11 +196,7 @@ bool hasCrossCTAScratch(Operation *op) {
     return !ReduceOpHelper(reduce).isReduceWithinCTA();
   if (auto poll = dyn_cast<AtomicPollOp>(op))
     return poll.getTimeout() && !poll.getResult().use_empty() &&
-           getScratchBroadcastMask(op).value_or(0) != 0;
-  if (auto inlineAsm = dyn_cast<ElementwiseInlineAsmOp>(op)) {
-    return !inlineAsm.getPure() && !inlineAsm->use_empty() &&
-           getScratchBroadcastMask(op).value_or(0) != 0;
-  }
+           getAtomicScratchBroadcastMask(op).value_or(0) != 0;
   if (isa<AtomicOpInterface, gpu::LocalAtomicScatterRMWOp>(op)) {
     Value result = op->getResult(0);
     if (result.use_empty())

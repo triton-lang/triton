@@ -10,6 +10,7 @@ from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple, TY
 from dataclasses import dataclass
 import builtins
 from .. import knobs
+from .._instrumentation import is_enabled
 from ..runtime.jit import JITCallable
 import inspect
 
@@ -2732,8 +2733,7 @@ def expect_zero(x, mask, _semantic=None):
     """
     x = _unwrap_if_constexpr(x)
     mask = _semantic.to_tensor(mask)
-    instrumentation_mode = getattr(_semantic.builder.options, "instrumentation_mode", "")
-    if "fpsan" in instrumentation_mode:
+    if is_enabled(_semantic.builder.options, "fpsan"):
         return _semantic.where(mask, 0, x)
     if _semantic.builder.options.debug:
         x_tensor = _semantic.to_tensor(x)
@@ -3403,12 +3403,6 @@ def inline_asm_elementwise(asm: str, constraints: str, args: Sequence, dtype: Un
         time.  Exactly which set of inputs a block receives is unspecified.
         Input elements of size less than 4 bytes are packed into 4-byte
         registers.
-        Incomplete groups are padded with undefined inputs, and the corresponding
-        padded outputs are discarded.
-
-        When :code:`is_pure` is false, each logical group of packed elements
-        executes once, even if its tensor layout replicates those elements
-        across physical threads.
 
         This op does not support empty :code:`dtype` -- the inline asm must
         return at least one tensor, even if you don't need it.  You can work
