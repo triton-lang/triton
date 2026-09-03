@@ -8,6 +8,7 @@ import triton.language as tl
 
 from triton_kernels.tensor_details.ragged_tensor import RaggedTensorMetadata
 from .base import Layout, LayoutTransformation
+from .strided import StridedLayoutTransformation
 from triton_kernels import target_info
 
 # ------------------- Blackwell MX Scale Layout -------------------
@@ -100,7 +101,20 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
     def storage_shape(self) -> list[int]:
         return [1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256]
 
+    def _convert_data_from(self, data, source: LayoutTransformation, *, out):
+        if isinstance(source, StridedLayoutTransformation) and not self.is_fp4 and _can_swizzle_scale(data):
+            return self._swizzle_data(data, out=out)
+        return super()._convert_data_from(data, source, out=out)
+
+    def _swizzle_data(self, data, out=None):
+        # Activation scales use the same encoding with the matrix axes exchanged.
+        shape = [*self.shape[:-2], self.shape[-1], self.shape[-2]]
+        metadata = self.ragged_metadata if self.mode == "ragged" else None
+        return _swizzle_mx_scale(data.mT, shape, self.storage_shape, out=out, ragged_metadata=metadata)
+
     def swizzle_data(self, data):
+        if not self.is_fp4 and _can_swizzle_scale(data):
+            return self._swizzle_data(data)
         if self.mode == "batched":
             # value of padding on left, right, top, bottom
             data = torch.nn.functional.pad(data, (0, self.K_pad - self.K, 0, self.M_pad - self.M))
@@ -162,10 +176,13 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
     def storage_shape(self) -> list[int]:
         return [1, self.B * self.N_pad // 128, self.K_pad // self.SWIZZLE_K, 2, 256]
 
-    def swizzle_data(self, data):
-        need_torch = data.device.type in ["cpu", "meta"] or data.dtype.itemsize != 1 or is_fake(data)
+    def _convert_data_from(self, data, source: LayoutTransformation, *, out):
+        if isinstance(source, StridedLayoutTransformation) and not self.is_fp4 and _can_swizzle_scale(data):
+            return _swizzle_mx_scale(data, self.shape, self.storage_shape, out=out)
+        return super()._convert_data_from(data, source, out=out)
 
-        if need_torch:
+    def swizzle_data(self, data):
+        if not _can_swizzle_scale(data):
             data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_pad - self.K))
             data = data.transpose(-1, -2).contiguous()
             data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.ALIGN_N // 32, 32,
@@ -174,30 +191,7 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
             data = data.view(*self.storage_shape)
             return self._validate_storage_shape(data)
 
-        # The following code is equivalent to the above, but faster for GPU tensors.
-
-        # Ensure that `leading_shape` can be collapsed into a single B dim.
-        assert tuple(data.shape) == tuple(self.shape)
-        data = data.reshape((self.B, self.K, self.N))
-
-        out = torch.empty(self.storage_shape, dtype=torch.uint8, device=data.device)
-        if not out.numel():
-            return self._validate_storage_shape(out)
-
-        block_k = 64
-        grid = (self.B * triton.cdiv(self.N_pad, self.ALIGN_N) * triton.cdiv(self.K_pad, block_k), )
-        _swizzle_blackwell_mx_scale[grid](
-            data.view(torch.uint8),
-            self.K,
-            self.N,
-            self.K_pad,
-            self.N_pad,
-            *data.stride(),
-            out,
-            BLOCK_K=block_k,
-            num_warps=4,
-        )
-        return self._validate_storage_shape(out.view(data.dtype))
+        return _swizzle_mx_scale(data, self.shape, self.storage_shape)
 
     def unswizzle_data(self, data):
         data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.K_pad // self.SWIZZLE_K, 32, self.ALIGN_N // 32,
@@ -207,6 +201,57 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
         data = data.transpose(-1, -2).contiguous()
         data = data[..., :self.K, :self.N]
         return data
+
+
+def _can_swizzle_scale(data):
+    return data.device.type == "cuda" and data.dtype.itemsize == 1 and not is_fake(data)
+
+
+def _swizzle_mx_scale(data, shape, storage_shape, out=None, *, ragged_metadata=None):
+    assert tuple(data.shape) == tuple(shape)
+    if out is None:
+        out = torch.empty(storage_shape, dtype=data.dtype, device=data.device)
+    if not out.numel():
+        return out
+    batch = math.prod(shape[:-2])
+    k_pad, n_pad = storage_shape[2] * 4, storage_shape[1] // batch * 128
+    metadata = (None, None, None, None)
+    n_slices = 0
+    if ragged_metadata is not None:
+        metadata = (ragged_metadata.slice_sizes, ragged_metadata.slice_offs, ragged_metadata.block_offs(128),
+                    ragged_metadata.block_schedule(128))
+        n_slices = ragged_metadata.n_slices
+    # Keep enough blocks for small tensors; larger tiles amortize scheduling work.
+    size = batch * k_pad * n_pad
+    contiguous_k = data.stride(-2) == 1
+    block_k = min(128, triton.next_power_of_2(k_pad)) if contiguous_k else 64
+    block_k = min(block_k, max(8, triton.next_power_of_2(size) // (128 * 128)))
+    if contiguous_k and k_pad % 32 == 0:
+        block_k = math.gcd(block_k, k_pad)
+    block_n, num_warps = 128, 4
+    if k_pad == 8:
+        block_k = 8
+        if ragged_metadata is None and size >= 2**22:
+            block_n = 512 if size < 2**25 else 1024
+    elif data.stride(-1) == 1 and k_pad <= 32 and size >= 2**22:
+        block_k, num_warps = 32, 2
+    grid = (batch * triton.cdiv(n_pad, block_n) * triton.cdiv(k_pad, block_k), )
+    with torch.cuda.device(data.device):
+        _swizzle_blackwell_mx_scale[grid](
+            data.view(torch.uint8),
+            out.view(torch.uint8),
+            tuple(shape),
+            data.stride(),
+            out.stride(),
+            k_pad,
+            n_pad,
+            *metadata,
+            n_slices,
+            BLOCK_K=block_k,
+            BLOCK_N=block_n,
+            num_warps=num_warps,
+        )
+    return out
 
 
 SWIZZLE_ALIGN_INNER = tl.constexpr(8)
@@ -503,34 +548,69 @@ def swizzle_mx_scale_bw_store_ptr(base, rows, cols, leading_idx, n_cols, stride_
 
 
 @triton.jit
-def _swizzle_blackwell_mx_scale(Data, K, N, K_PAD, N_PAD, stride_b, stride_k, stride_n, Out, BLOCK_K: tl.constexpr):
-    tl.static_assert(BLOCK_K % 4 == 0)
-    BLKSIZE: tl.constexpr = 4 * 128
+def _swizzle_blackwell_mx_scale(
+    Data,
+    Out,
+    SHAPE: tl.constexpr,
+    STRIDES: tl.constexpr,
+    OUT_STRIDES: tl.constexpr,
+    K_PAD: tl.constexpr,
+    N_PAD: tl.constexpr,
+    SliceSizes,
+    SliceOffs,
+    BlockOffs,
+    BlockSchedule,
+    N_SLICES: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+):
+    tl.static_assert(BLOCK_K % 4 == 0 and BLOCK_N % 128 == 0)
+    K: tl.constexpr = SHAPE[-2]
+    N: tl.constexpr = SHAPE[-1]
+    k_blocks: tl.constexpr = tl.cdiv(K_PAD, BLOCK_K)
+    n_blocks: tl.constexpr = N_PAD // 128
+    n_tiles: tl.constexpr = tl.cdiv(N_PAD, BLOCK_N)
+    pid = tl.program_id(0).to(tl.int64)
+    k_block = pid % k_blocks
+    n_tile = pid // k_blocks % n_tiles
+    batch = pid // (k_blocks * n_tiles)
+    batch_index = batch
+    batch_offset = tl.full((), 0, tl.int64)
+    for axis in tl.static_range(len(SHAPE) - 3, -1, -1):
+        batch_offset += (batch_index % SHAPE[axis]) * STRIDES[axis]
+        batch_index //= SHAPE[axis]
 
-    k_blocks = tl.cdiv(K_PAD, BLOCK_K)
-    n_blocks = tl.cdiv(N_PAD, 128)
-    pid = tl.program_id(0)
-    k_block = (pid % k_blocks).to(tl.int64)
-    pid //= k_blocks
-    n_block = (pid % n_blocks).to(tl.int64)
-    b = (pid // n_blocks).to(tl.int64)
-
-    # `vals` contains BLOCK_K rows and 128 columns: a swizzle block is 4x128,
-    # and blocks are arranged in column-major order, so it contains (BLOCK_K // 4)
-    # blocks which we can write to a contiguous region.
-    rows = k_block * BLOCK_K + tl.arange(0, BLOCK_K)[:, None]
-    cols = n_block * 128 + tl.arange(0, 128)[None, :]
-    vals = tl.load(
-        Data + b * stride_b + rows * stride_k + cols * stride_n,
-        mask=(rows < K) & (cols < N),
-        other=0,
-    )
-    vals = vals.reshape(BLOCK_K // 4, 4, 4, 32).trans(0, 3, 2, 1).ravel()  # reshape(BLOCK_K // 4, BLKSIZE)
-    Out += b * K_PAD * N_PAD
-    Out += (n_block * (K_PAD // 4) + k_block * (BLOCK_K // 4)) * BLKSIZE
-    inner_idx = tl.arange(0, (BLOCK_K // 4) * BLKSIZE)
-    mask = (k_block * (BLOCK_K // 4) + inner_idx // BLKSIZE) < (K_PAD // 4)
-    tl.store(Out + inner_idx, vals, mask=mask)
+    rows = k_block * BLOCK_K + tl.arange(0, BLOCK_K)
+    cols = n_tile * BLOCK_N + tl.arange(0, BLOCK_N)
+    if BlockSchedule is not None:
+        tl.static_assert(BLOCK_N == 128)
+        n_block = n_tile
+        active = n_block < tl.load(BlockOffs + N_SLICES)
+        schedule = tl.load(BlockSchedule + n_block, active, other=0)
+        slice_index = schedule & 0xFFFF
+        block_in_slice = schedule >> 16
+        slice_size = tl.load(SliceSizes + slice_index, active, other=0)
+        slice_start = tl.load(SliceOffs + slice_index, active, other=0).to(tl.int64)
+        slice_rows = block_in_slice * 128 + tl.arange(0, 128)
+        cols = slice_start + slice_rows
+        col_mask = active & (slice_rows < slice_size)
+    else:
+        col_mask = cols < N
+    vals = tl.load(Data + batch_offset + rows[:, None] * STRIDES[-2] + cols[None, :] * STRIDES[-1],
+                   (rows[:, None] < K) & col_mask[None, :], other=0)
+    # A swizzle block is 4x128; reorder it before writing its 512 encoded elements.
+    vals = vals.reshape(BLOCK_K // 4, 4, BLOCK_N // 128, 4, 32).trans(2, 0, 4, 3, 1).ravel()
+    offsets = tl.arange(0, BLOCK_K * BLOCK_N)
+    n_block = n_tile * (BLOCK_N // 128) + offsets // (BLOCK_K * 128)
+    group = k_block * (BLOCK_K // 4) + offsets % (BLOCK_K * 128) // 512
+    lane = offsets % 512
+    if OUT_STRIDES[2:] == (512, 256, 1):
+        # A flat inner offset lets the compiler vectorize the contiguous stores.
+        out_offsets = (batch * n_blocks + n_block) * OUT_STRIDES[1] + group * 512 + lane
+    else:
+        out_offsets = ((batch * n_blocks + n_block) * OUT_STRIDES[1] + group * OUT_STRIDES[2] +
+                       lane // 256 * OUT_STRIDES[3] + lane % 256 * OUT_STRIDES[4])
+    tl.store(Out + out_offsets, vals, (group < K_PAD // 4) & (n_block < n_blocks))
 
 
 @triton.jit

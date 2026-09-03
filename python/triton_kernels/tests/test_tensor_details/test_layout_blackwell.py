@@ -1,6 +1,7 @@
 import math
 import pytest
 import torch
+from torch._subclasses.fake_tensor import FakeTensorMode
 from triton_kernels.tensor_details.layout import (
     BlackwellActMXScaleLayout,
     BlackwellMX4ValueShuffledLayout,
@@ -347,3 +348,152 @@ def test_act_scale_roundtrip_ragged(slice_sizes, m, k, align_m):
     x_useful_rows = x[ragged_metadata.slice_offs[:-1], :]
     res_useful_rows = res[ragged_metadata.slice_offs[:-1], :]
     torch.testing.assert_close(res_useful_rows, x_useful_rows)
+
+
+@pytest.mark.parametrize("layout,shape", [
+    (BlackwellActMXScaleLayout(None), (130, 9)),
+    (BlackwellActMXScaleLayout(None), (2, 130, 9)),
+    (BlackwellActMXScaleLayout(None), (130, 259)),
+    (BlackwellActMXScaleLayout(None), (524416, 8)),
+    (BlackwellMXScaleLayout(), (9, 130)),
+    (BlackwellMXScaleLayout(), (2, 9, 130)),
+    (BlackwellMXScaleLayout(), (259, 130)),
+    (BlackwellMXScaleLayout(), (8, 524416)),
+    (BlackwellMXScaleLayout(), (2, 3, 9, 130)),
+])
+@pytest.mark.parametrize("step", [1, 2])
+@pytest.mark.parametrize("with_out", [False, True])
+def test_scale_convert_layout_strided_storage(layout, shape, step, with_out):
+    storage_shape = tuple(step * size + 1 for size in shape)
+    storage = torch.randint(0, 256, storage_shape, dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
+    index = (slice(1, None, step), ) * len(shape)
+    data = storage[index]
+    expected = convert_layout(wrap_torch_tensor(data, layout=StridedLayout(-1)), layout)
+    source = wrap_torch_tensor(storage.cuda()[index], layout=StridedLayout(-1))
+    out_storage = torch.full((expected.data.numel() * step + 1, ), 0xAB, dtype=torch.uint8, device="cuda")
+    out_data = out_storage[1:].as_strided(expected.data.shape, tuple(s * step for s in expected.data.stride()))
+    out = wrap_torch_tensor(out_data, shape=shape, layout=layout) if with_out else None
+
+    actual = convert_layout(source, layout, out=out)
+
+    assert actual.shape == list(shape)
+    assert torch.equal(actual.data.cpu(), expected.data)
+    assert torch.equal(source.data.cpu(), data)
+    if with_out:
+        assert actual is out
+        assert out_storage[0].item() == 0xAB
+        if step == 2:
+            assert torch.all(out_storage[2::2] == 0xAB)
+    else:
+        assert actual.data.stride() == expected.data.stride()
+
+
+@pytest.mark.parametrize("sizes,shape", [
+    ([17, 0, 33, 5], (100, 94)),
+    ([1, 127, 128, 129], (512, 17)),
+    ([0, 0], (256, 9)),
+    ([], (0, 9)),
+])
+@pytest.mark.parametrize("step", [1, 2])
+@pytest.mark.parametrize("with_out", [False, True])
+def test_act_scale_convert_layout_ragged_padding(sizes, shape, step, with_out):
+    metadata = make_ragged_tensor_metadata(torch.tensor(sizes, dtype=torch.int32, device="cuda"), shape[0])
+    layout = BlackwellActMXScaleLayout(metadata)
+    transformation = layout.make_transformation(list(shape), False)
+    storage = torch.randint(0, 256, tuple(step * size + 1 for size in shape), dtype=torch.uint8,
+                            generator=torch.Generator().manual_seed(0))
+    data = storage[1::step, 1::step]
+    padded = torch.zeros((transformation.M_pad, transformation.K_pad), dtype=torch.uint8)
+    source_start, padded_start = 0, 0
+    for size in sizes:
+        padded[padded_start:padded_start + size, :shape[1]] = data[source_start:source_start + size]
+        source_start += size
+        padded_start += (size + 127) // 128 * 128
+    expected = BlackwellActMXScaleLayout(None).make_transformation(list(padded.shape), False).swizzle_data(padded)
+    source = wrap_torch_tensor(storage.cuda()[1::step, 1::step], layout=StridedLayout(-1))
+    out_storage = torch.full((expected.numel() * step + 1, ), 0xAB, dtype=torch.uint8, device="cuda")
+    out_data = out_storage[1:].as_strided(expected.shape, tuple(s * step for s in expected.stride()))
+    out = wrap_torch_tensor(out_data, shape=shape, layout=layout) if with_out else None
+
+    actual = convert_layout(source, layout, out=out)
+
+    assert torch.equal(actual.data.cpu(), expected)
+    if with_out:
+        assert actual is out
+        assert out_storage[0].item() == 0xAB
+        if step == 2:
+            assert torch.all(out_storage[2::2] == 0xAB)
+
+
+@pytest.mark.parametrize("layout", [BlackwellActMXScaleLayout(None), BlackwellMXScaleLayout()])
+@pytest.mark.parametrize("dtype", [torch.float8_e4m3fn, torch.float8_e5m2, torch.float32])
+def test_scale_convert_layout_dtype(layout, dtype):
+    bits = torch.randint(0, 256, (2, 130, 9), dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
+    data = bits.view(dtype) if dtype.itemsize == 1 else bits.to(dtype)
+    expected = convert_layout(wrap_torch_tensor(bits if dtype.itemsize == 1 else data), layout).data
+    source = wrap_torch_tensor(data.cuda())
+
+    actual = convert_layout(source, layout)
+
+    assert actual.data.dtype == dtype
+    assert torch.equal(actual.data.cpu().view(torch.uint8), expected.view(torch.uint8))
+
+
+@pytest.mark.parametrize("kind", ["act", "mx", "ragged_act"])
+@pytest.mark.parametrize("with_out", [False, True])
+def test_scale_convert_layout_peak_allocation(kind, with_out):
+    shape = (32768, 128) if kind == "ragged_act" else (16, 2048, 128)
+    data = torch.empty(shape, dtype=torch.uint8, device="cuda")
+    if kind == "ragged_act":
+        sizes = torch.tensor([8191, 8193, 8191, 8192], dtype=torch.int32, device="cuda")
+        layout = BlackwellActMXScaleLayout(make_ragged_tensor_metadata(sizes, shape[0]))
+    else:
+        layout = BlackwellMXScaleLayout() if kind == "mx" else BlackwellActMXScaleLayout(None)
+    source = wrap_torch_tensor(data)
+    out = convert_layout(source, layout) if with_out else None
+    warm = convert_layout(source, layout, out=out)
+    torch.cuda.synchronize()
+    del warm
+    baseline = torch.cuda.memory_allocated()
+    torch.cuda.reset_peak_memory_stats()
+
+    actual = convert_layout(source, layout, out=out)
+    torch.cuda.synchronize()
+    peak = torch.cuda.max_memory_allocated() - baseline
+
+    assert peak <= (0 if with_out else actual.data.nbytes) + 1024**2
+    if with_out:
+        assert actual is out
+
+
+@pytest.mark.parametrize("layout", [BlackwellActMXScaleLayout(None), BlackwellMXScaleLayout()])
+@pytest.mark.parametrize("with_out", [False, True])
+def test_scale_convert_layout_uses_input_device(layout, with_out):
+    if torch.cuda.device_count() < 2:
+        pytest.skip("requires two CUDA devices")
+    data = torch.randint(0, 256, (2, 130, 9), dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
+    expected = convert_layout(wrap_torch_tensor(data), layout)
+    stream = torch.cuda.Stream(device=1)
+    with torch.cuda.stream(stream), torch.cuda.device(0):
+        source = wrap_torch_tensor(data.to("cuda:1"))
+        out = wrap_torch_tensor(torch.empty_like(expected.data, device="cuda:1"), shape=source.shape,
+                                layout=layout) if with_out else None
+        actual = convert_layout(source, layout, out=out)
+        assert torch.cuda.current_device() == 0
+        assert torch.cuda.current_stream(1) == stream
+        assert actual.device == torch.device("cuda:1")
+        stream.synchronize()
+        assert torch.equal(actual.data.cpu(), expected.data)
+        if with_out:
+            assert actual is out
+
+
+@pytest.mark.parametrize("layout", [BlackwellActMXScaleLayout(None), BlackwellMXScaleLayout()])
+def test_scale_convert_layout_fake(layout):
+    shape = (2, 130, 9)
+    with FakeTensorMode():
+        source = wrap_torch_tensor(torch.empty(shape, dtype=torch.uint8, device="cuda"))
+        out = convert_layout(source, layout)
+        assert convert_layout(source, layout, out=out) is out
+        assert list(out.data.shape) == layout.storage_shape(shape, False)
+        assert out.data.dtype == torch.uint8
