@@ -44,6 +44,8 @@
 
 namespace py = nanobind;
 
+void init_triton_amd_loader(py::module_ &m);
+
 namespace {
 llvm::Triple getAMDTargetTriple(const std::string &arch) {
   llvm::AMDGPU::GPUKind gpuKind = llvm::AMDGPU::parseArchAMDGCN(arch);
@@ -353,6 +355,7 @@ static std::optional<std::string> lldInvoke(const char *inPath,
 
 void init_triton_amd(py::module_ &m) {
   m.doc() = "Python bindings to the AMD Triton backend";
+  init_triton_amd_loader(m);
 
   auto passes = m.def_submodule("passes");
   auto ttgpuir_m = passes.def_submodule("ttgpuir");
