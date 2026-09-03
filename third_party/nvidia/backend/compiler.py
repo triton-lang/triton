@@ -497,6 +497,9 @@ class CUDABackend(BaseBackend):
         llvm.optimize_module(
             llvm_mod,
             llvm.OPTIMIZE_O3,
+            # Same LLVM flags as make_ptx: compilations sharing a process only
+            # run in parallel while their flag sets are identical.
+            flags=["nvptx-mad-wide-opt"],
             disable_slp_vectorizer=capability == 80,
             expand_masked_div_rem=True,
         )

@@ -48,6 +48,21 @@ def is_expert_scheduling_enabled(arch):
     return arch in ["gfx1250"]
 
 
+def get_llvm_flags(arch):
+    """LLVM command line flags for every LLVM pipeline run of a compilation.
+
+    These are process-wide LLVM options: compilations sharing a process can only
+    run in parallel while they use identical flags. Prefer per-function LLVM
+    attributes (see make_llir) whenever LLVM offers one.
+    """
+    flags = []
+    # LLVM has no per-function attribute for the AMDGPU register pressure
+    # trackers yet.
+    if arch in ["gfx942", "gfx950"]:
+        flags.append("amdgpu-use-amdgpu-trackers")
+    return flags
+
+
 def is_fpsan_supported(arch):
     return arch in ["gfx942", "gfx950", "gfx1250"]
 
@@ -472,6 +487,12 @@ class HIPBackend(BaseBackend):
         if is_coexec_scheduler_enabled(options.arch) and options.num_warps <= 4:
             kernel_fn.add_fn_attr("amdgpu-sched-strategy", "coexec")
 
+        if is_expert_scheduling_enabled(options.arch):
+            # LLVM reads this attribute per function, so cover every function in
+            # the module rather than only the kernel.
+            for fn in fns:
+                fn.add_fn_attr("amdgpu-expert-scheduling-mode", "true")
+
         denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
         kernel_fn.add_fn_attr("denormal-fp-math-f32", denormal_mode)
 
@@ -504,8 +525,8 @@ class HIPBackend(BaseBackend):
             if len(paths) > 0:
                 llvm.link_extern_libs(llvm_mod, paths)
 
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion,
-                             disable_vector_combine=True)
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', get_llvm_flags(options.arch),
+                             options.enable_fp_fusion, disable_vector_combine=True)
 
         # Architectures with architected SGPRs store the workgroup id in ttmp9 (X) and ttmp7 (Y[15:0], Z[31:16]).
         # These attributes are used to determine if Z should be masked out when loading Y. They are inferred during
@@ -545,11 +566,7 @@ class HIPBackend(BaseBackend):
         assert len(names) == 1
         metadata["name"] = names[0]
         # llvm -> hsaco
-        flags = []
-        if options.arch in ["gfx942", "gfx950"]:
-            flags.append("amdgpu-use-amdgpu-trackers")
-        if is_expert_scheduling_enabled(options.arch):
-            flags.append("amdgpu-expert-scheduling-mode")
+        flags = get_llvm_flags(options.arch)
         features = ''
         target_triple = amd.get_target_triple(options.arch)
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()

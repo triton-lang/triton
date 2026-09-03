@@ -135,6 +135,82 @@ def test_nvidia_register_pressure_scheduler_concurrent():
     assert results == [expected[policy] for policy in scheduling_policies]
 
 
+def _compile_empty_hip_kernel(arch, warp_size):
+    from triton.backends.compiler import GPUTarget
+
+    @triton.jit
+    def empty_kernel():
+        return
+
+    return triton.compile(triton.compiler.ASTSource(empty_kernel, {}), target=GPUTarget("hip", arch, warp_size))
+
+
+@pytest.mark.parametrize("arch, warp_size, knob, expected", [
+    ("gfx1250", 32, None, True),
+    ("gfx1250", 32, False, False),
+    ("gfx942", 64, None, False),
+    ("gfx942", 64, True, True),
+])
+def test_amd_expert_scheduling_attribute(arch, warp_size, knob, expected, fresh_knobs, fresh_triton_cache):
+    if knob is not None:
+        fresh_knobs.amd.use_expert_scheduling = knob
+    compiled = _compile_empty_hip_kernel(arch, warp_size)
+    # Expert scheduling is requested through a per-function LLVM attribute
+    # rather than a process-wide LLVM option.
+    assert ('"amdgpu-expert-scheduling-mode"="true"' in compiled.asm["llir"]) == expected
+
+
+def _amd_scheduler_kernel():
+    arithmetic = []
+    stores = []
+    for lane in range(32):
+        arithmetic.extend([
+            f"  %seed{lane} = add i32 %seed, {lane + 1}",
+            f"  %high{lane} = mul i32 %seed{lane}, -766435501",
+            f"  %low{lane} = mul i32 %seed{lane}, -845247145",
+            f"  %value{lane} = xor i32 %high{lane}, %low{lane}",
+        ])
+        stores.extend([
+            f"  %out{lane} = getelementptr i32, ptr addrspace(1) %out, i64 {lane}",
+            f"  store i32 %value{lane}, ptr addrspace(1) %out{lane}, align 4",
+        ])
+
+    return ('target triple = "amdgcn-amd-amdhsa"\n'
+            'define amdgpu_kernel void @scheduler_kernel(ptr addrspace(1) %out, i32 %seed) {\n' +
+            "\n".join(arithmetic + stores) + "\n  ret void\n}\n")
+
+
+def test_amd_llvm_options_concurrent():
+    from triton.backends.compiler import GPUTarget
+    from triton.backends.amd import compiler
+
+    compiler.llvm.init_targets()
+    source = _amd_scheduler_kernel()
+    # gfx950 codegen needs a process-wide LLVM option that gfx1250 codegen must
+    # not see, and every HSACO link resets all LLVM options.
+    backends = {
+        arch: compiler.HIPBackend(GPUTarget("hip", arch, warp_size))
+        for arch, warp_size in [("gfx950", 64), ("gfx1250", 32)]
+    }
+
+    def emit(arch):
+        backend = backends[arch]
+        options = backend.parse_options({})
+        metadata = {}
+        amdgcn = backend.make_amdgcn(source, metadata, options)
+        backend.make_hsaco(amdgcn, metadata, options)
+        return amdgcn
+
+    expected = {arch: emit(arch) for arch in backends}
+    assert expected["gfx950"] != expected["gfx1250"]
+
+    archs = [("gfx950", "gfx1250")[index % 2] for index in range(24)]
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(emit, archs))
+
+    assert results == [expected[arch] for arch in archs]
+
+
 def test_knobs_scope(fresh_knobs, monkeypatch):
     fresh_knobs.amd.use_buffer_atomics = True
 
