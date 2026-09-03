@@ -36,14 +36,19 @@ namespace {
 
 static std::optional<mlir::triton::LinearLayout>
 wmmaRepLayoutForTensor(const mlir::triton::LinearLayout &wholeTileLL,
-                       const mlir::triton::LinearLayout &tileLL) {
+                       const mlir::triton::LinearLayout &tileLL,
+                       unsigned &elemsPerTile) {
   llvm::SmallDenseMap<StringAttr, int64_t> shape;
   for (auto outDim : wholeTileLL.getOutDimNames())
     shape[outDim] = wholeTileLL.getOutDimSize(outDim);
 
   // Clamp the tileLL to the tensor's output dims so that divideLeft succeeds
   // when the tensor is smaller than the WMMA instruction shape.
-  auto clampedTileLL = ensureLayoutNotLargerThan(tileLL, shape);
+  auto kRegister =
+      StringAttr::get(shape.begin()->first.getContext(), "register");
+  auto clampedTileLL = ensureLayoutNotLargerThan(tileLL, shape)
+                           .removeZeroBasesAlongDim(kRegister);
+  elemsPerTile = clampedTileLL.getInDimSize(kRegister);
 
   auto quot = divideLeft(wholeTileLL, clampedTileLL);
   if (quot.has_value())
@@ -218,10 +223,17 @@ Value getOperandVals(ConversionPatternRewriter &rewriter,
   int nonKRepeat = nonKDim / nonKTileDim;
   int kPerSubtile = kBase / nonKRepeat;
   int validKPerSubTile = validK / nonKRepeat;
+  int nonKSubtiles = nonKRepeat;
+  if (!isScale)
+    nonKSubtiles = std::min<int>(
+        nonKRepeat, gpu::getElemsPerThread(tensorType)[rank - 2 + opIdx]);
 
   for (int k = 0; k < kBase; ++k) {
     int subTilePos = k % kPerSubtile;
-    Value elem = (subTilePos < validKPerSubTile) ? elems[startReg + k] : zero;
+    int subTile = k / kPerSubtile % nonKSubtiles;
+    // Compact registers omit padded K elements and repeated non-K subtiles.
+    int reg = startReg + subTile * validKPerSubTile + subTilePos;
+    Value elem = (subTilePos < validKPerSubTile) ? elems[reg] : zero;
     rawElems = tb.insert_element(vecTy, rawElems, elem, tb.i32_val(k));
   }
 
@@ -444,7 +456,8 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
 
   auto tile = wmmaLayout.getTileLayout(rank);
   auto wmmaLL = triton::gpu::toLinearLayout(resShape, wmmaLayout);
-  auto repLayout = wmmaRepLayoutForTensor(wmmaLL, tile);
+  unsigned elemsPerTile;
+  auto repLayout = wmmaRepLayoutForTensor(wmmaLL, tile, elemsPerTile);
   if (!repLayout.has_value()) {
     return op.emitError("failed to divide wmma layout by tile layout");
   }
@@ -484,20 +497,20 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   int tiedGroup = 1;
 
   for (int reg = 0; reg < repLayout->getInDimSize(kRegister);
-       reg += dElemsToStorePerThread) {
+       reg += elemsPerTile) {
     auto repIndices = repLayout->apply(
         {{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
     int batchIdx = (rank == 3 ? repIndices[0].second : 0);
     int m = repIndices[rank == 3 ? 1 : 0].second;
     int n = repIndices[rank == 3 ? 2 : 1].second;
 
-    int nextMReg = reg + dElemsToStorePerThread;
+    int nextMReg = reg + elemsPerTile;
     std::optional<int> nextM;
     if (paddedOutputElemSize == 2) {
       if (mnProcessed.count(packMN((uint32_t)m, (uint32_t)n))) {
         continue;
       }
-      nextM = findNextM(*repLayout, nextMReg, dElemsToStorePerThread, m, rank);
+      nextM = findNextM(*repLayout, nextMReg, elemsPerTile, m, rank);
       if (nextM.has_value()) {
         tiedGroup = 2;
         mnProcessed.insert(packMN((uint32_t)m, (uint32_t)n));
@@ -513,7 +526,8 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
 
     for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
       for (int subTied = 0; subTied < tiedGroup; ++subTied) {
-        acc = tb.insert_element(vecTy, acc, fc[selectRegValue(subTied) + v],
+        acc = tb.insert_element(vecTy, acc,
+                                fc[selectRegValue(subTied) + v % elemsPerTile],
                                 tb.i32_val(v * paddedOutputElemSize + subTied));
       }
     }
@@ -565,7 +579,7 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
                                    intrinsicName, optTied);
       }
     }
-    for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
+    for (unsigned v = 0; v < elemsPerTile; ++v) {
       for (int subTied = 0; subTied < tiedGroup; ++subTied) {
         fc[selectRegValue(subTied) + v] = tb.extract_element(
             dstElemTy, acc, tb.i32_val(v * paddedOutputElemSize + subTied));
@@ -669,7 +683,8 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
 
   auto tile = wmmaLayout.getTileLayout(rank);
   auto wmmaLL = triton::gpu::toLinearLayout(resShape, wmmaLayout);
-  auto repLayout = wmmaRepLayoutForTensor(wmmaLL, tile);
+  unsigned elemsPerTile;
+  auto repLayout = wmmaRepLayoutForTensor(wmmaLL, tile, elemsPerTile);
   if (!repLayout.has_value()) {
     return op.emitError("failed to divide wmma layout by tile layout");
   }
@@ -704,7 +719,7 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
   auto vecTy = vec_ty(dstElemTy, elemsPerVec);
 
   for (int reg = 0; reg < repLayout->getInDimSize(kRegister);
-       reg += elemsPerVec) {
+       reg += elemsPerTile) {
 
     auto repIndices = repLayout->apply(
         {{kRegister, reg}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
@@ -714,7 +729,8 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
 
     Value acc = tb.undef(vecTy);
     for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
-      acc = tb.insert_element(vecTy, acc, fc[reg + v], tb.i32_val(v));
+      acc = tb.insert_element(vecTy, acc, fc[reg + v % elemsPerTile],
+                              tb.i32_val(v));
     }
     for (size_t k = 0; k < numRepK; k++) {
       int scaleOpSelA = 0;
@@ -768,7 +784,7 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
                       bScaleTensorTy.getElementType(), dstElemTy, scaleOpSelA,
                       scaleOpSelB, intrinsicName);
     }
-    for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
+    for (unsigned v = 0; v < elemsPerTile; ++v) {
       fc[reg + v] = tb.extract_element(dstElemTy, acc, tb.i32_val(v));
     }
   }

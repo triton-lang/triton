@@ -105,6 +105,8 @@ LogicalResult parametricConvertFMADot(DotOp op, DotOp::Adaptor adaptor,
   Value llB = adaptor.getB();
 
   llvm::SmallVector<unsigned> sizePerThread{dLayout.getSizePerThread()};
+  for (auto [size, dim] : llvm::zip(sizePerThread, getShapePerCTA(dTensorTy)))
+    size = std::min<int64_t>(size, dim);
   auto numElemsPerThread = product(sizePerThread);
   SmallVector<unsigned> shapePerCTATile;
   for (auto [reg, thread, warp] :
