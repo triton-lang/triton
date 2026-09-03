@@ -177,8 +177,9 @@ def TritonNvidiaGPUOptimizeSynchronizationPass : Pass<"triton-nvidia-gpu-optimiz
 
   let description = [{
     Use Membar's memory and thread-effect dataflow to remove warp barriers
-    covered by preceding synchronization and fold distributed arrivals when
-    prior effects are synchronized across the execution region. Preserve
+    covered by preceding synchronization or a following local CTA barrier.
+    Fold distributed arrivals when prior effects are synchronized across the
+    execution region. Preserve
     total counts, predicates, and routes. Run after memory synchronization and
     sanitizer insertion, without introducing new synchronization.
   }];

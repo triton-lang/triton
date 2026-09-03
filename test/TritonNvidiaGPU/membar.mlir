@@ -216,6 +216,51 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return %loaded : tensor<512xi32, #load>
   }
 
+  // A following CTA barrier covers both warp barriers across pure arithmetic.
+  // CLEANUP-LABEL: @warp_barrier_before_cta
+  // CLEANUP-NEXT: %[[SUM:.*]] = arith.addi
+  // CLEANUP-NEXT: ttg.barrier local
+  // CLEANUP-NEXT: tt.return %[[SUM]]
+  tt.func @warp_barrier_before_cta(%data: tensor<512xi32, #store>) -> tensor<512xi32, #store> {
+    ttg.barrier warp local
+    %sum = arith.addi %data, %data : tensor<512xi32, #store>
+    ttg.barrier warp local
+    ttg.barrier local
+    tt.return %sum : tensor<512xi32, #store>
+  }
+
+  // Explicit memory effects and implicit shared scratch stop subsumption.
+  // CLEANUP-LABEL: @warp_barrier_before_cta_with_effects
+  // CLEANUP-NEXT: ttg.barrier warp local
+  // CLEANUP-NEXT: tt.store
+  // CLEANUP-NEXT: ttg.barrier local
+  // CLEANUP-NEXT: tt.store
+  // CLEANUP-NEXT: ttg.barrier warp local
+  // CLEANUP-NEXT: %[[CONVERTED:.*]] = ttg.convert_layout
+  // CLEANUP-NEXT: ttg.barrier local
+  // CLEANUP-NEXT: tt.return %[[CONVERTED]]
+  tt.func @warp_barrier_before_cta_with_effects(%out: !tt.ptr<i32>, %value: i32, %data: tensor<512xi32, #store>) -> tensor<512xi32, #load> {
+    ttg.barrier warp local
+    tt.store %out, %value : !tt.ptr<i32>
+    ttg.barrier local
+    tt.store %out, %value : !tt.ptr<i32>
+    ttg.barrier warp local
+    %converted = ttg.convert_layout %data : tensor<512xi32, #store> -> tensor<512xi32, #load>
+    ttg.barrier local
+    tt.return %converted : tensor<512xi32, #load>
+  }
+
+  // A CTA rendezvous without local-memory ordering cannot cover warp local.
+  // CLEANUP-LABEL: @warp_barrier_before_cta_none
+  // CLEANUP-NEXT: ttg.barrier warp local
+  // CLEANUP-NEXT: ttg.barrier none
+  // CLEANUP-NEXT: tt.return
+  tt.func @warp_barrier_before_cta_none() {
+    ttg.barrier warp local
+    ttg.barrier none
+    tt.return
+  }
+
   // Tensor arithmetic preserves synchronization across CFG edges.
   // CLEANUP-LABEL: @arrival_after_tensor_arithmetic
   // CLEANUP: ttg.barrier local
@@ -454,7 +499,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CLEANUP-NEXT: ttg.barrier warp local
   // CLEANUP-NEXT: arith.constant true
   // CLEANUP-NEXT: ttng.arrive_barrier {{.*}}, 4 {arrivalWarps = 4 : i32}
-  // CLEANUP-NEXT: ttg.barrier warp local
   // CLEANUP-NEXT: %[[PRED:.*]] = arith.xori
   // CLEANUP-NEXT: ttg.barrier local
   // CLEANUP-NEXT: ttng.arrive_barrier {{.*}}, 8, %[[PRED]] {fromCTA = 0 : i32}

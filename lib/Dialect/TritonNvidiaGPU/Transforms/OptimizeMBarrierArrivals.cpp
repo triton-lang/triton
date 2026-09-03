@@ -145,9 +145,27 @@ private:
       else
         foldableOps.erase(op);
     }
+
+    if (auto barrier = dyn_cast<gpu::BarrierOp>(op)) {
+      if (barrier.isWarp()) {
+        // Later warp barriers already fold through warpsSynced.
+        if (barrier.hasLocal() && !pendingWarp)
+          pendingWarp = op;
+      } else {
+        if (barrier.hasLocal() && pendingWarp)
+          foldableOps.insert(pendingWarp);
+        pendingWarp = nullptr;
+      }
+    } else if (op->getNumRegions() || op->hasTrait<OpTrait::IsTerminator>() ||
+               !isMemoryEffectFree(op) ||
+               allocation.getBufferId(op) != Allocation::InvalidBufferId) {
+      // Pure operations can still use shared scratch during lowering.
+      pendingWarp = nullptr;
+    }
     MembarAnalysis::update(op, info, funcMap, /*builder=*/nullptr);
   }
 
+  Operation *pendingWarp = nullptr;
   llvm::SmallPtrSet<Operation *, 16> foldableOps;
 };
 

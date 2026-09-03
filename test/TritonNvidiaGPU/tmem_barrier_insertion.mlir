@@ -141,7 +141,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // ARRIVAL-LABEL: @ld_then_st_broadcast_warps
   // ARRIVAL: ttng.tmem_load
   // ARRIVAL-NEXT: ttng.tmem_wait load
-  // ARRIVAL-NEXT: ttg.barrier warp local
   // ARRIVAL-NEXT: ttg.barrier local
   // ARRIVAL-NEXT: ttng.tmem_store
   tt.func @ld_then_st_broadcast_warps(%data: tensor<128x1xf32, #blocked_broadcast_warps>) -> tensor<128x1xf32, #blocked_broadcast_warps> attributes {"ttg.num-warps" = 8 : i32} {
