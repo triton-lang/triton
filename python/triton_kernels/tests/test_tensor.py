@@ -534,6 +534,67 @@ def test_mxfp4_value_convert_layout_meta(layout, major_dim, inverse):
     assert actual.device.type == "meta"
 
 
+@pytest.mark.parametrize("kind", ["value", "scale", "act_scale", "ragged_scale", "hopper4", "hopper8"])
+@pytest.mark.parametrize("inverse", [False, True])
+@pytest.mark.parametrize("major", [-2, -1])
+@pytest.mark.parametrize("step", [1, 2])
+@pytest.mark.parametrize("with_out", [False, True])
+def test_layout_conversion_compile_warmup(kind, inverse, major, step, with_out, monkeypatch):
+    from triton._compile_warmup import compile_warmup_only
+    from triton.runtime.jit import JITFunction
+    from triton_kernels.testing import convert_layout as testing_convert_layout
+
+    calls = []
+    original_run = JITFunction.run
+
+    def record_run(kernel, *args, **kwargs):
+        compiled = original_run(kernel, *args, **kwargs)
+        calls.append((kernel.fn.__name__, compiled.hash, tuple(kwargs["grid"])))
+        return compiled
+
+    monkeypatch.setattr(JITFunction, "run", record_run)
+
+    def convert():
+        shape = (129, 9) if kind == "ragged_scale" else (2, 130, 66)
+        dtype = FP4 if kind == "value" else UINT8
+        if kind == "ragged_scale":
+            metadata = make_ragged_tensor_metadata(torch.tensor([17, 0, 33], dtype=torch.int32, device="cuda"),
+                                                   shape[0])
+            layout = BlackwellActMXScaleLayout(metadata)
+        elif kind.startswith("hopper"):
+            layout = HopperMXScaleLayout(major, int(kind[-1]))
+        else:
+            layout = {
+                "value": BlackwellMXValueLayout(), "scale": BlackwellMXScaleLayout(), "act_scale":
+                BlackwellActMXScaleLayout(None)
+            }[kind]
+        strided = StridedLayout(major)
+        source_layout, destination = (layout, strided) if inverse else (strided, layout)
+
+        def allocate(storage_layout):
+            transformation = storage_layout.make_transformation(list(shape), dtype == FP4)
+            physical_shape = transformation.storage_shape
+            strides = (transformation.storage_strides if isinstance(storage_layout, StridedLayout) else torch.empty(
+                physical_shape, device="meta").stride())
+            storage = torch.zeros((math.prod(physical_shape) * step + 1, ), dtype=torch.uint8, device="cuda")
+            data = storage[1:].as_strided(physical_shape, tuple(stride * step for stride in strides))
+            return wrap_torch_tensor(data, dtype=dtype, shape=shape, layout=storage_layout)
+
+        source = allocate(source_layout)
+        out = allocate(destination) if with_out else None
+        return (testing_convert_layout(source, destination, out=out) if with_out else testing_convert_layout(
+            source, destination))
+
+    with compile_warmup_only():
+        convert()
+    warmed = list(calls)
+    calls.clear()
+    convert()
+    torch.cuda.synchronize()
+    assert warmed
+    assert calls == warmed
+
+
 @pytest.mark.parametrize("shape", [(256, 512), (130, 66), (2, 130, 66), (2, 3, 130, 66), (2, 1, 3, 130, 66),
                                    (0, 130, 66)])
 @pytest.mark.parametrize("tiles", [(128, 256), (192, 48)])

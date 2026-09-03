@@ -210,6 +210,9 @@ def _convert_mx_scale(data, shape, storage_shape, out=None, *, ragged_metadata=N
         out = torch.empty(storage_shape, dtype=data.dtype, device=data.device)
     if not out.numel():
         return out
+    if inverse and ragged_metadata is not None and ragged_metadata.n_slices == 0:
+        # No encoded rows are needed, but the logical output may still have capacity.
+        return out.zero_()
     matrix, encoded = (out, data) if inverse else (data, out)
     assert tuple(matrix.shape) == tuple(shape)
     batch = math.prod(shape[:-2])

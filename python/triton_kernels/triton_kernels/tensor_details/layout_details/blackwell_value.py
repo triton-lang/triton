@@ -1,8 +1,10 @@
 import math
 from dataclasses import dataclass
 import torch
+from torch._subclasses.fake_tensor import is_fake
 import triton
 import triton.language as tl
+from triton._internal_testing import is_compile_warmup
 from triton_kernels.tensor_details.layout_details import strided
 from .base import Layout, LayoutTransformation
 from .torch_utils import repack
@@ -39,6 +41,10 @@ def strides_major_dim_m2(shape):
 @dataclass(frozen=True)
 class BlackwellMXValueLayoutTransformation(LayoutTransformation):
 
+    def _can_convert(self, data):
+        return (self.is_fp4 and data.device.type == "cuda" and data.dtype == torch.uint8 and self.shape[-2] % 2 == 0
+                and self.shape[-1] % 2 == 0 and (not is_fake(data) or is_compile_warmup()))
+
     @property
     def storage_shape(self) -> list[int]:
         *leading_shape, M, K = self.shape
@@ -50,16 +56,15 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
         return [*leading_shape, M, K]
 
     def convert_data(self, data, destination: LayoutTransformation, *, out=None):
-        if (not self.is_fp4 or data.device.type != "cuda" or data.dtype != torch.uint8 or self.shape[-2] % 2
-                or self.shape[-1] % 2 or not isinstance(destination, strided.StridedLayoutTransformation)
+        if (not self._can_convert(data) or not isinstance(destination, strided.StridedLayoutTransformation)
                 or destination.order[0] < len(self.shape) - 2):
             return super().convert_data(data, destination, out=out)
 
         return unswizzle_mxfp4(data, self.shape, destination.order[0], out=out)
 
     def _convert_data_from(self, data, source: LayoutTransformation, *, out):
-        if (not isinstance(source, strided.StridedLayoutTransformation) or not self.is_fp4 or self.shape[-1] % 2
-                or self.shape[-2] % 2 or not source._can_convert_fp4(data)):
+        if (not self._can_convert(data) or not isinstance(source, strided.StridedLayoutTransformation)
+                or not source._can_convert_fp4(data)):
             return super()._convert_data_from(data, source, out=out)
         return self._swizzle_mxfp4(data, source.order[0], out=out)
 
@@ -76,8 +81,7 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
         return out
 
     def swizzle_data(self, data):
-        if (self.is_fp4 and data.device.type == "cuda" and data.dtype == torch.uint8 and self.shape[-2] % 2 == 0
-                and self.shape[-1] % 2 == 0):
+        if self._can_convert(data):
             return self._swizzle_mxfp4(data, -1)
         # re-pack as column-major
         ret = torch.empty_strided(self.storage_shape, strides_major_dim_m2(self.storage_shape), device=data.device,
@@ -94,8 +98,7 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
         return data[tuple(slice(0, s) for s in sizes)]
 
     def unswizzle_data(self, data: torch.Tensor):
-        if (self.is_fp4 and data.device.type == "cuda" and data.dtype == torch.uint8 and self.shape[-2] % 2 == 0
-                and self.shape[-1] % 2 == 0):
+        if self._can_convert(data):
             return unswizzle_mxfp4(data, self.shape, -1)
         data = self._unpad_data(data)
         out_shape = list(self.shape)

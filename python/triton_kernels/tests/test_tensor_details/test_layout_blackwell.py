@@ -1,6 +1,7 @@
 import math
 import pytest
 import torch
+import triton
 from torch._subclasses.fake_tensor import FakeTensorMode
 from triton_kernels.tensor_details.layout import (
     BlackwellActMXScaleLayout,
@@ -288,6 +289,50 @@ def test_mxfp4_value_peak_allocation(inverse, layout, with_out):
         assert actual is out
 
 
+@pytest.mark.parametrize("inverse", [False, True])
+@pytest.mark.parametrize("major", [-2, -1])
+@pytest.mark.parametrize("with_out", [False, True])
+def test_mxfp4_value_convert_layout_fake(inverse, major, with_out, monkeypatch):
+
+    def reject_launch(*args, **kwargs):
+        pytest.fail("ordinary FakeTensor conversion must not launch a Triton kernel")
+
+    monkeypatch.setattr(triton.KernelInterface, "__getitem__", reject_launch)
+    shape = (256, 512)
+    layout, strided = BlackwellMXValueLayout(), StridedLayout(major)
+    source = empty(shape, dtype=FP4, device="cpu", layout=strided)
+    if inverse:
+        source = convert_layout(source, layout)
+    destination = strided if inverse else layout
+    expected = convert_layout(source, destination)
+    with FakeTensorMode():
+        data = torch.empty_strided(source.data.shape, source.data.stride(), dtype=torch.uint8, device="cuda")
+        source_fake = wrap_torch_tensor(data, dtype=FP4, shape=shape, layout=source.storage.layout)
+        out = wrap_torch_tensor(
+            torch.empty_strided(expected.data.shape, expected.data.stride(), dtype=torch.uint8, device="cuda"),
+            dtype=FP4, shape=shape, layout=destination) if with_out else None
+        actual = convert_layout(source_fake, destination, out=out)
+        assert actual.shape == list(shape)
+        assert actual.data.shape == expected.data.shape
+        assert actual.data.stride() == expected.data.stride()
+        if with_out:
+            assert actual is out
+
+
+@pytest.mark.parametrize("inverse", [False, True])
+def test_mxfp4_value_transform_fake(inverse, monkeypatch):
+
+    def reject_launch(*args, **kwargs):
+        pytest.fail("ordinary FakeTensor transformation must not launch a Triton kernel")
+
+    monkeypatch.setattr(triton.KernelInterface, "__getitem__", reject_launch)
+    transformation = BlackwellMXValueLayout().make_transformation([256, 512], True)
+    with FakeTensorMode():
+        data = torch.empty(transformation.storage_shape if inverse else (256, 256), dtype=torch.uint8, device="cuda")
+        actual = transformation.unswizzle_data(data) if inverse else transformation.swizzle_data(data)
+        assert list(actual.shape) == ([256, 256] if inverse else transformation.storage_shape)
+
+
 @pytest.mark.parametrize(("slice_sizes", "shape"), [([0], (0, 64)), ([2, 0], (2, 0))])
 @pytest.mark.parametrize("device", ["cpu", "meta", "cuda"])
 def test_act_scale_zero_sized_ragged_roundtrip(slice_sizes, shape, device):
@@ -441,6 +486,9 @@ def test_scale_convert_layout_strided_storage(layout, shape, inverse, major, ste
     ([1, 127, 128, 129], (512, 17)),
     ([0, 0], (256, 9)),
     ([], (0, 9)),
+    ([], (100, 9)),
+    ([], (129, 9)),
+    ([], (257, 9)),
 ])
 @pytest.mark.parametrize("step", [1, 2])
 @pytest.mark.parametrize("with_out", [False, True])

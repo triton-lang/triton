@@ -2,6 +2,7 @@ from abc import abstractmethod
 
 import torch
 from torch._subclasses.fake_tensor import is_fake
+from triton._internal_testing import is_compile_warmup
 
 from .base import LayoutTransformation
 from .strided import StridedLayoutTransformation
@@ -11,7 +12,9 @@ class ScaleLayoutTransformation(LayoutTransformation):
     """Byte-scale layouts with direct CUDA conversions to and from strided storage."""
 
     def _can_convert(self, data):
-        return not self.is_fp4 and data.device.type == "cuda" and data.dtype.itemsize == 1 and not is_fake(data)
+        # Compile warmup intercepts launches; ordinary FakeTensors must use Torch.
+        return (not self.is_fp4 and data.device.type == "cuda" and data.dtype.itemsize == 1
+                and (not is_fake(data) or is_compile_warmup()))
 
     def convert_data(self, data, destination: LayoutTransformation, *, out=None):
         if isinstance(destination, StridedLayoutTransformation) and self._can_convert(data):
