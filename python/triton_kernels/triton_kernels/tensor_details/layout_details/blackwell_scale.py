@@ -101,8 +101,16 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
     def storage_shape(self) -> list[int]:
         return [1, self.B * self.M_pad // 128, self.K_pad // 4, 2, 256]
 
+    def convert_data(self, data, destination: LayoutTransformation, *, out=None):
+        if isinstance(destination, StridedLayoutTransformation) and not self.is_fp4 and _can_convert_scale(data):
+            if out is None:
+                out = torch.empty_strided(destination.storage_shape, destination.storage_strides, dtype=data.dtype,
+                                          device=data.device)
+            return self._unswizzle_data(data, out)
+        return super().convert_data(data, destination, out=out)
+
     def _convert_data_from(self, data, source: LayoutTransformation, *, out):
-        if isinstance(source, StridedLayoutTransformation) and not self.is_fp4 and _can_swizzle_scale(data):
+        if isinstance(source, StridedLayoutTransformation) and not self.is_fp4 and _can_convert_scale(data):
             return self._swizzle_data(data, out=out)
         return super()._convert_data_from(data, source, out=out)
 
@@ -110,10 +118,10 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
         # Activation scales use the same encoding with the matrix axes exchanged.
         shape = [*self.shape[:-2], self.shape[-1], self.shape[-2]]
         metadata = self.ragged_metadata if self.mode == "ragged" else None
-        return _swizzle_mx_scale(data.mT, shape, self.storage_shape, out=out, ragged_metadata=metadata)
+        return _convert_mx_scale(data.mT, shape, self.storage_shape, out=out, ragged_metadata=metadata)
 
     def swizzle_data(self, data):
-        if not self.is_fp4 and _can_swizzle_scale(data):
+        if not self.is_fp4 and _can_convert_scale(data):
             return self._swizzle_data(data)
         if self.mode == "batched":
             # value of padding on left, right, top, bottom
@@ -134,7 +142,17 @@ class BlackwellActMXScaleLayoutTransformation(LayoutTransformation):
         data = data.view(*self.storage_shape)
         return self._validate_storage_shape(data)
 
+    def _unswizzle_data(self, data, out=None):
+        if out is None:
+            out = torch.empty(self.shape, dtype=data.dtype, device=data.device)
+        shape = [*self.shape[:-2], self.shape[-1], self.shape[-2]]
+        metadata = self.ragged_metadata if self.mode == "ragged" else None
+        _convert_mx_scale(data, shape, self.storage_shape, out=out.mT, ragged_metadata=metadata, inverse=True)
+        return out
+
     def unswizzle_data(self, data):
+        if not self.is_fp4 and _can_convert_scale(data):
+            return self._unswizzle_data(data)
         data = data.reshape(self.B, self.M_pad // 128, self.K_pad // 4, 32, 4, 4)
         data = data.transpose(2, 4)  # [B, M//128, 4, 32, K//4, 4]
         data = data.reshape(self.B, self.M_pad, self.K_pad)
@@ -176,13 +194,21 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
     def storage_shape(self) -> list[int]:
         return [1, self.B * self.N_pad // 128, self.K_pad // self.SWIZZLE_K, 2, 256]
 
+    def convert_data(self, data, destination: LayoutTransformation, *, out=None):
+        if isinstance(destination, StridedLayoutTransformation) and not self.is_fp4 and _can_convert_scale(data):
+            if out is None:
+                out = torch.empty_strided(destination.storage_shape, destination.storage_strides, dtype=data.dtype,
+                                          device=data.device)
+            return self._unswizzle_data(data, out)
+        return super().convert_data(data, destination, out=out)
+
     def _convert_data_from(self, data, source: LayoutTransformation, *, out):
-        if isinstance(source, StridedLayoutTransformation) and not self.is_fp4 and _can_swizzle_scale(data):
-            return _swizzle_mx_scale(data, self.shape, self.storage_shape, out=out)
+        if isinstance(source, StridedLayoutTransformation) and not self.is_fp4 and _can_convert_scale(data):
+            return _convert_mx_scale(data, self.shape, self.storage_shape, out=out)
         return super()._convert_data_from(data, source, out=out)
 
     def swizzle_data(self, data):
-        if not _can_swizzle_scale(data):
+        if not _can_convert_scale(data):
             data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_pad - self.K))
             data = data.transpose(-1, -2).contiguous()
             data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.ALIGN_N // 32, 32,
@@ -191,9 +217,16 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
             data = data.view(*self.storage_shape)
             return self._validate_storage_shape(data)
 
-        return _swizzle_mx_scale(data, self.shape, self.storage_shape)
+        return _convert_mx_scale(data, self.shape, self.storage_shape)
+
+    def _unswizzle_data(self, data, out=None):
+        if out is None:
+            out = torch.empty(self.shape, dtype=data.dtype, device=data.device)
+        return _convert_mx_scale(data, self.shape, self.storage_shape, out=out, inverse=True)
 
     def unswizzle_data(self, data):
+        if not self.is_fp4 and _can_convert_scale(data):
+            return self._unswizzle_data(data)
         data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.K_pad // self.SWIZZLE_K, 32, self.ALIGN_N // 32,
                             self.SWIZZLE_K)
         data = data.transpose(2, 4)
@@ -203,16 +236,17 @@ class BlackwellMXScaleLayoutTransformation(LayoutTransformation):
         return data
 
 
-def _can_swizzle_scale(data):
+def _can_convert_scale(data):
     return data.device.type == "cuda" and data.dtype.itemsize == 1 and not is_fake(data)
 
 
-def _swizzle_mx_scale(data, shape, storage_shape, out=None, *, ragged_metadata=None):
-    assert tuple(data.shape) == tuple(shape)
+def _convert_mx_scale(data, shape, storage_shape, out=None, *, ragged_metadata=None, inverse=False):
     if out is None:
         out = torch.empty(storage_shape, dtype=data.dtype, device=data.device)
     if not out.numel():
         return out
+    matrix, encoded = (out, data) if inverse else (data, out)
+    assert tuple(matrix.shape) == tuple(shape)
     batch = math.prod(shape[:-2])
     k_pad, n_pad = storage_shape[2] * 4, storage_shape[1] // batch * 128
     metadata = (None, None, None, None)
@@ -223,7 +257,7 @@ def _swizzle_mx_scale(data, shape, storage_shape, out=None, *, ragged_metadata=N
         n_slices = ragged_metadata.n_slices
     # Keep enough blocks for small tensors; larger tiles amortize scheduling work.
     size = batch * k_pad * n_pad
-    contiguous_k = data.stride(-2) == 1
+    contiguous_k = matrix.stride(-2) == 1
     block_k = min(128, triton.next_power_of_2(k_pad)) if contiguous_k else 64
     block_k = min(block_k, max(8, triton.next_power_of_2(size) // (128 * 128)))
     if contiguous_k and k_pad % 32 == 0:
@@ -233,22 +267,23 @@ def _swizzle_mx_scale(data, shape, storage_shape, out=None, *, ragged_metadata=N
         block_k = 8
         if ragged_metadata is None and size >= 2**22:
             block_n = 512 if size < 2**25 else 1024
-    elif data.stride(-1) == 1 and k_pad <= 32 and size >= 2**22:
+    elif matrix.stride(-1) == 1 and k_pad <= 32 and size >= 2**22:
         block_k, num_warps = 32, 2
     grid = (batch * triton.cdiv(n_pad, block_n) * triton.cdiv(k_pad, block_k), )
     with torch.cuda.device(data.device):
-        _swizzle_blackwell_mx_scale[grid](
-            data.view(torch.uint8),
-            out.view(torch.uint8),
+        _convert_blackwell_mx_scale[grid](
+            matrix.view(torch.uint8),
+            encoded.view(torch.uint8),
             tuple(shape),
-            data.stride(),
-            out.stride(),
+            matrix.stride(),
+            encoded.stride(),
             k_pad,
             n_pad,
             *metadata,
             n_slices,
             BLOCK_K=block_k,
             BLOCK_N=block_n,
+            INVERSE=inverse,
             num_warps=num_warps,
         )
     return out
@@ -548,12 +583,12 @@ def swizzle_mx_scale_bw_store_ptr(base, rows, cols, leading_idx, n_cols, stride_
 
 
 @triton.jit
-def _swizzle_blackwell_mx_scale(
-    Data,
-    Out,
+def _convert_blackwell_mx_scale(
+    Matrix,
+    Encoded,
     SHAPE: tl.constexpr,
-    STRIDES: tl.constexpr,
-    OUT_STRIDES: tl.constexpr,
+    MATRIX_STRIDES: tl.constexpr,
+    ENCODED_STRIDES: tl.constexpr,
     K_PAD: tl.constexpr,
     N_PAD: tl.constexpr,
     SliceSizes,
@@ -563,6 +598,7 @@ def _swizzle_blackwell_mx_scale(
     N_SLICES: tl.constexpr,
     BLOCK_K: tl.constexpr,
     BLOCK_N: tl.constexpr,
+    INVERSE: tl.constexpr = False,
 ):
     tl.static_assert(BLOCK_K % 4 == 0 and BLOCK_N % 128 == 0)
     K: tl.constexpr = SHAPE[-2]
@@ -577,7 +613,7 @@ def _swizzle_blackwell_mx_scale(
     batch_index = batch
     batch_offset = tl.full((), 0, tl.int64)
     for axis in tl.static_range(len(SHAPE) - 3, -1, -1):
-        batch_offset += (batch_index % SHAPE[axis]) * STRIDES[axis]
+        batch_offset += (batch_index % SHAPE[axis]) * MATRIX_STRIDES[axis]
         batch_index //= SHAPE[axis]
 
     rows = k_block * BLOCK_K + tl.arange(0, BLOCK_K)
@@ -596,21 +632,35 @@ def _swizzle_blackwell_mx_scale(
         col_mask = active & (slice_rows < slice_size)
     else:
         col_mask = cols < N
-    vals = tl.load(Data + batch_offset + rows[:, None] * STRIDES[-2] + cols[None, :] * STRIDES[-1],
-                   (rows[:, None] < K) & col_mask[None, :], other=0)
-    # A swizzle block is 4x128; reorder it before writing its 512 encoded elements.
-    vals = vals.reshape(BLOCK_K // 4, 4, BLOCK_N // 128, 4, 32).trans(2, 0, 4, 3, 1).ravel()
     offsets = tl.arange(0, BLOCK_K * BLOCK_N)
     n_block = n_tile * (BLOCK_N // 128) + offsets // (BLOCK_K * 128)
     group = k_block * (BLOCK_K // 4) + offsets % (BLOCK_K * 128) // 512
     lane = offsets % 512
-    if OUT_STRIDES[2:] == (512, 256, 1):
-        # A flat inner offset lets the compiler vectorize the contiguous stores.
-        out_offsets = (batch * n_blocks + n_block) * OUT_STRIDES[1] + group * 512 + lane
+    if ENCODED_STRIDES[2:] == (512, 256, 1):
+        # A flat inner offset lets the compiler vectorize contiguous loads and stores.
+        encoded_offsets = (batch * n_blocks + n_block) * ENCODED_STRIDES[1] + group * 512 + lane
     else:
-        out_offsets = ((batch * n_blocks + n_block) * OUT_STRIDES[1] + group * OUT_STRIDES[2] +
-                       lane // 256 * OUT_STRIDES[3] + lane % 256 * OUT_STRIDES[4])
-    tl.store(Out + out_offsets, vals, (group < K_PAD // 4) & (n_block < n_blocks))
+        encoded_offsets = ((batch * n_blocks + n_block) * ENCODED_STRIDES[1] + group * ENCODED_STRIDES[2] +
+                           lane // 256 * ENCODED_STRIDES[3] + lane % 256 * ENCODED_STRIDES[4])
+    matrix_offsets = batch_offset + rows[:, None] * MATRIX_STRIDES[-2] + cols[None, :] * MATRIX_STRIDES[-1]
+    matrix_mask = (rows[:, None] < K) & col_mask[None, :]
+    encoded_mask = (group < K_PAD // 4) & (n_block < n_blocks)
+    if INVERSE:
+        vals = tl.load(Encoded + encoded_offsets, encoded_mask, other=0)
+        vals = vals.reshape(BLOCK_N // 128, BLOCK_K // 4, 32, 4, 4).trans(1, 4, 0, 3, 2).reshape(BLOCK_K, BLOCK_N)
+        tl.store(Matrix + matrix_offsets, vals, matrix_mask)
+        if BlockSchedule is not None:
+            # Valid segments occupy a prefix; the unused logical tail must be zero.
+            valid_rows = tl.load(SliceOffs + N_SLICES).to(tl.int64)
+            tail_cols = n_tile * BLOCK_N + tl.arange(0, BLOCK_N)
+            tail_offsets = batch_offset + rows[:, None] * MATRIX_STRIDES[-2] + tail_cols[None, :] * MATRIX_STRIDES[-1]
+            tail_mask = (rows[:, None] < K) & (tail_cols[None, :] >= valid_rows) & (tail_cols[None, :] < N)
+            tl.store(Matrix + tail_offsets, 0, tail_mask)
+    else:
+        vals = tl.load(Matrix + matrix_offsets, matrix_mask, other=0)
+        # A swizzle block is 4x128; reorder its 512 encoded elements.
+        vals = vals.reshape(BLOCK_K // 4, 4, BLOCK_N // 128, 4, 32).trans(2, 0, 4, 3, 1).ravel()
+        tl.store(Encoded + encoded_offsets, vals, encoded_mask)
 
 
 @triton.jit
