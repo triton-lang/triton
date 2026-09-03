@@ -531,11 +531,14 @@ If the condition is false, the message is printed, and the program is aborted.</
               attr-dict `:` qualified(type($ptr)) `,` type($expected) `-&gt;` type($result)
 </pre></div>
 </div>
-<p>Repeatedly load from $ptr with relaxed semantics on a single thread
-until the loaded value equals $expected. For acquire semantics, issue
-an acquire fence only after a successful poll. Other threads wait for
-the polling thread to finish.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Repeatedly load each logical element of $ptr with relaxed semantics
+until it equals $expected or the operation’s timeout expires. One thread polls
+each element; threads replicating that element wait for its result.
+For acquire semantics, issue an acquire fence after each successful
+poll. The block waits for all elements to finish. The result has the
+same shape and encoding as $ptr. All elements share one timeout budget,
+and each element is loaded at least once, even with a zero timeout.</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code></p>
 <section id="id5">
 <h3>Attributes:<a class="headerlink" href="#id5" title="Link to this heading"></a></h3>
@@ -555,10 +558,10 @@ the polling thread to finish.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">ptr</span></code></p></td>
-<td><p>ptr</p></td>
+<td><p>ptr or ranked tensor of ptr values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">expected</span></code></p></td>
-<td><p>integer</p></td>
+<td><p>integer or ranked tensor of integer values</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">timeout</span></code></p></td>
 <td><p>64-bit signless integer</p></td>
@@ -576,7 +579,7 @@ the polling thread to finish.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>1-bit signless integer</p></td>
+<td><p>1-bit signless integer or ranked tensor of 1-bit signless integer values</p></td>
 </tr>
 </tbody>
 </table>
@@ -1207,12 +1210,7 @@ Where scale(x, s) is a function that applies the scale per block following micro
 </div>
 <p>Runs an inline asm block to generate one or more tensors.</p>
 <p>The asm block is given <code class="docutils literal notranslate"><span class="pre">packed_element</span></code> elements at a time.  Exactly which
-elems it receives is unspecified.
-Incomplete groups are padded with undefined inputs, and the corresponding
-padded outputs are discarded.</p>
-<p>When <code class="docutils literal notranslate"><span class="pre">pure</span></code> is false, each logical group of packed elements executes the
-asm block once, even if the tensor layout replicates those elements across
-physical threads.</p>
+elems it receives is unspecified.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">Elementwise</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id36">

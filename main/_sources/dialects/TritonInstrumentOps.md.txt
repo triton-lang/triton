@@ -252,6 +252,8 @@ operation ::= `tti.experimental_gsan_atomic_poll` $sem `,` $scope `,` $ptr `,` $
 Records the successful read performed by an atomic poll after the hardware
 polling loop has completed.
 
+Traits: `SameOperandsEncoding`
+
 #### Attributes:
 
 <table>
@@ -264,8 +266,8 @@ polling loop has completed.
 
 | Operand | Description |
 | :-----: | ----------- |
-| `ptr` | ptr |
-| `matched` | 1-bit signless integer |
+| `ptr` | ptr or ranked tensor of ptr values |
+| `matched` | 1-bit signless integer or ranked tensor of 1-bit signless integer values |
 
 
 

@@ -145,27 +145,28 @@
 <dt class="sig sig-object py" id="triton.language.atomic_poll">
 <span class="sig-prename descclassname"><span class="pre">triton.language.</span></span><span class="sig-name descname"><span class="pre">atomic_poll</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">pointer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">expected_value</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sem</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scope</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">timeout_ns</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.language.atomic_poll" title="Link to this definition"></a></dt>
 <dd><p>Wait until the value at <code class="code docutils literal notranslate"><span class="pre">pointer</span></code> equals <code class="code docutils literal notranslate"><span class="pre">expected_value</span></code>.</p>
-<p>This will spin-wait on the specified pointer until either the value equals
-the expected value, or the operation times out. In the event of a timeout,
-the operation returns false and no results may be acquired.</p>
+<p>This will spin-wait on each specified pointer until either its value equals
+the expected value, or the operation times out. The block waits for all polls to
+finish. Timed-out elements return false and acquire no results.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>pointer</strong> (<em>triton.PointerDType</em>) – A pointer to a scalar 16-, 32-, or 64-bit integer.</p></li>
-<li><p><strong>expected_value</strong> (<em>pointer.dtype.element_ty</em>) – The value that ends the polling loop.</p></li>
+<li><p><strong>pointer</strong> (<em>triton.PointerDType</em>) – A pointer, or block of pointers, to 16-, 32-, or 64-bit integers.</p></li>
+<li><p><strong>expected_value</strong> (<em>pointer.dtype.element_ty</em>) – The value that ends each polling loop, broadcast to
+the shape of <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>.</p></li>
 <li><p><strong>sem</strong> (<em>str</em><em>, </em><em>optional</em>) – Specifies whether a successful poll has acquire semantics.
 Acceptable values are “acquire” (default) and “relaxed”.</p></li>
 <li><p><strong>scope</strong> (<em>str</em><em>, </em><em>optional</em>) – Defines the scope of threads that observe the synchronizing
 effect of the poll. Acceptable values are “gpu” (default), “cta”
 (cooperative thread array, thread block), and “sys” (system).</p></li>
-<li><p><strong>timeout_ns</strong> (<em>int</em><em>, </em><em>optional</em>) – Maximum wall time to poll, measured in nanoseconds by
-the GPU global timer. If omitted, polling has no timeout. A timeout of
-zero still performs one load.</p></li>
+<li><p><strong>timeout_ns</strong> (<em>int</em><em>, </em><em>optional</em>) – Shared polling time budget for the entire operation, measured
+in nanoseconds by the GPU global timer. If omitted, polling has no timeout.
+Each element is loaded at least once, even with a zero timeout.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p>True if the expected value was observed, or False if the timeout
-expired first.</p>
+<dd class="field-even"><p>A boolean with the shape of <code class="code docutils literal notranslate"><span class="pre">pointer</span></code>, true for each element
+whose expected value was observed and false if its timeout expired first.</p>
 </dd>
 <dt class="field-odd">Return type<span class="colon">:</span></dt>
 <dd class="field-odd"><p><a class="reference internal" href="triton.language.tensor.html#triton.language.tensor" title="triton.language.tensor">triton.language.tensor</a></p>

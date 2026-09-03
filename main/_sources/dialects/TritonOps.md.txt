@@ -121,12 +121,15 @@ operation ::= `tt.atomic_poll` $sem `,` $scope `,` $ptr `,` $expected (`timeout`
               attr-dict `:` qualified(type($ptr)) `,` type($expected) `->` type($result)
 ```
 
-Repeatedly load from $ptr with relaxed semantics on a single thread
-until the loaded value equals $expected. For acquire semantics, issue
-an acquire fence only after a successful poll. Other threads wait for
-the polling thread to finish.
+Repeatedly load each logical element of $ptr with relaxed semantics
+until it equals $expected or the operation's timeout expires. One thread polls
+each element; threads replicating that element wait for its result.
+For acquire semantics, issue an acquire fence after each successful
+poll. The block waits for all elements to finish. The result has the
+same shape and encoding as $ptr. All elements share one timeout budget,
+and each element is loaded at least once, even with a zero timeout.
 
-Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+Traits: `SameOperandsAndResultEncoding`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `InferTypeOpInterface`
 
@@ -142,15 +145,15 @@ Interfaces: `InferTypeOpInterface`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `ptr` | ptr |
-| `expected` | integer |
+| `ptr` | ptr or ranked tensor of ptr values |
+| `expected` | integer or ranked tensor of integer values |
 | `timeout` | 64-bit signless integer |
 
 #### Results:
 
 | Result | Description |
 | :----: | ----------- |
-| `result` | 1-bit signless integer |
+| `result` | 1-bit signless integer or ranked tensor of 1-bit signless integer values |
 
 
 
@@ -649,12 +652,6 @@ Runs an inline asm block to generate one or more tensors.
 
 The asm block is given `packed_element` elements at a time.  Exactly which
 elems it receives is unspecified.
-Incomplete groups are padded with undefined inputs, and the corresponding
-padded outputs are discarded.
-
-When `pure` is false, each logical group of packed elements executes the
-asm block once, even if the tensor layout replicates those elements across
-physical threads.
 
 Traits: `Elementwise`, `SameOperandsAndResultEncoding`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 

@@ -562,6 +562,7 @@ slabs. For single-CTA kernels this is always zero.</p>
 </div>
 <p>Records the successful read performed by an atomic poll after the hardware
 polling loop has completed.</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">SameOperandsEncoding</span></code></p>
 <section id="id13">
 <h3>Attributes:<a class="headerlink" href="#id13" title="Link to this heading"></a></h3>
 <table>
@@ -580,10 +581,10 @@ polling loop has completed.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">ptr</span></code></p></td>
-<td><p>ptr</p></td>
+<td><p>ptr or ranked tensor of ptr values</p></td>
 </tr>
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">matched</span></code></p></td>
-<td><p>1-bit signless integer</p></td>
+<td><p>1-bit signless integer or ranked tensor of 1-bit signless integer values</p></td>
 </tr>
 </tbody>
 </table>
