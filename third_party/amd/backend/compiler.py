@@ -1,6 +1,7 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
 from triton._C.libtriton import ir, passes, llvm, amd
 from triton import knobs
+from triton._instrumentation import instrument as _instrument, is_enabled
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 from types import ModuleType
@@ -11,6 +12,8 @@ import re
 import functools
 import warnings
 from pathlib import Path
+
+instrument = functools.partial(_instrument, backend="amd")
 
 
 def get_min_dot_size(target: GPUTarget):
@@ -129,7 +132,6 @@ class HIPOptions:
 
 
 class HIPBackend(BaseBackend):
-    instrumentation = None
     supports_native_tensor_specialization = False
 
     @staticmethod
@@ -153,7 +155,7 @@ class HIPBackend(BaseBackend):
 
     def parse_options(self, opts) -> Any:
         # Enable debug mode for ConSan, so device-side assertions are not optimized out
-        if any(mode in opts.get("instrumentation_mode", "") for mode in ["consan"]):
+        if is_enabled(opts, "consan"):
             opts["debug"] = True
             opts["sanitize_overflow"] = False
 
@@ -198,8 +200,7 @@ class HIPBackend(BaseBackend):
 
     def load_dialects(self, ctx):
         amd.load_dialects(ctx)
-        if HIPBackend.instrumentation:
-            HIPBackend.instrumentation.load_dialects(ctx)
+        instrument(ctx, point="load-dialects")
 
     # is_within_2gb() needs to check for a torch subobject and this var tracks torch
     # availability state: None - not tested, True - torch is present. Anything else -
@@ -316,7 +317,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
-        if options.instrumentation_mode == "fpsan" and is_fpsan_supported(options.arch):
+        if is_enabled(options, "fpsan") and is_fpsan_supported(options.arch):
             amd.passes.ttgpuir.add_fp_sanitizer(pm)
             passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
         pm.run(mod, 'make_ttgir')
@@ -336,12 +337,12 @@ class HIPBackend(BaseBackend):
         passes.gluon.add_canonicalizer(pm)
         passes.ttir.add_loop_unroll(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
-        if options.instrumentation_mode == "fpsan" and is_fpsan_supported(options.arch):
+        if is_enabled(options, "fpsan") and is_fpsan_supported(options.arch):
             passes.common.add_symbol_dce(pm)
         amd.passes.ttgpuir.add_warp_pipeline(pm)
         passes.ttgpuir.add_allocate_warp_groups(pm)
 
-        if options.instrumentation_mode == "fpsan" and is_fpsan_supported(options.arch):
+        if is_enabled(options, "fpsan") and is_fpsan_supported(options.arch):
             amd.passes.ttgpuir.add_fp_sanitizer(pm)
             passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
 
@@ -362,18 +363,17 @@ class HIPBackend(BaseBackend):
         passes.convert.add_index_to_llvmir(pm)
 
         # Reserve LDS space for ConSan captures before allocation computes offsets.
-        if "consan" in options.instrumentation_mode and is_consan_supported(options.arch):
+        if is_enabled(options, "consan") and is_consan_supported(options.arch):
             passes.ttgpuir.add_prepare_consan_captures(pm, "amd")
         amd.passes.ttgpuir.add_allocate_shared_memory(pm, options.arch)
         # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after shared
-        if "consan" in options.instrumentation_mode and is_consan_supported(options.arch):
+        if is_enabled(options, "consan") and is_consan_supported(options.arch):
             passes.ttgpuir.add_concurrency_sanitizer(pm)
             passes.gluon.add_canonicalizer(pm)
             passes.common.add_cse(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
-        # instrumentation point here so we can override IRs above (e.g., ttir and ttgir)
-        if HIPBackend.instrumentation:
-            HIPBackend.instrumentation.patch("ttgpuir_to_llvmir", pm, mod.context)
+        # Instrumentation point here so an extension can override IRs above (e.g., ttir and ttgir).
+        instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         ## __HIP_FTZ is used to control the denorm flushing behavior of exp2 op as follows:
         ## 1. If __HIP_FTZ = 1, exp2 flushes denorms in input and output regardless
@@ -395,8 +395,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
 
         # This can not be moved below the di_scope pass
-        if HIPBackend.instrumentation:
-            HIPBackend.instrumentation.patch("llvmir_to_llvm", pm, mod.context)
+        instrument(pm, point="llvmir-to-llvm", context=mod.context)
 
         if not knobs.compilation.disable_line_info and not knobs.compilation.dump_ir_extract_di_local_variables:
             passes.llvmir.add_di_scope(pm)
