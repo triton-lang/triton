@@ -238,7 +238,8 @@ std::optional<mlir::triton::gpu::SwizzledSharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible);
 
 // Replace the CGA layout while preserving intra-CTA layout choices and
-// recursing through Slice and DotOperand parents.
+// recursing through Slice and DotOperand parents. For example, a blocked
+// layout with threadsPerWarp=[1, 32] keeps that value under the new CGA layout.
 FailureOr<Attribute> cloneWithCGALayout(RankedTensorType tensorTy,
                                         triton::gpu::CGAEncodingAttr cgaLayout);
 

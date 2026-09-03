@@ -48,18 +48,21 @@ FailureOr<ttg::CGAEncodingAttr> maybeGetCGA(RankedTensorType type) {
   return ttg::maybeLinearToCGAEncodingAttr(ttg::toLinearLayout(type));
 }
 
-// Redistribute blocked layouts for the new shape per CTA
 FailureOr<Attribute> getRematerializationLayout(RankedTensorType tensorTy,
                                                 ttg::CGAEncodingAttr cgaLayout,
                                                 Operation *scope) {
   if (auto blocked =
           dyn_cast<ttg::BlockedEncodingAttr>(tensorTy.getEncoding())) {
+    // Rebuild for the new shape per CTA. For tensor<32x128>, moving a two-CTA
+    // split from dim 0 to dim 1 can change threadsPerWarp=[1,32] to [2,16].
     OpBuilder builder(scope);
     return ttg::BlockedEncodingAttr::get(
         tensorTy.getContext(), tensorTy.getShape(), blocked.getSizePerThread(),
         blocked.getOrder(), ttg::lookupNumWarps(scope),
         ttg::lookupThreadsPerWarp(builder), cgaLayout);
   }
+  // Derived and explicit layouts cannot be rebuilt from the visible shape;
+  // preserve their intra-CTA mapping and replace only the CGA component.
   return cloneWithCGALayout(tensorTy, cgaLayout);
 }
 
