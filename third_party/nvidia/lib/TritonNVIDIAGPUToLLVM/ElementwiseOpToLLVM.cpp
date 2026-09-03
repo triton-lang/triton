@@ -589,6 +589,7 @@ struct FDivOpConversion
     Value args[] = {operands[0][0], operands[0][1]};
     auto callOp =
         LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, resultTy, args);
+    propagateFastMathFlags(op, callOp);
     return {callOp.getResult(0)};
   }
 };
@@ -661,12 +662,15 @@ struct ExpOpConversionApprox
       return {};
 
     const double log2e = 1.4426950408889634;
-    Value prod = b.fmul(f32_ty, operands[0][0], b.f32_val(log2e));
+    LLVM::FastmathFlagsAttr fastmathFlags = getLLVMFastmathFlags(op);
+    Value prod =
+        b.fmul(f32_ty, operands[0][0], b.f32_val(log2e), fastmathFlags);
 
     Type resultTy = operands[0][0].getType();
     StringRef name = "llvm.nvvm.ex2.approx.f32";
     auto callOp =
         LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, resultTy, {prod});
+    propagateFastMathFlags(op, callOp);
     return {callOp.getResult(0)};
   }
 };

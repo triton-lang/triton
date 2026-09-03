@@ -4,6 +4,7 @@
 // RUN: triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=80 ptx-version=83' -cse | FileCheck --check-prefix=VEC80 --dump-input-context=20 %s
 // RUN: triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' -cse | FileCheck --check-prefix=VEC90 --dump-input-context=20 %s
 // RUN: triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=87' -cse | FileCheck --check-prefix=VEC100 --dump-input-context=20 %s
+// RUN: triton-opt %s --allocate-shared-memory-nv='compute-capability=90 ptx-version=83' --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | FileCheck --check-prefix=LLVMIR-FMF %s
 
 
 #blocked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
@@ -171,6 +172,37 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
     }) {allocation.offset = 0 : i32} : (tensor<1x256xf32, #blocked_reduce>) -> tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked_reduce}>>
     %ptr = tt.splat %out : !tt.ptr<f32> -> tensor<1x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #blocked_reduce}>>
     tt.store %ptr, %r : tensor<1x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #blocked_reduce}>>
+    tt.return
+  }
+
+  // LLVMIR-FMF-LABEL: define{{.*}} @fastmath_llvm_ir
+  // LLVMIR-FMF: fadd contract float
+  // LLVMIR-FMF: call arcp float @llvm.nvvm.div.full
+  // LLVMIR-FMF: fmul afn float
+  // LLVMIR-FMF: call afn float @llvm.nvvm.ex2.approx
+  // LLVMIR-FMF: call double @__nv_exp
+  // LLVMIR-FMF: call double @__nv_exp2
+  // LLVMIR-FMF: call double @__nv_rsqrt
+  // `afn` survives to the scalar math op, so libdevice lowering picks the
+  // approximate variant of log.
+  // LLVMIR-FMF: call float @__nv_fast_logf
+  // LLVMIR-FMF: call float @__nv_floorf
+  tt.func public @fastmath_llvm_ir(
+      %out: !tt.ptr<f32>,
+      %out64: !tt.ptr<f64>,
+      %arg0: f32,
+      %arg1: f32,
+      %arg2: f64) {
+    %add = arith.addf %arg0, %arg1 fastmath<contract> : f32
+    %div = arith.divf %add, %arg1 fastmath<arcp> : f32
+    %exp = math.exp %div fastmath<afn> : f32
+    %exp64 = math.exp %arg2 fastmath<nnan,afn> : f64
+    %exp2 = math.exp2 %exp64 fastmath<nnan,afn> : f64
+    %rsqrt = math.rsqrt %exp2 fastmath<nnan,afn> : f64
+    %log = math.log %arg0 fastmath<nnan,afn> : f32
+    %floor = math.floor %arg1 fastmath<ninf> : f32
+    tt.store %out, %exp : !tt.ptr<f32>
+    tt.store %out64, %rsqrt : !tt.ptr<f64>
     tt.return
   }
 }

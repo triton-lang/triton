@@ -3,6 +3,7 @@
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "triton/Version.h"
+#include "llvm/ADT/FloatingPointMode.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/ScopedNoAliasAA.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
@@ -12,6 +13,7 @@
 #include "llvm/CodeGen/SchedulerRegistry.h"
 #include "llvm/CodeGen/SelectionDAGISel.h"
 #include "llvm/Config/llvm-config.h"
+#include "llvm/IR/Attributes.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
@@ -679,6 +681,22 @@ void init_triton_llvm(py::module_ &m) {
               fn->addFnAttr(name, val);
           },
           py::arg("name"), py::arg("val") = "")
+      .def(
+          "add_denormal_fp_env_attr",
+          [](llvm::Function *fn, const std::string &defaultMode,
+             const std::string &f32Mode) {
+            auto parseMode = [](const std::string &mode) {
+              llvm::DenormalMode parsed = llvm::parseDenormalFPAttribute(mode);
+              if (!parsed.isValid())
+                throw std::invalid_argument("invalid denormal mode: " + mode);
+              return parsed;
+            };
+            llvm::AttrBuilder attrs(fn->getContext());
+            attrs.addDenormalFPEnvAttr(llvm::DenormalFPEnv(
+                parseMode(defaultMode), parseMode(f32Mode)));
+            fn->addFnAttrs(attrs);
+          },
+          py::arg("default_mode"), py::arg("f32_mode"))
       .def("remove_fn_attr", [](llvm::Function *fn,
                                 std::string &name) { fn->removeFnAttr(name); })
       .def("add_fn_asan_attr",

@@ -49,7 +49,8 @@ Value Fp16ToFp32OneValue(Location loc, ConversionPatternRewriter &rewriter,
                          const Value &v);
 SmallVector<Value> convertFp32ToFp16rtne(Location loc,
                                          ConversionPatternRewriter &rewriter,
-                                         ArrayRef<Value> v, Type outElemTy);
+                                         ArrayRef<Value> v, Type outElemTy,
+                                         LLVM::FastmathFlagsAttr fastmathFlags);
 } // namespace
 
 namespace mlir::triton::AMD {
@@ -98,7 +99,8 @@ SmallVector<Value> convertFp32ToF16rtne(Location loc,
                                         ConversionPatternRewriter &rewriter,
                                         Type inElemTy, Type outElemTy,
                                         MultipleOperandsRange operands,
-                                        ISAFamily isaFamily) {
+                                        ISAFamily isaFamily,
+                                        LLVM::FastmathFlagsAttr fastmathFlags) {
   // For CDNA4 we can potentially use packed v_cvt_pk_[b]f16_f32 instructions.
   if (isCDNA4OrHigher(isaFamily)) {
     SmallVector<Value> inVals;
@@ -107,7 +109,8 @@ SmallVector<Value> convertFp32ToF16rtne(Location loc,
     for (unsigned i = 0; i < numElem; i++) {
       inVals.push_back(operands[i][0]);
     }
-    return convertFp32ToFp16rtne(loc, rewriter, inVals, outElemTy);
+    return convertFp32ToFp16rtne(loc, rewriter, inVals, outElemTy,
+                                 fastmathFlags);
   }
 
   if (outElemTy.isBF16()) {
@@ -115,7 +118,11 @@ SmallVector<Value> convertFp32ToF16rtne(Location loc,
     return {AMD::convertFp32ToBf16(loc, rewriter, operands[0][0],
                                    RoundingMode::RTNE)};
   }
-  return {LLVM::FPTruncOp::create(rewriter, loc, outElemTy, operands[0][0])};
+  auto result =
+      LLVM::FPTruncOp::create(rewriter, loc, outElemTy, operands[0][0]);
+  if (fastmathFlags)
+    result.setFastmathFlagsAttr(fastmathFlags);
+  return {result};
 }
 } // namespace mlir::triton::AMD
 
@@ -813,13 +820,18 @@ SmallVector<Value> Pk4Fp32ToF8(Location loc,
   return ret;
 }
 
-// Fp32->Fp16/Bf16 (RTNE) in GFX950
-SmallVector<Value> convertFp32ToFp16rtne(Location loc,
-                                         ConversionPatternRewriter &rewriter,
-                                         ArrayRef<Value> v, Type outElemTy) {
+// Fp32->Fp16/Bf16 (RTNE) on CDNA4 and GFX1250
+SmallVector<Value>
+convertFp32ToFp16rtne(Location loc, ConversionPatternRewriter &rewriter,
+                      ArrayRef<Value> v, Type outElemTy,
+                      LLVM::FastmathFlagsAttr fastmathFlags) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  if (v.size() == 1)
-    return {b.fptrunc(outElemTy, v.front())};
+  if (v.size() == 1) {
+    auto result = b.fptrunc(outElemTy, v.front());
+    if (fastmathFlags)
+      result.setFastmathFlagsAttr(fastmathFlags);
+    return {result};
+  }
 
   assert(v.size() == 2);
   auto inVecTy = vec_ty(f32_ty, 2);
@@ -829,7 +841,9 @@ SmallVector<Value> convertFp32ToFp16rtne(Location loc,
   auto idx1 = b.i32_val(1);
   inVec = b.insert_element(inVecTy, inVec, v[0], idx0);
   inVec = b.insert_element(inVecTy, inVec, v[1], idx1);
-  Value retVec = b.fptrunc(retVecTy, inVec);
+  auto retVec = b.fptrunc(retVecTy, inVec);
+  if (fastmathFlags)
+    retVec.setFastmathFlagsAttr(fastmathFlags);
   SmallVector<Value> ret(2);
   ret[0] = b.extract_element(outElemTy, retVec, idx0);
   ret[1] = b.extract_element(outElemTy, retVec, idx1);
@@ -1971,7 +1985,8 @@ public:
     Type dstTy = Float16Type::get(rewriter.getContext());
     if (roundingMode == RoundingMode::RTNE) {
       if (isCDNA4OrHigher(isaFamily))
-        return convertFp32ToFp16rtne(loc, rewriter, inVals, dstTy);
+        return convertFp32ToFp16rtne(loc, rewriter, inVals, dstTy,
+                                     /*fastmathFlags=*/{});
       else {
         SmallVector<Value> outVals;
         for (const Value &v : inVals) {
@@ -2025,7 +2040,8 @@ public:
 
     if (roundingMode == RoundingMode::RTNE) {
       if (isCDNA4OrHigher(isaFamily))
-        return convertFp32ToFp16rtne(loc, rewriter, v, dstTy);
+        return convertFp32ToFp16rtne(loc, rewriter, v, dstTy,
+                                     /*fastmathFlags=*/{});
       else {
         auto result =
             AMD::convertFp32ToBf16(loc, rewriter, v[0], RoundingMode::RTNE);

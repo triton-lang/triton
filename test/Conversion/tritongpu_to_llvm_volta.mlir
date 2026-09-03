@@ -29,3 +29,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:70", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: fastmath_minmax_emulated
+  // CHECK-COUNT-2: llvm.fcmp "une" {{.*}} {fastmathFlags = #llvm.fastmath<nnan>} : f32
+  // CHECK: llvm.intr.maxnum({{.*}}) {fastmathFlags = #llvm.fastmath<nnan>} : (f32, f32) -> f32
+  // CHECK: llvm.select {{.*}} {fastmathFlags = #llvm.fastmath<nnan>} : i1, f32
+  tt.func @fastmath_minmax_emulated(
+      %arg0: tensor<32xf32, #blocked1>,
+      %arg1: tensor<32xf32, #blocked1>) {
+    %maximum = arith.maximumf %arg0, %arg1 fastmath<nnan> : tensor<32xf32, #blocked1>
+    tt.return
+  }
+}

@@ -3263,3 +3263,121 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.prof
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @fastmath_elementwise
+  // CHECK-DAG: llvm.fadd {{.*}} {fastmathFlags = #llvm.fastmath<contract>} : f32
+  // CHECK-DAG: llvm.call_intrinsic "llvm.nvvm.div.full"({{.*}}) {fastmathFlags = #llvm.fastmath<arcp>}
+  // CHECK-DAG: llvm.fsub {{.*}} {fastmathFlags = #llvm.fastmath<reassoc>} : f32
+  // CHECK-DAG: llvm.fmul {{.*}} {fastmathFlags = #llvm.fastmath<ninf>} : f32
+  // CHECK-DAG: llvm.fneg {{.*}} {fastmathFlags = #llvm.fastmath<nnan>} : f32
+  // CHECK-DAG: llvm.frem {{.*}} {fastmathFlags = #llvm.fastmath<nsz>} : f32
+  // CHECK-DAG: llvm.intr.minnum({{.*}}) {fastmathFlags = #llvm.fastmath<reassoc>} : (f32, f32) -> f32
+  // CHECK-DAG: llvm.intr.minimum({{.*}}) {fastmathFlags = #llvm.fastmath<ninf>} : (f32, f32) -> f32
+  // CHECK-DAG: llvm.intr.fma({{.*}}) {fastmathFlags = #llvm.fastmath<contract>} : (f32, f32, f32) -> f32
+  // CHECK-DAG: llvm.fmul {{.*}} {fastmathFlags = #llvm.fastmath<afn>} : f32
+  // CHECK-DAG: llvm.call_intrinsic "llvm.nvvm.ex2.approx.f32"({{.*}}) {fastmathFlags = #llvm.fastmath<afn>}
+  // CHECK-DAG: llvm.fcmp "olt" {{.*}} {fastmathFlags = #llvm.fastmath<ninf>} : f32
+  // CHECK-DAG: llvm.intr.fabs({{.*}}) {fastmathFlags = #llvm.fastmath<nsz>} : (f32) -> f32
+  // CHECK-DAG: llvm.intr.maximum({{.*}}) {fastmathFlags = #llvm.fastmath<nnan>} : (f32, f32) -> f32
+  // CHECK-DAG: llvm.fpext {{.*}} fastmath<nnan> : f16 to f32
+  // CHECK-DAG: llvm.fptrunc {{.*}} fastmath<ninf> : f64 to f32
+  //
+  // Transcendentals reach MLIR's libdevice lowering as scalar math ops that
+  // still carry their flags, so `afn` selects the approximate entry points.
+  // CHECK-DAG: llvm.call @__nv_fast_logf({{.*}}) : (f32) -> f32
+  // CHECK-DAG: llvm.call @__nv_fast_log2f({{.*}}) : (f32) -> f32
+  // CHECK-DAG: llvm.call @__nv_fast_cosf({{.*}}) : (f32) -> f32
+  // CHECK-DAG: llvm.call @__nv_fast_sinf({{.*}}) : (f32) -> f32
+  // CHECK-DAG: llvm.call @__nv_fast_expf({{.*}}) : (f32) -> f32
+  // Without `afn` the precise entry points are kept.
+  // CHECK-DAG: llvm.call @__nv_expf({{.*}}) : (f32) -> f32
+  // CHECK-DAG: llvm.call @__nv_ceilf({{.*}}) : (f32) -> f32
+  // CHECK-DAG: llvm.call @__nv_sqrtf({{.*}}) : (f32) -> f32
+  // CHECK-DAG: llvm.call @__nv_erff({{.*}}) : (f32) -> f32
+  // CHECK-DAG: llvm.call @__nv_exp2f({{.*}}) : (f32) -> f32
+  // CHECK-DAG: llvm.call @__nv_rsqrtf({{.*}}) : (f32) -> f32
+  // CHECK-DAG: llvm.call @__nv_floorf({{.*}}) : (f32) -> f32
+  // CHECK-DAG: llvm.call @__nv_exp({{.*}}) : (f64) -> f64
+  // CHECK-DAG: llvm.call @__nv_exp2({{.*}}) : (f64) -> f64
+  // CHECK-DAG: llvm.call @__nv_rsqrt({{.*}}) : (f64) -> f64
+  tt.func @fastmath_elementwise(
+      %arg0: tensor<32xf32, #blocked>,
+      %arg1: tensor<32xf32, #blocked>,
+      %arg2: tensor<32xf16, #blocked>,
+      %arg3: tensor<32xf64, #blocked>,
+      %arg4: tensor<32xbf16, #blocked>) {
+    %add = arith.addf %arg0, %arg1 fastmath<contract> : tensor<32xf32, #blocked>
+    %div = arith.divf %add, %arg1 fastmath<arcp> : tensor<32xf32, #blocked>
+    %sub = arith.subf %div, %arg1 fastmath<reassoc> : tensor<32xf32, #blocked>
+    %mul = arith.mulf %sub, %arg1 fastmath<ninf> : tensor<32xf32, #blocked>
+    %neg = arith.negf %mul fastmath<nnan> : tensor<32xf32, #blocked>
+    %rem = arith.remf %neg, %arg1 fastmath<nsz> : tensor<32xf32, #blocked>
+    %minnum = arith.minnumf %rem, %arg1 fastmath<reassoc> : tensor<32xf32, #blocked>
+    %minimum = arith.minimumf %minnum, %arg1 fastmath<ninf> : tensor<32xf32, #blocked>
+    %fma = math.fma %minimum, %arg0, %arg1 fastmath<contract> : tensor<32xf32, #blocked>
+    %exp = math.exp %div fastmath<afn> : tensor<32xf32, #blocked>
+    %exp2f = math.exp2 %div fastmath<afn> : tensor<32xf32, #blocked>
+    %rsqrtf = math.rsqrt %div fastmath<afn> : tensor<32xf32, #blocked>
+    %floor = math.floor %arg0 fastmath<afn> : tensor<32xf32, #blocked>
+    %ceil = math.ceil %arg0 fastmath<nnan> : tensor<32xf32, #blocked>
+    %log = math.log %arg0 fastmath<nnan,afn> : tensor<32xf32, #blocked>
+    %log2 = math.log2 %arg0 fastmath<ninf,afn> : tensor<32xf32, #blocked>
+    %cos = math.cos %arg0 fastmath<nsz,afn> : tensor<32xf32, #blocked>
+    %sin = math.sin %arg0 fastmath<arcp,afn> : tensor<32xf32, #blocked>
+    %sqrt = math.sqrt %arg0 fastmath<nnan,afn> : tensor<32xf32, #blocked>
+    %erf = math.erf %arg0 fastmath<ninf> : tensor<32xf32, #blocked>
+    %cmp = arith.cmpf olt, %arg0, %arg1 fastmath<ninf> : tensor<32xf32, #blocked>
+    %abs = math.absf %arg0 fastmath<nsz> : tensor<32xf32, #blocked>
+    %maximum = arith.maximumf %abs, %arg1 fastmath<nnan> : tensor<32xf32, #blocked>
+    %ext = arith.extf %arg2 fastmath<nnan> : tensor<32xf16, #blocked> to tensor<32xf32, #blocked>
+    %trunc = arith.truncf %arg3 fastmath<ninf> : tensor<32xf64, #blocked> to tensor<32xf32, #blocked>
+    %exp64 = math.exp %arg3 fastmath<nnan,afn> : tensor<32xf64, #blocked>
+    %exp2 = math.exp2 %exp64 fastmath<nnan,afn> : tensor<32xf64, #blocked>
+    %rsqrt = math.rsqrt %exp2 fastmath<nnan,afn> : tensor<32xf64, #blocked>
+    %exp16 = math.exp %arg2 fastmath<afn> : tensor<32xf16, #blocked>
+    %exp16Strict = math.exp %arg2 fastmath<nnan> : tensor<32xf16, #blocked>
+    %exp2bf16 = math.exp2 %arg4 fastmath<afn> : tensor<32xbf16, #blocked>
+    %rsqrt16 = math.rsqrt %arg2 fastmath<afn> : tensor<32xf16, #blocked>
+    %floor16 = math.floor %arg2 fastmath<nsz> : tensor<32xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @fastmath_none
+  // CHECK-NOT: fastmathFlags
+  // CHECK: llvm.call @__nv_logf
+  // CHECK: llvm.return
+  tt.func @fastmath_none(
+      %arg0: tensor<32xf32, #blocked>,
+      %arg1: tensor<32xf32, #blocked>) {
+    %add = arith.addf %arg0, %arg1 : tensor<32xf32, #blocked>
+    %div = arith.divf %add, %arg1 : tensor<32xf32, #blocked>
+    %log = math.log %arg0 : tensor<32xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // Sub-byte floats are converted to integers, so `absf` becomes a sign-bit
+  // mask that cannot represent fast-math flags.
+  // CHECK-LABEL: @fastmath_absf_masked
+  // CHECK-NOT: fastmath
+  // CHECK: llvm.and
+  // CHECK-NOT: fastmath
+  // CHECK: llvm.return
+  tt.func @fastmath_absf_masked(%arg0: tensor<32xf8E4M3FN, #blocked>) {
+    %abs = math.absf %arg0 fastmath<nsz> : tensor<32xf8E4M3FN, #blocked>
+    tt.return
+  }
+}

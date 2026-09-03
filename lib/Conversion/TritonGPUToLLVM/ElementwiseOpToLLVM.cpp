@@ -102,9 +102,11 @@ struct CmpFOpConversion
   createDestOps(arith::CmpFOp op, OpAdaptor adaptor,
                 ConversionPatternRewriter &rewriter, Type elemTy,
                 MultipleOperandsRange operands, Location loc) {
-    return {LLVM::FCmpOp::create(rewriter, loc, elemTy,
-                                 ArithCmpFPredicateToLLVM(op.getPredicate()),
-                                 operands[0][0], operands[0][1])};
+    auto dstOp = LLVM::FCmpOp::create(
+        rewriter, loc, elemTy, ArithCmpFPredicateToLLVM(op.getPredicate()),
+        operands[0][0], operands[0][1]);
+    propagateFastMathFlags(op, dstOp);
+    return {dstOp};
   }
 
   static LLVM::FCmpPredicate
@@ -408,7 +410,8 @@ struct AbsFOpConversion
                                    Location loc) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     if (llvm::isa<IntegerType>(elemTy)) {
-      // Mask out the sign bit
+      // Mask out the sign bit. This is implemented with integer bit
+      // operations, which cannot represent floating-point fast-math flags.
       auto num_bits =
           getElementTypeOrSelf(op.getType()).getIntOrFloatBitWidth();
       assert(num_bits <= 16);
@@ -418,7 +421,9 @@ struct AbsFOpConversion
       return {b.and_(operands[0][0], maskConst)};
     }
 
-    return {LLVM::FAbsOp::create(rewriter, loc, elemTy, operands[0][0])};
+    auto dstOp = LLVM::FAbsOp::create(rewriter, loc, elemTy, operands[0][0]);
+    propagateFastMathFlags(op, dstOp);
+    return {dstOp};
   }
 };
 
@@ -477,8 +482,10 @@ struct MinMaxFOpConversion
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
     if (hwNanPropagationSupported) {
-      return {DestOpNanProp::create(rewriter, loc, elemTy, operands[0][0],
-                                    operands[0][1])};
+      auto dstOp = DestOpNanProp::create(rewriter, loc, elemTy, operands[0][0],
+                                         operands[0][1]);
+      propagateFastMathFlags(op, dstOp);
+      return {dstOp};
     }
     // Handle workaround for NaN propagation, i.e. software emulation of NaN
     // propagation. If any of the operands is NaN, return NaN.
@@ -486,15 +493,20 @@ struct MinMaxFOpConversion
     auto rhs = operands[0][1];
     auto lhsIsNan =
         LLVM::FCmpOp::create(rewriter, loc, LLVM::FCmpPredicate::une, lhs, lhs);
+    propagateFastMathFlags(op, lhsIsNan);
     auto rhsIsNan =
         LLVM::FCmpOp::create(rewriter, loc, LLVM::FCmpPredicate::une, rhs, rhs);
+    propagateFastMathFlags(op, rhsIsNan);
     auto isNan = LLVM::OrOp::create(rewriter, loc, lhsIsNan, rhsIsNan);
     auto nonNanRes = DestOpNoNanProp::create(rewriter, loc, elemTy, lhs, rhs);
+    propagateFastMathFlags(op, nonNanRes);
 
     auto nan = LLVM::createNaNConstant(loc, rewriter, elemTy);
 
     // Select the result based on the isNan flag.
-    return {LLVM::SelectOp::create(rewriter, loc, isNan, nan, nonNanRes)};
+    auto result = LLVM::SelectOp::create(rewriter, loc, isNan, nan, nonNanRes);
+    propagateFastMathFlags(op, result);
+    return {result};
   }
 
 private:
