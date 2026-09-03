@@ -52,7 +52,7 @@ void lockRegistryBeforeFork() {
   ++reg.exclusivesPending;
   reg.changed.wait(lock, [&] { return !reg.exclusiveHeld; });
   --reg.exclusivesPending;
-  lock.release();
+  lock.release(); // No unlock--unlock done explicitly after forking.
 }
 
 void unlockRegistryInParent() {

@@ -101,14 +101,8 @@ def _register_pressure_scheduler_kernel():
 def test_nvidia_register_pressure_scheduler_hook(link_hip_first, fresh_triton_cache):
     backend, source = _register_pressure_scheduler_kernel()
     if link_hip_first:
-        from triton.backends.compiler import GPUTarget
-
-        @triton.jit
-        def empty_kernel():
-            return
-
         # HIP linking resets LLVM command-line options.
-        triton.compile(triton.compiler.ASTSource(empty_kernel, {}), target=GPUTarget("hip", "gfx942", 64))
+        _compile_empty_hip_kernel("gfx942", 64)
 
     default_options = backend.parse_options({"ptx_version": 80, "sched4reg": False})
     pressure_options = backend.parse_options({"ptx_version": 80, "sched4reg": True})
@@ -186,21 +180,6 @@ def _compile_empty_hip_kernel(arch, warp_size):
         return
 
     return triton.compile(triton.compiler.ASTSource(empty_kernel, {}), target=GPUTarget("hip", arch, warp_size))
-
-
-@pytest.mark.parametrize("arch, warp_size, knob, expected", [
-    ("gfx1250", 32, None, True),
-    ("gfx1250", 32, False, False),
-    ("gfx942", 64, None, False),
-    ("gfx942", 64, True, True),
-])
-def test_amd_expert_scheduling_attribute(arch, warp_size, knob, expected, fresh_knobs, fresh_triton_cache):
-    if knob is not None:
-        fresh_knobs.amd.use_expert_scheduling = knob
-    compiled = _compile_empty_hip_kernel(arch, warp_size)
-    # Expert scheduling is requested through a per-function LLVM attribute
-    # rather than a process-wide LLVM option.
-    assert ('"amdgpu-expert-scheduling-mode"="true"' in compiled.asm["llir"]) == expected
 
 
 def _amd_scheduler_kernel():

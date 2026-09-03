@@ -168,7 +168,7 @@ TEST(LLVMOptions, ForkedChildStartsWithFreshRegistry) {
 
   pid_t child = fork();
   ASSERT_NE(child, -1);
-  if (child == 0) {
+  if (child == 0) { // In the child process
     // This guard belongs to the parent's registry generation. Destroying it
     // must not underflow the child's freshly reset user count.
     parentScope.reset();
@@ -182,6 +182,7 @@ TEST(LLVMOptions, ForkedChildStartsWithFreshRegistry) {
     _exit(succeeded ? 0 : 1);
   }
 
+  // In the parent process
   int status = 0;
   ASSERT_EQ(waitpid(child, &status, 0), child);
   EXPECT_TRUE(WIFEXITED(status));
