@@ -375,13 +375,23 @@ private:
       return;
     }
 
-    if (auto barrier = dyn_cast<gpu::BarrierOp>(op);
-        barrier && barrier.isWarp()) {
-      // Complete each warp's accesses before its rendezvous, retaining
-      // dependencies on other warps for later hazards and publications.
-      if (barrier.hasLocal())
-        flush(op, pending);
-      return;
+    if (auto barrier = dyn_cast<gpu::BarrierOp>(op)) {
+      if (barrier.isWarp()) {
+        // Complete each warp's accesses before its rendezvous, retaining
+        // dependencies on other warps for later hazards and publications.
+        if (barrier.hasLocal())
+          flush(op, pending);
+        return;
+      }
+      // Tensor masks require completion before this CTA rendezvous.
+      if (barrier.hasTensorRead()) {
+        waitNow(op, TMEMWaitKind::LOAD, pending);
+        pending.syncReadSlices.clear();
+      }
+      if (barrier.hasTensorWrite()) {
+        waitNow(op, TMEMWaitKind::STORE, pending);
+        pending.syncWriteSlices.clear();
+      }
     }
 
     // Choose the barrier before placing waits.

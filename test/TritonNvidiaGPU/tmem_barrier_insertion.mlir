@@ -116,6 +116,63 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return %1 : tensor<128x128xf32, #blocked>
   }
 
+  // Explicit tensor masks complete the requested accesses at the barrier.
+  // WAIT-LABEL: @wait_explicit_all_barrier
+  // WAIT: ttng.tmem_load
+  // WAIT-NEXT: ttng.tmem_wait load
+  // WAIT-NEXT: ttng.tmem_wait store
+  // WAIT-NEXT: ttg.barrier all
+  // WAIT-NEXT: arith.addf
+  // WAIT-NEXT: ttng.tmem_store
+  // WAIT-NEXT: ttng.tmem_wait store
+  // WAIT-NEXT: tt.return
+  tt.func @wait_explicit_all_barrier(%data: tensor<128x128xf32, #blocked>) -> tensor<128x128xf32, #blocked> {
+    %true = arith.constant true
+    %stored = ttng.tmem_alloc %data {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %mem = ttng.tmem_alloc {tensor_memory_col_offset = 128 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttg.barrier local
+    %loaded = ttng.tmem_load %mem : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    ttg.barrier all
+    %updated = arith.addf %data, %data : tensor<128x128xf32, #blocked>
+    ttng.tmem_store %updated, %mem, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    tt.return %loaded : tensor<128x128xf32, #blocked>
+  }
+
+  // The read mask publishes all issuing warps without completing stores.
+  // WAIT-LABEL: @wait_explicit_tensor_read
+  // WAIT: ttng.tmem_load
+  // WAIT-NEXT: ttng.tmem_wait load
+  // WAIT-NEXT: ttg.barrier tensor_read
+  // WAIT-NEXT: ttng.tmem_store
+  // WAIT-NEXT: ttng.tmem_wait store
+  // WAIT-NEXT: tt.return
+  tt.func @wait_explicit_tensor_read(%data: tensor<128x1xf32, #blocked_broadcast_warps>) -> tensor<128x1xf32, #blocked_broadcast_warps> attributes {"ttg.num-warps" = 8 : i32} {
+    %true = arith.constant true
+    %stored = ttng.tmem_alloc %data {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x1xf32, #blocked_broadcast_warps>) -> !ttg.memdesc<128x1xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %mem = ttng.tmem_alloc {tensor_memory_col_offset = 128 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x1xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %loaded = ttng.tmem_load %mem : !ttg.memdesc<128x1xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x1xf32, #blocked_broadcast_warps>
+    ttg.barrier tensor_read
+    ttng.tmem_store %data, %mem, %true : tensor<128x1xf32, #blocked_broadcast_warps> -> !ttg.memdesc<128x1xf32, #tmem128, #ttng.tensor_memory, mutable>
+    tt.return %loaded : tensor<128x1xf32, #blocked_broadcast_warps>
+  }
+
+  // The write mask covers the RAW dependency while the disjoint read remains.
+  // WAIT-LABEL: @wait_explicit_tensor_write
+  // WAIT: ttng.tmem_load
+  // WAIT-NEXT: ttng.tmem_wait store
+  // WAIT-NEXT: ttg.barrier tensor_write
+  // WAIT-NEXT: ttng.tmem_load
+  // WAIT-NEXT: ttng.tmem_wait load
+  // WAIT-NEXT: tt.return
+  tt.func @wait_explicit_tensor_write(%data: tensor<128x128xf32, #blocked>) -> (tensor<128x128xf32, #blocked>, tensor<128x128xf32, #blocked>) {
+    %stored = ttng.tmem_alloc %data {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %mem = ttng.tmem_alloc {tensor_memory_col_offset = 128 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %loaded = ttng.tmem_load %mem : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    ttg.barrier tensor_write
+    %updated = ttng.tmem_load %stored : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    tt.return %loaded, %updated : tensor<128x128xf32, #blocked>, tensor<128x128xf32, #blocked>
+  }
+
   // Shrinking #linear64 to one column broadcasts lane 16 within each warp.
   // WAIT-LABEL: @ld_then_st_broadcast_lanes
   // WAIT: ttng.tmem_load
