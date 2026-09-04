@@ -475,6 +475,35 @@ tt.func @remsi_positivity_guard(
 
 // -----
 
+// The loop body sees [0, 7], while its exit sees [-8, -1]. Both use the
+// same header argument, so nonnegativity must be queried at each operation.
+tt.func @signed_div_rem_cf_loop() {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %c8 = arith.constant dense<8> : tensor<8xi32>
+  %initial = tt.make_range {start = 0 : i32, end = 8 : i32} : tensor<8xi32>
+  cf.br ^header(%c0, %initial : i32, tensor<8xi32>)
+^header(%i: i32, %num: tensor<8xi32>):
+  %more = arith.cmpi slt, %i, %c1 : i32
+  cf.cond_br %more, ^body, ^exit
+^body:
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [8]}}
+  %body_div = arith.divsi %num, %c8 : tensor<8xi32>
+  // expected-remark @below {{contiguity = [8], divisibility = [8], constancy = [1]}}
+  %body_rem = arith.remsi %num, %c8 : tensor<8xi32>
+  %next_num = arith.subi %num, %c8 : tensor<8xi32>
+  %next_i = arith.addi %i, %c1 : i32
+  cf.br ^header(%next_i, %next_num : i32, tensor<8xi32>)
+^exit:
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1]}}
+  %exit_div = arith.divsi %num, %c8 : tensor<8xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1]}}
+  %exit_rem = arith.remsi %num, %c8 : tensor<8xi32>
+  tt.return
+}
+
+// -----
+
 tt.func @rem() {
   // expected-remark @below {{contiguity = [128], divisibility = [1073741824], constancy = [1], constant_value = <none>}}
   %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
