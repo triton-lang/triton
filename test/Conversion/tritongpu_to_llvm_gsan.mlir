@@ -24,34 +24,34 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
     tt.return
   }
 
-  // CHECK-LABEL: llvm.func internal @unmasked_store
+  // CHECK-LABEL: llvm.func @unmasked_store
   // CHECK: llvm.call @__triton_gsan_store_tensor(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) : (!llvm.ptr, !llvm.ptr, i32, i32, !llvm.ptr, i32) -> ()
-  tt.func private @unmasked_store(%ptrs: tensor<128x!tt.ptr<i32>, #blocked>, %vals: tensor<128xi32, #blocked>) {
+  tt.func @unmasked_store(%ptrs: tensor<128x!tt.ptr<i32>, #blocked>, %vals: tensor<128xi32, #blocked>) {
     tt.store %ptrs, %vals : tensor<128x!tt.ptr<i32>, #blocked>
     tt.return
   }
 
-  // CHECK-LABEL: llvm.func internal @unmasked_atomic_add
+  // CHECK-LABEL: llvm.func @unmasked_atomic_add
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
-  tt.func private @unmasked_atomic_add(%ptr: !tt.ptr<i32>, %val: i32) {
+  tt.func @unmasked_atomic_add(%ptr: !tt.ptr<i32>, %val: i32) {
     %0 = tt.atomic_rmw add, relaxed, gpu, %ptr, %val : (!tt.ptr<i32>, i32) -> i32
     tt.return
   }
 
-  // CHECK-LABEL: llvm.func internal @atomic_poll
+  // CHECK-LABEL: llvm.func @atomic_poll
   // CHECK: llvm.load %{{.*}} atomic monotonic
   // CHECK: llvm.fence acquire
   // CHECK: nvvm.barrier
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
   // CHECK: nvvm.barrier
-  tt.func private @atomic_poll(%ptr: !tt.ptr<i32>, %expected: i32) {
+  tt.func @atomic_poll(%ptr: !tt.ptr<i32>, %expected: i32) {
     %matched = tt.atomic_poll acquire, sys, %ptr, %expected : !tt.ptr<i32>, i32 -> i1
     tt.return
   }
 
-  // CHECK-LABEL: llvm.func internal @atomic_poll_tensor
+  // CHECK-LABEL: llvm.func @atomic_poll_tensor
   // CHECK: llvm.load %{{.*}} atomic monotonic
   // CHECK: llvm.load %{{.*}} atomic monotonic
   // CHECK: nvvm.barrier
@@ -60,26 +60,26 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
   // CHECK: nvvm.barrier
-  tt.func private @atomic_poll_tensor(%ptr: tensor<256x!tt.ptr<i32>, #blocked>, %expected: tensor<256xi32, #blocked>) {
+  tt.func @atomic_poll_tensor(%ptr: tensor<256x!tt.ptr<i32>, #blocked>, %expected: tensor<256xi32, #blocked>) {
     %matched = tt.atomic_poll acquire, sys, %ptr, %expected : tensor<256x!tt.ptr<i32>, #blocked>, tensor<256xi32, #blocked> -> tensor<256xi1, #blocked>
     tt.return
   }
 
-  // CHECK-LABEL: llvm.func internal @atomic_tensor_desc
+  // CHECK-LABEL: llvm.func @atomic_tensor_desc
   // CHECK: llvm.alloca %{{.*}} x !llvm.array<2 x i32>
   // CHECK: llvm.alloca %{{.*}} x !llvm.array<2 x i16>
   // CHECK: llvm.call @__triton_gsan_atomic_tensor_desc(%{{.*}}) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i32, !llvm.ptr, i32, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
-  tt.func private @atomic_tensor_desc(%desc: !tt.tensordesc<8x32xi32, #shared_i32>) {
+  tt.func @atomic_tensor_desc(%desc: !tt.tensordesc<8x32xi32, #shared_i32>) {
     %c0_i32 = arith.constant 0 : i32
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<8x32xi32, #shared_i32, #smem, mutable>
     ttng.async_tma_reduce add, %desc[%c0_i32, %c0_i32] %buf : !tt.tensordesc<8x32xi32, #shared_i32>, !ttg.memdesc<8x32xi32, #shared_i32, #smem, mutable>
     tt.return
   }
 
-  // CHECK-LABEL: llvm.func internal @tma_i64_atomic_shadow_cells
+  // CHECK-LABEL: llvm.func @tma_i64_atomic_shadow_cells
   // CHECK: %[[ATOMIC_ELEMENT_BYTES:.*]] = llvm.mlir.constant(8 : i32)
   // CHECK: llvm.call @__triton_gsan_atomic_tensor_desc(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[ATOMIC_ELEMENT_BYTES]], %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}})
-  tt.func private @tma_i64_atomic_shadow_cells(%desc: !tt.tensordesc<8x16xi64, #shared_i64>) {
+  tt.func @tma_i64_atomic_shadow_cells(%desc: !tt.tensordesc<8x16xi64, #shared_i64>) {
     %c0_i32 = arith.constant 0 : i32
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<8x16xi64, #shared_i64, #smem, mutable>
     ttng.async_tma_reduce add, %desc[%c0_i32, %c0_i32] %buf : !tt.tensordesc<8x16xi64, #shared_i64>, !ttg.memdesc<8x16xi64, #shared_i64, #smem, mutable>
@@ -158,9 +158,9 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
     tt.return
   }
 
-  // CHECK-LABEL: llvm.func internal @tma_f16_atomic_shadow_cell
+  // CHECK-LABEL: llvm.func @tma_f16_atomic_shadow_cell
   // CHECK: llvm.call @__triton_gsan_atomic_tensor_desc(%{{.*}}) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i32, !llvm.ptr, i32, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
-  tt.func private @tma_f16_atomic_shadow_cell(%desc: !tt.tensordesc<32x64xf16, #shared_f16>) {
+  tt.func @tma_f16_atomic_shadow_cell(%desc: !tt.tensordesc<32x64xf16, #shared_f16>) {
     %c0_i32 = arith.constant 0 : i32
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x64xf16, #shared_f16, #smem, mutable>
     ttng.async_tma_reduce add, %desc[%c0_i32, %c0_i32] %buf : !tt.tensordesc<32x64xf16, #shared_f16>, !ttg.memdesc<32x64xf16, #shared_f16, #smem, mutable>
@@ -354,14 +354,14 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
     tt.return
   }
 
-  // CHECK-LABEL: llvm.func internal @gsan_distinct_register_accesses
+  // CHECK-LABEL: llvm.func @gsan_distinct_register_accesses
   // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<4 x i64>, array<4 x i8>)>
   // CHECK: %[[DISTINCT_LOAD_COUNT:.*]] = llvm.mlir.constant(4 : i32) : i32
   // CHECK: llvm.call @__triton_gsan_load_tensor(%{{.*}}, %{{.*}}, %[[DISTINCT_LOAD_COUNT]], %{{.*}}, %{{.*}}, %{{.*}})
   // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<4 x i64>, array<4 x i8>)>
   // CHECK: %[[DISTINCT_STORE_COUNT:.*]] = llvm.mlir.constant(4 : i32) : i32
   // CHECK: llvm.call @__triton_gsan_store_tensor(%{{.*}}, %{{.*}}, %[[DISTINCT_STORE_COUNT]], %{{.*}}, %{{.*}}, %{{.*}})
-  tt.func private @gsan_distinct_register_accesses(
+  tt.func @gsan_distinct_register_accesses(
       %ptrs: tensor<128x!tt.ptr<i32>, #broadcasted_registers>,
       %vals: tensor<128xi32, #broadcasted_registers>,
       %mask: tensor<128xi1, #broadcasted_registers>) {
