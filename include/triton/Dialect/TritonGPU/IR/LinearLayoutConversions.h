@@ -50,6 +50,11 @@ enum class TMAMode;
 LinearLayout toLinearLayout(RankedTensorType type);
 LinearLayout toLinearLayout(MemDescType type);
 LinearLayout toLinearLayout(TensorOrMemDesc type);
+
+// Like toLinearLayout(MemDescType), but normalizes the memdesc shape to a
+// power of two before constructing a linear layout.
+LinearLayout toLinearLayoutWithPow2Shape(MemDescType type);
+
 // UNSAFE OVERLOAD!
 // If you call this with a SharedMemoryEncodingAttr, you should call it
 // with the allocShape as the shape, otherwise the layout will be incorrect!

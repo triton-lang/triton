@@ -66,6 +66,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#nonpow2_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8, rank = 5}>
+#nonpow2_barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#nonpow2_smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @non_power_of_two_tma_region
+  tt.func @non_power_of_two_tma_region(
+      %desc: !tt.tensordesc<1x1x3x32x128xi8, #nonpow2_shared>) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %buffer = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1x1x3x32x128xi8, #nonpow2_shared, #nonpow2_smem, mutable>
+    %bar = ttg.local_alloc {allocation.offset = 12288 : i32} : () -> !ttg.memdesc<1xi64, #nonpow2_barrier, #nonpow2_smem, mutable>
+    // CHECK: ttng.async_tma_copy_global_to_local
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0, %c0, %c0, %c0] %buffer, %bar, %true : !tt.tensordesc<1x1x3x32x128xi8, #nonpow2_shared>, !ttg.memdesc<1xi64, #nonpow2_barrier, #nonpow2_smem, mutable> -> !ttg.memdesc<1x1x3x32x128xi8, #nonpow2_shared, #nonpow2_smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #store_blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[0, 0]]}>
 #store_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32, CGALayout = [[0, 0]]}>
 #store_barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>

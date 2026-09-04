@@ -21,7 +21,8 @@ union SMEMDescriptor {
     uint64_t : 3;
     uint64_t matrixBaseOffset : 3;
     uint64_t leadDimensionAbsoluteMode : 1;
-    uint64_t : 9;
+    uint64_t lutBKSegmentOffset : 1;
+    uint64_t : 8;
     uint64_t swizzlingMode : 2;
   };
 };
@@ -70,7 +71,7 @@ public:
     // we would need to handle the getReps part more carefuly
     // This way we could support more subviews that we don't
     // We can implement this generalisation in the future if needed
-    auto llInv = toLinearLayout(memTy).pseudoinvert();
+    auto llInv = gpu::toLinearLayoutWithPow2Shape(memTy).pseudoinvert();
     auto bitwidth = memTy.getElementType().getIntOrFloatBitWidth();
     if (isFp4) {
       // hacky but well
@@ -102,6 +103,8 @@ public:
     assert(mmaTy.has_value() == (mmaVersion == 3));
     assert(MNdim < 2);
     assert(instrShape.size() == 2);
+    assert(llvm::all_of(instrShape, llvm::isPowerOf2_32) &&
+           "instrShape must contain only powers of two");
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     // Due to having a 16B alignment, we can compute the offsets in 128b
@@ -159,7 +162,8 @@ public:
   }
 
   Value smemLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                 Location loc, int kSize = 0) const {
+                 Location loc, int kSize = 0,
+                 int lutBKSegmentOffset = 0) const {
     auto *ctx = loc.getContext();
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     auto dims = to_vector(ll.getInDimNames());
@@ -175,6 +179,7 @@ public:
     // Take the next 0/1/2/3 bits after the 128b tile
     uint32_t mask = (desc.swizzlingByteWidth >> 4) - 1;
     currDesc.matrixBaseOffset = (smemByteOffsetb8 / 128) & mask;
+    currDesc.lutBKSegmentOffset = lutBKSegmentOffset;
     // Packed FP4 K96 may straddle a 128-byte swizzle sector. SM103 can
     // address the second chunk through an absolute leading dimension.
     // The caller selects this only for K-major, 128-byte-swizzled operands
