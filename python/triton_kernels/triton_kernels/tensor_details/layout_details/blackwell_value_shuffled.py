@@ -7,7 +7,7 @@ import triton.language as tl
 
 from triton_kernels.tensor_details.layout_details import strided
 from .base import Layout, LayoutTransformation
-from .blackwell_value import BlackwellMXValueLayoutTransformation, strides_major_dim_m2, unswizzle_mxfp4
+from .blackwell_value import BlackwellMXValueLayoutTransformation, unswizzle_mxfp4
 from .torch_utils import repack
 
 
@@ -105,11 +105,10 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
         if (isinstance(destination, BlackwellMXValueLayoutTransformation) and self.is_fp4 and data.device.type == "cuda"
                 and data.dtype == torch.uint8 and list(data.shape) == self.storage_shape):
             if out is None:
-                out_shape = destination.storage_shape
-                out = torch.empty_strided(out_shape, strides_major_dim_m2(out_shape), device=data.device,
+                out = torch.empty_strided(destination.storage_shape, destination.storage_strides, device=data.device,
                                           dtype=data.dtype)
             # Only logical bytes are written; plain Blackwell padding is unspecified.
-            return self._convert_data(data, inverse=True, major_dim=len(self.shape) - 2, out=out)
+            return self._convert_data(data, inverse=True, major_dim=-2, out=out)
         if (data.device.type != "cuda" or data.dtype != torch.uint8
                 or not isinstance(destination, strided.StridedLayoutTransformation)
                 or destination.order[0] < len(self.shape) - 2):
@@ -120,7 +119,7 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
         if (isinstance(source, BlackwellMXValueLayoutTransformation) and self.is_fp4 and data.device.type == "cuda"
                 and data.dtype == torch.uint8 and list(data.shape) == source.storage_shape):
             # Blackwell values already pack K; only their physical tiling changes.
-            return self._convert_data(data, inverse=False, major_dim=len(self.shape) - 2, out=out)
+            return self._convert_data(data, inverse=False, major_dim=-2, out=out)
         if (not isinstance(source, strided.StridedLayoutTransformation) or not self.is_fp4
                 or not source._can_convert_fp4(data)):
             return super()._convert_data_from(data, source, out=out)

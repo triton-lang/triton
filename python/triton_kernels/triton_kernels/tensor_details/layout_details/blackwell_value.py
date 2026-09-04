@@ -25,18 +25,6 @@ class BlackwellMXValueLayout(Layout):
         return block_shape
 
 
-def strides_major_dim_m2(shape):
-    n = len(shape)
-    if n <= 1:
-        return [1] * n
-    order = [n - 2, n - 1] + list(range(n - 3, -1, -1))  # fastest -> slowest
-    st = [0] * n
-    st[order[0]] = 1
-    for prev, d in zip(order, order[1:]):
-        st[d] = st[prev] * shape[prev]
-    return st
-
-
 # ------------------- Blackwell MX Value Layout Transformation -------------------
 @dataclass(frozen=True)
 class BlackwellMXValueLayoutTransformation(LayoutTransformation):
@@ -55,6 +43,11 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
         M += -M % 128
         return [*leading_shape, M, K]
 
+    @property
+    def storage_strides(self) -> list[int]:
+        # The physical shape already includes packing and TMA padding.
+        return strided.StridedLayout(-2).make_transformation(self.storage_shape, is_fp4=False).storage_strides
+
     def convert_data(self, data, destination: LayoutTransformation, *, out=None):
         if (not self._can_convert(data) or not isinstance(destination, strided.StridedLayoutTransformation)
                 or destination.order[0] < len(self.shape) - 2):
@@ -70,8 +63,7 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
 
     def _swizzle_mxfp4(self, data, major_dim, out=None):
         if out is None:
-            out = torch.empty_strided(self.storage_shape, strides_major_dim_m2(self.storage_shape), device=data.device,
-                                      dtype=data.dtype)
+            out = torch.empty_strided(self.storage_shape, self.storage_strides, device=data.device, dtype=data.dtype)
         if major_dim % len(self.shape) == len(self.shape) - 1:
             # N-to-K repacking is K-to-N repacking with the matrix axes exchanged.
             shape = [*self.shape[:-2], self.shape[-1], self.shape[-2]]
@@ -84,8 +76,7 @@ class BlackwellMXValueLayoutTransformation(LayoutTransformation):
         if self._can_convert(data):
             return self._swizzle_mxfp4(data, -1)
         # re-pack as column-major
-        ret = torch.empty_strided(self.storage_shape, strides_major_dim_m2(self.storage_shape), device=data.device,
-                                  dtype=data.dtype)
+        ret = torch.empty_strided(self.storage_shape, self.storage_strides, device=data.device, dtype=data.dtype)
         repacked_shape = list(data.shape)
         repacked_shape[-1] *= 2
         repacked_shape[-2] //= 2
