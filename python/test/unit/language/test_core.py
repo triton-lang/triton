@@ -552,6 +552,36 @@ def test_floordiv(dtype_x, dtype_y, num_ctas, device):
     _test_binary(dtype_x, dtype_y, expr, numpy_expr, filter_y=filter_y, device=device, num_ctas=num_ctas)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("op", ["//", "%"])
+def test_signed_div_rem_negative_run(op, device):
+    # The alignment analysis used to keep the group structure of a contiguous
+    # run through a signed division or remainder without knowing the sign of
+    # the run. On `offs - 64` the lowering then deduplicated `//` results and
+    # vectorized loads at `x + r` across elements the source never grouped.
+    N = 128
+    SHIFT = 64
+    DIV = 32
+
+    @triton.jit
+    def kernel(x_ptr, out_ptr, N: tl.constexpr, SHIFT: tl.constexpr, DIV: tl.constexpr, op: tl.constexpr):
+        offs = tl.arange(0, N)
+        x = offs - SHIFT
+        if op == "//":
+            v = x // DIV
+        else:
+            v = tl.load(x_ptr + (x % DIV))
+        tl.store(out_ptr + offs, v)
+
+    # x[SHIFT + i] == i, so x_ptr + r reads back r for -SHIFT <= r < N.
+    x = torch.arange(-SHIFT, N, dtype=torch.int32, device=device)
+    out = torch.full((N, ), 12345, dtype=torch.int32, device=device)
+    kernel[(1, )](x[SHIFT:], out, N=N, SHIFT=SHIFT, DIV=DIV, op=op, num_warps=1)
+    offs = np.arange(N, dtype=np.int64) - SHIFT
+    ref = np.trunc(offs / DIV) if op == "//" else np.fmod(offs, DIV)
+    np.testing.assert_equal(to_numpy(out), ref.astype(np.int32))
+
+
 def test_unsigned_name_mangling(device):
     # Test that uint32 and int32 are mangled differently by the compiler
     SIZE = 128
