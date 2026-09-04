@@ -67,7 +67,7 @@ class _FakeCudaTensorMode(TorchFunctionMode):
 def compile_warmup_only(dispatcher=None):
     """Capture launch specializations without GPU allocations or kernel execution."""
     from torch._subclasses.fake_tensor import FakeTensor
-    from triton._internal_testing import _COMPILE_WARMUP_ACTIVE
+    from triton._compile_warmup_state import _COMPILE_WARMUP_ACTIVE
 
     def fake_assert_close(*args, **kwargs):
         if not any(isinstance(value, FakeTensor) for value in args):
