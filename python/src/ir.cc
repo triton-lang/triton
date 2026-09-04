@@ -243,6 +243,15 @@ void init_triton_ir(py::module_ &m) {
   using ret = py::rv_policy;
   using namespace nanobind::literals;
 
+  py::enum_<ReportValidity>(m, "REPORT_VALIDITY")
+      .value("NONE", ReportValidity::NONE)
+      .value("PER_16B_FP32", ReportValidity::PER_16B_FP32)
+      .value("PER_16B_FP16", ReportValidity::PER_16B_FP16)
+      .value("PER_16B_FP8", ReportValidity::PER_16B_FP8)
+      .value("PER_16B_FP4", ReportValidity::PER_16B_FP4)
+      .value("PER_ELEM_1B", ReportValidity::PER_ELEM_1B)
+      .export_values();
+
   py::enum_<PaddingOption>(m, "PADDING_OPTION")
       .value("PAD_ZERO", PaddingOption::PAD_ZERO)
       .value("PAD_NAN", PaddingOption::PAD_NAN)

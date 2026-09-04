@@ -1,5 +1,48 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+#shared_mbarrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @barrier_test_wait_multicta(
+      %barrier: !ttg.memdesc<1xi64, #shared_mbarrier, #smem>, %phase: i32) {
+    // expected-error @below {{is only supported when ttg.num-ctas is 1}}
+    %done = ttng.barrier_test_wait %barrier, %phase : !ttg.memdesc<1xi64, #shared_mbarrier, #smem> -> i1
+    tt.return
+  }
+}
+
+// -----
+
+#shared_mbarrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @barrier_test_wait_report_multicta(
+      %barrier: !ttg.memdesc<1xi64, #shared_mbarrier, #smem>, %phase: i32) {
+    // expected-error @below {{is only supported when ttg.num-ctas is 1}}
+    %done, %reported = ttng.barrier_test_wait_report %barrier, %phase : !ttg.memdesc<1xi64, #shared_mbarrier, #smem> -> (i1, i1)
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 0]]}>
+#shared_mbarrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true} {
+  tt.func @tma_report_validity_two_ctas(
+      %desc: !tt.tensordesc<128x128xf16, #shared>,
+      %result: !ttg.memdesc<128x128xf16, #shared, #smem, mutable>,
+      %barrier: !ttg.memdesc<1xi64, #shared_mbarrier, #smem>, %coord: i32,
+      %pred: i1) {
+    // expected-error @below {{reportValidity does not support two-CTA TMA mode}}
+    ttng.async_tma_copy_global_to_local %desc[%coord, %coord] %result, %barrier, %pred reportValidity = per_16B_fp16 : !tt.tensordesc<128x128xf16, #shared>, !ttg.memdesc<1xi64, #shared_mbarrier, #smem> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 // expected-error @below {{fp4Padded tensor memory layout requires colStride 1 but got 2}}
 #bad_fp4_padded_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 2, fp4Padded = true>
 
