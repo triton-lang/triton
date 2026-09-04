@@ -1,4 +1,4 @@
-#include "Analysis/RangeAnalysis.h"
+#include "triton/Analysis/RangeAnalysis.h"
 #include "ControlFlowRangeAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Analysis/DataFlow/IntegerRangeAnalysis.h"
@@ -239,7 +239,7 @@ maybeGetAssumedRange(const SetVector<Operation *> &allAssumptions, Value anchor,
 
 } // namespace
 
-namespace mlir::triton::AMD {
+namespace mlir::triton {
 
 std::optional<int64_t>
 TritonIntegerRangeAnalysis::maybeGetTripCount(LoopLikeOpInterface loop) {
@@ -1089,4 +1089,4 @@ void initializeFuncOps(Operation *op,
   });
 }
 
-} // namespace mlir::triton::AMD
+} // namespace mlir::triton
