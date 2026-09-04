@@ -528,6 +528,19 @@ private:
     if (first.use_empty() || second.use_empty())
       return false;
 
+    // Paired narrowing conversions consume both registers directly and pack
+    // their results into one register. No scalar extraction is needed in SASS.
+    if (first.hasOneUse() && second.hasOneUse()) {
+      auto *firstTrunc = dyn_cast<FPTruncInst>(*first.user_begin());
+      auto *secondTrunc = dyn_cast<FPTruncInst>(*second.user_begin());
+      if (firstTrunc && secondTrunc && first.getType()->isFloatTy() &&
+          firstTrunc->getType() == secondTrunc->getType() &&
+          (firstTrunc->getType()->isHalfTy() ||
+           firstTrunc->getType()->isBFloatTy()) &&
+          getPackedResultUse(*firstTrunc, *secondTrunc))
+        return true;
+    }
+
     auto hasMatchingUser = [&](Instruction &source, Instruction &other) {
       return llvm::all_of(source.users(), [&](User *user) {
         auto *instruction = dyn_cast<Instruction>(user);

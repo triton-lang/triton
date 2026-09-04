@@ -25,6 +25,27 @@ define void @scalar_float_add_zero(ptr addrspace(1) %dst, <2 x float> %src) {
   ret void
 }
 
+; Narrowing an existing register pair to a packed BF16 result does not need
+; extra register moves, so zero canonicalization can stay packed as well.
+; BLACKWELL-LABEL: define <2 x bfloat> @packed_zero_add_narrow(
+; BLACKWELL: fadd <2 x float> %src, zeroinitializer
+; HOPPER-ONLY-LABEL: define <2 x bfloat> @packed_zero_add_narrow(
+; HOPPER-ONLY-COUNT-2: fadd float
+; PTX-LABEL: packed_zero_add_narrow(
+; PTX: add.rn.f32x2
+; PTX: cvt.rn.bf16x2.f32
+define <2 x bfloat> @packed_zero_add_narrow(<2 x float> %src) {
+  %a = extractelement <2 x float> %src, i64 0
+  %b = extractelement <2 x float> %src, i64 1
+  %x = fadd float %a, 0.0
+  %y = fadd float %b, 0.0
+  %lo = fptrunc float %x to bfloat
+  %hi = fptrunc float %y to bfloat
+  %out0 = insertelement <2 x bfloat> poison, bfloat %lo, i64 0
+  %out1 = insertelement <2 x bfloat> %out0, bfloat %hi, i64 1
+  ret <2 x bfloat> %out1
+}
+
 ; Keep a register pair packed through zero canonicalization and arithmetic.
 ; BLACKWELL-LABEL: define <2 x float> @packed_zero_add_chain(
 ; BLACKWELL: fadd <2 x float> %src, zeroinitializer
