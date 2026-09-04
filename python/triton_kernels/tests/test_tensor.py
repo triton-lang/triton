@@ -1,4 +1,6 @@
 import math
+import subprocess
+import sys
 from contextlib import nullcontext
 
 import pytest
@@ -164,6 +166,46 @@ def test_ragged_layout_storage_shape():
     metadata = make_ragged_tensor_metadata_torch(slice_sizes, 100)
 
     assert BlackwellActMXScaleLayout(metadata).storage_shape([100, 94], False) == [1, 4, 24, 2, 256]
+
+
+def test_import_does_not_initialize_cuda():
+    subprocess.run([
+        sys.executable, "-c", """
+import torch
+assert not torch.cuda.is_initialized()
+import triton_kernels.matmul
+assert not torch.cuda.is_initialized()
+"""
+    ], check=True)
+
+
+@pytest.mark.parametrize("shape", [(6, 10), (2, 6, 10), (2, 4, 6, 10)])
+@pytest.mark.parametrize("is_fp4", [False, True])
+def test_strided_layout_axis_aliases(shape, is_fp4):
+    physical_shape = (*shape[:-1], shape[-1] // 2) if is_fp4 else shape
+    data = torch.arange(math.prod(physical_shape), dtype=torch.int32).to(torch.uint8).reshape(physical_shape)
+    source = wrap_torch_tensor(data, dtype=FP4 if is_fp4 else UINT8, shape=shape)
+    for axis in range(len(shape)):
+        positive, negative = StridedLayout(axis), StridedLayout(axis - len(shape))
+        assert positive.can_preserve_storage_as(negative, len(shape))
+        actual = convert_layout(source, positive)
+        expected = convert_layout(source, negative)
+        assert actual.data.stride() == expected.data.stride()
+        assert torch.equal(actual.data, expected.data)
+
+
+@pytest.mark.parametrize("shape", [(6, 10), (2, 6, 10), (2, 4, 6, 10)])
+@pytest.mark.parametrize("axis", [-2, -1])
+def test_hopper_scale_axis_aliases(shape, axis):
+    data = torch.arange(math.prod(shape), dtype=torch.int32).to(torch.uint8).reshape(shape)
+    source = wrap_torch_tensor(data)
+    positive, negative = HopperMXScaleLayout(axis + len(shape), 4), HopperMXScaleLayout(axis, 4)
+    actual = convert_layout(source, positive)
+    expected = convert_layout(source, negative)
+    assert actual.data.stride() == expected.data.stride()
+    assert torch.equal(actual.data, expected.data)
+    for encoded in [actual, expected]:
+        assert torch.equal(convert_layout(encoded, StridedLayout(-1)).data, data)
 
 
 @pytest.mark.parametrize("major_dim", [-1, -2])

@@ -409,15 +409,13 @@ def test_upcast_mxfp4_to_bf16(num_warps, mx_axis):
 
 @pytest.mark.parametrize("shape,major", [(shape, major)
                                          for shape in [(130, 9), (2, 259, 130), (2, 3, 9, 130)]
-                                         for major in range(-len(shape), len(shape))])
-@pytest.mark.parametrize("mx_axis", [-2, -1, 0, 1])
+                                         for major in range(len(shape))])
+@pytest.mark.parametrize("mx_axis", [-2, -1])
 @pytest.mark.parametrize("num_warps", [1, 2, 4, 8, 16, 32])
 @pytest.mark.parametrize("inverse", [False, True])
 @pytest.mark.parametrize("with_out", [False, True])
 def test_mxfp4_scale_convert_strided_storage(shape, mx_axis, num_warps, major, inverse, with_out):
     data = torch.randint(0, 256, shape, dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
-    if mx_axis >= 0:
-        mx_axis += len(shape) - 2
     layout = HopperMXScaleLayout(mx_axis, num_warps)
     strided = StridedLayout(major)
     canonical = wrap_torch_tensor(data)

@@ -194,8 +194,7 @@ def _convert_scale_kernel(Matrix, Encoded, LEADING_SHAPE: tl.constexpr, MATRIX_S
     enc_mask = (enc_rows[:, None] < M_PAD // 32) & (enc_cols[None, :] < K_PAD * 32)
     if INVERSE:
         x = tl.load(Encoded + enc_offsets, enc_mask, other=0)
-        x = x.reshape(BLOCK_M // (32 * LAYOUT_WARPS), LAYOUT_WARPS, BLOCK_K // 2, 2, 8, 2, 2)
-        x = x.trans(0, 3, 1, 6, 4, 2, 5).reshape(BLOCK_M, BLOCK_K)
+        x = unswizzle_mxfp4_scale_hopper(x, mx_axis=1, num_warps=LAYOUT_WARPS)
         tl.store(Matrix + matrix_offsets, x, matrix_mask)
     else:
         x = tl.load(Matrix + matrix_offsets, matrix_mask, other=0)

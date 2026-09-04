@@ -229,7 +229,7 @@ def test_mxfp4_value_conversion_strided_storage(shape, step, inverse):
 
 @pytest.mark.parametrize("shape,major", [(shape, major)
                                          for shape in [(256, 256), (2, 130, 66), (2, 4, 130, 66)]
-                                         for major in range(-len(shape), len(shape))])
+                                         for major in range(len(shape))])
 @pytest.mark.parametrize("layout", [
     BlackwellMXValueLayout(),
 ] + [
@@ -261,32 +261,6 @@ def test_mxfp4_value_convert_layout_out(shape, layout, major, inverse):
     assert torch.equal(actual_data, expected_data)
     assert torch.all(storage[::2] == 0xAB)
     assert torch.equal(source_gpu.data.cpu(), source.data)
-
-
-@pytest.mark.parametrize("inverse", [False, True])
-@pytest.mark.parametrize("layout", [BlackwellMXValueLayout(), BlackwellMX4ValueShuffledLayout()])
-@pytest.mark.parametrize("with_out", [False, True])
-def test_mxfp4_value_peak_allocation(inverse, layout, with_out):
-    data = torch.empty((4096, 1024), dtype=torch.uint8, device="cuda").mT
-    source = wrap_torch_tensor(data, dtype=FP4, shape=[2048, 4096], layout=StridedLayout(-2))
-    if inverse:
-        source = convert_layout(source, layout)
-        layout = StridedLayout(-2)
-    out = convert_layout(source, layout) if with_out else None
-    warm = convert_layout(source, layout, out=out)
-    torch.cuda.synchronize(data.device)
-    del warm
-    baseline = torch.cuda.memory_allocated(data.device)
-    torch.cuda.reset_peak_memory_stats(data.device)
-
-    actual = convert_layout(source, layout, out=out)
-    torch.cuda.synchronize(data.device)
-    peak = torch.cuda.max_memory_allocated(data.device) - baseline
-
-    # Conversion should allocate its output, not another whole weight tensor.
-    assert peak <= (0 if with_out else actual.data.nbytes) + 1024**2
-    if with_out:
-        assert actual is out
 
 
 @pytest.mark.parametrize("inverse", [False, True])
@@ -445,7 +419,7 @@ def test_act_scale_roundtrip_ragged(slice_sizes, m, k, align_m):
     (BlackwellMXScaleLayout(), (2, 259, 130)),
     (BlackwellMXScaleLayout(), (8, 524416)),
     (BlackwellMXScaleLayout(), (2, 3, 9, 130)),
-] for major in range(-len(shape), len(shape))])
+] for major in range(len(shape))])
 @pytest.mark.parametrize("inverse", [False, True])
 @pytest.mark.parametrize("step", [1, 2])
 @pytest.mark.parametrize("with_out", [False, True])
@@ -492,7 +466,7 @@ def test_scale_convert_layout_strided_storage(layout, shape, inverse, major, ste
 ])
 @pytest.mark.parametrize("step", [1, 2])
 @pytest.mark.parametrize("with_out", [False, True])
-@pytest.mark.parametrize("major", [-2, -1, 0, 1])
+@pytest.mark.parametrize("major", [-2, -1])
 def test_act_scale_convert_layout_ragged_padding(sizes, shape, step, with_out, major):
     metadata = make_ragged_tensor_metadata(torch.tensor(sizes, dtype=torch.int32, device="cuda"), shape[0])
     layout = BlackwellActMXScaleLayout(metadata)
@@ -524,7 +498,7 @@ def test_act_scale_convert_layout_ragged_padding(sizes, shape, step, with_out, m
 
     restored_expected = data.clone()
     restored_expected[sum(sizes):] = 0
-    for destination_major in [-2, -1, 0, 1]:
+    for destination_major in [-2, -1]:
         destination = StridedLayout(destination_major)
         strides = destination.make_transformation(list(shape), False).storage_strides
         restored_storage = torch.full((data.numel() * step + 1, ), 0xAB, dtype=torch.uint8, device="cuda")

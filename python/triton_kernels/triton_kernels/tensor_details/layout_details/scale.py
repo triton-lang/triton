@@ -2,7 +2,7 @@ from abc import abstractmethod
 
 import torch
 from torch._subclasses.fake_tensor import is_fake
-from triton._internal_testing import is_compile_warmup
+from triton._compile_warmup_state import is_compile_warmup
 
 from .base import LayoutTransformation
 from .strided import StridedLayoutTransformation

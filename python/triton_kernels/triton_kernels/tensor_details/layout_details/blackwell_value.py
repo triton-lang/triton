@@ -4,7 +4,7 @@ import torch
 from torch._subclasses.fake_tensor import is_fake
 import triton
 import triton.language as tl
-from triton._internal_testing import is_compile_warmup
+from triton._compile_warmup_state import is_compile_warmup
 from triton_kernels.tensor_details.layout_details import strided
 from .base import Layout, LayoutTransformation
 from .torch_utils import repack
