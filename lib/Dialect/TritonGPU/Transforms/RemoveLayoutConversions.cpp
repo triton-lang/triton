@@ -1318,14 +1318,13 @@ bool LayoutRematerialization::hoistConvertDotOperand(
     auto type = dyn_cast<RankedTensorType>(loadOp->getResult(0).getType());
     if (!type)
       continue;
+    // If there is nothing to remat between the leaf op and the convert, we are done.
+    if (innerSlice.empty())
+      return false;
     auto newType = type.cloneWithEncoding(layout[loadOp->getResult(0)]);
     auto newConvertOp = ConvertLayoutOp::create(builder, convertOp.getLoc(),
                                                 newType, loadOp->getResult(0));
     mapping.map(loadOp->getResult(0), newConvertOp.getResult());
-  }
-
-  if (innerSlice.empty()) {
-    return false;
   }
 
   LLVM_DEBUG({
