@@ -50,17 +50,17 @@ public:
   explicit TMemWarpOwnership(BufferRegionAnalysis &regions)
       : regions(regions) {}
 
-  bool isSameWarp(Operation *load, Operation *store, Allocation *allocation) {
+  bool isSameWarp(Operation *lhsOp, Operation *rhsOp, Allocation *allocation) {
     // Function summaries and different WS regions may have different issuers.
-    if (load->getParentRegion() != store->getParentRegion() ||
-        load->getParentOfType<FunctionOpInterface>() !=
+    if (lhsOp->getParentRegion() != rhsOp->getParentRegion() ||
+        lhsOp->getParentOfType<FunctionOpInterface>() !=
             allocation->getOperation())
       return false;
-    auto [it, inserted] = sameWarps.try_emplace({load, store}, false);
+    auto [it, inserted] = sameWarps.try_emplace({lhsOp, rhsOp}, false);
     if (!inserted)
       return it->second;
-    const Info *lhs = getInfo(load);
-    const Info *rhs = getInfo(store);
+    const Info *lhs = getInfo(lhsOp);
+    const Info *rhs = getInfo(rhsOp);
     if (!lhs || !rhs)
       return false;
     for (const auto &a : lhs->footprint->regionInfo.views)
@@ -160,7 +160,7 @@ private:
       return nullptr;
     auto warps = getWarpLayout(regTy, cast<gpu::MemDescType>(mem.getType()));
     // A non-surjective inverse hides other warps accessing the same word.
-    // The load wait only orders accesses within its issuing warp.
+    // TMEM waits only order accesses within their issuing warp.
     if (!warps.isSurjective())
       return nullptr;
     it->second = std::make_unique<Info>(Info{std::move(warps), footprint});
@@ -410,15 +410,14 @@ private:
     if (boundary != TMemBoundary::None) {
       flush(op, pending);
     } else {
-      for (TMEMWaitKind kind : {TMEMWaitKind::LOAD, TMEMWaitKind::STORE})
+      for (TMEMWaitKind kind : {TMEMWaitKind::LOAD, TMEMWaitKind::STORE}) {
         if (hasHazard(beforeBarrier, effects, kind))
           waitBeforeBarrier(kind);
-      // Same-warp WAR still needs completion immediately before the store.
-      if (hasHazard(beforeBarrier, effects, TMEMWaitKind::LOAD,
-                    /*needsBarrier=*/false) ||
-          hasHazard(afterBarrier, effects, TMEMWaitKind::LOAD,
-                    /*needsBarrier=*/false))
-        waitNow(op, TMEMWaitKind::LOAD, pending);
+        // Same-warp hazards still need completion before the next access.
+        if (hasHazard(beforeBarrier, effects, kind, /*needsBarrier=*/false) ||
+            hasHazard(afterBarrier, effects, kind, /*needsBarrier=*/false))
+          waitNow(op, kind, pending);
+      }
     }
 
     if (!info->allPathsFromEntrySynced)
@@ -455,7 +454,7 @@ static LogicalResult runTMemAnalysis(ModuleOp mod) {
   auto filter = [&](Operation *lhs, Operation *rhs, bool lhsIsRead,
                     bool rhsIsRead, Allocation *allocation) {
     return filterFn(lhs, rhs, lhsIsRead, rhsIsRead, allocation) ||
-           (lhsIsRead && !rhsIsRead &&
+           (lhsIsRead != rhsIsRead &&
             ownership.isSameWarp(lhs, rhs, allocation));
   };
   ModuleAllocation allocation(mod);
