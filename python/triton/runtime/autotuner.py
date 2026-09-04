@@ -6,6 +6,7 @@ import inspect
 import hashlib
 import json
 from functools import cached_property
+from threading import local
 from typing import Dict, Tuple, List, Optional
 
 from .. import knobs
@@ -36,6 +37,7 @@ class Autotuner(KernelInterface):
         self.keys = key
         self.cache: Dict[Tuple, Config] = {}
         self.arg_names = arg_names
+        self._nargs = local()
         self.cache_results = (cache_results or knobs.autotuning.cache) and not knobs.runtime.interpret
 
         # Reset to zero or restore values
@@ -213,6 +215,14 @@ class Autotuner(KernelInterface):
                 [(config.__dict__, timings) for config, timings in self.configs_timings.items() if not config.pre_hook],
             }), file_name, binary=False)
         return False
+
+    @property
+    def nargs(self):
+        return getattr(self._nargs, "value", None)
+
+    @nargs.setter
+    def nargs(self, value):
+        self._nargs.value = value
 
     def run(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
