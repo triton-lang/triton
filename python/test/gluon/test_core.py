@@ -2375,6 +2375,48 @@ def test_tmem_subslice_unpacked_one_column():
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tmem_same_warp_raw_then_cross_warp(device):
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, flag_ptr, same_ptr, cross_ptr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [32, 1], [4, 2], [0, 1])
+        rows = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))
+        cols = ttgl.arange(0, 2, layout=ttgl.SliceLayout(0, layout))
+        offsets = ttgl.program_id(0) * 256 + rows[:, None] * 2 + cols[None, :]
+        av = ttgl.load(a_ptr + offsets)
+        bv = ttgl.load(b_ptr + offsets)
+
+        parent = allocate_tensor_memory(ttgl.float32, [128, 4], TensorMemoryLayout([128, 128], col_stride=1))
+        a = parent.slice(0, 2)
+        b = parent.slice(1, 2)
+        b.store(bv)
+        a.store(av)
+
+        # The ready flag gives a local-only CTA barrier; TMEM completion
+        # and cross-warp publication are still required before the loads.
+        ttgl.atomic_poll(flag_ptr, 1, sem="acquire", scope="gpu")
+        same = a.load(layout)
+        cross = b.load(layout)
+        ttgl.store(same_ptr + offsets, same)
+        ttgl.store(cross_ptr + offsets, cross)
+
+    ctas = 256
+    a = torch.arange(ctas * 256, dtype=torch.float32, device=device).reshape(ctas, 128, 2)
+    b = a + 1048576
+    flag = torch.ones((), dtype=torch.int32, device=device)
+    same = torch.empty_like(a)
+    cross = torch.empty_like(a)
+    expected_cross = torch.stack((a[:, :, 1], b[:, :, 1]), dim=2)
+
+    for _ in range(8):
+        same.fill_(float("nan"))
+        cross.fill_(float("nan"))
+        kernel[(ctas, )](a, b, flag, same, cross, num_warps=8, num_ctas=1)
+        torch.testing.assert_close(same, a, rtol=0, atol=0)
+        torch.testing.assert_close(cross, expected_cross, rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("pred", [False, True])
 @pytest.mark.parametrize("iterations", [1, 3])
 def test_tmem_wait_predicated_store(pred, iterations):
