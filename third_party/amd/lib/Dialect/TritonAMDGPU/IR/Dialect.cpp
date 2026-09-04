@@ -474,6 +474,11 @@ std::optional<LinearLayout> ScaledDowncastFp8Op::computeScaleLayout(
   return computeScaledCastScaleLayout(outputLayout, axis, elementsPerScale);
 }
 
+void ExtractSliceOp::inferResultRanges(ArrayRef<ConstantIntRanges> argRanges,
+                                       SetIntRangeFn setResultRange) {
+  setResultRange(getResult(), argRanges.front());
+}
+
 LogicalResult ExtractSliceOp::verify() {
   // Basic type/rank checks.
   auto srcTypeVal = getSource().getType();
