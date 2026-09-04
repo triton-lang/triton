@@ -15,6 +15,8 @@
 
 namespace mlir::triton {
 
+struct TritonIntegerRangeAnalysis;
+
 //===----------------------------------------------------------------------===//
 // AxisInfo
 //===----------------------------------------------------------------------===//
@@ -176,8 +178,8 @@ private:
 
 class AxisInfoVisitor {
 public:
-  explicit AxisInfoVisitor(DataFlowSolver &rangeSolver)
-      : rangeSolver(rangeSolver) {}
+  explicit AxisInfoVisitor(TritonIntegerRangeAnalysis *rangeAnalysis)
+      : rangeAnalysis(rangeAnalysis) {}
   virtual ~AxisInfoVisitor() = default;
 
   bool isContiguousDim(const AxisInfo &info, ArrayRef<int64_t> shape, int dim) {
@@ -195,20 +197,20 @@ public:
   virtual bool match(Operation *op) = 0;
 
 protected:
-  DataFlowSolver &getRangeSolver() const { return rangeSolver; }
+  TritonIntegerRangeAnalysis *getRangeAnalysis() const { return rangeAnalysis; }
 
 private:
-  DataFlowSolver &rangeSolver;
+  TritonIntegerRangeAnalysis *rangeAnalysis;
 };
 
 class AxisInfoVisitorList {
 public:
-  explicit AxisInfoVisitorList(DataFlowSolver &rangeSolver)
-      : rangeSolver(rangeSolver) {}
+  explicit AxisInfoVisitorList(TritonIntegerRangeAnalysis *rangeAnalysis)
+      : rangeAnalysis(rangeAnalysis) {}
 
   template <typename... Ts, typename = std::enable_if_t<sizeof...(Ts) != 0>>
   void append() {
-    (visitors.emplace_back(std::make_unique<Ts>(rangeSolver)), ...);
+    (visitors.emplace_back(std::make_unique<Ts>(rangeAnalysis)), ...);
   }
 
   AxisInfo apply(Operation *op,
@@ -221,7 +223,7 @@ public:
 
 private:
   std::vector<std::unique_ptr<AxisInfoVisitor>> visitors;
-  DataFlowSolver &rangeSolver;
+  TritonIntegerRangeAnalysis *rangeAnalysis;
 };
 
 class AxisInfoAnalysis : public dataflow::SparseForwardDataFlowAnalysis<
@@ -241,7 +243,8 @@ protected:
                          ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
 
 public:
-  AxisInfoAnalysis(DataFlowSolver &solver, DataFlowSolver &rangeSolver);
+  AxisInfoAnalysis(DataFlowSolver &solver,
+                   TritonIntegerRangeAnalysis *rangeAnalysis);
   using dataflow::SparseForwardDataFlowAnalysis<
       dataflow::Lattice<AxisInfo>>::getLatticeElement;
 
@@ -250,10 +253,10 @@ public:
                  ArrayRef<const dataflow::Lattice<AxisInfo> *> operands,
                  ArrayRef<dataflow::Lattice<AxisInfo> *> results) override;
 
-  static AxisInfoAnalysis *loadDefaultAnalysis(DataFlowSolver *solver,
-                                               DataFlowSolver &rangeSolver);
-  using LoadCallback =
-      std::function<AxisInfoAnalysis *(DataFlowSolver *, DataFlowSolver &)>;
+  static AxisInfoAnalysis *
+  loadDefaultAnalysis(DataFlowSolver *solver,
+                      TritonIntegerRangeAnalysis *rangeAnalysis);
+  using LoadCallback = decltype(&AxisInfoAnalysis::loadDefaultAnalysis);
 };
 
 // Module level axis info analysis based on the call graph, assuming that we do
