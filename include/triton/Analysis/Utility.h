@@ -171,27 +171,14 @@ public:
   GatherLoweringHelper(triton::GatherOp gatherOp);
 
   // Get the shared memory scratch size required by this op.
-  unsigned getScratchSizeInBytes() const { return scratchSize; }
+  unsigned getScratchSizeInBytes();
   // Determine if the gather can be performed completely within a warp.
-  bool isWarpLocal() const { return warpLocalLayout.has_value(); }
-  bool isCTALocal() const { return ctaLocal; }
-
-  // Maps receiver (register, lane, warp, block), actual index, and constant=1
-  // to a source register and optionally a source lane. An absent lane means
-  // that the gather is entirely thread-local. Construct before LLVM conversion
-  // while tensor index expressions are available.
-  const std::optional<triton::LinearLayout> &getWarpLocalLayout() const {
-    return warpLocalLayout;
-  }
-  // For a singleton-axis gather, map source registers to locally available
-  // column selectors. A nonempty map permits storing only selected values.
-  ArrayRef<unsigned> getSourceToIndex() const { return sourceToIndex; }
+  bool isWarpLocal();
 
 private:
-  std::optional<triton::LinearLayout> warpLocalLayout;
-  SmallVector<unsigned> sourceToIndex;
-  unsigned scratchSize;
-  bool ctaLocal;
+  triton::GatherOp gatherOp;
+  RankedTensorType srcTy;
+  RankedTensorType dstTy;
 };
 
 // This struct represents the factorization of a warp-local layout conversion

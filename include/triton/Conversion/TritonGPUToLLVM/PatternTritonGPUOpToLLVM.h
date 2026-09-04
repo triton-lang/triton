@@ -72,8 +72,7 @@ void populateScanOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                   RewritePatternSet &patterns,
                                   const TargetInfoBase &targetInfo,
                                   PatternBenefit benefit);
-void populateGatherOpToLLVMPatterns(ModuleOp module,
-                                    LLVMTypeConverter &typeConverter,
+void populateGatherOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                     RewritePatternSet &patterns,
                                     const TargetInfoBase &targetInfo,
                                     PatternBenefit benefit);

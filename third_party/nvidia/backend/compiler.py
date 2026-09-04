@@ -416,6 +416,7 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_allocate_warp_groups(pm, "consan" in options.instrumentation_mode)
         passes.convert.add_scf_to_cf(pm)
         passes.gluon.add_inliner(pm)
+        passes.ttgpuir.add_optimize_one_hot_xor_reduction(pm)
         if "consan" in options.instrumentation_mode:
             passes.ttgpuir.add_prepare_consan_captures(pm, "nvidia")
         nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
