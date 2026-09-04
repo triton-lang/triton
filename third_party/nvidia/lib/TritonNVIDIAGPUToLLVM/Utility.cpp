@@ -197,7 +197,7 @@ LogicalResult lowerLdStMatrix(
     SmallVector<Value> &vals, // Input for stmatrix, output for ldmatrix
     Value smemBase, Value affineOffset, uint64_t maskSpanAffineOffset,
     Type llvmElemTy, ConversionPatternRewriter &rewriter,
-    const ::triton::NVIDIA::TargetInfo &targetInfo) {
+    const ::triton::NVIDIA::TargetInfo &targetInfo, bool isFp4Padded) {
   // Lower load via ldmatrix, store via stmatrix
 
   bool isStore = !vals.empty();
@@ -216,8 +216,12 @@ LogicalResult lowerLdStMatrix(
   auto kOffset = S("offset");
   auto kBlock = S("block");
   auto kAddr = S("addr");
+  auto kUnpack = S("unpack");
   auto smemPtrTy = ptr_ty(ctx, 3);
   auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
+  if (isFp4Padded && (isStore || transpose || bitwidth != 8 ||
+                      !targetInfo.supportsFp4Ldmatrix()))
+    return failure();
   // In the contiguous case we can pack elements <= 32 bits
   // In the transpose case we just have the b8 and b16 cases
   if ((!transpose && bitwidth > 32) ||
@@ -234,7 +238,28 @@ LogicalResult lowerLdStMatrix(
   // Accumulate the permutations to apply the inverse for loads
   ColumnAction accPermReg =
       ColumnAction::identity(kReg, cvt.getInDimSizeLog2(kReg));
-  if (!transpose) {
+  if (isFp4Padded) {
+    // The fp4 ldmatrix tile uses all 32 lanes. Reject smaller lane layouts
+    // before composing them with the full instruction tile.
+    if (cvt.getInDimSize(kLane) < 32)
+      return failure();
+
+    // For one m8n16 result, each lane receives four expanded FP4 values.
+    // Register bit 0 selects low/high FP4 within a packed source byte.
+    // Register bit 1 selects one of the lane's two source data bytes.
+    // Lane bits 0 and 1 select one of four 2-byte groups in the source row's
+    // eight non-padding bytes.
+    tile = LinearLayout::identity1D(2, kReg, kUnpack) *
+           LinearLayout::identity1D(2, kReg, kOffset) *
+           LinearLayout::identity1D(4, kLane, kOffset);
+
+    // Lane bits 2 through 4 select one of eight matrix rows
+    fullTile = tile * LinearLayout::identity1D(8, kLane, kAddr);
+
+    assert(fullTile.isInvertible());
+    // Project out kUnpack to get the address-only tile used by divideLeft.
+    tile = tile.sublayout({kReg, kLane}, {kOffset});
+  } else if (!transpose) {
     tile = LinearLayout::identity1D(32 / bitwidth, kReg, kOffset) *
            LinearLayout::identity1D(4, kLane, kOffset);
     fullTile = tile * LinearLayout::identity1D(8, kLane, kAddr);
@@ -348,10 +373,14 @@ LogicalResult lowerLdStMatrix(
   // just add warps as compose belowe requires the dimensions of both layouts to
   // agree
   fullTileVec *= LinearLayout::identity1D(1, kWarp, kAddr);
-  // fullTile.invert() is a map from kOffset, kAddr into kReg, kLane, kWarp
-  // addrToOffset gives us a map from kAddr into kOffset, which is the map of
-  // the addresses each lane should hold
+  // fullTile.invert() maps instruction coordinates back to kReg, kLane, kWarp.
+  // For fp4, kUnpack distinguishes the two output registers sourced from one
+  // packed byte. Composing with reps must therefore erase kUnpack: changing it
+  // cannot change the shared-memory address. addrToOffset then gives the
+  // addresses each lane should hold.
   auto addrToOffset = fullTileVec.invert().compose(reps);
+  if (isFp4Padded)
+    assert(addrToOffset.sublayoutIsZero({kUnpack}, {kOffset}));
   // sanity check
   assert(addrToOffset.getInDimSizeLog2(kAddr) >= 3 &&
          addrToOffset.getInDimSizeLog2(kAddr) <= 5);
@@ -412,12 +441,18 @@ LogicalResult lowerLdStMatrix(
   if (transpose) {
     std::swap(m, n);
   }
+  if (isFp4Padded) {
+    m = 8;
+    n = 16;
+    eltType = NVVM::LdStMatrixEltType::B8X16_B4X16_P64;
+  }
   auto shape = NVVM::LdStMatrixShapeAttr::get(ctx, m, n);
 
   // Elements per op
   auto elemsPerInstr = fullTileVec.getInDimSize(kReg);
   auto elemsPerVec = 32 / bitwidth;
   auto vecTy = vec_ty(llvmElemTy, elemsPerVec);
+
   for (int i = 0; i < cvt.getInDimSize(kReg); i += nAdditive) {
     auto regIdx = reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}})[0].second;
     auto regIdxI8 = regIdx * (bitwidth / 8);

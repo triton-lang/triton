@@ -57,7 +57,8 @@ LogicalResult lowerLdStMatrix(
     SmallVector<Value> &vals, // Input for stmatrix, output for ldmatrix
     Value smemBase, Value affineOffset, uint64_t maskSpanAffineOffset,
     Type llvmElemTy, ConversionPatternRewriter &rewriter,
-    const mlir::triton::NVIDIA::TargetInfo &targetInfo);
+    const mlir::triton::NVIDIA::TargetInfo &targetInfo,
+    bool isFp4Padded = false);
 
 // Given a broadcast mask and the number of CTAs, create a mask of ones
 // where for ctaId, it sets as 1's the positions that are in the same broadcast

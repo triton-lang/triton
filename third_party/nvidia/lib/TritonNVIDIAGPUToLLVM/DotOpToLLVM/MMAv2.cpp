@@ -7,6 +7,8 @@
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
 
+#include <optional>
+
 using namespace mlir;
 using namespace mlir::triton;
 
@@ -15,6 +17,43 @@ using ::mlir::triton::gpu::getOrderForDotOperand;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
 namespace {
+
+// This helper returns:
+//  - 0 if A is FP4 and B is FP8.
+//  - 1 if A is FP8 and B is FP4.
+//  - nullopt if it is not mixed or uses unsupported formats.
+static std::optional<unsigned> getMixedFp8Fp4Operand(DotScaledOp op) {
+  auto isFp4 = [](ScaleDotElemType format, Type storageType) {
+    return format == ScaleDotElemType::E2M1 && storageType.isSignlessInteger(8);
+  };
+  auto isFp8 = [](ScaleDotElemType format, Type storageType) {
+    return (format == ScaleDotElemType::E4M3 &&
+            isa<Float8E4M3FNType>(storageType)) ||
+           (format == ScaleDotElemType::E5M2 &&
+            isa<Float8E5M2Type>(storageType));
+  };
+  Type aStorageType =
+      cast<RankedTensorType>(op.getA().getType()).getElementType();
+  Type bStorageType =
+      cast<RankedTensorType>(op.getB().getType()).getElementType();
+  bool aIsFp4 = isFp4(op.getAElemType(), aStorageType);
+  bool bIsFp4 = isFp4(op.getBElemType(), bStorageType);
+  bool aIsFp8 = isFp8(op.getAElemType(), aStorageType);
+  bool bIsFp8 = isFp8(op.getBElemType(), bStorageType);
+  if (aIsFp4 && bIsFp8)
+    return 0;
+  if (aIsFp8 && bIsFp4)
+    return 1;
+  return std::nullopt;
+}
+
+static bool isFp4OperandUnpacked(DotScaledOp op, unsigned fp4OperandIdx) {
+  assert((fp4OperandIdx == 0 || fp4OperandIdx == 1) &&
+         "expected an FP4 A or B operand");
+  Value fp4 = fp4OperandIdx == 0 ? op.getA() : op.getB();
+  auto fp4Type = cast<RankedTensorType>(fp4.getType());
+  return cast<DotOperandEncodingAttr>(fp4Type.getEncoding()).getFp4Unpacked();
+}
 
 using ValueTableV2 = std::map<std::array<int, 3>, Value>;
 
@@ -98,7 +137,9 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
   };
 
   auto dot = cast<DotOperandEncodingAttr>(type.getEncoding());
-  auto kWidth = dot.getKWidth();
+  // Double kWidth for an fp4Unpacked operand because one byte gets decompressed
+  // into two bytes.
+  auto kWidth = dot.getKWidth() * (dot.getFp4Unpacked() ? 2 : 1);
   auto largeK = bitwidth * kWidth > std::max(32u, bitwidth);
 
   assert((bitwidth != 64 || largeK == false) &&
@@ -284,6 +325,11 @@ enum class TensorCoreType : uint8_t {
   FP32_FP8E5M2_FP8E4M3FN_FP32_SCALE_VEC_1X,
   FP32_FP8E4M3FN_FP8E5M2_FP32_SCALE_VEC_1X,
   FP32_FP8E4M3FN_FP8E4M3FN_FP32_SCALE_VEC_1X,
+  // scaled mixed-precision mxfp8 x mxfp4 (and mirror), mxf8f6f4, ue8m0 scales
+  FP32_FP8E4M3FN_FP4E2M1_FP32_SCALE_VEC_1X,
+  FP32_FP8E5M2_FP4E2M1_FP32_SCALE_VEC_1X,
+  FP32_FP4E2M1_FP8E4M3FN_FP32_SCALE_VEC_1X,
+  FP32_FP4E2M1_FP8E5M2_FP32_SCALE_VEC_1X,
   //
   FP32_FP4E2M1_FP4E2M1_FP32_SCALE_VEC_2X,
   FP32_NVFP4_NVFP4_FP32_SCALE_VEC_4X,
@@ -331,6 +377,10 @@ static Type getMmaRetType(TensorCoreType mmaType, MLIRContext *ctx) {
   case TensorCoreType::FP32_FP8E5M2_FP8E4M3FN_FP32_SCALE_VEC_1X:
   case TensorCoreType::FP32_FP8E4M3FN_FP8E5M2_FP32_SCALE_VEC_1X:
   case TensorCoreType::FP32_FP8E4M3FN_FP8E4M3FN_FP32_SCALE_VEC_1X:
+  case TensorCoreType::FP32_FP8E4M3FN_FP4E2M1_FP32_SCALE_VEC_1X:
+  case TensorCoreType::FP32_FP8E5M2_FP4E2M1_FP32_SCALE_VEC_1X:
+  case TensorCoreType::FP32_FP4E2M1_FP8E4M3FN_FP32_SCALE_VEC_1X:
+  case TensorCoreType::FP32_FP4E2M1_FP8E5M2_FP32_SCALE_VEC_1X:
   case TensorCoreType::FP32_FP4E2M1_FP4E2M1_FP32_SCALE_VEC_2X:
   case TensorCoreType::FP32_NVFP4_NVFP4_FP32_SCALE_VEC_4X:
     return fp32x4Ty;
@@ -369,6 +419,21 @@ static TensorCoreType getMmaTypeDotScaled(DotScaledOp op, RankedTensorType aTy,
       } else {
         return TensorCoreType::FP32_FP4E2M1_FP4E2M1_FP32_SCALE_VEC_2X;
       }
+    }
+
+    // Mixed fp4 and fp8 mma
+    auto fp4Operand = getMixedFp8Fp4Operand(op);
+    if (fp4Operand && *fp4Operand == 1 &&
+        op.getBScale().getType().getElementType().isSignlessInteger(8)) {
+      if (llvm::isa<Float8E4M3FNType>(aTy.getElementType()))
+        return TensorCoreType::FP32_FP8E4M3FN_FP4E2M1_FP32_SCALE_VEC_1X;
+      return TensorCoreType::FP32_FP8E5M2_FP4E2M1_FP32_SCALE_VEC_1X;
+    }
+    if (fp4Operand && *fp4Operand == 0 &&
+        op.getAScale().getType().getElementType().isSignlessInteger(8)) {
+      if (llvm::isa<Float8E4M3FNType>(bTy.getElementType()))
+        return TensorCoreType::FP32_FP4E2M1_FP8E4M3FN_FP32_SCALE_VEC_1X;
+      return TensorCoreType::FP32_FP4E2M1_FP8E5M2_FP32_SCALE_VEC_1X;
     }
   }
   return TensorCoreType::NOT_APPLICABLE;
@@ -491,6 +556,22 @@ inline static const std::map<TensorCoreType, std::string> mmaInstrPtxScaled = {
      "mma.sync.aligned.m16n8k32.row.col."
      "kind::mxf8f6f4.block_scale.scale_vec::"
      "1X.f32.e4m3.e4m3.f32.ue8m0"},
+    {TensorCoreType::FP32_FP8E4M3FN_FP4E2M1_FP32_SCALE_VEC_1X,
+     "mma.sync.aligned.m16n8k32.row.col."
+     "kind::mxf8f6f4.block_scale.scale_vec::"
+     "1X.f32.e4m3.e2m1.f32.ue8m0"},
+    {TensorCoreType::FP32_FP8E5M2_FP4E2M1_FP32_SCALE_VEC_1X,
+     "mma.sync.aligned.m16n8k32.row.col."
+     "kind::mxf8f6f4.block_scale.scale_vec::"
+     "1X.f32.e5m2.e2m1.f32.ue8m0"},
+    {TensorCoreType::FP32_FP4E2M1_FP8E4M3FN_FP32_SCALE_VEC_1X,
+     "mma.sync.aligned.m16n8k32.row.col."
+     "kind::mxf8f6f4.block_scale.scale_vec::"
+     "1X.f32.e2m1.e4m3.f32.ue8m0"},
+    {TensorCoreType::FP32_FP4E2M1_FP8E5M2_FP32_SCALE_VEC_1X,
+     "mma.sync.aligned.m16n8k32.row.col."
+     "kind::mxf8f6f4.block_scale.scale_vec::"
+     "1X.f32.e2m1.e5m2.f32.ue8m0"},
     {TensorCoreType::FP32_FP4E2M1_FP4E2M1_FP32_SCALE_VEC_2X,
      "mma.sync.aligned.m16n8k64.row.col."
      "kind::mxf4nvf4.block_scale.scale_vec::"
@@ -708,7 +789,8 @@ LogicalResult convertMMAImpl(
     DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
     const LLVMTypeConverter *typeConverter, ConversionPatternRewriter &rewriter,
     TensorCoreType mmaType, const NumRegisters &numRegisters,
-    const std::string &mmaInstruction, const EmitMmaCallback &emitMma) {
+    const std::string &mmaInstruction, const EmitMmaCallback &emitMma,
+    std::optional<unsigned> fp4OperandToCenter) {
   auto loc = op.getLoc();
   auto aType = cast<RankedTensorType>(op.getA().getType());
   auto bType = cast<RankedTensorType>(op.getB().getType());
@@ -730,14 +812,31 @@ LogicalResult convertMMAImpl(
 
   int bitwidth = aTensorTy.getElementType().getIntOrFloatBitWidth();
   auto dotOpA = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
-  int kWidth = dotOpA.getKWidth();
-  auto repA =
-      cast<NvidiaMmaEncodingAttr>(dotOpA.getParent())
-          .getRepForOperand(aShapePerCTA, bitwidth, kWidth, dotOpA.getOpIdx());
   auto dotOpB = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
-  auto repB =
-      cast<NvidiaMmaEncodingAttr>(dotOpB.getParent())
-          .getRepForOperand(bShapePerCTA, bitwidth, kWidth, dotOpB.getOpIdx());
+
+  // Double the effective kWidth for fp4Unpacked operands because one byte
+  // with two values get decompressed into two bytes.
+  auto effKWidth = [](DotOperandEncodingAttr d) {
+    if (d.getFp4Unpacked())
+      return d.getKWidth() * 2;
+    return d.getKWidth();
+  };
+  auto effShape = [](ArrayRef<int64_t> shape, DotOperandEncodingAttr d) {
+    SmallVector<int64_t> s(shape.begin(), shape.end());
+    if (!d.getFp4Unpacked())
+      return s;
+
+    int rank = s.size();
+    int kDim = d.getOpIdx() == 0 ? rank - 1 : rank - 2;
+    s[kDim] *= 2;
+    return s;
+  };
+  auto repA = cast<NvidiaMmaEncodingAttr>(dotOpA.getParent())
+                  .getRepForOperand(effShape(aShapePerCTA, dotOpA), bitwidth,
+                                    effKWidth(dotOpA), dotOpA.getOpIdx());
+  auto repB = cast<NvidiaMmaEncodingAttr>(dotOpB.getParent())
+                  .getRepForOperand(effShape(bShapePerCTA, dotOpB), bitwidth,
+                                    effKWidth(dotOpB), dotOpB.getOpIdx());
 
   assert(repA[2] == repB[1]);
   assert(repA[0] == repB[0]);
@@ -759,6 +858,16 @@ LogicalResult convertMMAImpl(
   auto hb = getValuesFromDotOperandLayoutStruct(typeConverter, loc, rewriter,
                                                 llvmB, repBatch, repN, repK,
                                                 bTensorTy, numRegisters);
+
+  // Target specific lowering of fp4Unpacked for the SM120: its mixed FP8/FP4
+  // MMA expects each e2m1 fp4 value in bits [5:2], while fp4Unpacked specifies
+  // fp4 values live in [3:0], so here we shift the value left by 2.
+  if (fp4OperandToCenter) {
+    Value mask = tb.i32_val(0x0f0f0f0f);
+    ValueTableV2 &fp4Table = *fp4OperandToCenter == 0 ? ha : hb;
+    for (auto &entry : fp4Table)
+      entry.second = tb.shl(tb.and_(entry.second, mask), tb.i32_val(2));
+  }
 
   int bitwidthRet = dTensorTy.getElementType().getIntOrFloatBitWidth();
   auto numMmaRets = bitwidthRet == 64 ? 2 : bitwidthRet / 8;
@@ -857,7 +966,8 @@ LogicalResult convertMMAWithInstruction(
   };
 
   return convertMMAImpl(op, llvmA, llvmB, llvmC, typeConverter, rewriter,
-                        mmaType, numRegisters, mmaInstruction, emit);
+                        mmaType, numRegisters, mmaInstruction, emit,
+                        std::nullopt);
 }
 
 } // namespace
@@ -908,6 +1018,12 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
   if (mmaInstrPtxScaled.find(mmaType) == mmaInstrPtxScaled.end())
     return op.emitError(
         "unsupported MMA instruction for the given operand/result types");
+
+  auto fp4OperandToCenter = getMixedFp8Fp4Operand(op);
+  if (fp4OperandToCenter && !isFp4OperandUnpacked(op, *fp4OperandToCenter))
+    return op.emitError(
+        "SM120 mixed FP8/FP4 MMA requires its FP4 operand to use "
+        "fp4Unpacked");
 
   SmallVector<Value> unpackedAScale = unpackTensorElements(
       op.getLoc(), adaptor.getAScale(), rewriter, op.getAScale().getType());
@@ -960,5 +1076,6 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
 
   return convertMMAImpl(op, adaptor.getA(), adaptor.getB(), adaptor.getC(),
                         typeConverter, rewriter, mmaType, numRegisters,
-                        mmaInstrPtxScaled.at(mmaType), emit);
+                        mmaInstrPtxScaled.at(mmaType), emit,
+                        fp4OperandToCenter);
 }

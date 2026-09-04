@@ -5,8 +5,7 @@ This tutorial demonstrates a Triton implementation of block scaled matrix multip
 which is generic over FP4 and FP8 formats on NVIDIA and AMD GPUs.
 The tutorial supports OCP microscaling formats such as mxfp4 and mxfp8, and NVIDIA's nvfp4
 (on NVIDIA GPUs) and mxfp4 (on AMD GPUs). These matrix multiplications are hardware-accelerated
-using fifth-generation Tensor Cores on NVIDIA GPUs with compute capability 10, and by the CDNA4
-matrix cores on AMD GPUs.
+on NVIDIA GPUs with compute capability 10, 11, or 12, and by the CDNA4 matrix cores on AMD GPUs.
 Users can run the tutorial with each of the supported formats by passing the `--format`
 argument and can benchmark the performance of each by specifying matrix dimensions
 and iteration steps.
@@ -23,7 +22,10 @@ and iteration steps.
     # FP4 with Cluster Launch Control
     python 10-block-scaled-matmul.py --format nvfp4 --clc
 
-Future updates to this tutorial which support mixed precision block scaled matmul are planned.
+    # Mixed MXFP8 x MXFP4
+    python 10-block-scaled-matmul.py --format mixed -K 8192 --bench
+    python 10-block-scaled-matmul.py --format mixed -K 8192 --bench \
+        --block-m 128 --block-n 128 --block-k 128 --num-warps 4 --num-stages 2
 """
 
 # %%
@@ -140,7 +142,7 @@ def is_hip_cdna4():
 
 
 def supports_block_scaling():
-    return (is_cuda() and torch.cuda.get_device_capability()[0] in [10, 11]) or is_hip_cdna4()
+    return (is_cuda() and torch.cuda.get_device_capability()[0] in [10, 11, 12]) or is_hip_cdna4()
 
 
 def is_rubin():
@@ -285,6 +287,8 @@ def block_scaled_matmul(a_desc, a_scale_desc, b_desc, b_scale_desc, dtype_dst, M
         num_stages,
         disallow_acc_multi_buffer=configs["disallow_acc_multi_buffer"],
         clc=clc,
+        num_warps=configs["num_warps"],
+        num_stages=num_stages,
     )
     return output
 
@@ -335,10 +339,12 @@ def cublas_block_scaled_matmul(a, a_scale, b, b_scale, block_scale_type="mxfp8")
     return output
 
 
-def initialize_block_scaled(M, N, K, block_scale_type="nvfp4", compute_reference=False):
-    BLOCK_M = 128
-    BLOCK_N = 256
-    BLOCK_K = 256 if "fp4" in block_scale_type else 128
+def initialize_block_scaled(M, N, K, block_scale_type="nvfp4", compute_reference=False, *, block_m=None, block_n=None,
+                            block_k=None, num_warps=None, num_stages=None):
+    BLOCK_M = 128 if block_m is None else block_m
+    BLOCK_N = 256 if block_n is None else block_n
+    default_block_k = 256 if "fp4" in block_scale_type else 128
+    BLOCK_K = default_block_k if block_k is None else block_k
     VEC_SIZE = 16 if block_scale_type == "nvfp4" else 32
     assert block_scale_type in ["nvfp4", "mxfp4", "mxfp8", "mixed"], f"Invalid block scale type: {block_scale_type}"
     ELEM_PER_BYTE_A = 2 if "fp4" in block_scale_type else 1
@@ -425,15 +431,19 @@ def initialize_block_scaled(M, N, K, block_scale_type="nvfp4", compute_reference
         b_scale_ref = unpack_scale(b_scale_ref).repeat_interleave(VEC_SIZE, dim=1).T.contiguous()[:K, :N]
         reference = torch.matmul(a_ref.to(torch.float32) * a_scale_ref, b_ref * b_scale_ref)
 
-    if is_rubin():
-        num_stages = 6
-    else:
-        num_stages = 4
+    if num_stages is None:
+        if is_rubin():
+            num_stages = 6
+        elif is_cuda() and torch.cuda.get_device_capability()[0] == 12:
+            num_stages = 2
+        else:
+            num_stages = 4
 
     configs = {
         "BLOCK_SIZE_M": BLOCK_M,
         "BLOCK_SIZE_N": BLOCK_N,
         "BLOCK_SIZE_K": BLOCK_K,
+        "num_warps": num_warps,
         "num_stages": num_stages,
         "ELEM_PER_BYTE_A": ELEM_PER_BYTE_A,
         "ELEM_PER_BYTE_B": ELEM_PER_BYTE_B,
@@ -457,8 +467,10 @@ def initialize_block_scaled(M, N, K, block_scale_type="nvfp4", compute_reference
     return a_desc, a_scale_desc, b_desc, b_scale_desc, rep_m, rep_n, rep_k, configs, reference, a, b, a_scale_cublas, b_scale_cublas
 
 
-def validate_block_scaled(M, N, K, block_scale_type="nvfp4", clc=False):
-    results = initialize_block_scaled(M, N, K, block_scale_type, compute_reference=True)
+def validate_block_scaled(M, N, K, block_scale_type="nvfp4", clc=False, *, block_m=None, block_n=None, block_k=None,
+                          num_warps=None, num_stages=None):
+    results = initialize_block_scaled(M, N, K, block_scale_type, compute_reference=True, block_m=block_m,
+                                      block_n=block_n, block_k=block_k, num_warps=num_warps, num_stages=num_stages)
     a_desc, a_scale_desc, b_desc, b_scale_desc, rep_m, rep_n, rep_k, configs, reference = results[:9]
     a, b, a_scale_cublas, b_scale_cublas = results[9:]
 
@@ -477,13 +489,15 @@ def validate_block_scaled(M, N, K, block_scale_type="nvfp4", clc=False):
         print(f"✅ (pass {block_scale_type} - Triton only)")
 
 
-def bench_block_scaled(K, block_scale_type="nvfp4", reps=10, warmup_reps=10, clc=False):
+def bench_block_scaled(K, block_scale_type="nvfp4", reps=10, warmup_reps=10, clc=False, *, block_m=None, block_n=None,
+                       block_k=None, num_warps=None, num_stages=None):
     assert K % 128 == 0
     M = 8192
     N = 8192
     print(f"Problem Shape = {M}x{N}x{K}")
 
-    results = initialize_block_scaled(M, N, K, block_scale_type, compute_reference=False)
+    results = initialize_block_scaled(M, N, K, block_scale_type, compute_reference=False, block_m=block_m,
+                                      block_n=block_n, block_k=block_k, num_warps=num_warps, num_stages=num_stages)
     a_desc, a_scale_desc, b_desc, b_scale_desc, rep_m, rep_n, rep_k, configs, _ = results[:9]
     a, b, a_scale_cublas, b_scale_cublas = results[9:]
 
@@ -616,17 +630,20 @@ def shuffle_scales_cdna4(scales: torch.Tensor, mfma_nonkdim: int):
     return scales_shuffled
 
 
-def initialize_block_scaled_amd(M, N, K, mfma_nonkdim):
+def initialize_block_scaled_amd(M, N, K, mfma_nonkdim, *, block_m=None, block_n=None, block_k=None, num_warps=None,
+                                num_stages=None):
 
-    BLOCK_M = 128
-    BLOCK_N = 128
-    BLOCK_K = 256
+    BLOCK_M = 128 if block_m is None else block_m
+    BLOCK_N = 128 if block_n is None else block_n
+    BLOCK_K = 256 if block_k is None else block_k
+    num_warps = 8 if num_warps is None else num_warps
+    num_stages = 2 if num_stages is None else num_stages
     configs = {
         "BLOCK_M": BLOCK_M,
         "BLOCK_N": BLOCK_N,
         "BLOCK_K": BLOCK_K,
-        "num_stages": 2,
-        "num_warps": 8,
+        "num_stages": num_stages,
+        "num_warps": num_warps,
         "mfma_nonkdim": mfma_nonkdim,
     }
 
@@ -653,7 +670,8 @@ def initialize_block_scaled_amd(M, N, K, mfma_nonkdim):
     )
 
 
-def validate_block_scaled_amd(M, N, K, block_scale_type="mxfp4", mfma_nonkdim=16):
+def validate_block_scaled_amd(M, N, K, block_scale_type="mxfp4", mfma_nonkdim=16, *, block_m=None, block_n=None,
+                              block_k=None, num_warps=None, num_stages=None):
 
     def e8m0_to_f32(x):
         x_f32 = 2**((x - 127).to(torch.float32))
@@ -674,7 +692,8 @@ def validate_block_scaled_amd(M, N, K, block_scale_type="mxfp4", mfma_nonkdim=16
         return torch.mm(x_f32, w_f32.T).to(dtype)
 
     x_mxfp4, w_mxfp4, x_scales, w_scales, x_scales_triton, w_scales_triton, configs = \
-    initialize_block_scaled_amd(M, N, K, mfma_nonkdim)
+    initialize_block_scaled_amd(M, N, K, mfma_nonkdim, block_m=block_m, block_n=block_n, block_k=block_k,
+                                num_warps=num_warps, num_stages=num_stages)
 
     x = x_mxfp4.to_packed_tensor(dim=1)
     w = w_mxfp4.to_packed_tensor(dim=1)
@@ -716,14 +735,16 @@ def block_scaled_matmul_amd(x, w, x_scales_triton, w_scales_triton, configs):
     return triton_out
 
 
-def bench_block_scaled_amd(K, block_scale_type="mxfp4", reps=10, mfma_nonkdim=16):
+def bench_block_scaled_amd(K, block_scale_type="mxfp4", reps=10, mfma_nonkdim=16, *, block_m=None, block_n=None,
+                           block_k=None, num_warps=None, num_stages=None):
     assert K % 128 == 0
     M = 8192
     N = 8192
     print(f"Problem Shape = {M}x{N}x{K}")
 
     x_mxfp4, w_mxfp4, x_scales, w_scales, x_scales_triton, w_scales_triton, configs = \
-    initialize_block_scaled_amd(M, N, K, mfma_nonkdim)
+    initialize_block_scaled_amd(M, N, K, mfma_nonkdim, block_m=block_m, block_n=block_n, block_k=block_k,
+                                num_warps=num_warps, num_stages=num_stages)
 
     x = x_mxfp4.to_packed_tensor(dim=1)
     w = w_mxfp4.to_packed_tensor(dim=1)
@@ -743,7 +764,19 @@ if __name__ == "__main__":
     parser.add_argument("--bench", action="store_true", default=True)
     parser.add_argument("--format", type=str, choices=["mxfp4", "nvfp4", "mxfp8", "mixed"], default="nvfp4")
     parser.add_argument("--clc", action="store_true", help="Enable CLC scheduling on NVIDIA SM100+")
+    parser.add_argument("--block-m", type=int, help="override the M tile size")
+    parser.add_argument("--block-n", type=int, help="override the N tile size")
+    parser.add_argument("--block-k", type=int, help="override the K tile size")
+    parser.add_argument("--num-warps", type=int, help="override the number of warps")
+    parser.add_argument("--num-stages", type=int, help="override the number of pipeline stages")
     args = parser.parse_args()
+    tuning_options = {
+        "block_m": args.block_m,
+        "block_n": args.block_n,
+        "block_k": args.block_k,
+        "num_warps": args.num_warps,
+        "num_stages": args.num_stages,
+    }
 
     if args.clc and (not is_cuda() or torch.cuda.get_device_capability()[0] < 10):
         parser.error("--clc requires an NVIDIA SM100+ GPU")
@@ -758,20 +791,22 @@ if __name__ == "__main__":
         torch.manual_seed(42)
 
         if is_cuda():
-            validate_block_scaled(8192, 8192, 8192, block_scale_type=args.format, clc=args.clc)
+            validate_block_scaled(8192, 8192, 8192, block_scale_type=args.format, clc=args.clc, **tuning_options)
         elif is_hip_cdna4():
             assert args.format == "mxfp4", "AMD tutorial only supports mxpf4 format currently"
-            validate_block_scaled_amd(8192, 8192, 8192, block_scale_type=args.format, mfma_nonkdim=16)
-            validate_block_scaled_amd(8192, 8192, 8192, block_scale_type=args.format, mfma_nonkdim=32)
+            validate_block_scaled_amd(8192, 8192, 8192, block_scale_type=args.format, mfma_nonkdim=16, **tuning_options)
+            validate_block_scaled_amd(8192, 8192, 8192, block_scale_type=args.format, mfma_nonkdim=32, **tuning_options)
 
         if args.bench:
             proton.start("block_scaled_matmul", hook="triton")
             proton.deactivate()  # Skip argument creation
             for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
                 if is_cuda():
-                    bench_block_scaled(K, reps=10000, block_scale_type=args.format, clc=args.clc)
+                    bench_block_scaled(K, reps=10000, block_scale_type=args.format, clc=args.clc, **tuning_options)
                 elif is_hip_cdna4():
-                    bench_block_scaled_amd(K, reps=10000, block_scale_type=args.format, mfma_nonkdim=16)
-                    bench_block_scaled_amd(K, reps=10000, block_scale_type=args.format, mfma_nonkdim=32)
+                    bench_block_scaled_amd(K, reps=10000, block_scale_type=args.format, mfma_nonkdim=16,
+                                           **tuning_options)
+                    bench_block_scaled_amd(K, reps=10000, block_scale_type=args.format, mfma_nonkdim=32,
+                                           **tuning_options)
             proton.finalize()
             show_profile("block_scaled_matmul")

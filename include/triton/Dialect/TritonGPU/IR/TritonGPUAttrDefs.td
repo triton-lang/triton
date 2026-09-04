@@ -1445,6 +1445,9 @@ kWidth defines number of consecutive elements stored by one thread along k dimen
 Some layouts do not use this parameter, either because they have a fixed number of
 elements along the K dim, or they use all elements of the tensor along the K dim.
 
+fp4Unpacked specifies that each byte containing two packed fp4 elements is
+unpacked into two bytes, with each fp4 value occupying bits [3:0] of its byte.
+
 # WGMMA Notes
 We require kWidth to be provided for Hopper because the dtype at loading might be
 different from the dtype at WGMMA, due to casting. The kWidth is determined by the
@@ -1471,7 +1474,8 @@ vecIdx (index of the element in the quad; this is always along the k-dim)
     ins
     "unsigned":$opIdx,
     "Attribute":$parent,
-    DefaultValuedParameter<"unsigned", "0">:$kWidth
+    DefaultValuedParameter<"unsigned", "0">:$kWidth,
+    DefaultValuedParameter<"bool", "false">:$fp4Unpacked
   );
 
   let builders = [
@@ -1480,11 +1484,18 @@ vecIdx (index of the element in the quad; this is always along the k-dim)
                      "Type":$eltTy), [{
       NvidiaMmaEncodingAttr parentAttr = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent);
       if (!parentAttr || (!parentAttr.isAmpere() && !parentAttr.isHopper()))
-        return $_get(context, opIdx, parent, 0);
+        return $_get(context, opIdx, parent, 0, /*fp4Unpacked=*/false);
       // For MMAV2 and V3
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
       unsigned kWidth = std::max(32 / bitwidth, 1u);
-      return $_get(context, opIdx, parent, kWidth);
+      return $_get(context, opIdx, parent, kWidth, /*fp4Unpacked=*/false);
+    }]>,
+    // Backwards-compatible builder: fp4Unpacked defaults to false so existing
+    // get(opIdx, parent, kWidth) call sites are unaffected by the new parameter.
+    AttrBuilder<(ins "unsigned":$opIdx,
+                     "Attribute":$parent,
+                     "unsigned":$kWidth), [{
+      return $_get(context, opIdx, parent, kWidth, /*fp4Unpacked=*/false);
     }]>
   ];
 

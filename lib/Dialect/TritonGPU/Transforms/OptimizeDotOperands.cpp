@@ -82,13 +82,24 @@ public:
   }
 };
 
-// Rewrite
+// Rewrite a tensor transpose followed by a shared-memory allocation:
 //
-//   dot(alloc(trans() #shared1) ->
-//   dot(trans(alloc() #shared2))
+//   %src : tensor<MxN>
+//   %t = tt.trans %src             : tensor<NxM>
+//   %m = ttg.local_alloc %t        : memdesc<NxM, #shared_dst>
+//   user(%m)
 //
-// if dot is an MMAv3/v5 (because MMAv3/v5 allows us to fold transposes).
-class FuseTransMMAV3Plus : public OpRewritePattern<LocalAllocOp> {
+// into an allocation in the corresponding pre-transpose shared layout:
+//
+//   %m0 = ttg.local_alloc %src     : memdesc<MxN, #shared_src>
+//   %m = ttg.memdesc_trans %m0     : memdesc<NxM, #shared_dst>
+//   user(%m)
+//
+// where user is:
+//  - WGMMA/MMAv5, or
+//  - `ttg.local_load` if the allocation uses an `fp4Padded` shared memory
+//    encoding.
+class FuseTransIntoMemDesc : public OpRewritePattern<LocalAllocOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
 
@@ -96,11 +107,11 @@ public:
                                 PatternRewriter &rewriter) const override {
     if (!allocOp.getSrc() || !allocOp->hasOneUse() ||
         !isa<triton::nvidia_gpu::WarpGroupDotOp,
-             triton::nvidia_gpu::MMAv5OpInterface>(
+             triton::nvidia_gpu::MMAv5OpInterface, LocalLoadOp>(
             *allocOp->getUsers().begin()))
       return failure();
 
-    // Match outerCvt(trans(innerCvt(x))).
+    // Match local_alloc(transpose(tensor)).
     auto trans = allocOp.getSrc().getDefiningOp<TransOp>();
     if (!trans || trans.getOrder() != ArrayRef<int32_t>({1, 0}))
       return failure();
@@ -111,6 +122,10 @@ public:
     if (!allocEncoding)
       return failure();
     RankedTensorType srcTy = trans.getSrc().getType();
+
+    if (isa<LocalLoadOp>(*allocOp->getUsers().begin()) &&
+        !allocEncoding.getFp4Padded())
+      return failure();
 
     Dialect &dialect = allocEncoding.getDialect();
     auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
@@ -323,7 +338,7 @@ public:
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<SwizzleShmemConvert>(context);
-    patterns.add<FuseTransMMAV3Plus, ReshapeMemDesc>(context);
+    patterns.add<FuseTransIntoMemDesc, ReshapeMemDesc>(context);
     patterns.add<RewriteMmaOperandViewsToMemDescForDotOp>(context);
     ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
     if (failed(applyPatternsGreedily(m, std::move(patterns))))
