@@ -1587,6 +1587,15 @@ void ModuleAxisInfoAnalysis::initialize(
     rangeSolver = createDataFlowSolver();
     rangeAnalysis = rangeSolver->load<TritonIntegerRangeAnalysis>(
         assumptions, domInfo.get());
+    auto module = funcOp->getParentOfType<ModuleOp>();
+    auto target = module
+                      ? module->getAttrOfType<StringAttr>(gpu::AttrTargetName)
+                      : nullptr;
+    if (target && target.getValue().starts_with("cuda:")) {
+      // CUDA grids have at most 65535 blocks in the y and z dimensions.
+      rangeAnalysis->setPidBound(1, 65534);
+      rangeAnalysis->setPidBound(2, 65534);
+    }
     initializeFuncOps(funcOp, rangeAnalysis);
     if (failed(rangeSolver->initializeAndRun(funcOp)))
       rangeAnalysis = nullptr;

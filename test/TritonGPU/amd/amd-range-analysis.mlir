@@ -2509,3 +2509,51 @@ tt.func @scf_to_cf_counted_loop() -> i32 {
   %exit_q = arith.addi %q, %c0 : i32
   tt.return %exit_q : i32
 }
+
+// -----
+
+// Zero in the divisor range must not hide bounds for defined executions.
+// CHECK-LABEL: tt.func @rem_divisor_crosses_zero
+tt.func @rem_divisor_crosses_zero(%divisor: i32) -> (i32, tensor<4xi32>) {
+  %cneg8 = arith.constant -8 : i32
+  %c8 = arith.constant 8 : i32
+  %lower = arith.cmpi sge, %divisor, %cneg8 : i32
+  %upper = arith.cmpi sle, %divisor, %c8 : i32
+  llvm.intr.assume %lower : i1
+  llvm.intr.assume %upper : i1
+  %positive = arith.constant 15 : i32
+  %negative = arith.constant dense<-15> : tensor<4xi32>
+  %divisors = tt.splat %divisor : i32 -> tensor<4xi32>
+  // expected-remark@+1 {{unsigned : [0, 7] signed : [0, 7]}}
+  %positive_rem = arith.remsi %positive, %divisor : i32
+  // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-7, 0]}}
+  %negative_rem = arith.remsi %negative, %divisors : tensor<4xi32>
+  tt.return %positive_rem, %negative_rem : i32, tensor<4xi32>
+}
+
+// -----
+
+// Keep the existing conservative result when there is no defined divisor.
+// CHECK-LABEL: tt.func @rem_zero_divisor
+tt.func @rem_zero_divisor(%value: i32) -> i32 {
+  %zero = arith.constant 0 : i32
+  // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+  %result = arith.remsi %value, %zero : i32
+  tt.return %result : i32
+}
+
+// -----
+
+// A nonnegative runtime group size cannot produce a negative tile index.
+// CHECK-LABEL: tt.func @div_nonnegative_divisor
+tt.func @div_nonnegative_divisor(%group_size: i32) -> i32 {
+  %zero = arith.constant 0 : i32
+  %sixteen = arith.constant 16 : i32
+  %nonnegative = arith.cmpi sge, %group_size, %zero : i32
+  llvm.intr.assume %nonnegative : i1
+  %pid = tt.get_program_id x : i32
+  %tile = arith.remsi %pid, %sixteen : i32
+  // expected-remark@+1 {{unsigned : [0, 15] signed : [0, 15]}}
+  %quotient = arith.divsi %tile, %group_size : i32
+  tt.return %quotient : i32
+}

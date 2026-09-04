@@ -849,6 +849,31 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
     return success();
   }
 
+  // A zero divisor is undefined. Split around zero so upstream can still use
+  // the dividend's sign and the divisor's magnitude.
+  if (isa<arith::RemSIOp, arith::DivSIOp>(op) &&
+      !operands[0].isUninitialized() && !operands[1].isUninitialized()) {
+    const auto &lhs = operands[0].getValue();
+    const auto &rhs = operands[1].getValue();
+    unsigned width = rhs.smin().getBitWidth();
+    IntegerValueRange range;
+    auto inferRange =
+        isa<arith::DivSIOp>(op) ? intrange::inferDivS : intrange::inferRemS;
+    auto addRange = [&](const APInt &min, const APInt &max) {
+      range = IntegerValueRange::join(
+          range, inferRange({lhs, ConstantIntRanges::fromSigned(min, max)}));
+    };
+    if (rhs.smin().isNegative())
+      addRange(rhs.smin(),
+               llvm::APIntOps::smin(rhs.smax(), APInt::getAllOnes(width)));
+    if (rhs.smax().isStrictlyPositive())
+      addRange(llvm::APIntOps::smax(rhs.smin(), APInt(width, 1)), rhs.smax());
+    if (!range.isUninitialized()) {
+      joinCallback(op->getResult(0), range);
+      return success();
+    }
+  }
+
   // TODO: It looks like inferResultRangesFromOptional does not handle bunch
   //  of operations very well:
   //   - arith.shrui, e.g. arith.shrui %arg3, %c5_i32
