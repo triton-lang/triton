@@ -110,27 +110,7 @@ class TritonGPUGlobalScratchAllocationPass
           TritonGPUGlobalScratchAllocationPass> {
 public:
   void runOnOperation() override {
-    ModuleOp mod = getOperation();
-    bool hasScratchAllocation = false;
-    mod.walk([&](triton::gpu::GlobalScratchAllocOp) {
-      hasScratchAllocation = true;
-      return WalkResult::interrupt();
-    });
-    if (!hasScratchAllocation) {
-      // Preserve zero-size metadata for normal single-kernel modules. Aggregate
-      // modules without scratch have no allocation work or unique kernel ABI.
-      bool seenPublicFunc = false;
-      for (auto func : mod.getOps<triton::FuncOp>()) {
-        if (func.getVisibility() != SymbolTable::Visibility::Public)
-          continue;
-        if (seenPublicFunc)
-          return;
-        seenPublicFunc = true;
-      }
-      if (!seenPublicFunc)
-        return;
-    }
-    runGlobalScratchMemoryAllocation(mod);
+    runGlobalScratchMemoryAllocation(getOperation());
   }
 };
 } // namespace
