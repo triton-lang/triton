@@ -3932,8 +3932,6 @@ def get_test_small_dots_cases():
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size,
              num_ctas, device):
     if is_interpreter():
-        if in_dtype == 'bfloat16':
-            pytest.skip("bfloat16 is not supported in the interpreter")
         if input_precision == "bf16x3" or input_precision == "bf16x6":
             pytest.skip(f"input_precision {input_precision} is not supported in the interpreter")
     else:

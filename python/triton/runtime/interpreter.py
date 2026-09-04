@@ -763,6 +763,11 @@ class InterpreterBuilder:
            (b.dtype.primitive_bitwidth == 8 and b.dtype.is_floating()):
             a_data = _convert_float(a_data, a.dtype, tl.float16, None).view(np.float16)
             b_data = _convert_float(b_data, b.dtype, tl.float16, None).view(np.float16)
+        # bfloat16 is stored as uint16 bit patterns; numpy has no bfloat16 type.
+        if a.dtype == tl.bfloat16:
+            a_data = _convert_float(a_data, tl.bfloat16, tl.float32, None).view(np.float32)
+        if b.dtype == tl.bfloat16:
+            b_data = _convert_float(b_data, tl.bfloat16, tl.float32, None).view(np.float32)
         return TensorHandle(np.matmul(a_data, b_data, dtype=d.data.dtype) + d.data, d.dtype.scalar)
 
     def create_make_range(self, ret_ty, start, stop):
