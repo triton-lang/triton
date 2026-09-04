@@ -8,11 +8,11 @@ namespace mlir::triton::AMD {
 class AxisInfoAnalysisExt : public triton::AxisInfoAnalysis {
 public:
   AxisInfoAnalysisExt(DataFlowSolver &solver,
-                      TritonIntegerRangeAnalysis *rangeAnalysis);
+                      const DenseSet<Operation *> &nonNegativeDivRems);
 
   static triton::AxisInfoAnalysis *
   loadAnalysis(DataFlowSolver *solver,
-               TritonIntegerRangeAnalysis *rangeAnalysis);
+               const DenseSet<Operation *> &nonNegativeDivRems);
 };
 
 class ModuleAxisInfoAnalysis : public mlir::triton::ModuleAxisInfoAnalysis {

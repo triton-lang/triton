@@ -455,6 +455,44 @@ tt.func @divsi_positivity_guard(
 
 // -----
 
+module attributes {ttg.target = "cuda:90"} {
+  tt.func @cuda_grid_bounds() {
+    %y = tt.get_program_id y : i32
+    %z = tt.get_program_id z : i32
+    %yz = arith.addi %y, %z : i32
+    %c32 = arith.constant 32 : i32
+    %base = arith.muli %yz, %c32 : i32
+    %splat = tt.splat %base : i32 -> tensor<32xi32>
+    %range = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32>
+    %offsets = arith.addi %splat, %range : tensor<32xi32>
+    %c2 = arith.constant dense<2> : tensor<32xi32>
+    // expected-remark @below {{constancy = [2]}}
+    %div = arith.divsi %offsets, %c2 : tensor<32xi32>
+    // expected-remark @below {{contiguity = [2]}}
+    %rem = arith.remsi %offsets, %c2 : tensor<32xi32>
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {ttg.target = "hip:gfx942"} {
+  tt.func @grid_without_cuda_bounds() {
+    %y = tt.get_program_id y : i32
+    %c32 = arith.constant 32 : i32
+    %base = arith.muli %y, %c32 : i32
+    %splat = tt.splat %base : i32 -> tensor<32xi32>
+    %range = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32>
+    %offsets = arith.addi %splat, %range : tensor<32xi32>
+    %c2 = arith.constant dense<2> : tensor<32xi32>
+    // expected-remark @below {{constancy = [1]}}
+    %div = arith.divsi %offsets, %c2 : tensor<32xi32>
+    tt.return
+  }
+}
+
+// -----
+
 tt.func @remsi_positivity_guard(
     %num: tensor<8xi32> {tt.contiguity = 8 : i32, tt.divisibility = 64 : i32, tt.constancy = 1 : i32},
     %den: tensor<8xi32> {tt.contiguity = 1 : i32, tt.divisibility = 32 : i32, tt.constancy = 8 : i32}) {

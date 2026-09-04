@@ -61,15 +61,14 @@ public:
 } // namespace
 
 AxisInfoAnalysisExt::AxisInfoAnalysisExt(
-    DataFlowSolver &solver, TritonIntegerRangeAnalysis *rangeAnalysis)
-    : triton::AxisInfoAnalysis(solver, rangeAnalysis) {
+    DataFlowSolver &solver, const DenseSet<Operation *> &nonNegativeDivRems)
+    : triton::AxisInfoAnalysis(solver, nonNegativeDivRems) {
   visitors.append<ExtractSliceOpAxisInfoVisitor>();
 }
 
-triton::AxisInfoAnalysis *
-AxisInfoAnalysisExt::loadAnalysis(DataFlowSolver *solver,
-                                  TritonIntegerRangeAnalysis *rangeAnalysis) {
-  return solver->load<AxisInfoAnalysisExt>(rangeAnalysis);
+triton::AxisInfoAnalysis *AxisInfoAnalysisExt::loadAnalysis(
+    DataFlowSolver *solver, const DenseSet<Operation *> &nonNegativeDivRems) {
+  return solver->load<AxisInfoAnalysisExt>(nonNegativeDivRems);
 }
 
 } // namespace mlir::triton::AMD

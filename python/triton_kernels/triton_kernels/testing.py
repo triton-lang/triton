@@ -214,7 +214,10 @@ def compute_actual_scale(x, dtype, per_batch_scale=False):
 def _random_block_signs(output, seed: tl.uint64, offset: tl.uint64, rows: tl.int32, cols: tl.int32,
                         row_blocks: tl.int32, col_blocks: tl.int32, block_size: tl.constexpr, num_elements: tl.int32,
                         TILE_SIZE: tl.constexpr):
-    indices = tl.program_id(0) * TILE_SIZE + tl.arange(0, TILE_SIZE)
+    # The launch grid covers a nonnegative int32 element count.
+    pid = tl.program_id(0)
+    tl.assume(pid <= 0x7FFFFFFF // TILE_SIZE)
+    indices = pid * TILE_SIZE + tl.arange(0, TILE_SIZE)
     block = indices // block_size
     lane = indices % block_size
     row_block = (block // col_blocks) % row_blocks

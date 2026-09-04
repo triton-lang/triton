@@ -358,23 +358,9 @@ public:
 
 protected:
   bool canUseUnsignedBounds(OpTy op) {
-    // The unsigned-style bounds used by signed div/rem visitors require a
-    // nonnegative numerator. Negative numerators can cross zero and invalidate
-    // those inferences.
     if constexpr (std::is_same_v<OpTy, arith::DivSIOp> ||
-                  std::is_same_v<OpTy, arith::RemSIOp>) {
-      auto *rangeAnalysis = this->getRangeAnalysis();
-      if (!rangeAnalysis)
-        return false;
-      auto [it, inserted] =
-          nonNegativeCache.try_emplace(op.getOperation(), false);
-      if (inserted) {
-        auto range = rangeAnalysis->getRangeAt(op.getLhs(), op);
-        it->second =
-            !range.isUninitialized() && range.getValue().smin().isNonNegative();
-      }
-      return it->second;
-    }
+                  std::is_same_v<OpTy, arith::RemSIOp>)
+      return this->hasNonNegativeLhs(op);
     return true;
   }
 
@@ -392,9 +378,6 @@ protected:
                                const AxisInfo &rhs, int dim) {
     return gcd(lhs.getConstancy(dim), rhs.getConstancy(dim));
   }
-
-private:
-  DenseMap<Operation *, bool> nonNegativeCache;
 };
 
 template <typename OpTy>
@@ -685,14 +668,10 @@ private:
     // the minimal constancy is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual constancy.
+    // Negative numerators break the plateau: (-8, -7) / 8 is (-1, 0).
     if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
-      // For signed division this unsigned-style plateau argument is only
-      // universally valid when the numerator is known nonnegative.  Without
-      // that, a legal run like (-|Y|, -|Y|+1) over constant Y gives (-1, 0),
-      // so no nontrivial constancy is guaranteed.
-      if (!this->canUseUnsignedBounds(op))
-        return constancy;
+        AxisInfoVisitor::isConstantDim(rhs, shape, dim) &&
+        this->canUseUnsignedBounds(op)) {
       constancy = std::max(constancy,
                            gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
                                rhs.getDivisibility(dim)));
@@ -746,9 +725,9 @@ private:
     // The minimal contiguity is gcd(d_lhs, d_rhs).
     // Since gcd(d_lhs, d_rhs) maybe > len(lhs),
     // we need to use another gcd to get the actual contiguity.
-    if (this->canUseUnsignedBounds(op) &&
-        AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
-        AxisInfoVisitor::isConstantDim(rhs, shape, dim)) {
+    if (AxisInfoVisitor::isContiguousDim(lhs, shape, dim) &&
+        AxisInfoVisitor::isConstantDim(rhs, shape, dim) &&
+        this->canUseUnsignedBounds(op)) {
       contiguity = gcd(lhs.getContiguity(dim), lhs.getDivisibility(dim),
                        rhs.getDivisibility(dim));
     }
@@ -1232,11 +1211,11 @@ public:
 // AxisInfoAnalysis
 //===----------------------------------------------------------------------===//
 
-AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
-                                   TritonIntegerRangeAnalysis *rangeAnalysis)
+AxisInfoAnalysis::AxisInfoAnalysis(
+    DataFlowSolver &solver, const DenseSet<Operation *> &nonNegativeDivRems)
     : dataflow::SparseForwardDataFlowAnalysis<dataflow::Lattice<AxisInfo>>(
           solver),
-      visitors(rangeAnalysis) {
+      visitors(nonNegativeDivRems) {
   // UnrealizedConversionCast:
   // This is needed by TritonGPUToLLVM, to get AxisInfo when the graph is
   // in the process of a PartialConversion, where UnrealizedConversionCast
@@ -1469,8 +1448,8 @@ void AxisInfo::initDimVectorFromHint(Attribute attr, DimVectorT *vec) {
 }
 
 AxisInfoAnalysis *AxisInfoAnalysis::loadDefaultAnalysis(
-    DataFlowSolver *solver, TritonIntegerRangeAnalysis *rangeAnalysis) {
-  return solver->load<AxisInfoAnalysis>(rangeAnalysis);
+    DataFlowSolver *solver, const DenseSet<Operation *> &nonNegativeDivRems) {
+  return solver->load<AxisInfoAnalysis>(nonNegativeDivRems);
 }
 
 unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
@@ -1567,33 +1546,49 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   return alignment;
 }
 
+// Keep the proof at each use: a loop-carried value can be nonnegative in
+// the body and negative at the exit.
+static DenseSet<Operation *>
+collectNonNegativeDivRems(FunctionOpInterface funcOp) {
+  SmallVector<Operation *> divRems;
+  funcOp.walk([&](Operation *op) {
+    if (isa<arith::DivSIOp, arith::RemSIOp>(op) &&
+        isa<RankedTensorType>(op->getResult(0).getType()))
+      divRems.push_back(op);
+  });
+  if (divRems.empty())
+    return {};
+
+  auto assumptions = TritonIntegerRangeAnalysis::collectAssumptions(funcOp);
+  DominanceInfo domInfo(funcOp);
+  auto solver = createDataFlowSolver();
+  auto *rangeAnalysis =
+      solver->load<TritonIntegerRangeAnalysis>(assumptions, &domInfo);
+  auto module = funcOp->getParentOfType<ModuleOp>();
+  auto target = module->getAttrOfType<StringAttr>(gpu::AttrTargetName);
+  if (target && target.getValue().starts_with("cuda:")) {
+    // CUDA grids have at most 65535 blocks in the y and z dimensions.
+    rangeAnalysis->setPidBound(1, 65534);
+    rangeAnalysis->setPidBound(2, 65534);
+  }
+  initializeFuncOps(funcOp, rangeAnalysis);
+  if (failed(solver->initializeAndRun(funcOp)))
+    return {};
+
+  DenseSet<Operation *> nonNegativeDivRems;
+  for (Operation *op : divRems) {
+    auto range = rangeAnalysis->getRangeAt(op->getOperand(0), op);
+    if (!range.isUninitialized() && range.getValue().smin().isNonNegative())
+      nonNegativeDivRems.insert(op);
+  }
+  return nonNegativeDivRems;
+}
+
 void ModuleAxisInfoAnalysis::initialize(
     FunctionOpInterface funcOp, AxisInfoAnalysis::LoadCallback loadAnalysis) {
-  // Range analysis is only needed for the signed div/rem unsigned-bound
-  // inference. Skip the expensive dataflow run for functions that cannot use
-  // it.
-  bool needsRangeAnalysis = false;
-  funcOp.walk([&](Operation *op) {
-    if (isa<arith::DivSIOp, arith::RemSIOp>(op))
-      needsRangeAnalysis = true;
-  });
-
-  std::unique_ptr<DominanceInfo> domInfo;
-  std::unique_ptr<DataFlowSolver> rangeSolver;
-  TritonIntegerRangeAnalysis *rangeAnalysis = nullptr;
-  if (needsRangeAnalysis) {
-    auto assumptions = TritonIntegerRangeAnalysis::collectAssumptions(funcOp);
-    domInfo = std::make_unique<DominanceInfo>(funcOp);
-    rangeSolver = createDataFlowSolver();
-    rangeAnalysis = rangeSolver->load<TritonIntegerRangeAnalysis>(
-        assumptions, domInfo.get());
-    initializeFuncOps(funcOp, rangeAnalysis);
-    if (failed(rangeSolver->initializeAndRun(funcOp)))
-      rangeAnalysis = nullptr;
-  }
-
+  auto nonNegativeDivRems = collectNonNegativeDivRems(funcOp);
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
-  AxisInfoAnalysis *analysis = loadAnalysis(solver.get(), rangeAnalysis);
+  AxisInfoAnalysis *analysis = loadAnalysis(solver.get(), nonNegativeDivRems);
   if (failed(solver->initializeAndRun(funcOp)))
     return;
 

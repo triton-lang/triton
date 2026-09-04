@@ -3,6 +3,7 @@
 
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include "mlir/Support/LLVM.h"
@@ -14,8 +15,6 @@
 #include <utility>
 
 namespace mlir::triton {
-
-struct TritonIntegerRangeAnalysis;
 
 //===----------------------------------------------------------------------===//
 // AxisInfo
@@ -178,8 +177,8 @@ private:
 
 class AxisInfoVisitor {
 public:
-  explicit AxisInfoVisitor(TritonIntegerRangeAnalysis *rangeAnalysis)
-      : rangeAnalysis(rangeAnalysis) {}
+  explicit AxisInfoVisitor(const DenseSet<Operation *> &nonNegativeDivRems)
+      : nonNegativeDivRems(nonNegativeDivRems) {}
   virtual ~AxisInfoVisitor() = default;
 
   bool isContiguousDim(const AxisInfo &info, ArrayRef<int64_t> shape, int dim) {
@@ -197,20 +196,23 @@ public:
   virtual bool match(Operation *op) = 0;
 
 protected:
-  TritonIntegerRangeAnalysis *getRangeAnalysis() const { return rangeAnalysis; }
+  bool hasNonNegativeLhs(Operation *op) const {
+    return nonNegativeDivRems.contains(op);
+  }
 
 private:
-  TritonIntegerRangeAnalysis *rangeAnalysis;
+  // Signed div/rem operations whose dividend is nonnegative at that use.
+  const DenseSet<Operation *> &nonNegativeDivRems;
 };
 
 class AxisInfoVisitorList {
 public:
-  explicit AxisInfoVisitorList(TritonIntegerRangeAnalysis *rangeAnalysis)
-      : rangeAnalysis(rangeAnalysis) {}
+  explicit AxisInfoVisitorList(const DenseSet<Operation *> &nonNegativeDivRems)
+      : nonNegativeDivRems(nonNegativeDivRems) {}
 
   template <typename... Ts, typename = std::enable_if_t<sizeof...(Ts) != 0>>
   void append() {
-    (visitors.emplace_back(std::make_unique<Ts>(rangeAnalysis)), ...);
+    (visitors.emplace_back(std::make_unique<Ts>(nonNegativeDivRems)), ...);
   }
 
   AxisInfo apply(Operation *op,
@@ -223,7 +225,7 @@ public:
 
 private:
   std::vector<std::unique_ptr<AxisInfoVisitor>> visitors;
-  TritonIntegerRangeAnalysis *rangeAnalysis;
+  const DenseSet<Operation *> &nonNegativeDivRems;
 };
 
 class AxisInfoAnalysis : public dataflow::SparseForwardDataFlowAnalysis<
@@ -244,7 +246,7 @@ protected:
 
 public:
   AxisInfoAnalysis(DataFlowSolver &solver,
-                   TritonIntegerRangeAnalysis *rangeAnalysis);
+                   const DenseSet<Operation *> &nonNegativeDivRems);
   using dataflow::SparseForwardDataFlowAnalysis<
       dataflow::Lattice<AxisInfo>>::getLatticeElement;
 
@@ -255,7 +257,7 @@ public:
 
   static AxisInfoAnalysis *
   loadDefaultAnalysis(DataFlowSolver *solver,
-                      TritonIntegerRangeAnalysis *rangeAnalysis);
+                      const DenseSet<Operation *> &nonNegativeDivRems);
   using LoadCallback = decltype(&AxisInfoAnalysis::loadDefaultAnalysis);
 };
 
