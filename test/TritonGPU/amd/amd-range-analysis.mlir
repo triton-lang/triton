@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -test-tritonamdgpu-range-analysis -verify-diagnostics=only-expected | FileCheck %s
+// RUN: sed 's/expected-remark/unused-remark/g' %s | triton-opt -split-input-file -allow-unregistered-dialect -convert-scf-to-cf -test-tritonamdgpu-range-analysis 2>&1 | FileCheck %s --check-prefix=LOWERED
 
 // CHECK-LABEL:   tt.func @conversion1
 module attributes {"ttg.num-warps" = 4 : i32} {
@@ -2010,4 +2011,501 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     }
     tt.return %res : i32
   }
+}
+
+// -----
+
+// Lowered scf.for values are visible in the body and exit by dominance.
+// CHECK-LABEL: tt.func @cf_counted_loop
+tt.func @cf_counted_loop() -> i32 {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %c2 = arith.constant 2 : i32
+  %c3 = arith.constant 3 : i32
+  %c8 = arith.constant 8 : i32
+  cf.br ^header(%c0, %c3 : i32, i32)
+^header(%iv: i32, %q: i32):
+  // The header also executes for the final failed condition.
+  // expected-remark@+1 {{unsigned : [0, 8] signed : [0, 8]}}
+  %header_iv = arith.addi %iv, %c0 : i32
+  %condition = arith.cmpi slt, %iv, %c8 : i32
+  cf.cond_br %condition, ^body, ^exit
+^body:
+  // expected-remark@+1 {{unsigned : [0, 7] signed : [0, 7]}}
+  %body_iv = arith.addi %iv, %c0 : i32
+  // expected-remark@+1 {{unsigned : [3, 17] signed : [3, 17]}}
+  %body_q = arith.addi %q, %c0 : i32
+  %next_q = arith.addi %q, %c2 : i32
+  %next_iv = arith.addi %iv, %c1 : i32
+  cf.br ^header(%next_iv, %next_q : i32, i32)
+^exit:
+  // expected-remark@+1 {{unsigned : [8, 8] signed : [8, 8]}}
+  %exit_iv = arith.addi %iv, %c0 : i32
+  // expected-remark@+1 {{unsigned : [19, 19] signed : [19, 19]}}
+  %exit_q = arith.addi %q, %c0 : i32
+  tt.return %exit_q : i32
+}
+
+// -----
+
+// CHECK-LABEL: tt.func @cf_nonunit_step
+tt.func @cf_nonunit_step() -> i32 {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %c3 = arith.constant 3 : i32
+  %c8 = arith.constant 8 : i32
+  cf.br ^header(%c1 : i32)
+^header(%iv: i32):
+  %condition = arith.cmpi slt, %iv, %c8 : i32
+  cf.cond_br %condition, ^body, ^exit
+^body:
+  // expected-remark@+1 {{unsigned : [1, 7] signed : [1, 7]}}
+  %body_iv = arith.addi %iv, %c0 : i32
+  %next_iv = arith.addi %iv, %c3 : i32
+  cf.br ^header(%next_iv : i32)
+^exit:
+  // expected-remark@+1 {{unsigned : [10, 10] signed : [10, 10]}}
+  %exit_iv = arith.addi %iv, %c0 : i32
+  tt.return %exit_iv : i32
+}
+
+// -----
+
+// CHECK-LABEL: tt.func @cf_zero_trip
+tt.func @cf_zero_trip() -> i32 {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %c3 = arith.constant 3 : i32
+  %c4 = arith.constant 4 : i32
+  %c8 = arith.constant 8 : i32
+  cf.br ^header(%c8, %c3 : i32, i32)
+^header(%iv: i32, %q: i32):
+  %condition = arith.cmpi slt, %iv, %c4 : i32
+  cf.cond_br %condition, ^body, ^exit
+^body:
+  %next_q = arith.addi %q, %c1 : i32
+  %next_iv = arith.addi %iv, %c1 : i32
+  cf.br ^header(%next_iv, %next_q : i32, i32)
+^exit:
+  // expected-remark@+1 {{unsigned : [8, 8] signed : [8, 8]}}
+  %exit_iv = arith.addi %iv, %c0 : i32
+  // expected-remark@+1 {{unsigned : [3, 3] signed : [3, 3]}}
+  %exit_q = arith.addi %q, %c0 : i32
+  tt.return %exit_q : i32
+}
+
+// -----
+
+// CHECK-LABEL: tt.func @cf_descending_while
+tt.func @cf_descending_while() -> i32 {
+  %c0 = arith.constant 0 : i32
+  %c2 = arith.constant 2 : i32
+  %c8 = arith.constant 8 : i32
+  cf.br ^header(%c8 : i32)
+^header(%iv: i32):
+  %condition = arith.cmpi sgt, %iv, %c0 : i32
+  cf.cond_br %condition, ^body(%iv : i32), ^exit
+^body(%body_arg: i32):
+  // expected-remark@+1 {{unsigned : [2, 8] signed : [2, 8]}}
+  %body_iv = arith.addi %body_arg, %c0 : i32
+  %next_iv = arith.subi %body_arg, %c2 : i32
+  cf.br ^header(%next_iv : i32)
+^exit:
+  // expected-remark@+1 {{unsigned : [0, 0] signed : [0, 0]}}
+  %exit_iv = arith.addi %iv, %c0 : i32
+  tt.return %exit_iv : i32
+}
+
+// -----
+
+// CHECK-LABEL: tt.func @cf_dynamic_bound
+module attributes {"ttg.num-warps" = 4 : i32, "test.pid-bound-x" = 7 : i64} {
+  tt.func @cf_dynamic_bound() -> i32 {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %pid = tt.get_program_id x : i32
+    %bound = arith.addi %pid, %c1 : i32
+    cf.br ^header(%c0 : i32)
+  ^header(%iv: i32):
+    %condition = arith.cmpi slt, %iv, %bound : i32
+    cf.cond_br %condition, ^body, ^exit
+  ^body:
+    // expected-remark@+1 {{unsigned : [0, 7] signed : [0, 7]}}
+    %body_iv = arith.addi %iv, %c0 : i32
+    %next_iv = arith.addi %iv, %c1 : i32
+    cf.br ^header(%next_iv : i32)
+  ^exit:
+    // expected-remark@+1 {{unsigned : [1, 8] signed : [1, 8]}}
+    %exit_iv = arith.addi %iv, %c0 : i32
+    tt.return %exit_iv : i32
+  }
+}
+
+// -----
+
+// The outer body's guard narrows both the inner initial value and bound.
+// CHECK-LABEL: tt.func @cf_nested_loops
+tt.func @cf_nested_loops() -> i32 {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %c2 = arith.constant 2 : i32
+  %c4 = arith.constant 4 : i32
+  cf.br ^outer_header(%c0 : i32)
+^outer_header(%i: i32):
+  %outer_condition = arith.cmpi slt, %i, %c4 : i32
+  cf.cond_br %outer_condition, ^outer_body, ^exit
+^outer_body:
+  // expected-remark@+1 {{unsigned : [2, 5] signed : [2, 5]}}
+  %inner_bound = arith.addi %i, %c2 : i32
+  cf.br ^inner_header(%i : i32)
+^inner_header(%j: i32):
+  %inner_condition = arith.cmpi slt, %j, %inner_bound : i32
+  cf.cond_br %inner_condition, ^inner_body, ^outer_latch
+^inner_body:
+  // expected-remark@+1 {{unsigned : [0, 4] signed : [0, 4]}}
+  %body_j = arith.addi %j, %c0 : i32
+  %next_j = arith.addi %j, %c1 : i32
+  cf.br ^inner_header(%next_j : i32)
+^outer_latch:
+  // expected-remark@+1 {{unsigned : [2, 5] signed : [2, 5]}}
+  %exit_j = arith.addi %j, %c0 : i32
+  %next_i = arith.addi %i, %c1 : i32
+  cf.br ^outer_header(%next_i : i32)
+^exit:
+  // expected-remark@+1 {{unsigned : [4, 4] signed : [4, 4]}}
+  %exit_i = arith.addi %i, %c0 : i32
+  tt.return %exit_i : i32
+}
+
+// -----
+
+// The apparent final value 130 overflows i8; this is not a bounded recurrence.
+// CHECK-LABEL: tt.func @cf_overflowing_sentinel
+tt.func @cf_overflowing_sentinel() {
+  %c0 = arith.constant 0 : i8
+  %c10 = arith.constant 10 : i8
+  %c120 = arith.constant 120 : i8
+  %c127 = arith.constant 127 : i8
+  cf.br ^header(%c120 : i8)
+^header(%iv: i8):
+  // Repeated wrapping visits every even i8 value, including -128.
+  // expected-remark@+1 {{signed : [-128,}}
+  %header_iv = arith.addi %iv, %c0 : i8
+  %condition = arith.cmpi slt, %iv, %c127 : i8
+  cf.cond_br %condition, ^body, ^exit
+^body:
+  %next_iv = arith.addi %iv, %c10 : i8
+  cf.br ^header(%next_iv : i8)
+^exit:
+  tt.return
+}
+
+// -----
+
+// Both cycle blocks have an entry edge, so neither is a natural-loop header.
+// CHECK-LABEL: tt.func @cf_irreducible_cycle
+tt.func @cf_irreducible_cycle(%choose: i1, %leave: i1) {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  cf.cond_br %choose, ^left(%c0 : i32), ^right(%c0 : i32)
+^left(%x: i32):
+  // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+  %observed = arith.addi %x, %c0 : i32
+  %next_x = arith.addi %x, %c1 : i32
+  cf.cond_br %leave, ^exit, ^right(%next_x : i32)
+^right(%y: i32):
+  %next_y = arith.addi %y, %c1 : i32
+  cf.br ^left(%next_y : i32)
+^exit:
+  tt.return
+}
+
+// -----
+
+// CHECK-LABEL: tt.func @cf_guard_scope
+module attributes {"ttg.num-warps" = 4 : i32, "test.pid-bound-x" = 15 : i64} {
+  tt.func @cf_guard_scope() -> i32 {
+    %c0 = arith.constant 0 : i32
+    %c8 = arith.constant 8 : i32
+    %pid = tt.get_program_id x : i32
+    %condition = arith.cmpi slt, %pid, %c8 : i32
+    cf.cond_br %condition, ^then, ^else
+  ^then:
+    // expected-remark@+1 {{unsigned : [0, 7] signed : [0, 7]}}
+    %then_value = arith.addi %pid, %c0 : i32
+    cf.br ^merge
+  ^else:
+    // expected-remark@+1 {{unsigned : [8, 15] signed : [8, 15]}}
+    %else_value = arith.addi %pid, %c0 : i32
+    cf.br ^merge
+  ^merge:
+    // expected-remark@+1 {{unsigned : [0, 15] signed : [0, 15]}}
+    %merged_value = arith.addi %pid, %c0 : i32
+    tt.return %merged_value : i32
+  }
+}
+
+// -----
+
+// Neither condition holds throughout a block reached by both branch edges.
+// CHECK-LABEL: tt.func @cf_duplicate_successors
+module attributes {"ttg.num-warps" = 4 : i32, "test.pid-bound-x" = 15 : i64} {
+  tt.func @cf_duplicate_successors() -> i32 {
+    %c0 = arith.constant 0 : i32
+    %c8 = arith.constant 8 : i32
+    %pid = tt.get_program_id x : i32
+    %condition = arith.cmpi slt, %pid, %c8 : i32
+    cf.cond_br %condition, ^merge(%pid : i32), ^merge(%pid : i32)
+  ^merge(%value: i32):
+    // expected-remark@+1 {{unsigned : [0, 15] signed : [0, 15]}}
+    %argument = arith.addi %value, %c0 : i32
+    // expected-remark@+1 {{unsigned : [0, 15] signed : [0, 15]}}
+    %direct = arith.addi %pid, %c0 : i32
+    tt.return %argument : i32
+  }
+}
+
+// -----
+
+// scf.for also lowers to an unsigned comparison when unsignedCmp is present.
+// CHECK-LABEL: tt.func @cf_unsigned_loop
+tt.func @cf_unsigned_loop() -> i32 {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %start = arith.constant -2147483648 : i32
+  %bound = arith.constant -2147483640 : i32
+  cf.br ^header(%start : i32)
+^header(%iv: i32):
+  %condition = arith.cmpi ult, %iv, %bound : i32
+  cf.cond_br %condition, ^body, ^exit
+^body:
+  // expected-remark@+1 {{unsigned : [2147483648, 2147483655] signed : [-2147483648, -2147483641]}}
+  %body_iv = arith.addi %iv, %c0 : i32
+  %next_iv = arith.addi %iv, %c1 : i32
+  cf.br ^header(%next_iv : i32)
+^exit:
+  // expected-remark@+1 {{unsigned : [2147483656, 2147483656] signed : [-2147483640, -2147483640]}}
+  %exit_iv = arith.addi %iv, %c0 : i32
+  tt.return %exit_iv : i32
+}
+
+// -----
+
+// An inner comparison also benefits from the enclosing branch's bounds.
+// CHECK-LABEL: tt.func @cf_nested_guards
+module attributes {"ttg.num-warps" = 4 : i32, "test.pid-bound-x" = 127 : i64, "test.pid-bound-y" = 127 : i64} {
+  tt.func @cf_nested_guards() {
+    %c0 = arith.constant 0 : i32
+    %c16 = arith.constant 16 : i32
+    %x = tt.get_program_id x : i32
+    %y = tt.get_program_id y : i32
+    %outer = arith.cmpi slt, %y, %c16 : i32
+    cf.cond_br %outer, ^small, ^exit
+  ^small:
+    %inner = arith.cmpi slt, %x, %y : i32
+    cf.cond_br %inner, ^ordered, ^exit
+  ^ordered:
+    // expected-remark@+1 {{unsigned : [0, 14] signed : [0, 14]}}
+    %bounded = arith.addi %x, %c0 : i32
+    cf.br ^exit
+  ^exit:
+    tt.return
+  }
+}
+
+// -----
+
+// The assume's block determines its scope, even when the comparison is hoisted.
+// CHECK-LABEL: tt.func @cf_assume_scope
+tt.func @cf_assume_scope(%x: i32, %choose: i1) {
+  %c0 = arith.constant 0 : i32
+  %nonnegative = arith.cmpi sge, %x, %c0 : i32
+  cf.cond_br %choose, ^then, ^else
+^then:
+  llvm.intr.assume %nonnegative : i1
+  // expected-remark@+1 {{unsigned : [0, 2147483647] signed : [0, 2147483647]}}
+  %positive = arith.addi %x, %c0 : i32
+  tt.return
+^else:
+  // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+  %unconstrained = arith.addi %x, %c0 : i32
+  tt.return
+}
+
+// -----
+
+// The inner loop's final accumulator is one update of the outer recurrence.
+// CHECK-LABEL: tt.func @cf_nested_accumulator
+tt.func @cf_nested_accumulator() -> i32 {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %c3 = arith.constant 3 : i32
+  %c4 = arith.constant 4 : i32
+  cf.br ^outer_header(%c0, %c0 : i32, i32)
+^outer_header(%i: i32, %outer_acc: i32):
+  %outer_condition = arith.cmpi slt, %i, %c4 : i32
+  cf.cond_br %outer_condition, ^outer_body, ^exit
+^outer_body:
+  // expected-remark@+1 {{unsigned : [0, 9] signed : [0, 9]}}
+  %outer_value = arith.addi %outer_acc, %c0 : i32
+  cf.br ^inner_header(%c0, %outer_acc : i32, i32)
+^inner_header(%j: i32, %inner_acc: i32):
+  %inner_condition = arith.cmpi slt, %j, %c3 : i32
+  cf.cond_br %inner_condition, ^inner_body, ^outer_latch
+^inner_body:
+  // expected-remark@+1 {{unsigned : [0, 11] signed : [0, 11]}}
+  %inner_value = arith.addi %inner_acc, %c0 : i32
+  %next_acc = arith.addi %inner_acc, %c1 : i32
+  %next_j = arith.addi %j, %c1 : i32
+  cf.br ^inner_header(%next_j, %next_acc : i32, i32)
+^outer_latch:
+  %next_i = arith.addi %i, %c1 : i32
+  cf.br ^outer_header(%next_i, %inner_acc : i32, i32)
+^exit:
+  // expected-remark@+1 {{unsigned : [12, 12] signed : [12, 12]}}
+  %result = arith.addi %outer_acc, %c0 : i32
+  tt.return %result : i32
+}
+
+// -----
+
+// Each diamond arm contributes to every iteration, regardless of visit order.
+// CHECK-LABEL: tt.func @cf_diamond_accumulator
+tt.func @cf_diamond_accumulator(%choose: i1) -> i32 {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %c2 = arith.constant 2 : i32
+  %c100 = arith.constant 100 : i32
+  cf.br ^header(%c0, %c0 : i32, i32)
+^header(%iv: i32, %acc: i32):
+  %condition = arith.cmpi slt, %iv, %c2 : i32
+  cf.cond_br %condition, ^body, ^exit
+^body:
+  // expected-remark@+1 {{unsigned : [0, 100] signed : [0, 100]}}
+  %body_acc = arith.addi %acc, %c0 : i32
+  cf.cond_br %choose, ^then, ^else
+^then:
+  %small = arith.addi %acc, %c1 : i32
+  cf.br ^latch(%small : i32)
+^else:
+  %large = arith.addi %acc, %c100 : i32
+  cf.br ^latch(%large : i32)
+^latch(%next_acc: i32):
+  %next_iv = arith.addi %iv, %c1 : i32
+  cf.br ^header(%next_iv, %next_acc : i32, i32)
+^exit:
+  // expected-remark@+1 {{unsigned : [2, 200] signed : [2, 200]}}
+  %result = arith.addi %acc, %c0 : i32
+  tt.return %result : i32
+}
+
+// -----
+
+// The child's bound and an enclosing guard must not recursively query each other.
+// CHECK-LABEL: tt.func @cf_guarded_nested_accumulator
+tt.func @cf_guarded_nested_accumulator() -> i32 {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %c4 = arith.constant 4 : i32
+  %c10 = arith.constant 10 : i32
+  cf.br ^outer_header(%c0, %c10 : i32, i32)
+^outer_header(%i: i32, %q: i32):
+  %condition = arith.cmpi slt, %i, %c4 : i32
+  cf.cond_br %condition, ^outer_body, ^exit
+^outer_body:
+  %guard = arith.cmpi slt, %i, %q : i32
+  cf.cond_br %guard, ^inner_entry, ^outer_latch(%q : i32)
+^inner_entry:
+  cf.br ^inner_header(%c0, %q : i32, i32)
+^inner_header(%j: i32, %inner_q: i32):
+  %inner_condition = arith.cmpi slt, %j, %i : i32
+  cf.cond_br %inner_condition, ^inner_body, ^inner_exit
+^inner_body:
+  %next_j = arith.addi %j, %c1 : i32
+  %next_q = arith.addi %inner_q, %c1 : i32
+  cf.br ^inner_header(%next_j, %next_q : i32, i32)
+^inner_exit:
+  cf.br ^outer_latch(%inner_q : i32)
+^outer_latch(%next_outer_q: i32):
+  %next_i = arith.addi %i, %c1 : i32
+  cf.br ^outer_header(%next_i, %next_outer_q : i32, i32)
+^exit:
+  // expected-remark@+1 {{unsigned : [10, 22] signed : [10, 22]}}
+  %result = arith.addi %q, %c0 : i32
+  tt.return %result : i32
+}
+
+// -----
+
+// Visit shared boolean subexpressions once when recovering branch constraints.
+// CHECK-LABEL: tt.func @cf_shared_condition
+module attributes {"ttg.num-warps" = 4 : i32, "test.pid-bound-x" = 15 : i64} {
+  tt.func @cf_shared_condition() {
+    %c0 = arith.constant 0 : i32
+    %c8 = arith.constant 8 : i32
+    %x = tt.get_program_id x : i32
+    %cmp = arith.cmpi slt, %x, %c8 : i32
+    %cnd0 = arith.andi %cmp, %cmp : i1
+    %cnd1 = arith.andi %cnd0, %cnd0 : i1
+    %cnd2 = arith.andi %cnd1, %cnd1 : i1
+    %cnd3 = arith.andi %cnd2, %cnd2 : i1
+    %cnd4 = arith.andi %cnd3, %cnd3 : i1
+    %cnd5 = arith.andi %cnd4, %cnd4 : i1
+    %cnd6 = arith.andi %cnd5, %cnd5 : i1
+    %cnd7 = arith.andi %cnd6, %cnd6 : i1
+    %cnd8 = arith.andi %cnd7, %cnd7 : i1
+    %cnd9 = arith.andi %cnd8, %cnd8 : i1
+    %cnd10 = arith.andi %cnd9, %cnd9 : i1
+    %cnd11 = arith.andi %cnd10, %cnd10 : i1
+    %cnd12 = arith.andi %cnd11, %cnd11 : i1
+    %cnd13 = arith.andi %cnd12, %cnd12 : i1
+    %cnd14 = arith.andi %cnd13, %cnd13 : i1
+    %cnd15 = arith.andi %cnd14, %cnd14 : i1
+    %cnd16 = arith.andi %cnd15, %cnd15 : i1
+    %cnd17 = arith.andi %cnd16, %cnd16 : i1
+    %cnd18 = arith.andi %cnd17, %cnd17 : i1
+    %cnd19 = arith.andi %cnd18, %cnd18 : i1
+    %cnd20 = arith.andi %cnd19, %cnd19 : i1
+    %cnd21 = arith.andi %cnd20, %cnd20 : i1
+    %cnd22 = arith.andi %cnd21, %cnd21 : i1
+    %cnd23 = arith.andi %cnd22, %cnd22 : i1
+    %cnd24 = arith.andi %cnd23, %cnd23 : i1
+    %cnd25 = arith.andi %cnd24, %cnd24 : i1
+    %cnd26 = arith.andi %cnd25, %cnd25 : i1
+    %cnd27 = arith.andi %cnd26, %cnd26 : i1
+    %cnd28 = arith.andi %cnd27, %cnd27 : i1
+    %cnd29 = arith.andi %cnd28, %cnd28 : i1
+    %cnd30 = arith.andi %cnd29, %cnd29 : i1
+    %cnd31 = arith.andi %cnd30, %cnd30 : i1
+    cf.cond_br %cnd31, ^then, ^exit
+  ^then:
+    // expected-remark@+1 {{unsigned : [0, 7] signed : [0, 7]}}
+    %bounded = arith.addi %x, %c0 : i32
+    cf.br ^exit
+  ^exit:
+    tt.return
+  }
+}
+
+// -----
+
+// Check the actual lowering, including its final header value at the loop exit.
+// CHECK-LABEL: tt.func @scf_to_cf_counted_loop
+tt.func @scf_to_cf_counted_loop() -> i32 {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %c2 = arith.constant 2 : i32
+  %c3 = arith.constant 3 : i32
+  %c8 = arith.constant 8 : i32
+  %q = scf.for %iv = %c0 to %c8 step %c1 iter_args(%acc = %c3) -> (i32) : i32 {
+    // LOWERED: :[[@LINE+2]]:{{[0-9]+}}: remark: unsigned : [0, 7] signed : [0, 7]
+    // expected-remark@+1 {{unsigned : [0, 7] signed : [0, 7]}}
+    %body_iv = arith.addi %iv, %c0 : i32
+    %next_q = arith.addi %acc, %c2 : i32
+    scf.yield %next_q : i32
+  }
+  // LOWERED: :[[@LINE+2]]:{{[0-9]+}}: remark: unsigned : [19, 19] signed : [19, 19]
+  // expected-remark@+1 {{unsigned : [5, 19] signed : [5, 19]}}
+  %exit_q = arith.addi %q, %c0 : i32
+  tt.return %exit_q : i32
 }
