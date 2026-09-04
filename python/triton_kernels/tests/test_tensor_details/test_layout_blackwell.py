@@ -683,7 +683,12 @@ def test_scale_convert_layout_uses_input_device(layout, with_out):
 
 
 @pytest.mark.parametrize("layout", [BlackwellActMXScaleLayout(None), BlackwellMXScaleLayout()])
-def test_scale_convert_layout_fake(layout):
+def test_scale_convert_layout_fake(layout, monkeypatch):
+
+    def reject_launch(*args, **kwargs):
+        pytest.fail("ordinary FakeTensor conversion must not launch a Triton kernel")
+
+    monkeypatch.setattr(triton.KernelInterface, "__getitem__", reject_launch)
     shape = (2, 130, 9)
     with FakeTensorMode():
         source = wrap_torch_tensor(torch.empty(shape, dtype=torch.uint8, device="cuda"))

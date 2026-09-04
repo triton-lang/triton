@@ -572,7 +572,12 @@ def test_mxfp4_scale_convert_layout_uses_input_device(mx_axis, num_warps, with_o
 @pytest.mark.parametrize("mx_axis", [-2, -1])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_mxfp4_scale_convert_layout_fake(mx_axis, num_warps, device):
+def test_mxfp4_scale_convert_layout_fake(mx_axis, num_warps, device, monkeypatch):
+
+    def reject_launch(*args, **kwargs):
+        pytest.fail("ordinary FakeTensor conversion must not launch a Triton kernel")
+
+    monkeypatch.setattr(triton.KernelInterface, "__getitem__", reject_launch)
     shape = (2, 130, 9)
     layout = HopperMXScaleLayout(mx_axis, num_warps)
     strided = StridedLayout(mx_axis)
