@@ -5,6 +5,7 @@ import triton.language as tl
 import pytest
 
 import pathlib
+import threading
 from triton._internal_testing import is_cuda, is_hip_cdna2, is_rubin
 
 
@@ -360,6 +361,64 @@ def test_pruned_single_config_skips_benchmark(prune_kind: str, device: str, fres
     assert _kernel.best_config == configs[1]
     assert 'run_do_bench' not in records
     assert captured == []
+
+
+def test_concurrent_autotuning_keeps_arguments_thread_local():
+    # Two threads tuning the same key must not clear the arguments used by the
+    # other thread while it is still benchmarking configurations.
+    role = threading.local()
+    first_bench_started = threading.Barrier(2)
+    fast_finished = threading.Event()
+    bench_counts = {'fast': 0, 'slow': 0}
+    run_counts = {'fast': 0, 'slow': 0}
+
+    class Kernel:
+
+        def __init__(self):
+            self.fn = lambda: None
+
+        def run(self, *args, **kwargs):
+            run_counts[role.name] += 1
+            if role.name == 'fast' and run_counts[role.name] == 3:
+                fast_finished.set()
+
+    def do_bench(kernel_call, quantiles):
+        bench_counts[role.name] += 1
+        if bench_counts[role.name] == 1:
+            first_bench_started.wait(timeout=5)
+            if role.name == 'slow':
+                assert fast_finished.wait(timeout=5)
+        kernel_call()
+        return [1.0, 1.0, 1.0]
+
+    tuner = triton.runtime.Autotuner(
+        Kernel(),
+        arg_names=['x'],
+        configs=[triton.Config(kwargs={'BLOCK': 1}),
+                 triton.Config(kwargs={'BLOCK': 2})],
+        key=['x'],
+        reset_to_zero=None,
+        restore_value=None,
+        do_bench=do_bench,
+    )
+
+    errors = []
+
+    def worker(name):
+        role.name = name
+        try:
+            tuner.run(1)
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(name, )) for name in ('fast', 'slow')]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert errors == []
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
