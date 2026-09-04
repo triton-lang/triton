@@ -156,6 +156,44 @@ void AtomicRMWOp::setPredicateOperand(Value pred) {
 
 Type AtomicRMWOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
 
+Value AtomicLoadOp::getPredicateOperand() { return getMask(); }
+
+void AtomicLoadOp::setPredicateOperand(Value pred) {
+  getMaskMutable().assign(pred);
+}
+
+Type AtomicLoadOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
+
+Value AtomicStoreOp::getPredicateOperand() { return getMask(); }
+
+void AtomicStoreOp::setPredicateOperand(Value pred) {
+  getMaskMutable().assign(pred);
+}
+
+Type AtomicStoreOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
+
+static LogicalResult verifyAtomicLoadStoreType(Operation *op, Type ptrTy) {
+  Type elementTy = getElementTypeOrSelf(getPointeeType(ptrTy));
+  if (!elementTy.isIntOrFloat())
+    return op->emitOpError("only supports integer and floating-point elements");
+  unsigned bitWidth = elementTy.getIntOrFloatBitWidth();
+  if (bitWidth != 16 && bitWidth != 32 && bitWidth != 64)
+    return op->emitOpError("only supports elements with width {16, 32, 64}");
+  return success();
+}
+
+LogicalResult AtomicLoadOp::verify() {
+  if (getSem() != MemSemantic::ACQUIRE && getSem() != MemSemantic::RELAXED)
+    return emitOpError("only supports acquire and relaxed semantics");
+  return verifyAtomicLoadStoreType(getOperation(), getPtr().getType());
+}
+
+LogicalResult AtomicStoreOp::verify() {
+  if (getSem() != MemSemantic::RELEASE && getSem() != MemSemantic::RELAXED)
+    return emitOpError("only supports release and relaxed semantics");
+  return verifyAtomicLoadStoreType(getOperation(), getPtr().getType());
+}
+
 LogicalResult AtomicPollOp::verify() {
   if (getSem() != MemSemantic::ACQUIRE && getSem() != MemSemantic::RELAXED)
     return emitOpError("only supports acquire and relaxed semantics");

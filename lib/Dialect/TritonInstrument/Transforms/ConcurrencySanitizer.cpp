@@ -813,7 +813,7 @@ private:
       return true;
 
     // NVIDIA broadcasts scalar atomic results; AMD executes them in each CTA.
-    if (isa<tt::AtomicRMWOp, tt::AtomicCASOp>(op) &&
+    if (isa<tt::AtomicOpInterface>(op) && op->getNumResults() == 1 &&
         !isa<RankedTensorType>(op->getResult(0).getType()))
       return !hooks.hasUnsummarizableCalleeState(op);
 

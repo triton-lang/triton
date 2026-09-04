@@ -2,6 +2,7 @@
 // RUN: triton-opt %s -split-input-file -tritoninstrument-global-sanitizer --allocate-shared-memory-nv --convert-triton-gpu-to-llvm | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #shared_i32 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #shared_i64 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 64}>
 #smem = #ttg.shared_memory
@@ -36,6 +37,90 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
   tt.func @unmasked_atomic_add(%ptr: !tt.ptr<i32>, %val: i32) {
     %0 = tt.atomic_rmw add, relaxed, gpu, %ptr, %val : (!tt.ptr<i32>, i32) -> i32
+    tt.return
+  }
+
+  // CHECK-LABEL: llvm.func @atomic_load_store
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK: llvm.load %{{.*}} atomic syncscope("device") monotonic
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  // CHECK: nvvm.barrier
+  // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> i32
+  // CHECK: llvm.fence syncscope("device") acquire
+  // CHECK: llvm.fence release
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  tt.func @atomic_load_store(%ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>, %mask: i1) {
+    %loaded = tt.atomic_load acquire, gpu, %ptr, %mask : (!tt.ptr<i32>, i1) -> i32
+    tt.atomic_store release, sys, %out, %loaded, %mask : !tt.ptr<i32>
+    tt.return
+  }
+
+  // CHECK-LABEL: llvm.func @tensor_atomic_load_store
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK: llvm.load %{{.*}} atomic syncscope("device") monotonic
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK: llvm.store %{{.*}}, %{{.*}} atomic syncscope("device") monotonic
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  tt.func @tensor_atomic_load_store(%ptrs: tensor<256x!tt.ptr<i32>, #blocked>,
+                                    %mask: tensor<256xi1, #blocked>) {
+    %loaded = tt.atomic_load relaxed, gpu, %ptrs, %mask : (tensor<256x!tt.ptr<i32>, #blocked>, tensor<256xi1, #blocked>) -> tensor<256xi32, #blocked>
+    tt.atomic_store relaxed, gpu, %ptrs, %loaded, %mask : tensor<256x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: llvm.func @unpredicated_tensor_atomic_load_store
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK-NEXT: %{{.*}} = llvm.mlir.undef : i32
+  // CHECK-NEXT: %{{.*}} = llvm.load %{{.*}} atomic monotonic
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK-NEXT: %{{.*}} = llvm.mlir.undef : i32
+  // CHECK-NEXT: %{{.*}} = llvm.load %{{.*}} atomic monotonic
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK-NEXT: %{{.*}} = llvm.mlir.undef : i32
+  // CHECK-NEXT: %{{.*}} = llvm.load %{{.*}} atomic monotonic
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK-NEXT: %{{.*}} = llvm.mlir.undef : i32
+  // CHECK-NEXT: %{{.*}} = llvm.load %{{.*}} atomic monotonic
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK-NEXT: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK-NEXT: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK-NEXT: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK-NEXT: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK: llvm.return
+  tt.func @unpredicated_tensor_atomic_load_store(
+      %ptrs: tensor<512x!tt.ptr<i32>, #blocked4>) {
+    %loaded = tt.atomic_load relaxed, sys, %ptrs : (tensor<512x!tt.ptr<i32>, #blocked4>) -> tensor<512xi32, #blocked4>
+    tt.atomic_store relaxed, sys, %ptrs, %loaded : tensor<512x!tt.ptr<i32>, #blocked4>
+    tt.return
+  }
+
+  // CHECK-LABEL: llvm.func @sharded_atomic_load_acquire
+  // CHECK-COUNT-4: llvm.load %{{.*}} atomic monotonic
+  // CHECK: nvvm.barrier
+  // CHECK-NEXT: llvm.fence acquire
+  // CHECK: llvm.return
+  tt.func @sharded_atomic_load_acquire(
+      %ptrs: tensor<512x!tt.ptr<i32>, #blocked4>,
+      %mask: tensor<512xi1, #blocked4>) {
+    %loaded = tt.atomic_load acquire, sys, %ptrs, %mask : (tensor<512x!tt.ptr<i32>, #blocked4>, tensor<512xi1, #blocked4>) -> tensor<512xi32, #blocked4>
+    tt.return
+  }
+
+  // CHECK-LABEL: llvm.func @sharded_atomic_store_release
+  // CHECK: nvvm.barrier
+  // CHECK: llvm.fence release
+  // CHECK-COUNT-4: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  tt.func @sharded_atomic_store_release(
+      %ptrs: tensor<512x!tt.ptr<i32>, #blocked4>,
+      %values: tensor<512xi32, #blocked4>,
+      %mask: tensor<512xi1, #blocked4>) {
+    tt.atomic_store release, sys, %ptrs, %values, %mask : tensor<512x!tt.ptr<i32>, #blocked4>
     tt.return
   }
 

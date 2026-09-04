@@ -154,6 +154,8 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     return getResultBroadcastScratchSize(poll.getResult());
   }
   if (isa<gpu::LocalAtomicScatterRMWOp>(op) || isa<AtomicOpInterface>(op)) {
+    if (op->getNumResults() == 0)
+      return 0;
     auto value = op->getOperand(0);
     auto smemShape = getRepShapeForAtomic(op->getResult(0));
     auto elems = getNumScratchElements(smemShape);
@@ -174,6 +176,8 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
 
 std::optional<uint16_t> getAtomicScratchBroadcastMask(Operation *op) {
   if (!isa<AtomicOpInterface, AtomicPollOp, gpu::LocalAtomicScatterRMWOp>(op))
+    return std::nullopt;
+  if (op->getNumResults() == 0)
     return std::nullopt;
 
   Type resultTy = op->getResult(0).getType();
@@ -198,6 +202,8 @@ bool hasCrossCTAScratch(Operation *op) {
     return poll.getTimeout() && !poll.getResult().use_empty() &&
            getAtomicScratchBroadcastMask(op).value_or(0) != 0;
   if (isa<AtomicOpInterface, gpu::LocalAtomicScatterRMWOp>(op)) {
+    if (op->getNumResults() == 0)
+      return false;
     Value result = op->getResult(0);
     if (result.use_empty())
       return false;

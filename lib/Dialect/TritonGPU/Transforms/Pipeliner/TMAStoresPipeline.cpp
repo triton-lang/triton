@@ -42,10 +42,9 @@ static bool hasAcquireOrReleaseSemantic(tt::MemSemantic sem) {
 static bool hasAcquireOrReleaseOp(LoopLikeOpInterface loop) {
   bool hasAcquireOrRelease = false;
   loop->walk([&](Operation *op) {
-    if (auto atomicRMW = dyn_cast<tt::AtomicRMWOp>(op)) {
-      hasAcquireOrRelease = hasAcquireOrReleaseSemantic(atomicRMW.getSem());
-    } else if (auto atomicCAS = dyn_cast<tt::AtomicCASOp>(op)) {
-      hasAcquireOrRelease = hasAcquireOrReleaseSemantic(atomicCAS.getSem());
+    if (auto atomic = dyn_cast<tt::AtomicOpInterface>(op)) {
+      hasAcquireOrRelease =
+          hasAcquireOrReleaseSemantic(atomic.getMemSemantic());
     } else if (auto atomicPoll = dyn_cast<tt::AtomicPollOp>(op)) {
       hasAcquireOrRelease = hasAcquireOrReleaseSemantic(atomicPoll.getSem());
     }
