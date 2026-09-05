@@ -1,4 +1,5 @@
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
@@ -100,9 +101,21 @@ public:
     if (splatCond != condSelect)
       return failure();
 
-    rewriter.replaceOpWithNewOp<LoadOp>(
-        op, loadOp.getPtr(), loadOp.getMask(), /*other=*/falseValue,
-        loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+    // Fold the select into the load's `other` by updating the load in place:
+    // replace its `other` operand with the select's false value and drop the
+    // select. Only do this when the load feeds only this select, so we never
+    // create a second load -- building a fresh load would duplicate the memory
+    // access (illegal for a volatile load, and redundant when the load has
+    // other users, e.g. the false value depends on the load). The update also
+    // requires the false value to dominate the load, since it becomes one of
+    // the load's operands.
+    if (!loadOp.getResult().hasOneUse() ||
+        !DominanceInfo().properlyDominates(falseValue, loadOp))
+      return failure();
+
+    rewriter.modifyOpInPlace(
+        loadOp, [&] { loadOp.getOtherMutable().assign(falseValue); });
+    rewriter.replaceOp(op, loadOp.getResult());
     return success();
   }
 };
