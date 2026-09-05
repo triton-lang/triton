@@ -1,6 +1,7 @@
 #include "mlir/IR/BuiltinOps.h" // mlir::ModuleOp
 #include "mlir/Target/LLVMIR/LLVMTranslationInterface.h"
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
+#include "triton/Tools/LLVMOptions.h"
 #include "triton/Tools/Sys/GetEnv.h"
 #include "triton/Version.h"
 #include "llvm/ADT/SmallVector.h"
@@ -117,78 +118,44 @@ struct ExpandMaskedDivRemPass : RequiredPassInfoMixin<ExpandMaskedDivRemPass> {
   }
 };
 
-// Set an LLVM command-line option using addOccurrence (simulates command-line)
-// and return its original value. Using addOccurrence instead of setValue is
-// necessary because some LLVM passes (like schedulers) check whether the option
-// was explicitly set on the command line.
-template <typename T> T setLLVMOption(const std::string &name, T value);
+using mlir::triton::tools::ScopedLLVMOptions;
 
-template <> bool setLLVMOption<bool>(const std::string &name, bool value) {
-  auto options = llvm::cl::getRegisteredOptions();
-  auto it = options.find(name);
-  if (it == options.end())
-    return false;
-  auto *opt = static_cast<llvm::cl::opt<bool> *>(it->second);
-  bool original = opt->getValue();
-  // Use addOccurrence to mark the option as explicitly set on command line.
-  // This is important for options like enable-misched where LLVM checks
-  // getNumOccurrences() to determine if the option was explicitly set.
-  // See: llvm/lib/CodeGen/MachineScheduler.cpp -
-  // enableMachineSchedDefaultSched() checks
-  // "EnableMachineSched.getNumOccurrences()" to decide behavior.
-  it->second->addOccurrence(1, name, value ? "true" : "false");
-  return original;
-}
+// The LLVM command line overrides one pipeline run needs. They take effect
+// through a ScopedLLVMOptions that must stay alive for the whole run, because
+// codegen reads the options as it goes rather than up front.
+struct LLVMOptionSettings {
+  std::vector<ScopedLLVMOptions::Setting> settings;
 
-template <>
-std::string setLLVMOption<std::string>(const std::string &name,
-                                       std::string value) {
-  auto options = llvm::cl::getRegisteredOptions();
-  auto it = options.find(name);
-  if (it == options.end())
-    return "";
-  auto *opt = static_cast<llvm::cl::opt<std::string> *>(it->second);
-  std::string original = opt->getValue();
-  it->second->addOccurrence(1, name, value);
-  return original;
-}
-
-// Restore an LLVM command-line option to a previous value
-template <typename T> void restoreLLVMOption(const std::string &name, T value);
-
-template <> void restoreLLVMOption<bool>(const std::string &name, bool value) {
-  auto options = llvm::cl::getRegisteredOptions();
-  auto it = options.find(name);
-  if (it != options.end()) {
-    auto *opt = static_cast<llvm::cl::opt<bool> *>(it->second);
-    opt->setValue(value);
+  void set(std::string name, std::string value) {
+    settings.emplace_back(std::move(name), std::move(value));
   }
-}
 
-template <>
-void restoreLLVMOption<std::string>(const std::string &name,
-                                    std::string value) {
-  auto options = llvm::cl::getRegisteredOptions();
-  auto it = options.find(name);
-  if (it != options.end()) {
-    it->second->addOccurrence(1, name, value);
+  void setFlag(std::string name, bool value) {
+    set(std::move(name), value ? "true" : "false");
   }
-}
 
-// RAII guard that sets an LLVM option and restores it on destruction
-template <typename T> class ScopedLLVMOption {
-  std::string name;
-  T originalValue;
-
-public:
-  ScopedLLVMOption(const std::string &n, T newValue) : name(n) {
-    originalValue = setLLVMOption<T>(name, newValue);
+  void enable(const std::vector<std::string> &flags) {
+    for (const std::string &flag : flags)
+      setFlag(flag, true);
   }
-  ~ScopedLLVMOption() { restoreLLVMOption<T>(name, originalValue); }
 
-  // Non-copyable
-  ScopedLLVMOption(const ScopedLLVMOption &) = delete;
-  ScopedLLVMOption &operator=(const ScopedLLVMOption &) = delete;
+  // DISABLE_LLVM_OPT may hold a comma separated list of LLVM flags to turn on,
+  // typically ones that switch off individual optimizations.
+  void enableFlagsFromDisableLLVMOptEnv() {
+    if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
+      return;
+    std::string flagList = mlir::triton::tools::getStrEnv("DISABLE_LLVM_OPT");
+    SmallVector<StringRef> flags;
+    StringRef(flagList).split(flags, ',', /*MaxSplit=*/-1,
+                              /*KeepEmpty=*/false);
+    for (StringRef flag : flags)
+      setFlag(flag.str(), true);
+  }
+
+  void enablePrintAfterAllIfRequested() {
+    if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP"))
+      setFlag("print-after-all", true);
+  }
 };
 
 thread_local bool scheduleForRegisters = false;
@@ -250,30 +217,14 @@ void dumpSchedulingDAG(llvm::Module &module, const std::string &triple,
     return;
   }
 
-  // Apply flags
-  for (const std::string &flag : flags) {
-    setLLVMOption<bool>(flag, true);
-  }
-
-  bool disableLLVMOpt = triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
-  if (!disableLLVMOpt) {
-    // Check to see if we are passing a list of flags to disable optimizations.
-    auto flagList = triton::tools::getStrEnv("DISABLE_LLVM_OPT");
-    if (!flagList.empty()) {
-      llvm::SmallVector<StringRef, 3> split;
-      StringRef(flagList.c_str()).split(split, ',');
-      for (const auto &flag : split) {
-        setLLVMOption<bool>(flag.str(), true);
-      }
-    }
-  }
+  LLVMOptionSettings options;
+  options.enable(flags);
+  options.enableFlagsFromDisableLLVMOptEnv();
+  options.set("stop-after", "machine-scheduler");
+  options.setFlag("misched-print-dags", true);
+  ScopedLLVMOptions optionScope(options.settings);
 
   std::string dumpFilename = dumpMirBase + "/" + dumpFileId + ".txt";
-
-  // Use RAII to set options and restore them when scope exits
-  ScopedLLVMOption<std::string> stopAfterGuard("stop-after",
-                                               "machine-scheduler");
-  ScopedLLVMOption<bool> mischedPrintGuard("misched-print-dags", true);
 
   // inline everything
   for (llvm::Function &f : module.functions())
@@ -323,7 +274,6 @@ void dumpSchedulingDAG(llvm::Module &module, const std::string &triple,
   }
 
   llvm::errs() << "DAG dumped to: " << dumpFilename << "\n";
-  // LLVM options are automatically restored when scope exits via RAII
 }
 
 std::string
@@ -342,31 +292,12 @@ translateLLVMIRToMIR(llvm::Module &module, const std::string &triple,
 
   llvm::StripDebugInfo(module);
 
-  // Apply flags
-  for (const std::string &flag : flags) {
-    setLLVMOption<bool>(flag, true);
-  }
-
-  bool disableLLVMOpt = triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
-  if (!disableLLVMOpt) {
-    // Check to see if we are passing a list of flags to disable optimizations.
-    auto flagList = triton::tools::getStrEnv("DISABLE_LLVM_OPT");
-    if (!flagList.empty()) {
-      llvm::SmallVector<StringRef, 3> split;
-      StringRef(flagList.c_str()).split(split, ',');
-      for (const auto &flag : split) {
-        setLLVMOption<bool>(flag.str(), true);
-      }
-    }
-  }
-
-  if (triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
-    setLLVMOption<bool>("print-after-all", true);
-  }
-
-  // Use RAII to set stop-before and restore it when scope exits
-  ScopedLLVMOption<std::string> stopBeforeGuard("stop-before",
-                                                "machine-scheduler");
+  LLVMOptionSettings options;
+  options.enable(flags);
+  options.enableFlagsFromDisableLLVMOptEnv();
+  options.enablePrintAfterAllIfRequested();
+  options.set("stop-before", "machine-scheduler");
+  ScopedLLVMOptions optionScope(options.settings);
 
   // inline everything
   for (llvm::Function &f : module.functions())
@@ -421,27 +352,13 @@ std::string translateLLVMIRToASM(
     bool enable_fp_fusion, bool isObject, bool canonicalizeGEP) {
   using namespace mlir;
 
-  // Apply flags
-  for (const std::string &flag : flags) {
-    setLLVMOption<bool>(flag, true);
-  }
-
-  if (triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
-    setLLVMOption<bool>("print-after-all", true);
-  }
+  LLVMOptionSettings options;
+  options.enable(flags);
+  options.enablePrintAfterAllIfRequested();
+  options.enableFlagsFromDisableLLVMOptEnv();
+  ScopedLLVMOptions optionScope(options.settings);
 
   bool disableLLVMOpt = triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
-  if (!disableLLVMOpt) {
-    // Check to see if we are passing a list of flags to disable optimizations.
-    auto flagList = triton::tools::getStrEnv("DISABLE_LLVM_OPT");
-    if (!flagList.empty()) {
-      llvm::SmallVector<StringRef, 3> split;
-      StringRef(flagList.c_str()).split(split, ',');
-      for (const auto &flag : split) {
-        setLLVMOption<bool>(flag.str(), true);
-      }
-    }
-  }
 
   // Set up target information before inlining so target-specific inline
   // compatibility checks use the backend's TTI.
@@ -519,21 +436,13 @@ translateMIRToASM(const std::string &mirPath, const std::string &triple,
   // start after it because machine-scheduler is used as anchor point to insert
   // some passes. Starting after machine-scheduler would also not insert these
   // passes to the pipeline.
-  // Use RAII to set options and restore them when scope exits
-  ScopedLLVMOption<std::string> startBeforeGuard("start-before",
-                                                 "machine-scheduler");
-  ScopedLLVMOption<bool> enableMISchedGuard("enable-misched", enableMISched);
-  ScopedLLVMOption<bool> enablePostMISchedGuard("enable-post-misched",
-                                                enableMISched);
-
-  if (triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
-    setLLVMOption<bool>("print-after-all", true);
-  }
-
-  // Apply other flags
-  for (const std::string &flag : flags) {
-    setLLVMOption<bool>(flag, true);
-  }
+  LLVMOptionSettings options;
+  options.set("start-before", "machine-scheduler");
+  options.setFlag("enable-misched", enableMISched);
+  options.setFlag("enable-post-misched", enableMISched);
+  options.enablePrintAfterAllIfRequested();
+  options.enable(flags);
+  ScopedLLVMOptions optionScope(options.settings);
 
   // Parse MIR into LLVM Module
   llvm::LLVMContext context;
@@ -604,7 +513,6 @@ translateMIRToASM(const std::string &mirPath, const std::string &triple,
     pass.run(*module);
   }
 
-  // LLVM options are automatically restored when scope exits via RAII
   return result;
 }
 
@@ -750,23 +658,33 @@ void init_triton_llvm(py::module_ &m) {
 #endif
   });
 
-  m.def("attach_datalayout", [](llvm::Module *mod, const std::string triple,
-                                const std::string proc,
-                                const std::string features) {
-    std::string error;
-    llvm::Triple targetTriple(triple);
-    auto target = llvm::TargetRegistry::lookupTarget(targetTriple, error);
-    if (!target) {
-      throw std::runtime_error("target lookup error: " + error);
-    }
-    llvm::TargetOptions opt;
-    // Target machine is only used to create the data layout.
-    std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
-        targetTriple, proc, features, opt, llvm::Reloc::PIC_, std::nullopt,
-        llvm::CodeGenOptLevel::None)};
-    // set data layout
-    mod->setDataLayout(machine->createDataLayout());
-  });
+  m.def(
+      "attach_datalayout",
+      [](llvm::Module *mod, const std::string triple, const std::string proc,
+         const std::string features, const std::vector<std::string> &flags) {
+        LLVMOptionSettings options;
+        options.enable(flags);
+        options.enableFlagsFromDisableLLVMOptEnv();
+        options.enablePrintAfterAllIfRequested();
+        ScopedLLVMOptions optionScope(options.settings);
+
+        std::string error;
+        llvm::Triple targetTriple(triple);
+        auto target = llvm::TargetRegistry::lookupTarget(targetTriple, error);
+        if (!target) {
+          throw std::runtime_error("target lookup error: " + error);
+        }
+        llvm::TargetOptions opt;
+        // Target machine is only used to create the data layout.
+        std::unique_ptr<llvm::TargetMachine> machine{
+            target->createTargetMachine(targetTriple, proc, features, opt,
+                                        llvm::Reloc::PIC_, std::nullopt,
+                                        llvm::CodeGenOptLevel::None)};
+        mod->setDataLayout(machine->createDataLayout());
+      },
+      py::arg("mod"), py::arg("triple"), py::arg("proc"), py::arg("features"),
+      py::arg("flags") = std::vector<std::string>{},
+      py::call_guard<py::gil_scoped_release>());
 
   m.def(
       "optimize_module",
@@ -776,16 +694,14 @@ void init_triton_llvm(py::module_ &m) {
          bool disable_vector_combine, bool expand_masked_div_rem) {
         if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
           return;
-        // Check to see if we are passing a list of flags to disable
-        // optimizations.
-        auto flagList = mlir::triton::tools::getStrEnv("DISABLE_LLVM_OPT");
-        if (!flagList.empty()) {
-          llvm::SmallVector<StringRef, 3> split;
-          StringRef(flagList.c_str()).split(split, ',');
-          for (const auto &flag : split) {
-            setLLVMOption<bool>(flag.str(), true);
-          }
-        }
+        // Declare the same flags as codegen even though IR optimization does
+        // not read them: compilations can only share the option registry, and
+        // thus run in parallel, while their flag sets are identical.
+        LLVMOptionSettings options;
+        options.enable(flags);
+        options.enableFlagsFromDisableLLVMOptEnv();
+        options.enablePrintAfterAllIfRequested();
+        ScopedLLVMOptions optionScope(options.settings);
         using namespace llvm;
         LoopAnalysisManager lam;
         FunctionAnalysisManager fam;
@@ -816,7 +732,6 @@ void init_triton_llvm(py::module_ &m) {
           enablePassInstrumentation = true;
         }
         if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
-          setLLVMOption<bool>("print-after-all", true);
           standardInstr.registerCallbacks(passInstrCb, &mam);
           enablePassInstrumentation = true;
         }
