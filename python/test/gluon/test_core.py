@@ -3660,6 +3660,8 @@ def in_thread_transpose_roundtrip_kernel(input, output, M: ttgl.constexpr, N: tt
                                          shared_layout: ttgl.constexpr):
     offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, first_layout))[:, None]
     offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, first_layout))[None, :]
+    offs_m = ttgl.convert_layout(offs_m, first_layout)
+    offs_n = ttgl.convert_layout(offs_n, first_layout)
 
     load_data = ttgl.load(input + offs_m * N + offs_n)
     converted_data = ttgl.convert_layout(load_data, second_layout)
