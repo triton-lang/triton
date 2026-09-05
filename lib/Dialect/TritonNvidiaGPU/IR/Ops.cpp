@@ -992,6 +992,19 @@ static std::string strMMADTypeKind(MMADTypeKind kind) {
   llvm_unreachable("unknown mma dtype kind");
 }
 
+static int64_t getMMAv5MinK(MMADTypeKind kind) {
+  switch (kind) {
+  case MMADTypeKind::tf32:
+    return 8;
+  case MMADTypeKind::f16:
+    return 16;
+  case MMADTypeKind::f8f6f4:
+  case MMADTypeKind::i8:
+    return 32;
+  }
+  llvm_unreachable("unknown mma dtype kind");
+}
+
 static std::optional<std::pair<MMADTypeKind, SmallVector<Type>>>
 getMMAv5DTypeKindAndAcc(Type t) {
   MLIRContext *ctx = t.getContext();
@@ -1066,8 +1079,7 @@ LogicalResult TCGen5MMAOp::verify() {
   if (getD().getType().getRank() != 2)
     return emitOpError("Return operand must have a rank-2 tensor");
 
-  // The smallest dense MMA instruction consumes 256 bits along K.
-  int64_t minK = 256 / atype.getIntOrFloatBitWidth();
+  int64_t minK = getMMAv5MinK(getMMAv5DTypeKindAndAcc(atype)->first);
   int64_t k = getA().getType().getDimSize(1);
   if (k < minK)
     return emitOpError("K dimension must be at least ")
@@ -1329,6 +1341,11 @@ static Type getScaledMMAOperandType(Type elementType,
   llvm_unreachable("Unsupported type.");
 };
 
+static bool isScaledMMATransposed(MemDescType type, bool isLhs) {
+  auto shared = dyn_cast<NVMMASharedEncodingAttr>(type.getEncoding());
+  return shared && (isLhs ? shared.getTransposed() : !shared.getTransposed());
+}
+
 static LogicalResult verifyScaledLHSOperand(Operation *op, Type elementType,
                                             TensorMemoryEncodingAttr encoding,
                                             ScaleDotElemType aType,
@@ -1413,6 +1430,18 @@ LogicalResult TCGen5MMAScaledOp::verify() {
                                       getAType(), getBType())))
       return failure();
   }
+  // Transposed and mixed-format FP4 use mxf8f6f4. Only non-transposed
+  // FP4 x FP4 uses mxf4/mxf4nvf4, whose minimum instruction K is 64.
+  bool isPackedFP4 = getAType() == ScaleDotElemType::E2M1 &&
+                     getBType() == ScaleDotElemType::E2M1 &&
+                     !isScaledMMATransposed(getA().getType(), /*isLhs=*/true) &&
+                     !isScaledMMATransposed(getB().getType(), /*isLhs=*/false);
+  int64_t minK = isPackedFP4 ? 64 : 32;
+  int64_t k = getBlockK();
+  if (k < minK)
+    return emitOpError("K dimension must be at least ")
+           << minK << " for this scaled MMA, but got " << k;
+
   auto aScaleType = cast<MemDescType>(getAScale().getType());
   auto bScaleType = cast<MemDescType>(getBScale().getType());
   auto isScaleBlockRepOrderRelevant = [](MemDescType scaleType) {
@@ -1484,16 +1513,8 @@ bool TCGen5MMAScaledOp::verifyDims() {
   auto aShape = this->getA().getType().getShape();
   auto bShape = this->getB().getType().getShape();
 
-  bool transA = false;
-  if (auto aSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
-          getA().getType().getEncoding())) {
-    transA = aSharedLayout.getTransposed();
-  }
-  bool transB = false;
-  if (auto bSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
-          getB().getType().getEncoding())) {
-    transB = !bSharedLayout.getTransposed();
-  }
+  bool transA = isScaledMMATransposed(getA().getType(), /*isLhs=*/true);
+  bool transB = isScaledMMATransposed(getB().getType(), /*isLhs=*/false);
   auto aKdim = aShape[aShape.size() - 1];
   auto bKdim = bShape[aShape.size() - 2];
   if (this->getAType() == ScaleDotElemType::E2M1 && !transA)
@@ -1513,16 +1534,8 @@ bool TCGen5MMAScaledOp::verifyOutputDims() {
 
   int aMdim = aShape[aShape.size() - 2];
   int bNdim = bShape[bShape.size() - 1];
-  bool transA = false;
-  if (auto aSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
-          getA().getType().getEncoding())) {
-    transA = aSharedLayout.getTransposed();
-  }
-  bool transB = false;
-  if (auto bSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
-          getB().getType().getEncoding())) {
-    transB = !bSharedLayout.getTransposed();
-  }
+  bool transA = isScaledMMATransposed(getA().getType(), /*isLhs=*/true);
+  bool transB = isScaledMMATransposed(getB().getType(), /*isLhs=*/false);
   if (this->getAType() == ScaleDotElemType::E2M1 && transA)
     aMdim *= 2;
   if (this->getBType() == ScaleDotElemType::E2M1 && transB)
@@ -1583,11 +1596,7 @@ Type TCGen5MMAScaledOp::getPredicateOperandTypeLike() {
 int64_t TCGen5MMAScaledOp::getBlockM() {
   ArrayRef<int64_t> shape = getA().getType().getShape();
   int64_t blockM = shape[shape.size() - 2];
-  bool transA = false;
-  if (auto aSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
-          getA().getType().getEncoding())) {
-    transA = aSharedLayout.getTransposed();
-  }
+  bool transA = isScaledMMATransposed(getA().getType(), /*isLhs=*/true);
   if (this->getAType() == ScaleDotElemType::E2M1 && transA)
     blockM *= 2;
   return blockM;
@@ -1596,11 +1605,7 @@ int64_t TCGen5MMAScaledOp::getBlockM() {
 int64_t TCGen5MMAScaledOp::getBlockN() {
   ArrayRef<int64_t> shape = getB().getType().getShape();
   int64_t blockN = shape[shape.size() - 1];
-  bool transB = false;
-  if (auto bSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
-          getB().getType().getEncoding())) {
-    transB = !bSharedLayout.getTransposed();
-  }
+  bool transB = isScaledMMATransposed(getB().getType(), /*isLhs=*/false);
   if (this->getBType() == ScaleDotElemType::E2M1 && transB)
     blockN *= 2;
   return blockN;
@@ -1609,11 +1614,7 @@ int64_t TCGen5MMAScaledOp::getBlockN() {
 int64_t TCGen5MMAScaledOp::getBlockK() {
   ArrayRef<int64_t> shape = getA().getType().getShape();
   int64_t blockK = shape[shape.size() - 1];
-  bool transA = false;
-  if (auto aSharedLayout = dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(
-          getA().getType().getEncoding())) {
-    transA = aSharedLayout.getTransposed();
-  }
+  bool transA = isScaledMMATransposed(getA().getType(), /*isLhs=*/true);
   if (this->getAType() == ScaleDotElemType::E2M1 && !transA)
     blockK *= 2;
   return blockK;
