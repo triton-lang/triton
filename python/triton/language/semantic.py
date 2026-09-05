@@ -1239,6 +1239,72 @@ class TritonSemantic(Generic[TensorTy]):
 # atomic
 #########
 
+    def _validate_atomic_load_store_element_type(self, element_ty: tl.dtype, op: str):
+        if not (element_ty.is_int() or element_ty.is_floating()) or element_ty.primitive_bitwidth not in [16, 32, 64]:
+            raise ValueError(f"atomic_{op} only supports integer and floating-point elements with width "
+                             "{16, 32, 64}")
+
+    def _validate_atomic_rmw_element_type(self, element_ty: tl.dtype, op: str):
+        if element_ty is tl.float16 and op != 'add':
+            raise ValueError("atomic_" + op + " does not support fp16")
+        if element_ty is tl.bfloat16 and op != 'add':
+            raise ValueError("atomic_" + op + " does not support bf16")
+        if element_ty in [tl.int16, tl.uint16] or element_ty.primitive_bitwidth < 16:
+            raise ValueError("atomic_" + op + " does not support " + str(element_ty))
+
+    def _atomic_typechecking_impl(self, ptr: TensorTy, val: Optional[TensorTy], mask: Optional[TensorTy], op: str):
+        if not ptr.type.scalar.is_ptr():
+            raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.atomic_{op}`")
+        if val is not None and (ptr.type.is_const() or ptr.type.scalar.is_const()):
+            raise ValueError("Cannot store to a constant pointer")
+
+        if not ptr.type.is_block():
+            if val is not None and val.type.is_block():
+                raise ValueError("Value argument cannot be block type if pointer argument is not a block")
+            if mask is not None and mask.type.is_block():
+                raise ValueError("Mask argument cannot be block type if pointer argument is not a block")
+        elif val is None:
+            if mask is not None:
+                ptr, mask = self.broadcast_impl_value(ptr, mask)
+        else:
+            ptr, val, mask = self._broadcast_ptr_val_mask(ptr, val, mask)
+
+        element_ty = ptr.type.scalar.element_ty
+        if val is not None:
+            val = self.cast(val, element_ty)
+
+        if mask is None:
+            mask_ir = self.builder.get_int1(True)
+            mask_ty = tl.int1
+            if ptr.type.is_block():
+                mask_ty = ptr.type.with_element_ty(tl.int1)
+                mask_ir = self.builder.create_splat(mask_ty.to_ir(self.builder), mask_ir)
+            mask = self.tensor(mask_ir, mask_ty)
+        elif not mask.type.scalar.is_bool():
+            raise ValueError("Mask must have boolean scalar type")
+        return ptr, val, mask
+
+    def atomic_load(self, ptr: TensorTy, mask: Optional[TensorTy], sem: str, scope: str) -> TensorTy:
+        ptr, _, mask = self._atomic_typechecking_impl(ptr, None, mask, "load")
+        self._validate_atomic_load_store_element_type(ptr.type.scalar.element_ty, "load")
+        sem = self._str_to_sem(sem, default=ir.MEM_SEMANTIC.ACQUIRE)
+        if sem not in [ir.MEM_SEMANTIC.ACQUIRE, ir.MEM_SEMANTIC.RELAXED]:
+            raise ValueError("atomic_load only supports acquire and relaxed semantics")
+        scope = self._str_to_scope(scope)
+        result_ty = ptr.type.with_element_ty(ptr.type.scalar.element_ty) if ptr.type.is_block() else ptr.type.element_ty
+        handle = self.builder.create_atomic_load(ptr.handle, mask.handle, sem, scope)
+        return self.tensor(handle, result_ty)
+
+    def atomic_store(self, ptr: TensorTy, val: TensorTy, mask: Optional[TensorTy], sem: str, scope: str) -> TensorTy:
+        ptr, val, mask = self._atomic_typechecking_impl(ptr, val, mask, "store")
+        self._validate_atomic_load_store_element_type(ptr.type.scalar.element_ty, "store")
+        sem = self._str_to_sem(sem, default=ir.MEM_SEMANTIC.RELEASE)
+        if sem not in [ir.MEM_SEMANTIC.RELEASE, ir.MEM_SEMANTIC.RELAXED]:
+            raise ValueError("atomic_store only supports release and relaxed semantics")
+        scope = self._str_to_scope(scope)
+        self.builder.create_atomic_store(ptr.handle, val.handle, mask.handle, sem, scope)
+        return self.tensor(None, tl.void)
+
     def atomic_poll(self, ptr: TensorTy, expected: TensorTy, sem: str, scope: str,
                     timeout_ns: Optional[TensorTy]) -> TensorTy:
         if isinstance(timeout_ns, int) and timeout_ns < 0:
@@ -1281,29 +1347,8 @@ class TritonSemantic(Generic[TensorTy]):
 
     def atom_red_typechecking_impl(self, ptr: TensorTy, val: TensorTy, mask: TensorTy,
                                    op: str) -> Tuple[TensorTy, TensorTy, TensorTy]:
-        if not ptr.type.scalar.is_ptr():
-            raise ValueError("Pointer argument of store instruction is " + ptr.type.__repr__())
-        if ptr.type.is_const() or ptr.type.element_ty.is_const():
-            raise ValueError("Cannot store to a constant pointer")
-        element_ty = ptr.type.scalar.element_ty
-        if element_ty is tl.float16 and op != 'add':
-            raise ValueError("atomic_" + op + " does not support fp16")
-        if element_ty is tl.bfloat16 and op != 'add':
-            raise ValueError("atomic_" + op + " does not support bf16")
-        if element_ty in [tl.int16, tl.uint16] or element_ty.primitive_bitwidth < 16:
-            raise ValueError("atomic_" + op + " does not support " + str(element_ty))
-        if ptr.type.is_block():
-            ptr, val, mask = self._broadcast_ptr_val_mask(ptr, val, mask)
-        val = self.cast(val, ptr.type.scalar.element_ty)
-        if mask is None:
-            mask_ir = self.builder.get_int1(True)
-            mask_ty = tl.int1
-            if ptr.type.is_block():
-                mask_ty = ptr.type.with_element_ty(tl.int1)
-                mask_ir = self.builder.create_splat(mask_ty.to_ir(self.builder), mask_ir)
-            mask = self.tensor(mask_ir, mask_ty)
-        elif not mask.type.scalar.is_bool():
-            raise ValueError("Mask must have boolean scalar type")
+        ptr, val, mask = self._atomic_typechecking_impl(ptr, val, mask, op)
+        self._validate_atomic_rmw_element_type(ptr.type.scalar.element_ty, op)
         return ptr, val, mask
 
     def _signbit(self, x: TensorTy) -> TensorTy:

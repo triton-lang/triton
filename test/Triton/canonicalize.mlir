@@ -13,6 +13,16 @@ tt.func @dead_load(%ptr: tensor<32x128x!tt.ptr<f16>>) {
 
 // -----
 
+// CHECK-LABEL: dead_atomic_load
+tt.func @dead_atomic_load(%ptr: !tt.ptr<i32>) {
+  // Atomic loads remain observable synchronization operations when unused.
+  // CHECK: tt.atomic_load acquire, gpu
+  %unused = tt.atomic_load acquire, gpu, %ptr : (!tt.ptr<i32>) -> i32
+  tt.return
+}
+
+// -----
+
 // CHECK-LABEL: make_range
 tt.func @make_range() -> (tensor<128x1xi32>, tensor<1xi32>) {
   // CHECK-DAG: %[[c:.*]] = arith.constant dense<0> : tensor<128x1xi32>

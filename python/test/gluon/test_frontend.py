@@ -2740,6 +2740,26 @@ def test_auto_layout_broadcast():
 
 @filecheck_test
 @gluon.jit
+def test_atomic_load_store():
+    # CHECK-LABEL: test_atomic_load_store
+    BLOCK: ttgl.constexpr = 128
+    ptr = ttgl.full([BLOCK], 0, ttgl.int64, layout=ttgl.AutoLayout())
+    ptr = ptr.cast(ttgl.pointer_type(ttgl.int32), bitcast=True)
+    offs = ttgl.arange(0, BLOCK, layout=ttgl.AutoLayout())
+    ptrs = ptr + offs
+    mask = offs < 64
+    # CHECK: %{{.*}} = tt.atomic_load acquire, gpu, %{{.*}}, %{{.*}} : (tensor<128x!tt.ptr<i32>, #gluon.auto_encoding>, tensor<128xi1, #gluon.auto_encoding>) -> tensor<128xi32, #gluon.auto_encoding>
+    value = ttgl.atomic_load(ptrs, mask=mask)
+    # CHECK: tt.atomic_store release, gpu, %{{.*}}, %{{.*}}, %{{.*}} : tensor<128x!tt.ptr<i32>, #gluon.auto_encoding>
+    ttgl.atomic_store(ptrs, value, mask=mask)
+    # CHECK: %{{.*}} = tt.atomic_load relaxed, sys
+    ttgl.atomic_load(ptrs, sem="relaxed", scope="sys")
+    # CHECK: tt.atomic_store relaxed, cta
+    ttgl.atomic_store(ptrs, 1, sem="relaxed", scope="cta")
+
+
+@filecheck_test
+@gluon.jit
 def test_atomic_rmw():
     x0 = ttgl.full([1], 1, ttgl.int64, layout=ttgl.AutoLayout())
     ptr0 = x0.cast(ttgl.pointer_type(ttgl.int32), bitcast=True).item()

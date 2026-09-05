@@ -118,10 +118,11 @@ getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
               ptr_ty(ctx), i32_ty,      i32_ty,      i32_ty,
               i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanAtomicBeginRuntimeFn) {
-    argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty,      i64_ty, i32_ty,
-              i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i64_ty,      i32_ty,
+              i32_ty,      i32_ty,      i32_ty, ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanAtomicEndRuntimeFn) {
-    argTys = {ptr_ty(ctx), i32_ty, i32_ty, i32_ty, i32_ty, ptr_ty(ctx), i32_ty};
+    argTys = {ptr_ty(ctx), i32_ty, i32_ty,      i32_ty,
+              i32_ty,      i32_ty, ptr_ty(ctx), i32_ty};
   } else {
     llvm_unreachable("unexpected GSan runtime symbol");
   }
@@ -260,7 +261,7 @@ Value castToGenericPointer(ConversionPatternRewriter &rewriter, Location loc,
 void emitGSanAtomicBeginCall(ConversionPatternRewriter &rewriter, Location loc,
                              Value gsanGlobalStatePtr, Value eventStatePtr,
                              Value pred, Value ptr, int32_t bytesPerElem,
-                             int32_t sem, int32_t scope,
+                             bool doesRead, int32_t sem, int32_t scope,
                              GSanSourceLocation sourceLoc) {
   TritonLLVMOpBuilder b(loc, rewriter);
   Value statePtr = b.bitcast(eventStatePtr, ptr_ty(rewriter.getContext()));
@@ -270,13 +271,13 @@ void emitGSanAtomicBeginCall(ConversionPatternRewriter &rewriter, Location loc,
          ValueRange{gsanGlobalStatePtr, statePtr,
                     materializeI32Bool(rewriter, b, pred),
                     b.ptrtoint(i64_ty, ptr), b.i32_val(bytesPerElem),
-                    b.i32_val(sem), b.i32_val(scope), sourceLoc.file,
-                    sourceLoc.line});
+                    b.i32_val(doesRead), b.i32_val(sem), b.i32_val(scope),
+                    sourceLoc.file, sourceLoc.line});
 }
 
 void emitGSanAtomicEndCall(ConversionPatternRewriter &rewriter, Location loc,
                            Value eventStatePtr, Value pred, Value didWrite,
-                           int32_t sem, int32_t scope,
+                           bool isRmw, int32_t sem, int32_t scope,
                            GSanSourceLocation sourceLoc) {
   TritonLLVMOpBuilder b(loc, rewriter);
   auto runtimeFunc =
@@ -284,8 +285,9 @@ void emitGSanAtomicEndCall(ConversionPatternRewriter &rewriter, Location loc,
   Value statePtr = b.bitcast(eventStatePtr, ptr_ty(rewriter.getContext()));
   b.call(runtimeFunc,
          ValueRange{statePtr, materializeI32Bool(rewriter, b, pred),
-                    materializeI32Bool(rewriter, b, didWrite), b.i32_val(sem),
-                    b.i32_val(scope), sourceLoc.file, sourceLoc.line});
+                    materializeI32Bool(rewriter, b, didWrite), b.i32_val(isRmw),
+                    b.i32_val(sem), b.i32_val(scope), sourceLoc.file,
+                    sourceLoc.line});
 }
 
 template <typename OpT>
@@ -631,6 +633,184 @@ public:
   }
 };
 
+static Value emitPredicatedAtomicLoad(ConversionPatternRewriter &rewriter,
+                                      Location loc, Type valueTy, Value ptr,
+                                      Value pred, LLVM::AtomicOrdering ordering,
+                                      StringRef syncScope) {
+  TritonLLVMOpBuilder b(loc, rewriter);
+  auto results =
+      emitPredicated(rewriter, loc, pred, ValueRange{b.undef(valueTy)}, [&] {
+        unsigned alignment = valueTy.getIntOrFloatBitWidth() / 8;
+        Value loaded = LLVM::LoadOp::create(
+            rewriter, loc, valueTy, ptr, alignment, /*isVolatile=*/false,
+            /*isNonTemporal=*/false, /*isInvariant=*/false,
+            /*isInvariantGroup=*/false, ordering, syncScope);
+        return SmallVector<Value>{loaded};
+      });
+  return results.front();
+}
+
+static void emitPredicatedAtomicStore(ConversionPatternRewriter &rewriter,
+                                      Location loc, Value ptr, Value value,
+                                      Value pred, LLVM::AtomicOrdering ordering,
+                                      StringRef syncScope) {
+  emitPredicated(rewriter, loc, pred, ValueRange{}, [&] {
+    unsigned alignment = value.getType().getIntOrFloatBitWidth() / 8;
+    LLVM::StoreOp::create(rewriter, loc, value, ptr, alignment,
+                          /*isVolatile=*/false, /*isNonTemporal=*/false,
+                          /*isInvariantGroup=*/false, ordering, syncScope);
+    return SmallVector<Value>{};
+  });
+}
+
+struct GSanAtomicLoadOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanAtomicLoadOp> {
+public:
+  using ConvertOpToLLVMPattern<
+      tti::ExperimentalGSanAtomicLoadOp>::ConvertOpToLLVMPattern;
+  const TargetInfoBase *targetInfo;
+
+  GSanAtomicLoadOpConversion(LLVMTypeConverter &typeConverter,
+                             const TargetInfoBase &targetInfo,
+                             PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanAtomicLoadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto *ctx = rewriter.getContext();
+    Location loc = op.getLoc();
+    auto gsanGlobalStatePtr = getGSanGlobalStateArg(op, rewriter, loc);
+    if (failed(gsanGlobalStatePtr))
+      return failure();
+
+    auto sem = op.getSem();
+    auto scope = op.getScope();
+    Operation *orderingBarrier = insertAtomicOrderingBarriers(
+        op, sem, !atomicResultHasOrderingBarrier(op), rewriter, *targetInfo);
+    StringRef syncScope = targetInfo->getAtomicSyncScope(scope);
+
+    TritonLLVMOpBuilder b(loc, rewriter);
+    auto ptrElements =
+        unpackUniqueTensorElements(loc, adaptor.getPtr(), rewriter);
+    SmallVector<Value> maskElements;
+    if (adaptor.getMask())
+      maskElements =
+          unpackUniqueTensorElements(loc, adaptor.getMask(), rewriter);
+    auto valueTy = op.getType();
+    Type valueElemTy =
+        getTypeConverter()->convertType(getElementTypeOrSelf(valueTy));
+    int32_t bytesPerElem = valueElemTy.getIntOrFloatBitWidth() / 8;
+    auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
+    Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
+                                                         loc, *targetInfo);
+    auto sourceLoc = materializeSourceLocation(rewriter, loc);
+    auto eventStateTy = getGSanAtomicEventStateType(rewriter);
+    Value eventState = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx),
+                                              eventStateTy, b.i32_val(1), 0);
+    SmallVector<Value> resultVals;
+    resultVals.reserve(ptrElements.size());
+
+    for (size_t i = 0; i < ptrElements.size(); ++i) {
+      Value pred =
+          maskElements.empty()
+              ? threadPred
+              : ttg::maybeAnd(rewriter, loc, threadPred, maskElements[i]);
+      emitGSanAtomicBeginCall(rewriter, loc, *gsanGlobalStatePtr, eventState,
+                              pred, ptrElements[i], bytesPerElem,
+                              /*doesRead=*/true, static_cast<int32_t>(sem),
+                              static_cast<int32_t>(scope), sourceLoc);
+      resultVals.push_back(emitPredicatedAtomicLoad(
+          rewriter, loc, valueElemTy, ptrElements[i], pred,
+          LLVM::AtomicOrdering::monotonic, syncScope));
+      emitGSanAtomicEndCall(rewriter, loc, eventState, pred, b.false_val(),
+                            /*isRmw=*/false, static_cast<int32_t>(sem),
+                            static_cast<int32_t>(scope), sourceLoc);
+    }
+
+    finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, threadPred,
+                          *targetInfo, getTypeConverter());
+    if (orderingBarrier)
+      rewriter.setInsertionPointAfter(orderingBarrier);
+    if (sem == MemSemantic::ACQUIRE)
+      LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::acquire,
+                            syncScope);
+    return success();
+  }
+};
+
+struct GSanAtomicStoreOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanAtomicStoreOp> {
+public:
+  using ConvertOpToLLVMPattern<
+      tti::ExperimentalGSanAtomicStoreOp>::ConvertOpToLLVMPattern;
+  const TargetInfoBase *targetInfo;
+
+  GSanAtomicStoreOpConversion(LLVMTypeConverter &typeConverter,
+                              const TargetInfoBase &targetInfo,
+                              PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        targetInfo(&targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanAtomicStoreOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto *ctx = rewriter.getContext();
+    Location loc = op.getLoc();
+    auto gsanGlobalStatePtr = getGSanGlobalStateArg(op, rewriter, loc);
+    if (failed(gsanGlobalStatePtr))
+      return failure();
+
+    auto sem = op.getSem();
+    auto scope = op.getScope();
+    insertAtomicOrderingBarriers(op, sem, /*emitBarrierAfter=*/true, rewriter,
+                                 *targetInfo);
+    StringRef syncScope = targetInfo->getAtomicSyncScope(scope);
+
+    TritonLLVMOpBuilder b(loc, rewriter);
+    auto ptrElements =
+        unpackUniqueTensorElements(loc, adaptor.getPtr(), rewriter);
+    auto valueElements =
+        unpackUniqueTensorElements(loc, adaptor.getValue(), rewriter);
+    SmallVector<Value> maskElements;
+    if (adaptor.getMask())
+      maskElements =
+          unpackUniqueTensorElements(loc, adaptor.getMask(), rewriter);
+    int32_t bytesPerElem =
+        valueElements.front().getType().getIntOrFloatBitWidth() / 8;
+    auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
+    Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
+                                                         loc, *targetInfo);
+    if (sem == MemSemantic::RELEASE)
+      LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::release,
+                            syncScope);
+    auto sourceLoc = materializeSourceLocation(rewriter, loc);
+    auto eventStateTy = getGSanAtomicEventStateType(rewriter);
+    Value eventState = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx),
+                                              eventStateTy, b.i32_val(1), 0);
+
+    for (size_t i = 0; i < ptrElements.size(); ++i) {
+      Value pred =
+          maskElements.empty()
+              ? threadPred
+              : ttg::maybeAnd(rewriter, loc, threadPred, maskElements[i]);
+      emitGSanAtomicBeginCall(rewriter, loc, *gsanGlobalStatePtr, eventState,
+                              pred, ptrElements[i], bytesPerElem,
+                              /*doesRead=*/false, static_cast<int32_t>(sem),
+                              static_cast<int32_t>(scope), sourceLoc);
+      emitPredicatedAtomicStore(rewriter, loc, ptrElements[i], valueElements[i],
+                                pred, LLVM::AtomicOrdering::monotonic,
+                                syncScope);
+      emitGSanAtomicEndCall(rewriter, loc, eventState, pred, pred,
+                            /*isRmw=*/false, static_cast<int32_t>(sem),
+                            static_cast<int32_t>(scope), sourceLoc);
+    }
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct GSanAtomicPollOpConversion
     : public ConvertOpToLLVMPattern<tti::ExperimentalGSanAtomicPollOp> {
 public:
@@ -671,10 +851,11 @@ public:
       Value pred = ttg::maybeAnd(rewriter, loc, threadPred, success);
       emitGSanAtomicBeginCall(rewriter, loc, *gsanGlobalStatePtr, eventState,
                               pred, ptr, bytesPerElem,
+                              /*doesRead=*/true,
                               static_cast<int32_t>(op.getSem()),
                               static_cast<int32_t>(op.getScope()), sourceLoc);
       emitGSanAtomicEndCall(rewriter, loc, eventState, pred, b.false_val(),
-                            static_cast<int32_t>(op.getSem()),
+                            /*isRmw=*/false, static_cast<int32_t>(op.getSem()),
                             static_cast<int32_t>(op.getScope()), sourceLoc);
     }
 
@@ -725,8 +906,6 @@ public:
       maskElements =
           unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
 
-    auto valueTy = op.getType();
-    auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
     Type valueElemTy = valElements[0].getType();
     unsigned valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     int32_t bytesPerElem = std::max<int32_t>(1, valueElemNBits / 8);
@@ -758,7 +937,7 @@ public:
 
       emitGSanAtomicBeginCall(rewriter, loc, *gsanGlobalStatePtr, eventState,
                               pred, rmwPtr, bytesPerElem,
-                              static_cast<int32_t>(sem),
+                              /*doesRead=*/true, static_cast<int32_t>(sem),
                               static_cast<int32_t>(scope), sourceLoc);
 
       SmallVector<Value> rmwVals{rmwVal};
@@ -768,25 +947,13 @@ public:
         return failure();
 
       emitGSanAtomicEndCall(rewriter, loc, eventState, pred, pred,
-                            static_cast<int32_t>(sem),
+                            /*isRmw=*/true, static_cast<int32_t>(sem),
                             static_cast<int32_t>(scope), sourceLoc);
       resultVals[i] = *old;
     }
 
-    if (op.getResult().use_empty()) {
-      rewriter.eraseOp(op);
-      return success();
-    }
-
-    if (!tensorTy) {
-      Value scalarResult = broadcastScalarAtomicResult(
-          op, valueElemTy, resultVals[0], rewriter, b, threadPred, *targetInfo);
-      rewriter.replaceOp(op, {scalarResult});
-      return success();
-    }
-
-    finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals, valueElemTy,
-                                b, threadPred, *targetInfo, getTypeConverter());
+    finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, threadPred,
+                          *targetInfo, getTypeConverter());
     return success();
   }
 };
@@ -830,8 +997,6 @@ public:
     auto valElements =
         unpackTensorElements(loc, llVal, rewriter, op.getVal().getType());
 
-    auto valueTy = op.getType();
-    auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
     Type valueElemTy = valElements[0].getType();
     unsigned valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     int32_t bytesPerElem = valueElemNBits / 8;
@@ -862,7 +1027,7 @@ public:
 
       emitGSanAtomicBeginCall(rewriter, loc, *gsanGlobalStatePtr, eventState,
                               pred, casPtr, bytesPerElem,
-                              static_cast<int32_t>(sem),
+                              /*doesRead=*/true, static_cast<int32_t>(sem),
                               static_cast<int32_t>(scope), sourceLoc);
 
       Value old = NVIDIA::emitPtxAtomicCAS(rewriter, loc, valueElemTy, casPtr,
@@ -874,25 +1039,13 @@ public:
           rewriter, loc, i1_ty, LLVM::ICmpPredicate::eq, oldInt, cmpInt);
       didWrite = ttg::maybeAnd(rewriter, loc, pred, didWrite);
       emitGSanAtomicEndCall(rewriter, loc, eventState, pred, didWrite,
-                            static_cast<int32_t>(sem),
+                            /*isRmw=*/true, static_cast<int32_t>(sem),
                             static_cast<int32_t>(scope), sourceLoc);
       resultVals[i] = old;
     }
 
-    if (op.getResult().use_empty()) {
-      rewriter.eraseOp(op);
-      return success();
-    }
-
-    if (!tensorTy) {
-      Value scalarResult = broadcastScalarAtomicResult(
-          op, valueElemTy, resultVals[0], rewriter, b, threadPred, *targetInfo);
-      rewriter.replaceOp(op, {scalarResult});
-      return success();
-    }
-
-    finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals, valueElemTy,
-                                b, threadPred, *targetInfo, getTypeConverter());
+    finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, threadPred,
+                          *targetInfo, getTypeConverter());
     return success();
   }
 };
@@ -1249,7 +1402,9 @@ void mlir::triton::populateGSanToLLVMPatterns(
                                                           targetInfo);
   patterns.add<GSanIndexedTensorDescAccessOpConversion>(typeConverter,
                                                         targetInfo);
+  patterns.add<GSanAtomicLoadOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanAtomicPollOpConversion>(typeConverter, targetInfo);
+  patterns.add<GSanAtomicStoreOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanAtomicCASOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanAtomicRMWOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanTensorAccessOpConversion>(typeConverter, axisInfoAnalysis,

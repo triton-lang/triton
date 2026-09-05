@@ -163,6 +163,15 @@ def AtomicOpInterface : OpInterface<"AtomicOpInterface"> {
 
   let methods = [
     InterfaceMethod<
+      /*desc=*/"Return the pointer operand accessed by the atomic operation.",
+      /*retType=*/"::mlir::Value",
+      /*methodName=*/"getPtr",
+      /*args=*/(ins),
+      /*defaultImplementation=*/[{
+        return $_op.getPtr();
+      }]
+    >,
+    InterfaceMethod<
       /*desc=*/"Return the atomic memory-ordering semantic.",
       /*retType=*/"::mlir::triton::MemSemantic",
       /*methodName=*/"getMemSemantic",

@@ -1,5 +1,6 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv=compute-capability=90 --convert-triton-gpu-to-llvm=compute-capability=90 2>&1 | FileCheck %s --check-prefixes=CHECK-TTG2NVGPU,CHECK-POLL
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv=compute-capability=90 --convert-triton-gpu-to-llvm=compute-capability=90 --convert-nv-gpu-to-llvm 2>&1 | FileCheck %s --check-prefixes=CHECK-NVGPU2LLVM,CHECK-POLL
+#blocked4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @kernel_r(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
     %cst = arith.constant 0.000000e+00 : f32
@@ -24,6 +25,98 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK-NVGPU2LLVM: ld.global.sys.acquire.b32
     %5 = tt.atomic_rmw fadd, acquire, sys, %arg0, %cst, %2 : (!tt.ptr<f32>, f32, i1) -> f32
     tt.store %arg0, %5 : !tt.ptr<f32>
+    tt.return
+  }
+
+  // CHECK-TTG2NVGPU-LABEL: @atomic_load_store
+  // CHECK-TTG2NVGPU: llvm.load %{{.*}} atomic syncscope("device") monotonic
+  // CHECK-TTG2NVGPU: nvvm.barrier
+  // CHECK-TTG2NVGPU: llvm.load %{{.*}} : !llvm.ptr<3> -> i32
+  // CHECK-TTG2NVGPU: llvm.fence syncscope("device") acquire
+  // CHECK-TTG2NVGPU: llvm.fence release
+  // CHECK-TTG2NVGPU: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-NVGPU2LLVM-LABEL: @atomic_load_store
+  // CHECK-NVGPU2LLVM: llvm.load %{{.*}} atomic syncscope("device") monotonic
+  // CHECK-NVGPU2LLVM: nvvm.barrier
+  // CHECK-NVGPU2LLVM: llvm.load %{{.*}} : !llvm.ptr<3> -> i32
+  // CHECK-NVGPU2LLVM: llvm.fence syncscope("device") acquire
+  // CHECK-NVGPU2LLVM: llvm.fence release
+  // CHECK-NVGPU2LLVM: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  tt.func public @atomic_load_store(%ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>, %mask: i1) {
+    %loaded = tt.atomic_load acquire, gpu, %ptr, %mask : (!tt.ptr<i32>, i1) -> i32
+    tt.atomic_store release, sys, %out, %loaded, %mask : !tt.ptr<i32>
+    tt.return
+  }
+
+  // CHECK-TTG2NVGPU-LABEL: @atomic_load_store_relaxed
+  // CHECK-TTG2NVGPU: llvm.load %{{.*}} atomic syncscope("block") monotonic
+  // CHECK-TTG2NVGPU: llvm.store %{{.*}}, %{{.*}} atomic syncscope("device") monotonic
+  tt.func public @atomic_load_store_relaxed(%ptr: !tt.ptr<i64>, %value: i64) {
+    %loaded = tt.atomic_load relaxed, cta, %ptr : (!tt.ptr<i64>) -> i64
+    tt.atomic_store relaxed, gpu, %ptr, %value : !tt.ptr<i64>
+    tt.return
+  }
+
+  // CHECK-TTG2NVGPU-LABEL: @unpredicated_tensor_atomic_load_store
+  // CHECK-TTG2NVGPU: %{{.*}} = llvm.mlir.undef : i32
+  // CHECK-TTG2NVGPU-NEXT: %{{.*}} = llvm.load %{{.*}} atomic monotonic
+  // CHECK-TTG2NVGPU-NEXT: %{{.*}} = llvm.mlir.undef : i32
+  // CHECK-TTG2NVGPU-NEXT: %{{.*}} = llvm.load %{{.*}} atomic monotonic
+  // CHECK-TTG2NVGPU-NEXT: %{{.*}} = llvm.mlir.undef : i32
+  // CHECK-TTG2NVGPU-NEXT: %{{.*}} = llvm.load %{{.*}} atomic monotonic
+  // CHECK-TTG2NVGPU-NEXT: %{{.*}} = llvm.mlir.undef : i32
+  // CHECK-TTG2NVGPU-NEXT: %{{.*}} = llvm.load %{{.*}} atomic monotonic
+  // CHECK-TTG2NVGPU: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-TTG2NVGPU-NEXT: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-TTG2NVGPU-NEXT: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-TTG2NVGPU-NEXT: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-TTG2NVGPU-NEXT: llvm.return
+  // CHECK-NVGPU2LLVM-LABEL: @unpredicated_tensor_atomic_load_store
+  // CHECK-NVGPU2LLVM: %{{.*}} = llvm.load %{{.*}} atomic monotonic
+  // CHECK-NVGPU2LLVM-NEXT: %{{.*}} = llvm.load %{{.*}} atomic monotonic
+  // CHECK-NVGPU2LLVM-NEXT: %{{.*}} = llvm.load %{{.*}} atomic monotonic
+  // CHECK-NVGPU2LLVM-NEXT: %{{.*}} = llvm.load %{{.*}} atomic monotonic
+  // CHECK-NVGPU2LLVM: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-NVGPU2LLVM-NEXT: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-NVGPU2LLVM-NEXT: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-NVGPU2LLVM-NEXT: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-NVGPU2LLVM-NEXT: llvm.return
+  tt.func public @unpredicated_tensor_atomic_load_store(
+      %ptrs: tensor<512x!tt.ptr<i32>, #blocked4>) {
+    %loaded = tt.atomic_load relaxed, sys, %ptrs : (tensor<512x!tt.ptr<i32>, #blocked4>) -> tensor<512xi32, #blocked4>
+    tt.atomic_store relaxed, sys, %ptrs, %loaded : tensor<512x!tt.ptr<i32>, #blocked4>
+    tt.return
+  }
+
+  // CHECK-TTG2NVGPU-LABEL: @sharded_atomic_load_acquire
+  // CHECK-TTG2NVGPU-COUNT-4: llvm.load %{{.*}} atomic monotonic
+  // CHECK-TTG2NVGPU: nvvm.barrier
+  // CHECK-TTG2NVGPU-NEXT: llvm.fence acquire
+  // CHECK-TTG2NVGPU-NEXT: llvm.return
+  // CHECK-NVGPU2LLVM-LABEL: @sharded_atomic_load_acquire
+  // CHECK-NVGPU2LLVM-COUNT-4: llvm.load %{{.*}} atomic monotonic
+  // CHECK-NVGPU2LLVM: nvvm.barrier
+  // CHECK-NVGPU2LLVM-NEXT: llvm.fence acquire
+  // CHECK-NVGPU2LLVM-NEXT: llvm.return
+  tt.func public @sharded_atomic_load_acquire(
+      %ptrs: tensor<512x!tt.ptr<i32>, #blocked4>,
+      %mask: tensor<512xi1, #blocked4>) {
+    %loaded = tt.atomic_load acquire, sys, %ptrs, %mask : (tensor<512x!tt.ptr<i32>, #blocked4>, tensor<512xi1, #blocked4>) -> tensor<512xi32, #blocked4>
+    tt.return
+  }
+
+  // CHECK-TTG2NVGPU-LABEL: @sharded_atomic_store_release
+  // CHECK-TTG2NVGPU: nvvm.barrier
+  // CHECK-TTG2NVGPU: llvm.fence release
+  // CHECK-TTG2NVGPU-COUNT-4: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-NVGPU2LLVM-LABEL: @sharded_atomic_store_release
+  // CHECK-NVGPU2LLVM: llvm.fence release
+  // CHECK-NVGPU2LLVM-COUNT-4: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  tt.func public @sharded_atomic_store_release(
+      %ptrs: tensor<512x!tt.ptr<i32>, #blocked4>,
+      %values: tensor<512xi32, #blocked4>,
+      %mask: tensor<512xi1, #blocked4>) {
+    tt.atomic_store release, sys, %ptrs, %values, %mask : tensor<512x!tt.ptr<i32>, #blocked4>
     tt.return
   }
 

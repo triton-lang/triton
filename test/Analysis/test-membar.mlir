@@ -213,6 +213,19 @@ tt.func @async_wait_before_atomic_acquire_no_scratch(%ptr: !tt.ptr<i32>, %arg: t
   tt.return
 }
 
+// CHECK-LABEL: async_wait_before_atomic_load_acquire_no_scratch
+tt.func @async_wait_before_atomic_load_acquire_no_scratch(%ptr: !tt.ptr<i32>, %arg: tensor<32x16xf16, #AL>) {
+  %smem = ttg.local_alloc %arg : (tensor<32x16xf16, #AL>) -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory>
+  // CHECK: ttg.async_wait
+  // CHECK-NEXT: %{{.*}} = tt.atomic_load acquire
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttg.local_load
+  ttg.async_wait {num = 0 : i32}
+  %unused = tt.atomic_load acquire, gpu, %ptr : (!tt.ptr<i32>) -> i32
+  %result = ttg.local_load %smem : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<32x16xf16, #AL>
+  tt.return
+}
+
 // CHECK-LABEL: async_wait_scan_stops_at_memory_effect
 tt.func @async_wait_scan_stops_at_memory_effect(%arg: tensor<32x16xf16, #AL>) {
   %cst0 = ttg.local_alloc %arg : (tensor<32x16xf16, #AL>) -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory>

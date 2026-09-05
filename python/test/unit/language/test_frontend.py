@@ -899,6 +899,46 @@ def test_atomic_scalar_masks():
 
 @filecheck_test
 @triton.jit
+def test_atomic_load_store():
+    # CHECK-LABEL: test_atomic_load_store
+    BLOCK: tl.constexpr = 128
+    ptr = tl.full((BLOCK, ), 0, tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    offs = tl.arange(0, BLOCK)
+    ptrs = ptr + offs
+    mask = offs < 64
+    # CHECK: %{{.*}} = tt.atomic_load acquire, gpu, %{{.*}}, %{{.*}} : (tensor<128x!tt.ptr<i32>>, tensor<128xi1>) -> tensor<128xi32>
+    value = tl.atomic_load(ptrs, mask=mask)
+    # CHECK: tt.atomic_store release, gpu, %{{.*}}, %{{.*}}, %{{.*}} : tensor<128x!tt.ptr<i32>>
+    tl.atomic_store(ptrs, value, mask=mask)
+    # CHECK: %{{.*}} = tt.atomic_load relaxed, sys
+    tl.atomic_load(ptrs, sem="relaxed", scope="sys")
+    # CHECK: tt.atomic_store relaxed, cta
+    tl.atomic_store(ptrs, 1, sem="relaxed", scope="cta")
+
+
+@doesnt_compile
+@triton.jit
+def test_atomic_load_rejects_release_semantics():
+    ptr = tl.to_tensor(0).to(tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    tl.atomic_load(ptr, sem="release")
+
+
+@doesnt_compile
+@triton.jit
+def test_atomic_store_rejects_acquire_semantics():
+    ptr = tl.to_tensor(0).to(tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    tl.atomic_store(ptr, 1, sem="acquire")
+
+
+@doesnt_compile
+@triton.jit
+def test_atomic_load_rejects_i8():
+    ptr = tl.to_tensor(0).to(tl.int64).to(tl.pointer_type(tl.int8), bitcast=True)
+    tl.atomic_load(ptr)
+
+
+@filecheck_test
+@triton.jit
 def test_atomic_poll():
     # CHECK-LABEL: test_atomic_poll
     ptr = tl.to_tensor(0).to(tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)

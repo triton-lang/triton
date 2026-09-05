@@ -492,6 +492,20 @@ public:
             ExperimentalGSanTensorAccessOp::create(
                 b, op.getLoc(), op.getPtr(), op.getMask(), /*isStore=*/true);
           })
+          .Case([&](tt::AtomicLoadOp op) {
+            auto newOp = ExperimentalGSanAtomicLoadOp::create(
+                b, op.getLoc(), op.getType(), op.getPtr(), op.getMask(),
+                op.getSem(), op.getScope());
+            newOp->setAttrs(op->getAttrs());
+            b.replaceOp(op, newOp);
+          })
+          .Case([&](tt::AtomicStoreOp op) {
+            auto newOp = ExperimentalGSanAtomicStoreOp::create(
+                b, op.getLoc(), op.getPtr(), op.getValue(), op.getMask(),
+                op.getSem(), op.getScope());
+            newOp->setAttrs(op->getAttrs());
+            b.replaceOp(op, newOp);
+          })
           .Case([&](ttg::AsyncCopyGlobalToLocalOp op) {
             ExperimentalGSanTensorAccessOp::create(
                 b, op.getLoc(), op.getSrc(), op.getMask(), /*isStore=*/false);
