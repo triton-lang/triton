@@ -1327,7 +1327,7 @@ void init_triton_ir(py::module_ &m) {
            })
       .def("create_sdiv",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
-             return self.create<arith::DivSIOp>(lhs, rhs);
+             return self.create<arith::FloorDivSIOp>(lhs, rhs);
            })
       .def("create_udiv",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
