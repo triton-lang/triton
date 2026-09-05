@@ -1,12 +1,16 @@
+#include "triton/Analysis/Membar.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
+#include "llvm/ADT/SmallPtrSet.h"
 
 #include <numeric>
 
 namespace mlir::triton::nvidia_gpu {
 
 #define GEN_PASS_DEF_TRITONNVIDIAGPUOPTIMIZEMBARRIERARRIVALSPASS
+#define GEN_PASS_DEF_TRITONNVIDIAGPUOPTIMIZESYNCHRONIZATIONPASS
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
 
 namespace {
@@ -93,6 +97,78 @@ static void distributeArrivals(gpu::LocalAllocOp alloc) {
   }
 }
 
+static bool isSynchronizationCandidate(Operation *op) {
+  if (auto arrive = dyn_cast<ArriveBarrierOp>(op))
+    return arrive.getArrivalWarps().has_value();
+  auto barrier = dyn_cast<gpu::BarrierOp>(op);
+  return barrier && barrier.isWarp() && barrier.hasLocal();
+}
+
+static void foldSynchronizedArrival(ArriveBarrierOp arrive) {
+  // Outlined helpers do not carry the caller's partition offset into lowering.
+  auto func = arrive->getParentOfType<triton::FuncOp>();
+  if (!func || !triton::isKernel(func))
+    return;
+  auto numWarps = arrive.getArrivalWarps();
+  if (!numWarps || *numWarps != gpu::lookupNumWarps(arrive))
+    return;
+  // Prior effects are synchronized across the region. One thread per routed
+  // target can contribute the full count.
+  arrive.removeArrivalWarpsAttr();
+}
+
+class SynchronizationAnalysis : public MembarAnalysis {
+public:
+  using MembarAnalysis::MembarAnalysis;
+
+  void run(FunctionOpInterface function, FuncMapT &funcMap) {
+    MembarAnalysis::run(function, funcMap);
+    // Rewrite only after all predecessors and backedges have been analyzed.
+    for (Operation *op : foldableOps) {
+      if (auto arrive = dyn_cast<ArriveBarrierOp>(op))
+        foldSynchronizedArrival(arrive);
+      else
+        cast<gpu::BarrierOp>(op).erase();
+    }
+  }
+
+private:
+  void update(Operation *op, MembarInfo *info, FuncMapT *funcMap,
+              OpBuilder *) override {
+    if (isSynchronizationCandidate(op)) {
+      bool canFold = info->warpsSynced;
+      if (isa<ArriveBarrierOp>(op))
+        canFold &= info->allPathsFromEntrySynced && !info->pending.hasEffects();
+      // A later predecessor or backedge can invalidate an earlier decision.
+      if (canFold)
+        foldableOps.insert(op);
+      else
+        foldableOps.erase(op);
+    }
+
+    if (auto barrier = dyn_cast<gpu::BarrierOp>(op)) {
+      if (barrier.isWarp()) {
+        // Later warp barriers already fold through warpsSynced.
+        if (barrier.hasLocal() && !pendingWarp)
+          pendingWarp = op;
+      } else {
+        if (barrier.hasLocal() && pendingWarp)
+          foldableOps.insert(pendingWarp);
+        pendingWarp = nullptr;
+      }
+    } else if (op->getNumRegions() || op->hasTrait<OpTrait::IsTerminator>() ||
+               !isMemoryEffectFree(op) ||
+               allocation.getBufferId(op) != Allocation::InvalidBufferId) {
+      // Pure operations can still use shared scratch during lowering.
+      pendingWarp = nullptr;
+    }
+    MembarAnalysis::update(op, info, funcMap, /*builder=*/nullptr);
+  }
+
+  Operation *pendingWarp = nullptr;
+  llvm::SmallPtrSet<Operation *, 16> foldableOps;
+};
+
 struct OptimizeMBarrierArrivalsPass
     : impl::TritonNvidiaGPUOptimizeMBarrierArrivalsPassBase<
           OptimizeMBarrierArrivalsPass> {
@@ -104,6 +180,26 @@ struct OptimizeMBarrierArrivalsPass
     if (computeCapability < 90)
       return;
     mod.walk(distributeArrivals);
+  }
+};
+
+struct OptimizeSynchronizationPass
+    : impl::TritonNvidiaGPUOptimizeSynchronizationPassBase<
+          OptimizeSynchronizationPass> {
+  using Base::Base;
+
+  void runOnOperation() override {
+    ModuleOp mod = getOperation();
+    if (!mod.walk([](Operation *op) {
+              return isSynchronizationCandidate(op) ? WalkResult::interrupt()
+                                                    : WalkResult::advance();
+            })
+             .wasInterrupted())
+      return;
+    // Coverage depends on scratch presence, not target-specific scratch sizes.
+    ModuleAllocation allocation(mod);
+    ModuleMembarAnalysis analysis(allocation);
+    analysis.run<SynchronizationAnalysis>();
   }
 };
 

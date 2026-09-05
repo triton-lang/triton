@@ -146,6 +146,10 @@ struct ThreadSyncInfo {
 
   bool requiresBefore() const { return kind == ThreadSyncKind::Publication; }
 
+  bool requiresWarpBefore() const {
+    return kind == ThreadSyncKind::WarpPublication;
+  }
+
   bool requiresAfter() const {
     return kind == ThreadSyncKind::CompletionNeedsSync;
   }
@@ -223,6 +227,8 @@ bool MembarAnalysis::requiresThreadSync(const BlockInfo &pending,
 void MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
                                   MembarInfo *membarInfo, OpBuilder *builder,
                                   bool cluster) {
+  if (!builder)
+    return;
   auto &pending = membarInfo->pending;
   auto canSkip = [&](Operation *before, Operation *after, bool beforeIsRead,
                      bool afterIsRead, Allocation *allocation) {
@@ -282,7 +288,8 @@ triton::BarrierStages getLocalBarrierStages(Operation *op,
   triton::BarrierStages stages;
   // The local-memory mask guarantees ordering of local memory accesses.
   if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op)) {
-    stages.beforeMemoryEffects = stages.afterMemoryEffects = barrier.hasLocal();
+    stages.beforeMemoryEffects = stages.afterMemoryEffects =
+        barrier.hasLocal() && !barrier.isWarp();
     return stages;
   }
   // Explicit barriers have no accesses between their leading and trailing
@@ -350,6 +357,12 @@ triton::BarrierStages MembarAnalysis::getBarrierStages(Operation *op) {
 
 void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
                             FuncMapT *funcMap, OpBuilder *builder) {
+  if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op);
+      barrier && barrier.isWarp()) {
+    if (barrier.hasLocal())
+      membarInfo->syncWarps();
+    return;
+  }
   auto sync = getThreadSyncInfo(op);
   // Region control flow is visited by the dataflow engine. Its children
   // contribute their own effects; implicit scratch belongs to this op.
@@ -498,6 +511,15 @@ void MembarAnalysis::updateMemoryEffects(Operation *op, MembarInfo *membarInfo,
   }
 
   syncIfNeeded(op, curBlockInfo, membarInfo, builder, cluster);
+
+  if (builder && !cluster && getThreadSyncInfo(op).requiresWarpBefore() &&
+      !membarInfo->warpsSynced) {
+    builder->setInsertionPoint(op);
+    triton::gpu::BarrierOp::create(*builder, op->getLoc(),
+                                   triton::gpu::AddrSpace::Local,
+                                   triton::gpu::BarrierScope::Warp);
+    membarInfo->syncWarps();
+  }
 
   if (scratchSlice) {
     if (barrierStages.betweenMemoryEffects) {

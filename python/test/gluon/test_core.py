@@ -1009,7 +1009,8 @@ def test_mbarrier_automatic_warp_arrivals(producer_warps, num_ctas):
     # Warp-specialization cluster barriers can introduce additional mbarriers.
     assert Counter(expected_inits) <= Counter(map(int, init_counts))
     arrive_counts = re.findall(r"mbarrier\.arrive\.shared::(?:cta|cluster)\.b64\s+_,\s*\[[^\]]+\](?:,\s*(\d+))?;", ptx)
-    expected_arrivals = [scale // producer_warps] * 2 + [1, scale // 4]
+    # The launch rendezvous covers the first bootstrap arrival's full count.
+    expected_arrivals = [scale, scale // producer_warps, 1, scale // 4]
     assert Counter(expected_arrivals) <= Counter(int(count or 1) for count in arrive_counts)
     assert "bar.warp.sync" in ptx
     kernel[(8, )](inp, out, iterations, block, producer_warps, num_warps=4, num_ctas=num_ctas)
@@ -1078,8 +1079,9 @@ def test_mbarrier_automatic_warp_arrivals_cross_cta(num_ctas, from_cta, two_ctas
     arrive_counts = re.findall(
         r"mbarrier\.arrive\.shared::cluster(?:\.multicast::cluster::32b)?\.b64\s+_,\s*\[[^\]]+\](?:,\s*(\d+))?(?:,\s*%r\d+)?;",
         ptx)
-    assert {int(count or 1) for count in arrive_counts} == {1}
-    assert "bar.warp.sync" in ptx
+    # An arrival after a CTA barrier contributes for all four warps.
+    assert {int(count or 1) for count in arrive_counts} == ({1, 4} if two_ctas else {4})
+    assert ("bar.warp.sync" in ptx) == two_ctas
     kernel[(1, )](out, from_cta, two_ctas, num_warps=4, num_ctas=num_ctas)
     assert out.item() == 1
 

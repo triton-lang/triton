@@ -1,6 +1,6 @@
 // RUN: triton-opt %s --convert-scf-to-cf -test-print-membar -triton-nvidia-gpu-tmem-barrier-insertion | FileCheck %s --check-prefixes=CHECK,WAIT
 // RUN: triton-opt %s --convert-scf-to-cf -triton-nvidia-gpu-tmem-barrier-insertion | FileCheck %s --check-prefix=WAIT
-// RUN: triton-opt %s -triton-nvidia-gpu-optimize-mbarrier-arrivals --convert-scf-to-cf -test-print-membar -triton-nvidia-gpu-tmem-barrier-insertion | FileCheck %s --check-prefix=ARRIVAL
+// RUN: triton-opt %s -triton-nvidia-gpu-optimize-mbarrier-arrivals --convert-scf-to-cf -test-print-membar -triton-nvidia-gpu-tmem-barrier-insertion -triton-nvidia-gpu-optimize-synchronization | FileCheck %s --check-prefix=ARRIVAL
 
 #shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
 #shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 16}>
@@ -136,14 +136,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // WAIT-LABEL: @ld_then_st_broadcast_warps
   // WAIT: ttng.tmem_load
   // WAIT-NEXT: ttng.tmem_wait load
+  // WAIT-NEXT: ttg.barrier warp local
   // WAIT-NEXT: ttg.barrier local
   // WAIT-NEXT: ttng.tmem_store
+  // ARRIVAL-LABEL: @ld_then_st_broadcast_warps
+  // ARRIVAL: ttng.tmem_load
+  // ARRIVAL-NEXT: ttng.tmem_wait load
+  // ARRIVAL-NEXT: ttg.barrier local
+  // ARRIVAL-NEXT: ttng.tmem_store
   tt.func @ld_then_st_broadcast_warps(%data: tensor<128x1xf32, #blocked_broadcast_warps>) -> tensor<128x1xf32, #blocked_broadcast_warps> attributes {"ttg.num-warps" = 8 : i32} {
     %true = arith.constant true
     %zero = arith.constant dense<0.0> : tensor<128x1xf32, #blocked_broadcast_warps>
     %mem = ttng.tmem_alloc %zero {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x1xf32, #blocked_broadcast_warps>) -> !ttg.memdesc<128x1xf32, #tmem128, #ttng.tensor_memory, mutable>
     ttg.barrier local
     %loaded = ttng.tmem_load %mem : !ttg.memdesc<128x1xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x1xf32, #blocked_broadcast_warps>
+    ttg.barrier warp local
     ttng.tmem_store %data, %mem, %true : tensor<128x1xf32, #blocked_broadcast_warps> -> !ttg.memdesc<128x1xf32, #tmem128, #ttng.tensor_memory, mutable>
     tt.return %loaded : tensor<128x1xf32, #blocked_broadcast_warps>
   }
@@ -1012,6 +1019,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // ARRIVAL: ttng.init_barrier {{.*}}, 4 :
   // ARRIVAL: ttng.tmem_load
   // ARRIVAL-NEXT: ttng.tmem_wait load
+  // ARRIVAL-NEXT: ttg.barrier warp local
   // ARRIVAL-NEXT: ttng.arrive_barrier {{.*}}, 4 {arrivalWarps = 4 : i32}
   tt.func @tmem_load_distributed_arrive(%data: tensor<128x128xf32, #blocked>) -> tensor<128x128xf32, #blocked> {
     %phase = arith.constant 0 : i32

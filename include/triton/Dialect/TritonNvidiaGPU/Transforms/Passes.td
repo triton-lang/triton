@@ -172,6 +172,24 @@ def TritonNvidiaGPUOptimizeMBarrierArrivalsPass : Pass<"triton-nvidia-gpu-optimi
   ];
 }
 
+def TritonNvidiaGPUOptimizeSynchronizationPass : Pass<"triton-nvidia-gpu-optimize-synchronization", "mlir::ModuleOp"> {
+  let summary = "Remove redundant warp synchronization and fold synchronized arrivals";
+
+  let description = [{
+    Use Membar's memory and thread-effect dataflow to remove warp barriers
+    covered by preceding synchronization or a following local CTA barrier.
+    Fold distributed arrivals when prior effects are synchronized across the
+    execution region. Preserve
+    total counts, predicates, and routes. Run after memory synchronization and
+    sanitizer insertion, without introducing new synchronization.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
 def TritonNvidiaGPUTMemBarrierInsertionPass : Pass<"triton-nvidia-gpu-tmem-barrier-insertion", "mlir::ModuleOp"> {
   let summary = "Insert barriers to order tensor-memory reuse";
 

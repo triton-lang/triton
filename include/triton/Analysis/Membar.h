@@ -134,6 +134,11 @@ struct BlockInfo {
 
   BlockInfo() = default;
 
+  bool hasEffects() const {
+    return !threadEffects.empty() || !syncReadSlices.empty() ||
+           !syncWriteSlices.empty();
+  }
+
   /// Unions two BlockInfo objects.
   BlockInfo &join(const BlockInfo &other) {
     for (auto &slice : other.syncReadSlices)
@@ -249,23 +254,28 @@ struct BlockInfo {
 /// Tracks memory and thread-ordering state at the current program point and at
 /// function boundaries.
 struct MembarInfo {
-  /// Effects since the most recent synchronization.
+  /// Effects since the most recent whole-region synchronization.
   BlockInfo pending;
 
   /// Effects reachable from the function entry block before the first
-  /// synchronization.
+  /// whole-region synchronization.
   /// It keeps incrementing during the iterative algorithm until
   ///  we note all paths to a basic block has synchronized.
   BlockInfo entryBlockInfo;
 
   /// Whether every path from the function entry block to the current program
-  /// point has synchronized.
+  /// point has synchronized the whole execution region.
   bool allPathsFromEntrySynced = false;
+
+  /// Every warp has synchronized since the last memory or thread effect.
+  /// This does not discharge dependencies between different warps.
+  bool warpsSynced = false;
 
   MembarInfo &join(const MembarInfo &other) {
     pending.join(other.pending);
     entryBlockInfo.join(other.entryBlockInfo);
     allPathsFromEntrySynced &= other.allPathsFromEntrySynced;
+    warpsSynced &= other.warpsSynced;
     return *this;
   }
 
@@ -273,11 +283,16 @@ struct MembarInfo {
     if (!allPathsFromEntrySynced)
       entryBlockInfo.join(blockInfo);
     pending.join(blockInfo);
+    if (blockInfo.hasEffects())
+      warpsSynced = false;
   }
+
+  void syncWarps() { warpsSynced = true; }
 
   void sync() {
     pending.sync();
     allPathsFromEntrySynced = true;
+    syncWarps();
   }
 
   void applyCallSummary(const MembarInfo &callee) {
@@ -286,6 +301,8 @@ struct MembarInfo {
     if (callee.allPathsFromEntrySynced)
       sync();
     pending.join(callee.pending);
+    // Keep warp coverage local to the current execution region.
+    warpsSynced = false;
   }
 
   template <typename Transform> void transformSlices(Transform transform) {
@@ -295,12 +312,13 @@ struct MembarInfo {
 
   bool operator==(const MembarInfo &other) const {
     return pending == other.pending && entryBlockInfo == other.entryBlockInfo &&
-           allPathsFromEntrySynced == other.allPathsFromEntrySynced;
+           allPathsFromEntrySynced == other.allPathsFromEntrySynced &&
+           warpsSynced == other.warpsSynced;
   }
 };
 
-/// Classify the barriers that synchronize local memory accesses in `op`
-/// relative to its memory effects.
+/// Classify whole-region barriers that synchronize local memory accesses in
+/// `op` relative to its memory effects.
 triton::BarrierStages getLocalBarrierStages(Operation *op,
                                             Allocation *allocation);
 
@@ -337,16 +355,16 @@ public:
             cast<FunctionOpInterface>(allocation.getOperation())) {}
 
 private:
-  /// Updates the BlockInfo operation based on the operation.
-  void update(Operation *operation, MembarInfo *membarInfo, FuncMapT *funcMap,
-              OpBuilder *builder) override;
-
   void updateSuccessor(Operation *terminator, Block *successor,
                        MembarInfo *membarInfo) override;
 
   void updateExitState(MembarInfo *membarInfo) override;
 
 protected:
+  /// A null builder analyzes existing synchronization without inserting any.
+  void update(Operation *operation, MembarInfo *membarInfo, FuncMapT *funcMap,
+              OpBuilder *builder) override;
+
   void updateMemoryEffects(Operation *operation, MembarInfo *membarInfo,
                            FuncMapT *funcMap, OpBuilder *builder,
                            bool cluster = false, BlockInfo effects = {});

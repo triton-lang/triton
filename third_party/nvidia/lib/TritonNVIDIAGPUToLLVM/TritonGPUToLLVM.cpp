@@ -203,6 +203,13 @@ LogicalResult ConvertTritonGPUToLLVM::prepareModule(ModuleOp mod,
       return failure();
   }
 
+  // Remove synchronization made redundant by later passes.
+  mlir::PassManager syncCleanupPm(mod.getContext());
+  syncCleanupPm.addPass(
+      ttng::createTritonNvidiaGPUOptimizeSynchronizationPass());
+  if (failed(syncCleanupPm.run(mod)))
+    return failure();
+
   mlir::triton::nvidia_gpu::runClusterBarrierMbarAllocator(mod);
   mod.walk([&](triton::gpu::GlobalScratchAllocOp) -> WalkResult {
     mlir::triton::gpu::runGlobalScratchMemoryAllocation(mod);
