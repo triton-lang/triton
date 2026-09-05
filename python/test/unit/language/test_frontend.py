@@ -69,6 +69,47 @@ def test_scalar_constant_float_zero_to_integer(dtype, value):
     run_filecheck_test(kernel, args=(dtype, value))
 
 
+@pytest.mark.parametrize("op", [tl.minimum, tl.maximum])
+@pytest.mark.parametrize("dtype, value, expected_dtype", [
+    (tl.float16, 0.0, tl.float16),
+    (tl.float16, 0, tl.float16),
+    (tl.float32, 0.0, tl.float32),
+    (tl.float64, 0.0, tl.float64),
+    (tl.bfloat16, 0.0, tl.float32),
+    (tl.int8, False, tl.int8),
+    (tl.int16, 0, tl.int16),
+    (tl.uint16, 0, tl.uint16),
+    (tl.int16, 0.0, tl.float32),
+])
+def test_minimum_maximum_scalar_promotion(op, dtype, value, expected_dtype):
+
+    @triton.jit
+    def kernel(op: tl.constexpr, dtype: tl.constexpr, value: tl.constexpr, expected_dtype: tl.constexpr):
+        x = tl.full((8, ), 1, dtype)
+        lhs = op(x, value)
+        rhs = op(value, x)
+        tl.static_assert(lhs.dtype == expected_dtype)
+        tl.static_assert(rhs.dtype == expected_dtype)
+
+    run_parser(kernel, args=(op, dtype, value, expected_dtype))
+
+
+@pytest.mark.parametrize("op", [tl.minimum, tl.maximum])
+@pytest.mark.parametrize("other_dtype", [tl.float32, tl.bfloat16])
+def test_minimum_maximum_tensor_promotion(op, other_dtype):
+
+    @triton.jit
+    def kernel(op: tl.constexpr, other_dtype: tl.constexpr):
+        x = tl.full((8, ), 1, tl.float16)
+        y = tl.full((), 0.0, other_dtype)
+        lhs = op(x, y)
+        rhs = op(y, x)
+        tl.static_assert(lhs.dtype == tl.float32)
+        tl.static_assert(rhs.dtype == tl.float32)
+
+    run_parser(kernel, args=(op, other_dtype))
+
+
 @triton.aggregate
 class Pair:
     first: tl.tensor
