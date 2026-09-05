@@ -1068,8 +1068,9 @@ LogicalResult TCGen5MMAOp::verify() {
     return emitOpError("Return operand must have a rank-2 tensor");
 
   auto kind = getMMAv5DTypeKindAndAcc(atype)->first;
-  int64_t minK =
-      kind == MMADTypeKind::tf32 ? 8 : kind == MMADTypeKind::f16 ? 16 : 32;
+  int64_t minK = kind == MMADTypeKind::tf32  ? 8
+                 : kind == MMADTypeKind::f16 ? 16
+                                             : 32;
   int64_t k = getA().getType().getDimSize(1);
   if (k < minK)
     return emitOpError("K dimension must be at least ")
@@ -1431,8 +1432,8 @@ LogicalResult TCGen5MMAScaledOp::verify() {
                       ? std::nullopt
                       : getNvmmaSmemAttrs(getA().getType());
     auto bAttrs = getNvmmaSmemAttrs(getB().getType());
-    bool transposed = (aAttrs && aAttrs->transposed) ||
-                      (bAttrs && !bAttrs->transposed);
+    bool transposed =
+        (aAttrs && aAttrs->transposed) || (bAttrs && !bAttrs->transposed);
     bool isUE4M3 = isa<Float8E4M3FNType>(aScaleType.getElementType()) &&
                    isa<Float8E4M3FNType>(bScaleType.getElementType());
     bool isUE5M3 = aScaleType.getElementType().isInteger(8) &&
