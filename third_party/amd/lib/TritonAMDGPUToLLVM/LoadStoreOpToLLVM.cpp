@@ -198,10 +198,13 @@ std::pair<Block *, Block *> emitBranch(RewriterBase &rewriter, Location loc,
   return {body, after};
 }
 
+// The predicate is built from the lane, warp and block masks only, and the warp
+// and block ids are uniform within a warp. Direct-to-LDS loads without scatter
+// support take a scalar LDS pointer, so masking through that address is valid
+// exactly when the predicate does not depend on the lane id.
 bool isRedundantThreadPredWarpUniform(
     const llvm::MapVector<StringAttr, int32_t> &masks, MLIRContext *ctx) {
-  return masks.lookup(StringAttr::get(ctx, "lane")) == 0 &&
-         masks.lookup(StringAttr::get(ctx, "reg")) == 0;
+  return masks.lookup(StringAttr::get(ctx, "lane")) == 0;
 }
 
 Value selectLdsAddressForPredicate(TritonLLVMOpBuilder &b, Value pred,
@@ -1720,7 +1723,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value threadPred = emitRedundantThreadPredicateNonNull(
         freeVarMasks, rewriter, loc, targetInfo);
-    uint32_t regMask = freeVarMasks[str_attr("reg")];
+    uint32_t regMask = freeVarMasks[str_attr("register")];
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
       if (!isCanonicalIndex(vecStart, regMask)) {
         // Don't emit store ops for redundant elements within a thread
@@ -1820,7 +1823,7 @@ struct BufferAtomicRMWOpConversion
         getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
 
     Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
-    SmallVector<Value> loadedVals;
+    SmallVector<Value> loadedVals(numElems);
 
     // We need to manually emit memory fences (LLVM doesn't do this for buffer
     // ops) see: https://llvm.org/docs/AMDGPUUsage.html#memory-model-gfx942
@@ -1847,10 +1850,14 @@ struct BufferAtomicRMWOpConversion
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value threadPred = emitRedundantThreadPredicateNonNull(
         freeVarMasks, rewriter, loc, targetInfo);
-    uint32_t regMask = freeVarMasks[str_attr("reg")];
+    uint32_t regMask = freeVarMasks[str_attr("register")];
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       if (!isCanonicalIndex(vecStart, regMask)) {
-        // Don't emit store ops for redundant elements within a thread
+        // A redundant element was already updated by its canonical index, so
+        // reuse that result instead of emitting a second atomic for it.
+        size_t canonicalStart = vecStart & ~static_cast<size_t>(regMask);
+        for (size_t ii = 0; ii < vec; ++ii)
+          loadedVals[vecStart + ii] = loadedVals[canonicalStart + ii];
         continue;
       }
 
@@ -1873,7 +1880,7 @@ struct BufferAtomicRMWOpConversion
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, getTypeConverter()->getIndexType(), ii);
         Value loaded = b.extract_element(valueElemTy, loadVal, vecIdx);
-        loadedVals.push_back(loaded);
+        loadedVals[vecStart + ii] = loaded;
       }
     } // end vec
 
@@ -2058,7 +2065,7 @@ struct BufferStoreOpConversion
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value threadPred = emitRedundantThreadPredicateNonNull(
         freeVarMasks, rewriter, loc, targetInfo);
-    uint32_t regMask = freeVarMasks[str_attr("reg")];
+    uint32_t regMask = freeVarMasks[str_attr("register")];
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       if (!isCanonicalIndex(vecStart, regMask)) {
         // Don't emit store ops for redundant elements within a thread
@@ -2144,7 +2151,7 @@ struct AtomicCASOpConversion
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
     Value threadPred = emitRedundantThreadPredicateNonNull(
         freeVarMasks, rewriter, loc, targetInfo);
-    uint32_t regMask = freeVarMasks[str_attr("reg")];
+    uint32_t regMask = freeVarMasks[str_attr("register")];
 
     // atomic ops
     for (size_t i = 0; i < elemsPerThread; i += 1) {

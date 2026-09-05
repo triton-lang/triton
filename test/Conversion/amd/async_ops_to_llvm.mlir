@@ -372,3 +372,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// A zero register basis duplicates elements inside a thread, but the thread
+// predicate is built from the lane, warp and block masks only, so it stays
+// warp-uniform and the out-of-range address masking still applies.
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [64, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: @async_copy_warp_uniform_thread_pred_broadcast_register
+  tt.func @async_copy_warp_uniform_thread_pred_broadcast_register(%ptr: !tt.ptr<f32>, %lds: !ttg.memdesc<64x1xf32, #shared, #smem, mutable>) {
+    %src = tt.splat %ptr : !tt.ptr<f32> -> tensor<64x1x!tt.ptr<f32>, #blocked>
+    // CHECK: %[[OOB_I32:.*]] = llvm.mlir.constant(2147483647 : i32) : i32
+    // CHECK: %[[OOB_PTR:.*]] = llvm.inttoptr %[[OOB_I32]] : i32 to !llvm.ptr<3>
+    // CHECK: %[[PRED_ADDR:.*]] = llvm.select {{.*}}, {{.*}}, %[[OOB_PTR]] : i1, !llvm.ptr<3>
+    // CHECK: rocdl.global.load.async.lds {{.*}}, %[[PRED_ADDR]], {{.*}}
+    %0 = ttg.async_copy_global_to_local %src, %lds : tensor<64x1x!tt.ptr<f32>, #blocked> -> <64x1xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}
