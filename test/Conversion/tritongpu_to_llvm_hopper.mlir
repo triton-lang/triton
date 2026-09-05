@@ -282,6 +282,20 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // -----
 
+// CHECK-LABEL: clamp_bfloat16
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @clamp_bfloat16(%x : bf16, %limit : bf16) {
+    %neg_limit = arith.negf %limit : bf16
+    // CHECK: nvvm.fmin.xorsign.abs.bf16
+    %0 = tt.clampf %x, %neg_limit, %limit, propagateNan = none : bf16
+    // CHECK: nvvm.fmin.nan.xorsign.abs.bf16
+    %1 = tt.clampf %x, %neg_limit, %limit, propagateNan = all : bf16
+    tt.return
+  }
+}
+
+// -----
+
 // CHECK-LABEL: clamp_scalar
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @clamp_scalar(%x : f32, %limit : f32) {

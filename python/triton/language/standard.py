@@ -201,7 +201,6 @@ def _elementwise_max(a, b):
 @core._add_reduction_docstr("maximum", return_indices_arg="return_indices",
                             tie_break_arg="return_indices_tie_break_left")
 def max(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False):
-    input = core._promote_bfloat16_to_float32(input)
     if return_indices:
         if return_indices_tie_break_left:
             return core._reduce_with_indices(input, axis, _argmax_combine_tie_break_left, keep_dims=keep_dims)
@@ -260,7 +259,6 @@ def _elementwise_min(a, b):
 @core._add_reduction_docstr("minimum", return_indices_arg="return_indices",
                             tie_break_arg="return_indices_tie_break_left")
 def min(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False):
-    input = core._promote_bfloat16_to_float32(input)
     if return_indices:
         if return_indices_tie_break_left:
             return core._reduce_with_indices(input, axis, _argmin_combine_tie_break_left, keep_dims=keep_dims)
@@ -355,9 +353,6 @@ def reduce_or(input, axis, keep_dims=False):
 @jit
 @core._add_scan_docstr("cumsum", dtype_arg="dtype")
 def cumsum(input, axis=0, reverse=False, dtype: core.constexpr = None):
-    # todo rename this to a generic function name
-
-    input = core._promote_bfloat16_to_float32(input)
     out_dtype: core.constexpr = _pick_sum_dtype(input.dtype, dtype)
     input = input.to(out_dtype)
     return core.associative_scan(input, axis, _sum_combine, reverse)
@@ -373,10 +368,10 @@ def _prod_combine(a, b):
 
 @core._tensor_member_fn
 @jit
-@core._add_scan_docstr("cumprod")
-def cumprod(input, axis=0, reverse=False):
-    # todo rename this to a generic function name
-    input = core._promote_bfloat16_to_float32(input)
+@core._add_scan_docstr("cumprod", dtype_arg="dtype")
+def cumprod(input, axis=0, reverse=False, dtype: core.constexpr = None):
+    out_dtype: core.constexpr = _pick_sum_dtype(input.dtype, dtype)
+    input = input.to(out_dtype)
     return core.associative_scan(input, axis, _prod_combine, reverse)
 
 
