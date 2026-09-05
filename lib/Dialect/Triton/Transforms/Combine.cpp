@@ -112,8 +112,10 @@ public:
 class CombineBroadcastMulReducePattern : public RewritePattern {
 private:
   static bool isAddF32(const Operation *op) {
+    // The rewrite below creates an f32 zero scalar, so it can only handle f32
+    // reductions without producing an ill-typed tt.splat.
     if (auto addf = dyn_cast_or_null<arith::AddFOp>(op))
-      return addf.getType().getIntOrFloatBitWidth() <= 32;
+      return addf.getType().isF32();
     return false;
   }
 
