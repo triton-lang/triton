@@ -172,8 +172,8 @@ def _ragged_tensor_metadata_compute(SliceSizes,  #
     block_size_log2 = first_block_size_log2 + block_size_id
     n_blocks = _cdiv_pow2(slice_sizes, block_size_log2)
     # compute block schedule
-    block_off = tl.load(BlockOffs + slice_id)
-    BlockSchedule += block_off
+    block_base = tl.load(BlockOffs + slice_id)
+    BlockSchedule += block_base
     for block_off in range(0, n_blocks, BLOCK):
         block_offs = block_off + tl.arange(0, BLOCK)
         data = (block_offs << 16) + slice_id

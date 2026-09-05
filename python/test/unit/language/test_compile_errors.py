@@ -33,6 +33,110 @@ def test_err_undefined_variable():
         raise assertion_err from e.value
 
 
+def test_err_for_target_after_loop():
+
+    @triton.jit
+    def kernel(out_ptr, n):
+        for i in range(n):
+            pass
+        tl.store(out_ptr, i)  # noqa
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={"out_ptr": "*i32", "n": "i32"}, constexprs={}))
+
+    try:
+        err_msg = format_exception(e.type, value=e.value, tb=e.tb)
+        assert "is not defined" in err_msg, "loop target should be local to the loop body"
+        assert "code_generator.py" not in err_msg
+    except AssertionError as assertion_err:
+        raise assertion_err from e.value
+
+
+def test_err_for_target_shadows_existing_variable():
+
+    @triton.jit
+    def kernel(n):
+        i = -1
+        for i in range(n):
+            pass
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={"n": "i32"}, constexprs={}))
+
+    try:
+        err_msg = format_exception(e.type, value=e.value, tb=e.tb)
+        assert "already defined" in err_msg, "error should reject reusing an assigned name as the loop target"
+        assert "code_generator.py" not in err_msg
+    except AssertionError as assertion_err:
+        raise assertion_err from e.value
+
+
+def test_err_for_target_shadows_nested_loop():
+
+    @triton.jit
+    def kernel(n):
+        for i in range(n):
+            for i in range(n):  # noqa
+                pass
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={"n": "i32"}, constexprs={}))
+
+    try:
+        err_msg = format_exception(e.type, value=e.value, tb=e.tb)
+        assert "already defined" in err_msg, "nested loops may not reuse the enclosing loop's target"
+        assert "code_generator.py" not in err_msg
+    except AssertionError as assertion_err:
+        raise assertion_err from e.value
+
+
+def test_for_other_name_after_loop_no_err():
+
+    @triton.jit
+    def kernel(out_ptr, n):
+        i = -1
+        for j in range(n):
+            pass
+        tl.store(out_ptr, i)
+
+    triton.compile(triton.compiler.ASTSource(fn=kernel, signature={"out_ptr": "*i32", "n": "i32"}, constexprs={}))
+
+
+def test_for_sequential_same_target_no_err():
+
+    @triton.jit
+    def kernel(n):
+        for i in range(n):
+            pass
+        for i in range(2 * n):
+            pass
+
+    triton.compile(triton.compiler.ASTSource(fn=kernel, signature={"n": "i32"}, constexprs={}))
+
+
+def test_for_target_rebound_after_loop_no_err():
+
+    @triton.jit
+    def kernel(out_ptr, n):
+        for i in range(n):
+            pass
+        i = -1
+        tl.store(out_ptr, i)
+
+    triton.compile(triton.compiler.ASTSource(fn=kernel, signature={"out_ptr": "*i32", "n": "i32"}, constexprs={}))
+
+
+def test_static_range_target_after_loop_no_err():
+
+    @triton.jit
+    def kernel(out_ptr):
+        for i in tl.static_range(3):
+            pass
+        tl.store(out_ptr, i)
+
+    triton.compile(triton.compiler.ASTSource(fn=kernel, signature={"out_ptr": "*i32"}, constexprs={}))
+
+
 def test_err_in_binary_operator():
 
     @triton.jit

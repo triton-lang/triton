@@ -1254,9 +1254,9 @@ def mma_scaled_pipelined_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_scale_de
     for ki in gl.static_range(0, BLOCK_K * (num_buffers - 2), BLOCK_K):
         load_producer = issue_loads(load_producer, pid_m, pid_n, ki, a_desc, b_desc, a_scale_desc, b_scale_desc, a_bufs,
                                     b_bufs, a_scale_bufs, b_scale_bufs, load_bars, pred=ki < K)
-    k = BLOCK_K * (num_buffers - 2)
-    load_producer = issue_loads(load_producer, pid_m, pid_n, k, a_desc, b_desc, a_scale_desc, b_scale_desc, a_bufs,
-                                b_bufs, a_scale_bufs, b_scale_bufs, load_bars, pred=k < K)
+    k_peel = BLOCK_K * (num_buffers - 2)
+    load_producer = issue_loads(load_producer, pid_m, pid_n, k_peel, a_desc, b_desc, a_scale_desc, b_scale_desc, a_bufs,
+                                b_bufs, a_scale_bufs, b_scale_bufs, load_bars, pred=k_peel < K)
 
     load_consumer, mma_producer = issue_mma(load_consumer, load_bars, a_bufs, b_bufs, a_scale_bufs, b_scale_bufs,
                                             mma_producer, mma_bars, acc_bufs.index(acc_idx), use_acc=False, pred=True)
