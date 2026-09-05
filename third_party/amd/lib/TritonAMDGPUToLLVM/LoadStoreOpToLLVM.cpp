@@ -2053,6 +2053,12 @@ struct BufferStoreOpConversion
     SmallVector<Value> maskElems =
         getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
 
+    // Work around gfx1151 faults from masked v2f32 buffer stores.
+    if (targetInfo.getArch() == "gfx1151" && valueElemTy.isF32() && llMask &&
+        vec == 2) {
+      vec = 1u;
+    }
+
     Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
     MLIRContext *ctx = rewriter.getContext();
     auto freeVarMasks = getFreeVariableMasks(valueTy);
