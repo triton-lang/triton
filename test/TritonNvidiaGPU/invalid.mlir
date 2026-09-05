@@ -1,5 +1,42 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+// A descriptor's logical K must cover complete MMA instructions, even if its
+// backing allocation is larger.
+#shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>
+#shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = true, elementBitWidth = 8}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+!a = !ttg.memdesc<128x16xf8E4M3FN, #shared_a, #ttg.shared_memory, 128x32>
+!b = !ttg.memdesc<16x64xf8E4M3FN, #shared_b, #ttg.shared_memory, 32x64>
+!c = !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  tt.func @tcgen5_fp8_k_too_small(%a: !a, %b: !b, %c: !c, %p: i1) {
+    // expected-error @below {{K dimension must be at least 32 for 'f8E4M3FN' operands, but got 16}}
+    ttng.tc_gen5_mma %a, %b, %c, %p, %p : !a, !b, !c
+    tt.return
+  }
+}
+
+// -----
+
+#b_enc = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = true, elementBitWidth = 8}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+#scales = #ttng.tensor_memory_scales_encoding<>
+!a = !ttg.memdesc<128x16xi8, #tmem, #ttng.tensor_memory>
+!b = !ttg.memdesc<16x64xi8, #b_enc, #ttg.shared_memory>
+!sa = !ttg.memdesc<128x1xi8, #scales, #ttng.tensor_memory>
+!sb = !ttg.memdesc<64x1xi8, #scales, #ttng.tensor_memory>
+!c = !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  tt.func @tcgen5_scaled_fp4_k_too_small(%a: !a, %b: !b, %c: !c, %sa: !sa, %sb: !sb, %p: i1) {
+    // expected-error @below {{K dimension must be at least 64 for this scaled MMA, but got 32}}
+    ttng.tc_gen5_mma_scaled %a, %b, %c, %sa, %sb, %p, %p lhs = e2m1 rhs = e2m1 :
+        !a, !b, !c, !sa, !sb
+    tt.return
+  }
+}
+
+// -----
+
 // expected-error @below {{fp4Padded tensor memory layout requires colStride 1 but got 2}}
 #bad_fp4_padded_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 2, fp4Padded = true>
 
