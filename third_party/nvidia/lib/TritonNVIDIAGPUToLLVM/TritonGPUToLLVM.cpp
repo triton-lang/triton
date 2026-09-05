@@ -162,6 +162,14 @@ void ConvertTritonGPUToLLVM::runOnOperation() {
 
 LogicalResult ConvertTritonGPUToLLVM::prepareModule(ModuleOp mod,
                                                     TargetInfo &targetInfo) {
+  ttng::TritonNvidiaGPUOptimizeMBarrierArrivalsPassOptions arrivalOptions;
+  arrivalOptions.computeCapability = computeCapability;
+  mlir::PassManager arrivalPm(mod.getContext());
+  arrivalPm.addPass(
+      ttng::createTritonNvidiaGPUOptimizeMBarrierArrivalsPass(arrivalOptions));
+  if (failed(arrivalPm.run(mod)))
+    return failure();
+
   ModuleAllocation allocation(
       mod, mlir::triton::nvidia_gpu::getNvidiaAllocationAnalysisScratchSizeFn(
                targetInfo));

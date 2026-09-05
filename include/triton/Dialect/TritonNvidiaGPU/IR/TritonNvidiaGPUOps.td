@@ -411,6 +411,11 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
     of at least 1 and decreases the pending arrival count of the mbarrier by
     the specified count.
 
+    The compiler-owned `arrivalWarps` attribute records the execution region's
+    warp count and divides the count equally among them. Each warp synchronizes
+    before contributing to every routed target. The count remains the total
+    decrement per source CTA and target barrier.
+
     When `multicastCTA` is non-zero, the arrive is multicast across the cluster.
     Each bit set in the mask identifies a CTA ID dimension to multicast
     along. CTA IDs `a` and `b` belong to the same equivalence class iff
@@ -439,7 +444,8 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
     I32Attr:$count,
     Optional<I1>:$pred,
     OptionalAttr<I32Attr>:$fromCTA,
-    DefaultValuedOptionalAttr<I32Attr, "0">:$multicastCTA
+    DefaultValuedOptionalAttr<I32Attr, "0">:$multicastCTA,
+    OptionalAttr<I32Attr>:$arrivalWarps
   );
 
   let assemblyFormat = [{
@@ -447,13 +453,12 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
   }];
 
   let builders = [
-    OpBuilder<(ins "Value":$alloc, "uint32_t":$count), [{
-      build($_builder, $_state, alloc, count, /*pred=*/Value(),
-            /*fromCTA=*/IntegerAttr(), /*multicastCTA=*/0u);
-    }]>,
-    OpBuilder<(ins "Value":$alloc, "uint32_t":$count, "Value":$pred), [{
-      build($_builder, $_state, alloc, count, pred, /*fromCTA=*/IntegerAttr(),
-            /*multicastCTA=*/0u);
+    OpBuilder<(ins "Value":$alloc, "uint32_t":$count,
+                   CArg<"Value", "Value()">:$pred,
+                   CArg<"IntegerAttr", "IntegerAttr()">:$fromCTA,
+                   CArg<"uint32_t", "0u">:$multicastCTA), [{
+      build($_builder, $_state, alloc, count, pred, fromCTA, multicastCTA,
+            /*arrivalWarps=*/IntegerAttr());
     }]>
   ];
 
