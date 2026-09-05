@@ -1,5 +1,94 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+// A descriptor's logical K must cover complete MMA instructions, even if its
+// backing allocation is larger.
+#shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>
+#shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = true, elementBitWidth = 8}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+!a = !ttg.memdesc<128x16xf8E4M3FN, #shared_a, #ttg.shared_memory, 128x32>
+!b = !ttg.memdesc<16x64xf8E4M3FN, #shared_b, #ttg.shared_memory, 32x64>
+!c = !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+!a_min = !ttg.memdesc<128x32xf8E4M3FN, #shared_a, #ttg.shared_memory>
+!b_min = !ttg.memdesc<32x64xf8E4M3FN, #shared_b, #ttg.shared_memory>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  tt.func @tcgen5_fp8_minimum_k(%a: !a_min, %b: !b_min, %c: !c, %p: i1) {
+    ttng.tc_gen5_mma %a, %b, %c, %p, %p : !a_min, !b_min, !c
+    tt.return
+  }
+  tt.func @tcgen5_fp8_k_too_small(%a: !a, %b: !b, %c: !c, %p: i1) {
+    // expected-error @below {{K dimension must be at least 32 for 'f8E4M3FN' operands, but got 16}}
+    ttng.tc_gen5_mma %a, %b, %c, %p, %p : !a, !b, !c
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = true, elementBitWidth = 8}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+!a = !ttg.memdesc<128x16xf8E5M2, #tmem, #ttng.tensor_memory>
+!b = !ttg.memdesc<16x64xf8E5M2, #shared, #ttg.shared_memory>
+!c = !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+!a_min = !ttg.memdesc<128x32xf8E5M2, #tmem, #ttng.tensor_memory>
+!b_min = !ttg.memdesc<32x64xf8E5M2, #shared, #ttg.shared_memory>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:103"} {
+  tt.func @tcgen5_fp8_tmem_minimum_k(%a: !a_min, %b: !b_min, %c: !c, %p: i1) {
+    ttng.tc_gen5_mma %a, %b, %c, %p, %p : !a_min, !b_min, !c
+    tt.return
+  }
+  tt.func @tcgen5_fp8_tmem_k_too_small(%a: !a, %b: !b, %c: !c, %p: i1) {
+    // expected-error @below {{K dimension must be at least 32 for 'f8E5M2' operands, but got 16}}
+    ttng.tc_gen5_mma %a, %b, %c, %p, %p : !a, !b, !c
+    tt.return
+  }
+}
+
+// -----
+
+#shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 16}>
+#shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = true, elementBitWidth = 16}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+!a = !ttg.memdesc<128x8xf16, #shared_a, #ttg.shared_memory>
+!b = !ttg.memdesc<8x64xf16, #shared_b, #ttg.shared_memory>
+!c = !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+!a_min = !ttg.memdesc<128x16xf16, #shared_a, #ttg.shared_memory>
+!b_min = !ttg.memdesc<16x64xf16, #shared_b, #ttg.shared_memory>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  tt.func @tcgen5_fp16_minimum_k(%a: !a_min, %b: !b_min, %c: !c, %p: i1) {
+    ttng.tc_gen5_mma %a, %b, %c, %p, %p : !a_min, !b_min, !c
+    tt.return
+  }
+  tt.func @tcgen5_fp16_k_too_small(%a: !a, %b: !b, %c: !c, %p: i1) {
+    // expected-error @below {{K dimension must be at least 16 for 'f16' operands, but got 8}}
+    ttng.tc_gen5_mma %a, %b, %c, %p, %p : !a, !b, !c
+    tt.return
+  }
+}
+
+// -----
+
+#shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 32}>
+#shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = true, elementBitWidth = 32}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+!a = !ttg.memdesc<128x4xf32, #shared_a, #ttg.shared_memory>
+!b = !ttg.memdesc<4x64xf32, #shared_b, #ttg.shared_memory>
+!c = !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+!a_min = !ttg.memdesc<128x8xf32, #shared_a, #ttg.shared_memory>
+!b_min = !ttg.memdesc<8x64xf32, #shared_b, #ttg.shared_memory>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  tt.func @tcgen5_tf32_minimum_k(%a: !a_min, %b: !b_min, %c: !c, %p: i1) {
+    ttng.tc_gen5_mma %a, %b, %c, %p, %p : !a_min, !b_min, !c
+    tt.return
+  }
+  tt.func @tcgen5_tf32_k_too_small(%a: !a, %b: !b, %c: !c, %p: i1) {
+    // expected-error @below {{K dimension must be at least 8 for 'f32' operands, but got 4}}
+    ttng.tc_gen5_mma %a, %b, %c, %p, %p : !a, !b, !c
+    tt.return
+  }
+}
+
+// -----
+
 // expected-error @below {{fp4Padded tensor memory layout requires colStride 1 but got 2}}
 #bad_fp4_padded_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 2, fp4Padded = true>
 

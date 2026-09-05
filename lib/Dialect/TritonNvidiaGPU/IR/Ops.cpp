@@ -1066,6 +1066,13 @@ LogicalResult TCGen5MMAOp::verify() {
   if (getD().getType().getRank() != 2)
     return emitOpError("Return operand must have a rank-2 tensor");
 
+  // The smallest dense MMA instruction consumes 256 bits along K.
+  int64_t minK = 256 / atype.getIntOrFloatBitWidth();
+  int64_t k = getA().getType().getDimSize(1);
+  if (k < minK)
+    return emitOpError("K dimension must be at least ")
+           << minK << " for " << atype << " operands, but got " << k;
+
   auto aEnc = getA().getType().getEncoding();
   if (!isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr,
            TensorMemoryEncodingAttr>(aEnc))
