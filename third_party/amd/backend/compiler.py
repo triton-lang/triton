@@ -472,13 +472,24 @@ class HIPBackend(BaseBackend):
         if is_coexec_scheduler_enabled(options.arch) and options.num_warps <= 4:
             kernel_fn.add_fn_attr("amdgpu-sched-strategy", "coexec")
 
-        denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
-        kernel_fn.add_fn_attr("denormal-fp-math-f32", denormal_mode)
+        denormal_default_mode = "ieee"
+        denormal_f32_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
+        llvm_fn_attrs = []
+        for name, value in options.llvm_fn_attrs:
+            # Preserve the override behavior of the legacy denormal attributes,
+            # but materialize them through LLVM's first-class attribute API.
+            if name == "denormal-fp-math":
+                denormal_default_mode = value
+            elif name == "denormal-fp-math-f32":
+                denormal_f32_mode = value
+            else:
+                llvm_fn_attrs.append((name, value))
+        kernel_fn.add_denormal_fp_env_attr(denormal_default_mode, denormal_f32_mode)
 
         if knobs.compilation.enable_asan:
             kernel_fn.add_fn_target_feature("+xnack")
             kernel_fn.add_fn_asan_attr()
-        for name, value in options.llvm_fn_attrs:
+        for name, value in llvm_fn_attrs:
             kernel_fn.remove_fn_attr(name)
             kernel_fn.add_fn_attr(name, value)
 

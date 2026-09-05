@@ -20,7 +20,9 @@ using mlir::triton::gpu::appendOrGetExternFuncOp;
 using mlir::triton::gpu::ElementwiseOpConversion;
 using mlir::triton::gpu::ElementwiseOpConversionBase;
 using mlir::triton::gpu::getFunctionType;
+using mlir::triton::gpu::getLLVMFastmathFlags;
 using mlir::triton::gpu::MultipleOperandsRange;
+using mlir::triton::gpu::propagateFastMathFlags;
 using triton::amdgpu::ISAFamily;
 
 namespace {
@@ -28,10 +30,11 @@ namespace {
 template <typename OP>
 Value EmitDualBF16ElementwiseOp(Location loc,
                                 ConversionPatternRewriter &rewriter,
-                                MultipleOperandsRange operands) {
+                                MultipleOperandsRange operands,
+                                LLVM::FastmathFlagsAttr fastmathFlags) {
   auto v0 = AMD::convertBf16ToFp32(loc, rewriter, operands[0][0]);
   auto v1 = AMD::convertBf16ToFp32(loc, rewriter, operands[0][1]);
-  auto result = OP::create(rewriter, loc, f32_ty, v0, v1);
+  auto result = OP::create(rewriter, loc, f32_ty, v0, v1, fastmathFlags);
   return AMD::convertFp32ToBf16(loc, rewriter, result, RoundingMode::RTNE);
 }
 
@@ -57,7 +60,8 @@ struct PackedArithOpConversion
 
     Value va = packLLVector(loc, {operands[0][0], operands[1][0]}, rewriter);
     Value vb = packLLVector(loc, {operands[0][1], operands[1][1]}, rewriter);
-    Value vr = LLVMOp::create(rewriter, loc, va.getType(), va, vb);
+    Value vr = LLVMOp::create(rewriter, loc, va.getType(), va, vb,
+                              getLLVMFastmathFlags(op));
     return unpackLLVector(loc, vr, rewriter);
   }
 };
@@ -72,7 +76,7 @@ struct FDivOpConversion
                                    Location loc) const {
 
     return {LLVM::FDivOp::create(rewriter, loc, elemTy, operands[0][0],
-                                 operands[0][1])};
+                                 operands[0][1], getLLVMFastmathFlags(op))};
   }
 };
 
@@ -87,10 +91,11 @@ struct FMulOpConversion
     auto lhsElemTy = getElementTypeOrSelf(op.getLhs());
     auto rhsElemTy = getElementTypeOrSelf(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
-      return {EmitDualBF16ElementwiseOp<LLVM::FMulOp>(loc, rewriter, operands)};
+      return {EmitDualBF16ElementwiseOp<LLVM::FMulOp>(
+          loc, rewriter, operands, getLLVMFastmathFlags(op))};
     } else {
       return {LLVM::FMulOp::create(rewriter, loc, elemTy, operands[0][0],
-                                   operands[0][1])};
+                                   operands[0][1], getLLVMFastmathFlags(op))};
     }
   }
 };
@@ -106,10 +111,11 @@ struct FAddOpConversion
     auto lhsElemTy = getElementTypeOrSelf(op.getLhs());
     auto rhsElemTy = getElementTypeOrSelf(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
-      return {EmitDualBF16ElementwiseOp<LLVM::FAddOp>(loc, rewriter, operands)};
+      return {EmitDualBF16ElementwiseOp<LLVM::FAddOp>(
+          loc, rewriter, operands, getLLVMFastmathFlags(op))};
     } else {
       return {LLVM::FAddOp::create(rewriter, loc, elemTy, operands[0][0],
-                                   operands[0][1])};
+                                   operands[0][1], getLLVMFastmathFlags(op))};
     }
   }
 };
@@ -125,10 +131,11 @@ struct FSubOpConversion
     auto lhsElemTy = getElementTypeOrSelf(op.getLhs());
     auto rhsElemTy = getElementTypeOrSelf(op.getRhs());
     if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
-      return {EmitDualBF16ElementwiseOp<LLVM::FSubOp>(loc, rewriter, operands)};
+      return {EmitDualBF16ElementwiseOp<LLVM::FSubOp>(
+          loc, rewriter, operands, getLLVMFastmathFlags(op))};
     } else {
       return {LLVM::FSubOp::create(rewriter, loc, elemTy, operands[0][0],
-                                   operands[0][1])};
+                                   operands[0][1], getLLVMFastmathFlags(op))};
     }
   }
 };
@@ -202,9 +209,13 @@ struct ExtFOpConversion
     if (inElemTy.isBF16()) {
       auto outElemTy = getElementTypeOrSelf(op.getOut());
       assert(outElemTy.isF32() && "unsupported conversion");
+      // This conversion is implemented with integer bit operations, which
+      // cannot represent floating-point fast-math flags.
       return {AMD::convertBf16ToFp32(loc, rewriter, operands[0][0])};
     } else {
-      return {LLVM::FPExtOp::create(rewriter, loc, elemTy, operands[0][0])};
+      auto dstOp = LLVM::FPExtOp::create(rewriter, loc, elemTy, operands[0][0]);
+      propagateFastMathFlags(op, dstOp);
+      return {dstOp};
     }
   }
 };
@@ -227,10 +238,15 @@ struct TruncFOpConversion
     auto outElemTy = getElementTypeOrSelf(op.getOut());
     auto inElemTy = getElementTypeOrSelf(op.getIn());
     if (inElemTy.isF32() && (outElemTy.isBF16() || outElemTy.isF16())) {
+      // Hardware-backed FPTrunc operations can carry fast-math flags; the
+      // software BF16 bit-manipulation fallback cannot represent them.
       return AMD::convertFp32ToF16rtne(loc, rewriter, inElemTy, outElemTy,
-                                       operands, isaFamily);
+                                       operands, isaFamily,
+                                       getLLVMFastmathFlags(op));
     }
-    return {LLVM::FPTruncOp::create(rewriter, loc, elemTy, operands[0][0])};
+    auto dstOp = LLVM::FPTruncOp::create(rewriter, loc, elemTy, operands[0][0]);
+    propagateFastMathFlags(op, dstOp);
+    return {dstOp};
   }
 
 private:
@@ -251,7 +267,9 @@ struct ExpOpConversionApprox
       return {};
 
     const double log2e = 1.4426950408889634;
-    Value prod = b.fmul(f32_ty, operands[0][0], b.f32_val(log2e));
+    LLVM::FastmathFlagsAttr fastmathFlags = getLLVMFastmathFlags(op);
+    Value prod =
+        b.fmul(f32_ty, operands[0][0], b.f32_val(log2e), fastmathFlags);
 
     // Here we use llvm.exp2.f32 instead of math::Exp2Op. The latter
     // flushes denorms by default, but we want to preserve denorms by default
@@ -261,7 +279,10 @@ struct ExpOpConversionApprox
     LLVM::LLVMFuncOp funcOp =
         appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
 
-    return {LLVM::createLLVMCallOp(rewriter, loc, funcOp, prod).getResult()};
+    auto callOp = LLVM::createLLVMCallOp(rewriter, loc, funcOp, prod);
+    if (fastmathFlags)
+      callOp.setFastmathFlagsAttr(fastmathFlags);
+    return {callOp.getResult()};
   }
 };
 
@@ -285,10 +306,16 @@ struct Exp2OpConversion
     // which flushes input and output denorms. `llvm.amdgcn.exp2.f32` provides
     // direct access to v_exp_f32. For `llvm.exp2.f32`, the LLVM backend inserts
     // instructions to handle denorms iff `allow_flush_denorm` is False.
+    //
+    // ROCDL ops map directly to AMDGPU intrinsics and do not implement
+    // LLVM::FastmathFlagsInterface, so the FTZ path cannot record the source
+    // fast-math flags.
     if (ftz)
       return {ROCDL::ROCDLExp2::create(rewriter, loc, elemTy, operands[0])};
 
-    return {LLVM::Exp2Op::create(rewriter, loc, elemTy, operands[0])};
+    auto dstOp = LLVM::Exp2Op::create(rewriter, loc, elemTy, operands[0]);
+    propagateFastMathFlags(op, dstOp);
+    return {dstOp};
   }
 
 private:
@@ -328,20 +355,28 @@ private:
 
 static inline std::pair<Value, Value>
 scaleUpIfDenorm(ConversionPatternRewriter &rewriter, Location loc,
-                const Value &src, float scaleThreshold, float scaleFactor) {
+                const Value &src, float scaleThreshold, float scaleFactor,
+                Operation *srcOp) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value needScale = b.fcmp_ogt(b.f32_val(scaleThreshold), src);
-  Value scaledSrc = b.fmul(f32_ty, src, b.f32_val(scaleFactor));
-  Value selectedSrc = b.select(needScale, scaledSrc, src);
+  auto needScale = b.fcmp_ogt(b.f32_val(scaleThreshold), src);
+  propagateFastMathFlags(srcOp, needScale);
+  auto scaledSrc = b.fmul(f32_ty, src, b.f32_val(scaleFactor));
+  propagateFastMathFlags(srcOp, scaledSrc);
+  auto selectedSrc = b.select(needScale, scaledSrc, src);
+  propagateFastMathFlags(srcOp, selectedSrc);
   return {needScale, selectedSrc};
 }
 
 static inline Value scaleDownIfDenorm(ConversionPatternRewriter &rewriter,
                                       Location loc, const Value &src,
-                                      Value needScale, float scaleFactor) {
+                                      Value needScale, float scaleFactor,
+                                      Operation *srcOp) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value scaledSrc = b.fmul(f32_ty, src, b.f32_val(scaleFactor));
-  return b.select(needScale, scaledSrc, src);
+  auto scaledSrc = b.fmul(f32_ty, src, b.f32_val(scaleFactor));
+  propagateFastMathFlags(srcOp, scaledSrc);
+  auto result = b.select(needScale, scaledSrc, src);
+  propagateFastMathFlags(srcOp, result);
+  return result;
 }
 
 struct SqrtOpConversion
@@ -384,7 +419,7 @@ struct SqrtOpConversion
       // Reference:
       // https://github.com/llvm/llvm-project/blob/0876c11c/llvm/lib/Target/AMDGPU/AMDGPULegalizerInfo.cpp#L5235-L5314.
       std::tie(needScale, scaledSrc) = scaleUpIfDenorm(
-          rewriter, loc, operands[0][0], 0x1.0p-96f, 0x1.0p+32f);
+          rewriter, loc, operands[0][0], 0x1.0p-96f, 0x1.0p+32f, op);
     }
 
     // llvm.amdgcn.sqrt.f32 provides direct access to v_sqrt_f32, which provides
@@ -396,7 +431,7 @@ struct SqrtOpConversion
       // In case of non-ftz, we need to calibrate the results by scaling down by
       // a factor of 2^{-16}.
       return {scaleDownIfDenorm(rewriter, loc, intrinsicsOutput, needScale,
-                                0x1.0p-16f)};
+                                0x1.0p-16f, op)};
     } else {
       return {intrinsicsOutput};
     }

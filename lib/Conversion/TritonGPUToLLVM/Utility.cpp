@@ -1,4 +1,5 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "mlir/Conversion/ArithCommon/AttrToLLVMConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/Transforms/RegionUtils.h"
@@ -285,6 +286,46 @@ Value emitRedundantThreadPredicate(
     }
   }
   return pred;
+}
+
+// Returns the fast-math flags carried by `op`, or a null attribute when it has
+// none. Arith fast-math attributes are default-valued, so an operation without
+// flags still reports an explicit `none` attribute.
+static arith::FastMathFlagsAttr getArithFastmathFlags(Operation *op) {
+  auto fastmath = dyn_cast<arith::ArithFastMathInterface>(op);
+  if (!fastmath)
+    return {};
+
+  arith::FastMathFlagsAttr flags = fastmath.getFastMathFlagsAttr();
+  if (!flags || flags.getValue() == arith::FastMathFlags::none)
+    return {};
+  return flags;
+}
+
+LLVM::FastmathFlagsAttr getLLVMFastmathFlags(Operation *op) {
+  arith::FastMathFlagsAttr flags = getArithFastmathFlags(op);
+  if (!flags)
+    return {};
+  return arith::convertArithFastMathAttrToLLVM(flags);
+}
+
+void propagateFastMathFlags(Operation *srcOp, Operation *dstOp) {
+  arith::FastMathFlagsAttr flags = getArithFastmathFlags(srcOp);
+  if (!flags)
+    return;
+
+  // Neither fast-math interface exposes a setter, so the flags have to go in
+  // by name.
+  if (auto dstFastmath = dyn_cast<arith::ArithFastMathInterface>(dstOp)) {
+    dstOp->setAttr(dstFastmath.getFastMathAttrName(), flags);
+    return;
+  }
+
+  auto dstFastmath = dyn_cast<LLVM::FastmathFlagsInterface>(dstOp);
+  if (!dstFastmath)
+    return;
+  dstOp->setAttr(dstFastmath.getFastmathAttrName(),
+                 arith::convertArithFastMathAttrToLLVM(flags));
 }
 
 } // namespace triton::gpu

@@ -72,6 +72,54 @@ def test_compile_only_sm100() -> None:
     assert k.asm["cubin"] != b""
 
 
+@pytest.mark.parametrize(
+    "allow_flush_denorm, llvm_fn_attrs, expected, expected_denorm_modes",
+    [
+        (False, (), "denormal_fpenv(ieee)", (3, 3)),
+        (True, (), "denormal_fpenv(float: preservesign)", (0, 3)),
+        (True, "denormal-fp-math-f32=ieee", "denormal_fpenv(ieee)", (3, 3)),
+        (
+            False,
+            "denormal-fp-math=preserve-sign",
+            "denormal_fpenv(preservesign, float: ieee)",
+            (3, 0),
+        ),
+    ],
+)
+def test_compile_only_denormal_fp_env(allow_flush_denorm, llvm_fn_attrs, expected, expected_denorm_modes) -> None:
+    """
+    Validate that the requested denormal mode reaches code generation.
+
+    The mode has to be carried by LLVM's `denormal_fpenv` attribute; the legacy
+    `denormal-fp-math` string attributes are accepted on the function but never
+    read, so requesting flush-to-zero through them has no effect on the
+    generated assembly.
+    """
+
+    @triton.jit
+    def kernel(out):
+        tl.store(out, 0.0)
+
+    src = ASTSource(fn=kernel, signature={"out": "*fp32"})
+    compiled = triton.compile(
+        src,
+        target=GPUTarget("hip", "gfx942", 64),
+        options={
+            "allow_flush_denorm": allow_flush_denorm,
+            "llvm_fn_attrs": llvm_fn_attrs,
+        },
+    )
+    llir = compiled.asm["llir"]
+    assert expected in llir
+    assert "denormal-fp-math" not in llir
+
+    # 3 selects IEEE denormals, 0 selects flush-to-zero.
+    f32_mode, f16_f64_mode = expected_denorm_modes
+    amdgcn = compiled.asm["amdgcn"]
+    assert f".amdhsa_float_denorm_mode_32 {f32_mode}" in amdgcn
+    assert f".amdhsa_float_denorm_mode_16_64 {f16_f64_mode}" in amdgcn
+
+
 @pytest.mark.parametrize("element_type", ["f32", "f16", "bf16"])
 def test_compile_only_packed_arith_chains(element_type, tmp_path) -> None:
     packed_type = f"{element_type}x2"

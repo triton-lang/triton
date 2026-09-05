@@ -15,6 +15,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @packed_fastmath(
+      %arg0: tensor<64xf32, #blocked>,
+      %arg1: tensor<64xf32, #blocked>) {
+    // GFX1250-LABEL: packed_fastmath
+    // GFX1250-DAG: llvm.fadd {{.*}} {fastmathFlags = #llvm.fastmath<contract>} : vector<2xf32>
+    // GFX1250-DAG: llvm.fsub {{.*}} {fastmathFlags = #llvm.fastmath<contract>} : vector<2xf32>
+    // GFX1250-DAG: llvm.fmul {{.*}} {fastmathFlags = #llvm.fastmath<contract>} : vector<2xf32>
+    // GFX1250-DAG: llvm.fptrunc {{.*}} fastmath<ninf> : vector<2xf32> to vector<2xf16>
+    %add = arith.addf %arg0, %arg1 fastmath<contract> : tensor<64xf32, #blocked>
+    %sub = arith.subf %add, %arg1 fastmath<contract> : tensor<64xf32, #blocked>
+    %mul = arith.mulf %sub, %arg1 fastmath<contract> : tensor<64xf32, #blocked>
+    %trunc = arith.truncf %mul fastmath<ninf> : tensor<64xf32, #blocked> to tensor<64xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 #mma = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[1, 0], [2, 0]]}, isTranspose = true, instrShape = [16, 16, 32]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // GFX1250-LABEL: reduce_16x16

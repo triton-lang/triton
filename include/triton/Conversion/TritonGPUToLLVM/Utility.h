@@ -356,6 +356,23 @@ Value emitRedundantThreadPredicate(
 // Takes two values that may be boolean, or null to represent constant True.
 Value maybeAnd(OpBuilder &builder, Location loc, Value a, Value b);
 
+// Fast-math flags are dropped unless a lowering carries them over explicitly.
+// Prefer `getLLVMFastmathFlags` when the destination is built through a builder
+// that accepts a `LLVM::FastmathFlagsAttr`; use `propagateFastMathFlags` when
+// the destination comes back from a helper, or when a lowering emits several
+// floating-point ops that each need the flags. Destinations that cannot
+// represent them (ROCDL intrinsics, integer bit-manipulation sequences, inline
+// asm) necessarily drop them.
+
+// Returns the fast-math flags of `op` in the LLVM dialect spelling, or a null
+// attribute when it carries none.
+LLVM::FastmathFlagsAttr getLLVMFastmathFlags(Operation *op);
+
+// Carries the fast-math flags of `srcOp` over to `dstOp`, translating them when
+// the lowering crosses from the arith/math spelling to the LLVM spelling. Does
+// nothing if `srcOp` has no flags or `dstOp` cannot carry them.
+void propagateFastMathFlags(Operation *srcOp, Operation *dstOp);
+
 } // namespace gpu
 
 } // namespace triton
