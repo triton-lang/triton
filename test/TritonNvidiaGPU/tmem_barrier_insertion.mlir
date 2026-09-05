@@ -3,6 +3,8 @@
 
 #shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
 #shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 16}>
+#shared_a_fp8 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+#shared_b_fp8 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
 #shared_copy = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #shared_fp8 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
@@ -412,8 +414,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-NEXT: ttng.tc_gen5_mma_scaled
   tt.func @st_then_mma_scaled_scale_operand(
       %arg0: tensor<128x1xi8, #blocked_scales>,
-      %arg1: !ttg.memdesc<128x128xf16, #shared_a, #ttg.shared_memory>,
-      %arg2: !ttg.memdesc<128x128xf16, #shared_b, #ttg.shared_memory>,
+      %arg1: !ttg.memdesc<128x128xf8E5M2, #shared_a_fp8, #ttg.shared_memory>,
+      %arg2: !ttg.memdesc<128x128xf8E5M2, #shared_b_fp8, #ttg.shared_memory>,
       %arg3: !ttg.memdesc<64x1xi8, #tmem_scales, #ttng.tensor_memory>) {
     %true = arith.constant true
     %d = ttng.tmem_alloc {tensor_memory_col_offset = 64 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
@@ -421,8 +423,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttg.barrier local
     ttng.tmem_store %arg0, %a_scale, %true : tensor<128x1xi8, #blocked_scales> -> !ttg.memdesc<128x1xi8, #tmem_scales, #ttng.tensor_memory, mutable>
     ttng.tc_gen5_mma_scaled %arg1, %arg2, %d, %a_scale, %arg3, %true, %true lhs = e5m2 rhs = e5m2 :
-      !ttg.memdesc<128x128xf16, #shared_a, #ttg.shared_memory>,
-      !ttg.memdesc<128x128xf16, #shared_b, #ttg.shared_memory>,
+      !ttg.memdesc<128x128xf8E5M2, #shared_a_fp8, #ttg.shared_memory>,
+      !ttg.memdesc<128x128xf8E5M2, #shared_b_fp8, #ttg.shared_memory>,
       !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>,
       !ttg.memdesc<128x1xi8, #tmem_scales, #ttng.tensor_memory, mutable>,
       !ttg.memdesc<64x1xi8, #tmem_scales, #ttng.tensor_memory>
