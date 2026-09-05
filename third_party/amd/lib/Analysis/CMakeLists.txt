@@ -1,6 +1,4 @@
 add_triton_library(TritonAMDAnalysis
-  RangeAnalysis.cpp
-  ControlFlowRangeAnalysis.cpp
   AxisInfoExt.cpp
   AMDGPUAllocation.cpp
 
@@ -10,8 +8,8 @@ add_triton_library(TritonAMDAnalysis
 
   LINK_LIBS PUBLIC
   MLIRAnalysis
-  MLIRControlFlowDialect
   MLIRLLVMDialect
+  TritonAnalysis
   TritonIR
   TritonGPUIR
 )
