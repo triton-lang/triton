@@ -567,7 +567,8 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
         LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDimNames[order[2]]);
   }
 
-  return combineCtaCgaWithShape(tileLayout, getCGALayout(), shape);
+  return combineCtaCgaWithShape(tileLayout, getCGALayout(), shape)
+      .removeZeroBasesAlongDim(kRegister);
 }
 
 static LinearLayout projectAwayOutDim(const LinearLayout &layout,
@@ -776,7 +777,8 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
       permuteDimNames(standardOutDimNames(ctx, rank), defaultRepOrder);
 
   wmmaLayout = wmmaLayout.transposeOuts(repDimNames);
-  return combineCtaCgaWithShape(wmmaLayout, getCGALayout(), shape);
+  return combineCtaCgaWithShape(wmmaLayout, getCGALayout(), shape)
+      .removeZeroBasesAlongDim(S("register"));
 }
 
 LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
@@ -980,7 +982,8 @@ NvidiaMmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   ctaLayout *= identityStandardND(S("warp"), getWarpsPerCTA(), warpOrder)
                    .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
 
-  return combineCtaCgaWithShape(ctaLayout, getCGALayout(), shape);
+  return combineCtaCgaWithShape(ctaLayout, getCGALayout(), shape)
+      .removeZeroBasesAlongDim(S("register"));
 }
 
 LinearLayout nvidiaDotToLinearLayout(ArrayRef<int64_t> shape,
@@ -1018,16 +1021,19 @@ LinearLayout nvidiaDotToLinearLayout(ArrayRef<int64_t> shape,
 
 LinearLayout
 DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  LinearLayout layout;
   auto parent = getParent();
-  if (auto blockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(parent)) {
-    return fmaDotToLinearLayout(*this, shape);
-  } else if (auto mfmaLayout = mlir::dyn_cast<AMDMfmaEncodingAttr>(parent)) {
-    return mfmaDotToLinearLayout(*this, shape);
-  } else if (auto wmmaLayout = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
-    return wmmaDotOperandToLinearLayout(*this, shape);
+  if (isa<BlockedEncodingAttr>(parent)) {
+    layout = fmaDotToLinearLayout(*this, shape);
+  } else if (isa<AMDMfmaEncodingAttr>(parent)) {
+    layout = mfmaDotToLinearLayout(*this, shape);
+  } else if (isa<AMDWmmaEncodingAttr>(parent)) {
+    layout = wmmaDotOperandToLinearLayout(*this, shape);
   } else {
-    return nvidiaDotToLinearLayout(shape, *this);
+    layout = nvidiaDotToLinearLayout(shape, *this);
   }
+  return layout.removeZeroBasesAlongDim(
+      StringAttr::get(getContext(), "register"));
 }
 
 LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {

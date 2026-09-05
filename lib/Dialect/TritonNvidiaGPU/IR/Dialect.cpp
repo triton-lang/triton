@@ -329,8 +329,7 @@ getDistributedLayoutForTmemLdSt(const LinearLayout &ll, TMemAccessAtom atom,
   tile *= LinearLayout::identity1D(nCTAs, kBlock, kBlock);
   assert(tile.getOutDimSize(rowColDims[1]) == ll.getInDimSize(rowColDims[1]));
 
-  auto ret = tile.compose(ll);
-  return ret;
+  return tile.compose(ll).removeZeroBasesAlongDim(kReg);
 }
 
 std::optional<LinearLayout>
