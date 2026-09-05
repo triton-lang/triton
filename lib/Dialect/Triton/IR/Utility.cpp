@@ -52,80 +52,81 @@ unsigned tt::getBitwidth(RankedTensorType ty) {
   return isPtr ? kPtrBitWidth : std::max(ty.getElementTypeBitWidth(), 8u);
 }
 
+std::optional<ConstantIntRanges>
+tt::getBoundFromCmpPredicate(arith::CmpIPredicate predicate,
+                             const ConstantIntRanges &other, bool isLhs) {
+  using P = arith::CmpIPredicate;
+  if (predicate == P::eq)
+    return other;
+
+  unsigned width = other.umin().getBitWidth();
+  if (predicate == P::ne) {
+    auto value = other.getConstantValue();
+    if (!value)
+      return ConstantIntRanges::maxRange(width);
+    APInt umin = APInt::getZero(width), umax = APInt::getMaxValue(width);
+    APInt smin = APInt::getSignedMinValue(width);
+    APInt smax = APInt::getSignedMaxValue(width);
+    if (*value == umin)
+      ++umin;
+    if (*value == umax)
+      --umax;
+    if (*value == smin)
+      ++smin;
+    if (*value == smax)
+      --smax;
+    return ConstantIntRanges(umin, umax, smin, smax);
+  }
+
+  bool isSigned = predicate == P::slt || predicate == P::sle ||
+                  predicate == P::sgt || predicate == P::sge;
+  bool less = predicate == P::slt || predicate == P::sle ||
+              predicate == P::ult || predicate == P::ule;
+  bool strict = predicate == P::slt || predicate == P::sgt ||
+                predicate == P::ult || predicate == P::ugt;
+  bool upperBound = less == isLhs;
+  APInt min =
+      isSigned ? APInt::getSignedMinValue(width) : APInt::getZero(width);
+  APInt max =
+      isSigned ? APInt::getSignedMaxValue(width) : APInt::getMaxValue(width);
+  if (upperBound) {
+    APInt bound = isSigned ? other.smax() : other.umax();
+    if (strict && bound == min)
+      return std::nullopt;
+    max = strict ? bound - 1 : bound;
+  } else {
+    APInt bound = isSigned ? other.smin() : other.umin();
+    if (strict && bound == max)
+      return std::nullopt;
+    min = strict ? bound + 1 : bound;
+  }
+  return ConstantIntRanges::range(min, max, isSigned);
+}
+
 std::optional<ConstantIntRanges> tt::getBoundFromCmpOp(arith::CmpIOp cmpOp,
                                                        Value anchor) {
-  bool isSigned = true;
-  switch (cmpOp.getPredicate()) {
-  case arith::CmpIPredicate::uge:
-  case arith::CmpIPredicate::ugt:
-  case arith::CmpIPredicate::ule:
-  case arith::CmpIPredicate::ult:
-    isSigned = false;
-  default:
-    break;
-  }
+  // Assumption ranges replace inferred ranges, so an unrepresentable hole
+  // must not introduce an otherwise uninformative assumption.
+  if (cmpOp.getPredicate() == arith::CmpIPredicate::ne)
+    return std::nullopt;
+  bool isLhs = cmpOp.getLhs() == anchor;
+  auto value = getConstantIntValue(
+      getAsOpFoldResult(isLhs ? cmpOp.getRhs() : cmpOp.getLhs()));
+  if (!value)
+    return std::nullopt;
 
-  bool anchorIsLhs = cmpOp.getLhs() == anchor;
-  auto maybeConstantIntValue = getConstantIntValue(
-      getAsOpFoldResult(anchorIsLhs ? cmpOp.getRhs() : cmpOp.getLhs()));
-  if (auto constValue = maybeConstantIntValue) {
-    unsigned bitWidth = ConstantIntRanges::getStorageBitwidth(anchor.getType());
-    assert(bitWidth > 0 && "expected non-zero bitwdith");
-    APInt apVal = {bitWidth, static_cast<uint64_t>(*constValue), isSigned};
-    APInt min, max;
-    if (isSigned) {
-      min = APInt::getSignedMinValue(bitWidth);
-      if (llvm::isa_and_nonnull<mlir::triton::GetProgramIdOp,
-                                mlir::triton::GetNumProgramsOp>(
-              anchor.getDefiningOp())) {
-        min = APInt::getZero(bitWidth);
-      } else
-        min = APInt::getSignedMinValue(bitWidth);
-      max = APInt::getSignedMaxValue(bitWidth);
-    } else {
-      min = APInt::getMinValue(bitWidth);
-      max = APInt::getMaxValue(bitWidth);
-    }
-
-    switch (cmpOp.getPredicate()) {
-    case arith::CmpIPredicate::eq:
-      return mlir::ConstantIntRanges::constant(apVal);
-    case arith::CmpIPredicate::uge:
-    case arith::CmpIPredicate::sge: {
-      // K >= apVal implies K ∈ [apVal, max]
-      if (anchorIsLhs)
-        return mlir::ConstantIntRanges::range(apVal, max, isSigned);
-      // apVal >= K implies K ∈ [min, apVal]
-      return mlir::ConstantIntRanges::range(min, apVal, isSigned);
-    }
-    case arith::CmpIPredicate::ugt:
-    case arith::CmpIPredicate::sgt: {
-      // K > apVal implies K >= apVal + 1 implies K ∈ [apVal + 1, max]
-      if (anchorIsLhs)
-        return mlir::ConstantIntRanges::range(apVal + 1, max, isSigned);
-      // apVal > K implies apVal - 1 >= K implies K ∈ [min, apVal - 1]
-      return mlir::ConstantIntRanges::range(min, apVal - 1, isSigned);
-    }
-    case arith::CmpIPredicate::ule:
-    case arith::CmpIPredicate::sle: {
-      // K <= apVal implies K ∈ [min, apVal]
-      if (anchorIsLhs)
-        return mlir::ConstantIntRanges::range(min, apVal, isSigned);
-      // apVal <= K implies K ∈ [apVal, max]
-      return mlir::ConstantIntRanges::range(apVal, max, isSigned);
-    }
-    case arith::CmpIPredicate::ult:
-    case arith::CmpIPredicate::slt: {
-      // K < apVal implies K <= apVal -1 implies K ∈ [min, apVal - 1]
-      if (anchorIsLhs)
-        return mlir::ConstantIntRanges::range(min, apVal - 1, isSigned);
-      // apVal < K implies apVal + 1 <= K implies K ∈ [apVal + 1, max]
-      return mlir::ConstantIntRanges::range(apVal + 1, max, isSigned);
-    }
-    default:
-      emitRemark(cmpOp.getLoc(), "unsupported cmp predicate for assumption");
-      return {};
-    }
-  }
-  return {};
+  unsigned width = ConstantIntRanges::getStorageBitwidth(anchor.getType());
+  APInt bound(width, static_cast<uint64_t>(*value), /*isSigned=*/true);
+  auto result = getBoundFromCmpPredicate(
+      cmpOp.getPredicate(), ConstantIntRanges::constant(bound), isLhs);
+  auto predicate = cmpOp.getPredicate();
+  bool isSigned = predicate == arith::CmpIPredicate::slt ||
+                  predicate == arith::CmpIPredicate::sle ||
+                  predicate == arith::CmpIPredicate::sgt ||
+                  predicate == arith::CmpIPredicate::sge;
+  if (result && isSigned && result->smin().isMinSignedValue() &&
+      isa_and_nonnull<GetProgramIdOp, GetNumProgramsOp>(anchor.getDefiningOp()))
+    result = result->intersection(ConstantIntRanges::fromSigned(
+        APInt::getZero(width), APInt::getSignedMaxValue(width)));
+  return result;
 }
