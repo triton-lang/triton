@@ -437,6 +437,8 @@ class CUDABackend(BaseBackend):
             nvidia.passes.ttgpuir.add_set_minimum_shared_memory(pm, options.min_shared_mem)
         passes.ttgpuir.add_canonicalize_llvm_ir(pm)
         passes.common.add_cse(pm)
+        # Lower Proton segment values before warp specialization captures partition operands.
+        instrument(pm, point="llvmir-to-llvm", context=mod.context)
         nvidia.passes.ttnvgpuir.add_warp_specialize_to_llvm(pm)
         nvidia.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
         passes.common.add_canonicalizer(pm)
@@ -446,8 +448,6 @@ class CUDABackend(BaseBackend):
 
         if not knobs.compilation.disable_line_info and not knobs.compilation.dump_ir_extract_di_local_variables:
             passes.llvmir.add_di_scope(pm)
-
-        instrument(pm, point="llvmir-to-llvm", context=mod.context)
 
         pm.run(mod, 'make_llir')
 

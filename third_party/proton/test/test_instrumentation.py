@@ -348,6 +348,40 @@ def test_gluon_warp_specialized_event(tmp_path: pathlib.Path):
         assert start["ts"] <= end["ts"]
 
 
+@pytest.mark.skipif(not supports_ws(), reason="requires warp specialization")
+def test_gluon_warp_specialized_dynamic_event(tmp_path: pathlib.Path):
+
+    @gluon.jit
+    def default_partition(iterations):
+        event = pl.allocate_event("dynamic_warp_specialized")
+        # The dynamic loop makes Proton's segment part of warp specialization's CFG.
+        for _ in range(iterations):
+            pl.start_event(event)
+            pl.end_event(event)
+
+    @gluon.jit
+    def empty_partition():
+        pass
+
+    @gluon.jit(do_not_specialize=["iterations"])
+    def kernel(iterations):
+        gl.warp_specialize([
+            (default_partition, (iterations, )),
+            (empty_partition, ()),
+        ], [4], [24])
+
+    trace_path = tmp_path / "warp_specialized_dynamic_event.chrome_trace"
+    proton.start(str(trace_path.with_suffix("")), backend="instrumentation", data="trace")
+    kernel[(1, )](2, num_warps=4)
+    proton.finalize()
+
+    with trace_path.open("rb") as f:
+        events = json.load(f)["traceEvents"]
+    async_events = [event for event in events if event["name"] == "dynamic_warp_specialized"]
+    assert async_events
+    assert all(event["ph"] == "X" for event in async_events)
+
+
 def test_select_ids(tmp_path: pathlib.Path):
     from contextlib import contextmanager
 
