@@ -622,6 +622,77 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // -----
 
+// CHECK-LABEL: mismatched_reduce_update
+// CHECK: %[[INIT_ARG:.*]] = arith.constant dense<2.000000e+00>
+// CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[INIT_ARG]]) -> {{.*}}
+// CHECK: %[[LOAD:.*]] = tt.load
+// CHECK-NOT: tt.reshape
+// CHECK: %[[REDUCE:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 1 : i32}>
+// CHECK: arith.addf
+// CHECK: %[[UPDATE:.*]] = arith.mulf %[[FOR_ARG]], %[[REDUCE]]
+// CHECK-NEXT: scf.yield %[[UPDATE]]
+// CHECK-NOT: "tt.reduce"
+// CHECK: tt.store {{.*}}, %[[LOOP_OUTPUT]]
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @mismatched_reduce_update(
+      %input: tensor<32x128x!tt.ptr<f32>, #blocked>,
+      %output: tensor<32x!tt.ptr<f32>, #slice>, %count: i32) {
+    %two = arith.constant dense<2.000000e+00> : tensor<32xf32, #slice>
+    %start = arith.constant 0 : i32
+    %step = arith.constant 1 : i32
+    %result = scf.for %i = %start to %count step %step
+        iter_args(%acc = %two) -> (tensor<32xf32, #slice>) : i32 {
+      %values = tt.load %input : tensor<32x128x!tt.ptr<f32>, #blocked>
+      %sum = "tt.reduce"(%values) <{axis = 1 : i32}> ({
+      ^bb0(%lhs: f32, %rhs: f32):
+        %pair = arith.addf %lhs, %rhs : f32
+        tt.reduce.return %pair : f32
+      }) : (tensor<32x128xf32, #blocked>) -> tensor<32xf32, #slice>
+      %updated = arith.mulf %acc, %sum : tensor<32xf32, #slice>
+      scf.yield %updated : tensor<32xf32, #slice>
+    }
+    tt.store %output, %result : tensor<32x!tt.ptr<f32>, #slice>
+    tt.return
+  }
+
+  // The combiner and update are both addf, but have different rounding modes.
+  // CHECK-LABEL: mismatched_reduce_properties
+  // CHECK: %[[INIT_ARG:.*]] = arith.constant dense<0.000000e+00>
+  // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[INIT_ARG]]) -> {{.*}}
+  // CHECK: %[[LOAD:.*]] = tt.load
+  // CHECK-NOT: tt.reshape
+  // CHECK: %[[REDUCE:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 1 : i32}>
+  // CHECK: arith.addf {{.*}} downward
+  // CHECK: %[[UPDATE:.*]] = arith.addf %[[FOR_ARG]], %[[REDUCE]]
+  // CHECK-NEXT: scf.yield %[[UPDATE]]
+  // CHECK-NOT: "tt.reduce"
+  // CHECK: tt.store {{.*}}, %[[LOOP_OUTPUT]]
+  tt.func public @mismatched_reduce_properties(
+      %input: tensor<32x128x!tt.ptr<f32>, #blocked>,
+      %output: tensor<32x!tt.ptr<f32>, #slice>, %count: i32) {
+    %zero = arith.constant dense<0.000000e+00> : tensor<32xf32, #slice>
+    %start = arith.constant 0 : i32
+    %step = arith.constant 1 : i32
+    %result = scf.for %i = %start to %count step %step
+        iter_args(%acc = %zero) -> (tensor<32xf32, #slice>) : i32 {
+      %values = tt.load %input : tensor<32x128x!tt.ptr<f32>, #blocked>
+      %sum = "tt.reduce"(%values) <{axis = 1 : i32}> ({
+      ^bb0(%lhs: f32, %rhs: f32):
+        %pair = arith.addf %lhs, %rhs downward : f32
+        tt.reduce.return %pair : f32
+      }) : (tensor<32x128xf32, #blocked>) -> tensor<32xf32, #slice>
+      %updated = arith.addf %acc, %sum : tensor<32xf32, #slice>
+      scf.yield %updated : tensor<32xf32, #slice>
+    }
+    tt.store %output, %result : tensor<32x!tt.ptr<f32>, #slice>
+    tt.return
+  }
+}
+
+// -----
+
 // CHECK-LABEL: remains_unchanged
 // CHECK: %[[CST:.*]] = arith.constant dense
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[CST]]) -> {{.*}}
