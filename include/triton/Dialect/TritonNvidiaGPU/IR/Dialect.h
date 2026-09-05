@@ -52,6 +52,12 @@ LogicalResult verifyMMAv5Op(Operation *op);
 #define GET_ATTRDEF_CLASSES
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.h.inc"
 
+namespace mlir::triton::nvidia_gpu {
+enum class MMAv5Kind { tf32, f16, f8f6f4, i8, mxf8f6f4, mxf4, mxf4nvf4 };
+StringRef stringifyMMAv5Kind(MMAv5Kind kind);
+int64_t getMMAv5MinK(MMAv5Kind kind);
+} // namespace mlir::triton::nvidia_gpu
+
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.h.inc"
 
 #define GET_OP_CLASSES

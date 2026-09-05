@@ -76,18 +76,8 @@ private:
 // InstDescriptor
 //===----------------------------------------------------------------------===//
 
-enum class mxfpKind { mxf8f6f4 = 0, mxf4 = 1, mxf4nvf4 = 2 };
+using ttng::MMAv5Kind;
 enum class scaleKind : uint32_t { ue4m3 = 0, e8m0 = 1, ue5m3 = 2 };
-
-bool isTransposed(Value operand) {
-  auto tensorTy = cast<MemDescType>(operand.getType());
-  if (isa<ttng::TensorMemoryEncodingAttr>(tensorTy.getEncoding()))
-    return false;
-
-  auto attrs = ttng::getNvmmaSmemAttrs(tensorTy);
-  assert(attrs && "expected MMAv5 shared operand to have NVMMA SMEM attrs");
-  return attrs->transposed;
-}
 
 bool isFp4Padded(MemDescType operand) {
   // An fp4Padded TMEM descriptor keeps the packed Mx(K/2)xi8 shape. Allocate
@@ -118,28 +108,6 @@ static bool isBlock16Scale(Type scaleType, int blockK) {
     return false;
   return shapedType.getShape().back() * 16 == blockK;
 }
-
-inline mxfpKind getMXFPKind(ScaleDotElemType typeA, ScaleDotElemType typeB,
-                            Type scaleAType, Type scaleBType, int blockK,
-                            bool transpose) {
-  if (typeA == ScaleDotElemType::E2M1 && typeB == ScaleDotElemType::E2M1) {
-    auto scaleAElemType = cast<ShapedType>(scaleAType).getElementType();
-    auto scaleBElemType = cast<ShapedType>(scaleBType).getElementType();
-    bool isUE4M3 = llvm::isa<Float8E4M3FNType>(scaleAElemType) &&
-                   llvm::isa<Float8E4M3FNType>(scaleBElemType);
-    bool isUE5M3 = scaleAElemType.isInteger(8) && scaleBElemType.isInteger(8) &&
-                   isBlock16Scale(scaleAType, blockK) &&
-                   isBlock16Scale(scaleBType, blockK);
-    if (isUE4M3 || isUE5M3) {
-      assert(!transpose &&
-             "MMAv5 with kind=mxf4nvf4 does not support transpose");
-      return mxfpKind::mxf4nvf4;
-    }
-    if (!transpose)
-      return mxfpKind::mxf4;
-  }
-  return mxfpKind::mxf8f6f4;
-};
 
 static scaleKind getScaleKind(ttng::TCGen5MMAScaledOp op, int blockK) {
   Type scaleType = op.getAScale().getType();
@@ -290,7 +258,7 @@ static Value createScaleInstDescriptorFp8(ConversionPatternRewriter &rewriter,
 static Value createScaleInstDescriptorFp4(
     ConversionPatternRewriter &rewriter, ttng::TCGen5MMAScaledOp op, int M,
     int N, bool transposeA, bool transposeB, int scaleFactorsubIdxA,
-    int scaleFactorsubIdxB, mxfpKind mxfpInstKind, int blockK, int kSize) {
+    int scaleFactorsubIdxB, MMAv5Kind mxfpInstKind, int blockK, int kSize) {
   Location loc = op.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   union TCGen5InstructionDescriptor {
@@ -347,7 +315,7 @@ static Value createScaleInstDescriptorFp4(
          "MMAv5 with kind=mxf4 does not support transpose");
 
   int scaleVecSize = getScaleVecSize(op);
-  if (mxfpInstKind == mxfpKind::mxf4 || (mxfpInstKind == mxfpKind::mxf4nvf4 &&
+  if (mxfpInstKind == MMAv5Kind::mxf4 || (mxfpInstKind == MMAv5Kind::mxf4nvf4 &&
                                          scaleVecSize == 32 && kSize == 64)) {
     desc.AScaleFactor *= 2;
     desc.BScaleFactor *= 2;
@@ -359,7 +327,7 @@ static Value createScaleInstDescriptorFp4(
                                          "MMAv5 with kind=mxf4 or "
                                          "kind=mxf4nvf4 and .block32 only "
                                          "supports SFB_ID 0 or 2");
-  } else if (mxfpInstKind == mxfpKind::mxf4nvf4) {
+  } else if (mxfpInstKind == MMAv5Kind::mxf4nvf4) {
     assert(desc.AScaleFactor == 0 &&
            "MMAv5 with kind=mxf4nvf4 and .block16 only supports SFA_ID 0");
     assert(desc.BScaleFactor == 0 &&
@@ -739,23 +707,10 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
   SmallVector<Value> commitDescs = op.getCompletionDescs();
 
   DotConversion dot;
-  Type srcElementTy = aTensorTy.getElementType();
-  if (srcElementTy.isF16() || srcElementTy.isBF16()) {
-    dot.kind = "f16";
-  } else if (srcElementTy.isF32()) {
-    dot.kind = "tf32";
-  } else if (llvm::isa<Float8E4M3FNType, Float8E5M2Type>(srcElementTy)) {
-    dot.kind = "f8f6f4";
-  } else if (dTensorTy.getElementType().isInteger(32)) {
-    // PTX uses "i8" for integer operations (both signed and unsigned)
-    // The signed/unsigned distinction is encoded in the instruction descriptor
-    dot.kind = "i8";
-  } else {
-    llvm_unreachable("Unsupported type.");
-  }
+  dot.kind = ttng::stringifyMMAv5Kind(op.getMmaKind());
 
   dot.blockK = aTensorTy.getDimSize(1);
-  dot.mmaSizeK = 256 / aTensorTy.getElementTypeBitWidth();
+  dot.mmaSizeK = ttng::getMMAv5MinK(op.getMmaKind());
 
   auto tensorMemAttr =
       cast<ttng::TensorMemoryEncodingAttr>(dTensorTy.getEncoding());
@@ -804,14 +759,14 @@ int64_t getFormatBitSize(ScaleDotElemType type) {
   }
 }
 
-int getScaleFactorColsPerSet(mxfpKind kind, ttng::TCGen5MMAScaledOp op,
+int getScaleFactorColsPerSet(MMAv5Kind kind, ttng::TCGen5MMAScaledOp op,
                              int kSize) {
   switch (kind) {
-  case mxfpKind::mxf8f6f4:
+  case MMAv5Kind::mxf8f6f4:
     return kSize == 32 ? 1 : 2;
-  case mxfpKind::mxf4:
+  case MMAv5Kind::mxf4:
     return kSize == 64 ? 2 : 4;
-  case mxfpKind::mxf4nvf4:
+  case MMAv5Kind::mxf4nvf4:
     return getScaleVecSize(op) == 32 && kSize == 64 ? 2 : 4;
   default:
     llvm_unreachable("Unsupported mxfp kind.");
@@ -838,24 +793,23 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
   MemDescType dTensorTy = op.getD().getType();
   int blockK = op.getBlockK();
 
-  mxfpKind mxfpInstKind =
-      getMXFPKind(op.getAType(), op.getBType(), op.getAScale().getType(),
-                  op.getBScale().getType(), blockK,
-                  isTransposed(op.getA()) || !isTransposed(op.getB()));
-  bool opKindIsMXFP4 = mxfpInstKind != mxfpKind::mxf8f6f4;
+  MMAv5Kind mxfpInstKind = op.getMmaKind();
+  bool opKindIsMXFP4 = mxfpInstKind != MMAv5Kind::mxf8f6f4;
 
   DotConversion dot;
   switch (mxfpInstKind) {
-  case mxfpKind::mxf8f6f4:
+  case MMAv5Kind::mxf8f6f4:
     dot.kind = "mxf8f6f4.block_scale.block32";
     break;
-  case mxfpKind::mxf4:
+  case MMAv5Kind::mxf4:
     dot.kind = "mxf4.block_scale.block32";
     break;
-  case mxfpKind::mxf4nvf4:
+  case MMAv5Kind::mxf4nvf4:
     dot.kind = getScaleVecSize(op) == 32 ? "mxf4nvf4.block_scale.block32"
                                          : "mxf4nvf4.block_scale.block16";
     break;
+  default:
+    llvm_unreachable("Unsupported scaled MMA kind.");
   }
 
   auto tensorMemAttr =
@@ -874,8 +828,8 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
       // which requires a special unpacked layout for scales B in TMEM
       // (currently undocumented). tensorMemoryScalesToLinearLayout and lowering
       // of tcgen05.cp need to be updated for this.
-      (mxfpInstKind == mxfpKind::mxf4nvf4 && mmaSizeN < 128)) {
-    dot.mmaSizeK = opKindIsMXFP4 ? 64 : 32;
+      (mxfpInstKind == MMAv5Kind::mxf4nvf4 && mmaSizeN < 128)) {
+    dot.mmaSizeK = ttng::getMMAv5MinK(mxfpInstKind);
   } else {
     dot.mmaSizeK = opKindIsMXFP4 ? std::min(blockK, 128) : std::min(blockK, 64);
   }
@@ -953,7 +907,7 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
     Value scaleA = tb.add(baseScaleA, tb.i32_val(offsetA));
     Value scaleB = tb.add(baseScaleB, tb.i32_val(offsetB));
     Value instDescriptor;
-    if (mxfpInstKind == mxfpKind::mxf8f6f4) {
+    if (mxfpInstKind == MMAv5Kind::mxf8f6f4) {
       instDescriptor = createScaleInstDescriptorFp8(
           rewriter, op, desc.mmaSizeM, desc.mmaSizeN, desc.transA, desc.transB,
           subWordIdx, subWordIdx, dot.mmaSizeK);
