@@ -141,8 +141,8 @@ void init_triton_nvidia_passes_ttgpuir(py::module_ &m) {
           pm.addPass(mlir::triton::createSetMinimumSharedMemory(options));
         });
   ADD_PASS_OPTION_WRAPPER_2("add_membar",
-                            mlir::triton::createTritonNvidiaGPUMembar,
-                            int32_t, int32_t);
+                            mlir::triton::createTritonNvidiaGPUMembar, int32_t,
+                            int32_t);
   m.def("add_to_llvmir",
         [](mlir::PassManager &pm, int32_t capability, int32_t ptxVersion) {
           pm.addPass(mlir::triton::createConvertTritonGPUToLLVMPass(
