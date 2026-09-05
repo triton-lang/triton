@@ -33,7 +33,6 @@
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/NvmmaSmemAttrs.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.cpp.inc"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
@@ -975,66 +974,60 @@ static void printToken(OpAsmPrinter &p, Operation *op, Value dep, Type token) {
   p << ']';
 }
 
-StringRef stringifyMMAv5Kind(MMAv5Kind kind) {
+namespace {
+enum class MMADTypeKind { tf32, f16, f8f6f4, i8 };
+} // namespace
+
+static std::string strMMADTypeKind(MMADTypeKind kind) {
   switch (kind) {
-  case MMAv5Kind::tf32:
+  case MMADTypeKind::tf32:
     return "tf32";
-  case MMAv5Kind::f16:
+  case MMADTypeKind::f16:
     return "f16";
-  case MMAv5Kind::f8f6f4:
+  case MMADTypeKind::f8f6f4:
     return "f8f6f4";
-  case MMAv5Kind::i8:
+  case MMADTypeKind::i8:
     return "i8";
-  case MMAv5Kind::mxf8f6f4:
-    return "mxf8f6f4";
-  case MMAv5Kind::mxf4:
-    return "mxf4";
-  case MMAv5Kind::mxf4nvf4:
-    return "mxf4nvf4";
   }
   llvm_unreachable("unknown mma dtype kind");
 }
 
-int64_t getMMAv5MinK(MMAv5Kind kind) {
+static int64_t getMMAv5MinK(MMADTypeKind kind) {
   switch (kind) {
-  case MMAv5Kind::tf32:
+  case MMADTypeKind::tf32:
     return 8;
-  case MMAv5Kind::f16:
+  case MMADTypeKind::f16:
     return 16;
-  case MMAv5Kind::f8f6f4:
-  case MMAv5Kind::i8:
-  case MMAv5Kind::mxf8f6f4:
+  case MMADTypeKind::f8f6f4:
+  case MMADTypeKind::i8:
     return 32;
-  case MMAv5Kind::mxf4:
-  case MMAv5Kind::mxf4nvf4:
-    return 64;
   }
   llvm_unreachable("unknown mma dtype kind");
 }
 
-static std::optional<std::pair<MMAv5Kind, SmallVector<Type>>>
+static std::optional<std::pair<MMADTypeKind, SmallVector<Type>>>
 getMMAv5DTypeKindAndAcc(Type t) {
   MLIRContext *ctx = t.getContext();
   // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-kind-shapes
   if (t.isF32()) {
-    return {{MMAv5Kind::tf32, {Float32Type::get(ctx)}}};
+    return {{MMADTypeKind::tf32, {Float32Type::get(ctx)}}};
   }
   if (t.isF16()) {
     return {
-        {MMAv5Kind::f16, {Float16Type::get(ctx), Float32Type::get(ctx)}}};
+        {MMADTypeKind::f16, {Float16Type::get(ctx), Float32Type::get(ctx)}}};
   }
   if (t.isBF16()) {
-    return {{MMAv5Kind::f16, {Float32Type::get(ctx)}}};
+    return {{MMADTypeKind::f16, {Float32Type::get(ctx)}}};
   }
   // TODO: float6 and explicit float4 types are not supported yet.
   // FIXME: i8 is used to represent float4 types.
   if (isa<FloatType>(t) && llvm::is_contained(std::array<unsigned, 3>{4, 6, 8},
                                               t.getIntOrFloatBitWidth())) {
     return {
-        {MMAv5Kind::f8f6f4, {Float16Type::get(ctx), Float32Type::get(ctx)}}};
+        {MMADTypeKind::f8f6f4, {Float16Type::get(ctx), Float32Type::get(ctx)}}};
   }
   if (t.isInteger(8)) {
-    return {{MMAv5Kind::i8, {IntegerType::get(ctx, 32)}}};
+    return {{MMADTypeKind::i8, {IntegerType::get(ctx, 32)}}};
   }
   return std::nullopt;
 }
@@ -1049,8 +1042,8 @@ static LogicalResult verifyMMADType(Operation *op, Type a, Type b, Type d) {
   if (akind->first != bkind->first) {
     return op->emitOpError(
                "LHS and RHS operand dtypes kinds don't match: LHS kind is ")
-           << stringifyMMAv5Kind(akind->first) << " but RHS kind is "
-           << stringifyMMAv5Kind(bkind->first);
+           << strMMADTypeKind(akind->first) << " but RHS kind is "
+           << strMMADTypeKind(bkind->first);
   }
   if (!llvm::is_contained(akind->second, d) ||
       !llvm::is_contained(bkind->second, d)) {
@@ -1063,10 +1056,6 @@ static LogicalResult verifyMMADType(Operation *op, Type a, Type b, Type d) {
     return diag;
   }
   return success();
-}
-
-MMAv5Kind TCGen5MMAOp::getMmaKind() {
-  return getMMAv5DTypeKindAndAcc(getA().getType().getElementType())->first;
 }
 
 LogicalResult TCGen5MMAOp::verify() {
@@ -1090,7 +1079,7 @@ LogicalResult TCGen5MMAOp::verify() {
   if (getD().getType().getRank() != 2)
     return emitOpError("Return operand must have a rank-2 tensor");
 
-  int64_t minK = getMMAv5MinK(getMmaKind());
+  int64_t minK = getMMAv5MinK(getMMAv5DTypeKindAndAcc(atype)->first);
   int64_t k = getA().getType().getDimSize(1);
   if (k < minK)
     return emitOpError("K dimension must be at least ")
@@ -1353,10 +1342,8 @@ static Type getScaledMMAOperandType(Type elementType,
 };
 
 static bool isScaledMMATransposed(MemDescType type, bool isLhs) {
-  if (isa<TensorMemoryEncodingAttr>(type.getEncoding()))
-    return false;
-  auto shared = getNvmmaSmemAttrs(type);
-  return shared && (isLhs ? shared->transposed : !shared->transposed);
+  auto shared = dyn_cast<NVMMASharedEncodingAttr>(type.getEncoding());
+  return shared && (isLhs ? shared.getTransposed() : !shared.getTransposed());
 }
 
 static LogicalResult verifyScaledLHSOperand(Operation *op, Type elementType,
@@ -1412,27 +1399,6 @@ verifyScaleBlockRepOrder(TCGen5MMAScaledOp op,
   return success();
 }
 
-MMAv5Kind TCGen5MMAScaledOp::getMmaKind() {
-  if (getAType() != ScaleDotElemType::E2M1 ||
-      getBType() != ScaleDotElemType::E2M1)
-    return MMAv5Kind::mxf8f6f4;
-
-  auto aScaleType = cast<ShapedType>(getAScale().getType());
-  auto bScaleType = cast<ShapedType>(getBScale().getType());
-  bool isUE4M3 = isa<Float8E4M3FNType>(aScaleType.getElementType()) &&
-                 isa<Float8E4M3FNType>(bScaleType.getElementType());
-  bool isUE5M3 = aScaleType.getElementType().isInteger(8) &&
-                 bScaleType.getElementType().isInteger(8) &&
-                 aScaleType.getShape().back() * 16 == getBlockK() &&
-                 bScaleType.getShape().back() * 16 == getBlockK();
-  if (isUE4M3 || isUE5M3)
-    return MMAv5Kind::mxf4nvf4;
-  if (isScaledMMATransposed(getA().getType(), /*isLhs=*/true) ||
-      isScaledMMATransposed(getB().getType(), /*isLhs=*/false))
-    return MMAv5Kind::mxf8f6f4;
-  return MMAv5Kind::mxf4;
-}
-
 LogicalResult TCGen5MMAScaledOp::verify() {
   if (!getIsAsync() && !getBarriers().empty()) {
     return emitOpError("The op is synchronous but a barrier is present.");
@@ -1464,12 +1430,13 @@ LogicalResult TCGen5MMAScaledOp::verify() {
                                       getAType(), getBType())))
       return failure();
   }
-  MMAv5Kind kind = getMmaKind();
-  if (kind == MMAv5Kind::mxf4nvf4 &&
-      (isScaledMMATransposed(getA().getType(), /*isLhs=*/true) ||
-       isScaledMMATransposed(getB().getType(), /*isLhs=*/false)))
-    return emitOpError("mxf4nvf4 does not support transposed operands");
-  int64_t minK = getMMAv5MinK(kind);
+  // Transposed and mixed-format FP4 use mxf8f6f4. Only non-transposed
+  // FP4 x FP4 uses mxf4/mxf4nvf4, whose minimum instruction K is 64.
+  bool isPackedFP4 = getAType() == ScaleDotElemType::E2M1 &&
+                     getBType() == ScaleDotElemType::E2M1 &&
+                     !isScaledMMATransposed(getA().getType(), /*isLhs=*/true) &&
+                     !isScaledMMATransposed(getB().getType(), /*isLhs=*/false);
+  int64_t minK = isPackedFP4 ? 64 : 32;
   int64_t k = getBlockK();
   if (k < minK)
     return emitOpError("K dimension must be at least ")

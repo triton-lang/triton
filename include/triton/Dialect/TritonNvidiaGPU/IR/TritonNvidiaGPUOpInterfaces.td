@@ -80,9 +80,6 @@ def MMAv5OpInterface : OpInterface<"MMAv5OpInterface"> {
 
   // We can add more methods as needed.
   let methods = [
-    InterfaceMethod<"Return the instruction kind selected for this MMAv5 op.",
-                    "::mlir::triton::nvidia_gpu::MMAv5Kind",
-                    "getMmaKind">,
     InterfaceMethod<"Return the A operand.",
                     "::mlir::TypedValue<::mlir::triton::gpu::MemDescType>",
                     "getA">,
