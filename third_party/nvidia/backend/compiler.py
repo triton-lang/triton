@@ -423,7 +423,7 @@ class CUDABackend(BaseBackend):
         passes.convert.add_scf_to_cf(pm)
         passes.gluon.add_inliner(pm)
         if is_enabled(options, "consan"):
-            nvidia.passes.ttnvgpuir.add_prepare_consan_captures(pm)
+            passes.ttgpuir.add_prepare_consan_captures(pm, "nvidia")
         nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         # Instrumentation point here so an extension can override IRs above (e.g., ttir and ttgir).
@@ -433,7 +433,7 @@ class CUDABackend(BaseBackend):
         nvidia.passes.ttgpuir.add_membar(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_tmem_wait_insertion(pm)
         if is_enabled(options, "consan"):
-            nvidia.passes.ttnvgpuir.add_concurrency_sanitizer(pm)
+            passes.ttgpuir.add_concurrency_sanitizer(pm)
             passes.gluon.add_canonicalizer(pm)
             passes.common.add_cse(pm)
         nvidia.passes.ttnvgpuir.add_cluster_barrier_mbar_allocator(pm)

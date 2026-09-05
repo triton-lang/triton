@@ -12,7 +12,7 @@
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/FunctionBuilder.h"
-#include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetInfo.h"
+#include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 
@@ -149,7 +149,7 @@ LogicalResult verifyConSanCaptureReservation(FuncOp func, int captureCounter,
     if (!reserved) {
       op.emitError("WarpSpecialize op is missing '")
           << kConSanExtraCaptureBytesAttr
-          << "'; run the target's prepare-consan-captures pass before shared "
+          << "'; run TritonInstrumentPrepareConSanCaptures before shared "
              "memory allocation";
       return WalkResult::interrupt();
     }
@@ -405,7 +405,7 @@ FuncOp getEntryPoint(ModuleOp module) {
 }
 
 AuxDataMap::ThreadLayout getThreadLayout(FuncOp entryPoint,
-                                        const ConSanTargetInfo &targetInfo) {
+                                         const ConSanTargetHooks &hooks) {
   AuxDataMap::ThreadLayout layout;
   bool hasTMA = false;
   bool hasTC = false;
@@ -418,9 +418,9 @@ AuxDataMap::ThreadLayout getThreadLayout(FuncOp entryPoint,
     if (auto wsOp = dyn_cast<WarpSpecializePartitionsOp>(op))
       layout.numBaseThreads = std::max<int>(
           layout.numBaseThreads, wsOp.getPartitionRegions().size() + 1);
-    hasTMA |= targetInfo.isTMAOp(op);
+    hasTMA |= hooks.isTMAOp(op);
     hasTC |= isa<MMAv5OpInterface, TCGen5CommitOp, TMEMCopyOp>(op);
-    hasCLC |= targetInfo.isCLCOp(op);
+    hasCLC |= hooks.isCLCOp(op);
   });
 
   assert(layout.numBaseThreads <= MAX_NUM_BASE_THREADS &&
@@ -486,16 +486,15 @@ Region *AuxDataMap::RegionToValueMap::getEnclosingParitionOrFunctionRegion(
 
 LogicalResult
 AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
-                                          FunctionBuilder &fb,
-                                          const ConSanTargetInfo &targetInfo) {
+                                            FunctionBuilder &fb,
+                                            const ConSanTargetHooks &hooks) {
   SmallVector<BufferRegion> barrierRegions;
-  if (failed(
-          getBuffersAndBarriers(module, entryPoint, barrierRegions, targetInfo)))
+  if (failed(getBuffersAndBarriers(module, entryPoint, barrierRegions, hooks)))
     return failure();
   int numCTAs = lookupNumCTAs(module);
-  threadLayout = getThreadLayout(entryPoint, targetInfo);
+  threadLayout = getThreadLayout(entryPoint, hooks);
   hasAsyncProxyFenceTracking =
-      targetInfo.needsAsyncProxyFenceTracking(module) &&
+      hooks.needsAsyncProxyFenceTracking(module) &&
       bufferStatePlans[(int)MemType::SHARED_MEM].numLanes != 0;
   int captureCounter = 0;
   int64_t captureBytes = 0;
@@ -626,7 +625,7 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
   ExperimentalLockReleaseOp::create(b, lockVal, isCTA0);
   if (numCTAs > 1) {
     SmallVector<Operation *> clusterBarriers =
-        targetInfo.createInitClusterBarrier(b);
+        hooks.createInitClusterBarrier(b);
     assert(!clusterBarriers.empty() &&
            "target must provide a cluster initialization barrier");
     llvm::append_range(internalClusterBarriers, clusterBarriers);
@@ -655,7 +654,7 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
     createCommitTensor(CommitKind::AsyncCp);
   }
 
-  for (auto kind : targetInfo.getRequiredCommitKinds(module))
+  for (auto kind : hooks.getRequiredCommitKinds(module))
     if (commits[kind].empty())
       createCommitTensor(kind);
 
@@ -683,7 +682,7 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
 LogicalResult
 AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
                                   SmallVector<BufferRegion> &barrierRegions,
-                                  const ConSanTargetInfo &targetInfo) {
+                                  const ConSanTargetHooks &hooks) {
   // Run dataflow over the module so call edges resolve, then collect only the
   // entrypoint regions that this ConSan invocation will instrument.
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
@@ -722,7 +721,7 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
     for (const MemoryAccess &access : getMemoryAccesses(op))
       collectCandidates(access.value);
 
-    auto info = getConSanMemEffectsOpInfo(targetInfo, op);
+    auto info = getConSanMemEffectsOpInfo(hooks, op);
     if (!info)
       return;
     if (info->trackingKind == MemEffectsOpInfo::TrackingKind::CommitCount &&

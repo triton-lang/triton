@@ -3,24 +3,6 @@
 
 include "mlir/Pass/PassBase.td"
 
-def TritonAMDGPUConcurrencySanitizer : Pass<"triton-amdgpu-consan", "mlir::ModuleOp"> {
-  let summary = "Instrument asynchronous operations with concurrency checks";
-
-  let dependentDialects = ["mlir::triton::TritonDialect",
-                           "mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::triton::instrument::TritonInstrumentDialect",
-                           "mlir::triton::amdgpu::TritonAMDGPUDialect"];
-}
-
-def TritonAMDGPUPrepareConSanCaptures : Pass<"triton-amdgpu-prepare-consan-captures", "mlir::ModuleOp"> {
-  let summary = "Reserve shared memory for ConSan WarpSpecialize captures";
-
-  let dependentDialects = ["mlir::triton::TritonDialect",
-                           "mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::triton::instrument::TritonInstrumentDialect",
-                           "mlir::triton::amdgpu::TritonAMDGPUDialect"];
-}
-
 def TritonAMDGPUScheduleLoops : Pass<"tritonamdgpu-schedule-loops", "mlir::ModuleOp"> {
   let summary = "Generate schedule for loops";
 

@@ -102,7 +102,7 @@ getNvidiaAllocationAnalysisScratchSizeFn(TargetInfoBase &targetInfo) {
     if (auto ws = dyn_cast<triton::gpu::WarpSpecializeOp>(op)) {
       unsigned captureSize = defaultAllocationAnalysisScratchSizeFn(op);
       // ConSan adds captures after allocation; reserve space pre-computed by
-      // the NVIDIA prepare-consan-captures pass.
+      // the common TritonInstrumentPrepareConSanCaptures pass.
       if (auto extra = ws->getAttrOfType<IntegerAttr>(
               mlir::triton::instrument::kConSanExtraCaptureBytesAttr))
         captureSize += extra.getInt();

@@ -1,11 +1,13 @@
-#ifndef TRITONINSTRUMENT_CONSAN_TARGET_INFO_H
-#define TRITONINSTRUMENT_CONSAN_TARGET_INFO_H
+#ifndef TRITONINSTRUMENT_CONSAN_TARGET_HOOKS_H
+#define TRITONINSTRUMENT_CONSAN_TARGET_HOOKS_H
 
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "triton/Analysis/BufferRegion.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
+#include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <variant>
@@ -115,11 +117,9 @@ struct CommitKindDesc {
   std::string operationDesc;
 };
 
-// Target semantics shared by capture preparation and ConSan instrumentation.
-// Each vendor pass constructs its implementation directly.
-class ConSanTargetInfo {
+class ConSanTargetHooks {
 public:
-  virtual ~ConSanTargetInfo() = default;
+  virtual ~ConSanTargetHooks() = default;
 
   virtual bool isTMAOp(Operation *op) const = 0;
 
@@ -213,8 +213,8 @@ public:
 };
 
 inline std::optional<MemEffectsOpInfo>
-getConSanMemEffectsOpInfo(const ConSanTargetInfo &targetInfo, Operation *op) {
-  std::optional<MemEffectsOpInfo> info = targetInfo.getMemEffectsOpInfo(op);
+getConSanMemEffectsOpInfo(const ConSanTargetHooks &hooks, Operation *op) {
+  std::optional<MemEffectsOpInfo> info = hooks.getMemEffectsOpInfo(op);
   auto sizeAttr = op->getAttrOfType<IntegerAttr>("allocation.size");
   // Keep frame summaries for retained callees, whose bodies are not
   // instrumented, but omit operation-local compiler scratch.
@@ -241,12 +241,9 @@ getConSanMemEffectsOpInfo(const ConSanTargetInfo &targetInfo, Operation *op) {
   return info;
 }
 
-LogicalResult runConcurrencySanitizer(ModuleOp module,
-                                     const ConSanTargetInfo &targetInfo);
-
-// hasClusterBarriers includes barriers inserted after capture preparation.
-void prepareConSanCaptures(ModuleOp module, const ConSanTargetInfo &targetInfo,
-                          bool hasClusterBarriers);
+using ConSanHooksFactory = std::function<std::unique_ptr<ConSanTargetHooks>()>;
+void registerConSanHooks(llvm::StringRef key, ConSanHooksFactory factory);
+std::unique_ptr<ConSanTargetHooks> createConSanHooks(llvm::StringRef key);
 
 } // namespace mlir::triton::instrument
 

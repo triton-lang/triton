@@ -364,13 +364,13 @@ class HIPBackend(BaseBackend):
 
         # Reserve LDS space for ConSan captures before allocation computes offsets.
         if is_enabled(options, "consan") and is_consan_supported(options.arch):
-            amd.passes.ttgpuir.add_prepare_consan_captures(pm)
+            passes.ttgpuir.add_prepare_consan_captures(pm, "amd")
         amd.passes.ttgpuir.add_allocate_shared_memory(pm, options.arch)
         # Instrumentation point here so an extension can override IRs above (e.g., ttir and ttgir).
         instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
         amd.passes.ttgpuir.add_membar(pm, options.arch)
         if is_enabled(options, "consan") and is_consan_supported(options.arch):
-            amd.passes.ttgpuir.add_concurrency_sanitizer(pm)
+            passes.ttgpuir.add_concurrency_sanitizer(pm)
             passes.gluon.add_canonicalizer(pm)
             passes.common.add_cse(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)

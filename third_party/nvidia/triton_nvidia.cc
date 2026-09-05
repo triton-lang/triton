@@ -225,10 +225,7 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module_ &m) {
                      ttng::createTritonNvidiaGPUOptimizeTMemLayoutsPass);
   ADD_PASS_WRAPPER_0("add_interleave_tmem",
                      ttng::createTritonNvidiaGPUInterleaveTMemPass);
-  ADD_PASS_WRAPPER_0("add_prepare_consan_captures",
-                     ttng::createTritonNvidiaGPUPrepareConSanCaptures);
-  ADD_PASS_WRAPPER_0("add_concurrency_sanitizer",
-                     ttng::createTritonNvidiaGPUConcurrencySanitizer);
+  ttng::registerConSanNVIDIAHooks();
 }
 
 void init_triton_nvidia_passes_nvws(py::module_ &m) {
