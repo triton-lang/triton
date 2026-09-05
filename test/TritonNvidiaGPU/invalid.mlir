@@ -327,7 +327,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
   tt.func @tcgen5_mxf4_transposed_a_k_small(%a: !a_small, %b: !b_small, %c: !c, %sa: !sa_small, %sb: !sb_small, %p: i1) {
-    // expected-error @below {{K dimension must be at least 32 for this scaled MMA, but got 16}}
+    // K=16 with one scale selects block16 NVFP4.
+    // expected-error @below {{mxf4nvf4 does not support transposed operands}}
     ttng.tc_gen5_mma_scaled %a, %b, %c, %sa, %sb, %p, %p lhs = e2m1 rhs = e2m1 :
         !a_small, !b_small, !c, !sa_small, !sb_small
     tt.return
@@ -356,7 +357,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
   tt.func @tcgen5_mxf4_transposed_b_k_small(%a: !a_small, %b: !b_small, %c: !c, %sa: !sa_small, %sb: !sb_small, %p: i1) {
-    // expected-error @below {{K dimension must be at least 32 for this scaled MMA, but got 16}}
+    // K=16 with one scale selects block16 NVFP4.
+    // expected-error @below {{mxf4nvf4 does not support transposed operands}}
     ttng.tc_gen5_mma_scaled %a, %b, %c, %sa, %sb, %p, %p lhs = e2m1 rhs = e2m1 :
         !a_small, !b_small, !c, !sa_small, !sb_small
     tt.return
@@ -2116,6 +2118,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %view = ttg.memdesc_subslice %alloc [1] : !ttg.memdesc<2xi64, #shared, #smem> -> !ttg.memdesc<1xi64, #shared, #smem, 2>
     // expected-error @below {{barrier must have a contiguous shared-memory layout without subviews}}
     ttng.init_barrier %view, 1 : !ttg.memdesc<1xi64, #shared, #smem, 2>
+    tt.return
+  }
+}
+
+// -----
+
+#a_enc = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8, fp4Padded = true}>
+#b_enc = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8, fp4Padded = true}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+#scales = #ttng.tensor_memory_scales_encoding<>
+!a_min = !ttg.memdesc<64x64xi8, #a_enc, #ttg.shared_memory>
+!b_min = !ttg.memdesc<32x64xi8, #b_enc, #ttg.shared_memory>
+!sa_min = !ttg.memdesc<128x4xf8E4M3FN, #scales, #ttng.tensor_memory>
+!sb_min = !ttg.memdesc<64x4xf8E4M3FN, #scales, #ttng.tensor_memory>
+!c = !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  tt.func @tcgen5_nvfp4_transposed_float8_scales(%a: !a_min, %b: !b_min, %c: !c, %sa: !sa_min, %sb: !sb_min, %p: i1) {
+    // expected-error @below {{mxf4nvf4 does not support transposed operands}}
+    ttng.tc_gen5_mma_scaled %a, %b, %c, %sa, %sb, %p, %p lhs = e2m1 rhs = e2m1 :
+        !a_min, !b_min, !c, !sa_min, !sb_min
     tt.return
   }
 }

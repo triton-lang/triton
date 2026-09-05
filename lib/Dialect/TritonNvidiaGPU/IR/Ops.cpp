@@ -33,6 +33,7 @@
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/NvmmaSmemAttrs.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.cpp.inc"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
@@ -1430,20 +1431,37 @@ LogicalResult TCGen5MMAScaledOp::verify() {
                                       getAType(), getBType())))
       return failure();
   }
-  // Transposed and mixed-format FP4 use mxf8f6f4. Only non-transposed
-  // FP4 x FP4 uses mxf4/mxf4nvf4, whose minimum instruction K is 64.
-  bool isPackedFP4 = getAType() == ScaleDotElemType::E2M1 &&
-                     getBType() == ScaleDotElemType::E2M1 &&
-                     !isScaledMMATransposed(getA().getType(), /*isLhs=*/true) &&
-                     !isScaledMMATransposed(getB().getType(), /*isLhs=*/false);
-  int64_t minK = isPackedFP4 ? 64 : 32;
+  auto aScaleType = cast<MemDescType>(getAScale().getType());
+  auto bScaleType = cast<MemDescType>(getBScale().getType());
   int64_t k = getBlockK();
+  int64_t minK = 32;
+  if (getAType() == ScaleDotElemType::E2M1 &&
+      getBType() == ScaleDotElemType::E2M1) {
+    // Match getMXFPKind in MMAv5.cpp: NVFP4 scales select mxf4nvf4
+    // regardless of transpose; other FP4 pairs use mxf8f6f4 when transposed.
+    bool transA = false;
+    if (!isa<TensorMemoryEncodingAttr>(getA().getType().getEncoding())) {
+      auto attrs = getNvmmaSmemAttrs(getA().getType());
+      transA = attrs && attrs->transposed;
+    }
+    auto bAttrs = getNvmmaSmemAttrs(getB().getType());
+    bool transB = bAttrs && !bAttrs->transposed;
+    bool isUE4M3 = isa<Float8E4M3FNType>(aScaleType.getElementType()) &&
+                   isa<Float8E4M3FNType>(bScaleType.getElementType());
+    bool isUE5M3 = aScaleType.getElementType().isInteger(8) &&
+                   bScaleType.getElementType().isInteger(8) &&
+                   aScaleType.getShape().back() * 16 == k &&
+                   bScaleType.getShape().back() * 16 == k;
+    bool isNVFP4 = isUE4M3 || isUE5M3;
+    if (isNVFP4 && (transA || transB))
+      return emitOpError("mxf4nvf4 does not support transposed operands");
+    if (isNVFP4 || (!transA && !transB))
+      minK = 64;
+  }
   if (k < minK)
     return emitOpError("K dimension must be at least ")
            << minK << " for this scaled MMA, but got " << k;
 
-  auto aScaleType = cast<MemDescType>(getAScale().getType());
-  auto bScaleType = cast<MemDescType>(getBScale().getType());
   auto isScaleBlockRepOrderRelevant = [](MemDescType scaleType) {
     auto shapePerCTA = getShapePerCTA(scaleType);
     assert(shapePerCTA.size() >= 2);
