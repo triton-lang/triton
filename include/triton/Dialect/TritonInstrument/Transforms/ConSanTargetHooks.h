@@ -241,9 +241,6 @@ getConSanMemEffectsOpInfo(const ConSanTargetHooks &hooks, Operation *op) {
   return info;
 }
 
-LogicalResult runConcurrencySanitizer(ModuleOp module,
-                                      const ConSanTargetHooks &hooks);
-
 using ConSanHooksFactory = std::function<std::unique_ptr<ConSanTargetHooks>()>;
 void registerConSanHooks(llvm::StringRef key, ConSanHooksFactory factory);
 std::unique_ptr<ConSanTargetHooks> createConSanHooks(llvm::StringRef key);

@@ -1559,8 +1559,8 @@ private:
 
 } // namespace
 
-LogicalResult runConcurrencySanitizer(ModuleOp module,
-                                      const ConSanTargetHooks &hooks) {
+static LogicalResult runConcurrencySanitizer(ModuleOp module,
+                                             const ConSanTargetHooks &hooks) {
   ConcurrencySanitizerImpl impl(module, hooks);
   return impl.run();
 }
@@ -1572,13 +1572,23 @@ public:
   void runOnOperation() override {
     ModuleOp module = getOperation();
     auto targetAttr = module->getAttrOfType<StringAttr>(ttg::AttrTargetName);
-    assert(targetAttr && "module missing ttg.target attribute");
+    if (!targetAttr) {
+      module.emitError("ConSan requires a ttg.target module attribute");
+      return signalPassFailure();
+    }
     StringRef target = targetAttr.strref();
     StringRef key = target.starts_with("cuda:")  ? "nvidia"
                     : target.starts_with("hip:") ? "amd"
                                                  : "";
+    if (key.empty()) {
+      module.emitError("unsupported ConSan target '") << target << "'";
+      return signalPassFailure();
+    }
     auto hooks = createConSanHooks(key);
-    assert(hooks && "no ConSan hooks registered for target");
+    if (!hooks) {
+      module.emitError("no ConSan hooks registered for target '") << key << "'";
+      return signalPassFailure();
+    }
     if (failed(runConcurrencySanitizer(module, *hooks)))
       return signalPassFailure();
   }
