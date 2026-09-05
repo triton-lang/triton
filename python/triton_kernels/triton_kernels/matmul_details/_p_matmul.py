@@ -249,6 +249,11 @@ def _p_matmul(
     loop_start = 0 if CLC else tl.program_id(0)
     loop_end = 1 if CLC else num_blocks
     loop_step = 1 if CLC else NUM_SMS
+    if CLC and RAGGED_DIMENSION == "M":
+        # The launch covers schedule capacity; num_blocks is the useful count.
+        # Skip capacity-only IDs before computing coordinates or reading the
+        # expert schedule, but keep the compiler's CLC loop running to drain them.
+        loop_end = (tl.program_id(0) < num_blocks).to(tl.int32)
     for block_id in tl.range(
         loop_start, loop_end, loop_step,
         flatten=FLATTEN_LOOPS and not CLC,

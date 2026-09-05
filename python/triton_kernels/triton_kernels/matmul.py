@@ -434,8 +434,6 @@ def matmul(a, b, bias,
         rhs_layout=b.storage.layout,
         epilogue_reduction_n=fused_activation.specs.reduction_n,
     )
-    if opt_flags.clc and ragged_dimension == "M":
-        raise InapplicableConstraint("CLC requires a host-known grid and does not support ragged-M matmul")
     if opt_flags.clc and opt_flags.idle_sms:
         raise InapplicableConstraint("CLC does not support leaving SMs idle")
     if b_is_shuffled:
