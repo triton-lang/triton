@@ -1,10 +1,8 @@
-#include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
-
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
-#include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
+#include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetInfo.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 #include <array>
@@ -12,9 +10,6 @@
 namespace mlir {
 namespace triton {
 namespace instrument {
-
-#define GEN_PASS_DEF_TRITONINSTRUMENTPREPARECONSANCAPTURES
-#include "triton/Dialect/TritonInstrument/Transforms/Passes.h.inc"
 
 namespace {
 
@@ -63,11 +58,11 @@ bool hasCpAsync(ModuleOp mod) {
   return result;
 }
 
-int getNumCommitKinds(ModuleOp mod, const ConSanTargetHooks &hooks) {
+int getNumCommitKinds(ModuleOp mod, const ConSanTargetInfo &targetInfo) {
   std::array<bool, tti::CommitKind::NumCommitKinds> commitKinds{};
   if (hasCpAsync(mod))
     commitKinds[tti::CommitKind::AsyncCp] = true;
-  for (auto kind : hooks.getRequiredCommitKinds(mod)) {
+  for (auto kind : targetInfo.getRequiredCommitKinds(mod)) {
     if (kind >= 0 && kind < tti::CommitKind::NumCommitKinds)
       commitKinds[kind] = true;
   }
@@ -78,46 +73,25 @@ int getNumCommitKinds(ModuleOp mod, const ConSanTargetHooks &hooks) {
   return result;
 }
 
-class PrepareConSanCaptures
-    : public impl::TritonInstrumentPrepareConSanCapturesBase<
-          PrepareConSanCaptures> {
-public:
-  using impl::TritonInstrumentPrepareConSanCapturesBase<
-      PrepareConSanCaptures>::TritonInstrumentPrepareConSanCapturesBase;
-
-  void runOnOperation() override {
-    ModuleOp mod = getOperation();
-    if (target.empty()) {
-      mod.emitError("ConSan capture preparation requires a target hook key");
-      return signalPassFailure();
-    }
-
-    auto hooks = createConSanHooks(target);
-    if (!hooks) {
-      mod.emitError("no ConSan hooks registered for target '") << target << "'";
-      return signalPassFailure();
-    }
-
-    bool hasSharedBuffers = hasSharedMemoryBuffers(mod);
-    int numActiveMemTypes =
-        (hasSharedBuffers ? 1 : 0) + (hasTensorMemoryBuffers(mod) ? 1 : 0);
-    // NVIDIA inserts a terminal cluster barrier after this pass.
-    bool hasClusterBarriers = target == "nvidia" && ttg::lookupNumCTAs(mod) > 1;
-    int totalCaptures = tti::estimateConSanCaptureCount(
-        numActiveMemTypes, hasBarriers(mod), hasClusterBarriers,
-        getNumCommitKinds(mod, *hooks),
-        hasSharedBuffers && hooks->needsAsyncProxyFenceTracking(mod));
-    int extraBytes = totalCaptures * tti::kCaptureSizeBytes;
-
-    auto i32Ty = IntegerType::get(mod.getContext(), 32);
-    mod.walk([&](ttg::WarpSpecializeOp ws) {
-      ws->setAttr(tti::kConSanExtraCaptureBytesAttr,
-                  IntegerAttr::get(i32Ty, extraBytes));
-    });
-  }
-};
-
 } // namespace
+
+void prepareConSanCaptures(ModuleOp mod, const ConSanTargetInfo &targetInfo,
+                          bool hasClusterBarriers) {
+  bool hasSharedBuffers = hasSharedMemoryBuffers(mod);
+  int numActiveMemTypes =
+      (hasSharedBuffers ? 1 : 0) + (hasTensorMemoryBuffers(mod) ? 1 : 0);
+  int totalCaptures = tti::estimateConSanCaptureCount(
+      numActiveMemTypes, hasBarriers(mod), hasClusterBarriers,
+      getNumCommitKinds(mod, targetInfo),
+      hasSharedBuffers && targetInfo.needsAsyncProxyFenceTracking(mod));
+  int extraBytes = totalCaptures * tti::kCaptureSizeBytes;
+
+  auto i32Ty = IntegerType::get(mod.getContext(), 32);
+  mod.walk([&](ttg::WarpSpecializeOp ws) {
+    ws->setAttr(tti::kConSanExtraCaptureBytesAttr,
+                IntegerAttr::get(i32Ty, extraBytes));
+  });
+}
 
 } // namespace instrument
 } // namespace triton

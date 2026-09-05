@@ -3,36 +3,6 @@
 
 include "mlir/Pass/PassBase.td"
 
-def TritonInstrumentConcurrencySanitizer: Pass<"tritoninstrument-concurrency-sanitizer", "mlir::ModuleOp"> {
-  let summary = "Add runtime verification of asynchronous operations";
-
-  let description = "Instrument the program with runtime verification of asynchronous operations.";
-
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::triton::TritonDialect",
-                           "mlir::triton::instrument::TritonInstrumentDialect"];
-}
-
-def TritonInstrumentPrepareConSanCaptures: Pass<"tritoninstrument-prepare-consan-captures", "mlir::ModuleOp"> {
-  let summary = "Reserve shared memory for ConSan WarpSpecialize captures";
-
-  let description = [{
-    Estimates how many explicit captures the ConcurrencySanitizer pass will add
-    to WarpSpecializeOps and records the corresponding byte count on each
-    WarpSpecializeOp. Backend shared-memory allocation passes consume this
-    reservation before ConSan mutates the capture list.
-  }];
-
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::triton::TritonDialect",
-                           "mlir::triton::instrument::TritonInstrumentDialect"];
-
-  let options = [
-    Option<"target", "target", "std::string", /*default*/"std::string{}",
-           "ConSan target hook key, e.g. amd or nvidia">
-  ];
-}
-
 def TritonInstrumentFpSanitizer: Pass<"tritoninstrument-fp-sanitizer", "mlir::ModuleOp"> {
   let summary = "Replace floating-point ops with integer-payload equivalents";
 

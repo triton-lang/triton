@@ -1,7 +1,7 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
+#include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetInfo.h"
 
 namespace ttg = mlir::triton::gpu;
 namespace ttag = mlir::triton::amdgpu;
@@ -16,7 +16,11 @@ using tti::WaitOpInfo;
 
 namespace mlir {
 
-class AMDConSanHooks : public tti::ConSanTargetHooks {
+#define GEN_PASS_DEF_TRITONAMDGPUCONCURRENCYSANITIZER
+#define GEN_PASS_DEF_TRITONAMDGPUPREPARECONSANCAPTURES
+#include "TritonAMDGPUTransforms/Passes.h.inc"
+
+class AMDConSanTargetInfo : public tti::ConSanTargetInfo {
 public:
   bool isTMAOp(Operation *op) const override {
     return isa<ttag::TDMOpInterface, ttag::AsyncTDMFusedCopyGlobalToLocalOp>(
@@ -110,7 +114,7 @@ public:
     bool isAsyncCopy =
         isa<ttag::BufferLoadToLocalOp, ttag::AsyncCopyLocalToGlobalOp>(op);
     if (isAsyncCopy || isTMAOp(op)) {
-      MemEffectsOpInfo info = *ConSanTargetHooks::getMemEffectsOpInfo(op);
+      MemEffectsOpInfo info = *ConSanTargetInfo::getMemEffectsOpInfo(op);
       Value barrier;
       if (auto barrierOp = dyn_cast<ttg::MBarrierOpInterface>(op))
         barrier = barrierOp.getBarrier();
@@ -140,7 +144,7 @@ public:
       return info;
     }
 
-    return ConSanTargetHooks::getMemEffectsOpInfo(op);
+    return ConSanTargetInfo::getMemEffectsOpInfo(op);
   }
 
   SmallVector<CommitKindDesc> getOutstandingWriteCommitKinds() const override {
@@ -177,9 +181,29 @@ public:
   }
 };
 
-void registerConSanAMDHooks() {
-  tti::registerConSanHooks("amd",
-                           [] { return std::make_unique<AMDConSanHooks>(); });
-}
+namespace {
+
+class TritonAMDGPUConcurrencySanitizer
+    : public impl::TritonAMDGPUConcurrencySanitizerBase<
+          TritonAMDGPUConcurrencySanitizer> {
+public:
+  void runOnOperation() override {
+    AMDConSanTargetInfo targetInfo;
+    if (failed(tti::runConcurrencySanitizer(getOperation(), targetInfo)))
+      signalPassFailure();
+  }
+};
+
+class TritonAMDGPUPrepareConSanCaptures
+    : public impl::TritonAMDGPUPrepareConSanCapturesBase<
+          TritonAMDGPUPrepareConSanCaptures> {
+public:
+  void runOnOperation() override {
+    AMDConSanTargetInfo targetInfo;
+    tti::prepareConSanCaptures(getOperation(), targetInfo, false);
+  }
+};
+
+} // namespace
 
 } // namespace mlir

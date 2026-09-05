@@ -12,7 +12,7 @@
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/FunctionBuilder.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
-#include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
+#include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetInfo.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/Sys/GetEnv.h"
@@ -25,25 +25,6 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 namespace tti = mlir::triton::instrument;
-
-#define GEN_PASS_DEF_TRITONINSTRUMENTCONCURRENCYSANITIZER
-#include "triton/Dialect/TritonInstrument/Transforms/Passes.h.inc"
-
-static llvm::StringMap<ConSanHooksFactory> &getHooksRegistry() {
-  static llvm::StringMap<ConSanHooksFactory> registry;
-  return registry;
-}
-
-void registerConSanHooks(llvm::StringRef key, ConSanHooksFactory factory) {
-  getHooksRegistry()[key] = std::move(factory);
-}
-
-std::unique_ptr<ConSanTargetHooks> createConSanHooks(llvm::StringRef key) {
-  auto it = getHooksRegistry().find(key);
-  if (it != getHooksRegistry().end())
-    return it->second();
-  return nullptr;
-}
 
 namespace {
 
@@ -92,11 +73,11 @@ std::optional<int> maybeGetPartitionIdx(Operation *op) {
   return maybeGetPartitionIdx(parent);
 }
 
-int getCurrentThread(Operation *op, const ConSanTargetHooks &hooks,
+int getCurrentThread(Operation *op, const ConSanTargetInfo &targetInfo,
                      const AuxDataMap::ThreadLayout &threadLayout) {
   // Default partition is 0, other partitions are idx + 1
   int thread = maybeGetPartitionIdx(op).value_or(-1) + 1;
-  if (hooks.isTMAOp(op)) {
+  if (targetInfo.isTMAOp(op)) {
     assert(threadLayout.hasTMAThreads() &&
            "TMA thread class must exist when instrumenting a TMA op");
     thread += threadLayout.tmaThreadOffset;
@@ -108,7 +89,7 @@ int getCurrentThread(Operation *op, const ConSanTargetHooks &hooks,
     thread += threadLayout.tcThreadOffset;
     return thread;
   }
-  if (hooks.isCLCOp(op)) {
+  if (targetInfo.isCLCOp(op)) {
     assert(threadLayout.hasCLCThreads() &&
            "CLC thread class must exist when instrumenting a CLC op");
     thread += threadLayout.clcThreadOffset;
@@ -771,8 +752,8 @@ Value getBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
 
 class ConcurrencySanitizerImpl {
 public:
-  ConcurrencySanitizerImpl(ModuleOp module, const ConSanTargetHooks &hooks)
-      : module(module), hooks(hooks) {}
+  ConcurrencySanitizerImpl(ModuleOp module, const ConSanTargetInfo &targetInfo)
+      : module(module), targetInfo(targetInfo) {}
 
   LogicalResult run() {
     SmallVector<tt::FuncOp> publicFuncs =
@@ -796,7 +777,7 @@ public:
 
     tti::FunctionBuilder funcBuilder(module, auxData);
     if (failed(auxData.populateAndPassToWarpSpecialize(module, entryPoint,
-                                                       funcBuilder, hooks)))
+                                                     funcBuilder, targetInfo)))
       return failure();
 
     ImplicitLocOpBuilder b(entryPoint.getLoc(), entryPoint);
@@ -815,7 +796,7 @@ private:
     // NVIDIA broadcasts scalar atomic results; AMD executes them in each CTA.
     if (isa<tt::AtomicRMWOp, tt::AtomicCASOp>(op) &&
         !isa<RankedTensorType>(op->getResult(0).getType()))
-      return !hooks.hasUnsummarizableCalleeState(op);
+      return !targetInfo.hasUnsummarizableCalleeState(op);
 
     return !tt::hasCrossCTAScratch(op);
   }
@@ -867,24 +848,24 @@ private:
               });
         }
 
-        auto info = hooks.getMemEffectsOpInfo(op);
+        auto info = targetInfo.getMemEffectsOpInfo(op);
         bool hasMemoryState =
             info && (!info->operandEffects.empty() || !info->barriers.empty() ||
                      info->implicitCommit);
-        bool hasBarrierState = hooks.getBarrierInitInfo(op) ||
-                               hooks.getBarrierWaitInfo(op) ||
-                               hooks.getBarrierInvalidateInfo(op) ||
+        bool hasBarrierState = targetInfo.getBarrierInitInfo(op) ||
+                               targetInfo.getBarrierWaitInfo(op) ||
+                               targetInfo.getBarrierInvalidateInfo(op) ||
                                isa<ttg::MBarrierOpInterface>(op);
         bool hasAsyncState =
-            hooks.getAsyncProxyFenceInfo(op) ||
-            hooks.getWaitOpInfo(op, emptyAuxData) ||
+            targetInfo.getAsyncProxyFenceInfo(op) ||
+            targetInfo.getWaitOpInfo(op, emptyAuxData) ||
             op->hasTrait<OpTrait::MemWaitOpTrait>() ||
             isa<ttg::AsyncCommitGroupOp, ttng::WarpGroupDotWaitOp,
                 ttg::AsyncWaitOp>(op);
         bool hasControlState =
             isa<ttg::WarpSpecializeOp, ttg::WarpSpecializePartitionsOp,
                 ttng::ClusterBarrierOp>(op) ||
-            hooks.hasUnsummarizableCalleeState(op);
+            targetInfo.hasUnsummarizableCalleeState(op);
         if (!hasUnsupportedAllocation && !hasOpaqueEffects &&
             !hasUnsupportedResource && !hasMemoryState && !hasBarrierState &&
             !hasAsyncState && !hasControlState && isCTALocalScratch(op))
@@ -941,7 +922,7 @@ private:
       CriticalSectionListener listener;
       b.setListener(&listener);
 
-      int thread = getCurrentThread(op, hooks, auxData.threadLayout);
+      int thread = getCurrentThread(op, targetInfo, auxData.threadLayout);
       int baseThread = getBaseThread(thread, auxData.threadLayout);
       b.setLoc(op->getLoc());
       b.setInsertionPoint(op);
@@ -953,7 +934,7 @@ private:
         b.setInsertionPointAfter(op);
       }
 
-      if (auto info = hooks.getBarrierWaitInfo(op)) {
+      if (auto info = targetInfo.getBarrierWaitInfo(op)) {
         // For waits we want to instrument it before and after, so we do it
         // manually inside instrumentBarrierWait (disable the critical section
         // listener and return early)
@@ -968,9 +949,9 @@ private:
         return WalkResult::interrupt();
       }
       b.setLoc(op->getLoc());
-      if (auto info = hooks.getAsyncProxyFenceInfo(op)) {
+      if (auto info = targetInfo.getAsyncProxyFenceInfo(op)) {
         funcBuilder.createFenceProxyAccessesCall(
-            b, baseThread, info->cluster, hooks.getIssuerCTAPred(b, op), op);
+            b, baseThread, info->cluster, targetInfo.getIssuerCTAPred(b, op), op);
       }
       if (auto wsOp = dyn_cast<ttg::WarpSpecializeOp>(op)) {
         // ConSan helpers can exceed the partition register budgets and make
@@ -1015,17 +996,17 @@ private:
           b.setListener(&listener);
         }
       }
-      if (auto info = hooks.getBarrierInitInfo(op)) {
-        Value pred = hooks.getIssuerCTAPred(b, op);
-        if (!hooks.barrierWritesInvalidate())
+      if (auto info = targetInfo.getBarrierInitInfo(op)) {
+        Value pred = targetInfo.getIssuerCTAPred(b, op);
+        if (!targetInfo.barrierWritesInvalidate())
           funcBuilder.createVerifyBarrierCanInitCall(b, info->alloc, pred, op,
                                                      currentCTAMask(b));
         funcBuilder.createInitBarrierStateCall(b, info->alloc, info->count,
                                                pred, op);
       }
-      if (auto info = hooks.getBarrierInvalidateInfo(op)) {
+      if (auto info = targetInfo.getBarrierInvalidateInfo(op)) {
         Value barrier = info->alloc;
-        Value pred = hooks.getIssuerCTAPred(b, op);
+        Value pred = targetInfo.getIssuerCTAPred(b, op);
         funcBuilder.createInvalidateBarrierStateCall(b, barrier, pred, op);
       }
       if (auto asyncCommitGroupOp = dyn_cast<ttg::AsyncCommitGroupOp>(op)) {
@@ -1039,7 +1020,7 @@ private:
             wgmmaWaitOp.getPendings(), nullptr, CommitKind::Wgmma,
             MemType::SHARED_MEM, op);
       }
-      if (auto info = hooks.getWaitOpInfo(op, auxData)) {
+      if (auto info = targetInfo.getWaitOpInfo(op, auxData)) {
         if (info->transferWrites && info->transferReads) {
           funcBuilder.createClearOutstandingCommitsTransferBothCall(
               b, baseThread, getThreadPeersMask(thread, auxData.threadLayout),
@@ -1116,7 +1097,7 @@ private:
     // after the operation walk rather than invalidating the walk iterators.
     for (ttng::ClusterBarrierOp clusterBarrier : clusterBarriers) {
       Operation *op = clusterBarrier.getOperation();
-      int thread = getCurrentThread(op, hooks, auxData.threadLayout);
+      int thread = getCurrentThread(op, targetInfo, auxData.threadLayout);
       int baseThread = getBaseThread(thread, auxData.threadLayout);
       bool partitionScoped =
           static_cast<bool>(op->getParentOfType<ttg::WarpSpecializeOp>());
@@ -1138,7 +1119,8 @@ private:
     bool isMultiCTA = ttg::lookupNumCTAs(scatter) > 1;
     auto synchronize = [&] {
       if (isMultiCTA) {
-        SmallVector<Operation *> barriers = hooks.createInitClusterBarrier(b);
+        SmallVector<Operation *> barriers =
+            targetInfo.createInitClusterBarrier(b);
         llvm::append_range(auxData.internalClusterBarriers, barriers);
       } else {
         ttg::BarrierOp::create(b, b.getLoc(), ttg::AddrSpace::Local);
@@ -1156,7 +1138,7 @@ private:
                              Value pred, int thread, int baseThread,
                              tti::FunctionBuilder &funcBuilder) {
     ImplicitLocOpBuilder wb(op->getLoc(), op);
-    pred = tti::maybeAnd(wb, pred, hooks.getIssuerCTAPred(wb, op));
+    pred = tti::maybeAnd(wb, pred, targetInfo.getIssuerCTAPred(wb, op));
     Value lock = auxData.lock.at(op).value;
     // Pre-wait: mark waiting threads and check for deadlock.
     tti::ExperimentalLockAcquireOp::create(wb, lock, pred);
@@ -1188,7 +1170,7 @@ private:
                                      tti::FunctionBuilder &funcBuilder) {
     int baseThread = getBaseThread(thread, auxData.threadLayout);
     std::optional<MemEffectsOpInfo> opInfo =
-        getConSanMemEffectsOpInfo(hooks, op);
+        getConSanMemEffectsOpInfo(targetInfo, op);
     for (const MemoryAccess &access :
          getMemoryAccesses(op, ttg::SharedKind::Barrier)) {
       if (opInfo && llvm::any_of(opInfo->barriers, [&](const auto &barrier) {
@@ -1196,15 +1178,15 @@ private:
           }))
         continue;
       funcBuilder.createVerifyBarrierInitializedCall(
-          b, access.value, hooks.getIssuerCTAPred(b, op), op,
+          b, access.value, targetInfo.getIssuerCTAPred(b, op), op,
           getBarrierRecipientCTAs(b, op));
     }
     if (!opInfo)
       return success();
-    bool isBarrierLifecycle = hooks.getBarrierInitInfo(op).has_value() ||
-                              hooks.getBarrierInvalidateInfo(op).has_value();
+    bool isBarrierLifecycle = targetInfo.getBarrierInitInfo(op).has_value() ||
+                              targetInfo.getBarrierInvalidateInfo(op).has_value();
     Value pred = opInfo->pred;
-    Value issuerCTAPred = hooks.getIssuerCTAPred(b, op);
+    Value issuerCTAPred = targetInfo.getIssuerCTAPred(b, op);
     pred = tti::maybeAnd(b, pred, issuerCTAPred);
     Value defaultEffectCTAs = getMemEffectCTAs(b, op);
     struct MaterializedEffect {
@@ -1338,7 +1320,7 @@ private:
           !buf || isa<ttg::SharedMemorySpaceAttr>(
                       cast<ttg::MemDescType>(buf->getType()).getMemorySpace());
       bool invalidatesBarriers =
-          isSharedMemory && hooks.barrierWritesInvalidate() &&
+          isSharedMemory && targetInfo.barrierWritesInvalidate() &&
           effect.rw == RW::Write &&
           effect.sharedKind == ttg::SharedKind::Generic &&
           thread == baseThread &&
@@ -1511,7 +1493,8 @@ private:
                       CommitKind::Kind opCommitKind = CommitKind::None) {
     funcBuilder.createVerifyWriteVisibilityCall(
         b, bufferMask, thread, operandName, pred, memType, op, effectCTAs);
-    if (hooks.isTMAOp(op) && !hooks.isOrderedCommitKind(CommitKind::TmaStore)) {
+    if (targetInfo.isTMAOp(op) &&
+        !targetInfo.isOrderedCommitKind(CommitKind::TmaStore)) {
       funcBuilder.createVerifyWriteVisibilityCall(
           b, bufferMask, getBaseThread(thread, auxData.threadLayout),
           operandName, pred, memType, op, effectCTAs);
@@ -1519,9 +1502,9 @@ private:
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM) {
       for (const auto &commitKindDesc :
-           hooks.getOutstandingWriteCommitKinds()) {
+           targetInfo.getOutstandingWriteCommitKinds()) {
         bool excludeSelf = (opCommitKind == commitKindDesc.kind &&
-                            hooks.isOrderedCommitKind(opCommitKind));
+                            targetInfo.isOrderedCommitKind(opCommitKind));
         funcBuilder.createCheckOutstandingCommitsCall(
             b, bufferMask, getBaseThread(thread, auxData.threadLayout),
             commitKindDesc.operationDesc, pred, memType, commitKindDesc.kind,
@@ -1540,9 +1523,9 @@ private:
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM) {
       for (const auto &commitKindDesc :
-           hooks.getOutstandingReadCommitKinds(auxData)) {
+           targetInfo.getOutstandingReadCommitKinds(auxData)) {
         bool excludeSelf = (opCommitKind == commitKindDesc.kind &&
-                            hooks.isOrderedCommitKind(opCommitKind));
+                            targetInfo.isOrderedCommitKind(opCommitKind));
         funcBuilder.createCheckOutstandingCommitsCall(
             b, bufferMask, getBaseThread(thread, auxData.threadLayout),
             commitKindDesc.operationDesc, pred, memType, commitKindDesc.kind,
@@ -1554,45 +1537,16 @@ private:
   ModuleOp module;
   tt::FuncOp entryPoint;
   AuxDataMap auxData;
-  const ConSanTargetHooks &hooks;
+  const ConSanTargetInfo &targetInfo;
 };
 
 } // namespace
 
-static LogicalResult runConcurrencySanitizer(ModuleOp module,
-                                             const ConSanTargetHooks &hooks) {
-  ConcurrencySanitizerImpl impl(module, hooks);
+LogicalResult runConcurrencySanitizer(ModuleOp module,
+                                     const ConSanTargetInfo &targetInfo) {
+  ConcurrencySanitizerImpl impl(module, targetInfo);
   return impl.run();
 }
-
-class ConcurrencySanitizerPass
-    : public impl::TritonInstrumentConcurrencySanitizerBase<
-          ConcurrencySanitizerPass> {
-public:
-  void runOnOperation() override {
-    ModuleOp module = getOperation();
-    auto targetAttr = module->getAttrOfType<StringAttr>(ttg::AttrTargetName);
-    if (!targetAttr) {
-      module.emitError("ConSan requires a ttg.target module attribute");
-      return signalPassFailure();
-    }
-    StringRef target = targetAttr.strref();
-    StringRef key = target.starts_with("cuda:")  ? "nvidia"
-                    : target.starts_with("hip:") ? "amd"
-                                                 : "";
-    if (key.empty()) {
-      module.emitError("unsupported ConSan target '") << target << "'";
-      return signalPassFailure();
-    }
-    auto hooks = createConSanHooks(key);
-    if (!hooks) {
-      module.emitError("no ConSan hooks registered for target '") << key << "'";
-      return signalPassFailure();
-    }
-    if (failed(runConcurrencySanitizer(module, *hooks)))
-      return signalPassFailure();
-  }
-};
 
 } // namespace instrument
 } // namespace triton

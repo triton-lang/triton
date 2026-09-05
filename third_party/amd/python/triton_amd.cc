@@ -67,14 +67,10 @@ void init_triton_amd_passes_ttgpuir(py::module_ &m) {
         [](mlir::PassManager &pm, const std::string &arch, bool ftz) {
           pm.addPass(createConvertBuiltinFuncToLLVMPass(arch, ftz));
         });
-  m.def("add_prepare_consan_captures", [](mlir::PassManager &pm) {
-    mlir::triton::instrument::TritonInstrumentPrepareConSanCapturesOptions
-        options;
-    options.target = "amd";
-    pm.addPass(
-        mlir::triton::instrument::createTritonInstrumentPrepareConSanCaptures(
-            options));
-  });
+  ADD_PASS_WRAPPER_0("add_prepare_consan_captures",
+                     mlir::createTritonAMDGPUPrepareConSanCaptures);
+  ADD_PASS_WRAPPER_0("add_concurrency_sanitizer",
+                     mlir::createTritonAMDGPUConcurrencySanitizer);
   ADD_PASS_OPTION_WRAPPER_1("add_allocate_shared_memory",
                             mlir::triton::createAllocateAMDGPUSharedMemoryPass,
                             const std::string &);
@@ -135,7 +131,6 @@ void init_triton_amd_passes_ttgpuir(py::module_ &m) {
                      mlir::createTritonAMDGPUOptimizeDescriptorEncoding);
   ADD_PASS_WRAPPER_0("add_convert_to_tensor_ops",
                      mlir::createTritonAMDGPUConvertToTensorOps);
-  mlir::registerConSanAMDHooks();
   m.def("add_in_thread_transpose", [](mlir::PassManager &pm) {
     pm.addNestedPass<mlir::triton::FuncOp>(
         mlir::createTritonAMDGPUInThreadTranspose());

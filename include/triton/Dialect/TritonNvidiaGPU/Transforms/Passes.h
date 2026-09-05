@@ -32,8 +32,6 @@ namespace nvidia_gpu {
 
 std::unique_ptr<Pass> createTritonNvidiaGPUPlanCTAPass();
 
-void registerConSanNVIDIAHooks();
-
 #define GEN_PASS_DECL
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
 

@@ -11,8 +11,6 @@ namespace mlir {
 #define GEN_PASS_DECL
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
-void registerConSanAMDHooks();
-
 } // namespace mlir
 
 namespace mlir::triton::amdgpu {

@@ -1,6 +1,6 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
+#include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetInfo.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
@@ -20,6 +20,10 @@ namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
 
+#define GEN_PASS_DEF_TRITONNVIDIAGPUCONCURRENCYSANITIZER
+#define GEN_PASS_DEF_TRITONNVIDIAGPUPREPARECONSANCAPTURES
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
+
 namespace {
 
 Value getLeaderCTAPredicate(ImplicitLocOpBuilder &b, uint32_t broadcastMask) {
@@ -38,7 +42,7 @@ uint32_t getBlockBroadcastMask(Type type) {
 
 } // namespace
 
-class NVIDIAConSanHooks : public tti::ConSanTargetHooks {
+class NVIDIAConSanTargetInfo : public tti::ConSanTargetInfo {
 public:
   bool isTMAOp(Operation *op) const override {
     return isa<ttng::TMAOpInterface, ttng::AsyncSharedStoreOp>(op);
@@ -160,7 +164,7 @@ public:
   std::optional<MemEffectsOpInfo>
   getMemEffectsOpInfo(Operation *op) const override {
     std::optional<MemEffectsOpInfo> info =
-        ConSanTargetHooks::getMemEffectsOpInfo(op);
+        ConSanTargetInfo::getMemEffectsOpInfo(op);
     if (!info) {
       if (!isa<ttng::BarrierExpectOp, ttng::TCGen5CommitOp,
                ttng::ArriveBarrierOp>(op))
@@ -290,10 +294,32 @@ public:
   }
 };
 
-void registerConSanNVIDIAHooks() {
-  tti::registerConSanHooks(
-      "nvidia", [] { return std::make_unique<NVIDIAConSanHooks>(); });
-}
+namespace {
+
+class TritonNvidiaGPUConcurrencySanitizer
+    : public impl::TritonNvidiaGPUConcurrencySanitizerBase<
+          TritonNvidiaGPUConcurrencySanitizer> {
+public:
+  void runOnOperation() override {
+    NVIDIAConSanTargetInfo targetInfo;
+    if (failed(tti::runConcurrencySanitizer(getOperation(), targetInfo)))
+      signalPassFailure();
+  }
+};
+
+class TritonNvidiaGPUPrepareConSanCaptures
+    : public impl::TritonNvidiaGPUPrepareConSanCapturesBase<
+          TritonNvidiaGPUPrepareConSanCaptures> {
+public:
+  void runOnOperation() override {
+    NVIDIAConSanTargetInfo targetInfo;
+    // NVIDIA inserts a terminal cluster barrier after capture preparation.
+    tti::prepareConSanCaptures(getOperation(), targetInfo,
+                              ttg::lookupNumCTAs(getOperation()) > 1);
+  }
+};
+
+} // namespace
 
 } // namespace nvidia_gpu
 } // namespace triton

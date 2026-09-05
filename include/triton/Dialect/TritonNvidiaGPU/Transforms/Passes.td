@@ -24,6 +24,24 @@
 
 include "mlir/Pass/PassBase.td"
 
+def TritonNvidiaGPUConcurrencySanitizer : Pass<"triton-nvidia-gpu-consan", "mlir::ModuleOp"> {
+  let summary = "Instrument asynchronous operations with concurrency checks";
+
+  let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::instrument::TritonInstrumentDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"];
+}
+
+def TritonNvidiaGPUPrepareConSanCaptures : Pass<"triton-nvidia-gpu-prepare-consan-captures", "mlir::ModuleOp"> {
+  let summary = "Reserve shared memory for ConSan WarpSpecialize captures";
+
+  let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::instrument::TritonInstrumentDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"];
+}
+
 def TritonGPUPlanCTAPass : Pass<"triton-nvidia-gpu-plan-cta", "mlir::ModuleOp"> {
   let summary = "plan CTA";
 

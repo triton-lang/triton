@@ -1,28 +1,22 @@
 // RUN: split-file %s %t
-// RUN: not triton-opt %t/missing.mlir -allow-unregistered-dialect -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/missing.mlir --check-prefix=MISSING
-// RUN: not triton-opt %t/too-small.mlir -allow-unregistered-dialect -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/too-small.mlir --check-prefix=SMALL
-// RUN: not triton-opt %t/unsupported-callee.mlir -allow-unregistered-dialect -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/unsupported-callee.mlir --check-prefix=CALLEE
-// RUN: not triton-opt %t/private-shared-access.mlir -allow-unregistered-dialect -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/private-shared-access.mlir --check-prefix=PRIVATE-ACCESS
-// RUN: not triton-opt %t/private-mbarrier.mlir -allow-unregistered-dialect -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/private-mbarrier.mlir --check-prefix=PRIVATE-MBARRIER
-// RUN: not triton-opt %t/private-amd-cluster-arrive.mlir -allow-unregistered-dialect -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/private-amd-cluster-arrive.mlir --check-prefix=AMD-ARRIVE
-// RUN: not triton-opt %t/private-amd-cluster-wait.mlir -allow-unregistered-dialect -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/private-amd-cluster-wait.mlir --check-prefix=AMD-WAIT
-// RUN: not triton-opt %t/private-cross-cta-scratch.mlir -allow-unregistered-dialect -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/private-cross-cta-scratch.mlir --check-prefix=CROSS-CTA
-// RUN: not triton-opt %t/missing-target.mlir -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/missing-target.mlir --check-prefix=MISSING-TARGET
-// RUN: not triton-opt %t/unsupported-target.mlir -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/unsupported-target.mlir --check-prefix=UNSUPPORTED-TARGET
-
-//--- missing-target.mlir
-
-// MISSING-TARGET: ConSan requires a ttg.target module attribute
-module {}
-
-//--- unsupported-target.mlir
-
-// UNSUPPORTED-TARGET: unsupported ConSan target 'cpu'
-module attributes {ttg.target = "cpu"} {}
+// RUN: triton-opt %t/missing.mlir -triton-nvidia-gpu-prepare-consan-captures -triton-nvidia-gpu-consan | FileCheck %t/missing.mlir --check-prefix=PREPARED
+// RUN: triton-opt %t/missing.mlir -triton-amdgpu-prepare-consan-captures -triton-amdgpu-consan | FileCheck %t/missing.mlir --check-prefix=PREPARED
+// RUN: not triton-opt %t/missing.mlir -allow-unregistered-dialect -triton-nvidia-gpu-consan 2>&1 | FileCheck %t/missing.mlir --check-prefix=MISSING
+// RUN: not triton-opt %t/too-small.mlir -allow-unregistered-dialect -triton-nvidia-gpu-consan 2>&1 | FileCheck %t/too-small.mlir --check-prefix=SMALL
+// RUN: not triton-opt %t/unsupported-callee.mlir -allow-unregistered-dialect -triton-nvidia-gpu-consan 2>&1 | FileCheck %t/unsupported-callee.mlir --check-prefix=CALLEE
+// RUN: not triton-opt %t/private-shared-access.mlir -allow-unregistered-dialect -triton-nvidia-gpu-consan 2>&1 | FileCheck %t/private-shared-access.mlir --check-prefix=PRIVATE-ACCESS
+// RUN: not triton-opt %t/private-mbarrier.mlir -allow-unregistered-dialect -triton-nvidia-gpu-consan 2>&1 | FileCheck %t/private-mbarrier.mlir --check-prefix=PRIVATE-MBARRIER
+// RUN: not triton-opt %t/private-amd-cluster-arrive.mlir -allow-unregistered-dialect -triton-amdgpu-consan 2>&1 | FileCheck %t/private-amd-cluster-arrive.mlir --check-prefix=AMD-ARRIVE
+// RUN: not triton-opt %t/private-amd-cluster-wait.mlir -allow-unregistered-dialect -triton-amdgpu-consan 2>&1 | FileCheck %t/private-amd-cluster-wait.mlir --check-prefix=AMD-WAIT
+// RUN: not triton-opt %t/private-cross-cta-scratch.mlir -allow-unregistered-dialect -triton-nvidia-gpu-consan 2>&1 | FileCheck %t/private-cross-cta-scratch.mlir --check-prefix=CROSS-CTA
 
 //--- missing.mlir
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 0 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {
+// The vendor pass selects target semantics without a ttg.target attribute.
+// PREPARED-LABEL: tt.func public @missing_reservation
+// PREPARED: ttg.warp_specialize
+// PREPARED: consan.extra_capture_bytes
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 0 : i32, ttg.tensor_memory_size = 0 : i32} {
   tt.func public @missing_reservation() {
     // MISSING: WarpSpecialize op is missing 'consan.extra_capture_bytes'
     ttg.warp_specialize()

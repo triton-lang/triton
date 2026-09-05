@@ -16,7 +16,7 @@ class GlobalScratchAllocOp;
 }
 
 namespace mlir::triton::instrument {
-class ConSanTargetHooks;
+class ConSanTargetInfo;
 class FunctionBuilder;
 
 constexpr int numMemTypes = getMaxEnumValForMemType() + 1;
@@ -282,10 +282,10 @@ struct AuxDataMap {
   bool hasAsyncCopyReads = false;
   bool hasAsyncProxyFenceTracking = false;
 
-  LogicalResult populateAndPassToWarpSpecialize(ModuleOp module,
-                                                triton::FuncOp entryPoint,
-                                                FunctionBuilder &funcBuilder,
-                                                const ConSanTargetHooks &hooks);
+  LogicalResult
+  populateAndPassToWarpSpecialize(ModuleOp module, triton::FuncOp entryPoint,
+                                 FunctionBuilder &funcBuilder,
+                                 const ConSanTargetInfo &targetInfo);
 
   int getClusterBarrierSlot(Operation *op) const;
 
@@ -293,7 +293,7 @@ private:
   LogicalResult
   getBuffersAndBarriers(ModuleOp module, triton::FuncOp entryPoint,
                         SmallVector<triton::BufferRegion> &barrierRegions,
-                        const ConSanTargetHooks &hooks);
+                        const ConSanTargetInfo &targetInfo);
   void passToWarpSpecialize(triton::FuncOp func, ValueType value,
                             RegionToValueMap &map, int &captureCounter,
                             int64_t &captureBytes);
