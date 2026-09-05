@@ -185,6 +185,8 @@ struct AuxDataMap {
   //   P = base-thread columns used by commit and proxy state, power-of-two
   //       padded.
   //   F = mbarrier phase parity slots, with extent 2.
+  //   V = visibility mask width: 32 bits for at most 32 logical threads,
+  //       otherwise 64 bits.
   //
   // Storage notation:
   //   tensor  = distributed tensor value.
@@ -201,7 +203,7 @@ struct AuxDataMap {
   // current arrival count, and bits [41..61] hold a signed tx-count.
   RegionToValueMap barrierStates;
 
-  // scratch, <Cbuf x B x Cmask x i64>
+  // scratch, <Cbuf x B x Cmask x iV>
   // Per-memory-type write frontier. Bit i means logical ConSan thread i can see
   // the latest write to the buffer row.
   RegionToValueMap writeVisibility[numMemTypes];
@@ -210,12 +212,12 @@ struct AuxDataMap {
   // Per-memory-type buffer/barrier/phase map for writes that a barrier tracks.
   RegionToValueMap writeTracking[numMemTypes];
 
-  // scratch, <Cbuf x B x Cthr x T x Cmask x i64>
+  // scratch, <Cbuf x B x Cthr x T x Cmask x iV>
   // Per-memory-type read frontier. For each buffer and logical thread lane, the
-  // i64 value is a bitmask of reads visible to that lane's thread.
+  // value is a bitmask of reads visible to that lane's thread.
   RegionToValueMap readVisibility[numMemTypes];
 
-  // scratch, <Cbuf x B x Cbar x K x Cmask x F x i64>
+  // scratch, <Cbuf x B x Cbar x K x Cmask x F x iV>
   // Per-memory-type buffer/barrier/phase map for read visibility masks that a
   // barrier tracks.
   RegionToValueMap readTracking[numMemTypes];

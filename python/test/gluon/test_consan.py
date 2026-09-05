@@ -1,4 +1,5 @@
 import os
+import re
 import tempfile
 import torch
 import pytest
@@ -4032,6 +4033,77 @@ def test_barrier_invalidate_requires_completion_wait(WAIT, device, run_wrapper, 
     smem_layout = ttgl.NVMMASharedLayout(128, 16, rank=2, cga_layout=[])
     input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(source, [XBLOCK.value, XBLOCK.value], smem_layout)
     kernel[(1, )](input_desc, WAIT=WAIT, num_warps=4, num_ctas=1)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
+@pytest.mark.parametrize("WIDTH", [pytest.param(32, id="bit31"), pytest.param(64, id="bit35")])
+@pytest.mark.parametrize("WAIT", [False, True], ids=["outstanding", "waited"])
+def test_consan_visibility_high_thread_bits(WIDTH, WAIT, device, run_wrapper, monkeypatch):
+    if run_wrapper and not WAIT:
+        result = run_in_process(test_consan_visibility_high_thread_bits, (WIDTH, WAIT, device, False, monkeypatch))
+        assert_expected_cuda_failure(result.exc)
+        assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    @gluon.jit
+    def partition(barrier, clc_result, markers, INDEX: ttgl.constexpr, N: ttgl.constexpr):
+        if INDEX == N - 1:
+            if N == 8:
+                mbarrier.expect(barrier, 16)
+                clc.try_cancel(clc_result, barrier)
+            else:
+                blackwell.tcgen05_commit(barrier)
+        ttgl.store(markers + INDEX, INDEX)
+
+    @gluon.jit
+    def kernel(input_desc, markers, N: ttgl.constexpr, WAIT: ttgl.constexpr):
+        smem = ttgl.allocate_shared_memory(ttgl.float16, [16, 64], input_desc.layout)
+        clc_result = ttgl.allocate_shared_memory(ttgl.int64, [2], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+        barrier = mbarrier.allocate_mbarrier()
+        mbarrier.init(barrier, count=1)
+        # Enable TMA and TC peers, completing both phases before the workers.
+        mbarrier.expect(barrier, input_desc.nbytes_per_cta)
+        tma.async_load(input_desc, [0, 0], barrier, smem)
+        mbarrier.wait(barrier, 0, deps=[smem])
+        blackwell.tcgen05_commit(barrier)
+        mbarrier.wait(barrier, 1)
+
+        # Eight base threads use CLC bit 31; twelve use TC bit 35.
+        # Fill whole worker warpgroups so padding cannot change the thread IDs.
+        ttgl.warp_specialize([
+            (partition, (barrier, clc_result, markers, i, N)) for i in (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11) if i < N
+        ], [1] * (N - 2) + [2])
+        # Joining base partitions does not acquire the async completion.
+        if WAIT:
+            mbarrier.wait(barrier, 0, deps=[clc_result])
+        mbarrier.invalidate(barrier)
+
+    source = torch.zeros((16, 64), device=device, dtype=torch.float16)
+    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(source, [16, 64],
+                                                                  ttgl.NVMMASharedLayout(128, 16, rank=2))
+    num_partitions = 8 if WIDTH == 32 else 12
+    markers = torch.full((num_partitions, ), -1, device=device, dtype=torch.int32)
+    compiled = kernel.warmup(input_desc, markers, N=num_partitions, WAIT=WAIT, grid=(1, ), num_warps=4, num_ctas=1)
+    # ConSan is inserted after saved TTGIR. Check the actual reader helper,
+    # not an integer that could also occur in unrelated range metadata.
+    reader_helpers = re.findall(r"^define [^\n]*@(__triton_consan_set_read_visibility_[^(]+)\([^\n]*\n(.*?)^}",
+                                compiled.asm["llir"], re.MULTILINE | re.DOTALL)
+    assert reader_helpers
+    assert all(f"x1x{WIDTH}x1xI{WIDTH}" in name for name, _ in reader_helpers)
+    worker_helpers = [body for name, body in reader_helpers if "_nw2_" in name]
+    assert len(worker_helpers) == 1
+    clear_reader_mask = (1 << 31) - 1 if WIDTH == 32 else ~(1 << 35)
+    assert re.search(rf"^\s+%\S+ = and i{WIDTH} %[^,\s]+, {clear_reader_mask}(?:,|\s*$)", worker_helpers[0],
+                     re.MULTILINE)
+
+    if is_compile_warmup():
+        return
+    kernel[(1, )](input_desc, markers, N=num_partitions, WAIT=WAIT, num_warps=4, num_ctas=1)
+    torch.testing.assert_close(markers, torch.arange(num_partitions, device=device, dtype=torch.int32))
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
