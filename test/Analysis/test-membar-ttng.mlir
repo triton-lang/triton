@@ -1,5 +1,6 @@
 // RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory -test-print-membar | FileCheck %s
 // RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory -test-print-membar -test-print-membar | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory -test-print-membar | FileCheck %s --check-prefix=SCF
 
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #A_SHARED = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
@@ -93,13 +94,102 @@ tt.func @wait_then_arrive_barrier(%phase: i32) {
 }
 
 // CHECK-LABEL: @arrive_then_wait_barrier
-tt.func @arrive_then_wait_barrier(%phase: i32) {
+tt.func @arrive_then_wait_barrier() {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %true = arith.constant true
   %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
-  // CHECK: ttng.arrive_barrier
+  // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.arrive_barrier
+  // CHECK-NEXT: ttng.wait_barrier
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.barrier_expect
+  // CHECK-NEXT: ttng.wait_barrier
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.tc_gen5_commit
+  // CHECK-NEXT: ttng.wait_barrier
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.inval_barrier
+  ttng.init_barrier %barrier, 1 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.arrive_barrier %barrier, 1 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.barrier_expect %barrier, 0, %true : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.wait_barrier %barrier, %c1 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.tc_gen5_commit %barrier : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.inval_barrier %barrier : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  tt.return
+}
+
+// CHECK-LABEL: @async_copy_arrive_then_wait_barrier
+tt.func @async_copy_arrive_then_wait_barrier() {
+  %phase = arith.constant 0 : i32
+  %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  // CHECK: ttng.init_barrier
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.async_copy_mbarrier_arrive
+  // CHECK-NEXT: ttng.wait_barrier
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.inval_barrier
+  // Each thread contributes one arrival for its empty copy group.
+  ttng.init_barrier %barrier, 128 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.async_copy_mbarrier_arrive %barrier {noIncrement} : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.wait_barrier %barrier, %phase : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.inval_barrier %barrier : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  tt.return
+}
+
+// CHECK-LABEL: @incrementing_async_copy_arrive_then_wait_barrier
+tt.func @incrementing_async_copy_arrive_then_wait_barrier() {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.init_barrier %barrier, 1 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.arrive_barrier %barrier, 1 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  // Register an empty copy group for phase 1 before waiting on completed phase 0.
+  // Incrementing arrivals must retain the rendezvous before the wait.
+  // CHECK: ttng.async_copy_mbarrier_arrive
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.wait_barrier
+  ttng.async_copy_mbarrier_arrive %barrier : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
   ttng.arrive_barrier %barrier, 1 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
-  ttng.wait_barrier %barrier, %phase : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.wait_barrier %barrier, %c1 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.inval_barrier %barrier : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  tt.return
+}
+
+// Distinct descriptors of the same barrier need no extra rendezvous.
+// CHECK-LABEL: @arrive_then_wait_barrier_alias
+tt.func @arrive_then_wait_barrier_alias() {
+  %phase = arith.constant 0 : i32
+  %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  %alias = ttg.memdesc_subslice %barrier [0] : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable> -> !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.init_barrier %barrier, 1 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  // CHECK: ttng.arrive_barrier
+  // CHECK-NEXT: ttng.wait_barrier
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.inval_barrier
+  ttng.arrive_barrier %barrier, 1 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.wait_barrier %alias, %phase : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.inval_barrier %barrier : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  tt.return
+}
+
+// SCF-LABEL: @arrive_then_wait_nested
+tt.func @arrive_then_wait_nested(%pred: i1) {
+  %phase = arith.constant 0 : i32
+  %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.init_barrier %barrier, 1 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.arrive_barrier %barrier, 1 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  // SCF: scf.if
+  // SCF-NEXT: ttng.wait_barrier
+  // SCF-NEXT: }
+  scf.if %pred {
+    ttng.wait_barrier %barrier, %phase : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  }
+  ttng.inval_barrier %barrier : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
   tt.return
 }
 
@@ -185,7 +275,6 @@ tt.func @tma_special_cases(%arg1: !tt.tensordesc<256x64xf16, #shared>, %arg2: !t
   // CHECK-NEXT: ttng.async_tma_copy_global_to_local
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.barrier_expect
-  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.wait_barrier
   ttng.async_tma_copy_global_to_local %arg1[%c0, %c0] %alloc, %barrier, %true : !tt.tensordesc<256x64xf16, #shared>, !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable> -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
   ttng.barrier_expect %barrier, 49152, %true : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
@@ -243,7 +332,6 @@ tt.func @tma_special_cases_cf(%arg1: !tt.tensordesc<256x64xf16, #shared>, %i1 : 
     //      CHECK: ttng.async_tma_copy_global_to_local
     // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: ttng.barrier_expect
-    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: ttng.wait_barrier
     // CHECK-NEXT: cf.br
     ttng.async_tma_copy_global_to_local %arg1[%c0, %c0] %alloc, %barrier, %true : !tt.tensordesc<256x64xf16, #shared>, !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable> -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
@@ -623,6 +711,24 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
 !barrier = !ttg.memdesc<2xi64, #bar, #ttg.shared_memory, mutable>
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 2 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @arrive_then_wait_barrier_multicta
+  tt.func @arrive_then_wait_barrier_multicta() {
+    %phase = arith.constant 0 : i32
+    %barrier = ttg.local_alloc : () -> !barrier
+    // CHECK: ttng.init_barrier
+    // CHECK-NEXT: ttng.cluster_barrier
+    // CHECK-NEXT: ttng.arrive_barrier {{.*}} {fromCTA = 0 : i32}
+    // CHECK-NEXT: ttng.wait_barrier
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: ttng.inval_barrier
+    ttng.init_barrier %barrier, 1 : !barrier
+    ttng.cluster_barrier
+    ttng.arrive_barrier %barrier, 1 {fromCTA = 0 : i32} : !barrier
+    ttng.wait_barrier %barrier, %phase : !barrier
+    ttng.inval_barrier %barrier : !barrier
+    tt.return
+  }
+
   // A relaxed cluster rendezvous preserves pending work without adding thread
   // effects or demands.
   // CHECK-LABEL: @relaxed_cluster_preserves_thread_state

@@ -347,10 +347,16 @@ createConvertTritonGPUToLLVMPass(int32_t computeCapability, int32_t ptxVersion,
 bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
                             bool /*beforeIsRead*/, bool /*afterIsRead*/,
                             Allocation * /*allocation*/) {
-  // wait_barrier will never run ahead of the load it's waiting on
-  if (isa<ttng::TMALoadLikeOpInterface>(before) &&
-      isa<ttng::WaitBarrierOp>(after))
-    return true;
+  if (isa<ttng::WaitBarrierOp>(after)) {
+    // All threads must register incrementing arrivals before any can wait.
+    if (auto arrive = dyn_cast<ttng::AsyncCopyMbarrierArriveOp>(before))
+      return arrive.getNoIncrement();
+    // Signals and waits can access the same live barrier concurrently;
+    // accesses to distinct barriers are independent.
+    if (isa<ttng::TMALoadLikeOpInterface, ttng::BarrierExpectOp,
+            ttng::ArriveBarrierOp, ttng::TCGen5CommitOp>(before))
+      return true;
+  }
 
   // Identical same-width commutative atomics can be freely reordered.
   auto beforeAtomic = dyn_cast<triton::gpu::LocalAtomicScatterRMWOp>(before);
