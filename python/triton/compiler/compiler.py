@@ -16,6 +16,7 @@ import functools
 import os
 import time
 import copy
+import threading
 
 # - ^\s*tt\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
 #    and any following whitespace
@@ -404,6 +405,43 @@ def _raise_error(err, *args, **kwargs):
     raise copy.deepcopy(err)
 
 
+_handle_init_tls = threading.local()
+_handle_generation = 0
+
+
+def _after_fork():
+    global _handle_generation
+    _handle_generation += 1
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_after_fork)
+
+
+def _run_kernel_load_hook(hook, state, *args):
+    hook_state = getattr(_handle_init_tls, "state", None)
+    _handle_init_tls.state = state
+    try:
+        hook(*args)
+    finally:
+        _handle_init_tls.state = hook_state
+
+
+def _ensure_same_process(pid, generation):
+    if os.getpid() != pid or _handle_generation != generation:
+        raise RuntimeError("process forked during kernel initialization; retry the launch")
+
+
+class _HandleInitState:
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.event = threading.Event()
+        self.owner = None
+        self.run = None
+        self.handles_ready = False
+
+
 class CompiledKernel:
 
     def __init__(self, src, metadata_group, hash):
@@ -436,6 +474,8 @@ class CompiledKernel:
         self._module_pid = None
         self.function = None
         self._run = None
+        self._handle_generation = _handle_generation
+        self._init_states = {os.getpid(): _HandleInitState()}
 
     def __del__(self):
 
@@ -449,50 +489,162 @@ class CompiledKernel:
             self.module = None
             self._module_pid = None
 
-    def _init_handles(self):
-        if self.module is not None:
-            return
+    def _init_handles(self, allow_provisional=False):
+        if self._run is not None and self._handle_generation == _handle_generation:
+            return self._run
 
-        def raise_(err):
-            # clone the exception object so that the one saved in the closure
-            # of the partial function below doesn't get assigned a stack trace
-            # after the subsequent raise. otherwise, the CompiledKernel instance
-            # saved in the (global) kernel cache will keep references to all the
-            # locals in the traceback via the exception instance in the closure.
-            cloned_err = copy.deepcopy(err)
-            self._run = functools.partial(_raise_error, cloned_err)
-            raise err
+        pid = os.getpid()
+        state = self._init_states.get(pid)
+        if state is None:
+            # setdefault makes concurrent first access in a forked child select
+            # one state without ever reusing the parent's possibly held lock.
+            state = self._init_states.setdefault(pid, _HandleInitState())
+        owner = threading.get_ident()
+        generation = _handle_generation
+        while True:
+            with state.lock:
+                if self._handle_generation != _handle_generation:
+                    self.module = None
+                    self._module_pid = None
+                    self.function = None
+                    self._run = None
+                    self._handle_generation = _handle_generation
+                if self._run is not None:
+                    return self._run
+                if state.owner is None:
+                    state.owner = owner
+                    state.handles_ready = False
+                    state.event.clear()
+                    break
+                hook_state = getattr(_handle_init_tls, "state", None)
+                if state.owner == owner and state.handles_ready:
+                    return state.run
+                if allow_provisional and state.run is not None and hook_state is state:
+                    return state.run
+                if state.owner == owner or hook_state is not None:
+                    raise RuntimeError("cannot initialize a kernel recursively from a kernel load hook")
+                event = state.event
+            event.wait()
+
+        try:
+            handles, error, cache_error = self._load_handles(state, pid, generation)
+            _ensure_same_process(pid, generation)
+        except BaseException:
+            with state.lock:
+                if self._module_pid is not None and self._module_pid != os.getpid():
+                    self.module = None
+                    self._module_pid = None
+                    self.function = None
+                state.owner = None
+                state.run = None
+                state.handles_ready = False
+                state.event.set()
+            raise
+
+        run = state.run
+        try:
+            if cache_error:
+                # Clone the exception so the one saved in the partial below
+                # does not retain this frame through its traceback.
+                run = functools.partial(_raise_error, copy.deepcopy(error))
+        except BaseException:
+            with state.lock:
+                state.owner = None
+                state.run = None
+                state.handles_ready = False
+                state.event.set()
+            raise
+
+        try:
+            with state.lock:
+                _ensure_same_process(pid, generation)
+                self._run = run
+                state.owner = None
+                state.run = None
+                state.handles_ready = False
+                state.event.set()
+        except BaseException:
+            with state.lock:
+                self._run = None
+                state.owner = None
+                state.run = None
+                state.handles_ready = False
+                state.event.set()
+            raise
+
+        if error is not None:
+            raise error
+        return run
+
+    def _load_handles(self, state, pid, generation):
 
         device = driver.active.get_current_device()
+        if self.module is not None and self._run is None:
+            if self._module_pid == os.getpid():
+                if knobs.runtime.kernel_unload_hook is not None:
+                    knobs.runtime.kernel_unload_hook(self.module, self.function, self.name, self.metadata_group,
+                                                     self.hash)
+                driver.active.utils.unload_module(self.module)
+            self.module = None
+            self._module_pid = None
+            self.function = None
         # create launcher
-        self._run = driver.active.launcher_cls(self.src, self.metadata)
+        run = driver.active.launcher_cls(self.src, self.metadata)
+        with state.lock:
+            state.run = run
         # not enough shared memory to run the kernel
         max_shared = max_shared_mem(device)
         if self.metadata.shared > max_shared:
-            raise_(OutOfResources(self.metadata.shared, max_shared, "shared memory"))
+            return None, OutOfResources(self.metadata.shared, max_shared, "shared memory"), True
         if hasattr(self.metadata, "tmem_size") and self.metadata.tmem_size is not None:
             # Use blackwell max tmem size for now, this should be moved in device properties
             max_tmem_size = 512  # tmem size in number of columns
             if self.metadata.target.arch == 107:
                 max_tmem_size = 576
             if self.metadata.tmem_size > max_tmem_size:
-                raise_(OutOfResources(self.metadata.tmem_size, max_tmem_size, "tensor memory"))
+                return None, OutOfResources(self.metadata.tmem_size, max_tmem_size, "tensor memory"), True
         if knobs.runtime.kernel_load_start_hook is not None:
-            knobs.runtime.kernel_load_start_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
-        # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
-        self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
-            self.name, self.kernel, self.metadata.shared, device)
-        self._module_pid = os.getpid()
+            _run_kernel_load_hook(knobs.runtime.kernel_load_start_hook, state, self.module, self.function, self.name,
+                                  self.metadata_group, self.hash)
+        _ensure_same_process(pid, generation)
         warp_size = driver.active.get_current_target().warp_size
-        if self.metadata.num_warps * warp_size > self.n_max_threads:
-            raise_(OutOfResources(self.metadata.num_warps * warp_size, self.n_max_threads, "threads"))
+        # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
+        module, function, n_regs, n_spills, n_max_threads = driver.active.utils.load_binary(
+            self.name, self.kernel, self.metadata.shared, device)
+        _ensure_same_process(pid, generation)
+        handles = (module, function, n_regs, n_spills, n_max_threads)
+        with state.lock:
+            # End hooks have historically observed usable handles. Publish the
+            # generation first so a fork during these assignments discards the
+            # parent's partial state, while normal waiters still gate on _run.
+            self._handle_generation = _handle_generation
+            self._module_pid = os.getpid()
+            self.module = module
+            self.function = function
+            self.n_regs = n_regs
+            self.n_spills = n_spills
+            self.n_max_threads = n_max_threads
+            state.handles_ready = True
+        if self.metadata.num_warps * warp_size > n_max_threads:
+            error = OutOfResources(self.metadata.num_warps * warp_size, n_max_threads, "threads")
+            return handles, error, True
         if knobs.runtime.kernel_load_end_hook is not None:
-            knobs.runtime.kernel_load_end_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
+            try:
+                _run_kernel_load_hook(knobs.runtime.kernel_load_end_hook, state, module, function, self.name,
+                                      self.metadata_group, self.hash)
+            except BaseException as error:
+                # The handles are usable even if an observer hook fails. Match
+                # the existing behavior by publishing them before re-raising.
+                return handles, error, False
+        _ensure_same_process(pid, generation)
+        return handles, None, False
 
     @property
     def run(self):
-        if self._run is None:
-            self._init_handles()
+        if self._run is None or self._handle_generation != _handle_generation:
+            run = self._init_handles(allow_provisional=True)
+            if run is not None:
+                return run
         return self._run
 
     def launch_metadata(self, grid, stream, *args):
