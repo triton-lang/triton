@@ -596,3 +596,43 @@ tt.func @prologue_output(%ub: i32) {
 
   tt.return
 }
+
+// -----
+
+// CHECK-LABEL: @assume_not_dominating_loop
+// An llvm.assume(ub > lb) that does not dominate the inner loop (it sits on
+// another branch of an scf.if) must not license dropping the zero-trip version
+// split of the fused loop: the nest is not reachable from the assume, so the
+// fast path must be declined and the runtime zero-trip guard kept.
+// CHECK-SAME: [[LB:%.*]]: i32, [[UB:%.*]]: i32, [[FLAG:%.*]]: i1
+tt.func @assume_not_dominating_loop(%lb: i32, %ub: i32, %flag: i1) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+
+  // The inner loop goes from 0 to %ub, so its zero-trip test is %ub == 0, and
+  // it must still be emitted (the assume on the other branch is not in force
+  // here). The buggy pass instead replaced this guard with `arith.constant
+  // true` because it matched the assume without a dominance check.
+  // CHECK: [[IS_ZERO:%.*]] = arith.cmpi eq, [[UB]], %c0_i32
+  // CHECK: scf.if [[IS_ZERO]]
+  // CHECK-NEXT: scf.for %{{.*}} = %c0_i32 to [[UB]] step %c1_i32
+  // CHECK-NEXT:   "prologue"
+  // CHECK-NOT: arith.constant true
+  scf.if %flag {
+    // The assume is in force only where %flag holds; the loop nest below is
+    // only reachable where %flag does not hold.
+    %cmp = arith.cmpi sgt, %ub, %lb : i32
+    llvm.intr.assume %cmp : i1
+    scf.yield
+  } else {
+    scf.for %i = %c0_i32 to %ub step %c1_i32 : i32 {
+      "prologue"(%i) : (i32) -> ()
+      scf.for %j = %c0_i32 to %ub step %c1_i32 : i32 {
+        "body"(%i, %j) : (i32, i32) -> ()
+        scf.yield
+      }
+    } {tt.flatten}
+    scf.yield
+  }
+  tt.return
+}

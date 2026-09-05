@@ -1105,11 +1105,14 @@ static void optimizeEpilogueDependencies(scf::ForOp outerLoop,
 }
 
 // Crudely match llvm.assume(ub > lb) or llvm.assume(lb < ub).
-static LogicalResult matchPositiveTripCount(scf::ForOp loop) {
+static LogicalResult matchPositiveTripCount(scf::ForOp loop,
+                                            mlir::DominanceInfo &domInfo) {
   for (Operation *user : loop.getUpperBound().getUsers()) {
     if (auto cmp = dyn_cast<arith::CmpIOp>(user)) {
-      if (llvm::none_of(cmp->getUsers(),
-                        [](Operation *op) { return isa<LLVM::AssumeOp>(op); }))
+      if (llvm::none_of(cmp->getUsers(), [&](Operation *op) {
+            return isa<LLVM::AssumeOp>(op) &&
+                   domInfo.properlyDominates(op, loop);
+          }))
         continue;
       if (cmp.getPredicate() == (loop.getUnsignedCmp()
                                      ? arith::CmpIPredicate::ugt
@@ -1139,7 +1142,7 @@ static LogicalResult speculateInnerLoopLength(scf::ForOp outerLoop,
   ImplicitLocOpBuilder b(loc, outerLoop);
 
   // Check if the inner loop is known to execute at least once.
-  if (succeeded(matchPositiveTripCount(innerLoop))) {
+  if (succeeded(matchPositiveTripCount(innerLoop, domInfo))) {
     innerLoop->setAttr(kMustExecuteAttrName, b.getUnitAttr());
     return success();
   }
