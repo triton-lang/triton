@@ -1361,6 +1361,23 @@ LogicalResult WarpSpecializeOp::verify() {
         "its second region");
   }
 
+  // Verify that captures can be marshaled through shared memory.
+  for (auto [i, val] :
+       llvm::enumerate(getPartitionOp().getExplicitCaptures())) {
+    Type type = val.getType();
+    if (isa<RankedTensorType>(type)) {
+      return emitOpError("cannot capture ranked tensor operand '")
+             << val
+             << "' directly into warp_specialize; operands must be scalars, "
+                "pointers, tensor descriptors, or memdescs";
+    }
+    if (!isa<IntegerType, FloatType, PointerType, TensorDescInterface,
+             MemDescType>(type)) {
+      return emitOpError("unsupported capture operand type ")
+             << type << " for operand '" << val << "'";
+    }
+  }
+
   // Verify the partitions.
   if (getPartitionRegions().size() != getPartitionNumWarps().size()) {
     return emitOpError("has ") << getPartitionRegions().size()
@@ -1598,7 +1615,7 @@ LogicalResult WarpYieldOp::verify() {
   return success();
 }
 
-// Get the size of a scalar type when stored in shared memory.
+// Get the size of a type when stored in shared memory.
 // TODO: Generalize this as needed.
 size_t getSharedMemorySize(Type type) {
   if (isa<IntegerType, FloatType>(type))
@@ -1611,7 +1628,7 @@ size_t getSharedMemorySize(Type type) {
     return 8 + desc.getRank() * 4;
   }
   llvm::report_fatal_error(
-      Twine("shared memory size for scalar type is unspecified: ") +
+      Twine("shared memory size for type is unspecified: ") +
       mlir::debugString(type));
 }
 
