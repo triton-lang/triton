@@ -534,12 +534,17 @@ void atomic_compare_exchange_strong(void *loc, void *expected,
 class AtomicCASOp : public AtomicOp {
 public:
   AtomicCASOp(const uint64_t *ptr, void *expected, const void *desired,
-              size_t itemsize, size_t numel, std::memory_order order)
+              const uint8_t *mask, size_t itemsize, size_t numel,
+              std::memory_order order)
       : AtomicOp(ptr, numel, order), expected(expected), desired(desired),
-        itemsize(itemsize) {}
+        mask(mask), itemsize(itemsize) {}
 
 protected:
   void applyAt(void *loc, size_t i) override {
+    if (!mask[i]) {
+      return;
+    }
+
     // Atomic operations perform bitwise comparison, so it's safe to
     // use number of bytes (itemsize) to determine the type of pointers
     if (itemsize == 1) {
@@ -561,6 +566,7 @@ protected:
 private:
   void *expected;
   const void *desired;
+  const uint8_t *mask;
   size_t itemsize;
 };
 
@@ -818,25 +824,30 @@ void init_triton_interpreter(py::module_ &m) {
 
   m.def("atomic_cas",
         [](py::object ptr_obj, py::object cmp_obj, py::object val_obj,
-           MemSemantic sem) -> py::object {
+           py::object mask_obj, MemSemantic sem) -> py::object {
           AnyArray ptr = py::cast<AnyArray>(ptr_obj);
           AnyArray cmp = py::cast<AnyArray>(cmp_obj);
           AnyArray val = py::cast<AnyArray>(val_obj);
+          AnyArray mask = py::cast<AnyArray>(mask_obj);
           require_dtype<uint64_t>(ptr, "ptr");
+          require_dtype<bool>(mask, "mask");
           std::memory_order order = mem_semantic_map[sem];
           size_t numel = ptr.size();
           py::object ret = numpy_empty(numel, cmp.cast().attr("dtype"));
           auto ret_array = py::cast<MutableArray>(ret);
 
+          std::vector<uint64_t> ptr_data = copy_uint64_array(ptr);
+          std::vector<uint8_t> mask_data = copy_bool_array(mask);
+
           size_t itemsize = cmp.itemsize();
           for (size_t i = 0; i < numel; ++i)
-            memcpy(element_data(ret_array, i), const_element_data(cmp, i),
-                   itemsize);
+            if (mask_data[i])
+              memcpy(element_data(ret_array, i), const_element_data(cmp, i),
+                     itemsize);
 
-          std::vector<uint64_t> ptr_data = copy_uint64_array(ptr);
           ByteStorage val_data = copy_bytes(val);
           AtomicCASOp(ptr_data.data(), ret_array.data(), val_data.data(),
-                      itemsize, numel, order)
+                      mask_data.data(), itemsize, numel, order)
               .apply();
 
           return ret.attr("reshape")(shape_list(ptr));

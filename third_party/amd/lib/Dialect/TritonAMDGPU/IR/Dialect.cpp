@@ -1667,6 +1667,14 @@ Type BufferAtomicRMWOp::getPredicateOperandTypeLike() {
   return getOffsets().getType();
 }
 
+Value BufferAtomicCASOp::getPredicateOperand() { return getMask(); }
+void BufferAtomicCASOp::setPredicateOperand(Value pred) {
+  getMaskMutable().assign(pred);
+}
+Type BufferAtomicCASOp::getPredicateOperandTypeLike() {
+  return getOffsets().getType();
+}
+
 Value BufferStoreOp::getPredicateOperand() { return getMask(); }
 void BufferStoreOp::setPredicateOperand(Value pred) {
   getMaskMutable().assign(pred);

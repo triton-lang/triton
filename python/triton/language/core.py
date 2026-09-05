@@ -1178,7 +1178,7 @@ class tensor(base_value):
     def store(self, value, mask=None, *, cache_modifier="", eviction_policy="") -> tensor:
         ...
 
-    def atomic_cas(self, cmp, val, sem=None, scope=None) -> tensor:
+    def atomic_cas(self, cmp, val, sem=None, scope=None, *, mask=None) -> tensor:
         ...
 
     def atomic_xchg(self, val, mask=None, sem=None, scope=None) -> tensor:
@@ -2551,6 +2551,9 @@ def _add_atomic_docstr(name: str, has_cmp: bool = False) -> Callable[[T], T]:
         docstr += """
     :param val: The values with which to perform the atomic operation
     :type val: Block of dtype=pointer.dtype.element_ty
+    :param mask: If :code:`mask[idx]` is false, do not perform the atomic operation at
+        :code:`pointer[idx]`
+    :type mask: Block of triton.int1, optional
     :param sem: Specifies the memory semantics for the operation. Acceptable values are "acquire",
         "release", "acq_rel" (stands for "ACQUIRE_RELEASE"), and "relaxed". If not provided,
         the function defaults to using "acq_rel" semantics.
@@ -2568,12 +2571,15 @@ def _add_atomic_docstr(name: str, has_cmp: bool = False) -> Callable[[T], T]:
 @_tensor_member_fn
 @builtin
 @_add_atomic_docstr("compare-and-swap", has_cmp=True)
-def atomic_cas(pointer, cmp, val, sem=None, scope=None, _semantic=None):
+def atomic_cas(pointer, cmp, val, sem=None, scope=None, *, mask=None, _semantic=None):
     cmp = _semantic.to_tensor(cmp)
     val = _semantic.to_tensor(val)
     sem = _unwrap_if_constexpr(sem)
     scope = _unwrap_if_constexpr(scope)
-    return _semantic.atomic_cas(pointer, cmp, val, sem, scope)
+    mask = _unwrap_if_constexpr(mask)
+    if mask is not None:
+        mask = _semantic.to_tensor(mask)
+    return _semantic.atomic_cas(pointer, cmp, val, mask, sem, scope)
 
 
 @_tensor_member_fn

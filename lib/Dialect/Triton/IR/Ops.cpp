@@ -156,6 +156,14 @@ void AtomicRMWOp::setPredicateOperand(Value pred) {
 
 Type AtomicRMWOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
 
+Value AtomicCASOp::getPredicateOperand() { return getMask(); }
+
+void AtomicCASOp::setPredicateOperand(Value pred) {
+  getMaskMutable().assign(pred);
+}
+
+Type AtomicCASOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
+
 LogicalResult AtomicPollOp::verify() {
   if (getSem() != MemSemantic::ACQUIRE && getSem() != MemSemantic::RELAXED)
     return emitOpError("only supports acquire and relaxed semantics");
