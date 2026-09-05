@@ -118,7 +118,8 @@ def compute_offsets(
         off_w_k = pid_k * PACKED_BLOCK_K_W
         block_schedule = tl.load(XBlockSchedule + pid_m)
         off_w_z = block_schedule & 0x0000FFFF
-        block_id = block_schedule >> 16
+        # The schedule packs unsigned block and slice indices into 16-bit fields.
+        block_id = (block_schedule.to(tl.uint32) >> 16).to(tl.int32)
         off_x_slice = tl.load(XSliceOffs + off_w_z)
         off_x_slice_tile = tl.load(XBlockOffs + off_w_z)
         off_x_z, off_y_z = 0, 0

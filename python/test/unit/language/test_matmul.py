@@ -41,6 +41,8 @@ def matmul_kernel(  #
     num_pid_m = tl.cdiv(M, BLOCK_M)
     pid_m = pid % num_pid_m
     pid_n = pid // num_pid_m
+    # The launch grid keeps the full column tile in signed 32-bit range.
+    tl.assume(pid_n.to(tl.uint32) < (1 << 31) // BLOCK_N)
     offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
     offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
     offs_k = tl.arange(0, BLOCK_K)
@@ -352,6 +354,8 @@ def mxfp_matmul(  #
     num_pid_m = tl.cdiv(M, BLOCK_M)
     pid_m = pid % num_pid_m
     pid_n = pid // num_pid_m
+    # The launch grid keeps the full column tile in signed 32-bit range.
+    tl.assume(pid_n.to(tl.uint32) < (1 << 31) // BLOCK_N)
     offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
     offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
     offs_k = tl.arange(0, BLOCK_K)
@@ -475,6 +479,8 @@ def block_scale_mxfp_matmul(  #
     num_pid_m = tl.cdiv(M, BLOCK_M)
     pid_m = pid % num_pid_m
     pid_n = pid // num_pid_m
+    # The launch grid keeps the full column tile in signed 32-bit range.
+    tl.assume(pid_n.to(tl.uint32) < (1 << 31) // BLOCK_N)
     offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
     offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
     offs_k = tl.arange(0, BLOCK_K)
@@ -1339,6 +1345,8 @@ def batched_mxfp_matmul(  #
     num_pid_m = tl.cdiv(M, BLOCK_M)
     pid_m = pid % num_pid_m
     pid_n = pid // num_pid_m
+    # The launch grid keeps the full column tile in signed 32-bit range.
+    tl.assume(pid_n.to(tl.uint32) < (1 << 31) // BLOCK_N)
 
     offs_batch = (batch_id * BLOCK_BATCH_SIZE + tl.arange(0, BLOCK_BATCH_SIZE)) % BATCH_SIZE
     offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M

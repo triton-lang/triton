@@ -7,9 +7,12 @@ namespace mlir::triton::AMD {
 
 class AxisInfoAnalysisExt : public triton::AxisInfoAnalysis {
 public:
-  AxisInfoAnalysisExt(DataFlowSolver &solver);
+  AxisInfoAnalysisExt(DataFlowSolver &solver,
+                      TritonIntegerRangeAnalysis *rangeAnalysis);
 
-  static triton::AxisInfoAnalysis *loadAnalysis(DataFlowSolver *solver);
+  static triton::AxisInfoAnalysis *
+  loadAnalysis(DataFlowSolver *solver,
+               TritonIntegerRangeAnalysis *rangeAnalysis);
 };
 
 class ModuleAxisInfoAnalysis : public mlir::triton::ModuleAxisInfoAnalysis {
