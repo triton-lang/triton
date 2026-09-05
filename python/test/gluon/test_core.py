@@ -2375,11 +2375,54 @@ def test_tmem_subslice_unpacked_one_column():
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize("pred", [False, True])
-def test_tmem_wait_predicated_store(pred):
+def test_tmem_same_warp_raw_then_cross_warp(device):
 
     @gluon.jit
-    def kernel(inp, out, pred_ptr):
+    def kernel(a_ptr, b_ptr, flag_ptr, same_ptr, cross_ptr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [32, 1], [4, 2], [0, 1])
+        rows = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))
+        cols = ttgl.arange(0, 2, layout=ttgl.SliceLayout(0, layout))
+        offsets = ttgl.program_id(0) * 256 + rows[:, None] * 2 + cols[None, :]
+        av = ttgl.load(a_ptr + offsets)
+        bv = ttgl.load(b_ptr + offsets)
+
+        parent = allocate_tensor_memory(ttgl.float32, [128, 4], TensorMemoryLayout([128, 128], col_stride=1))
+        a = parent.slice(0, 2)
+        b = parent.slice(1, 2)
+        b.store(bv)
+        a.store(av)
+
+        # The ready flag gives a local-only CTA barrier; TMEM completion
+        # and cross-warp publication are still required before the loads.
+        ttgl.atomic_poll(flag_ptr, 1, sem="acquire", scope="gpu")
+        same = a.load(layout)
+        cross = b.load(layout)
+        ttgl.store(same_ptr + offsets, same)
+        ttgl.store(cross_ptr + offsets, cross)
+
+    ctas = 256
+    a = torch.arange(ctas * 256, dtype=torch.float32, device=device).reshape(ctas, 128, 2)
+    b = a + 1048576
+    flag = torch.ones((), dtype=torch.int32, device=device)
+    same = torch.empty_like(a)
+    cross = torch.empty_like(a)
+    expected_cross = torch.stack((a[:, :, 1], b[:, :, 1]), dim=2)
+
+    for _ in range(8):
+        same.fill_(float("nan"))
+        cross.fill_(float("nan"))
+        kernel[(ctas, )](a, b, flag, same, cross, num_warps=8, num_ctas=1)
+        torch.testing.assert_close(same, a, rtol=0, atol=0)
+        torch.testing.assert_close(cross, expected_cross, rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("pred", [False, True])
+@pytest.mark.parametrize("iterations", [1, 3])
+def test_tmem_wait_predicated_store(pred, iterations):
+
+    @gluon.jit
+    def kernel(inp, out, pred_ptr, iterations):
         parent = allocate_tensor_memory(ttgl.float32, [128, 64], TensorMemoryLayout([128, 64], col_stride=1))
         layout: ttgl.constexpr = parent.get_reg_layout()
         rows = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))
@@ -2391,24 +2434,26 @@ def test_tmem_wait_predicated_store(pred):
         a = parent.slice(0, 16)
         b = parent.slice(16, 16)
         c = parent.slice(32, 16)
-        values = a.load()
-        # Register users and disjoint stores need no load wait.
-        b.store(values + 1)
-        c.store(values + 2, pred=pred_value)
-        # Overwriting the loaded source and reading all stores require completion.
-        a.store(ttgl.full([128, 16], -7, ttgl.float32, layout=a.get_reg_layout()))
+        for _ in range(iterations):
+            values = a.load()
+            # Register users and disjoint stores need no load wait.
+            b.store(values + 1)
+            c.store(values + 2, pred=pred_value)
+            # Complete the load before overwriting its source.
+            a.store(ttgl.full([128, 16], -7, ttgl.float32, layout=a.get_reg_layout()))
         ttgl.store(out + offsets, parent.load())
 
     inp = torch.arange(128 * 64, dtype=torch.float32, device="cuda").reshape(128, 64)
     out = torch.empty_like(inp)
     pred_tensor = torch.tensor(pred, dtype=torch.bool, device="cuda")
-    kernel[(1, )](inp, out, pred_tensor, num_warps=4)
+    kernel[(1, )](inp, out, pred_tensor, iterations, num_warps=4)
 
     expected = inp.clone()
     expected[:, :16] = -7
-    expected[:, 16:32] = inp[:, :16] + 1
+    last_load = inp[:, :16] if iterations == 1 else -7
+    expected[:, 16:32] = last_load + 1
     if pred:
-        expected[:, 32:48] = inp[:, :16] + 2
+        expected[:, 32:48] = last_load + 2
     torch.testing.assert_close(out, expected, atol=0, rtol=0)
 
 
