@@ -543,6 +543,8 @@ def swizzle_mx_scale_bw_ptr(base, outer, inner, leading_block, stride_outer, str
     Strides are in elements. Each stride product uses ``INDEX_TYPE`` before
     being added to the pointer.
     """
+    outer = tl.to_tensor(outer)
+    inner = tl.to_tensor(inner)
     outer_block = leading_block + outer // SIZE_OUTER
     inner_group = inner // SIZE_INNER
     outer_lane = outer % SIZE_OUTER
