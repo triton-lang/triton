@@ -4640,6 +4640,35 @@ def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_
     np.testing.assert_allclose(out_ref, to_numpy(out_tri), rtol=0.01, atol=1e-2)
 
 
+@pytest.mark.parametrize("rows, head_dim, num_warps", [(64, 128, 4), (64, 128, 8), (128, 256, 8), (64, 256, 4)])
+def test_dot_row_reduction_chained(rows, head_dim, num_warps, device):
+
+    @triton.jit
+    def kernel(Q, K, V, O, M: tl.constexpr, D: tl.constexpr):
+        m = tl.arange(0, M)
+        n = tl.arange(0, 64)
+        d = tl.arange(0, D)
+        q = tl.load(Q + m[:, None] * D + d[None, :])
+        k = tl.load(K + n[None, :] * D + d[:, None])
+        scores = tl.dot(q, k) * (D**-0.5)
+        p = tl.exp(scores - tl.max(scores, 1)[:, None])
+        p = p / tl.sum(p, 1)[:, None]
+        v = tl.load(V + n[:, None] * D + d[None, :])
+        out = tl.dot(p.to(v.dtype), v)
+        tl.store(O + m[:, None] * D + d[None, :], out)
+
+    torch.manual_seed(0)
+    q = torch.randn((rows, head_dim), device=device, dtype=torch.float16)
+    k, v = [torch.randn((64, head_dim), device=device, dtype=torch.float16) for _ in range(2)]
+    out = torch.empty_like(q)
+    kernel[(1, )](q, k, v, out, rows, head_dim, num_warps=num_warps)
+    if is_compile_warmup():
+        return
+    scores = (q.float() @ k.float().T) * (head_dim**-0.5)
+    expected = (scores.softmax(-1) @ v.float()).half()
+    torch.testing.assert_close(out, expected, atol=2e-3, rtol=2e-3)
+
+
 @pytest.mark.parametrize('in_dtype', ['float32'])
 def test_dot_mulbroadcasted(in_dtype, device):
     if is_cuda():

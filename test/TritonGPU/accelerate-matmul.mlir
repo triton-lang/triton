@@ -1168,3 +1168,65 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %0 : tensor<128x256xf32, #blocked>
   }
 }
+
+// -----
+
+// Distribute rows only when every warp gets distinct MMA rows.
+// CHECK: #[[$MMA:.+]] = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @chained_dot_row_reduction
+  tt.func @chained_dot_row_reduction(
+      %a: tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+      %b: tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>,
+      %v: tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<64x128xf32, #blocked> {
+    %zero_qk = arith.constant dense<0.0> : tensor<64x64xf32, #blocked>
+    %zero_pv = arith.constant dense<0.0> : tensor<64x128xf32, #blocked>
+    // CHECK: tt.dot {{.*}} -> tensor<64x64xf32, #[[$MMA]]>
+    %d = tt.dot %a, %b, %zero_qk : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<64x64xf32, #blocked>
+    %row = "tt.reduce"(%d) ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %sum = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %sum : f32
+    }) {axis = 1 : i32} : (tensor<64x64xf32, #blocked>) -> tensor<64xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %row_expand = tt.expand_dims %row {axis = 1 : i32} : tensor<64xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<64x1xf32, #blocked>
+    %row_broadcast = tt.broadcast %row_expand : tensor<64x1xf32, #blocked> -> tensor<64x64xf32, #blocked>
+    %normalized = arith.subf %d, %row_broadcast : tensor<64x64xf32, #blocked>
+    %half = arith.truncf %normalized : tensor<64x64xf32, #blocked> to tensor<64x64xf16, #blocked>
+    %p = ttg.convert_layout %half : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    // CHECK: tt.dot {{.*}} -> tensor<64x128xf32, #[[$MMA]]>
+    %out = tt.dot %p, %v, %zero_pv : tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<64x128xf32, #blocked>
+    tt.return %out : tensor<64x128xf32, #blocked>
+  }
+}
+
+// -----
+
+// Distribute rows only when every warp gets distinct MMA rows.
+// CHECK: #[[$MMA:.+]] = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 8], instrShape = [16, 8]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @chained_dot_row_reduction_replicated_warps
+  tt.func @chained_dot_row_reduction_replicated_warps(
+      %a: tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+      %b: tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>,
+      %v: tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<64x128xf32, #blocked> {
+    %zero_qk = arith.constant dense<0.0> : tensor<64x64xf32, #blocked>
+    %zero_pv = arith.constant dense<0.0> : tensor<64x128xf32, #blocked>
+    // CHECK: tt.dot {{.*}} -> tensor<64x64xf32, #[[$MMA]]>
+    %d = tt.dot %a, %b, %zero_qk : tensor<64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<64x64xf32, #blocked>
+    %row = "tt.reduce"(%d) ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %sum = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %sum : f32
+    }) {axis = 1 : i32} : (tensor<64x64xf32, #blocked>) -> tensor<64xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %row_expand = tt.expand_dims %row {axis = 1 : i32} : tensor<64xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<64x1xf32, #blocked>
+    %row_broadcast = tt.broadcast %row_expand : tensor<64x1xf32, #blocked> -> tensor<64x64xf32, #blocked>
+    %normalized = arith.subf %d, %row_broadcast : tensor<64x64xf32, #blocked>
+    %half = arith.truncf %normalized : tensor<64x64xf32, #blocked> to tensor<64x64xf16, #blocked>
+    %p = ttg.convert_layout %half : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    // CHECK: tt.dot {{.*}} -> tensor<64x128xf32, #[[$MMA]]>
+    %out = tt.dot %p, %v, %zero_pv : tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<64x128xf32, #blocked>
+    tt.return %out : tensor<64x128xf32, #blocked>
+  }
+}

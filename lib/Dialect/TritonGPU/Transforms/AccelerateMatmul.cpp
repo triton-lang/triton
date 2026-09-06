@@ -97,7 +97,28 @@ SmallVector<unsigned> warpsPerTileV2(DotOpInterface dotOp,
   };
   auto slices = mlir::getSlice(dotOp, {filter}, {filter});
   bool hasChainedDot = false;
+  bool hasRowReduction = false;
+  bool hasOtherReduction = false;
+  bool canDistributeRows = shape[0] >= 16 * numWarps;
   for (Operation *op : slices) {
+    if (auto reduce = dyn_cast<ReduceOp>(op)) {
+      SetVector<Operation *> backward, forward;
+      if (failed(getBackwardSlice(op, &backward, {filter}))) {
+        hasOtherReduction = true;
+        continue;
+      }
+      getForwardSlice(op, &forward, {filter});
+      auto isDot = [](Operation *op) { return isa<DotOp, DotScaledOp>(op); };
+      // Only consider reductions on a path between dots, not reductions of
+      // their inputs or reductions used solely by an epilogue.
+      if (llvm::any_of(backward, isDot) && llvm::any_of(forward, isDot)) {
+        auto srcTy = cast<RankedTensorType>(reduce.getSrcs()[0].getType());
+        if (srcTy.getRank() == 2 && reduce.getAxis() == 1)
+          hasRowReduction = true;
+        else
+          hasOtherReduction = true;
+      }
+    }
     if (isa<DotOp, DotScaledOp>(op) && (op != dotOp)) {
       auto resTy = cast<RankedTensorType>(op->getResult(0).getType());
       if (resTy.getRank() != rank) {
@@ -108,9 +129,16 @@ SmallVector<unsigned> warpsPerTileV2(DotOpInterface dotOp,
         return to_vector(mmaEncoding.getWarpsPerCTA());
       }
       hasChainedDot = true;
+      canDistributeRows &= resTy.getShape()[0] >= 16 * numWarps;
     }
   }
   if (hasChainedDot) {
+    // Keep row reductions, such as the softmax between attention's dots,
+    // within a warp. Each MMA v2 warp covers 16 rows, so only do this when
+    // all dots have enough rows to avoid replicating work across warps.
+    // Reusing an existing MMA encoding above keeps the whole chain consistent.
+    if (hasRowReduction && !hasOtherReduction && canDistributeRows)
+      return {(unsigned)numWarps, 1};
     if (shape[0] >= shape[1]) {
       return {(unsigned)numWarps, 1};
     } else {
