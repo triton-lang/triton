@@ -277,6 +277,47 @@ def _fma_fp64(a, b, c):
     return ret if ret != 0.0 else math.copysign(0.0, sign)
 
 
+def _fma_narrow(a, b, c, dtype):
+    # Rounding a*b and then a*b+c separately (each through float64) is double
+    # rounding: a value exactly halfway between two `dtype` steps can round to
+    # the wrong neighbor once the float64 intermediate has already rounded it
+    # once. Round the exact rational value directly against the two `dtype`
+    # candidates instead, so there is exactly one rounding step.
+    a64, b64, c64 = float(a), float(b), float(c)
+    if math.isnan(a64) or math.isnan(b64) or math.isnan(c64) or math.isinf(a64) or math.isinf(b64):
+        return dtype(a64 * b64 + c64)
+    if math.isinf(c64):
+        return dtype(c64)
+    exact = Fraction(a64) * Fraction(b64) + Fraction(c64)
+    if exact == 0:
+        # Only zero operands can make this a negative zero.
+        return dtype(a64 * b64 + c64) if a64 * b64 == 0.0 and c64 == 0.0 else dtype(0.0)
+    sign = 1.0 if exact > 0 else -1.0
+    approx = dtype(float(exact))
+    if not np.isfinite(approx):
+        return approx
+    # `approx` and its neighbor on the side of `exact` are the only two
+    # candidates a correctly-rounded result can be; pick whichever is closer,
+    # breaking an exact tie to the neighbor with an even mantissa bit
+    # (round-half-to-even, matching IEEE 754 default rounding).
+    # The neighbor must be taken towards `exact`, not away from zero: `approx`
+    # (itself already rounded once, through float64) can land on either side
+    # of `exact`, so the sign of the *value* is not the direction to search.
+    towards_exact = np.inf if Fraction(float(approx)) < exact else -np.inf
+    neighbor = dtype(np.nextafter(approx, towards_exact, dtype=dtype))
+    d_approx = abs(exact - Fraction(float(approx)))
+    d_neighbor = abs(exact - Fraction(float(neighbor)))
+    if d_neighbor < d_approx:
+        ret = neighbor
+    elif d_neighbor > d_approx:
+        ret = approx
+    else:
+        bit_view = np.uint16 if dtype is np.float16 else np.uint32
+        approx_is_even = (int(approx.view(bit_view)) & 1) == 0
+        ret = approx if approx_is_even else neighbor
+    return ret if ret != 0.0 else dtype(math.copysign(0.0, sign))
+
+
 def _e8m0_to_f32(scale):
     assert scale.dtype in (np.uint8, np.int8)
     scale = scale.astype(np.uint8)
@@ -373,6 +414,7 @@ np_erf_fp32 = np.vectorize(_erf, otypes=[np.float32])
 np_erf_fp64 = np.vectorize(_erf, otypes=[np.float64])
 np_umulhi_u64 = np.vectorize(_umulhi_64, otypes=[np.uint64])
 np_fma_fp64 = np.vectorize(_fma_fp64, otypes=[np.float64])
+np_fma_fp32 = np.vectorize(lambda a, b, c: _fma_narrow(a, b, c, np.float32), otypes=[np.float32])
 
 
 class ExtraFunctions:
@@ -708,10 +750,18 @@ class InterpreterBuilder:
 
     def create_fma(self, x, y, z):
         # An fma rounds once, but multiplying and then adding rounds twice.
-        # float64 has the precision to round the narrower types correctly.
+        # A float64 intermediate has the precision to round float16 correctly
+        # (its full range fits in a float64 mantissa), but not float32: the
+        # product+sum can land exactly halfway between two float32 values, in
+        # which case rounding it to float64 first and then to float32 can pick
+        # the wrong neighbor (double rounding). float32 is routed through
+        # `_fma_narrow`, which rounds the exact value directly against the
+        # float32 grid.
         dtype = z.data.dtype
         if dtype == np.float64:
             ret = np_fma_fp64(x.data, y.data, z.data)
+        elif dtype == np.float32:
+            ret = np_fma_fp32(x.data, y.data, z.data)
         else:
             product = np.multiply(x.data, y.data, dtype=np.float64)
             ret = np.add(product, z.data, dtype=np.float64).astype(dtype)
