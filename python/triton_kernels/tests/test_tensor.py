@@ -162,11 +162,17 @@ def test_layout_storage_shape_matches_conversion(logical_shape, is_fp4, layout, 
     assert list(converted.storage.data.shape) == storage_shape
 
 
-def test_cdna4_scale_symbolic_storage_shape():
-    k, n = sympy.symbols("k n", integer=True, nonnegative=True)
-    shape = CDNA4MXScaleLayout().storage_shape([k, n], False)
-    assert shape[1].subs(k, 9) == 512
-    assert shape[2].subs(n, 33) == 2
+@pytest.mark.parametrize(("layout", "expected"), [
+    (BlackwellMXScaleLayout(), [1, 1, 4, 2, 256]),
+    (BlackwellActMXScaleLayout(None), [1, 1, 10, 2, 256]),
+    (HopperMXScaleLayout(-1, 4), [4, 1088]),
+    (HopperMXScaleLayout(-2, 4), [320, 4]),
+    (CDNA4MXScaleLayout(), [1, 512, 2]),
+])
+def test_scale_layout_symbolic_storage_shape(layout, expected):
+    m, n = sympy.symbols("m n", integer=True, nonnegative=True)
+    shape = layout.storage_shape([m, n], False)
+    assert [sympy.sympify(dim).subs({m: 9, n: 33}) for dim in shape] == expected
 
 
 def test_ragged_layout_storage_shape():
