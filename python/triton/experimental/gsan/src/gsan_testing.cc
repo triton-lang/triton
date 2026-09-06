@@ -50,6 +50,7 @@ struct PyGlobalState {
   uintptr_t reserveBase = 0;
   uintptr_t globalsBase = 0;
   uint32_t rngSeed = 0;
+  uint32_t shadowGranularityBytes = 0;
   uint32_t numSms = 0;
   uint32_t numDevices = 0;
   uint32_t numThreads = 0;
@@ -144,6 +145,7 @@ std::string globalStateStr(const PyGlobalState &s) {
   std::ostringstream oss;
   oss << "GlobalState(reserve_base=" << s.reserveBase
       << ", globals_base=" << s.globalsBase << ", rng_seed=" << s.rngSeed
+      << ", shadow_granularity_bytes=" << s.shadowGranularityBytes
       << ", num_sms=" << s.numSms << ", num_devices=" << s.numDevices
       << ", num_threads=" << s.numThreads
       << ", clock_buffer_size=" << s.clockBufferSize << ")";
@@ -190,6 +192,7 @@ PyGlobalState toPyGlobalState(const gsan::GlobalState &state) {
   out.reserveBase = static_cast<uintptr_t>(state.reserveBase);
   out.globalsBase = static_cast<uintptr_t>(state.globalsBase);
   out.rngSeed = state.rngSeed;
+  out.shadowGranularityBytes = state.shadowGranularityBytes;
   out.numSms = state.numSms;
   out.numDevices = state.numDevices;
   out.numThreads = state.numThreads;
@@ -325,6 +328,9 @@ void init_gsan_testing(py::module_ &m) {
       .def_prop_ro("globals_base",
                    [](const PyGlobalState &s) { return s.globalsBase; })
       .def_prop_ro("rng_seed", [](const PyGlobalState &s) { return s.rngSeed; })
+      .def_prop_ro(
+          "shadow_granularity_bytes",
+          [](const PyGlobalState &s) { return s.shadowGranularityBytes; })
       .def_prop_ro("num_sms", [](const PyGlobalState &s) { return s.numSms; })
       .def_prop_ro("num_devices",
                    [](const PyGlobalState &s) { return s.numDevices; })
@@ -365,6 +371,7 @@ void init_gsan_testing(py::module_ &m) {
 
   m.def(
       "shadow_cell_address", gsan::getShadowAddress, py::arg("real_address"),
+      py::arg("granularity_bytes") = gsan::kShadowMemGranularityBytes,
       "Return the address of the ShadowCell corresponding to a real address.");
 
   m.attr("SHADOW_CELL_SIZE_BYTES") = sizeof(gsan::ShadowCell);

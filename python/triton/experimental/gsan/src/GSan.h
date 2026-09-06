@@ -24,6 +24,7 @@ using uintptr_t = __UINTPTR_TYPE__;
 // Reserve 1 PiB, should be big enough for a while :)
 static constexpr size_t kReserveSize = 1ull << 40;
 static constexpr int kShadowMemGranularityBytes = 4;
+static constexpr int kMinShadowMemGranularityBytes = 2;
 static_assert((kReserveSize & (kReserveSize - 1)) == 0,
               "kReserveSize must be a power of 2");
 
@@ -75,6 +76,7 @@ struct GlobalState {
   thread_id_t numThreads;
 
   uint16_t clockBufferSize;
+  uint32_t shadowGranularityBytes;
 };
 
 struct ThreadState {
@@ -101,7 +103,9 @@ struct ThreadState {
   epoch_t vectorClock[];
 };
 
-static constexpr int kMaxAtomicShadowCells = 3;
+// An eight-byte atomic can intersect five two-byte shadow cells.
+static constexpr int kMaxAtomicShadowCells =
+    8 / kMinShadowMemGranularityBytes + 1;
 
 struct AtomicEventState {
   ThreadState *threadState;
@@ -181,11 +185,14 @@ inline GSAN_HOST_DEVICE uintptr_t getReserveBaseFromAddress(uintptr_t addr) {
 }
 
 // Assumes address is in gsan-managed memory
-inline GSAN_HOST_DEVICE uintptr_t getShadowAddress(uintptr_t virtualAddress) {
+inline GSAN_HOST_DEVICE uintptr_t getShadowAddress(
+    uintptr_t virtualAddress, int granularity = kShadowMemGranularityBytes) {
   auto reserveBase = getReserveBaseFromAddress(virtualAddress);
   auto realBase = getRealBaseAddress(reserveBase);
   auto byteOffset = virtualAddress - realBase;
-  auto wordOffset = byteOffset / kShadowMemGranularityBytes;
+  // Configuration accepts only two- or four-byte cells. Avoid a device-side
+  // integer division when the precision comes from runtime state.
+  auto wordOffset = byteOffset >> (granularity == 2 ? 1 : 2);
   return reserveBase + sizeof(ShadowCell) * wordOffset;
 }
 

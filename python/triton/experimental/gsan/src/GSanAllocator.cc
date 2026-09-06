@@ -93,6 +93,7 @@ struct GSanConfig {
   int numThreads = 0;
   int clockBufferSize = 0;
   uint32_t rngSeed = 0;
+  int shadowGranularityBytes = gsan::kShadowMemGranularityBytes;
   CUmemAllocationHandleType shareableHandleType =
       CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
   bool clockBufferSizeConfigured = false;
@@ -124,6 +125,16 @@ void printCUDAError(CUresult err) {
 static AllocatorState *alloc = nullptr;
 static GSanConfig config;
 static std::mutex mut;
+
+// IPC handles do not encode their shadow precision. Keep the existing format
+// restricted to its original mapping until peers can negotiate precision.
+bool requireDefaultShadowGranularityForIPC() {
+  if (config.shadowGranularityBytes == gsan::kShadowMemGranularityBytes)
+    return true;
+  PyErr_SetString(PyExc_RuntimeError,
+                  "GSan IPC requires shadow_granularity_bytes=4");
+  return false;
+}
 
 bool hasLiveAllocations() {
   return alloc != nullptr &&
@@ -193,7 +204,7 @@ size_t roundDownToPowerOfTwo(size_t x) {
 }
 
 size_t getShadowSize(size_t realMemSize) {
-  auto wordSize = cdiv(realMemSize, gsan::kShadowMemGranularityBytes);
+  auto wordSize = cdiv(realMemSize, config.shadowGranularityBytes);
   return wordSize * sizeof(gsan::ShadowCell);
 }
 
@@ -363,8 +374,8 @@ int gsanEnsureInit() {
   // Choose size so that both shadow memory and real memory definitely fit in
   // the address reservation
   auto shadowSize = gsan::kReserveSize / 2;
-  auto realSize = gsan::kShadowMemGranularityBytes *
-                  (shadowSize / sizeof(gsan::ShadowCell));
+  auto realSize =
+      config.shadowGranularityBytes * (shadowSize / sizeof(gsan::ShadowCell));
   realSize = std::min(gsan::kReserveSize / 2, realSize);
   realSize = roundDownToPowerOfTwo(realSize);
   root->size = realSize;
@@ -478,6 +489,7 @@ CUresult initializeRuntimeState(CUdeviceptr deviceAddr, size_t allocSize) {
   globals.numDevices = static_cast<gsan::thread_id_t>(config.numGPUs);
   globals.numThreads = static_cast<gsan::thread_id_t>(config.numThreads);
   globals.clockBufferSize = config.clockBufferSize;
+  globals.shadowGranularityBytes = config.shadowGranularityBytes;
   return cuMemcpyHtoD(deviceAddr, &globals, sizeof(globals));
 }
 
@@ -568,7 +580,8 @@ CUresult mapNodeHandles(AllocNode *node,
   assert(realMapped != nullptr);
   assert(shadowMapped != nullptr);
 
-  const auto shadowAddress = gsan::getShadowAddress(node->virtualAddress);
+  const auto shadowAddress = gsan::getShadowAddress(
+      node->virtualAddress, config.shadowGranularityBytes);
   const auto shadowSize = getShadowSize(allocSize);
 
   CUresult err = cuMemMap(node->virtualAddress, allocSize, /*offset*/ 0,
@@ -604,7 +617,8 @@ CUresult mapNodeHandles(AllocNode *node,
 
 void unmapNodeHandles(AllocNode *node, bool realMapped, bool shadowMapped) {
   assert(node != nullptr);
-  const auto shadowAddress = gsan::getShadowAddress(node->virtualAddress);
+  const auto shadowAddress = gsan::getShadowAddress(
+      node->virtualAddress, config.shadowGranularityBytes);
   const auto shadowSize = getShadowSize(node->allocSize);
   if (shadowMapped)
     cuMemUnmap(shadowAddress, shadowSize);
@@ -658,7 +672,8 @@ extern "C" void *gsanMalloc(ssize_t size, int device,
   bool realMapped = false;
   bool shadowMapped = false;
   auto cuStream = reinterpret_cast<CUstream>(stream);
-  auto shadowAddress = gsan::getShadowAddress(node->virtualAddress);
+  auto shadowAddress = gsan::getShadowAddress(node->virtualAddress,
+                                              config.shadowGranularityBytes);
   auto shadowSize = getShadowSize(allocSize);
   err = cuMemCreate(&realHandle, allocSize, &prop, 0);
   if (err != CUDA_SUCCESS)
@@ -718,7 +733,8 @@ extern "C" void gsanFree(void *void_ptr, [[maybe_unused]] ssize_t size,
   if (err != CUDA_SUCCESS)
     printCUDAError(err);
 
-  const auto shadowAddress = gsan::getShadowAddress(node->virtualAddress);
+  const auto shadowAddress = gsan::getShadowAddress(
+      node->virtualAddress, config.shadowGranularityBytes);
   const auto shadowSize = getShadowSize(node->allocSize);
 
   err = cuMemUnmap(node->virtualAddress, node->allocSize);
@@ -765,6 +781,8 @@ int gsanExportAllocationHandles(void *void_ptr,
     return -1;
 
   std::lock_guard lg(mut);
+  if (!requireDefaultShadowGranularityForIPC())
+    return -1;
   if (alloc == nullptr)
     return -1;
 
@@ -816,6 +834,8 @@ int gsanExportAllocationMemhandleRegions(void *void_ptr, uintptr_t *realPtr,
     return -1;
 
   std::lock_guard lg(mut);
+  if (!requireDefaultShadowGranularityForIPC())
+    return -1;
   if (alloc == nullptr)
     return -1;
 
@@ -831,8 +851,8 @@ int gsanExportAllocationMemhandleRegions(void *void_ptr, uintptr_t *realPtr,
 
   *realPtr = static_cast<uintptr_t>(node->virtualAddress);
   *realSize = node->allocSize;
-  *shadowPtr =
-      static_cast<uintptr_t>(gsan::getShadowAddress(node->virtualAddress));
+  *shadowPtr = static_cast<uintptr_t>(gsan::getShadowAddress(
+      node->virtualAddress, config.shadowGranularityBytes));
   *shadowSize = getShadowSize(node->allocSize);
   return 0;
 }
@@ -852,6 +872,8 @@ int gsanExportRuntimeStateHandle(int device,
     return -1;
 
   std::lock_guard lg(mut);
+  if (!requireDefaultShadowGranularityForIPC())
+    return -1;
   if (gsanEnsureInit() != 0)
     return -1;
   CUresult err = ensureContext(device);
@@ -897,6 +919,8 @@ gsanImportAllocationHandles(const GSanShareableHandle *realShareableHandle,
   }
 
   std::lock_guard lg(mut);
+  if (!requireDefaultShadowGranularityForIPC())
+    return nullptr;
   if (gsanEnsureInit() != 0)
     return nullptr;
   CUresult err = ensureContext(device);
@@ -963,6 +987,8 @@ int gsanImportRuntimeStateHandle(const GSanShareableHandle *shareableHandle,
     return -1;
 
   std::lock_guard lg(mut);
+  if (!requireDefaultShadowGranularityForIPC())
+    return -1;
   if (gsanEnsureInit() != 0)
     return -1;
   CUresult err = ensureContext(device);
@@ -1156,9 +1182,9 @@ PyObject *pyFree([[maybe_unused]] PyObject *self, PyObject *const *args,
 
 PyObject *pyConfigure([[maybe_unused]] PyObject *self, PyObject *const *args,
                       Py_ssize_t nargs) {
-  if (nargs != 5) {
+  if (nargs != 6) {
     PyErr_Format(PyExc_TypeError,
-                 "%s.configure expected 5 positional arguments, got %zd",
+                 "%s.configure expected 6 positional arguments, got %zd",
                  kModuleName, nargs);
     return nullptr;
   }
@@ -1259,11 +1285,31 @@ PyObject *pyConfigure([[maybe_unused]] PyObject *self, PyObject *const *args,
     return nullptr;
   }
 
+  const bool shadowGranularityRequested = args[5] != Py_None;
+  int requestedShadowGranularity = 0;
+  if (shadowGranularityRequested) {
+    if (!parseIntArg(args[5], "shadow_granularity_bytes",
+                     &requestedShadowGranularity))
+      return nullptr;
+    if (requestedShadowGranularity != gsan::kMinShadowMemGranularityBytes &&
+        requestedShadowGranularity != gsan::kShadowMemGranularityBytes) {
+      PyErr_SetString(PyExc_ValueError,
+                      "shadow_granularity_bytes must be 2 or 4");
+      return nullptr;
+    }
+  }
+
   std::lock_guard lg(mut);
   if (config.topologyFrozen) {
     PyErr_SetString(PyExc_RuntimeError,
                     "GSan allocator configuration is already frozen and "
                     "cannot be changed");
+    return nullptr;
+  }
+  if (shadowGranularityRequested && alloc != nullptr) {
+    PyErr_SetString(PyExc_RuntimeError,
+                    "GSan shadow precision cannot be changed after memory "
+                    "is reserved");
     return nullptr;
   }
 
@@ -1287,6 +1333,8 @@ PyObject *pyConfigure([[maybe_unused]] PyObject *self, PyObject *const *args,
     config.shareableHandleType = requestedShareableHandleType;
     config.shareableHandleTypeConfigured = true;
   }
+  if (shadowGranularityRequested)
+    config.shadowGranularityBytes = requestedShadowGranularity;
   Py_RETURN_NONE;
 }
 
@@ -1405,6 +1453,11 @@ PyObject *pyGetShadowSizeBytes(PyObject *self, PyObject *args) {
   return PyLong_FromLong(sizeof(gsan::ShadowCell));
 }
 
+PyObject *pyGetShadowGranularityBytes(PyObject *self, PyObject *args) {
+  std::lock_guard lg(mut);
+  return PyLong_FromLong(config.shadowGranularityBytes);
+}
+
 PyObject *pyGetGlobalStatePointer([[maybe_unused]] PyObject *self,
                                   PyObject *args) {
   std::lock_guard lg(mut);
@@ -1488,7 +1541,7 @@ PyObject *pyGetRuntimeStateLayout([[maybe_unused]] PyObject *self,
   threadStateStride = roundUp(threadStateStride, alignof(gsan::ThreadState));
 
   return Py_BuildValue(
-      "{s:K,s:K,s:K,s:K,s:i,s:i,s:i}", "global_state_ptr",
+      "{s:K,s:K,s:K,s:K,s:i,s:i,s:i,s:i}", "global_state_ptr",
       static_cast<unsigned long long>(globalStateAddress),
       "thread_state_base_ptr", static_cast<unsigned long long>(threadStateBase),
       "thread_state_stride_bytes",
@@ -1496,7 +1549,8 @@ PyObject *pyGetRuntimeStateLayout([[maybe_unused]] PyObject *self,
       "thread_state_header_size_bytes",
       static_cast<unsigned long long>(kThreadStateHeaderSize), "num_sms",
       config.numSMs, "num_threads", config.numThreads, "clock_buffer_size",
-      config.clockBufferSize);
+      config.clockBufferSize, "shadow_granularity_bytes",
+      config.shadowGranularityBytes);
 }
 
 PyObject *pyExportAllocationHandles(PyObject *self, PyObject *const *args,
@@ -1524,7 +1578,9 @@ PyObject *pyExportAllocationHandles(PyObject *self, PyObject *const *args,
                                        &shadowShareableHandle, &allocSize,
                                        handleType);
   if (rc != 0) {
-    PyErr_SetString(PyExc_RuntimeError, "gsanExportAllocationHandles failed.");
+    if (!PyErr_Occurred())
+      PyErr_SetString(PyExc_RuntimeError,
+                      "gsanExportAllocationHandles failed.");
     return nullptr;
   }
 
@@ -1557,8 +1613,9 @@ PyObject *pyExportAllocationMemhandleRegions(PyObject *self,
   int rc = gsanExportAllocationMemhandleRegions(ptr, &realPtr, &realSize,
                                                 &shadowPtr, &shadowSize);
   if (rc != 0) {
-    PyErr_SetString(PyExc_RuntimeError,
-                    "gsanExportAllocationMemhandleRegions failed.");
+    if (!PyErr_Occurred())
+      PyErr_SetString(PyExc_RuntimeError,
+                      "gsanExportAllocationMemhandleRegions failed.");
     return nullptr;
   }
 
@@ -1601,7 +1658,9 @@ PyObject *pyImportAllocationHandles(PyObject *self, PyObject *const *args,
       gsanImportAllocationHandles(&realShareableHandle, &shadowShareableHandle,
                                   handleType, allocSize, device);
   if (ptr == nullptr) {
-    PyErr_SetString(PyExc_RuntimeError, "gsanImportAllocationHandles failed.");
+    if (!PyErr_Occurred())
+      PyErr_SetString(PyExc_RuntimeError,
+                      "gsanImportAllocationHandles failed.");
     return nullptr;
   }
 
@@ -1631,7 +1690,9 @@ PyObject *pyExportRuntimeStateHandle(PyObject *self, PyObject *const *args,
   int rc = gsanExportRuntimeStateHandle(device, &shareableHandle, &allocSize,
                                         handleType);
   if (rc != 0) {
-    PyErr_SetString(PyExc_RuntimeError, "gsanExportRuntimeStateHandle failed.");
+    if (!PyErr_Occurred())
+      PyErr_SetString(PyExc_RuntimeError,
+                      "gsanExportRuntimeStateHandle failed.");
     return nullptr;
   }
 
@@ -1671,7 +1732,9 @@ PyObject *pyImportRuntimeStateHandle(PyObject *self, PyObject *const *args,
   int rc = gsanImportRuntimeStateHandle(&shareableHandle, handleType, allocSize,
                                         peerDevice, device);
   if (rc != 0) {
-    PyErr_SetString(PyExc_RuntimeError, "gsanImportRuntimeStateHandle failed.");
+    if (!PyErr_Occurred())
+      PyErr_SetString(PyExc_RuntimeError,
+                      "gsanImportRuntimeStateHandle failed.");
     return nullptr;
   }
 
@@ -1699,6 +1762,9 @@ PyMethodDef kGSanAllocatorMethods[] = {
     {"get_shadow_size_bytes",
      reinterpret_cast<PyCFunction>(pyGetShadowSizeBytes), METH_NOARGS,
      "Return the shadow cell size in bytes."},
+    {"get_shadow_granularity_bytes",
+     reinterpret_cast<PyCFunction>(pyGetShadowGranularityBytes), METH_NOARGS,
+     "Return configured bytes per shadow cell without initializing memory."},
     {"get_global_state_pointer",
      reinterpret_cast<PyCFunction>(pyGetGlobalStatePointer), METH_NOARGS,
      "Return the pointer to the GSan global state region."},

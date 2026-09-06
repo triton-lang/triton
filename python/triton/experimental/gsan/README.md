@@ -86,6 +86,25 @@ These limitations can be mitigated by increasing the number of read samples, or 
 
 ## **3\. Shadow Memory Details**
 
+GSan tracks one access history per four-byte cell by default. Independent writes to
+adjacent FP16 or BF16 values can therefore report a race when they share a cell.
+For local workloads that need halfword precision, configure the process before
+creating a memory pool or reserving any GSan addresses:
+
+```python
+from triton.experimental import gsan
+
+gsan.configure(shadow_granularity_bytes=2)
+pool = gsan.create_mem_pool()
+```
+
+Each cell occupies 24 bytes. Two-byte precision increases shadow storage from
+six to twelve bytes per application byte, excluding allocation rounding and
+the shared vector-clock state. It does not distinguish independent single-byte
+accesses. The choice is fixed after the first address reservation; IPC currently
+requires the default four-byte precision. Kernel instrumentation supports both
+choices without changing the kernel's compilation options.
+
 So far we’ve assumed that we can quickly and easily map between a given pointer and its corresponding shadow memory. To do this, we can take advantage of the CUDA driver API which has a number of primitives to control virtual memory addressing. `cuMemAddressReserve` allows us to reserve a large chunk of virtual address space, and `cuMemMap` allows us to map newly allocated memory pages anywhere we want within the reserved address space.
 
 This gives us the tools we need to  implement a custom allocator that maps all tensor allocations into the higher address range with `cuMemMap`; and also creates a corresponding shadow allocation that gets mapped into the lower address range.

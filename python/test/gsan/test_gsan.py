@@ -10,8 +10,8 @@ from triton.experimental.gluon.language.nvidia.ampere import async_copy
 from triton.experimental.gluon.language.nvidia import hopper
 from triton.tools.tensor_descriptor import TensorDescriptor
 
-from triton._internal_testing import is_blackwell, is_cuda, is_ampere_or_newer, is_hopper_or_newer, is_sm12x
-from triton.experimental.gsan import create_mem_pool
+from triton._internal_testing import default_alloc_fn, is_blackwell, is_cuda, is_ampere_or_newer, is_hopper_or_newer, is_sm12x, run_in_process
+from triton.experimental.gsan import configure, create_mem_pool
 from triton._C.libtriton.gsan_testing import AtomicScope, SHADOW_GRANULARITY_BYTES, ScalarClock
 from triton.experimental.gsan._testing_utils import (atomic_poll, load_one_i32, shadow_cell_from_address, store_one_i32,
                                                      thread_state_from_smid)
@@ -102,6 +102,89 @@ def _assert_cross_sm_sync(payload_ptr: torch.Tensor, flag_ptr: torch.Tensor, exp
 def _assert_no_gsan_runtime_output(capfd) -> None:
     captured = capfd.readouterr()
     assert "GSanLibrary.cu" not in captured.out + captured.err
+
+
+@triton.jit
+def _subword_rows_kernel(output, COLS: tl.constexpr):
+    row = tl.program_id(0)
+    columns = tl.arange(0, 4)
+    tl.store(output + row * COLS + columns, row + columns, columns < COLS)
+
+
+def _run_subword_rows(granularity, cols):
+    configure(shadow_granularity_bytes=granularity)
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    pool = create_mem_pool()
+    with torch.cuda.use_mem_pool(pool):
+        output = torch.empty((64, cols), dtype=torch.bfloat16, device="cuda")
+        _subword_rows_kernel[(64, )](output, cols)
+        torch.cuda.synchronize()
+        expected = torch.arange(64, device="cuda")[:, None] + torch.arange(cols, device="cuda")
+        torch.testing.assert_close(output, expected.to(torch.bfloat16), rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("granularity, cols", [(2, 3), (2, 4), (4, 4)])
+def test_subword_rows(granularity, cols):
+    result = run_in_process(_run_subword_rows, (granularity, cols))
+    assert result.exc is None, result
+
+
+@gluon.jit
+def _subword_mask_kernel(source, output):
+    offsets = gl.arange(0, 128, layout=gl.BlockedLayout([4], [32], [1], [0]))
+    mask = offsets % 2 == 0
+    values = gl.load(source + offsets, mask, other=0)
+    gl.store(output + offsets, values, mask)
+
+
+def _run_subword_masks():
+    configure(shadow_granularity_bytes=2)
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    pool = create_mem_pool()
+    with torch.cuda.use_mem_pool(pool):
+        source = torch.ones(128, dtype=torch.bfloat16, device="cuda")
+        output = torch.zeros_like(source)
+        _subword_mask_kernel[(1, )](source, output, num_warps=1)
+        torch.cuda.synchronize()
+        assert torch.all(output[::2] == 1)
+        assert torch.all(output[1::2] == 0)
+        for index in range(4):
+            read_cell = shadow_cell_from_address(source.data_ptr() + index * 2)
+            write_cell = shadow_cell_from_address(output.data_ptr() + index * 2)
+            assert (read_cell.num_reads > 0) == (index % 2 == 0)
+            assert (write_cell.write_clock.epoch > 0) == (index % 2 == 0)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+def test_subword_masks_preserve_untouched_halfwords():
+    result = run_in_process(_run_subword_masks)
+    assert result.exc is None, result
+
+
+def _run_subword_atomic_cells():
+    configure(shadow_granularity_bytes=2)
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    pool = create_mem_pool()
+    with torch.cuda.use_mem_pool(pool):
+        target = torch.zeros(2, dtype=torch.int64, device="cuda")
+        atomic_add_kernel[(1, )](target, sem="acq_rel", scope="gpu", num_warps=1)
+        assert target[0].item() == 1
+        for offset in range(0, 8, 2):
+            _assert_atomic_rmw_shadow(target.data_ptr() + offset, AtomicScope.GPU, is_release=True)
+        assert shadow_cell_from_address(target.data_ptr() + 8).write_clock.epoch == 0
+
+        atomic_poll_kernel[(1, )](target, 1, sem="acquire", scope="gpu", num_warps=1)
+        torch.cuda.synchronize()
+        for offset in range(0, 8, 2):
+            assert shadow_cell_from_address(target.data_ptr() + offset).num_reads == 2
+        assert shadow_cell_from_address(target.data_ptr() + 8).num_reads == 0
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+def test_subword_eight_byte_atomics_cover_all_cells():
+    result = run_in_process(_run_subword_atomic_cells)
+    assert result.exc is None, result
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
@@ -1170,7 +1253,7 @@ def _gluon_async_copy_masked_kernel(out_ptr, in_ptr, n_elements, start_idx, BLOC
 @triton.jit
 def _device_tma_masked_store_kernel(ptr, m_size, n_size, row_idx, col_idx, stride_0, BLOCK: tl.constexpr):
     desc = tl.make_tensor_descriptor(ptr, [m_size, n_size], [stride_0, 1], [BLOCK, BLOCK])
-    values = tl.full((BLOCK, BLOCK), 1, dtype=tl.int32)
+    values = tl.full((BLOCK, BLOCK), 1, dtype=ptr.dtype.element_ty)
     desc.store([row_idx, col_idx], values)
 
 
@@ -1209,6 +1292,79 @@ def _host_tma_reduce_add_kernel(desc, src_ptr, src_stride_0, src_stride_1, BLOCK
     indices_y = tl.arange(0, BLOCK_Y)[None, :] * src_stride_1
     src = tl.load(src_ptr + indices_x + indices_y)
     desc.atomic_add([0, 0], src)
+
+
+def _run_subword_tma_masks(indexed, cols):
+    configure(shadow_granularity_bytes=2)
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    triton.set_allocator(default_alloc_fn)
+    pool = create_mem_pool()
+    with torch.cuda.use_mem_pool(pool):
+        storage = torch.zeros((16, 16), dtype=torch.bfloat16, device="cuda")
+        output = torch.empty_like(storage)
+        if indexed:
+            desc = TensorDescriptor.from_tensor(storage[:8, :cols], [1, 16])
+            rows = torch.arange(8, dtype=torch.int32, device="cuda")
+            source = torch.ones((8, 16), dtype=torch.bfloat16, device="cuda")
+            _host_tma_scatter_kernel[(1, )](desc, rows, 0, source, 16, 1, BLOCK_X=8)
+            _host_tma_gather_kernel[(1, )](output, 16, 1, desc, rows, 0, BLOCK_X=8)
+        else:
+            _device_tma_masked_store_kernel[(1, )](storage, 8, cols, 0, 0, 16, BLOCK=16)
+            _device_tma_masked_load_kernel[(1, )](output, storage, 8, cols, 0, 0, 16, BLOCK=16)
+        torch.cuda.synchronize()
+        # Stores write whole 16-byte sectors; loads only read logical elements.
+        written_cols = triton.cdiv(cols * storage.element_size(), 16) * 16 // storage.element_size()
+        assert torch.all(storage[:8, :written_cols] == 1)
+        assert torch.all(storage[:8, written_cols:] == 0)
+        assert torch.all(storage[8:] == 0)
+        assert torch.all(output[:8, :cols] == 1)
+        assert torch.all(output[:8, cols:] == 0)
+        for col in (cols - 1, cols, 15):
+            cell = shadow_cell_from_address(storage[0, col].data_ptr())
+            assert (cell.write_clock.epoch > 0) == (col < written_cols)
+            assert (cell.num_reads > 0) == (col < cols)
+        untouched_row = shadow_cell_from_address(storage[8, 0].data_ptr())
+        assert untouched_row.write_clock.epoch == untouched_row.num_reads == 0
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="TMA requires Hopper or newer")
+@pytest.mark.parametrize(
+    "indexed",
+    [False,
+     pytest.param(True, marks=pytest.mark.skipif(not is_blackwell(), reason="Indexed TMA requires Blackwell"))])
+@pytest.mark.parametrize("cols", [8, 9])
+def test_subword_tma_tracks_store_and_load_bounds(indexed, cols):
+    result = run_in_process(_run_subword_tma_masks, (indexed, cols))
+    assert result.exc is None, result
+
+
+def _run_subword_tma_atomic_cells(dtype, cols):
+    configure(shadow_granularity_bytes=2)
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    pool = create_mem_pool()
+    with torch.cuda.use_mem_pool(pool):
+        target = torch.zeros((1, 16), dtype=dtype, device="cuda")
+        source = torch.ones_like(target)
+        desc = TensorDescriptor.from_tensor(target[:, :cols], [1, 16])
+        _host_tma_reduce_add_kernel[(1, )](desc, source, 16, 1, BLOCK_X=1)
+        torch.cuda.synchronize()
+        written_bytes = triton.cdiv(cols * target.element_size(), 16) * 16
+        written_cols = written_bytes // target.element_size()
+        assert torch.all(target[:, :written_cols] == 1)
+        assert torch.all(target[:, written_cols:] == 0)
+        for offset in range(0, written_bytes, 2):
+            _assert_atomic_rmw_shadow(target.data_ptr() + offset, AtomicScope.GPU, is_release=False)
+        if written_cols < target.numel():
+            untouched = shadow_cell_from_address(target.data_ptr() + written_bytes)
+            assert untouched.write_clock.epoch == untouched.num_reads == 0
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="TMA requires Hopper or newer")
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.uint64])
+@pytest.mark.parametrize("cols", [9, 16])
+def test_subword_tma_atomics_cover_all_cells(dtype, cols):
+    result = run_in_process(_run_subword_tma_atomic_cells, (dtype, cols))
+    assert result.exc is None, result
 
 
 def _shadow_cells_for_tensor(tensor: torch.Tensor):
@@ -1377,16 +1533,17 @@ def test_tma_masked_store_updates_shadow(with_gsan, with_allocator, row_idx, col
     valid_cols = max(last_col - first_col, 0)
     target_storage = torch.zeros((padded_m, padded_n), dtype=torch.int32, device="cuda")
     target = target_storage[:m_size, :n_size]
+    write_n_size = triton.cdiv(n_size * target.element_size(), 16) * 16 // target.element_size()
     shadow0 = _shadow_cells_for_tensor(target_storage)
-    changed_mask = _masked_tma_change_mask(target_storage, m_size, n_size, row_idx, col_idx, block)
+    changed_mask = _masked_tma_change_mask(target_storage, m_size, write_n_size, row_idx, col_idx, block)
 
     _device_tma_masked_store_kernel[(1, )](target, m_size, n_size, row_idx, col_idx, target.stride(0), BLOCK=block,
                                            num_ctas=num_ctas)
     torch.cuda.synchronize()
 
-    expected = torch.zeros_like(target)
-    expected[first_row:last_row, first_col:last_col] = 1
-    torch.testing.assert_close(target, expected)
+    expected = torch.zeros_like(target_storage)
+    expected[first_row:last_row, first_col:min(col_idx + block, write_n_size)] = 1
+    torch.testing.assert_close(target_storage, expected)
 
     shadow1 = _shadow_cells_for_tensor(target_storage)
     _assert_shadow_mask(shadow0, shadow1, changed_mask, access_kind="write")
@@ -1437,15 +1594,19 @@ def test_host_tma_scatter_updates_shadow(with_gsan):
     target = target_storage[:m_size, :n_size]
     target_desc = TensorDescriptor.from_tensor(target, [1, block_y])
     src = torch.arange(1, block_x * block_y + 1, dtype=torch.int32, device="cuda").reshape(block_x, block_y)
+    write_n_size = triton.cdiv(n_size * target.element_size(), 16) * 16 // target.element_size()
     shadow0 = _shadow_cells_for_tensor(target_storage)
-    changed_mask = _gather_scatter_change_mask(target_storage, x_offsets, y_offset, m_size, n_size, block_y)
+    changed_mask = _gather_scatter_change_mask(target_storage, x_offsets, y_offset, m_size, write_n_size, block_y)
 
     compiled = _host_tma_scatter_kernel[(1, )](target_desc, x_offsets, y_offset, src, src.stride(0), src.stride(1),
                                                BLOCK_X=block_x)
     assert "ttng.async_tma_scatter" in compiled.asm["ttgir"]
     torch.cuda.synchronize()
 
-    torch.testing.assert_close(target, _scatter_reference(target, src, x_offsets, y_offset))
+    expected = torch.zeros_like(target_storage)
+    expected[:m_size, :write_n_size] = _scatter_reference(target_storage[:m_size, :write_n_size], src, x_offsets,
+                                                          y_offset)
+    torch.testing.assert_close(target_storage, expected)
 
     shadow1 = _shadow_cells_for_tensor(target_storage)
     _assert_shadow_mask(shadow0, shadow1, changed_mask, access_kind="write")

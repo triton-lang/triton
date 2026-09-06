@@ -21,8 +21,6 @@ namespace ttg = mlir::triton::gpu;
 
 namespace {
 
-static constexpr unsigned kGSanShadowGranularityBytes = 4;
-
 struct GSanSourceLocation {
   Value file;
   Value line;
@@ -136,7 +134,7 @@ LLVM::LLVMStructType
 getGSanAtomicEventStateType(ConversionPatternRewriter &rewriter) {
   auto *ctx = rewriter.getContext();
   return LLVM::LLVMStructType::getLiteral(
-      ctx, {ptr_ty(ctx), array_ty(ptr_ty(ctx), 3), i8_ty});
+      ctx, {ptr_ty(ctx), array_ty(ptr_ty(ctx), 5), i8_ty});
 }
 
 FileLineColLoc extractSourceLocation(Location loc) {
@@ -290,33 +288,20 @@ void emitGSanAtomicEndCall(ConversionPatternRewriter &rewriter, Location loc,
 
 template <typename OpT>
 unsigned getTensorAccessVecSize(OpT op,
-                                ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                bool keepWithinSingleShadowCell) {
-  auto ptrTy = op.getPtr().getType();
-  auto bytesPerElem = std::max(8u, tt::getPointeeBitWidth(ptrTy)) / 8;
+                                ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   auto contiguity = axisInfoAnalysis.getContiguity(op.getPtr());
-
-  if (keepWithinSingleShadowCell) {
-    if (bytesPerElem >= kGSanShadowGranularityBytes)
-      return 1;
-    contiguity =
-        std::min(contiguity, kGSanShadowGranularityBytes / bytesPerElem);
-  }
 
   if (!op.getMask())
     return contiguity;
 
+  // Preserve subword masks; shadow precision is selected by the allocator.
   auto maskAlign = axisInfoAnalysis.getMaskAlignment(op.getMask());
-  if (bytesPerElem < kGSanShadowGranularityBytes) {
-    maskAlign = std::max(maskAlign, kGSanShadowGranularityBytes / bytesPerElem);
-  }
   return std::min(contiguity, maskAlign);
 }
 
-void mergeTensorAccessElements(ConversionPatternRewriter &rewriter,
-                               Location loc, SmallVector<Value> &ptrElems,
+void mergeTensorAccessElements(SmallVector<Value> &ptrElems,
                                SmallVector<Value> &maskElems, unsigned mergeVec,
-                               unsigned maskAlign, int32_t &bytesPerElem) {
+                               int32_t &bytesPerElem) {
   if (mergeVec <= 1)
     return;
 
@@ -328,14 +313,9 @@ void mergeTensorAccessElements(ConversionPatternRewriter &rewriter,
 
   for (unsigned i = 0; i < ptrElems.size(); i += mergeVec) {
     mergedPtrElems.push_back(ptrElems[i]);
-    if (maskElems.empty())
-      continue;
-    Value mergedMask = maskElems[i];
-    for (unsigned j = maskAlign; j < mergeVec; j += maskAlign) {
-      mergedMask =
-          arith::OrIOp::create(rewriter, loc, mergedMask, maskElems[i + j]);
-    }
-    mergedMaskElems.push_back(mergedMask);
+    // getTensorAccessVecSize only merges groups with identical masks.
+    if (!maskElems.empty())
+      mergedMaskElems.push_back(maskElems[i]);
   }
 
   ptrElems = std::move(mergedPtrElems);
@@ -419,8 +399,7 @@ public:
         axisInfoAnalysis(&axisInfoAnalysis) {}
 
   unsigned getVecSize(tti::ExperimentalGSanTensorAccessOp op) const {
-    return getTensorAccessVecSize(op, *axisInfoAnalysis,
-                                  /*keepWithinSingleShadowCell=*/false);
+    return getTensorAccessVecSize(op, *axisInfoAnalysis);
   }
 
   LogicalResult
@@ -438,10 +417,7 @@ public:
     }
 
     unsigned mergeVec = getVecSize(op);
-    auto maskAlign =
-        op.getMask() ? axisInfoAnalysis->getMaskAlignment(op.getMask()) : 1;
-    mergeTensorAccessElements(rewriter, loc, ptrElems, maskElems, mergeVec,
-                              maskAlign, bytesPerElem);
+    mergeTensorAccessElements(ptrElems, maskElems, mergeVec, bytesPerElem);
 
     auto ctx = op.getContext();
     auto kReg = str_attr("register");
