@@ -1159,12 +1159,11 @@ static LogicalResult speculateInnerLoopLength(scf::ForOp outerLoop,
   // Mark the inner loop.
   innerLoop->setAttr(kMustExecuteAttrName, b.getUnitAttr());
 
-  // Speculate on whether the length of the inner loop is zero.
-  Value lenInner = computeNumIters(b, innerLoop);
-  auto zeroAttr = IntegerAttr::get(lenInner.getType(), 0);
-  Value innerLoopEmpty =
-      arith::CmpIOp::create(b, arith::CmpIPredicate::eq, lenInner,
-                            arith::ConstantOp::create(b, zeroAttr));
+  // SCF for loops have positive steps, so inverted bounds are empty too.
+  auto predicate = innerLoop.getUnsignedCmp() ? arith::CmpIPredicate::uge
+                                              : arith::CmpIPredicate::sge;
+  Value innerLoopEmpty = arith::CmpIOp::create(
+      b, predicate, innerLoop.getLowerBound(), innerLoop.getUpperBound());
   auto ifOp = scf::IfOp::create(b, outerLoop.getResultTypes(), innerLoopEmpty);
 
   // In the `then` branch, the inner loop does not execute. Clone the loop nest

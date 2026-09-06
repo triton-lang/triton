@@ -6886,6 +6886,29 @@ def test_tl_range_fuse(device):
     torch.testing.assert_close(out, ref, atol=0, rtol=0)
 
 
+@pytest.mark.parametrize("bounds", [(2, 5, 1), (5, 5, 1), (5, 2, 1), (5, 2, 2), (5, 4, 2), (2, 5, 2)])
+@pytest.mark.parametrize("flatten", [False, True])
+def test_tl_range_fuse_empty_inner_bounds(bounds, flatten, device):
+
+    @triton.jit
+    def kernel(x_ptr, out_ptr, lower, upper, step, FLATTEN: tl.constexpr):
+        acc = 7
+        for i in tl.range(3, flatten=FLATTEN):
+            acc += 10
+            for j in range(lower, upper, step):
+                acc += tl.load(x_ptr + j)
+            acc += 100
+        tl.store(out_ptr, acc)
+
+    lower, upper, step = bounds
+    x = torch.arange(32, dtype=torch.int32, device=device)
+    out = torch.empty((), dtype=torch.int32, device=device)
+    kernel[(1, )](x, out, lower, upper, step, flatten)
+    # Empty inner loops must still preserve the outer prologue and epilogue.
+    expected = 7 + 3 * (110 + sum(range(lower, upper, step)))
+    assert out.item() == expected
+
+
 def test_tl_range_fuse_dependent(device):
 
     @triton.jit

@@ -492,10 +492,9 @@ tt.func @preserve_explicit_stage_one(%lb: i32, %ub: i32) {
 tt.func @fuse_attr_speculate(%lb: i32, %ub: i32) {
   %c1_i32 = arith.constant 1 : i32
 
-  // CHECK: [[LEN:%.*]] = arith.subi [[UB]], [[LB]]
-  // CHECK: [[IS_ZERO:%.*]] = arith.cmpi eq, [[LEN]], %c0_i32
+  // CHECK: [[IS_EMPTY:%.*]] = arith.cmpi sge, [[LB]], [[UB]]
 
-  // CHECK: scf.if [[IS_ZERO]]
+  // CHECK: scf.if [[IS_EMPTY]]
   // CHECK-NEXT: scf.for %{{.*}} = [[LB]] to [[UB]] step %c1_i32
   // CHECK-NEXT:   "prologue"
   // CHECK-NXET: } {tt.flatten}
@@ -525,9 +524,10 @@ tt.func @fuse_attr_speculate(%lb: i32, %ub: i32) {
 tt.func @speculate_hoist(%lb: i32, %ub: i32) {
   %c1_i32 = arith.constant 1 : i32
 
-  // CHECK: [[IS_ZERO:%.*]] = arith.cmpi eq, [[UB]], %c0_i32
+  // CHECK: [[INNER_UB:%.*]] = arith.addi [[LB]], [[UB]]
+  // CHECK: [[IS_EMPTY:%.*]] = arith.cmpi sge, [[LB]], [[INNER_UB]]
 
-  // CHECK: scf.if [[IS_ZERO]]
+  // CHECK: scf.if [[IS_EMPTY]]
   scf.for %i = %lb to %ub step %c1_i32 : i32 {
     "prologue"(%i) : (i32) -> ()
     %ubj = arith.addi %lb, %ub : i32
@@ -535,6 +535,31 @@ tt.func @speculate_hoist(%lb: i32, %ub: i32) {
       "body"(%i, %j) : (i32, i32) -> ()
       scf.yield
     }
+  } {tt.flatten}
+  tt.return
+}
+
+// The empty-loop check must use the inner loop's comparison signedness.
+// CHECK-LABEL: @speculate_unsigned_inner_bounds
+// CHECK-SAME: [[M:%.*]]: i32, [[LB:%.*]]: i32, [[UB:%.*]]: i32
+tt.func @speculate_unsigned_inner_bounds(%m: i32, %lb: i32, %ub: i32) {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  // CHECK: [[EMPTY:%.*]] = arith.cmpi uge, [[LB]], [[UB]]
+  // CHECK-NEXT: scf.if [[EMPTY]] {
+  // CHECK-NEXT: scf.for
+  // CHECK-NEXT: "prologue"
+  // CHECK-NEXT: "epilogue"
+  // CHECK-NEXT: }
+  // CHECK-NEXT: } else {
+  // CHECK: scf.for
+  // CHECK: "body"
+  scf.for %i = %c0 to %m step %c1 : i32 {
+    "prologue"(%i) : (i32) -> ()
+    scf.for unsigned %j = %lb to %ub step %c1 : i32 {
+      "body"(%j) : (i32) -> ()
+    }
+    "epilogue"(%i) : (i32) -> ()
   } {tt.flatten}
   tt.return
 }
