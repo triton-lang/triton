@@ -4,6 +4,7 @@ import sys
 from contextlib import nullcontext
 
 import pytest
+import sympy
 import torch
 from torch._subclasses.fake_tensor import FakeTensorMode
 import triton
@@ -147,6 +148,8 @@ def test_fpsan_embed_unembed_torch_tensor(dtype, layout, fresh_knobs):
         ((0, 64), False, BlackwellActMXScaleLayout(None), [1, 0, 16, 2, 256]),
         ((3, 254, 60), False, CDNA4MXScaleLayout(), [3, 8192, 2]),
         ((0, 64), False, CDNA4MXScaleLayout(), [1, 0, 2]),
+        ((2**53 + 1, 1), False, CDNA4MXScaleLayout(), [1, (2**53 + 8) * 32, 1]),
+        ((8, 2**53 + 1), False, CDNA4MXScaleLayout(), [1, 256, 2**48 + 1]),
         ((3, 254, 60), False, GFX1250MXScaleLayout(), [3, 32768, 1]),
         ((0, 64), False, GFX1250MXScaleLayout(), [1, 0, 1]),
     ],
@@ -159,6 +162,26 @@ def test_layout_storage_shape_matches_conversion(logical_shape, is_fp4, layout, 
 
     assert layout.storage_shape(list(logical_shape), is_fp4) == storage_shape
     assert list(converted.storage.data.shape) == storage_shape
+
+
+@pytest.mark.parametrize("layout", [
+    BlackwellMXScaleLayout(),
+    BlackwellActMXScaleLayout(None),
+    HopperMXScaleLayout(-1, 4),
+    HopperMXScaleLayout(-2, 4),
+    CDNA4MXScaleLayout(),
+])
+@pytest.mark.parametrize("rank", [2, 3])
+def test_scale_layout_symbolic_storage_shape(layout, rank):
+    symbols = sympy.symbols("batch rows cols", integer=True, nonnegative=True)
+    symbolic_shape = layout.storage_shape(list(symbols[-rank:]), False)
+
+    for shape in [(0, 129, 65), (2, 0, 0), (2, 0, 65), (2, 129, 0), (2, 8, 128), (2, 128, 64), (2, 129, 65)]:
+        tensor = empty(shape[-rank:], dtype=UINT8, device="meta")
+        converted = convert_layout(tensor, layout)
+        substitutions = dict(zip(symbols, shape))
+        result = [sympy.sympify(size).subs(substitutions) for size in symbolic_shape]
+        assert result == list(converted.storage.data.shape)
 
 
 def test_ragged_layout_storage_shape():
