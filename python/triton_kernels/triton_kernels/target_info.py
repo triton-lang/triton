@@ -16,6 +16,7 @@ __all__ = [
     "get_cdna_version",
     "get_rdna_version",
     "has_tma_gather",
+    "has_tma_scatter",
     "has_native_mxfp",
     "is_cuda",
     "is_hip",
@@ -63,6 +64,15 @@ def get_rdna_version():
 @triton.constexpr_function
 def has_tma_gather():
     return cuda_capability_geq(10, 0)
+
+
+@triton.constexpr_function
+def has_tma_scatter():
+    target = tl.target_info.current_target()
+    if target is None or target.backend != "cuda":
+        return False
+    assert isinstance(target.arch, int)
+    return target.arch >= 100 and target.arch // 10 != 12
 
 
 @triton.constexpr_function
