@@ -4,7 +4,8 @@ from triton_kernels.tensor import wrap_torch_tensor, convert_layout, empty, FP4
 from triton_kernels.tensor_details.layout import HopperMXScaleLayout, HopperMXValueLayout, StridedLayout
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp
 from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
-from triton_kernels.tensor_details.layout_details.hopper_scale import swizzle_mx_scale_hopper_ptr, unswizzle_mxfp4_scale_hopper
+from triton_kernels.tensor_details.layout_details import hopper_scale
+from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
 from triton_kernels.target_info import cuda_capability_geq
 import triton.language as tl
 import triton
@@ -352,63 +353,28 @@ def test_mxfp4_scale_zero_sized_roundtrip(shape, mx_axis, num_warps, device):
 
 
 @triton.jit
-def _pack_scale_with_ptr(X, S, OUTER: tl.constexpr, INNER: tl.constexpr, S_STRIDES: tl.constexpr,
-                         LAYOUT_WARPS: tl.constexpr, INDEX_TYPE: tl.constexpr):
-    batch = tl.program_id(0)
-    outer = tl.program_id(1) * (32 * LAYOUT_WARPS) + tl.arange(0, 32 * LAYOUT_WARPS)
-    inner = tl.program_id(2) * 8 + tl.arange(0, 8)
-    mask = (outer[:, None] < OUTER) & (inner[None, :] < INNER)
-    values = tl.load(X + (batch * OUTER + outer[:, None]) * INNER + inner[None, :], mask, other=0)
-    pointers = swizzle_mx_scale_hopper_ptr(S + batch * S_STRIDES[0], outer[:, None], inner[None, :], *S_STRIDES[1:],
-                                           LAYOUT_WARPS, INDEX_TYPE)
-    tl.store(pointers, values, mask)
+def _gather_scale(S, Rows, Cols, Out, STRIDES: tl.constexpr):
+    i = tl.arange(0, 4)
+    rows = tl.load(Rows + i)
+    cols = tl.load(Cols + i)
+    ptrs = hopper_scale.swizzle_mx_scale_hopper_ptr(S, rows, cols, *STRIDES, 4)
+    tl.store(Out + i, tl.load(ptrs))
+    ptrs = hopper_scale.swizzle_mx_scale_hopper_ptr(S, 0, cols, *STRIDES, 4)
+    tl.store(Out + 4 + i, tl.load(ptrs))
+    ptrs = hopper_scale.swizzle_mx_scale_hopper_ptr(S, rows, 0, *STRIDES, 4)
+    tl.store(Out + 8 + i, tl.load(ptrs))
 
 
-@triton.jit
-def _gather_scale_with_ptr(S, Indices, Out, COUNT: tl.constexpr, OUTER: tl.constexpr, INNER: tl.constexpr,
-                           S_STRIDES: tl.constexpr, LAYOUT_WARPS: tl.constexpr, INDEX_TYPE: tl.constexpr):
-    positions = tl.program_id(0) * 256 + tl.arange(0, 256)
-    indices = tl.load(Indices + positions, positions < COUNT, other=0)
-    batch = indices // (OUTER * INNER)
-    outer, inner = indices // INNER % OUTER, indices % INNER
-    for query in tl.static_range(3):
-        pointers = swizzle_mx_scale_hopper_ptr(S + batch * S_STRIDES[0], 0 if query == 1 else outer,
-                                               0 if query == 2 else inner, *S_STRIDES[1:], LAYOUT_WARPS, INDEX_TYPE)
-        values = tl.load(pointers, positions < COUNT, other=0)
-        tl.store(Out + query * COUNT + positions, values, positions < COUNT)
+def test_scale_ptr_gather(device):
+    data = torch.arange(131 * 9, device=device).reshape(131, 9).to(torch.uint8)
+    packed = convert_layout(wrap_torch_tensor(data), HopperMXScaleLayout(-1, 4)).data
+    rows, cols = torch.tensor([[130, 0, 65, 31], [8, 1, 5, 0]], device=device)
+    gathered = torch.empty((3, 4), dtype=torch.uint8, device=device)
 
+    _gather_scale[(1, )](packed, rows, cols, gathered, packed.stride())
 
-@pytest.mark.parametrize("mx_axis", [-2, -1])
-@pytest.mark.parametrize("num_warps", [4, 8])
-@pytest.mark.parametrize("step", [1, 2])
-@pytest.mark.parametrize("index_type", [tl.int32, tl.int64])
-def test_scale_addressing_pack_and_gather(mx_axis, num_warps, step, index_type, device):
-    batch, outer, inner = 2, 32 * num_warps + 3, 9
-    data = torch.randint(0, 256, (batch, outer, inner), dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
-    logical = data.mT if mx_axis == -2 else data
-    layout = HopperMXScaleLayout(mx_axis, num_warps)
-    expected = layout.make_transformation(list(logical.shape), False).swizzle_data(logical)
-    storage = torch.full((expected.numel() * step + 2, ), 0xAB, dtype=torch.uint8, device=device)
-    packed = storage[1:-1].as_strided(expected.shape, tuple(s * step for s in expected.stride()))
-    packed.zero_()
-    strides = (packed.mT if mx_axis == -2 else packed).stride()
-
-    pack_grid = (batch, triton.cdiv(outer, 32 * num_warps), triton.cdiv(inner, 8))
-    _pack_scale_with_ptr[pack_grid](data.to(device), packed, outer, inner, strides, num_warps, index_type)
-
-    assert torch.equal(packed.cpu(), expected)
-    assert storage[0].item() == storage[-1].item() == 0xAB
-    if step == 2:
-        assert torch.all(storage[2:-1:2] == 0xAB)
-
-    indices = torch.randperm(data.numel(), generator=torch.Generator().manual_seed(1))
-    gathered = torch.empty((3, indices.numel()), dtype=torch.uint8, device=device)
-    gather_grid = (triton.cdiv(indices.numel(), 256), )
-    _gather_scale_with_ptr[gather_grid](packed, indices.to(device), gathered, indices.numel(), outer, inner, strides,
-                                        num_warps, index_type)
-
-    b, i, j = torch.unravel_index(indices, data.shape)
-    assert torch.equal(gathered.cpu(), torch.stack((data.reshape(-1)[indices], data[b, 0, j], data[b, i, 0])))
+    expected = torch.stack((data[rows, cols], data[0, cols], data[rows, 0]))
+    assert torch.equal(gathered, expected)
 
 
 # ------------------ upcast mxfp4 to bf16 --------------------

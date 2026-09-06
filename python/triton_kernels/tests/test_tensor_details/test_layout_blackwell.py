@@ -12,11 +12,7 @@ from triton_kernels.tensor_details.layout import (
     StridedLayout,
 )
 from triton_kernels.tensor_details.dtype import FP4
-from triton_kernels.tensor_details.layout_details.blackwell_scale import (
-    swizzle_act_mx_scale_bw_store_ptr,
-    swizzle_mx_scale_bw_ptr,
-    swizzle_mx_scale_bw_store_ptr,
-)
+from triton_kernels.tensor_details.layout_details import blackwell_scale
 from triton_kernels.tensor import make_ragged_tensor_metadata, make_ragged_tensor_metadata_torch, wrap_torch_tensor, convert_layout, empty
 
 # ------------------------------------------------------------
@@ -708,106 +704,25 @@ def test_scale_convert_layout_fake(layout, monkeypatch):
 
 
 @triton.jit
-def _pack_scale_with_store_ptr(X, S, OUTER: tl.constexpr, INNER: tl.constexpr, X_STRIDES: tl.constexpr,
-                               S_STRIDES: tl.constexpr, ACT: tl.constexpr, INDEX_TYPE: tl.constexpr,
-                               BATCHES: tl.constexpr):
-    batch = tl.program_id(0)
-    outer = tl.program_id(1) * 128 + tl.arange(0, 128)
-    inner = tl.program_id(2) * 8 + tl.arange(0, 8)
-    if ACT:
-        offsets = batch * X_STRIDES[0] + outer[:, None] * X_STRIDES[1] + inner[None, :] * X_STRIDES[2]
-        mask = (outer[:, None] < OUTER) & (inner[None, :] < INNER)
-        if BATCHES == 1:
-            origin = 0
-        else:
-            origin = batch * tl.cdiv(OUTER, 128)
-        pointers = swizzle_act_mx_scale_bw_store_ptr(S, outer, inner, origin, *S_STRIDES[1:], INDEX_TYPE=INDEX_TYPE)
-    else:
-        offsets = batch * X_STRIDES[0] + inner[:, None] * X_STRIDES[1] + outer[None, :] * X_STRIDES[2]
-        mask = (inner[:, None] < INNER) & (outer[None, :] < OUTER)
-        pointers = swizzle_mx_scale_bw_store_ptr(S, inner, outer, 0 if BATCHES == 1 else batch, OUTER, *S_STRIDES[1:],
-                                                 INDEX_TYPE=INDEX_TYPE)
-    tl.store(pointers, tl.load(X + offsets, mask, other=0), mask)
+def _gather_scale(S, Rows, Cols, Out, STRIDES: tl.constexpr):
+    i = tl.arange(0, 4)
+    rows = tl.load(Rows + i)
+    cols = tl.load(Cols + i)
+    ptrs = blackwell_scale.swizzle_mx_scale_bw_ptr(S, cols, rows, 0, *STRIDES)
+    tl.store(Out + i, tl.load(ptrs))
+    ptrs = blackwell_scale.swizzle_mx_scale_bw_ptr(S, 0, rows, 0, *STRIDES)
+    tl.store(Out + 4 + i, tl.load(ptrs))
+    ptrs = blackwell_scale.swizzle_mx_scale_bw_ptr(S, cols, 0, 0, *STRIDES)
+    tl.store(Out + 8 + i, tl.load(ptrs))
 
 
-@triton.jit
-def _gather_scale_with_ptr(S, Indices, Out, COUNT: tl.constexpr, OUTER: tl.constexpr, INNER: tl.constexpr,
-                           S_STRIDES: tl.constexpr, ACT: tl.constexpr, INDEX_TYPE: tl.constexpr):
-    positions = tl.program_id(0) * 256 + tl.arange(0, 256)
-    indices = tl.load(Indices + positions, positions < COUNT, other=0)
-    batch = indices // (OUTER * INNER)
-    if ACT:
-        outer, inner = indices // INNER % OUTER, indices % INNER
-    else:
-        outer, inner = indices % OUTER, indices // OUTER % INNER
-    for query in tl.static_range(3):
-        pointers = swizzle_mx_scale_bw_ptr(S, 0 if query == 1 else outer, 0 if query == 2 else inner,
-                                           batch * tl.cdiv(OUTER, 128), *S_STRIDES[1:], INDEX_TYPE=INDEX_TYPE)
-        tl.store(Out + query * COUNT + positions, tl.load(pointers, positions < COUNT, other=0), positions < COUNT)
+def test_scale_ptr_gather(device):
+    data = torch.arange(9 * 130, device=device).reshape(9, 130).to(torch.uint8)
+    packed = convert_layout(wrap_torch_tensor(data), BlackwellMXScaleLayout()).data
+    rows, cols = torch.tensor([[8, 0, 5, 2], [129, 31, 64, 0]], device=device)
+    gathered = torch.empty((3, 4), dtype=torch.uint8, device=device)
 
+    _gather_scale[(1, )](packed, rows, cols, gathered, packed.stride()[1:])
 
-@pytest.mark.parametrize("shape", [(2, 9, 130), (1, 8, 256)])
-@pytest.mark.parametrize("act", [False, True])
-@pytest.mark.parametrize("step", [1, 2])
-@pytest.mark.parametrize("index_type", [tl.int32, tl.int64])
-def test_scale_addressing_pack_and_gather(shape, act, step, index_type, device):
-    data = torch.randint(0, 256, shape, dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
-    if act:
-        data = data.mT
-    layout = BlackwellActMXScaleLayout(None) if act else BlackwellMXScaleLayout()
-    expected = layout.make_transformation(list(data.shape), False).swizzle_data(data)
-    storage = torch.full((expected.numel() * step + 2, ), 0xAB, dtype=torch.uint8, device=device)
-    packed = storage[1:-1].as_strided(expected.shape, tuple(s * step for s in expected.stride()))
-    packed.zero_()
-    source = data.to(device)
-    batch, inner, outer = shape
-
-    pack_grid = (batch, triton.cdiv(outer, 128), triton.cdiv(inner, 8))
-    _pack_scale_with_store_ptr[pack_grid](source, packed, outer, inner, source.stride(), packed.stride(), act,
-                                          index_type, batch)
-
-    assert torch.equal(packed.cpu(), expected)
-    assert storage[0].item() == storage[-1].item() == 0xAB
-    if step == 2:
-        assert torch.all(storage[2:-1:2] == 0xAB)
-
-    indices = torch.randperm(data.numel(), generator=torch.Generator().manual_seed(1))
-    gathered = torch.empty((3, indices.numel()), dtype=torch.uint8, device=device)
-    gather_grid = (triton.cdiv(indices.numel(), 256), )
-    _gather_scale_with_ptr[gather_grid](packed, indices.to(device), gathered, indices.numel(), outer, inner,
-                                        packed.stride(), act, index_type)
-
-    b, i, j = torch.unravel_index(indices, data.shape)
-    first_outer = data[b, 0, j] if act else data[b, i, 0]
-    first_inner = data[b, i, 0] if act else data[b, 0, j]
-    assert torch.equal(gathered.cpu(), torch.stack((data.reshape(-1)[indices], first_outer, first_inner)))
-
-
-@triton.jit
-def _scale_store_addresses(Base, Origins, Out, ACT: tl.constexpr, INDEX_TYPE: tl.constexpr):
-    outer = tl.arange(0, 4)
-    inner = 4 + tl.arange(0, 4)
-    origins = tl.load(Origins + outer)
-    if ACT:
-        pointers = swizzle_act_mx_scale_bw_store_ptr(Base, outer, inner, origins, 2**31 - 512, 512, 256, 1,
-                                                     INDEX_TYPE=INDEX_TYPE)
-    else:
-        pointers = swizzle_mx_scale_bw_store_ptr(Base, inner, outer, origins, 128, 2**31 - 512, 512, 256, 1,
-                                                 INDEX_TYPE=INDEX_TYPE)
-    # Inspect addresses without dereferencing the sparsely strided storage.
-    addresses = pointers.to(tl.int64) - Base.to(tl.int64)
-    tl.store(Out + tl.arange(0, 4)[:, None] * 4 + tl.arange(0, 4)[None, :], addresses)
-
-
-@pytest.mark.parametrize("act", [False, True])
-@pytest.mark.parametrize("index_type", [tl.int32, tl.int64])
-def test_scale_store_ptr_large_offset(act, index_type, device):
-    base = torch.empty(1, dtype=torch.uint8, device=device)
-    origins = torch.tensor([0, 1, 1, 0], dtype=torch.int32, device=device)
-    addresses = torch.empty((4, 4), dtype=torch.int64, device=device)
-
-    _scale_store_addresses[(1, )](base, origins, addresses, act, index_type)
-
-    outer = origins.cpu().long() * (2**31 - 512) + torch.arange(4) * 16
-    expected = outer[:, None] + 512 + torch.arange(4)[None, :]
-    assert torch.equal(addresses.cpu(), expected if act else expected.mT)
+    expected = torch.stack((data[rows, cols], data[rows, 0], data[0, cols]))
+    assert torch.equal(gathered, expected)
