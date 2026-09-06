@@ -1,4 +1,6 @@
 // RUN: triton-opt %s --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s
+// RUN: not triton-opt %s --convert-triton-gpu-to-llvm=compute-capability=120 2>&1 | FileCheck %s --check-prefix=SM12X-ERROR
+// RUN: not triton-opt %s --convert-triton-gpu-to-llvm=compute-capability=121 2>&1 | FileCheck %s --check-prefix=SM12X-ERROR
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
@@ -146,6 +148,7 @@ tt.func @tma_gather_redundant_warps(%arg0: !tt.tensordesc<1x128xbf16, #shared1>,
   tt.return
 }
 
+// SM12X-ERROR: error: TMA scatter is not supported on consumer Blackwell (sm_12x)
 // CHECK-LABEL: @tma_scatter
 tt.func @tma_scatter(%arg0: !tt.tensordesc<1x128xbf16, #shared1>, %arg1: tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, %arg2: i32, %arg3: !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>) {
   // The lowering for `async_tma_scatter` shares practically all of its logic

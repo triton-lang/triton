@@ -1688,16 +1688,28 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
 
 struct AsyncTMAScatterOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::AsyncTMAScatterOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  AsyncTMAScatterOpConversion(LLVMTypeConverter &typeConverter,
+                              int computeCapability, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::nvidia_gpu::AsyncTMAScatterOp>(
+            typeConverter, benefit),
+        computeCapability(computeCapability) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::AsyncTMAScatterOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override;
+
+  int computeCapability;
 };
 
 LogicalResult AsyncTMAScatterOpConversion::matchAndRewrite(
     triton::nvidia_gpu::AsyncTMAScatterOp op, OpAdaptor adaptor,
     ConversionPatternRewriter &rewriter) const {
+  if (computeCapability / 10 == 12)
+    return op.emitError(
+        "TMA scatter is not supported on consumer Blackwell (sm_12x). TMA "
+        "gather is supported on this architecture; use regular stores "
+        "instead.");
+
   Location loc = op.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   LLVM::LLVMVoidType voidTy = void_ty(op->getContext());
@@ -1836,9 +1848,11 @@ void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
       typeConverter, targetInfo, computeCapability, axisInfoAnalysis, benefit);
   patterns.add<AsyncCommitGroupOpConversion, AsyncWaitOpConversion,
                AsyncCopyMbarrierArriveOpConversion>(typeConverter, benefit);
-  patterns.add<AsyncTMACopyGlobalToLocalOpConversion,
-               AsyncTMACopyLocalToGlobalOpConversion,
-               AsyncTMAReduceOpConversion, AsyncTMAGatherOpConversion,
-               AsyncTMAScatterOpConversion, TMAStoreWaitOpConversion>(
-      typeConverter, benefit);
+  patterns
+      .add<AsyncTMACopyGlobalToLocalOpConversion,
+           AsyncTMACopyLocalToGlobalOpConversion, AsyncTMAReduceOpConversion,
+           AsyncTMAGatherOpConversion, TMAStoreWaitOpConversion>(typeConverter,
+                                                                 benefit);
+  patterns.add<AsyncTMAScatterOpConversion>(typeConverter, computeCapability,
+                                            benefit);
 }

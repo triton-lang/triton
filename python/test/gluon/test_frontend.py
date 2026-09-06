@@ -1777,6 +1777,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@pytest.mark.parametrize("arch", [120, 121], ids=["sm120", "sm121"])
+def test_async_tma_scatter_rejects_consumer_blackwell(arch):
+    input = MockTensor(ttgl.float16, (1024, 1024))
+    XBLOCK = 128
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+    input_desc = TensorDescriptor.from_tensor(input, [1, XBLOCK], shared_layout)
+    expected = ("TMA scatter is not supported on consumer Blackwell (sm_12x). "
+                "TMA gather is supported on this architecture; use regular stores instead.")
+
+    with pytest.raises(CompilationError) as error:
+        run_parser(
+            async_tma_blackwell_kernel,
+            *make_args(input_desc, XBLOCK, num_warps=4),
+            target=GPUTarget("cuda", arch, 32),
+        )
+    assert expected in str(error.value)
+    assert "tma.async_scatter(input_desc, x_offsets, 0, smem)" in str(error.value)
+
+
 def test_mlir_attr_error():
 
     @gluon.jit
