@@ -596,3 +596,26 @@ tt.func @prologue_output(%ub: i32) {
 
   tt.return
 }
+
+// CHECK-LABEL: @hoisted_inner_loop
+tt.func @hoisted_inner_loop() {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %c2 = arith.constant 2 : i32
+  // CHECK: [[SUM:%.*]] = scf.for
+  scf.for %i = %c0 to %c2 step %c1 : i32 {
+    %sum = scf.for %j = %c0 to %c2 step %c1
+        iter_args(%acc = %c0) -> i32 : i32 {
+      // CHECK: arith.addi
+      %next = arith.addi %acc, %j : i32
+      // CHECK-NEXT: scf.yield
+      scf.yield %next : i32
+    }
+    // CHECK-NEXT: }
+    // CHECK-NEXT: scf.for
+    // CHECK-NEXT: "epilogue"([[SUM]])
+    "epilogue"(%sum) : (i32) -> ()
+  } {tt.flatten}
+
+  tt.return
+}

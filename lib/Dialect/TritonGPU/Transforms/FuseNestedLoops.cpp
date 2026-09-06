@@ -1198,6 +1198,9 @@ static LogicalResult preprocessLoopNest(const LoopNest &nest,
   scf::ForOp &innerLoop = nest.root->children.front()->loop;
 
   moveLoopInvariantCode(outerLoop);
+  // LICM might have hoisted the inner loop
+  if (innerLoop->getBlock() != outerLoop.getBody())
+    return failure();
   optimizeEpilogueDependencies(outerLoop, innerLoop, domInfo);
   return speculateInnerLoopLength(outerLoop, innerLoop, domInfo);
 }
