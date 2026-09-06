@@ -722,7 +722,8 @@ def test_scale_ptr_gather_column(device):
     assert torch.equal(gathered, data[rows, 0])
 
 
-@triton.jit
+# The one-byte base stands in for a large allocation; do not specialize its pointer range.
+@triton.jit(do_not_specialize=["S"])
 def _scale_ptr_offset(S, Out, outer, inner):
     # Two int32 stride products sum to 2**31; inspect the pointer without loading it.
     ptr = blackwell_scale.swizzle_mx_scale_bw_ptr(S, outer, inner, 0, 2**31 - 1024, 512, 256, 1, INDEX_TYPE=tl.int32)
