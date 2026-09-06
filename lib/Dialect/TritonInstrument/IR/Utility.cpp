@@ -425,7 +425,7 @@ AuxDataMap::ThreadLayout getThreadLayout(FuncOp entryPoint,
     if (auto wsOp = dyn_cast<WarpSpecializePartitionsOp>(op))
       layout.numBaseThreads = std::max<int>(
           layout.numBaseThreads, wsOp.getPartitionRegions().size() + 1);
-    hasTMA |= hooks.isTMAOp(op);
+    hasTMA |= hooks.isTMAOp(op) || isa<AsyncCopyMbarrierArriveOp>(op);
     hasTC |= isa<MMAv5OpInterface, TCGen5CommitOp, TMEMCopyOp>(op);
     hasCLC |= hooks.isCLCOp(op);
   });
@@ -501,6 +501,8 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
   int numCTAs = lookupNumCTAs(module);
   threadLayout = getThreadLayout(entryPoint, hooks);
   int frontierBitWidth = threadLayout.totalNumThreads <= 32 ? 32 : 64;
+  entryPoint.walk(
+      [&](AsyncCopyMbarrierArriveOp) { hasAsyncCopyMbarriers = true; });
   hasAsyncProxyFenceTracking =
       hooks.needsAsyncProxyFenceTracking(module) &&
       bufferStatePlans[(int)MemType::SHARED_MEM].numLanes != 0;

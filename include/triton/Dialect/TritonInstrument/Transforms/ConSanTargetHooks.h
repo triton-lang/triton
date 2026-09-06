@@ -31,6 +31,7 @@ struct MemEffectsOpInfo {
   enum class BarrierTrackingMode {
     Frontier,
     EffectWrites,
+    AsyncCopies,
   };
   struct Effects {
     struct StaticSharedBuffer {

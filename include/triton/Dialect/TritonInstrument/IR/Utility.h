@@ -241,9 +241,12 @@ struct AuxDataMap {
   // Per-commit-kind outstanding commit counters for shared-memory buffers.
   // Entries are 0 for none, -1 for staged but uncommitted, and positive for a
   // committed access with an outstanding-group distance.
+  // With async-copy mbarriers, -2 retains a completed copy's issuer for later
+  // barrier arrivals. Visibility distinguishes completed from pending copies.
   // Just one C dimension as ampere async_copy, WGMMA and TMA store are
   // intra-CTA.
   RegionToValueMap commits[CommitKind::NumCommitKinds];
+  bool hasAsyncCopyMbarriers = false;
 
   // State-lane plans and analysis-derived runtime-base, state-mask, and CTA
   // cases for each memdesc. bufferRegions preserves the ordered region list

@@ -96,7 +96,7 @@ int getCurrentThread(Operation *op, const ConSanTargetHooks &hooks,
                      const AuxDataMap::ThreadLayout &threadLayout) {
   // Default partition is 0, other partitions are idx + 1
   int thread = maybeGetPartitionIdx(op).value_or(-1) + 1;
-  if (hooks.isTMAOp(op)) {
+  if (hooks.isTMAOp(op) || isa<ttng::AsyncCopyMbarrierArriveOp>(op)) {
     assert(threadLayout.hasTMAThreads() &&
            "TMA thread class must exist when instrumenting a TMA op");
     thread += threadLayout.tmaThreadOffset;
@@ -1455,6 +1455,10 @@ private:
         if (opInfo->trackingKind ==
             MemEffectsOpInfo::TrackingKind::CommitCount) {
           assert(memType == MemType::SHARED_MEM);
+          if (auxData.hasAsyncCopyMbarriers &&
+              opInfo->commitKind == CommitKind::AsyncCp)
+            funcBuilder.createPublishWriteVisibilityCall(
+                b, bufferMask, 0, pred, memType, op, effectCTAs);
           funcBuilder.createStageAccessForCommitCall(
               b, bufferMask, baseThread, pred, memType, opInfo->commitKind, op);
         }
@@ -1518,6 +1522,13 @@ private:
           funcBuilder.createTrackVisibleAccessesCall(
               b, barrier, thread, combinedPred, MemType::SHARED_MEM, op,
               recipientCTAs, completionBufferMask);
+      } else if (barrierInfo.trackingMode ==
+                 MemEffectsOpInfo::BarrierTrackingMode::AsyncCopies) {
+        funcBuilder.createTrackAsyncCopiesForBarrierCall(
+            b, barrier, baseThread, combinedPred, op, recipientCTAs);
+        funcBuilder.createTrackVisibleAccessesCall(
+            b, barrier, thread, combinedPred, MemType::SHARED_MEM, op,
+            recipientCTAs, completionBufferMask);
       }
       if (barrierInfo.count > 0 || barrierInfo.txCount != 0) {
         funcBuilder.createVerifyAndUpdateBarrierStateCall(
