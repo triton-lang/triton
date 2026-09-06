@@ -7,6 +7,7 @@ from typing import Tuple, List, Dict, Callable, TypeVar, Optional
 import math
 import numpy as np
 import time
+import warnings
 
 import triton
 import triton.language as tl
@@ -1110,12 +1111,28 @@ class ReduceOps(ReduceScanOpInterface):
     def min_max(self, input, val_reduce_op, idx_reduce_op=None):
         # If input is a tuple, it must be (val, index), and we only take val
         input = input[0] if isinstance(input, tuple) else input
+        data = input.handle.data
         val = None
         idx = None
-        if val_reduce_op:
-            val = self.to_tensor(val_reduce_op(input.handle.data, axis=self.axis, keepdims=self.keep_dims), input.dtype)
-        if idx_reduce_op:
-            idx = self.to_tensor(idx_reduce_op(input.handle.data, axis=self.axis, keepdims=self.keep_dims), tl.int32)
+        # np.nanmax/np.nanmin/np.nanargmax/np.nanargmin all raise or warn on
+        # slices that are entirely NaN. The JIT combine functions are pure
+        # comparisons (NaN comparisons are always False), so they never raise:
+        # for tie_break_left, an all-NaN reduction always keeps the
+        # rightmost element (every `gt`/`tie` test is False), giving value
+        # NaN and index equal to the last position along the reduced axis.
+        all_nan = np.all(np.isnan(data), axis=self.axis, keepdims=self.keep_dims)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            if val_reduce_op:
+                val_data = val_reduce_op(data, axis=self.axis, keepdims=self.keep_dims)
+                val = self.to_tensor(val_data, input.dtype)
+            if idx_reduce_op:
+                safe_data = np.where(np.isnan(data), -np.inf, data) if idx_reduce_op is np.nanargmax \
+                    else np.where(np.isnan(data), np.inf, data) if idx_reduce_op is np.nanargmin else data
+                idx_data = idx_reduce_op(safe_data, axis=self.axis, keepdims=self.keep_dims)
+                last_index = data.shape[self.axis] - 1 if self.axis is not None else data.size - 1
+                idx_data = np.where(all_nan, last_index, idx_data)
+                idx = self.to_tensor(idx_data, tl.int32)
         if val is not None and idx is not None:
             return val, idx
         elif val is not None:
