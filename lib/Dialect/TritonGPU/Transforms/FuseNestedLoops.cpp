@@ -883,33 +883,36 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   //   epilogue(i)
   Logue &epilogue = logues.back();
 
-  // The only possible use of an epilogue output is the yield.
+  // The only external uses of epilogue outputs are in the outer yield.
+  auto epilogueOutputs = epilogue.getOutputs();
   auto outerYield = cast<scf::YieldOp>(outer.getBody()->getTerminator());
-  SmallVector<Value> usedIterArgs;
-  for (Value output : epilogue.getOutputs()) {
-    for (OpOperand &use : output.getUses()) {
-      if (use.getOwner() == outerYield) {
-        usedIterArgs.push_back(fused.getRegionIterArgs().drop_front(
-            outerArgsStartIdx)[use.getOperandNumber()]);
-      }
-    }
+
+  SmallVector<unsigned> positions;
+  SmallVector<Value> thenValues, elseValues;
+  for (auto [pos, value] : llvm::enumerate(outerYield.getOperands())) {
+    if (!llvm::is_contained(epilogueOutputs, value))
+      continue;
+    positions.push_back(pos);
+    thenValues.push_back(value);
+    elseValues.push_back(fused.getRegionIterArg(outerArgsStartIdx + pos));
   }
 
   auto epilogueCond =
       arith::CmpIOp::create(b, arith::CmpIPredicate::eq, T,
                             arith::SubIOp::create(b, innerLen, intTyCst(1)));
   auto epilogueIf =
-      scf::IfOp::create(b, epilogue.getOutputTypes(), epilogueCond);
+      scf::IfOp::create(b, ValueRange(thenValues).getTypes(), epilogueCond);
 
   Block *thenBlock = b.createBlock(&epilogueIf.getThenRegion());
   epilogue.moveBefore(thenBlock, thenBlock->end());
 
   b.setInsertionPointToEnd(thenBlock);
-  scf::YieldOp::create(b, epilogue.getOutputs());
+  scf::YieldOp::create(b, thenValues);
   b.createBlock(&epilogueIf.getElseRegion());
-  scf::YieldOp::create(b, usedIterArgs);
-  epilogue.replaceAllUsesWith(epilogueIf.getResults(),
-                              epilogueIf.getThenRegion());
+  scf::YieldOp::create(b, elseValues);
+  for (auto [result, position] :
+       llvm::zip_equal(epilogueIf.getResults(), positions))
+    outerYield->setOperand(position, result);
 
   // T = 0 if T == (inner_len - 1) else T + 1
   b.setInsertionPointToEnd(fused.getBody());
