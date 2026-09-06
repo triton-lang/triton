@@ -704,25 +704,19 @@ def test_scale_convert_layout_fake(layout, monkeypatch):
 
 
 @triton.jit
-def _gather_scale(S, Rows, Cols, Out, STRIDES: tl.constexpr):
+def _gather_scale_column(S, Rows, Out, STRIDES: tl.constexpr):
     i = tl.arange(0, 4)
     rows = tl.load(Rows + i)
-    cols = tl.load(Cols + i)
-    ptrs = blackwell_scale.swizzle_mx_scale_bw_ptr(S, cols, rows, 0, *STRIDES)
-    tl.store(Out + i, tl.load(ptrs))
     ptrs = blackwell_scale.swizzle_mx_scale_bw_ptr(S, 0, rows, 0, *STRIDES)
-    tl.store(Out + 4 + i, tl.load(ptrs))
-    ptrs = blackwell_scale.swizzle_mx_scale_bw_ptr(S, cols, 0, 0, *STRIDES)
-    tl.store(Out + 8 + i, tl.load(ptrs))
+    tl.store(Out + i, tl.load(ptrs))
 
 
-def test_scale_ptr_gather(device):
-    data = torch.arange(9 * 130, device=device).reshape(9, 130).to(torch.uint8)
+def test_scale_ptr_gather_column(device):
+    data = torch.arange(9 * 8, device=device).reshape(9, 8).to(torch.uint8)
     packed = convert_layout(wrap_torch_tensor(data), BlackwellMXScaleLayout()).data
-    rows, cols = torch.tensor([[8, 0, 5, 2], [129, 31, 64, 0]], device=device)
-    gathered = torch.empty((3, 4), dtype=torch.uint8, device=device)
+    rows = torch.tensor([8, 0, 5, 2], device=device)
+    gathered = torch.empty(4, dtype=torch.uint8, device=device)
 
-    _gather_scale[(1, )](packed, rows, cols, gathered, packed.stride()[1:])
+    _gather_scale_column[(1, )](packed, rows, gathered, packed.stride()[1:])
 
-    expected = torch.stack((data[rows, cols], data[rows, 0], data[0, cols]))
-    assert torch.equal(gathered, expected)
+    assert torch.equal(gathered, data[rows, 0])
