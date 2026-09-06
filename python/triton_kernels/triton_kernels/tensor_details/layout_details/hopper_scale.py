@@ -148,6 +148,21 @@ class HopperMXScaleLayoutTransformation(ScaleLayoutTransformation):
 
 
 @triton.jit
+def swizzle_mx_scale_hopper_ptr(base, outer, inner, stride_outer, stride_inner, num_warps: tl.constexpr,
+                                INDEX_TYPE: tl.constexpr = tl.int64):
+    """Pointers for broadcastable scale coordinates, without bounds masking.
+
+    ``outer`` indexes the non-MX axis; ``inner`` indexes scales along the MX axis.
+    Strides are in elements, in physical outer/inner order. ``base`` points to
+    the batch origin. Each stride product uses ``INDEX_TYPE`` before being
+    added to the pointer.
+    """
+    outer_block = outer // (32 * num_warps) * num_warps + outer // 16 % num_warps
+    inner_lane = (inner // 2 * 64 + outer // (16 * num_warps) % 2 * 32 + outer % 8 * 4 + inner % 2 * 2 + outer // 8 % 2)
+    return base + tl.cast(outer_block, INDEX_TYPE) * stride_outer + tl.cast(inner_lane, INDEX_TYPE) * stride_inner
+
+
+@triton.jit
 def unswizzle_mxfp4_scale_hopper(x, mx_axis: tl.constexpr, num_warps: tl.constexpr):
     """
     Triton inverse of swizzle_mxfp4_scale_hopper
