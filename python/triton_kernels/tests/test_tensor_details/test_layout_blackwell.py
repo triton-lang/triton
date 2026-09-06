@@ -720,3 +720,17 @@ def test_scale_ptr_gather_column(device):
     _gather_scale_column[(1, )](packed, rows, gathered, packed.stride()[1:])
 
     assert torch.equal(gathered, data[rows, 0])
+
+
+@triton.jit
+def _scale_ptr_offset(S, Out, outer, inner):
+    # Two int32 stride products sum to 2**31; inspect the pointer without loading it.
+    ptr = blackwell_scale.swizzle_mx_scale_bw_ptr(S, outer, inner, 0, 2**31 - 1024, 512, 256, 1, INDEX_TYPE=tl.int32)
+    tl.store(Out, ptr.to(tl.int64) - S.to(tl.int64))
+
+
+def test_scale_ptr_large_offset(device):
+    base = torch.empty(1, dtype=torch.uint8, device=device)
+    offset = torch.empty((), dtype=torch.int64, device=device)
+    _scale_ptr_offset[(1, )](base, offset, 128, 8)
+    assert offset.item() == 2**31
