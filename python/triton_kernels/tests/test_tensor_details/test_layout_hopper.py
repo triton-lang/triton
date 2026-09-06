@@ -9,6 +9,7 @@ from triton_kernels.target_info import cuda_capability_geq
 import triton.language as tl
 import triton
 import torch
+from torch._subclasses.fake_tensor import FakeTensorMode
 
 # ------------------------------------------------------------
 # Torch tests
@@ -404,3 +405,191 @@ def test_upcast_mxfp4_to_bf16(num_warps, mx_axis):
         *value_block, *shape,  #
         *scale_block, mx_axis=mx_axis, num_warps=num_warps)
     assert (y == x_bf16).all()
+
+
+@pytest.mark.parametrize("shape,major", [(shape, major)
+                                         for shape in [(130, 9), (2, 259, 130), (2, 3, 9, 130)]
+                                         for major in range(len(shape))])
+@pytest.mark.parametrize("mx_axis", [-2, -1])
+@pytest.mark.parametrize("num_warps", [1, 2, 4, 8, 16, 32])
+@pytest.mark.parametrize("inverse", [False, True])
+@pytest.mark.parametrize("with_out", [False, True])
+def test_mxfp4_scale_convert_strided_storage(shape, mx_axis, num_warps, major, inverse, with_out):
+    data = torch.randint(0, 256, shape, dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
+    layout = HopperMXScaleLayout(mx_axis, num_warps)
+    strided = StridedLayout(major)
+    canonical = wrap_torch_tensor(data)
+    source = convert_layout(canonical, layout if inverse else strided)
+    destination = strided if inverse else layout
+    expected = convert_layout(source, destination)
+    source_storage = torch.full((source.data.numel() * 2 + 1, ), 0xCD, dtype=torch.uint8, device="cuda")
+    source_data = source_storage[1:].as_strided(source.data.shape, tuple(s * 2 for s in source.data.stride()))
+    source_data.copy_(source.data)
+    source_gpu = wrap_torch_tensor(source_data, shape=shape, layout=source.storage.layout)
+    out_storage = torch.full((expected.data.numel() * 2 + 1, ), 0xAB, dtype=torch.uint8, device="cuda")
+    out_data = out_storage[1:].as_strided(expected.data.shape, tuple(s * 2 for s in expected.data.stride()))
+    out = wrap_torch_tensor(out_data, shape=shape, layout=destination) if with_out else None
+
+    actual = convert_layout(source_gpu, destination, out=out)
+
+    assert torch.equal(actual.data.cpu(), expected.data)
+    assert torch.equal(source_gpu.data.cpu(), source.data)
+    if with_out:
+        assert actual is out
+        assert torch.all(out_storage[::2] == 0xAB)
+    else:
+        assert actual.data.stride() == expected.data.stride()
+
+
+@pytest.mark.parametrize("columns", [126, 128, 130])
+@pytest.mark.parametrize("mx_axis", [-2, -1])
+@pytest.mark.parametrize("num_warps", [4, 8])
+def test_mxfp4_scale_convert_layout_size_boundary(columns, mx_axis, num_warps):
+    # Padded storage lies below, at, or above the one-MiB dispatch boundary.
+    data = torch.randint(0, 256, (8192, columns), dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
+    if mx_axis == -2:
+        data = data.mT
+    layout = HopperMXScaleLayout(mx_axis, num_warps)
+    source = wrap_torch_tensor(data)
+    expected = convert_layout(source, layout)
+    source_gpu = wrap_torch_tensor(data.cuda(), layout=source.storage.layout)
+    out = wrap_torch_tensor(torch.empty_like(expected.data, device="cuda"), shape=source.shape, layout=layout)
+
+    actual = convert_layout(source_gpu, layout, out=out)
+    assert actual is out
+    assert torch.equal(actual.data.cpu(), expected.data)
+    restored = wrap_torch_tensor(torch.empty_like(source_gpu.data), layout=source.storage.layout)
+    assert convert_layout(actual, source.storage.layout, out=restored) is restored
+    assert torch.equal(restored.data.cpu(), data)
+
+
+@pytest.mark.parametrize("dtype", [torch.uint8, torch.int8, torch.float8_e4m3fn, torch.float32])
+@pytest.mark.parametrize("mx_axis", [-2, -1])
+def test_mxfp4_scale_convert_dtype(dtype, mx_axis):
+    data = torch.randint(0, 16, (130, 9), dtype=torch.uint8).to(dtype)
+    transformation = HopperMXScaleLayout(mx_axis, 4).make_transformation(list(data.shape), False)
+    expected = transformation.swizzle_data(data)
+    actual = transformation.swizzle_data(data.cuda())
+    assert torch.equal(actual.cpu().contiguous().view(torch.uint8), expected.contiguous().view(torch.uint8))
+    restored = transformation.unswizzle_data(actual)
+    assert torch.equal(restored.cpu().contiguous().view(torch.uint8), data.contiguous().view(torch.uint8))
+
+
+@pytest.mark.parametrize("dtype", [
+    torch.uint8,
+    torch.float8_e4m3fn,
+    torch.float8_e4m3fnuz,
+    torch.float8_e5m2,
+    torch.float8_e5m2fnuz,
+    torch.float32,
+])
+@pytest.mark.parametrize("mx_axis", [-2, -1])
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("inverse", [False, True])
+@pytest.mark.parametrize("with_out", [False, True])
+def test_mxfp4_scale_convert_layout_dtype(dtype, mx_axis, num_warps, inverse, with_out):
+    bits = torch.randint(0, 256, (2, 130, 9), dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
+    reference = bits if dtype.itemsize == 1 else bits.to(dtype)
+    layout = HopperMXScaleLayout(mx_axis, num_warps)
+    strided = StridedLayout(mx_axis)
+    source = convert_layout(wrap_torch_tensor(reference), layout if inverse else strided)
+    destination = strided if inverse else layout
+    expected = convert_layout(source, destination)
+    source_gpu = wrap_torch_tensor(source.data.view(dtype).cuda(), shape=bits.shape, layout=source.storage.layout)
+    storage = torch.full((expected.data.numel() * 2 + 1, ), 0xAB, dtype=reference.dtype, device="cuda")
+    out_data = storage.view(dtype)[1:].as_strided(expected.data.shape, tuple(s * 2 for s in expected.data.stride()))
+    out = wrap_torch_tensor(out_data, shape=bits.shape, layout=destination) if with_out else None
+
+    actual = convert_layout(source_gpu, destination, out=out)
+
+    assert actual.data.dtype == dtype
+    assert torch.equal(actual.data.cpu().contiguous().view(torch.uint8), expected.data.contiguous().view(torch.uint8))
+    if with_out:
+        assert actual is out
+        assert torch.all(storage[::2] == 0xAB)
+
+
+@pytest.mark.parametrize("mx_axis", [-2, -1])
+@pytest.mark.parametrize("inverse", [False, True])
+@pytest.mark.parametrize("with_out", [False, True])
+def test_mxfp4_scale_convert_peak_allocation(mx_axis, inverse, with_out):
+    data = torch.randint(0, 256, (4096, 4096), dtype=torch.uint8, device="cuda")
+    if mx_axis == -2:
+        data = data.mT
+    strided = StridedLayout(mx_axis)
+    layout = HopperMXScaleLayout(mx_axis, 4)
+    source = wrap_torch_tensor(data, layout=strided)
+    if inverse:
+        source = convert_layout(source, layout)
+    destination = strided if inverse else layout
+    out = convert_layout(source, destination) if with_out else None
+    warm = convert_layout(source, destination, out=out)
+    torch.cuda.synchronize(data.device)
+    del warm
+    baseline = torch.cuda.memory_allocated(data.device)
+    torch.cuda.reset_peak_memory_stats(data.device)
+    actual = convert_layout(source, destination, out=out)
+    torch.cuda.synchronize(data.device)
+    peak = torch.cuda.max_memory_allocated(data.device) - baseline
+    assert peak <= (0 if with_out else actual.data.nbytes) + 1024**2
+
+
+@pytest.mark.parametrize("mx_axis", [-2, -1])
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("with_out", [False, True])
+def test_mxfp4_scale_convert_layout_uses_input_device(mx_axis, num_warps, with_out):
+    if torch.cuda.device_count() < 2:
+        pytest.skip("requires two CUDA devices")
+    data = torch.randint(0, 256, (2, 130, 9), dtype=torch.uint8, generator=torch.Generator().manual_seed(0))
+    layout = HopperMXScaleLayout(mx_axis, num_warps)
+    strided = StridedLayout(mx_axis)
+    source_cpu = convert_layout(wrap_torch_tensor(data), strided)
+    expected = convert_layout(source_cpu, layout)
+    stream = torch.cuda.Stream(device=1)
+    with torch.cuda.stream(stream), torch.cuda.device(0):
+        source = wrap_torch_tensor(source_cpu.data.to("cuda:1"), layout=strided)
+        out = wrap_torch_tensor(torch.empty_like(expected.data, device="cuda:1"), shape=source.shape,
+                                layout=layout) if with_out else None
+        actual = convert_layout(source, layout, out=out)
+        assert torch.cuda.current_device() == 0
+        assert torch.cuda.current_stream(1) == stream
+        assert actual.device == torch.device("cuda:1")
+        stream.synchronize()
+        assert torch.equal(actual.data.cpu(), expected.data)
+        if with_out:
+            assert actual is out
+        restored_out = wrap_torch_tensor(torch.empty_like(source.data), layout=strided) if with_out else None
+        restored = convert_layout(actual, strided, out=restored_out)
+        assert torch.cuda.current_device() == 0
+        assert torch.cuda.current_stream(1) == stream
+        assert restored.device == torch.device("cuda:1")
+        stream.synchronize()
+        assert torch.equal(restored.data.cpu(), data)
+        if with_out:
+            assert restored is restored_out
+
+
+@pytest.mark.parametrize("mx_axis", [-2, -1])
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_mxfp4_scale_convert_layout_fake(mx_axis, num_warps, device, monkeypatch):
+
+    def reject_launch(*args, **kwargs):
+        pytest.fail("ordinary FakeTensor conversion must not launch a Triton kernel")
+
+    monkeypatch.setattr(triton.KernelInterface, "__getitem__", reject_launch)
+    shape = (2, 130, 9)
+    layout = HopperMXScaleLayout(mx_axis, num_warps)
+    strided = StridedLayout(mx_axis)
+    with FakeTensorMode():
+        source = empty(shape, dtype=torch.uint8, device=device, layout=strided)
+        out = convert_layout(source, layout)
+        assert convert_layout(source, layout, out=out) is out
+        assert list(out.data.shape) == layout.storage_shape(shape, False)
+        assert out.data.dtype == torch.uint8
+        assert out.device == source.device
+        restored = convert_layout(out, strided)
+        assert list(restored.data.shape) == list(shape)
+        assert restored.data.stride() == source.data.stride()
+        assert restored.device == source.device
+        assert convert_layout(out, strided, out=restored) is restored
