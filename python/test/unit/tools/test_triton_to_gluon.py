@@ -131,11 +131,12 @@ def dot_scaled_tile_kernel(
     LHS_K_PACK: tl.constexpr,
     RHS_K_PACK: tl.constexpr,
     FAST_MATH: tl.constexpr,
+    SCALE_FACTOR: tl.constexpr = 32,
 ):
     offs_m = tl.arange(0, BLOCK_M)
     offs_n = tl.arange(0, BLOCK_N)
     offs_k = tl.arange(0, BLOCK_K)
-    offs_scale_k = tl.arange(0, BLOCK_K // 32)
+    offs_scale_k = tl.arange(0, BLOCK_K // SCALE_FACTOR)
 
     if A_FORMAT == "e2m1":
         if LHS_K_PACK:
@@ -158,12 +159,12 @@ def dot_scaled_tile_kernel(
         b = tl.load(b_ptr + offs_k[:, None] * BLOCK_N + offs_n[None, :])
 
     if HAS_A_SCALE:
-        a_scale = tl.load(a_scale_ptr + offs_m[:, None] * (BLOCK_K // 32) + offs_scale_k[None, :])
+        a_scale = tl.load(a_scale_ptr + offs_m[:, None] * (BLOCK_K // SCALE_FACTOR) + offs_scale_k[None, :])
     else:
         a_scale = None
 
     if HAS_B_SCALE:
-        b_scale = tl.load(b_scale_ptr + offs_n[:, None] * (BLOCK_K // 32) + offs_scale_k[None, :])
+        b_scale = tl.load(b_scale_ptr + offs_n[:, None] * (BLOCK_K // SCALE_FACTOR) + offs_scale_k[None, :])
     else:
         b_scale = None
 
@@ -266,6 +267,46 @@ def test_triton_to_gluon_dot_scaled(
     kernel[grid](a, b, a_scale, b_scale, c, *kernel_args, num_warps=NUM_WARPS)
     dot_scaled_tile_kernel[grid](a, b, a_scale, b_scale, ref, *kernel_args, num_warps=NUM_WARPS)
     torch.testing.assert_close(c, ref, atol=1e-2, rtol=1e-2)
+
+
+@pytest.mark.parametrize("rhs_scale", [False, True])
+@pytest.mark.parametrize("normal_type", ["bf16", "fp16"])
+@pytest.mark.parametrize("scale_factor", [16, 32])
+@pytest.mark.parametrize("float_scale", [False, True])
+def test_triton_to_gluon_dot_scaled_minimum_scale(rhs_scale, normal_type, scale_factor, float_scale, tmp_path):
+    if not (is_hopper_or_newer() or is_hip_cdna4() or is_hip_gfx1250()):
+        pytest.skip("Requires Hopper, Blackwell, CDNA4, or gfx1250")
+
+    kernel = convert_kernel(dot_scaled_tile_kernel, "dot_scaled_tile_kernel", tmp_path)
+    dtype = torch.bfloat16 if normal_type == "bf16" else torch.float16
+    x = torch.full((128, 128), 2.0**112 if normal_type == "bf16" else 1.0, dtype=dtype, device="cuda")
+    w = torch.full((128, 128), 256.0, dtype=torch.float8_e4m3fn, device="cuda")
+    scale_dtype = dtype if float_scale else torch.uint8
+    scale_values = [0, 0, 0, 0] if float_scale else [0, 1, 127, 254]
+    scales = torch.tensor(scale_values, dtype=scale_dtype, device="cuda")
+    scales = scales.repeat_interleave(32)[:, None].expand(128, 128 // scale_factor).contiguous()
+    out = torch.empty((128, 128), dtype=torch.float32, device="cuda")
+    ref = torch.empty_like(out)
+
+    a, b = (x, w) if rhs_scale else (w, x)
+    a_scale, b_scale = (None, scales) if rhs_scale else (scales, None)
+    a_format, b_format = (normal_type, "e4m3") if rhs_scale else ("e4m3", normal_type)
+    kernel_args = (128, 128, 128, not rhs_scale, rhs_scale, a_format, b_format, True, True, True)
+    kernel[(1, )](a, b, a_scale, b_scale, out, *kernel_args, SCALE_FACTOR=scale_factor, num_warps=4)
+    dot_scaled_tile_kernel[(1, )](a, b, a_scale, b_scale, ref, *kernel_args, SCALE_FACTOR=scale_factor, num_warps=4)
+
+    if float_scale:
+        expected_values = (0.0, ) * 4
+    elif normal_type == "bf16":
+        # NVIDIA's group-16 integer scales retain their existing UE5M3 behavior.
+        minimum = 1.0 if scale_factor == 32 or not is_cuda() else 0.0
+        expected_values = (minimum, 2.0, 2.0**127, float("inf"))
+    else:
+        expected_values = (0.0, 0.0, 32768.0, float("inf"))
+    expected = torch.tensor(expected_values, dtype=torch.float32, device="cuda").repeat_interleave(32)
+    expected = (expected[None, :] if rhs_scale else expected[:, None]).expand(128, 128)
+    torch.testing.assert_close(ref, expected, atol=0, rtol=0)
+    torch.testing.assert_close(out, expected, atol=0, rtol=0)
 
 
 @triton.jit

@@ -174,7 +174,7 @@ def convert_to_expand_dims_layout(value, expand_dims: list[int]):
 
 
 @gluon.jit
-def tl_dot_decomposed_scale_to_16(scale, compute_type: ttgl.constexpr):
+def tl_dot_decomposed_scale_to_16(scale, compute_type: ttgl.constexpr, scale_factor: ttgl.constexpr):
     large_fp_type: ttgl.constexpr = ttgl.float32 if compute_type == ttgl.float16 else compute_type
     int_width: ttgl.constexpr = large_fp_type.primitive_bitwidth
     int_type: ttgl.constexpr = get_int_type(int_width)
@@ -182,6 +182,10 @@ def tl_dot_decomposed_scale_to_16(scale, compute_type: ttgl.constexpr):
     zexted = ttgl.cast(scale, int_type)
     shift_value: ttgl.constexpr = large_fp_type.fp_mantissa_width
     shl_res = zexted << shift_value
+    is_e8m0: ttgl.constexpr = scale.dtype.is_int() and (scale_factor == 32 or current_target().backend == "hip")
+    if compute_type == ttgl.bfloat16 and is_e8m0:
+        # E8M0's minimum value (2**-127) is a BF16 subnormal.
+        shl_res |= ttgl.where(scale == 0, 0x0040, 0).to(int_type)
     scale_fp = ttgl.cast(shl_res, large_fp_type, bitcast=True)
     if large_fp_type != compute_type:
         scale_fp = ttgl.cast(scale_fp, compute_type)
@@ -245,7 +249,7 @@ def tl_dot_decomposed_extend_and_broadcast_scale(v, scale, compute_type: ttgl.co
         order: ttgl.constexpr = tl_dot_decomposed_get_transposed_order(rank)
         scale = ttgl.permute(scale, order)
 
-    scale16 = tl_dot_decomposed_scale_to_16(scale, compute_type)
+    scale16 = tl_dot_decomposed_scale_to_16(scale, compute_type, scale_factor)
     reshape_scale = tl_dot_decomposed_broadcast_scale(scale16, k_dim, scale_factor)
     return ttgl.convert_layout(reshape_scale, v.type.layout), scale
 

@@ -277,11 +277,14 @@ def _fma_fp64(a, b, c):
     return ret if ret != 0.0 else math.copysign(0.0, sign)
 
 
-def _e8m0_to_f32(scale):
+def _dot_scaled_scale_to_f32(scale, compute_type, is_e8m0):
     assert scale.dtype in (np.uint8, np.int8)
     scale = scale.astype(np.uint8)
     scale = scale.astype(np.int32)
     scale = scale << 23
+    if compute_type == tl.bfloat16 and is_e8m0:
+        # E8M0 byte zero is 2^-127, which rounds to zero in FP16.
+        scale = np.maximum(scale, 0x00400000)
     scale = scale.view(np.float32)
     return scale
 
@@ -344,7 +347,7 @@ def _unpack_e2m1(data, axis):
     return np.moveaxis(unpacked, -1, axis)
 
 
-def _prepare_dot_scaled_operand(value_handle, scale_handle, format_enum, k_pack, is_rhs):
+def _prepare_dot_scaled_operand(value_handle, scale_handle, format_enum, k_pack, compute_type, is_rhs):
     if format_enum == _ir.ScaleDotElemTypeTY.E2M1:
         if is_rhs:
             unpack_axis = -2 if k_pack else -1
@@ -357,14 +360,14 @@ def _prepare_dot_scaled_operand(value_handle, scale_handle, format_enum, k_pack,
     if scale_handle is None:
         return value
 
-    scale = _e8m0_to_f32(scale_handle.data)
+    scale_factor = value.shape[-2 if is_rhs else -1] // scale_handle.data.shape[-1]
+    is_e8m0 = scale_handle.dtype.is_int() and (scale_factor == 32 or tl.target_info.is_hip())
+    scale = _dot_scaled_scale_to_f32(scale_handle.data, compute_type, is_e8m0)
+    scale = np.repeat(scale, scale_factor, axis=-1)
 
     if is_rhs:
         # rhs is in [K, N] layout, but rhs_scale is supplied as [N, K / group].
-        scale = np.repeat(scale, value.shape[-2] // scale.shape[-1], axis=-1)
         scale = np.swapaxes(scale, -1, -2)
-    else:
-        scale = np.repeat(scale, value.shape[-1] // scale.shape[-1], axis=-1)
 
     return value * scale
 
@@ -954,8 +957,11 @@ class InterpreterBuilder:
                           rhs_scale_handle: Optional[TensorHandle], rhs_format_enum: _ir.ScaleDotElemTypeTY,
                           fast_math: bool, lhs_k_pack: bool, rhs_k_pack: bool,
                           acc_handle: TensorHandle) -> TensorHandle:
-        lhs_data = _prepare_dot_scaled_operand(lhs, lhs_scale_handle, lhs_format_enum, lhs_k_pack, is_rhs=False)
-        rhs_data = _prepare_dot_scaled_operand(rhs, rhs_scale_handle, rhs_format_enum, rhs_k_pack, is_rhs=True)
+        compute_type = tl.float16 if _ir.ScaleDotElemTypeTY.FP16 in (lhs_format_enum, rhs_format_enum) else tl.bfloat16
+        lhs_data = _prepare_dot_scaled_operand(lhs, lhs_scale_handle, lhs_format_enum, lhs_k_pack, compute_type,
+                                               is_rhs=False)
+        rhs_data = _prepare_dot_scaled_operand(rhs, rhs_scale_handle, rhs_format_enum, rhs_k_pack, compute_type,
+                                               is_rhs=True)
 
         result = np.matmul(lhs_data, rhs_data) + acc_handle.data
         return TensorHandle(result, tl.float32)
