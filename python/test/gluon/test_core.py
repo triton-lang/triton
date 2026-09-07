@@ -85,21 +85,20 @@ def test_memdesc_to_i32_view(memory_space, device):
             address = _memdesc_to_i32(view) + ((rows[:, None] // 32 * 32) << 16) + cols[None, :] * 0
             result = ttgl.inline_asm_elementwise(ASM, CONSTRAINTS, [address], ttgl.float32, False, 32)
         else:
-            parent = ttgl.allocate_shared_memory(ttgl.float32, [128, 64],
-                                                ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0]), values)
+            parent = ttgl.allocate_shared_memory(ttgl.float32, [128, 64], ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0]),
+                                                 values)
             view = parent.slice(32, 32, dim=1)
             ttgl.barrier()
             rows = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))
             cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
             address = _memdesc_to_i32(view) + (rows[:, None] * 64 + cols[None, :]) * 4
-            result = ttgl.inline_asm_elementwise("ld.shared.f32 $0, [$1];", "=f,r", [address],
-                                                ttgl.float32, False, 1)
+            result = ttgl.inline_asm_elementwise("ld.shared.f32 $0, [$1];", "=f,r", [address], ttgl.float32, False, 1)
             parent._keep_alive()
         ttgl.store(Y + rows[:, None] * 32 + cols[None, :], result)
 
     x = torch.randn((128, 64), device=device)
     y = torch.empty((128, 32), device=device)
-    kernel[(1,)](x, y, memory_space == "tensor", asm, constraints)
+    kernel[(1, )](x, y, memory_space == "tensor", asm, constraints)
     torch.testing.assert_close(y, x[:, 32:], atol=0, rtol=0)
 
 
