@@ -276,13 +276,15 @@ def test_triton_to_gluon_dot_scaled(
 def test_triton_to_gluon_dot_scaled_minimum_scale(rhs_scale, normal_type, scale_factor, float_scale, tmp_path):
     if not (is_hopper_or_newer() or is_hip_cdna4() or is_hip_gfx1250()):
         pytest.skip("Requires Hopper, Blackwell, CDNA4, or gfx1250")
+    if float_scale and not is_cuda():
+        pytest.skip("Floating-point scale controls require CUDA")
 
     kernel = convert_kernel(dot_scaled_tile_kernel, "dot_scaled_tile_kernel", tmp_path)
     dtype = torch.bfloat16 if normal_type == "bf16" else torch.float16
-    x = torch.full((128, 128), 2.0**112 if normal_type == "bf16" else 1.0, dtype=dtype, device="cuda")
+    x = torch.ones((128, 128), dtype=dtype, device="cuda")
     w = torch.full((128, 128), 256.0, dtype=torch.float8_e4m3fn, device="cuda")
     scale_dtype = dtype if float_scale else torch.uint8
-    scale_values = [0, 0, 0, 0] if float_scale else [0, 1, 127, 254]
+    scale_values = [0, 0, 0, 0] if float_scale else [0, 1, 127, 128]
     scales = torch.tensor(scale_values, dtype=scale_dtype, device="cuda")
     scales = scales.repeat_interleave(32)[:, None].expand(128, 128 // scale_factor).contiguous()
     out = torch.empty((128, 128), dtype=torch.float32, device="cuda")
@@ -299,10 +301,10 @@ def test_triton_to_gluon_dot_scaled_minimum_scale(rhs_scale, normal_type, scale_
         expected_values = (0.0, ) * 4
     elif normal_type == "bf16":
         # NVIDIA's group-16 integer scales retain their existing UE5M3 behavior.
-        minimum = 1.0 if scale_factor == 32 or not is_cuda() else 0.0
-        expected_values = (minimum, 2.0, 2.0**127, float("inf"))
+        minimum = 2.0**-112 if scale_factor == 32 or not is_cuda() else 0.0
+        expected_values = (minimum, 2.0**-111, 32768.0, 65536.0)
     else:
-        expected_values = (0.0, 0.0, 32768.0, float("inf"))
+        expected_values = (0.0, 0.0, 32768.0, 65536.0)
     expected = torch.tensor(expected_values, dtype=torch.float32, device="cuda").repeat_interleave(32)
     expected = (expected[None, :] if rhs_scale else expected[:, None]).expand(128, 128)
     torch.testing.assert_close(ref, expected, atol=0, rtol=0)

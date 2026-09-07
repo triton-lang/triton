@@ -4567,7 +4567,8 @@ def test_scaled_dot_zero_scale(rhs_scale, normal_type, scale_factor, scale_dtype
     w = torch.full((128, 128), 256.0, dtype=torch.float8_e4m3fn, device=device)
     scales = torch.zeros((128, 128 // scale_factor), dtype=scale_dtype, device=device)
     out = torch.empty((128, 128), dtype=torch.float32, device=device)
-    kernel[(1, )](x, w, scales, out, rhs_scale, normal_type, scale_factor, num_warps=4)
+    # Eight warps avoid a ptxas crash in the FP8-scale BF16 configuration.
+    kernel[(1, )](x, w, scales, out, rhs_scale, normal_type, scale_factor, num_warps=8)
     if is_compile_warmup():
         return
     is_e8m0 = scale_dtype == torch.uint8 and (scale_factor == 32 or tl.target_info.is_hip())
