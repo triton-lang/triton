@@ -331,6 +331,7 @@ class HIPBackend(BaseBackend):
         pm.enable_debug()
 
         passes.gluon.add_inliner(pm)
+        passes.gluon.add_infer_coalesced_encodings(pm)
         passes.gluon.add_resolve_auto_encodings(pm)
         passes.common.add_sccp(pm)
         passes.ttir.add_loop_aware_cse(pm)
