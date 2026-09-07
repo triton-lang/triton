@@ -940,11 +940,14 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
                                            numRepKWords);
     int offsetA = scaleIdxA * numColPerScaleBlockA;
     int offsetB = scaleIdxB * numColPerScaleBlockB;
-    if (useK96) {
+    if (mxfpInstKind == mxfpKind::mxf8f6f4 || useK96) {
+      // Sliced scales retain the parent layout's physical repetition strides.
       offsetA =
           ttng::getTMemSubSliceOffset(op.getAScale().getType(),
                                       m * desc.mmaSizeM, 0) +
           ttng::getTMemSubSliceOffset(op.getAScale().getType(), wordIdx * 4, 1);
+    }
+    if (useK96) {
       offsetB =
           ttng::getTMemSubSliceOffset(op.getBScale().getType(),
                                       n * desc.mmaSizeN, 0) +
