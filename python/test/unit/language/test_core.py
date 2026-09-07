@@ -4305,10 +4305,10 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         tl.static_assert(x.dtype == tl.uint8)
 
         if to_type == tl.bfloat16:
-            upcasted_scale = (scale.to(tl.uint16) << 7).to(tl.bfloat16, bitcast=True)
+            upcasted_scale = tl.maximum(scale.to(tl.uint16) << 7, 0x0040).to(tl.bfloat16, bitcast=True)
         else:
             tl.static_assert(to_type == tl.float16)
-            scale_fp32 = (scale.to(tl.uint32) << 23).to(tl.float32, bitcast=True)
+            scale_fp32 = tl.maximum(scale.to(tl.uint32) << 23, 0x00400000).to(tl.float32, bitcast=True)
             upcasted_scale = scale_fp32.to(tl.float16)
 
         to_e_bits: tl.constexpr = 8 if to_type == tl.bfloat16 else 5
@@ -4497,6 +4497,43 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
     if is_hip_cdna4() and normal_type in ["bf16", "fp16"]:
         amdgcn = pgm.asm['amdgcn']
         assert (re.search(r"v_cvt_scalef32_pk_.*?(fp4|fp8|bf8).*?op_sel", amdgcn))
+
+
+@pytest.mark.parametrize("rhs_scale", [False, True])
+@pytest.mark.parametrize("normal_type", ["bf16", "fp16"])
+@pytest.mark.parametrize("fast_math", [False, True])
+@pytest.mark.enable_warmup(min_capability=9)
+def test_scaled_dot_minimum_scale(rhs_scale, normal_type, fast_math, device):
+    if not is_cuda() or torch.cuda.get_device_capability() < (8, 9):
+        pytest.skip("requires CUDA FP8 support")
+
+    @triton.jit
+    def kernel(X, W, S, Y, RHS_SCALE: tl.constexpr, NORMAL_TYPE: tl.constexpr, FAST_MATH: tl.constexpr):
+        indices = tl.arange(0, 128)
+        offsets = indices[:, None] * 128 + indices[None, :]
+        x = tl.load(X + offsets)
+        w = tl.load(W + offsets)
+        scales = tl.load(S + indices[:, None] * 4 + tl.arange(0, 4)[None, :])
+        if RHS_SCALE:
+            y = tl.dot_scaled(x, None, NORMAL_TYPE, w, scales, "e4m3", fast_math=FAST_MATH)
+        else:
+            y = tl.dot_scaled(w, scales, "e4m3", x, None, NORMAL_TYPE, fast_math=FAST_MATH)
+        tl.store(Y + offsets, y)
+
+    dtype = torch.bfloat16 if normal_type == "bf16" else torch.float16
+    x = torch.full((128, 128), 2.0**112 if normal_type == "bf16" else 1.0, dtype=dtype, device=device)
+    w = torch.full((128, 128), 256.0, dtype=torch.float8_e4m3fn, device=device)
+    scales = torch.empty((128, 4), dtype=torch.uint8, device=device)
+    out = torch.empty((128, 128), dtype=torch.float32, device=device)
+    # The decoded BF16 weight is normal despite its subnormal scale. FP16
+    # legitimately underflows for this scale; unit scales cover its live path.
+    expected_values = (1.0, 2.0, 2.0**127) if normal_type == "bf16" else (0.0, 0.0, 32768.0)
+    for scale, expected in zip((0, 1, 127), expected_values):
+        scales.fill_(scale)
+        kernel[(1, )](x, w, scales, out, rhs_scale, normal_type, fast_math, num_warps=4)
+        if is_compile_warmup():
+            return
+        torch.testing.assert_close(out, torch.full_like(out, expected), rtol=0, atol=0)
 
 
 @pytest.mark.interpreter

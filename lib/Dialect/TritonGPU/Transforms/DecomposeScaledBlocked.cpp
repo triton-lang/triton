@@ -87,8 +87,14 @@ DecomposeScaledBlocked::scaleTo16(PatternRewriter &rewriter,
   auto shift =
       SplatOp::create(rewriter, loc, scaleTy.clone(intType), shiftConst);
   auto shlRes = arith::ShLIOp::create(rewriter, loc, zexted, shift);
+  // E8M0 byte zero encodes 2^-127, a subnormal in bf16 and f32.
+  auto minScaleBits = arith::ConstantIntOp::create(
+      rewriter, loc, 1 << (shiftValue - 1), intWidth);
+  auto minScale =
+      SplatOp::create(rewriter, loc, scaleTy.clone(intType), minScaleBits);
+  auto scaleBits = arith::MaxUIOp::create(rewriter, loc, shlRes, minScale);
   Value scaleFP =
-      BitcastOp::create(rewriter, loc, scaleTy.clone(largeFpType), shlRes);
+      BitcastOp::create(rewriter, loc, scaleTy.clone(largeFpType), scaleBits);
   if (largeFpType != computeType) {
     scaleFP = arith::TruncFOp::create(rewriter, loc, scaleTy.clone(computeType),
                                       scaleFP);

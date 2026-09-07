@@ -49,8 +49,14 @@ Value convertScaleElemType(PatternRewriter &rewriter, Location loc, Value scale,
       DenseElementsAttr::get(scaleTy.clone(largeIntTy),
                              rewriter.getIntegerAttr(largeIntTy, shiftValue)));
   Value shifted = arith::ShLIOp::create(rewriter, loc, ext, shift);
-  Value scaleFP =
-      tt::BitcastOp::create(rewriter, loc, scaleTy.clone(largeFpType), shifted);
+  Value minScale = arith::ConstantOp::create(
+      rewriter, loc, scaleTy.clone(largeIntTy),
+      DenseElementsAttr::get(
+          scaleTy.clone(largeIntTy),
+          rewriter.getIntegerAttr(largeIntTy, 1 << (shiftValue - 1))));
+  Value scaleBits = arith::MaxUIOp::create(rewriter, loc, shifted, minScale);
+  Value scaleFP = tt::BitcastOp::create(rewriter, loc,
+                                        scaleTy.clone(largeFpType), scaleBits);
   if (largeFpType != dstElemTy)
     scaleFP = arith::TruncFOp::create(rewriter, loc, scaleTy.clone(dstElemTy),
                                       scaleFP);

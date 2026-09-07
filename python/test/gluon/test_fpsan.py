@@ -1757,10 +1757,10 @@ def _dot_scaled_compute_payload_elem(val: np.uint64, elem_type: str, compute_typ
 
 def _dot_scaled_scale_payload(raw_scale: np.uint64, compute_type: str) -> np.uint64:
     if compute_type == "bf16":
-        raw_bf16 = (raw_scale & np.uint64(0xFF)) << np.uint64(7)
+        raw_bf16 = np.maximum((raw_scale & np.uint64(0xFF)) << np.uint64(7), np.uint64(0x0040))
         return _mix_float_scalar(raw_bf16, 16, 0x3F80)
     if compute_type == "fp16":
-        raw_f32 = (raw_scale & np.uint64(0xFF)) << np.uint64(23)
+        raw_f32 = np.maximum((raw_scale & np.uint64(0xFF)) << np.uint64(23), np.uint64(0x00400000))
         payload_f32 = _mix_float_scalar(raw_f32, 32, 0x3F800000)
         return _cast_float_payload_scalar(payload_f32, 32, 16)
     raise ValueError(f"unsupported dot_scaled compute type: {compute_type}")
@@ -1837,7 +1837,7 @@ def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.nd
             payload = _mix_float_bits_to_payload_u64(raw_scale, 8, 0x38)
             return _cast_float_payload_u64(payload, 8, 16)
         assert scale_type == "e8m0"
-        raw_bf16 = (raw_scale & np.uint64(0xFF)) << np.uint64(7)
+        raw_bf16 = np.maximum((raw_scale & np.uint64(0xFF)) << np.uint64(7), np.uint64(0x0040))
         return _mix_float_bits_to_payload_u64(raw_bf16, 16, 0x3F80)
 
     a_payload = compute_payload_matrix(unpack_payload_matrix(a_u8, a_pack, pack_axis=1), type_a)
@@ -2677,8 +2677,8 @@ def test_tcgen05_mma_scaled(device, type_a, type_b, m, n, k, scale_factor, scale
     else:
         b_bits = rs.randint(20, 40, size=(packed_k_b, n), dtype=np.uint8)
         b_ref_bits = b_bits
-    a_scale_bits = rs.randint(1, 4, size=(m, k // scale_factor), dtype=np.int8)
-    b_scale_bits = rs.randint(1, 4, size=(n, k // scale_factor), dtype=np.int8)
+    a_scale_bits = rs.randint(0, 4, size=(m, k // scale_factor), dtype=np.int8)
+    b_scale_bits = rs.randint(0, 4, size=(n, k // scale_factor), dtype=np.int8)
     if scale_type == "e4m3":
         a_scale_bits = rs.randint(1, 0x40, size=(m, k // scale_factor), dtype=np.uint8)
         b_scale_bits = rs.randint(1, 0x40, size=(n, k // scale_factor), dtype=np.uint8)
