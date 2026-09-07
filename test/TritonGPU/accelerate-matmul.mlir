@@ -286,12 +286,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %scale_a: tensor<64x4xi8, #blocked>,
       %b: tensor<32x64xi8, #blocked>,
       %scale_b: tensor<64x4xi8, #blocked>) -> tensor<64x64xf32, #blocked> {
-    // CHECK-NOT: arith.maxui
-    // CHECK: %[[SCALE_BITS:.*]] = arith.shli {{.*}} : tensor<{{.*}}xi16,
-    // CHECK-NEXT: {{.*}}tt.bitcast %[[SCALE_BITS]] : {{.*}} -> tensor<{{.*}}xbf16,
-    // CHECK-NOT: arith.maxui
+    // CHECK: %[[SCALE_BITS_A:.*]] = arith.shli {{.*}} : tensor<{{.*}}xi16,
+    // CHECK-NEXT: {{.*}}tt.bitcast %[[SCALE_BITS_A]] : {{.*}} -> tensor<{{.*}}xbf16,
+    // CHECK: %[[SCALE_BITS_B:.*]] = arith.shli {{.*}} : tensor<{{.*}}xi16,
+    // CHECK-NEXT: {{.*}}tt.bitcast %[[SCALE_BITS_B]] : {{.*}} -> tensor<{{.*}}xbf16,
     // CHECK: arith.cmpi eq, {{.*}} : tensor<{{.*}}xi8,
-    // CHECK-NOT: arith.maxui
     // CHECK: tt.return
     %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked>
     %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<64x32xi8, #blocked_k>, tensor<64x4xi8, #blocked> * tensor<32x64xi8, #blocked>, tensor<64x4xi8, #blocked> -> tensor<64x64xf32, #blocked>
@@ -568,10 +567,12 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     ) -> tensor<128x128xf32, #blocked> {
     // CHECK-DAG: %[[MIN_SCALE:.*]] = arith.constant dense<64>
     // CHECK-DAG: %[[ZERO_SCALE:.*]] = arith.constant dense<0> : tensor<{{.*}}xi8,
+    // CHECK-DAG: %[[ZERO_BITS:.*]] = arith.constant dense<0> : tensor<{{.*}}xi16,
     // CHECK: ttg.fp4_to_fp
     // CHECK: %[[SHIFTED_SCALE:.*]] = arith.shli
     // CHECK: %[[IS_ZERO:.*]] = arith.cmpi eq, %{{.*}}, %[[ZERO_SCALE]] : tensor<{{.*}}xi8,
-    // CHECK: %[[SCALE_BITS:.*]] = arith.select %[[IS_ZERO]], %[[MIN_SCALE]], %[[SHIFTED_SCALE]]
+    // CHECK: %[[CORRECTION:.*]] = arith.select %[[IS_ZERO]], %[[MIN_SCALE]], %[[ZERO_BITS]]
+    // CHECK: %[[SCALE_BITS:.*]] = arith.ori %[[SHIFTED_SCALE]], %[[CORRECTION]]
     // CHECK: tt.bitcast %[[SCALE_BITS]] : {{.*}} -> tensor<{{.*}}xbf16,
     // CHECK: ttng.warp_group_dot
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>

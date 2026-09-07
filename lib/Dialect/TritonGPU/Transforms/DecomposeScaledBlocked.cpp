@@ -107,8 +107,12 @@ DecomposeScaledBlocked::scaleTo16(PatternRewriter &rewriter,
                                           rewriter.getZeroAttr(scaleTy));
     auto isZero = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq,
                                         scale, zero);
-    scaleBits =
-        arith::SelectOp::create(rewriter, loc, isZero, minScale, scaleBits);
+    auto zeroBits =
+        arith::ConstantOp::create(rewriter, loc, minScale.getType(),
+                                  rewriter.getZeroAttr(minScale.getType()));
+    auto correction =
+        arith::SelectOp::create(rewriter, loc, isZero, minScale, zeroBits);
+    scaleBits = arith::OrIOp::create(rewriter, loc, scaleBits, correction);
   }
   Value scaleFP =
       BitcastOp::create(rewriter, loc, scaleTy.clone(largeFpType), scaleBits);
@@ -197,15 +201,17 @@ TypedValue<RankedTensorType> DecomposeScaledBlocked::maskNan(
                          isE8M0Scale(scaledDotOp);
   TypedValue<RankedTensorType> scaleIsNan;
   if (useDecodedScale) {
-    // Only E8M0 byte 255 decodes to BF16 infinity.
+    // Only E8M0 byte 255 produces a BF16 scale with exponent 255.
     auto bitsTy = expandedScale.getType().clone(rewriter.getI16Type());
     auto bits = BitcastOp::create(rewriter, loc, bitsTy, expandedScale);
-    auto constInf = arith::ConstantOp::create(
-        rewriter, loc, bitsTy,
-        DenseElementsAttr::get(bitsTy, APInt(16, 0x7f80)));
+    auto shift = arith::ConstantOp::create(
+        rewriter, loc, bitsTy, DenseElementsAttr::get(bitsTy, APInt(16, 7)));
+    auto exponent = arith::ShRUIOp::create(rewriter, loc, bits, shift);
+    auto nanExponent = arith::ConstantOp::create(
+        rewriter, loc, bitsTy, DenseElementsAttr::get(bitsTy, APInt(16, 0xff)));
     scaleIsNan = cast<TypedValue<RankedTensorType>>(
-        arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq, bits,
-                              constInf)
+        arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq, exponent,
+                              nanExponent)
             .getResult());
   } else if (isa<FloatType>(scaleTy.getElementType())) {
     auto computeType = cast<FloatType>(mxfp.getType().getElementType());
