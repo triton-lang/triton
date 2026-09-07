@@ -2661,7 +2661,7 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
     auto srcRegTy = RankedTensorType::get(
         srcMemTy.getShape(), srcMemTy.getElementType(), srcEncoding);
     if (scratch->usesSharedClusterState()) {
-      // Match the lead-CTA TMA wait before both CTAs emulate the TMEM copy.
+      // Make shared operands visible before the CTAs emulate the TMEM copy.
       ttng::ClusterBarrierOp::create(rewriter, loc);
     }
     Value srcReg =
@@ -2685,12 +2685,12 @@ private:
 };
 
 struct TCGen5CommitPattern : public OpRewritePattern<ttng::TCGen5CommitOp> {
-  TCGen5CommitPattern(MLIRContext *ctx, bool twoCTAs)
-      : OpRewritePattern(ctx), twoCTAs(twoCTAs) {}
+  TCGen5CommitPattern(MLIRContext *ctx, bool sharedClusterState)
+      : OpRewritePattern(ctx), sharedClusterState(sharedClusterState) {}
 
   LogicalResult matchAndRewrite(ttng::TCGen5CommitOp op,
                                 PatternRewriter &rewriter) const override {
-    if (twoCTAs)
+    if (sharedClusterState)
       createGlobalScratchBarrier(rewriter, op.getLoc(),
                                  /*sharedClusterState=*/true);
     createSynchronousCompletionArrive(rewriter, op.getLoc(), op.getBarrier(),
@@ -2700,7 +2700,7 @@ struct TCGen5CommitPattern : public OpRewritePattern<ttng::TCGen5CommitOp> {
   }
 
 private:
-  bool twoCTAs;
+  bool sharedClusterState;
 };
 
 struct WarpGroupDotPattern : public OpRewritePattern<ttng::WarpGroupDotOp> {
@@ -3274,7 +3274,7 @@ static FpSanCallsRequiringInlining
 getFpSanCallsRequiringInlining(ModuleOp module) {
   DenseMap<Operation *, FpSanInliningRequirement> functions;
   DenseMap<Operation *, FpSanInliningRequirement> producers;
-  bool twoCTAs = hasTwoCTAMma(module);
+  bool sharedClusterState = ttg::lookupNumCTAs(module) > 1;
 
   module.walk([&](Operation *op) {
     auto operands = getFpSanTmemOperands(op);
@@ -3310,7 +3310,8 @@ getFpSanCallsRequiringInlining(ModuleOp module) {
                         op, "warp specialization requires kernel context"});
     // A callee receives a per-CTA scratch base, not the cluster base needed by
     // TMEM emulation. Its generated cluster barriers also need kernel context.
-    if (twoCTAs && (!operands.empty() || isa<ttng::TCGen5CommitOp>(op)))
+    if (sharedClusterState &&
+        (!operands.empty() || isa<ttng::TCGen5CommitOp>(op)))
       functions.try_emplace(
           function, FpSanInliningRequirement{
                         op, "FPSan cluster scratch and barriers require kernel "
@@ -3363,7 +3364,9 @@ public:
     getOperation()->setAttr(kHomomorphicCastsAttr,
                             BoolAttr::get(&getContext(), homomorphicCasts));
 
-    TmemScratchManager scratch(twoCTAs);
+    // MMA emulation can redistribute accumulator elements across all CTAs.
+    bool sharedClusterState = ttg::lookupNumCTAs(getOperation()) > 1;
+    TmemScratchManager scratch(sharedClusterState);
     RewritePatternSet patterns(&getContext());
     patterns.add<BinaryFloatToIntPattern<arith::AddFOp, arith::AddIOp>,
                  BinaryFloatToIntPattern<arith::SubFOp, arith::SubIOp>,
@@ -3393,7 +3396,7 @@ public:
                  TCGen5MMAPattern, TCGen5MMAScaledPattern>(&getContext(),
                                                            &scratch);
     patterns.add<WarpGroupDotPattern>(&getContext());
-    patterns.add<TCGen5CommitPattern>(&getContext(), twoCTAs);
+    patterns.add<TCGen5CommitPattern>(&getContext(), sharedClusterState);
 
     LogicalResult result =
         applyPatternsGreedily(getOperation(), std::move(patterns));

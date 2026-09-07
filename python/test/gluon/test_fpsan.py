@@ -2513,6 +2513,55 @@ def test_tcgen05_mma_warp_specialize_partition(device, partition_warps, fresh_kn
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("num_ctas", [1, 2, 4])
+def test_tcgen05_mma_independent_ctas(device, num_ctas, fresh_knobs):
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    m, n, k = 64, 64 * num_ctas, 32
+    replicated = tuple((0, 0) for _ in range(num_ctas.bit_length() - 1))
+    columns = tuple((0, 1 << i) for i in range(num_ctas.bit_length() - 1))
+    b_rows = tuple((1 << i, 0) for i in range(num_ctas.bit_length() - 1))
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, out_ptr, N: gl.constexpr, ACGA: gl.constexpr, BCGA: gl.constexpr, DCGA: gl.constexpr):
+        al: gl.constexpr = gl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], cga_layout=ACGA)
+        bl: gl.constexpr = gl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], cga_layout=BCGA)
+        am = gl.arange(0, 64, gl.SliceLayout(1, al))
+        ak = gl.arange(0, 32, gl.SliceLayout(0, al))
+        bn = gl.arange(0, N, gl.SliceLayout(1, bl))
+        bk = gl.arange(0, 32, gl.SliceLayout(0, bl))
+        a = gl.load(a_ptr + am[:, None] * 32 + ak[None, :])
+        b = gl.load(b_ptr + bn[:, None] * 32 + bk[None, :])
+        ash: gl.constexpr = gl.NVMMASharedLayout.get_default_for((64, 32), gl.bfloat16, cga_layout=ACGA)
+        bsh: gl.constexpr = gl.NVMMASharedLayout.get_default_for((N, 32), gl.bfloat16, cga_layout=BCGA)
+        smem_a = gl.allocate_shared_memory(gl.bfloat16, (64, 32), ash, a)
+        smem_b = gl.allocate_shared_memory(gl.bfloat16, (N, 32), bsh, b)
+        tmem_layout: gl.constexpr = TensorMemoryLayout((64, 64), col_stride=1, cga_layout=DCGA)
+        acc = allocate_tensor_memory(gl.float32, (64, N), tmem_layout)
+        layout: gl.constexpr = acc.get_reg_layout()
+        rows = gl.arange(0, 64, gl.SliceLayout(1, layout))
+        cols = gl.arange(0, N, gl.SliceLayout(0, layout))
+        offsets = rows[:, None] * N + cols[None, :]
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        # Independent MMAs own columns; FPSan may compute using a row partition.
+        tcgen05_mma(smem_a, smem_b.permute((1, 0)), acc, use_acc=False, multicast=False, mbarriers=[bar])
+        mbarrier.wait(bar, phase=0, deps=[smem_a, smem_b])
+        mbarrier.invalidate(bar)
+        gl.store(out_ptr + offsets, acc.load())
+
+    rs = np.random.RandomState(0)
+    a_bits = _random_float_bits(rs, (m, k), "bf16")
+    b_bits = _random_float_bits(rs, (n, k), "bf16")
+    expected = _mm_payload_bits(a_bits, b_bits.T, None, "bf16", "bf16", "f32")
+    _, a = _as_float_bits_tensor(a_bits, "bf16")
+    _, b = _as_float_bits_tensor(b_bits, "bf16")
+    out, output = _as_float_bits_tensor(np.empty((m, n), dtype=np.int32), "f32")
+    kernel[(1, )](a, b, output, n, replicated, b_rows, columns, num_warps=4, num_ctas=num_ctas)
+    _assert_payload_equal(out, expected)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("use_acc", [False, True])
 def test_tcgen05_mma_two_ctas(device, use_acc, fresh_knobs):
     _require_cuda_backend(device)
