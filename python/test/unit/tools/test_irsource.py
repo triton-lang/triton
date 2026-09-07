@@ -1,7 +1,11 @@
 import pathlib
+import pytest
+import torch
 import triton
 from triton.compiler import IRSource, make_backend
 from triton._C.libtriton import ir
+from triton.experimental import gluon
+from triton.experimental.gluon import language as ttgl
 
 target = triton.runtime.driver.active.get_current_target()
 backend = make_backend(target)
@@ -90,3 +94,49 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
     # now test compilation
     triton.compile(str(temp_file), target=target)
+
+    # Identical IR with a different extension must use its own pipeline and cache entry.
+    glir_file = temp_file.with_suffix(".glir")
+    glir_file.write_text(sample_ttgir_vector_add)
+    assert "glir" in triton.compile(str(glir_file), target=target).asm
+
+
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("num_ctas, coalesced", [(1, False), (2, False), (1, True)])
+def test_gluon_ir_file(tmp_path, device, num_warps, num_ctas, coalesced):
+    if num_ctas > 1 and (target.backend != "cuda" or target.arch < 90):
+        pytest.skip("requires CUDA cluster support")
+    if coalesced and target.backend != "cuda":
+        pytest.skip("coalesced layouts require CUDA")
+
+    @gluon.jit
+    def kernel(In, Out, Layout: ttgl.constexpr, Increment: ttgl.constexpr):
+        offsets = ttgl.arange(0, 1024, layout=ttgl.AutoLayout())
+        in_ptrs = ttgl.set_auto_layout(In + offsets, Layout)
+        out_ptrs = ttgl.set_auto_layout(Out + offsets, Layout)
+        ttgl.store(out_ptrs, ttgl.load(in_ptrs) + Increment)
+
+    if coalesced:
+        layout = ttgl.CoalescedLayout()
+    else:
+        cga_layout = [[1]] if num_ctas == 2 else []
+        layout = ttgl.BlockedLayout([1], [target.warp_size], [num_warps], [0], cga_layout=cga_layout)
+    x = torch.arange(1024, dtype=torch.int32, device=device)
+    y = torch.empty_like(x)
+    compiled = kernel[(1, )](x, y, layout, 1, num_warps=num_warps, num_ctas=num_ctas)
+    assert "#gluon.auto_encoding" in compiled.asm["glir"]
+    assert "gluon" not in compiled.asm["ttgir"]
+
+    path = tmp_path / "kernel.glir"
+    path.write_text(compiled.asm["glir"])
+    from_file = triton.compile(str(path), target=target)
+    assert from_file.metadata.num_warps == num_warps
+    assert from_file.metadata.num_ctas == num_ctas
+    y.fill_(-1)
+    from_file[(1, 1, 1)](x, y)
+    torch.testing.assert_close(y, x + 1)
+
+    # A GLIR override must be parsed before resolving Gluon layouts.
+    y.fill_(-1)
+    kernel[(1, )](x, y, layout, 2, num_warps=num_warps, num_ctas=num_ctas, ir_override=str(path))
+    torch.testing.assert_close(y, x + 1)
