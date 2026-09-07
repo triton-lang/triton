@@ -1174,6 +1174,40 @@ def test_math_fma_op(dtype, device):
 
 
 @pytest.mark.interpreter
+def test_math_fma_op_float32_double_rounding(device):
+    # Regression test for: https://github.com/triton-lang/triton/issues/11610
+    # x=y=4097.0, z=2**-30: x*y == 16785409.0 sits exactly halfway between the
+    # two float32 neighbors 16785408.0 and 16785410.0 (float32 ulp is 2 here).
+    # z is below the float64 half-ulp threshold there, so rounding x*y+z to
+    # float64 first (as create_fma did before this fix) picks 16785409.0,
+    # which .astype(float32) then rounds-to-even down to 16785408.0. The
+    # exact (rational) value x*y+z is above the halfway point and must round
+    # up to 16785410.0 instead -- rounding through float64 double-rounds it.
+    check_type_supported('float32', device)
+
+    @triton.jit
+    def kernel(Z, X, Y, W, SIZE: tl.constexpr):
+        off = tl.arange(0, SIZE)
+        x = tl.load(X + off)
+        y = tl.load(Y + off)
+        w = tl.load(W + off)
+        z = tl.math.fma(x, y, w)
+        tl.store(Z + off, z)
+
+    x = np.array([4097.0], dtype=np.float32)
+    y = np.array([4097.0], dtype=np.float32)
+    w = np.array([2**-30], dtype=np.float32)
+
+    x_tri = to_triton(x, device=device, dst_type='float32')
+    y_tri = to_triton(y, device=device, dst_type='float32')
+    w_tri = to_triton(w, device=device, dst_type='float32')
+    z_tri = to_triton(np.zeros_like(x), device=device, dst_type='float32')
+    kernel[(1, )](z_tri, x_tri, y_tri, w_tri, SIZE=1)
+
+    np.testing.assert_equal(to_numpy(z_tri), np.array([16785410.0], dtype=np.float32))
+
+
+@pytest.mark.interpreter
 def test_math_fma_op_special_values(device):
     check_type_supported('float64', device)
 
