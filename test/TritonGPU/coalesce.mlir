@@ -312,3 +312,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// Gluon placeholder encodings (gluon.auto_encoding / gluon.coalesced_encoding)
+// do not implement LayoutEncodingTrait. tritongpu-coalesce must skip them
+// (they are resolved by the Gluon pipeline), not crash in getCGALayout.
+// CHECK-LABEL: @gluon_coalesced_encoding
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @gluon_coalesced_encoding(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>) {
+    %mask = arith.constant dense<0> : tensor<128x256xi1, #gluon.auto_encoding>
+    %0 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<128x256x!tt.ptr<f32>, #gluon.auto_encoding>
+    %1 = gluon.set_auto_layout %0 : tensor<128x256x!tt.ptr<f32>, #gluon.auto_encoding> -> tensor<128x256x!tt.ptr<f32>, #gluon.coalesced_encoding>
+    %2 = gluon.set_auto_layout %mask : tensor<128x256xi1, #gluon.auto_encoding> -> tensor<128x256xi1, #gluon.coalesced_encoding>
+    %3 = tt.load %1, %2 : tensor<128x256x!tt.ptr<f32>, #gluon.coalesced_encoding>
+    tt.return
+  }
+}

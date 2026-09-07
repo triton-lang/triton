@@ -4,6 +4,7 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/CoalesceUtils.h"
@@ -22,6 +23,15 @@ namespace gpu {
 
 #define GEN_PASS_DEF_TRITONGPUCOALESCE
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
+
+// Gluon placeholder encodings (AutoEncodingAttr, CoalescedEncodingAttr) are not
+// LayoutEncodingTrait and are resolved by their own pipeline
+// (gluon-infer-coalesced-encodings, gluon-resolve-auto-encodings).
+// tritongpu-coalesce must skip them.
+static bool isGluonEncoding(Attribute encoding) {
+  return isa<mlir::triton::gluon::AutoEncodingAttr,
+             mlir::triton::gluon::CoalescedEncodingAttr>(encoding);
+}
 
 // Descriptor load/stores don't need to consider L1 coalescing but the
 // destination layout will affect the shared memory load/store generated. So we
@@ -56,14 +66,18 @@ static void pickDescriptorLoadStoreLayout(
   moduleOp.walk([&](Operation *op) {
     int numWarps = lookupNumWarps(op);
     if (auto load = dyn_cast<DescriptorOpInterface>(op)) {
-      if (load->getNumResults() == 1)
-        layoutMap[op] = pickDescriptorLoadStoreLayout(
-            numWarps, threadsPerWarp,
-            cast<RankedTensorType>(load->getResult(0).getType()));
+      if (load->getNumResults() == 1) {
+        auto resultType = cast<RankedTensorType>(load->getResult(0).getType());
+        if (!isGluonEncoding(resultType.getEncoding()))
+          layoutMap[op] = pickDescriptorLoadStoreLayout(numWarps, threadsPerWarp,
+                                                        resultType);
+      }
     }
     if (auto store = dyn_cast<DescriptorStoreLikeOpInterface>(op)) {
-      layoutMap[op] = pickDescriptorLoadStoreLayout(numWarps, threadsPerWarp,
-                                                    store.getSrc().getType());
+      auto srcType = store.getSrc().getType();
+      if (!isGluonEncoding(srcType.getEncoding()))
+        layoutMap[op] = pickDescriptorLoadStoreLayout(numWarps, threadsPerWarp,
+                                                      srcType);
     }
   });
 }
@@ -96,6 +110,10 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
       int numWarps = lookupNumWarps(curr);
 
       auto tensorType = cast<RankedTensorType>(ptr.getType());
+      // Skip Gluon placeholder encodings; they are resolved by the Gluon
+      // pipeline (gluon-infer-coalesced-encodings) instead.
+      if (isGluonEncoding(tensorType.getEncoding()))
+        return;
       CGAEncodingAttr cgaLayout = getCGALayout(tensorType.getEncoding());
       SmallVector<int64_t> shapePerCTA = getShapePerCTA(tensorType);
       auto layout =
