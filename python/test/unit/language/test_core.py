@@ -4305,7 +4305,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         tl.static_assert(x.dtype == tl.uint8)
 
         if to_type == tl.bfloat16:
-            upcasted_scale = tl.maximum(scale.to(tl.uint16) << 7, 0x0040).to(tl.bfloat16, bitcast=True)
+            upcasted_scale = tl.maximum(scale.to(tl.uint16) << 7, 0x0040).to(tl.uint16).to(tl.bfloat16, bitcast=True)
         else:
             tl.static_assert(to_type == tl.float16)
             scale_fp32 = tl.maximum(scale.to(tl.uint32) << 23, 0x00400000).to(tl.float32, bitcast=True)
