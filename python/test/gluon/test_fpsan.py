@@ -1760,7 +1760,7 @@ def _dot_scaled_scale_payload(raw_scale: np.uint64, compute_type: str) -> np.uin
         raw_bf16 = np.maximum((raw_scale & np.uint64(0xFF)) << np.uint64(7), np.uint64(0x0040))
         return _mix_float_scalar(raw_bf16, 16, 0x3F80)
     if compute_type == "fp16":
-        raw_f32 = np.maximum((raw_scale & np.uint64(0xFF)) << np.uint64(23), np.uint64(0x00400000))
+        raw_f32 = (raw_scale & np.uint64(0xFF)) << np.uint64(23)
         payload_f32 = _mix_float_scalar(raw_f32, 32, 0x3F800000)
         return _cast_float_payload_scalar(payload_f32, 32, 16)
     raise ValueError(f"unsupported dot_scaled compute type: {compute_type}")

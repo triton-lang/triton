@@ -21,11 +21,10 @@ protected:
   broadcastScale(PatternRewriter &rewriter, DotScaledOp scaledDotOp,
                  TypedValue<RankedTensorType> scale, int dim,
                  Attribute dstEncoding) const;
-  TypedValue<RankedTensorType> maskNan(PatternRewriter &rewriter,
-                                       DotScaledOp scaledDotOp,
-                                       TypedValue<RankedTensorType> mxfp,
-                                       TypedValue<RankedTensorType> scale,
-                                       int dim) const;
+  TypedValue<RankedTensorType>
+  maskNan(PatternRewriter &rewriter, DotScaledOp scaledDotOp,
+          TypedValue<RankedTensorType> mxfp, TypedValue<RankedTensorType> scale,
+          TypedValue<RankedTensorType> expandedScale, int dim) const;
   virtual TypedValue<RankedTensorType> scaleArg(PatternRewriter &rewriter,
                                                 DotScaledOp scaledDotOp,
                                                 int opIdx,

@@ -968,8 +968,7 @@ module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num
 module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @sm120_dot_scaled_fp16_fp8_fallback
   // CHECK-NOT: tt.dot_scaled
-  // CHECK: %[[MIN_SCALE:.*]] = arith.constant dense<4194304>
-  // CHECK: %[[SCALE_BITS:.*]] = arith.maxui %{{.*}}, %[[MIN_SCALE]]
+  // CHECK: %[[SCALE_BITS:.*]] = arith.shli
   // CHECK: %[[SCALE_F32:.*]] = tt.bitcast %[[SCALE_BITS]] : {{.*}} -> tensor<{{.*}}xf32,
   // CHECK: arith.truncf %[[SCALE_F32]] : {{.*}} to tensor<{{.*}}xf16,
   // CHECK: tt.dot

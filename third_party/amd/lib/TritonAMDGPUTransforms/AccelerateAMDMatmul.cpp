@@ -868,7 +868,7 @@ public:
     scale.getDefiningOp()->setAttr(AttrDecomposedDotScaledSource,
                                    BoolAttr::get(rewriter.getContext(), true));
 
-    Value reshapeScale;
+    TensorValue expandedScale;
     if (targetFeatures.supportsCvtPkScalePk8()) {
       // On architectures with CvtPkScalePk8 (e.g., GFX1250), the scale type
       // is int8, required by hardware instruction so type should not be
@@ -879,27 +879,27 @@ public:
       }
 
       auto newScaleType = resultType.clone(scale.getType().getElementType());
-      reshapeScale = broadcastScale(rewriter, dotOp, scale, kDim,
-                                    newScaleType.getEncoding());
+      expandedScale = broadcastScale(rewriter, dotOp, scale, kDim,
+                                     newScaleType.getEncoding());
     } else {
       // Cast scale to bf16, broadcast it and convert the layout
       FloatType bf16Type = rewriter.getBF16Type();
-      reshapeScale = extendAndBroadcastScale(rewriter, dotOp, scale, bf16Type,
-                                             resultType.clone(bf16Type), opIdx);
+      expandedScale = extendAndBroadcastScale(
+          rewriter, dotOp, scale, bf16Type, resultType.clone(bf16Type), opIdx);
     }
 
     // Upcast with scale
     TensorValue result;
     if (isFp4) {
       result = triton::amdgpu::ScaledUpcastFp4Op::create(
-          rewriter, loc, resultType, v, reshapeScale, kDim);
+          rewriter, loc, resultType, v, expandedScale, kDim);
     } else {
       result = triton::amdgpu::ScaledUpcastFp8Op::create(
-          rewriter, loc, resultType, v, reshapeScale);
+          rewriter, loc, resultType, v, expandedScale);
     }
 
     // If the scale is NaN, return NaN, else return the scaled value.
-    return maskNan(rewriter, dotOp, result, scale, kDim);
+    return maskNan(rewriter, dotOp, result, scale, expandedScale, kDim);
   }
 
 private:

@@ -1257,8 +1257,6 @@ Value scaleI8ToF32Payload(PatternRewriter &rewriter, Location loc,
   Value scaleI32 = arith::ExtUIOp::create(rewriter, loc, i32Ty, scaleI);
   auto shift = getUIntConstantLike(rewriter, loc, i32Ty, 23);
   Value rawF32 = arith::ShLIOp::create(rewriter, loc, scaleI32, shift);
-  auto minScale = getUIntConstantLike(rewriter, loc, i32Ty, 0x00400000);
-  rawF32 = arith::MaxUIOp::create(rewriter, loc, rawF32, minScale);
   return embedFloatBitsToInt(rewriter, loc, rawF32, rewriter.getF32Type());
 }
 
