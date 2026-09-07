@@ -37,6 +37,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// expected-error @below {{cache modifier cannot be combined with an L1 eviction priority}}
+#invalid_cache_policy = #ttng.cache_policy<cache_modifier = cg, l1 = no_allocate>
+
+// -----
+
 // expected-error @below {{fp4Padded tensor memory layout requires colStride 1 but got 2}}
 #bad_fp4_padded_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 2, fp4Padded = true>
 

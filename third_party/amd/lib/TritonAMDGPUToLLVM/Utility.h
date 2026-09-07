@@ -14,6 +14,10 @@
 
 namespace mlir::LLVM::AMD {
 
+// Decode the target-independent compatibility payload accepted by Triton
+// memory operations. Target-specific cache policy attributes are rejected.
+FailureOr<triton::CacheModifier> getCacheModifier(Attribute cachePolicy);
+
 // Here is a partial definition of DppCtrl enums. For the complete definition,
 // please check:
 // https://github.com/llvm/llvm-project/blob/8c75290/llvm/lib/Target/AMDGPU/SIDefines.h#L939
