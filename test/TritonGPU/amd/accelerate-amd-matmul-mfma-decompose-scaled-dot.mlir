@@ -13,12 +13,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ) {
     // CHECK-DAG: %[[CST:.*]] = arith.constant dense<7> : tensor<2x32xi16, #linear{{.*}}>
     // CHECK-DAG: %[[MIN_SCALE:.*]] = arith.constant dense<64> : tensor<2x32xi16, #linear{{.*}}>
+    // CHECK-DAG: %[[ZERO_SCALE:.*]] = arith.constant dense<0> : tensor<2x32xi8, #linear{{.*}}>
     // CHECK: %[[B:.*]] = ttg.convert_layout %{{.*}} : tensor<64x32xf8E4M3FN, #blocked{{.*}}> -> tensor<64x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
     // CHECK: %[[S:.*]] = ttg.convert_layout %{{.*}} : tensor<32x2xi8, #blocked{{.*}}> -> tensor<32x2xi8, #linear{{.*}}>
     // CHECK: %[[TS:.*]] = tt.trans %[[S]] {order = array<i32: 1, 0>}
     // CHECK: %[[ES:.*]] = arith.extui %[[TS]]
     // CHECK: %[[SHS:.*]] = arith.shli %[[ES]], %[[CST]]
-    // CHECK: %[[SCALE_BITS:.*]] = arith.maxui %[[SHS]], %[[MIN_SCALE]]
+    // CHECK: %[[IS_ZERO:.*]] = arith.cmpi eq, %[[TS]], %[[ZERO_SCALE]]
+    // CHECK: %[[SCALE_BITS:.*]] = arith.select %[[IS_ZERO]], %[[MIN_SCALE]], %[[SHS]]
     // CHECK: %[[BS:.*]] = tt.bitcast %[[SCALE_BITS]] : tensor<2x32xi16, #linear{{.*}}> -> tensor<2x32xbf16, #linear{{.*}}>
     // CHECK: %[[EPS:.*]] = tt.reshape %[[BS]] efficient_layout : tensor<2x32xbf16, #linear{{.*}}> -> tensor<2x1x32xbf16, #linear{{.*}}>
     // CHECK: %[[BCS:.*]] = tt.broadcast %[[EPS]] : tensor<2x1x32xbf16, #linear{{.*}}> -> tensor<2x32x32xbf16, #linear{{.*}}>
@@ -77,12 +79,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ) {
     // CHECK-DAG: %[[CST:.*]] = arith.constant dense<7> : tensor<2x32xi16, #linear{{.*}}>
     // CHECK-DAG: %[[MIN_SCALE:.*]] = arith.constant dense<64> : tensor<2x32xi16, #linear{{.*}}>
+    // CHECK-DAG: %[[ZERO_SCALE:.*]] = arith.constant dense<0> : tensor<2x32xi8, #linear{{.*}}>
     // CHECK: %[[B:.*]] = ttg.convert_layout %{{.*}} : tensor<32x32xi8, #blocked{{.*}}> -> tensor<32x32xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
     // CHECK: %[[S:.*]] = ttg.convert_layout %{{.*}} : tensor<32x2xi8, #blocked{{.*}}> -> tensor<32x2xi8, #linear{{.*}}>
     // CHECK: %[[TS:.*]] = tt.trans %[[S]] {order = array<i32: 1, 0>}
     // CHECK: %[[ES:.*]] = arith.extui %[[TS]]
     // CHECK: %[[SHS:.*]] = arith.shli %[[ES]], %[[CST]]
-    // CHECK: %[[SCALE_BITS:.*]] = arith.maxui %[[SHS]], %[[MIN_SCALE]]
+    // CHECK: %[[IS_ZERO:.*]] = arith.cmpi eq, %[[TS]], %[[ZERO_SCALE]]
+    // CHECK: %[[SCALE_BITS:.*]] = arith.select %[[IS_ZERO]], %[[MIN_SCALE]], %[[SHS]]
     // CHECK: %[[BS:.*]] = tt.bitcast %[[SCALE_BITS]] : tensor<2x32xi16, #linear{{.*}}> -> tensor<2x32xbf16, #linear{{.*}}>
     // CHECK: %[[EPS:.*]] = tt.reshape %[[BS]] efficient_layout : tensor<2x32xbf16, #linear{{.*}}> -> tensor<2x1x32xbf16, #linear{{.*}}>
     // CHECK: %[[BCS:.*]] = tt.broadcast %[[EPS]] : tensor<2x1x32xbf16, #linear{{.*}}> -> tensor<2x32x32xbf16, #linear{{.*}}>

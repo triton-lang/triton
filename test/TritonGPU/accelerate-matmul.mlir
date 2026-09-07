@@ -566,9 +566,12 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     %scale: tensor<128x2xi8, #blocked1>,
     %b_bf16: tensor<64x128xbf16, #blocked>
     ) -> tensor<128x128xf32, #blocked> {
-    // CHECK: %[[MIN_SCALE:.*]] = arith.constant dense<64>
+    // CHECK-DAG: %[[MIN_SCALE:.*]] = arith.constant dense<64>
+    // CHECK-DAG: %[[ZERO_SCALE:.*]] = arith.constant dense<0> : tensor<{{.*}}xi8,
     // CHECK: ttg.fp4_to_fp
-    // CHECK: %[[SCALE_BITS:.*]] = arith.maxui %{{.*}}, %[[MIN_SCALE]]
+    // CHECK: %[[SHIFTED_SCALE:.*]] = arith.shli
+    // CHECK: %[[IS_ZERO:.*]] = arith.cmpi eq, %{{.*}}, %[[ZERO_SCALE]] : tensor<{{.*}}xi8,
+    // CHECK: %[[SCALE_BITS:.*]] = arith.select %[[IS_ZERO]], %[[MIN_SCALE]], %[[SHIFTED_SCALE]]
     // CHECK: tt.bitcast %[[SCALE_BITS]] : {{.*}} -> tensor<{{.*}}xbf16,
     // CHECK: ttng.warp_group_dot
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>

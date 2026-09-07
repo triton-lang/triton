@@ -103,7 +103,12 @@ DecomposeScaledBlocked::scaleTo16(PatternRewriter &rewriter,
     auto minScaleBits = arith::ConstantIntOp::create(rewriter, loc, 0x0040, 16);
     auto minScale =
         SplatOp::create(rewriter, loc, scaleTy.clone(intType), minScaleBits);
-    scaleBits = arith::MaxUIOp::create(rewriter, loc, scaleBits, minScale);
+    auto zero = arith::ConstantOp::create(rewriter, loc, scaleTy,
+                                          rewriter.getZeroAttr(scaleTy));
+    auto isZero = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::eq,
+                                        scale, zero);
+    scaleBits =
+        arith::SelectOp::create(rewriter, loc, isZero, minScale, scaleBits);
   }
   Value scaleFP =
       BitcastOp::create(rewriter, loc, scaleTy.clone(largeFpType), scaleBits);
