@@ -27,6 +27,7 @@ from triton.compiler import max_shared_mem
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
+from triton.experimental.gluon.language._core import builtin
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mma_v2
 from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier, fence_async_shared
 from triton.experimental.gluon.language.nvidia import blackwell
@@ -50,6 +51,56 @@ from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton._C.libtriton.gluon_ir import make_cga_layout
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
+
+
+@builtin
+def _memdesc_to_i32(desc, _semantic=None):
+    return ttgl.tensor(_semantic.builder.create_memdesc_to_i32(desc.handle), ttgl.uint32)
+
+
+@pytest.mark.parametrize("memory_space", ["shared", "tensor"])
+def test_memdesc_to_i32_view(memory_space, device):
+    if not is_cuda() or (memory_space == "tensor" and not (is_blackwell() or is_blackwell_ultra() or is_rubin())):
+        pytest.skip("requires CUDA shared memory or Blackwell tensor memory")
+
+    registers = ",".join(f"${i}" for i in range(32))
+    asm = ("{ tcgen05.fence::after_thread_sync; "
+           "tcgen05.ld.sync.aligned.32x32b.x32.b32 {" + registers + "}, [$32]; "
+           "tcgen05.wait::ld.sync.aligned; }")
+    constraints = ",".join(["=f"] * 32 + ["r"] * 32)
+
+    @gluon.jit
+    def kernel(X, Y, TMEM: ttgl.constexpr, ASM: ttgl.constexpr, CONSTRAINTS: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+        r = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))
+        c = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, layout))
+        values = ttgl.load(X + r[:, None] * 64 + c[None, :])
+        if TMEM:
+            parent = allocate_tensor_memory(ttgl.float32, [128, 64], TensorMemoryLayout([128, 64], 1))
+            parent.store(ttgl.convert_layout(values, parent.get_reg_layout()))
+            view = parent.slice(32, 32)
+            output_layout: ttgl.constexpr = view.get_reg_layout(instr_variant="32x32b")
+            rows = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, output_layout))
+            cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, output_layout))
+            address = _memdesc_to_i32(view) + ((rows[:, None] // 32 * 32) << 16) + cols[None, :] * 0
+            result = ttgl.inline_asm_elementwise(ASM, CONSTRAINTS, [address], ttgl.float32, False, 32)
+        else:
+            parent = ttgl.allocate_shared_memory(ttgl.float32, [128, 64],
+                                                ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0]), values)
+            view = parent.slice(32, 32, dim=1)
+            ttgl.barrier()
+            rows = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))
+            cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
+            address = _memdesc_to_i32(view) + (rows[:, None] * 64 + cols[None, :]) * 4
+            result = ttgl.inline_asm_elementwise("ld.shared.f32 $0, [$1];", "=f,r", [address],
+                                                ttgl.float32, False, 1)
+            parent._keep_alive()
+        ttgl.store(Y + rows[:, None] * 32 + cols[None, :], result)
+
+    x = torch.randn((128, 64), device=device)
+    y = torch.empty((128, 32), device=device)
+    kernel[(1,)](x, y, memory_space == "tensor", asm, constraints)
+    torch.testing.assert_close(y, x[:, 32:], atol=0, rtol=0)
 
 
 @pytest.mark.parametrize("block_size", [1, 16, 128, 512])

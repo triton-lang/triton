@@ -860,6 +860,11 @@ void init_gluon_ir(py::module_ &m) {
            [](GluonOpBuilder &self, Type resultType, Value src) -> Value {
              return self.create<ttg::MemDescReinterpretOp>(resultType, src);
            })
+      .def("create_memdesc_to_i32",
+           [](GluonOpBuilder &self, Value src) -> Value {
+             return self.create<tt::instrument::ExperimentalMemDescToI32Op>(
+                 self.getBuilder().getI32Type(), src);
+           })
       .def("create_set_auto_layout",
            [](GluonOpBuilder &self, Attribute layout, Value value) -> Value {
              return self.create<gluon::SetAutoLayoutOp>(layout, value);
