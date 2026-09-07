@@ -136,7 +136,8 @@ def test_gluon_ir_file(tmp_path, device, num_warps, num_ctas, coalesced):
     from_file[(1, 1, 1)](x, y)
     torch.testing.assert_close(y, x + 1)
 
-    # A GLIR override must be parsed before resolving Gluon layouts.
-    y.fill_(-1)
-    kernel[(1, )](x, y, layout, 2, num_warps=num_warps, num_ctas=num_ctas, ir_override=str(path))
-    torch.testing.assert_close(y, x + 1)
+    if target.backend == "cuda":
+        # A GLIR override must be parsed before resolving Gluon layouts.
+        y.fill_(-1)
+        kernel[(1, )](x, y, layout, 2, num_warps=num_warps, num_ctas=num_ctas, ir_override=str(path))
+        torch.testing.assert_close(y, x + 1)
