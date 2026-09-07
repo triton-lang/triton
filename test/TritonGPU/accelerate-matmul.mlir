@@ -277,6 +277,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked_k = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
+  // Group-16 integer scales use UE5M3, whose zero must remain zero.
+  // M=64 forces decomposition rather than a native scaled MMA.
+  // CHECK-LABEL: @dot_scaled_ue5m3_decomposed
+  tt.func public @dot_scaled_ue5m3_decomposed(
+      %a: tensor<64x32xi8, #blocked_k>,
+      %scale_a: tensor<64x4xi8, #blocked>,
+      %b: tensor<32x64xi8, #blocked>,
+      %scale_b: tensor<64x4xi8, #blocked>) -> tensor<64x64xf32, #blocked> {
+    // CHECK-NOT: arith.maxui
+    // CHECK: %[[SCALE_BITS:.*]] = arith.shli {{.*}} : tensor<{{.*}}xi16,
+    // CHECK-NEXT: {{.*}}tt.bitcast %[[SCALE_BITS]] : {{.*}} -> tensor<{{.*}}xbf16,
+    // CHECK-NOT: arith.maxui
+    // CHECK: arith.cmpi eq, {{.*}} : tensor<{{.*}}xi8,
+    // CHECK-NOT: arith.maxui
+    // CHECK: tt.return
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #blocked>
+    %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<64x32xi8, #blocked_k>, tensor<64x4xi8, #blocked> * tensor<32x64xi8, #blocked>, tensor<64x4xi8, #blocked> -> tensor<64x64xf32, #blocked>
+    tt.return %d : tensor<64x64xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked_k = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: unscaled_lhs_keeps_mn_packed_rhs
   tt.func public @unscaled_lhs_keeps_mn_packed_rhs(

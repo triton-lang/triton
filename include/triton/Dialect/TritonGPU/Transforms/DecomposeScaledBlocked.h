@@ -16,7 +16,8 @@ protected:
                            PatternRewriter &rewriter) const;
   TypedValue<RankedTensorType> scaleTo16(PatternRewriter &rewriter,
                                          TypedValue<RankedTensorType> scale,
-                                         FloatType computeType) const;
+                                         FloatType computeType,
+                                         bool isE8M0) const;
   TypedValue<RankedTensorType>
   broadcastScale(PatternRewriter &rewriter, DotScaledOp scaledDotOp,
                  TypedValue<RankedTensorType> scale, int dim,
