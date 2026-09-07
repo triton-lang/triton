@@ -4286,6 +4286,45 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         assert re.search(pattern, ptx, flags=re.DOTALL)
 
 
+@pytest.mark.parametrize("in_dtype", ["int16", "float16", "int8"])
+@pytest.mark.parametrize("shape", [(16, 16, 16), (32, 32, 32)])
+def test_dot_upcast_to_fp64(in_dtype, shape, device):
+    if is_interpreter():
+        pytest.skip("Interpreter does not support FP64 dot")
+    if not is_cuda():
+        pytest.skip("Only test on CUDA")
+    if torch.cuda.get_device_capability()[0] < 8:
+        pytest.skip("FP64 MMA requires CUDA sm >= 80")
+
+    M, N, K = shape
+
+    @triton.jit
+    def kernel(X, Y, Z, stride_xm, stride_xk, stride_yk, stride_yn, stride_zm, stride_zn, BLOCK_M: tl.constexpr,
+               BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
+        off_m = tl.arange(0, BLOCK_M)
+        off_n = tl.arange(0, BLOCK_N)
+        off_k = tl.arange(0, BLOCK_K)
+        x = tl.load(X + off_m[:, None] * stride_xm + off_k[None, :] * stride_xk)
+        y = tl.load(Y + off_k[:, None] * stride_yk + off_n[None, :] * stride_yn)
+        z = tl.dot(x.to(tl.float64), y.to(tl.float64))
+        tl.store(Z + off_m[:, None] * stride_zm + off_n[None, :] * stride_zn, z)
+
+    torch_dtype = getattr(torch, in_dtype)
+    if "int" in in_dtype:
+        x = torch.randint(-10, 10, (M, K), device=device, dtype=torch_dtype)
+        y = torch.randint(-10, 10, (K, N), device=device, dtype=torch_dtype)
+    else:
+        x = torch.randn((M, K), device=device, dtype=torch_dtype)
+        y = torch.randn((K, N), device=device, dtype=torch_dtype)
+
+    z_triton = torch.empty((M, N), device=device, dtype=torch.float64)
+    kernel[(1, 1)](x, y, z_triton, x.stride(0), x.stride(1), y.stride(0), y.stride(1), z_triton.stride(0),
+                   z_triton.stride(1), BLOCK_M=M, BLOCK_N=N, BLOCK_K=K)
+
+    z_ref = torch.matmul(x.to(torch.float64), y.to(torch.float64))
+    torch.testing.assert_close(z_triton, z_ref)
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack",
                          [(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, 4, mma, kpack)

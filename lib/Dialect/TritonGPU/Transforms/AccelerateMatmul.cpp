@@ -561,6 +561,13 @@ public:
     } else {
       int minBitwidth =
           std::min(computeOrigBitWidth(a), computeOrigBitWidth(b));
+      // F64 MMAv2 does not support largeK (kWidth > 1). Keep minBitwidth at 64
+      // for F64 dots to ensure kWidth = 1.
+      if (oldRetType.getElementType().isF64() ||
+          oldAType.getElementType().isF64() ||
+          oldBType.getElementType().isF64()) {
+        minBitwidth = 64;
+      }
       a = convertDotOperandForMMA(a, 0, minBitwidth, mmaResult.newRetType,
                                   rewriter);
       b = convertDotOperandForMMA(b, 1, minBitwidth, mmaResult.newRetType,

@@ -1187,3 +1187,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %0 : tensor<128x256xf32, #blocked>
   }
 }
+
+// -----
+
+// CHECK: #mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 4], instrShape = [8, 8]}>
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 32], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-warps" = 8 : i32} {
+  // CHECK-LABEL: fp64_dot_with_i16_upcast
+  tt.func public @fp64_dot_with_i16_upcast(
+    %ptr_a: tensor<128x32x!tt.ptr<i16>, #blocked>,
+    %b: tensor<32x128xf64, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>,
+    %c: tensor<128x128xf64, #blocked>) -> tensor<128x128xf64, #blocked> {
+    %a_i16 = tt.load %ptr_a : tensor<128x32x!tt.ptr<i16>, #blocked>
+    %a_f64 = arith.sitofp %a_i16 : tensor<128x32xi16, #blocked> to tensor<128x32xf64, #blocked>
+    %a = ttg.convert_layout %a_f64 : tensor<128x32xf64, #blocked> -> tensor<128x32xf64, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    // CHECK: tt.dot {{.*}} : tensor<128x32xf64, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<32x128xf64, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<128x128xf64, #mma>
+    %d = tt.dot %a, %b, %c : tensor<128x32xf64, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x128xf64, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x128xf64, #blocked>
+    tt.return %d : tensor<128x128xf64, #blocked>
+  }
+}
