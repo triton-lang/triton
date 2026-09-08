@@ -216,6 +216,17 @@ struct ConvertLayoutOpConversion
     };
 
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+    // The source layout may broadcast a value across a group of threads (e.g.
+    // the partial held by every lane of a warp in the cross-warp epilogue of a
+    // `tt.reduce`). All redundant threads would then write the same shared
+    // memory address, which is a data race when the combine is not
+    // bitwise-exact. Predicate the store to a representative thread of each
+    // broadcast group.
+    Value storePred =
+        emitRedundantSharedStorePredicate(srcLayout, storeCvt, rewriter, loc,
+                                          targetInfo);
+    if (!storePred)
+      storePred = b.true_val();
     for (int i = 0; i < nReps; ++i) {
       if (i > 0)
         emitBarrier();
@@ -226,7 +237,7 @@ struct ConvertLayoutOpConversion
                 /*paddingShifts=*/{}, affineOffset, maskSpanAffineOffset,
                 /*affineBlockOffset=*/Value(), /*maskSpanAffineBlock=*/0,
                 laneId, warpId, rewriter, targetInfo, /*maybeMaxVecElems=*/{},
-                makeSharedStoreEmitter(targetInfo, b.true_val()));
+                makeSharedStoreEmitter(targetInfo, storePred));
       emitBarrier();
       // Load
       auto tileOutVals = lowerLdSt(

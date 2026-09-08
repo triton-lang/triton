@@ -287,6 +287,20 @@ Value emitRedundantThreadPredicate(
   return pred;
 }
 
+Value emitRedundantSharedStorePredicate(const LinearLayout &srcLayout,
+                                        const LinearLayout &storeCvt,
+                                        ConversionPatternRewriter &rewriter,
+                                        Location loc,
+                                        const TargetInfoBase &targetInfo) {
+  auto valueMasks = srcLayout.getFreeVariableMasks();
+  auto addrMasks = storeCvt.getFreeVariableMasks();
+  llvm::MapVector<StringAttr, int32_t> redundantMasks;
+  for (auto &[dim, mask] : valueMasks)
+    redundantMasks[dim] = mask & addrMasks.lookup(dim);
+  return emitRedundantThreadPredicate(redundantMasks, rewriter, loc,
+                                      targetInfo);
+}
+
 } // namespace triton::gpu
 
 SmallVector<std::pair<StringAttr, Value>>

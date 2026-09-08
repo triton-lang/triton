@@ -1586,7 +1586,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32} {
 #dst = #ttg.linear<{register = [], lane = [[0], [0], [0], [0], [0]], warp = [], block = [[1]]}>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: convert_layout_loads_local_replica
-  // CHECK: llvm.store
+  // CHECK: st.shared::cta
   // CHECK: nvg.cluster_id
   // CHECK-NOT: nvvm.mapa
   // CHECK: llvm.load
@@ -1607,7 +1607,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: linear_layout_with_multiple_iterations
   tt.func @linear_layout_with_multiple_iterations(%src: tensor<8x4xbf16, #linear>) {
     %cvt = ttg.convert_layout %src : tensor<8x4xbf16, #linear> -> tensor<8x4xbf16, #linear1>
-    // CHECK-COUNT-1: llvm.store {{.*}} : vector<4xi16>
+    // CHECK-COUNT-1: st.shared::cta.v4.b16
     // CHECK: nvvm.barrier
     // CHECK-COUNT: llvm.load{{.*}}->vector<2xi16>
     tt.return
@@ -2353,7 +2353,7 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // -----
 
 //  CHECK-LABEL: reduce_md_slice
-//  CHECK: llvm.store {{.*}} vector<2xi32>
+//  CHECK: llvm.inline_asm{{.*}} st.shared::cta.v2.b32
 //  CHECK: llvm.load {{.*}} vector<2xi32>
 #blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [1, 2, 2], order = [2, 1, 0]}>
 #sliced = #ttg.slice<{dim = 2, parent = #blocked}>

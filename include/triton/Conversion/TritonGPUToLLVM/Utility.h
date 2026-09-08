@@ -353,6 +353,19 @@ Value emitRedundantThreadPredicate(
     ConversionPatternRewriter &rewriter, Location loc,
     const TargetInfoBase &targetInfo);
 
+// Return a predicate for a shared-memory store that lowers a layout conversion,
+// true only for a representative thread of each group of threads that hold the
+// same value AND write the same shared-memory address. A thread is redundant
+// only when the value it stores and the address it writes are both invariant
+// across the same thread-index bits, so the free-variable masks of the source
+// value layout are intersected with those of the store-address layout. The
+// predicate may be null to indicate no predication is required.
+Value emitRedundantSharedStorePredicate(const LinearLayout &srcLayout,
+                                        const LinearLayout &storeCvt,
+                                        ConversionPatternRewriter &rewriter,
+                                        Location loc,
+                                        const TargetInfoBase &targetInfo);
+
 // Takes two values that may be boolean, or null to represent constant True.
 Value maybeAnd(OpBuilder &builder, Location loc, Value a, Value b);
 
