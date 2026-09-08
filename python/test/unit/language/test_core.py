@@ -4524,6 +4524,21 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         assert (re.search(r"v_cvt_scalef32_pk_.*?(fp4|fp8|bf8).*?op_sel", amdgcn))
 
 
+@triton.jit
+def _scaled_dot_scale_kernel(X, W, S, Y, RHS_SCALE: tl.constexpr, NORMAL_TYPE: tl.constexpr, SCALE_FACTOR: tl.constexpr,
+                             FAST_MATH: tl.constexpr):
+    indices = tl.arange(0, 128)
+    offsets = indices[:, None] * 128 + indices[None, :]
+    x = tl.load(X + offsets)
+    w = tl.load(W + offsets)
+    scales = tl.load(S + indices[:, None] * (128 // SCALE_FACTOR) + tl.arange(0, 128 // SCALE_FACTOR)[None, :])
+    if RHS_SCALE:
+        y = tl.dot_scaled(x, None, NORMAL_TYPE, w, scales, "e4m3", fast_math=FAST_MATH)
+    else:
+        y = tl.dot_scaled(w, scales, "e4m3", x, None, NORMAL_TYPE, fast_math=FAST_MATH)
+    tl.store(Y + offsets, y)
+
+
 @pytest.mark.parametrize("rhs_scale", [False, True])
 @pytest.mark.parametrize("normal_type", ["bf16", "fp16"])
 @pytest.mark.parametrize("fast_math", [False, True])
@@ -4531,19 +4546,6 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
 def test_scaled_dot_minimum_scale(rhs_scale, normal_type, fast_math, device):
     if not is_cuda() or torch.cuda.get_device_capability() < (8, 9):
         pytest.skip("requires CUDA FP8 support")
-
-    @triton.jit
-    def kernel(X, W, S, Y, RHS_SCALE: tl.constexpr, NORMAL_TYPE: tl.constexpr, FAST_MATH: tl.constexpr):
-        indices = tl.arange(0, 128)
-        offsets = indices[:, None] * 128 + indices[None, :]
-        x = tl.load(X + offsets)
-        w = tl.load(W + offsets)
-        scales = tl.load(S + indices[:, None] * 4 + tl.arange(0, 4)[None, :])
-        if RHS_SCALE:
-            y = tl.dot_scaled(x, None, NORMAL_TYPE, w, scales, "e4m3", fast_math=FAST_MATH)
-        else:
-            y = tl.dot_scaled(w, scales, "e4m3", x, None, NORMAL_TYPE, fast_math=FAST_MATH)
-        tl.store(Y + offsets, y)
 
     dtype = torch.bfloat16 if normal_type == "bf16" else torch.float16
     x = torch.full((128, 128), 2.0**112 if normal_type == "bf16" else 1.0, dtype=dtype, device=device)
@@ -4558,7 +4560,7 @@ def test_scaled_dot_minimum_scale(rhs_scale, normal_type, fast_math, device):
         if fast_math and scale == 255:
             continue
         scales.fill_(scale)
-        kernel[(1, )](x, w, scales, out, rhs_scale, normal_type, fast_math, num_warps=4)
+        _scaled_dot_scale_kernel[(1, )](x, w, scales, out, rhs_scale, normal_type, 32, fast_math, num_warps=4)
         if is_compile_warmup():
             return
         torch.testing.assert_close(out, torch.full_like(out, expected), rtol=0, atol=0, equal_nan=True)
@@ -4574,26 +4576,13 @@ def test_scaled_dot_zero_scale(rhs_scale, normal_type, scale_factor, scale_dtype
     if not is_interpreter() and (not is_cuda() or torch.cuda.get_device_capability() < (8, 9)):
         pytest.skip("requires CUDA FP8 support")
 
-    @triton.jit
-    def kernel(X, W, S, Y, RHS_SCALE: tl.constexpr, NORMAL_TYPE: tl.constexpr, SCALE_FACTOR: tl.constexpr):
-        indices = tl.arange(0, 128)
-        offsets = indices[:, None] * 128 + indices[None, :]
-        x = tl.load(X + offsets)
-        w = tl.load(W + offsets)
-        scales = tl.load(S + indices[:, None] * (128 // SCALE_FACTOR) + tl.arange(0, 128 // SCALE_FACTOR)[None, :])
-        if RHS_SCALE:
-            y = tl.dot_scaled(x, None, NORMAL_TYPE, w, scales, "e4m3")
-        else:
-            y = tl.dot_scaled(w, scales, "e4m3", x, None, NORMAL_TYPE)
-        tl.store(Y + offsets, y)
-
     dtype = torch.bfloat16 if normal_type == "bf16" else torch.float16
     x = torch.ones((128, 128), dtype=dtype, device=device)
     w = torch.full((128, 128), 256.0, dtype=torch.float8_e4m3fn, device=device)
     scales = torch.zeros((128, 128 // scale_factor), dtype=scale_dtype, device=device)
     out = torch.empty((128, 128), dtype=torch.float32, device=device)
     # Eight warps avoid a ptxas crash in the FP8-scale BF16 configuration.
-    kernel[(1, )](x, w, scales, out, rhs_scale, normal_type, scale_factor, num_warps=8)
+    _scaled_dot_scale_kernel[(1, )](x, w, scales, out, rhs_scale, normal_type, scale_factor, False, num_warps=8)
     if is_compile_warmup():
         return
     is_e8m0 = scale_dtype == torch.uint8 and (scale_factor == 32 or tl.target_info.is_hip())
