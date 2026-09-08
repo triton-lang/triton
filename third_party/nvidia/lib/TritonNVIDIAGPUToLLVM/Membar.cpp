@@ -56,9 +56,61 @@ struct TritonNvidiaGPUMembar
 
 } // namespace
 
+// Preserve aliases introduced by allocator reuse. Multiple possible origins
+// are safe when every physical overlap has the same allocation origin.
+static bool hasOnlySourceAliases(const AllocationSlice &lhs,
+                                 const AllocationSlice &rhs) {
+  auto *before = lhs.physicalFootprint;
+  auto *after = rhs.physicalFootprint;
+  if (!before || !after)
+    return false;
+  for (const auto &a : before->regionInfo.views) {
+    assert(isa_and_nonnull<gpu::LocalAllocOp>(a.allocation) &&
+           "shared descriptor footprints must have allocation origins");
+    for (const auto &b : after->regionInfo.views) {
+      assert(a.allocationFrame && a.allocationFrame == b.allocationFrame &&
+             "shared accesses must use the current function frame");
+      if (a.region.intersects(b.region) && a.allocation != b.allocation)
+        return false;
+    }
+  }
+  return true;
+}
+
 bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
                             bool /*beforeIsRead*/, bool /*afterIsRead*/,
-                            Allocation * /*allocation*/) {
+                            Allocation * /*allocation*/,
+                            const AllocationSlice &beforeSlice,
+                            const AllocationSlice &afterSlice) {
+  auto completesTransactions = [](Operation *op) {
+    return isa<ttng::TMALoadLikeOpInterface, ttng::CLCTryCancelOp,
+               ttng::AsyncSharedStoreOp>(op);
+  };
+  // Accessing these live destinations requires completion, which makes their
+  // writes visible to the generic proxy.
+  if (completesTransactions(before) &&
+      beforeSlice.sharedKind != gpu::SharedKind::Barrier &&
+      hasOnlySourceAliases(beforeSlice, afterSlice))
+    return true;
+
+  // If before and after are mbarriers
+  if (beforeSlice.sharedKind == gpu::SharedKind::Barrier &&
+      afterSlice.sharedKind == gpu::SharedKind::Barrier) {
+    auto signalsCompletion = [&](Operation *op) {
+      if (auto arrive = dyn_cast<ttng::AsyncCopyMbarrierArriveOp>(op))
+        return arrive.getNoIncrement();
+      return completesTransactions(op) ||
+             isa<ttng::ArriveBarrierOp, ttng::BarrierExpectOp,
+                 ttng::TCGen5CommitOp, ttng::MMAv5OpInterface>(op);
+    };
+    // Signaling completion via incrementing or decrementing
+    // expect / arrive counters commutes with each other
+    // Note that this is just for mbarriers
+    // Data accessed by these ops may still add barriers
+    if (signalsCompletion(before) && signalsCompletion(after))
+      return true;
+  }
+
   if (isa<ttng::WaitBarrierOp>(after)) {
     // All threads must register incrementing arrivals before any can wait.
     if (auto arrive = dyn_cast<ttng::AsyncCopyMbarrierArriveOp>(before))

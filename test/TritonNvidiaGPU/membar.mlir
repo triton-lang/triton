@@ -456,22 +456,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
-  // Barrier-state dependencies remain ordered between partial contributions.
-  // ARRIVAL-LABEL: @distributed_arrival_keeps_barrier_hazards
+  // Partial contributions share a counter with only warp synchronization.
+  // ARRIVAL-LABEL: @distributed_arrival_keeps_warp_barrier
   // ARRIVAL: ttng.init_barrier {{.*}}, 8 :
   // ARRIVAL-NEXT: ttg.barrier local
   // ARRIVAL-NEXT: ttng.arrive_barrier {{.*}}, 4 {per_warp}
-  // ARRIVAL-NEXT: ttg.barrier local
+  // ARRIVAL-NEXT: ttg.barrier warp local
   // ARRIVAL-NEXT: ttng.arrive_barrier {{.*}}, 4 {per_warp}
   // ARRIVAL-NEXT: ttng.wait_barrier
-  // FOLD-LABEL: @distributed_arrival_keeps_barrier_hazards
+  // FOLD-LABEL: @distributed_arrival_keeps_warp_barrier
   // FOLD: ttng.init_barrier {{.*}}, 8 :
   // FOLD-NEXT: ttg.barrier local
   // FOLD-NEXT: ttng.arrive_barrier {{.*}}, 4 :
-  // FOLD-NEXT: ttg.barrier local
-  // FOLD-NEXT: ttng.arrive_barrier {{.*}}, 4 :
+  // FOLD-NEXT: ttg.barrier warp local
+  // FOLD-NEXT: ttng.arrive_barrier {{.*}}, 4 {per_warp}
   // FOLD-NEXT: ttng.wait_barrier
-  tt.func @distributed_arrival_keeps_barrier_hazards() {
+  tt.func @distributed_arrival_keeps_warp_barrier() {
     %phase = arith.constant 0 : i32
     %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
     ttng.init_barrier %bar, 2 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
@@ -815,5 +815,234 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttng.wait_barrier %bar, %c0 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
     ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
     tt.return %old : tensor<16x64xf16, #blocked>
+  }
+
+  // Independent payloads can complete into one barrier across control flow.
+  // CHECK-LABEL: @independent_tma_rows
+  // CHECK: ttng.barrier_expect
+  // CHECK-NEXT: ttng.async_tma_copy_global_to_local
+  // CHECK-NOT: ttg.barrier
+  // CHECK: ttng.async_tma_copy_global_to_local
+  // CHECK-NOT: ttg.barrier
+  // CHECK: ttng.async_tma_copy_global_to_local
+  // CHECK-NOT: ttg.barrier
+  // CHECK: ttng.wait_barrier
+  // CHECK-NEXT: {{.*}}ttg.local_load
+  tt.func @independent_tma_rows(%desc: !tt.tensordesc<16x64xf16, #shared>, %condition: i1) -> tensor<32x64xf16, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %c16 = arith.constant 16 : i32
+    %c32 = arith.constant 32 : i32
+    %true = arith.constant true
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %mem = ttg.local_alloc : () -> !ttg.memdesc<32x64xf16, #shared, #smem, mutable>
+    %first = ttg.memdesc_subslice %mem[0, 0] : !ttg.memdesc<32x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 32x64>
+    %second = ttg.memdesc_subslice %mem[16, 0] : !ttg.memdesc<32x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 32x64>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %bar, 4096, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %first, %bar, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 32x64>
+    scf.if %condition {
+      ttng.async_tma_copy_global_to_local %desc[%c16, %c0] %second, %bar, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 32x64>
+    } else {
+      ttng.async_tma_copy_global_to_local %desc[%c32, %c0] %second, %bar, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 32x64>
+    }
+    ttng.wait_barrier %bar, %c0 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %result = ttg.local_load %mem : !ttg.memdesc<32x64xf16, #shared, #smem, mutable> -> tensor<32x64xf16, #blocked>
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    tt.return %result : tensor<32x64xf16, #blocked>
+  }
+
+  // Completion permits another TMA write to the same live payload.
+  // CHECK-LABEL: @tma_rows_reuse_payload
+  // CHECK: ttng.async_tma_copy_global_to_local
+  // CHECK-NEXT: ttng.wait_barrier
+  // CHECK-NEXT: ttng.async_tma_copy_global_to_local
+  // CHECK-NEXT: ttng.wait_barrier
+  // CHECK-NEXT: {{.*}}ttg.local_load
+  // ARRIVAL-LABEL: @tma_rows_reuse_payload
+  // ARRIVAL: ttng.async_tma_copy_global_to_local
+  // ARRIVAL-NEXT: ttng.wait_barrier
+  // ARRIVAL-NEXT: ttng.async_tma_copy_global_to_local
+  tt.func @tma_rows_reuse_payload(%desc: !tt.tensordesc<16x64xf16, #shared>) -> tensor<16x64xf16, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %c16 = arith.constant 16 : i32
+    %true = arith.constant true
+    %first = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %second = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %mem = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.init_barrier %first, 1 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.init_barrier %second, 1 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %first, 2048, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %second, 2048, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %mem, %first, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.wait_barrier %first, %c0 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c16, %c0] %mem, %second, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.wait_barrier %second, %c0 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %result = ttg.local_load %mem : !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> tensor<16x64xf16, #blocked>
+    ttng.inval_barrier %first : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.inval_barrier %second : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    tt.return %result : tensor<16x64xf16, #blocked>
+  }
+
+  // Distinct allocation origins keep physical storage reuse conservative.
+  // CHECK-LABEL: @tma_payload_distinct_allocations
+  // CHECK: ttg.local_alloc {{.*}}allocation.offset = [[PAYLOAD_OFFSET:[0-9]+]] : i32{{.*}}!ttg.memdesc<16x64xf16
+  // CHECK: ttng.async_tma_copy_global_to_local
+  // CHECK-NEXT: ttng.wait_barrier
+  // CHECK-NEXT: ttg.local_dealloc
+  // CHECK-NEXT: ttg.local_alloc {{.*}}allocation.offset = [[PAYLOAD_OFFSET]] : i32{{.*}}!ttg.memdesc<16x64xf16
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.async_tma_copy_global_to_local
+  tt.func @tma_payload_distinct_allocations(%desc: !tt.tensordesc<16x64xf16, #shared>) -> tensor<16x64xf16, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %c16 = arith.constant 16 : i32
+    %true = arith.constant true
+    %first = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %second = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.init_barrier %first, 1 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.init_barrier %second, 1 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %first, 2048, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %second, 2048, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %a = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %a, %first, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.wait_barrier %first, %c0 deps %a : !ttg.memdesc<1xi64, #barrier, #smem, mutable>, !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttg.local_dealloc %a : !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    %b = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c16, %c0] %b, %second, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.wait_barrier %second, %c0 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %result = ttg.local_load %b : !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> tensor<16x64xf16, #blocked>
+    ttng.inval_barrier %first : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.inval_barrier %second : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    tt.return %result : tensor<16x64xf16, #blocked>
+  }
+
+  // The ordinary read must finish before another TMA overwrites the payload.
+  // CHECK-LABEL: @tma_payload_after_generic_read
+  // CHECK: ttng.async_tma_copy_global_to_local
+  // CHECK-NEXT: ttng.wait_barrier
+  // CHECK-NEXT: {{.*}}ttg.local_load
+  // CHECK-NEXT: ttng.fence_async_shared
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.async_tma_copy_global_to_local
+  tt.func @tma_payload_after_generic_read(%desc: !tt.tensordesc<16x64xf16, #shared>) -> tensor<16x64xf16, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %c16 = arith.constant 16 : i32
+    %true = arith.constant true
+    %first = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %second = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %mem = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.init_barrier %first, 1 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.init_barrier %second, 1 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %first, 2048, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %second, 2048, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %mem, %first, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.wait_barrier %first, %c0 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %before = ttg.local_load %mem : !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> tensor<16x64xf16, #blocked>
+    ttng.fence_async_shared {bCluster = false}
+    ttng.async_tma_copy_global_to_local %desc[%c16, %c0] %mem, %second, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.wait_barrier %second, %c0 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %after = ttg.local_load %mem : !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> tensor<16x64xf16, #blocked>
+    %result = arith.addf %before, %after : tensor<16x64xf16, #blocked>
+    ttng.inval_barrier %first : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.inval_barrier %second : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    tt.return %result : tensor<16x64xf16, #blocked>
+  }
+
+  // The payload can be allocated after a uniform early return.
+  // CHECK-LABEL: @tma_after_early_return
+  // CHECK: cf.cond_br
+  // CHECK: ttng.wait_barrier
+  // CHECK-NEXT: {{.*}}ttg.local_load
+  tt.func @tma_after_early_return(%desc: !tt.tensordesc<16x64xf16, #shared>, %skip: i1) -> tensor<16x64xf16, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %zero = arith.constant dense<0.0> : tensor<16x64xf16, #blocked>
+    cf.cond_br %skip, ^exit, ^load
+  ^exit:
+    tt.return %zero : tensor<16x64xf16, #blocked>
+  ^load:
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %mem = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %bar, 2048, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %mem, %bar, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %c0 deps %mem : !ttg.memdesc<1xi64, #barrier, #smem, mutable>, !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    %result = ttg.local_load %mem : !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> tensor<16x64xf16, #blocked>
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    tt.return %result : tensor<16x64xf16, #blocked>
+  }
+
+  // Each loop-local lifetime completes its copy before reading and deallocating.
+  // CHECK-LABEL: @tma_loop_local_allocation
+  // CHECK: ttng.wait_barrier
+  // CHECK-NEXT: {{.*}}ttg.local_load
+  tt.func @tma_loop_local_allocation(%desc: !tt.tensordesc<16x64xf16, #shared>) -> tensor<16x64xf16, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c2 = arith.constant 2 : i32
+    %true = arith.constant true
+    %zero = arith.constant dense<0.0> : tensor<16x64xf16, #blocked>
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %result = scf.for %phase = %c0 to %c2 step %c1 iter_args(%sum = %zero) -> (tensor<16x64xf16, #blocked>) : i32 {
+      %mem = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+      ttng.barrier_expect %bar, 2048, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+      ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %mem, %bar, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+      ttng.wait_barrier %bar, %phase deps %mem : !ttg.memdesc<1xi64, #barrier, #smem, mutable>, !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+      %loaded = ttg.local_load %mem : !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> tensor<16x64xf16, #blocked>
+      ttg.local_dealloc %mem : !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+      %next = arith.addf %sum, %loaded : tensor<16x64xf16, #blocked>
+      scf.yield %next : tensor<16x64xf16, #blocked>
+    }
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    tt.return %result : tensor<16x64xf16, #blocked>
+  }
+
+  // Dynamic stage views keep their common entry allocation across backedges.
+  // CHECK-LABEL: @tma_dynamic_stages
+  // CHECK: ttng.wait_barrier
+  // CHECK-NEXT: {{.*}}ttg.local_load
+  tt.func @tma_dynamic_stages(%desc: !tt.tensordesc<16x64xf16, #shared>) -> tensor<16x64xf16, #blocked> {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c2 = arith.constant 2 : i32
+    %true = arith.constant true
+    %zero = arith.constant dense<0.0> : tensor<16x64xf16, #blocked>
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %mem = ttg.local_alloc : () -> !ttg.memdesc<2x16x64xf16, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %result = scf.for %stage = %c0 to %c2 step %c1 iter_args(%sum = %zero) -> (tensor<16x64xf16, #blocked>) : i32 {
+      %view = ttg.memdesc_index %mem[%stage] : !ttg.memdesc<2x16x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+      ttng.barrier_expect %bar, 2048, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+      ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %view, %bar, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+      ttng.wait_barrier %bar, %stage : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+      %loaded = ttg.local_load %view : !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> tensor<16x64xf16, #blocked>
+      %next = arith.addf %sum, %loaded : tensor<16x64xf16, #blocked>
+      scf.yield %next : tensor<16x64xf16, #blocked>
+    }
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    tt.return %result : tensor<16x64xf16, #blocked>
+  }
+
+  // A uniform selection preserves completion for either allocation and proxy.
+  // CHECK-LABEL: @tma_payload_selected_allocation
+  // CHECK: ttng.wait_barrier
+  // CHECK-NEXT: ttng.async_tma_copy_local_to_global
+  tt.func @tma_payload_selected_allocation(%src: !tt.tensordesc<16x64xf16, #shared>, %dst: !tt.tensordesc<16x64xf16, #shared>, %choose: i1) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %a = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    %b = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    %mem = arith.select %choose, %a, %b : !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %bar, 2048, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.async_tma_copy_global_to_local %src[%c0, %c0] %mem, %bar, %true : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.wait_barrier %bar, %c0 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    ttng.async_tma_copy_local_to_global %dst[%c0, %c0] %mem : !tt.tensordesc<16x64xf16, #shared>, !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.async_tma_store_wait {pendings = 0 : i32}
+    ttg.local_dealloc %a : !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttg.local_dealloc %b : !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    tt.return
   }
 }

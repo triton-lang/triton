@@ -79,6 +79,7 @@ tt.func @warpgroup_wait_before_barrier_invalidation(%acc: tensor<256xf32, #block
 // -----
 
 #barrier_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#tma_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
@@ -125,17 +126,39 @@ tt.func @arrive_then_wait_barrier() {
 // CHECK-LABEL: @async_copy_arrive_then_wait_barrier
 tt.func @async_copy_arrive_then_wait_barrier() {
   %phase = arith.constant 0 : i32
+  %true = arith.constant true
   %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
   // CHECK: ttng.init_barrier
   // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.barrier_expect
   // CHECK-NEXT: ttng.async_copy_mbarrier_arrive
   // CHECK-NEXT: ttng.wait_barrier
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.inval_barrier
-  // Each thread contributes one arrival for its empty copy group.
-  ttng.init_barrier %barrier, 128 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  // Expect contributes one arrival, followed by one async arrival per thread.
+  ttng.init_barrier %barrier, 129 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.barrier_expect %barrier, 0, %true : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
   ttng.async_copy_mbarrier_arrive %barrier {noIncrement} : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
   ttng.wait_barrier %barrier, %phase : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.inval_barrier %barrier : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  tt.return
+}
+
+// CHECK-LABEL: @incrementing_arrive_before_tma
+tt.func @incrementing_arrive_before_tma(%desc: !tt.tensordesc<16x64xf16, #tma_shared>) {
+  %c0 = arith.constant 0 : i32
+  %true = arith.constant true
+  %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  %payload = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #tma_shared, #smem, mutable>
+  ttng.init_barrier %barrier, 1 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.barrier_expect %barrier, 2048, %true : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  // Register every thread before the TMA completion can finish this phase.
+  // CHECK: ttng.async_copy_mbarrier_arrive
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttng.async_tma_copy_global_to_local
+  ttng.async_copy_mbarrier_arrive %barrier : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
+  ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %payload, %barrier, %true : !tt.tensordesc<16x64xf16, #tma_shared>, !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable> -> !ttg.memdesc<16x64xf16, #tma_shared, #smem, mutable>
+  ttng.wait_barrier %barrier, %c0 deps %payload : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>, !ttg.memdesc<16x64xf16, #tma_shared, #smem, mutable>
   ttng.inval_barrier %barrier : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
   tt.return
 }
@@ -264,7 +287,6 @@ tt.func @tma_special_cases(%arg1: !tt.tensordesc<256x64xf16, #shared>, %arg2: !t
 
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.barrier_expect
-  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.async_tma_copy_global_to_local
   // CHECK-NEXT: ttng.wait_barrier
   ttng.barrier_expect %barrier, 49152, %true : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
@@ -285,7 +307,6 @@ tt.func @tma_special_cases(%arg1: !tt.tensordesc<256x64xf16, #shared>, %arg2: !t
 
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.barrier_expect
-  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.async_tma_copy_global_to_local
   // CHECK-NEXT: ttng.wait_barrier
   ttng.barrier_expect %barrier, 49152, %true : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
@@ -295,7 +316,6 @@ tt.func @tma_special_cases(%arg1: !tt.tensordesc<256x64xf16, #shared>, %arg2: !t
   // CHECK-NEXT: memdesc_subslice
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.barrier_expect
-  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.async_tma_gather
   // CHECK-NEXT: ttng.wait_barrier
   %view = ttg.memdesc_subslice %gather_alloc [0, 0]  : !ttg.memdesc<32x64xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<32x64xf16, #shared, #ttg.shared_memory, mutable>
