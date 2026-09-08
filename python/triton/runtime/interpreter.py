@@ -7,7 +7,6 @@ from typing import Tuple, List, Dict, Callable, TypeVar, Optional
 import math
 import numpy as np
 import time
-from fractions import Fraction
 
 import triton
 import triton.language as tl
@@ -258,25 +257,6 @@ def _umulhi_64(a, b):
     return ((int(a) & mask) * (int(b) & mask)) >> 64
 
 
-def _fma_fp64(a, b, c):
-    # Numpy has no fused multiply-add, and float64 has no wider type to hold the
-    # product exactly, so round the exact rational value instead.
-    if math.isnan(a) or math.isnan(b) or math.isnan(c) or math.isinf(a) or math.isinf(b):
-        return a * b + c
-    if math.isinf(c):
-        return c
-    exact = Fraction(a) * Fraction(b) + Fraction(c)
-    if exact == 0:
-        # Only zero operands can make this a negative zero.
-        return a * b + c if a * b == 0.0 and c == 0.0 else 0.0
-    sign = 1.0 if exact > 0 else -1.0
-    try:
-        ret = float(exact)
-    except OverflowError:
-        return math.copysign(math.inf, sign)
-    return ret if ret != 0.0 else math.copysign(0.0, sign)
-
-
 def _e8m0_to_f32(scale):
     assert scale.dtype in (np.uint8, np.int8)
     scale = scale.astype(np.uint8)
@@ -372,7 +352,6 @@ def _prepare_dot_scaled_operand(value_handle, scale_handle, format_enum, k_pack,
 np_erf_fp32 = np.vectorize(_erf, otypes=[np.float32])
 np_erf_fp64 = np.vectorize(_erf, otypes=[np.float64])
 np_umulhi_u64 = np.vectorize(_umulhi_64, otypes=[np.uint64])
-np_fma_fp64 = np.vectorize(_fma_fp64, otypes=[np.float64])
 
 
 class ExtraFunctions:
@@ -708,10 +687,12 @@ class InterpreterBuilder:
 
     def create_fma(self, x, y, z):
         # An fma rounds once, but multiplying and then adding rounds twice.
-        # float64 has the precision to round the narrower types correctly.
+        # float64 intermediate rounding is safe for float16, but not float32.
         dtype = z.data.dtype
         if dtype == np.float64:
-            ret = np_fma_fp64(x.data, y.data, z.data)
+            ret = _interpreter.fma_fp64(*np.broadcast_arrays(x.data, y.data, z.data))
+        elif dtype == np.float32:
+            ret = _interpreter.fma_fp32(*np.broadcast_arrays(x.data, y.data, z.data))
         else:
             product = np.multiply(x.data, y.data, dtype=np.float64)
             ret = np.add(product, z.data, dtype=np.float64).astype(dtype)

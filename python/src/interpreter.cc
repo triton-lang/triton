@@ -1,4 +1,5 @@
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -639,6 +640,30 @@ void require_dtype(const AnyArray &array, const char *name) {
     throw std::invalid_argument(std::string(name) + " has unsupported dtype");
 }
 
+template <typename T>
+py::object fma_array(py::object x_obj, py::object y_obj, py::object z_obj) {
+  AnyArray x = py::cast<AnyArray>(x_obj);
+  AnyArray y = py::cast<AnyArray>(y_obj);
+  AnyArray z = py::cast<AnyArray>(z_obj);
+  require_dtype<T>(x, "x");
+  require_dtype<T>(y, "y");
+  require_dtype<T>(z, "z");
+  if (x.size() != y.size() || x.size() != z.size())
+    throw std::invalid_argument("fma operands must have the same size");
+  py::object ret = numpy_empty(x.size(), x_obj.attr("dtype"));
+  auto ret_array = py::cast<MutableArray>(ret);
+  auto *out = static_cast<T *>(ret_array.data());
+  for (size_t i = 0; i < x.size(); ++i) {
+    T a, b, c;
+    memcpy(&a, const_element_data(x, i), sizeof(T));
+    memcpy(&b, const_element_data(y, i), sizeof(T));
+    memcpy(&c, const_element_data(z, i), sizeof(T));
+    // Select the overload that rounds directly to the operand type.
+    out[i] = std::fma(a, b, c);
+  }
+  return ret.attr("reshape")(shape_list(x));
+}
+
 std::vector<uint64_t> copy_uint64_array(const AnyArray &array) {
   std::vector<uint64_t> data(array.size());
   for (size_t i = 0; i < array.size(); ++i)
@@ -721,6 +746,9 @@ void init_triton_interpreter(py::module_ &m) {
       .value("UMIN", RMWOp::UMIN)
       .value("UMAX", RMWOp::UMAX)
       .export_values();
+
+  m.def("fma_fp32", &fma_array<float>);
+  m.def("fma_fp64", &fma_array<double>);
 
   m.def("load",
         [](py::object ptr_obj, py::object mask_obj, py::object other_obj,
