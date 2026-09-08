@@ -925,11 +925,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // WAIT-NEXT: ttng.tmem_wait store
   // WAIT-NEXT: %{{.*}} = ttng.tmem_load
   // WAIT-NEXT: %{{.*}} = ttg.local_alloc
-  // WAIT-NEXT: ttng.tmem_wait load
   // WAIT-NEXT: ttng.fence_async_shared
   // CHECK-NEXT: ttg.barrier local
   // WAIT-NEXT: ttng.async_tma_copy_local_to_global
   // WAIT-NEXT: ttng.async_tma_store_wait
+  // WAIT: ttng.tmem_wait load
   tt.func @wait_tensormap_acquire_barrier(%out: !tt.ptr<f32>, %value: f32) {
     %true = arith.constant true
     %c0 = arith.constant 0 : i32
@@ -950,6 +950,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttng.async_tma_copy_local_to_global %desc[%c0, %c0] %smem : !tt.tensordesc<128x128xf32, #shared_copy>, !ttg.memdesc<128x128xf32, #shared_copy, #ttg.shared_memory, mutable>
     ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
     ttg.local_dealloc %smem : !ttg.memdesc<128x128xf32, #shared_copy, #ttg.shared_memory, mutable>
+    tt.return
+  }
+
+  // Independent shared-memory synchronization leaves the store pending until
+  // the TMEM load needs it. These empty copy groups are already complete.
+  // WAIT-LABEL: @tmem_wait_after_shared_synchronization
+  // WAIT: ttng.tmem_alloc
+  // WAIT-NEXT: ttng.fence_async_shared
+  // WAIT-NEXT: ttg.async_commit_group
+  // WAIT-NEXT: ttg.async_wait
+  // WAIT-NEXT: ttng.async_tma_store_wait
+  // CHECK-NEXT: ttg.barrier local
+  // WAIT-NEXT: ttng.tmem_wait store
+  // WAIT-NEXT: %{{.*}} = ttng.tmem_load
+  tt.func @tmem_wait_after_shared_synchronization(%data: tensor<128x128xf32, #blocked>) {
+    %mem = ttng.tmem_alloc %data {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttng.fence_async_shared {bCluster = false}
+    ttg.async_commit_group
+    ttg.async_wait {num = 0 : i32}
+    ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
+    %loaded = ttng.tmem_load %mem : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
     tt.return
   }
 
@@ -1031,14 +1052,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   }
 
   // A one-column shift changes the warp owning each overlapping word.
-  // A same-warp load completes the store after the old CTA. Its publication
-  // obligation must survive for the following cross-warp load.
+  // A same-warp load completes the store after the old CTA and acquire.
+  // Its publication obligation survives for the following cross-warp load.
   // WAIT-LABEL: @st_shifted_warp_ownership
   // WAIT: ttng.tmem_store
   // WAIT-NEXT: ttng.tmem_wait store
   // WAIT-NEXT: ttg.barrier local
   // WAIT-NEXT: ttng.tmem_store
   // WAIT-NEXT: ttg.barrier local
+  // WAIT-NEXT: ttng.wait_barrier
   // WAIT-NEXT: ttng.tmem_wait store
   // WAIT-NEXT: ttng.tmem_load
   // WAIT-NEXT: ttng.tmem_wait load
@@ -1046,14 +1068,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // WAIT-NEXT: ttng.tmem_load
   // WAIT-NEXT: ttng.tmem_wait load
   // WAIT-NEXT: tt.return
-  tt.func @st_shifted_warp_ownership(%data: tensor<128x2xf32, #blocked_broadcast_warps>) -> (tensor<128x2xf32, #blocked_broadcast_warps>, tensor<128x2xf32, #blocked_broadcast_warps>) attributes {"ttg.num-warps" = 8 : i32} {
+  tt.func @st_shifted_warp_ownership(%data: tensor<128x2xf32, #blocked_broadcast_warps>, %ack: !ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>) -> (tensor<128x2xf32, #blocked_broadcast_warps>, tensor<128x2xf32, #blocked_broadcast_warps>) attributes {"ttg.num-warps" = 8 : i32} {
     %true = arith.constant true
+    %phase = arith.constant 0 : i32
     %parent = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x4xf32, #tmem128, #ttng.tensor_memory, mutable>
     %a = ttng.tmem_subslice %parent {offset = 0 : i32, dim = 1 : i32} : !ttg.memdesc<128x4xf32, #tmem128, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x2xf32, #tmem128, #ttng.tensor_memory, mutable, 128x4>
     %b = ttng.tmem_subslice %parent {offset = 1 : i32, dim = 1 : i32} : !ttg.memdesc<128x4xf32, #tmem128, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x2xf32, #tmem128, #ttng.tensor_memory, mutable, 128x4>
     ttng.tmem_store %data, %b, %true : tensor<128x2xf32, #blocked_broadcast_warps> -> !ttg.memdesc<128x2xf32, #tmem128, #ttng.tensor_memory, mutable, 128x4>
     ttng.tmem_store %data, %a, %true : tensor<128x2xf32, #blocked_broadcast_warps> -> !ttg.memdesc<128x2xf32, #tmem128, #ttng.tensor_memory, mutable, 128x4>
     ttg.barrier local
+    ttng.wait_barrier %ack, %phase : !ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>
     %same_warp = ttng.tmem_load %a : !ttg.memdesc<128x2xf32, #tmem128, #ttng.tensor_memory, mutable, 128x4> -> tensor<128x2xf32, #blocked_broadcast_warps>
     %cross_warp = ttng.tmem_load %b : !ttg.memdesc<128x2xf32, #tmem128, #ttng.tensor_memory, mutable, 128x4> -> tensor<128x2xf32, #blocked_broadcast_warps>
     tt.return %same_warp, %cross_warp : tensor<128x2xf32, #blocked_broadcast_warps>, tensor<128x2xf32, #blocked_broadcast_warps>
@@ -1074,5 +1098,75 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttng.tmem_store %data, %mem, %true : tensor<128x1xf32, #blocked_broadcast_warps> -> !ttg.memdesc<128x1xf32, #tmem128, #ttng.tensor_memory, mutable>
     %loaded = ttng.tmem_load %mem : !ttg.memdesc<128x1xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x1xf32, #blocked_broadcast_warps>
     tt.return %loaded : tensor<128x1xf32, #blocked_broadcast_warps>
+  }
+
+  // An acquire can overlap the store, which must complete before publication.
+  // WAIT-LABEL: @wait_acquire_before_arrival
+  // WAIT: ttng.tmem_store
+  // WAIT-NEXT: ttng.wait_barrier
+  // WAIT-NEXT: ttng.tmem_wait store
+  // WAIT-NEXT: ttg.barrier local
+  // WAIT-NEXT: ttng.arrive_barrier
+  // WAIT-NEXT: tt.return
+  tt.func @wait_acquire_before_arrival(
+      %data: tensor<128x128xf32, #blocked>,
+      %ack: !ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>,
+      %ready: !ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>,
+      %pred: i1) {
+    %true = arith.constant true
+    %phase = arith.constant 0 : i32
+    %mem = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %data, %mem, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttng.wait_barrier %ack, %phase, %pred : !ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>
+    ttng.arrive_barrier %ready, 1 : !ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>
+    tt.return
+  }
+
+  // Reusing a CTA across an acquire still requires completion before that CTA.
+  // WAIT-LABEL: @wait_acquire_saved_cta_waw
+  // WAIT: ttng.tmem_store
+  // WAIT-NEXT: ttng.tmem_wait store
+  // WAIT-NEXT: ttg.barrier local
+  // WAIT-NEXT: ttng.wait_barrier
+  // WAIT-NEXT: ttng.tmem_store
+  // WAIT-NEXT: ttng.tmem_wait store
+  // WAIT-NEXT: tt.return
+  tt.func @wait_acquire_saved_cta_waw(
+      %data: tensor<128x128xf32, #blocked>,
+      %ack: !ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>) {
+    %true = arith.constant true
+    %phase = arith.constant 0 : i32
+    %mem = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %data, %mem, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttg.barrier local
+    ttng.wait_barrier %ack, %phase : !ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>
+    ttng.tmem_store %data, %mem, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // Completion must stay in this block even when its last operation acquires.
+  // WAIT-LABEL: @wait_acquire_before_cfg
+  // WAIT: ttng.tmem_store
+  // WAIT-NEXT: ttng.wait_barrier
+  // WAIT-NEXT: ttng.tmem_wait store
+  // WAIT-NEXT: cf.cond_br
+  // WAIT: ttng.tmem_load
+  // WAIT-NEXT: ttng.tmem_wait load
+  // WAIT-NEXT: tt.return
+  tt.func @wait_acquire_before_cfg(
+      %data: tensor<128x128xf32, #blocked>,
+      %ack: !ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>,
+      %condition: i1) -> tensor<128x128xf32, #blocked> {
+    %true = arith.constant true
+    %phase = arith.constant 0 : i32
+    %mem = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %data, %mem, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttng.wait_barrier %ack, %phase : !ttg.memdesc<1xi64, #barrier, #ttg.shared_memory, mutable>
+    cf.cond_br %condition, ^return_data, ^load_data
+  ^return_data:
+    tt.return %data : tensor<128x128xf32, #blocked>
+  ^load_data:
+    %loaded = ttng.tmem_load %mem : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    tt.return %loaded : tensor<128x128xf32, #blocked>
   }
 }
