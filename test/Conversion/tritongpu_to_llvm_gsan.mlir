@@ -32,6 +32,7 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
   }
 
   // CHECK-LABEL: llvm.func @unmasked_atomic_add
+  // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(ptr, array<8 x ptr>, i8)>
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
   tt.func @unmasked_atomic_add(%ptr: !tt.ptr<i32>, %val: i32) {
@@ -69,6 +70,28 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
     %c0_i32 = arith.constant 0 : i32
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<8x16xi64, #shared_i64, #smem, mutable>
     ttng.async_tma_reduce add, %desc[%c0_i32, %c0_i32] %buf : !tt.tensordesc<8x16xi64, #shared_i64>, !ttg.memdesc<8x16xi64, #shared_i64, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#byte_vec = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: llvm.func @byte_access_preserves_mask_holes
+  // Each thread keeps all four byte pointers and masks, rather than replacing
+  // them with a single four-byte access enabled by the OR of the masks.
+  // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<4 x i64>, array<4 x i8>)>
+  // CHECK: llvm.call @__triton_gsan_load_tensor
+  // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<4 x i64>, array<4 x i8>)>
+  // CHECK: llvm.call @__triton_gsan_store_tensor
+  tt.func @byte_access_preserves_mask_holes(%ptr: !tt.ptr<i8> {tt.divisibility = 16 : i32},
+                                          %mask: tensor<128xi1, #byte_vec>) {
+    %offsets = tt.make_range {start = 0 : i32, end = 128 : i32} : tensor<128xi32, #byte_vec>
+    %base = tt.splat %ptr : !tt.ptr<i8> -> tensor<128x!tt.ptr<i8>, #byte_vec>
+    %ptrs = tt.addptr %base, %offsets : tensor<128x!tt.ptr<i8>, #byte_vec>, tensor<128xi32, #byte_vec>
+    %values = tt.load %ptrs, %mask : tensor<128x!tt.ptr<i8>, #byte_vec>
+    tt.store %ptrs, %values, %mask : tensor<128x!tt.ptr<i8>, #byte_vec>
     tt.return
   }
 }

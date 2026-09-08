@@ -366,6 +366,8 @@ void init_gsan_testing(py::module_ &m) {
   m.def(
       "shadow_cell_address", gsan::getShadowAddress, py::arg("real_address"),
       "Return the address of the ShadowCell corresponding to a real address.");
+  m.def("shadow_granularity", gsan::getShadowGranularity,
+        py::arg("real_address"), "Return the pointer's shadow granularity.");
 
   m.attr("SHADOW_CELL_SIZE_BYTES") = sizeof(gsan::ShadowCell);
   m.attr("SHADOW_GRANULARITY_BYTES") = gsan::kShadowMemGranularityBytes;

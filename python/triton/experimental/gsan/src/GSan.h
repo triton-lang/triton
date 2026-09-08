@@ -21,8 +21,12 @@ using uint16_t = __UINT16_TYPE__;
 using uint32_t = __UINT32_TYPE__;
 using uintptr_t = __UINTPTR_TYPE__;
 
-// Reserve 1 PiB, should be big enough for a while :)
-static constexpr size_t kReserveSize = 1ull << 40;
+// Three 1 TiB pools, padded to a power of two so pointers identify their pool
+// and the enclosing reservation without a metadata lookup.
+static constexpr size_t kPoolReserveSize = 1ull << 40;
+static constexpr int kNumPools = 3;
+static constexpr size_t kReserveSize = 4 * kPoolReserveSize;
+// Default granularity. Each pool uses 1 << (2 * poolIndex) bytes.
 static constexpr int kShadowMemGranularityBytes = 4;
 static_assert((kReserveSize & (kReserveSize - 1)) == 0,
               "kReserveSize must be a power of 2");
@@ -101,7 +105,8 @@ struct ThreadState {
   epoch_t vectorClock[];
 };
 
-static constexpr int kMaxAtomicShadowCells = 3;
+// The widest supported scalar atomic is eight bytes, including in byte pools.
+static constexpr int kMaxAtomicShadowCells = 8;
 
 struct AtomicEventState {
   ThreadState *threadState;
@@ -170,8 +175,27 @@ inline GSAN_HOST_DEVICE GlobalState *getGlobalState(ThreadState *threadState) {
   return (GlobalState *)(threadAddr & ~(kPerDeviceStateStride - 1));
 }
 
-inline GSAN_HOST_DEVICE uintptr_t getRealBaseAddress(uintptr_t reserveBase) {
-  return reserveBase + kReserveSize / 2;
+inline GSAN_HOST_DEVICE bool isValidShadowGranularity(int granularity) {
+  return granularity == 1 || granularity == 4 || granularity == 16;
+}
+
+inline GSAN_HOST_DEVICE int getPoolIndexForGranularity(int granularity) {
+  return granularity == 1 ? 0 : granularity == 4 ? 1 : 2;
+}
+
+inline GSAN_HOST_DEVICE int getPoolIndex(uintptr_t address) {
+  return (address & (kReserveSize - 1)) / kPoolReserveSize;
+}
+
+inline GSAN_HOST_DEVICE int getShadowGranularity(uintptr_t address) {
+  return 1 << (2 * getPoolIndex(address));
+}
+
+inline GSAN_HOST_DEVICE uintptr_t getRealBaseAddress(
+    uintptr_t reserveBase, int granularity = kShadowMemGranularityBytes) {
+  return reserveBase +
+         getPoolIndexForGranularity(granularity) * kPoolReserveSize +
+         kPoolReserveSize / 2;
 }
 
 inline GSAN_HOST_DEVICE uintptr_t getReserveBaseFromAddress(uintptr_t addr) {
@@ -180,16 +204,18 @@ inline GSAN_HOST_DEVICE uintptr_t getReserveBaseFromAddress(uintptr_t addr) {
 
 // Assumes address is in gsan-managed memory
 inline GSAN_HOST_DEVICE uintptr_t getShadowAddress(uintptr_t virtualAddress) {
-  auto reserveBase = getReserveBaseFromAddress(virtualAddress);
-  auto realBase = getRealBaseAddress(reserveBase);
+  auto poolBase = virtualAddress & ~(kPoolReserveSize - 1);
+  auto realBase = poolBase + kPoolReserveSize / 2;
   auto byteOffset = virtualAddress - realBase;
-  auto wordOffset = byteOffset / kShadowMemGranularityBytes;
-  return reserveBase + sizeof(ShadowCell) * wordOffset;
+  auto wordOffset = byteOffset >> (2 * getPoolIndex(virtualAddress));
+  return poolBase + sizeof(ShadowCell) * wordOffset;
 }
 
 inline GSAN_HOST_DEVICE bool isGsanManaged(uintptr_t addr,
                                            uintptr_t reserveBase) {
-  return getReserveBaseFromAddress(addr) == reserveBase;
+  return getReserveBaseFromAddress(addr) == reserveBase &&
+         getPoolIndex(addr) < kNumPools &&
+         (addr & (kPoolReserveSize - 1)) >= kPoolReserveSize / 2;
 }
 
 inline GSAN_HOST_DEVICE bool isAtomicScope(AtomicScope scope) {

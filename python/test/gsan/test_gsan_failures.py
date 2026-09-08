@@ -47,39 +47,45 @@ TRANSITIVE_RELAY_MISMATCH_CASES = (
 )
 
 
-@triton.jit
-def _raw_kernel(ptr, scratch_ptr, counter_ptr):
-    pid = tl.program_id(0)
+@gluon.jit
+def _raw_kernel(ptr, scratch_ptr, counter_ptr, WIDTH: gl.constexpr):
+    offsets = gl.arange(0, WIDTH, layout=gl.BlockedLayout([16], [32], [1], [0]))
+    pid = gl.program_id(0)
     if pid == 0:
-        tl.store(ptr, 1)
-        tl.atomic_add(counter_ptr, 1, sem="relaxed")
+        gl.store(ptr + offsets, 1)
+        gl.atomic_add(counter_ptr, 1, sem="relaxed")
     else:
-        atomic_poll(counter_ptr, 1)
-        value = tl.load(ptr)
-        tl.store(scratch_ptr, value)
+        while gl.atomic_add(counter_ptr, 0, sem="relaxed") != 1:
+            pass
+        value = gl.load(ptr + offsets)
+        gl.store(scratch_ptr + offsets, value)
 
 
-@triton.jit
-def _war_kernel(ptr, scratch_ptr, counter_ptr):
-    pid = tl.program_id(0)
+@gluon.jit
+def _war_kernel(ptr, scratch_ptr, counter_ptr, WIDTH: gl.constexpr):
+    offsets = gl.arange(0, WIDTH, layout=gl.BlockedLayout([16], [32], [1], [0]))
+    pid = gl.program_id(0)
     if pid == 0:
-        value = tl.load(ptr)
-        tl.store(scratch_ptr, value)
-        tl.atomic_add(counter_ptr, 1, sem="relaxed")
+        value = gl.load(ptr + offsets)
+        gl.store(scratch_ptr + offsets, value)
+        gl.atomic_add(counter_ptr, 1, sem="relaxed")
     else:
-        atomic_poll(counter_ptr, 1)
-        tl.store(ptr, 1)
+        while gl.atomic_add(counter_ptr, 0, sem="relaxed") != 1:
+            pass
+        gl.store(ptr + offsets, 1)
 
 
-@triton.jit
-def _waw_kernel(ptr, scratch_ptr, counter_ptr):
-    pid = tl.program_id(0)
+@gluon.jit
+def _waw_kernel(ptr, scratch_ptr, counter_ptr, WIDTH: gl.constexpr):
+    offsets = gl.arange(0, WIDTH, layout=gl.BlockedLayout([16], [32], [1], [0]))
+    pid = gl.program_id(0)
     if pid == 0:
-        tl.store(ptr, 1)
-        tl.atomic_add(counter_ptr, 1, sem="relaxed")
+        gl.store(ptr + offsets, 1)
+        gl.atomic_add(counter_ptr, 1, sem="relaxed")
     else:
-        atomic_poll(counter_ptr, 1)
-        tl.store(ptr, 2)
+        while gl.atomic_add(counter_ptr, 0, sem="relaxed") != 1:
+            pass
+        gl.store(ptr + offsets, 2)
 
 
 @triton.jit
@@ -361,35 +367,39 @@ def run_with_gsan(fn):
     @functools.wraps(fn)
     def wrapped(*args, **kwargs) -> None:
         triton.knobs.compilation.instrumentation_mode = "gsan"
-        pool = create_mem_pool()
+        pool = create_mem_pool(shadow_granularity=kwargs.pop("shadow_granularity", 4))
         with torch.cuda.use_mem_pool(pool):
             fn(*args, **kwargs)
 
     return wrapped
 
 
-@run_with_gsan
-def _run_raw_case() -> None:
-    target = torch.zeros(1, dtype=torch.int32, device="cuda")
-    scratch = torch.zeros(1, dtype=torch.int32, device="cuda")
-    counter = torch.zeros(1, dtype=torch.int32, device="cuda")
-    _raw_kernel[(2, )](target, scratch, counter, num_warps=1)
+def _run_race_case(kernel, dtype, shadow_granularity):
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    width = 16 // torch.empty((), dtype=dtype).element_size() if shadow_granularity == 16 else 1
+    pool = create_mem_pool(shadow_granularity=shadow_granularity)
+    auxiliary_pool = create_mem_pool(shadow_granularity=min(shadow_granularity, 4))
+    with torch.cuda.use_mem_pool(pool):
+        target = torch.zeros(width, dtype=dtype, device="cuda")
+    # The relaxed scheduling flag does not establish a happens-before edge.
+    # Keep it in a fine pool because coarse pools cannot contain atomic flags.
+    with torch.cuda.use_mem_pool(auxiliary_pool):
+        scratch = torch.zeros(width, dtype=torch.int32, device="cuda")
+        counter = torch.zeros(1, dtype=torch.int32, device="cuda")
+    kernel[(2, )](target, scratch, counter, WIDTH=width, num_warps=1)
+    torch.cuda.synchronize()
 
 
-@run_with_gsan
-def _run_war_case() -> None:
-    target = torch.zeros(1, dtype=torch.int32, device="cuda")
-    scratch = torch.zeros(1, dtype=torch.int32, device="cuda")
-    counter = torch.zeros(1, dtype=torch.int32, device="cuda")
-    _war_kernel[(2, )](target, scratch, counter, num_warps=1)
+def _run_raw_case(dtype=torch.int32, shadow_granularity=4) -> None:
+    _run_race_case(_raw_kernel, dtype, shadow_granularity)
 
 
-@run_with_gsan
-def _run_waw_case() -> None:
-    target = torch.zeros(1, dtype=torch.int32, device="cuda")
-    scratch = torch.zeros(1, dtype=torch.int32, device="cuda")
-    counter = torch.zeros(1, dtype=torch.int32, device="cuda")
-    _waw_kernel[(2, )](target, scratch, counter, num_warps=1)
+def _run_war_case(dtype=torch.int32, shadow_granularity=4) -> None:
+    _run_race_case(_war_kernel, dtype, shadow_granularity)
+
+
+def _run_waw_case(dtype=torch.int32, shadow_granularity=4) -> None:
+    _run_race_case(_waw_kernel, dtype, shadow_granularity)
 
 
 @run_with_gsan
@@ -620,14 +630,12 @@ def _expected_file_line(source_function, marker: str) -> str:
     raise AssertionError(f"Could not find marker {marker!r} for function {source_function!r}")
 
 
-def _run_failure_case(case: str, *, runner, source_function, marker: str, error: str, runner_args=(),
-                      runner_kwargs=None) -> None:
+def _run_failure_case(case: str, shadow_granularity: int, *, runner, source_function, marker: str, error: str,
+                      runner_args=(), runner_kwargs=None) -> None:
     if torch.cuda.device_count() < 1:
         pytest.skip("requires at least 1 CUDA device")
 
-    if runner_kwargs is None:
-        runner_kwargs = {}
-
+    runner_kwargs = {**(runner_kwargs or {}), "shadow_granularity": shadow_granularity}
     result = run_in_process(runner, runner_args, runner_kwargs)
     print(result.driver_stderr_output)
     assert isinstance(result.exc, RuntimeError), (f"case={case} completed without the expected GSan failure\n"
@@ -639,25 +647,90 @@ def _run_failure_case(case: str, *, runner, source_function, marker: str, error:
     assert error in result.driver_stderr_output
 
 
-def test_read_after_write():
-    _run_failure_case("raw", runner=_run_raw_case, source_function=_raw_kernel.fn, marker="value = tl.load(ptr)",
-                      error="Read after write race detected")
+@pytest.mark.parametrize("dtype", [torch.int8, torch.int32])
+def test_read_after_write(shadow_granularity, dtype):
+    _run_failure_case("raw", shadow_granularity, runner=_run_raw_case, source_function=_raw_kernel.fn,
+                      marker="value = gl.load(ptr + offsets)", error="Read after write race detected",
+                      runner_kwargs={"dtype": dtype})
 
 
-def test_write_after_read():
-    _run_failure_case("war", runner=_run_war_case, source_function=_war_kernel.fn, marker="tl.store(ptr, 1)",
-                      error="Write after read race detected")
+@pytest.mark.parametrize("dtype", [torch.int8, torch.int32])
+def test_write_after_read(shadow_granularity, dtype):
+    _run_failure_case("war", shadow_granularity, runner=_run_war_case, source_function=_war_kernel.fn,
+                      marker="gl.store(ptr + offsets, 1)", error="Write after read race detected",
+                      runner_kwargs={"dtype": dtype})
 
 
-def test_write_after_write():
-    _run_failure_case("waw", runner=_run_waw_case, source_function=_waw_kernel.fn, marker="tl.store(ptr, 2)",
-                      error="Write after write race detected")
+@pytest.mark.parametrize("dtype", [torch.int8, torch.int32])
+def test_write_after_write(shadow_granularity, dtype):
+    _run_failure_case("waw", shadow_granularity, runner=_run_waw_case, source_function=_waw_kernel.fn,
+                      marker="gl.store(ptr + offsets, 2)", error="Write after write race detected",
+                      runner_kwargs={"dtype": dtype})
+
+
+@triton.jit
+def _coarse_pool_access_kernel(ptr, out, KIND: tl.constexpr):
+    if KIND == "load":
+        value = tl.load(ptr)
+        tl.store(out, value)
+    elif KIND == "store":
+        tl.store(ptr, 1)
+    else:
+        tl.atomic_add(ptr, 1)
+
+
+@triton.jit
+def _coarse_pool_tma_tail_kernel(ptr):
+    desc = tl.make_tensor_descriptor(ptr, shape=[32, 37], strides=[40, 1], block_shape=[32, 32])
+    desc.store([0, 32], tl.full((32, 32), 1, tl.int32))
+
+
+@run_with_gsan
+def _run_coarse_pool_access_case(kind):
+    target = torch.zeros((32, 40), dtype=torch.int32, device="cuda")
+    output = torch.empty_like(target)
+    if kind == "tma_tail":
+        triton.set_allocator(_cuda_byte_allocator)
+        _coarse_pool_tma_tail_kernel[(1, )](target)
+    else:
+        _coarse_pool_access_kernel[(1, )](target, output, kind, num_warps=1)
+
+
+@pytest.mark.parametrize("kind,marker", [
+    ("load", "value = tl.load(ptr)"),
+    ("store", "tl.store(ptr, 1)"),
+    ("atomic", "tl.atomic_add(ptr, 1)"),
+])
+def test_pool_partial_and_atomic_access_restrictions(shadow_granularity, kind, marker):
+    if shadow_granularity != 16:
+        result = run_in_process(_run_coarse_pool_access_case, args=(kind, ),
+                                kwargs={"shadow_granularity": shadow_granularity})
+        assert result.exc is None, result.driver_stderr_output
+        return
+    error = ("GSan 16-byte pools do not support atomic accesses"
+             if kind == "atomic" else "GSan 16-byte pools require complete aligned 16-byte accesses")
+    _run_failure_case("coarse_pool", shadow_granularity, runner=_run_coarse_pool_access_case,
+                      source_function=_coarse_pool_access_kernel.fn, marker=marker, error=error, runner_args=(kind, ))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="TMA requires Hopper or newer")
+def test_pool_partial_tma_tail_restrictions(shadow_granularity):
+    if shadow_granularity != 16:
+        result = run_in_process(_run_coarse_pool_access_case, args=("tma_tail", ),
+                                kwargs={"shadow_granularity": shadow_granularity})
+        assert result.exc is None, result.driver_stderr_output
+        return
+    _run_failure_case("coarse_pool_tma", shadow_granularity, runner=_run_coarse_pool_access_case,
+                      source_function=_coarse_pool_tma_tail_kernel.fn, marker="desc.store",
+                      error="GSan 16-byte pools require complete aligned 16-byte accesses", runner_args=("tma_tail", ))
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")
-def test_programmatic_dependent_launch_requires_wait():
+@pytest.mark.gsan_fine_granularity("This race test uses scalar accesses or atomic synchronization")
+def test_programmatic_dependent_launch_requires_wait(shadow_granularity):
     _run_failure_case(
         "pdl_missing_wait",
+        shadow_granularity,
         runner=_run_pdl_missing_wait_case,
         source_function=_pdl_conditional_wait_kernel.fn,
         marker="def _pdl_conditional_wait_kernel",
@@ -666,9 +739,11 @@ def test_programmatic_dependent_launch_requires_wait():
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")
-def test_programmatic_dependent_launch_without_wait_reports_race():
+@pytest.mark.gsan_fine_granularity("This race test uses scalar accesses or atomic synchronization")
+def test_programmatic_dependent_launch_without_wait_reports_race(shadow_granularity):
     _run_failure_case(
         "pdl_without_wait",
+        shadow_granularity,
         runner=_run_pdl_without_wait_case,
         source_function=_pdl_consumer_without_wait_kernel.fn,
         marker="value = tl.load(payload_ptr + 1)",
@@ -677,9 +752,11 @@ def test_programmatic_dependent_launch_without_wait_reports_race():
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")
-def test_programmatic_dependent_launch_does_not_inherit_persistent_sm_dependencies():
+@pytest.mark.gsan_fine_granularity("This race test uses scalar accesses or atomic synchronization")
+def test_programmatic_dependent_launch_does_not_inherit_persistent_sm_dependencies(shadow_granularity):
     _run_failure_case(
         "pdl_persistent_state_without_wait",
+        shadow_granularity,
         runner=_run_pdl_persistent_state_without_wait_case,
         source_function=_pdl_transitively_acquired_consumer_without_wait_kernel.fn,
         marker="value = tl.load(payload_ptr)",
@@ -687,9 +764,11 @@ def test_programmatic_dependent_launch_does_not_inherit_persistent_sm_dependenci
     )
 
 
-def test_mixed_scope_release_rmw_accumulation():
+@pytest.mark.gsan_fine_granularity("This race test uses scalar accesses or atomic synchronization")
+def test_mixed_scope_release_rmw_accumulation(shadow_granularity):
     _run_failure_case(
         "mixed_scope_release_rmw",
+        shadow_granularity,
         runner=_run_mixed_scope_release_rmw_case,
         source_function=_mixed_scope_release_rmw_kernel.fn,
         marker='tl.atomic_add(counter_ptr, 1, sem="release", scope="sys")',
@@ -698,9 +777,11 @@ def test_mixed_scope_release_rmw_accumulation():
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="requires Hopper or newer")
-def test_relaxed_cluster_barrier_does_not_synchronize_vector_clocks():
+@pytest.mark.gsan_fine_granularity("This race test uses scalar accesses or atomic synchronization")
+def test_relaxed_cluster_barrier_does_not_synchronize_vector_clocks(shadow_granularity):
     _run_failure_case(
         "relaxed_cluster_barrier",
+        shadow_granularity,
         runner=_run_gluon_relaxed_cluster_barrier_case,
         source_function=_gluon_cluster_barrier_kernel.fn,
         marker="value = gl.load(payload_ptr",
@@ -709,9 +790,11 @@ def test_relaxed_cluster_barrier_does_not_synchronize_vector_clocks():
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="requires Hopper or newer")
-def test_mbarrier_wait_does_not_acquire_post_arrival_writes():
+@pytest.mark.gsan_fine_granularity("This race test uses scalar accesses or atomic synchronization")
+def test_mbarrier_wait_does_not_acquire_post_arrival_writes(shadow_granularity):
     _run_failure_case(
         "mbarrier_post_arrival_write",
+        shadow_granularity,
         runner=_run_gluon_mbarrier_post_arrival_write_case,
         source_function=_gluon_mbarrier_post_arrival_write_kernel.fn,
         marker="unordered = gl.load(unordered_ptrs",
@@ -720,9 +803,11 @@ def test_mbarrier_wait_does_not_acquire_post_arrival_writes():
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_tcgen05_commit_does_not_publish_vector_clock():
+@pytest.mark.gsan_fine_granularity("This race test uses scalar accesses or atomic synchronization")
+def test_tcgen05_commit_does_not_publish_vector_clock(shadow_granularity):
     _run_failure_case(
         "tcgen05_commit_no_release",
+        shadow_granularity,
         runner=_run_gluon_tcgen05_commit_no_release_case,
         source_function=_gluon_tcgen05_commit_no_release_kernel.fn,
         marker="value = gl.load(payload_ptrs",
@@ -731,9 +816,11 @@ def test_tcgen05_commit_does_not_publish_vector_clock():
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_mbarrier_multicast_partial_wait_only_acquires_on_leader_ctas():
+@pytest.mark.gsan_fine_granularity("This race test uses scalar accesses or atomic synchronization")
+def test_mbarrier_multicast_partial_wait_only_acquires_on_leader_ctas(shadow_granularity):
     _run_failure_case(
         "mbarrier_multicast_partial_wait",
+        shadow_granularity,
         runner=_run_gluon_mbarrier_multicast_partial_wait_case,
         source_function=_gluon_mbarrier_multicast_partial_wait_kernel.fn,
         marker="value = gl.load(payload_ptrs",
@@ -741,74 +828,88 @@ def test_mbarrier_multicast_partial_wait_only_acquires_on_leader_ctas():
     )
 
 
-def test_tma_read_after_write():
-    _run_failure_case("tma_raw", runner=_run_tma_raw_case, source_function=_tma_raw_kernel.fn,
+@pytest.mark.gsan_fine_granularity("This race test uses scalar accesses or atomic synchronization")
+def test_tma_read_after_write(shadow_granularity):
+    _run_failure_case("tma_raw", shadow_granularity, runner=_run_tma_raw_case, source_function=_tma_raw_kernel.fn,
                       marker="value = tl.load(ptr + row_idx * stride_0 + col_idx)",
                       error="Read after write race detected")
 
 
-def test_host_tma_write_after_read():
-    _run_failure_case("host_tma_war", runner=_run_host_tma_war_case, source_function=_host_tma_war_kernel.fn,
+@pytest.mark.gsan_fine_granularity("This race test uses scalar accesses or atomic synchronization")
+def test_host_tma_write_after_read(shadow_granularity):
+    _run_failure_case("host_tma_war", shadow_granularity, runner=_run_host_tma_war_case,
+                      source_function=_host_tma_war_kernel.fn,
                       marker="tl.store(target_ptr + row_idx * stride_0 + col_idx, 1)",
                       error="Write after read race detected")
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_host_tma_gather_write_after_read():
-    _run_failure_case("host_tma_gather_war", runner=_run_host_tma_gather_war_case,
+@pytest.mark.gsan_fine_granularity("This race test uses scalar accesses or atomic synchronization")
+def test_host_tma_gather_write_after_read(shadow_granularity):
+    _run_failure_case("host_tma_gather_war", shadow_granularity, runner=_run_host_tma_gather_war_case,
                       source_function=_host_tma_gather_war_kernel.fn,
                       marker="tl.store(target_ptr + row_idx * stride_0 + y_offset, 1)",
                       error="Write after read race detected")
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_host_tma_scatter_write_after_read():
-    _run_failure_case("host_tma_scatter_war", runner=_run_host_tma_scatter_war_case,
+@pytest.mark.gsan_fine_granularity("This race test uses scalar accesses or atomic synchronization")
+def test_host_tma_scatter_write_after_read(shadow_granularity):
+    _run_failure_case("host_tma_scatter_war", shadow_granularity, runner=_run_host_tma_scatter_war_case,
                       source_function=_host_tma_scatter_war_kernel.fn,
                       marker="target_desc.scatter(values, x_offsets, y_offset)", error="Write after read race detected")
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
-def test_host_tma_atomic_on_release_flag_does_not_publish_data():
-    _run_failure_case("host_tma_atomic_flag_publish", runner=_run_host_tma_atomic_flag_publish_case,
+@pytest.mark.gsan_fine_granularity("This race test uses scalar accesses or atomic synchronization")
+def test_host_tma_atomic_on_release_flag_does_not_publish_data(shadow_granularity):
+    _run_failure_case("host_tma_atomic_flag_publish", shadow_granularity, runner=_run_host_tma_atomic_flag_publish_case,
                       source_function=_host_tma_atomic_flag_publish_kernel.fn, marker="result = tl.load(payload_ptr)",
                       error="Read after write race detected")
 
 
 @pytest.mark.parametrize("producer_sem, consumer_sem, scope", CROSS_SM_SEMANTIC_MISMATCH_CASES)
-def test_cross_sm_semantic_mismatch_read_after_write(producer_sem, consumer_sem, scope):
-    _run_failure_case(f"cross_sm_semantic_mismatch_{producer_sem}_{consumer_sem}_{scope}",
+@pytest.mark.gsan_fine_granularity("This race test uses scalar accesses or atomic synchronization")
+def test_cross_sm_semantic_mismatch_read_after_write(shadow_granularity, producer_sem, consumer_sem, scope):
+    _run_failure_case(f"cross_sm_semantic_mismatch_{producer_sem}_{consumer_sem}_{scope}", shadow_granularity,
                       runner=_run_cross_sm_atomic_sync_case, runner_args=(producer_sem, consumer_sem, scope),
                       source_function=_cross_sm_atomic_sync_kernel.fn, marker="result = tl.load(payload_ptr)",
                       error="Read after write race detected")
 
 
 @pytest.mark.parametrize("producer_sem, consumer_sem, scope", CROSS_SM_SEMANTIC_MISMATCH_CASES)
-def test_atomic_poll_semantic_mismatch_read_after_write(producer_sem, consumer_sem, scope):
-    _run_failure_case(f"atomic_poll_semantic_mismatch_{producer_sem}_{consumer_sem}_{scope}",
+@pytest.mark.gsan_fine_granularity("This race test uses scalar accesses or atomic synchronization")
+def test_atomic_poll_semantic_mismatch_read_after_write(shadow_granularity, producer_sem, consumer_sem, scope):
+    _run_failure_case(f"atomic_poll_semantic_mismatch_{producer_sem}_{consumer_sem}_{scope}", shadow_granularity,
                       runner=_run_atomic_poll_cross_sm_sync_case, runner_args=(producer_sem, consumer_sem, scope),
                       source_function=_atomic_poll_cross_sm_sync_kernel.fn, marker="result = tl.load(payload_ptr)",
                       error="Read after write race detected")
 
 
 @pytest.mark.parametrize("producer_sem, consumer_sem", RELEASE_ACQUIRE_SYNC_CASES)
-def test_cross_sm_cta_scope_read_after_write(producer_sem, consumer_sem):
-    _run_failure_case(f"cross_sm_cta_scope_{producer_sem}_{consumer_sem}", runner=_run_cross_sm_atomic_sync_case,
-                      runner_args=(producer_sem, consumer_sem, "cta"), source_function=_cross_sm_atomic_sync_kernel.fn,
+@pytest.mark.gsan_fine_granularity("This race test uses scalar accesses or atomic synchronization")
+def test_cross_sm_cta_scope_read_after_write(shadow_granularity, producer_sem, consumer_sem):
+    _run_failure_case(f"cross_sm_cta_scope_{producer_sem}_{consumer_sem}", shadow_granularity,
+                      runner=_run_cross_sm_atomic_sync_case, runner_args=(producer_sem, consumer_sem, "cta"),
+                      source_function=_cross_sm_atomic_sync_kernel.fn,
                       marker="ready = tl.atomic_add(flag_ptr, 0, sem=consumer_sem, scope=scope)",
                       error="Read after write race detected")
 
 
 @pytest.mark.parametrize("release_sem, relay_sem, scope", TRANSITIVE_RELAY_MISMATCH_CASES)
-def test_transitive_release_acquire_requires_middle_acquire(release_sem, relay_sem, scope):
-    _run_failure_case(f"transitive_sync_{release_sem}_{relay_sem}_{scope}", runner=_run_transitive_atomic_sync_case,
-                      runner_args=(release_sem, relay_sem, scope), source_function=_transitive_atomic_sync_kernel.fn,
-                      marker="result = tl.load(payload_ptr)", error="Read after write race detected")
+@pytest.mark.gsan_fine_granularity("This race test uses scalar accesses or atomic synchronization")
+def test_transitive_release_acquire_requires_middle_acquire(shadow_granularity, release_sem, relay_sem, scope):
+    _run_failure_case(f"transitive_sync_{release_sem}_{relay_sem}_{scope}", shadow_granularity,
+                      runner=_run_transitive_atomic_sync_case, runner_args=(release_sem, relay_sem, scope),
+                      source_function=_transitive_atomic_sync_kernel.fn, marker="result = tl.load(payload_ptr)",
+                      error="Read after write race detected")
 
 
 @pytest.mark.parametrize("release_sem, relay_sem", RELEASE_ACQUIRE_SYNC_CASES)
-def test_transitive_cta_scope_read_after_write(release_sem, relay_sem):
-    _run_failure_case(f"transitive_cta_scope_{release_sem}_{relay_sem}", runner=_run_transitive_atomic_sync_case,
-                      runner_args=(release_sem, relay_sem, "cta"), source_function=_transitive_atomic_sync_kernel.fn,
+@pytest.mark.gsan_fine_granularity("This race test uses scalar accesses or atomic synchronization")
+def test_transitive_cta_scope_read_after_write(shadow_granularity, release_sem, relay_sem):
+    _run_failure_case(f"transitive_cta_scope_{release_sem}_{relay_sem}", shadow_granularity,
+                      runner=_run_transitive_atomic_sync_case, runner_args=(release_sem, relay_sem, "cta"),
+                      source_function=_transitive_atomic_sync_kernel.fn,
                       marker="ready = tl.atomic_add(flag0_ptr, 0, sem=relay_sem, scope=scope)",
                       error="Read after write race detected")

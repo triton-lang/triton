@@ -357,13 +357,19 @@ struct Range {
   uintptr_t end;
 };
 
-GSAN_DEVICE Range roundRange(Range x) {
+GSAN_DEVICE Range roundRange(Range x, int granularity) {
+  uintptr_t mask = granularity - 1;
   // Round start down to shadow granularity
-  x.start = x.start - (x.start % kShadowMemGranularityBytes);
+  x.start &= ~mask;
   // Round end up to shadow granularity
-  auto mod = x.end % kShadowMemGranularityBytes;
-  x.end = x.end + (mod == 0 ? 0 : kShadowMemGranularityBytes - mod);
+  x.end = (x.end + mask) & ~mask;
   return x;
+}
+
+GSAN_DEVICE void checkCoarseAccess(uintptr_t address, int nBytes,
+                                   int granularity, Location loc) {
+  assert_msg(loc, granularity != 16 || (address % 16 == 0 && nBytes % 16 == 0),
+             "GSan 16-byte pools require complete aligned 16-byte accesses");
 }
 
 GSAN_DEVICE ShadowCell *acquireShadow(uintptr_t shadowAddr) {
@@ -797,12 +803,15 @@ GSAN_DEVICE void doWrite(ThreadState *state, ShadowCell *cell, Location loc) {
 
 GSAN_DEVICE void writeRange(ThreadState *state, uintptr_t write_addr,
                             int nBytes, Location loc) {
-  auto range = roundRange(Range{write_addr, write_addr + nBytes});
+  if (!isGsanManaged(write_addr, state->reserveBase))
+    return;
+  int granularity = getShadowGranularity(write_addr);
+  checkCoarseAccess(write_addr, nBytes, granularity, loc);
+  auto range = roundRange(Range{write_addr, write_addr + nBytes}, granularity);
 
   auto reserveBase = state->reserveBase;
 
-  for (uintptr_t addr = range.start; addr < range.end;
-       addr += kShadowMemGranularityBytes) {
+  for (uintptr_t addr = range.start; addr < range.end; addr += granularity) {
     if (!isGsanManaged(addr, reserveBase))
       continue;
     auto shadowAddr = getShadowAddress(addr);
@@ -841,14 +850,14 @@ GSAN_DEVICE void doRead(ThreadState *state, ShadowCell *cell, Location loc) {
 
 GSAN_DEVICE void readRange(ThreadState *state, uintptr_t read_addr, int nBytes,
                            Location loc) {
-  auto range = roundRange(Range{read_addr, read_addr + nBytes});
+  if (!isGsanManaged(read_addr, state->reserveBase))
+    return;
+  int granularity = getShadowGranularity(read_addr);
+  checkCoarseAccess(read_addr, nBytes, granularity, loc);
+  auto range = roundRange(Range{read_addr, read_addr + nBytes}, granularity);
 
   auto reserveBase = state->reserveBase;
-  if (range.start >= reserveBase + kReserveSize || reserveBase >= range.end)
-    return;
-
-  for (uintptr_t addr = range.start; addr < range.end;
-       addr += kShadowMemGranularityBytes) {
+  for (uintptr_t addr = range.start; addr < range.end; addr += granularity) {
     if (!isGsanManaged(addr, reserveBase))
       continue;
     auto shadowAddr = getShadowAddress(addr);
@@ -911,11 +920,19 @@ template <typename ElementHandler>
 GSAN_DEVICE void tensorAccessRow(uintptr_t rowPtr, int rowBytes,
                                  int elementGranularity,
                                  ElementHandler &handleElement) {
-  auto range = roundRange(Range{rowPtr, rowPtr + rowBytes});
   uintptr_t reserveBase = handleElement.reserveBase;
-  uintptr_t reserveEnd = reserveBase + kReserveSize;
-  range.start = range.start < reserveBase ? reserveBase : range.start;
-  range.end = range.end < reserveEnd ? range.end : reserveEnd;
+  if (!isGsanManaged(rowPtr, reserveBase))
+    return;
+  int granularity = getShadowGranularity(rowPtr);
+  if (elementGranularity == 0) {
+    checkCoarseAccess(rowPtr, rowBytes, granularity, handleElement.loc);
+    elementGranularity = granularity;
+  } else {
+    assert_msg(handleElement.loc, granularity != 16,
+               "GSan 16-byte pools do not support atomic accesses");
+    elementGranularity = roundUp(elementGranularity, granularity);
+  }
+  auto range = roundRange(Range{rowPtr, rowPtr + rowBytes}, granularity);
   uint32_t laneId = __nvvm_read_ptx_sreg_laneid();
   for (uintptr_t addr = range.start + laneId * elementGranularity;
        addr < range.end; addr += 32 * elementGranularity)
@@ -1011,8 +1028,7 @@ GSAN_DEVICE void tensorAccessIndexedDesc(const void *descriptor,
 
     uintptr_t rowPtr =
         desc.base + static_cast<uintptr_t>(index) * rowStride + colOffset;
-    tensorAccessRow(rowPtr, rowBytes, kShadowMemGranularityBytes,
-                    handleElement);
+    tensorAccessRow(rowPtr, rowBytes, /*elementGranularity=*/0, handleElement);
   }
 }
 
@@ -1057,7 +1073,7 @@ tensorNonAtomicDesc(ThreadState *state, const void *descriptor,
   NonAtomicElementHandler<ShadowCellHandler> handleElement{
       state, state->reserveBase, loc, handleShadowCell};
   tensorAccessDesc(descriptor, coords, rank, blockShape, bytesPerElem,
-                   kShadowMemGranularityBytes, warpId, numWarps, handleElement);
+                   /*elementGranularity=*/0, warpId, numWarps, handleElement);
   if (handleElement.acquired)
     rwLockReleaseRead(state->lock);
 }
@@ -1087,11 +1103,15 @@ GSAN_DEVICE void acquireAtomicShadowRange(ThreadState *state,
                                           AtomicEventState *event,
                                           uintptr_t address, int nBytes,
                                           Location loc) {
-  auto range = roundRange(Range{address, address + nBytes});
+  if (!isGsanManaged(address, state->reserveBase))
+    return;
+  int granularity = getShadowGranularity(address);
+  assert_msg(loc, granularity != 16,
+             "GSan 16-byte pools do not support atomic accesses");
+  auto range = roundRange(Range{address, address + nBytes}, granularity);
   auto reserveBase = state->reserveBase;
   uint8_t numCells = 0;
-  for (uintptr_t addr = range.start; addr < range.end;
-       addr += kShadowMemGranularityBytes) {
+  for (uintptr_t addr = range.start; addr < range.end; addr += granularity) {
     if (isGsanManaged(addr, reserveBase))
       ++numCells;
   }
@@ -1106,8 +1126,7 @@ GSAN_DEVICE void acquireAtomicShadowRange(ThreadState *state,
   rwLockAcquireWrite(state->lock);
   event->threadState = state;
   event->numCells = 0;
-  for (uintptr_t addr = range.start; addr < range.end;
-       addr += kShadowMemGranularityBytes) {
+  for (uintptr_t addr = range.start; addr < range.end; addr += granularity) {
     if (!isGsanManaged(addr, reserveBase))
       continue;
     event->cells[event->numCells++] = acquireShadow(getShadowAddress(addr));
@@ -1233,12 +1252,10 @@ GSAN_DEVICE void tensorAtomicDesc(GlobalState *globals, const void *descriptor,
                                   const int16_t *blockShape, int bytesPerElem,
                                   int sem, int scope, int warpId, int numWarps,
                                   Location loc) {
-  int granularity =
-      roundUp(bytesPerElem, static_cast<uintptr_t>(kShadowMemGranularityBytes));
   AtomicElementHandler handleElement{
-      globals, globals->reserveBase, granularity, sem, scope, loc};
+      globals, globals->reserveBase, bytesPerElem, sem, scope, loc};
   tensorAccessDesc(descriptor, coords, rank, blockShape, bytesPerElem,
-                   granularity, warpId, numWarps, handleElement);
+                   bytesPerElem, warpId, numWarps, handleElement);
 }
 
 } // namespace
