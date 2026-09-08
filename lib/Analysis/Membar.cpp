@@ -298,10 +298,6 @@ bool MembarAnalysis::mayNotifyPeer(Operation *op) {
   });
 }
 
-bool requiresThreadSyncBefore(Operation *op) {
-  return getThreadSyncInfo(op).requiresBefore();
-}
-
 bool MembarAnalysis::requiresThreadSync(const BlockInfo &pending,
                                         const BlockInfo &effects) {
   // Only effect -> demand edges require a rendezvous; independent completion
@@ -326,9 +322,11 @@ bool MembarAnalysis::requiresThreadSync(const BlockInfo &pending,
   return false;
 }
 
-void MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
-                                  MembarInfo *membarInfo, OpBuilder *builder,
-                                  bool cluster) {
+Operation *MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
+                                        MembarInfo *membarInfo,
+                                        OpBuilder *builder, bool cluster) {
+  if (!builder)
+    return nullptr;
   auto &pending = membarInfo->pending;
   auto canSkip = [&](Operation *before, Operation *after, bool beforeIsRead,
                      bool afterIsRead, Allocation *allocation) {
@@ -342,22 +340,22 @@ void MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
   };
   if (!requiresThreadSync(pending, effects) &&
       !pending.isIntersected(effects, canSkip, &allocation, sliceFilter))
-    return;
+    return nullptr;
   // The barrier clears incoming state. The operation's own effects still
   // follow it, including a scratch write that conflicts with a pending read.
   builder->setInsertionPoint(op);
-  insertBarrier(op, builder, cluster);
+  Operation *barrier = insertBarrier(op, builder, cluster);
   membarInfo->sync();
+  return barrier;
 }
 
-void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder,
-                                   bool cluster) {
+Operation *MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder,
+                                         bool cluster) {
   OpBuilder::InsertionGuard g(*builder);
   if (cluster)
-    ttng::ClusterBarrierOp::create(*builder, op->getLoc());
-  else
-    triton::gpu::BarrierOp::create(*builder, op->getLoc(),
-                                   triton::gpu::AddrSpace::Local);
+    return ttng::ClusterBarrierOp::create(*builder, op->getLoc());
+  return triton::gpu::BarrierOp::create(*builder, op->getLoc(),
+                                        triton::gpu::AddrSpace::Local);
 }
 
 static Allocation::BufferId getScratchBufferId(Operation *op,
