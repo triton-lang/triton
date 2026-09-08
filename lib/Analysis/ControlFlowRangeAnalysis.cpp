@@ -13,7 +13,7 @@
 #include <tuple>
 
 using namespace mlir;
-using namespace mlir::triton::AMD::detail;
+using namespace mlir::triton::detail;
 
 namespace {
 

@@ -1,5 +1,5 @@
-#ifndef TRITONAMD_ANALYSIS_CONTROL_FLOW_RANGE_ANALYSIS_H
-#define TRITONAMD_ANALYSIS_CONTROL_FLOW_RANGE_ANALYSIS_H
+#ifndef TRITON_ANALYSIS_CONTROL_FLOW_RANGE_ANALYSIS_H
+#define TRITON_ANALYSIS_CONTROL_FLOW_RANGE_ANALYSIS_H
 
 #include "mlir/Interfaces/InferIntRangeInterface.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
@@ -9,7 +9,7 @@
 namespace mlir {
 class DominanceInfo;
 
-namespace triton::AMD::detail {
+namespace triton::detail {
 
 /// Range summaries for natural loops formed by lowering structured control
 /// flow. A header argument includes the final, failing condition evaluation;
@@ -32,7 +32,7 @@ private:
   std::unique_ptr<Impl> impl;
 };
 
-} // namespace triton::AMD::detail
+} // namespace triton::detail
 } // namespace mlir
 
 #endif
