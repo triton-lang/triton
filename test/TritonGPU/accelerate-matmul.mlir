@@ -568,12 +568,18 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     // CHECK-DAG: %[[MIN_SCALE:.*]] = arith.constant dense<64>
     // CHECK-DAG: %[[ZERO_SCALE:.*]] = arith.constant dense<0> : tensor<{{.*}}xi8,
     // CHECK-DAG: %[[ZERO_BITS:.*]] = arith.constant dense<0> : tensor<{{.*}}xi16,
+    // CHECK-DAG: %[[NAN_EXPONENT:.*]] = arith.constant dense<255> : tensor<{{.*}}xi16,
     // CHECK: ttg.fp4_to_fp
     // CHECK: %[[SHIFTED_SCALE:.*]] = arith.shli
     // CHECK: %[[IS_ZERO:.*]] = arith.cmpi eq, %{{.*}}, %[[ZERO_SCALE]] : tensor<{{.*}}xi8,
     // CHECK: %[[CORRECTION:.*]] = arith.select %[[IS_ZERO]], %[[MIN_SCALE]], %[[ZERO_BITS]]
     // CHECK: %[[SCALE_BITS:.*]] = arith.ori %[[SHIFTED_SCALE]], %[[CORRECTION]]
     // CHECK: tt.bitcast %[[SCALE_BITS]] : {{.*}} -> tensor<{{.*}}xbf16,
+    // CHECK: %[[SCALED:.*]] = arith.mulf %{{.*}}, %[[EXPANDED_SCALE:.*]] : tensor<{{.*}}xbf16,
+    // CHECK: %[[EXPANDED_BITS:.*]] = tt.bitcast %[[EXPANDED_SCALE]] : {{.*}} -> tensor<{{.*}}xi16,
+    // CHECK: %[[EXPONENT:.*]] = arith.shrui %[[EXPANDED_BITS]], %{{.*}}
+    // CHECK: %[[IS_NAN:.*]] = arith.cmpi eq, %[[EXPONENT]], %[[NAN_EXPONENT]]
+    // CHECK: arith.select %[[IS_NAN]], %{{.*}}, %[[SCALED]]
     // CHECK: ttng.warp_group_dot
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
     %result = tt.dot_scaled %a scale %scale, %b_bf16, %cst lhs = e2m1 rhs = bf16 {fastMath = false} : tensor<128x32xi8, #blocked2>, tensor<128x2xi8, #blocked1> * tensor<64x128xbf16, #blocked> -> tensor<128x128xf32, #blocked>
@@ -1001,6 +1007,7 @@ module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num
   // CHECK: %[[SCALE_BITS:.*]] = arith.shli
   // CHECK: %[[SCALE_F32:.*]] = tt.bitcast %[[SCALE_BITS]] : {{.*}} -> tensor<{{.*}}xf32,
   // CHECK: arith.truncf %[[SCALE_F32]] : {{.*}} to tensor<{{.*}}xf16,
+  // CHECK: arith.cmpi eq, {{.*}} : tensor<{{.*}}xi8,
   // CHECK: tt.dot
   // CHECK-NOT: tt.dot_scaled
   // CHECK: tt.return
