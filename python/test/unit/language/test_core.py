@@ -1580,6 +1580,54 @@ def test_noinline_returns_tensor(device):
 # ---------------
 
 
+@pytest.mark.parametrize("dtype", [
+    torch.bool, torch.int8, torch.uint8, torch.int16, torch.int32, torch.int64, torch.float16, torch.float32,
+    torch.float64
+])
+@pytest.mark.parametrize("scalar", [False, True])
+@pytest.mark.parametrize("ordered", [False, True])
+def test_atomic_load_store(dtype, scalar, ordered, device):
+
+    @triton.jit
+    def kernel(src, dst, N: tl.constexpr, SCALAR: tl.constexpr, ORDERED: tl.constexpr):
+        if SCALAR:
+            offsets = 1
+            mask = True
+        else:
+            offsets = tl.arange(0, 512)
+            mask = (offsets < N) & (offsets % 2 == 1)
+        value = tl.atomic_load(src + offsets, mask=mask, sem="acquire" if ORDERED else "relaxed")
+        tl.static_assert(value.dtype == src.dtype.element_ty)
+        tl.atomic_store(dst + offsets, value, mask=mask, sem="release" if ORDERED else "relaxed")
+
+    src = torch.arange(257, dtype=torch.int32, device=device)
+    if dtype == torch.bool:
+        src = (src // 2) % 2
+    src = src.to(dtype)
+    dst = torch.full_like(src, True if dtype == torch.bool else 42)
+    expected = dst.clone()
+    if scalar:
+        expected[1] = src[1]
+    else:
+        expected[1::2] = src[1::2]
+
+    compiled = kernel[(1, )](src, dst, src.numel(), scalar, ordered)
+
+    torch.testing.assert_close(dst, expected)
+    if dtype == torch.bool:
+        assert torch.all(dst.view(torch.uint8) <= 1)
+    if is_cuda():
+        ptx = compiled.asm["ptx"]
+        bit_width = dtype.itemsize * 8
+        assert f"ld.relaxed.gpu.global.b{bit_width}" in ptx
+        assert f"st.relaxed.gpu.global.b{bit_width}" in ptx
+        if torch.cuda.get_device_capability()[0] >= 9:
+            assert ptx.count("fence.acquire.gpu;") == ordered
+            assert ptx.count("fence.release.gpu;") == ordered
+        else:
+            assert ptx.count("fence.acq_rel.gpu;") == 2 * ordered
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("sem", ["relaxed", "acquire"])
 @pytest.mark.parametrize("scope", ["cta", "gpu", "sys"])

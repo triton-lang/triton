@@ -176,9 +176,8 @@ static LogicalResult verifyAtomicLoadStoreType(Operation *op, Type ptrTy) {
   Type elementTy = getElementTypeOrSelf(getPointeeType(ptrTy));
   if (!elementTy.isIntOrFloat())
     return op->emitOpError("only supports integer and floating-point elements");
-  unsigned bitWidth = elementTy.getIntOrFloatBitWidth();
-  if (bitWidth != 16 && bitWidth != 32 && bitWidth != 64)
-    return op->emitOpError("only supports elements with width {16, 32, 64}");
+  if (elementTy.getIntOrFloatBitWidth() < 8)
+    return op->emitOpError("does not support sub-byte elements");
   return success();
 }
 

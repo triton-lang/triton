@@ -1240,9 +1240,8 @@ class TritonSemantic(Generic[TensorTy]):
 #########
 
     def _validate_atomic_load_store_element_type(self, element_ty: tl.dtype, op: str):
-        if not (element_ty.is_int() or element_ty.is_floating()) or element_ty.primitive_bitwidth not in [16, 32, 64]:
-            raise ValueError(f"atomic_{op} only supports integer and floating-point elements with width "
-                             "{16, 32, 64}")
+        if not (element_ty.is_int() or element_ty.is_floating()):
+            raise ValueError(f"atomic_{op} only supports integer and floating-point elements")
 
     def _validate_atomic_rmw_element_type(self, element_ty: tl.dtype, op: str):
         if element_ty is tl.float16 and op != 'add':
@@ -1270,6 +1269,9 @@ class TritonSemantic(Generic[TensorTy]):
             ptr, val, mask = self._broadcast_ptr_val_mask(ptr, val, mask)
 
         element_ty = ptr.type.scalar.element_ty
+        if op in ("load", "store") and element_ty == tl.int1:
+            element_ty = tl.int8
+            ptr = self.cast(ptr, tl.pointer_type(element_ty, ptr.type.scalar.address_space))
         if val is not None:
             val = self.cast(val, element_ty)
 
@@ -1285,6 +1287,7 @@ class TritonSemantic(Generic[TensorTy]):
         return ptr, val, mask
 
     def atomic_load(self, ptr: TensorTy, mask: Optional[TensorTy], sem: str, scope: str) -> TensorTy:
+        ptr_ty = ptr.type.scalar
         ptr, _, mask = self._atomic_typechecking_impl(ptr, None, mask, "load")
         self._validate_atomic_load_store_element_type(ptr.type.scalar.element_ty, "load")
         sem = self._str_to_sem(sem, default=ir.MEM_SEMANTIC.ACQUIRE)
@@ -1293,7 +1296,10 @@ class TritonSemantic(Generic[TensorTy]):
         scope = self._str_to_scope(scope)
         result_ty = ptr.type.with_element_ty(ptr.type.scalar.element_ty) if ptr.type.is_block() else ptr.type.element_ty
         handle = self.builder.create_atomic_load(ptr.handle, mask.handle, sem, scope)
-        return self.tensor(handle, result_ty)
+        result = self.tensor(handle, result_ty)
+        if ptr_ty.element_ty == tl.int1:
+            result = self.cast(result, tl.int1)
+        return result
 
     def atomic_store(self, ptr: TensorTy, val: TensorTy, mask: Optional[TensorTy], sem: str, scope: str) -> TensorTy:
         ptr, val, mask = self._atomic_typechecking_impl(ptr, val, mask, "store")

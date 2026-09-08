@@ -2546,8 +2546,7 @@ def atomic_load(pointer, mask=None, sem=None, scope=None, _semantic=None):
     """
     Atomically loads from the memory locations specified by :code:`pointer`.
 
-    :param pointer: The memory locations to load from. Elements must be 16, 32,
-        or 64 bits wide.
+    :param pointer: The memory locations to load from.
     :type pointer: Block of dtype=triton.PointerDType
     :param mask: If :code:`mask[idx]` is false, the corresponding load is not
         performed and the result is unspecified.
@@ -2572,8 +2571,7 @@ def atomic_store(pointer, val, mask=None, sem=None, scope=None, _semantic=None):
     Atomically stores :code:`val` into the memory locations specified by
     :code:`pointer`.
 
-    :param pointer: The memory locations to store to. Elements must be 16, 32,
-        or 64 bits wide.
+    :param pointer: The memory locations to store to.
     :type pointer: Block of dtype=triton.PointerDType
     :param val: The values to store.
     :type val: Block of dtype=pointer.dtype.element_ty
