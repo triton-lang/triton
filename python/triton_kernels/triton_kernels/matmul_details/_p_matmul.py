@@ -336,7 +336,12 @@ def _p_matmul(
         k_tiles = tl.cdiv(loop_k, BLOCK_K * SPLIT_K)
         loop_bound = tl.maximum(k_tiles, 1)
         tl.assume(loop_bound > 0)  # Currently necessary for the compiler to flatten the loop properly.
-        for ki in tl.range(loop_bound, disallow_acc_multi_buffer=DISALLOW_ACC_MULTI_BUFFER):
+        for ki in tl.range(
+            loop_bound,
+            disallow_acc_multi_buffer=DISALLOW_ACC_MULTI_BUFFER,
+            # CLC needs warp specialization enabled on the inner loop.
+            warp_specialize=CLC,
+        ):
             if RAGGED_DIMENSION == "K" and ki >= k_tiles:
                 # Tile #ki does not exist: use out-of-bound indices to mask all loads.
                 off_k_x = K

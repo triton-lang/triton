@@ -565,8 +565,10 @@ void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, std::string exclusive,
     auto ctx = ret->getContext();
     auto loc = ret.getLoc();
     // Multi-CTA kernels already synchronize the cluster before every return.
-    if (!twoCTAs)
-      NVVM::BarrierOp::create(b, loc);
+    if (!twoCTAs) {
+      // Warp-specialized groups may reach different copies of this barrier.
+      NVVM::BarrierOp::create(b, loc, Value{}, Value{}, /*aligned=*/false);
+    }
     PTXBuilder ptxBuilder;
     // Calculate the predicate in the inline asm to avoid creating long
     // liveranges.

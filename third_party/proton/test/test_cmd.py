@@ -1,23 +1,10 @@
 import pytest
 import subprocess
 import json
-import os
 import pathlib
 import sys
 from packaging.version import Version
-
-
-def clean_rocprofiler_env():
-    # TODO: Remove when fix is merged in rocprofsdk for this
-    # rocprofiler-sdk updates the native process environment directly. Passing
-    # an explicit Python environment prevents that parent-process bootstrap
-    # state from initializing the SDK before Proton in a fresh CLI subprocess.
-    # https://github.com/ROCm/rocm-systems/pull/5348
-    env = os.environ.copy()
-    env.pop("ROCPROFILER_REGISTER_FORCE_LOAD", None)
-    env.pop("ROCPROFILER_REGISTER_LIBRARY", None)
-    env.pop("ROCP_TOOL_LIBRARIES", None)
-    return env
+from subprocess_utils import clean_rocprofiler_env
 
 
 def test_configure_runtime_without_therock(monkeypatch):

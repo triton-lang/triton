@@ -287,6 +287,10 @@ struct BarrierStages {
   bool beforeMemoryEffects = false;
   bool afterMemoryEffects = false;
   bool betweenMemoryEffects = false;
+
+  bool hasBarrier() const {
+    return beforeMemoryEffects || betweenMemoryEffects || afterMemoryEffects;
+  }
 };
 
 // Classify the barriers required by an atomic at a chosen scope. A result

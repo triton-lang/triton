@@ -653,12 +653,13 @@ public:
     if (failed(gsanGlobalStatePtr))
       return failure();
 
-    Value pollPtr = unpackLLElements(loc, adaptor.getPtr(), rewriter).front();
+    auto ptrs = unpackUniqueTensorElements(loc, adaptor.getPtr(), rewriter);
+    auto matched =
+        unpackUniqueTensorElements(loc, adaptor.getMatched(), rewriter);
     int32_t bytesPerElem = tt::getPointeeBitWidth(op.getPtr().getType()) / 8;
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
     Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
                                                          loc, *targetInfo);
-    threadPred = ttg::maybeAnd(rewriter, loc, threadPred, adaptor.getMatched());
     auto sourceLoc = materializeSourceLocation(rewriter, loc);
 
     TritonLLVMOpBuilder b(loc, rewriter);
@@ -666,13 +667,16 @@ public:
     Value eventState = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx),
                                               eventStateTy, b.i32_val(1),
                                               /*alignment=*/0);
-    emitGSanAtomicBeginCall(rewriter, loc, *gsanGlobalStatePtr, eventState,
-                            threadPred, pollPtr, bytesPerElem,
+    for (auto [ptr, success] : llvm::zip_equal(ptrs, matched)) {
+      Value pred = ttg::maybeAnd(rewriter, loc, threadPred, success);
+      emitGSanAtomicBeginCall(rewriter, loc, *gsanGlobalStatePtr, eventState,
+                              pred, ptr, bytesPerElem,
+                              static_cast<int32_t>(op.getSem()),
+                              static_cast<int32_t>(op.getScope()), sourceLoc);
+      emitGSanAtomicEndCall(rewriter, loc, eventState, pred, b.false_val(),
                             static_cast<int32_t>(op.getSem()),
                             static_cast<int32_t>(op.getScope()), sourceLoc);
-    emitGSanAtomicEndCall(rewriter, loc, eventState, threadPred, b.false_val(),
-                          static_cast<int32_t>(op.getSem()),
-                          static_cast<int32_t>(op.getScope()), sourceLoc);
+    }
 
     rewriter.eraseOp(op);
     return success();

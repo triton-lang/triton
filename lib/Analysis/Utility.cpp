@@ -81,7 +81,7 @@ unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
 
 bool ReduceOpHelper::isReduceWithinCTA() {
   // TODO: Support reduce across CTAS
-  // Layout optimization passes such as PlanCTAPass and
+  // Layout optimization passes such as AssignCGALayoutsPass and
   // RemoveLayoutConversionPass should avoid cross-CTA reduction
   return getCTASplitNum(srcEncoding)[axis] == 1;
 }
@@ -1308,8 +1308,7 @@ static bool atomicNeedsClusterBarrier(Operation *op) {
 
   auto stages = getAtomicBarrierStages(atomic.getMemSemantic(),
                                        atomicResultHasCTABroadcast(op));
-  return stages.beforeMemoryEffects || stages.afterMemoryEffects ||
-         stages.betweenMemoryEffects;
+  return stages.hasBarrier();
 }
 
 bool needsClusterBarrier(Operation *op) {

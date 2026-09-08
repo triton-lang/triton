@@ -287,6 +287,11 @@ std::optional<CGAEncodingAttr> parseCGAAttr(AsmParser &parser, Attribute attr,
 
 void printCGAAttr(AsmPrinter &printer, CGAEncodingAttr layout);
 
+// Return the CGA factor if layout = CTA * CGA, preserving broadcast block bits.
+// Pass a shape-instantiated layout when querying a tensor's CTA distribution.
+FailureOr<CGAEncodingAttr>
+maybeLinearToCGAEncodingAttr(const LinearLayout &layout);
+
 CGAEncodingAttr getCGALayout(Attribute layout);
 
 // Projects the CGA layout of a dot accumulator onto operand `opIdx`.
@@ -397,6 +402,9 @@ bool areLayoutsEquivalent(ArrayRef<int64_t> shape, LayoutEncodingTrait lhs,
 
 // Return true if the innermost numElems are contiguous.
 bool isInnermostContiguous(MemDescType type, unsigned numElems);
+
+// Return true for a full buffer with rank-one swizzled_shared(1, 1, 1).
+bool isContiguousSharedMemoryLayout(MemDescType type);
 
 LinearLayout inferReshapeLinearLayout(TensorOrMemDesc srcTy,
                                       ArrayRef<int64_t> dstShape);

@@ -2,6 +2,7 @@
 
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -10,6 +11,48 @@ namespace mlir::triton::nvidia_gpu {
 
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
+
+bool isCrossCTALoadStore(ttg::MemDescType memDescTy, RankedTensorType regTy) {
+  auto kRegister = StringAttr::get(memDescTy.getContext(), "register");
+  LinearLayout regLayout =
+      ttg::toLinearLayout(regTy).removeZeroBasesAlongDim(kRegister);
+  LinearLayout conversion = invertAndComposeBlockLocal(
+      ttg::toLinearLayoutIgnoringPadding(memDescTy), regLayout);
+  auto kBlock = StringAttr::get(memDescTy.getContext(), "block");
+  return !conversion.isIdentityOnOutDim(kBlock);
+}
+
+bool isCrossCTAGatherScatter(ttg::MemDescType memDescTy, RankedTensorType regTy,
+                             unsigned axis) {
+  MLIRContext *ctx = memDescTy.getContext();
+  LinearLayout sharedLayout = ttg::toLinearLayoutIgnoringPadding(memDescTy);
+  SmallVector<StringAttr> allDims =
+      standardOutDimNames(ctx, memDescTy.getRank());
+  StringAttr axisDim = allDims[axis];
+  auto kRegister = StringAttr::get(ctx, "register");
+  auto kBlock = StringAttr::get(ctx, "block");
+
+  // Runtime indices may select any shard of the indexed axis.
+  if (!sharedLayout.sublayoutIsZero({kBlock}, {axisDim}))
+    return true;
+
+  LinearLayout regLayout = ttg::toLinearLayout(regTy)
+                               .removeZeroBasesAlongDim(kRegister)
+                               .transposeOuts(allDims);
+  // Replace `axis` with a descriptor-sized input, then check whether the
+  // remaining result coordinates select a remote CTA.
+  SmallVector<StringAttr> nonIndexedDims = allDims;
+  nonIndexedDims.erase(nonIndexedDims.begin() + axis);
+  LinearLayout indexedLayout =
+      regLayout.sublayout(llvm::to_vector(regLayout.getInDimNames()),
+                          nonIndexedDims) *
+      LinearLayout::identity1D(sharedLayout.getOutDimSize(axisDim), axisDim,
+                               axisDim);
+  indexedLayout = indexedLayout.transposeOuts(allDims);
+  LinearLayout conversion =
+      invertAndComposeBlockLocal(sharedLayout, indexedLayout);
+  return !conversion.isIdentityOnOutDim(kBlock);
+}
 
 bool hasTCGen5CommitCrossCTA(Operation *op) {
   SmallVector<Value> descs;
@@ -42,8 +85,11 @@ bool requiresCrossCTAMBarrierInitSync(
           crossCTA = hasTCGen5CommitCrossCTA(op);
         else if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op))
           crossCTA = tma.getMulticast();
-        else if (isa<ttng::CLCTryCancelOp, ttng::AsyncSharedStoreOp>(op))
+        else if (isa<ttng::CLCTryCancelOp>(op))
           crossCTA = true;
+        else if (auto store = dyn_cast<ttng::AsyncSharedStoreOp>(op))
+          crossCTA = isCrossCTALoadStore(store.getDst().getType(),
+                                         store.getSrc().getType());
         else if (auto expect = dyn_cast<ttng::BarrierExpectOp>(op))
           crossCTA = expect.getFromCTA().has_value();
         else if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op))

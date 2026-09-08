@@ -179,7 +179,10 @@ createInitializeWSClusterBarriersWrapper(int32_t capability,
 }
 
 void init_triton_nvidia_passes_ttnvgpuir(py::module_ &m) {
-  ADD_PASS_WRAPPER_0("add_plan_cta", ttng::createTritonNvidiaGPUPlanCTAPass);
+  ADD_PASS_WRAPPER_0("add_assign_cga_layouts",
+                     ttng::createTritonNvidiaGPUAssignCGALayoutsPass);
+  ADD_PASS_WRAPPER_0("add_optimize_cta_locality",
+                     ttng::createTritonNvidiaGPUOptimizeCTALocalityPass);
   ADD_PASS_WRAPPER_0("add_to_clc", ttng::createTritonNvidiaGPUToCLCPass);
   ADD_PASS_WRAPPER_0("add_lower_clc", ttng::createTritonNvidiaGPULowerCLCPass);
   ADD_PASS_WRAPPER_1("add_fence_insertion",
@@ -307,6 +310,16 @@ void init_triton_nvidia(py::module_ &m) {
     mlir::registerNVVMDialectTranslation(registry);
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
+  });
+
+  // Set short point option, this needs to be set before setting the data
+  // layout.
+  m.def("set_short_ptr", []() {
+    auto options = llvm::cl::getRegisteredOptions();
+    const char *flag = "nvptx-short-ptr";
+    auto *shortPtr = static_cast<llvm::cl::opt<bool> *>(options[flag]);
+    assert(shortPtr);
+    shortPtr->setValue(true);
   });
 
   // TODO: could be done in python if we had a generic interface to set metadata

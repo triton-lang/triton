@@ -1032,19 +1032,25 @@ def test_async_compile_error(fresh_triton_cache):
     def fn(x: tl.constexpr):
         tl.static_assert(x == 2)
 
-    with pytest.raises(triton.compiler.errors.CompileTimeAssertionFailure):
-        with (
-                ThreadPoolExecutor(2) as pool,
-                triton.AsyncCompileMode(pool),
-        ):
-            assert triton.runtime._async_compile.active_mode.get() is not None
-            fn.warmup(1, grid=(1, ))
+    with (
+            ThreadPoolExecutor(2) as pool,
+            triton.AsyncCompileMode(pool),
+    ):
+        assert triton.runtime._async_compile.active_mode.get() is not None
+        fn.warmup(1, grid=(1, ))
 
-            assert len(fn.device_caches[0][0]) == 1
+        assert len(fn.device_caches[0][0]) == 1
+        # Resolving the queued kernel reports the compilation failure. The
+        # mode must not resolve the failed FutureKernel again on exit.
+        with pytest.raises(triton.compiler.errors.CompileTimeAssertionFailure):
+            fn[(1, )](1)
 
     # After the AsyncCompileMode context manager exits, the active mode should
     # be set to None again, even if there was an error.
     assert triton.runtime._async_compile.active_mode.get() is None
+    # A failed Future would otherwise retain its exception traceback and the
+    # compiler objects reachable through it.
+    assert len(fn.device_caches[0][0]) == 0
 
 
 def test_higher_order_kernel(device, fresh_triton_cache, capsys):

@@ -10,6 +10,7 @@ from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple, TY
 from dataclasses import dataclass
 import builtins
 from .. import knobs
+from .._instrumentation import is_enabled
 from ..runtime.jit import JITCallable
 import inspect
 
@@ -1459,7 +1460,7 @@ class tensor_descriptor_base(base_value):
 
         :note: Offset must be a multiple of 16-bytes
         """
-        return _semantic.descriptor_load(self, offsets, "", "")
+        return _semantic.descriptor_load(self, offsets, _CachePolicy())
 
     @builtin
     def store(self, offsets: Sequence[constexpr | tensor], value: tensor, _semantic=None) -> tensor:
@@ -2343,6 +2344,50 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
 # -----------------------
 
 
+@dataclass(frozen=True)
+class _CachePolicy:
+    """Target-neutral cache hints for Triton and Gluon memory operations."""
+
+    cache_modifier: str = "none"
+    eviction_policy: str = "evict_normal"
+
+    def __post_init__(self):
+        cache_modifier = _unwrap_if_constexpr(self.cache_modifier)
+        eviction_policy = _unwrap_if_constexpr(self.eviction_policy)
+        if not isinstance(cache_modifier, str):
+            raise TypeError("cache_modifier must be a string")
+        if not isinstance(eviction_policy, str):
+            raise TypeError("eviction_policy must be a string")
+        cache_modifier = cache_modifier.removeprefix(".")
+        object.__setattr__(self, "cache_modifier", cache_modifier)
+        object.__setattr__(self, "eviction_policy", eviction_policy)
+        if cache_modifier not in {"none", "ca", "cg", "wb", "cs", "wt", "cv"}:
+            raise ValueError(f"Unsupported cache modifier {cache_modifier!r}")
+        if eviction_policy not in {"evict_normal", "evict_first", "evict_last"}:
+            raise ValueError(f"Unsupported eviction policy {eviction_policy!r}")
+
+    @property
+    def type(self):
+        return constexpr_type(self)
+
+    def mangle(self) -> str:
+        return f"CP_{self.cache_modifier}_{self.eviction_policy}_CP"
+
+    def _to_ir(self, builder):
+        return builder.get_cache_policy(self.cache_modifier, self.eviction_policy)
+
+
+def _normalize_cache_policy(cache_policy, cache_modifier, eviction_policy):
+    cache_modifier = _unwrap_if_constexpr(cache_modifier)
+    eviction_policy = _unwrap_if_constexpr(eviction_policy)
+    cache_policy = _unwrap_if_constexpr(cache_policy)
+    if cache_policy is not None:
+        assert eviction_policy is None, "cache_policy and eviction_policy are mutually exclusive"
+        assert cache_modifier is None, "cache_policy and cache_modifier are mutually exclusive"
+        return cache_policy
+    return _CachePolicy(cache_modifier or "none", eviction_policy or "evict_normal")
+
+
 @builtin
 def load(pointer, mask=None, other=None, *, cache_modifier="", eviction_policy="", volatile=False, _semantic=None):
     """
@@ -2383,10 +2428,9 @@ def load(pointer, mask=None, other=None, *, cache_modifier="", eviction_policy="
         mask = _semantic.to_tensor(mask)
     if other is not None:
         other = _semantic.to_tensor(other)
-    cache_modifier = _unwrap_if_constexpr(cache_modifier)
-    eviction_policy = _unwrap_if_constexpr(eviction_policy)
     volatile = _unwrap_if_constexpr(volatile)
-    return _semantic.load(pointer, mask, other, cache_modifier, eviction_policy, volatile)
+    cache_policy = _normalize_cache_policy(None, cache_modifier, eviction_policy)
+    return _semantic.load(pointer, mask, other, cache_policy, volatile)
 
 
 @builtin
@@ -2439,9 +2483,8 @@ def store(pointer, value, mask=None, *, cache_modifier="", eviction_policy="", _
     mask = _unwrap_if_constexpr(mask)
     if mask is not None:
         mask = _semantic.to_tensor(mask)
-    cache_modifier = _unwrap_if_constexpr(cache_modifier)
-    eviction_policy = _unwrap_if_constexpr(eviction_policy)
-    return _semantic.store(pointer, value, mask, cache_modifier, eviction_policy)
+    cache_policy = _normalize_cache_policy(None, cache_modifier, eviction_policy)
+    return _semantic.store(pointer, value, mask, cache_policy)
 
 
 @builtin
@@ -2581,13 +2624,14 @@ def atomic_poll(pointer, expected_value, sem=None, scope=None, timeout_ns=None, 
     """
     Wait until the value at :code:`pointer` equals :code:`expected_value`.
 
-    This will spin-wait on the specified pointer until either the value equals
-    the expected value, or the operation times out. In the event of a timeout,
-    the operation returns false and no results may be acquired.
+    This will spin-wait on each specified pointer until either its value equals
+    the expected value, or the operation times out. The block waits for all polls to
+    finish. Timed-out elements return false and acquire no results.
 
-    :param pointer: A pointer to a scalar 16-, 32-, or 64-bit integer.
+    :param pointer: A pointer, or block of pointers, to 16-, 32-, or 64-bit integers.
     :type pointer: triton.PointerDType
-    :param expected_value: The value that ends the polling loop.
+    :param expected_value: The value that ends each polling loop, broadcast to
+        the shape of :code:`pointer`.
     :type expected_value: pointer.dtype.element_ty
     :param sem: Specifies whether a successful poll has acquire semantics.
         Acceptable values are "acquire" (default) and "relaxed".
@@ -2596,12 +2640,12 @@ def atomic_poll(pointer, expected_value, sem=None, scope=None, timeout_ns=None, 
         effect of the poll. Acceptable values are "gpu" (default), "cta"
         (cooperative thread array, thread block), and "sys" (system).
     :type scope: str, optional
-    :param timeout_ns: Maximum wall time to poll, measured in nanoseconds by
-        the GPU global timer. If omitted, polling has no timeout. A timeout of
-        zero still performs one load.
+    :param timeout_ns: Shared polling time budget for the entire operation, measured
+        in nanoseconds by the GPU global timer. If omitted, polling has no timeout.
+        Each element is loaded at least once, even with a zero timeout.
     :type timeout_ns: int, optional
-    :return: True if the expected value was observed, or False if the timeout
-        expired first.
+    :return: A boolean with the shape of :code:`pointer`, true for each element
+        whose expected value was observed and false if its timeout expired first.
     :rtype: triton.language.tensor
     """
     expected_value = _semantic.to_tensor(expected_value)
@@ -2731,8 +2775,7 @@ def expect_zero(x, mask, _semantic=None):
     """
     x = _unwrap_if_constexpr(x)
     mask = _semantic.to_tensor(mask)
-    instrumentation_mode = getattr(_semantic.builder.options, "instrumentation_mode", "")
-    if "fpsan" in instrumentation_mode:
+    if is_enabled(_semantic.builder.options, "fpsan"):
         return _semantic.where(mask, 0, x)
     if _semantic.builder.options.debug:
         x_tensor = _semantic.to_tensor(x)

@@ -719,9 +719,6 @@ InThreadTransposeOp::deduceOutputLayout(ArrayRef<int64_t> shape,
   for (int baseIdx = 0; baseIdx < regBasesTransposed; ++baseIdx)
     regBase.second[baseIdx] =
         inThreadTransposedTile.getBasis(regDimName, baseIdx);
-  int regBasesInTile = llvm::Log2_32(product(srcEncoding.getSizePerThread()));
-  for (int baseIdx = regBasesTransposed; baseIdx < regBasesInTile; ++baseIdx)
-    llvm::for_each(regBase.second[baseIdx], [](int32_t &val) { val = 0; });
 
   LinearLayout transposedLL(bases, SmallVector<StringAttr>(outDimNames));
   return transposedLL;
@@ -1305,7 +1302,8 @@ LogicalResult AsyncCopyLocalToGlobalOp::verify() {
   if (!isa<gpu::SharedMemorySpaceAttr>(srcTy.getMemorySpace()))
     return emitOpError("source must be in shared memory");
 
-  return success();
+  return triton::verifyCachePolicy(getOperation(), getCachePolicyAttr(),
+                                   triton::CachePolicyOperation::Store);
 }
 
 LogicalResult AsyncTDMFusedCopyGlobalToLocalOp::verify() {
@@ -1570,8 +1568,6 @@ LogicalResult UpdateTensorDescriptorOp::verify() {
 
 // -- InitBarrierOp --
 LogicalResult InitBarrierOp::verify() {
-  if (failed(verifyBarrierType(*this, getAlloc().getType())))
-    return failure();
   if (getCount() < 1)
     return emitOpError("count must be greater than or equal to 1");
   return success();
@@ -1580,18 +1576,10 @@ LogicalResult InitBarrierOp::verify() {
 TypedValue<gpu::MemDescType> InitBarrierOp::getBarrier() { return getAlloc(); }
 
 // -- WaitBarrierOp --
-LogicalResult WaitBarrierOp::verify() {
-  if (failed(verifyBarrierType(*this, getAlloc().getType())))
-    return failure();
-  return success();
-}
-
 TypedValue<gpu::MemDescType> WaitBarrierOp::getBarrier() { return getAlloc(); }
 
 // -- ArriveBarrierOp --
 LogicalResult ArriveBarrierOp::verify() {
-  if (failed(verifyBarrierType(*this, getAlloc().getType())))
-    return failure();
   if (getCount() < 1)
     return emitOpError("count must be greater than or equal to 1");
   return success();
@@ -1599,13 +1587,6 @@ LogicalResult ArriveBarrierOp::verify() {
 
 TypedValue<gpu::MemDescType> ArriveBarrierOp::getBarrier() {
   return getAlloc();
-}
-
-// -- AsyncCopyMbarrierArriveOp --
-LogicalResult AsyncCopyMbarrierArriveOp::verify() {
-  if (failed(verifyBarrierType(*this, getBarrier().getType())))
-    return failure();
-  return success();
 }
 
 // -- TDMPrefetchOp --

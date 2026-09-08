@@ -533,6 +533,53 @@ def test_list_comprehension_if_filter():
     run_parser(kernel)
 
 
+def test_list_comprehension_tuple_target():
+
+    @triton.jit
+    def kernel():
+        vals: tl.constexpr = [a + b for a, b in ((1, 2), (3, 4))]
+        tl.static_assert(len(vals) == 2)
+        tl.static_assert(vals[0] == 3)
+        tl.static_assert(vals[1] == 7)
+
+        nested: tl.constexpr = [a + b + c for a, (b, c) in ((1, (2, 3)), (4, (5, 6)))]
+        tl.static_assert(len(nested) == 2)
+        tl.static_assert(nested[0] == 6)
+        tl.static_assert(nested[1] == 15)
+
+    run_parser(kernel)
+
+
+def test_list_comprehension_tuple_target_rejects_mismatch():
+
+    @triton.jit
+    def kernel():
+        vals = [a + b for a, b in ((1, 2, 3), )]  # noqa: F841
+
+    with pytest.raises(CompilationError, match="too many values to unpack"):
+        run_parser(kernel)
+
+
+def test_list_comprehension_tuple_target_rejects_scalar_item():
+
+    @triton.jit
+    def kernel():
+        vals = [a + b for a, b in (1, 2)]  # noqa: F841
+
+    with pytest.raises(CompilationError, match="cannot unpack non-iterable value"):
+        run_parser(kernel)
+
+
+def test_list_comprehension_tuple_target_rejects_starred_target():
+
+    @triton.jit
+    def kernel():
+        vals = [a for a, *rest in ((1, 2, 3), )]  # noqa: F841
+
+    with pytest.raises(CompilationError, match="starred assignment targets are not supported"):
+        run_parser(kernel)
+
+
 def test_named_expr_respects_prior_constexpr_annotation():
 
     @triton.jit
@@ -915,11 +962,31 @@ def test_atomic_poll_timeout():
     tl.atomic_poll(ptr, 1, timeout_ns=1000)
 
 
+@filecheck_test
+@triton.jit
+def test_atomic_poll_tensor_pointer():
+    # CHECK-LABEL: test_atomic_poll_tensor_pointer
+    ptrs = tl.full((1, ), 0, tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    # CHECK: tt.atomic_poll acquire, gpu, {{.*}} : tensor<1x!tt.ptr<i32>>, tensor<1xi32> -> tensor<1xi1>
+    tl.atomic_poll(ptrs, 1)
+
+
+@filecheck_test
+@triton.jit
+def test_atomic_poll_tensor_timeout():
+    # CHECK-LABEL: test_atomic_poll_tensor_timeout
+    ptrs = tl.full((128, ), 0, tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    expected = tl.arange(0, 128)
+    # CHECK: tt.atomic_poll acquire, gpu, {{.*}} timeout {{.*}} : tensor<128x!tt.ptr<i32>>, tensor<128xi32> -> tensor<128xi1>
+    result = tl.atomic_poll(ptrs, expected, timeout_ns=0)
+    tl.static_assert(result.shape == expected.shape)
+
+
 @doesnt_compile
 @triton.jit
-def test_atomic_poll_rejects_tensor_pointer():
-    ptrs = tl.full((1, ), 0, tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
-    tl.atomic_poll(ptrs, 1)
+def test_atomic_poll_rejects_mismatched_shape():
+    ptrs = tl.full((32, ), 0, tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    tl.atomic_poll(ptrs, tl.arange(0, 64))
 
 
 @doesnt_compile
@@ -1521,3 +1588,16 @@ def test_const_ptr_is_constant_addrspace():
         tl.store(Out + offs, tl.load(In + offs, mask=mask), mask=mask)
 
     run_filecheck_test(kernel, args=(MockTensor(tl.float32), MockTensor(tl.float32), 8, 128))
+
+
+def test_cache_policy_ir_attrs():
+
+    @triton.jit
+    def kernel(In, Out, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        # CHECK: %[[VALUE:.*]] = tt.load {{.*}} {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_first>}
+        value = tl.load(In + offsets, cache_modifier=".cg", eviction_policy="evict_first")
+        # CHECK: tt.store {{.*}} {cachePolicy = #tt.cache_policy<cache_modifier = wt, eviction_policy = evict_last>}
+        tl.store(Out + offsets, value, cache_modifier=".wt", eviction_policy="evict_last")
+
+    run_filecheck_test(kernel, args=(MockTensor(tl.float32), MockTensor(tl.float32), 128))

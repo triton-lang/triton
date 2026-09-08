@@ -2022,6 +2022,29 @@ tt.func @must_barrier_nonzero_wrap_arm(%cst: tensor<128x128xf16>, %phase: i32) {
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.num-ctas" = 1 : i32} {
 
+// Argument descriptors have no allocation IDs. Different slots are disjoint
+// only when their indexed source is the same.
+// CHECK-LABEL: @shared_argument_buffer_indices
+tt.func @shared_argument_buffer_indices(%first: !ttg.memdesc<2x128xi32, #shared, #smem, mutable>, %second: !ttg.memdesc<2x128xi32, #shared, #smem, mutable>) -> (tensor<128xi32, #reader>, tensor<128xi32, #reader>) {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %input = arith.constant dense<1> : tensor<128xi32, #writer>
+  %first0 = ttg.memdesc_index %first[%c0] : !ttg.memdesc<2x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  %first1 = ttg.memdesc_index %first[%c1] : !ttg.memdesc<2x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  %second1 = ttg.memdesc_index %second[%c1] : !ttg.memdesc<2x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  // CHECK: ttg.local_store
+  // CHECK-NEXT: {{.*}} = ttg.local_load
+  // CHECK-NEXT: ttg.barrier local{{$}}
+  // CHECK-NEXT: {{.*}} = ttg.local_load
+  // CHECK-NEXT: ttg.barrier local{{$}}
+  // CHECK-NEXT: ttg.local_store
+  ttg.local_store %input, %first0 : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  %disjoint = ttg.local_load %first1 : !ttg.memdesc<128xi32, #shared, #smem, mutable> -> tensor<128xi32, #reader>
+  %overlapping = ttg.local_load %first0 : !ttg.memdesc<128xi32, #shared, #smem, mutable> -> tensor<128xi32, #reader>
+  ttg.local_store %input, %second1 : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  tt.return %disjoint, %overlapping : tensor<128xi32, #reader>, tensor<128xi32, #reader>
+}
+
 // Different constant indices can name the same slot when their indexed
 // sources have different origins: allocation[1] equals prefix[0].
 // CHECK-LABEL: @shared_buffer_index_shifted_source
@@ -2087,6 +2110,7 @@ tt.func @shared_subslice_shifted_source(%input: tensor<64xi32, #writer>) -> tens
 #writer = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
 #reader = #ttg.linear<{register = [], lane = [[1], [2], [4], [8], [16]], warp = [[64], [32]], block = [[0]]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#split = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.num-ctas" = 2 : i32} {
@@ -2216,12 +2240,11 @@ tt.func @shared_async_disjoint_footprints(%input: tensor<128xi32, #writer>, %ptr
   tt.return %output : tensor<128xi32, #reader>
 }
 
-// An immediate common source supplies relative coordinates even when it is
-// itself a subslice. A private function keeps physical-footprint refinement
-// disabled, so both the disjoint and overlapping cases use that relative proof.
+// Caller-owned descriptors have unknown footprints in the callee's frame.
+// Nested subslices still share relative coordinates; only the overlapping
+// load needs a barrier.
 // CHECK-LABEL: @nested_subslices_same_source
-tt.func private @nested_subslices_same_source(%initial: tensor<512xi32, #writer>, %input: tensor<128xi32, #writer>) -> (tensor<128xi32, #reader>, tensor<128xi32, #reader>) {
-  %allocation = ttg.local_alloc %initial : (tensor<512xi32, #writer>) -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
+tt.func private @nested_subslices_same_source(%allocation: !ttg.memdesc<512xi32, #shared, #smem, mutable>, %input: tensor<128xi32, #writer>) -> (tensor<128xi32, #reader>, tensor<128xi32, #reader>) attributes {noinline = true} {
   %source = ttg.memdesc_subslice %allocation [0] : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> !ttg.memdesc<256xi32, #shared, #smem, mutable, 512>
   %low = ttg.memdesc_subslice %source [0] : !ttg.memdesc<256xi32, #shared, #smem, mutable, 512> -> !ttg.memdesc<128xi32, #shared, #smem, mutable, 512>
   %high = ttg.memdesc_subslice %source [128] : !ttg.memdesc<256xi32, #shared, #smem, mutable, 512> -> !ttg.memdesc<128xi32, #shared, #smem, mutable, 512>
@@ -2233,6 +2256,32 @@ tt.func private @nested_subslices_same_source(%initial: tensor<512xi32, #writer>
   ttg.local_store %input, %low : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #shared, #smem, mutable, 512>
   %disjoint = ttg.local_load %high : !ttg.memdesc<128xi32, #shared, #smem, mutable, 512> -> tensor<128xi32, #reader>
   %overlapping = ttg.local_load %low : !ttg.memdesc<128xi32, #shared, #smem, mutable, 512> -> tensor<128xi32, #reader>
+  tt.return %disjoint, %overlapping : tensor<128xi32, #reader>, tensor<128xi32, #reader>
+}
+
+tt.func @call_nested_subslices_same_source(%initial: tensor<512xi32, #writer>, %input: tensor<128xi32, #writer>) -> (tensor<128xi32, #reader>, tensor<128xi32, #reader>) {
+  %allocation = ttg.local_alloc %initial : (tensor<512xi32, #writer>) -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
+  %disjoint, %overlapping = tt.call @nested_subslices_same_source(%allocation, %input) : (!ttg.memdesc<512xi32, #shared, #smem, mutable>, tensor<128xi32, #writer>) -> (tensor<128xi32, #reader>, tensor<128xi32, #reader>)
+  tt.return %disjoint, %overlapping : tensor<128xi32, #reader>, tensor<128xi32, #reader>
+}
+
+// Block arguments hide the immediate subslices. Equal offsets in different
+// physical CTAs remain disjoint; an overlapping access still needs a barrier.
+// CHECK-LABEL: @shared_distinct_cta_footprints
+tt.func @shared_distinct_cta_footprints(%initial: tensor<256xi32, #writer>, %input: tensor<128xi32, #writer>) -> (tensor<128xi32, #reader>, tensor<128xi32, #reader>) {
+  %allocation = ttg.local_alloc %initial : (tensor<256xi32, #writer>) -> !ttg.memdesc<256xi32, #split, #smem, mutable>
+  %first = ttg.memdesc_subslice %allocation [0] : !ttg.memdesc<256xi32, #split, #smem, mutable> -> !ttg.memdesc<128xi32, #split, #smem, mutable, 256>
+  %second = ttg.memdesc_subslice %allocation [128] : !ttg.memdesc<256xi32, #split, #smem, mutable> -> !ttg.memdesc<128xi32, #split, #smem, mutable, 256>
+  ttng.cluster_barrier
+  cf.br ^access(%first, %second : !ttg.memdesc<128xi32, #split, #smem, mutable, 256>, !ttg.memdesc<128xi32, #split, #smem, mutable, 256>)
+^access(%left: !ttg.memdesc<128xi32, #split, #smem, mutable, 256>, %right: !ttg.memdesc<128xi32, #split, #smem, mutable, 256>):
+  // CHECK: ttg.local_store
+  // CHECK-NEXT: {{.*}} = ttg.local_load
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: {{.*}} = ttg.local_load
+  ttg.local_store %input, %left : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #split, #smem, mutable, 256>
+  %disjoint = ttg.local_load %right : !ttg.memdesc<128xi32, #split, #smem, mutable, 256> -> tensor<128xi32, #reader>
+  %overlapping = ttg.local_load %left : !ttg.memdesc<128xi32, #split, #smem, mutable, 256> -> tensor<128xi32, #reader>
   tt.return %disjoint, %overlapping : tensor<128xi32, #reader>, tensor<128xi32, #reader>
 }
 
@@ -2248,6 +2297,92 @@ tt.func @shared_pointer_storage(%input: tensor<128x!tt.ptr<i32>, #writer>) -> te
   tt.return %output : tensor<128x!tt.ptr<i32>, #reader>
 }
 
+tt.func private @read_first_call_slot(%input: tensor<128xi32, #writer>) -> tensor<128xi32, #reader> {
+  %c0 = arith.constant 0 : i32
+  %allocation = ttg.local_alloc : () -> !ttg.memdesc<2x128xi32, #shared, #smem, mutable>
+  %first = ttg.memdesc_index %allocation[%c0] : !ttg.memdesc<2x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  ttg.local_store %input, %first : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  %output = ttg.local_load %first : !ttg.memdesc<128xi32, #shared, #smem, mutable> -> tensor<128xi32, #reader>
+  tt.return %output : tensor<128xi32, #reader>
+}
+
+// The live buffer forces a nonzero call frame. Reused storage in the second
+// slot is disjoint from both the callee's entry write and its pending read.
+// CHECK-LABEL: @call_footprints_preserve_slots
+tt.func @call_footprints_preserve_slots(%input: tensor<128xi32, #writer>) -> (tensor<128xi32, #reader>, tensor<1024xi32, #writer>) {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %zeros = arith.constant dense<0> : tensor<1024xi32, #writer>
+  %live = ttg.local_alloc %zeros : (tensor<1024xi32, #writer>) -> !ttg.memdesc<1024xi32, #shared, #smem, mutable>
+  %before = ttg.local_alloc : () -> !ttg.memdesc<2x128xi32, #shared, #smem, mutable>
+  %before_second = ttg.memdesc_index %before[%c1] : !ttg.memdesc<2x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  // CHECK: ttg.local_store
+  // CHECK-NEXT: ttg.local_dealloc
+  // CHECK-NEXT: {{.*}} = tt.call @read_first_call_slot{{.*}}allocation.offset = [[FRAME:[1-9][0-9]*]]
+  ttg.local_store %input, %before_second : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  ttg.local_dealloc %before : !ttg.memdesc<2x128xi32, #shared, #smem, mutable>
+  %output = tt.call @read_first_call_slot(%input) : (tensor<128xi32, #writer>) -> tensor<128xi32, #reader>
+  // CHECK-NEXT: {{.*}} = ttg.local_alloc {allocation.offset = [[FRAME]]
+  %after = ttg.local_alloc : () -> !ttg.memdesc<2x128xi32, #shared, #smem, mutable>
+  %after_first = ttg.memdesc_index %after[%c0] : !ttg.memdesc<2x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  %after_second = ttg.memdesc_index %after[%c1] : !ttg.memdesc<2x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  // CHECK: ttg.memdesc_index
+  // CHECK-NEXT: {{.*}} = ttg.memdesc_index
+  // CHECK-NEXT: ttg.local_store
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: ttg.local_store
+  ttg.local_store %input, %after_second : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  ttg.local_store %input, %after_first : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  %kept = ttg.local_load %live : !ttg.memdesc<1024xi32, #shared, #smem, mutable> -> tensor<1024xi32, #writer>
+  tt.return %output, %kept : tensor<128xi32, #reader>, tensor<1024xi32, #writer>
+}
+
+tt.func private @return_shared_argument(%value: !ttg.memdesc<128xi32, #shared, #smem, mutable>) -> !ttg.memdesc<128xi32, #shared, #smem, mutable> {
+  tt.return %value : !ttg.memdesc<128xi32, #shared, #smem, mutable>
+}
+
+// The selected descriptor retains both origins even when one returns through
+// a call that the function-local allocation alias analysis cannot follow.
+// CHECK-LABEL: @returned_origin_in_selected_access
+tt.func @returned_origin_in_selected_access(%condition: i1, %input: tensor<128xi32, #writer>) -> tensor<128xi32, #reader> {
+  %first = ttg.local_alloc %input : (tensor<128xi32, #writer>) -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  %second = ttg.local_alloc %input : (tensor<128xi32, #writer>) -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  %returned = tt.call @return_shared_argument(%second) : (!ttg.memdesc<128xi32, #shared, #smem, mutable>) -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  %selected = arith.select %condition, %first, %returned : !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  ttg.barrier local
+  // CHECK: ttg.local_store
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: {{.*}} = ttg.local_load
+  ttg.local_store %input, %selected : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  %output = ttg.local_load %second : !ttg.memdesc<128xi32, #shared, #smem, mutable> -> tensor<128xi32, #reader>
+  tt.return %output : tensor<128xi32, #reader>
+}
+
+tt.func private @write_local_or_argument(%condition: i1, %input: tensor<128xi32, #writer>, %incoming: !ttg.memdesc<128xi32, #shared, #smem, mutable>) {
+  %local = ttg.local_alloc : () -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  %selected = arith.select %condition, %local, %incoming : !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  ttg.local_store %input, %selected : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  tt.return
+}
+
+// A partial local-ID set must not drop the argument access. Its unknown range
+// remains unbounded when imported at the nonzero call offset.
+// CHECK-LABEL: @call_with_mixed_allocation_frames
+tt.func @call_with_mixed_allocation_frames(%condition: i1, %input: tensor<128xi32, #writer>) -> tensor<128xi32, #reader> {
+  %c0 = arith.constant 0 : i32
+  %allocation = ttg.local_alloc : () -> !ttg.memdesc<8x128xi32, #shared, #smem, mutable>
+  %incoming = ttg.memdesc_index %allocation[%c0] : !ttg.memdesc<8x128xi32, #shared, #smem, mutable> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  // CHECK: ttg.local_store
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: tt.call @write_local_or_argument{{.*}}allocation.offset = {{[1-9][0-9]*}}
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: {{.*}} = ttg.local_load
+  ttg.local_store %input, %incoming : tensor<128xi32, #writer> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+  tt.call @write_local_or_argument(%condition, %input, %incoming) : (i1, tensor<128xi32, #writer>, !ttg.memdesc<128xi32, #shared, #smem, mutable>) -> ()
+  %output = ttg.local_load %incoming : !ttg.memdesc<128xi32, #shared, #smem, mutable> -> tensor<128xi32, #reader>
+  tt.return %output : tensor<128xi32, #reader>
+}
+
 }
 
 // -----
@@ -2257,10 +2392,10 @@ tt.func @shared_pointer_storage(%input: tensor<128x!tt.ptr<i32>, #writer>) -> te
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
-// Block arguments hide the immediate subslices. Physical footprints still
-// distinguish the padded partitions and retain the overlapping dependency.
+// Block arguments hide the immediate subslices. Device-function footprints
+// still distinguish padded partitions and retain the overlapping dependency.
 // CHECK-LABEL: @shared_partitioned_padded_footprints
-tt.func @shared_partitioned_padded_footprints(%initial: tensor<8x16xf16>, %input: tensor<4x16xf16>) -> (tensor<4x16xf16>, tensor<4x16xf16>) {
+tt.func private @shared_partitioned_padded_footprints(%initial: tensor<8x16xf16>, %input: tensor<4x16xf16>) -> (tensor<4x16xf16>, tensor<4x16xf16>) {
   %allocation = ttg.local_alloc %initial : (tensor<8x16xf16>) -> !ttg.memdesc<8x16xf16, #shared, #smem, mutable>
   %first = ttg.memdesc_subslice %allocation [0, 0] : !ttg.memdesc<8x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<4x16xf16, #shared, #smem, mutable, 8x16>
   %second = ttg.memdesc_subslice %allocation [4, 0] : !ttg.memdesc<8x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<4x16xf16, #shared, #smem, mutable, 8x16>
@@ -2275,5 +2410,10 @@ tt.func @shared_partitioned_padded_footprints(%initial: tensor<8x16xf16>, %input
   %disjoint = ttg.local_load %right : !ttg.memdesc<4x16xf16, #shared, #smem, mutable, 8x16> -> tensor<4x16xf16>
   %overlapping = ttg.local_load %left : !ttg.memdesc<4x16xf16, #shared, #smem, mutable, 8x16> -> tensor<4x16xf16>
   tt.return %disjoint, %overlapping : tensor<4x16xf16>, tensor<4x16xf16>
+}
+
+tt.func @call_partitioned_padded_footprints(%initial: tensor<8x16xf16>, %input: tensor<4x16xf16>) -> (tensor<4x16xf16>, tensor<4x16xf16>) {
+  %result:2 = tt.call @shared_partitioned_padded_footprints(%initial, %input) : (tensor<8x16xf16>, tensor<4x16xf16>) -> (tensor<4x16xf16>, tensor<4x16xf16>)
+  tt.return %result#0, %result#1 : tensor<4x16xf16>, tensor<4x16xf16>
 }
 }

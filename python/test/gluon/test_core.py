@@ -14,6 +14,7 @@ from triton._internal_testing import (
     is_blackwell,
     is_blackwell_ultra,
     is_rubin,
+    is_hip,
     is_hip_rdna,
     is_hip_rdna3,
     is_hip_rdna4,
@@ -50,6 +51,53 @@ from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton._C.libtriton.gluon_ir import make_cga_layout
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
+
+
+@pytest.mark.parametrize("block_size", [1, 16, 128, 512])
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("timeout", [None, 0])
+def test_atomic_poll_tensor_results(block_size, num_warps, timeout, device):
+
+    @gluon.jit
+    def kernel(Flags, Out, BLOCK: ttgl.constexpr, TIMEOUT: ttgl.constexpr, Layout: ttgl.constexpr):
+        offsets = ttgl.arange(0, BLOCK, layout=Layout)
+        matched = ttgl.atomic_poll(Flags + offsets, offsets + 1, timeout_ns=TIMEOUT)
+        ttgl.store(Out + offsets, matched)
+
+    expected = torch.arange(1, block_size + 1, dtype=torch.int32, device=device)
+    flags = expected.clone()
+    if timeout is not None:
+        flags[::2] = 0
+    out = torch.empty(block_size, dtype=torch.bool, device=device)
+    layout = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [num_warps], [0])
+    kernel[(1, )](flags, out, block_size, timeout, layout, num_warps=num_warps)
+    assert torch.equal(out, flags == expected)
+
+
+@pytest.mark.parametrize("block_size", [16, 128, 512])
+@pytest.mark.parametrize("use_result", [False, True])
+def test_atomic_poll_tensor_acquire(block_size, use_result, device):
+    if not is_cuda():
+        pytest.skip("requires concurrent CUDA CTAs")
+
+    @gluon.jit
+    def kernel(Flags, Payload, Out, BLOCK: ttgl.constexpr, UseResult: ttgl.constexpr):
+        offsets = ttgl.arange(0, BLOCK, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+        if ttgl.program_id(0) == 0:
+            matched = ttgl.atomic_poll(Flags + offsets, 1, scope="gpu")
+            values = ttgl.load(Payload + offsets)
+            if UseResult:
+                values = ttgl.where(matched, values, -1)
+            ttgl.store(Out + offsets, values)
+        else:
+            ttgl.store(Payload + offsets, offsets + 1)
+            ttgl.atomic_xchg(Flags + offsets, 1, sem="release", scope="gpu")
+
+    flags = torch.zeros(block_size, dtype=torch.int32, device=device)
+    payload = torch.zeros_like(flags)
+    out = torch.zeros_like(flags)
+    kernel[(2, )](flags, payload, out, block_size, use_result, num_warps=4)
+    torch.testing.assert_close(out, torch.arange(1, block_size + 1, dtype=torch.int32, device=device))
 
 
 @gluon.jit
@@ -1556,7 +1604,7 @@ def _run_tma_mma_shared_inputs(warps, reps, ctas_per_cga, two_ctas, multicast, u
                           for acc_dtype in [torch.float16, torch.float32]
                           if bitwidth == 16 or (acc_dtype == torch.float32 and not transpose_a and transpose_b)])
 @pytest.mark.parametrize("warps", ([8, 1], [4, 2], [4, 1]))
-@pytest.mark.parametrize("swizzling_a, swizzling_b", product([0, 32, 64, 128], repeat=2))
+@pytest.mark.parametrize("swizzling_a, swizzling_b", list(product([0, 32, 64, 128], repeat=2)))
 @pytest.mark.parametrize("instr_m", [64, 128] if is_blackwell() else [64])
 @pytest.mark.parametrize("shape_m, shape_n, shape_k", [(1, 1, 1), (2, 4, 1), (2, 2, 4)])
 @pytest.mark.parametrize("ctas_per_cga", [[1, 1], [2, 1], [4, 4]])
@@ -2325,6 +2373,44 @@ def test_tmem_subslice_unpacked_one_column():
     kernel[(1, )](inp, out, num_warps=4)
     torch.testing.assert_close(out[:, 0], torch.full_like(out[:, 0], 777), atol=0, rtol=0)
     torch.testing.assert_close(out[:, 1], inp[:, 1], atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("pred", [False, True])
+def test_tmem_wait_predicated_store(pred):
+
+    @gluon.jit
+    def kernel(inp, out, pred_ptr):
+        parent = allocate_tensor_memory(ttgl.float32, [128, 64], TensorMemoryLayout([128, 64], col_stride=1))
+        layout: ttgl.constexpr = parent.get_reg_layout()
+        rows = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))
+        cols = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, layout))
+        offsets = rows[:, None] * 64 + cols[None, :]
+        pred_value = ttgl.load(pred_ptr)
+        parent.store(ttgl.load(inp + offsets))
+
+        a = parent.slice(0, 16)
+        b = parent.slice(16, 16)
+        c = parent.slice(32, 16)
+        values = a.load()
+        # Register users and disjoint stores need no load wait.
+        b.store(values + 1)
+        c.store(values + 2, pred=pred_value)
+        # Overwriting the loaded source and reading all stores require completion.
+        a.store(ttgl.full([128, 16], -7, ttgl.float32, layout=a.get_reg_layout()))
+        ttgl.store(out + offsets, parent.load())
+
+    inp = torch.arange(128 * 64, dtype=torch.float32, device="cuda").reshape(128, 64)
+    out = torch.empty_like(inp)
+    pred_tensor = torch.tensor(pred, dtype=torch.bool, device="cuda")
+    kernel[(1, )](inp, out, pred_tensor, num_warps=4)
+
+    expected = inp.clone()
+    expected[:, :16] = -7
+    expected[:, 16:32] = inp[:, :16] + 1
+    if pred:
+        expected[:, 32:48] = inp[:, :16] + 2
+    torch.testing.assert_close(out, expected, atol=0, rtol=0)
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
@@ -3480,7 +3566,7 @@ def test_tcgen05_mma_scaled_lhs_tmem(a_format, a_torch_dtype, b_format, b_torch_
     torch.testing.assert_close(out, ref, atol=atol, rtol=rtol)
 
 
-@pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
+@pytest.mark.skipif(not (is_ampere_or_newer() or is_hip()), reason="Requires Ampere or newer, or AMD")
 def test_coalesced_layout():
 
     @gluon.jit
@@ -3525,7 +3611,7 @@ def test_coalesced_layout():
     torch.testing.assert_close(output, ref)
 
 
-@pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
+@pytest.mark.skipif(not (is_ampere_or_newer() or is_hip()), reason="Requires Ampere or newer, or AMD")
 def test_convert_auto_layout_to_coalesced_layout():
 
     @gluon.jit

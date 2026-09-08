@@ -470,6 +470,9 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 // Peer-CTA views can share local byte offsets while selecting different
 // recipient CTAs. Runtime selection must preserve both candidates.
+// A replicated root covers both CTAs and is physically identical to the
+// sharded parent, including its CTA1 slice.
+#replicated = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 0]]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
 #blocked_sharded = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
 #smem = #ttg.shared_memory
@@ -479,12 +482,16 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 // CHECK: cta_affine_a_parent vs cta_affine_c_remote: alias=true
 // CHECK: cta_affine_a_parent vs cta_affine_d_disjoint: alias=false
 // CHECK: cta_affine_a_parent vs cta_affine_e_selected: alias=true
+// CHECK: cta_affine_a_parent vs cta_affine_f_replicated: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true
+// CHECK: cta_affine_b_local vs cta_affine_c_remote: alias=false
 // CHECK: cta_affine_b_local vs cta_affine_d_disjoint: alias=false
 // CHECK: cta_affine_c_remote vs cta_affine_d_disjoint: alias=false
+// CHECK: cta_affine_c_remote vs cta_affine_f_replicated: alias=true
 // CHECK: cta_affine_d_disjoint vs cta_affine_e_selected: alias=false
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 1024 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
   tt.func public @cross_cta_affine_physical_alias(%choose: i1) {
-    %parent = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<4x32xi32, #shared, #smem, mutable>
+    %replica = ttg.local_alloc {allocation.offset = 0 : i32, test.region_name = "cta_affine_f_replicated"} : () -> !ttg.memdesc<2x32xi32, #replicated, #smem, mutable>
+    %parent = ttg.memdesc_reinterpret %replica : !ttg.memdesc<2x32xi32, #replicated, #smem, mutable> -> !ttg.memdesc<4x32xi32, #shared, #smem, mutable>
     %local = ttg.memdesc_subslice %parent [0, 0] : !ttg.memdesc<4x32xi32, #shared, #smem, mutable> -> !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32>
     %remote = ttg.memdesc_subslice %parent [2, 0] : !ttg.memdesc<4x32xi32, #shared, #smem, mutable> -> !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32>
     %selected = arith.select %choose, %local, %remote : !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32>
@@ -500,13 +507,14 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
-// Callee allocations are relative to their own frame. Incoming descriptors
-// remain disjoint from callee-local storage across direct and indirect callers.
+// Callee allocations are relative to their own frame. A physical overlap query
+// cannot compare them with incoming caller-frame descriptors before their
+// origins are normalized, even when the program's buffers are disjoint.
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 
 // CHECK-LABEL: frame_a_argument vs frame_a_argument: alias=true
-// CHECK: frame_a_argument vs frame_b_local: alias=false
+// CHECK: frame_a_argument vs frame_b_local: alias=true, lhs_contains_rhs=false, rhs_contains_lhs=false
 // CHECK: frame_b_local vs frame_b_local: alias=true
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 256 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   tt.func private @callee_local_is_disjoint_from_argument(
@@ -541,13 +549,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 // -----
 
 // A descriptor returned through a callee retains its caller allocation frame.
+// Its physical offsets cannot be compared with the callee-local frame yet.
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 
 // CHECK-LABEL: return_frame_a_direct vs return_frame_a_direct: alias=true
 // CHECK: return_frame_a_direct vs return_frame_a_returned: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true
-// CHECK: return_frame_a_direct vs return_frame_b_local: alias=false
-// CHECK: return_frame_a_returned vs return_frame_b_local: alias=false
+// CHECK: return_frame_a_direct vs return_frame_b_local: alias=true, lhs_contains_rhs=false, rhs_contains_lhs=false
+// CHECK: return_frame_a_returned vs return_frame_b_local: alias=true, lhs_contains_rhs=false, rhs_contains_lhs=false
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 64 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   tt.func private @return_argument(
       %incoming: !ttg.memdesc<16xi32, #shared, #smem, mutable>)
@@ -780,6 +789,48 @@ module attributes {test.print_state_plan, "ttg.num-ctas" = 2 : i32, "ttg.num-war
     %remote = ttg.memdesc_subslice %parent [2, 0] : !ttg.memdesc<4x32xi32, #shared, #smem, mutable> -> !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32>
     %0 = ttg.local_load %local {test.region_name = "cta_state_a_local"} : !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32> -> tensor<2x32xi32, #blocked>
     %1 = ttg.local_load %remote {test.region_name = "cta_state_b_remote"} : !ttg.memdesc<2x32xi32, #shared, #smem, mutable, 4x32> -> tensor<2x32xi32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// Scale elements are broadcast into all four warp-addressable TMEM blocks.
+// The complete footprint equals two full columns of 32-bit words, not just
+// the representative rows chosen by the layout's pseudoinverse.
+// The scales are replicated across CTAs too; sharding the word view must not
+// change its physical coverage.
+#scales = #ttng.tensor_memory_scales_encoding<CGALayout = [[0, 0]]>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]]>
+
+// CHECK-LABEL: broadcast_a_scales vs broadcast_a_scales: alias=true
+// CHECK: broadcast_a_scales vs broadcast_b_words: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true
+// CHECK: broadcast_a_scales vs broadcast_c_disjoint: alias=false
+// CHECK: broadcast_b_words vs broadcast_c_disjoint: alias=false
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @tmem_broadcast_rows_are_physical_replicas() {
+    %scales = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32, test.region_name = "broadcast_a_scales"} : () -> !ttg.memdesc<64x4xi8, #scales, #ttng.tensor_memory, mutable>
+    %words = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32, test.region_name = "broadcast_b_words"} : () -> !ttg.memdesc<256x2xi32, #tmem, #ttng.tensor_memory, mutable>
+    %disjoint = ttng.tmem_alloc {tensor_memory_col_offset = 4 : i32, tensor_memory_row_offset = 0 : i32, test.region_name = "broadcast_c_disjoint"} : () -> !ttg.memdesc<256x2xi32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// Shared bytes and TMEM words are different address spaces, even when their
+// numerical addresses coincide.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: spaces_a_shared vs spaces_a_shared: alias=true
+// CHECK: spaces_a_shared vs spaces_b_tensor: alias=false, lhs_contains_rhs=false, rhs_contains_lhs=false
+// CHECK: spaces_b_tensor vs spaces_b_tensor: alias=true
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 512 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 128 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @different_memory_spaces_do_not_alias() {
+    %shared = ttg.local_alloc {allocation.offset = 0 : i32, test.region_name = "spaces_a_shared"} : () -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
+    %tensor = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32, test.region_name = "spaces_b_tensor"} : () -> !ttg.memdesc<128x1xf32, #tmem, #ttng.tensor_memory, mutable>
     tt.return
   }
 }

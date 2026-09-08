@@ -7,6 +7,7 @@ from typing import Tuple, List, Dict, Callable, TypeVar, Optional
 import math
 import numpy as np
 import time
+from fractions import Fraction
 
 import triton
 import triton.language as tl
@@ -257,6 +258,25 @@ def _umulhi_64(a, b):
     return ((int(a) & mask) * (int(b) & mask)) >> 64
 
 
+def _fma_fp64(a, b, c):
+    # Numpy has no fused multiply-add, and float64 has no wider type to hold the
+    # product exactly, so round the exact rational value instead.
+    if math.isnan(a) or math.isnan(b) or math.isnan(c) or math.isinf(a) or math.isinf(b):
+        return a * b + c
+    if math.isinf(c):
+        return c
+    exact = Fraction(a) * Fraction(b) + Fraction(c)
+    if exact == 0:
+        # Only zero operands can make this a negative zero.
+        return a * b + c if a * b == 0.0 and c == 0.0 else 0.0
+    sign = 1.0 if exact > 0 else -1.0
+    try:
+        ret = float(exact)
+    except OverflowError:
+        return math.copysign(math.inf, sign)
+    return ret if ret != 0.0 else math.copysign(0.0, sign)
+
+
 def _e8m0_to_f32(scale):
     assert scale.dtype in (np.uint8, np.int8)
     scale = scale.astype(np.uint8)
@@ -352,6 +372,7 @@ def _prepare_dot_scaled_operand(value_handle, scale_handle, format_enum, k_pack,
 np_erf_fp32 = np.vectorize(_erf, otypes=[np.float32])
 np_erf_fp64 = np.vectorize(_erf, otypes=[np.float64])
 np_umulhi_u64 = np.vectorize(_umulhi_64, otypes=[np.uint64])
+np_fma_fp64 = np.vectorize(_fma_fp64, otypes=[np.float64])
 
 
 class ExtraFunctions:
@@ -515,16 +536,19 @@ class InterpreterBuilder:
         return TensorHandle(np.array([self.grid_dim[axis]], dtype=np.int32), tl.int32)
 
     # memory ops
-    def create_load(self, ptr, _0, _1, is_volatile):
+    def get_cache_policy(self, cache_modifier, eviction_policy):
+        return None
+
+    def create_load(self, ptr, cache_policy, is_volatile):
         mask = TensorHandle(np.ones_like(ptr.data, dtype=bool), tl.int1)
         other = None
-        return self.create_masked_load(ptr, mask, other, _0, _1, is_volatile)
+        return self.create_masked_load(ptr, mask, other, cache_policy, is_volatile)
 
-    def create_store(self, ptr, val, _0, _1):
+    def create_store(self, ptr, val, cache_policy):
         mask = TensorHandle(np.ones_like(ptr.data, dtype=bool), tl.int1)
-        return self.create_masked_store(ptr, val, mask, None, None)
+        return self.create_masked_store(ptr, val, mask, cache_policy)
 
-    def create_masked_load(self, ptrs, mask, other, cache_modifier, eviction_policy, is_volatile):
+    def create_masked_load(self, ptrs, mask, other, cache_policy, is_volatile):
         dtype_tt = ptrs.get_element_ty()
         dtype_np = _get_np_dtype(dtype_tt)
         if other is None:
@@ -532,7 +556,7 @@ class InterpreterBuilder:
         ret = _interpreter.load(ptrs.data, mask.data, other.data, dtype_np)
         return TensorHandle(ret, dtype_tt)
 
-    def create_masked_store(self, ptrs, value, mask, cache_modifier, eviction_policy):
+    def create_masked_store(self, ptrs, value, mask, cache_policy):
         return _interpreter.store(ptrs.data, value.data, mask.data)
 
     # casting ops
@@ -686,7 +710,15 @@ class InterpreterBuilder:
     create_select = lambda self, cond, lhs, rhs: self.ternary_op(cond, lhs, rhs, np.where)
 
     def create_fma(self, x, y, z):
-        return TensorHandle(x.data * y.data + z.data, z.dtype.scalar)
+        # An fma rounds once, but multiplying and then adding rounds twice.
+        # float64 has the precision to round the narrower types correctly.
+        dtype = z.data.dtype
+        if dtype == np.float64:
+            ret = np_fma_fp64(x.data, y.data, z.data)
+        else:
+            product = np.multiply(x.data, y.data, dtype=np.float64)
+            ret = np.add(product, z.data, dtype=np.float64).astype(dtype)
+        return TensorHandle(ret, z.dtype.scalar)
 
     # unary functions
     def unary_op(self, arg, op):
@@ -805,13 +837,18 @@ class InterpreterBuilder:
         return TensorHandle(_interpreter.atomic_cas(ptr.data, cmp.data, val.data, sem), cmp.dtype.scalar)
 
     def create_atomic_poll(self, ptr, expected, timeout_ns, sem, scope):
-        start_ns = time.perf_counter_ns()
-        while True:
-            value = self.create_load(ptr, None, None, True)
-            if np.array_equal(value.data, expected.data):
-                return TensorHandle(np.array(True, dtype=np.bool_), tl.int1)
-            if timeout_ns is not None and time.perf_counter_ns() - start_ns >= timeout_ns.data.item():
-                return TensorHandle(np.array(False, dtype=np.bool_), tl.int1)
+        matched = np.zeros(ptr.data.shape, dtype=np.bool_)
+        start_ns = time.perf_counter_ns() if timeout_ns is not None else None
+        for index in np.ndindex(ptr.data.shape):
+            element_ptr = TensorHandle(np.asarray(ptr.data[index]), ptr.dtype)
+            while True:
+                value = self.create_load(element_ptr, None, True)
+                if value.data.item() == expected.data[index]:
+                    matched[index] = True
+                    break
+                if timeout_ns is not None and time.perf_counter_ns() - start_ns >= timeout_ns.data.item():
+                    break
+        return TensorHandle(matched, tl.int1)
 
     def create_atomic_rmw(self, rmwOp, ptr, val, mask, sem, scope):
         if rmwOp not in self.ir_rmw_op_to_interpreter_rmw_op:
@@ -867,8 +904,7 @@ class InterpreterBuilder:
         desc.validate()
         return desc
 
-    def create_descriptor_load(self, desc: TensorDescHandle, indices: List[TensorHandle], cache_modifier,
-                               eviction_policy):
+    def create_descriptor_load(self, desc: TensorDescHandle, indices: List[TensorHandle], cache_policy):
         ptrs, mask = desc.materialize_pointers(indices)
         dtype_tt = ptrs.get_element_ty()
         dtype_np = _get_np_dtype(dtype_tt)
@@ -879,22 +915,20 @@ class InterpreterBuilder:
             other = TensorHandle(np.full_like(ptrs.data, float('nan'), dtype=dtype_np), dtype_tt)
         else:
             raise ValueError(f"unsupported padding {padding}")
-        return self.create_masked_load(ptrs, mask, other, cache_modifier=cache_modifier,
-                                       eviction_policy=eviction_policy, is_volatile=False)
+        return self.create_masked_load(ptrs, mask, other, cache_policy=cache_policy, is_volatile=False)
 
     def create_descriptor_store(self, desc: TensorDescHandle, value: TensorHandle, indices: List[TensorHandle]):
         ptrs, mask = desc.materialize_pointers(indices)
-        return self.create_masked_store(ptrs, value, mask, None, None)
+        return self.create_masked_store(ptrs, value, mask, None)
 
     def create_descriptor_gather(self, desc: TensorDescHandle, x_offsets: TensorHandle, y_offset: TensorHandle, type):
         dtype = desc.base.dtype.element_ty
         np_dtype = _get_np_dtype(dtype)
         result = np.zeros([x_offsets.data.shape[0], desc.block_shape[-1]], dtype=np_dtype)
-        cache_modifier = None
-        eviction_policy = None
+        cache_policy = None
         for i, x_offset in enumerate(x_offsets.data):
             indices = [TensorHandle(x_offset, tl.int32), y_offset]
-            result[i, :] = self.create_descriptor_load(desc, indices, cache_modifier, eviction_policy).data
+            result[i, :] = self.create_descriptor_load(desc, indices, cache_policy).data
         return TensorHandle(result, dtype)
 
     def create_descriptor_scatter(self, desc: TensorDescHandle, value: TensorHandle, x_offsets: TensorHandle,
@@ -1010,7 +1044,9 @@ class ReduceScanOpInterface:
             ret = ret.astype(np_dtype)
             ret_type = tl.block_type(dtype, list(ret.shape))
         else:
-            ret = np.array([ret], dtype=np_dtype)
+            # Match the shaped path above. NumPy 2 rejects out-of-range Python
+            # integers in array(..., dtype=...), while astype narrows instead.
+            ret = np.array([ret]).astype(np_dtype)
             ret_type = dtype
         return tl.core.tensor(TensorHandle(ret, dtype.scalar), ret_type)
 
@@ -1278,6 +1314,7 @@ def _patch_lang_core(lang, scope: _LangPatchScope):
 
     scope.set_attr(lang, "range", _new_range)
     scope.set_attr(lang, "static_range", _new_range)
+    scope.set_attr(lang.condition, "__bool__", lambda self: bool(self.condition))
     scope.set_attr(lang, "static_assert", _new_static_assert)
     scope.set_attr(lang, "static_print", print)
     scope.set_attr(lang.dtype, "to_ir", _new_to_ir)

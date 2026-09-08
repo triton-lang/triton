@@ -16,6 +16,16 @@ using mlir::triton::amdgpu::ISAFamily;
 using mlir::triton::gpu::appendOrGetExternFuncOp;
 
 namespace mlir::LLVM::AMD {
+
+FailureOr<triton::CacheModifier> getCacheModifier(Attribute cachePolicy) {
+  if (!cachePolicy)
+    return triton::CacheModifier::NONE;
+  auto policy = dyn_cast<triton::CachePolicyAttr>(cachePolicy);
+  if (!policy)
+    return failure();
+  return policy.getCacheModifier();
+}
+
 namespace {
 
 enum class ShflKind : uint32_t {
