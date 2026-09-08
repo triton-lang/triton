@@ -414,7 +414,8 @@ struct ConvertLayoutOpConversion
     // `(1 - (1/2)^m) * numRegs` shuffles in total. If `P_lane` is nontrivial,
     // then we can conjugate its effects through the first two stages and fuse
     // it with the second stage, resulting in `numRegs` shuffles instead.
-    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+    Value laneId, warpId;
+    std::tie(laneId, warpId) = getLaneAndWarpId(rewriter, loc);
     // Implement r_i ^= l_j using `numRegs` independent selects or permutes.
     auto applySwap = [&](TranspositionInfo t, bool preShuf) {
       int rIdx = t.regBit - nPack;
