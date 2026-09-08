@@ -2752,10 +2752,11 @@ def test_tmem_subslice_unpacked_one_column():
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_tmem_same_warp_raw_then_cross_warp(device):
+@pytest.mark.parametrize("store_repeats", [1, 4])
+def test_tmem_same_warp_raw_then_cross_warp(device, store_repeats):
 
     @gluon.jit
-    def kernel(a_ptr, b_ptr, flag_ptr, same_ptr, cross_ptr):
+    def kernel(a_ptr, b_ptr, flag_ptr, same_ptr, cross_ptr, repeats):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [32, 1], [4, 2], [0, 1])
         rows = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))
         cols = ttgl.arange(0, 2, layout=ttgl.SliceLayout(0, layout))
@@ -2767,7 +2768,8 @@ def test_tmem_same_warp_raw_then_cross_warp(device):
         a = parent.slice(0, 2)
         b = parent.slice(1, 2)
         b.store(bv)
-        a.store(av)
+        for i in range(repeats):
+            a.store(av + i)
 
         # The ready flag gives a local-only CTA barrier; TMEM completion
         # and cross-warp publication are still required before the loads.
@@ -2783,13 +2785,14 @@ def test_tmem_same_warp_raw_then_cross_warp(device):
     flag = torch.ones((), dtype=torch.int32, device=device)
     same = torch.empty_like(a)
     cross = torch.empty_like(a)
-    expected_cross = torch.stack((a[:, :, 1], b[:, :, 1]), dim=2)
+    expected_same = a + store_repeats - 1
+    expected_cross = torch.stack((expected_same[:, :, 1], b[:, :, 1]), dim=2)
 
     for _ in range(8):
         same.fill_(float("nan"))
         cross.fill_(float("nan"))
-        kernel[(ctas, )](a, b, flag, same, cross, num_warps=8, num_ctas=1)
-        torch.testing.assert_close(same, a, rtol=0, atol=0)
+        kernel[(ctas, )](a, b, flag, same, cross, store_repeats, num_warps=8, num_ctas=1)
+        torch.testing.assert_close(same, expected_same, rtol=0, atol=0)
         torch.testing.assert_close(cross, expected_cross, rtol=0, atol=0)
 
 
