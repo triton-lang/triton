@@ -287,6 +287,11 @@ std::optional<CGAEncodingAttr> parseCGAAttr(AsmParser &parser, Attribute attr,
 
 void printCGAAttr(AsmPrinter &printer, CGAEncodingAttr layout);
 
+// Return the CGA factor if layout = CTA * CGA, preserving broadcast block bits.
+// Pass a shape-instantiated layout when querying a tensor's CTA distribution.
+FailureOr<CGAEncodingAttr>
+maybeLinearToCGAEncodingAttr(const LinearLayout &layout);
+
 CGAEncodingAttr getCGALayout(Attribute layout);
 
 // Projects the CGA layout of a dot accumulator onto operand `opIdx`.

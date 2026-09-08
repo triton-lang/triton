@@ -1,7 +1,7 @@
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx942" | FileCheck %s --check-prefixes=CHECK,NO-F32,BUF-F64
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx950" | FileCheck %s --check-prefixes=CHECK,NO-F32,BUF-F64
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx1100" | FileCheck %s --check-prefixes=CHECK,BUF-F32,NO-F64
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx1170" | FileCheck %s --check-prefixes=CHECK,NO-F32,NO-F64
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx1170" | FileCheck %s --check-prefixes=CHECK,BUF-F32,NO-F64
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx1200" | FileCheck %s --check-prefixes=CHECK,BUF-F32,NO-F64
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="gfx-arch=gfx1250" | FileCheck %s --check-prefixes=CHECK,BUF-F32,BUF-F64
 
@@ -27,6 +27,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %5 = tt.addptr %4, %2 : tensor<1024x!tt.ptr<f16>, #blocked>, tensor<1024xi32, #blocked>
     // CHECK-NOT: amdg.buffer_atomic_rmw
     // CHECK: tt.atomic_rmw max
+    // CHECK-NOT: amdg.buffer_atomic_rmw
     %6 = tt.atomic_rmw max, acq_rel, gpu, %5, %values : (tensor<1024x!tt.ptr<f16>, #blocked>, tensor<1024xf16, #blocked>) -> tensor<1024xf16, #blocked>
     tt.return
   }
@@ -47,6 +48,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %5 = tt.addptr %4, %2 : tensor<1024x!tt.ptr<bf16>, #blocked>, tensor<1024xi32, #blocked>
     // CHECK-NOT: amdg.buffer_atomic_rmw
     // CHECK: tt.atomic_rmw min
+    // CHECK-NOT: amdg.buffer_atomic_rmw
     %6 = tt.atomic_rmw min, acq_rel, gpu, %5, %values : (tensor<1024x!tt.ptr<bf16>, #blocked>, tensor<1024xbf16, #blocked>) -> tensor<1024xbf16, #blocked>
     tt.return
   }
@@ -67,8 +69,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %4 = tt.splat %3 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
     %5 = tt.addptr %4, %2 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
     // BUF-F32: amdg.buffer_atomic_rmw max
+    // BUF-F32-NOT: tt.atomic_rmw
     // NO-F32-NOT: amdg.buffer_atomic_rmw
     // NO-F32: tt.atomic_rmw max
+    // NO-F32-NOT: amdg.buffer_atomic_rmw
     %6 = tt.atomic_rmw max, acq_rel, gpu, %5, %values : (tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>) -> tensor<1024xf32, #blocked>
     tt.return
   }
@@ -89,8 +93,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %4 = tt.splat %3 : !tt.ptr<f64> -> tensor<1024x!tt.ptr<f64>, #blocked>
     %5 = tt.addptr %4, %2 : tensor<1024x!tt.ptr<f64>, #blocked>, tensor<1024xi32, #blocked>
     // BUF-F64: amdg.buffer_atomic_rmw min
+    // BUF-F64-NOT: tt.atomic_rmw
     // NO-F64-NOT: amdg.buffer_atomic_rmw
     // NO-F64: tt.atomic_rmw min
+    // NO-F64-NOT: amdg.buffer_atomic_rmw
     %6 = tt.atomic_rmw min, acq_rel, gpu, %5, %values : (tensor<1024x!tt.ptr<f64>, #blocked>, tensor<1024xf64, #blocked>) -> tensor<1024xf64, #blocked>
     tt.return
   }
@@ -111,6 +117,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %5 = tt.addptr %4, %2 : tensor<1024x!tt.ptr<i32>, #blocked>, tensor<1024xi32, #blocked>
     // CHECK-NOT: amdg.buffer_atomic_rmw
     // CHECK: tt.atomic_rmw max
+    // CHECK-NOT: amdg.buffer_atomic_rmw
     %6 = tt.atomic_rmw max, acq_rel, gpu, %5, %values : (tensor<1024x!tt.ptr<i32>, #blocked>, tensor<1024xi32, #blocked>) -> tensor<1024xi32, #blocked>
     tt.return
   }
