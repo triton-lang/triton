@@ -380,10 +380,6 @@ Syntax:
 
 ```
 operation ::= `nvws.descriptor_load` $desc `[` $indices `]` $txCount $result
-              oilist(
-              `cacheModifier` `=` $cache |
-              `evictionPolicy` `=` $evict
-              )
               attr-dict `:` type(operands)
 ```
 
@@ -397,8 +393,7 @@ Interfaces: `NVWS_DescriptorLoadOpInterface`, `TT_DescriptorOpInterface`
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>txCount</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
-<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
-<tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
+<tr><td><code>cachePolicy</code></td><td>::mlir::Attribute</td><td>any attribute</td></tr>
 </table>
 
 #### Operands:

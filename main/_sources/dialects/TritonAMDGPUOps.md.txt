@@ -52,7 +52,7 @@ Syntax:
 
 ```
 operation ::= `amdg.async_copy_local_to_global` $src `,` $dst (`mask` $mask^)?
-              oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
+              oilist(`cachePolicy` `=` $cachePolicy)
               attr-dict `:` qualified(type($src)) `->` type($dst)
 ```
 
@@ -69,8 +69,7 @@ Interfaces: `InferTypeOpInterface`, `PredicatedOpInterface`
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
-<tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
+<tr><td><code>cachePolicy</code></td><td>::mlir::Attribute</td><td>any attribute</td></tr>
 <tr><td><code>contiguity</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 
@@ -615,7 +614,6 @@ Syntax:
 
 ```
 operation ::= `amdg.buffer_load` $ptr `[` $offsets `]` (`,` $mask^)? (`,` $other^)?
-              oilist(`cacheModifier` `=` $cache)
               (`stride` `=` $stride^)?
               attr-dict `:` qualified(type($ptr)) `->` type($result)
 ```
@@ -643,7 +641,7 @@ Interfaces: `BufferOpInterface`, `PredicatedOpInterface`
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
+<tr><td><code>cachePolicy</code></td><td>::mlir::Attribute</td><td>any attribute</td></tr>
 <tr><td><code>contiguity</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 
@@ -673,7 +671,7 @@ Syntax:
 
 ```
 operation ::= `amdg.buffer_load_to_local` $ptr `[` $offsets `]` (`mask` `=` $mask^)? (`other` `=` $other^)? (`stride` `=` $stride^)?
-              oilist(`cacheModifier` `=` $cache) `into` $dest
+              oilist(`cachePolicy` `=` $cachePolicy) `into` $dest
               attr-dict `:` qualified(type($ptr)) `[` type($offsets) `]` type($other) `->` type($dest)
 ```
 
@@ -689,7 +687,7 @@ Interfaces: `BufferOpInterface`, `InferTypeOpInterface`, `PredicatedOpInterface`
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
+<tr><td><code>cachePolicy</code></td><td>::mlir::Attribute</td><td>any attribute</td></tr>
 <tr><td><code>contiguity</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 
@@ -720,7 +718,6 @@ Syntax:
 
 ```
 operation ::= `amdg.buffer_store` $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
-              oilist(`cacheModifier` `=` $cache)
               (`stride` `=` $stride^)?
               attr-dict `:` qualified(type($ptr)) `->` type($value)
 ```
@@ -748,7 +745,7 @@ Interfaces: `BufferOpInterface`, `PredicatedOpInterface`
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
+<tr><td><code>cachePolicy</code></td><td>::mlir::Attribute</td><td>any attribute</td></tr>
 <tr><td><code>contiguity</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 

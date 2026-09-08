@@ -402,10 +402,6 @@ Syntax:
 
 ```
 operation ::= `tt.descriptor_load` $desc `[` $indices `]`
-              oilist(
-              `cacheModifier` `=` $cache |
-              `evictionPolicy` `=` $evict
-              )
               attr-dict `:` qualified(type($desc)) `->` type($result)
 ```
 
@@ -421,8 +417,7 @@ Interfaces: `TT_DescriptorLoadLikeOpInterface`, `TT_DescriptorOpInterface`
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
-<tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
+<tr><td><code>cachePolicy</code></td><td>::mlir::Attribute</td><td>any attribute</td></tr>
 </table>
 
 #### Operands:
@@ -1110,10 +1105,6 @@ Syntax:
 
 ```
 operation ::= `tt.load` $ptr (`,` $mask^)? (`,` $other^)?
-              oilist(
-              `cacheModifier` `=` $cache |
-              `evictionPolicy` `=` $evict
-              )
               attr-dict `:` type($ptr)
 ```
 
@@ -1125,8 +1116,7 @@ Interfaces: `InferTypeOpInterface`, `MemoryEffectOpInterface`, `PredicatedOpInte
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
-<tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
+<tr><td><code>cachePolicy</code></td><td>::mlir::Attribute</td><td>any attribute</td></tr>
 <tr><td><code>isVolatile</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 </table>
 
@@ -1709,7 +1699,6 @@ Syntax:
 
 ```
 operation ::= `tt.store` $ptr `,` $value (`,` $mask^)?
-              oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
               attr-dict `:` type($ptr)
 ```
 
@@ -1721,8 +1710,7 @@ Interfaces: `PredicatedOpInterface`
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
-<tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
+<tr><td><code>cachePolicy</code></td><td>::mlir::Attribute</td><td>any attribute</td></tr>
 <tr><td><code>ignore_cta</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 </table>
 

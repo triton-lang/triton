@@ -317,7 +317,6 @@ This is required in order to ensure async copy operations can be waited on.</p>
 <p><em>Copy data from global memory to local memory asynchronously</em></p>
 <p>Syntax:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttg.async_copy_global_to_local` $src `,` $result (`mask` $mask^)? (`other` $other^)?
-              oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
               attr-dict `:` type($src) `-&gt;` type($result)
 </pre></div>
 </div>
@@ -337,8 +336,7 @@ completion of <code class="docutils literal notranslate"><span class="pre">async
 <h3>Attributes:<a class="headerlink" href="#attributes" title="Link to this heading"></a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
-<tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
+<tr><td><code>cachePolicy</code></td><td>::mlir::Attribute</td><td>any attribute</td></tr>
 <tr><td><code>isVolatile</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 <tr><td><code>contiguity</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>

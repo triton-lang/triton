@@ -898,10 +898,6 @@ Accordingly, the result is a 2D tensor multiple rows.</p>
 <p><em>Load from descriptor</em></p>
 <p>Syntax:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.descriptor_load` $desc `[` $indices `]`
-              oilist(
-              `cacheModifier` `=` $cache |
-              `evictionPolicy` `=` $evict
-              )
               attr-dict `:` qualified(type($desc)) `-&gt;` type($result)
 </pre></div>
 </div>
@@ -914,8 +910,7 @@ The destination tensor type and shape must match the descriptor otherwise the re
 <h3>Attributes:<a class="headerlink" href="#id23" title="Link to this heading"></a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
-<tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
+<tr><td><code>cachePolicy</code></td><td>::mlir::Attribute</td><td>any attribute</td></tr>
 </table>
 </section>
 <section id="id24">
@@ -1741,10 +1736,6 @@ the two input tensors must have the same shape.</p>
 <p><em>Load from a pointer or tensor of pointers</em></p>
 <p>Syntax:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.load` $ptr (`,` $mask^)? (`,` $other^)?
-              oilist(
-              `cacheModifier` `=` $cache |
-              `evictionPolicy` `=` $evict
-              )
               attr-dict `:` type($ptr)
 </pre></div>
 </div>
@@ -1754,8 +1745,7 @@ the two input tensors must have the same shape.</p>
 <h3>Attributes:<a class="headerlink" href="#id62" title="Link to this heading"></a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
-<tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
+<tr><td><code>cachePolicy</code></td><td>::mlir::Attribute</td><td>any attribute</td></tr>
 <tr><td><code>isVolatile</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 </table>
 </section>
@@ -2492,7 +2482,6 @@ shape 4x8xf32.</p>
 <p><em>Store through a pointer or tensor of pointers</em></p>
 <p>Syntax:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.store` $ptr `,` $value (`,` $mask^)?
-              oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
               attr-dict `:` type($ptr)
 </pre></div>
 </div>
@@ -2502,8 +2491,7 @@ shape 4x8xf32.</p>
 <h3>Attributes:<a class="headerlink" href="#id100" title="Link to this heading"></a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
-<tr><td><code>evict</code></td><td>::mlir::triton::EvictionPolicyAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
+<tr><td><code>cachePolicy</code></td><td>::mlir::Attribute</td><td>any attribute</td></tr>
 <tr><td><code>ignore_cta</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 </table>
 </section>
