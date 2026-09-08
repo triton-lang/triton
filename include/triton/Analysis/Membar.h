@@ -304,8 +304,6 @@ struct MembarInfo {
 triton::BarrierStages getLocalBarrierStages(Operation *op,
                                             Allocation *allocation);
 
-bool requiresThreadSyncBefore(Operation *op);
-
 //===----------------------------------------------------------------------===//
 // Shared Memory Barrier Analysis
 //===----------------------------------------------------------------------===//
@@ -353,11 +351,12 @@ protected:
   void updateMemoryEffects(Operation *operation, MembarInfo *membarInfo,
                            FuncMapT *funcMap, OpBuilder *builder,
                            bool cluster = false, BlockInfo effects = {});
-  void syncIfNeeded(Operation *operation, const BlockInfo &effects,
-                    MembarInfo *membarInfo, OpBuilder *builder,
-                    bool cluster = false);
-  void insertBarrier(Operation *operation, OpBuilder *builder,
-                     bool cluster = false);
+  /// Returns the inserted barrier, or nullptr when none is inserted.
+  Operation *syncIfNeeded(Operation *operation, const BlockInfo &effects,
+                          MembarInfo *membarInfo, OpBuilder *builder,
+                          bool cluster = false);
+  Operation *insertBarrier(Operation *operation, OpBuilder *builder,
+                           bool cluster = false);
   virtual triton::BarrierStages getBarrierStages(Operation *operation);
 
   /// Whether pending thread effects must rendezvous before upcoming demands.
