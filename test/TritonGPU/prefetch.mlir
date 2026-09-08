@@ -292,6 +292,45 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// CHECK-LABEL: tt.func @prefetch_reject_logical_index_phase
+// CHECK-NOT: ttg.memdesc_subslice
+// CHECK: ttg.local_load
+// CHECK-NOT: ttg.memdesc_subslice
+// CHECK: tt.dot
+// CHECK-NOT: ttg.memdesc_subslice
+// CHECK: tt.return
+
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+#a_op = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>
+#b_op = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
+#a = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0]]}, alignment = 16>
+#b_alloc = #ttg.shared_linear<{offset = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 0, 8], [0, 0, 16], [0, 0, 32], [0, 0, 64], [0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0], [0, 16, 0]]}, alignment = 16>
+#b_phase = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0]]}, alignment = 16, hasIndexPhase = true, indexPhaseMask = 0>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @prefetch_reject_logical_index_phase() -> tensor<128x128xf32, #mma> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c4_i32 = arith.constant 4 : i32
+    %zero = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
+    %a_alloc = ttg.local_alloc : () -> !ttg.memdesc<1x128x32xf16, #a, #smem, mutable>
+    %b_alloc = ttg.local_alloc : () -> !ttg.memdesc<1x32x128xf16, #b_alloc, #smem, mutable>
+    %a_init = ttg.memdesc_index %a_alloc[%c0_i32] : !ttg.memdesc<1x128x32xf16, #a, #smem, mutable> -> !ttg.memdesc<128x32xf16, #a, #smem, mutable>
+    %b_init = ttg.memdesc_index %b_alloc[%c0_i32] : !ttg.memdesc<1x32x128xf16, #b_alloc, #smem, mutable> -> !ttg.memdesc<32x128xf16, #b_phase, #smem, mutable, 1x32x128>
+    %loop:3 = scf.for %iv = %c0_i32 to %c4_i32 step %c1_i32 iter_args(%acc = %zero, %a = %a_init, %b = %b_init) -> (tensor<128x128xf32, #mma>, !ttg.memdesc<128x32xf16, #a, #smem, mutable>, !ttg.memdesc<32x128xf16, #b_phase, #smem, mutable, 1x32x128>) : i32 {
+      %a_val = ttg.local_load %a : !ttg.memdesc<128x32xf16, #a, #smem, mutable> -> tensor<128x32xf16, #a_op>
+      %b_val = ttg.local_load %b : !ttg.memdesc<32x128xf16, #b_phase, #smem, mutable, 1x32x128> -> tensor<32x128xf16, #b_op>
+      %next_acc = tt.dot %a_val, %b_val, %acc : tensor<128x32xf16, #a_op> * tensor<32x128xf16, #b_op> -> tensor<128x128xf32, #mma>
+      %next_a = ttg.memdesc_index %a_alloc[%c0_i32] : !ttg.memdesc<1x128x32xf16, #a, #smem, mutable> -> !ttg.memdesc<128x32xf16, #a, #smem, mutable>
+      %next_b = ttg.memdesc_index %b_alloc[%c0_i32] : !ttg.memdesc<1x32x128xf16, #b_alloc, #smem, mutable> -> !ttg.memdesc<32x128xf16, #b_phase, #smem, mutable, 1x32x128>
+      scf.yield %next_acc, %next_a, %next_b : tensor<128x128xf32, #mma>, !ttg.memdesc<128x32xf16, #a, #smem, mutable>, !ttg.memdesc<32x128xf16, #b_phase, #smem, mutable, 1x32x128>
+    }
+    tt.return %loop#0 : tensor<128x128xf32, #mma>
+  }
+}
+
+// -----
+
 #A_RING = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
 #B_RING = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
 #C_RING = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [16, 8]}>

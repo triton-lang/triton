@@ -1,5 +1,74 @@
 // RUN: triton-opt %s -split-input-file -mlir-disable-threading -test-buffer-region-alias -o /dev/null 2>&1 | FileCheck %s
 
+#shared = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [1, 0], [2, 8]]}, alignment = 8>
+#indexed = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 8>
+#plain = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+// The XOR phase changes the descriptor key from 1536 to 1568, but the view
+// still owns all of [1536, 1792). It must match the physical row and remain
+// disjoint from the next row.
+// CHECK-LABEL: logical_index_phase vs logical_index_phase
+// CHECK: logical_index_phase vs physical_next: alias=false
+// CHECK: logical_index_phase vs physical_same: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true
+// CHECK: logical_index_phase vs whole: alias=true, lhs_contains_rhs=false, rhs_contains_lhs=true
+// CHECK: logical_index_phase case [1568, 256]: mask={1}
+// CHECK: physical_same case [1536, 256]: mask={1}
+// CHECK: state-plan: lanes=3
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 2048 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32, test.print_state_plan} {
+  tt.func public @logical_index_phase_footprint() {
+    %c2 = arith.constant 2 : i32
+    %parent = ttg.local_alloc {allocation.offset = 1024 : i32} : () -> !ttg.memdesc<4x64xf32, #shared, #smem, mutable>
+    %logical = ttg.memdesc_index %parent[%c2] : !ttg.memdesc<4x64xf32, #shared, #smem, mutable> -> !ttg.memdesc<64xf32, #indexed, #smem, mutable, 4x64>
+    %storage = ttg.memdesc_reinterpret %parent : !ttg.memdesc<4x64xf32, #shared, #smem, mutable> -> !ttg.memdesc<256xf32, #plain, #smem, mutable>
+    %same = ttg.memdesc_subslice %storage [128] : !ttg.memdesc<256xf32, #plain, #smem, mutable> -> !ttg.memdesc<64xf32, #plain, #smem, mutable, 256>
+    %next = ttg.memdesc_subslice %storage [192] : !ttg.memdesc<256xf32, #plain, #smem, mutable> -> !ttg.memdesc<64xf32, #plain, #smem, mutable, 256>
+    %0 = ttg.local_load %logical {test.region_name = "logical_index_phase"} : !ttg.memdesc<64xf32, #indexed, #smem, mutable, 4x64> -> tensor<64xf32>
+    %1 = ttg.local_load %next {test.region_name = "physical_next"} : !ttg.memdesc<64xf32, #plain, #smem, mutable, 256> -> tensor<64xf32>
+    %2 = ttg.local_load %same {test.region_name = "physical_same"} : !ttg.memdesc<64xf32, #plain, #smem, mutable, 256> -> tensor<64xf32>
+    %3 = ttg.local_load %parent {test.region_name = "whole"} : !ttg.memdesc<4x64xf32, #shared, #smem, mutable> -> tensor<4x64xf32>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 4, order = [1, 0]}>
+#indexed = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 16, hasIndexPhase = true, indexPhaseMask = 12>
+#plain = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+// Reinterpretation folds the 1024-byte subslice offset into the base. Index
+// one adds a 256-byte base displacement and a 16-byte phase: key 2320, with
+// the physical footprint [2304, 2560).
+// CHECK-LABEL: reinterpreted_index vs reinterpreted_index
+// CHECK: reinterpreted_index vs reinterpreted_next: alias=false
+// CHECK: reinterpreted_index vs reinterpreted_previous: alias=false
+// CHECK: reinterpreted_index vs reinterpreted_same: alias=true, lhs_contains_rhs=true, rhs_contains_lhs=true
+// CHECK: reinterpreted_index case [2320, 256]: mask={1}
+// CHECK: reinterpreted_same case [2304, 256]: mask={1}
+// CHECK: state-plan: lanes=3
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 4096 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32, test.print_state_plan} {
+  tt.func public @logical_index_reinterpreted_swizzled_subslice() {
+    %c1 = arith.constant 1 : i32
+    %parent = ttg.local_alloc {allocation.offset = 1024 : i32} : () -> !ttg.memdesc<8x64xf32, #shared, #smem, mutable>
+    %slice = ttg.memdesc_subslice %parent [4, 0] : !ttg.memdesc<8x64xf32, #shared, #smem, mutable> -> !ttg.memdesc<4x64xf32, #shared, #smem, mutable, 8x64>
+    %source = ttg.memdesc_reinterpret %slice : !ttg.memdesc<4x64xf32, #shared, #smem, mutable, 8x64> -> !ttg.memdesc<4x64xf32, #shared, #smem, mutable>
+    %logical = ttg.memdesc_index %source[%c1] : !ttg.memdesc<4x64xf32, #shared, #smem, mutable> -> !ttg.memdesc<64xf32, #indexed, #smem, mutable, 4x64>
+    %storage = ttg.memdesc_reinterpret %parent : !ttg.memdesc<8x64xf32, #shared, #smem, mutable> -> !ttg.memdesc<512xf32, #plain, #smem, mutable>
+    %previous = ttg.memdesc_subslice %storage [256] : !ttg.memdesc<512xf32, #plain, #smem, mutable> -> !ttg.memdesc<64xf32, #plain, #smem, mutable, 512>
+    %same = ttg.memdesc_subslice %storage [320] : !ttg.memdesc<512xf32, #plain, #smem, mutable> -> !ttg.memdesc<64xf32, #plain, #smem, mutable, 512>
+    %next = ttg.memdesc_subslice %storage [384] : !ttg.memdesc<512xf32, #plain, #smem, mutable> -> !ttg.memdesc<64xf32, #plain, #smem, mutable, 512>
+    %0 = ttg.local_load %logical {test.region_name = "reinterpreted_index"} : !ttg.memdesc<64xf32, #indexed, #smem, mutable, 4x64> -> tensor<64xf32>
+    %1 = ttg.local_load %previous {test.region_name = "reinterpreted_previous"} : !ttg.memdesc<64xf32, #plain, #smem, mutable, 512> -> tensor<64xf32>
+    %2 = ttg.local_load %same {test.region_name = "reinterpreted_same"} : !ttg.memdesc<64xf32, #plain, #smem, mutable, 512> -> tensor<64xf32>
+    %3 = ttg.local_load %next {test.region_name = "reinterpreted_next"} : !ttg.memdesc<64xf32, #plain, #smem, mutable, 512> -> tensor<64xf32>
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 4, order = [1, 0]}>
 #smem = #ttg.shared_memory
 

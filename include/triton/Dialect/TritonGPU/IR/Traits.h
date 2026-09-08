@@ -12,6 +12,7 @@ namespace OpTrait {
 
 namespace impl {
 LogicalResult verifyEquivalentMemDescType(Type typeA, Type typeB);
+LogicalResult verifyMemDescIndexPhase(Operation *op);
 LogicalResult verifyMemDescLayouts(Operation *op);
 } // namespace impl
 
@@ -32,10 +33,20 @@ class MemDescViewTrait
   // Optional: Add methods or verification logic here
 };
 
+// Marks operations that produce, consume, or forward logical-index phases.
+// Individual operations may impose additional operand constraints.
+template <typename ConcreteType>
+class SupportsMemDescIndexPhaseTrait
+    : public mlir::OpTrait::TraitBase<ConcreteType,
+                                      SupportsMemDescIndexPhaseTrait> {};
+
 template <typename ConcreteType>
 class LocalLoadTrait
     : public mlir::OpTrait::TraitBase<ConcreteType, LocalLoadTrait> {
-  // Optional: Add methods or verification logic here
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    return impl::verifyMemDescIndexPhase(op);
+  }
 };
 
 template <typename ConcreteType>
@@ -48,10 +59,19 @@ class MemWaitOpTrait
 template <typename ConcreteType>
 class GlobalToLocalCopyTrait
     : public mlir::OpTrait::TraitBase<ConcreteType, GlobalToLocalCopyTrait> {
-  // Optional: Add methods or verification logic here
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    return impl::verifyMemDescIndexPhase(op);
+  }
 };
 
 } // namespace OpTrait
 } // namespace mlir
+
+namespace mlir::triton::gpu {
+// Returns whether the operation supports logical-index phase descriptors in
+// its current execution context.
+bool supportsMemDescIndexPhase(Operation *op);
+} // namespace mlir::triton::gpu
 
 #endif

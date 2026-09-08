@@ -543,8 +543,14 @@ class shared_memory_descriptor(base_value):
         """
         Create a subview of shared memory by indexing along the first dimension.
 
+        A leading pipeline-buffer dimension can be indexed before one logical
+        dimension, as in ``buffers.index(stage).index(row)``. Logical indexing
+        infers the result layout and requires a full view with a swizzled or
+        shared-linear layout on one CTA. Padding and further logical indexing
+        are not supported.
+
         Args:
-            index (int): The index at which to take the subview.
+            index (int or scalar int32 tensor): The index at which to take the subview.
 
         Returns:
             shared_memory_descriptor: Descriptor for the indexed subview.

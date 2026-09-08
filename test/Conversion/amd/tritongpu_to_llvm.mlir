@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx942' --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 --convert-builtin-func-to-llvm | FileCheck %s --enable-var-scope --check-prefixes=CHECK,COMMON
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx950' --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck %s --enable-var-scope --check-prefixes=GFX950,COMMON
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx1250' --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s --enable-var-scope --check-prefixes=GFX1250,COMMON
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx950' --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck %s --enable-var-scope --check-prefixes=GFX950,COMMON,GFX950-GFX1250
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx1250' --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s --enable-var-scope --check-prefixes=GFX1250,COMMON,GFX950-GFX1250
 
 // COMMON-DAG: [[$LOCAL_MMRA_TAG:#[A-Za-z0-9_]+]] = #llvm.mmra_tag<"amdgpu-synchronize-as":"local">
 // COMMON-DAG: [[$GLOBAL_MMRA_TAG:#[A-Za-z0-9_]+]] = #llvm.mmra_tag<"amdgpu-synchronize-as":"global">
@@ -29,6 +29,65 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttg.barrier local|global_read|global_write
 
     tt.return
+  }
+}
+
+// -----
+
+// A logical memdesc_index can reduce the rank of a shared-memory tile while
+// retaining the dynamic swizzle phase contributed by the indexed dimension.
+#logical_blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+#logical_subtiles = #ttg.shared_linear<{offset = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 0, 8], [0, 0, 16], [0, 0, 32], [0, 1, 0], [0, 2, 0], [0, 4, 0], [1, 1, 0], [2, 0, 8]]}, alignment = 8>
+#logical_tile = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [1, 0], [2, 0], [4, 0]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 72>
+#logical_smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: llvm.func @logical_rank_reducing_memdesc_index
+  // COMMON-SAME: (%[[STAGE_IDX:[^,]+]]: i32, %[[SUBTILE_IDX:[^,]+]]: i32
+  // The base advances by 512 elements per subtile. The index also contributes
+  // phase bits 64 and 8, which must feed the result descriptor's offsets.
+  // CHECK-DAG: %[[INDEX_MASK:[0-9]+]] = llvm.mlir.constant(3 : i32) : i32
+  // CHECK-DAG: %[[BASE_SHIFT:[0-9]+]] = llvm.mlir.constant(9 : i32) : i32
+  // CHECK-DAG: %[[ONE:[0-9]+]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-DAG: %[[SIX:[0-9]+]] = llvm.mlir.constant(6 : i32) : i32
+  // CHECK-DAG: %[[TWO:[0-9]+]] = llvm.mlir.constant(2 : i32) : i32
+  // COMMON-DAG: %[[STAGE_STRIDE:[0-9]+]] = llvm.mlir.constant(2048 : i32) : i32
+  // COMMON-DAG: %[[STAGE_OFFSET:[0-9]+]] = llvm.mul %[[STAGE_IDX]], %[[STAGE_STRIDE]] : i32
+  // COMMON-DAG: %[[STAGE_BASE:[0-9]+]] = llvm.getelementptr %{{[0-9]+}}[%[[STAGE_OFFSET]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
+  // GFX950-GFX1250: %[[INDEX_MASK:[0-9]+]] = llvm.mlir.constant(3 : i32) : i32
+  // COMMON: %[[BASE_INDEX:[0-9]+]] = llvm.and %[[COORDS:[0-9]+]], %[[INDEX_MASK]] : i32
+  // GFX950-GFX1250: %[[BASE_SHIFT:[0-9]+]] = llvm.mlir.constant(9 : i32) : i32
+  // COMMON: %[[SCALED_BASE:[0-9]+]] = llvm.shl %[[BASE_INDEX]], %[[BASE_SHIFT]] : i32
+  // COMMON: %[[BASE_BITS:[0-9]+]] = llvm.or disjoint %[[SCALED_BASE]], %{{[0-9]+}} : i32
+  // COMMON: %[[BASE_DISPLACEMENT:[0-9]+]] = llvm.xor %{{[0-9]+}}, %[[BASE_BITS]] : i32
+  // GFX950-GFX1250: %[[ONE:[0-9]+]] = llvm.mlir.constant(1 : i32) : i32
+  // COMMON: %[[INDEX_BIT0:[0-9]+]] = llvm.and %[[COORDS]], %[[ONE]] : i32
+  // GFX950-GFX1250: %[[SIX:[0-9]+]] = llvm.mlir.constant(6 : i32) : i32
+  // COMMON: %[[PHASE_BIT6:[0-9]+]] = llvm.shl %[[INDEX_BIT0]], %[[SIX]] : i32
+  // GFX950-GFX1250: %[[TWO:[0-9]+]] = llvm.mlir.constant(2 : i32) : i32
+  // COMMON: %[[INDEX_BIT1:[0-9]+]] = llvm.and %[[COORDS]], %[[TWO]] : i32
+  // CHECK: %[[PHASE_BIT3:[0-9]+]] = llvm.shl %[[INDEX_BIT1]], %[[TWO]] : i32
+  // GFX950-GFX1250: %[[PHASE_SHIFT:[0-9]+]] = llvm.mlir.constant(2 : i32) : i32
+  // GFX950-GFX1250: %[[PHASE_BIT3:[0-9]+]] = llvm.shl %[[INDEX_BIT1]], %[[PHASE_SHIFT]] : i32
+  // COMMON: %[[INDEX_PHASE:[0-9]+]] = llvm.xor %[[PHASE_BIT6]], %[[PHASE_BIT3]] : i32
+  // COMMON: %[[PHASE_BITS:[0-9]+]] = llvm.xor %{{[0-9]+}}, %[[INDEX_PHASE]] : i32
+  // COMMON: %[[PHASE_OR:[0-9]+]] = llvm.or disjoint %{{[0-9]+}}, %[[PHASE_BITS]] : i32
+  // COMMON: %[[PHASE:[0-9]+]] = llvm.xor %{{[0-9]+}}, %[[PHASE_OR]] : i32
+  // COMMON: %[[TILE_BASE:[0-9]+]] = llvm.getelementptr %{{[0-9]+}}[%[[BASE_DISPLACEMENT]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, f16
+  // COMMON: llvm.shl %[[PHASE]], %{{[0-9]+}} : i32
+  // CHECK: %[[LOAD_PTR:[0-9]+]] = llvm.getelementptr inbounds %[[TILE_BASE]][%{{[0-9]+}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+  // CHECK: llvm.load %[[LOAD_PTR]] : !llvm.ptr<3> -> vector<8xf16>
+  // GFX950-GFX1250: %[[TILE_DESC0:[0-9]+]] = llvm.insertvalue %[[TILE_BASE]], %{{[0-9]+}}[0] : !llvm.struct<(ptr<3>, i32, i32)>
+  // GFX950-GFX1250: %[[TILE_DESC1:[0-9]+]] = llvm.insertvalue %{{[0-9]+}}, %[[TILE_DESC0]][1] : !llvm.struct<(ptr<3>, i32, i32)>
+  // GFX950-GFX1250: %[[TILE_DESC2:[0-9]+]] = llvm.insertvalue %{{[0-9]+}}, %[[TILE_DESC1]][2] : !llvm.struct<(ptr<3>, i32, i32)>
+  // GFX950-GFX1250: %[[LOAD_BASE:[0-9]+]] = llvm.extractvalue %[[TILE_DESC2]][0] : !llvm.struct<(ptr<3>, i32, i32)>
+  // GFX950-GFX1250: %[[LOAD_PTR:[0-9]+]] = llvm.getelementptr inbounds %[[LOAD_BASE]][%{{[0-9]+}}] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
+  // GFX950-GFX1250: llvm.load %[[LOAD_PTR]] : !llvm.ptr<3> -> vector<8xf16>
+  tt.func @logical_rank_reducing_memdesc_index(%stage_idx: i32, %subtile_idx: i32) -> tensor<8x64xf16, #logical_blocked> {
+    %alloc = ttg.local_alloc : () -> !ttg.memdesc<2x4x8x64xf16, #logical_subtiles, #logical_smem, mutable>
+    %stage = ttg.memdesc_index %alloc[%stage_idx] : !ttg.memdesc<2x4x8x64xf16, #logical_subtiles, #logical_smem, mutable> -> !ttg.memdesc<4x8x64xf16, #logical_subtiles, #logical_smem, mutable>
+    %subtile = ttg.memdesc_index %stage[%subtile_idx] : !ttg.memdesc<4x8x64xf16, #logical_subtiles, #logical_smem, mutable> -> !ttg.memdesc<8x64xf16, #logical_tile, #logical_smem, mutable, 4x8x64>
+    %value = ttg.local_load %subtile : !ttg.memdesc<8x64xf16, #logical_tile, #logical_smem, mutable, 4x8x64> -> tensor<8x64xf16, #logical_blocked>
+    tt.return %value : tensor<8x64xf16, #logical_blocked>
   }
 }
 

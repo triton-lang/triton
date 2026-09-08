@@ -1986,10 +1986,17 @@ void SwizzledSharedEncodingAttr::print(AsmPrinter &printer) const {
 // SharedLinear encoding
 //===----------------------------------------------------------------------===//
 
-LogicalResult
-SharedLinearEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
-                                 LinearLayout linearLayout,
-                                 unsigned layoutAlignment) {
+SharedLinearEncodingAttr SharedLinearEncodingAttr::getChecked(
+    function_ref<InFlightDiagnostic()> emitError, MLIRContext *context,
+    LinearLayout linearLayout, unsigned layoutAlignment) {
+  return SharedLinearEncodingAttr::getChecked(
+      emitError, context, std::move(linearLayout), layoutAlignment,
+      /*hasIndexPhase=*/false, /*indexPhaseMask=*/0u);
+}
+
+LogicalResult SharedLinearEncodingAttr::verify(
+    function_ref<InFlightDiagnostic()> emitError, LinearLayout linearLayout,
+    unsigned layoutAlignment, bool hasIndexPhase, unsigned indexPhaseMask) {
   if (layoutAlignment == 0 || !llvm::isPowerOf2_32(layoutAlignment)) {
     return emitError() << "alignment must be a positive power of two";
   }
@@ -2024,6 +2031,10 @@ SharedLinearEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
   auto kOffset = StringAttr::get(ctx, "offset");
   auto kBlock = StringAttr::get(ctx, "block");
 
+  if (hasIndexPhase && linearLayout.getNumInDims() != 2)
+    return emitError() << "index phase layouts require exactly the input "
+                          "dimensions 'offset' and 'block'";
+
   if (!linearLayout.isSurjective()) {
     return emitError() << "The layout must be surjective";
   }
@@ -2034,6 +2045,18 @@ SharedLinearEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
   if (!withoutBroadcast.isInvertible()) {
     return emitError()
            << "After removing the zero bases the layout must be bijective";
+  }
+
+  if (!hasIndexPhase && indexPhaseMask != 0)
+    return emitError() << "index phase mask requires index phase provenance";
+  if (hasIndexPhase) {
+    if (!linearLayout.isInvertible())
+      return emitError() << "index phase layout must be invertible";
+    if (linearLayout.getInDimSize(kBlock) != 1)
+      return emitError() << "index phase layout must use one CTA";
+    if (indexPhaseMask >=
+        static_cast<unsigned>(linearLayout.getInDimSize(kOffset)))
+      return emitError() << "index phase mask exceeds the offset dimension";
   }
 
   return success();
@@ -2049,7 +2072,14 @@ void SharedLinearEncodingAttr::print(AsmPrinter &printer) const {
         layout.sublayout({kOffset}, llvm::to_vector(layout.getOutDimNames()));
   }
   printLinearLayout(printer, layout);
-  printer << "}, alignment = " << getAlignment() << ">";
+  printer << "}, alignment = " << getAlignment();
+  // Without any basis vectors, their lengths cannot encode the output rank.
+  if (layout.getTotalInDimSizeLog2() == 0)
+    printer << ", rank = " << layout.getNumOutDims();
+  if (getHasIndexPhase())
+    printer << ", hasIndexPhase = true, indexPhaseMask = "
+            << getIndexPhaseMask();
+  printer << ">";
 }
 
 Attribute SharedLinearEncodingAttr::parse(AsmParser &parser, Type type) {
@@ -2084,11 +2114,40 @@ Attribute SharedLinearEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseInteger(layoutAlignment).failed())
     return {};
 
+  int serializedRank = 0;
+  bool hasNextField = succeeded(parser.parseOptionalComma());
+  if (hasNextField && succeeded(parser.parseOptionalKeyword("rank"))) {
+    if (parser.parseEqual().failed() ||
+        parser.parseInteger(serializedRank).failed())
+      return {};
+    if (serializedRank <= 0) {
+      parser.emitError(parser.getCurrentLocation()) << "rank must be positive";
+      return {};
+    }
+    hasNextField = succeeded(parser.parseOptionalComma());
+  }
+
+  bool hasIndexPhase = false;
+  unsigned indexPhaseMask = 0;
+  if (hasNextField) {
+    if (parser.parseKeyword("hasIndexPhase").failed() ||
+        parser.parseEqual().failed() || parser.parseKeyword("true").failed())
+      return {};
+    hasIndexPhase = true;
+    if (succeeded(parser.parseOptionalComma())) {
+      if (parser.parseKeyword("indexPhaseMask").failed() ||
+          parser.parseEqual().failed() ||
+          parser.parseInteger(indexPhaseMask).failed())
+        return {};
+    }
+  }
+
   if (parser.parseGreater().failed())
     return {};
 
   std::vector<std::string> inDimNames = {"offset", "block"};
-  auto maybeLL = parseLinearLayout(layoutDict, parser, inDimNames);
+  auto maybeLL =
+      parseLinearLayout(layoutDict, parser, inDimNames, serializedRank);
   if (!maybeLL.has_value())
     return {};
 
@@ -2107,7 +2166,8 @@ Attribute SharedLinearEncodingAttr::parse(AsmParser &parser, Type type) {
   }
 
   return parser.getChecked<SharedLinearEncodingAttr>(
-      parser.getContext(), std::move(*maybeLL), layoutAlignment);
+      parser.getContext(), std::move(*maybeLL), layoutAlignment, hasIndexPhase,
+      indexPhaseMask);
 }
 
 SmallVector<unsigned>

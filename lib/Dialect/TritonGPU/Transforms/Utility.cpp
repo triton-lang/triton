@@ -1543,20 +1543,105 @@ void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices) {
 
 namespace mlir::triton {
 
-void replaceUsesAndPropagateType(
-    OpBuilder &builder, Operation *oldUse, Value val,
+namespace {
+
+FailureOr<ttg::MemDescType> inferPropagatedViewType(Operation *user,
+                                                    ttg::MemDescType srcType) {
+  if (auto index = dyn_cast<ttg::MemDescIndexOp>(user)) {
+    ttg::MemDescType resultType;
+    if (failed(ttg::MemDescIndexOp::inferResultType(srcType, resultType)))
+      return failure();
+    return resultType;
+  }
+
+  if (auto subslice = dyn_cast<ttg::MemDescSubsliceOp>(user)) {
+    auto oldType = subslice.getType();
+    if (failed(ttg::MemDescSubsliceOp::verifyOffsets(
+            srcType, oldType.getShape(), subslice.getOffsets())))
+      return failure();
+    return ttg::MemDescType::get(
+        oldType.getShape(), srcType.getElementType(), srcType.getEncoding(),
+        srcType.getMemorySpace(), srcType.getMutableMemory(),
+        srcType.getAllocShape());
+  }
+
+  if (auto trans = dyn_cast<ttg::MemDescTransOp>(user)) {
+    Block block;
+    Value src = block.addArgument(srcType, trans.getLoc());
+    ttg::MemDescTransOp::Adaptor adaptor(ValueRange{src}, trans);
+    SmallVector<Type> resultTypes;
+    if (failed(ttg::MemDescTransOp::inferReturnTypes(
+            user->getContext(), std::nullopt, adaptor, resultTypes)))
+      return failure();
+    return cast<ttg::MemDescType>(resultTypes.front());
+  }
+
+  if (auto reshape = dyn_cast<ttg::MemDescReshapeOp>(user)) {
+    ttg::MemDescType resultType;
+    if (failed(ttg::MemDescReshapeOp::inferReturnTypes(
+            user->getContext(), std::nullopt, srcType,
+            reshape.getType().getShape(), resultType)))
+      return failure();
+    return resultType;
+  }
+
+  return failure();
+}
+
+bool canAcceptIndexPhase(Operation *op, ttg::MemDescType type) {
+  return !ttg::MemDescIndexOp::hasLogicalSharedIndexProvenance(type) ||
+         ttg::supportsMemDescIndexPhase(op);
+}
+
+bool canReplaceUsesAndPropagateType(Value oldValue, ttg::MemDescType newType) {
+  for (OpOperand &use : oldValue.getUses()) {
+    Operation *user = use.getOwner();
+    if (!canAcceptIndexPhase(user, newType))
+      return false;
+    if (auto yield = dyn_cast<ttg::WarpYieldOp>(user)) {
+      // This utility does not propagate changes to the enclosing result
+      // contract, so a yielded descriptor must retain its result type.
+      if (newType !=
+          yield.getParentOp().getResultTypes()[use.getOperandNumber()])
+        return false;
+    }
+    if (auto wsOp = dyn_cast<ttg::WarpSpecializePartitionsOp>(user)) {
+      for (Region &region : wsOp.getPartitionRegions()) {
+        if (!canReplaceUsesAndPropagateType(
+                region.getArgument(use.getOperandNumber()), newType))
+          return false;
+      }
+      continue;
+    }
+    if (!user->hasTrait<OpTrait::MemDescViewTrait>())
+      continue;
+
+    FailureOr<ttg::MemDescType> resultType =
+        inferPropagatedViewType(user, newType);
+    // A logical index can introduce phase provenance in its result even when
+    // the replacement source has none. Check both sides of the view.
+    if (failed(resultType) || !canAcceptIndexPhase(user, *resultType) ||
+        !canReplaceUsesAndPropagateType(user->getResult(0), *resultType))
+      return false;
+  }
+  return true;
+}
+
+void replaceUsesAndPropagateTypeImpl(
+    OpBuilder &builder, Value oldValue, Value val,
     std::function<void(Operation *, Operation *)> callback) {
   OpBuilder::InsertionGuard guard(builder);
   SmallVector<Operation *> opsToDelete;
   SmallVector<OpOperand *> operandsToReplace;
 
-  // Save the operand to replace / delete later (avoid iterator invalidation).
-  // TODO: can we use an early_inc iterator?
-  for (OpOperand &use : oldUse->getUses()) {
+  for (OpOperand &use : oldValue.getUses()) {
     // Propagate through `ttg.warp_specialize`.
     if (auto wsOp = dyn_cast<ttg::WarpSpecializePartitionsOp>(use.getOwner())) {
-      for (Region &region : wsOp.getPartitionRegions())
-        region.getArgument(use.getOperandNumber()).setType(val.getType());
+      for (Region &region : wsOp.getPartitionRegions()) {
+        BlockArgument arg = region.getArgument(use.getOperandNumber());
+        arg.setType(val.getType());
+        replaceUsesAndPropagateTypeImpl(builder, arg, arg, nullptr);
+      }
     }
 
     // Non-subview/trans ops will be replaced by `val`.
@@ -1568,34 +1653,27 @@ void replaceUsesAndPropagateType(
     Operation *user = use.getOwner();
     // `subview(old_op)` is replaced by a new `subview(val)`.
     builder.setInsertionPoint(user);
+    FailureOr<ttg::MemDescType> resultType =
+        inferPropagatedViewType(user, cast<ttg::MemDescType>(val.getType()));
+    assert(succeeded(resultType) && "view type propagation was preflighted");
     Value newVal;
     if (auto subview = dyn_cast<ttg::MemDescIndexOp>(user)) {
-      ttg::MemDescType oldType = subview.getType();
-      bool isMutable = cast<ttg::MemDescType>(val.getType()).getMutableMemory();
-      Type newDstType = ttg::MemDescType::get(
-          oldType.getShape(), oldType.getElementType(), oldType.getEncoding(),
-          oldType.getMemorySpace(), isMutable);
-      newVal = ttg::MemDescIndexOp::create(builder, subview.getLoc(),
-                                           newDstType, val, subview.getIndex());
+      newVal = ttg::MemDescIndexOp::create(
+          builder, subview.getLoc(), *resultType, val, subview.getIndex());
     } else if (auto subslice = dyn_cast<ttg::MemDescSubsliceOp>(user)) {
-      ttg::MemDescType oldType = subslice.getType();
-      bool isMutable = cast<ttg::MemDescType>(val.getType()).getMutableMemory();
-      Type newDstType = ttg::MemDescType::get(
-          oldType.getShape(), oldType.getElementType(), oldType.getEncoding(),
-          oldType.getMemorySpace(), isMutable, oldType.getAllocShape());
       newVal = ttg::MemDescSubsliceOp::create(
-          builder, subslice.getLoc(), newDstType, val, subslice.getOffsets());
+          builder, subslice.getLoc(), *resultType, val, subslice.getOffsets());
     } else if (auto trans = dyn_cast<ttg::MemDescTransOp>(user)) {
-      newVal = ttg::MemDescTransOp::create(builder, trans.getLoc(), val,
-                                           trans.getOrder());
+      newVal = ttg::MemDescTransOp::create(builder, trans.getLoc(), *resultType,
+                                           val, trans.getOrder());
     } else if (auto reshape = dyn_cast<ttg::MemDescReshapeOp>(user)) {
-      auto shape = reshape.getType().getShape();
-      newVal =
-          ttg::MemDescReshapeOp::create(builder, reshape.getLoc(), val, shape);
+      newVal = ttg::MemDescReshapeOp::create(builder, reshape.getLoc(),
+                                             *resultType, val);
     }
     assert(newVal && "unhandled memdesc view");
     newVal.getDefiningOp()->setAttrs(user->getAttrs());
-    replaceUsesAndPropagateType(builder, user, newVal);
+    replaceUsesAndPropagateTypeImpl(builder, user->getResult(0), newVal,
+                                    nullptr);
     opsToDelete.push_back(user);
     if (callback) {
       callback(user, newVal.getDefiningOp());
@@ -1624,6 +1702,25 @@ void replaceUsesAndPropagateType(
     op->erase();
 }
 
+} // namespace
+
+bool replaceUsesAndPropagateType(
+    OpBuilder &builder, Operation *oldUse, Value val,
+    std::function<void(Operation *, Operation *)> callback) {
+  if (oldUse->getNumResults() != 1)
+    return false;
+  auto oldType = dyn_cast<ttg::MemDescType>(oldUse->getResult(0).getType());
+  auto newType = dyn_cast<ttg::MemDescType>(val.getType());
+  if (!oldType || !newType || oldType.getShape() != newType.getShape() ||
+      oldType.getElementType() != newType.getElementType() ||
+      oldType.getMemorySpace() != newType.getMemorySpace() ||
+      !canReplaceUsesAndPropagateType(oldUse->getResult(0), newType))
+    return false;
+
+  replaceUsesAndPropagateTypeImpl(builder, oldUse->getResult(0), val, callback);
+  return true;
+}
+
 ttg::LocalLoadOp
 replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
                          TypedValue<ttg::MemDescType> alloc,
@@ -1642,8 +1739,8 @@ replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
           (allocEnc && userAllocEnc &&
            ttg::areLayoutsEquivalent(allocTy.getShape(), allocEnc,
                                      userAllocEnc))) {
-        replaceUsesAndPropagateType(builder, userAlloc, alloc);
-        allocsToErase.push_back(userAlloc);
+        if (replaceUsesAndPropagateType(builder, userAlloc, alloc))
+          allocsToErase.push_back(userAlloc);
       }
     }
   }

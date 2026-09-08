@@ -273,7 +273,10 @@ py::object layoutToGluon(Attribute layout, bool isRubin = false) {
     auto kBlock = mlir::StringAttr::get(ctx, "block");
     return layouts.SharedLinearLayout(
         toStdVector(ll.getBases().lookup(kOffset)),
-        toStdVector(ll.getBases().lookup(kBlock)), sharedLl.getAlignment());
+        toStdVector(ll.getBases().lookup(kBlock)), sharedLl.getAlignment(),
+        py::arg("_rank") = sharedLl.getRank(),
+        py::arg("_has_index_phase") = sharedLl.getHasIndexPhase(),
+        py::arg("_index_phase_mask") = sharedLl.getIndexPhaseMask());
   } else if (auto autoEnc = dyn_cast<gluon::AutoEncodingAttr>(layout)) {
     return layouts.AutoLayout();
   } else if (auto autoEnc = dyn_cast<gluon::CoalescedEncodingAttr>(layout)) {
@@ -493,6 +496,8 @@ void init_gluon_ir(py::module_ &m) {
            [](GluonOpBuilder &self, Attribute layout,
               std::vector<int64_t> &shape) -> py::object {
              auto ctx = self.getContext();
+             if (isa<ttg::SharedLinearEncodingAttr>(layout))
+               return layoutToGluon(layout, self.isRubin());
              auto linearLayout = ttg::toLinearLayout(shape, layout);
 
              if (isa<ttg::DistributedEncodingTrait>(layout)) {
@@ -604,16 +609,17 @@ void init_gluon_ir(py::module_ &m) {
            })
       .def("get_shared_linear_layout",
            [](GluonOpBuilder &self, std::vector<std::vector<int>> &offsetBases,
-              std::vector<std::vector<int>> &blockBases,
-              unsigned alignment) -> Attribute {
+              std::vector<std::vector<int>> &blockBases, unsigned alignment,
+              unsigned rank, bool hasIndexPhase,
+              unsigned indexPhaseMask) -> Attribute {
              auto ctx = self.getContext();
              auto kOffset = mlir::StringAttr::get(ctx, "offset");
              auto kBlock = mlir::StringAttr::get(ctx, "block");
-             auto outDims = tt::standardOutDimNames(ctx, offsetBases[0].size());
+             auto outDims = tt::standardOutDimNames(ctx, rank);
              auto ll = tt::LinearLayout(
                  {{kOffset, offsetBases}, {kBlock, blockBases}}, outDims);
              return self.getChecked<ttg::SharedLinearEncodingAttr>(
-                 ctx, std::move(ll), alignment);
+                 ctx, std::move(ll), alignment, hasIndexPhase, indexPhaseMask);
            })
       .def("get_nvmma_shared_layout",
            [](GluonOpBuilder &self, unsigned swizzleByteWidth,
@@ -726,6 +732,11 @@ void init_gluon_ir(py::module_ &m) {
              auto ty = dyn_cast<ttg::MemDescType>(memdesc.getType());
              check(ty.getEncoding(), "expected a memdesc with an encoding");
              return layoutToGluon(ty.getEncoding(), self.isRubin());
+           })
+      .def("get_alloc_shape_from_memdesc",
+           [](GluonOpBuilder &, Value memdesc) -> std::vector<int64_t> {
+             return toStdVector(
+                 cast<ttg::MemDescType>(memdesc.getType()).getAllocShape());
            })
       .def("get_tensor_descriptor_layout_type",
            [](GluonOpBuilder &self, Type blockType, bool isSigned,
@@ -919,8 +930,17 @@ void init_gluon_ir(py::module_ &m) {
           ret::reference)
 
       .def("create_memdesc_index",
-           [](GluonOpBuilder &self, Type resultType, Value src,
-              Value index) -> Value {
+           [](GluonOpBuilder &self, Value src, Value index) -> Value {
+             std::string message;
+             llvm::raw_string_ostream os(message);
+             ScopedDiagnosticHandler handler(
+                 self.getContext(),
+                 [&](Diagnostic &diag) { printDiagStr(os, diag); });
+             ttg::MemDescType resultType;
+             if (failed(ttg::MemDescIndexOp::inferResultType(
+                     cast<ttg::MemDescType>(src.getType()), resultType,
+                     self.getLastLoc())))
+               throw std::runtime_error(os.str());
              return self.create<ttg::MemDescIndexOp>(resultType, src, index);
            })
       .def("create_memdesc_subslice",

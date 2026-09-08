@@ -65,6 +65,49 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 // -----
 
+#shared = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [1, 0], [2, 8]]}, alignment = 8>
+#indexed = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 8>
+#plain = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 4096 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32, "ttg.total-num-warps" = 1 : i32} {
+  tt.func public @logical_memdesc_index_phase(%index_arg: i32) {
+    %c2 = arith.constant 2 : i32
+    %c3 = arith.constant 3 : i32
+    %index = arith.andi %index_arg, %c3 : i32
+    %alloc = ttg.local_alloc {allocation.offset = 1024 : i32} : () -> !ttg.memdesc<4x64xf32, #shared, #smem, mutable>
+    %view = ttg.memdesc_index %alloc[%c2] : !ttg.memdesc<4x64xf32, #shared, #smem, mutable> -> !ttg.memdesc<64xf32, #indexed, #smem, mutable, 4x64>
+    // Row two has physical base 1536 and a 32-byte XOR phase. The runtime
+    // descriptor key includes the phase, while the footprint is the full row.
+    // expected-remark @below {{Buffers: [1568, 256]}}
+    ttg.local_load %view : !ttg.memdesc<64xf32, #indexed, #smem, mutable, 4x64> -> tensor<64xf32, #blocked>
+    %dynamic = ttg.memdesc_index %alloc[%index] : !ttg.memdesc<4x64xf32, #shared, #smem, mutable> -> !ttg.memdesc<64xf32, #indexed, #smem, mutable, 4x64>
+    // expected-remark @below {{Buffers: [1024, 256], [1280, 256], [1568, 256], [1824, 256]}}
+    ttg.local_load %dynamic : !ttg.memdesc<64xf32, #indexed, #smem, mutable, 4x64> -> tensor<64xf32, #blocked>
+    tt.return
+  }
+
+  tt.func public @logical_memdesc_index_reinterpreted_subslice() {
+    %c2 = arith.constant 2 : i32
+    %alloc = ttg.local_alloc {allocation.offset = 2048 : i32} : () -> !ttg.memdesc<512xf32, #plain, #smem, mutable>
+    %slice = ttg.memdesc_subslice %alloc [256] : !ttg.memdesc<512xf32, #plain, #smem, mutable> -> !ttg.memdesc<256xf32, #plain, #smem, mutable, 512>
+    %src = ttg.memdesc_reinterpret %slice : !ttg.memdesc<256xf32, #plain, #smem, mutable, 512> -> !ttg.memdesc<4x64xf32, #shared, #smem, mutable>
+    %view = ttg.memdesc_index %src[%c2] : !ttg.memdesc<4x64xf32, #shared, #smem, mutable> -> !ttg.memdesc<64xf32, #indexed, #smem, mutable, 4x64>
+    // Reinterpretation folds the subslice origin into the source base.
+    // expected-remark @below {{Buffers: [3616, 256]}}
+    ttg.local_load %view : !ttg.memdesc<64xf32, #indexed, #smem, mutable, 4x64> -> tensor<64xf32, #blocked>
+    tt.return
+  }
+
+  // expected-remark @below {{All Shared Regions: [1024, 256], [1280, 256], [1568, 256], [1824, 256], [3616, 256]}}
+  tt.func private @print_all_regions() attributes {test.print_all_used_regions} {
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8, rank = 5}>
 #smem = #ttg.shared_memory
 #blocked = #ttg.blocked<{sizePerThread = [1, 2, 1, 2, 8], threadsPerWarp = [1, 1, 1, 1, 32], warpsPerCTA = [1, 1, 1, 1, 1], order = [4, 3, 2, 1, 0]}>

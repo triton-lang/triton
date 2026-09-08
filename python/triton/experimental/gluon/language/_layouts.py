@@ -634,15 +634,23 @@ class SharedLinearLayout(SharedLayout):
     offset_bases: List[List[int]]
     block_bases: List[List[int]] = field(default_factory=list)
     alignment: int = 16
+    # Compiler-inferred metadata. Rank survives empty bases, and phase provenance
+    # remains significant even when the phase mask is zero.
+    _rank: int = field(default=0, kw_only=True)
+    _has_index_phase: bool = field(default=False, kw_only=True)
+    _index_phase_mask: int = field(default=0, kw_only=True)
 
     def __post_init__(self):
         super().__setattr__("offset_bases", _unwrap_shape(self.offset_bases))
         super().__setattr__("block_bases", _unwrap_shape(self.block_bases))
         super().__setattr__("alignment", _unwrap_if_constexpr(self.alignment))
+        super().__setattr__("_has_index_phase", _unwrap_if_constexpr(self._has_index_phase))
+        super().__setattr__("_index_phase_mask", _unwrap_if_constexpr(self._index_phase_mask))
 
-        assert len(self.offset_bases) != 0, "SharedLinearLayout offset_bases must not be empty"
-        rank = len(self.offset_bases[0])
-        assert rank > 0, "SharedLinearLayout offset_bases must not be empty"
+        bases = self.offset_bases or self.block_bases
+        rank = _unwrap_if_constexpr(self._rank) or (len(bases[0]) if bases else 0)
+        assert rank > 0, "SharedLinearLayout requires a positive rank"
+        super().__setattr__("_rank", rank)
         for basis in self.offset_bases:
             assert len(basis) == rank
         for basis in self.block_bases:
@@ -651,15 +659,16 @@ class SharedLinearLayout(SharedLayout):
             "SharedLinearLayout alignment must be a positive power of two"
 
     def _to_ir(self, builder):
-        return builder.get_shared_linear_layout(self.offset_bases, self.block_bases, self.alignment)
+        return builder.get_shared_linear_layout(self.offset_bases, self.block_bases, self.alignment, self._rank,
+                                                self._has_index_phase, self._index_phase_mask)
 
     def mangle(self) -> str:
-        return f"SharedLinear_{self.offset_bases}_{self.block_bases}_{self.alignment}_SharedLinear"
+        return (f"SharedLinear_{self.offset_bases}_{self.block_bases}_{self.alignment}_"
+                f"{self._rank}_{self._has_index_phase}_{self._index_phase_mask}_SharedLinear")
 
     @property
     def shape(self):
-        rank = len(self.offset_bases[0])
-        max_stride = [0] * rank
+        max_stride = [0] * self._rank
         for b in itertools.chain(self.offset_bases, self.block_bases):
             for i, bi in enumerate(b):
                 max_stride[i] = max(max_stride[i], bi)
@@ -670,6 +679,9 @@ class SharedLinearLayout(SharedLayout):
             tuple(map(tuple, self.offset_bases)),
             tuple(map(tuple, self.block_bases)),
             self.alignment,
+            self._rank,
+            self._has_index_phase,
+            self._index_phase_mask,
         ))
 
 

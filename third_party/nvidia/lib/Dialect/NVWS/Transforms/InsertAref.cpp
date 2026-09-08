@@ -533,7 +533,10 @@ void createArefGet(OpBuilder &builder, Operation *loop, ArefCreateOp aref,
           }));
           setPartition(newOp, remotePartitions);
         };
-        replaceUsesAndPropagateType(builder, localAlloc, dataBuf, callback);
+        if (!replaceUsesAndPropagateType(builder, localAlloc, dataBuf,
+                                         callback))
+          llvm::report_fatal_error("createArefGet: failed to propagate remote "
+                                   "memory descriptor type");
       }
     } else if (isa<RankedTensorType>(result.getType())) {
       auto localLoadOp = triton::gpu::createInto<LocalLoadOp>(

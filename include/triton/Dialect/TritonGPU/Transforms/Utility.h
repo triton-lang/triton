@@ -290,12 +290,14 @@ void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices);
 } // namespace mlir
 
 namespace mlir::triton {
-/// Replace all uses of `oldUse` with `val` and propagate the type if needed.
+/// Replace uses of `oldUse` with `val` and propagate the type if needed.
 /// This is useful when we need to change a memory descriptor from immutable to
 /// mutable.
 /// The callback is invoked for each pair of an old and a cloned memdesc op
 /// as the type is propagated.
-void replaceUsesAndPropagateType(
+/// Returns false without changing the IR if a use cannot accept the propagated
+/// type.
+bool replaceUsesAndPropagateType(
     OpBuilder &builder, Operation *oldUse, Value val,
     std::function<void(Operation *, Operation *)> callback = nullptr);
 

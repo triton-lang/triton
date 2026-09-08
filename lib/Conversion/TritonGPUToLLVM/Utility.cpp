@@ -635,7 +635,8 @@ materializeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
                       RewriterBase &rewriter) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  // Get the subslice affine offset and target CTA.
+  // Get the view-derived physical offset and target CTA. This includes a
+  // logical-index phase and rank-preserving subslice offsets.
   auto [affineOffset, affineBlockOffset] =
       smemObj.getShmemOffsetAndBlock(loc, rewriter, memDescTy);
   bool hasAffineBlock =
@@ -644,18 +645,15 @@ materializeLocalAddrs(Location loc, triton::gpu::MemDescType memDescTy,
   SmallVector<LocalSharedMemoryAddress> addrs;
   addrs.reserve(offsetAndBlock.size());
   for (auto [offset, blockId] : offsetAndBlock) {
-    // For subslices, the physical offset and target CTA are computed as:
-    //   physical_offset = L⁻¹(coords) ⊕ L⁻¹(subslice_logical_offset)
+    // For supported memdesc views, the physical offset and target CTA are
+    // computed as:
+    //   physical_offset = L⁻¹(coords) ⊕ L⁻¹(view_logical_offset)
     //   target_cta = block(L⁻¹(coords)) ⊕
-    //                block(L⁻¹(subslice_logical_offset))
+    //                block(L⁻¹(view_logical_offset))
     //
-    // We use XOR for consistency with lowerLdSt. MemDescSubsliceOp::verify()
-    // enforces:
-    // 1. Subslice offsets must be multiples of the tile size
-    // 2. Subslice offsets must map to power-of-2 physical offsets
-    //
-    // These constraints ensure the bit ranges of L⁻¹(coords) and
-    // L⁻¹(subslice_offset) are disjoint, so XOR and addition are equivalent.
+    // `view_logical_offset` includes any logical-index phase and subslice
+    // offset. We use XOR for consistency with lowerLdSt, including when their
+    // physical bit ranges overlap.
     offset = b.xor_(offset, affineOffset);
     if (hasAffineBlock) {
       if (!blockId)
@@ -767,6 +765,13 @@ uint32_t applyPadding(uint32_t baseOffset,
   return static_cast<uint32_t>(out);
 }
 
+static unsigned constrainVectorSizeForSharedMemoryOffset(unsigned vectorSize,
+                                                         uint64_t offsetMask) {
+  while (vectorSize > 1 && (offsetMask & (vectorSize - 1)) != 0)
+    vectorSize /= 2;
+  return vectorSize;
+}
+
 LowerLdStCallback makeSharedStoreEmitter(const TargetInfoBase &targetInfo,
                                          Value pred) {
   return [&targetInfo, pred](RewriterBase &rewriter, Location loc,
@@ -844,6 +849,8 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
 
   auto [elemsPerVec, permutation] =
       largestVectorisation(ctx, cvt, bitwidth, maybeMaxVecElems);
+  elemsPerVec = constrainVectorSizeForSharedMemoryOffset(elemsPerVec,
+                                                         maskSpanAffineOffset);
 
   cvt = permutation.apply(cvt);
   if (isStore) {
@@ -906,10 +913,10 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
   bool hasPadding = !paddingShifts.empty();
   Value paddedAffineOffsetI8 = b.i32_val(0);
   if (hasPadding && maskSpanAffineOffset != 0) {
-    // `maskSpanAffineOffset != 0` indicates the affine offsets come from
-    // MemDescSubsliceOp, whose verifier guarantees that the affine offsets are
-    // bitwise disjoint from other offset contributors. Padding can thus be
-    // applied separately. This helps LLVM reuse base pointers.
+    // Padded layouts only support memdesc_subslice affine offsets. Its verifier
+    // guarantees that they are bitwise disjoint from other offset contributors,
+    // so padding can be applied separately. This helps LLVM reuse base
+    // pointers.
     paddedAffineOffsetI8 =
         applyPadding(loc, rewriter, affineOffsetI8, paddingShifts);
   } else {
@@ -1485,8 +1492,12 @@ std::pair<uint64_t, uint64_t> SharedMemoryObject::getMaskSpanOffsetsAndBlocks(
   auto allocShape =
       triton::gpu::dropPipeliningDim(srcTy.getAllocShape(), encoding);
 
-  // Early exist when there is no subview
-  if (allocShape == shape) {
+  bool hasLogicalIndexProvenance =
+      triton::gpu::MemDescIndexOp::hasLogicalSharedIndexProvenance(srcTy);
+
+  // Early exit when neither a subslice nor a logical index can contribute an
+  // affine offset.
+  if (allocShape == shape && !hasLogicalIndexProvenance) {
     return {0, 0};
   }
   auto totalLl = triton::gpu::toLinearLayoutIgnoringPadding(
@@ -1499,6 +1510,9 @@ std::pair<uint64_t, uint64_t> SharedMemoryObject::getMaskSpanOffsetsAndBlocks(
   }
 
   uint64_t offsetMask = 0;
+  if (hasLogicalIndexProvenance)
+    offsetMask = cast<triton::gpu::SharedLinearEncodingAttr>(encoding)
+                     .getIndexPhaseMask();
   uint64_t blockMask = 0;
   for (auto [dim, shapes] : llvm::enumerate(llvm::zip(shape, allocShape))) {
     auto [shape, allocShape] = shapes;
@@ -1525,8 +1539,8 @@ std::pair<Value, Value> SharedMemoryObject::getShmemOffsetAndBlock(
   auto ctx = srcTy.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  // If it did not have a memdesc_subslice we don't need to compute the offset
-  // as it is zero
+  // A descriptor without a logical-index phase or rank-preserving subslice
+  // has no view-derived offset or target-CTA adjustment.
   if (!isAffineSharedMemoryAccess(srcTy)) {
     return {b.i32_val(0), b.i32_val(0)};
   }

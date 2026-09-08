@@ -699,7 +699,13 @@ Operation *hoistBufferOutOfLoop(scf::ForOp forOp, Operation *op,
     newStore = ttg::LocalStoreOp::create(builder, op->getOperand(0),
                                          localAlloc.getResult());
   }
-  replaceUsesAndPropagateType(builder, op, newAlloc->getResult(0));
+  if (!replaceUsesAndPropagateType(builder, op, newAlloc->getResult(0))) {
+    schedule.erase(newStore);
+    schedule.erase(newAlloc);
+    newStore->erase();
+    newAlloc->erase();
+    return nullptr;
+  }
   op->erase();
   return newStore;
 }

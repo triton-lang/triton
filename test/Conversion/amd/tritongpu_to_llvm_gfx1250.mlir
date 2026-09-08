@@ -1,4 +1,8 @@
-// RUN:  triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch="gfx1250" | FileCheck %s --check-prefix=GFX1250
+// RUN: split-file %s %t
+// RUN: triton-opt %t/base.mlir -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch="gfx1250" | FileCheck %s --check-prefix=GFX1250
+// RUN: triton-opt %t/warp-specialize-result.mlir --tritongpu-allocate-warp-groups --allocate-amdgpu-shared-memory=arch=gfx1250 --triton-amdgpu-membar=gfx-arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --triton-amdgpu-convert-warp-specialize-to-llvm=gfx-arch=gfx1250 --canonicalize=region-simplify=disabled | FileCheck %s --check-prefix=WS-RESULT
+
+//--- base.mlir
 #linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 8], [0, 16]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 4]], warp = [[16, 0]], block = []}>
 #mma = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[1, 0]]}, isTranspose = true, instrShape = [16, 16, 32]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32} {
@@ -184,5 +188,39 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.tot
   tt.func private @outlined_indices_8() -> tensor<256xi32, #blocked8> attributes {noinline = true, "ttg.num-warps" = 8 : i32, "ttg.warp-id-offset" = 4 : i32} {
     %range = tt.make_range {start = 0 : i32, end = 256 : i32} : tensor<256xi32, #blocked8>
     tt.return %range : tensor<256xi32, #blocked8>
+  }
+}
+
+//--- warp-specialize-result.mlir
+
+#all = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [1, 0]}>
+#row = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [1, 0], [2, 8], [4, 16]]}, alignment = 8>
+#indexed = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 24>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "hip:gfx1250", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // A default-region result must carry both the selected base and its phase
+  // through warp_yield to the local_load after explicit warp specialization.
+  // WS-RESULT-LABEL: llvm.func @warp_specialize_logical_index_result
+  // WS-RESULT: llvm.br ^bb{{[0-9]+}}({{.*}} : !llvm.struct<(ptr<3>, i32)>)
+  // WS-RESULT: ^bb{{[0-9]+}}(%[[DESC:.*]]: !llvm.struct<(ptr<3>, i32)>):
+  // WS-RESULT: %[[BASE:.*]] = llvm.extractvalue %[[DESC]][0]
+  // WS-RESULT: %[[PHASE:.*]] = llvm.extractvalue %[[DESC]][1]
+  // WS-RESULT: llvm.xor
+  // WS-RESULT: %[[PTR:.*]] = llvm.getelementptr inbounds %[[BASE]]
+  // WS-RESULT: llvm.load %[[PTR]] : !llvm.ptr<3>
+  tt.func @warp_specialize_logical_index_result(%values: tensor<8x64xf32, #all>, %index: i32, %out: tensor<64x!tt.ptr<f32>, #row>) {
+    %src = ttg.local_alloc %values : (tensor<8x64xf32, #all>) -> !ttg.memdesc<8x64xf32, #shared, #smem, mutable>
+    %view = ttg.warp_specialize()
+    default {
+      %slice = ttg.memdesc_index %src[%index] : !ttg.memdesc<8x64xf32, #shared, #smem, mutable> -> !ttg.memdesc<64xf32, #indexed, #smem, mutable, 8x64>
+      ttg.warp_yield %slice : !ttg.memdesc<64xf32, #indexed, #smem, mutable, 8x64>
+    }
+    partition0() num_warps(4) {
+      ttg.warp_return
+    } : () -> !ttg.memdesc<64xf32, #indexed, #smem, mutable, 8x64>
+    %value = ttg.local_load %view : !ttg.memdesc<64xf32, #indexed, #smem, mutable, 8x64> -> tensor<64xf32, #row>
+    tt.store %out, %value : tensor<64x!tt.ptr<f32>, #row>
+    tt.return
   }
 }

@@ -410,11 +410,43 @@ def SharedLinearEncodingAttr
     Linear shared encodings mirror LinearEncodingAttr but operate on shared
     memory layouts. The LinearLayout parameter captures how shared memory
     offsets (and optionally blocks) map to logical tensor indices.
+
+    Layouts with no basis vectors serialize their output rank after alignment,
+    for example `#ttg.shared_linear<{offset = []}, alignment = 16, rank = 2>`
+    for a `1x1` layout. Otherwise the rank is inferred from the basis vectors.
+
+    `hasIndexPhase` marks layouts produced by rank-reducing a logical shared
+    dimension. `indexPhaseMask` records the low physical offset bits that the
+    removed dimension may change. The provenance flag remains meaningful when
+    the mask is zero.
   }];
 
-  let parameters = (ins LinearLayoutParam:$linearLayout, "unsigned":$layoutAlignment);
+  let parameters = (ins LinearLayoutParam:$linearLayout,
+      "unsigned":$layoutAlignment,
+      DefaultValuedParameter<"bool", "false">:$hasIndexPhase,
+      DefaultValuedParameter<"unsigned", "0">:$indexPhaseMask);
 
   let extraClassDeclaration = [{
+    static SharedLinearEncodingAttr get(MLIRContext *context,
+                                         LinearLayout linearLayout,
+                                         unsigned layoutAlignment) {
+      return get(context, std::move(linearLayout), layoutAlignment,
+                 /*hasIndexPhase=*/false, /*indexPhaseMask=*/0);
+    }
+
+    static SharedLinearEncodingAttr
+    getChecked(function_ref<InFlightDiagnostic()> emitError,
+               MLIRContext *context, LinearLayout linearLayout,
+               unsigned layoutAlignment);
+
+    static LogicalResult
+    verifyInvariants(function_ref<InFlightDiagnostic()> emitError,
+                     LinearLayout linearLayout, unsigned layoutAlignment) {
+      return verifyInvariants(emitError, std::move(linearLayout),
+                              layoutAlignment, /*hasIndexPhase=*/false,
+                              /*indexPhaseMask=*/0);
+    }
+
     SmallVector<unsigned> basesPerDim(StringAttr dimName,
                                       bool skipBroadcast = true) const;
     SmallVector<unsigned> orderPerDim(StringAttr dimName,

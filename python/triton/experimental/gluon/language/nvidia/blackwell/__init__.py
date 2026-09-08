@@ -498,7 +498,7 @@ class tensor_memory_descriptor(base_value):
         shape = self.shape[1:]
         layout = self.layout
         ret = tensor_memory_descriptor(None, self.dtype, shape, layout, shape)
-        ret.handle = builder.create_memdesc_index(ret.type.to_ir(builder), self.handle, index.handle)
+        ret.handle = builder.create_memdesc_index(self.handle, index.handle)
         return ret
 
     @builtin

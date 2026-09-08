@@ -199,6 +199,182 @@ tt.func public @memdesc_index_inner_subview(%arg0: !ttg.memdesc<3x8x8xf32, #shar
 
 // -----
 
+#nested = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [1, 0], [2, 8], [4, 16]]}, alignment = 8>
+#plain = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 8>
+#smem = #ttg.shared_memory
+tt.func public @logical_memdesc_index_requires_inferred_layout(
+    %arg0: !ttg.memdesc<8x64xf32, #nested, #smem, mutable>, %index: i32) {
+  // expected-error @+1 {{result type does not match inferred logical memdesc_index type}}
+  %a = ttg.memdesc_index %arg0[%index] : !ttg.memdesc<8x64xf32, #nested, #smem, mutable> -> !ttg.memdesc<64xf32, #plain, #smem, mutable, 8x64>
+  tt.return
+}
+
+// -----
+
+#shared = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [1, 0], [2, 8], [4, 16]]}, alignment = 8>
+#phase = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 24>
+#smem = #ttg.shared_memory
+tt.func public @logical_index_phase_rejects_automatic_partition(
+    %src: !ttg.memdesc<8x64xf32, #shared, #smem, mutable>, %index: i32) {
+  // Automatic partition rewrites cannot preserve the new view's metadata.
+  // expected-error @+1 {{logical shared index phase is not supported in automatic warp-specialization partitions}}
+  %view = ttg.memdesc_index %src[%index] {ttg.partition = array<i32: 1>} : !ttg.memdesc<8x64xf32, #shared, #smem, mutable> -> !ttg.memdesc<64xf32, #phase, #smem, mutable, 8x64>
+  tt.return
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#phase = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 0>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @logical_index_zero_phase_rejects_automatic_partition_consumer(
+      %src: !ttg.memdesc<64xf16, #phase, #smem, mutable, 2x64>) {
+    // This also covers a phase descriptor defined outside the partition.
+    // expected-error @+1 {{logical shared index phase is not supported in automatic warp-specialization partitions}}
+    %value = ttg.local_load %src {ttg.partition = array<i32: 1>} : !ttg.memdesc<64xf16, #phase, #smem, mutable, 2x64> -> tensor<64xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#phase = #ttg.shared_linear<{offset = [[1], [2], [4]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 1>
+#smem = #ttg.shared_memory
+// expected-error @+2 {{logical index phase memdesc shape rank must equal encoding rank}}
+tt.func public @logical_index_phase_rejects_visible_pipeline_dimension(
+    %src: !ttg.memdesc<2x8xf16, #phase, #smem, mutable>) {
+  tt.return
+}
+
+// -----
+
+#phase = #ttg.shared_linear<{offset = [[1], [2], [4]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 1>
+#smem = #ttg.shared_memory
+// expected-error @+2 {{logical index phase memdesc alloc shape must have exactly one leading dimension}}
+tt.func public @logical_index_phase_requires_parent_allocation_dimension(
+    %src: !ttg.memdesc<8xf16, #phase, #smem, mutable>) {
+  tt.return
+}
+
+// -----
+
+#phase = #ttg.shared_linear<{offset = [[1], [2], [4], [8]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 1>
+#smem = #ttg.shared_memory
+// expected-error @+2 {{logical index phase memdesc alloc shape suffix must equal shape}}
+tt.func public @logical_index_phase_requires_matching_allocation_suffix(
+    %src: !ttg.memdesc<8xf16, #phase, #smem, mutable, 2x16>) {
+  tt.return
+}
+
+// -----
+
+#phase = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 1>
+#smem = #ttg.shared_memory
+// expected-error @+2 {{logical index phase memdesc leading allocation dimension must be a positive power of two}}
+tt.func public @logical_index_phase_requires_power_of_two_parent_dimension(
+    %src: !ttg.memdesc<64xf16, #phase, #smem, mutable, 3x64>) {
+  tt.return
+}
+
+// -----
+
+#phase_2d = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [1, 0]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 8>
+#phase_1d = #ttg.shared_linear<{offset = [[1], [2], [4]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 0>
+#smem = #ttg.shared_memory
+tt.func public @logical_index_phase_rejects_another_index(
+    %src: !ttg.memdesc<2x8xf16, #phase_2d, #smem, mutable, 4x2x8>, %index: i32) {
+  // expected-error @+1 {{memdesc_index does not support a logical shared index phase}}
+  %0 = ttg.memdesc_index %src[%index] : !ttg.memdesc<2x8xf16, #phase_2d, #smem, mutable, 4x2x8> -> !ttg.memdesc<8xf16, #phase_1d, #smem, mutable, 2x8>
+  tt.return
+}
+
+// -----
+
+#phase = #ttg.shared_linear<{offset = [[1], [2], [4], [8]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 1>
+#smem = #ttg.shared_memory
+tt.func public @logical_index_phase_rejects_transpose(
+    %src: !ttg.memdesc<16xf16, #phase, #smem, mutable, 2x16>) {
+  // expected-error @+1 {{logical shared index phase is not supported on ttg.memdesc_trans}}
+  %0 = ttg.memdesc_trans %src {order = array<i32: 0>} : !ttg.memdesc<16xf16, #phase, #smem, mutable, 2x16> -> !ttg.memdesc<16xf16, #phase, #smem, mutable, 2x16>
+  tt.return
+}
+
+// -----
+
+#plain = #ttg.shared_linear<{offset = [[1], [2], [4], [8]]}, alignment = 8>
+#phase = #ttg.shared_linear<{offset = [[1], [2], [4], [8]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 1>
+#smem = #ttg.shared_memory
+tt.func public @logical_index_phase_rejects_reshape(
+    %src: !ttg.memdesc<16xf16, #phase, #smem, mutable, 2x16>) {
+  // expected-error @+1 {{logical shared index phase is not supported on ttg.memdesc_reshape}}
+  %0 = ttg.memdesc_reshape %src : !ttg.memdesc<16xf16, #phase, #smem, mutable, 2x16> -> !ttg.memdesc<16xf16, #plain, #smem, mutable, 2x16>
+  tt.return
+}
+
+// -----
+
+#plain = #ttg.shared_linear<{offset = [[1], [2], [4], [8]]}, alignment = 8>
+#phase = #ttg.shared_linear<{offset = [[1], [2], [4], [8]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 0>
+#smem = #ttg.shared_memory
+tt.func public @logical_index_zero_phase_rejects_reshape(
+    %src: !ttg.memdesc<16xf16, #phase, #smem, mutable, 2x16>) {
+  // expected-error @+1 {{logical shared index phase is not supported on ttg.memdesc_reshape}}
+  %0 = ttg.memdesc_reshape %src : !ttg.memdesc<16xf16, #phase, #smem, mutable, 2x16> -> !ttg.memdesc<16xf16, #plain, #smem, mutable, 2x16>
+  tt.return
+}
+
+// -----
+
+#plain = #ttg.shared_linear<{offset = [[1], [2], [4], [8]]}, alignment = 8>
+#phase = #ttg.shared_linear<{offset = [[1], [2], [4], [8]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 0>
+#smem = #ttg.shared_memory
+tt.func public @logical_index_zero_phase_rejects_reshape_result(
+    %src: !ttg.memdesc<16xf16, #plain, #smem, mutable, 2x16>) {
+  // expected-error @+1 {{logical shared index phase is not supported on ttg.memdesc_reshape}}
+  %0 = ttg.memdesc_reshape %src : !ttg.memdesc<16xf16, #plain, #smem, mutable, 2x16> -> !ttg.memdesc<16xf16, #phase, #smem, mutable, 2x16>
+  tt.return
+}
+
+// -----
+
+#phase = #ttg.shared_linear<{offset = [[1], [2], [4], [8]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 1>
+#smem = #ttg.shared_memory
+tt.func public @logical_index_phase_rejects_reinterpret(
+    %src: !ttg.memdesc<16xf16, #phase, #smem, mutable, 2x16>) {
+  // expected-error @+1 {{logical shared index phase is not supported on ttg.memdesc_reinterpret}}
+  %0 = ttg.memdesc_reinterpret %src : !ttg.memdesc<16xf16, #phase, #smem, mutable, 2x16> -> !ttg.memdesc<16xf16, #phase, #smem, mutable, 2x16>
+  tt.return
+}
+
+// -----
+
+#phase = #ttg.shared_linear<{offset = [[1], [2], [4], [8]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 1>
+#smem = #ttg.shared_memory
+tt.func public @logical_index_phase_rejects_subslice(
+    %src: !ttg.memdesc<16xf16, #phase, #smem, mutable, 2x16>) {
+  // expected-error @+1 {{logical shared index phase is not supported on ttg.memdesc_subslice}}
+  %0 = ttg.memdesc_subslice %src[0] : !ttg.memdesc<16xf16, #phase, #smem, mutable, 2x16> -> !ttg.memdesc<16xf16, #phase, #smem, mutable, 2x16>
+  tt.return
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#phase = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 1>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @logical_index_phase_rejects_unsupported_consumer(
+      %src: tensor<64x!tt.ptr<f16>, #blocked>,
+      %dst: !ttg.memdesc<64xf16, #phase, #smem, mutable, 2x64>) {
+    // expected-error @+1 {{logical shared index phase is not supported on ttg.async_copy_global_to_local}}
+    %token = ttg.async_copy_global_to_local %src, %dst : tensor<64x!tt.ptr<f16>, #blocked> -> <64xf16, #phase, #smem, mutable, 2x64>
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0]}>
 #smem = #ttg.shared_memory
 tt.func public @result_1d_to_1d(%arg0: !ttg.memdesc<8xf32, #shared, #smem>) {
@@ -942,6 +1118,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     tt.return
   }
 }
+
+// -----
+
+// expected-error @below {{rank must be positive}}
+#shared = #ttg.shared_linear<{offset = []}, alignment = 16, rank = 0>
+
+// -----
+
+// expected-error @below {{rank must be positive}}
+#shared = #ttg.shared_linear<{offset = []}, alignment = 16, rank = -1>
+
+// -----
+
+// expected-error @+3 {{Serialized rank and rank deduced from LL need to match}}
+#shared = #ttg.shared_linear<{offset = [[1, 0]]}, alignment = 16, rank = 1>
 
 // -----
 

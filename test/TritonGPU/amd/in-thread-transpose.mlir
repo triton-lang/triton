@@ -569,3 +569,39 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#phase_blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [0, 1]}>
+#phase_row = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+#phase_mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [1, 1], instrShape = [16, 16, 4], isTransposed = true}>
+#phase_alloc = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#phase_view = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 16, hasIndexPhase = true, indexPhaseMask = 0>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: inThreadTranspose_logical_index_phase_neg
+  // CHECK-NOT: amdg.in_thread_transpose
+  // CHECK: [[LOAD:%.*]] = tt.load
+  // CHECK-NOT: amdg.in_thread_transpose
+  // CHECK: [[ALLOC:%.*]] = ttg.local_alloc
+  // CHECK-NOT: amdg.in_thread_transpose
+  // CHECK: ttg.local_store [[LOAD]], [[ALLOC]]
+  // CHECK-NOT: amdg.in_thread_transpose
+  // CHECK: ttg.local_load [[ALLOC]]
+  // CHECK-NOT: amdg.in_thread_transpose
+  // CHECK: [[VIEW:%.*]] = ttg.memdesc_index [[ALLOC]]
+  // CHECK-NOT: amdg.in_thread_transpose
+  // CHECK: ttg.local_load [[VIEW]]
+  // CHECK-NOT: amdg.in_thread_transpose
+  // CHECK: tt.return
+  tt.func public @inThreadTranspose_logical_index_phase_neg(
+      %a_ptr: tensor<8x64x!tt.ptr<f32>, #phase_blocked>, %row_idx: i32) {
+    %a = tt.load %a_ptr : tensor<8x64x!tt.ptr<f32>, #phase_blocked>
+    %alloc = ttg.local_alloc : () -> !ttg.memdesc<8x64xf32, #phase_alloc, #smem, mutable>
+    ttg.local_store %a, %alloc : tensor<8x64xf32, #phase_blocked> -> !ttg.memdesc<8x64xf32, #phase_alloc, #smem, mutable>
+    %full = ttg.local_load %alloc : !ttg.memdesc<8x64xf32, #phase_alloc, #smem, mutable> -> tensor<8x64xf32, #ttg.dot_op<{opIdx = 0, parent = #phase_mma, kWidth = 1}>>
+    %view = ttg.memdesc_index %alloc[%row_idx] : !ttg.memdesc<8x64xf32, #phase_alloc, #smem, mutable> -> !ttg.memdesc<64xf32, #phase_view, #smem, mutable, 8x64>
+    %row = ttg.local_load %view : !ttg.memdesc<64xf32, #phase_view, #smem, mutable, 8x64> -> tensor<64xf32, #phase_row>
+    tt.return
+  }
+}

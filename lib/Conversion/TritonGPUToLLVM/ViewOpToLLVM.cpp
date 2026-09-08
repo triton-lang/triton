@@ -394,6 +394,49 @@ struct MemDescIndexOpConversion
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getResult().getType();
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+    auto *ctx = rewriter.getContext();
+    Value index = adaptor.getIndex();
+
+    if (op.isLogicalSharedIndex()) {
+      auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                     llvmElemTy, rewriter);
+      auto prevOffsets = smemObj.getOffsets();
+      auto srcDims = standardOutDimNames(ctx, srcTy.getRank());
+      if (prevOffsets.size() != srcDims.size())
+        return rewriter.notifyMatchFailure(
+            op, "shared memory object offset rank does not match source rank");
+
+      SmallVector<std::pair<StringAttr, Value>> logicalOffsets;
+      logicalOffsets.reserve(srcDims.size());
+      logicalOffsets.push_back({srcDims[0], b.add(prevOffsets[0], index)});
+      for (auto [dim, prevOffset] :
+           llvm::zip_equal(ArrayRef<StringAttr>(srcDims).drop_front(),
+                           ArrayRef<Value>(prevOffsets).drop_front()))
+        logicalOffsets.push_back({dim, prevOffset});
+
+      auto offsets = applyLinearLayout(
+          loc, rewriter, op.getLogicalIndexOffsetLayout(), logicalOffsets);
+      Value baseOffset = offsets[0].second;
+      Value phase = offsets[1].second;
+
+      SmallVector<Value> newBases;
+      for (Value base : smemObj.getBases())
+        newBases.push_back(b.gep(base.getType(), llvmElemTy, base, baseOffset));
+
+      auto dstLayout = triton::gpu::toLinearLayout(dstTy);
+      auto kOffset = StringAttr::get(ctx, "offset");
+      auto kBlock = StringAttr::get(ctx, "block");
+      auto resultOffsets = applyLinearLayout(
+          loc, rewriter, dstLayout, {{kOffset, phase}, {kBlock, b.i32_val(0)}});
+      SmallVector<Value> offsetVals;
+      for (Value value : llvm::make_second_range(resultOffsets))
+        offsetVals.push_back(value);
+
+      auto newSmemObj = SharedMemoryObject(newBases, llvmElemTy, offsetVals);
+      rewriter.replaceOp(
+          op, getStructFromSharedMemoryObject(loc, newSmemObj, rewriter));
+      return success();
+    }
 
     // Stride is computed from dstTy (the result after dropping the leading
     // buffer dimension). The encoding's partitionDim is relative to this
@@ -409,7 +452,7 @@ struct MemDescIndexOpConversion
             dyn_cast<PartitionedSharedEncodingAttr>(dstTy.getEncoding())) {
       stride /= partEnc.getNumPartitions();
     }
-    Value offset = b.mul(op.getIndex(), b.i32_val(stride));
+    Value offset = b.mul(index, b.i32_val(stride));
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
     auto prevOffsets = smemObj.getOffsets();

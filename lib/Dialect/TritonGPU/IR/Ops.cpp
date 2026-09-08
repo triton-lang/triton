@@ -525,7 +525,7 @@ void Fp4ToFpOp::build(OpBuilder &builder, OperationState &state,
 
 OpFoldResult MemDescTransOp::fold(FoldAdaptor adaptor) {
   // transpose(x, order=[0, 1, ...]) -> x
-  if (isIota(getOrder())) {
+  if (isIota(getOrder()) && getType() == getSrc().getType()) {
     return getSrc();
   }
 
@@ -549,6 +549,9 @@ MemDescTransOp::inferReturnTypes(MLIRContext *context,
   auto argTy = cast<MemDescType>(adaptor.getSrc().getType());
   auto shape = argTy.getShape();
   auto order = adaptor.getOrder();
+  if (MemDescIndexOp::hasLogicalSharedIndexProvenance(argTy))
+    return emitOptionalError(
+        loc, "memdesc_trans does not support a logical shared index phase");
   SmallVector<int64_t> retShape = applyPermutation(shape, order);
 
   auto retEltTy = argTy.getElementType();
@@ -652,6 +655,9 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
 LogicalResult MemDescReshapeOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> loc, MemDescType srcTy,
     ArrayRef<int64_t> dstShape, MemDescType &inferredReturnType) {
+  if (MemDescIndexOp::hasLogicalSharedIndexProvenance(srcTy))
+    return emitOptionalError(
+        loc, "memdesc_reshape does not support a logical shared index phase");
   if (product<int64_t>(dstShape) != product<int64_t>(srcTy.getShape()))
     return emitOptionalError(
         loc, "dst shape has different number of elements than src");
@@ -1147,15 +1153,184 @@ LogicalResult AsyncCopyGlobalToLocalOp::verify() {
   return success();
 }
 
+static bool isLogicalSharedIndexCandidate(MemDescType srcType) {
+  auto layout = dyn_cast_or_null<LayoutEncodingTrait>(srcType.getEncoding());
+  return srcType.getRank() > 1 && layout &&
+         isa<SharedEncodingTrait>(srcType.getEncoding()) &&
+         layout.getRank() == static_cast<unsigned>(srcType.getRank());
+}
+
+bool MemDescIndexOp::hasLogicalSharedIndexProvenance(MemDescType type) {
+  auto sharedLinear =
+      dyn_cast_or_null<SharedLinearEncodingAttr>(type.getEncoding());
+  return sharedLinear && sharedLinear.getHasIndexPhase();
+}
+
+LinearLayout MemDescIndexOp::getLogicalIndexOffsetLayout() {
+  assert(isLogicalSharedIndex() && "expected a logical shared index");
+  LinearLayout inverse = toLinearLayout(getSrc().getType()).pseudoinvert();
+  auto kOffset = StringAttr::get(getContext(), "offset");
+  unsigned offsetDim = inverse.getOutDimIndex(kOffset);
+  int32_t sliceSize = product(getType().getShape());
+  auto bases = inverse.getBases();
+  // Splitting each basis shares the same origin calculation between constant
+  // analysis and LLVM lowering. The low bits are the slice's XOR phase.
+  for (auto &dimBases : llvm::make_second_range(bases)) {
+    for (auto &basis : dimBases) {
+      int32_t origin = basis[offsetDim];
+      int32_t phase = origin & (sliceSize - 1);
+      basis = {origin ^ phase, phase};
+    }
+  }
+  return LinearLayout(
+      std::move(bases),
+      {{StringAttr::get(getContext(), "base"), inverse.getOutDimSize(kOffset)},
+       {StringAttr::get(getContext(), "phase"), sliceSize}},
+      /*requireSurjective=*/false);
+}
+
+static LogicalResult
+inferLogicalMemDescIndexOpEncoding(MemDescType srcTy, Attribute &dstEnc,
+                                   std::optional<Location> loc) {
+  ArrayRef<int64_t> srcShape = srcTy.getShape();
+  Attribute srcEnc = srcTy.getEncoding();
+  auto sharedEnc = dyn_cast<SharedEncodingTrait>(srcEnc);
+  if (!sharedEnc)
+    return emitOptionalError(loc, "expected shared memory encoding");
+
+  if (isa<PartitionedSharedEncodingAttr>(srcEnc))
+    return emitOptionalError(
+        loc,
+        "logical memdesc_index does not support partitioned shared encodings");
+  if (isPaddedEncoding(srcEnc))
+    return emitOptionalError(
+        loc, "logical memdesc_index does not support padded shared encodings");
+  if (!isa<SwizzledSharedEncodingAttr, SharedLinearEncodingAttr>(srcEnc))
+    return emitOptionalError(
+        loc, "logical memdesc_index currently supports only swizzled_shared "
+             "and shared_linear encodings");
+
+  if (!llvm::all_of(srcTy.getAllocShape(), [](int64_t dim) {
+        return dim > 0 && llvm::isPowerOf2_64(dim);
+      }))
+    return emitOptionalError(
+        loc, "logical memdesc_index requires a positive power-of-two "
+             "allocation shape");
+
+  LinearLayout srcLL = toLinearLayout(srcTy.getAllocShape(), srcEnc);
+  if (!srcLL.isInvertible())
+    return emitOptionalError(
+        loc, "logical memdesc_index source layout must be invertible");
+
+  auto *ctx = srcEnc.getContext();
+  auto kOffset = StringAttr::get(ctx, "offset");
+  auto kBlock = StringAttr::get(ctx, "block");
+  if (srcLL.getNumInDims() != 2 || !srcLL.hasInDim(kOffset) ||
+      !srcLL.hasInDim(kBlock))
+    return emitOptionalError(
+        loc, "logical memdesc_index requires exactly the input dimensions "
+             "'offset' and 'block'");
+  if (srcLL.getInDimSize(kBlock) != 1)
+    return emitOptionalError(
+        loc, "logical memdesc_index requires a one-CTA shared layout");
+
+  int64_t sliceSize = product<int64_t>(srcShape.drop_front());
+  if (!llvm::isPowerOf2_64(sliceSize))
+    return emitOptionalError(
+        loc, "logical memdesc_index requires power-of-two indexed slice size");
+  if (sliceSize > srcLL.getInDimSize(kOffset))
+    return emitOptionalError(
+        loc,
+        "logical memdesc_index source layout does not cover indexed slice");
+
+  unsigned sliceBits = llvm::Log2_64(sliceSize);
+  const auto &offsetBases = srcLL.getBases().lookup(kOffset);
+  auto dim0 = standardOutDimNames(ctx, srcTy.getRank()).front();
+  unsigned dim0Index = srcLL.getOutDimIndex(dim0);
+  for (unsigned bit = 0; bit < sliceBits; ++bit) {
+    if (offsetBases[bit][dim0Index] != 0)
+      return emitOptionalError(loc, "logical memdesc_index requires low offset "
+                                    "bits not to affect source dim0");
+  }
+
+  LinearLayout restrictedLL =
+      srcLL.resizeInDim(kOffset, static_cast<int32_t>(sliceSize));
+  LinearLayout dstLL = removeStandardDim(restrictedLL, /*dim=*/0);
+  if (!dstLL.isInvertible())
+    return emitOptionalError(
+        loc, "logical memdesc_index result layout must be invertible");
+
+  LinearLayout srcInvLL = srcLL.invert();
+  unsigned offsetDim = srcInvLL.getOutDimIndex(kOffset);
+  unsigned indexPhaseMask = 0;
+  for (const auto &basis : srcInvLL.getBases().lookup(dim0))
+    indexPhaseMask |= basis[offsetDim] & (sliceSize - 1);
+
+  dstEnc = SharedLinearEncodingAttr::get(
+      ctx, std::move(dstLL), sharedEnc.getAlignment(),
+      /*hasIndexPhase=*/true, indexPhaseMask);
+  return success();
+}
+
+LogicalResult MemDescIndexOp::inferResultType(MemDescType srcType,
+                                              MemDescType &resultType,
+                                              std::optional<Location> loc) {
+  if (srcType.getRank() < 2)
+    return emitOptionalError(
+        loc, "memdesc_index requires a source rank of at least 2");
+  if (hasLogicalSharedIndexProvenance(srcType))
+    return emitOptionalError(
+        loc, "memdesc_index does not support a logical shared index phase");
+
+  SmallVector<int64_t> resultShape(srcType.getShape().drop_front());
+  if (isLogicalSharedIndexCandidate(srcType)) {
+    if (srcType.getAllocShape() != srcType.getShape())
+      return emitOptionalError(loc,
+                               "We don't support memdesc_index of a subview");
+
+    Attribute resultEncoding;
+    if (failed(
+            inferLogicalMemDescIndexOpEncoding(srcType, resultEncoding, loc)))
+      return failure();
+    resultType =
+        MemDescType::get(resultShape, srcType.getElementType(), resultEncoding,
+                         srcType.getMemorySpace(), srcType.getMutableMemory(),
+                         srcType.getAllocShape());
+    return success();
+  }
+
+  auto layout = dyn_cast_or_null<LayoutEncodingTrait>(srcType.getEncoding());
+  if (!layout ||
+      layout.getRank() + 1 != static_cast<unsigned>(srcType.getRank()))
+    return emitOptionalError(
+        loc, "cannot infer memdesc_index result for this source encoding");
+
+  resultType = MemDescType::get(resultShape, srcType.getElementType(),
+                                srcType.getEncoding(), srcType.getMemorySpace(),
+                                srcType.getMutableMemory(), resultShape);
+  return success();
+}
+
 LogicalResult MemDescIndexOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getType();
   if (srcTy.getElementType() != dstTy.getElementType()) {
     return emitError("result element type must match desc element type");
   }
-  if (srcTy.getEncoding() != dstTy.getEncoding()) {
-    return emitError("src and result must have the same encoding");
+  if (isLogicalSharedIndexCandidate(srcTy)) {
+    MemDescType expectedTy;
+    if (failed(inferResultType(srcTy, expectedTy, getLoc())))
+      return failure();
+    if (dstTy != expectedTy)
+      return emitError(
+          "result type does not match inferred logical memdesc_index type");
+    return success();
   }
+  if (hasLogicalSharedIndexProvenance(dstTy))
+    return emitError(
+        "result has logical shared index provenance for a synthetic index");
+  if (srcTy.getEncoding() != dstTy.getEncoding())
+    return emitError("src and result must have the same encoding");
   // memdesc_index reduces rank by 1 and preserves the trailing shape.
   bool correctRank = srcTy.getRank() == dstTy.getRank() + 1;
   if (!correctRank) {
@@ -1227,17 +1402,14 @@ LogicalResult MemDescSubsliceOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getType();
 
+  if (failed(verifyOffsets(srcTy, dstTy.getShape(), getOffsets(), getLoc())))
+    return failure();
+
   if (srcTy.getElementType() != dstTy.getElementType()) {
     return emitError("result element type must match desc element type");
   }
   if (srcTy.getEncoding() != dstTy.getEncoding()) {
     return emitError("src and result must have the same encoding");
-  }
-  if (getOffsets().size() != srcTy.getRank()) {
-    return emitError("offsets must have the same rank as input");
-  }
-  if (srcTy.getRank() != dstTy.getRank()) {
-    return emitError("result rank must equal to input rank");
   }
   if (srcTy.getAllocShape() != dstTy.getAllocShape())
     return emitError("source and result must have the same allocation shape");
@@ -1247,32 +1419,48 @@ LogicalResult MemDescSubsliceOp::verify() {
   if (bool(srcEnc) != bool(dstEnc)) {
     return emitError("src and result must both have or not have an encoding");
   }
-  if (!isa<SharedEncodingTrait>(srcEnc) || !isa<SharedEncodingTrait>(dstEnc)) {
-    return emitError("src and dst must both be of shared memory encoding");
-  }
-  auto layoutRank = dropPipeliningDim(getOffsets(), srcEnc).size();
-  auto prefixRank = getOffsets().size() - layoutRank;
+  return success();
+}
+
+LogicalResult MemDescSubsliceOp::verifyOffsets(MemDescType srcTy,
+                                               ArrayRef<int64_t> resultShape,
+                                               ArrayRef<int32_t> offsets,
+                                               std::optional<Location> loc) {
+  if (MemDescIndexOp::hasLogicalSharedIndexProvenance(srcTy))
+    return emitOptionalError(
+        loc, "memdesc_subslice does not support a logical shared index phase");
+  if (offsets.size() != static_cast<size_t>(srcTy.getRank()))
+    return emitOptionalError(loc, "offsets must have the same rank as input");
+  if (srcTy.getRank() != static_cast<int64_t>(resultShape.size()))
+    return emitOptionalError(loc, "result rank must equal to input rank");
+
+  auto srcEnc = srcTy.getEncoding();
+  if (!isa<SharedEncodingTrait>(srcEnc))
+    return emitOptionalError(loc, "src must have a shared memory encoding");
+  auto layoutRank = dropPipeliningDim(offsets, srcEnc).size();
+  auto prefixRank = offsets.size() - layoutRank;
 
   SetVector<int> splitDims{};
   for (int i = 0; i < srcTy.getRank(); i++) {
-    if (srcTy.getDimSize(i) != dstTy.getDimSize(i)) {
+    if (srcTy.getDimSize(i) != resultShape[i]) {
       splitDims.insert(i);
     }
   }
-  SmallVector<int64_t> offsets(getOffsets().begin(), getOffsets().end());
   for (auto [dim, offset] : llvm::enumerate(offsets)) {
     if (!splitDims.contains(dim)) {
       if (offset != 0) {
-        return emitError("A non zero offset found in a dimension that is "
-                         "not being split");
+        return emitOptionalError(
+            loc, "A non zero offset found in a dimension that is not being "
+                 "split");
       }
     } else {
-      if (offset < 0 ||
-          offset > srcTy.getDimSize(dim) - dstTy.getDimSize(dim)) {
-        return emitError("The split offset may not exceed the source shape");
+      if (offset < 0 || offset > srcTy.getDimSize(dim) - resultShape[dim]) {
+        return emitOptionalError(
+            loc, "The split offset may not exceed the source shape");
       }
-      if (dim >= prefixRank && (offset & (dstTy.getDimSize(dim) - 1))) {
-        return emitError("The split offset may not touch the tile");
+      if (dim >= prefixRank && (offset & (resultShape[dim] - 1))) {
+        return emitOptionalError(loc,
+                                 "The split offset may not touch the tile");
       }
     }
   }
@@ -1280,11 +1468,12 @@ LogicalResult MemDescSubsliceOp::verify() {
   if (splitDims.empty())
     return success();
 
-  auto ctx = getContext();
+  auto *ctx = srcTy.getContext();
   if (auto paddedEncoding = triton::gpu::getPaddedEncoding(srcEnc)) {
     if (paddedEncoding.getRank() < srcTy.getRank()) {
-      return emitError("SubSlice of low rank PaddedSharedEncoding from higher "
-                       "rank tensors is not supported yet");
+      return emitOptionalError(
+          loc, "SubSlice of low rank PaddedSharedEncoding from higher rank "
+               "tensors is not supported yet");
     }
   }
   LinearLayout ll = triton::gpu::toLinearLayoutIgnoringPadding(srcTy);
@@ -1298,14 +1487,14 @@ LogicalResult MemDescSubsliceOp::verify() {
     for (auto d : standardOutDimNames(ctx, layoutRank)) {
       namedOffsets.push_back({d, 0});
     }
-    for (int dimSize = dstTy.getDimSize(dim); dimSize < srcTy.getDimSize(dim);
+    for (int dimSize = resultShape[dim]; dimSize < srcTy.getDimSize(dim);
          dimSize *= 2) {
       namedOffsets[layoutDim].second = dimSize;
       auto offsetAndBlock = llInv.apply(namedOffsets);
       auto offset = offsetAndBlock[0];
       if (!llvm::isPowerOf2_32(offset.second) && offset.second != 0) {
-        return emitError(
-            "We don't support splitting along the swizzling pattern");
+        return emitOptionalError(
+            loc, "We don't support splitting along the swizzling pattern");
       }
     }
   }

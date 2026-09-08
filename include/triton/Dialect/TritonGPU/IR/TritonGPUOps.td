@@ -31,7 +31,8 @@ class TTG_Op<string mnemonic, list<Trait> traits = []> :
 
 def TTG_InlineAsmOp : TTG_Op<"inline_asm", [
   DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
-  DeclareOpInterfaceMethods<ConditionallySpeculatable>
+  DeclareOpInterfaceMethods<ConditionallySpeculatable>,
+  SupportsMemDescIndexPhaseTrait
 ]> {
   let summary = "Run inline assembly once per thread with explicit tensor layouts";
   let description = [{
@@ -213,7 +214,8 @@ def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEf
 }
 
 // Deallocate shared memory
-def TTG_LocalDeallocOp : TTG_Op<"local_dealloc"> {
+def TTG_LocalDeallocOp :
+    TTG_Op<"local_dealloc", [SupportsMemDescIndexPhaseTrait]> {
   let summary = "dealloc buffer";
 
   let description = [{
@@ -235,7 +237,9 @@ def TTG_LocalDeallocOp : TTG_Op<"local_dealloc"> {
   // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src attr-dict `:` qualified(type($src))}];
 }
-def TTG_MemDescIndexOp : TTG_Op<"memdesc_index", [Pure, MemDescViewTrait]> {
+def TTG_MemDescIndexOp :
+    TTG_Op<"memdesc_index",
+           [Pure, MemDescViewTrait, SupportsMemDescIndexPhaseTrait]> {
   let summary = "take a subview of the descriptor.";
 
   let description = [{
@@ -249,11 +253,32 @@ def TTG_MemDescIndexOp : TTG_Op<"memdesc_index", [Pure, MemDescViewTrait]> {
      - the output shape is 4x16xf16, and
      - index = 1.
     Then the output descriptor is equivalent to input[1], where input is the logical tensor.
+
+    If the source has a leading pipeline-buffer dimension that is not present
+    in its layout, the result keeps the same encoding. Otherwise, indexing the
+    leading logical dimension derives a rank-reduced shared-linear encoding
+    that retains the dynamic swizzle phase of the selected slice.
   }];
 
   let arguments = (ins TTG_MemDescType:$src, I32:$index);
 
   let results = (outs TTG_MemDescType:$result);
+
+  let extraClassDeclaration = [{
+    bool isLogicalSharedIndex() {
+      return hasLogicalSharedIndexProvenance(getType());
+    }
+
+    static bool hasLogicalSharedIndexProvenance(MemDescType type);
+
+    /// Maps source logical coordinates to "base" and "phase" element offsets.
+    /// Requires a verified logical index with an invertible, one-CTA source.
+    LinearLayout getLogicalIndexOffsetLayout();
+
+    static LogicalResult
+    inferResultType(MemDescType srcType, MemDescType &resultType,
+                    std::optional<Location> loc = std::nullopt);
+  }];
 
   let assemblyFormat = [{$src `[` $index `]` attr-dict `:` qualified(type($src)) `->` qualified(type($result))}];
 
@@ -286,6 +311,13 @@ def TTG_MemDescSubsliceOp : TTG_Op<"memdesc_subslice", [Pure, MemDescViewTrait]>
   }];
 
   let results = (outs TTG_MemDescType:$result);
+
+  let extraClassDeclaration = [{
+    static LogicalResult
+    verifyOffsets(MemDescType srcType, ArrayRef<int64_t> resultShape,
+                  ArrayRef<int32_t> offsets,
+                  std::optional<Location> loc = std::nullopt);
+  }];
 
   let hasFolder = 1;
   let hasVerifier = 1;
@@ -375,7 +407,8 @@ def TTG_MemDescReinterpretOp : TTG_Op<"memdesc_reinterpret", [Pure, MemDescViewT
   let hasVerifier = 1;
 }
 
-def TTG_LocalLoadOp : TTG_Op<"local_load", [LocalLoadTrait]> {
+def TTG_LocalLoadOp :
+    TTG_Op<"local_load", [LocalLoadTrait, SupportsMemDescIndexPhaseTrait]> {
   let summary = "Load a buffer from local memory into a distributed tensor";
 
   let description = [{
@@ -398,7 +431,8 @@ def TTG_LocalLoadOp : TTG_Op<"local_load", [LocalLoadTrait]> {
   let hasVerifier = 1;
 }
 
-def TTG_LocalStoreOp : TTG_Op<"local_store"> {
+def TTG_LocalStoreOp :
+    TTG_Op<"local_store", [SupportsMemDescIndexPhaseTrait]> {
   let summary = "Store a distributed tensor into a buffer in local memory";
 
   let description = [{
@@ -416,7 +450,9 @@ def TTG_LocalStoreOp : TTG_Op<"local_store"> {
   }];
 }
 
-def TTG_LocalGatherOp : TTG_Op<"local_gather", [LocalLoadTrait]> {
+def TTG_LocalGatherOp :
+    TTG_Op<"local_gather",
+           [LocalLoadTrait, SupportsMemDescIndexPhaseTrait]> {
   let summary = "Gather elements from shared memory along a specified axis";
 
   let description = [{
@@ -449,7 +485,8 @@ def TTG_LocalGatherOp : TTG_Op<"local_gather", [LocalLoadTrait]> {
   let hasVerifier = 1;
 }
 
-def TTG_LocalScatterOp : TTG_Op<"local_scatter"> {
+def TTG_LocalScatterOp :
+    TTG_Op<"local_scatter", [SupportsMemDescIndexPhaseTrait]> {
   let summary = "Scatter elements to shared memory along a specified axis";
 
   let description = [{
@@ -484,6 +521,7 @@ def TTG_LocalScatterOp : TTG_Op<"local_scatter"> {
 
 def TTG_LocalAtomicScatterRMWOp : TTG_Op<"local_atomic_scatter_rmw", [
   DeclareOpInterfaceMethods<InferTypeOpInterface>,
+  SupportsMemDescIndexPhaseTrait,
   TypesMatchWith<"result type matches values type", "values", "result", "$_self">,
   OptionalTypesMatchWith<"mask type matches values type",
                  "values", "mask", "getI1SameShape($_self)">
@@ -622,6 +660,7 @@ def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc"> {
 
 def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
   RecursiveMemoryEffects, RecursivelySpeculatable, AsyncRegions,
+  SupportsMemDescIndexPhaseTrait,
   DeclareOpInterfaceMethods<RegionBranchOpInterface, ["getSuccessorInputs"]>
 ]> {
   let summary = "asynchronously execute code on multiple warpgroups";
@@ -699,6 +738,7 @@ def TTG_WarpSpecializePartitionsOp
     : TTG_Op<"warp_specialize.partitions",
              [IsolatedFromAbove, RecursiveMemoryEffects,
               RecursivelySpeculatable, Terminator,
+              SupportsMemDescIndexPhaseTrait,
               HasParent<"WarpSpecializeOp">,
               DeclareOpInterfaceMethods<
                   RegionBranchOpInterface, ["getEntrySuccessorOperands",
@@ -718,6 +758,7 @@ def TTG_WarpSpecializePartitionsOp
 
 def TTG_WarpYieldOp : TTG_Op<"warp_yield", [
   Pure, Terminator, ReturnLike, HasParent<"WarpSpecializeOp">,
+  SupportsMemDescIndexPhaseTrait,
   DeclareOpInterfaceMethods<RegionBranchTerminatorOpInterface>
 ]> {
   let summary = "yield from the default region of `ttg.warp_specialize`";

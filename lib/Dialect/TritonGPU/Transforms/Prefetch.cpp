@@ -493,6 +493,11 @@ LogicalResult Prefetcher::initialize() {
     if (aVals.size() && bVals.size()) {
       Value aSmem = aVals.front();
       Value bSmem = bVals.front();
+      auto aSmemType = cast<MemDescType>(aSmem.getType());
+      auto bSmemType = cast<MemDescType>(bSmem.getType());
+      if (MemDescIndexOp::hasLogicalSharedIndexProvenance(aSmemType) ||
+          MemDescIndexOp::hasLogicalSharedIndexProvenance(bSmemType))
+        continue;
       if (isBroadcasted(aSmem) || isBroadcasted(bSmem))
         continue;
       dot2aVals[dot] = aVals;

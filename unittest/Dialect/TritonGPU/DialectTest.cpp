@@ -3,7 +3,12 @@
 #include <gtest/gtest.h>
 
 #include "mlir/AsmParser/AsmParser.h"
+#include "mlir/IR/Verifier.h"
+#include "mlir/Parser/Parser.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Partitioning.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Signals.h"
@@ -454,6 +459,686 @@ public:
 protected:
   MLIRContext ctx;
 };
+
+TEST_F(LinearEncodingTest, MemDescIndexInfersRankReducedSharedLayout) {
+  auto srcType = dyn_cast<MemDescType>(
+      parseType("!ttg.memdesc<8x64xf32, "
+                "#ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], "
+                "[0, 16], [0, 32], [1, 0], [2, 8], [4, 16]]}, alignment = 8>, "
+                "#ttg.shared_memory, mutable>",
+                &ctx));
+  ASSERT_TRUE(srcType);
+
+  MemDescType resultType;
+  ASSERT_TRUE(succeeded(MemDescIndexOp::inferResultType(
+      srcType, resultType, UnknownLoc::get(&ctx))));
+  EXPECT_EQ(resultType.getShape(), ArrayRef<int64_t>({64}));
+  EXPECT_EQ(resultType.getAllocShape(), ArrayRef<int64_t>({8, 64}));
+
+  auto resultEncoding =
+      dyn_cast<SharedLinearEncodingAttr>(resultType.getEncoding());
+  ASSERT_TRUE(resultEncoding);
+  EXPECT_TRUE(resultEncoding.getHasIndexPhase());
+  EXPECT_EQ(resultEncoding.getIndexPhaseMask(), 24u);
+  auto outDimSizes =
+      llvm::to_vector(resultEncoding.getLinearLayout().getOutDimSizes());
+  EXPECT_THAT(outDimSizes, testing::ElementsAre(64));
+}
+
+TEST_F(LinearEncodingTest, MemDescIndexPreservesSwizzledSharedAddresses) {
+  auto srcType = dyn_cast<MemDescType>(
+      parseType("!ttg.memdesc<8x64xf32, "
+                "#ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, "
+                "order = [1, 0]}>, #ttg.shared_memory, mutable>",
+                &ctx));
+  ASSERT_TRUE(srcType);
+
+  MemDescType resultType;
+  ASSERT_TRUE(succeeded(MemDescIndexOp::inferResultType(
+      srcType, resultType, UnknownLoc::get(&ctx))));
+  auto resultEncoding =
+      dyn_cast<SharedLinearEncodingAttr>(resultType.getEncoding());
+  ASSERT_TRUE(resultEncoding);
+  EXPECT_EQ(resultEncoding.getIndexPhaseMask(), 24u);
+  EXPECT_EQ(resultEncoding.getAlignment(),
+            cast<SharedEncodingTrait>(srcType.getEncoding()).getAlignment());
+
+  OpBuilder builder(&ctx);
+  Block block;
+  auto loc = builder.getUnknownLoc();
+  Value source = block.addArgument(srcType, loc);
+  Value indexValue = block.addArgument(builder.getI32Type(), loc);
+  builder.setInsertionPointToStart(&block);
+  auto indexOp =
+      MemDescIndexOp::create(builder, loc, resultType, source, indexValue);
+  auto offsetLayout = indexOp.getLogicalIndexOffsetLayout();
+  auto srcInverse = toLinearLayout(srcType).invert();
+  auto dstLayout = toLinearLayout(resultType);
+  auto dstInverse = dstLayout.invert();
+  auto srcDims = standardOutDimNames(&ctx, srcType.getRank());
+  auto dstDims = standardOutDimNames(&ctx, resultType.getRank());
+  auto kOffset = StringAttr::get(&ctx, "offset");
+  auto kBlock = StringAttr::get(&ctx, "block");
+
+  for (int32_t index = 0; index < srcType.getDimSize(0); ++index) {
+    auto offsets = offsetLayout.apply({{srcDims[0], index}, {srcDims[1], 0}});
+    ASSERT_EQ(offsets[0].first, StringAttr::get(&ctx, "base"));
+    ASSERT_EQ(offsets[1].first, StringAttr::get(&ctx, "phase"));
+    int32_t high = offsets[0].second;
+    int32_t low = offsets[1].second;
+
+    auto resultLogicalOffset =
+        dstLayout.apply({{kOffset, low}, {kBlock, 0}})[0].second;
+    auto recoveredLow =
+        dstInverse.apply({{dstDims[0], resultLogicalOffset}})[0].second;
+    ASSERT_EQ(recoveredLow, low);
+
+    for (int32_t coord = 0; coord < resultType.getDimSize(0); ++coord) {
+      int32_t srcOffset =
+          srcInverse.apply({{srcDims[0], index}, {srcDims[1], coord}})[0]
+              .second;
+      int32_t dstOffset = dstInverse.apply({{dstDims[0], coord}})[0].second;
+      EXPECT_EQ(srcOffset, high + (dstOffset ^ low))
+          << "index=" << index << ", coord=" << coord;
+    }
+  }
+}
+
+TEST_F(LinearEncodingTest, MemDescIndexDistinguishesSyntheticBufferDimension) {
+  auto srcType = dyn_cast<MemDescType>(
+      parseType("!ttg.memdesc<2x8x64xf32, "
+                "#ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], "
+                "[0, 16], [0, 32], [1, 0], [2, 8], [4, 16]]}, alignment = 8>, "
+                "#ttg.shared_memory, mutable>",
+                &ctx));
+  ASSERT_TRUE(srcType);
+
+  MemDescType resultType;
+  ASSERT_TRUE(succeeded(MemDescIndexOp::inferResultType(
+      srcType, resultType, UnknownLoc::get(&ctx))));
+  EXPECT_EQ(resultType.getShape(), ArrayRef<int64_t>({8, 64}));
+  EXPECT_EQ(resultType.getAllocShape(), ArrayRef<int64_t>({8, 64}));
+  EXPECT_EQ(resultType.getEncoding(), srcType.getEncoding());
+  EXPECT_FALSE(MemDescIndexOp::hasLogicalSharedIndexProvenance(resultType));
+}
+
+TEST_F(LinearEncodingTest, MemDescIndexPreservesZeroPhaseProvenance) {
+  auto srcType = dyn_cast<MemDescType>(
+      parseType("!ttg.memdesc<8x64xf32, "
+                "#ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], "
+                "[0, 16], [0, 32], [1, 0], [2, 0], [4, 0]]}, alignment = 8>, "
+                "#ttg.shared_memory, mutable>",
+                &ctx));
+  ASSERT_TRUE(srcType);
+
+  MemDescType resultType;
+  ASSERT_TRUE(succeeded(MemDescIndexOp::inferResultType(
+      srcType, resultType, UnknownLoc::get(&ctx))));
+  auto resultEncoding =
+      dyn_cast<SharedLinearEncodingAttr>(resultType.getEncoding());
+  ASSERT_TRUE(resultEncoding);
+  EXPECT_TRUE(resultEncoding.getHasIndexPhase());
+  EXPECT_EQ(resultEncoding.getIndexPhaseMask(), 0u);
+  EXPECT_TRUE(MemDescIndexOp::hasLogicalSharedIndexProvenance(resultType));
+}
+
+TEST_F(LinearEncodingTest, MemDescIndexSingletonLayoutRoundtrip) {
+  auto kOffset = StringAttr::get(&ctx, "offset");
+  auto kBlock = StringAttr::get(&ctx, "block");
+  for (unsigned rank : {1u, 2u, 3u}) {
+    SCOPED_TRACE(rank);
+    SmallVector<int64_t> srcShape(rank + 1, 1);
+    srcShape[0] = 2;
+    std::vector<int32_t> basis(rank + 1, 0);
+    basis[0] = 1;
+    LinearLayout layout({{kOffset, {basis}}, {kBlock, {}}},
+                        standardOutDimNames(&ctx, rank + 1));
+    auto encoding = SharedLinearEncodingAttr::get(&ctx, layout, 16);
+    auto srcType = MemDescType::get(srcShape, Float32Type::get(&ctx), encoding,
+                                    SharedMemorySpaceAttr::get(&ctx), true);
+
+    MemDescType resultType;
+    ASSERT_TRUE(succeeded(MemDescIndexOp::inferResultType(
+        srcType, resultType, UnknownLoc::get(&ctx))));
+    auto resultEncoding =
+        cast<SharedLinearEncodingAttr>(resultType.getEncoding());
+    EXPECT_EQ(resultEncoding.getRank(), rank);
+    EXPECT_EQ(resultEncoding.getLinearLayout().getTotalInDimSizeLog2(), 0);
+    EXPECT_TRUE(resultEncoding.getHasIndexPhase());
+    EXPECT_EQ(resultEncoding.getIndexPhaseMask(), 0u);
+    EXPECT_EQ(parseType(stringifyLLVMType(resultType), &ctx), resultType);
+  }
+}
+
+TEST_F(LinearEncodingTest, ReplaceUsesSingletonMemDescIndexRoundtrip) {
+  MLIRContext context;
+  context.loadDialect<triton::TritonDialect, TritonGPUDialect>();
+  auto module = parseSourceString<ModuleOp>(R"mlir(
+    #synthetic = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+    #logical = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+    #smem = #ttg.shared_memory
+    module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+      tt.func @singleton_index(%replacement: !ttg.memdesc<2x1xf32, #logical, #smem, mutable>, %index: i32) {
+        %copy = ttg.local_alloc : () -> !ttg.memdesc<2x1xf32, #synthetic, #smem, mutable>
+        %view = ttg.memdesc_index %copy[%index] : !ttg.memdesc<2x1xf32, #synthetic, #smem, mutable> -> !ttg.memdesc<1xf32, #synthetic, #smem, mutable>
+        tt.return
+      }
+    }
+  )mlir",
+                                            &context);
+  ASSERT_TRUE(module);
+  ASSERT_TRUE(succeeded(verify(*module)));
+  auto func = module->lookupSymbol<triton::FuncOp>("singleton_index");
+  LocalAllocOp copy;
+  func.walk([&](LocalAllocOp op) { copy = op; });
+  ASSERT_TRUE(copy);
+
+  OpBuilder builder(&context);
+  bool replaced =
+      replaceUsesAndPropagateType(builder, copy, func.getArgument(0));
+  ASSERT_TRUE(replaced);
+  ASSERT_TRUE(succeeded(verify(*module)));
+
+  MemDescIndexOp index;
+  func.walk([&](MemDescIndexOp op) { index = op; });
+  ASSERT_TRUE(index);
+  EXPECT_EQ(index.getSrc(), func.getArgument(0));
+  auto encoding = cast<SharedLinearEncodingAttr>(index.getType().getEncoding());
+  EXPECT_EQ(encoding.getRank(), 1u);
+  EXPECT_TRUE(encoding.getHasIndexPhase());
+  EXPECT_EQ(encoding.getIndexPhaseMask(), 0u);
+
+  std::string serialized;
+  llvm::raw_string_ostream stream(serialized);
+  module->print(stream);
+  auto roundtrip = parseSourceString<ModuleOp>(serialized, &context);
+  ASSERT_TRUE(roundtrip);
+  EXPECT_TRUE(succeeded(verify(*roundtrip)));
+  roundtrip->walk(
+      [&](MemDescIndexOp op) { EXPECT_EQ(op.getType(), index.getType()); });
+}
+
+TEST_F(LinearEncodingTest, LogicalIndexPhaseRejectsDynamicParentDimension) {
+  auto validType = dyn_cast<MemDescType>(parseType(
+      "!ttg.memdesc<64xf32, "
+      "#ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, "
+      "alignment = 8, hasIndexPhase = true, indexPhaseMask = 0>, "
+      "#ttg.shared_memory, mutable, 2x64>",
+      &ctx));
+  ASSERT_TRUE(validType);
+
+  SmallVector<int64_t> allocShape = {ShapedType::kDynamic, 64};
+  std::vector<std::string> diagnostics;
+  MemDescType dynamicType;
+  {
+    ScopedDiagnosticHandler handler(
+        &ctx, [&](Diagnostic &diag) { diagnostics.push_back(diag.str()); });
+    dynamicType = MemDescType::getChecked(
+        [&]() { return emitError(UnknownLoc::get(&ctx)); }, &ctx,
+        validType.getShape(), validType.getElementType(),
+        validType.getEncoding(), validType.getMemorySpace(),
+        validType.getMutableMemory(), ArrayRef<int64_t>(allocShape));
+  }
+
+  EXPECT_FALSE(dynamicType);
+  EXPECT_THAT(diagnostics,
+              testing::Contains(testing::HasSubstr(
+                  "leading allocation dimension must be a positive power of "
+                  "two")));
+}
+
+TEST_F(LinearEncodingTest, ReplaceUsesRejectsNestedLogicalMemDescIndex) {
+  MLIRContext context;
+  context.loadDialect<triton::TritonDialect, TritonGPUDialect>();
+  auto module = parseSourceString<ModuleOp>(R"mlir(
+    #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+    #plain = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [1, 0], [2, 8], [4, 16]]}, alignment = 8>
+    #indexed = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 24>
+    #replacement = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [1, 0], [2, 0], [4, 0]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 0>
+    #smem = #ttg.shared_memory
+    module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+      tt.func @reject_nested_index(
+          %replacement: !ttg.memdesc<8x64xf32, #replacement, #smem, mutable, 2x8x64>,
+          %plain_replacement: !ttg.memdesc<8x64xf32, #plain, #smem, mutable>,
+          %index: i32) {
+        %copy = ttg.local_alloc : () -> !ttg.memdesc<8x64xf32, #plain, #smem, mutable>
+        %view = ttg.memdesc_index %copy[%index] : !ttg.memdesc<8x64xf32, #plain, #smem, mutable> -> !ttg.memdesc<64xf32, #indexed, #smem, mutable, 8x64>
+        %value = ttg.local_load %view : !ttg.memdesc<64xf32, #indexed, #smem, mutable, 8x64> -> tensor<64xf32, #blocked>
+        tt.return
+      }
+    }
+  )mlir",
+                                            &context);
+  ASSERT_TRUE(module);
+  ASSERT_TRUE(succeeded(verify(*module)));
+
+  auto func = module->lookupSymbol<triton::FuncOp>("reject_nested_index");
+  ASSERT_TRUE(func);
+  LocalAllocOp copy;
+  func.walk([&](LocalAllocOp op) { copy = op; });
+  ASSERT_TRUE(copy);
+
+  OpBuilder builder(&context);
+  EXPECT_FALSE(replaceUsesAndPropagateType(builder, copy, func.getArgument(0)));
+
+  SmallVector<MemDescIndexOp> indexes;
+  func.walk([&](MemDescIndexOp op) { indexes.push_back(op); });
+  ASSERT_EQ(indexes.size(), 1u);
+  EXPECT_EQ(indexes.front().getSrc(), copy.getResult());
+  EXPECT_TRUE(succeeded(verify(*module)));
+
+  EXPECT_TRUE(replaceUsesAndPropagateType(builder, copy, func.getArgument(1)));
+  indexes.clear();
+  func.walk([&](MemDescIndexOp op) { indexes.push_back(op); });
+  ASSERT_EQ(indexes.size(), 1u);
+  EXPECT_EQ(indexes.front().getSrc(), func.getArgument(1));
+  EXPECT_TRUE(succeeded(verify(*module)));
+}
+
+TEST_F(LinearEncodingTest, ReplaceUsesRejectsUnsupportedPhaseConsumer) {
+  MLIRContext context;
+  context.loadDialect<triton::TritonDialect, TritonGPUDialect>();
+  auto module = parseSourceString<ModuleOp>(R"mlir(
+    #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+    #plain = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 8>
+    #phase = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 0>
+    #smem = #ttg.shared_memory
+    module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+      tt.func @reject_unsupported_consumer(
+          %replacement: !ttg.memdesc<64xf32, #phase, #smem, mutable, 2x64>,
+          %src: tensor<64x!tt.ptr<f32>, #blocked>) {
+        %copy = ttg.local_alloc : () -> !ttg.memdesc<64xf32, #plain, #smem, mutable>
+        %token = ttg.async_copy_global_to_local %src, %copy : tensor<64x!tt.ptr<f32>, #blocked> -> <64xf32, #plain, #smem, mutable>
+        tt.return
+      }
+    }
+  )mlir",
+                                            &context);
+  ASSERT_TRUE(module);
+  ASSERT_TRUE(succeeded(verify(*module)));
+
+  auto func =
+      module->lookupSymbol<triton::FuncOp>("reject_unsupported_consumer");
+  ASSERT_TRUE(func);
+  LocalAllocOp copy;
+  AsyncCopyGlobalToLocalOp asyncCopy;
+  func.walk([&](LocalAllocOp op) { copy = op; });
+  func.walk([&](AsyncCopyGlobalToLocalOp op) { asyncCopy = op; });
+  ASSERT_TRUE(copy && asyncCopy);
+
+  OpBuilder builder(&context);
+  EXPECT_FALSE(replaceUsesAndPropagateType(builder, copy, func.getArgument(0)));
+  EXPECT_EQ(asyncCopy.getResult(), copy.getResult());
+  EXPECT_TRUE(succeeded(verify(*module)));
+}
+
+TEST_F(LinearEncodingTest, ReplaceUsesRejectsLogicalIndexPhaseThroughReshape) {
+  MLIRContext context;
+  context.loadDialect<triton::TritonDialect, TritonGPUDialect>();
+  auto module = parseSourceString<ModuleOp>(R"mlir(
+    #plain = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 8>
+    #zero_phase = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 0>
+    #phase = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 24>
+    #smem = #ttg.shared_memory
+    module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+      tt.func @reject_phase_reshape(
+          %zero_phase: !ttg.memdesc<64xf32, #zero_phase, #smem, mutable, 2x64>,
+          %phase: !ttg.memdesc<64xf32, #phase, #smem, mutable, 8x64>,
+          %plain: !ttg.memdesc<64xf32, #plain, #smem, mutable>) {
+        %copy = ttg.local_alloc : () -> !ttg.memdesc<64xf32, #plain, #smem, mutable>
+        %view = ttg.memdesc_reshape %copy : !ttg.memdesc<64xf32, #plain, #smem, mutable> -> !ttg.memdesc<64xf32, #plain, #smem, mutable>
+        tt.return
+      }
+    }
+  )mlir",
+                                            &context);
+  ASSERT_TRUE(module);
+  ASSERT_TRUE(succeeded(verify(*module)));
+
+  auto func = module->lookupSymbol<triton::FuncOp>("reject_phase_reshape");
+  ASSERT_TRUE(func);
+  LocalAllocOp copy;
+  MemDescReshapeOp reshape;
+  func.walk([&](LocalAllocOp op) { copy = op; });
+  func.walk([&](MemDescReshapeOp op) { reshape = op; });
+  ASSERT_TRUE(copy && reshape);
+
+  OpBuilder builder(&context);
+  for (Value replacement : func.getArguments().take_front(2)) {
+    bool replaced = replaceUsesAndPropagateType(builder, copy, replacement);
+    ASSERT_FALSE(replaced);
+    EXPECT_EQ(reshape.getSrc(), copy.getResult());
+    EXPECT_TRUE(succeeded(verify(*module)));
+  }
+
+  bool replaced =
+      replaceUsesAndPropagateType(builder, copy, func.getArgument(2));
+  EXPECT_TRUE(replaced);
+  func.walk([&](MemDescReshapeOp op) {
+    EXPECT_EQ(op.getSrc(), func.getArgument(2));
+  });
+  EXPECT_TRUE(succeeded(verify(*module)));
+}
+
+TEST_F(LinearEncodingTest, ReplaceUsesRejectsInvalidPropagatedSubslice) {
+  MLIRContext context;
+  context.loadDialect<triton::TritonDialect, TritonGPUDialect>();
+  auto module = parseSourceString<ModuleOp>(R"mlir(
+    #synthetic = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [1, 0], [2, 0], [4, 0]]}, alignment = 8>
+    #logical = #ttg.shared_linear<{offset = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 0, 8], [0, 1, 0], [0, 2, 0], [0, 4, 0], [1, 0, 0], [2, 0, 0]]}, alignment = 8>
+    #smem = #ttg.shared_memory
+    module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+      tt.func @reject_invalid_subslice(
+          %replacement: !ttg.memdesc<4x8x16xf32, #logical, #smem, mutable>) {
+        %copy = ttg.local_alloc : () -> !ttg.memdesc<4x8x16xf32, #synthetic, #smem, mutable>
+        %view = ttg.memdesc_subslice %copy[1, 0, 0] : !ttg.memdesc<4x8x16xf32, #synthetic, #smem, mutable> -> !ttg.memdesc<2x8x16xf32, #synthetic, #smem, mutable, 4x8x16>
+        tt.return
+      }
+    }
+  )mlir",
+                                            &context);
+  ASSERT_TRUE(module);
+  ASSERT_TRUE(succeeded(verify(*module)));
+
+  auto func = module->lookupSymbol<triton::FuncOp>("reject_invalid_subslice");
+  ASSERT_TRUE(func);
+  LocalAllocOp copy;
+  MemDescSubsliceOp subslice;
+  func.walk([&](LocalAllocOp op) { copy = op; });
+  func.walk([&](MemDescSubsliceOp op) { subslice = op; });
+  ASSERT_TRUE(copy && subslice);
+
+  OpBuilder builder(&context);
+  EXPECT_FALSE(replaceUsesAndPropagateType(builder, copy, func.getArgument(0)));
+  SmallVector<MemDescSubsliceOp> subslices;
+  func.walk([&](MemDescSubsliceOp op) { subslices.push_back(op); });
+  ASSERT_EQ(subslices.size(), 1u);
+  EXPECT_EQ(subslices.front().getSrc(), copy.getResult());
+  EXPECT_TRUE(succeeded(verify(*module)));
+}
+
+TEST_F(LinearEncodingTest,
+       ReplaceUsesRejectsInferredIndexPhaseInAutomaticPartition) {
+  MLIRContext context;
+  context.loadDialect<triton::TritonDialect, TritonGPUDialect>();
+  auto module = parseSourceString<ModuleOp>(R"mlir(
+    #synthetic = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 8>
+    #logical = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [1, 0], [2, 8], [4, 16]]}, alignment = 8>
+    #smem = #ttg.shared_memory
+    module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+      tt.func @reject_partitioned_index(
+          %replacement: !ttg.memdesc<8x64xf32, #logical, #smem, mutable>, %index: i32) {
+        %copy = ttg.local_alloc : () -> !ttg.memdesc<8x64xf32, #synthetic, #smem, mutable>
+        %view = ttg.memdesc_index %copy[%index] {ttg.partition = array<i32: 1>} : !ttg.memdesc<8x64xf32, #synthetic, #smem, mutable> -> !ttg.memdesc<64xf32, #synthetic, #smem, mutable>
+        tt.return
+      }
+    }
+  )mlir",
+                                            &context);
+  ASSERT_TRUE(module);
+  ASSERT_TRUE(succeeded(verify(*module)));
+  auto func = module->lookupSymbol<triton::FuncOp>("reject_partitioned_index");
+  ASSERT_TRUE(func);
+  LocalAllocOp copy;
+  MemDescIndexOp index;
+  func.walk([&](LocalAllocOp op) { copy = op; });
+  func.walk([&](MemDescIndexOp op) { index = op; });
+  ASSERT_TRUE(copy && index);
+  auto oldIndexType = index.getType();
+  // An unused result ensures that checking only downstream consumers cannot
+  // catch the new phase on the partitioned index itself.
+  ASSERT_TRUE(index->use_empty());
+
+  OpBuilder builder(&context);
+  bool replaced =
+      replaceUsesAndPropagateType(builder, copy, func.getArgument(0));
+  ASSERT_FALSE(replaced);
+  EXPECT_EQ(index.getSrc(), copy.getResult());
+  EXPECT_EQ(index.getType(), oldIndexType);
+  EXPECT_TRUE(succeeded(verify(*module)));
+
+  index->removeAttr(kPartitionAttrName);
+  replaced = replaceUsesAndPropagateType(builder, copy, func.getArgument(0));
+  ASSERT_TRUE(replaced);
+  func.walk([&](MemDescIndexOp op) { index = op; });
+  EXPECT_EQ(index.getSrc(), func.getArgument(0));
+  auto encoding = cast<SharedLinearEncodingAttr>(index.getType().getEncoding());
+  EXPECT_TRUE(encoding.getHasIndexPhase());
+  EXPECT_EQ(encoding.getIndexPhaseMask(), 24u);
+  EXPECT_TRUE(succeeded(verify(*module)));
+}
+
+static OwningOpRef<ModuleOp>
+parseWarpSpecializeMemDescIndexModule(MLIRContext &context) {
+  return parseSourceString<ModuleOp>(R"mlir(
+    #plain = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [1, 0], [2, 8], [4, 16]]}, alignment = 8>
+    #indexed = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 24>
+    #replacement = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [1, 0], [2, 0], [4, 0]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 0>
+    #smem = #ttg.shared_memory
+    module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+      tt.func @through_warp_specialize(
+          %replacement: !ttg.memdesc<8x64xf32, #replacement, #smem, mutable, 2x8x64>,
+          %plain_replacement: !ttg.memdesc<8x64xf32, #plain, #smem>,
+          %index: i32) {
+        %copy = ttg.local_alloc : () -> !ttg.memdesc<8x64xf32, #plain, #smem, mutable>
+        ttg.warp_specialize(%copy, %index)
+        default {
+          ttg.warp_yield
+        }
+        partition0(%capture: !ttg.memdesc<8x64xf32, #plain, #smem, mutable>, %partition_index: i32) num_warps(4) {
+          %view = ttg.memdesc_index %capture[%partition_index] : !ttg.memdesc<8x64xf32, #plain, #smem, mutable> -> !ttg.memdesc<64xf32, #indexed, #smem, mutable, 8x64>
+          ttg.warp_return
+        } : (!ttg.memdesc<8x64xf32, #plain, #smem, mutable>, i32) -> ()
+        tt.return
+      }
+    }
+  )mlir",
+                                     &context);
+}
+
+static OwningOpRef<ModuleOp>
+parseWarpSpecializePhaseConsumerModule(MLIRContext &context) {
+  return parseSourceString<ModuleOp>(R"mlir(
+    #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+    #plain = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 8>
+    #phase = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 0>
+    #smem = #ttg.shared_memory
+    module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+      tt.func @phase_through_warp_specialize(
+          %replacement: !ttg.memdesc<64xf32, #phase, #smem, mutable, 2x64>) {
+        %copy = ttg.local_alloc : () -> !ttg.memdesc<64xf32, #plain, #smem, mutable>
+        ttg.warp_specialize(%copy)
+        default {
+          ttg.warp_yield
+        }
+        partition0(%capture: !ttg.memdesc<64xf32, #plain, #smem, mutable>) num_warps(4) {
+          %value = ttg.local_load %capture : !ttg.memdesc<64xf32, #plain, #smem, mutable> -> tensor<64xf32, #blocked>
+          ttg.warp_return
+        } : (!ttg.memdesc<64xf32, #plain, #smem, mutable>) -> ()
+        tt.return
+      }
+    }
+  )mlir",
+                                     &context);
+}
+
+TEST_F(LinearEncodingTest,
+       ReplaceUsesPropagatesLogicalIndexPhaseThroughWarpSpecialize) {
+  MLIRContext context;
+  context.loadDialect<triton::TritonDialect, TritonGPUDialect>();
+  auto module = parseWarpSpecializePhaseConsumerModule(context);
+  ASSERT_TRUE(module);
+  ASSERT_TRUE(succeeded(verify(*module)));
+
+  auto func =
+      module->lookupSymbol<triton::FuncOp>("phase_through_warp_specialize");
+  ASSERT_TRUE(func);
+  LocalAllocOp copy;
+  WarpSpecializePartitionsOp partitions;
+  LocalLoadOp load;
+  func.walk([&](LocalAllocOp op) { copy = op; });
+  func.walk([&](WarpSpecializePartitionsOp op) { partitions = op; });
+  func.walk([&](LocalLoadOp op) { load = op; });
+  ASSERT_TRUE(copy && partitions && load);
+
+  OpBuilder builder(&context);
+  EXPECT_TRUE(replaceUsesAndPropagateType(builder, copy, func.getArgument(0)));
+  EXPECT_EQ(partitions.getExplicitCaptures().front(), func.getArgument(0));
+  auto partitionArg = partitions->getRegion(0).getArgument(0);
+  EXPECT_EQ(partitionArg.getType(), func.getArgument(0).getType());
+  EXPECT_EQ(load.getSrc(), partitionArg);
+  EXPECT_TRUE(succeeded(verify(*module)));
+}
+
+TEST_F(LinearEncodingTest,
+       ReplaceUsesRejectsIndexPhaseInAutomaticPartitionConsumer) {
+  MLIRContext context;
+  context.loadDialect<triton::TritonDialect, TritonGPUDialect>();
+  auto module = parseWarpSpecializePhaseConsumerModule(context);
+  ASSERT_TRUE(module);
+  auto func =
+      module->lookupSymbol<triton::FuncOp>("phase_through_warp_specialize");
+  ASSERT_TRUE(func);
+  LocalAllocOp copy;
+  WarpSpecializePartitionsOp partitions;
+  LocalLoadOp load;
+  func.walk([&](LocalAllocOp op) { copy = op; });
+  func.walk([&](WarpSpecializePartitionsOp op) { partitions = op; });
+  func.walk([&](LocalLoadOp op) { load = op; });
+  ASSERT_TRUE(copy && partitions && load);
+
+  OpBuilder builder(&context);
+  load->setAttr(kPartitionAttrName, builder.getDenseI32ArrayAttr({1}));
+  ASSERT_TRUE(succeeded(verify(*module)));
+  auto capture = partitions->getRegion(0).getArgument(0);
+  auto oldCaptureType = capture.getType();
+
+  // The replacement has zero phase mask, but its provenance must still be
+  // rejected before changing either the capture or the nested consumer.
+  bool replaced =
+      replaceUsesAndPropagateType(builder, copy, func.getArgument(0));
+  ASSERT_FALSE(replaced);
+  EXPECT_EQ(partitions.getExplicitCaptures().front(), copy.getResult());
+  EXPECT_EQ(capture.getType(), oldCaptureType);
+  EXPECT_EQ(load.getSrc(), capture);
+  EXPECT_TRUE(succeeded(verify(*module)));
+}
+
+TEST_F(LinearEncodingTest,
+       ReplaceUsesRejectsNestedLogicalMemDescIndexInWarpSpecialize) {
+  MLIRContext context;
+  context.loadDialect<triton::TritonDialect, TritonGPUDialect>();
+  auto module = parseWarpSpecializeMemDescIndexModule(context);
+  ASSERT_TRUE(module);
+  ASSERT_TRUE(succeeded(verify(*module)));
+
+  auto func = module->lookupSymbol<triton::FuncOp>("through_warp_specialize");
+  ASSERT_TRUE(func);
+  LocalAllocOp copy;
+  WarpSpecializePartitionsOp partitions;
+  MemDescIndexOp index;
+  func.walk([&](LocalAllocOp op) { copy = op; });
+  func.walk([&](WarpSpecializePartitionsOp op) { partitions = op; });
+  func.walk([&](MemDescIndexOp op) { index = op; });
+  ASSERT_TRUE(copy && partitions && index);
+
+  OpBuilder builder(&context);
+  EXPECT_FALSE(replaceUsesAndPropagateType(builder, copy, func.getArgument(0)));
+  EXPECT_EQ(partitions.getExplicitCaptures().front(), copy.getResult());
+  EXPECT_EQ(partitions->getRegion(0).getArgument(0).getType(), copy.getType());
+  EXPECT_TRUE(succeeded(verify(*module)));
+}
+
+TEST_F(LinearEncodingTest,
+       ReplaceUsesPropagatesMemDescIndexThroughWarpSpecialize) {
+  MLIRContext context;
+  context.loadDialect<triton::TritonDialect, TritonGPUDialect>();
+  auto module = parseWarpSpecializeMemDescIndexModule(context);
+  ASSERT_TRUE(module);
+  ASSERT_TRUE(succeeded(verify(*module)));
+
+  auto func = module->lookupSymbol<triton::FuncOp>("through_warp_specialize");
+  ASSERT_TRUE(func);
+  LocalAllocOp copy;
+  WarpSpecializePartitionsOp partitions;
+  MemDescIndexOp index;
+  func.walk([&](LocalAllocOp op) { copy = op; });
+  func.walk([&](WarpSpecializePartitionsOp op) { partitions = op; });
+  func.walk([&](MemDescIndexOp op) { index = op; });
+  ASSERT_TRUE(copy && partitions && index);
+
+  OpBuilder builder(&context);
+  EXPECT_TRUE(replaceUsesAndPropagateType(builder, copy, func.getArgument(1)));
+  EXPECT_EQ(partitions.getExplicitCaptures().front(), func.getArgument(1));
+  auto partitionArg = partitions->getRegion(0).getArgument(0);
+  EXPECT_EQ(partitionArg.getType(), func.getArgument(1).getType());
+
+  MemDescType expectedType;
+  ASSERT_TRUE(succeeded(MemDescIndexOp::inferResultType(
+      cast<MemDescType>(partitionArg.getType()), expectedType)));
+  SmallVector<MemDescIndexOp> indexes;
+  func.walk([&](MemDescIndexOp op) { indexes.push_back(op); });
+  ASSERT_EQ(indexes.size(), 1u);
+  EXPECT_EQ(indexes.front().getSrc(), partitionArg);
+  EXPECT_EQ(indexes.front().getType(), expectedType);
+  EXPECT_TRUE(succeeded(verify(*module)));
+}
+
+TEST_F(LinearEncodingTest, ReplaceUsesRejectsWarpYieldResultTypeChange) {
+  MLIRContext context;
+  context.loadDialect<triton::TritonDialect, TritonGPUDialect>();
+  auto module = parseSourceString<ModuleOp>(R"mlir(
+    #plain = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 8>
+    #phase = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 24>
+    #smem = #ttg.shared_memory
+    module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+      tt.func @preserve_warp_yield_types(
+          %phase: !ttg.memdesc<64xf32, #phase, #smem, mutable, 8x64>,
+          %plain: !ttg.memdesc<64xf32, #plain, #smem, mutable>, %marker: i32) {
+        %scalar, %desc = ttg.warp_specialize()
+        default {
+          %copy = ttg.local_alloc : () -> !ttg.memdesc<64xf32, #plain, #smem, mutable>
+          ttg.warp_yield %marker, %copy : i32, !ttg.memdesc<64xf32, #plain, #smem, mutable>
+        }
+        partition0() num_warps(4) {
+          ttg.warp_return
+        } : () -> (i32, !ttg.memdesc<64xf32, #plain, #smem, mutable>)
+        tt.return
+      }
+    }
+  )mlir",
+                                            &context);
+  ASSERT_TRUE(module);
+  ASSERT_TRUE(succeeded(verify(*module)));
+  auto func = module->lookupSymbol<triton::FuncOp>("preserve_warp_yield_types");
+  ASSERT_TRUE(func);
+  LocalAllocOp copy;
+  WarpYieldOp yield;
+  func.walk([&](LocalAllocOp op) { copy = op; });
+  func.walk([&](WarpYieldOp op) { yield = op; });
+  ASSERT_TRUE(copy && yield);
+
+  std::string before;
+  llvm::raw_string_ostream beforeStream(before);
+  module->print(beforeStream);
+  OpBuilder builder(&context);
+  bool replaced =
+      replaceUsesAndPropagateType(builder, copy, func.getArgument(0));
+  ASSERT_FALSE(replaced);
+  std::string after;
+  llvm::raw_string_ostream afterStream(after);
+  module->print(afterStream);
+  EXPECT_EQ(before, after);
+  EXPECT_TRUE(succeeded(verify(*module)));
+
+  replaced = replaceUsesAndPropagateType(builder, copy, func.getArgument(1));
+  ASSERT_TRUE(replaced);
+  EXPECT_EQ(yield.getOperand(0), func.getArgument(2));
+  EXPECT_EQ(yield.getOperand(1), func.getArgument(1));
+  EXPECT_EQ(yield.getParentOp().getResultTypes()[1],
+            func.getArgument(1).getType());
+  EXPECT_TRUE(succeeded(verify(*module)));
+}
 
 TEST_F(LinearEncodingTest, MaybeLinearToCGAEncodingAttr) {
   auto s = [&](StringRef name) { return StringAttr::get(&ctx, name); };

@@ -1,4 +1,8 @@
 // RUN: triton-opt --split-input-file %s | FileCheck %s
+// RUN: split-file %s %t
+// RUN: triton-opt %t/singleton.mlir | triton-opt | FileCheck %t/singleton.mlir
+
+//--- general.mlir
 
 // CHECK: #[[$WMMA_GEN1:.*]] = #ttg.amd_wmma<{{.*}}version = 1{{.*}}>
 // CHECK: #[[$WMMA_GEN2:.*]] = #ttg.amd_wmma<{{.*}}version = 2{{.*}}>
@@ -82,6 +86,60 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 }
 
 // -----
+
+#nested = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [1, 0], [2, 8], [4, 16]]}, alignment = 8>
+#indexed = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 24>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "gfx950", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-DAG: #[[$INDEXED:[a-zA-Z0-9_]+]] = #ttg.shared_linear<{{.*}}hasIndexPhase = true{{.*}}indexPhaseMask = 24{{.*}}>
+  // CHECK-LABEL: @nested_memdesc_index
+  // CHECK: %[[TILE:.*]] = ttg.memdesc_index %{{.*}}[%{{.*}}] : !ttg.memdesc<2x8x64xf32, #{{.*}}, #smem, mutable> -> !ttg.memdesc<8x64xf32, #{{.*}}, #smem, mutable>
+  // CHECK: ttg.memdesc_index %[[TILE]][%{{.*}}] : !ttg.memdesc<8x64xf32, #{{.*}}, #smem, mutable> -> !ttg.memdesc<64xf32, #[[$INDEXED]], #smem, mutable, 8x64>
+  tt.func @nested_memdesc_index(%arg0: !ttg.memdesc<2x8x64xf32, #nested, #smem, mutable>, %buffer: i32, %row: i32) {
+    %tile = ttg.memdesc_index %arg0[%buffer] : !ttg.memdesc<2x8x64xf32, #nested, #smem, mutable> -> !ttg.memdesc<8x64xf32, #nested, #smem, mutable>
+    %row_view = ttg.memdesc_index %tile[%row] : !ttg.memdesc<8x64xf32, #nested, #smem, mutable> -> !ttg.memdesc<64xf32, #indexed, #smem, mutable, 8x64>
+    tt.return
+  }
+}
+
+// -----
+
+//--- singleton.mlir
+
+#shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#shared3 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 1, 0]}>
+#indexed1 = #ttg.shared_linear<{offset = []}, alignment = 16, rank = 1, hasIndexPhase = true, indexPhaseMask = 0>
+#indexed2 = #ttg.shared_linear<{offset = [], block = []}, alignment = 16, rank = 2, hasIndexPhase = true, indexPhaseMask = 0>
+#singleton3 = #ttg.shared_linear<{offset = []}, alignment = 16, rank = 3>
+#smem = #ttg.shared_memory
+// CHECK-DAG: #[[$SINGLETON1:.*]] = #ttg.shared_linear<{offset = []}, alignment = 16, rank = 1, hasIndexPhase = true, indexPhaseMask = 0>
+// CHECK-DAG: #[[$SINGLETON2:.*]] = #ttg.shared_linear<{offset = []}, alignment = 16, rank = 2, hasIndexPhase = true, indexPhaseMask = 0>
+// CHECK-DAG: #[[$SINGLETON3:.*]] = #ttg.shared_linear<{offset = []}, alignment = 16, rank = 3>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @singleton_memdesc_index_rank1
+  // CHECK: ttg.memdesc_index %{{.*}}[%{{.*}}] : !ttg.memdesc<2x1xf32, #{{.*}}, #smem, mutable> -> !ttg.memdesc<1xf32, #[[$SINGLETON1]], #smem, mutable, 2x1>
+  tt.func @singleton_memdesc_index_rank1(%src: !ttg.memdesc<2x1xf32, #shared2, #smem, mutable>, %index: i32) {
+    %view = ttg.memdesc_index %src[%index] : !ttg.memdesc<2x1xf32, #shared2, #smem, mutable> -> !ttg.memdesc<1xf32, #indexed1, #smem, mutable, 2x1>
+    tt.return
+  }
+
+  // CHECK-LABEL: @singleton_memdesc_index_rank2
+  // CHECK: ttg.memdesc_index %{{.*}}[%{{.*}}] : !ttg.memdesc<2x1x1xf32, #{{.*}}, #smem, mutable> -> !ttg.memdesc<1x1xf32, #[[$SINGLETON2]], #smem, mutable, 2x1x1>
+  tt.func @singleton_memdesc_index_rank2(%src: !ttg.memdesc<2x1x1xf32, #shared3, #smem, mutable>, %index: i32) {
+    %view = ttg.memdesc_index %src[%index] : !ttg.memdesc<2x1x1xf32, #shared3, #smem, mutable> -> !ttg.memdesc<1x1xf32, #indexed2, #smem, mutable, 2x1x1>
+    tt.return
+  }
+
+  // CHECK-LABEL: @singleton_shared_rank3
+  // CHECK-SAME: !ttg.memdesc<1x1x1xf32, #[[$SINGLETON3]], #smem>
+  tt.func @singleton_shared_rank3(%src: !ttg.memdesc<1x1x1xf32, #singleton3, #smem>) {
+    tt.return
+  }
+}
+
+// -----
+
+//--- remaining.mlir
 
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory

@@ -511,6 +511,16 @@ LogicalResult Pingponger::genLocalSlice(OpBuilder &builder, Value v,
 // create corresponding local_load slices.
 LogicalResult Pingponger::sliceDot(OpBuilder &builder, Location loc,
                                    tt::DotOp op, unsigned numSlices) {
+  auto canSlice = [](Value operand) {
+    auto localLoad = operand.getDefiningOp<ttg::LocalLoadOp>();
+    if (!localLoad)
+      return false;
+    auto type = cast<ttg::MemDescType>(localLoad.getSrc().getType());
+    return !ttg::MemDescIndexOp::hasLogicalSharedIndexProvenance(type);
+  };
+  if (!canSlice(op.getA()) || !canSlice(op.getB()))
+    return failure();
+
   builder.setInsertionPointToStart(forOp.getBody());
   auto typeB = op.getB().getType();
   auto shapeB = typeB.getShape();

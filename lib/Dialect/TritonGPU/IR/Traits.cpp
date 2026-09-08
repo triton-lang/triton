@@ -3,6 +3,8 @@
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Partitioning.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/LogicalResult.h"
@@ -40,6 +42,35 @@ LogicalResult OpTrait::impl::verifyEquivalentMemDescType(Type typeA,
                                                 encodingB, {});
 }
 
+bool mlir::triton::gpu::supportsMemDescIndexPhase(Operation *op) {
+  return op->hasTrait<OpTrait::SupportsMemDescIndexPhaseTrait>() &&
+         !op->hasAttr(kPartitionAttrName);
+}
+
+LogicalResult OpTrait::impl::verifyMemDescIndexPhase(Operation *op) {
+  if (supportsMemDescIndexPhase(op))
+    return success();
+
+  auto hasIndexPhase = [](Type type) {
+    auto memDescTy = dyn_cast<MemDescType>(type);
+    return memDescTy &&
+           MemDescIndexOp::hasLogicalSharedIndexProvenance(memDescTy);
+  };
+
+  if (!llvm::any_of(op->getOperandTypes(), hasIndexPhase) &&
+      !llvm::any_of(op->getResultTypes(), hasIndexPhase))
+    return success();
+
+  // Automatic warp-specialization rewrites do not preserve logical-index
+  // descriptor metadata. Reject this combination before those rewrites run.
+  if (op->hasAttr(kPartitionAttrName))
+    return op->emitOpError("logical shared index phase is not supported in "
+                           "automatic warp-specialization partitions");
+
+  return op->emitOpError() << "logical shared index phase is not supported on "
+                           << op->getName();
+}
+
 // Check that the Triton layouts on op's operands and return types are valid.
 // For example, we check that the number of warps per block in a Triton GPU
 // blocked layout matches that of its module.
@@ -49,6 +80,9 @@ LogicalResult OpTrait::impl::verifyEquivalentMemDescType(Type typeA,
 // on the op.  They do depend on the *module*, though, and a layout is attached
 // to a module only by virtue of being used in one of the module's ops.
 LogicalResult OpTrait::impl::verifyMemDescLayouts(Operation *op) {
+  if (failed(verifyMemDescIndexPhase(op)))
+    return failure();
+
   auto checkLayout = [&](Value val, auto makeErr) -> LogicalResult {
     auto memDescTy = dyn_cast<MemDescType>(val.getType());
     if (!memDescTy)

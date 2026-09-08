@@ -480,12 +480,16 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         index = self.to_tensor(index)
         _check(index.type == ttgl.int32, lambda: f"expected 'index' to be int32 but got {index.type}")
         shape = mem_desc.shape[1:]
-        index = self.to_tensor(index).handle
-        layout = mem_desc.layout
-        ty = ttgl.shared_memory_descriptor_type(mem_desc.dtype, shape, layout, shape)
         builder = self.builder
-        handle = builder.create_memdesc_index(ty.to_ir(builder), mem_desc.handle, index)
-        return ttgl.shared_memory_descriptor(handle, **ty.__dict__)
+        handle = builder.create_memdesc_index(mem_desc.handle, index.handle)
+        alloc_shape = builder.get_alloc_shape_from_memdesc(handle)
+        # Only logical indexing retains the parent allocation rank. Buffer
+        # indexing preserves Python layout wrappers such as MBarrierLayout.
+        layout = mem_desc.layout
+        if len(alloc_shape) > len(shape):
+            layout = builder.get_gluon_layout_from_memdesc(handle)
+        return ttgl.shared_memory_descriptor(handle, element_ty=mem_desc.dtype, shape=shape, layout=layout,
+                                             alloc_shape=alloc_shape)
 
     def memdesc_trans(self, mem_desc, order):
         _check(_is_int_list(order), lambda: f"all elements of 'order' must be integers but got {order}")

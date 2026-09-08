@@ -418,16 +418,16 @@ public:
 
   SmallVector<Type> getTypes() const;
 
-  // Returns a mask representing all the bits of the memdesc offsets that
-  // may be modified by an affine offset coming from a memdesc_subslice.
-  // The offsets are considered to be in the type of the memdesc.
-  // For padded layouts, we return the offsets without padding.
+  // Returns masks for physical offset and CTA bits that supported memdesc
+  // views may modify: logical-index phase and rank-preserving subslices.
+  // The offsets are in the memdesc element domain. For padded layouts, the
+  // returned offset mask excludes padding.
   static uint64_t getMaskSpanOffsets(triton::gpu::MemDescType srcTy);
   static std::pair<uint64_t, uint64_t>
   getMaskSpanOffsetsAndBlocks(triton::gpu::MemDescType srcTy);
 
-  // Returns whether the shared memory access had a memdesc_subslice
-  // that is rank-preserving (soon to be called memdesc_slice)
+  // Returns whether a logical-index phase or rank-preserving subslice can
+  // contribute a shared-memory offset or target-CTA adjustment.
   static bool isAffineSharedMemoryAccess(triton::gpu::MemDescType srcTy) {
     auto [offsetMask, blockMask] = getMaskSpanOffsetsAndBlocks(srcTy);
     return offsetMask != 0 || blockMask != 0;

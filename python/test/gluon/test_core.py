@@ -2870,6 +2870,54 @@ def test_shared_dynamic_stage_synchronization(high_base, fresh_knobs):
     assert (barrier is not None) == (high_base == 1)
 
 
+@pytest.mark.parametrize("torch_dtype", [torch.int32, torch.float16], ids=["int32", "float16"])
+@pytest.mark.parametrize("size_per_thread", [1, 4])
+def test_shared_index_multibuffer_swizzled(torch_dtype, size_per_thread, device):
+
+    @gluon.jit
+    def forward_indexed_view(view):
+        return view
+
+    @gluon.jit
+    def kernel(inp, loaded, snapshots, layout_2d: ttgl.constexpr, layout_1d: ttgl.constexpr):
+        stage = ttgl.program_id(0)
+        row = ttgl.program_id(1)
+        rows = ttgl.arange(0, 8, layout=ttgl.SliceLayout(1, layout_2d))[:, None]
+        cols = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, layout_2d))[None, :]
+        offsets = rows * 64 + cols
+        parent = ttgl.allocate_shared_memory(inp.dtype.element_ty, [2, 8, 64],
+                                             ttgl.SwizzledSharedLayout(1, 1, 4, [1, 0]))
+        for buffer in ttgl.static_range(2):
+            parent.index(buffer).store(ttgl.load(inp + buffer * 512 + offsets))
+
+        # The first index selects a buffer; the second carries the row's swizzle phase.
+        view = forward_indexed_view(parent.index(stage).index(row))
+        values = view.load(layout_1d)
+        row_offsets = ttgl.arange(0, 64, layout=layout_1d)
+        ttgl.store(loaded + stage * 512 + row * 64 + row_offsets, values)
+        view.store(-values)
+
+        # Observe the whole allocation to catch writes outside the selected row.
+        snapshot_base = (stage * 8 + row) * 1024
+        for buffer in ttgl.static_range(2):
+            values_2d = parent.index(buffer).load(layout_2d)
+            ttgl.store(snapshots + snapshot_base + buffer * 512 + offsets, values_2d)
+
+    layout_2d = ttgl.BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0])
+    layout_1d = ttgl.BlockedLayout([size_per_thread], [THREADS_PER_WARP], [4], [0])
+    values = torch.arange(1, 1025, device=device, dtype=torch_dtype).reshape(2, 8, 64)
+    loaded = torch.empty_like(values)
+    snapshots = torch.empty((2, 8, 2, 8, 64), device=device, dtype=torch_dtype)
+    kernel[(2, 8)](values, loaded, snapshots, layout_2d, layout_1d, num_warps=4)
+
+    torch.testing.assert_close(loaded, values, atol=0, rtol=0)
+    expected = values.expand(2, 8, 2, 8, 64).clone()
+    for stage in range(2):
+        for row in range(8):
+            expected[stage, row, stage, row] = -values[stage, row]
+    torch.testing.assert_close(snapshots, expected, atol=0, rtol=0)
+
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_multibuffer_prefix_subslice():
 

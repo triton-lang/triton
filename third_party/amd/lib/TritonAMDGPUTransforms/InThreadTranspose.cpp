@@ -508,7 +508,11 @@ findReachableSMemOps(ttg::LocalLoadOp root) {
       } else if (isa<ttg::LocalStoreOp>(candidate)) {
         foundNetwork.localAllocStores.insert(candidate);
         smemOperand = candidate->getOperand(1);
-      } else if (isa<ttg::MemDescIndexOp>(candidate)) {
+      } else if (auto indexOp = dyn_cast<ttg::MemDescIndexOp>(candidate)) {
+        if (indexOp.isLogicalSharedIndex()) {
+          LDBG(" skip because of logical memdesc index");
+          return failure();
+        }
         smemOutput = candidate->getResult(0);
         smemOperand = candidate->getOperand(0);
       } else if (isa<ttg::LocalLoadOp, ttg::LocalDeallocOp>(candidate)) {

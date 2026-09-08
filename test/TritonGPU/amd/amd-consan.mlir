@@ -126,6 +126,58 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 // -----
 
+#all = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#row = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#indexed = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 16, hasIndexPhase = true, indexPhaseMask = 0>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 4104 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @logical_index_dynamic_stage
+  tt.func public @logical_index_dynamic_stage(%output: !tt.ptr<f32>, %stage_arg: i32) {
+    %one = arith.constant 1 : i32
+    // CHECK: %[[STAGE_INDEX:.*]] = arith.andi
+    %stage_index = arith.andi %stage_arg, %one : i32
+    %values = arith.constant dense<1.0> : tensor<8x64xf32, #all>
+    %alloc = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x8x64xf32, #shared, #smem, mutable>
+    %bar = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    // Keep an unrelated barrier live across the logical load. Its storage
+    // must not be included in the logical view's candidate masks.
+    // CHECK: amdg.init_barrier
+    amdg.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    // CHECK: %[[STAGE:.*]] = ttg.memdesc_index %{{.*}}[%[[STAGE_INDEX]]]
+    %stage = ttg.memdesc_index %alloc[%stage_index] : !ttg.memdesc<2x8x64xf32, #shared, #smem, mutable> -> !ttg.memdesc<8x64xf32, #shared, #smem, mutable>
+    // CHECK: ttg.local_store %{{.*}}, %[[STAGE]]
+    ttg.local_store %values, %stage : tensor<8x64xf32, #all> -> !ttg.memdesc<8x64xf32, #shared, #smem, mutable>
+    // The logical origin is 256 or 2304, not either parent stage base (0 or
+    // 2048), even with a zero phase mask.
+    // CHECK: %[[VIEW:.*]] = ttg.memdesc_index %[[STAGE]]
+    %view = ttg.memdesc_index %stage[%one] : !ttg.memdesc<8x64xf32, #shared, #smem, mutable> -> !ttg.memdesc<64xf32, #indexed, #smem, mutable, 8x64>
+    ttg.barrier local
+    // CHECK: %[[BASE:.*]] = tti.experimental_memdesc_to_i32 %[[VIEW]]
+    // CHECK: %[[BASE0:.*]] = tti.experimental_memory_offset_to_i32 256, shared_mem
+    // CHECK: arith.cmpi eq, %[[BASE]], %[[BASE0]]
+    // CHECK: %[[BASE1:.*]] = tti.experimental_memory_offset_to_i32 2304, shared_mem
+    // CHECK: arith.cmpi eq, %[[BASE]], %[[BASE1]]
+    // CHECK: arith.constant dense<[false, true, false, false, false, false, false, false]> : tensor<8xi1
+    // CHECK: arith.constant dense<[false, false, false, true, false, false, false, false]> : tensor<8xi1
+    // CHECK: %[[MASK:.*]] = arith.ori %{{.*}}, %{{.*}} : tensor<8xi1
+    // CHECK-NOT: Shared memory reused before barrier invalidation
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}(%[[MASK]],
+    // CHECK: %[[VALUE:.*]] = ttg.local_load %[[VIEW]]
+    %value = ttg.local_load %view : !ttg.memdesc<64xf32, #indexed, #smem, mutable, 8x64> -> tensor<64xf32, #row>
+    %offsets = tt.make_range {start = 0 : i32, end = 64 : i32} : tensor<64xi32, #row>
+    %base = tt.splat %output : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>, #row>
+    %ptrs = tt.addptr %base, %offsets : tensor<64x!tt.ptr<f32>, #row>, tensor<64xi32, #row>
+    // CHECK: tt.store %{{.*}}, %[[VALUE]]
+    tt.store %ptrs, %value : tensor<64x!tt.ptr<f32>, #row>
+    // CHECK: tt.return
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 4, perPhase = 4, maxPhase = 4, order = [1, 0]}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory

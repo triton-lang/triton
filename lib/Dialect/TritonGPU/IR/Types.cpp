@@ -113,6 +113,24 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
            nvidia_gpu::TensorMemoryScalesEncodingAttr>(encoding))
     return emitError() << encoding << " is not a valid encoding";
   auto rank = layoutEncoding.getRank();
+  if (auto sharedLinear = dyn_cast<SharedLinearEncodingAttr>(encoding);
+      sharedLinear && sharedLinear.getHasIndexPhase()) {
+    if (shape.size() != rank)
+      return emitError()
+             << "logical index phase memdesc shape rank must equal encoding "
+                "rank";
+    if (allocShape.size() != shape.size() + 1)
+      return emitError() << "logical index phase memdesc alloc shape must have "
+                            "exactly one leading dimension";
+    if (allocShape.drop_front() != shape)
+      return emitError() << "logical index phase memdesc alloc shape suffix "
+                            "must equal shape";
+    if (allocShape.front() <= 0 ||
+        !llvm::isPowerOf2_64(static_cast<uint64_t>(allocShape.front())))
+      return emitError()
+             << "logical index phase memdesc leading allocation dimension "
+                "must be a positive power of two";
+  }
   if (isa<nvidia_gpu::TensorMemoryEncodingAttr>(encoding)) {
     if (shape.size() != 2 && shape.size() != 3)
       return emitError() << "rank must be 2 or 3";

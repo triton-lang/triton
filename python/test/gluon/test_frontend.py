@@ -555,6 +555,122 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
+def shared_memory_index_preserves_layout_kernel(LAYOUT: ttgl.constexpr):
+    view = ttgl.allocate_shared_memory(ttgl.int64, [1], LAYOUT)
+    buffers = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], LAYOUT)
+    if ttgl.program_id(0) == 0:
+        view = buffers.index(0)
+    anchor_noinline(view)
+
+
+@pytest.mark.parametrize("target", [AMPERE_TARGET, HIP_TARGET_CDNA4])
+@pytest.mark.parametrize(
+    "layout",
+    [ampere_mbarrier.MBarrierLayout(),
+     ttgl.SwizzledSharedLayout(1, 1, 1, (0, ), cga_layout=())],
+    ids=["mbarrier", "tuple_fields"],
+)
+def test_shared_memory_index_preserves_layout(target, layout):
+    mod = run_parser(shared_memory_index_preserves_layout_kernel, *make_args(layout, num_warps=1), target=target)
+    text = mod.str_nodebug()
+    assert "scf.if" in text
+    assert "ttg.memdesc_index" in text
+
+
+@gluon.jit
+def shared_memory_index_helper(smem):
+    return smem.index(0)
+
+
+@gluon.jit
+def shared_memory_layout_identity_helper(LAYOUT: ttgl.constexpr):
+    return LAYOUT
+
+
+@gluon.jit
+def shared_memory_logical_index_kernel(COLS: ttgl.constexpr, MAX_PHASE: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, MAX_PHASE, [1, 0])
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [2, 8, COLS], layout)
+    matrix = smem.index(1)
+    ttgl.static_assert(matrix.shape == [8, COLS])
+    ttgl.static_assert(matrix.layout == layout)
+    row = shared_memory_index_helper(matrix)
+    ttgl.static_assert(row.shape == [COLS])
+    ttgl.static_assert(row.layout.shape == [COLS])
+    ttgl.static_assert(row.type.alloc_shape == [8, COLS])
+    # Reconstruct the returned descriptor's Python type as an IR argument type.
+    anchor_noinline(row)
+    if COLS != 1:
+        ordinary_layout: ttgl.constexpr = ttgl.SharedLinearLayout(row.layout.offset_bases, row.layout.block_bases,
+                                                                  row.layout.alignment)
+        ordinary = ttgl.allocate_shared_memory(ttgl.int32, [COLS], ordinary_layout)
+        ttgl.static_assert(ordinary.permute([0]).layout == ordinary_layout)
+        ttgl.static_assert(row.layout != ordinary.layout)
+        ttgl.static_assert(shared_memory_layout_identity_helper(row.layout) == row.layout)
+        ttgl.static_assert(shared_memory_layout_identity_helper(ordinary_layout) == ordinary_layout)
+        anchor_noinline(ordinary)
+
+
+@pytest.mark.parametrize("target", [AMPERE_TARGET, HIP_TARGET_CDNA4])
+@pytest.mark.parametrize(
+    "columns, max_phase, phase_mask",
+    [(64, 4, 3), (64, 1, 0), (1, 4, 0)],
+    ids=["swizzled", "no_swizzle", "singleton"],
+)
+def test_shared_memory_logical_index(target, columns, max_phase, phase_mask):
+    mod = run_parser(
+        shared_memory_logical_index_kernel,
+        *make_args(columns, max_phase, num_warps=1),
+        target=target,
+    )
+    text = mod.str_nodebug()
+    layouts = re.findall(r"(?m)^(#\w+) = #ttg.shared_linear<(.*hasIndexPhase = true, indexPhaseMask = \d+)>$", text)
+    assert len(layouts) == 1
+    layout_name, layout_text = layouts[0]
+    assert layout_text.endswith(f"hasIndexPhase = true, indexPhaseMask = {phase_mask}")
+    if columns == 1:
+        assert "offset = []" in layout_text
+        assert "rank = 1" in layout_text
+
+    result_type = f"!ttg.memdesc<{columns}xi32, {layout_name}, #smem, mutable, 8x{columns}>"
+    calls = [line for line in text.splitlines() if "tt.call @" in line]
+    assert any("shared_memory_index_helper" in line and line.endswith(f" -> {result_type}") for line in calls)
+    assert any("anchor_noinline" in line and f": ({result_type}) -> ()" in line for line in calls)
+    assert sum("anchor_noinline" in line for line in calls) == (1 if columns == 1 else 2)
+    assert text.count("ttg.memdesc_index ") == 2
+
+
+@gluon.jit
+def shared_memory_logical_index_invalid_kernel(CASE: ttgl.constexpr):
+    if CASE == "padded":
+        layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[8, 1]], [8, 64], [1, 0])
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [8, 64], layout)
+    elif CASE == "subview":
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [8, 64], ttgl.SwizzledSharedLayout(1, 1, 4, [1, 0]))
+        smem = smem.slice(0, 4, dim=0)
+    else:
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [8, 4, 16], ttgl.SwizzledSharedLayout(1, 1, 1, [2, 1, 0]))
+        # A zero phase still carries logical-index provenance through a helper.
+        smem = shared_memory_index_helper(smem)
+    shared_memory_index_helper(smem)
+
+
+@pytest.mark.parametrize("target", [AMPERE_TARGET, HIP_TARGET_CDNA4])
+@pytest.mark.parametrize(
+    "case, message",
+    [
+        ("padded", "logical memdesc_index does not support padded shared encodings"),
+        ("subview", "We don't support memdesc_index of a subview"),
+        ("logical_index", "memdesc_index does not support a logical shared index phase"),
+    ],
+)
+def test_shared_memory_logical_index_invalid(target, case, message):
+    with pytest.raises(CompilationError) as exc:
+        run_parser(shared_memory_logical_index_invalid_kernel, *make_args(case, num_warps=1), target=target)
+    assert message in str(exc.value.__cause__)
+
+
+@gluon.jit
 def shared_memory_permute_kernel():
     layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
     smem = ttgl.allocate_shared_memory(ttgl.float16, [4, 128], layout)

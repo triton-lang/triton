@@ -14,6 +14,7 @@
 #linear_ds_tr_complex_8contig = #ttg.linear<{register = [[0, 64], [16, 0], [0, 1], [32, 0], [0, 2], [0, 4], [64, 0], [0, 8]], lane = [[1, 0], [2, 0], [4, 0], [0, 16], [8, 0], [0, 32]], warp = [[0, 0], [0, 0]], block = []}>
 #linear_ds_tr_complex_4contig = #ttg.linear<{register = [[0, 64], [16, 0], [0, 1], [32, 0], [0, 2], [0, 4], [64, 0], [0, 8]], lane = [[1, 0], [2, 0], [0, 16], [4, 0], [8, 0], [0, 32]], warp = [[0, 0], [0, 0]], block = []}>
 #linear_ds_tr_complex_novec = #ttg.linear<{register = [[0, 64], [16, 0], [0, 1], [32, 0], [0, 2], [0, 4], [64, 0], [0, 8]], lane = [[2, 0], [1, 0], [4, 0], [0, 16], [8, 0], [0, 32]], warp = [[0, 0], [0, 0]], block = []}>
+#shared_index_phase_low = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 1>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   //  CHECK-LABEL: ds_transpose_n_t_fp16_mfma_16
@@ -763,6 +764,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.store %ptr1, %1 : tensor<128x128x!tt.ptr<f16>, #linear_ds_tr_complex_4contig>
     tt.store %ptr2, %2 : tensor<128x128x!tt.ptr<f16>, #linear_ds_tr_complex_8contig>
     tt.store %ptr3, %3 : tensor<128x128x!tt.ptr<f16>, #linear_ds_tr_complex_novec>
+    tt.return
+  }
+
+  // CHECK-LABEL: ds_transpose_index_phase_overlap_falls_back
+  tt.func @ds_transpose_index_phase_overlap_falls_back(%src: !ttg.memdesc<64x128xf16, #shared_index_phase_low, #smem, mutable, 2x64x128>, %dst: !ttg.memdesc<64x128xf16, #shared_index_phase_low, #smem, mutable, 2x64x128>) {
+    // CHECK-NOT: rocdl.ds.read.tr16.b64
+    // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<1xf16>
+    // CHECK-NOT: rocdl.ds.read.tr16.b64
+    // CHECK: llvm.store %{{.*}}, %{{.*}} : vector<1xf16>, !llvm.ptr<3>
+    // CHECK-NOT: rocdl.ds.read.tr16.b64
+    %value = ttg.local_load %src : !ttg.memdesc<64x128xf16, #shared_index_phase_low, #smem, mutable, 2x64x128> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma16, kWidth = 8}>>
+    ttg.local_store %value, %dst : tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma16, kWidth = 8}>> -> !ttg.memdesc<64x128xf16, #shared_index_phase_low, #smem, mutable, 2x64x128>
     tt.return
   }
 }

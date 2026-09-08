@@ -821,3 +821,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+#phase = #ttg.shared_linear<{offset = [[1], [2], [4], [8], [16], [32]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 1>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @buffer_load_to_local_rejects_logical_index_phase(
+      %ptr: !tt.ptr<f32>, %offsets: tensor<64xi32, #blocked>,
+      %dst: !ttg.memdesc<64xf32, #phase, #smem, mutable, 2x64>) {
+    // expected-error @+1 {{logical shared index phase is not supported on amdg.buffer_load_to_local}}
+    %token = amdg.buffer_load_to_local %ptr[%offsets] into %dst : !tt.ptr<f32>[tensor<64xi32, #blocked>] -> <64xf32, #phase, #smem, mutable, 2x64>
+    tt.return
+  }
+}
+
+// -----
+
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [2, 2], instrShape = [32, 32, 16], isTransposed = true}>
+#phase = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32]]}, alignment = 8, hasIndexPhase = true, indexPhaseMask = 1>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @local_load_packed_transposed_rejects_logical_index_phase(
+      %src: !ttg.memdesc<16x64xi8, #phase, #smem, mutable, 2x16x64>) {
+    // expected-error @+1 {{logical shared index phase is not supported on amdg.local_load_packed_transposed}}
+    %value = amdg.local_load_packed_transposed %src : !ttg.memdesc<16x64xi8, #phase, #smem, mutable, 2x16x64> -> tensor<32x32xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>
+    tt.return
+  }
+}

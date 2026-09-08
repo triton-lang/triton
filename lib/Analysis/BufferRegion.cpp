@@ -706,8 +706,8 @@ LogicalResult BufferRegionAnalysis::visitOperation(
     const RegionInfo &in = operands[0]->getValue();
     if (in.isUnknown())
       return propagateRegions(in);
-    int numSubBuffers =
-        cast<ttg::MemDescType>(memdescIndexOp.getSrc().getType()).getShape()[0];
+    auto srcType = memdescIndexOp.getSrc().getType();
+    int numSubBuffers = srcType.getShape()[0];
     int firstSubBuffer = 0;
     int endSubBuffer = numSubBuffers;
     APInt constantIndex;
@@ -716,6 +716,34 @@ LogicalResult BufferRegionAnalysis::visitOperation(
       int64_t index = constantIndex.getSExtValue();
       firstSubBuffer = index;
       endSubBuffer = index + 1;
+    }
+    if (memdescIndexOp.isLogicalSharedIndex()) {
+      // ConSan matches candidates by descriptor origin, so logical indices
+      // must update the runtime key as well as the physical footprint.
+      auto dstType = memdescIndexOp.getType();
+      LinearLayout offsetLayout = memdescIndexOp.getLogicalIndexOffsetLayout();
+      SmallVector<std::pair<StringAttr, int32_t>> logicalOffsets;
+      for (StringAttr dim :
+           standardOutDimNames(op->getContext(), srcType.getRank()))
+        logicalOffsets.emplace_back(dim, 0);
+      uint32_t elementSize =
+          getIntOrFloatOrPtrBitWidth(srcType.getElementType()) / 8;
+      for (const BufferRegionView &view : in.views) {
+        // The verifier requires a full source view. Reinterpretation may
+        // have folded an earlier subslice offset into its runtime base.
+        BufferRegionView source = view;
+        source.storageBase = view.region.baseOffset;
+        source.affineOffset = 0;
+        for (int i = firstSubBuffer; i < endSubBuffer; ++i) {
+          logicalOffsets.front().second = i;
+          auto offsets = offsetLayout.apply(logicalOffsets);
+          uint32_t base = offsets[0].second;
+          uint32_t phase = offsets[1].second;
+          regionInfo.views.insert(getSubView(
+              dstType, source, base * elementSize, phase * elementSize));
+        }
+      }
+      return propagateRegions(regionInfo);
     }
     for (const BufferRegionView &view : in.views) {
       for (int i = firstSubBuffer; i < endSubBuffer; ++i) {

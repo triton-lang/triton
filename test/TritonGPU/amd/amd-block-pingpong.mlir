@@ -291,6 +291,48 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
+// CHECK-LABEL: pingpong_reject_logical_index_phase
+// CHECK-NOT: ttg.memdesc_subslice
+// CHECK-NOT: rocdl.s.setprio
+// CHECK-NOT: amdg.cond_barrier
+// CHECK: tt.return
+
+#blocked_a = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked_b = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [0, 1]}>
+#mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [2, 4], instrShape = [16, 16, 16], isTransposed = true}>
+#a = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0], [128, 0]]}, alignment = 16>
+#b_alloc = #ttg.shared_linear<{offset = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 0, 8], [0, 0, 16], [0, 0, 32], [0, 0, 64], [0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0], [0, 16, 0], [0, 32, 0]]}, alignment = 16>
+#b_phase = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0]]}, alignment = 16, hasIndexPhase = true, indexPhaseMask = 0>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @pingpong_reject_logical_index_phase(
+      %a_ptr: tensor<256x64x!tt.ptr<f16>, #blocked_a>,
+      %b_ptr: tensor<64x128x!tt.ptr<f16>, #blocked_b>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %zero = arith.constant dense<0.000000e+00> : tensor<256x128xf32, #mma>
+    %a_alloc = ttg.local_alloc : () -> !ttg.memdesc<1x256x64xf16, #a, #ttg.shared_memory, mutable>
+    %b_alloc = ttg.local_alloc : () -> !ttg.memdesc<1x64x128xf16, #b_alloc, #ttg.shared_memory, mutable>
+    %a_init = ttg.memdesc_index %a_alloc[%c0_i32] : !ttg.memdesc<1x256x64xf16, #a, #ttg.shared_memory, mutable> -> !ttg.memdesc<256x64xf16, #a, #ttg.shared_memory, mutable>
+    %b_init = ttg.memdesc_index %b_alloc[%c0_i32] : !ttg.memdesc<1x64x128xf16, #b_alloc, #ttg.shared_memory, mutable> -> !ttg.memdesc<64x128xf16, #b_phase, #ttg.shared_memory, mutable, 1x64x128>
+    %loop:3 = scf.for %iv = %c0_i32 to %c64_i32 step %c1_i32 iter_args(%acc = %zero, %a = %a_init, %b = %b_init) -> (tensor<256x128xf32, #mma>, !ttg.memdesc<256x64xf16, #a, #ttg.shared_memory, mutable>, !ttg.memdesc<64x128xf16, #b_phase, #ttg.shared_memory, mutable, 1x64x128>) : i32 {
+      %next_a = tt.load %a_ptr : tensor<256x64x!tt.ptr<f16>, #blocked_a>
+      %next_b = tt.load %b_ptr : tensor<64x128x!tt.ptr<f16>, #blocked_b>
+      %a_val = ttg.local_load %a : !ttg.memdesc<256x64xf16, #a, #ttg.shared_memory, mutable> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
+      %b_val = ttg.local_load %b : !ttg.memdesc<64x128xf16, #b_phase, #ttg.shared_memory, mutable, 1x64x128> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+      %next_acc = tt.dot %a_val, %b_val, %acc : tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<256x128xf32, #mma>
+      %next_a_desc = ttg.memdesc_index %a_alloc[%c0_i32] : !ttg.memdesc<1x256x64xf16, #a, #ttg.shared_memory, mutable> -> !ttg.memdesc<256x64xf16, #a, #ttg.shared_memory, mutable>
+      ttg.local_store %next_a, %next_a_desc : tensor<256x64xf16, #blocked_a> -> !ttg.memdesc<256x64xf16, #a, #ttg.shared_memory, mutable>
+      %next_b_desc = ttg.memdesc_index %b_alloc[%c0_i32] : !ttg.memdesc<1x64x128xf16, #b_alloc, #ttg.shared_memory, mutable> -> !ttg.memdesc<64x128xf16, #b_phase, #ttg.shared_memory, mutable, 1x64x128>
+      ttg.local_store %next_b, %next_b_desc : tensor<64x128xf16, #blocked_b> -> !ttg.memdesc<64x128xf16, #b_phase, #ttg.shared_memory, mutable, 1x64x128>
+      scf.yield %next_acc, %next_a_desc, %next_b_desc : tensor<256x128xf32, #mma>, !ttg.memdesc<256x64xf16, #a, #ttg.shared_memory, mutable>, !ttg.memdesc<64x128xf16, #b_phase, #ttg.shared_memory, mutable, 1x64x128>
+    }
+    tt.return
+  }
+}
+
+// -----
+
 // CHECK-LABEL: pingpong_reject_loop_variant_mask
 // CHECK-NOT: rocdl.s.setprio
 // CHECK-NOT: amdg.cond_barrier
