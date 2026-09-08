@@ -436,6 +436,109 @@ tt.func @div(%arg0: i32 {tt.divisibility = 16 : i32}) {
   tt.return
 }
 
+// -----
+
+tt.func @divsi_positivity_guard(
+    %num: tensor<8xi32> {tt.contiguity = 8 : i32, tt.divisibility = 8 : i32, tt.constancy = 1 : i32},
+    %den: tensor<8xi32> {tt.contiguity = 1 : i32, tt.divisibility = 8 : i32, tt.constancy = 8 : i32}) {
+  // Without a nonnegativity proof for %num, signed division by a constant
+  // denominator has no nontrivial universal constancy.
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %0 = arith.divsi %num, %den : tensor<8xi32>
+  // expected-remark @below {{contiguity = [8], divisibility = [1073741824], constancy = [1], constant_value = <none>}}
+  %pos = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32>
+  // With a nonnegative numerator, the existing unsigned-style bound is valid.
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [8], constant_value = <none>}}
+  %1 = arith.divsi %pos, %den : tensor<8xi32>
+  tt.return
+}
+
+// -----
+
+module attributes {ttg.target = "cuda:90"} {
+  tt.func @cuda_grid_bounds() {
+    %y = tt.get_program_id y : i32
+    %z = tt.get_program_id z : i32
+    %yz = arith.addi %y, %z : i32
+    %c32 = arith.constant 32 : i32
+    %base = arith.muli %yz, %c32 : i32
+    %splat = tt.splat %base : i32 -> tensor<32xi32>
+    %range = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32>
+    %offsets = arith.addi %splat, %range : tensor<32xi32>
+    %c2 = arith.constant dense<2> : tensor<32xi32>
+    // expected-remark @below {{constancy = [2]}}
+    %div = arith.divsi %offsets, %c2 : tensor<32xi32>
+    // expected-remark @below {{contiguity = [2]}}
+    %rem = arith.remsi %offsets, %c2 : tensor<32xi32>
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {ttg.target = "hip:gfx942"} {
+  tt.func @grid_without_cuda_bounds() {
+    %y = tt.get_program_id y : i32
+    %c32 = arith.constant 32 : i32
+    %base = arith.muli %y, %c32 : i32
+    %splat = tt.splat %base : i32 -> tensor<32xi32>
+    %range = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32>
+    %offsets = arith.addi %splat, %range : tensor<32xi32>
+    %c2 = arith.constant dense<2> : tensor<32xi32>
+    // expected-remark @below {{constancy = [1]}}
+    %div = arith.divsi %offsets, %c2 : tensor<32xi32>
+    tt.return
+  }
+}
+
+// -----
+
+tt.func @remsi_positivity_guard(
+    %num: tensor<8xi32> {tt.contiguity = 8 : i32, tt.divisibility = 64 : i32, tt.constancy = 1 : i32},
+    %den: tensor<8xi32> {tt.contiguity = 1 : i32, tt.divisibility = 32 : i32, tt.constancy = 8 : i32}) {
+  // Repro for:
+  //   [-64, -63, -62, -61, -60, -59, -58, -57]
+  //   remsi [32, 32, 32, 32, 32, 32, 32, 32]
+  //   = [0, -31, -30, -29, -28, -27, -26, -25]
+  // This result has neither nontrivial contiguity nor divisibility.
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %0 = arith.remsi %num, %den : tensor<8xi32>
+  // expected-remark @below {{contiguity = [8], divisibility = [1073741824], constancy = [1], constant_value = <none>}}
+  %pos = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32>
+  // With a nonnegative numerator, the existing unsigned-style bounds are valid.
+  // expected-remark @below {{contiguity = [8], divisibility = [32], constancy = [1], constant_value = <none>}}
+  %1 = arith.remsi %pos, %den : tensor<8xi32>
+  tt.return
+}
+
+// -----
+
+// The loop body sees [0, 7], while its exit sees [-8, -1]. Both use the
+// same header argument, so nonnegativity must be queried at each operation.
+tt.func @signed_div_rem_cf_loop() {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %c8 = arith.constant dense<8> : tensor<8xi32>
+  %initial = tt.make_range {start = 0 : i32, end = 8 : i32} : tensor<8xi32>
+  cf.br ^header(%c0, %initial : i32, tensor<8xi32>)
+^header(%i: i32, %num: tensor<8xi32>):
+  %more = arith.cmpi slt, %i, %c1 : i32
+  cf.cond_br %more, ^body, ^exit
+^body:
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [8]}}
+  %body_div = arith.divsi %num, %c8 : tensor<8xi32>
+  // expected-remark @below {{contiguity = [8], divisibility = [8], constancy = [1]}}
+  %body_rem = arith.remsi %num, %c8 : tensor<8xi32>
+  %next_num = arith.subi %num, %c8 : tensor<8xi32>
+  %next_i = arith.addi %i, %c1 : i32
+  cf.br ^header(%next_i, %next_num : i32, tensor<8xi32>)
+^exit:
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1]}}
+  %exit_div = arith.divsi %num, %c8 : tensor<8xi32>
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1]}}
+  %exit_rem = arith.remsi %num, %c8 : tensor<8xi32>
+  tt.return
+}
 
 // -----
 

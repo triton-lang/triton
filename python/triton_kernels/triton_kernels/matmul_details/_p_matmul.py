@@ -518,6 +518,8 @@ def _p_matmul(
         # ------------------------------------------------------------
         if INDEPENDENT_EPILOGUE:
             tile_id1 += NUM_SMS
+            # The epilogue counter matches the current nonnegative block_id.
+            tl.assume(tile_id1 >= 0)
             pid_s1, pid_m1, pid_n1, pid_k1 = compute_pids(tile_id1, useful_grid_m, grid_n, num_blocks, XCD_SWIZZLE, GROUP_M, SPLIT_K)
             expt_id1, _, start_z1, start_m1, slice_block_off_m1, off_m1, _, _ = compute_offsets(
                 pid_s1, pid_m1, pid_k1,
@@ -535,6 +537,10 @@ def _p_matmul(
             tile_id1, expt_id1, start_z1, start_m1, eM1 = block_id, off_w_z, off_y_z, slice_off_m, shape_m
             _, off_m1, off_n1, pid_k1 = slice_block_off_m, off_m, off_n, pid_k
 
+        if (is_out_microscaled and Y_MX_SCALE_LAYOUT == "BLACKWELL_ACT_SCALE" and not HAS_SCATTER
+                and not HAS_GATHER and isinstance(M, tl.tensor) and M.dtype == tl.int32):
+            # The padded row tile fits the signed dimension's index range.
+            tl.assume(off_m1.to(tl.uint32) <= (1 << 31) - BLOCK_M)
         offs_m = off_m1 + tl.arange(0, BLOCK_M)
         mask_m = offs_m < eM1
         if USE_SCATTER_TMA:

@@ -642,13 +642,13 @@ def swizzle_act_mx_scale_bw_store_ptr(base, rows, cols, leading_m_block, stride_
     row_block = rows // SIZE_OUTER
     outer = leading_m_block + row_block
     inner_group = cols // SIZE_INNER
-    col_lane = cols - inner_group * SIZE_INNER
-    row_lane = rows - row_block * SIZE_OUTER
+    col_lane = cols % SIZE_INNER
+    row_lane = rows % SIZE_OUTER
     row_quad = row_lane // SIZE_LANE
-    row_lane_inner = row_lane - row_quad * SIZE_LANE
+    row_lane_inner = row_lane % SIZE_LANE
     inner_linear = ((row_lane_inner[:, None] * (SIZE_OUTER // SIZE_LANE) + row_quad[:, None]) * SIZE_INNER +
                     col_lane[None, :])
     half = inner_linear // SIZE_HALF
-    inner = inner_linear - half * SIZE_HALF
+    inner = inner_linear % SIZE_HALF
     return (base + outer.to(INDEX_TYPE)[:, None] * stride_outer + inner_group.to(INDEX_TYPE)[None, :] * stride_inner +
             half.to(INDEX_TYPE) * stride_half + inner.to(INDEX_TYPE) * stride_lane)
