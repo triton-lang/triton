@@ -186,9 +186,8 @@ def compute_num_stages(
         scale_block_size = mx_block_size or int(MXFP_BLOCK_SIZE)
         stage_size += block_n * (block_k // scale_block_size)
 
-    fp4_reduction = (has_native_mxfp and lhs_dtype == rhs_dtype == out_dtype == FP4
-                     and epilogue_reduction_n == 2 and epilogue_effective_itemsize == 8
-                     and not has_y_acc_in)
+    fp4_reduction = (has_native_mxfp and lhs_dtype == rhs_dtype == out_dtype == FP4 and epilogue_reduction_n == 2
+                     and epilogue_effective_itemsize == 8 and not has_y_acc_in)
     if is_persistent:
         # Per-stage wait barrier
         stage_size += 8

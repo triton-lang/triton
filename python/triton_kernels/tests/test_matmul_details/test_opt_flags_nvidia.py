@@ -182,17 +182,35 @@ def test_compute_num_warps_uses_two_warp_floor():
     (64, 8, 4, 3),
 ])
 def test_fp4_reduction_stage_budget(monkeypatch, block_m, num_warps, epilogue_subtile, expected_stages):
-    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda _: SimpleNamespace(
-        shared_memory_per_block_optin=232448, multi_processor_count=148))
+    monkeypatch.setattr(torch.cuda, "get_device_properties",
+                        lambda _: SimpleNamespace(shared_memory_per_block_optin=232448, multi_processor_count=148))
     monkeypatch.setattr(opt_flags_nvidia.target_info, "cuda_capability_geq", lambda *_: True)
     monkeypatch.setattr(opt_flags, "cuda_capability_geq", lambda *_: True)
-    scale = torch.empty((1,), dtype=torch.float8_e4m3fn)
+    scale = torch.empty((1, ), dtype=torch.float8_e4m3fn)
     precision = PrecisionConfig(a_mx_scale=scale, b_mx_scale=scale)
     flags = opt_flags.make_default_opt_flags_nvidia(
-        FP4, FP4, FP4, precision, 1, 256, 512, 1024, None, True, False, False, 8, False, False,
-        {"block_m": block_m, "block_n": 256, "block_k": 256, "num_warps": num_warps,
-         "epilogue_subtile": epilogue_subtile, "is_persistent": True, "split_k": 1},
-        torch.float32, mx_block_size=16, epilogue_reduction_n=2,
+        FP4,
+        FP4,
+        FP4,
+        precision,
+        1,
+        256,
+        512,
+        1024,
+        None,
+        True,
+        False,
+        False,
+        8,
+        False,
+        False,
+        {
+            "block_m": block_m, "block_n": 256, "block_k": 256, "num_warps": num_warps, "epilogue_subtile":
+            epilogue_subtile, "is_persistent": True, "split_k": 1
+        },
+        torch.float32,
+        mx_block_size=16,
+        epilogue_reduction_n=2,
     )
     assert flags.num_stages == expected_stages
 
@@ -205,16 +223,27 @@ def test_fp4_reduction_stage_budget(monkeypatch, block_m, num_warps, epilogue_su
     ({"is_persistent": False}, 4),
 ])
 def test_fp4_reduction_stage_budget_other_epilogues(monkeypatch, overrides, expected_stages):
-    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda _: SimpleNamespace(
-        shared_memory_per_block_optin=232448))
+    monkeypatch.setattr(torch.cuda, "get_device_properties",
+                        lambda _: SimpleNamespace(shared_memory_per_block_optin=232448))
     monkeypatch.setattr(opt_flags_nvidia.target_info, "cuda_capability_geq", lambda *_: True)
-    scale = torch.empty((1,), dtype=torch.float8_e4m3fn)
+    scale = torch.empty((1, ), dtype=torch.float8_e4m3fn)
     args = {
         "precision_config": PrecisionConfig(a_mx_scale=scale, b_mx_scale=scale),
-        "is_persistent": True, "block_m": 128, "block_n": 256, "block_k": 256,
-        "out_dtype": FP4, "lhs_dtype": FP4, "rhs_dtype": FP4, "x_transpose": False,
-        "epilogue_effective_itemsize": 8, "has_y_acc_in": False, "mx_block_size": 16,
-        "epilogue_reduction_n": 2, "epilogue_subtile": 2, "num_warps": 8, "occupancy_target": 1,
+        "is_persistent": True,
+        "block_m": 128,
+        "block_n": 256,
+        "block_k": 256,
+        "out_dtype": FP4,
+        "lhs_dtype": FP4,
+        "rhs_dtype": FP4,
+        "x_transpose": False,
+        "epilogue_effective_itemsize": 8,
+        "has_y_acc_in": False,
+        "mx_block_size": 16,
+        "epilogue_reduction_n": 2,
+        "epilogue_subtile": 2,
+        "num_warps": 8,
+        "occupancy_target": 1,
     }
     assert opt_flags_nvidia.compute_num_stages(**(args | overrides)) == expected_stages
 
@@ -223,7 +252,7 @@ def test_fp4_reduction_stage_budget_other_epilogues(monkeypatch, overrides, expe
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("epilogue_subtile", [1, 2, 4])
 def test_matmul_fp4_reduction_shared_memory(device, monkeypatch, block_m, num_warps, epilogue_subtile,
-                                           swizzle_lhs_scale):
+                                            swizzle_lhs_scale):
     if device != "cuda" or not torch.cuda.is_available() or not is_cuda():
         pytest.skip("requires CUDA")
     if torch.cuda.get_device_capability()[0] != 10:
@@ -231,10 +260,11 @@ def test_matmul_fp4_reduction_shared_memory(device, monkeypatch, block_m, num_wa
 
     torch.manual_seed(0)
     m, n, k = 255, 512, 1024
-    a, a_scale = downcast_to_mxfp(torch.randn((m, k), device=device, dtype=torch.bfloat16), torch.uint8,
-                                 axis=-1, scale_dtype=torch.float8_e4m3fn, microblock_size=16)
-    b, b_scale = downcast_to_mxfp(torch.randn((n, k), device=device, dtype=torch.bfloat16).T * 0.01,
-                                 torch.uint8, axis=-2, scale_dtype=torch.float8_e4m3fn, microblock_size=16)
+    a, a_scale = downcast_to_mxfp(torch.randn((m, k), device=device, dtype=torch.bfloat16), torch.uint8, axis=-1,
+                                  scale_dtype=torch.float8_e4m3fn, microblock_size=16)
+    b, b_scale = downcast_to_mxfp(
+        torch.randn((n, k), device=device, dtype=torch.bfloat16).T * 0.01, torch.uint8, axis=-2,
+        scale_dtype=torch.float8_e4m3fn, microblock_size=16)
     a, b = wrap_torch_tensor(a, dtype=FP4), wrap_torch_tensor(b, dtype=FP4)
     a_scale, b_scale = wrap_torch_tensor(a_scale), wrap_torch_tensor(b_scale)
     if swizzle_lhs_scale:
@@ -242,14 +272,21 @@ def test_matmul_fp4_reduction_shared_memory(device, monkeypatch, block_m, num_wa
     b_scale = convert_layout(b_scale, BlackwellMXScaleLayout())
     c_scale = torch.empty((m, n // 2 // NVFP_BLOCK_SIZE.value), device=device, dtype=torch.float8_e4m3fn)
     precision = PrecisionConfig(
-        a_mx_scale=a_scale, b_mx_scale=b_scale, c_mx_scale=c_scale,
-        a_microblock_size=16, b_microblock_size=16, c_microblock_size=16,
-        c_value_pack_factor=2, out_dtype=torch.uint8,
+        a_mx_scale=a_scale,
+        b_mx_scale=b_scale,
+        c_mx_scale=c_scale,
+        a_microblock_size=16,
+        b_microblock_size=16,
+        c_microblock_size=16,
+        c_value_pack_factor=2,
+        out_dtype=torch.uint8,
     )
     activation = FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2), (1.0, 7.0))
     epilogue = Epilogue(FnSpecs(FnName.QUANTIZE_NVFP4.name, quantize_nvfp4_fn, (), ()), effective_itemsize=8)
-    constraints = {"block_m": block_m, "block_n": 256, "block_k": 256, "num_warps": num_warps,
-                   "epilogue_subtile": epilogue_subtile, "is_persistent": True, "split_k": 1}
+    constraints = {
+        "block_m": block_m, "block_n": 256, "block_k": 256, "num_warps": num_warps, "epilogue_subtile":
+        epilogue_subtile, "is_persistent": True, "split_k": 1
+    }
     with scoped_opt_flags_constraints(constraints | {"num_stages": 1}):
         expected = matmul(a, b, None, precision_config=precision, fused_activation=activation, epilogue=epilogue)
     expected_scale = c_scale.clone()
