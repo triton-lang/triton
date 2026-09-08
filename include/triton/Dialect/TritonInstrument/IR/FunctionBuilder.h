@@ -184,6 +184,10 @@ public:
                                             Operation *insertPoint,
                                             Value barrierCTAs,
                                             Value effectCTAs);
+  void createTrackAsyncCopiesForBarrierCall(ImplicitLocOpBuilder &b, Value mbar,
+                                            int thread, Value pred,
+                                            Operation *insertPoint,
+                                            Value barrierCTAs);
   // transferVisibleAccesses: transfer the requested barrier phase's
   // independently tracked write and read visibility to all threads in
   // threadMask.
