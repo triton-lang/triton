@@ -50,17 +50,33 @@ def _validate_scaled_upcast_fp4_args(src, scale, axis):
         scale.type.shape[axis] > 0 and expected_shape[axis] % scale.type.shape[axis] == 0,
         lambda: f"Expected output axis extent {expected_shape[axis]} to be divisible by scale axis extent "
         f"{scale.type.shape[axis]}")
-    _check(scale.dtype in {ttgl.int8, ttgl.uint8, ttgl.bfloat16},
+    _check(scale.dtype in {ttgl.int8, ttgl.uint8},
            lambda: f"Unsupported scale dtype for fp4 scaled_upcast: {scale.dtype}")
     return axis
 
 
 @ttgl.builtin
-def get_scaled_upcast_fp4_scale_layout(src, scale_size, elem_type, axis, _semantic=None):
+def get_scaled_upcast_fp4_scale_layout(src, scale_factor, elem_type, axis, _semantic=None):
     """Return the scale layout required by an FP4 scaled_upcast.
 
-    ``scale_size`` is the scale tensor's extent along ``axis``. Raises if the layout
-    of ``src`` allows for no valid scale layout for the requested ``scale_size``.
+    Returns the layout to use for the scale tensor required by a scaled_upcast
+    based on the input tensor layout and the scale factor. Raises if there is
+    no valid scale layout for the requested scale factor.
+
+    Args:
+        src: Packed FP4 source tensor (``int8``/``uint8``) whose layout is used
+            to infer the scale layout.
+        scale_factor (int): The scale factor, i.e. the number of elements along
+            ``axis`` sharing a single scale. The scale tensor's extent along
+            ``axis`` is the unpacked extent of ``src`` divided by this.
+        elem_type: Output element type of the scaled_upcast (``fp16`` or
+            ``bf16``). This must match the ``elem_type`` passed to
+            ``scaled_upcast``.
+        axis (int): Dimension along which packed FP4 values are unpacked and
+            scales are shared.
+
+    Returns:
+        The distributed layout to use for the scale tensor.
     """
     _check(isinstance(src.type, ttgl.distributed_type),
            lambda: f"Expected src to have a distributed_type but got {src.type}")
@@ -70,15 +86,15 @@ def get_scaled_upcast_fp4_scale_layout(src, scale_size, elem_type, axis, _semant
            lambda: f"Expected packed fp4 input in int8/uint8, but got {src.dtype}")
 
     axis = _normalize_axis(axis, len(src.type.shape), "axis is required for packed fp4 scaled_upcast")
-    scale_size = _unwrap_if_constexpr(scale_size)
-    _check(isinstance(scale_size, int), lambda: f"Expected scale_size to be an int but got {scale_size}")
+    scale_factor = _unwrap_if_constexpr(scale_factor)
+    _check(isinstance(scale_factor, int), lambda: f"Expected scale_factor to be an int but got {scale_factor}")
     output_size = src.type.shape[axis] * 2
-    _check(scale_size > 0 and output_size % scale_size == 0,
-           lambda: f"Expected output axis extent {output_size} to be divisible by scale_size {scale_size}")
+    _check(scale_factor > 0 and output_size % scale_factor == 0,
+           lambda: f"Expected output axis extent {output_size} to be divisible by scale_factor {scale_factor}")
 
     return _semantic.builder.get_scaled_upcast_fp4_scale_layout(
         src.handle,
-        scale_size,
+        output_size // scale_factor,
         elem_type.to_ir(_semantic.builder),
         axis,
     )
@@ -221,8 +237,7 @@ def _scaled_upcast(src, scale, elem_type, axis, semantic):
         _check(
             scale.type.layout == src.type.layout,
             lambda: f"Expected scale layout for fp8 scaled_upcast to be {src.type.layout} but got {scale.type.layout}")
-        # Note: bf16 is allowed due to CDNA3/CDNA4 conversion before passing to scaled_upcast
-        _check(scale.dtype in {ttgl.int8, ttgl.uint8, ttgl.bfloat16},
+        _check(scale.dtype in {ttgl.int8, ttgl.uint8},
                lambda: f"Unsupported scale dtype for fp8 scaled_upcast: {scale.dtype}")
         ret_ty = scale.type.with_element_ty(elem_type)
         handle = semantic.builder.create_scaled_upcast_fp8(ret_ty.to_ir(semantic.builder), src.handle, scale.handle)

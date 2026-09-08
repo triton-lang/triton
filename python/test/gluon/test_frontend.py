@@ -4082,13 +4082,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     %cst = arith.constant dense<17> : tensor<16x32xi8, #blocked>
     %c2_i8 = arith.constant 2 : i8
     %cst_0 = arith.constant dense<2> : tensor<16x64xi8, #blocked1>
-    %0 = arith.extui %cst_0 : tensor<16x64xi8, #blocked1> to tensor<16x64xi16, #blocked1>
-    %c7_i32 = arith.constant 7 : i32
-    %1 = arith.trunci %c7_i32 : i32 to i16
-    %2 = tt.splat %1 : i16 -> tensor<16x64xi16, #blocked1>
-    %3 = arith.shli %0, %2 : tensor<16x64xi16, #blocked1>
-    %4 = tt.bitcast %3 : tensor<16x64xi16, #blocked1> -> tensor<16x64xbf16, #blocked1>
-    %5 = amdg.scaled_upcast_fp4 %cst scale %4 {axis = 1 : i32} : tensor<16x32xi8, #blocked>, tensor<16x64xbf16, #blocked1> -> tensor<16x64xbf16, #blocked1>
+    %0 = amdg.scaled_upcast_fp4 %cst scale %cst_0 {axis = 1 : i32} : tensor<16x32xi8, #blocked>, tensor<16x64xi8, #blocked1> -> tensor<16x64xbf16, #blocked1>
     tt.return
   }
 }
@@ -4137,22 +4131,33 @@ def test_amd_scaled_downcast_fp8_cdna(target, fp8_format, ir_dtype):
     assert f"-> tensor<16x64x{ir_dtype}" in module_text
 
 
-@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4], ids=["cdna3", "cdna4"])
-def test_amd_scaled_upcast_fp4_compact_scale_cdna(target):
+@pytest.mark.parametrize("target, threads_per_warp, expect_layout", [
+    (HIP_TARGET_CDNA3, [8, 8],
+     ttgl.DistributedLinearLayout(reg_bases=[[8, 0]], lane_bases=[[0, 0], [0, 0], [0, 1], [1, 0], [2, 0], [4, 0]],
+                                  warp_bases=[], block_bases=[], shape=[16, 2])),
+    (HIP_TARGET_CDNA4, [8, 8],
+     ttgl.DistributedLinearLayout(reg_bases=[[8, 0]], lane_bases=[[0, 0], [0, 0], [0, 1], [1, 0], [2, 0], [4, 0]],
+                                  warp_bases=[], block_bases=[], shape=[16, 2])),
+    (HIP_TARGET_CDNA5, [8, 4],
+     ttgl.DistributedLinearLayout(reg_bases=[[0, 1], [8, 0]], lane_bases=[[0, 0], [0, 0], [1, 0], [2, 0], [4, 0]],
+                                  warp_bases=[], block_bases=[], shape=[16, 2])),
+], ids=["cdna3", "cdna4", "cdna5"])
+def test_amd_scaled_upcast_fp4_compact_scale_cdna(target, threads_per_warp, expect_layout):
     scaled_upcast = _get_amd_scaled_upcast(target)
 
     @gluon.jit
-    def kernel():
-        packed_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [8, 8], [1, 1], [1, 0])
+    def kernel(THREADS_PER_WARP: ttgl.constexpr, EXPECT_LAYOUT: ttgl.constexpr):
+        packed_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], THREADS_PER_WARP, [1, 1], [1, 0])
         src = ttgl.full([16, 32], 0x11, ttgl.uint8, packed_layout)
-        scale_layout: ttgl.constexpr = ttgl.amd.get_scaled_upcast_fp4_scale_layout(src, 2, ttgl.bfloat16, axis=1)
+        scale_layout: ttgl.constexpr = ttgl.amd.get_scaled_upcast_fp4_scale_layout(src, 32, ttgl.bfloat16, axis=1)
+        ttgl.static_assert(scale_layout == EXPECT_LAYOUT)
         scale = ttgl.full([16, 2], 0x02, ttgl.uint8, scale_layout)
         scaled_upcast(src, scale, ttgl.bfloat16, axis=1)
 
-    module = run_parser(kernel, *make_args(num_warps=1), target=target)
+    module = run_parser(kernel, *make_args(threads_per_warp, expect_layout, num_warps=1), target=target)
     ir = anonymize_ir(module.str_nodebug())
     assert "ttg.convert_layout" not in ir
-    assert "tensor<16x2xbf16" in ir
+    assert "tensor<16x2xi8" in ir
     assert "amdg.scaled_upcast_fp4" in ir
     assert "tensor<16x64xbf16" in ir
 
@@ -4179,13 +4184,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     %1 = tt.splat %0 : f8E4M3FN -> tensor<16x64xf8E4M3FN, #blocked>
     %c2_i8 = arith.constant 2 : i8
     %cst_0 = arith.constant dense<2> : tensor<16x64xi8, #blocked>
-    %2 = arith.extui %cst_0 : tensor<16x64xi8, #blocked> to tensor<16x64xi16, #blocked>
-    %c7_i32 = arith.constant 7 : i32
-    %3 = arith.trunci %c7_i32 : i32 to i16
-    %4 = tt.splat %3 : i16 -> tensor<16x64xi16, #blocked>
-    %5 = arith.shli %2, %4 : tensor<16x64xi16, #blocked>
-    %6 = tt.bitcast %5 : tensor<16x64xi16, #blocked> -> tensor<16x64xbf16, #blocked>
-    %7 = amdg.scaled_upcast_fp8 %1 scale %6 : tensor<16x64xf8E4M3FN, #blocked>, tensor<16x64xbf16, #blocked> -> tensor<16x64xbf16, #blocked>
+    %2 = amdg.scaled_upcast_fp8 %1 scale %cst_0 : tensor<16x64xf8E4M3FN, #blocked>, tensor<16x64xi8, #blocked> -> tensor<16x64xbf16, #blocked>
     tt.return
   }
 }
