@@ -275,6 +275,33 @@ static bool canSliceBounds(mlir::DominanceInfo &domInfo, scf::ForOp outer,
       });
 }
 
+static void
+hoistLoopBoundComputations(scf::ForOp outer,
+                           const llvm::SetVector<Operation *> &toHoist,
+                           mlir::DominanceInfo &domInfo) {
+  if (llvm::any_of(toHoist,
+                   [](Operation *op) { return !isMemoryEffectFree(op); })) {
+    // A read-only bound computation may still fault when the outer loop is
+    // empty. Guard the loop and its bounds together, including computations
+    // that consume the loaded value (e.g. a divisor).
+    ImplicitLocOpBuilder b(outer.getLoc(), outer);
+    auto predicate = outer.getUnsignedCmp() ? arith::CmpIPredicate::ult
+                                            : arith::CmpIPredicate::slt;
+    Value nonEmpty = arith::CmpIOp::create(b, predicate, outer.getLowerBound(),
+                                           outer.getUpperBound());
+    auto guard = scf::IfOp::create(b, outer.getResultTypes(), nonEmpty);
+    outer.replaceAllUsesWith(guard.getResults());
+    b.createBlock(&guard.getThenRegion());
+    outer->remove();
+    b.insert(outer);
+    scf::YieldOp::create(b, outer.getResults());
+    b.createBlock(&guard.getElseRegion());
+    scf::YieldOp::create(b, outer.getInits());
+    domInfo.invalidate();
+  }
+  hoistOpsBefore(outer, toHoist);
+}
+
 // Pessimistically assume the internal storage bitwidth for index types.
 static unsigned getIntTypeWidth(Type type) {
   if (isa<IndexType>(type))
@@ -516,6 +543,10 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   for (LoopNestNode *child : parent->children) {
     scf::ForOp inner = child->loop;
     assert(child->children.empty() && "fuseOneLevel runs leaf-to-root");
+    // A child fusion may have introduced an execution guard. Treat the
+    // guarded loop opaquely, just as loop-nest discovery treats scf.if.
+    if (inner->getBlock() != outer.getBody())
+      continue;
 
     // Check if the inner loop bounds are or can be made invariant to the outer
     // loop. Check them all at once to avoid adding ops to `toHoist` if not
@@ -553,7 +584,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   // The transformation will definitely succeed on `childrenToFuse`. `toHoist`
   // only contains the operations that must be hoisted for `childrenToFuse` to
   // be fusible.
-  hoistOpsBefore(outer, toHoist);
+  hoistLoopBoundComputations(outer, toHoist, domInfo);
 
   // Determine the integer type to use for the length computations. Use an
   // integer bitwidth twice the size of the largest integer, up to 64 bits, to
@@ -1154,7 +1185,8 @@ static LogicalResult speculateInnerLoopLength(scf::ForOp outerLoop,
     return failure();
 
   // Hoist the inner loop bounds computations if necessary.
-  hoistOpsBefore(outerLoop, toHoist);
+  hoistLoopBoundComputations(outerLoop, toHoist, domInfo);
+  b.setInsertionPoint(outerLoop);
 
   // Mark the inner loop.
   innerLoop->setAttr(kMustExecuteAttrName, b.getUnitAttr());

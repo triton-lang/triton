@@ -6886,6 +6886,38 @@ def test_tl_range_fuse(device):
     torch.testing.assert_close(out, ref, atol=0, rtol=0)
 
 
+@pytest.mark.parametrize("bounds", [(0, 0), (3, 1), (2, 5)])
+@pytest.mark.parametrize("inner_bound", [0, 3])
+@pytest.mark.parametrize("load_enabled", [False, True])
+def test_tl_range_fuse_loaded_bound_zero_trip(bounds, inner_bound, load_enabled, device):
+
+    @triton.jit
+    def kernel(x_ptr, bound_ptr, out_ptr, lower, upper, enabled, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        acc = tl.full((BLOCK, ), 7, tl.int32)
+        for i in tl.range(lower, upper, flatten=True):
+            n = tl.load(bound_ptr, mask=enabled, other=0)
+            for j in range(n):
+                acc += tl.load(x_ptr + j * BLOCK + offsets)
+        tl.store(out_ptr + offsets, acc)
+
+    lower, upper = bounds
+    # Empty outer loops must not dereference the bound, even when its load
+    # mask is true. An empty tensor supplies no readable elements.
+    bound_values = [inner_bound] if lower < upper else []
+    bound = torch.tensor(bound_values, dtype=torch.int32, device=device)
+    x = torch.arange(3 * 128, dtype=torch.int32, device=device).reshape(3, 128)
+    out = torch.empty((128, ), dtype=torch.int32, device=device)
+    compiled = kernel[(1, )](x, bound, out, lower, upper, load_enabled, BLOCK=128)
+
+    trips = max(upper - lower, 0)
+    expected = torch.full_like(out, 7)
+    if trips and load_enabled:
+        expected += trips * x[:inner_bound].sum(dim=0).to(torch.int32)
+    torch.testing.assert_close(out, expected, atol=0, rtol=0)
+    assert compiled.asm["ttgir"].count("scf.for") == 1
+
+
 def test_tl_range_fuse_dependent(device):
 
     @triton.jit
