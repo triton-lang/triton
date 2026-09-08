@@ -2219,17 +2219,9 @@ static Value synchronizeAtomicResults(Operation *op,
     return broadcastScalarAtomicResult(op, valueElemTy, resultVals[0], rewriter,
                                        b, threadPred, targetInfo);
 
-  if (!op->hasAttr("allocation.offset")) {
-    // No broadcasting, just pack the values into a struct.
-    return packTensorElements(loc, typeConverter, resultVals, rewriter,
-                              tensorTy);
-  }
-
-  auto removeRegBroadcast =
-      actionRemoveBroadcastedRegs(triton::gpu::toLinearLayout(tensorTy));
-  resultVals = broadcastTensorResult(op, tensorTy, rewriter,
-                                     removeRegBroadcast.apply(resultVals),
-                                     valueElemTy, b, threadPred, targetInfo);
+  if (op->hasAttr("allocation.offset"))
+    resultVals = broadcastTensorResult(op, tensorTy, rewriter, resultVals,
+                                       valueElemTy, b, threadPred, targetInfo);
   return packUniqueTensorElements(loc, typeConverter, resultVals, rewriter,
                                   tensorTy);
 }

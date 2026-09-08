@@ -238,10 +238,6 @@ void emitTensorAccessRuntimeCall(ConversionPatternRewriter &rewriter,
                     b.i32_val(bytesPerElem), sourceLoc.file, sourceLoc.line});
 }
 
-unsigned getCanonicalIndex(unsigned index, unsigned freeVarMask) {
-  return index & ~freeVarMask;
-}
-
 Value materializeI32Bool(ConversionPatternRewriter &rewriter,
                          TritonLLVMOpBuilder &b, Value pred) {
   if (!pred)
@@ -897,23 +893,19 @@ public:
     Value llVal = adaptor.getVal();
     Value llMask = adaptor.getMask();
 
-    auto ptrElements =
-        unpackTensorElements(loc, llPtr, rewriter, op.getPtr().getType());
-    auto valElements =
-        unpackTensorElements(loc, llVal, rewriter, op.getVal().getType());
+    auto ptrElements = unpackUniqueTensorElements(loc, llPtr, rewriter);
+    auto valElements = unpackUniqueTensorElements(loc, llVal, rewriter);
     SmallVector<Value> maskElements;
     if (llMask)
-      maskElements =
-          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
+      maskElements = unpackUniqueTensorElements(loc, llMask, rewriter);
 
     Type valueElemTy = valElements[0].getType();
     unsigned valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     int32_t bytesPerElem = std::max<int32_t>(1, valueElemNBits / 8);
-    auto elemsPerThread = ttg::getTotalElemsPerThread(op.getVal().getType());
+    auto elemsPerThread = ttg::getUniqueElemsPerThread(op.getVal().getType());
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
     Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
                                                          loc, *targetInfo);
-    uint32_t regMask = freeVarMasks.lookup(str_attr("register"));
     auto sourceLoc = materializeSourceLocation(rewriter, loc);
     auto eventStateTy = getGSanAtomicEventStateType(rewriter);
     Value eventState = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx),
@@ -923,12 +915,6 @@ public:
     SmallVector<Value> resultVals(elemsPerThread);
 
     for (size_t i = 0; i < elemsPerThread; ++i) {
-      if (auto canonicalIdx = getCanonicalIndex(i, regMask);
-          i != canonicalIdx) {
-        resultVals[i] = resultVals[canonicalIdx];
-        continue;
-      }
-
       Value pred =
           llMask ? ttg::maybeAnd(rewriter, loc, threadPred, maskElements[i])
                  : threadPred;
@@ -990,21 +976,17 @@ public:
     Value llCmp = adaptor.getCmp();
     Value llVal = adaptor.getVal();
 
-    auto ptrElements =
-        unpackTensorElements(loc, llPtr, rewriter, op.getPtr().getType());
-    auto cmpElements =
-        unpackTensorElements(loc, llCmp, rewriter, op.getCmp().getType());
-    auto valElements =
-        unpackTensorElements(loc, llVal, rewriter, op.getVal().getType());
+    auto ptrElements = unpackUniqueTensorElements(loc, llPtr, rewriter);
+    auto cmpElements = unpackUniqueTensorElements(loc, llCmp, rewriter);
+    auto valElements = unpackUniqueTensorElements(loc, llVal, rewriter);
 
     Type valueElemTy = valElements[0].getType();
     unsigned valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     int32_t bytesPerElem = valueElemNBits / 8;
-    auto elemsPerThread = ttg::getTotalElemsPerThread(op.getVal().getType());
+    auto elemsPerThread = ttg::getUniqueElemsPerThread(op.getVal().getType());
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
     Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
                                                          loc, *targetInfo);
-    uint32_t regMask = freeVarMasks.lookup(str_attr("register"));
     auto sourceLoc = materializeSourceLocation(rewriter, loc);
     auto eventStateTy = getGSanAtomicEventStateType(rewriter);
     Value eventState = LLVM::AllocaOp::create(rewriter, loc, ptr_ty(ctx),
@@ -1014,12 +996,6 @@ public:
     SmallVector<Value> resultVals(elemsPerThread);
 
     for (size_t i = 0; i < elemsPerThread; ++i) {
-      if (auto canonicalIdx = getCanonicalIndex(i, regMask);
-          canonicalIdx != i) {
-        resultVals[i] = resultVals[canonicalIdx];
-        continue;
-      }
-
       Value pred = threadPred;
       Value casPtr = ptrElements[i];
       Value casCmp = cmpElements[i];
