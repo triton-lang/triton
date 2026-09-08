@@ -2,8 +2,10 @@ import pytest
 import torch
 import triton
 import triton.language as tl
+from triton.backends.compiler import GPUTarget
 from triton._internal_testing import is_cuda
 
+from triton_kernels import target_info
 from triton_kernels.matmul import matmul, matmul_torch, PrecisionConfig
 from triton_kernels.matmul_details._matmul import _compute_packed_n_w
 from triton_kernels.matmul_details.opt_flags import InapplicableConstraint, scoped_opt_flags_constraints
@@ -15,6 +17,80 @@ from triton_kernels.tensor_details.layout import BlackwellMX4ValueShuffledLayout
 from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellMXScaleLayout
 from triton_kernels.tensor_details.ragged_tensor import make_ragged_tensor_metadata_torch
 from triton_kernels.testing import assert_close
+
+
+@pytest.mark.parametrize(
+    "target, expected_gather, expected_scatter",
+    [
+        pytest.param(None, False, False, id="no-target"),
+        pytest.param(GPUTarget("cuda", 80, 32), False, False, id="sm80"),
+        pytest.param(GPUTarget("cuda", 90, 32), False, False, id="sm90"),
+        pytest.param(GPUTarget("cuda", 100, 32), True, True, id="sm100"),
+        pytest.param(GPUTarget("cuda", 103, 32), True, True, id="sm103"),
+        pytest.param(GPUTarget("cuda", 107, 32), True, True, id="sm107"),
+        pytest.param(GPUTarget("cuda", 110, 32), True, True, id="sm110"),
+        pytest.param(GPUTarget("cuda", 120, 32), True, False, id="sm120"),
+        pytest.param(GPUTarget("cuda", 121, 32), True, False, id="sm121"),
+        pytest.param(GPUTarget("hip", "gfx942", 64), False, False, id="gfx942"),
+    ],
+)
+def test_tma_gather_scatter_support(monkeypatch, target, expected_gather, expected_scatter):
+    monkeypatch.setattr(tl.target_info, "current_target", lambda: target)
+    assert target_info.has_tma_gather() == expected_gather
+    assert target_info.has_tma_scatter() == expected_scatter
+
+
+def test_matmul_scatter_falls_back_on_consumer_blackwell(device):
+    if device != "cuda" or not torch.cuda.is_available() or not is_cuda():
+        pytest.skip("requires CUDA")
+    if torch.cuda.get_device_capability()[0] != 12:
+        pytest.skip("requires consumer Blackwell")
+
+    torch.manual_seed(0)
+    m = n = k = 128
+    a = torch.randn((m, k), device=device, dtype=torch.float16)
+    b = torch.randn((k, n), device=device, dtype=torch.float16)
+    scatter_indx = torch.randperm(m, device=device, dtype=torch.int32)
+    precision_config = PrecisionConfig()
+    constraints = {
+        "is_persistent": True,
+        "block_m": 128,
+        "split_k": 1,
+        "epilogue_subtile": 1,
+        "num_warps": 4,
+    }
+
+    reference = matmul_torch(a, b, None, scatter_indx=scatter_indx, precision_config=precision_config)
+    with scoped_opt_flags_constraints(constraints):
+        actual = matmul(a, b, None, scatter_indx=scatter_indx, precision_config=precision_config)
+
+    assert_close(reference, actual)
+
+
+def test_matmul_scatter_rejects_forced_output_tma_on_consumer_blackwell(device):
+    if device != "cuda" or not torch.cuda.is_available() or not is_cuda():
+        pytest.skip("requires CUDA")
+    if torch.cuda.get_device_capability()[0] != 12:
+        pytest.skip("requires consumer Blackwell")
+
+    a = torch.empty((128, 128), device=device, dtype=torch.float16)
+    b = torch.empty((128, 128), device=device, dtype=torch.float16)
+    scatter_indx = torch.arange(128, device=device, dtype=torch.int32)
+    constraints = {
+        "is_persistent": True,
+        "block_m": 128,
+        "split_k": 1,
+        "epilogue_subtile": 1,
+        "num_warps": 4,
+        "use_output_tma": True,
+    }
+
+    with scoped_opt_flags_constraints(constraints):
+        with pytest.raises(
+                InapplicableConstraint,
+                match=r"cannot enforce `use_output_tma=True` because TMA scatter is unavailable",
+        ):
+            matmul(a, b, None, scatter_indx=scatter_indx, precision_config=PrecisionConfig())
 
 
 def _make_blackwell_scale_tensor():
