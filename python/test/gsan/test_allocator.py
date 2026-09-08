@@ -18,13 +18,16 @@ from triton.experimental.gsan._allocator import (
     get_global_state_pointer,
     get_reserve_pointer,
     get_reserve_size,
+    get_runtime_state_layout,
+    get_shadow_granularity_bytes,
     gsan_free,
     gsan_malloc,
     import_allocation_handles,
     import_runtime_state_handle,
 )
-from triton.experimental.gsan._testing_utils import (global_state, shadow_cell_from_address, shadow_tensor_for,
-                                                     store_one_i32, thread_state_from_smid)
+from triton.experimental.gsan._testing_utils import (SHADOW_CELL_SIZE_BYTES, global_state, shadow_cell_from_address,
+                                                     shadow_cell_tensor_from_address, shadow_tensor_for, store_one_i32,
+                                                     thread_state_from_smid)
 from triton.experimental.gsan._utils import uint8_cuda_tensor_from_ptr
 
 # With 2 MiB pages, this rounds to a 6 MiB allocation inside an 8 MiB tree node.
@@ -49,6 +52,71 @@ def _run_configure_runtime_fields_check() -> None:
         assert state.clock_buffer_size == 17
     finally:
         gsan_free(ptr, device, 0, 0)
+
+
+def _run_shadow_precision_configuration_check() -> None:
+    assert get_shadow_granularity_bytes() == 4
+    for invalid in (0, 1, 3, 8, -2, True):
+        with pytest.raises(ValueError, match="shadow_granularity_bytes"):
+            configure(shadow_granularity_bytes=invalid)
+    with pytest.raises(TypeError):
+        configure(shadow_granularity_bytes=2.0)
+    for precision in (2, 4, 2):
+        configure(shadow_granularity_bytes=precision)
+        configure(rng_seed=12345)
+        assert get_shadow_granularity_bytes() == precision
+
+
+def _run_shadow_precision_reservation_check(query: str) -> None:
+    configure(shadow_granularity_bytes=2)
+    reserve = get_reserve_pointer if query == "reserve" else get_global_state_pointer
+    assert reserve() != 0
+    for precision in (2, 4):
+        with pytest.raises(RuntimeError, match="memory is reserved"):
+            configure(shadow_granularity_bytes=precision)
+    # Other settings retain their existing pre-allocation behavior.
+    configure(rng_seed=12345)
+    assert get_shadow_granularity_bytes() == 2
+
+
+def _run_shadow_precision_mapping_check(precision: int | None) -> None:
+    configure(shadow_granularity_bytes=precision)
+    expected = 4 if precision is None else precision
+    device = torch.cuda.current_device()
+    ptr = gsan_malloc(_ODD_LARGE_ALLOCATION_SIZE, device)
+    assert ptr != 0
+    try:
+        real = uint8_cuda_tensor_from_ptr(ptr, _ODD_LARGE_ALLOCATION_SIZE, device)
+        shadow = shadow_tensor_for(real)
+        assert shadow.numel() == triton.cdiv(_ODD_LARGE_ALLOCATION_SIZE, expected) * SHADOW_CELL_SIZE_BYTES
+        neighbor = shadow_cell_tensor_from_address(ptr + 2, device_index=device)
+        assert neighbor.data_ptr() - shadow.data_ptr() == (2 // expected) * SHADOW_CELL_SIZE_BYTES
+        assert global_state(device_index=device).shadow_granularity_bytes == expected
+        assert get_runtime_state_layout(get_device_rank(device))["shadow_granularity_bytes"] == expected
+        # Exercise the whole mapped range, including beyond the default 4-byte shadow size.
+        shadow.fill_(17)
+        assert torch.all(shadow == 17).item()
+        del neighbor, shadow, real
+    finally:
+        gsan_free(ptr, device)
+
+
+def _run_shadow_precision_ipc_check(handle_type: ShareableHandleType) -> None:
+    configure(shadow_granularity_bytes=2)
+    handle = 0 if handle_type == ShareableHandleType.POSIX_FILE_DESCRIPTOR else bytes(64)
+    calls = (
+        (export_allocation_handles, (1, handle_type)),
+        (export_allocation_memhandle_regions, (1, )),
+        (export_runtime_state_handle, (0, handle_type)),
+        (import_allocation_handles, (handle, handle, 4096, 0, handle_type)),
+        (import_runtime_state_handle, (handle, 4096, 0, 0, handle_type)),
+    )
+    for function, args in calls:
+        with pytest.raises(RuntimeError, match="IPC requires shadow_granularity_bytes=4"):
+            function(*args)
+    assert not has_live_allocations()
+    # Rejected IPC must not reserve addresses or freeze the configuration.
+    configure(shadow_granularity_bytes=4)
 
 
 def _run_freeze_config_check() -> None:
@@ -146,9 +214,9 @@ def _run_reset_collects_unreachable_allocations_check() -> None:
     reset()
 
 
-def _run_reset_reinitializes_runtime_state_check() -> None:
+def _run_reset_reinitializes_runtime_state_check(precision: int | None) -> None:
     device = torch.cuda.current_device()
-    configure(rng_seed=12345, clock_buffer_size=17)
+    configure(rng_seed=12345, clock_buffer_size=17, shadow_granularity_bytes=precision)
     original_state_pointer = get_global_state_pointer()
 
     ptr = gsan_malloc(4, device)
@@ -176,6 +244,7 @@ def _run_reset_reinitializes_runtime_state_check() -> None:
     state = global_state(device_index=device)
     assert state.rng_seed == 12345
     assert state.clock_buffer_size == 17
+    assert state.shadow_granularity_bytes == (4 if precision is None else precision)
     with pytest.raises(RuntimeError, match="configuration is already frozen"):
         configure(rng_seed=12345)
 
@@ -354,6 +423,33 @@ def test_configure_exposes_runtime_fields():
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_shadow_precision_configuration():
+    result = run_in_process(_run_shadow_precision_configuration_check)
+    assert result.exc is None
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@pytest.mark.parametrize("query", ["reserve", "global_state"])
+def test_shadow_precision_freezes_at_reservation(query):
+    result = run_in_process(_run_shadow_precision_reservation_check, args=(query, ))
+    assert result.exc is None
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@pytest.mark.parametrize("precision", [None, 2], ids=["default", "halfword"])
+def test_shadow_precision_maps_full_shadow(precision):
+    result = run_in_process(_run_shadow_precision_mapping_check, args=(precision, ))
+    assert result.exc is None
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+@pytest.mark.parametrize("handle_type", list(ShareableHandleType))
+def test_halfword_precision_rejects_ipc(handle_type):
+    result = run_in_process(_run_shadow_precision_ipc_check, args=(handle_type, ))
+    assert result.exc is None
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
 def test_freeze_config_rejects_later_changes():
     result = run_in_process(_run_freeze_config_check)
     assert result.exc is None
@@ -384,8 +480,9 @@ def test_reset_collects_unreachable_allocations():
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
-def test_reset_reinitializes_runtime_state():
-    result = run_in_process(_run_reset_reinitializes_runtime_state_check)
+@pytest.mark.parametrize("precision", [None, 2], ids=["default", "halfword"])
+def test_reset_reinitializes_runtime_state(precision):
+    result = run_in_process(_run_reset_reinitializes_runtime_state_check, args=(precision, ))
     assert result.exc is None
 
 

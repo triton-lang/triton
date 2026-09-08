@@ -55,6 +55,7 @@ def configure(
     rng_seed: int | None = None,
     clock_buffer_size: int | None = None,
     handle_type: ShareableHandleType | None = None,
+    shadow_granularity_bytes: int | None = None,
 ) -> None:
     """Configures the process-local GSan state.
 
@@ -82,8 +83,13 @@ def configure(
         handle_type (ShareableHandleType, optional): Type of shareable handle requested for GSan
             allocations. If omitted, GSan uses fabric handles when ``PYTORCH_CUDA_ALLOC_CONF``
             contains ``fabric_handles:True`` and otherwise uses POSIX file descriptors.
+        shadow_granularity_bytes (int, optional): Bytes tracked by each shadow cell, either
+            2 or 4 (default). Two-byte precision distinguishes adjacent halfwords and doubles
+            shadow memory use. Set this before any address reservation, including calls to
+            get_reserve_pointer or get_global_state_pointer. IPC requires four-byte precision.
     """
-    _load_gsan_module().configure(device_ranks, num_devices, rng_seed, clock_buffer_size, handle_type)
+    _load_gsan_module().configure(device_ranks, num_devices, rng_seed, clock_buffer_size, handle_type,
+                                  shadow_granularity_bytes)
 
 
 def freeze_config() -> None:
@@ -136,6 +142,11 @@ def get_reserve_pointer() -> int:
 
 def get_reserve_size() -> int:
     return _load_gsan_module().get_reserve_size()
+
+
+def get_shadow_granularity_bytes() -> int:
+    """Return configured precision without reserving or mapping memory."""
+    return _load_gsan_module().get_shadow_granularity_bytes()
 
 
 def get_global_state_pointer() -> int:

@@ -39,6 +39,16 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
     tt.return
   }
 
+  // CHECK-LABEL: llvm.func @unmasked_atomic_add_i64
+  // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(ptr, array<5 x ptr>, i8)>
+  // CHECK: %[[ATOMIC_BYTES:.*]] = llvm.mlir.constant(8 : i32)
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[ATOMIC_BYTES]],
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  tt.func @unmasked_atomic_add_i64(%ptr: !tt.ptr<i64>, %val: i64) {
+    %0 = tt.atomic_rmw add, relaxed, gpu, %ptr, %val : (!tt.ptr<i64>, i64) -> i64
+    tt.return
+  }
+
   // CHECK-LABEL: llvm.func @atomic_poll
   // CHECK: llvm.load %{{.*}} atomic monotonic
   // CHECK: llvm.fence acquire
@@ -83,6 +93,27 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
     %c0_i32 = arith.constant 0 : i32
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<8x16xi64, #shared_i64, #smem, mutable>
     ttng.async_tma_reduce add, %desc[%c0_i32, %c0_i32] %buf : !tt.tensordesc<8x16xi64, #shared_i64>, !ttg.memdesc<8x16xi64, #shared_i64, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#subword = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // Each halfword retains its own mask, even when neighboring pointers are contiguous.
+  // CHECK-LABEL: llvm.func @subword_masks
+  // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<4 x i64>, array<4 x i8>)>
+  // CHECK: llvm.call @__triton_gsan_load_tensor
+  // CHECK: llvm.alloca %{{.*}} x !llvm.struct<(array<4 x i64>, array<4 x i8>)>
+  // CHECK: llvm.call @__triton_gsan_store_tensor
+  tt.func @subword_masks(%ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32},
+                        %mask: tensor<128xi1, #subword>) {
+    %offsets = tt.make_range {start = 0 : i32, end = 128 : i32} : tensor<128xi32, #subword>
+    %base = tt.splat %ptr : !tt.ptr<bf16> -> tensor<128x!tt.ptr<bf16>, #subword>
+    %ptrs = tt.addptr %base, %offsets : tensor<128x!tt.ptr<bf16>, #subword>, tensor<128xi32, #subword>
+    %values = tt.load %ptrs, %mask : tensor<128x!tt.ptr<bf16>, #subword>
+    tt.store %ptrs, %values, %mask : tensor<128x!tt.ptr<bf16>, #subword>
     tt.return
   }
 }

@@ -19,7 +19,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
 )
 
 from triton._internal_testing import is_blackwell, is_cuda, is_hopper_or_newer, run_in_process
-from triton.experimental.gsan import create_mem_pool
+from triton.experimental.gsan import configure, create_mem_pool
 from triton.experimental.gsan._testing_utils import atomic_poll, shadow_cell_from_address
 from triton.tools.tensor_descriptor import TensorDescriptor
 
@@ -80,6 +80,38 @@ def _waw_kernel(ptr, scratch_ptr, counter_ptr):
     else:
         atomic_poll(counter_ptr, 1)
         tl.store(ptr, 2)
+
+
+@triton.jit
+def _subword_race_kernel(ptr, scratch_ptr, counter_ptr, KIND: tl.constexpr):
+    if tl.program_id(0) == 0:
+        if KIND == "war":
+            value = tl.load(ptr)
+            tl.store(scratch_ptr, value)
+        else:
+            tl.store(ptr, 1)
+        tl.atomic_xchg(counter_ptr, 1, sem="relaxed")
+    else:
+        atomic_poll(counter_ptr, 1)
+        # A disjoint halfword write must not replace the first halfword's history.
+        tl.store(ptr + 1, 7)
+        if KIND == "raw":
+            conflicting_read = tl.load(ptr)
+            tl.store(scratch_ptr, conflicting_read)
+        else:
+            tl.store(ptr, 2)  # conflicting write
+
+
+def _run_subword_race(kind):
+    configure(shadow_granularity_bytes=2)
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    pool = create_mem_pool()
+    with torch.cuda.use_mem_pool(pool):
+        target = torch.zeros(2, dtype=torch.bfloat16, device="cuda")
+        scratch = torch.zeros(1, dtype=torch.float32, device="cuda")
+        counter = torch.zeros(1, dtype=torch.int32, device="cuda")
+        _subword_race_kernel[(2, )](target, scratch, counter, kind, num_warps=1)
+        torch.cuda.synchronize()
 
 
 @triton.jit
@@ -185,6 +217,37 @@ def _tma_raw_kernel(ptr, scratch_ptr, counter_ptr, m_size, n_size, row_idx, col_
         atomic_poll(counter_ptr, 1)
         value = tl.load(ptr + row_idx * stride_0 + col_idx)
         tl.store(scratch_ptr, value)
+
+
+@triton.jit
+def _tma_padding_raw_kernel(ptr, desc, scratch_ptr, counter_ptr, KIND: tl.constexpr):
+    if tl.program_id(0) == 0:
+        values = tl.full((8, 16), 1, dtype=ptr.dtype.element_ty)
+        if KIND == "scatter":
+            desc.scatter(values, tl.arange(0, 8), 0)
+        elif KIND == "reduce":
+            desc.atomic_add([0, 0], values)
+        else:
+            desc.store([0, 0], values)
+        tl.atomic_xchg(counter_ptr, 1, sem="relaxed")
+    else:
+        atomic_poll(counter_ptr, 1)
+        padding_read = tl.load(ptr + 15)
+        tl.store(scratch_ptr, padding_read)
+
+
+def _run_tma_padding_race(kind, granularity):
+    configure(shadow_granularity_bytes=granularity)
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    pool = create_mem_pool()
+    with torch.cuda.use_mem_pool(pool):
+        target = torch.zeros((8, 16), dtype=torch.bfloat16, device="cuda")
+        scratch = torch.zeros(1, dtype=torch.bfloat16, device="cuda")
+        counter = torch.zeros(1, dtype=torch.int32, device="cuda")
+        block_shape = [1, 16] if kind == "scatter" else [8, 16]
+        desc = TensorDescriptor.from_tensor(target[:, :9], block_shape)
+        _tma_padding_raw_kernel[(2, )](target, desc, scratch, counter, kind)
+        torch.cuda.synchronize()
 
 
 @triton.jit
@@ -650,6 +713,28 @@ def test_write_after_read():
 def test_write_after_write():
     _run_failure_case("waw", runner=_run_waw_case, source_function=_waw_kernel.fn, marker="tl.store(ptr, 2)",
                       error="Write after write race detected")
+
+
+@pytest.mark.parametrize("kind, marker, error", [
+    ("raw", "conflicting_read =", "Read after write race detected"),
+    ("war", "# conflicting write", "Write after read race detected"),
+    ("waw", "# conflicting write", "Write after write race detected"),
+])
+def test_subword_access_preserves_neighbor_history(kind, marker, error):
+    _run_failure_case(kind, runner=_run_subword_race, runner_args=(kind, ), source_function=_subword_race_kernel.fn,
+                      marker=marker, error=error)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="TMA requires Hopper or newer")
+@pytest.mark.parametrize("kind", [
+    "store", "reduce",
+    pytest.param("scatter", marks=pytest.mark.skipif(not is_blackwell(), reason="Indexed TMA requires Blackwell"))
+])
+@pytest.mark.parametrize("granularity", [2, 4])
+def test_subword_tma_padding_reports_race(kind, granularity):
+    _run_failure_case(kind, runner=_run_tma_padding_race, runner_args=(kind, granularity),
+                      source_function=_tma_padding_raw_kernel.fn, marker="padding_read =",
+                      error="Read after write race detected")
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="PDL requires SM90 or newer")
