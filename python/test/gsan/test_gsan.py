@@ -1533,7 +1533,10 @@ def test_tma_masked_store_updates_shadow(with_gsan, with_allocator, row_idx, col
     valid_cols = max(last_col - first_col, 0)
     target_storage = torch.zeros((padded_m, padded_n), dtype=torch.int32, device="cuda")
     target = target_storage[:m_size, :n_size]
-    write_n_size = triton.cdiv(n_size * target.element_size(), 16) * 16 // target.element_size()
+    # Hardware TMA writes full 16-byte sectors; the pre-Hopper fallback masks to the logical shape.
+    write_n_size = n_size
+    if is_hopper_or_newer():
+        write_n_size = triton.cdiv(n_size * target.element_size(), 16) * 16 // target.element_size()
     shadow0 = _shadow_cells_for_tensor(target_storage)
     changed_mask = _masked_tma_change_mask(target_storage, m_size, write_n_size, row_idx, col_idx, block)
 
