@@ -804,7 +804,7 @@ broadcastTensorResult(Operation *op, RankedTensorType tensorTy,
                       TritonLLVMOpBuilder &b, Value threadPred,
                       const TargetInfoBase &targetInfo);
 
-/// Synchronize an atomic result, then replace the op or erase it when unused.
+/// Synchronize an atomic result, then replace the op.
 void finalizeAtomicResults(Operation *op, ConversionPatternRewriter &rewriter,
                            SmallVector<Value> &resultVals, Type valueElemTy,
                            TritonLLVMOpBuilder &b, Value threadPred,

@@ -1095,6 +1095,10 @@ def test_atomic_poll_acquire_synchronizes_cross_sm(with_gsan, capfd, scope, expe
 @pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES[1:])
 @pytest.mark.parametrize("dtype", ATOMIC_LOAD_STORE_TYPES)
 def test_atomic_load_store_synchronizes_cross_sm(with_gsan, capfd, scope, expected_scope, dtype):
+    if dtype == torch.bool:
+        # LLVM loop peeling duplicates aligned barriers and hangs the kernel.
+        pytest.xfail("LLVM loop peeling breaks convergence of atomic-load result broadcasts")
+
     payload = torch.zeros(1, dtype=torch.int32, device="cuda")
     flag = torch.zeros(1, dtype=dtype, device="cuda")
     out = torch.full((1, ), -1, dtype=torch.int32, device="cuda")

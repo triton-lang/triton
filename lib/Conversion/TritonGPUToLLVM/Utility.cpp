@@ -2213,15 +2213,6 @@ static Value synchronizeAtomicResults(Operation *op,
                                       Value threadPred,
                                       const TargetInfoBase &targetInfo,
                                       const LLVMTypeConverter *typeConverter) {
-  if (op->getNumResults() != 1)
-    return {};
-
-  // Membar models an allocated atomic scratch buffer as containing an internal
-  // rendezvous. Preserve that synchronization if the result becomes dead after
-  // scratch allocation.
-  if (op->getResult(0).use_empty() && !op->hasAttr("allocation.offset"))
-    return {};
-
   auto loc = op->getLoc();
   auto tensorTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
   if (!tensorTy)
@@ -2251,10 +2242,7 @@ void finalizeAtomicResults(Operation *op, ConversionPatternRewriter &rewriter,
   Value result =
       synchronizeAtomicResults(op, rewriter, resultVals, valueElemTy, b,
                                threadPred, targetInfo, typeConverter);
-  if (result)
-    rewriter.replaceOp(op, result);
-  else
-    rewriter.eraseOp(op);
+  rewriter.replaceOp(op, result);
 }
 
 // Only retain those attributes that are not constructed by

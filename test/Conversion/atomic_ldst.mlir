@@ -57,6 +57,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 
+  // CHECK-TTG2NVGPU-LABEL: @unused_replicated_atomic_load
+  // CHECK-TTG2NVGPU: llvm.load %{{.*}} atomic syncscope("device") monotonic
+  // CHECK-TTG2NVGPU: llvm.return
+  // CHECK-NVGPU2LLVM-LABEL: @unused_replicated_atomic_load
+  // CHECK-NVGPU2LLVM: llvm.load %{{.*}} atomic syncscope("device") monotonic
+  // CHECK-NVGPU2LLVM: llvm.return
+  tt.func public @unused_replicated_atomic_load(%ptrs: tensor<1x!tt.ptr<i32>, #blocked4>) {
+    %loaded = tt.atomic_load relaxed, gpu, %ptrs : (tensor<1x!tt.ptr<i32>, #blocked4>) -> tensor<1xi32, #blocked4>
+    tt.return
+  }
+
   // CHECK-TTG2NVGPU-LABEL: @unpredicated_tensor_atomic_load_store
   // CHECK-TTG2NVGPU: %{{.*}} = llvm.mlir.undef : i32
   // CHECK-TTG2NVGPU-NEXT: %{{.*}} = llvm.load %{{.*}} atomic monotonic
