@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 import itertools
 
 from triton._C.libtriton import interpreter as _interpreter
@@ -86,3 +87,15 @@ def test_atomic_cas_accepts_non_contiguous_ndarray_views() -> None:
     np.testing.assert_array_equal(old, original[:, ::2])
     original[:, ::2] = desired
     np.testing.assert_array_equal(dst, original)
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+def test_fma_broadcast_and_strides(dtype):
+    x = np.arange(12, dtype=dtype).reshape(3, 4)[:, ::2]
+    y = np.array(2, dtype=dtype)
+    z = np.arange(2, dtype=dtype)
+    handles = [interpreter.TensorHandle(value, getattr(tl, dtype)) for value in (x, y, z)]
+    result = interpreter.InterpreterBuilder().create_fma(*handles)
+    assert result.data.shape == x.shape
+    assert result.data.dtype == np.dtype(dtype)
+    np.testing.assert_array_equal(result.data, x * y + z)

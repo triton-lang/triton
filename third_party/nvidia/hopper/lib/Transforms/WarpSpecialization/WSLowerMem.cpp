@@ -76,7 +76,7 @@ createAsyncCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *c,
   Operation *copy =
       builder.createWithAsyncTaskIds<ttg::AsyncCopyGlobalToLocalOp>(
           loadOp.getLoc(), loadOp.getPtr(), view, loadOp.getMask(),
-          loadOp.getOther(), loadOp.getCache(), loadOp.getEvict(),
+          loadOp.getOther(), loadOp.getCachePolicyAttr(),
           loadOp.getIsVolatile());
 
   // Extract part.

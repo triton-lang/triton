@@ -47,6 +47,15 @@ inline int getTensorDescNumDwords(triton::TensorDescType type) {
   auto shape = type.getShape();
   return (shape.size() > 2) ? (4 + 8 + 4 + 4) : (4 + 8);
 }
+
+/// Derives the scale layout an fp4 scaled upcast requires from the layout of
+/// its output. `scaleShape` must have the same rank as the output and match it
+/// on every dimension but `axis`, where it must divide the output extent. The
+/// result is canonical: broadcast (zero) register bases are dropped so a thread
+/// keeps one register per distinct scale value.
+FailureOr<triton::LinearLayout> inferScaledUpcastFp4ScaleLayout(
+    const triton::LinearLayout &outputLL, ArrayRef<int64_t> scaleShape,
+    int64_t axis, function_ref<InFlightDiagnostic()> emitError = nullptr);
 } // namespace mlir::triton::amdgpu
 
 // clang-format off

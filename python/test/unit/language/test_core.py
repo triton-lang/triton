@@ -1174,8 +1174,9 @@ def test_math_fma_op(dtype, device):
 
 
 @pytest.mark.interpreter
-def test_math_fma_op_special_values(device):
-    check_type_supported('float64', device)
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+def test_math_fma_op_edge_cases(dtype, device):
+    check_type_supported(dtype, device)
 
     @triton.jit
     def kernel(Z, X, Y, W, SIZE: tl.constexpr):
@@ -1186,25 +1187,49 @@ def test_math_fma_op_special_values(device):
         z = tl.math.fma(x, y, w)
         tl.store(Z + off, z)
 
-    finfo = np.finfo(np.float64)
+    finfo = np.finfo(getattr(np, dtype))
     inf, nan = float('inf'), float('nan')
+    if dtype == "float32":
+        mid_x, mid_y = 4097, 4097
+        lower, upper = 16785408, 16785410
+        # Product: 2**128 - 2**103, the float32 overflow midpoint
+        overflow_x, overflow_y = 31 * 2**59, 1082401 * 2**44
+    else:
+        mid_x, mid_y = 2**27 + 1, 2**27 + 2
+        lower = 2**54 + 3 * 2**27
+        upper = lower + 4
+        # Product: 2**1024 - 2**970, the float64 overflow midpoint
+        overflow_x, overflow_y = (2**27 - 1) * 2**485, (2**27 + 1) * 2**485
     cases = [
         # x, y, w, expected
+        # Round to either side of a midpoint, check just below and at the overflow threshold
+        (mid_x, mid_y, 2**-30, upper),
+        (mid_x, mid_y, -2**-30, lower),
+        (overflow_x, overflow_y, -1, finfo.max),
+        (overflow_x, overflow_y, 0, inf),
+        # Finite results adjacent to infinity, including exact equality
+        (finfo.max, 1, 1, finfo.max),
+        (-finfo.max, 1, 0, -finfo.max),
+        # NaN propagation, invalid multiplication, and an infinite addend
         (nan, 1.0, 1.0, nan),
         (inf, 0.0, 1.0, nan),
-        (2.0, 3.0, inf, inf),
         (-finfo.max, finfo.max, inf, inf),
+        # Signed zero, exact cancellation, and overflow cancellation.
         (-0.0, 1.0, -0.0, -0.0),
         (1.0, 1.0, -1.0, 0.0),
-        (finfo.max, 2.0, finfo.max, inf),
+        (finfo.max, 2.0, -finfo.max, finfo.max),
+        # Preserve subnormals and round underflow ties to even
+        (finfo.smallest_subnormal, 1.0, 0.0, finfo.smallest_subnormal),
         (-finfo.smallest_subnormal, 0.5, 0.0, -0.0),
+        (finfo.smallest_subnormal, 0.5, finfo.smallest_subnormal, 2 * finfo.smallest_subnormal),
+        (finfo.tiny, 0.5, 0.0, finfo.tiny / 2),
     ]
-    x, y, w, expected = (np.array(column, dtype=np.float64) for column in zip(*cases))
+    x, y, w, expected = (np.array(column, dtype=dtype) for column in zip(*cases))
 
-    x_tri = to_triton(x, device=device, dst_type='float64')
-    y_tri = to_triton(y, device=device, dst_type='float64')
-    w_tri = to_triton(w, device=device, dst_type='float64')
-    z_tri = to_triton(np.zeros_like(x), device=device, dst_type='float64')
+    x_tri = to_triton(x, device=device, dst_type=dtype)
+    y_tri = to_triton(y, device=device, dst_type=dtype)
+    w_tri = to_triton(w, device=device, dst_type=dtype)
+    z_tri = to_triton(np.zeros_like(x), device=device, dst_type=dtype)
     kernel[(1, )](z_tri, x_tri, y_tri, w_tri, SIZE=len(cases))
 
     z = to_numpy(z_tri)

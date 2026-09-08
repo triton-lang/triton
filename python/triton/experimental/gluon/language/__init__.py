@@ -1,5 +1,6 @@
 from ._core import (
     aggregate_replace,
+    CachePolicy,
     base_value,
     base_type,
     block_type,

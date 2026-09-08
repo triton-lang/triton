@@ -995,10 +995,9 @@ class TritonSemantic(Generic[TensorTy]):
                 raise ValueError(f"Memory semantic {scope_option} not supported")
         return scope
 
-    def load(self, ptr: TensorTy, mask: Optional[TensorTy], other: Optional[TensorTy], cache_modifier: str,
-             eviction_policy: str, is_volatile: bool) -> TensorTy:
-        cache = self._str_to_load_cache_modifier(cache_modifier)
-        eviction = self._str_to_eviction_policy(eviction_policy)
+    def load(self, ptr: TensorTy, mask: Optional[TensorTy], other: Optional[TensorTy], cache_policy,
+             is_volatile: bool) -> TensorTy:
+        cache_policy = cache_policy._to_ir(self.builder)
         if not ptr.type.scalar.is_ptr():
             raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.load`")
 
@@ -1044,25 +1043,23 @@ class TritonSemantic(Generic[TensorTy]):
 
         # Build IR
         if mask is None:
-            ret = self.tensor(self.builder.create_load(ptr.handle, cache, eviction, is_volatile), dst_ty)
+            ret = self.tensor(self.builder.create_load(ptr.handle, cache_policy, is_volatile), dst_ty)
         else:
             ret = self.tensor(
-                self.builder.create_masked_load(ptr.handle, mask.handle, other.handle if other else None, cache,
-                                                eviction, is_volatile), dst_ty)
+                self.builder.create_masked_load(ptr.handle, mask.handle, other.handle if other else None, cache_policy,
+                                                is_volatile), dst_ty)
         if is_bool:
             ret = self.cast(ret, tl.int1)
         return ret
 
-    def descriptor_load(self, desc: tl.tensor_descriptor_base, offsets, cache_modifier: str,
-                        eviction_policy: str) -> TensorTy:
+    def descriptor_load(self, desc: tl.tensor_descriptor_base, offsets, cache_policy) -> TensorTy:
         assert isinstance(desc, tl.tensor_descriptor_base), \
             f"expected a tensor descriptor, got {type(desc).__name__}"
         ndim = len(desc.block_shape)
         assert len(offsets) == ndim, f"expected {ndim} offsets, but got {len(offsets)}"
 
         offsets = self._convert_to_ir_values(offsets, require_i64=False)
-        x = self.builder.create_descriptor_load(desc.handle, offsets, self._str_to_load_cache_modifier(cache_modifier),
-                                                self._str_to_eviction_policy(eviction_policy))
+        x = self.builder.create_descriptor_load(desc.handle, offsets, cache_policy._to_ir(self.builder))
         return self.tensor(x, desc.block_type)
 
     def validate_store_like(self, desc: tl.tensor_descriptor_base, value: TensorTy, offsets) -> None:
@@ -1193,10 +1190,8 @@ class TritonSemantic(Generic[TensorTy]):
             raise ValueError(f"Expected pointer argument to have shape {ptr.shape} but got {ptr_shape}")
         return ptr, val, mask
 
-    def store(self, ptr: TensorTy, val: TensorTy, mask: Optional[TensorTy], cache_modifier: str,
-              eviction_policy: str) -> TensorTy:
-        cache = self._str_to_store_cache_modifier(cache_modifier)
-        eviction = self._str_to_eviction_policy(eviction_policy)
+    def store(self, ptr: TensorTy, val: TensorTy, mask: Optional[TensorTy], cache_policy) -> TensorTy:
+        cache_policy = cache_policy._to_ir(self.builder)
         if ptr.type.is_const() or ptr.type.scalar.is_const():
             raise ValueError("Cannot store to a constant pointer")
 
@@ -1229,11 +1224,10 @@ class TritonSemantic(Generic[TensorTy]):
 
         # Build IR
         if mask is None:
-            return self.tensor(self.builder.create_store(ptr.handle, val.handle, cache, eviction), tl.void)
+            return self.tensor(self.builder.create_store(ptr.handle, val.handle, cache_policy), tl.void)
         if not mask.type.scalar.is_bool():
             raise ValueError("Mask must have boolean scalar type")
-        return self.tensor(self.builder.create_masked_store(ptr.handle, val.handle, mask.handle, cache, eviction),
-                           tl.void)
+        return self.tensor(self.builder.create_masked_store(ptr.handle, val.handle, mask.handle, cache_policy), tl.void)
 
 #########
 # atomic
