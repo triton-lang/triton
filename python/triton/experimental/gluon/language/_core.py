@@ -14,6 +14,8 @@ from ._layouts import (SharedLayout, DistributedLayout, BlockedLayout, DotOperan
 from triton._C.libtriton import ir
 import triton.language.core as tl_core
 from triton.language.core import (
+    _CachePolicy as CachePolicy,
+    _normalize_cache_policy,
     aggregate_replace,
     base_value,
     base_type,
@@ -52,6 +54,7 @@ from triton.language.core import (
 # this file but we want to import them anyway so they are importable from here.
 __all__ = [
     "aggregate_replace",
+    "CachePolicy",
     "constexpr",
     "pointer_type",
     "void",
@@ -125,7 +128,6 @@ expand_dims = builtin(tl_core.expand_dims)
 gather = builtin(tl_core.gather)
 inline_asm_elementwise = builtin(tl_core.inline_asm_elementwise)
 join = builtin(tl_core.join)
-load = builtin(tl_core.load)
 map_elementwise = builtin(tl_core.map_elementwise)
 max_constancy = builtin(tl_core.max_constancy)
 max_contiguous = builtin(tl_core.max_contiguous)
@@ -141,11 +143,36 @@ reshape = builtin(tl_core.reshape)
 split = builtin(tl_core.split)
 static_assert = builtin(tl_core.static_assert)
 static_print = builtin(tl_core.static_print)
-store = builtin(tl_core.store)
 sub = builtin(tl_core.sub)
 to_tensor = builtin(tl_core.to_tensor)
 expect_zero = builtin(tl_core.expect_zero)
 where = builtin(tl_core.where)
+
+
+@builtin
+def load(pointer, mask=None, other=None, *, cache_modifier=None, eviction_policy=None, volatile=False,
+         cache_policy=None, _semantic=None):
+    """Load from memory, optionally using a cache policy."""
+    mask = _unwrap_if_constexpr(mask)
+    other = _unwrap_if_constexpr(other)
+    if mask is not None:
+        mask = _semantic.to_tensor(mask)
+    if other is not None:
+        other = _semantic.to_tensor(other)
+    volatile = _unwrap_if_constexpr(volatile)
+    cache_policy = _normalize_cache_policy(cache_policy, cache_modifier, eviction_policy)
+    return _semantic.load(pointer, mask, other, cache_policy, volatile)
+
+
+@builtin
+def store(pointer, value, mask=None, *, cache_modifier=None, eviction_policy=None, cache_policy=None, _semantic=None):
+    """Store to memory, optionally using a cache policy."""
+    value = _semantic.to_tensor(value)
+    mask = _unwrap_if_constexpr(mask)
+    if mask is not None:
+        mask = _semantic.to_tensor(mask)
+    cache_policy = _normalize_cache_policy(cache_policy, cache_modifier, eviction_policy)
+    return _semantic.store(pointer, value, mask, cache_policy)
 
 
 class distributed_type(block_type):

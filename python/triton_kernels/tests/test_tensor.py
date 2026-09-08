@@ -1,4 +1,6 @@
 import math
+import subprocess
+import sys
 from contextlib import nullcontext
 
 import pytest
@@ -164,6 +166,46 @@ def test_ragged_layout_storage_shape():
     metadata = make_ragged_tensor_metadata_torch(slice_sizes, 100)
 
     assert BlackwellActMXScaleLayout(metadata).storage_shape([100, 94], False) == [1, 4, 24, 2, 256]
+
+
+def test_import_does_not_initialize_cuda():
+    subprocess.run([
+        sys.executable, "-c", """
+import torch
+assert not torch.cuda.is_initialized()
+import triton_kernels.matmul
+assert not torch.cuda.is_initialized()
+"""
+    ], check=True)
+
+
+@pytest.mark.parametrize("shape", [(6, 10), (2, 6, 10), (2, 4, 6, 10)])
+@pytest.mark.parametrize("is_fp4", [False, True])
+def test_strided_layout_axis_aliases(shape, is_fp4):
+    physical_shape = (*shape[:-1], shape[-1] // 2) if is_fp4 else shape
+    data = torch.arange(math.prod(physical_shape), dtype=torch.int32).to(torch.uint8).reshape(physical_shape)
+    source = wrap_torch_tensor(data, dtype=FP4 if is_fp4 else UINT8, shape=shape)
+    for axis in range(len(shape)):
+        positive, negative = StridedLayout(axis), StridedLayout(axis - len(shape))
+        assert positive.can_preserve_storage_as(negative, len(shape))
+        actual = convert_layout(source, positive)
+        expected = convert_layout(source, negative)
+        assert actual.data.stride() == expected.data.stride()
+        assert torch.equal(actual.data, expected.data)
+
+
+@pytest.mark.parametrize("shape", [(6, 10), (2, 6, 10), (2, 4, 6, 10)])
+@pytest.mark.parametrize("axis", [-2, -1])
+def test_hopper_scale_axis_aliases(shape, axis):
+    data = torch.arange(math.prod(shape), dtype=torch.int32).to(torch.uint8).reshape(shape)
+    source = wrap_torch_tensor(data)
+    positive, negative = HopperMXScaleLayout(axis + len(shape), 4), HopperMXScaleLayout(axis, 4)
+    actual = convert_layout(source, positive)
+    expected = convert_layout(source, negative)
+    assert actual.data.stride() == expected.data.stride()
+    assert torch.equal(actual.data, expected.data)
+    for encoded in [actual, expected]:
+        assert torch.equal(convert_layout(encoded, StridedLayout(-1)).data, data)
 
 
 @pytest.mark.parametrize("major_dim", [-1, -2])
@@ -534,83 +576,65 @@ def test_mxfp4_value_convert_layout_meta(layout, major_dim, inverse):
     assert actual.device.type == "meta"
 
 
-@pytest.mark.parametrize("shape", [(256, 512), (130, 66), (2, 130, 66), (2, 3, 130, 66), (2, 1, 3, 130, 66),
-                                   (0, 130, 66)])
-@pytest.mark.parametrize("tiles", [(128, 256), (192, 48)])
+@pytest.mark.parametrize("kind", ["value", "scale", "act_scale", "ragged_scale", "hopper4", "hopper8"])
+@pytest.mark.parametrize("inverse", [False, True])
+@pytest.mark.parametrize("major", [-2, -1])
 @pytest.mark.parametrize("step", [1, 2])
 @pytest.mark.parametrize("with_out", [False, True])
-@pytest.mark.parametrize("device", ["cpu", "meta", "cuda"])
-@pytest.mark.parametrize("inverse", [False, True])
-def test_blackwell_fp4_shuffle_conversion(shape, tiles, step, with_out, device, inverse):
-    data = torch.randint(0, 256, (*shape[:-1], shape[-1] // 2), dtype=torch.uint8,
-                         generator=torch.Generator().manual_seed(0))
-    canonical = wrap_torch_tensor(data, dtype=FP4)
-    plain, shuffled = BlackwellMXValueLayout(), BlackwellMX4ValueShuffledLayout(*tiles)
-    source_layout, destination = (shuffled, plain) if inverse else (plain, shuffled)
-    source = convert_layout(canonical, source_layout)
-    expected = convert_layout(canonical, destination)
-    # Padding bytes must not leak into logical values or shuffled destination padding.
-    if inverse:
-        _, tiles_k, tiles_n, tile_n, tile_k = source.data.shape
-        k = torch.arange(tiles_k * tile_k).reshape(1, tiles_k, 1, 1, tile_k)
-        n = torch.arange(tiles_n * tile_n).reshape(1, 1, tiles_n, tile_n, 1)
-        source.data.masked_fill_((k >= shape[-2] // 2) | (n >= shape[-1]), 0xAB)
-    else:
-        source.data[..., shape[-2] // 2:, :].fill_(0xAB)
-    source_data = source.data.to(device)
-    if step == 2:
-        storage = torch.empty(tuple(2 * size for size in source_data.shape), dtype=torch.uint8, device=device)
-        source_view = storage[tuple(slice(None, None, 2) for _ in range(source_data.ndim))]
-        source_view.copy_(source_data)
-        source_data = source_view
-    source = wrap_torch_tensor(source_data, dtype=FP4, shape=shape, layout=source.storage.layout)
-    out = None
-    if with_out:
-        storage = torch.full((expected.data.numel() * step + 1, ), 0xCD, dtype=torch.uint8, device=device)
-        out_data = storage[1:].as_strided(expected.data.shape, tuple(step * s for s in expected.data.stride()))
-        out = wrap_torch_tensor(out_data, dtype=FP4, shape=shape, layout=destination)
+def test_layout_conversion_compile_warmup(kind, inverse, major, step, with_out, monkeypatch):
+    from triton._compile_warmup import compile_warmup_only
+    from triton.runtime.jit import JITFunction
+    from triton_kernels.testing import convert_layout as testing_convert_layout
 
-    actual = convert_layout(source, destination, out=out)
+    calls = []
+    original_run = JITFunction.run
 
-    assert actual.shape == list(shape)
-    assert actual.data.shape == expected.data.shape
-    assert actual.data.dtype == expected.data.dtype
-    if with_out:
-        assert actual is out
-    if device != "meta":
-        actual_data, expected_data = actual.data.cpu(), expected.data
-        if inverse:
-            actual_data = actual_data[..., :shape[-2] // 2, :]
-            expected_data = expected_data[..., :shape[-2] // 2, :]
-            if device == "cuda" and with_out:
-                assert torch.all(out.data[..., shape[-2] // 2:, :] == 0xCD)
-        assert torch.equal(actual_data, expected_data)
-        assert torch.equal(convert_layout(actual, StridedLayout()).data.cpu(), data)
-        if with_out:
-            assert storage[0].item() == 0xCD
-            if step == 2:
-                assert torch.all(storage[2::2] == 0xCD)
+    def record_run(kernel, *args, **kwargs):
+        compiled = original_run(kernel, *args, **kwargs)
+        calls.append((kernel.fn.__name__, compiled.hash, tuple(kwargs["grid"])))
+        return compiled
 
+    monkeypatch.setattr(JITFunction, "run", record_run)
 
-@pytest.mark.parametrize("with_out", [False, True])
-@pytest.mark.parametrize("inverse", [False, True])
-def test_blackwell_fp4_shuffle_peak_allocation(with_out, inverse):
-    canonical = empty((8, 1024, 2048), dtype=FP4, device="cuda")
-    plain, shuffled = BlackwellMXValueLayout(), BlackwellMX4ValueShuffledLayout()
-    source_layout, destination = (shuffled, plain) if inverse else (plain, shuffled)
-    source = convert_layout(canonical, source_layout)
-    warm = convert_layout(source, destination)
-    out = warm if with_out else None
+    def convert():
+        shape = (129, 9) if kind == "ragged_scale" else (2, 130, 66)
+        dtype = FP4 if kind == "value" else UINT8
+        if kind == "ragged_scale":
+            metadata = make_ragged_tensor_metadata(torch.tensor([17, 0, 33], dtype=torch.int32, device="cuda"),
+                                                   shape[0])
+            layout = BlackwellActMXScaleLayout(metadata)
+        elif kind.startswith("hopper"):
+            layout = HopperMXScaleLayout(major, int(kind[-1]))
+        else:
+            layout = {
+                "value": BlackwellMXValueLayout(), "scale": BlackwellMXScaleLayout(), "act_scale":
+                BlackwellActMXScaleLayout(None)
+            }[kind]
+        strided = StridedLayout(major)
+        source_layout, destination = (layout, strided) if inverse else (strided, layout)
+
+        def allocate(storage_layout):
+            transformation = storage_layout.make_transformation(list(shape), dtype == FP4)
+            physical_shape = transformation.storage_shape
+            strides = (transformation.storage_strides if isinstance(storage_layout, StridedLayout) else torch.empty(
+                physical_shape, device="meta").stride())
+            storage = torch.zeros((math.prod(physical_shape) * step + 1, ), dtype=torch.uint8, device="cuda")
+            data = storage[1:].as_strided(physical_shape, tuple(stride * step for stride in strides))
+            return wrap_torch_tensor(data, dtype=dtype, shape=shape, layout=storage_layout)
+
+        source = allocate(source_layout)
+        out = allocate(destination) if with_out else None
+        return (testing_convert_layout(source, destination, out=out) if with_out else testing_convert_layout(
+            source, destination))
+
+    with compile_warmup_only():
+        convert()
+    warmed = list(calls)
+    calls.clear()
+    convert()
     torch.cuda.synchronize()
-    del warm
-    baseline = torch.cuda.memory_allocated()
-    torch.cuda.reset_peak_memory_stats()
-
-    actual = convert_layout(source, destination, out=out)
-    torch.cuda.synchronize()
-    peak = torch.cuda.max_memory_allocated() - baseline
-
-    assert peak <= (0 if with_out else actual.data.nbytes) + 1024**2
+    assert warmed
+    assert calls == warmed
 
 
 @pytest.mark.parametrize("layout", _FP4_VALUE_LAYOUTS)

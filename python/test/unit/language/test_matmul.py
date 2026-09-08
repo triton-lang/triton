@@ -1137,6 +1137,36 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
 
 
 @triton.jit
+def rhs_scaled_n_packed_fp4_matmul(A, B, BS, C):
+    a = tl.load(A + tl.arange(0, 128)[:, None] * 32 + tl.arange(0, 32)[None, :])
+    b = tl.load(B + tl.arange(0, 32)[:, None] * 64 + tl.arange(0, 64)[None, :])
+    bs = tl.load(BS + tl.arange(0, 128)[:, None])
+    c = tl.dot_scaled(a, None, "bf16", b, bs, "e2m1", rhs_k_pack=False)
+    tl.store(C + tl.arange(0, 128)[:, None] * 128 + tl.arange(0, 128)[None, :], c)
+
+
+def test_dot_scaled_unscaled_lhs_fp4_rhs(device):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 8:
+        pytest.skip("Requires NVIDIA compute capability >= 8")
+
+    M, N, K = 128, 128, 32
+    torch.manual_seed(42)
+    a = torch.randn((M, K), dtype=torch.bfloat16, device=device)
+    b_mxfp4 = MXFP4Tensor(size=(K, N), device=device).random()
+    b = b_mxfp4.to_packed_tensor(dim=1)
+    b_scale = MXScaleTensor(size=(N, K // 32), device=device).random(low=0.5, high=2.0)
+    output = torch.empty((M, N), dtype=torch.float32, device=device)
+
+    rhs_scaled_n_packed_fp4_matmul[(1, )](a, b, b_scale.data, output)
+    if is_compile_warmup():
+        return
+
+    scale_ref = b_scale.to(torch.float32).T
+    ref_out = torch.matmul(a.float(), b_mxfp4.to(torch.float32) * scale_ref)
+    torch.testing.assert_close(output, ref_out, atol=1e-3, rtol=1e-3)
+
+
+@triton.jit
 def mxfp8_mxfp4_matmul(  #
         a_ptr, b_ptr, output_ptr,  #
         a_scale, b_scale,  #
