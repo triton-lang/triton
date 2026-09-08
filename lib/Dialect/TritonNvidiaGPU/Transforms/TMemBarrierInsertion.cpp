@@ -225,8 +225,9 @@ static BlockInfo getTMemAccesses(Operation *op, BufferRegionAnalysis &regions) {
 enum class TMemBoundary { None, Wait, Publication };
 
 static TMemBoundary getTMemBoundary(Operation *op) {
-  if (requiresThreadSyncBefore(op))
-    return TMemBoundary::Publication;
+  // An acquire does not publish earlier TMEM accesses. Keep them pending.
+  if (isa<WaitBarrierOp>(op))
+    return TMemBoundary::None;
   // Defer completion at CTA barriers until a hazard or boundary needs it.
   if (isa<gpu::BarrierOp>(op))
     return TMemBoundary::None;
@@ -245,17 +246,16 @@ static TMemBoundary getTMemBoundary(Operation *op) {
       return TMemBoundary::Publication;
   if (auto barrier = dyn_cast<gpu::MBarrierOpInterface>(op))
     if (!barrier.getBarriers().empty()) {
-      bool publishes = !isa<WaitBarrierOp>(op) &&
-                       hasSharedAccess(op, gpu::SharedKind::Barrier, RW::Write);
+      bool publishes = hasSharedAccess(op, gpu::SharedKind::Barrier, RW::Write);
       return publishes ? TMemBoundary::Publication : TMemBoundary::Wait;
     }
   // Volatile loads still access only global memory.
   if (isa<triton::LoadOp>(op))
     return TMemBoundary::None;
+  // Shared-memory fences and copy-group waits do not publish TMEM accesses.
   if (isa<FenceAsyncSharedOp, FenceMBarrierInitReleaseClusterOp,
-          gpu::AsyncCommitGroupOp, gpu::AsyncWaitOp, TMAStoreWaitOp,
-          WarpGroupDotWaitOp>(op))
-    return TMemBoundary::Wait;
+          gpu::AsyncCommitGroupOp, gpu::AsyncWaitOp, TMAStoreWaitOp>(op))
+    return TMemBoundary::None;
 
   auto memory = dyn_cast<MemoryEffectOpInterface>(op);
   if (!memory)
@@ -375,10 +375,8 @@ private:
 
     // Choose the barrier before placing waits.
     auto syncBefore = [&](const BlockInfo &effects) {
-      Operation *previous = op->getPrevNode();
-      syncIfNeeded(op, effects, info, builder);
-      if (op->getPrevNode() != previous)
-        rememberBarrier(op->getPrevNode(), *info);
+      if (Operation *barrier = syncIfNeeded(op, effects, info, builder))
+        rememberBarrier(barrier, *info);
     };
 
     if (auto call = dyn_cast<CallOpInterface>(op)) {
@@ -393,13 +391,12 @@ private:
 
     BlockInfo effects = getTMemAccesses(op, regions);
     auto stages = getBarrierStages(op);
-    // A barrier inside this operation can cover incoming accesses, but waits
-    // inserted before the operation cannot complete its own TMEM effects.
-    bool beforeEffects =
-        stages.beforeMemoryEffects ||
-        (effects.syncReadSlices.empty() && effects.syncWriteSlices.empty());
-    if (stages.hasBarrier() && beforeEffects)
+    if (stages.hasBarrier()) {
+      assert(effects.syncReadSlices.empty() &&
+             effects.syncWriteSlices.empty() &&
+             "barrier stages must not access tensor memory");
       rememberBarrier(op, *info);
+    }
 
     auto boundary = getTMemBoundary(op);
     if (boundary == TMemBoundary::Publication)
@@ -422,8 +419,6 @@ private:
 
     if (!info->allPathsFromEntrySynced)
       info->entryBlockInfo.join(effects);
-    if (stages.hasBarrier() && !beforeEffects)
-      rememberBarrier(op, *info);
 
     // Only loads and stores can require a barrier before later TMEM accesses.
     auto kind = getTMemAccessKind(op);
