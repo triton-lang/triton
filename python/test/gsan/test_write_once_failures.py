@@ -122,13 +122,13 @@ def _run_write_once_unordered_read():
             target = torch.empty(1, dtype=torch.int32, device="cuda")
         scratch = torch.empty_like(target)
         counter = torch.zeros_like(target)
-        _raw_kernel[(2, )](target, scratch, counter, num_warps=1)
+        _raw_kernel[(2, )](target, scratch, counter, WIDTH=1, num_warps=1)
         torch.cuda.synchronize()
 
 
 def test_write_once_unordered_read():
     _run_failure_case("write_once_raw", runner=_run_write_once_unordered_read, source_function=_raw_kernel.fn,
-                      marker="value = tl.load(ptr)", error="Read after write race detected")
+                      marker="value = gl.load(ptr + offsets)", error="Read after write race detected")
 
 
 @triton.jit
@@ -165,8 +165,8 @@ def _run_memory_category_boundary(boundary, is_store):
     with _write_once_pools():
         out = torch.empty(1, dtype=torch.int16, device="cuda")
         offset = {
-            "reserve_start": 0,
-            "write_once_start": get_reserve_size() // 2,
+            "normal_start": 3 * get_reserve_size() // 8,
+            "write_once_start": 7 * get_reserve_size() // 8,
             "reserve_end": get_reserve_size(),
         }[boundary]
         # A two-byte access straddles the boundary without needing a huge allocation.
@@ -175,7 +175,7 @@ def _run_memory_category_boundary(boundary, is_store):
         torch.cuda.synchronize()
 
 
-@pytest.mark.parametrize("boundary", ["reserve_start", "write_once_start", "reserve_end"])
+@pytest.mark.parametrize("boundary", ["normal_start", "write_once_start", "reserve_end"])
 @pytest.mark.parametrize("is_store", [False, True])
 def test_access_rejects_crossing_memory_category_boundary(boundary, is_store):
     _run_failure_case(f"memory_category_boundary_{boundary}_{is_store}", runner=_run_memory_category_boundary,
