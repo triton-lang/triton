@@ -24,7 +24,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @alloc_then_alloc
   // CHECK: ttng.tmem_alloc
   // CHECK-NEXT: ttng.tmem_wait store
-  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.tmem_alloc
   // CHECK-NEXT: ttng.tmem_wait store
   // CHECK-NEXT: tt.return
@@ -49,7 +48,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @alloc_then_st
   // CHECK: ttng.tmem_alloc
   // CHECK-NEXT: ttng.tmem_wait store
-  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.tmem_store
   tt.func @alloc_then_st(%arg0: tensor<128x128xf32, #blocked>) {
     %true = arith.constant true
@@ -120,10 +118,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   }
 
   // Shrinking #linear64 to one column broadcasts lane 16 within each warp.
-  // The initializer completes after the old barrier; its WAW still needs one.
+  // The unique warp owners can overwrite after completing their loads.
   // WAIT-LABEL: @ld_then_st_broadcast_lanes
   // WAIT: ttng.tmem_load
-  // WAIT-NEXT: ttg.barrier local
   // WAIT-NEXT: ttng.tmem_wait load
   // WAIT-NEXT: ttng.tmem_store
   tt.func @ld_then_st_broadcast_lanes(%data: tensor<64x1xf32, #linear64>) -> tensor<64x1xf32, #linear64> {
@@ -152,14 +149,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return %loaded : tensor<128x1xf32, #blocked_broadcast_warps>
   }
 
-  // Reuse the barrier for the high-half WAW, while completing the same-thread
-  // low-half WAR immediately before the final store.
+  // Complete the high-half store and low-half load before the same-warp store.
   // WAIT-LABEL: @wait_mixed_store_hazards
   // WAIT: ttng.tmem_store
-  // WAIT-NEXT: ttng.tmem_wait store
   // WAIT-NEXT: ttg.barrier local
   // WAIT-NEXT: ttng.tmem_load
   // WAIT-NEXT: ttng.tmem_wait load
+  // WAIT-NEXT: ttng.tmem_wait store
   // WAIT-NEXT: ttng.tmem_store
   // WAIT-NEXT: ttng.tmem_wait store
   // WAIT-NEXT: tt.return
@@ -333,7 +329,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: ttng.tmem_store
   // CHECK-NEXT: ttng.tmem_alloc
   // CHECK-NEXT: ttng.tmem_wait store
-  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.tmem_store
   // CHECK-NEXT: ttng.tmem_wait store
   // CHECK-NEXT: tt.return
@@ -363,7 +358,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @st_then_st
   // CHECK: ttng.tmem_store
   // CHECK-NEXT: ttng.tmem_wait store
-  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.tmem_store
   // CHECK-NEXT: ttng.tmem_wait store
   // CHECK-NEXT: tt.return
@@ -589,7 +583,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @alloc_then_alloc_partial_overlap
   // CHECK: ttng.tmem_alloc
   // CHECK-NEXT: ttng.tmem_wait store
-  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.tmem_alloc
   tt.func @alloc_then_alloc_partial_overlap(%arg0: tensor<128x128xf32, #blocked>) {
     %0 = ttng.tmem_alloc %arg0 {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
@@ -645,13 +638,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
-  // The initializer WAW needs a barrier before storing %a. The following
-  // wait completes both loads; the copy still needs their publication barrier.
+  // Complete both loads before storing %a, retaining their publication
+  // barrier before the copy.
   // CHECK-LABEL: @ld_then_tmem_copy
   // CHECK: ttng.tmem_load
   // CHECK-NEXT: ttng.tmem_load
   // CHECK-NEXT: arith.addf
-  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.tmem_wait load
   // CHECK-NEXT: ttng.tmem_store
   // CHECK-NOT: ttng.tmem_wait load
@@ -821,11 +813,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return %loaded : tensor<128x128xf32, #blocked>
   }
 
-  // The initializer WAW needs a barrier before overwriting %low. Keep the
-  // new store pending and complete both corrections together at publication.
+  // Keep the same-warp corrections pending and complete them at publication.
   // WAIT-LABEL: @wait_disjoint_corrections
   // WAIT: ttng.tmem_load
-  // WAIT-NEXT: ttg.barrier local
   // WAIT-NEXT: ttng.tmem_wait load
   // WAIT-NEXT: ttng.tmem_store
   // WAIT-NEXT: ttg.barrier local
@@ -900,8 +890,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return %result : tensor<128x64xf32, #blocked>
   }
 
-  // Complete stores before branching. The merge keeps its rendezvous before
-  // overwriting %low, which may have been written by the left branch.
+  // Stores completed before branching can be overwritten by the same owners
+  // after the merge.
   // CHECK-LABEL: @wait_cfg_join
   // CHECK: cf.cond_br
   // CHECK: ttng.tmem_store
@@ -911,8 +901,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-NEXT: ttng.tmem_wait store
   // CHECK-NEXT: cf.br
   // CHECK-NOT: ttng.tmem_wait store
-  // CHECK: ttg.barrier local
-  // CHECK-NEXT: ttng.tmem_store
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttng.tmem_store
   // CHECK-NEXT: ttng.tmem_wait store
   // CHECK-NEXT: tt.return
   tt.func @wait_cfg_join(%condition: i1, %data: tensor<128x64xf32, #blocked>) {
@@ -955,17 +945,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
-  // The backedge adds a barrier before the store. Move the disjoint load
-  // wait before that barrier, and complete the store before the next iteration.
+  // Same-warp stores across the backedge complete before the next iteration.
+  // The disjoint load can complete with the store at the branch.
   // CHECK-LABEL: @wait_cfg_backedge
   // CHECK: cf.br
   // CHECK-NOT: ttng.tmem_wait
   // CHECK: cf.cond_br
   // CHECK: ttng.tmem_load
-  // CHECK-NEXT: ttng.tmem_wait load
-  // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: ttng.tmem_store
   // CHECK-NEXT: %{{.*}} = arith.subi
+  // CHECK-NEXT: ttng.tmem_wait load
   // CHECK-NEXT: ttng.tmem_wait store
   // CHECK-NEXT: cf.br
   // CHECK-NOT: ttng.tmem_wait
@@ -1180,6 +1169,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return %same_warp, %cross_warp : tensor<128x2xf32, #blocked_broadcast_warps>, tensor<128x2xf32, #blocked_broadcast_warps>
   }
 
+  // Completing the full store for a same-owner overwrite must retain its
+  // untouched columns for a later load from additional warps.
+  // WAIT-LABEL: @waw_keeps_unwritten_columns
+  // WAIT: ttng.tmem_store
+  // WAIT-NEXT: ttng.tmem_wait store
+  // WAIT-NEXT: ttng.tmem_store
+  // WAIT: ttg.barrier local
+  // WAIT-NEXT: ttng.tmem_load
+  // WAIT-NEXT: ttng.tmem_wait load
+  // WAIT-NEXT: tt.return
+  tt.func @waw_keeps_unwritten_columns(%data: tensor<128x4xf32, #blocked_broadcast_warps>, %half: tensor<128x2xf32, #blocked_broadcast_warps>, %pred: i1) -> tensor<128x1xf32, #blocked_broadcast_warps> attributes {"ttg.num-warps" = 8 : i32} {
+    %true = arith.constant true
+    %parent = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x4xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %high = ttng.tmem_subslice %parent {offset = 2 : i32, dim = 1 : i32} : !ttg.memdesc<128x4xf32, #tmem128, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x2xf32, #tmem128, #ttng.tensor_memory, mutable, 128x4>
+    %low = ttng.tmem_subslice %parent {offset = 0 : i32, dim = 1 : i32} : !ttg.memdesc<128x4xf32, #tmem128, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x1xf32, #tmem128, #ttng.tensor_memory, mutable, 128x4>
+    ttng.tmem_store %data, %parent, %true : tensor<128x4xf32, #blocked_broadcast_warps> -> !ttg.memdesc<128x4xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %half, %high, %pred : tensor<128x2xf32, #blocked_broadcast_warps> -> !ttg.memdesc<128x2xf32, #tmem128, #ttng.tensor_memory, mutable, 128x4>
+    %loaded = ttng.tmem_load %low : !ttg.memdesc<128x1xf32, #tmem128, #ttng.tensor_memory, mutable, 128x4> -> tensor<128x1xf32, #blocked_broadcast_warps>
+    tt.return %loaded : tensor<128x1xf32, #blocked_broadcast_warps>
+  }
+
   // Broadcasting one column across two warp groups has no unique warp owner.
   // Keep the RAW rendezvous even though the register layouts are identical.
   // WAIT-LABEL: @st_then_ld_broadcast_warps
@@ -1219,12 +1229,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
-  // Reusing a CTA across an acquire still requires completion before that CTA.
+  // Complete the first store after the acquire, before its same-warp overwrite.
   // WAIT-LABEL: @wait_acquire_saved_cta_waw
   // WAIT: ttng.tmem_store
-  // WAIT-NEXT: ttng.tmem_wait store
   // WAIT-NEXT: ttg.barrier local
   // WAIT-NEXT: ttng.wait_barrier
+  // WAIT-NEXT: ttng.tmem_wait store
   // WAIT-NEXT: ttng.tmem_store
   // WAIT-NEXT: ttng.tmem_wait store
   // WAIT-NEXT: tt.return
