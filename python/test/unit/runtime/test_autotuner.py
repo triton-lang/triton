@@ -423,6 +423,68 @@ def test_pruned_single_config_skips_benchmark(prune_kind: str, device: str, fres
     assert captured == []
 
 
+@pytest.mark.parametrize("use_pool", [False, True])
+def test_reentrant_warmup_keeps_call_arguments(use_pool):
+    from triton._compile_warmup_pool import _warmup_kernel
+
+    warmed = []
+    hooked = []
+
+    class Kernel:
+
+        def __init__(self):
+            self.fn = lambda: None
+
+        def warmup(self, x, **kwargs):
+            warmed.append((x, kwargs['BLOCK']))
+            return x
+
+    def warmup(x):
+        if use_pool:
+            return _warmup_kernel(tuner, (x, ), (1, ), {})
+        return tuner.warmup(x)
+
+    def prune(configs, named_args, **kwargs):
+        if named_args['x'] == 1:
+            assert warmup(2) == [2]
+        return configs
+
+    def perf_model(x, BLOCK, **kwargs):
+        # Each nested call must retain its own argument dictionary through
+        # early pruning, the performance model, and the eventual warmup.
+        return abs(x - BLOCK)
+
+    configs = [triton.Config({'BLOCK': i}, pre_hook=lambda args: hooked.append(args['x'])) for i in (1, 2)]
+    tuner = triton.runtime.Autotuner(
+        Kernel(), ['x'], configs, ['x'], None, None,
+        prune_configs_by={'early_config_prune': prune, 'perf_model': perf_model, 'top_k': 1})
+    assert warmup(1) == [1]
+    assert warmed == [(2, 2), (1, 1)]
+    assert hooked == ([2, 1] if use_pool else [])
+
+
+def test_autotune_preserves_nargs_kernel_keyword():
+    calls = []
+
+    class Kernel:
+
+        def __init__(self):
+            self.fn = lambda: None
+
+        def run(self, **kwargs):
+            calls.append(kwargs['nargs'])
+
+    def bench(call, quantiles):
+        call()
+        return [1., 1., 1.]
+
+    tuner = triton.runtime.Autotuner(
+        Kernel(), ['nargs'], [triton.Config({'BLOCK': 1}), triton.Config({'BLOCK': 2})], ['nargs'], None, None,
+        do_bench=bench)
+    tuner.run(nargs=7)
+    assert calls == [7, 7, 7]
+
+
 def test_concurrent_autotuning_keeps_arguments_thread_local():
     # Two threads tuning the same key must not clear the arguments used by the
     # other thread while it is still benchmarking configurations.

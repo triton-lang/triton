@@ -6,7 +6,6 @@ import inspect
 import hashlib
 import json
 from functools import cached_property
-from threading import local
 from typing import Any, Dict, Tuple, List, Optional
 
 from .. import knobs
@@ -37,7 +36,6 @@ class Autotuner(KernelInterface):
         self.keys = key
         self.cache: Dict[Tuple, Config] = {}
         self.arg_names = arg_names
-        self._nargs = local()
         self.cache_results = (cache_results or knobs.autotuning.cache) and not knobs.runtime.interpret
 
         # Reset to zero or restore values
@@ -147,7 +145,7 @@ class Autotuner(KernelInterface):
             return driver.active.get_benchmarker()
         return self._do_bench
 
-    def _bench(self, *args, config, **meta):
+    def _bench(self, nargs, /, *args, config, **meta):
         from ..compiler.errors import CompileTimeAssertionFailure
 
         verbose = knobs.autotuning.print
@@ -162,7 +160,7 @@ class Autotuner(KernelInterface):
                              " Make sure that you don't re-define auto-tuned symbols.")
         # augment meta-parameters with tunable ones
         current = dict(meta, **config.all_kwargs())
-        full_nargs = {**self.nargs, **current}
+        full_nargs = {**nargs, **current}
 
         def kernel_call():
             if config.pre_hook:
@@ -231,19 +229,11 @@ class Autotuner(KernelInterface):
             }), file_name, binary=False)
         return False
 
-    @property
-    def nargs(self):
-        return getattr(self._nargs, "value", None)
-
-    @nargs.setter
-    def nargs(self, value):
-        self._nargs.value = value
-
     def run(self, *args, **kwargs):
-        self.nargs = dict(zip(self.arg_names, args))
+        nargs = dict(zip(self.arg_names, args))
         used_cached_result = True
         if len(self.configs) > 1:
-            all_args = {**self.nargs, **kwargs}
+            all_args = {**nargs, **kwargs}
             _args = {k: v for (k, v) in all_args.items() if k in self.arg_names}
             key = [_args[key] for key in self.keys if key in _args]
             for _, arg in _args.items():
@@ -252,7 +242,7 @@ class Autotuner(KernelInterface):
             key = tuple(key)
             if key not in self.cache:
                 used_cached_result = False
-                pruned_configs = self.prune_configs(kwargs)
+                pruned_configs = self.prune_configs(nargs, kwargs)
 
                 if len(pruned_configs) == 1:
                     # Match single-config autotune behavior: no benchmarking is needed.
@@ -262,11 +252,14 @@ class Autotuner(KernelInterface):
 
                     def benchmark():
                         bench_start = time.time()
-                        timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                        timings = {
+                            config: self._bench(nargs, *args, config=config, **kwargs)
+                            for config in pruned_configs
+                        }
                         bench_end = time.time()
                         self.bench_time = bench_end - bench_start
                         self.cache[key] = builtins.min(timings, key=timings.get)
-                        full_nargs = {**self.nargs, **kwargs, **self.cache[key].all_kwargs()}
+                        full_nargs = {**nargs, **kwargs, **self.cache[key].all_kwargs()}
                         self.pre_hook(full_nargs, reset_only=True)
                         self.configs_timings = timings
 
@@ -296,20 +289,19 @@ class Autotuner(KernelInterface):
             print(f"Triton autotuning for function {self.base_fn.__name__},\nwith key as {key},\n"
                   f"finished after {self.bench_time:.2f}s,\nbest config selected: {self.best_config};")
         if config.pre_hook is not None:
-            full_nargs = {**self.nargs, **kwargs, **config.all_kwargs()}
+            full_nargs = {**nargs, **kwargs, **config.all_kwargs()}
             config.pre_hook(full_nargs)
         ret = self.fn.run(
             *args,
             **kwargs,
             **config.all_kwargs(),
         )
-        self.nargs = None
         return ret
 
-    def prune_configs(self, kwargs: Dict) -> List[Config]:
+    def prune_configs(self, nargs: Dict, kwargs: Dict) -> List[Config]:
         pruned_configs = self.configs
         if self.early_config_prune:
-            pruned_configs = self.early_config_prune(self.configs, self.nargs, **kwargs)
+            pruned_configs = self.early_config_prune(self.configs, nargs, **kwargs)
             if not pruned_configs:
                 raise AutotunerError(
                     "No valid autotuner configs after pruning. `early_config_prune` should return at least one config.")
@@ -328,7 +320,7 @@ class Autotuner(KernelInterface):
             if len(pruned_configs) > top_k:
                 est_timing = {
                     config: self.perf_model(
-                        **self.nargs,
+                        **nargs,
                         **kwargs,
                         **config.all_kwargs(),
                     )
@@ -338,15 +330,14 @@ class Autotuner(KernelInterface):
         return pruned_configs
 
     def warmup(self, *args, **kwargs):
-        self.nargs = dict(zip(self.arg_names, args))
+        nargs = dict(zip(self.arg_names, args))
         ret = []
-        for autotune_config in self.prune_configs(kwargs):
+        for autotune_config in self.prune_configs(nargs, kwargs):
             ret.append(self.fn.warmup(
                 *args,
                 **kwargs,
                 **autotune_config.all_kwargs(),
             ))
-        self.nargs = None
         return ret
 
 
