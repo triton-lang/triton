@@ -22,27 +22,12 @@ namespace nvidia_gpu {
 
 namespace {
 
-enum class TMemAccessKind { None, Load, Store, MMA };
-
-// Fine grain modeling of TMEM ops as pipelining behavior is not fully
-// represented in ops attributes.
-static bool isWritingAlloc(Operation *op) {
+// TMEM loads and stores require completion through tmem_wait.
+static bool needsTMemWait(Operation *op) {
+  if (isa<TMEMLoadOp, TMEMStoreOp>(op))
+    return true;
   auto alloc = dyn_cast<TMEMAllocOp>(op);
   return alloc && alloc.getSrc();
-}
-
-static bool isMMALikeOp(Operation *op) {
-  return isa<TCGen5MMAOp, TCGen5MMAScaledOp, TMEMCopyOp>(op);
-}
-
-static TMemAccessKind getTMemAccessKind(Operation *op) {
-  if (isa<TMEMLoadOp>(op))
-    return TMemAccessKind::Load;
-  if (isa<TMEMStoreOp>(op) || isWritingAlloc(op))
-    return TMemAccessKind::Store;
-  if (isMMALikeOp(op))
-    return TMemAccessKind::MMA;
-  return TMemAccessKind::None;
 }
 
 class TMemWarpOwnership {
@@ -65,10 +50,11 @@ public:
       return false;
     for (const auto &a : lhs->footprint->regionInfo.views)
       for (const auto &b : rhs->footprint->regionInfo.views) {
-        if (!a.allocationFrame || a.allocationFrame != b.allocationFrame)
-          return false;
-        if (a.affineCTAOffset == b.affineCTAOffset &&
-            a.region.baseOffset == b.region.baseOffset &&
+        assert(a.allocationFrame && a.allocationFrame == b.allocationFrame &&
+               "TMEM allocations share a module frame");
+        assert(!a.affineCTAOffset && !b.affineCTAOffset &&
+               "TMEM views do not shift CTA coordinates");
+        if (a.region.baseOffset == b.region.baseOffset &&
             lhs->warps == rhs->warps)
           continue;
         for (const auto &[cta, addresses] : a.region.ctaAddresses)
@@ -78,8 +64,6 @@ public:
             auto overlap = addresses.intersection(otherAddresses);
             if (overlap.empty())
               continue;
-            if (a.affineCTAOffset != b.affineCTAOffset)
-              return false;
             // Descriptor offsets use integer addition, not layout XOR.
             for (uint32_t address : overlap) {
               if (lhs->getWarp(address - a.region.baseOffset) !=
@@ -171,31 +155,6 @@ private:
   DenseMap<Operation *, std::unique_ptr<Info>> info;
   DenseMap<std::pair<Operation *, Operation *>, bool> sameWarps;
 };
-
-static bool filterFn(Operation *lhs, Operation *rhs, bool /*lhsIsRead*/,
-                     bool /*rhsIsRead*/, Allocation * /*allocation*/) {
-  TMemAccessKind lhsKind = getTMemAccessKind(lhs);
-  TMemAccessKind rhsKind = getTMemAccessKind(rhs);
-
-  bool war =
-      lhsKind == TMemAccessKind::Load && rhsKind == TMemAccessKind::Store;
-  bool raw =
-      lhsKind == TMemAccessKind::Store && rhsKind == TMemAccessKind::Load;
-  bool waw =
-      lhsKind == TMemAccessKind::Store && rhsKind == TMemAccessKind::Store;
-
-  // MMAv5 ops and tmem_copy are special cases, we care about load->mma and
-  // store->mma dependencies but mma -> load/store doesn't require a barrier
-  // since it would need a mbarrier wait that will ensure the op is finished
-  // before any thread can reach the load/store.
-  bool loadToMma =
-      lhsKind == TMemAccessKind::Load && rhsKind == TMemAccessKind::MMA;
-  bool storeToMma =
-      lhsKind == TMemAccessKind::Store && rhsKind == TMemAccessKind::MMA;
-
-  bool requiresBarrier = war || raw || waw || loadToMma || storeToMma;
-  return !requiresBarrier;
-}
 
 static bool isTensorMemory(Value value) {
   auto memDescType = dyn_cast<gpu::MemDescType>(value.getType());
@@ -420,9 +379,9 @@ private:
     if (!info->allPathsFromEntrySynced)
       info->entryBlockInfo.join(effects);
 
-    // Only loads and stores can require a barrier before later TMEM accesses.
-    auto kind = getTMemAccessKind(op);
-    if (kind == TMemAccessKind::Load || kind == TMemAccessKind::Store) {
+    // MMA and copies complete through mbarrier waits; only loads and stores
+    // remain pending.
+    if (needsTMemWait(op)) {
       pending.join(effects);
       afterBarrier.join(effects);
     }
@@ -446,11 +405,10 @@ static LogicalResult runTMemAnalysis(ModuleOp mod) {
   if (failed(solver->initializeAndRun(mod)))
     return failure();
   TMemWarpOwnership ownership(*regions);
-  auto filter = [&](Operation *lhs, Operation *rhs, bool lhsIsRead,
-                    bool rhsIsRead, Allocation *allocation) {
-    return filterFn(lhs, rhs, lhsIsRead, rhsIsRead, allocation) ||
-           (lhsIsRead != rhsIsRead &&
-            ownership.isSameWarp(lhs, rhs, allocation));
+  auto filter = [&](Operation *lhs, Operation *rhs, bool /*lhsIsRead*/,
+                    bool /*rhsIsRead*/, Allocation *allocation) {
+    // A completion wait orders same-warp RAW, WAR, and WAW dependencies.
+    return ownership.isSameWarp(lhs, rhs, allocation);
   };
   ModuleAllocation allocation(mod);
   ModuleMembarAnalysis analysis(allocation, std::move(filter));
@@ -469,9 +427,8 @@ struct TMemBarrierInsertionPass
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     if (!mod.walk([](Operation *op) {
-              return getTMemAccessKind(op) == TMemAccessKind::None
-                         ? WalkResult::advance()
-                         : WalkResult::interrupt();
+              return needsTMemWait(op) ? WalkResult::interrupt()
+                                       : WalkResult::advance();
             })
              .wasInterrupted())
       return;
