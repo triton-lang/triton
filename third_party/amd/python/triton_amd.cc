@@ -579,7 +579,8 @@ void init_triton_amd(py::module_ &m) {
                                .attr("find_libraries")("hipblaslt");
           auto path = libraries.attr("__getitem__")(0);
           auto pathString = path.attr("__str__")();
-          const char *pathChars = PyUnicode_AsUTF8(pathString.ptr());
+          Py_ssize_t name_size;
+          const char *pathChars = PyUnicode_AsUTF8AndSize(pathString.ptr(), &name_size);
           if (pathChars == nullptr)
             throw py::python_error();
           hipblasLtPath = pathChars;
