@@ -1060,6 +1060,132 @@ module attributes {"ttg.num-warps" = 1 : i32} {
 
 // -----
 
+#broadcast_src = #ttg.linear<{register=[[0, 1], [0, 2]], lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp=[[32, 0], [64, 0], [0, 0]], block=[]}>
+#broadcast_dst = #ttg.linear<{register=[[0, 1], [0, 2], [8, 0]], lane=[[0, 0], [0, 0], [1, 0], [2, 0], [4, 0]], warp=[[32, 0], [64, 0], [16, 0]], block=[]}>
+#broadcast_expanded = #ttg.linear<{register=[[0, 1], [0, 2], [4, 0], [8, 0]], lane=[[0, 0], [0, 0], [0, 0], [1, 0], [2, 0]], warp=[[32, 0], [64, 0], [16, 0]], block=[]}>
+#register_src = #ttg.linear<{register=[[32, 0]], lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp=[[0, 0], [64, 0], [0, 0]], block=[]}>
+#register_dst = #ttg.linear<{register=[], lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp=[[32, 0], [64, 0], [0, 0]], block=[]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
+  // The source repeats its rows in warp ^ 4. Packed columns share a source lane.
+  // CHECK-LABEL: @convert_layout_broadcast_warp
+  tt.func @convert_layout_broadcast_warp(%arg0: tensor<128x4xf16, #broadcast_src>) {
+    // CHECK-NOT: nvvm.bar
+    // CHECK-COUNT-4: nvvm.shfl.sync
+    // CHECK-NOT: nvvm.shfl.sync
+    // CHECK-NOT: nvvm.bar
+    // CHECK: llvm.return
+    %0 = ttg.convert_layout %arg0 : tensor<128x4xf16, #broadcast_src> -> tensor<128x4xf16, #broadcast_dst>
+    tt.return
+  }
+
+  // Two register bits select source lanes, exceeding the shuffle heuristic.
+  // CHECK-LABEL: @convert_layout_broadcast_warp_expanded
+  tt.func @convert_layout_broadcast_warp_expanded(%arg0: tensor<128x4xf16, #broadcast_src>) {
+    // CHECK-NOT: nvvm.shfl.sync
+    // CHECK: nvvm.barrier
+    // CHECK: llvm.return
+    %0 = ttg.convert_layout %arg0 : tensor<128x4xf16, #broadcast_src> -> tensor<128x4xf16, #broadcast_expanded>
+    tt.return
+  }
+
+  // Reversing the conversion requires values from another warp.
+  // CHECK-LABEL: @convert_layout_broadcast_warp_reverse
+  tt.func @convert_layout_broadcast_warp_reverse(%arg0: tensor<128x4xf16, #broadcast_dst>) {
+    // CHECK-NOT: nvvm.shfl.sync
+    // CHECK: nvvm.barrier
+    // CHECK: llvm.return
+    %0 = ttg.convert_layout %arg0 : tensor<128x4xf16, #broadcast_dst> -> tensor<128x4xf16, #broadcast_src>
+    tt.return
+  }
+
+  // The source register is warp & 1, so keep the shared-memory fallback.
+  // CHECK-LABEL: @convert_layout_warp_dependent_register
+  tt.func @convert_layout_warp_dependent_register(%arg0: tensor<128x1xf32, #register_src>) {
+    // CHECK-NOT: nvvm.shfl.sync
+    // CHECK: nvvm.barrier
+    // CHECK: llvm.return
+    %0 = ttg.convert_layout %arg0 : tensor<128x1xf32, #register_src> -> tensor<128x1xf32, #register_dst>
+    tt.return
+  }
+}
+
+// -----
+
+#src = #ttg.linear<{register=[[1]], lane=[[2], [4], [8], [16], [32]], warp=[[0]], block=[]}>
+#dst = #ttg.linear<{register=[], lane=[[1], [2], [4], [8], [16]], warp=[[32]], block=[]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
+  // CHECK-LABEL: @convert_layout_warp_broadcast_register_select
+  tt.func @convert_layout_warp_broadcast_register_select(%arg0: tensor<64xi32, #src>) {
+    // CHECK: %[[PRE_TRUE:.*]] = llvm.mlir.constant(true)
+    // CHECK: llvm.select %[[PRE_TRUE]]
+    // CHECK-NOT: nvvm.bar
+    // CHECK-COUNT-2: nvvm.shfl.sync
+    // CHECK: llvm.select
+    // CHECK-NOT: nvvm.bar
+    // CHECK: llvm.return
+    %0 = ttg.convert_layout %arg0 : tensor<64xi32, #src> -> tensor<64xi32, #dst>
+    tt.return
+  }
+}
+
+// -----
+
+#src = #ttg.linear<{register=[[1], [2]], lane=[[4], [8], [16], [32], [64]], warp=[[0]], block=[]}>
+#dst = #ttg.linear<{register=[[4], [1], [2]], lane=[[0], [8], [16], [32], [0]], warp=[[64]], block=[]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
+  // CHECK-LABEL: @convert_layout_warp_broadcast_packed_permutation
+  tt.func @convert_layout_warp_broadcast_packed_permutation(%arg0: tensor<128xi8, #src>) {
+    // Packed output still needs byte permutations with a constant predicate.
+    // CHECK-NOT: nvvm.bar
+    // CHECK-COUNT-2: nvvm.shfl.sync
+    // CHECK: %[[POST_TRUE:.*]] = llvm.mlir.constant(true)
+    // CHECK: llvm.select %[[POST_TRUE]]
+    // CHECK: llvm.select %[[POST_TRUE]]
+    // CHECK-COUNT-2: llvm.call_intrinsic "llvm.nvvm.prmt"
+    // CHECK-NOT: nvvm.bar
+    // CHECK: llvm.return
+    %0 = ttg.convert_layout %arg0 : tensor<128xi8, #src> -> tensor<128xi8, #dst>
+    tt.return
+  }
+}
+
+// -----
+
+#src = #ttg.linear<{register=[], lane=[[1], [2], [4], [8], [16]], warp=[[32], [0]], block=[[0]]}>
+#dst = #ttg.linear<{register=[], lane=[[0], [1], [2], [4], [8]], warp=[[32], [0]], block=[[16]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @convert_layout_cta_broadcast
+  tt.func @convert_layout_cta_broadcast(%arg0: tensor<64xi32, #src>) {
+    // CHECK: nvg.cluster_id
+    // CHECK-NOT: nvvm.bar
+    // CHECK: nvvm.shfl.sync idx
+    // CHECK-NOT: nvvm.shfl.sync
+    // CHECK-NOT: nvvm.bar
+    // CHECK: llvm.return
+    %0 = ttg.convert_layout %arg0 : tensor<64xi32, #src> -> tensor<64xi32, #dst>
+    tt.return
+  }
+}
+
+// -----
+
+#src = #ttg.generic_linear<{register=[[32], [64]], lane=[[1], [2], [4], [8], [16]], warp=[[192], [256]], block=[]}>
+#dst = #ttg.generic_linear<{register=[[32], [16]], lane=[[1], [2], [4], [8], [64]], warp=[[192], [256]], block=[]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // This register/warp swizzle falls back to shared memory.
+  // CHECK-LABEL: @convert_layout_generic_warp_swizzle
+  tt.func @convert_layout_generic_warp_swizzle(%arg0: tensor<512xf64, #src>) {
+    // CHECK-NOT: nvvm.shfl.sync
+    // CHECK: nvvm.bar.warp.sync
+    // CHECK-NOT: nvvm.shfl.sync
+    // CHECK: llvm.return
+    %0 = ttg.convert_layout %arg0 : tensor<512xf64, #src> -> tensor<512xf64, #dst>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [2, 2], order = [0, 1]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
