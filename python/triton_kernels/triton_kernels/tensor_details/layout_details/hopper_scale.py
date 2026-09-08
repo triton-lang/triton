@@ -59,7 +59,7 @@ class HopperMXScaleLayoutTransformation(ScaleLayoutTransformation):
         if self.mx_axis == len(leading_shape):
             M, K = K, M
         align_m = 32 * self.num_warps
-        M = (M + align_m - 1) // align_m * align_m
+        M = (M + (align_m - 1)) // align_m * align_m
         K = (K + 1) // 2 * 2
         return [*leading_shape, M, K]
 

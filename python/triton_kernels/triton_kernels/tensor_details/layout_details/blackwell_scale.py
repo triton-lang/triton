@@ -70,7 +70,7 @@ class BlackwellActMXScaleLayoutTransformation(ScaleLayoutTransformation):
             B, M, K = 1, *self.shape
             added_leading_batch_dim = True
             if self.ragged_metadata is None:
-                M_pad = (M + self.ALIGN_M - 1) // self.ALIGN_M * self.ALIGN_M
+                M_pad = (M + (self.ALIGN_M - 1)) // self.ALIGN_M * self.ALIGN_M
                 mode = "batched"
             else:
                 # In ragged mode, input often include padded tokens
@@ -84,9 +84,9 @@ class BlackwellActMXScaleLayoutTransformation(ScaleLayoutTransformation):
                 mode = "ragged"
         else:
             B, M, K = self.shape
-            M_pad = (M + self.ALIGN_M - 1) // self.ALIGN_M * self.ALIGN_M
+            M_pad = (M + (self.ALIGN_M - 1)) // self.ALIGN_M * self.ALIGN_M
             mode = "batched"
-        K_pad = (K + self.ALIGN_K - 1) // self.ALIGN_K * self.ALIGN_K  # min multiple of ALIGN_K
+        K_pad = (K + (self.ALIGN_K - 1)) // self.ALIGN_K * self.ALIGN_K  # min multiple of ALIGN_K
         # initialize attributes
         object.__setattr__(self, "B", B)
         object.__setattr__(self, "M", M)
@@ -169,8 +169,8 @@ class BlackwellMXScaleLayoutTransformation(ScaleLayoutTransformation):
         object.__setattr__(self, "ALIGN_K", 8)
         object.__setattr__(self, "ALIGN_N", 128)
         object.__setattr__(self, "SWIZZLE_K", 4)
-        object.__setattr__(self, "K_pad", (K + self.ALIGN_K - 1) // self.ALIGN_K * self.ALIGN_K)
-        object.__setattr__(self, "N_pad", (N + self.ALIGN_N - 1) // self.ALIGN_N * self.ALIGN_N)
+        object.__setattr__(self, "K_pad", (K + (self.ALIGN_K - 1)) // self.ALIGN_K * self.ALIGN_K)
+        object.__setattr__(self, "N_pad", (N + (self.ALIGN_N - 1)) // self.ALIGN_N * self.ALIGN_N)
 
     @property
     def storage_shape(self) -> list[int]:
