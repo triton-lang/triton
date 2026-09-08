@@ -5,10 +5,13 @@ import os
 import pytest
 import torch
 import triton
+from triton.experimental import gluon
+from triton.experimental.gluon import language as gl
 
 from triton._internal_testing import is_cuda, run_in_process
-from triton.experimental.gsan import ShareableHandleType, configure, create_mem_pool, freeze_config, has_live_allocations, reset
+from triton.experimental.gsan import ShareableHandleType, configure, create_mem_pool, freeze_config, get_allocator, has_live_allocations, reset
 from triton.experimental.gsan import _stream_sync
+from triton._C.libtriton.gsan_testing import shadow_granularity as get_shadow_granularity, shadow_cell_address
 from triton.experimental.gsan._allocator import (
     export_allocation_handles,
     export_allocation_memhandle_regions,
@@ -40,11 +43,11 @@ def _run_configure_check(device_ranks: dict[int, int], num_devices: int) -> None
     assert get_device_rank(1) == device_ranks[1]
 
 
-def _run_configure_runtime_fields_check() -> None:
+def _run_configure_runtime_fields_check(shadow_granularity: int) -> None:
     device = torch.cuda.current_device()
     configure(rng_seed=12345, clock_buffer_size=17)
 
-    ptr = gsan_malloc(1, device, 0)
+    ptr = gsan_malloc(1, device, 0, shadow_granularity=shadow_granularity)
     try:
         state = global_state(device_index=device)
         assert state.rng_seed == 12345
@@ -64,10 +67,10 @@ def _run_freeze_config_check() -> None:
         raise AssertionError("expected freeze_config() to reject later config changes")
 
 
-def _run_allocator_freezes_config_check() -> None:
+def _run_allocator_freezes_config_check(shadow_granularity: int) -> None:
     device = torch.cuda.current_device()
     configure(rng_seed=12345)
-    ptr = gsan_malloc(1, device, 0)
+    ptr = gsan_malloc(1, device, 0, shadow_granularity=shadow_granularity)
     try:
         try:
             configure(rng_seed=12345)
@@ -79,11 +82,17 @@ def _run_allocator_freezes_config_check() -> None:
         gsan_free(ptr, device, 0, 0)
 
 
-def _run_has_live_allocations_check() -> None:
+@gluon.jit
+def _store_reset_target(ptr, WIDTH: gl.constexpr):
+    offsets = gl.arange(0, WIDTH, layout=gl.BlockedLayout([4], [32], [1], [0]))
+    gl.store(ptr + offsets, 1)
+
+
+def _run_has_live_allocations_check(shadow_granularity) -> None:
     assert has_live_allocations() is False
     configure(rng_seed=12345)
     device = torch.cuda.current_device()
-    ptr = gsan_malloc(1, device)
+    ptr = gsan_malloc(1, device, shadow_granularity=shadow_granularity)
     try:
         assert has_live_allocations() is True
     finally:
@@ -91,15 +100,15 @@ def _run_has_live_allocations_check() -> None:
     assert has_live_allocations() is False
 
 
-def _run_reset_rejects_live_allocations_check() -> None:
+def _run_reset_rejects_live_allocations_check(shadow_granularity) -> None:
     device = torch.cuda.current_device()
     stream = torch.cuda.current_stream().cuda_stream
-    ptr = gsan_malloc(4, device)
-    target = uint8_cuda_tensor_from_ptr(ptr, 4, device).view(torch.int32)
+    ptr = gsan_malloc(max(4, shadow_granularity), device, shadow_granularity=shadow_granularity)
+    target = uint8_cuda_tensor_from_ptr(ptr, max(4, shadow_granularity), device).view(torch.int32)
     try:
         with triton.knobs.compilation.scope():
             triton.knobs.compilation.instrumentation_mode = "gsan"
-            store_one_i32[(1, )](target, num_warps=1)
+            _store_reset_target[(1, )](target, WIDTH=target.numel(), num_warps=1)
             torch.cuda.synchronize()
 
             stream_state = _stream_sync._launch_stream_state(device, stream)
@@ -121,7 +130,7 @@ def _run_reset_rejects_live_allocations_check() -> None:
             assert torch.equal(shadow_tensor_for(target).cpu(), shadow_before)
             assert thread_state_from_smid(thread_id).vector_clock == thread_state_before.vector_clock
 
-            store_one_i32[(1, )](target, num_warps=1)
+            _store_reset_target[(1, )](target, WIDTH=target.numel(), num_warps=1)
             torch.cuda.synchronize()
             assert stream_state.next_kernel_id == 2
     finally:
@@ -131,13 +140,13 @@ def _run_reset_rejects_live_allocations_check() -> None:
     reset()
 
 
-def _run_reset_collects_unreachable_allocations_check() -> None:
+def _run_reset_collects_unreachable_allocations_check(shadow_granularity) -> None:
     device = torch.cuda.current_device()
 
     class CyclicAllocation:
 
         def __init__(self):
-            self.ptr = gsan_malloc(1, device)
+            self.ptr = gsan_malloc(1, device, shadow_granularity=shadow_granularity)
             self.cycle = self
 
         def __del__(self):
@@ -148,16 +157,16 @@ def _run_reset_collects_unreachable_allocations_check() -> None:
     reset()
 
 
-def _run_reset_reinitializes_runtime_state_check() -> None:
+def _run_reset_reinitializes_runtime_state_check(shadow_granularity) -> None:
     device = torch.cuda.current_device()
     configure(rng_seed=12345, clock_buffer_size=17)
     original_state_pointer = get_global_state_pointer()
 
-    ptr = gsan_malloc(4, device)
-    target = uint8_cuda_tensor_from_ptr(ptr, 4, device).view(torch.int32)
+    ptr = gsan_malloc(max(4, shadow_granularity), device, shadow_granularity=shadow_granularity)
+    target = uint8_cuda_tensor_from_ptr(ptr, max(4, shadow_granularity), device).view(torch.int32)
     with triton.knobs.compilation.scope():
         triton.knobs.compilation.instrumentation_mode = "gsan"
-        store_one_i32[(1, )](target, num_warps=1)
+        _store_reset_target[(1, )](target, WIDTH=target.numel(), num_warps=1)
     torch.cuda.synchronize()
 
     thread_id = shadow_cell_from_address(ptr).write_clock.thread_id
@@ -185,12 +194,12 @@ def _run_reset_reinitializes_runtime_state_check() -> None:
     assert new_thread_state.globals_ptr == 0
     assert all(epoch == 0 for epoch in new_thread_state.vector_clock)
 
-    ptr = gsan_malloc(4, device)
-    target = uint8_cuda_tensor_from_ptr(ptr, 4, device).view(torch.int32)
+    ptr = gsan_malloc(max(4, shadow_granularity), device, shadow_granularity=shadow_granularity)
+    target = uint8_cuda_tensor_from_ptr(ptr, max(4, shadow_granularity), device).view(torch.int32)
     try:
         with triton.knobs.compilation.scope():
             triton.knobs.compilation.instrumentation_mode = "gsan"
-            store_one_i32[(1, )](target, num_warps=1)
+            _store_reset_target[(1, )](target, WIDTH=target.numel(), num_warps=1)
         torch.cuda.synchronize()
         stream = torch.cuda.current_stream().cuda_stream
         assert _stream_sync._launch_stream_state(device, stream).next_kernel_id == 1
@@ -199,14 +208,14 @@ def _run_reset_reinitializes_runtime_state_check() -> None:
         gsan_free(ptr, device)
 
 
-def _run_reset_releases_cached_pool_clocks_check(num_pools: int) -> None:
-    pools = [create_mem_pool() for _ in range(num_pools)]
+def _run_reset_releases_cached_pool_clocks_check(num_pools: int, shadow_granularity) -> None:
+    pools = [create_mem_pool(shadow_granularity=shadow_granularity) for _ in range(num_pools)]
     streams = [torch.cuda.Stream() for _ in pools]
     for pool, stream in zip(pools, streams):
         with torch.cuda.stream(stream), torch.cuda.use_mem_pool(pool), triton.knobs.compilation.scope():
             triton.knobs.compilation.instrumentation_mode = "gsan"
-            target = torch.zeros(1, dtype=torch.int32, device="cuda")
-            store_one_i32[(1, )](target, num_warps=1)
+            target = torch.zeros(max(1, shadow_granularity // 4), dtype=torch.int32, device="cuda")
+            _store_reset_target[(1, )](target, WIDTH=target.numel(), num_warps=1)
         del target
     torch.cuda.synchronize()
 
@@ -215,9 +224,9 @@ def _run_reset_releases_cached_pool_clocks_check(num_pools: int) -> None:
     reset()
 
 
-def _run_launch_stream_clocks_use_private_pool_check() -> None:
+def _run_launch_stream_clocks_use_private_pool_check(shadow_granularity) -> None:
     device = torch.cuda.current_device()
-    pool = create_mem_pool()
+    pool = create_mem_pool(shadow_granularity=shadow_granularity)
     stream = torch.cuda.Stream()
     with torch.cuda.stream(stream), torch.cuda.use_mem_pool(pool):
         before = torch.empty(1, device=device)
@@ -237,14 +246,14 @@ def _run_launch_stream_clocks_use_private_pool_check() -> None:
     reset()
 
 
-def _run_export_import_fabric_handles_check(explicit_config: bool, write_once: bool) -> None:
+def _run_export_import_fabric_handles_check(explicit_config: bool, shadow_granularity: int, write_once: bool) -> None:
     device = torch.cuda.current_device()
     configure(
         device_ranks={device: 0},
         num_devices=2,
         handle_type=ShareableHandleType.FABRIC if explicit_config else None,
     )
-    real_ptr = gsan_malloc(4096, device, write_once=write_once)
+    real_ptr = gsan_malloc(4096, device, shadow_granularity=shadow_granularity, write_once=write_once)
     imported_ptr = 0
     try:
         runtime_handle, runtime_alloc_size = export_runtime_state_handle(
@@ -262,11 +271,16 @@ def _run_export_import_fabric_handles_check(explicit_config: bool, write_once: b
             ShareableHandleType.FABRIC,
         )
 
-        real_handle, shadow_handle, alloc_size = export_allocation_handles(
-            real_ptr,
-            ShareableHandleType.FABRIC,
-            write_once=write_once,
-        )
+        # Keep coverage of the legacy three-field export/default import API.
+        if shadow_granularity == 4 or write_once:
+            real_handle, shadow_handle, alloc_size = export_allocation_handles(real_ptr, ShareableHandleType.FABRIC,
+                                                                               write_once=write_once)
+            import_kwargs = {"write_once": write_once}
+        else:
+            real_handle, shadow_handle, alloc_size, exported_granularity = export_allocation_handles(
+                real_ptr, ShareableHandleType.FABRIC, include_granularity=True)
+            assert exported_granularity == shadow_granularity
+            import_kwargs = {"shadow_granularity": exported_granularity}
         assert isinstance(real_handle, bytes)
         assert isinstance(shadow_handle, bytes)
         assert len(real_handle) == 64
@@ -278,8 +292,9 @@ def _run_export_import_fabric_handles_check(explicit_config: bool, write_once: b
             alloc_size,
             device,
             ShareableHandleType.FABRIC,
-            write_once=write_once,
+            **import_kwargs,
         )
+        assert get_shadow_granularity(imported_ptr) == shadow_granularity
         assert is_write_once_allocation(imported_ptr) == write_once
         local_real = uint8_cuda_tensor_from_ptr(real_ptr, alloc_size, device)
         imported_real = uint8_cuda_tensor_from_ptr(imported_ptr, alloc_size, device)
@@ -297,7 +312,9 @@ def _run_export_import_fabric_handles_check(explicit_config: bool, write_once: b
 
 
 @pytest.fixture
-def _direct_allocator():
+def _direct_allocator(shadow_granularity):
+    if not is_cuda():
+        pytest.skip("requires CUDA backend")
     device = torch.cuda.current_device()
     stream = 0
     reserve_ptr = get_reserve_pointer()
@@ -305,7 +322,7 @@ def _direct_allocator():
     allocated = set()
 
     def malloc(size: int) -> int:
-        ptr_int = gsan_malloc(size, device, stream)
+        ptr_int = gsan_malloc(size, device, stream, shadow_granularity=shadow_granularity)
         if ptr_int != 0:
             allocated.add(ptr_int)
         return ptr_int
@@ -353,8 +370,8 @@ def test_configure_supports_sparse_global_device_ids():
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
-def test_configure_exposes_runtime_fields():
-    result = run_in_process(_run_configure_runtime_fields_check)
+def test_configure_exposes_runtime_fields(shadow_granularity):
+    result = run_in_process(_run_configure_runtime_fields_check, args=(shadow_granularity, ))
     assert result.exc is None
 
 
@@ -365,45 +382,45 @@ def test_freeze_config_rejects_later_changes():
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
-def test_allocator_initialization_rejects_later_config():
-    result = run_in_process(_run_allocator_freezes_config_check)
+def test_allocator_initialization_rejects_later_config(shadow_granularity):
+    result = run_in_process(_run_allocator_freezes_config_check, args=(shadow_granularity, ))
     assert result.exc is None
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
-def test_has_live_allocations():
-    result = run_in_process(_run_has_live_allocations_check)
+def test_has_live_allocations(shadow_granularity):
+    result = run_in_process(_run_has_live_allocations_check, args=(shadow_granularity, ))
     assert result.exc is None
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
-def test_reset_rejects_live_allocations():
-    result = run_in_process(_run_reset_rejects_live_allocations_check)
+def test_reset_rejects_live_allocations(shadow_granularity):
+    result = run_in_process(_run_reset_rejects_live_allocations_check, args=(shadow_granularity, ))
     assert result.exc is None
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
-def test_reset_collects_unreachable_allocations():
-    result = run_in_process(_run_reset_collects_unreachable_allocations_check)
+def test_reset_collects_unreachable_allocations(shadow_granularity):
+    result = run_in_process(_run_reset_collects_unreachable_allocations_check, args=(shadow_granularity, ))
     assert result.exc is None
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
-def test_reset_reinitializes_runtime_state():
-    result = run_in_process(_run_reset_reinitializes_runtime_state_check)
+def test_reset_reinitializes_runtime_state(shadow_granularity):
+    result = run_in_process(_run_reset_reinitializes_runtime_state_check, args=(shadow_granularity, ))
     assert result.exc is None
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
 @pytest.mark.parametrize("num_pools", [1, 2])
-def test_reset_releases_cached_pool_clocks(num_pools):
-    result = run_in_process(_run_reset_releases_cached_pool_clocks_check, args=(num_pools, ))
+def test_reset_releases_cached_pool_clocks(num_pools, shadow_granularity):
+    result = run_in_process(_run_reset_releases_cached_pool_clocks_check, args=(num_pools, shadow_granularity))
     assert result.exc is None
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
-def test_launch_stream_clocks_use_private_pool():
-    result = run_in_process(_run_launch_stream_clocks_use_private_pool_check)
+def test_launch_stream_clocks_use_private_pool(shadow_granularity):
+    result = run_in_process(_run_launch_stream_clocks_use_private_pool_check, args=(shadow_granularity, ))
     assert result.exc is None
 
 
@@ -414,9 +431,10 @@ def test_default_topology_uses_cuda_device_indices():
     assert get_device_rank(1) == 1
 
 
-def test_malloc_free(_direct_allocator):
+def test_malloc_free(_direct_allocator, shadow_granularity):
     malloc, free, reserve_ptr, reserve_size = _direct_allocator
-    real_base = reserve_ptr + reserve_size // 4
+    pool_index = (1, 4, 16).index(shadow_granularity)
+    real_base = reserve_ptr + (2 * pool_index + 1) * reserve_size // 8
 
     # First valid allocation should come from the real base and be reusable.
     p0 = malloc(1)
@@ -491,8 +509,8 @@ def test_free_invalid_pointer_and_double_free(_direct_allocator):
 
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
-def test_mem_pool():
-    pool = create_mem_pool()
+def test_mem_pool(shadow_granularity):
+    pool = create_mem_pool(shadow_granularity=shadow_granularity)
     with torch.cuda.use_mem_pool(pool):
         real = torch.empty(4096, dtype=torch.uint8, device="cuda")
 
@@ -501,12 +519,14 @@ def test_mem_pool():
     assert reserve_ptr != 0
     assert reserve_size > 0
 
-    # Check real allocation is in the higher half of the normal arena
-    real_base = reserve_ptr + reserve_size // 4
-    assert real_base <= real.data_ptr() < reserve_ptr + reserve_size
+    assert reserve_ptr <= real.data_ptr() < reserve_ptr + reserve_size
+    assert get_shadow_granularity(real.data_ptr()) == shadow_granularity
+    assert shadow_cell_address(real.data_ptr() + shadow_granularity - 1) == shadow_cell_address(real.data_ptr())
+    assert shadow_cell_address(real.data_ptr() + shadow_granularity) == shadow_cell_address(real.data_ptr()) + 24
 
     shadow = shadow_tensor_for(real)
-    assert reserve_ptr <= shadow.data_ptr() < reserve_ptr + reserve_size // 4
+    assert reserve_ptr <= shadow.data_ptr() < real.data_ptr()
+    assert shadow.numel() == real.numel() // shadow_granularity * 24
 
     # Test that real and shadow allocation can be used
     real.zero_()
@@ -571,7 +591,7 @@ def test_export_allocation_memhandle_regions_accepts_interior_pointer(_direct_al
 
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
 @pytest.mark.parametrize("size", [4096, _ODD_LARGE_ALLOCATION_SIZE])
-def test_export_import_allocation_handles_maps_real_and_shadow(_direct_allocator, size):
+def test_export_import_allocation_handles_maps_real_and_shadow(_direct_allocator, size, shadow_granularity):
     malloc, free, reserve_ptr, reserve_size = _direct_allocator
     device = torch.cuda.current_device()
 
@@ -582,13 +602,18 @@ def test_export_import_allocation_handles_maps_real_and_shadow(_direct_allocator
     real_fd = -1
     shadow_fd = -1
     try:
-        real_fd, shadow_fd, alloc_size = export_allocation_handles(
+        real_fd, shadow_fd, alloc_size, exported_granularity = export_allocation_handles(
             real_ptr,
             ShareableHandleType.POSIX_FILE_DESCRIPTOR,
+            include_granularity=True,
         )
         assert isinstance(real_fd, int)
         assert isinstance(shadow_fd, int)
         assert alloc_size > 0
+        assert exported_granularity == shadow_granularity
+        if shadow_granularity != 4:
+            with pytest.raises(ValueError, match="include_granularity=True"):
+                export_allocation_handles(real_ptr, ShareableHandleType.POSIX_FILE_DESCRIPTOR)
 
         imported_ptr = import_allocation_handles(
             real_fd,
@@ -596,9 +621,11 @@ def test_export_import_allocation_handles_maps_real_and_shadow(_direct_allocator
             alloc_size,
             device,
             ShareableHandleType.POSIX_FILE_DESCRIPTOR,
+            shadow_granularity=exported_granularity,
         )
         assert imported_ptr != 0
         assert imported_ptr != real_ptr
+        assert get_shadow_granularity(imported_ptr) == shadow_granularity
 
         local_real = uint8_cuda_tensor_from_ptr(real_ptr, alloc_size, device)
         imported_real = uint8_cuda_tensor_from_ptr(imported_ptr, alloc_size, device)
@@ -622,6 +649,35 @@ def test_export_import_allocation_handles_maps_real_and_shadow(_direct_allocator
         free(real_ptr)
 
 
+@pytest.mark.parametrize("granularity", [0, 2, 8, 32, -1, True, 1.0, "1"])
+@pytest.mark.parametrize("factory", [get_allocator, create_mem_pool])
+def test_mem_pool_rejects_invalid_granularity(factory, granularity):
+    with pytest.raises(ValueError, match="shadow_granularity must be 1, 4, or 16"):
+        factory(shadow_granularity=granularity)
+
+
+@pytest.mark.parametrize("granularity", [4, 16])
+@pytest.mark.parametrize("factory", [get_allocator, create_mem_pool])
+def test_write_once_rejects_non_byte_granularity(factory, granularity):
+    with pytest.raises(ValueError, match="write_once allocations require shadow_granularity=1"):
+        factory(write_once=True, shadow_granularity=granularity)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
+def test_mem_pools_have_distinct_regions():
+    tensors = []
+    pools = [create_mem_pool(shadow_granularity=g) for g in (1, 4, 16)]
+    pools.append(create_mem_pool(write_once=True))
+    for pool in pools:
+        with torch.cuda.use_mem_pool(pool):
+            tensors.append(torch.empty(4096, dtype=torch.uint8, device="cuda"))
+    assert [get_shadow_granularity(t.data_ptr()) for t in tensors] == [1, 4, 16, 1]
+    assert len({shadow_cell_address(t.data_ptr()) for t in tensors}) == 4
+    assert [is_write_once_allocation(t.data_ptr()) for t in tensors] == [False, False, False, True]
+    assert get_allocator() is get_allocator(shadow_granularity=4)
+    assert get_allocator(write_once=True) is get_allocator(write_once=True, shadow_granularity=1)
+
+
 @pytest.mark.skipif(not is_cuda(), reason="requires CUDA backend")
 @pytest.mark.parametrize(
     ("explicit_config", "allocator_config"),
@@ -631,12 +687,14 @@ def test_export_import_allocation_handles_maps_real_and_shadow(_direct_allocator
     ],
 )
 @pytest.mark.parametrize("write_once", [False, True])
-def test_export_import_fabric_handles(explicit_config, allocator_config, write_once):
+def test_export_import_fabric_handles(explicit_config, allocator_config, write_once, shadow_granularity):
+    if write_once and shadow_granularity != 1:
+        pytest.skip("write_once allocations always use byte granularity")
     if not supports_fabric_handles(torch.cuda.current_device()):
         pytest.skip("CUDA device does not support fabric handles")
     result = run_in_process(
         _run_export_import_fabric_handles_check,
-        args=(explicit_config, write_once),
+        args=(explicit_config, shadow_granularity, write_once),
         env={"PYTORCH_CUDA_ALLOC_CONF": allocator_config},
     )
     if (isinstance(result.exc, RuntimeError) and str(result.exc) == "gsanExportRuntimeStateHandle failed."
