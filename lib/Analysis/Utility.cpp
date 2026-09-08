@@ -1266,7 +1266,7 @@ bool isCvtDimSync(const triton::LinearLayout &srcLayout,
            dstLayout.getFreeVariableMasks()[dim] == 0;
   } else {
     assert(dim == kBlock);
-    return invertAndComposeBlockLocal(srcLayout, dstLayout)
+    return invertAndComposeLocal(srcLayout, dstLayout, {kBlock})
         .isIdentityOnOutDim(dim);
   }
 }
