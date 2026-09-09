@@ -1589,6 +1589,266 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // -----
 
+// Same as @propagate_divisibility, but small ptr case
+// (tt.pointer_range = 32), which routes through the small-tensor rewrite instead.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @propagate_divisibility_small_ptr(%arg0: !tt.ptr<f32> {tt.pointer_range = 32 : i32}) -> tensor<1024xf32> {
+    %c1024_i32 = arith.constant 1024 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1024_i32 : i32
+    %2 = tt.splat %1 : i32 -> tensor<1024xi32>
+    %3 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+    %4 = tt.addptr %3, %2 {tt.divisibility = 16 : i32, misc.misc = 3 : i32} : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+    %5 = tt.load %4 : tensor<1024x!tt.ptr<f32>>
+    tt.return %5 : tensor<1024xf32>
+  }
+}
+
+// CHECK-LABEL:   tt.func @propagate_divisibility_small_ptr(
+// CHECK-SAME:                         %[[VAL_0:.*]]: !tt.ptr<f32> {tt.pointer_range = 32 : i32}) -> tensor<1024xf32> {
+// CHECK:           %[[VAL_1:.*]] = arith.constant 1024 : i32
+// CHECK:           %[[VAL_2:.*]] = tt.get_program_id x : i32
+// CHECK:           %[[VAL_3:.*]] = arith.muli %[[VAL_2]], %[[VAL_1]] : i32
+// CHECK:           %[[VAL_4:.*]] = tt.splat %[[VAL_3]] : i32 -> tensor<1024xi32>
+// CHECK:           %[[VAL_5:.*]] = tt.splat %[[VAL_0]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+// CHECK:           %[[VAL_6:.*]] = tt.addptr %[[VAL_5]], %[[VAL_4]] {tt.divisibility = 16 : i32} : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+// CHECK:           %[[VAL_7:.*]] = tt.load %[[VAL_6]] : tensor<1024x!tt.ptr<f32>>
+// CHECK:           tt.return %[[VAL_7]] : tensor<1024xf32>
+// CHECK:         }
+
+// -----
+
+// Multiple tt.addptr ops: the second tt.addptr offsets by an unknown amount
+// and is not 16-byte aligned, so it must not carry the divisibility attribute.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @no_divisibility_leak_small_ptr(%arg0: !tt.ptr<f32> {tt.pointer_range = 32 : i32}, %arg1: i32) -> tensor<1024xf32> {
+    %c1024_i32 = arith.constant 1024 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1024_i32 : i32
+    %2 = tt.splat %1 : i32 -> tensor<1024xi32>
+    %3 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+    %4 = tt.addptr %3, %2 {tt.divisibility = 16 : i32} : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+    %5 = tt.load %4 : tensor<1024x!tt.ptr<f32>>
+    %6 = tt.splat %arg1 : i32 -> tensor<1024xi32>
+    %7 = tt.addptr %4, %6 : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+    %8 = tt.load %7 : tensor<1024x!tt.ptr<f32>>
+    %9 = arith.addf %5, %8 : tensor<1024xf32>
+    tt.return %9 : tensor<1024xf32>
+  }
+}
+
+// CHECK-LABEL:   tt.func @no_divisibility_leak_small_ptr(
+// CHECK-SAME:                         %[[VAL_0:.*]]: !tt.ptr<f32> {tt.pointer_range = 32 : i32},
+// CHECK-SAME:                         %[[VAL_1:.*]]: i32) -> tensor<1024xf32> {
+// CHECK:           %[[VAL_2:.*]] = arith.constant 1024 : i32
+// CHECK:           %[[VAL_3:.*]] = tt.get_program_id x : i32
+// CHECK:           %[[VAL_4:.*]] = arith.muli %[[VAL_3]], %[[VAL_2]] : i32
+// CHECK:           %[[VAL_5:.*]] = tt.splat %[[VAL_4]] : i32 -> tensor<1024xi32>
+// CHECK:           %[[VAL_6:.*]] = tt.splat %[[VAL_0]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+// CHECK:           %[[VAL_7:.*]] = tt.addptr %[[VAL_6]], %[[VAL_5]] {tt.divisibility = 16 : i32} : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+// CHECK:           %[[VAL_8:.*]] = tt.load %[[VAL_7]] : tensor<1024x!tt.ptr<f32>>
+// CHECK:           %[[VAL_9:.*]] = tt.splat %[[VAL_1]] : i32 -> tensor<1024xi32>
+// CHECK:           %[[VAL_10:.*]] = arith.addi %[[VAL_5]], %[[VAL_9]] : tensor<1024xi32>
+// CHECK:           %[[VAL_11:.*]] = tt.splat %[[VAL_0]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+// CHECK:           %[[VAL_12:.*]] = tt.addptr %[[VAL_11]], %[[VAL_10]] : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+// CHECK:           %[[VAL_13:.*]] = tt.load %[[VAL_12]] : tensor<1024x!tt.ptr<f32>>
+// CHECK:           %[[VAL_14:.*]] = arith.addf %[[VAL_8]], %[[VAL_13]] : tensor<1024xf32>
+// CHECK:           tt.return %[[VAL_14]] : tensor<1024xf32>
+// CHECK:         }
+
+// -----
+
+// The attr attached to the tt.addptr has rank 2, but the pointer
+// it annotates is rank 1, so the attr must be dropped.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @drop_rank_mismatched_attr(%arg0: !tt.ptr<f32> {tt.pointer_range = 32 : i32}) -> tensor<1024xf32> {
+    %c1024_i32 = arith.constant 1024 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1024_i32 : i32
+    %2 = tt.splat %1 : i32 -> tensor<1024xi32>
+    %3 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+    %4 = tt.addptr %3, %2 {tt.divisibility = dense<[1, 16]> : tensor<2xi32>} : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+    %5 = tt.load %4 : tensor<1024x!tt.ptr<f32>>
+    tt.return %5 : tensor<1024xf32>
+  }
+}
+
+// CHECK-LABEL:   tt.func @drop_rank_mismatched_attr(
+// CHECK-SAME:                         %[[VAL_0:.*]]: !tt.ptr<f32> {tt.pointer_range = 32 : i32}) -> tensor<1024xf32> {
+// CHECK:           %[[VAL_1:.*]] = arith.constant 1024 : i32
+// CHECK:           %[[VAL_2:.*]] = tt.get_program_id x : i32
+// CHECK:           %[[VAL_3:.*]] = arith.muli %[[VAL_2]], %[[VAL_1]] : i32
+// CHECK:           %[[VAL_4:.*]] = tt.splat %[[VAL_3]] : i32 -> tensor<1024xi32>
+// CHECK:           %[[VAL_5:.*]] = tt.splat %[[VAL_0]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+// CHECK:           %[[VAL_6:.*]] = tt.addptr %[[VAL_5]], %[[VAL_4]] : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+// CHECK:           %[[VAL_7:.*]] = tt.load %[[VAL_6]] : tensor<1024x!tt.ptr<f32>>
+// CHECK:           tt.return %[[VAL_7]] : tensor<1024xf32>
+// CHECK:         }
+
+// -----
+
+// A hint on a scalar tt.addptr, which AxisInfoAnalysis treats as rank 1.
+// The hint should be propagated.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @propagate_hints_scalar_ptr(%arg0: !tt.ptr<f32> {tt.pointer_range = 32 : i32}, %arg1: i32) -> f32 {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c4_i32 = arith.constant 4 : i32
+    %cst = arith.constant 0.000000e+00 : f32
+    %0 = tt.addptr %arg0, %arg1 : !tt.ptr<f32>, i32
+    %res:2 = scf.for %i = %c0_i32 to %c4_i32 step %c1_i32 iter_args(%p = %0, %acc = %cst) -> (!tt.ptr<f32>, f32) : i32 {
+      %n = tt.addptr %p, %c1_i32 {tt.divisibility = 16 : i32} : !tt.ptr<f32>, i32
+      %l = tt.load %n : !tt.ptr<f32>
+      %a = arith.addf %acc, %l : f32
+      scf.yield %n, %a : !tt.ptr<f32>, f32
+    }
+    tt.return %res#1 : f32
+  }
+}
+
+// CHECK-LABEL:   tt.func @propagate_hints_scalar_ptr(
+// CHECK-SAME:                         %[[VAL_0:.*]]: !tt.ptr<f32> {tt.pointer_range = 32 : i32},
+// CHECK-SAME:                         %[[VAL_1:.*]]: i32) -> f32 {
+// CHECK:           %[[VAL_2:.*]]:2 = scf.for
+// CHECK:             %[[VAL_3:.*]] = arith.addi
+// CHECK:             %[[VAL_4:.*]] = tt.addptr %[[VAL_0]], %[[VAL_3]] {tt.divisibility = 16 : i32} : !tt.ptr<f32>, i32
+// CHECK:             %[[VAL_5:.*]] = tt.load %[[VAL_4]] : !tt.ptr<f32>
+
+// -----
+
+// A hint on a loop-carried pointer describes iteration 0 only: %ptr advances by
+// a runtime amount each iteration, so the claimed alignment cannot hold for all
+// of them, so the hint should be dropped.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @drop_hints_into_loop_body(%arg0: !tt.ptr<f32> {tt.pointer_range = 32 : i32}, %arg1: i32) -> tensor<1024xf32> {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c4_i32 = arith.constant 4 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<1024xf32>
+    %0 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
+    %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+    %2 = tt.addptr %1, %0 {tt.divisibility = 16 : i32} : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+    %3 = tt.splat %arg1 : i32 -> tensor<1024xi32>
+    %res:2 = scf.for %i = %c0_i32 to %c4_i32 step %c1_i32 iter_args(%ptr = %2, %acc = %cst) -> (tensor<1024x!tt.ptr<f32>>, tensor<1024xf32>) : i32 {
+      %l = tt.load %ptr : tensor<1024x!tt.ptr<f32>>
+      %a = arith.addf %acc, %l : tensor<1024xf32>
+      %next = tt.addptr %ptr, %3 : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+      scf.yield %next, %a : tensor<1024x!tt.ptr<f32>>, tensor<1024xf32>
+    }
+    tt.return %res#1 : tensor<1024xf32>
+  }
+}
+
+// CHECK-LABEL:   tt.func @drop_hints_into_loop_body(
+// CHECK:           %[[LOOP:.*]]:2 = scf.for
+// CHECK:             %[[PTR:.*]] = tt.addptr %{{.*}}, %{{.*}} : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+// CHECK:             %[[L:.*]] = tt.load %[[PTR]] : tensor<1024x!tt.ptr<f32>>
+
+// -----
+
+// Per-dimension hints on a tt.addptr feeding the load directly: the rebuilt
+// pointer has the same type as the one it replaces, so the hints still describe
+// it and are re-attached.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @propagate_2d_hints_small_ptr(%arg0: !tt.ptr<f32> {tt.pointer_range = 32 : i32}, %arg1: i32) -> tensor<2x8xf32> {
+    %0 = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<8xi32> -> tensor<1x8xi32>
+    %2 = tt.broadcast %1 : tensor<1x8xi32> -> tensor<2x8xi32>
+    %3 = tt.splat %arg1 : i32 -> tensor<2x8xi32>
+    %4 = arith.addi %2, %3 : tensor<2x8xi32>
+    %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<2x8x!tt.ptr<f32>>
+    %6 = tt.addptr %5, %4 {tt.contiguity = dense<[1, 8]> : tensor<2xi32>, tt.divisibility = dense<[1, 16]> : tensor<2xi32>} : tensor<2x8x!tt.ptr<f32>>, tensor<2x8xi32>
+    %7 = tt.load %6 : tensor<2x8x!tt.ptr<f32>>
+    tt.return %7 : tensor<2x8xf32>
+  }
+}
+
+// CHECK-LABEL:   tt.func @propagate_2d_hints_small_ptr(
+// CHECK-SAME:                         %[[VAL_0:.*]]: !tt.ptr<f32> {tt.pointer_range = 32 : i32},
+// CHECK-SAME:                         %[[VAL_1:.*]]: i32) -> tensor<2x8xf32> {
+// CHECK:           %[[VAL_2:.*]] = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32>
+// CHECK:           %[[VAL_3:.*]] = tt.splat %[[VAL_1]] : i32 -> tensor<2x8xi32>
+// CHECK:           %[[VAL_4:.*]] = tt.expand_dims %[[VAL_2]] {axis = 0 : i32} : tensor<8xi32> -> tensor<1x8xi32>
+// CHECK:           %[[VAL_5:.*]] = tt.broadcast %[[VAL_4]] : tensor<1x8xi32> -> tensor<2x8xi32>
+// CHECK:           %[[VAL_6:.*]] = arith.addi %[[VAL_3]], %[[VAL_5]] : tensor<2x8xi32>
+// CHECK:           %[[VAL_7:.*]] = tt.splat %[[VAL_0]] : !tt.ptr<f32> -> tensor<2x8x!tt.ptr<f32>>
+// CHECK:           %[[VAL_8:.*]] = tt.addptr %[[VAL_7]], %[[VAL_6]] {tt.contiguity = dense<[1, 8]> : tensor<2xi32>, tt.divisibility = dense<[1, 16]> : tensor<2xi32>} : tensor<2x8x!tt.ptr<f32>>, tensor<2x8xi32>
+// CHECK:           %[[VAL_9:.*]] = tt.load %[[VAL_8]] : tensor<2x8x!tt.ptr<f32>>
+// CHECK:           tt.return %[[VAL_9]] : tensor<2x8xf32>
+// CHECK:         }
+
+// -----
+
+// Dropping is required here: the hints describe a 2x8 tensor and the reshape to
+// 4x4 keeps the rank, so no rank check could catch it, yet it truncates the
+// contiguous runs the hints claim. They must not reach the 4x4 pointer.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @drop_hints_across_reshape(%arg0: !tt.ptr<f32> {tt.pointer_range = 32 : i32}, %arg1: i32) -> tensor<4x4xf32> {
+    %0 = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<8xi32> -> tensor<1x8xi32>
+    %2 = tt.broadcast %1 : tensor<1x8xi32> -> tensor<2x8xi32>
+    %3 = tt.splat %arg1 : i32 -> tensor<2x8xi32>
+    %4 = arith.addi %2, %3 : tensor<2x8xi32>
+    %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<2x8x!tt.ptr<f32>>
+    %6 = tt.addptr %5, %4 {tt.contiguity = dense<[1, 8]> : tensor<2xi32>, tt.divisibility = dense<[1, 16]> : tensor<2xi32>} : tensor<2x8x!tt.ptr<f32>>, tensor<2x8xi32>
+    %7 = tt.reshape %6 allow_reorder : tensor<2x8x!tt.ptr<f32>> -> tensor<4x4x!tt.ptr<f32>>
+    %8 = tt.load %7 : tensor<4x4x!tt.ptr<f32>>
+    tt.return %8 : tensor<4x4xf32>
+  }
+}
+
+// CHECK-LABEL:   tt.func @drop_hints_across_reshape(
+// CHECK-SAME:                         %[[VAL_0:.*]]: !tt.ptr<f32> {tt.pointer_range = 32 : i32},
+// CHECK-SAME:                         %[[VAL_1:.*]]: i32) -> tensor<4x4xf32> {
+// CHECK:           %[[VAL_2:.*]] = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32>
+// CHECK:           %[[VAL_3:.*]] = tt.splat %[[VAL_1]] : i32 -> tensor<2x8xi32>
+// CHECK:           %[[VAL_4:.*]] = tt.expand_dims %[[VAL_2]] {axis = 0 : i32} : tensor<8xi32> -> tensor<1x8xi32>
+// CHECK:           %[[VAL_5:.*]] = tt.broadcast %[[VAL_4]] : tensor<1x8xi32> -> tensor<2x8xi32>
+// CHECK:           %[[VAL_6:.*]] = arith.addi %[[VAL_3]], %[[VAL_5]] : tensor<2x8xi32>
+// CHECK:           %[[VAL_7:.*]] = tt.reshape %[[VAL_6]] allow_reorder : tensor<2x8xi32> -> tensor<4x4xi32>
+// CHECK:           %[[VAL_8:.*]] = tt.splat %[[VAL_0]] : !tt.ptr<f32> -> tensor<4x4x!tt.ptr<f32>>
+// CHECK:           %[[VAL_9:.*]] = tt.addptr %[[VAL_8]], %[[VAL_7]] : tensor<4x4x!tt.ptr<f32>>, tensor<4x4xi32>
+// CHECK:           %[[VAL_10:.*]] = tt.load %[[VAL_9]] : tensor<4x4x!tt.ptr<f32>>
+// CHECK:           tt.return %[[VAL_10]] : tensor<4x4xf32>
+// CHECK:         }
+
+// -----
+
+// Dropping is a deliberate choice here, not a requirement: a broadcast only
+// expands unit dimensions, so contiguity [1, 8] and divisibility [1, 16] would
+// still hold for the 2x8 result. Hints are recovered only from a tt.addptr
+// feeding the access directly, so the broadcast in between drops them anyway.
+// This pins that conservatism, and the optimization it gives up.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @drop_hints_across_broadcast(%arg0: !tt.ptr<f32> {tt.pointer_range = 32 : i32}, %arg1: i32) -> tensor<2x8xf32> {
+    %0 = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32>
+    %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<8xi32> -> tensor<1x8xi32>
+    %2 = tt.splat %arg1 : i32 -> tensor<1x8xi32>
+    %3 = arith.addi %1, %2 : tensor<1x8xi32>
+    %4 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1x8x!tt.ptr<f32>>
+    %5 = tt.addptr %4, %3 {tt.contiguity = dense<[1, 8]> : tensor<2xi32>, tt.divisibility = dense<[1, 16]> : tensor<2xi32>} : tensor<1x8x!tt.ptr<f32>>, tensor<1x8xi32>
+    %6 = tt.broadcast %5 : tensor<1x8x!tt.ptr<f32>> -> tensor<2x8x!tt.ptr<f32>>
+    %7 = tt.load %6 : tensor<2x8x!tt.ptr<f32>>
+    tt.return %7 : tensor<2x8xf32>
+  }
+}
+
+// CHECK-LABEL:   tt.func @drop_hints_across_broadcast(
+// CHECK-SAME:                         %[[VAL_0:.*]]: !tt.ptr<f32> {tt.pointer_range = 32 : i32},
+// CHECK-SAME:                         %[[VAL_1:.*]]: i32) -> tensor<2x8xf32> {
+// CHECK:           %[[VAL_2:.*]] = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32>
+// CHECK:           %[[VAL_3:.*]] = tt.splat %[[VAL_1]] : i32 -> tensor<1x8xi32>
+// CHECK:           %[[VAL_4:.*]] = tt.expand_dims %[[VAL_2]] {axis = 0 : i32} : tensor<8xi32> -> tensor<1x8xi32>
+// CHECK:           %[[VAL_5:.*]] = arith.addi %[[VAL_3]], %[[VAL_4]] : tensor<1x8xi32>
+// CHECK:           %[[VAL_6:.*]] = tt.broadcast %[[VAL_5]] : tensor<1x8xi32> -> tensor<2x8xi32>
+// CHECK:           %[[VAL_7:.*]] = tt.splat %[[VAL_0]] : !tt.ptr<f32> -> tensor<2x8x!tt.ptr<f32>>
+// CHECK:           %[[VAL_8:.*]] = tt.addptr %[[VAL_7]], %[[VAL_6]] : tensor<2x8x!tt.ptr<f32>>, tensor<2x8xi32>
+// CHECK:           %[[VAL_9:.*]] = tt.load %[[VAL_8]] : tensor<2x8x!tt.ptr<f32>>
+// CHECK:           tt.return %[[VAL_9]] : tensor<2x8xf32>
+// CHECK:         }
+
+// -----
+
 module attributes {"ttg.num-warps" = 4 : i32} {
   tt.func @divisiblity_changeing_dims(%arg0: !tt.ptr<f32>) -> tensor<1024x32xf32> {
     %c1024_i32 = arith.constant 1024 : i32
