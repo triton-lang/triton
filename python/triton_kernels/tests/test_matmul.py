@@ -372,9 +372,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     elif is_hip():
         if a_dtype.is_nvfp4 or b_dtype.is_nvfp4 or c_dtype.is_nvfp4:
             pytest.skip("NVFP4 matmul not tested on AMD GPU")
-        if (a_dtype.has_global_scale != b_dtype.has_global_scale
-                and not (a_dtype.has_mx_scale or b_dtype.has_mx_scale)):
-            pytest.skip("Unscaled mixed FP8 matmul is only tested on CUDA")
         if a_dtype.is_any_float8 and b_dtype.has_mx_scale and not (is_hip_cdna4() or is_hip_gfx1250()):
             pytest.skip("float8 x mx only supported on CDNA4 and gfx1250")
         if a_dtype.is_any_float8 and b_dtype.name == "mxfloat8_e4m3fn":
@@ -676,8 +673,10 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     ((273, 544, 576), False, {}),
 ])
 def test_matmul_mixed_fp8_resource_limits(shape, fp8_lhs, constraints, device, opt_flags_scope):
-    if not is_cuda() or torch.cuda.get_device_capability()[0] < 9:
+    if is_cuda() and torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("requires Hopper or newer")
+    if is_hip() and constraints.get("is_persistent"):
+        pytest.skip("Persistent kernel not supported on AMD GPU")
 
     torch.manual_seed(0)
     m, n, k = shape
@@ -695,8 +694,10 @@ def test_matmul_mixed_fp8_resource_limits(shape, fp8_lhs, constraints, device, o
 @pytest.mark.parametrize("fp8_lhs", [False, True])
 @pytest.mark.parametrize("is_persistent", [False, True])
 def test_matmul_mixed_fp8_preserves_fp16_precision(fp8_lhs, is_persistent, device, opt_flags_scope):
-    if not is_cuda() or torch.cuda.get_device_capability()[0] < 9:
+    if is_cuda() and torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("requires Hopper or newer")
+    if is_hip() and is_persistent:
+        pytest.skip("Persistent kernel not supported on AMD GPU")
 
     a = torch.zeros((128, 128), dtype=torch.float16, device=device)
     b = torch.zeros_like(a)
