@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import textwrap
 import torch
 
 import pytest
@@ -27,21 +28,27 @@ def test_nvidia_kernel_dispatch_without_torch():
 
 
 @pytest.mark.skipif(not is_hip(), reason="Requires an AMD GPU")
-def test_hip_driver_amdsmi():
-    from triton.backends.amd.driver import HIPDriver
+def test_hip_discovery_without_visible_devices():
+    code = textwrap.dedent("""\
+        import ctypes
+        import sys
+        from triton.backends.amd.driver import HIPDriver, _get_path_to_hip_runtime_dylib
 
-    amdsmi = pytest.importorskip("amdsmi")
+        assert "torch" not in sys.modules
+        ctypes.CDLL(_get_path_to_hip_runtime_dylib()).hipGetDeviceCount
+        assert not HIPDriver.is_active()
+        assert "torch" not in sys.modules
+    """)
+    env = dict(os.environ, HIP_VISIBLE_DEVICES="-1")
+    proc = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
 
-    amdsmi.amdsmi_init()
-    try:
-        assert amdsmi.amdsmi_get_processor_handles()
-    finally:
-        amdsmi.amdsmi_shut_down()
-    assert HIPDriver.is_active()
 
+def test_hip_discovery_runtime_unavailable(monkeypatch):
+    from triton.backends.amd import driver
 
-def test_hip_driver_without_amdsmi(monkeypatch):
-    from triton.backends.amd.driver import HIPDriver
+    def unavailable():
+        raise RuntimeError("HIP runtime unavailable")
 
-    monkeypatch.setitem(sys.modules, "amdsmi", None)
-    assert HIPDriver.is_active() == (torch.cuda.is_available() and torch.version.hip is not None)
+    monkeypatch.setattr(driver, "_get_path_to_hip_runtime_dylib", unavailable)
+    assert driver.HIPDriver.is_active() == (torch.cuda.is_available() and torch.version.hip is not None)

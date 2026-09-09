@@ -117,8 +117,9 @@ def _get_path_to_hip_runtime_dylib():
         site_packages = [user_site] + site_packages
     for path in site_packages:
         path = os.path.join(path, "torch", "lib", lib_name)
-        if os.path.exists(path):
-            return path
+        for candidate in sorted(Path(path).parent.glob(f"{lib_name}*")):
+            if candidate.is_file():
+                return str(candidate)
         paths.append(path)
 
     # Then try to see if developer provides a HIP runtime dynamic library using LD_LIBARAY_PATH.
@@ -163,7 +164,7 @@ def _get_path_to_hip_runtime_dylib():
     # each line looks like the following:
     # libamdhip64.so.6 (libc6,x86-64) => /opt/rocm-6.0.2/lib/libamdhip64.so.6
     # libamdhip64.so (libc6,x86-64) => /opt/rocm-6.0.2/lib/libamdhip64.so
-    locs = [line.split()[-1] for line in libs.splitlines() if line.strip().endswith(lib_name)]
+    locs = [line.split()[-1] for line in libs.splitlines() if line.lstrip().startswith(lib_name)]
     for loc in locs:
         if os.path.exists(loc):
             return loc
@@ -399,17 +400,19 @@ class HIPDriver(GPUDriver):
 
     @staticmethod
     def is_active():
+        import ctypes
+
         try:
-            import amdsmi
-            amdsmi.amdsmi_init()
-            try:
-                if not amdsmi.amdsmi_get_processor_handles():
-                    return False
-            finally:
-                amdsmi.amdsmi_shut_down()
-        except Exception:
-            # Missing or unusable management support must not rule out HIP.
-            pass
+            libhip = ctypes.CDLL(_get_path_to_hip_runtime_dylib())
+            get_device_count = libhip.hipGetDeviceCount
+            get_device_count.argtypes = [ctypes.POINTER(ctypes.c_int)]
+            get_device_count.restype = ctypes.c_int
+            count = ctypes.c_int()
+            status = get_device_count(ctypes.byref(count))
+            if status == 100 or (status == 0 and count.value == 0):  # hipErrorNoDevice or hipSuccess
+                return False
+        except (RuntimeError, OSError, AttributeError, subprocess.CalledProcessError):
+            pass  # Let the existing Torch check handle uncertain discovery.
         try:
             import torch
             return torch.cuda.is_available() and (torch.version.hip is not None)
