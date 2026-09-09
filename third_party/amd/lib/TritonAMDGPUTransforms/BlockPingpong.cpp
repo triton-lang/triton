@@ -1054,7 +1054,7 @@ void Pingponger::getDotPingponged() {
   }
 
   if (numOfDotLikeOps == 2) {
-    if (numStages != 4)
+    if (numStages != 4 || dotOps.size() != 2)
       return;
 
     if (transformChainedDotSchedule(builder, loc).failed()) {
