@@ -380,15 +380,13 @@ Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
   }
   auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType);
   return StoreOp::create(b, loc, ptrTensor, tensor, storeMask,
-                         CacheModifier::NONE, EvictionPolicy::NORMAL,
                          /*ignore_cta=*/true);
 }
 
 Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
                               RankedTensorType tensorType) {
   auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType);
-  Value value = LoadOp::create(b, loc, ptrTensor, CacheModifier::NONE,
-                               EvictionPolicy::NORMAL, false);
+  Value value = LoadOp::create(b, loc, ptrTensor);
   // Finish replicated reads before another thread can update the scratch.
   auto freeVarMasks = toLinearLayout(tensorType).getFreeVariableMasks();
   if (freeVarMasks.lookup(b.getStringAttr("lane")) ||
@@ -418,7 +416,7 @@ AuxDataMap::ThreadLayout getThreadLayout(FuncOp entryPoint,
     if (auto wsOp = dyn_cast<WarpSpecializePartitionsOp>(op))
       layout.numBaseThreads = std::max<int>(
           layout.numBaseThreads, wsOp.getPartitionRegions().size() + 1);
-    hasTMA |= hooks.isTMAOp(op);
+    hasTMA |= hooks.isTMAOp(op) || isa<AsyncCopyMbarrierArriveOp>(op);
     hasTC |= isa<MMAv5OpInterface, TCGen5CommitOp, TMEMCopyOp>(op);
     hasCLC |= hooks.isCLCOp(op);
   });
@@ -493,6 +491,8 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
     return failure();
   int numCTAs = lookupNumCTAs(module);
   threadLayout = getThreadLayout(entryPoint, hooks);
+  entryPoint.walk(
+      [&](AsyncCopyMbarrierArriveOp) { hasAsyncCopyMbarriers = true; });
   hasAsyncProxyFenceTracking =
       hooks.needsAsyncProxyFenceTracking(module) &&
       bufferStatePlans[(int)MemType::SHARED_MEM].numLanes != 0;

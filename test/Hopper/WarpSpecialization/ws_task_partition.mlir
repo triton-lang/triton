@@ -37,4 +37,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     }
     tt.return
   }
+
+// CHECK-LABEL: @load_with_cache_policy
+// CHECK: %[[#LOAD:]] = tt.load {{.*}} {async_task_id = array<i32: 0>, cachePolicy = #ttng.cache_policy<l1 = evict_last>}
+// CHECK: %[[#LOCAL:]] = ttg.local_alloc %[[#LOAD]]
+// CHECK: ttng.warp_group_dot %[[#LOCAL]], {{.*}} {async_task_id = array<i32: 1, 2>
+  tt.func @load_with_cache_policy(%arg0: tensor<128x64x!tt.ptr<f16>, #blocked>, %arg1: !tt.tensordesc<64x256xf16>, %arg2: i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #mma>
+    %0 = scf.for %arg3 = %c0_i32 to %arg2 step %c1_i32 iter_args(%arg4 = %cst) -> tensor<128x256xf32, #mma> : i32 {
+      %1 = tt.load %arg0 {cachePolicy = #ttng.cache_policy<l1 = evict_last>} : tensor<128x64x!tt.ptr<f16>, #blocked>
+      %2 = ttg.local_alloc %1 : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+      %3 = tt.descriptor_load %arg1[%arg3, %arg3] : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #blocked1>
+      %4 = ttg.local_alloc %3 : (tensor<64x256xf16, #blocked1>) -> !ttg.memdesc<64x256xf16, #shared, #smem>
+      %5 = ttng.warp_group_dot %2, %4, %arg4 {inputPrecision = 0 : i32} : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<128x256xf32, #mma>
+      scf.yield %5 : tensor<128x256xf32, #mma>
+    }
+    tt.return
+  }
 }

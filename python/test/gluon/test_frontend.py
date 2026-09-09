@@ -25,7 +25,7 @@ from triton.experimental.gluon.language.amd.cdna5 import (
 )
 from triton.experimental.gluon.language.extra import libdevice
 
-from triton._filecheck import filecheck_test, run_parser
+from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
 from triton.runtime.jit import MockTensor
 import triton.language as tl
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
@@ -2610,6 +2610,182 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
+def detailed_cache_policy_kernel(inp, out, l1_load_policy: ttgl.constexpr, modifier_load_policy: ttgl.constexpr,
+                                 store_policy: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    offsets = ttgl.arange(0, 128, layout)
+    # CHECK: %[[L1_VALUE:.*]] = tt.load {{.*}} {cachePolicy = #ttng.cache_policy<l1 = no_allocate, l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = {{.*}} : f32, l2_prefetch_size = 128 : i32>}
+    l1_value = ttgl.load(inp + offsets, cache_policy=l1_load_policy)
+    # CHECK: %[[MODIFIER_VALUE:.*]] = tt.load {{.*}} {cachePolicy = #ttng.cache_policy<cache_modifier = cg, l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = {{.*}} : f32, l2_prefetch_size = 128 : i32>}
+    modifier_value = ttgl.load(inp + offsets, cache_policy=modifier_load_policy)
+    # CHECK: tt.store {{.*}} {cachePolicy = #ttng.cache_policy<l1 = no_allocate, l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = {{.*}} : f32>}
+    ttgl.store(out + offsets, l1_value + modifier_value, cache_policy=store_policy)
+
+
+@gluon.jit
+def generic_cache_policy_kernel(inp, out, layout: ttgl.constexpr, load_policy: ttgl.constexpr,
+                                store_policy: ttgl.constexpr):
+    offsets = ttgl.arange(0, 256, layout)
+    # CHECK: %[[VALUE:.*]] = tt.load {{.*}} {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_last>}
+    value = ttgl.load(inp + offsets, cache_policy=load_policy)
+    # CHECK: tt.store {{.*}} {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_first>}
+    ttgl.store(out + offsets, value, cache_policy=store_policy)
+
+
+@gluon.jit
+def legacy_cache_policy_kernel(inp, out, layout: ttgl.constexpr):
+    offsets = ttgl.arange(0, 256, layout)
+    # CHECK: %[[VALUE:.*]] = tt.load {{.*}} {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_last>}
+    value = ttgl.load(inp + offsets, cache_modifier=".cg", eviction_policy="evict_last")
+    # CHECK: tt.store {{.*}} {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_first>}
+    ttgl.store(out + offsets, value, cache_modifier=".cs", eviction_policy="evict_first")
+
+
+@pytest.mark.parametrize("target", [HOPPER_TARGET, HIP_TARGET_CDNA4])
+def test_generic_cache_policy_frontend(target):
+    layout = ttgl.BlockedLayout([1], [target.warp_size], [4], [0])
+    load_policy = ttgl.CachePolicy(".cg", "evict_last")
+    store_policy = ttgl.CachePolicy(".cs", "evict_first")
+    run_filecheck_test(
+        generic_cache_policy_kernel,
+        *make_args(MockTensor(ttgl.float32), MockTensor(ttgl.float32), layout, load_policy, store_policy),
+        target=target,
+    )
+
+
+@pytest.mark.parametrize("target", [HOPPER_TARGET, HIP_TARGET_CDNA4])
+def test_legacy_cache_policy_normalization(target):
+    layout = ttgl.BlockedLayout([1], [target.warp_size], [4], [0])
+    run_filecheck_test(
+        legacy_cache_policy_kernel,
+        *make_args(MockTensor(ttgl.float32), MockTensor(ttgl.float32), layout),
+        target=target,
+    )
+
+
+def test_generic_cache_policy_validation():
+    assert ttgl.CachePolicy().cache_modifier == "none"
+    assert ttgl.CachePolicy(".cg").cache_modifier == "cg"
+    with pytest.raises(ValueError, match="Unsupported cache modifier"):
+        ttgl.CachePolicy(".invalid")
+    with pytest.raises(ValueError, match="Unsupported eviction policy"):
+        ttgl.CachePolicy(eviction_policy="evict_unchanged")
+
+
+def test_detailed_cache_policy_frontend():
+    l2_policy = ttgl.nvidia.ampere.FractionalEvictionPolicy("evict_last", 0.33, "evict_first")
+    l1_load_policy = ttgl.nvidia.ampere.CachePolicy(
+        l1="no_allocate",
+        l2=l2_policy,
+        l2_prefetch_size=128,
+    )
+    modifier_load_policy = ttgl.nvidia.ampere.CachePolicy(
+        cache_modifier=".cg",
+        l2=l2_policy,
+        l2_prefetch_size=128,
+    )
+    store_policy = ttgl.nvidia.ampere.CachePolicy(l1="no_allocate", l2=l2_policy)
+    run_filecheck_test(
+        detailed_cache_policy_kernel,
+        *make_args(
+            MockTensor(ttgl.float32),
+            MockTensor(ttgl.float32),
+            l1_load_policy,
+            modifier_load_policy,
+            store_policy,
+        ),
+    )
+
+
+def test_detailed_cache_policy_rejects_cache_modifier_with_l1():
+    invalid_policy = ttgl.nvidia.ampere.CachePolicy(cache_modifier=".cg", l1="no_allocate")
+    valid_policy = ttgl.nvidia.ampere.CachePolicy(l1="no_allocate")
+    with pytest.raises(
+            CompilationError,
+            match="cache modifier cannot be combined with an L1 eviction priority",
+    ):
+        run_parser(
+            detailed_cache_policy_kernel,
+            *make_args(
+                MockTensor(ttgl.float32),
+                MockTensor(ttgl.float32),
+                invalid_policy,
+                valid_policy,
+                valid_policy,
+            ),
+        )
+
+
+def test_detailed_cache_policy_validation():
+    assert not hasattr(ttgl.nvidia, "CachePolicy")
+    assert not hasattr(ttgl.nvidia, "FractionalEvictionPolicy")
+    assert ttgl.nvidia.hopper.CachePolicy is ttgl.nvidia.ampere.CachePolicy
+    assert ttgl.nvidia.blackwell.CachePolicy is ttgl.nvidia.ampere.CachePolicy
+    assert ttgl.nvidia.rubin.CachePolicy is ttgl.nvidia.ampere.CachePolicy
+    assert ttgl.nvidia.hopper.FractionalEvictionPolicy is ttgl.nvidia.ampere.FractionalEvictionPolicy
+    assert ttgl.nvidia.blackwell.FractionalEvictionPolicy is ttgl.nvidia.ampere.FractionalEvictionPolicy
+    assert ttgl.nvidia.rubin.FractionalEvictionPolicy is ttgl.nvidia.ampere.FractionalEvictionPolicy
+    assert ttgl.nvidia.ampere.CachePolicy(cache_modifier=".cg").cache_modifier == "cg"
+    assert ttgl.nvidia.ampere.CachePolicy(l2_prefetch_size=64).l2_prefetch_size == 64
+    with pytest.raises(ValueError, match="Unsupported cache modifier"):
+        ttgl.nvidia.ampere.CachePolicy(cache_modifier=".invalid")
+    with pytest.raises(ValueError, match="Unsupported L1"):
+        ttgl.nvidia.ampere.CachePolicy(l1="evict_immediately")
+    with pytest.raises(ValueError, match=r"\(0, 1\]"):
+        ttgl.nvidia.ampere.FractionalEvictionPolicy("evict_first", 0.0)
+    with pytest.raises(ValueError, match="Unsupported L2 secondary"):
+        ttgl.nvidia.ampere.FractionalEvictionPolicy("evict_first", 0.5, "evict_last")
+    with pytest.raises(ValueError, match="L2 prefetch size"):
+        ttgl.nvidia.ampere.CachePolicy(l2_prefetch_size=32)
+    with pytest.raises(ValueError, match="L2 prefetch size"):
+        ttgl.nvidia.ampere.CachePolicy(l2_prefetch_size=64.0)
+
+
+@gluon.jit
+def cache_policy_with_cache_modifier_kernel(inp, policy: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    offsets = ttgl.arange(0, 128, layout)
+    ttgl.load(inp + offsets, cache_modifier=".cg", cache_policy=policy)
+
+
+@gluon.jit
+def cache_policy_with_eviction_policy_kernel(inp, policy: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    offsets = ttgl.arange(0, 128, layout)
+    ttgl.load(inp + offsets, eviction_policy="evict_first", cache_policy=policy)
+
+
+@gluon.jit
+def store_cache_policy_with_cache_modifier_kernel(out, policy: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    offsets = ttgl.arange(0, 128, layout)
+    ttgl.store(out + offsets, 0.0, cache_modifier=".cs", cache_policy=policy)
+
+
+@gluon.jit
+def async_cache_policy_with_eviction_policy_kernel(inp, policy: ttgl.constexpr):
+    smem = ttgl.allocate_shared_memory(inp.dtype.element_ty, [128], ttgl.SwizzledSharedLayout(1, 1, 1, order=[0]))
+    layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
+    offsets = ttgl.arange(0, 128, layout)
+    async_copy.async_load(smem, inp + offsets, eviction_policy="evict_first", cache_policy=policy)
+
+
+@pytest.mark.parametrize(
+    "kernel, message",
+    [
+        (cache_policy_with_cache_modifier_kernel, "cache_policy and cache_modifier are mutually exclusive"),
+        (cache_policy_with_eviction_policy_kernel, "cache_policy and eviction_policy are mutually exclusive"),
+        (store_cache_policy_with_cache_modifier_kernel, "cache_policy and cache_modifier are mutually exclusive"),
+        (async_cache_policy_with_eviction_policy_kernel, "cache_policy and eviction_policy are mutually exclusive"),
+    ],
+)
+def test_detailed_cache_policy_rejects_legacy_policy_arguments(kernel, message):
+    policy = ttgl.nvidia.ampere.CachePolicy(l1="evict_first")
+    with pytest.raises(CompilationError, match=message):
+        run_parser(kernel, *make_args(MockTensor(ttgl.float32), policy))
+
+
+@gluon.jit
 def async_copy_kernel(inp, xnumel, XBLOCK: ttgl.constexpr):
     smem = ttgl.allocate_shared_memory(inp.dtype.element_ty, [XBLOCK], ttgl.SwizzledSharedLayout(1, 1, 1, order=[0]))
     block_layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
@@ -2624,6 +2800,26 @@ def async_copy_kernel(inp, xnumel, XBLOCK: ttgl.constexpr):
     async_copy.mbarrier_arrive(mbar, increment_count=False)
     async_copy.commit_group()
     async_copy.wait_group(0)
+
+
+@gluon.jit
+def detailed_cache_policy_async_copy_kernel(inp, policy: ttgl.constexpr):
+    smem = ttgl.allocate_shared_memory(inp.dtype.element_ty, [128], ttgl.SwizzledSharedLayout(1, 1, 1, order=[0]))
+    layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
+    offsets = ttgl.arange(0, 128, layout)
+    # CHECK: ttg.async_copy_global_to_local {{.*}} {cachePolicy = #ttng.cache_policy<l2_primary = evict_last, {{.*}}l2_prefetch_size = 256 : i32>}
+    async_copy.async_load(smem, inp + offsets, cache_policy=policy)
+
+
+def test_detailed_cache_policy_async_copy_frontend():
+    policy = ttgl.nvidia.ampere.CachePolicy(
+        l2=ttgl.nvidia.ampere.FractionalEvictionPolicy("evict_last", 0.82),
+        l2_prefetch_size=256,
+    )
+    run_filecheck_test(
+        detailed_cache_policy_async_copy_kernel,
+        *make_args(MockTensor(ttgl.float16), policy),
+    )
 
 
 @pytest.mark.parametrize("target", [AMPERE_TARGET, HOPPER_TARGET, BLACKWELL_TARGET])
@@ -2649,7 +2845,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %6 = ttg.async_copy_global_to_local %5, %0 : tensor<128x!tt.ptr<f16>, #blocked> -> <128xf16, #shared, #smem, mutable>
     %7 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x!tt.ptr<f16>, #blocked>
     %8 = tt.addptr %7, %1 : tensor<128x!tt.ptr<f16>, #blocked>, tensor<128xi32, #blocked>
-    %9 = ttg.async_copy_global_to_local %8, %0 mask %3 cacheModifier = ca evictionPolicy = evict_last {isVolatile = true} : tensor<128x!tt.ptr<f16>, #blocked> -> <128xf16, #shared, #smem, mutable>
+    %9 = ttg.async_copy_global_to_local %8, %0 mask %3 {cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_last>, isVolatile = true} : tensor<128x!tt.ptr<f16>, #blocked> -> <128xf16, #shared, #smem, mutable>
     %10 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
     ttng.async_copy_mbarrier_arrive %10 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
     ttng.async_copy_mbarrier_arrive %10 {noIncrement} : !ttg.memdesc<1xi64, #shared, #smem, mutable>
@@ -3180,7 +3376,8 @@ def amd_async_copy_shared_to_global(ptr):
 
     # test mask
     mask = (y_offset < 64)[:, None]
-    cdna5_async_copy.shared_to_global(ptr + offsets, smem, mask)
+    # CHECK: amdg.async_copy_local_to_global {{.*}} mask {{.*}} cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>
+    cdna5_async_copy.shared_to_global(ptr + offsets, smem, mask, cache_modifier=".cg")
 
     cdna5_async_copy.commit_group()
 
@@ -3188,6 +3385,7 @@ def amd_async_copy_shared_to_global(ptr):
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA5])
 def test_amd_async_copy_shared_to_global(target):
     ptr = MockTensor(ttgl.float16)
+    run_filecheck_test(amd_async_copy_shared_to_global, *make_args(ptr), target=target)
     mod = run_parser(amd_async_copy_shared_to_global, *make_args(ptr), target=target)
     expecttest.assert_expected_inline(
         anonymize_ir(mod.str_nodebug()), """\
@@ -3218,7 +3416,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %14 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x16x!tt.ptr<f16>, #blocked>
     %15 = tt.addptr %14, %8 : tensor<128x16x!tt.ptr<f16>, #blocked>, tensor<128x16xi32, #blocked>
     %16 = tt.broadcast %13 : tensor<128x1xi1, #blocked> -> tensor<128x16xi1, #blocked>
-    %17 = amdg.async_copy_local_to_global %0, %15 mask %16 : !ttg.memdesc<128x16xf16, #shared, #smem, mutable> -> tensor<128x16x!tt.ptr<f16>, #blocked>
+    %17 = amdg.async_copy_local_to_global %0, %15 mask %16 cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal> : !ttg.memdesc<128x16xf16, #shared, #smem, mutable> -> tensor<128x16x!tt.ptr<f16>, #blocked>
     %18 = ttg.async_commit_group
     tt.return
   }
@@ -3461,9 +3659,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %7 = tt.broadcast %5 : tensor<1x16xi32, #blocked> -> tensor<128x16xi32, #blocked>
     %8 = arith.addi %6, %7 : tensor<128x16xi32, #blocked>
     %9 = amdg.buffer_load_to_local %arg0[%8] into %0 : !tt.ptr<f16>[tensor<128x16xi32, #blocked>]  -> <128x16xf16, #shared, #smem, mutable>
-    %10 = amdg.buffer_load_to_local %arg0[%8] cacheModifier = ca into %0 : !tt.ptr<f16>[tensor<128x16xi32, #blocked>]  -> <128x16xf16, #shared, #smem, mutable>
-    %11 = amdg.buffer_load_to_local %arg0[%8] cacheModifier = cg into %0 : !tt.ptr<f16>[tensor<128x16xi32, #blocked>]  -> <128x16xf16, #shared, #smem, mutable>
-    %12 = amdg.buffer_load_to_local %arg0[%8] cacheModifier = cv into %0 : !tt.ptr<f16>[tensor<128x16xi32, #blocked>]  -> <128x16xf16, #shared, #smem, mutable>
+    %10 = amdg.buffer_load_to_local %arg0[%8] cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_normal> into %0 : !tt.ptr<f16>[tensor<128x16xi32, #blocked>]  -> <128x16xf16, #shared, #smem, mutable>
+    %11 = amdg.buffer_load_to_local %arg0[%8] cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal> into %0 : !tt.ptr<f16>[tensor<128x16xi32, #blocked>]  -> <128x16xf16, #shared, #smem, mutable>
+    %12 = amdg.buffer_load_to_local %arg0[%8] cachePolicy = #tt.cache_policy<cache_modifier = cv, eviction_policy = evict_normal> into %0 : !tt.ptr<f16>[tensor<128x16xi32, #blocked>]  -> <128x16xf16, #shared, #smem, mutable>
     %c64_i32 = arith.constant 64 : i32
     %cst_1 = arith.constant dense<64> : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
     %13 = arith.cmpi slt, %1, %cst_1 : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
@@ -3527,10 +3725,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %cst = arith.constant dense<true> : tensor<64x64xi1, #blocked>
     %cst_0 = arith.constant 1.000000e+00 : f32
     %cst_1 = arith.constant dense<1.000000e+00> : tensor<64x64xf32, #blocked>
-    %3 = amdg.buffer_load %arg0[%2], %cst, %cst_1 cacheModifier = ca : !tt.ptr<f32> -> tensor<64x64xf32, #blocked>
-    amdg.buffer_store %3, %arg1[%2], %cst cacheModifier = cs : !tt.ptr<f32> -> tensor<64x64xf32, #blocked>
-    %4 = amdg.buffer_load %arg0[%2], %cst, %cst_1 cacheModifier = ca : !tt.ptr<f32> -> tensor<64x64xf32, #blocked>
-    amdg.buffer_store %4, %arg1[%2], %cst cacheModifier = cs : !tt.ptr<f32> -> tensor<64x64xf32, #blocked>
+    %3 = amdg.buffer_load %arg0[%2], %cst, %cst_1 {cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_normal>} : !tt.ptr<f32> -> tensor<64x64xf32, #blocked>
+    amdg.buffer_store %3, %arg1[%2], %cst {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_normal>} : !tt.ptr<f32> -> tensor<64x64xf32, #blocked>
+    %4 = amdg.buffer_load %arg0[%2], %cst, %cst_1 {cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_normal>} : !tt.ptr<f32> -> tensor<64x64xf32, #blocked>
+    amdg.buffer_store %4, %arg1[%2], %cst {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_normal>} : !tt.ptr<f32> -> tensor<64x64xf32, #blocked>
     %true_2 = arith.constant true
     %cst_3 = arith.constant dense<true> : tensor<64x64xi1, #gluon.auto_encoding>
     %cst_4 = arith.constant 1.000000e+00 : f32
@@ -3587,23 +3785,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %cst_1 = arith.constant dense<true> : tensor<64x1xi1, #blocked>
     %3 = tt.broadcast %cst_1 : tensor<64x1xi1, #blocked> -> tensor<64x64xi1, #blocked>
     %4 = arith.truncf %cst_0 : tensor<64x64xf32, #blocked> to tensor<64x64xf16, #blocked>
-    %5 = amdg.buffer_load %arg0[%2], %3, %4 cacheModifier = ca : !tt.ptr<f16> -> tensor<64x64xf16, #blocked>
+    %5 = amdg.buffer_load %arg0[%2], %3, %4 {cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_normal>} : !tt.ptr<f16> -> tensor<64x64xf16, #blocked>
     %6 = tt.broadcast %cst_1 : tensor<64x1xi1, #blocked> -> tensor<64x64xi1, #blocked>
-    amdg.buffer_store %5, %arg1[%2], %6 cacheModifier = cs : !tt.ptr<f16> -> tensor<64x64xf16, #blocked>
+    amdg.buffer_store %5, %arg1[%2], %6 {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_normal>} : !tt.ptr<f16> -> tensor<64x64xf16, #blocked>
     %true_2 = arith.constant true
     %cst_3 = arith.constant dense<true> : tensor<1x64xi1, #blocked>
     %7 = tt.broadcast %cst_3 : tensor<1x64xi1, #blocked> -> tensor<64x64xi1, #blocked>
     %8 = arith.truncf %cst_0 : tensor<64x64xf32, #blocked> to tensor<64x64xf16, #blocked>
-    %9 = amdg.buffer_load %arg0[%2], %7, %8 cacheModifier = ca : !tt.ptr<f16> -> tensor<64x64xf16, #blocked>
+    %9 = amdg.buffer_load %arg0[%2], %7, %8 {cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_normal>} : !tt.ptr<f16> -> tensor<64x64xf16, #blocked>
     %10 = tt.broadcast %cst_3 : tensor<1x64xi1, #blocked> -> tensor<64x64xi1, #blocked>
-    amdg.buffer_store %9, %arg1[%2], %10 cacheModifier = cs : !tt.ptr<f16> -> tensor<64x64xf16, #blocked>
+    amdg.buffer_store %9, %arg1[%2], %10 {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_normal>} : !tt.ptr<f16> -> tensor<64x64xf16, #blocked>
     %11 = tt.broadcast %cst_3 : tensor<1x64xi1, #blocked> -> tensor<64x64xi1, #blocked>
     %cst_4 = arith.constant 1.000000e+00 : f32
     %12 = arith.truncf %cst_4 : f32 to f16
     %13 = tt.splat %12 : f16 -> tensor<64x64xf16, #blocked>
-    %14 = amdg.buffer_load %arg0[%2], %11, %13 cacheModifier = ca : !tt.ptr<f16> -> tensor<64x64xf16, #blocked>
+    %14 = amdg.buffer_load %arg0[%2], %11, %13 {cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_normal>} : !tt.ptr<f16> -> tensor<64x64xf16, #blocked>
     %15 = tt.broadcast %cst_3 : tensor<1x64xi1, #blocked> -> tensor<64x64xi1, #blocked>
-    amdg.buffer_store %14, %arg1[%2], %15 cacheModifier = cs : !tt.ptr<f16> -> tensor<64x64xf16, #blocked>
+    amdg.buffer_store %14, %arg1[%2], %15 {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_normal>} : !tt.ptr<f16> -> tensor<64x64xf16, #blocked>
     tt.return
   }
 }
@@ -3884,13 +4082,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     %cst = arith.constant dense<17> : tensor<16x32xi8, #blocked>
     %c2_i8 = arith.constant 2 : i8
     %cst_0 = arith.constant dense<2> : tensor<16x64xi8, #blocked1>
-    %0 = arith.extui %cst_0 : tensor<16x64xi8, #blocked1> to tensor<16x64xi16, #blocked1>
-    %c7_i32 = arith.constant 7 : i32
-    %1 = arith.trunci %c7_i32 : i32 to i16
-    %2 = tt.splat %1 : i16 -> tensor<16x64xi16, #blocked1>
-    %3 = arith.shli %0, %2 : tensor<16x64xi16, #blocked1>
-    %4 = tt.bitcast %3 : tensor<16x64xi16, #blocked1> -> tensor<16x64xbf16, #blocked1>
-    %5 = amdg.scaled_upcast_fp4 %cst scale %4 {axis = 1 : i32} : tensor<16x32xi8, #blocked>, tensor<16x64xbf16, #blocked1> -> tensor<16x64xbf16, #blocked1>
+    %0 = amdg.scaled_upcast_fp4 %cst scale %cst_0 {axis = 1 : i32} : tensor<16x32xi8, #blocked>, tensor<16x64xi8, #blocked1> -> tensor<16x64xbf16, #blocked1>
     tt.return
   }
 }
@@ -3939,6 +4131,37 @@ def test_amd_scaled_downcast_fp8_cdna(target, fp8_format, ir_dtype):
     assert f"-> tensor<16x64x{ir_dtype}" in module_text
 
 
+@pytest.mark.parametrize("target, threads_per_warp, expect_layout", [
+    (HIP_TARGET_CDNA3, [8, 8],
+     ttgl.DistributedLinearLayout(reg_bases=[[8, 0]], lane_bases=[[0, 0], [0, 0], [0, 1], [1, 0], [2, 0], [4, 0]],
+                                  warp_bases=[], block_bases=[], shape=[16, 2])),
+    (HIP_TARGET_CDNA4, [8, 8],
+     ttgl.DistributedLinearLayout(reg_bases=[[8, 0]], lane_bases=[[0, 0], [0, 0], [0, 1], [1, 0], [2, 0], [4, 0]],
+                                  warp_bases=[], block_bases=[], shape=[16, 2])),
+    (HIP_TARGET_CDNA5, [8, 4],
+     ttgl.DistributedLinearLayout(reg_bases=[[0, 1], [8, 0]], lane_bases=[[0, 0], [0, 0], [1, 0], [2, 0], [4, 0]],
+                                  warp_bases=[], block_bases=[], shape=[16, 2])),
+], ids=["cdna3", "cdna4", "cdna5"])
+def test_amd_scaled_upcast_fp4_compact_scale_cdna(target, threads_per_warp, expect_layout):
+    scaled_upcast = _get_amd_scaled_upcast(target)
+
+    @gluon.jit
+    def kernel(THREADS_PER_WARP: ttgl.constexpr, EXPECT_LAYOUT: ttgl.constexpr):
+        packed_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], THREADS_PER_WARP, [1, 1], [1, 0])
+        src = ttgl.full([16, 32], 0x11, ttgl.uint8, packed_layout)
+        scale_layout: ttgl.constexpr = ttgl.amd.get_scaled_upcast_fp4_scale_layout(src, 32, ttgl.bfloat16, axis=1)
+        ttgl.static_assert(scale_layout == EXPECT_LAYOUT)
+        scale = ttgl.full([16, 2], 0x02, ttgl.uint8, scale_layout)
+        scaled_upcast(src, scale, ttgl.bfloat16, axis=1)
+
+    module = run_parser(kernel, *make_args(threads_per_warp, expect_layout, num_warps=1), target=target)
+    ir = anonymize_ir(module.str_nodebug())
+    assert "ttg.convert_layout" not in ir
+    assert "tensor<16x2xi8" in ir
+    assert "amdg.scaled_upcast_fp4" in ir
+    assert "tensor<16x64xbf16" in ir
+
+
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4], ids=["cdna3", "cdna4"])
 def test_amd_scaled_upcast_fp8_cdna(target):
     scaled_upcast = _get_amd_scaled_upcast(target)
@@ -3961,13 +4184,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     %1 = tt.splat %0 : f8E4M3FN -> tensor<16x64xf8E4M3FN, #blocked>
     %c2_i8 = arith.constant 2 : i8
     %cst_0 = arith.constant dense<2> : tensor<16x64xi8, #blocked>
-    %2 = arith.extui %cst_0 : tensor<16x64xi8, #blocked> to tensor<16x64xi16, #blocked>
-    %c7_i32 = arith.constant 7 : i32
-    %3 = arith.trunci %c7_i32 : i32 to i16
-    %4 = tt.splat %3 : i16 -> tensor<16x64xi16, #blocked>
-    %5 = arith.shli %2, %4 : tensor<16x64xi16, #blocked>
-    %6 = tt.bitcast %5 : tensor<16x64xi16, #blocked> -> tensor<16x64xbf16, #blocked>
-    %7 = amdg.scaled_upcast_fp8 %1 scale %6 : tensor<16x64xf8E4M3FN, #blocked>, tensor<16x64xbf16, #blocked> -> tensor<16x64xbf16, #blocked>
+    %2 = amdg.scaled_upcast_fp8 %1 scale %cst_0 : tensor<16x64xf8E4M3FN, #blocked>, tensor<16x64xi8, #blocked> -> tensor<16x64xbf16, #blocked>
     tt.return
   }
 }

@@ -134,6 +134,38 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
 
 // -----
 
+#detailed_cache_policy = #ttng.cache_policy<l1 = evict_last, l2_primary = evict_first, l2_secondary = evict_unchanged, l2_fraction = 3.300000e-01 : f32, l2_prefetch_size = 128 : i32>
+#store_detailed_cache_policy = #ttng.cache_policy<l1 = evict_last, l2_primary = evict_first, l2_secondary = evict_unchanged, l2_fraction = 3.300000e-01 : f32>
+#modifier_l2_cache_policy = #ttng.cache_policy<cache_modifier = cg, l2_primary = evict_last, l2_secondary = evict_unchanged, l2_fraction = 5.000000e-01 : f32>
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: load_with_detailed_cache_policy
+  tt.func @load_with_detailed_cache_policy(%ptrs : tensor<128x!tt.ptr<f32>, #blocked0>) {
+    // CHECK: createpolicy.fractional.L2::evict_first.b64 $0, {{0\.33.*}};
+    // CHECK: ld.global.L1::evict_last.L2::128B.L2::cache_hint.b32
+    %value = tt.load %ptrs {cachePolicy = #detailed_cache_policy} : tensor<128x!tt.ptr<f32>, #blocked0>
+    tt.return
+  }
+
+  // CHECK-LABEL: store_with_detailed_cache_policy
+  tt.func @store_with_detailed_cache_policy(%ptrs : tensor<128x!tt.ptr<f32>, #blocked0>, %value : tensor<128xf32, #blocked0>) {
+    // CHECK: createpolicy.fractional.L2::evict_first.b64 $0, {{0\.33.*}};
+    // CHECK: st.global.L1::evict_last.L2::cache_hint.b32
+    tt.store %ptrs, %value {cachePolicy = #store_detailed_cache_policy} : tensor<128x!tt.ptr<f32>, #blocked0>
+    tt.return
+  }
+
+  // CHECK-LABEL: load_with_cache_modifier_in_policy
+  tt.func @load_with_cache_modifier_in_policy(%ptrs : tensor<128x!tt.ptr<f32>, #blocked0>) {
+    // CHECK: createpolicy.fractional.L2::evict_last.b64 $0, 0.5;
+    // CHECK: ld.global.cg.L2::cache_hint.b32
+    %value = tt.load %ptrs {cachePolicy = #modifier_l2_cache_policy} : tensor<128x!tt.ptr<f32>, #blocked0>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: store_with_cache_attr
@@ -143,7 +175,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att {{.*}} "@$3 st.global.L1::evict_last.L2::cache_hint.b32 [ $1 + 0 ], { $0 }, $2;"
     // CHECK-NOT: createpolicy
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att {{.*}} "@$3 st.global.L1::evict_last.L2::cache_hint.b32 [ $1 + 0 ], { $0 }, $2;"
-    tt.store %a_ptr_init, %cst_0, %cst evictionPolicy = evict_last cacheModifier = ca : tensor<256x!tt.ptr<f32>, #blocked0>
+    tt.store %a_ptr_init, %cst_0, %cst {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_last>} : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.return
   }
 }
@@ -159,7 +191,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att {{.*}} "mov.u32 $0, $1;\0A\09@$4 ld.global.L1::evict_first.L2::cache_hint.b32 { $0 }, [ $2 + 0 ], $3;"
     // CHECK-NOT: createpolicy
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att {{.*}} "mov.u32 $0, $1;\0A\09@$4 ld.global.L1::evict_first.L2::cache_hint.b32 { $0 }, [ $2 + 0 ], $3;"
-      %1 = tt.load %a_ptr_init, %cst, %cst_0 evictionPolicy = evict_first : tensor<256x!tt.ptr<f32>, #blocked0>
+      %1 = tt.load %a_ptr_init, %cst, %cst_0 {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_first>} : tensor<256x!tt.ptr<f32>, #blocked0>
       tt.return
   }
 }
@@ -174,7 +206,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att {{.*}} "@$3 st.global.L1::evict_last.L2::cache_hint.b32 [ $1 + 0 ], { $0 }, $2;"
     // CHECK-NOT: createpolicy
     // CHECK: llvm.inline_asm has_side_effects asm_dialect = att {{.*}} "@$3 st.global.L1::evict_last.L2::cache_hint.b32 [ $1 + 0 ], { $0 }, $2;"
-      tt.store %a_ptr_init, %cst_0, %cst evictionPolicy = evict_last : tensor<256x!tt.ptr<f32>, #blocked0>
+      tt.store %a_ptr_init, %cst_0, %cst {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_last>} : tensor<256x!tt.ptr<f32>, #blocked0>
       tt.return
   }
 }
@@ -796,15 +828,94 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #shared1D = #ttg.swizzled_shared<{vec = 2, perPhase = 1, maxPhase = 8, order = [0]}>
 #smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+#async_l2_policy = #ttng.cache_policy<l1 = evict_last, l2_primary = evict_last, l2_secondary = evict_unchanged, l2_fraction = 8.200000e-01 : f32, l2_prefetch_size = 256 : i32>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: async_cp_contiguity_hint
   tt.func @async_cp_contiguity_hint(%v: tensor<256x!tt.ptr<f16>, #blocked>, %smem: !ttg.memdesc<256xf16, #shared1D, #smem, mutable>) {
     // CHECK: cp.async.ca.shared.global [ ${{.*}} + 0 ], [ ${{.*}} + 0 ], 0x8, 0x8
     %0 = ttg.async_copy_global_to_local %v, %smem {contiguity = 4 : i32} : tensor<256x!tt.ptr<f16>, #blocked> -> !ttg.memdesc<256xf16, #shared1D, #smem, mutable>
     tt.return
   }
+
+  // CHECK-LABEL: async_cp_detailed_cache_policy
+  tt.func @async_cp_detailed_cache_policy(%v: tensor<256x!tt.ptr<f16>, #blocked>, %smem: !ttg.memdesc<256xf16, #shared1D, #smem, mutable>) {
+    // Fractional L2 policies are disabled in cp.async codegen due to a ptxas bug.
+    // CHECK-NOT: createpolicy
+    // CHECK-NOT: L1::evict_last
+    // CHECK: cp.async.ca.shared.global.L2::256B {{.*}}, 0x8, 0x8;
+    %0 = ttg.async_copy_global_to_local %v, %smem {cachePolicy = #async_l2_policy, contiguity = 4 : i32} : tensor<256x!tt.ptr<f16>, #blocked> -> !ttg.memdesc<256xf16, #shared1D, #smem, mutable>
+    tt.return
+  }
 }
 
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 8, order = [0]}>
+#smem = #ttg.shared_memory
+#ca = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_normal>
+#cg = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>
+#evict_first = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_first>
+#evict_last = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_last>
+#detailed_ca = #ttng.cache_policy<cache_modifier = ca, l2_primary = evict_last, l2_secondary = evict_unchanged, l2_fraction = 5.000000e-01 : f32, l2_prefetch_size = 128 : i32>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: async_cp_ca_16_bytes
+  tt.func @async_cp_ca_16_bytes(%src: tensor<256x!tt.ptr<f32>, #blocked>, %dst: !ttg.memdesc<256xf32, #shared, #smem, mutable>) {
+    // CHECK: cp.async.ca.shared.global {{.*}}, 0x10, 0x10;
+    %0 = ttg.async_copy_global_to_local %src, %dst {cachePolicy = #ca, contiguity = 4 : i32} : tensor<256x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<256xf32, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: async_cp_detailed_ca_16_bytes
+  tt.func @async_cp_detailed_ca_16_bytes(%src: tensor<256x!tt.ptr<f32>, #blocked>, %dst: !ttg.memdesc<256xf32, #shared, #smem, mutable>) {
+    // CHECK-NOT: createpolicy
+    // CHECK: cp.async.ca.shared.global.L2::128B {{.*}}, 0x10, 0x10;
+    %0 = ttg.async_copy_global_to_local %src, %dst {cachePolicy = #detailed_ca, contiguity = 4 : i32} : tensor<256x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<256xf32, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // Legacy eviction policies also use fractional L2 policies and must be ignored.
+  // CHECK-LABEL: async_cp_evict_first_masked_8_bytes
+  tt.func @async_cp_evict_first_masked_8_bytes(%src: tensor<256x!tt.ptr<f32>, #blocked>, %dst: !ttg.memdesc<256xf32, #shared, #smem, mutable>, %valid: i1) {
+    // CHECK-NOT: createpolicy
+    // CHECK: llvm.select
+    // CHECK: cp.async.ca.shared.global {{.*}}, 0x8, ${{[0-9]+}};
+    %mask = tt.splat %valid : i1 -> tensor<256xi1, #blocked>
+    %0 = ttg.async_copy_global_to_local %src, %dst mask %mask {cachePolicy = #evict_first, contiguity = 2 : i32} : tensor<256x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<256xf32, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: async_cp_evict_last_16_bytes
+  tt.func @async_cp_evict_last_16_bytes(%src: tensor<256x!tt.ptr<f32>, #blocked>, %dst: !ttg.memdesc<256xf32, #shared, #smem, mutable>) {
+    // CHECK-NOT: createpolicy
+    // CHECK: cp.async.cg.shared.global {{.*}}, 0x10, 0x10;
+    %0 = ttg.async_copy_global_to_local %src, %dst {cachePolicy = #evict_last, contiguity = 4 : i32} : tensor<256x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<256xf32, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: async_cp_cg_16_bytes
+  tt.func @async_cp_cg_16_bytes(%src: tensor<256x!tt.ptr<f32>, #blocked>, %dst: !ttg.memdesc<256xf32, #shared, #smem, mutable>) {
+    // CHECK: cp.async.cg.shared.global {{.*}}, 0x10, 0x10;
+    %0 = ttg.async_copy_global_to_local %src, %dst {cachePolicy = #cg, contiguity = 4 : i32} : tensor<256x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<256xf32, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // Smaller transfers must use ca because cp.async.cg only supports 16 bytes.
+  // CHECK-LABEL: async_cp_cg_8_bytes
+  tt.func @async_cp_cg_8_bytes(%src: tensor<256x!tt.ptr<f32>, #blocked>, %dst: !ttg.memdesc<256xf32, #shared, #smem, mutable>) {
+    // CHECK: cp.async.ca.shared.global {{.*}}, 0x8, 0x8;
+    %0 = ttg.async_copy_global_to_local %src, %dst {cachePolicy = #cg, contiguity = 2 : i32} : tensor<256x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<256xf32, #shared, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: async_cp_cg_4_bytes
+  tt.func @async_cp_cg_4_bytes(%src: tensor<256x!tt.ptr<f32>, #blocked>, %dst: !ttg.memdesc<256xf32, #shared, #smem, mutable>) {
+    // CHECK: cp.async.ca.shared.global {{.*}}, 0x4, 0x4;
+    %0 = ttg.async_copy_global_to_local %src, %dst {cachePolicy = #cg} : tensor<256x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<256xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}
 
 // -----
 
@@ -1012,6 +1123,132 @@ module attributes {"ttg.num-warps" = 1 : i32} {
     //CHECK: nvvm.shfl.sync
     //CHECK-COUNT-2: llvm.select
     %0 = ttg.convert_layout %arg0 : tensor<8x32xi1, #linear0> -> tensor<8x32xi1, #linear1>
+    tt.return
+  }
+}
+
+// -----
+
+#broadcast_src = #ttg.linear<{register=[[0, 1], [0, 2]], lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp=[[32, 0], [64, 0], [0, 0]], block=[]}>
+#broadcast_dst = #ttg.linear<{register=[[0, 1], [0, 2], [8, 0]], lane=[[0, 0], [0, 0], [1, 0], [2, 0], [4, 0]], warp=[[32, 0], [64, 0], [16, 0]], block=[]}>
+#broadcast_expanded = #ttg.linear<{register=[[0, 1], [0, 2], [4, 0], [8, 0]], lane=[[0, 0], [0, 0], [0, 0], [1, 0], [2, 0]], warp=[[32, 0], [64, 0], [16, 0]], block=[]}>
+#register_src = #ttg.linear<{register=[[32, 0]], lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp=[[0, 0], [64, 0], [0, 0]], block=[]}>
+#register_dst = #ttg.linear<{register=[], lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp=[[32, 0], [64, 0], [0, 0]], block=[]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
+  // The source repeats its rows in warp ^ 4. Packed columns share a source lane.
+  // CHECK-LABEL: @convert_layout_broadcast_warp
+  tt.func @convert_layout_broadcast_warp(%arg0: tensor<128x4xf16, #broadcast_src>) {
+    // CHECK-NOT: nvvm.bar
+    // CHECK-COUNT-4: nvvm.shfl.sync
+    // CHECK-NOT: nvvm.shfl.sync
+    // CHECK-NOT: nvvm.bar
+    // CHECK: llvm.return
+    %0 = ttg.convert_layout %arg0 : tensor<128x4xf16, #broadcast_src> -> tensor<128x4xf16, #broadcast_dst>
+    tt.return
+  }
+
+  // Two register bits select source lanes, exceeding the shuffle heuristic.
+  // CHECK-LABEL: @convert_layout_broadcast_warp_expanded
+  tt.func @convert_layout_broadcast_warp_expanded(%arg0: tensor<128x4xf16, #broadcast_src>) {
+    // CHECK-NOT: nvvm.shfl.sync
+    // CHECK: nvvm.barrier
+    // CHECK: llvm.return
+    %0 = ttg.convert_layout %arg0 : tensor<128x4xf16, #broadcast_src> -> tensor<128x4xf16, #broadcast_expanded>
+    tt.return
+  }
+
+  // Reversing the conversion requires values from another warp.
+  // CHECK-LABEL: @convert_layout_broadcast_warp_reverse
+  tt.func @convert_layout_broadcast_warp_reverse(%arg0: tensor<128x4xf16, #broadcast_dst>) {
+    // CHECK-NOT: nvvm.shfl.sync
+    // CHECK: nvvm.barrier
+    // CHECK: llvm.return
+    %0 = ttg.convert_layout %arg0 : tensor<128x4xf16, #broadcast_dst> -> tensor<128x4xf16, #broadcast_src>
+    tt.return
+  }
+
+  // The source register is warp & 1, so keep the shared-memory fallback.
+  // CHECK-LABEL: @convert_layout_warp_dependent_register
+  tt.func @convert_layout_warp_dependent_register(%arg0: tensor<128x1xf32, #register_src>) {
+    // CHECK-NOT: nvvm.shfl.sync
+    // CHECK: nvvm.barrier
+    // CHECK: llvm.return
+    %0 = ttg.convert_layout %arg0 : tensor<128x1xf32, #register_src> -> tensor<128x1xf32, #register_dst>
+    tt.return
+  }
+}
+
+// -----
+
+#src = #ttg.linear<{register=[[1]], lane=[[2], [4], [8], [16], [32]], warp=[[0]], block=[]}>
+#dst = #ttg.linear<{register=[], lane=[[1], [2], [4], [8], [16]], warp=[[32]], block=[]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
+  // CHECK-LABEL: @convert_layout_warp_broadcast_register_select
+  tt.func @convert_layout_warp_broadcast_register_select(%arg0: tensor<64xi32, #src>) {
+    // CHECK: %[[PRE_TRUE:.*]] = llvm.mlir.constant(true)
+    // CHECK: llvm.select %[[PRE_TRUE]]
+    // CHECK-NOT: nvvm.bar
+    // CHECK-COUNT-2: nvvm.shfl.sync
+    // CHECK: llvm.select
+    // CHECK-NOT: nvvm.bar
+    // CHECK: llvm.return
+    %0 = ttg.convert_layout %arg0 : tensor<64xi32, #src> -> tensor<64xi32, #dst>
+    tt.return
+  }
+}
+
+// -----
+
+#src = #ttg.linear<{register=[[1], [2]], lane=[[4], [8], [16], [32], [64]], warp=[[0]], block=[]}>
+#dst = #ttg.linear<{register=[[4], [1], [2]], lane=[[0], [8], [16], [32], [0]], warp=[[64]], block=[]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
+  // CHECK-LABEL: @convert_layout_warp_broadcast_packed_permutation
+  tt.func @convert_layout_warp_broadcast_packed_permutation(%arg0: tensor<128xi8, #src>) {
+    // Packed output still needs byte permutations with a constant predicate.
+    // CHECK-NOT: nvvm.bar
+    // CHECK-COUNT-2: nvvm.shfl.sync
+    // CHECK: %[[POST_TRUE:.*]] = llvm.mlir.constant(true)
+    // CHECK: llvm.select %[[POST_TRUE]]
+    // CHECK: llvm.select %[[POST_TRUE]]
+    // CHECK-COUNT-2: llvm.call_intrinsic "llvm.nvvm.prmt"
+    // CHECK-NOT: nvvm.bar
+    // CHECK: llvm.return
+    %0 = ttg.convert_layout %arg0 : tensor<128xi8, #src> -> tensor<128xi8, #dst>
+    tt.return
+  }
+}
+
+// -----
+
+#src = #ttg.linear<{register=[], lane=[[1], [2], [4], [8], [16]], warp=[[32], [0]], block=[[0]]}>
+#dst = #ttg.linear<{register=[], lane=[[0], [1], [2], [4], [8]], warp=[[32], [0]], block=[[16]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @convert_layout_cta_broadcast
+  tt.func @convert_layout_cta_broadcast(%arg0: tensor<64xi32, #src>) {
+    // CHECK: nvg.cluster_id
+    // CHECK-NOT: nvvm.bar
+    // CHECK: nvvm.shfl.sync idx
+    // CHECK-NOT: nvvm.shfl.sync
+    // CHECK-NOT: nvvm.bar
+    // CHECK: llvm.return
+    %0 = ttg.convert_layout %arg0 : tensor<64xi32, #src> -> tensor<64xi32, #dst>
+    tt.return
+  }
+}
+
+// -----
+
+#src = #ttg.generic_linear<{register=[[32], [64]], lane=[[1], [2], [4], [8], [16]], warp=[[192], [256]], block=[]}>
+#dst = #ttg.generic_linear<{register=[[32], [16]], lane=[[1], [2], [4], [8], [64]], warp=[[192], [256]], block=[]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // This register/warp swizzle falls back to shared memory.
+  // CHECK-LABEL: @convert_layout_generic_warp_swizzle
+  tt.func @convert_layout_generic_warp_swizzle(%arg0: tensor<512xf64, #src>) {
+    // CHECK-NOT: nvvm.shfl.sync
+    // CHECK: nvvm.bar.warp.sync
+    // CHECK-NOT: nvvm.shfl.sync
+    // CHECK: llvm.return
+    %0 = ttg.convert_layout %arg0 : tensor<512xf64, #src> -> tensor<512xf64, #dst>
     tt.return
   }
 }

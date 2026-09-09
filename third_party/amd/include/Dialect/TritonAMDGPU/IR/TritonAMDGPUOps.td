@@ -293,7 +293,7 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       Arg<TT_Ptr, "Global memory scalar base pointer to load from", [MemRead<GlobalMemory>]>:$ptr,
       I32Tensor:$offsets,
       Optional<I32>:$stride,
-      DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
+      OptionalAttr<AnyAttr>:$cachePolicy,
       Optional<TT_BoolTensor>:$mask,
       Optional<TT_Tensor>:$other,
       DefaultValuedAttr<I32Attr, "1">:$contiguity
@@ -302,7 +302,6 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
 
     let assemblyFormat = [{
       $ptr `[` $offsets `]` (`,` $mask^)? (`,` $other^)?
-      oilist(`cacheModifier` `=` $cache)
       (`stride` `=` $stride^)?
       attr-dict `:` qualified(type($ptr)) `->` type($result)
     }];
@@ -338,7 +337,7 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
       Optional<TT_BoolTensor>:$mask,
       Optional<TT_Tensor>:$other,
       Optional<I32>:$stride,
-      DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
+      OptionalAttr<AnyAttr>:$cachePolicy,
       DefaultValuedAttr<I32Attr, "1">:$contiguity
     );
     let results = (outs TTG_AsyncToken:$token);
@@ -347,7 +346,7 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
 
     let assemblyFormat = [{
       $ptr `[` $offsets `]` (`mask` `=` $mask^)? (`other` `=` $other^)? (`stride` `=` $stride^)?
-      oilist(`cacheModifier` `=` $cache) `into` $dest
+      oilist(`cachePolicy` `=` $cachePolicy) `into` $dest
       attr-dict `:` qualified(type($ptr)) `[` type($offsets) `]` type($other) `->` type($dest)
     }];
 }
@@ -483,7 +482,7 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
       Arg<TT_Ptr, "Global memory scalar base pointer to write to", [MemWrite<GlobalMemory>]>:$ptr,
       I32Tensor:$offsets,
       Optional<I32>:$stride,
-      DefaultValuedAttr<TT_CacheModifierAttr, "mlir::triton::CacheModifier::NONE">:$cache,
+      OptionalAttr<AnyAttr>:$cachePolicy,
       Optional<TT_BoolTensor>:$mask,
       DefaultValuedAttr<I32Attr, "1">:$contiguity
     );
@@ -492,7 +491,6 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
 
     let assemblyFormat = [{
       $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
-      oilist(`cacheModifier` `=` $cache)
       (`stride` `=` $stride^)?
       attr-dict `:` qualified(type($ptr)) `->` type($value)
     }];
@@ -833,8 +831,7 @@ def AsyncCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_copy_local_to_global", [
     Arg<TTG_MemDescType, "", GenericSharedRead>:$src,
     Arg<TT_PtrTensor, "", [MemWrite<GlobalMemory>]>:$dst,
     Optional<I1Tensor>:$mask,
-    DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
-    DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
+    OptionalAttr<AnyAttr>:$cachePolicy,
     DefaultValuedAttr<I32Attr, "1">:$contiguity
   );
 
@@ -842,7 +839,7 @@ def AsyncCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_copy_local_to_global", [
 
   let assemblyFormat = [{
     $src `,` $dst (`mask` $mask^)?
-    oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
+    oilist(`cachePolicy` `=` $cachePolicy)
     attr-dict `:` qualified(type($src)) `->` type($dst)
   }];
 }

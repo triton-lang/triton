@@ -183,7 +183,7 @@ void createNVWSDescriptorLoadOp(OpBuilder &builder, Operation *ttDescLoadOp,
   if (auto descLoad = dyn_cast<triton::DescriptorLoadOp>(ttDescLoadOp)) {
     auto newDescLoad = triton::nvws::DescriptorLoadOp::create(
         builder, loc, descLoad.getDesc(), descLoad.getIndices(), txCount,
-        dataBuf, descLoad.getCache(), descLoad.getEvict());
+        dataBuf, descLoad.getCachePolicyAttr());
     newDescLoad->setAttrs(descLoad->getAttrs());
     setPartition(newDescLoad, producerPartitions);
   } else if (auto descGather =
