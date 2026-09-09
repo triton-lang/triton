@@ -48,7 +48,7 @@ def is_expert_scheduling_enabled(arch):
     return arch in ["gfx1250"]
 
 
-def get_llvm_flags(arch):
+def get_llvm_flags(options):
     """LLVM command line flags for every LLVM pipeline run of a compilation.
 
     These are process-wide LLVM options: compilations sharing a process can only
@@ -57,8 +57,9 @@ def get_llvm_flags(arch):
     """
     flags = []
     # LLVM has no per-function attribute for the AMDGPU register pressure
-    # trackers yet.
-    if arch in ["gfx942", "gfx950"]:
+    # trackers yet. They help kernels that request waves_per_eu > 1 and would
+    # otherwise spill, but regress single-wave MFMA kernels that already fit.
+    if options.arch in ["gfx942", "gfx950"] and options.waves_per_eu > 1:
         flags.append("amdgpu-use-amdgpu-trackers")
     return flags
 
@@ -447,7 +448,7 @@ class HIPBackend(BaseBackend):
         target_features = ''
         if knobs.compilation.enable_asan:
             target_features = '+xnack'
-        llvm.attach_datalayout(llvm_mod, target_triple, options.arch, target_features, get_llvm_flags(options.arch))
+        llvm.attach_datalayout(llvm_mod, target_triple, options.arch, target_features, get_llvm_flags(options))
 
         # Set various control constants on the LLVM module so that device
         # libraries can resolve references to them.
@@ -526,7 +527,7 @@ class HIPBackend(BaseBackend):
                 if not fn.is_declaration():
                     fn.add_fn_attr("amdgpu-expert-scheduling-mode", "true")
 
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', get_llvm_flags(options.arch),
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', get_llvm_flags(options),
                              options.enable_fp_fusion, disable_vector_combine=True)
 
         # Architectures with architected SGPRs store the workgroup id in ttmp9 (X) and ttmp7 (Y[15:0], Z[31:16]).
@@ -567,7 +568,7 @@ class HIPBackend(BaseBackend):
         assert len(names) == 1
         metadata["name"] = names[0]
         # llvm -> hsaco
-        flags = get_llvm_flags(options.arch)
+        flags = get_llvm_flags(options)
         features = ''
         target_triple = amd.get_target_triple(options.arch)
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
