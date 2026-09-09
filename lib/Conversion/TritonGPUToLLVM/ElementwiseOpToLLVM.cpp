@@ -194,102 +194,253 @@ struct ExternElementwiseOpConversion
   }
 };
 
-template <typename Op>
-struct InlineAsmOpConversion : public ConvertOpToLLVMPattern<Op> {
-  using ConvertOpToLLVMPattern<Op>::ConvertOpToLLVMPattern;
-  using typename ConvertOpToLLVMPattern<Op>::OpAdaptor;
-  static constexpr bool elementwise =
-      std::is_same_v<Op, ElementwiseInlineAsmOp>;
+struct ElementwiseInlineAsmOpConversion
+    : public ConvertOpToLLVMPattern<ElementwiseInlineAsmOp> {
+  using Base = ConvertOpToLLVMPattern<ElementwiseInlineAsmOp>;
+
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+  typedef typename Base::OpAdaptor OpAdaptor;
+
+  // If operand size is smaller than 32 bits, pack in groups of 32 bits.
+  SmallVector<Value> packOperands(ElementwiseInlineAsmOp op,
+                                  MultipleOperandsRange operands,
+                                  ConversionPatternRewriter &rewriter,
+                                  Location loc) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    SmallVector<Value> packedOperands;
+    unsigned numPackedElements = op.getPackedElement();
+    for (int i = 0, e = op.getNumOperands(); i < e; i++) {
+      if (isa<MemDescType>(op.getOperand(i).getType())) {
+        packedOperands.push_back(operands[0][i]);
+        continue;
+      }
+      Type elemTy = getElementTypeOrSelf(op.getOperand(i));
+      unsigned bitWidth =
+          elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : 64;
+      unsigned numElementPerReg = std::max(32 / bitWidth, 1u);
+      numElementPerReg = std::min(numElementPerReg, numPackedElements);
+      for (int j = 0; j < numPackedElements; j += numElementPerReg) {
+        if (numElementPerReg == 1) {
+          packedOperands.push_back(operands[j][i]);
+          continue;
+        }
+        Type t =
+            vec_ty(getTypeConverter()->convertType(elemTy), numElementPerReg);
+        Value packed = b.undef(t);
+        for (int k = 0; k < numElementPerReg; k++) {
+          packed = b.insert_element(packed, operands[j + k][i], b.i32_val(k));
+        }
+        packedOperands.push_back(packed);
+      }
+    }
+    return packedOperands;
+  }
+
+  SmallVector<SmallVector<Value>>
+  createDestOps(ElementwiseInlineAsmOp op, OpAdaptor adaptor,
+                ConversionPatternRewriter &rewriter,
+                MultipleOperandsRange operands, Location loc) const {
+    auto ctx = op->getContext();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    if (operands.size() % op.getPackedElement() != 0)
+      llvm::report_fatal_error("Inline asm op has more packed elements than "
+                               "number of elements per thread.");
+
+    // Pack elems smaller than 32 bits into 32-bit registers.
+    SmallVector<Value> packedOperands =
+        packOperands(op, operands, rewriter, loc);
+
+    // Types returned by the LLVM asm op.  If there's more than one, they'll be
+    // wrapped in a struct.
+    SmallVector<Type> asmRetTypes;
+    for (auto result : op.getResult()) {
+      auto ty = getTypeConverter()->convertType(getElementTypeOrSelf(result));
+
+      // Pack return elements into 32-bits.
+      unsigned bitWidth = getIntOrFloatOrPtrBitWidth(ty);
+      unsigned numElemsPerReg =
+          std::min(std::max(32 / bitWidth, 1u), op.getPackedElement());
+      assert(op.getPackedElement() % numElemsPerReg == 0);
+      if (numElemsPerReg > 1) {
+        ty = vec_ty(ty, numElemsPerReg);
+      }
+      for (unsigned i = 0; i < op.getPackedElement() / numElemsPerReg; i++) {
+        asmRetTypes.push_back(ty);
+      }
+    }
+    Type asmRetType =
+        asmRetTypes.size() > 1 ? struct_ty(asmRetTypes) : asmRetTypes[0];
+
+    Value asmResults = LLVM::InlineAsmOp::create(
+                           rewriter, loc, asmRetType,
+                           /*operands=*/packedOperands,
+                           /*asm_string=*/op.getAsmString(),
+                           /*constraints=*/op.getConstraints(),
+                           /*has_side_effects=*/!op.getPure(),
+                           /*is_align_stack=*/false, LLVM::TailCallKind::None,
+                           /*asm_dialect=*/
+                           LLVM::AsmDialectAttr::get(rewriter.getContext(),
+                                                     LLVM::AsmDialect::AD_ATT),
+                           /*operand_attrs=*/ArrayAttr())
+                           ->getResult(0);
+
+    // asmResults is a flat struct; pack its values into
+    // [return_value][op.getPackedElement()].
+    SmallVector<SmallVector<Value>> ret(op->getNumResults());
+    int structIdx = 0;
+    for (int i = 0; i < op->getNumResults(); i++) {
+      for (int j = 0; j < op.getPackedElement(); j++) {
+        Value val;
+        if (asmRetTypes.size() > 1) {
+          val = b.extract_val(asmResults, structIdx++);
+        } else {
+          val = asmResults;
+        }
+        if (auto vectorTy = dyn_cast<VectorType>(val.getType())) {
+          for (int k = 0; k < vectorTy.getNumElements(); k++) {
+            ret[i].push_back(b.extract_element(val, b.i32_val(k)));
+          }
+          j += vectorTy.getNumElements() - 1;
+        } else {
+          ret[i].push_back(val);
+        }
+      }
+    }
+    return ret;
+  }
 
   LogicalResult
-  matchAndRewrite(Op op, OpAdaptor adaptor,
+  matchAndRewrite(ElementwiseInlineAsmOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    // Layout is unpackedOperands[operand][elem].
+    SmallVector<SmallVector<Value>> unpackedOperands;
+    for (auto [original, operand] :
+         llvm::zip(op.getOperands(), adaptor.getOperands())) {
+      if (auto desc = dyn_cast<MemDescType>(original.getType())) {
+        Value address = getMemDescAddress(rewriter, loc, getTypeConverter(),
+                                          desc, operand);
+        unpackedOperands.emplace_back(
+            getUniqueElemsPerThread(op->getResult(0).getType()), address);
+        continue;
+      }
+      auto subOperands = unpackUniqueTensorElements(loc, operand, rewriter);
+      unpackedOperands.push_back(subOperands);
+    }
+
+    auto resultTy = op->getResult(0).getType();
+    int numElemsPerThread =
+        isa<RankedTensorType>(resultTy) ? getUniqueElemsPerThread(resultTy) : 1;
+
+    // These are checked by the verifier, so we don't need to raise a nice
+    // error.
+    assert(all_of(unpackedOperands, [&](auto &operands) {
+      return operands.size() == numElemsPerThread;
+    }));
+    if (numElemsPerThread % op.getPackedElement() != 0) {
+      // Pad with the undef for each operand to have a multiple of
+      // op.getPackedElement() elements.
+      int numPaddedValue =
+          op.getPackedElement() - numElemsPerThread % op.getPackedElement();
+      for (auto &operands : unpackedOperands) {
+        for (int i = 0; i < numPaddedValue; i++) {
+          operands.push_back(b.undef(operands[0].getType()));
+        }
+      }
+    }
+
+    // Run the inline asm op on each block of elements.
+    //
+    // Layout is unpackedResults[result_idx][elem].
+    //
+    // This loop always runs at least once, even when the asm has no input
+    // elements.
+    SmallVector<SmallVector<Value>> unpackedResults(op->getNumResults());
+    for (unsigned i = 0; i < numElemsPerThread; i += op.getPackedElement()) {
+      // Block of elements to process with one call to the inline asm.  This is
+      // ordered opposite `unpackedResults`: The outer dim is
+      // op.getPackedElement(), and the inner dim is the operand.
+      SmallVector<SmallVector<Value>> block(op.getPackedElement());
+      for (auto &os : unpackedOperands) {
+        for (int j = 0; j < op.getPackedElement(); j++) {
+          block[j].push_back(os[i + j]);
+        }
+      }
+      auto cur = createDestOps(op, adaptor, rewriter, block, loc);
+      assert(cur.size() == unpackedResults.size());
+      for (unsigned j = 0; j < cur.size(); j++) {
+        unpackedResults[j].insert(unpackedResults[j].end(), cur[j].begin(),
+                                  cur[j].end());
+      }
+    }
+    for (auto &results : unpackedResults) {
+      results.resize(numElemsPerThread);
+    }
+    // Reorder and pack the results.
+    SmallVector<Value> outs;
+    for (int i = 0; i < unpackedResults.size(); i++) {
+      outs.push_back(packUniqueTensorElements(loc, getTypeConverter(),
+                                              unpackedResults[i], rewriter,
+                                              op->getResult(i).getType()));
+    }
+
+    rewriter.replaceOp(op, outs);
+    return success();
+  }
+};
+
+struct InlineAsmOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::InlineAsmOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::InlineAsmOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     auto *ctx = op.getContext();
-    auto *converter = this->getTypeConverter();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    unsigned pack = 1, numElems = 1;
-    if constexpr (elementwise) {
-      pack = op.getPackedElement();
-      numElems = getUniqueElemsPerThread(op->getResult(0).getType());
-    }
-    auto resultSize = [&](Type type) {
-      return elementwise ? pack : getTotalElemsPerThread(type);
-    };
-    auto registerWidth = [&](Type type) {
-      unsigned bitwidth = getIntOrFloatOrPtrBitWidth(type);
-      return elementwise ? std::min(pack, std::max(32 / bitwidth, 1u)) : 1u;
-    };
-
-    SmallVector<SmallVector<Value>> inputs;
+    auto *converter = getTypeConverter();
+    SmallVector<Value> operands;
     for (auto [original, lowered] :
          llvm::zip(op.getOperands(), adaptor.getOperands())) {
       if (auto desc = dyn_cast<MemDescType>(original.getType())) {
-        inputs.push_back(
-            {getMemDescAddress(rewriter, loc, converter, desc, lowered)});
+        operands.push_back(
+            getMemDescAddress(rewriter, loc, converter, desc, lowered));
       } else {
-        auto values = elementwise
-                          ? unpackUniqueTensorElements(loc, lowered, rewriter)
-                          : unpackTensorElements(loc, lowered, rewriter,
-                                                 original.getType());
-        // Elementwise packs may extend beyond the unique values in a thread.
-        if constexpr (elementwise)
-          values.resize(llvm::alignTo(values.size(), pack),
-                        b.undef(values.front().getType()));
-        inputs.push_back(std::move(values));
+        auto values =
+            unpackTensorElements(loc, lowered, rewriter, original.getType());
+        llvm::append_range(operands, values);
       }
     }
 
     SmallVector<Type> resultTypes;
-    for (Type type : op.getResultTypes()) {
-      Type elemTy = converter->convertType(getElementTypeOrSelf(type));
-      unsigned width = registerWidth(elemTy);
-      Type regTy = width == 1 ? elemTy : vec_ty(elemTy, width);
-      resultTypes.append(resultSize(type) / width, regTy);
-    }
-    Type returnType = resultTypes.empty()       ? LLVM::LLVMVoidType::get(ctx)
-                      : resultTypes.size() == 1 ? resultTypes.front()
-                                                : struct_ty(resultTypes);
-    SmallVector<SmallVector<Value>> outputs(op.getNumResults());
-    for (unsigned offset = 0; offset < numElems; offset += pack) {
-      SmallVector<Value> operands;
-      for (auto [original, input] : llvm::zip(op.getOperands(), inputs)) {
-        ArrayRef<Value> values(input);
-        if (elementwise && !isa<MemDescType>(original.getType()))
-          values = values.slice(offset, pack);
-        unsigned width = registerWidth(values.front().getType());
-        for (unsigned i = 0; i < values.size(); i += width)
-          operands.push_back(
-              width == 1 ? values[i]
-                         : packLLVector(loc, values.slice(i, width), rewriter));
-      }
-      auto call = LLVM::InlineAsmOp::create(
-          rewriter, loc, returnType, operands, op.getAsmString(),
-          op.getConstraints(), !op.getPure(), false, LLVM::TailCallKind::None,
-          LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
-          ArrayAttr());
-      if (resultTypes.empty())
-        continue;
-      auto results = resultTypes.size() == 1
-                         ? SmallVector<Value>{call.getResult(0)}
-                         : unpackLLElements(loc, call.getResult(0), rewriter);
-      unsigned cursor = 0;
-      for (auto [type, output] : llvm::zip(op.getResultTypes(), outputs)) {
-        unsigned width =
-            registerWidth(converter->convertType(getElementTypeOrSelf(type)));
-        for (unsigned i = 0; i < resultSize(type); i += width)
-          llvm::append_range(output,
-                             unpackLLVector(loc, results[cursor++], rewriter));
-      }
-    }
+    for (Type type : op.getResultTypes())
+      resultTypes.append(getTotalElemsPerThread(type),
+                         converter->convertType(getElementTypeOrSelf(type)));
+    Type returnType = LLVM::LLVMVoidType::get(ctx);
+    if (resultTypes.size() == 1)
+      returnType = resultTypes.front();
+    else if (!resultTypes.empty())
+      returnType = struct_ty(resultTypes);
+    auto call = LLVM::InlineAsmOp::create(
+        rewriter, loc, returnType, operands, op.getAsmString(),
+        op.getConstraints(), !op.getPure(), false, LLVM::TailCallKind::None,
+        LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT), ArrayAttr());
 
+    SmallVector<Value> elements;
+    if (!resultTypes.empty())
+      elements = unpackLLElements(loc, call.getResult(0), rewriter);
     SmallVector<Value> results;
-    for (auto [type, output] : llvm::zip(op.getResultTypes(), outputs)) {
-      if constexpr (elementwise)
-        output.resize(numElems);
-      auto packResult =
-          elementwise ? packUniqueTensorElements : packTensorElements;
-      results.push_back(packResult(loc, converter, output, rewriter, type));
+    unsigned offset = 0;
+    for (Type type : op.getResultTypes()) {
+      unsigned count = getTotalElemsPerThread(type);
+      results.push_back(packTensorElements(
+          loc, converter, ArrayRef(elements).slice(offset, count), rewriter,
+          type));
+      offset += count;
     }
     rewriter.replaceOp(op, results);
     return success();
@@ -621,9 +772,8 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
                                     benefit);
   patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
                                               benefit);
-  patterns.add<InlineAsmOpConversion<ElementwiseInlineAsmOp>,
-               InlineAsmOpConversion<triton::gpu::InlineAsmOp>>(typeConverter,
-                                                                benefit);
+  patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter, benefit);
+  patterns.add<InlineAsmOpConversion>(typeConverter, benefit);
   patterns.add<AbsIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SelectOpConversion>(typeConverter, axisInfoAnalysis, benefit);
