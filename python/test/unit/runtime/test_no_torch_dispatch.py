@@ -78,55 +78,41 @@ def test_backend_discovery_without_torch(cuda_active):
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
-@pytest.mark.parametrize("status, count, expected", [(0, 1, True), (0, 0, False), (100, 0, False), (999, 0, None)])
-def test_hip_runtime_probe(status, count, expected, monkeypatch):
-    from triton.backends.amd import driver
-
-    def get_device_count(pointer):
-        driver.ctypes.cast(pointer, driver.ctypes.POINTER(driver.ctypes.c_int))[0] = count
-        return status
-
-    monkeypatch.setattr(driver, "_get_path_to_hip_runtime_dylib", lambda: "libamdhip64.so")
-    monkeypatch.setattr(driver.ctypes, "CDLL", lambda path: SimpleNamespace(hipGetDeviceCount=get_device_count))
-    assert driver._hip_runtime_is_active() is expected
-
-
-@pytest.mark.parametrize("failure, expected", [("absent", False), ("load", None), ("symbol", None)])
-def test_hip_runtime_probe_unavailable(failure, expected, monkeypatch):
-    from triton.backends.amd import driver
-
-    def library_path():
-        if failure == "absent":
-            raise driver._HIPRuntimeNotFoundError("no HIP runtime")
-        return "libamdhip64.so"
-
-    def load_library(path):
-        if failure == "load":
-            raise OSError("cannot load HIP runtime")
-        return SimpleNamespace()
-
-    monkeypatch.setattr(driver, "_get_path_to_hip_runtime_dylib", library_path)
-    monkeypatch.setattr(driver.ctypes, "CDLL", load_library)
-    assert driver._hip_runtime_is_active() is expected
-
-
-@pytest.mark.parametrize("error", [RuntimeError, OSError])
-def test_hip_runtime_probe_configuration_fallback(error, monkeypatch):
-    from triton.backends.amd import driver
-
-    def invalid_configuration():
-        raise error("invalid HIP runtime configuration")
-
-    monkeypatch.setattr(driver, "_get_path_to_hip_runtime_dylib", invalid_configuration)
-    assert driver._hip_runtime_is_active() is None
-
-
-@pytest.mark.parametrize("native, available, hip, expected", [(False, True, "7.0", False), (True, True, "7.0", True),
-                                                              (None, True, "7.0", True), (True, False, "7.0", False),
-                                                              (True, True, None, False)])
-def test_hip_runtime_probe_torch_fallback(native, available, hip, expected, monkeypatch):
+@pytest.mark.parametrize("runtime, available, hip, expected", [
+    ("missing", True, "7.0", False),
+    ("no_devices", True, "7.0", False),
+    ("no_device_status", True, "7.0", False),
+    ("unknown_status", True, "7.0", True),
+    ("missing_symbol", True, "7.0", True),
+    ("found", True, "7.0", True),
+    ("configuration_error", True, "7.0", True),
+    ("os_error", True, "7.0", True),
+    ("subprocess_error", True, "7.0", True),
+    ("found", False, "7.0", False),
+    ("found", True, None, False),
+])
+def test_hip_driver_runtime_lookup(runtime, available, hip, expected, monkeypatch):
     import builtins
     from triton.backends.amd import driver
+
+    def find_runtime():
+        if runtime == "missing":
+            raise driver._HIPRuntimeNotFoundError("no HIP runtime")
+        if runtime == "configuration_error":
+            raise RuntimeError("invalid HIP runtime configuration")
+        if runtime == "os_error":
+            raise OSError("cannot search for HIP runtime")
+        if runtime == "subprocess_error":
+            raise subprocess.CalledProcessError(1, "ldconfig")
+        return "libamdhip64.so"
+
+    def get_device_count(pointer):
+        if runtime == "unknown_status":
+            return 999
+        if runtime == "no_device_status":
+            return 100
+        driver.ctypes.cast(pointer, driver.ctypes.POINTER(driver.ctypes.c_int))[0] = int(runtime != "no_devices")
+        return 0
 
     imports = []
     original_import = builtins.__import__
@@ -140,18 +126,20 @@ def test_hip_runtime_probe_torch_fallback(native, available, hip, expected, monk
 
     monkeypatch.delitem(sys.modules, "torch")
     monkeypatch.setattr(builtins, "__import__", import_torch)
-    monkeypatch.setattr(driver, "_hip_runtime_is_active", lambda: native)
+    monkeypatch.setattr(driver, "_get_path_to_hip_runtime_dylib", find_runtime)
+    library = SimpleNamespace() if runtime == "missing_symbol" else SimpleNamespace(hipGetDeviceCount=get_device_count)
+    monkeypatch.setattr(driver.ctypes, "CDLL", lambda path: library)
     assert driver.HIPDriver.is_active() is expected
-    assert imports == ([] if native is False else ["torch"])
+    assert imports == ([] if runtime in ("missing", "no_devices", "no_device_status") else ["torch"])
 
 
-def test_hip_runtime_probe_reuses_loaded_torch(monkeypatch):
+def test_hip_driver_reuses_loaded_torch(monkeypatch):
     from triton.backends.amd import driver
 
     def unexpected_probe():
         raise AssertionError("Torch is already loaded")
 
-    monkeypatch.setattr(driver, "_hip_runtime_is_active", unexpected_probe)
+    monkeypatch.setattr(driver, "_get_path_to_hip_runtime_dylib", unexpected_probe)
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(torch.version, "hip", "7.0")
     assert driver.HIPDriver.is_active()
