@@ -4179,12 +4179,11 @@ def test_amd_scaled_upcast_fp8_cdna(target):
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @kernel() attributes {noinline = false} {
-    %cst = arith.constant 1.000000e+00 : f32
-    %0 = arith.truncf %cst : f32 to f8E4M3FN
-    %1 = tt.splat %0 : f8E4M3FN -> tensor<16x64xf8E4M3FN, #blocked>
+    %cst = arith.constant 1.000000e+00 : f8E4M3FN
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<16x64xf8E4M3FN, #blocked>
     %c2_i8 = arith.constant 2 : i8
-    %cst_0 = arith.constant dense<2> : tensor<16x64xi8, #blocked>
-    %2 = amdg.scaled_upcast_fp8 %1 scale %cst_0 : tensor<16x64xf8E4M3FN, #blocked>, tensor<16x64xi8, #blocked> -> tensor<16x64xbf16, #blocked>
+    %cst_1 = arith.constant dense<2> : tensor<16x64xi8, #blocked>
+    %0 = amdg.scaled_upcast_fp8 %cst_0 scale %cst_1 : tensor<16x64xf8E4M3FN, #blocked>, tensor<16x64xi8, #blocked> -> tensor<16x64xbf16, #blocked>
     tt.return
   }
 }
