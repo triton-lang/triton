@@ -27,28 +27,26 @@ def test_nvidia_kernel_dispatch_without_torch():
                                   f"stderr:\n{proc.stderr}")
 
 
-@pytest.mark.skipif(not is_hip(), reason="Requires an AMD GPU")
-def test_hip_discovery_without_visible_devices():
+@pytest.mark.parametrize("mode", ["missing_runtime", "visible", "hidden"])
+def test_hip_discovery_without_torch(mode, tmp_path):
+    if mode != "missing_runtime" and not is_hip():
+        pytest.skip("Requires an AMD GPU")
+
     code = textwrap.dedent("""\
         import ctypes
         import sys
         from triton.backends.amd.driver import HIPDriver, _get_path_to_hip_runtime_dylib
 
         assert "torch" not in sys.modules
-        ctypes.CDLL(_get_path_to_hip_runtime_dylib()).hipGetDeviceCount
-        assert not HIPDriver.is_active()
+        if sys.argv[1] != "missing_runtime":
+            ctypes.CDLL(_get_path_to_hip_runtime_dylib()).hipGetDeviceCount
+        assert HIPDriver.is_active() == (sys.argv[1] == "visible")
         assert "torch" not in sys.modules
     """)
-    env = dict(os.environ, HIP_VISIBLE_DEVICES="-1")
-    proc = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+    env = os.environ.copy()
+    if mode == "missing_runtime":
+        env["TRITON_LIBHIP_PATH"] = str(tmp_path / "libamdhip64.so")
+    elif mode == "hidden":
+        env["HIP_VISIBLE_DEVICES"] = "-1"
+    proc = subprocess.run([sys.executable, "-c", code, mode], env=env, capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout + proc.stderr
-
-
-def test_hip_discovery_runtime_unavailable(monkeypatch):
-    from triton.backends.amd import driver
-
-    def unavailable():
-        raise RuntimeError("HIP runtime unavailable")
-
-    monkeypatch.setattr(driver, "_get_path_to_hip_runtime_dylib", unavailable)
-    assert driver.HIPDriver.is_active() == (torch.cuda.is_available() and torch.version.hip is not None)

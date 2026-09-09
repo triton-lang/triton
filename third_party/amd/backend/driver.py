@@ -409,14 +409,8 @@ class HIPDriver(GPUDriver):
             get_device_count.restype = ctypes.c_int
             count = ctypes.c_int()
             status = get_device_count(ctypes.byref(count))
-            if status == 100 or (status == 0 and count.value == 0):  # hipErrorNoDevice or hipSuccess
-                return False
+            return status == 0 and count.value > 0
         except (RuntimeError, OSError, AttributeError, subprocess.CalledProcessError):
-            pass  # Let the existing Torch check handle uncertain discovery.
-        try:
-            import torch
-            return torch.cuda.is_available() and (torch.version.hip is not None)
-        except ImportError:
             return False
 
     def map_python_to_cpp_type(self, ty: str) -> str:
