@@ -2,7 +2,9 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import textwrap
 import torch
+from types import SimpleNamespace
 
 import pytest
 from triton._internal_testing import is_cuda
@@ -13,8 +15,7 @@ def test_nvidia_kernel_dispatch_without_torch():
         pytest.skip("Requires CUDA and TMAs")
 
     env = os.environ.copy()
-    # force cuda driver to avoid importing torch when checking for other backends.
-    env["TRITON_DEFAULT_BACKEND"] = "nvidia"
+    env.pop("TRITON_DEFAULT_BACKEND", None)
     # force compilation to ensure there is no torch dependencies in the compiler.
     env["TRITON_ALWAYS_COMPILE"] = "1"
 
@@ -24,3 +25,152 @@ def test_nvidia_kernel_dispatch_without_torch():
     assert proc.returncode == 0, ("Torch-free runtime dispatch subprocess failed.\n"
                                   f"stdout:\n{proc.stdout}\n"
                                   f"stderr:\n{proc.stderr}")
+
+
+@pytest.mark.parametrize("cuda_active", [False, True])
+def test_backend_discovery_without_torch(cuda_active):
+    code = textwrap.dedent("""\
+        import builtins
+        import importlib
+        import sys
+        from types import SimpleNamespace
+
+        import triton.language as tl
+        from triton.backends.amd import driver as amd_driver
+        from triton.backends.compiler import GPUTarget
+        from triton.experimental.gluon import language as gl
+        from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
+        from triton.runtime.jit import MockTensor
+
+        assert "torch" not in sys.modules
+        original_import = builtins.__import__
+        def no_torch_import(name, *args, **kwargs):
+            if name == "torch" or name.startswith("torch."):
+                raise AssertionError("backend discovery must not import Torch")
+            return original_import(name, *args, **kwargs)
+        builtins.__import__ = no_torch_import
+
+        def missing_hip_runtime():
+            raise amd_driver._HIPRuntimeNotFoundError("no HIP runtime")
+        amd_driver._get_path_to_hip_runtime_dylib = missing_hip_runtime
+
+        cuda_active = sys.argv[1] == "1"
+        target = GPUTarget("cuda", 103, 32)
+        class CudaDriver:
+            @staticmethod
+            def is_active():
+                return cuda_active
+            def get_current_target(self):
+                return target
+
+        runtime = importlib.import_module("triton.runtime.driver")
+        runtime.backends = {"nvidia": SimpleNamespace(driver=CudaDriver),
+                            "amd": SimpleNamespace(driver=amd_driver.HIPDriver)}
+        assert tl.target_info.current_target() == (target if cuda_active else None)
+        tensor = MockTensor(gl.uint8, (128, 128))
+        layout = gl.NVMMASharedLayout(128, 8, fp4_padded=True)
+        TensorDescriptor.from_tensor(tensor, [128, 128], layout)
+        assert "torch" not in sys.modules
+    """)
+    env = os.environ.copy()
+    env.pop("TRITON_DEFAULT_BACKEND", None)
+    proc = subprocess.run([sys.executable, "-c", code, str(int(cuda_active))], env=env, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+@pytest.mark.parametrize("status, count, expected", [(0, 1, True), (0, 0, False), (100, 0, False), (999, 0, None)])
+def test_hip_runtime_probe(status, count, expected, monkeypatch):
+    from triton.backends.amd import driver
+
+    def get_device_count(pointer):
+        driver.ctypes.cast(pointer, driver.ctypes.POINTER(driver.ctypes.c_int))[0] = count
+        return status
+
+    monkeypatch.setattr(driver, "_get_path_to_hip_runtime_dylib", lambda: "libamdhip64.so")
+    monkeypatch.setattr(driver.ctypes, "CDLL", lambda path: SimpleNamespace(hipGetDeviceCount=get_device_count))
+    assert driver._hip_runtime_is_active() is expected
+
+
+@pytest.mark.parametrize("failure, expected", [("absent", False), ("load", None), ("symbol", None)])
+def test_hip_runtime_probe_unavailable(failure, expected, monkeypatch):
+    from triton.backends.amd import driver
+
+    def library_path():
+        if failure == "absent":
+            raise driver._HIPRuntimeNotFoundError("no HIP runtime")
+        return "libamdhip64.so"
+
+    def load_library(path):
+        if failure == "load":
+            raise OSError("cannot load HIP runtime")
+        return SimpleNamespace()
+
+    monkeypatch.setattr(driver, "_get_path_to_hip_runtime_dylib", library_path)
+    monkeypatch.setattr(driver.ctypes, "CDLL", load_library)
+    assert driver._hip_runtime_is_active() is expected
+
+
+@pytest.mark.parametrize("error", [RuntimeError, OSError])
+def test_hip_runtime_probe_configuration_fallback(error, monkeypatch):
+    from triton.backends.amd import driver
+
+    def invalid_configuration():
+        raise error("invalid HIP runtime configuration")
+
+    monkeypatch.setattr(driver, "_get_path_to_hip_runtime_dylib", invalid_configuration)
+    assert driver._hip_runtime_is_active() is None
+
+
+@pytest.mark.parametrize("native, available, hip, expected", [(False, True, "7.0", False), (True, True, "7.0", True),
+                                                              (None, True, "7.0", True), (True, False, "7.0", False),
+                                                              (True, True, None, False)])
+def test_hip_runtime_probe_torch_fallback(native, available, hip, expected, monkeypatch):
+    import builtins
+    from triton.backends.amd import driver
+
+    imports = []
+    original_import = builtins.__import__
+
+    def import_torch(name, *args, **kwargs):
+        if name == "torch":
+            imports.append(name)
+            return SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: available),
+                                   version=SimpleNamespace(hip=hip))
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.delitem(sys.modules, "torch")
+    monkeypatch.setattr(builtins, "__import__", import_torch)
+    monkeypatch.setattr(driver, "_hip_runtime_is_active", lambda: native)
+    assert driver.HIPDriver.is_active() is expected
+    assert imports == ([] if native is False else ["torch"])
+
+
+def test_hip_runtime_probe_reuses_loaded_torch(monkeypatch):
+    from triton.backends.amd import driver
+
+    def unexpected_probe():
+        raise AssertionError("Torch is already loaded")
+
+    monkeypatch.setattr(driver, "_hip_runtime_is_active", unexpected_probe)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.version, "hip", "7.0")
+    assert driver.HIPDriver.is_active()
+
+
+def test_hip_runtime_versioned_torch_library(tmp_path, monkeypatch):
+    from triton.backends.amd import driver
+
+    library = tmp_path / "torch" / "lib" / "libamdhip64.so.6"
+    library.parent.mkdir(parents=True)
+    library.touch()
+    monkeypatch.setattr(driver.knobs.amd, "libhip_path", None)
+    monkeypatch.setitem(sys.modules, "rocm_sdk", None)
+    monkeypatch.setattr(driver, "_find_already_mmapped_dylib_on_linux", lambda name: None)
+    monkeypatch.setattr(driver, "__file__", str(tmp_path / "backend" / "driver.py"))
+    monkeypatch.setattr(driver.importlib.util, "find_spec",
+                        lambda name: SimpleNamespace(submodule_search_locations=[str(library.parent.parent)]))
+    driver._get_path_to_hip_runtime_dylib.cache_clear()
+    try:
+        assert driver._get_path_to_hip_runtime_dylib() == str(library)
+    finally:
+        driver._get_path_to_hip_runtime_dylib.cache_clear()

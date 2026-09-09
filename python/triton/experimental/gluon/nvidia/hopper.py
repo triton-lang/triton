@@ -1,4 +1,4 @@
-from dataclasses import dataclass, InitVar
+from dataclasses import dataclass
 from typing import List, Any, Optional
 from triton._utils import validate_block_shape, canonicalize_dtype, get_primitive_bitwidth
 from triton.experimental.gluon.language._layouts import NVMMASharedLayout
@@ -7,7 +7,7 @@ import triton.language as tl
 __all__ = ["TensorDescriptor", "TensorDescriptorIm2Col"]
 
 
-def _validate_common_descriptor(tensor, shape, strides, layout, padding, round_f32_to_tf32, block_shape, target=None):
+def _validate_common_descriptor(tensor, shape, strides, layout, padding, round_f32_to_tf32, block_shape):
     rank = len(shape)
     assert len(strides) == rank, "strides rank mismatch"
     assert 0 < rank <= 5, "rank must be 1-5"
@@ -37,13 +37,9 @@ def _validate_common_descriptor(tensor, shape, strides, layout, padding, round_f
         for stride in strides[:-1]:
             assert (stride * elem_bytes) % 32 == 0, "For fp4_padded, tensor strides must be 32-byte aligned"
         # Descriptors may be constructed for offline compilation without an active runtime driver.
-        if target is None:
-            target = tl.target_info.current_target()
-            assert target is None or tl.target_info.cuda_capability_geq(10, 0), \
-                "fp4_padded requires blackwell or newer"
-        else:
-            assert target.backend == "cuda" and target.arch >= 100, \
-                "fp4_padded requires blackwell or newer"
+        target = tl.target_info.current_target()
+        assert target is None or tl.target_info.cuda_capability_geq(10, 0), \
+            "fp4_padded requires blackwell or newer"
     assert not layout.fp4_padded or layout.swizzle_byte_width == 128, (
         f"FP4 padded operands must be swizzled with 128-byte width, but got {layout.swizzle_byte_width}")
     assert layout.element_bitwidth in [
@@ -61,9 +57,8 @@ class TensorDescriptor:
     layout: NVMMASharedLayout
     padding: str = "zero"
     round_f32_to_tf32: bool = False
-    target: InitVar[object] = None
 
-    def __post_init__(self, target):
+    def __post_init__(self):
         rank = len(self.shape)
         assert len(self.block_shape) == rank, f"tiled: block_shape must match rank {rank}"
         rank = _validate_common_descriptor(
@@ -74,7 +69,6 @@ class TensorDescriptor:
             self.padding,
             self.round_f32_to_tf32,
             self.block_shape,
-            target,
         )
         validate_block_shape(self.block_shape)
 

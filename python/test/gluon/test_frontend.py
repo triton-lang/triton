@@ -1,10 +1,7 @@
 import expecttest
 import pytest
 import re
-import subprocess
-import sys
-import textwrap
-from dataclasses import fields, replace
+from dataclasses import replace
 
 from triton.backends.compiler import GPUTarget
 from triton.experimental import gluon
@@ -4824,59 +4821,6 @@ def test_tma_descriptor_layout_rank():
 
     with pytest.raises(AssertionError, match="layout rank must match block shape rank"):
         TensorDescriptor.from_tensor(tensor, [2, 32, 64], layout)
-
-
-@pytest.mark.parametrize("target, valid", [(GPUTarget("cuda", 103, 32), True), (HOPPER_TARGET, False),
-                                           (HIP_TARGET_CDNA3, False)])
-def test_tma_descriptor_explicit_target(target, valid, monkeypatch):
-
-    def unexpected_runtime_discovery():
-        raise AssertionError("explicit target must not query the runtime")
-
-    monkeypatch.setattr(tl.target_info, "current_target", unexpected_runtime_discovery)
-    tensor = MockTensor(ttgl.uint8, (128, 128))
-    layout = ttgl.NVMMASharedLayout(128, 8, fp4_padded=True)
-    if valid:
-        descriptor = TensorDescriptor(tensor, tensor.shape, tensor.stride(), [128, 128], layout, target=target)
-        other = TensorDescriptor(tensor, tensor.shape, tensor.stride(), [128, 128], layout, target=BLACKWELL_TARGET)
-        assert "target" not in vars(descriptor)
-        assert "target" not in {field.name for field in fields(descriptor)}
-        assert descriptor == other
-        assert descriptor.__mangle__() == other.__mangle__()
-    else:
-        with pytest.raises(AssertionError, match="fp4_padded requires blackwell or newer"):
-            TensorDescriptor(tensor, tensor.shape, tensor.stride(), [128, 128], layout, target=target)
-
-
-@pytest.mark.parametrize("target, valid", [(None, True), (BLACKWELL_TARGET, True), (HOPPER_TARGET, False),
-                                           (HIP_TARGET_CDNA3, False)])
-def test_tma_descriptor_implicit_target(target, valid, monkeypatch):
-    monkeypatch.setattr(tl.target_info, "current_target", lambda: target)
-    tensor = MockTensor(ttgl.uint8, (128, 128))
-    layout = ttgl.NVMMASharedLayout(128, 8, fp4_padded=True)
-    if valid:
-        TensorDescriptor.from_tensor(tensor, [128, 128], layout)
-    else:
-        with pytest.raises(AssertionError, match="fp4_padded requires blackwell or newer"):
-            TensorDescriptor.from_tensor(tensor, [128, 128], layout)
-
-
-def test_tma_descriptor_explicit_target_no_torch_import():
-    code = textwrap.dedent("""\
-        import sys
-        from triton.backends.compiler import GPUTarget
-        from triton.experimental.gluon import language as ttgl
-        from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
-        from triton.runtime.jit import MockTensor
-
-        assert "torch" not in sys.modules
-        tensor = MockTensor(ttgl.uint8, (128, 128))
-        layout = ttgl.NVMMASharedLayout(128, 8, fp4_padded=True)
-        TensorDescriptor(tensor, tensor.shape, tensor.stride(), [128, 128], layout,
-                         target=GPUTarget("cuda", 103, 32))
-        assert "torch" not in sys.modules
-    """)
-    subprocess.run([sys.executable, "-c", code], check=True)
 
 
 def test_non_scalar_loop_bounds():

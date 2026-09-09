@@ -1,6 +1,9 @@
 import functools
+import ctypes
+import importlib.util
 import os
 import subprocess
+import sys
 import triton
 from pathlib import Path
 from triton import knobs
@@ -16,6 +19,10 @@ PyKernelArg = None
 ARG_CONSTEXPR = None
 ARG_KERNEL = None
 ARG_TUPLE = None
+
+
+class _HIPRuntimeNotFoundError(RuntimeError):
+    pass
 
 
 def _find_already_mmapped_dylib_on_linux(lib_name):
@@ -111,6 +118,15 @@ def _get_path_to_hip_runtime_dylib():
     # First search the HIP runtime dynamic library packaged with PyTorch. It's very likely
     # that we run Triton together with PyTorch. This makes sure we use the same dynamic
     # library to avoid version mismatch.
+    try:
+        torch_spec = importlib.util.find_spec("torch")
+    except (ImportError, ValueError):
+        torch_spec = None
+    if torch_spec and torch_spec.submodule_search_locations:
+        for location in torch_spec.submodule_search_locations:
+            candidates = sorted(path for path in Path(location, "lib").glob(f"{lib_name}*") if path.is_file())
+            if candidates:
+                return str(candidates[0])
     site_packages = site.getsitepackages()
     user_site = site.getusersitepackages()
     if site.ENABLE_USER_SITE:  # ENABLE_USER_SITE is initialized in getusersitepackages()
@@ -159,11 +175,18 @@ def _get_path_to_hip_runtime_dylib():
         paths.append(rocm_lib_path)
 
     # Afterwards try to search the loader dynamic library resolution paths.
-    libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode(errors="ignore")
+    try:
+        libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode(errors="ignore")
+    except FileNotFoundError:
+        libs = ""
     # each line looks like the following:
     # libamdhip64.so.6 (libc6,x86-64) => /opt/rocm-6.0.2/lib/libamdhip64.so.6
     # libamdhip64.so (libc6,x86-64) => /opt/rocm-6.0.2/lib/libamdhip64.so
-    locs = [line.split()[-1] for line in libs.splitlines() if line.strip().endswith(lib_name)]
+    locs = [
+        line.split()[-1]
+        for line in libs.splitlines()
+        if line.strip() and Path(line.split()[-1]).name.startswith(lib_name)
+    ]
     for loc in locs:
         if os.path.exists(loc):
             return loc
@@ -175,7 +198,31 @@ def _get_path_to_hip_runtime_dylib():
         return common_install_path
     paths.append(common_install_path)
 
-    raise RuntimeError(f"cannot locate {lib_name} after attempted paths {paths}")
+    raise _HIPRuntimeNotFoundError(f"cannot locate {lib_name} after attempted paths {paths}")
+
+
+def _hip_runtime_is_active():
+    # None leaves discovery to Torch; driver initialization still validates the runtime.
+    try:
+        libhip_path = _get_path_to_hip_runtime_dylib()
+    except _HIPRuntimeNotFoundError:
+        return False
+    except (RuntimeError, OSError, subprocess.CalledProcessError):
+        return None
+
+    try:
+        get_device_count = ctypes.CDLL(libhip_path).hipGetDeviceCount
+    except (OSError, AttributeError):
+        return None
+    get_device_count.argtypes = [ctypes.POINTER(ctypes.c_int)]
+    get_device_count.restype = ctypes.c_int
+    count = ctypes.c_int()
+    status = get_device_count(ctypes.byref(count))
+    if status == 0:
+        return count.value > 0
+    if status == 100:  # hipErrorNoDevice
+        return False
+    return None
 
 
 class HIPUtils(object):
@@ -399,6 +446,9 @@ class HIPDriver(GPUDriver):
 
     @staticmethod
     def is_active():
+        # Avoid importing a framework just to discover that HIP is unavailable.
+        if "torch" not in sys.modules and _hip_runtime_is_active() is False:
+            return False
         try:
             import torch
             return torch.cuda.is_available() and (torch.version.hip is not None)
