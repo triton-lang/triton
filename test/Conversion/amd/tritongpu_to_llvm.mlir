@@ -994,7 +994,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   // COMMON-LABEL: @atomic_load_store
   // COMMON: llvm.load %{{.*}} atomic syncscope("agent") monotonic
+  // COMMON-NOT: rocdl.s.barrier
   // COMMON: llvm.fence syncscope("agent") acquire
+  // COMMON: rocdl.s.barrier
+  // COMMON: llvm.load %{{.*}} : !llvm.ptr<3> -> i32
   // COMMON: llvm.fence syncscope("workgroup") release
   // COMMON: llvm.store %{{.*}}, %{{.*}} atomic syncscope("workgroup") monotonic
   tt.func public @atomic_load_store(%ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>, %mask: i1) {
@@ -1005,7 +1008,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
   // COMMON-LABEL: @sharded_atomic_load_acquire
   // COMMON-COUNT-4: llvm.load %{{.*}} atomic syncscope("agent") monotonic
+  // COMMON-NOT: rocdl.s.barrier
   // COMMON: llvm.fence syncscope("agent") acquire
+  // COMMON: rocdl.s.barrier
+  // COMMON: llvm.return
   tt.func public @sharded_atomic_load_acquire(
       %ptrs: tensor<1024x!tt.ptr<i32>, #blocked4_atomic>,
       %mask: tensor<1024xi1, #blocked4_atomic>) {
