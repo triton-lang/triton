@@ -475,6 +475,46 @@ tt.func @split_pipelined_mmav2_loads_f64(%lb : index, %ub : index, %step : index
 
 // -----
 
+// Large f64 tile: prefetching would keep ~3 K-slices of each 128-wide operand
+// plus a 128x128 accumulator live, blowing past the register budget and
+// spilling. The footprint guard must skip prefetch here, so no memdesc_subslice
+// (the prefetch marker) is emitted in the loop.
+
+#shared_f64 = #ttg.swizzled_shared<{vec = 2, perPhase = 1, maxPhase = 8, order = [1, 0]}>
+#shared1_f64 = #ttg.swizzled_shared<{vec = 2, perPhase = 1, maxPhase = 8, order = [1, 0]}>
+#mma_f64 = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [1, 1], instrShape = [16, 8, 8]}>
+#a_f64_op = #ttg.dot_op<{opIdx = 0, parent = #mma_f64, kWidth = 2}>
+#b_f64_op = #ttg.dot_op<{opIdx = 1, parent = #mma_f64, kWidth = 2}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: tt.func @no_prefetch_large_f64
+// CHECK-NOT: ttg.memdesc_subslice
+module attributes {ttg.target = "cuda:90", "ttg.num-warps" = 1 : i32} {
+tt.func @no_prefetch_large_f64(%lb : index, %ub : index, %step : index, %tok0 : !ttg.async.token, %tok1 : !ttg.async.token) -> tensor<128x128xf64, #mma_f64> {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %cst = arith.constant dense<0.00e+00> : tensor<128x128xf64, #mma_f64>
+  %a = ttg.local_alloc : () -> !ttg.memdesc<3x128x64xf64, #shared_f64, #smem, mutable>
+  %b = ttg.local_alloc : () -> !ttg.memdesc<3x64x128xf64, #shared1_f64, #smem, mutable>
+  %loop:2 = scf.for %iv = %lb to %ub step %step iter_args(%idx = %c0_i32, %acc = %cst) -> (i32, tensor<128x128xf64, #mma_f64>) {
+    %idx_p1 = arith.addi %idx, %c1_i32 : i32
+    %idx_cmp = arith.cmpi sge, %idx_p1, %c3_i32 : i32
+    %idx_next = arith.select %idx_cmp, %c0_i32, %idx_p1 : i32
+    %wait = ttg.async_wait %tok0, %tok1 {num = 4 : i32}
+    %a_view = ttg.memdesc_index %a[%idx_next] : !ttg.memdesc<3x128x64xf64, #shared_f64, #smem, mutable> -> !ttg.memdesc<128x64xf64, #shared_f64, #smem, mutable>
+    %a_val = ttg.local_load %a_view token %wait : !ttg.memdesc<128x64xf64, #shared_f64, #smem, mutable> -> tensor<128x64xf64, #a_f64_op>
+    %b_view = ttg.memdesc_index %b[%idx_next] : !ttg.memdesc<3x64x128xf64, #shared1_f64, #smem, mutable> -> !ttg.memdesc<64x128xf64, #shared1_f64, #smem, mutable>
+    %b_val = ttg.local_load %b_view token %wait : !ttg.memdesc<64x128xf64, #shared1_f64, #smem, mutable> -> tensor<64x128xf64, #b_f64_op>
+    %acc_next = tt.dot %a_val, %b_val, %acc, inputPrecision = tf32 : tensor<128x64xf64, #a_f64_op> * tensor<64x128xf64, #b_f64_op> -> tensor<128x128xf64, #mma_f64>
+    scf.yield %idx_next, %acc_next : i32, tensor<128x128xf64, #mma_f64>
+  }
+  tt.return %loop#1 : tensor<128x128xf64, #mma_f64>
+}
+}  // end module
+
+// -----
+
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #BL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
 #A = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
