@@ -404,6 +404,8 @@ class HIPDriver(GPUDriver):
 
         try:
             libhip = ctypes.CDLL(_get_path_to_hip_runtime_dylib())
+            # AMD's reference for querying compute-capable devices:
+            # https://rocm.docs.amd.com/projects/HIP/en/latest/doxygen/html/group___device.html
             get_device_count = libhip.hipGetDeviceCount
             get_device_count.argtypes = [ctypes.POINTER(ctypes.c_int)]
             get_device_count.restype = ctypes.c_int
