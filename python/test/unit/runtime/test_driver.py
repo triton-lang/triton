@@ -1,5 +1,4 @@
 import os
-import subprocess
 import sys
 from concurrent.futures import Future, ThreadPoolExecutor
 from multiprocessing.connection import Client
@@ -12,104 +11,20 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._compile_trace import CompilationTrace, _require_complete_warmup, summarize_compile_trace
 from triton._compile_warmup import (
+    CompilationTrace,
+    _require_complete_warmup,
     compile_warmup_only,
     pytest_collection_modifyitems,
     pytest_xdist_setupnodes,
+    summarize_compile_trace,
 )
 from triton._compile_warmup_pool import ProcessPoolWarmupDispatcher, SharedWarmupCoordinator, _jit_dumps
 from triton._internal_testing import is_compile_warmup, random_float, random_int
 from triton import _test_runner
-from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver, expand_signature, wrap_handle_tensordesc_impl
 from triton.backends.nvidia.compiler import CUDABackend
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
-
-
-def test_cpu_helpers_without_torch():
-    subprocess.run([
-        sys.executable, "-c", """
-import builtins
-import json
-import os
-import sys
-import tempfile
-from types import SimpleNamespace
-
-def forbid_torch(name, *args, **kwargs):
-    assert name != "torch" and not name.startswith("torch."), name
-    return original_import(name, *args, **kwargs)
-
-original_import = builtins.__import__
-builtins.__import__ = forbid_torch
-
-import numpy as np
-import triton
-from triton import _test_runner
-from triton._compile_trace import CompilationTrace
-from triton._compile_warmup_state import _COMPILE_WARMUP_ACTIVE
-from triton.backends.amd.compiler import HIPBackend
-from triton.backends.compiler import GPUTarget
-from triton.experimental.gsan import _stream_sync, _utils
-
-for size in (0, 2**31 - 1, 2**31):
-    assert HIPBackend.is_within_2gb(SimpleNamespace(ptr_range=lambda: size)) == (size < 2**31)
-
-token = _COMPILE_WARMUP_ACTIVE.set(True)
-try:
-    assert triton.testing.cublas() is None
-finally:
-    _COMPILE_WARMUP_ACTIVE.reset(token)
-
-triton.runtime.driver.set_active(SimpleNamespace(
-    get_current_device=lambda: 2,
-    utils=SimpleNamespace(get_device_properties=lambda device: {
-        "mem_clock_rate": 1000 * device, "mem_bus_width": 256,
-    }),
-))
-assert triton.testing.get_dram_gbps() == triton.testing.get_dram_gbps(device=2) == 0.128
-
-for shape in ((), (1,), (2,)):
-    x = np.ones(shape)
-    triton.testing.assert_close(x, np.full(shape, 1.005))
-    try:
-        triton.testing.assert_close(x, np.full(shape, 2.), err_msg="expected mismatch")
-    except AssertionError as error:
-        assert "expected mismatch" in str(error)
-    else:
-        raise AssertionError("assert_close accepted unequal arrays")
-
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
-os.environ["HIP_VISIBLE_DEVICES"] = "3"
-with tempfile.TemporaryDirectory() as directory:
-    for backend, visible in (("cuda", "2"), ("hip", "3")):
-        trace = CompilationTrace(directory, backend)
-        trace(src=SimpleNamespace(name="kernel", hash=lambda: "source"),
-              metadata={"hash": "kernel", "target": GPUTarget(backend, "unused", 32)},
-              metadata_group={}, times=SimpleNamespace(total=1), cache_hit=False)
-        with open(trace.path) as source:
-            assert json.loads(source.readline())["gpu"] == visible
-    assert _test_runner._report(SimpleNamespace(directory=directory, require_complete=False)) == 0
-
-assert "torch" not in sys.modules
-"""
-    ], check=True)
-
-
-@pytest.mark.parametrize("array_type", ["numpy", "torch", "list"])
-def test_assert_close_tolerance_callback_dtype(array_type):
-    import numpy as np
-
-    x = {"numpy": np.ones(2, dtype=np.float32), "torch": torch.ones(2), "list": [1., 1.]}[array_type]
-    seen = []
-
-    def tolerance(dtype):
-        seen.append(dtype)
-        return 0
-
-    triton.testing.assert_close(x, x, atol=tolerance, rtol=tolerance)
-    assert seen == [torch.float32, torch.float32]
 
 
 def test_compile_warmup_only_intercepts_launches():
@@ -420,9 +335,8 @@ def test_compile_warmup_reuses_equivalent_kernel_payloads(monkeypatch):
 
 def _trace(directory, phase, test, digest, hit):
     source = SimpleNamespace(name="kernel", fn=SimpleNamespace(_fn_name="package.kernel"), hash=lambda: "source")
-    CompilationTrace(str(directory), phase,
-                     test)(src=source, metadata={"hash": digest, "target": GPUTarget("cuda", 90, 32)},
-                           metadata_group={}, times=SimpleNamespace(total=125_000), cache_hit=hit)
+    CompilationTrace(str(directory), phase, test)(src=source, metadata={"hash": digest}, metadata_group={},
+                                                  times=SimpleNamespace(total=125_000), cache_hit=hit)
 
 
 def test_compile_warmup_runner_discards_previous_job_traces(tmp_path, monkeypatch):

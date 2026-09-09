@@ -24,7 +24,7 @@ def _cublas_for_device(device):
 
 def cublas():
     """Return the current device's cached cuBLAS handle outside compile warmup."""
-    from triton._compile_warmup_state import is_compile_warmup
+    from triton._internal_testing import is_compile_warmup
 
     if is_compile_warmup():
         return None
@@ -451,26 +451,29 @@ def assert_close(x, y, atol=None, rtol=None, err_msg=''):
     :type err_msg: str
     """
     import numpy as np
+    import torch
+
+    # canonicalize arguments to be tensors
+    if not isinstance(x, torch.Tensor):
+        x = torch.tensor(x)
+    if not isinstance(y, torch.Tensor):
+        y = torch.tensor(y)
     # absolute tolerance
     if atol is None:
         atol = 1e-2
+    atol = atol(x.dtype) if callable(atol) else atol
     # relative tolerance hook
     if rtol is None:
         rtol = 0.
-
-    # Dtype callbacks retain their torch.dtype argument, even for NumPy inputs.
-    if not (isinstance(x, np.ndarray) and isinstance(y, np.ndarray) and not callable(atol) and not callable(rtol)):
-        import torch
-
-        if not isinstance(x, torch.Tensor):
-            x = torch.tensor(x)
-        if not isinstance(y, torch.Tensor):
-            y = torch.tensor(y)
-        atol = atol(x.dtype) if callable(atol) else atol
-        rtol = rtol(x.dtype) if callable(rtol) else rtol
+    rtol = rtol(x.dtype) if callable(rtol) else rtol
+    # we use numpy instead of pytorch
+    # as it seems more memory efficient
+    # pytorch tends to oom on large tensors
+    if isinstance(x, torch.Tensor):
         if x.dtype == torch.bfloat16:
             x = x.float()
         x = x.cpu().detach().numpy()
+    if isinstance(y, torch.Tensor):
         if y.dtype == torch.bfloat16:
             y = y.float()
         y = y.cpu().detach().numpy()
@@ -665,7 +668,7 @@ def get_dram_gbps(device=None):
 
     from .runtime import driver
     if device is None:
-        device = driver.active.get_current_device()
+        device = driver.active.get_device_interface().current_device()
     mem_clock_khz = driver.active.utils.get_device_properties(device)["mem_clock_rate"]  # in kHz
     bus_width = driver.active.utils.get_device_properties(device)["mem_bus_width"]
     bw_gbps = mem_clock_khz * bus_width * 2 / 1e6 / 8  # In GB/s

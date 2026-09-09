@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import ctypes
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import torch
+import torch
 
 _DLPACK_CAPSULE_NAME = b"dltensor"
 _DL_UINT = 1
@@ -104,8 +102,6 @@ class _DLPackCudaPtrView:
 
 
 def uint8_cuda_tensor_from_ptr(data_ptr: int, numel: int, device_index: int) -> torch.Tensor:
-    import torch
-
     numel = int(numel)
     if numel < 0:
         raise ValueError(f"numel must be >= 0, got {numel}")
