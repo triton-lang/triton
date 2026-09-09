@@ -164,10 +164,7 @@ def _get_path_to_hip_runtime_dylib():
         paths.append(rocm_lib_path)
 
     # Afterwards try to search the loader dynamic library resolution paths.
-    try:
-        libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode(errors="ignore")
-    except FileNotFoundError:
-        libs = ""
+    libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode(errors="ignore")
     # each line looks like the following:
     # libamdhip64.so.6 (libc6,x86-64) => /opt/rocm-6.0.2/lib/libamdhip64.so.6
     # libamdhip64.so (libc6,x86-64) => /opt/rocm-6.0.2/lib/libamdhip64.so
