@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import triton
 from triton_kernels import target_info
 from triton_kernels.target_info import get_cdna_version, get_rdna_version, cuda_capability_geq
-from triton_kernels.tensor import FP4, FP32, Tensor, torch_dtype_to_dtype
+from triton_kernels.tensor import FP4, FP8_E4M3FN, FP32, Tensor, torch_dtype_to_dtype
 import torch
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
 from triton_kernels.tensor_details.layout_details.strided import StridedLayout
@@ -225,6 +225,7 @@ def make_default_opt_flags_nvidia(
     constraints_supported = {"block_m", "block_n", "block_k", "split_k", "is_persistent", "clc", "epilogue_subtile", "num_stages", "idle_sms", "max_allowable_mn", "num_warps", "disable_mx4_block_swap", "swap_xw", "group_m", "use_output_tma"}
     unsupported = set(constraints.keys()) - constraints_supported
     assert not unsupported, f"Given unsupported constraint: {unsupported}"
+    is_mixed_fp8 = opt_flags_nvidia.is_unscaled_mixed_fp8(precision_config, lhs_dtype, rhs_dtype)
     is_large_ragged_nvfp4 = (
         routing_data is not None
         and m >= _MIN_NVFP4_RAGGED_TRAIN_ROWS
@@ -314,7 +315,11 @@ def make_default_opt_flags_nvidia(
         is_persistent = True
     else:
         has_simple_epilogue = precision_config.max_num_imprecise_acc is None
-        is_persistent = supports_persistent and has_simple_epilogue and (tiles_per_sm >= 2.0 or lhs_dtype.bitwidth <= 8) and (out_dtype.bitwidth < 32 or lhs_dtype.bitwidth == 32 or rhs_dtype.bitwidth == 32)
+        is_persistent = (
+            supports_persistent and has_simple_epilogue
+            and (tiles_per_sm >= 2.0 or lhs_dtype.bitwidth <= 8 or is_mixed_fp8)
+            and (out_dtype.bitwidth < 32 or lhs_dtype.bitwidth == 32 or rhs_dtype.bitwidth == 32)
+        )
         # TMA is slower for batched matmuls with small m/n/k.
         if m * n * k < 131072:
             is_persistent = False
@@ -343,6 +348,14 @@ def make_default_opt_flags_nvidia(
     if is_persistent and opt_flags_nvidia.is_x_scale_swizzled(precision_config):
         # a mx scale has been swizzled to BlackwellActMXScaleLayout, enforce block_m=128 to align with swizzling layout
         block_m = 128
+    swap_xw = constraints.get("swap_xw")
+    if is_mixed_fp8 and rhs_dtype == FP8_E4M3FN and is_persistent:
+        # Convert FP8 in the MMA's lhs registers/TMEM, avoiding a widened RHS buffer.
+        if swap_xw is None and block_n >= 64:
+            swap_xw = True
+        if (swap_xw and not enforce_bitwise_invariance and slice_size >= block_n > block_m
+                and constraints.get("block_m") is None and constraints.get("block_n") is None):
+            block_m, block_n = block_n, block_m
     # block k
     if constraints.get("block_k", None) is not None:
         block_k = constraints["block_k"]
@@ -384,7 +397,6 @@ def make_default_opt_flags_nvidia(
     )
 
     num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, is_persistent, precision_config, constraints)
-    swap_xw = constraints.get("swap_xw")
     if is_large_ragged_nvfp4 and constraints.get("num_warps", None) is None:
         # Eight warps overrun GB300 TMEM for the large ragged NVFP4 tile.
         num_warps = 4

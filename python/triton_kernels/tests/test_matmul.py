@@ -664,8 +664,12 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 @pytest.mark.parametrize("b_transpose", [False, True])
 @pytest.mark.parametrize("shape, constraints", [
     ((273, 544, 576), dict(block_m=block_m, block_n=256, block_k=128, split_k=1, is_persistent=is_persistent))
-    for block_m, is_persistent in [(32, False), (16, True), (64, True), (128, True)]
-] + [((128, 256, 1024), {})])
+    for block_m, is_persistent in [(32, False), (16, True), (64, True)]
+] + [
+    ((273, 544, 576), dict(block_m=128, block_n=256, block_k=128, split_k=1, is_persistent=True, swap_xw=False)),
+    ((128, 256, 1024), {}),
+    ((273, 544, 576), {}),
+])
 def test_matmul_unscaled_mixed_fp8(dtype, fp8_lhs, b_transpose, shape, constraints, device, opt_flags_scope):
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("requires Hopper or newer")
@@ -684,6 +688,31 @@ def test_matmul_unscaled_mixed_fp8(dtype, fp8_lhs, b_transpose, shape, constrain
 
     expected = torch.matmul(a.float(), b.float()).to(dtype)
     assert_close(expected, actual)
+
+
+@pytest.mark.parametrize("fp8_lhs", [False, True])
+@pytest.mark.parametrize("is_persistent", [False, True])
+def test_matmul_mixed_fp8_preserves_fp16_precision(fp8_lhs, is_persistent, device, opt_flags_scope):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("requires Hopper or newer")
+
+    a = torch.zeros((128, 128), dtype=torch.float16, device=device)
+    b = torch.zeros_like(a)
+    a[:, 0] = 1
+    a[:, 1] = -1
+    # Rounding the FP16 operand to BF16 would erase the residual.
+    b[0, :] = 1 + 2**-10
+    b[1, :] = 1
+    if fp8_lhs:
+        a = a.to(torch.float8_e4m3fn)
+    else:
+        a, b = b.mT.contiguous(), a.mT.contiguous().to(torch.float8_e4m3fn)
+
+    with opt_flags.scoped_opt_flags_constraints(dict(is_persistent=is_persistent, split_k=1)):
+        actual = matmul(a, b, None, precision_config=PrecisionConfig(out_dtype=torch.float16))
+
+    expected = torch.full((128, 128), 2**-10, dtype=torch.float16, device=device)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("is_persistent", [False, True])

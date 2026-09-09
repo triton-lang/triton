@@ -7,6 +7,12 @@ from triton_kernels.tensor_details.layout import HopperMXScaleLayout
 from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, BlackwellMXScaleLayout
 
 
+def is_unscaled_mixed_fp8(precision_config, lhs_dtype, rhs_dtype):
+    return (precision_config.a_mx_scale is None and precision_config.b_mx_scale is None
+            and (lhs_dtype == FP8_E4M3FN and rhs_dtype in (FP16, BF16)
+                 or rhs_dtype == FP8_E4M3FN and lhs_dtype in (FP16, BF16)))
+
+
 def is_x_scale_swizzled(precision_config):
     return (precision_config is not None and precision_config.a_mx_scale is not None
             and isinstance(precision_config.a_mx_scale, Tensor)
@@ -76,6 +82,10 @@ def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_d
     # block_k needs to match the cacheline size (1024 bits)
     block_k = int(1024 // min(lhs_width, rhs_width))
     has_native_mxfp = target_info.cuda_capability_geq(10, 0)
+    if (not has_native_mxfp and target_info.cuda_capability_geq(9, 0)
+            and is_unscaled_mixed_fp8(precision_config, lhs_dtype, rhs_dtype)):
+        # Limit register pressure from Hopper's FP8-to-16-bit conversion.
+        block_k = 64
     if rhs_width == 4 and not has_native_mxfp:
         block_k = 128
     elif is_persistent and is_x_scale_swizzled(precision_config):
@@ -149,23 +159,26 @@ def compute_num_stages(
 ):
     if precision_config.max_num_imprecise_acc is not None:
         return 3
+    if swap_xw is None:
+        swap_xw = compute_swap_xw(precision_config, block_m, is_persistent, lhs_dtype, rhs_dtype)
     act_size = lhs_dtype.bitwidth / 8
     weight_size = rhs_dtype.bitwidth / 8
     has_native_mxfp = target_info.cuda_capability_geq(10, 0)
-    is_unscaled = precision_config.a_mx_scale is None and precision_config.b_mx_scale is None
-    if (lhs_dtype in (FP16, BF16) and
-        (has_native_mxfp and precision_config.b_mx_scale is not None or is_unscaled and rhs_dtype == FP8_E4M3FN)):
-        # Mixed 16-bit dots stage widened FP8/MXFP weights in shared memory.
+    if has_native_mxfp and lhs_dtype in (FP16, BF16) and precision_config.b_mx_scale is not None:
         weight_size = 2
-    if (has_native_mxfp and rhs_dtype in (FP16, BF16)
-            and (precision_config.a_mx_scale is not None or is_unscaled and lhs_dtype == FP8_E4M3FN)):
-        # Blackwell also needs space for widened activation tiles.
+    if has_native_mxfp and rhs_dtype in (FP16, BF16) and precision_config.a_mx_scale is not None:
         act_size = 2
 
     stage_size = block_m * block_k * act_size + block_k * block_n * weight_size
     device_props = torch.cuda.get_device_properties(0)
     smem_capacity = device_props.shared_memory_per_block_optin
     smem_capacity //= occupancy_target
+    if (is_unscaled_mixed_fp8(precision_config, lhs_dtype, rhs_dtype)
+            and (lhs_dtype if swap_xw else rhs_dtype) == FP8_E4M3FN):
+        # A computed RHS needs one widened tile in addition to its input ring.
+        # The regular pipeline replaces one raw FP8 slot with that widened tile.
+        rhs_elements = block_k * (block_m if swap_xw else block_n)
+        smem_capacity -= rhs_elements * (2 if is_persistent else 1)
     if has_native_mxfp:
         # 4-bit e2m1 operands are padded 2x
         # https://docs.nvidia.com/cuda/parallel-thread-execution/#packing-format-used-for-matrix-a-and-b-by-kind-mxf8f6f4-in-shared-memory
@@ -201,8 +214,11 @@ def compute_num_stages(
         # pipelined layout conversion before store of the accumulator
         # note: layout conversion has some padding
         epilogue_smem = int((block_m + 4) * acc_block_n * acc_size)
-        if swap_xw is None:
-            swap_xw = compute_swap_xw(precision_config, block_m, is_persistent, lhs_dtype, rhs_dtype)
+        if (has_native_mxfp and not swap_xw and block_m == 64 and epilogue_subtile > 1
+                and is_unscaled_mixed_fp8(precision_config, lhs_dtype, rhs_dtype)):
+            # The first accumulator split needs FP32 redistribution scratch
+            # alongside the output tile, before any activation reduction.
+            epilogue_smem += block_m * (block_n // 2) * 4
         if swap_xw:
             # The fp32 accumulator stays in TMEM for the Blackwell SWAP_XW
             # persistent path. Fused reductions such as swiglu still need smem
@@ -229,8 +245,7 @@ def compute_num_stages(
         smem_capacity -= epilogue_smem
         if x_transpose:
             smem_capacity -= int(block_m * block_k * act_size)
-        if (rhs_dtype == FP32 and not w_transpose or has_native_mxfp and is_unscaled and lhs_dtype == FP8_E4M3FN
-                and rhs_dtype in (FP16, BF16) and w_transpose != swap_xw):
+        if rhs_dtype == FP32 and not w_transpose:
             # Different TMA and MMA layouts require an extra B tile for conversion.
             smem_capacity -= int(block_k * block_n * weight_size)
     if is_persistent and not has_native_mxfp and epilogue_reduction_n > 1:
