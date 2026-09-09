@@ -115,6 +115,7 @@ def test_inline_asm_memdesc_view(memory_space, threadwise, pack, device):
             cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
             offsets = (rows[:, None] * 64 + cols[None, :]) * 4
         if THREADWISE:
+            ttgl.barrier()
             result = ttgl.inline_asm(ASM, CONSTRAINTS, [view, offsets], offsets.type.with_element_ty(ttgl.float32))
         else:
             result = ttgl.inline_asm_elementwise(ASM, CONSTRAINTS, [view, offsets], ttgl.float32, False, PACK)
@@ -150,8 +151,10 @@ def test_inline_asm_memdesc_store(elementwise, device):
                 "{ .reg .u32 addr; add.u32 addr, $1, $2; st.shared.u32 [addr], $3; mov.u32 $0, 0; }", "=r,r,r,r",
                 [view, offsets * 4, offsets + 1], ttgl.int32, False, 1)
         else:
+            ttgl.barrier()
             ttgl.inline_asm("{ .reg .u32 addr; add.u32 addr, $0, $1; st.shared.u32 [addr], $2; }", "r,r,r",
                             [view, offsets * 4, offsets + 1])
+            ttgl.barrier()
         load_layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
         result = parent.load(load_layout)
         ttgl.store(Out + ttgl.arange(0, 256, layout=load_layout), result)

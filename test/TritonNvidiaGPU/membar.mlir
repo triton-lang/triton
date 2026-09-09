@@ -183,10 +183,10 @@ tt.func @wait_after_mma(
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK-LABEL: @inline_asm_memdesc_effects
-  tt.func @inline_asm_memdesc_effects(%data: tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked> {
+  // CHECK-LABEL: @inline_asm_no_memdesc_effects
+  tt.func @inline_asm_no_memdesc_effects(%data: tensor<128xi32, #blocked>) -> tensor<128xi32, #blocked> {
+    // CHECK: ttg.local_alloc
     %mem = ttg.local_alloc %data : (tensor<128xi32, #blocked>) -> !ttg.memdesc<128xi32, #shared, #smem, mutable>
-    // CHECK: ttg.barrier local
     // CHECK-NEXT: ttg.inline_asm
     ttg.inline_asm "// access descriptor" {constraints = "r", pure = false} %mem : (!ttg.memdesc<128xi32, #shared, #smem, mutable>) -> ()
     // CHECK-NEXT: ttg.barrier local

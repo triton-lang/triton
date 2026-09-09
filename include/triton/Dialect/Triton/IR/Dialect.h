@@ -67,9 +67,6 @@ public:
                                       bool isPure) const = 0;
 };
 
-void getInlineAsmEffects(
-    Operation *op, bool isPure,
-    SmallVectorImpl<MemoryEffects::EffectInstance> &effects);
 LogicalResult verifyInlineAsmOperands(Operation *op, bool isPure);
 
 class DialectInferLayoutInterface

@@ -146,6 +146,7 @@ def test_inline_asm_shared_amd_compilation(elementwise):
         if ELEMENTWISE:
             y = ttgl.inline_asm_elementwise(asm, "=&v,v,v", [smem, x * 4], ttgl.int32, False, 1)
         else:
+            ttgl.barrier()
             y = ttgl.inline_asm(asm, "=&v,v,v", [smem, x * 4], x.type)
         ttgl.store(Out + x, y)
 

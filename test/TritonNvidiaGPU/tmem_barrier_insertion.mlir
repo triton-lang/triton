@@ -806,15 +806,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
-  // WAIT-LABEL: @inline_asm_tmem_effects
+  // WAIT-LABEL: @elementwise_inline_asm_tmem_effects
   // CHECK: ttng.tmem_alloc
   // WAIT: ttng.tmem_wait store
-  // WAIT-NEXT: ttg.inline_asm
+  // WAIT-NEXT: {{.*}}tt.elementwise_inline_asm
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: {{.*}}ttng.tmem_load
-  tt.func @inline_asm_tmem_effects(%data: tensor<128x128xf32, #blocked>) -> tensor<128x128xf32, #blocked> {
+  tt.func @elementwise_inline_asm_tmem_effects(%data: tensor<128x128xf32, #blocked>) -> tensor<128x128xf32, #blocked> {
     %mem = ttng.tmem_alloc %data {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
-    ttg.inline_asm "// access descriptor" {constraints = "r", pure = false} %mem : (!ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>) -> ()
+    %unused = tt.elementwise_inline_asm "mov.u32 $0, 0;" {constraints = "=r,r", pure = false, packed_element = 1 : i32} %mem : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> i32
+    %result = ttng.tmem_load %mem : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    tt.return %result : tensor<128x128xf32, #blocked>
+  }
+
+  // WAIT-LABEL: @inline_asm_no_tmem_effects
+  // WAIT: ttg.inline_asm
+  // WAIT-NEXT: {{.*}}ttng.tmem_load
+  // WAIT-NEXT: ttng.tmem_wait load
+  // WAIT-NEXT: tt.return
+  tt.func @inline_asm_no_tmem_effects(%mem: !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>) -> tensor<128x128xf32, #blocked> {
+    ttg.inline_asm "// opaque descriptor" {constraints = "r", pure = false} %mem : (!ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>) -> ()
     %result = ttng.tmem_load %mem : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
     tt.return %result : tensor<128x128xf32, #blocked>
   }

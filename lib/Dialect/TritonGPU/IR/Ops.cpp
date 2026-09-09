@@ -46,7 +46,10 @@ namespace mlir::triton::gpu {
 
 void InlineAsmOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
-  getInlineAsmEffects(*this, getPure(), effects);
+  if (getPure())
+    return;
+  effects.emplace_back(MemoryEffects::Read::get());
+  effects.emplace_back(MemoryEffects::Write::get());
 }
 
 Speculation::Speculatability InlineAsmOp::getSpeculatability() {

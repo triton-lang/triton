@@ -1619,14 +1619,13 @@ LogicalResult SplitOp::fold(FoldAdaptor adaptor,
 }
 
 // -- ElementwiseInlineAsmOp --
-void getInlineAsmEffects(
-    Operation *op, bool isPure,
+void ElementwiseInlineAsmOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
-  if (isPure)
+  if (getPure())
     return;
   effects.emplace_back(MemoryEffects::Read::get());
   effects.emplace_back(MemoryEffects::Write::get());
-  for (OpOperand &operand : op->getOpOperands())
+  for (OpOperand &operand : getOperation()->getOpOperands())
     if (auto *interface = dyn_cast<DialectInlineAsmInterface>(
             &operand.get().getType().getDialect()))
       interface->getOperandEffects(operand, effects);
@@ -1639,12 +1638,6 @@ LogicalResult verifyInlineAsmOperands(Operation *op, bool isPure) {
       if (failed(interface->verifyOperand(operand, isPure)))
         return failure();
   return success();
-}
-
-void ElementwiseInlineAsmOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  getInlineAsmEffects(*this, getPure(), effects);
 }
 
 Speculation::Speculatability ElementwiseInlineAsmOp::getSpeculatability() {
