@@ -1,4 +1,6 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --convert-triton-gpu-to-llvm -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --dump-input-context 20
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --convert-triton-gpu-to-llvm -reconcile-unrealized-casts --canonicalize --cse 2>/dev/null | tee %t | FileCheck %s --check-prefix=MMA
+// RUN: FileCheck %s --check-prefix=STATIC < %t
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i32, %arg1: !llvm.ptr<1> {tt.pointee_type = f16}, %arg2: !llvm.ptr<1>, %arg3: !llvm.ptr<1>)
@@ -3499,6 +3501,39 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.prof
   // CHECK: llvm.getelementptr %arg1[%[[TOTAL_OFFSET]]] : (!llvm.ptr<1>, i64) -> !llvm.ptr<1>, i8
   tt.func @profile_scratch_ptr_uses_i64() {
     %0 = ttg.global_scratch_alloc {alignment = 128 : i32, third_party_allocation, nbytes = 2304 : i32, ttg.global_scratch_memory_offset = 0 : i32} : !tt.ptr<i32>
+    tt.return
+  }
+}
+
+// -----
+
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 1, 1], instrShape = [1, 8, 8]}>
+#a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>
+#b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  // FP64 fragments already have the MMA register order, including across batches.
+  // STATIC-LABEL: llvm.func @mma_fp64_large_k_batched(
+  // STATIC-NOT: llvm.select
+  // STATIC-NOT: llvm.icmp
+  // STATIC-NOT: llvm.udiv
+  // STATIC-NOT: nvvm.read.ptx.sreg
+  // STATIC: llvm.return
+  // MMA-LABEL: llvm.func @mma_fp64_large_k_batched(
+  // MMA-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
+  // MMA-DAG: %[[UNDEF:.*]] = llvm.mlir.undef : vector<1xf64>
+  // MMA-DAG: %[[A0:.*]] = llvm.extractvalue %arg0[0]
+  // MMA-DAG: %[[A8:.*]] = llvm.extractvalue %arg0[8]
+  // MMA-DAG: %[[AV0:.*]] = llvm.insertelement %[[A0]], %[[UNDEF]][%[[ZERO]] : i32] : vector<1xf64>
+  // MMA-DAG: %[[AV8:.*]] = llvm.insertelement %[[A8]], %[[UNDEF]][%[[ZERO]] : i32] : vector<1xf64>
+  // MMA-DAG: %[[B0:.*]] = llvm.extractvalue %arg1[0]
+  // MMA-DAG: %[[B8:.*]] = llvm.extractvalue %arg1[8]
+  // MMA-DAG: %[[BV0:.*]] = llvm.insertelement %[[B0]], %[[UNDEF]][%[[ZERO]] : i32] : vector<1xf64>
+  // MMA-DAG: %[[BV8:.*]] = llvm.insertelement %[[B8]], %[[UNDEF]][%[[ZERO]] : i32] : vector<1xf64>
+  // MMA: llvm.inline_asm{{.*}}mma.sync.aligned.m8n8k4{{.*}}%[[BV0]], %[[AV0]] :
+  // MMA: llvm.inline_asm{{.*}}mma.sync.aligned.m8n8k4{{.*}}%[[BV8]], %[[AV8]] :
+  tt.func @mma_fp64_large_k_batched(%a: tensor<2x16x16xf64, #a>, %b: tensor<2x16x16xf64, #b>) {
+    %c = arith.constant dense<0.0> : tensor<2x16x16xf64, #mma>
+    %d = tt.dot %a, %b, %c : tensor<2x16x16xf64, #a> * tensor<2x16x16xf64, #b> -> tensor<2x16x16xf64, #mma>
     tt.return
   }
 }

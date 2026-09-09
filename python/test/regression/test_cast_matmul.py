@@ -58,7 +58,7 @@ def matmul_kernel(A, B, C, M, N, K,  #
     # pointers
     A = A + (ram[:, None] * stride_am + rk[None, :] * stride_ak)
     B = B + (rk[:, None] * stride_bk + rbn[None, :] * stride_bn)
-    acc_dtype = tl.float16 if compute_dtype == tl.float16 and C.dtype.element_ty == tl.float16 else tl.float32
+    acc_dtype = tl.float32 if compute_dtype == tl.float16 and C.dtype.element_ty != tl.float16 else compute_dtype
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=acc_dtype)
     for k in range(0, tl.cdiv(K, BLOCK_K)):
         k_remaining = K - k * BLOCK_K
@@ -85,7 +85,9 @@ def matmul_kernel(A, B, C, M, N, K,  #
                           for (M, K, N) in [(768, 768, 1024)]  #
                           for w in input_dtypes
                           for x in input_dtypes  #
-                          for o in out_dtypes])
+                          for o in out_dtypes] + [(32, 32, 32, block_k, 32, 32, dtype, "float64", "float64")
+                                                  for block_k in [16, 32]
+                                                  for dtype in ["int16", "float16", "int8"]])
 def test_cast_matmul(M, K, N, BLOCK_K, BLOCK_M, BLOCK_N, w_dtype, x_dtype, out_dtype, device):
     if is_hip() and (BLOCK_K, BLOCK_M, BLOCK_N) in ((64, 64, 128), (64, 16, 128)):
         pytest.skip("skip as they run out of shared memory")
@@ -95,7 +97,7 @@ def test_cast_matmul(M, K, N, BLOCK_K, BLOCK_M, BLOCK_N, w_dtype, x_dtype, out_d
     w_dtype: torch.dtype = getattr(torch, w_dtype)
 
     def init_tensor(dtype, shape):
-        if dtype == torch.int8:
+        if dtype in (torch.int8, torch.int16):
             return torch.randint(0, 2, shape, device=device, dtype=dtype)
         elif dtype in (torch.float8_e4m3fn, torch.float8_e4m3fnuz, torch.float8_e5m2):
             return torch.randn(shape, device=device, dtype=torch.float16).to(dtype)
@@ -106,9 +108,8 @@ def test_cast_matmul(M, K, N, BLOCK_K, BLOCK_M, BLOCK_N, w_dtype, x_dtype, out_d
         # a holds the larger dtype
         if a_dtype.itemsize < b_dtype.itemsize:
             a_dtype, b_dtype = b_dtype, a_dtype
-        # float64 matmul is not supported by triton
         if a_dtype == torch.float64:
-            return torch.float32
+            return torch.float64
         # If they are both 1 byte or float16 and (1 byte or float16)
         if a_dtype.itemsize == 1 or (a_dtype == torch.float16 and b_dtype != torch.bfloat16):
             return torch.float16
@@ -142,4 +143,5 @@ def test_cast_matmul(M, K, N, BLOCK_K, BLOCK_M, BLOCK_N, w_dtype, x_dtype, out_d
         BLOCK_N=block_n,  #
         BLOCK_K=block_k)
 
-    torch.testing.assert_close(out_torch, out_triton, atol=0.3, rtol=0.01)
+    atol, rtol = (1e-12, 1e-12) if out_dtype == "float64" else (0.3, 0.01)
+    torch.testing.assert_close(out_torch, out_triton, atol=atol, rtol=rtol)

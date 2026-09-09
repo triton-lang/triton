@@ -914,3 +914,31 @@ tt.func public @padded_subview_unsupported_size(%arg0: !ttg.memdesc<2x32x32xf32,
 // expected-error @below {{alignment must be specified outside of the linear layout braces}}
 #shared = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [1, 0], [2, 0]], block = [], alignment = 16}>
 !alignment_in_layout = !ttg.memdesc<4x4xf32, #shared, #ttg.shared_memory>
+
+// -----
+
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 1], instrShape = [8, 8]}>
+#a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>
+#b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  tt.func @mma_fp64_large_k_replicated_lanes(%a: tensor<8x4xf64, #a>, %b: tensor<4x8xf64, #b>) {
+    %c = arith.constant dense<0.0> : tensor<8x8xf64, #mma>
+    // expected-error@+1 {{MMA operand layout requires K >= 4 * kWidth}}
+    %d = tt.dot %a, %b, %c : tensor<8x4xf64, #a> * tensor<4x8xf64, #b> -> tensor<8x8xf64, #mma>
+    tt.return
+  }
+}
+
+// -----
+
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 1], instrShape = [16, 8]}>
+#a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>
+#b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  tt.func @mma_fp32_large_k_replicated_lanes(%a: tensor<16x16xf32, #a>, %b: tensor<16x8xf32, #b>) {
+    %c = arith.constant dense<0.0> : tensor<16x8xf32, #mma>
+    // expected-error@+1 {{MMA operand layout requires K >= 4 * kWidth}}
+    %d = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<16x16xf32, #a> * tensor<16x8xf32, #b> -> tensor<16x8xf32, #mma>
+    tt.return
+  }
+}
