@@ -62,9 +62,9 @@ def test_custom_ops(tmp_path: pathlib.Path):
     if os.environ.get('TRITON_EXT_ENABLED', '0') == '0':
         return
 
-    # Extend Triton's operation builder with the plugin's operations.
+    # Extend Triton with the plugin (registers its custom operations).
     LIB = 'python/triton/plugins/libMLIRDialectPlugin.so'
-    triton._C.libtriton.ir.builder.extend_with(LIB)
+    triton._C.libtriton.extend_with(LIB)
 
     size = 8
     x = torch.zeros(size, device=DEVICE, dtype=torch.float32)
