@@ -70,6 +70,4 @@ def has_native_mxfp():
 
 
 def num_sms():
-    import torch
-
-    return torch.cuda.get_device_properties(0).multi_processor_count
+    return triton.runtime.driver.active.utils.get_device_properties(0)["multiprocessor_count"]
