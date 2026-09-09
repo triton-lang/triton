@@ -282,7 +282,7 @@ def _preload_worker(module_name, qualified_name, fn_bytes, compile_context_bytes
                 raise AssertionError("missing JIT function import and serialized payload")
             compile_context = cloudpickle.loads(compile_context_bytes)
             if trace_directory is not None:
-                from triton._compile_warmup import CompilationTrace
+                from triton._compile_trace import CompilationTrace
 
                 triton.knobs.compilation.listener = CompilationTrace(trace_directory, phase, test)
             start = time.monotonic()

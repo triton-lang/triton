@@ -10,7 +10,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from triton._compile_warmup import _require_complete_warmup, summarize_compile_trace
+from triton._compile_trace import _require_complete_warmup, summarize_compile_trace
 from triton._compile_warmup_pool import SharedWarmupCoordinator
 
 ROOT = Path(__file__).resolve().parents[2]

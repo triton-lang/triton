@@ -1,4 +1,3 @@
-import torch
 import triton
 import triton.language as tl
 
@@ -71,4 +70,6 @@ def has_native_mxfp():
 
 
 def num_sms():
+    import torch
+
     return torch.cuda.get_device_properties(0).multi_processor_count

@@ -219,12 +219,16 @@ class HIPBackend(BaseBackend):
 
     # is_within_2gb() needs to check for a torch subobject and this var tracks torch
     # availability state: None - not tested, True - torch is present. Anything else -
-    # no torch available. First call to is_within_2gb() checks torch availability
-    # and caches it.
+    # no torch available. The first call without ptr_range() checks torch
+    # availability and caches it.
     _torch_available: None | bool = None
 
     @staticmethod
     def is_within_2gb(arg):
+        MAX_INT_32 = 2**31 - 1
+        if hasattr(arg, "ptr_range"):
+            return arg.ptr_range() <= MAX_INT_32
+
         if HIPBackend._torch_available is None:
             try:
                 import torch
@@ -234,9 +238,6 @@ class HIPBackend(BaseBackend):
         elif HIPBackend._torch_available:
             import torch
 
-        MAX_INT_32 = 2**31 - 1
-        if hasattr(arg, "ptr_range"):
-            return arg.ptr_range() <= MAX_INT_32
         if HIPBackend._torch_available and isinstance(arg, torch.Tensor) and hasattr(arg, "untyped_storage"):
             return arg.untyped_storage().size() <= MAX_INT_32
         return False
