@@ -237,7 +237,7 @@ public:
   // and invalidate prior proxy-fence coverage for that source thread.
   void createSetProxyAccessCall(ImplicitLocOpBuilder &b, Value bufferMask,
                                 int thread, Value pred, Operation *insertPoint,
-                                Value effectCTAs);
+                                Value effectCTAs, Value bufferIndex = {});
   // fenceProxyAccesses: mark all generic accesses visible to the current base
   // thread as covered by fence.proxy.async. A CTA fence covers the current
   // buffer row; a cluster fence covers every cluster buffer row.

@@ -711,14 +711,37 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #frontier_smem = #ttg.shared_memory
 #frontier_src = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8200 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
-  // The helper consumes the analysis-derived completion mask directly.
-  // CHECK-LABEL: tt.func private @__triton_consan_track_proxy_accesses_for_buffer
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8208 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // Slice dynamic K=2 while preserving the multi-atom completion mask and
+  // the full phase stride. A missing match must leave old tracking unchanged.
+  // CHECK-LABEL: tt.func private @__triton_consan_track_proxy_accesses_for_buffer{{.*}}_I1(
   // CHECK-SAME: %arg8: i32, %arg9: tensor<8xi1{{.*}}, %arg10: i32
+  // CHECK: %[[FILTER_K_EQ:.*]] = arith.cmpi eq, {{.*}} : tensor<2xi64,
+  // CHECK: %[[FILTER_K_RANGE:.*]] = tt.make_range {end = 2 : i32, start = 0 : i32}
+  // CHECK: %[[FILTER_K_INDICES:.*]] = arith.select %[[FILTER_K_EQ]], %[[FILTER_K_RANGE]], {{.*}}tensor<2xi32,
+  // CHECK: %[[FILTER_K_INDEX:.*]] = "tt.reduce"(%[[FILTER_K_INDICES]]) <{axis = 0 : i32}>
+  // CHECK: %[[FILTER_K_ANY:.*]] = "tt.reduce"(%[[FILTER_K_EQ]]) <{axis = 0 : i32}>
+  // CHECK: %[[FILTER_K_STRIDE:.*]] = arith.constant 8 : i32
+  // CHECK-NEXT: %[[FILTER_K_OFFSET:.*]] = arith.muli %[[FILTER_K_INDEX]], %[[FILTER_K_STRIDE]] : i32
+  // CHECK-NEXT: %[[FILTER_K_PTR:.*]] = tt.addptr {{.*}}, %[[FILTER_K_OFFSET]] : !tt.ptr<i64>, i32
+  // CHECK: arith.constant dense<16> : tensor<2xi32,
+  // CHECK: %[[FILTER_K_TRACKING:.*]] = tt.load {{.*}} : tensor<1x8x1x1x2x!tt.ptr<i64>,
   // CHECK: ttg.convert_layout %arg9 {force_warp_shuffle}
+  // CHECK: %[[FILTER_K_ANY_MASK:.*]] = tt.splat %[[FILTER_K_ANY]] : i1 -> tensor<1x8x1x1x2xi1,
+  // CHECK: %[[FILTER_K_CTA_MASK:.*]] = arith.andi %[[FILTER_K_ANY_MASK]],
+  // CHECK: %[[FILTER_K_PHASE_MASK:.*]] = arith.cmpi eq,
+  // CHECK: %[[FILTER_K_BARRIER_MASK:.*]] = arith.andi %[[FILTER_K_CTA_MASK]], %[[FILTER_K_PHASE_MASK]]
+  // CHECK: ttg.convert_layout %arg9 {force_warp_shuffle}
+  // CHECK: %[[FILTER_K_BUFFER_MASK:.*]] = arith.andi %[[FILTER_K_BARRIER_MASK]],
+  // CHECK: %[[FILTER_K_MASK:.*]] = arith.andi %[[FILTER_K_BUFFER_MASK]],
+  // CHECK: %[[FILTER_K_WITH_SOURCE:.*]] = arith.ori %[[FILTER_K_TRACKING]],
+  // CHECK: %[[FILTER_K_UPDATED:.*]] = arith.select %[[FILTER_K_MASK]], %[[FILTER_K_WITH_SOURCE]], %[[FILTER_K_TRACKING]]
+  // CHECK: tt.splat %[[FILTER_K_PTR]] : !tt.ptr<i64> -> tensor<1x8x1x1x2x!tt.ptr<i64>,
+  // CHECK: arith.constant dense<16> : tensor<2xi32,
+  // CHECK: tt.store {{.*}}, %[[FILTER_K_UPDATED]] {ignore_cta} : tensor<1x8x1x1x2x!tt.ptr<i64>,
   // CHECK-LABEL: @tma_completion_tracks_contained_proxy_frontier
   tt.func public @tma_completion_tracks_contained_proxy_frontier(
-      %desc: !tt.tensordesc<1024xi32, #frontier_shared>) {
+      %desc: !tt.tensordesc<1024xi32, #frontier_shared>, %choose: i1) {
     // The first explicit region is contained in the TMA destination. The third
     // region only partially overlaps it, so only its overlapping atom may be
     // published by TMA completion. Its remainder and the fourth, disjoint
@@ -732,10 +755,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
         : (tensor<128xi32, #frontier_src>) -> !ttg.memdesc<128xi32, #frontier_shared, #frontier_smem, mutable>
     %dst = ttg.local_alloc {allocation.offset = 0 : i32}
         : () -> !ttg.memdesc<1024xi32, #frontier_shared, #frontier_smem, mutable>
-    %bar = ttg.local_alloc {allocation.offset = 8192 : i32}
+    %bar0 = ttg.local_alloc {allocation.offset = 8192 : i32}
         : () -> !ttg.memdesc<1xi64, #frontier_barrier, #frontier_smem, mutable>
-    ttng.init_barrier %bar, 1
+    %bar1 = ttg.local_alloc {allocation.offset = 8200 : i32}
+        : () -> !ttg.memdesc<1xi64, #frontier_barrier, #frontier_smem, mutable>
+    ttng.init_barrier %bar0, 1
         : !ttg.memdesc<1xi64, #frontier_barrier, #frontier_smem, mutable>
+    ttng.init_barrier %bar1, 1
+        : !ttg.memdesc<1xi64, #frontier_barrier, #frontier_smem, mutable>
+    %bar = arith.select %choose, %bar1, %bar0 : !ttg.memdesc<1xi64, #frontier_barrier, #frontier_smem, mutable>
     ttng.barrier_expect %bar, 4096, %true
         : !ttg.memdesc<1xi64, #frontier_barrier, #frontier_smem, mutable>
     ttng.fence_async_shared {bCluster = false}
@@ -752,6 +780,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
         : !tt.tensordesc<1024xi32, #frontier_shared>,
           !ttg.memdesc<1xi64, #frontier_barrier, #frontier_smem, mutable>
           -> !ttg.memdesc<1024xi32, #frontier_shared, #frontier_smem, mutable>
+    ttng.wait_barrier %bar, %c0, %true : !ttg.memdesc<1xi64, #frontier_barrier, #frontier_smem, mutable>
+    ttng.inval_barrier %bar0 : !ttg.memdesc<1xi64, #frontier_barrier, #frontier_smem, mutable>
+    ttng.inval_barrier %bar1 : !ttg.memdesc<1xi64, #frontier_barrier, #frontier_smem, mutable>
     tt.return
   }
 }
@@ -3165,6 +3196,206 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     ttng.arrive_barrier %bar, 1 : !ttg.memdesc<4xi64, #phase_clear_barrier, #phase_clear_smem, mutable>
     ttng.wait_barrier %bar, %zero, %true : !ttg.memdesc<4xi64, #phase_clear_barrier, #phase_clear_smem, mutable>
     ttng.inval_barrier %bar : !ttg.memdesc<4xi64, #phase_clear_barrier, #phase_clear_smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// A dynamic one-buffer proxy access keeps every observer and both phase banks,
+// with offsets derived from the four-row backing allocation, not the B=1 view.
+#proxy_row_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 32, rank = 1, CGALayout = [[1]]}>
+#proxy_row_barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#proxy_row_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CGALayout = [[1]]}>
+#proxy_row_smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32, ttg.shared = 544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 0 : i32} {
+  // A wait loads only its selected K row and its caller-supplied phase.
+  // The original K=2 origin/phase strides remain 32/64 elements.
+  // CHECK-LABEL: tt.func private @__triton_consan_complete_barrier_wait_
+  // CHECK-SAME: (%{{[^:]+}}: i32, %{{[^:]+}}: i32, %[[WAIT_K_PHASE:[^:]+]]: i32,
+  // CHECK: %[[WAIT_K_EQ:.*]] = arith.cmpi eq, {{.*}} : tensor<2xi64,
+  // CHECK: %[[WAIT_K_RANGE:.*]] = tt.make_range {end = 2 : i32, start = 0 : i32}
+  // CHECK: %[[WAIT_K_INDICES:.*]] = arith.select %[[WAIT_K_EQ]], %[[WAIT_K_RANGE]], {{.*}}tensor<2xi32,
+  // CHECK: %[[WAIT_K_INDEX:.*]] = "tt.reduce"(%[[WAIT_K_INDICES]]) <{axis = 0 : i32}>
+  // CHECK: %[[WAIT_K_ANY:.*]] = "tt.reduce"(%[[WAIT_K_EQ]]) <{axis = 0 : i32}>
+  // CHECK: %[[WAIT_K_ONE:.*]] = arith.constant 1 : i32
+  // CHECK: %[[WAIT_K_PARITY:.*]] = arith.andi %[[WAIT_K_PHASE]], %[[WAIT_K_ONE]] : i32
+  // CHECK: %[[WAIT_K_PHASE_STRIDE:.*]] = arith.constant 64 : i32
+  // CHECK: %[[WAIT_K_PHASE_OFFSET:.*]] = arith.muli %[[WAIT_K_PARITY]], %[[WAIT_K_PHASE_STRIDE]] : i32
+  // CHECK: %[[WAIT_K_PHASE_PTR:.*]] = tt.addptr {{.*}}, %[[WAIT_K_PHASE_OFFSET]] : !tt.ptr<i64>, i32
+  // CHECK: %[[WAIT_K_STRIDE:.*]] = arith.constant 16 : i32
+  // CHECK: %[[WAIT_K_OFFSET:.*]] = arith.muli %[[WAIT_K_INDEX]], %[[WAIT_K_STRIDE]] : i32
+  // CHECK: %[[WAIT_K_PTR:.*]] = tt.addptr %[[WAIT_K_PHASE_PTR]], %[[WAIT_K_OFFSET]] : !tt.ptr<i64>, i32
+  // CHECK-DAG: tt.splat %[[WAIT_K_PTR]] : !tt.ptr<i64> -> tensor<2x4x2x1x2x!tt.ptr<i64>,
+  // CHECK-DAG: arith.constant dense<32> : tensor<2xi32,
+  // CHECK: %[[WAIT_K_TRACKING:.*]] = tt.load {{.*}} : tensor<2x4x2x1x2x!tt.ptr<i64>,
+  // CHECK: %[[WAIT_K_ANY_MASK:.*]] = tt.splat %[[WAIT_K_ANY]] : i1 -> tensor<2x4x2x1x2xi1,
+  // CHECK: %[[WAIT_K_MASK:.*]] = arith.andi %[[WAIT_K_ANY_MASK]],
+  // CHECK: %[[WAIT_K_ZERO:.*]] = arith.constant dense<0> : tensor<2x4x2x1x2xi64,
+  // CHECK: arith.select %[[WAIT_K_MASK]], %[[WAIT_K_TRACKING]], %[[WAIT_K_ZERO]]
+  // Clearing waiting bits still uses the original full K comparison.
+  // CHECK: {{ttg.convert_layout|tt.expand_dims}} %[[WAIT_K_EQ]]
+  // CHECK: %[[WAIT_K_FULL_MASK:.*]] = tt.broadcast {{.*}} -> tensor<2x2x2xi1,
+  // CHECK: %[[WAIT_K_CLEAR_MASK:.*]] = arith.andi %[[WAIT_K_FULL_MASK]],
+  // CHECK: arith.select %[[WAIT_K_CLEAR_MASK]],
+  // CHECK-LABEL: tt.func private @__triton_consan_transfer_visible_accesses_
+  // CHECK-SAME: (%{{[^:]+}}: i32, %{{[^:]+}}: i32, %[[TRANSFER_K_PHASE:[^:]+]]: i32,
+  // CHECK: %[[TRANSFER_K_EQ:.*]] = arith.cmpi eq, {{.*}} : tensor<2xi64,
+  // CHECK: %[[TRANSFER_K_RANGE:.*]] = tt.make_range {end = 2 : i32, start = 0 : i32}
+  // CHECK: %[[TRANSFER_K_INDICES:.*]] = arith.select %[[TRANSFER_K_EQ]], %[[TRANSFER_K_RANGE]], {{.*}}tensor<2xi32,
+  // CHECK: %[[TRANSFER_K_INDEX:.*]] = "tt.reduce"(%[[TRANSFER_K_INDICES]]) <{axis = 0 : i32}>
+  // CHECK: %[[TRANSFER_K_ANY:.*]] = "tt.reduce"(%[[TRANSFER_K_EQ]]) <{axis = 0 : i32}>
+  // Write tracking has no origin axis: its full phase stride is 32.
+  // CHECK: %[[TRANSFER_K_WRITE_ONE:.*]] = arith.constant 1 : i32
+  // CHECK: %[[TRANSFER_K_WRITE_PHASE:.*]] = arith.andi %[[TRANSFER_K_PHASE]], %[[TRANSFER_K_WRITE_ONE]] : i32
+  // CHECK: %[[TRANSFER_K_WRITE_PHASE_STRIDE:.*]] = arith.constant 32 : i32
+  // CHECK: %[[TRANSFER_K_WRITE_PHASE_OFFSET:.*]] = arith.muli %[[TRANSFER_K_WRITE_PHASE]], %[[TRANSFER_K_WRITE_PHASE_STRIDE]] : i32
+  // CHECK: %[[TRANSFER_K_WRITE_PHASE_PTR:.*]] = tt.addptr {{.*}}, %[[TRANSFER_K_WRITE_PHASE_OFFSET]] : !tt.ptr<i8>, i32
+  // CHECK: %[[TRANSFER_K_WRITE_STRIDE:.*]] = arith.constant 16 : i32
+  // CHECK: %[[TRANSFER_K_WRITE_OFFSET:.*]] = arith.muli %[[TRANSFER_K_INDEX]], %[[TRANSFER_K_WRITE_STRIDE]] : i32
+  // CHECK: %[[TRANSFER_K_WRITE_PTR:.*]] = tt.addptr %[[TRANSFER_K_WRITE_PHASE_PTR]], %[[TRANSFER_K_WRITE_OFFSET]] : !tt.ptr<i8>, i32
+  // CHECK: tt.splat %[[TRANSFER_K_WRITE_PTR]] : !tt.ptr<i8> -> tensor<2x4x2x1x!tt.ptr<i8>,
+  // CHECK: %[[TRANSFER_K_WRITE_TRACKING:.*]] = tt.load {{.*}} : tensor<2x4x2x1x!tt.ptr<i8>,
+  // CHECK: %[[TRANSFER_K_WRITE_ANY:.*]] = tt.splat %[[TRANSFER_K_ANY]] : i1 -> tensor<2x4x2x1xi1,
+  // CHECK: %[[TRANSFER_K_WRITE_MASK:.*]] = arith.andi %[[TRANSFER_K_WRITE_ANY]],
+  // CHECK: %[[TRANSFER_K_WRITE_ZERO:.*]] = arith.constant dense<0> : tensor<2x4x2x1xi8,
+  // CHECK: arith.select %[[TRANSFER_K_WRITE_MASK]], %[[TRANSFER_K_WRITE_TRACKING]], %[[TRANSFER_K_WRITE_ZERO]]
+  // Read tracking retains both origins at their original stride 32.
+  // CHECK: %[[TRANSFER_K_READ_ONE:.*]] = arith.constant 1 : i32
+  // CHECK: %[[TRANSFER_K_READ_PHASE:.*]] = arith.andi %[[TRANSFER_K_PHASE]], %[[TRANSFER_K_READ_ONE]] : i32
+  // CHECK: %[[TRANSFER_K_READ_PHASE_STRIDE:.*]] = arith.constant 64 : i32
+  // CHECK: %[[TRANSFER_K_READ_PHASE_OFFSET:.*]] = arith.muli %[[TRANSFER_K_READ_PHASE]], %[[TRANSFER_K_READ_PHASE_STRIDE]] : i32
+  // CHECK: %[[TRANSFER_K_READ_PHASE_PTR:.*]] = tt.addptr {{.*}}, %[[TRANSFER_K_READ_PHASE_OFFSET]] : !tt.ptr<i{{32|64}}>, i32
+  // CHECK: %[[TRANSFER_K_READ_STRIDE:.*]] = arith.constant 16 : i32
+  // CHECK: %[[TRANSFER_K_READ_OFFSET:.*]] = arith.muli %[[TRANSFER_K_INDEX]], %[[TRANSFER_K_READ_STRIDE]] : i32
+  // CHECK: %[[TRANSFER_K_READ_PTR:.*]] = tt.addptr %[[TRANSFER_K_READ_PHASE_PTR]], %[[TRANSFER_K_READ_OFFSET]] : !tt.ptr<i{{32|64}}>, i32
+  // CHECK-DAG: tt.splat %[[TRANSFER_K_READ_PTR]] : !tt.ptr<i{{32|64}}> -> tensor<2x4x2x1x2x!tt.ptr<i{{32|64}}>,
+  // CHECK-DAG: arith.constant dense<32> : tensor<2xi32,
+  // CHECK: %[[TRANSFER_K_READ_TRACKING:.*]] = tt.load {{.*}} : tensor<2x4x2x1x2x!tt.ptr<i{{32|64}}>,
+  // CHECK: %[[TRANSFER_K_READ_ANY:.*]] = tt.splat %[[TRANSFER_K_ANY]] : i1 -> tensor<2x4x2x1x2xi1,
+  // CHECK: %[[TRANSFER_K_READ_MASK:.*]] = arith.andi %[[TRANSFER_K_READ_ANY]],
+  // CHECK: %[[TRANSFER_K_READ_ZERO:.*]] = arith.constant dense<0> : tensor<2x4x2x1x2xi{{32|64}},
+  // CHECK: arith.select %[[TRANSFER_K_READ_MASK]], %[[TRANSFER_K_READ_TRACKING]], %[[TRANSFER_K_READ_ZERO]]
+  // K=2 is selected dynamically. Keep all four buffer atoms, both origin
+  // CTAs and both phases, using the full table's origin/phase strides.
+  // CHECK-LABEL: tt.func private @__triton_consan_track_proxy_accesses_{{.*}}_I1(
+  // CHECK: %[[PROXY_K_EQ:.*]] = arith.cmpi eq, {{.*}} : tensor<2xi64,
+  // CHECK: %[[PROXY_K_RANGE:.*]] = tt.make_range {end = 2 : i32, start = 0 : i32}
+  // CHECK: %[[PROXY_K_INDICES:.*]] = arith.select %[[PROXY_K_EQ]], %[[PROXY_K_RANGE]], {{.*}}tensor<2xi32,
+  // CHECK: %[[PROXY_K_INDEX:.*]] = "tt.reduce"(%[[PROXY_K_INDICES]]) <{axis = 0 : i32}>
+  // CHECK: %[[PROXY_K_ANY:.*]] = "tt.reduce"(%[[PROXY_K_EQ]]) <{axis = 0 : i32}>
+  // CHECK: %[[PROXY_K_SELECTED_PHASES:.*]] = arith.select {{.*}}tensor<2x2xi{{32|64}},
+  // CHECK: %[[PROXY_K_PHASES:.*]] = "tt.reduce"(%[[PROXY_K_SELECTED_PHASES]]) <{axis = 1 : i32}>
+  // CHECK: %[[PROXY_K_STRIDE:.*]] = arith.constant 16 : i32
+  // CHECK-NEXT: %[[PROXY_K_OFFSET:.*]] = arith.muli %[[PROXY_K_INDEX]], %[[PROXY_K_STRIDE]] : i32
+  // CHECK-NEXT: %[[PROXY_K_PTR:.*]] = tt.addptr {{.*}}, %[[PROXY_K_OFFSET]] : !tt.ptr<i64>, i32
+  // CHECK: arith.constant dense<32> : tensor<2xi32,
+  // CHECK: arith.constant dense<64> : tensor<2xi32,
+  // CHECK: %[[PROXY_K_TRACKING:.*]] = tt.load {{.*}} : tensor<2x4x2x2x2x!tt.ptr<i64>,
+  // CHECK: %[[PROXY_K_ANY_MASK:.*]] = tt.splat %[[PROXY_K_ANY]] : i1 -> tensor<2x4x2x2x2xi1,
+  // CHECK: %[[PROXY_K_CTA_MASK:.*]] = arith.andi %[[PROXY_K_ANY_MASK]], {{.*}} : tensor<2x4x2x2x2xi1,
+  // CHECK: ttg.convert_layout %[[PROXY_K_PHASES]]{{.*}} : tensor<2xi{{32|64}},
+  // CHECK: %[[PROXY_K_PHASE_BCAST:.*]] = tt.broadcast {{.*}} -> tensor<2x4x2x2x2xi{{32|64}},
+  // CHECK: %[[PROXY_K_PHASE_VALUES:.*]] = arith.trunci %[[PROXY_K_PHASE_BCAST]]
+  // CHECK: %[[PROXY_K_PHASE_MASK:.*]] = arith.cmpi eq, %[[PROXY_K_PHASE_VALUES]],
+  // CHECK: %[[PROXY_K_MASK:.*]] = arith.andi %[[PROXY_K_CTA_MASK]], %[[PROXY_K_PHASE_MASK]]
+  // CHECK: %[[PROXY_K_UPDATED:.*]] = arith.ori %[[PROXY_K_TRACKING]],
+  // CHECK: tt.splat %[[PROXY_K_PTR]] : !tt.ptr<i64> -> tensor<2x4x2x2x2x!tt.ptr<i64>,
+  // CHECK: arith.constant dense<32> : tensor<2xi32,
+  // CHECK: arith.constant dense<64> : tensor<2xi32,
+  // CHECK: tt.store {{.*}}, %[[PROXY_K_UPDATED]], %[[PROXY_K_MASK]] {ignore_cta} : tensor<2x4x2x2x2x!tt.ptr<i64>,
+  // CHECK-LABEL: tt.func private @__triton_consan_set_proxy_access_nw1_I32_
+  // CHECK-SAME: (%[[PROXY_ROW_INDEX:[^:]+]]: i32,
+  // CHECK: %[[PROXY_ROW_STRIDE:.*]] = arith.constant 2 : i32
+  // CHECK-NEXT: %[[PROXY_ROW_OFFSET:.*]] = arith.muli %[[PROXY_ROW_INDEX]], %[[PROXY_ROW_STRIDE]] : i32
+  // CHECK-NEXT: tt.addptr {{.*}}, %[[PROXY_ROW_OFFSET]] : !tt.ptr<i64>, i32
+  // CHECK: arith.constant dense<16> : tensor<2xi32
+  // CHECK: tt.load {{.*}} : tensor<2x1x2x1x2x!tt.ptr<i64>
+  // CHECK: arith.constant dense<16> : tensor<2xi32
+  // CHECK: tt.store {{.*}} : tensor<2x1x2x1x2x!tt.ptr<i64>
+  // CHECK: %[[PROXY_ROW_ORIGIN:.*]] = tti.experimental_cluster_cta_id
+  // CHECK-NEXT: %[[PROXY_ROW_BANK_SIZE:.*]] = arith.constant 32 : i32
+  // CHECK-NEXT: %[[PROXY_ROW_BANK_OFFSET:.*]] = arith.muli %[[PROXY_ROW_ORIGIN]], %[[PROXY_ROW_BANK_SIZE]] : i32
+  // CHECK-NEXT: tt.addptr {{.*}}, %[[PROXY_ROW_BANK_OFFSET]] : !tt.ptr<i64>, i32
+  // CHECK: arith.constant dense<16> : tensor<2xi32
+  // CHECK: tt.load {{.*}} : tensor<2x1x2x2x!tt.ptr<i64>
+  // CHECK: arith.constant dense<16> : tensor<2xi32
+  // CHECK: tt.store {{.*}} : tensor<2x1x2x2x!tt.ptr<i64>
+  // CHECK: %[[PROXY_ROW_PHASE_STRIDE:.*]] = arith.constant 2 : i32
+  // CHECK-NEXT: %[[PROXY_ROW_PHASE_ORIGIN:.*]] = arith.addi %[[PROXY_ROW_ORIGIN]], %[[PROXY_ROW_PHASE_STRIDE]] : i32
+  // CHECK-NEXT: %[[PROXY_ROW_NEXT_BANK_SIZE:.*]] = arith.constant 32 : i32
+  // CHECK-NEXT: arith.muli %[[PROXY_ROW_PHASE_ORIGIN]], %[[PROXY_ROW_NEXT_BANK_SIZE]] : i32
+  // CHECK: tt.load {{.*}} : tensor<2x1x2x2x!tt.ptr<i64>
+  // CHECK: tt.store {{.*}} : tensor<2x1x2x2x!tt.ptr<i64>
+  // CHECK: tt.return
+  // CHECK-LABEL: @single_buffer_dynamic_proxy_ring
+  // CHECK-SAME: (%{{[^:]+}}: i32, %[[PROXY_DYNAMIC_PHASE:[^:]+]]: i32,
+  tt.func public @single_buffer_dynamic_proxy_ring(%idx: i32, %phase: i32, %out: !tt.tensordesc<64xi32, #proxy_row_shared>) {
+    %zero = arith.constant 0 : i32
+    %one = arith.constant 1 : i32
+    %true = arith.constant true
+    %value = arith.constant dense<0> : tensor<64xi32, #proxy_row_blocked>
+    %slot = arith.andi %idx, %one : i32
+    %ring = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<2x64xi32, #proxy_row_shared, #proxy_row_smem, mutable>
+    %buf0 = ttg.memdesc_index %ring[%zero] : !ttg.memdesc<2x64xi32, #proxy_row_shared, #proxy_row_smem, mutable> -> !ttg.memdesc<64xi32, #proxy_row_shared, #proxy_row_smem, mutable>
+    %buf1 = ttg.memdesc_index %ring[%one] : !ttg.memdesc<2x64xi32, #proxy_row_shared, #proxy_row_smem, mutable> -> !ttg.memdesc<64xi32, #proxy_row_shared, #proxy_row_smem, mutable>
+    %barriers = ttg.local_alloc {allocation.offset = 512 : i32} : () -> !ttg.memdesc<2x2xi64, #proxy_row_barrier, #proxy_row_smem, mutable>
+    %bar0 = ttg.memdesc_index %barriers[%zero] : !ttg.memdesc<2x2xi64, #proxy_row_barrier, #proxy_row_smem, mutable> -> !ttg.memdesc<2xi64, #proxy_row_barrier, #proxy_row_smem, mutable>
+    %bar1 = ttg.memdesc_index %barriers[%one] : !ttg.memdesc<2x2xi64, #proxy_row_barrier, #proxy_row_smem, mutable> -> !ttg.memdesc<2xi64, #proxy_row_barrier, #proxy_row_smem, mutable>
+    ttng.init_barrier %bar0, 1 : !ttg.memdesc<2xi64, #proxy_row_barrier, #proxy_row_smem, mutable>
+    ttng.init_barrier %bar1, 1 : !ttg.memdesc<2xi64, #proxy_row_barrier, #proxy_row_smem, mutable>
+    %dynamic = ttg.memdesc_index %ring[%slot] : !ttg.memdesc<2x64xi32, #proxy_row_shared, #proxy_row_smem, mutable> -> !ttg.memdesc<64xi32, #proxy_row_shared, #proxy_row_smem, mutable>
+    // CHECK: internal ConSan error: active memdesc resolved to no buffer state
+    // CHECK: arith.select {{.*}} : i32
+    // CHECK: %[[PROXY_ROW_SELECTED:.*]] = arith.select {{.*}} : i32
+    // CHECK: tt.call @__triton_consan_set_proxy_access_nw1_I32_{{.*}}(%[[PROXY_ROW_SELECTED]],
+    // CHECK: ttg.local_store
+    ttg.local_store %value, %dynamic : tensor<64xi32, #proxy_row_blocked> -> !ttg.memdesc<64xi32, #proxy_row_shared, #proxy_row_smem, mutable>
+    %dynamic_barrier = ttg.memdesc_index %barriers[%slot] : !ttg.memdesc<2x2xi64, #proxy_row_barrier, #proxy_row_smem, mutable> -> !ttg.memdesc<2xi64, #proxy_row_barrier, #proxy_row_smem, mutable>
+    // CHECK: %[[PROXY_K_BARRIER:.*]] = ttg.memdesc_index {{.*}}[%{{.*}}]
+    // CHECK: tt.call @__triton_consan_track_visible_accesses_
+    // CHECK: %[[PROXY_K_BARRIER_I32:.*]] = tti.experimental_memdesc_to_i32 %[[PROXY_K_BARRIER]]
+    // CHECK: tt.call @__triton_consan_track_proxy_accesses_{{.*}}_I1(%[[PROXY_K_BARRIER_I32]],
+    ttng.arrive_barrier %dynamic_barrier, 1, %true : !ttg.memdesc<2xi64, #proxy_row_barrier, #proxy_row_smem, mutable>
+    // CHECK: ttng.wait_barrier {{.*}}, %[[PROXY_DYNAMIC_PHASE]],
+    // CHECK: tt.call @__triton_consan_transfer_visible_accesses{{.*}}(%{{[^,]+}}, %{{[^,]+}}, %[[PROXY_DYNAMIC_PHASE]],
+    // CHECK: tt.call @__triton_consan_complete_barrier_wait{{.*}}(%{{[^,]+}}, %{{[^,]+}}, %[[PROXY_DYNAMIC_PHASE]],
+    ttng.wait_barrier %dynamic_barrier, %phase, %true : !ttg.memdesc<2xi64, #proxy_row_barrier, #proxy_row_smem, mutable>
+    ttng.fence_async_shared {bCluster = false}
+    ttng.async_tma_copy_local_to_global %out[%zero] %dynamic : !tt.tensordesc<64xi32, #proxy_row_shared>, !ttg.memdesc<64xi32, #proxy_row_shared, #proxy_row_smem, mutable>
+    ttng.async_tma_store_wait {pendings = 0 : i32}
+    ttng.inval_barrier %bar0 : !ttg.memdesc<2xi64, #proxy_row_barrier, #proxy_row_smem, mutable>
+    ttng.inval_barrier %bar1 : !ttg.memdesc<2xi64, #proxy_row_barrier, #proxy_row_smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// Partially overlapping buffers span multiple state atoms and retain the full
+// mask path rather than silently dropping either part of the generic access.
+#proxy_alias_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 32, rank = 1}>
+#proxy_alias_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#proxy_alias_smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32, ttg.shared = 384 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {
+  // CHECK-LABEL: tt.func private @__triton_consan_set_proxy_access_nw1_T4xI1_
+  // CHECK: tt.load {{.*}} : tensor<1x4x1x1x1x!tt.ptr<i64>
+  // CHECK: tt.store {{.*}} : tensor<1x4x1x1x1x!tt.ptr<i64>
+  // CHECK-LABEL: @multi_atom_proxy_access
+  tt.func public @multi_atom_proxy_access(%out: !tt.tensordesc<64xi32, #proxy_alias_shared>) {
+    %zero = arith.constant 0 : i32
+    %value = arith.constant dense<0> : tensor<64xi32, #proxy_alias_blocked>
+    %left = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<64xi32, #proxy_alias_shared, #proxy_alias_smem, mutable>
+    %right = ttg.local_alloc {allocation.offset = 128 : i32} : () -> !ttg.memdesc<64xi32, #proxy_alias_shared, #proxy_alias_smem, mutable>
+    // CHECK: tt.call @__triton_consan_set_proxy_access_nw1_T4xI1_
+    ttg.local_store %value, %left : tensor<64xi32, #proxy_alias_blocked> -> !ttg.memdesc<64xi32, #proxy_alias_shared, #proxy_alias_smem, mutable>
+    // CHECK: tt.call @__triton_consan_set_proxy_access_nw1_T4xI1_
+    ttg.local_store %value, %right : tensor<64xi32, #proxy_alias_blocked> -> !ttg.memdesc<64xi32, #proxy_alias_shared, #proxy_alias_smem, mutable>
+    ttng.fence_async_shared {bCluster = false}
+    ttng.async_tma_copy_local_to_global %out[%zero] %left : !tt.tensordesc<64xi32, #proxy_alias_shared>, !ttg.memdesc<64xi32, #proxy_alias_shared, #proxy_alias_smem, mutable>
+    ttng.async_tma_store_wait {pendings = 0 : i32}
     tt.return
   }
 }
