@@ -2940,6 +2940,42 @@ def test_argmax_argmin_all_nan(device):
 
 
 @pytest.mark.interpreter
+def test_argmax_argmin_int64_precision(device):
+    # Regression test for: https://github.com/triton-lang/triton/pull/11616
+    # The all-NaN fixup path substitutes inf for NaN via np.where, which
+    # promotes integer data to float64. Integer dtypes can never contain NaN,
+    # so that path must never run for them: for int64 >= 2**53, float64
+    # can't represent consecutive integers distinctly, silently corrupting
+    # the result (e.g. argmax([2**53, 2**53+1]) would wrongly return 0).
+    @triton.jit
+    def argmax_kernel(x_ptr, idx_ptr, N: tl.constexpr, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        mask = offsets < N
+        x = tl.load(x_ptr + offsets, mask=mask, other=-2**62)
+        idx = tl.argmax(x, axis=0)
+        tl.store(idx_ptr, idx)
+
+    @triton.jit
+    def argmin_kernel(x_ptr, idx_ptr, N: tl.constexpr, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        mask = offsets < N
+        x = tl.load(x_ptr + offsets, mask=mask, other=2**62)
+        idx = tl.argmin(x, axis=0)
+        tl.store(idx_ptr, idx)
+
+    idx = torch.empty((), dtype=torch.int32, device=device)
+
+    x = torch.tensor([2**53, 2**53 + 1], dtype=torch.int64, device=device)
+    argmax_kernel[(1, )](x, idx, N=2, BLOCK=2)
+    assert idx.item() == 1, f"expected 1, got {idx.item()}"
+
+    x = torch.tensor([2**53 + 1, 2**53], dtype=torch.int64, device=device)
+    idx.zero_()
+    argmin_kernel[(1, )](x, idx, N=2, BLOCK=2)
+    assert idx.item() == 1, f"expected 1, got {idx.item()}"
+
+
+@pytest.mark.interpreter
 def test_argmax_argmin_tie_break_fast_with_nan(device):
     # tl.argmax/argmin with tie_break_left=False should also ignore NaN,
     # consistent with the tie_break_left=True behaviour and JIT hardware

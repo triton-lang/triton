@@ -1121,16 +1121,23 @@ class ReduceOps(ReduceScanOpInterface):
             val_data = val_reduce_op(data, axis=self.axis, keepdims=self.keep_dims)
             val = self.to_tensor(val_data, input.dtype)
         if idx_reduce_op:
-            # np.nanargmax/np.nanargmin still raise on all-NaN slices, so
-            # substitute a real number for NaN before reducing, then patch
-            # the all-NaN positions to match tie_break_left: since NaN
-            # comparisons are always False, the JIT keeps the rightmost
-            # element there.
-            fill = -np.inf if idx_reduce_op is np.nanargmax else np.inf
-            idx_data = idx_reduce_op(np.where(np.isnan(data), fill, data), axis=self.axis, keepdims=self.keep_dims)
             is_all_nan = np.all(np.isnan(data), axis=self.axis, keepdims=self.keep_dims)
-            last_index = data.shape[self.axis] - 1 if self.axis is not None else data.size - 1
-            idx_data = np.where(is_all_nan, last_index, idx_data)
+            if np.any(is_all_nan):
+                # np.nanargmax/np.nanargmin raise on all-NaN slices, so
+                # substitute a real number for NaN before reducing, then patch
+                # the all-NaN positions to match tie_break_left: since NaN
+                # comparisons are always False, the JIT keeps the rightmost
+                # element there. Only taken when an all-NaN slice is actually
+                # present — the substitution promotes integer data to float
+                # (e.g. int64 >= 2**53 loses precision against inf), so
+                # integer inputs (which can never contain NaN) always skip
+                # this branch and reduce directly below.
+                fill = -np.inf if idx_reduce_op is np.nanargmax else np.inf
+                idx_data = idx_reduce_op(np.where(np.isnan(data), fill, data), axis=self.axis, keepdims=self.keep_dims)
+                last_index = data.shape[self.axis] - 1 if self.axis is not None else data.size - 1
+                idx_data = np.where(is_all_nan, last_index, idx_data)
+            else:
+                idx_data = idx_reduce_op(data, axis=self.axis, keepdims=self.keep_dims)
             idx = self.to_tensor(idx_data, tl.int32)
         if val is not None and idx is not None:
             return val, idx
