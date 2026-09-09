@@ -655,7 +655,7 @@ class TritonSemantic(Generic[TensorTy]):
             return self.splat(input, shape=dst_shape)
 
         ret_ty = tl.block_type(input.type.scalar, dst_shape)
-        return self.tensor(self.builder.create_expand_dims(input.handle, axis), ret_ty)
+        return self.tensor(self.builder.create_reshape(input.handle, dst_shape, False), ret_ty)
 
     def join(self, a: TensorTy, b: TensorTy) -> TensorTy:
         a, b = self.broadcast_impl_value(a, b)
@@ -740,15 +740,13 @@ class TritonSemantic(Generic[TensorTy]):
             if len(lhs_shape) < len(rhs_shape):
                 # Add new axes to lhs
                 for _ in range(len(lhs_shape), len(rhs_shape)):
-                    lhs = self.tensor(self.builder.create_expand_dims(lhs.handle, 0),
-                                      tl.block_type(lhs_ty.scalar, [1] + lhs_shape.values))
+                    lhs = self.expand_dims(lhs, 0)
                     lhs_ty = lhs.type
                     lhs_shape = lhs_ty.get_block_shapes()
             elif len(rhs_shape) < len(lhs_shape):
                 # Add new axes to rhs
                 for _ in range(len(rhs_shape), len(lhs_shape)):
-                    rhs = self.tensor(self.builder.create_expand_dims(rhs.handle, 0),
-                                      tl.block_type(rhs_ty.scalar, [1] + rhs_shape.values))
+                    rhs = self.expand_dims(rhs, 0)
                     rhs_ty = rhs.type
                     rhs_shape = rhs_ty.get_block_shapes()
             assert len(rhs_shape) == len(lhs_shape), \
