@@ -56,6 +56,22 @@ def TritonLoopUnroll : Pass</*cli-arg*/"triton-loop-unroll", /*Op*/"mlir::Module
   let dependentDialects = ["mlir::triton::TritonDialect"];
 }
 
+def TritonLoopUnswitch : Pass</*cli-arg*/"triton-loop-unswitch", /*Op*/"mlir::ModuleOp"> {
+  let summary = "Hoist loop-invariant if out of for";
+  let description = [{
+    Moves a loop-invariant `scf.if` out of an `scf.for` by creating one copy
+    of the loop per branch.
+  }];
+
+  let options = [
+    Option<"maxBodySize", "max-body-size", "unsigned", /*default=*/"256",
+           "Maximum number of operations in a loop body to duplicate; larger "
+           "loops are not unswitched to bound compile time and code size.">
+  ];
+
+  let dependentDialects = ["mlir::triton::TritonDialect"];
+}
+
 def TritonLoopInvariantCodeMotion : Pass</*cli-arg*/"triton-licm", /*Op*/"mlir::ModuleOp"> {
   let summary = "MLIR's LICM plus hoist load ops out of loops with masks.";
   let description = [{
