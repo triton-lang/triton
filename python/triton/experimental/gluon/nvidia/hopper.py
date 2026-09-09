@@ -37,9 +37,13 @@ def _validate_common_descriptor(tensor, shape, strides, layout, padding, round_f
         for stride in strides[:-1]:
             assert (stride * elem_bytes) % 32 == 0, "For fp4_padded, tensor strides must be 32-byte aligned"
         # Descriptors may be constructed for offline compilation without an active runtime driver.
-        target = target if target is not None else tl.target_info.current_target()
-        assert target is None or (target.backend == "cuda" and target.arch >= 100), \
-            "fp4_padded requires blackwell or newer"
+        if target is None:
+            target = tl.target_info.current_target()
+            assert target is None or tl.target_info.cuda_capability_geq(10, 0), \
+                "fp4_padded requires blackwell or newer"
+        else:
+            assert target.backend == "cuda" and target.arch >= 100, \
+                "fp4_padded requires blackwell or newer"
     assert not layout.fp4_padded or layout.swizzle_byte_width == 128, (
         f"FP4 padded operands must be swizzled with 128-byte width, but got {layout.swizzle_byte_width}")
     assert layout.element_bitwidth in [
