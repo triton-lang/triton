@@ -59,8 +59,6 @@ public:
     return addresses == other.addresses;
   }
   bool operator<(const AddressSet &other) const {
-    if (addresses == other.addresses)
-      return false;
     auto lhs = begin();
     auto rhs = other.begin();
     while (lhs != end() && rhs != other.end()) {

@@ -348,8 +348,6 @@ bool AddressSet::contains(const AddressSet &other) const {
 }
 
 AddressSet AddressSet::translated(uint32_t delta) const {
-  if (!delta)
-    return *this;
   AddressSet result;
   for (uint32_t address : addresses)
     result.set(address + delta);
