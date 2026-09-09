@@ -607,8 +607,7 @@ class TritonSemantic(Generic[TensorTy]):
             value = self.tensor(self.builder.get_fp32(value), tl.float32)
             return self.cast(value, dtype)
         elif dtype.is_fp8():
-            value = self.builder.get_fp32(value)
-            value = self.builder.create_fp_trunc(value, dtype.to_ir(self.builder))
+            value = self.builder.get_fp8(value, dtype.to_ir(self.builder))
         else:
             get_value_fn = getattr(self.builder, f"get_{dtype.name}")
             value = get_value_fn(value)

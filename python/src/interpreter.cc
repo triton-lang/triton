@@ -1,3 +1,5 @@
+#include "llvm/ADT/APFloat.h"
+
 #include <atomic>
 #include <cmath>
 #include <cstddef>
@@ -749,6 +751,20 @@ void init_triton_interpreter(py::module_ &m) {
 
   m.def("fma_fp32", &fma_array<float>);
   m.def("fma_fp64", &fma_array<double>);
+
+  m.def("get_fp8", [](float value, const std::string &dtype) {
+    static const std::map<std::string, const llvm::fltSemantics *> semantics = {
+        {"fp8e4nv", &llvm::APFloat::Float8E4M3FN()},
+        {"fp8e5", &llvm::APFloat::Float8E5M2()},
+        {"fp8e4b8", &llvm::APFloat::Float8E4M3FNUZ()},
+        {"fp8e5b16", &llvm::APFloat::Float8E5M2FNUZ()},
+    };
+    llvm::APFloat result(value);
+    bool losesInfo;
+    result.convert(*semantics.at(dtype), llvm::APFloat::rmNearestTiesToEven,
+                   &losesInfo);
+    return result.bitcastToAPInt().getZExtValue();
+  });
 
   m.def("load",
         [](py::object ptr_obj, py::object mask_obj, py::object other_obj,

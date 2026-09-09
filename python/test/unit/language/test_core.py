@@ -4800,6 +4800,39 @@ def test_full(dtype_str, shape, device):
     assert torch.all(out_dynamic == 2)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype",
+                         [torch.float8_e4m3fn, torch.float8_e5m2, torch.float8_e4m3fnuz, torch.float8_e5m2fnuz])
+@pytest.mark.parametrize("shape", [(), (1, ), (128, )])
+@pytest.mark.parametrize("value", [
+    0.0, -0.0, 1.0, 0.1, -0.1, 1.1, 1.0625, 1.1875, 1.125, 1.375, 1.0625 + 2**-30, 1.125 + 2**-30, 2**-9,
+    2**-10 + 2**-20, 2**-16, 2**-17, 2**-18, -2**-18, 240.0, 248.0, 448.0, 464.0, 465.0, 57344.0, 61440.0,
+    float("inf"),
+    float("-inf"),
+    float("nan")
+])
+def test_full_fp8(dtype, shape, value, device):
+    triton_dtype = str_to_triton_dtype(torch_dtype_name(dtype))
+    check_type_supported(triton_dtype, device)
+    if is_cuda() and triton_dtype in (tl.float8e4b8, tl.float8e5b16):
+        pytest.skip("FNUZ formats are not supported on CUDA")
+
+    @triton.jit
+    def kernel(out, value: tl.constexpr, shape: tl.constexpr):
+        a = tl.full(shape, value, out.dtype.element_ty)
+        tl.static_assert(a.shape == shape)
+        tl.store(out + tl.arange(0, 128), a)
+
+    out = torch.empty((128, ), dtype=dtype, device=device)
+    kernel[(1, )](out, value, shape)
+    actual = out.cpu()
+    expected = torch.full((128, ), value, dtype=torch.float32, device="cpu").to(dtype)
+    if torch.isnan(expected.float()).all():
+        assert torch.isnan(actual.float()).all()
+    else:
+        torch.testing.assert_close(actual.view(torch.uint8), expected.view(torch.uint8))
+
+
 @pytest.mark.parametrize("literal, dtype_str", [(1e+50, "f64"), (1e+10, "f32"), (1.0, "f32"), ('float("inf")', "f32"),
                                                 ('float("-inf")', "f32"), ('float("nan")', "f32"),
                                                 ('float("-nan")', "f32"), (0., "f32"), (5, "i32"), (2**40, "i64")])
