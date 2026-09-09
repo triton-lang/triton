@@ -430,6 +430,8 @@ def make_default_opt_flags_nvidia(
         if ns > num_stages:
             epilogue_subtile, num_stages = ep, ns
 
+    # A smaller epilogue may fit a stage; clamp only after comparing candidates.
+    num_stages = max(1, num_stages)
     if constraints.get("num_stages", None):
         num_stages = constraints["num_stages"]
     elif is_large_ragged_nvfp4 and not any(

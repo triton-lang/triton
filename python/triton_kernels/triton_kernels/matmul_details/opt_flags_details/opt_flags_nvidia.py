@@ -247,7 +247,4 @@ def compute_num_stages(
         # extra epilogue/scale smem that a 5-stage persistent kernel can
         # exceed H100's launch limit.
         max_stages = 4
-    num_stages = min(smem_capacity // int(stage_size), max_stages)
-    if num_stages == 0:
-        num_stages = 1
-    return num_stages
+    return min(smem_capacity // int(stage_size), max_stages)

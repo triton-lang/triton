@@ -662,23 +662,24 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
 @pytest.mark.parametrize("fp8_lhs", [False, True])
 @pytest.mark.parametrize("b_transpose", [False, True])
-@pytest.mark.parametrize("block_m, is_persistent", [(32, False), (16, True), (64, True), (128, True)])
-def test_matmul_unscaled_mixed_fp8(dtype, fp8_lhs, b_transpose, block_m, is_persistent, device):
+@pytest.mark.parametrize("shape, constraints", [
+    ((273, 544, 576), dict(block_m=block_m, block_n=256, block_k=128, split_k=1, is_persistent=is_persistent))
+    for block_m, is_persistent in [(32, False), (16, True), (64, True), (128, True)]
+] + [((128, 256, 1024), {})])
+def test_matmul_unscaled_mixed_fp8(dtype, fp8_lhs, b_transpose, shape, constraints, device, opt_flags_scope):
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("requires Hopper or newer")
 
     torch.manual_seed(0)
-    m, n, k = 273, 544, 576
+    m, n, k = shape
     a_dtype, b_dtype = (torch.float8_e4m3fn, dtype) if fp8_lhs else (dtype, torch.float8_e4m3fn)
     a = torch.randn((m, k), device=device).to(a_dtype)
     b = torch.randn((k, n), device=device).to(b_dtype)
     if b_transpose:
         b = b.mT.contiguous().mT
 
-    # Small tiles swap operands; larger tiles stress shared memory and TMEM.
-    with opt_flags.scoped_opt_flags_constraints(dict(
-        block_m=block_m, block_n=256, block_k=128, split_k=1, is_persistent=is_persistent,
-    )):
+    # Cover swapped operands, large tiles, and the default split-K planner.
+    with opt_flags.scoped_opt_flags_constraints(constraints):
         actual = matmul(a, b, None, precision_config=PrecisionConfig(out_dtype=dtype))
 
     expected = torch.matmul(a.float(), b.float()).to(dtype)
