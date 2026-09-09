@@ -6,13 +6,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: tt.func @direct_chained_dots
 
   // We have no ops between the dots so we just check that dot and memory ops are in the correct order and check if basic pipelining (prologue, epilogue) is working correctly.
-  // CHECK-COUNT-2: ttg.local_load
+  // K's local_load is at the same stage as dot1 so it appears before dot1.
+  // CHECK: ttg.local_load
   // CHECK: scf.for
+  // CHECK: ttg.async_wait
+  // CHECK: ttg.local_load
   // CHECK: tt.dot
   // CHECK: ttg.async_copy_global_to_local
   // CHECK: tt.dot
-  // CHECK: ttg.async_wait
-  // CHECK: ttg.local_load
   // CHECK: scf.yield
   // CHECK: ttg.async_wait
   // CHECK: ttg.local_load
@@ -50,20 +51,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
   // CHECK: scf.for
 
+  // K wait+load moved before dot1 (same stage)
+  // CHECK: ttg.async_wait
+  // CHECK: ttg.local_load
   // CHECK: tt.dot
   // CHECK: arith.addf
   // CHECK: math.exp2
   // CHECK: arith.addf
 
-  // CHECK: ttg.async_wait
+  // V local_load + K async_copy
   // CHECK: ttg.local_load
   // CHECK: ttg.async_copy_global_to_local
 
   // CHECK: tt.dot
   // CHECK: tt.reduce
 
-  // CHECK: ttg.async_wait
-  // CHECK: ttg.local_load
+  // V async_copy
   // CHECK: ttg.async_copy_global_to_local
 
   // CHECK: scf.yield
@@ -112,10 +115,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
   // CHECK: scf.for
 
+  // K wait+load moved before dot1 (same stage)
+  // CHECK: ttg.async_wait
+  // CHECK: ttg.local_load
   // CHECK: tt.dot
   // CHECK: arith.mulf
 
-  // CHECK: ttg.async_wait
+  // V local_load + K async_copy
   // CHECK: ttg.local_load
   // CHECK: ttg.async_copy_global_to_local
 
@@ -123,8 +129,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: tt.reduce
   // CHECK: arith.maxnumf
 
-  // CHECK: ttg.async_wait
-  // CHECK: ttg.local_load
+  // V async_copy
   // CHECK: ttg.async_copy_global_to_local
 
   // CHECK: scf.yield
@@ -172,11 +177,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
   // We expect the unstreamable load can be kept after pipelining
 
   // CHECK: scf.for
+  // K wait+load moved before dot1 (same stage)
+  // CHECK: ttg.async_wait
+  // CHECK: ttg.local_load
   // CHECK: tt.dot
   // CHECK: ttg.async_copy_global_to_local
   // CHECK: tt.dot
-  // CHECK: ttg.async_wait
-  // CHECK: ttg.local_load
   // CHECK: tt.load
   // CHECK: scf.yield
 
@@ -212,5 +218,52 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
       scf.yield %23 : tensor<256x64xf32, #mma>
     }
     tt.return %7 : tensor<256x64xf32, #mma>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [32, 32, 16], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: tt.func @k_tile_not_loop_carried
+
+  // Verify that K (dot1 operand) is loaded from LDS and consumed by dot1
+  // within the same loop iteration — i.e. K is NOT loop-carried.
+  // This is the key property of the schedule change that moves K's
+  // local_load to the same stage as dot1.
+
+  // CHECK: scf.for
+  // K is loaded and immediately consumed by dot1 in the same iteration.
+  // CHECK: [[K_TILE:%.*]] = ttg.local_load
+  // CHECK-NEXT: tt.dot {{%.*}}, [[K_TILE]],
+  // V is still at a later stage (loop-carried from previous iteration).
+  // CHECK: ttg.local_load
+  // CHECK: tt.dot
+  // K tile must NOT appear in scf.yield (it is not loop-carried).
+  // CHECK: scf.yield
+  // CHECK-NOT: [[K_TILE]]
+
+  tt.func @k_tile_not_loop_carried(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>, %arg2: i32, %arg3: i32) -> tensor<128x16xf32, #mma> {
+    %c0_i32 = arith.constant 0 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x16xf32, #mma>
+    %0 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<1x16x!tt.ptr<f16>, #blocked>
+    %1 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %2 = tt.expand_dims %1 {axis = 1 : i32} : tensor<64xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<64x1xi32, #blocked>
+    %3 = tt.broadcast %0 : tensor<1x16x!tt.ptr<f16>, #blocked> -> tensor<64x16x!tt.ptr<f16>, #blocked>
+    %4 = tt.broadcast %2 : tensor<64x1xi32, #blocked> -> tensor<64x16xi32, #blocked>
+    %5 = tt.addptr %3, %4 : tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<64x16xi32, #blocked>
+    %6 = scf.for %arg5 = %c0_i32 to %arg2 step %arg3 iter_args(%arg6 = %cst) -> (tensor<128x16xf32, #mma>)  : i32 {
+      // K load (feeds dot1)
+      %7 = tt.load %5 : tensor<64x16x!tt.ptr<f16>, #blocked>
+      %8 = ttg.convert_layout %7 : tensor<64x16xf16, #blocked> -> tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+      // V load (feeds dot2)
+      %9 = tt.load %5 : tensor<64x16x!tt.ptr<f16>, #blocked>
+      %10 = ttg.convert_layout %9 : tensor<64x16xf16, #blocked> -> tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+      %11 = tt.dot %arg1, %8, %cst : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x16xf32, #mma>
+      %12 = tt.dot %arg1, %10, %11 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x16xf32, #mma>
+      scf.yield %12 : tensor<128x16xf32, #mma>
+    }
+    tt.return %6#0 : tensor<128x16xf32, #mma>
   }
 }
