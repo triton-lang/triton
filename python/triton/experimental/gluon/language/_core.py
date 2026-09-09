@@ -178,8 +178,8 @@ def inline_asm(asm, constraints="", args=(), result_types=(), is_pure=False, _se
     every element in their group. Use a string for explicitly numbered ties or
     clobbers.
 
-    Unless ``is_pure`` is true, the assembly conservatively reads and writes
-    every descriptor operand. All such accesses must be within those views.
+    Descriptor operands require ``is_pure=False``. The assembly conservatively
+    reads and writes every descriptor operand within its view.
     Callers must complete asynchronous accesses before allowing storage reuse,
     and must satisfy the assembly instructions' synchronization requirements.
 

@@ -3873,10 +3873,13 @@ struct TritonGPUInlineAsmInterface : public DialectInlineAsmInterface {
     }
   }
 
-  LogicalResult verifyOperand(OpOperand &operand) const override {
+  LogicalResult verifyOperand(OpOperand &operand, bool isPure) const override {
     auto desc = dyn_cast<MemDescType>(operand.get().getType());
     if (!desc)
       return success();
+    if (isPure)
+      return operand.getOwner()->emitOpError(
+          "requires pure=false for memory descriptor operands");
     if (auto layout =
             dyn_cast<PartitionedSharedEncodingAttr>(desc.getEncoding());
         layout && layout.getNumPartitions() != 1)

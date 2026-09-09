@@ -1632,11 +1632,11 @@ void getInlineAsmEffects(
       interface->getOperandEffects(operand, effects);
 }
 
-LogicalResult verifyInlineAsmOperands(Operation *op) {
+LogicalResult verifyInlineAsmOperands(Operation *op, bool isPure) {
   for (OpOperand &operand : op->getOpOperands())
     if (auto *interface = dyn_cast<DialectInlineAsmInterface>(
             &operand.get().getType().getDialect()))
-      if (failed(interface->verifyOperand(operand)))
+      if (failed(interface->verifyOperand(operand, isPure)))
         return failure();
   return success();
 }
@@ -1674,7 +1674,7 @@ LogicalResult ElementwiseInlineAsmOp::verify() {
              << getPackedElement();
     }
   }
-  return verifyInlineAsmOperands(*this);
+  return verifyInlineAsmOperands(*this, getPure());
 }
 
 // -- ExternElementwiseOp --

@@ -3499,8 +3499,9 @@ def inline_asm_elementwise(asm: str, constraints: str, args: Sequence, dtype: Un
         In Gluon, :code:`args` may also contain shared or tensor memory
         descriptors. Each descriptor contributes one :code:`i32` address per
         invocation, independently of :code:`pack`, and does not participate in
-        broadcasting. Non-pure assembly conservatively reads and writes the
-        descriptor views; accesses must remain within their logical elements.
+        broadcasting. Descriptor operands require :code:`is_pure=False`; the
+        assembly conservatively reads and writes the descriptor views, and
+        accesses must remain within their logical elements.
 
         :code:`dtype` can be a tuple of types, in which case the output is a
         tuple of tensors.

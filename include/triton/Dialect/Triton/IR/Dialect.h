@@ -63,13 +63,14 @@ public:
   virtual void getOperandEffects(
       OpOperand &operand,
       SmallVectorImpl<MemoryEffects::EffectInstance> &effects) const = 0;
-  virtual LogicalResult verifyOperand(OpOperand &operand) const = 0;
+  virtual LogicalResult verifyOperand(OpOperand &operand,
+                                      bool isPure) const = 0;
 };
 
 void getInlineAsmEffects(
     Operation *op, bool isPure,
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects);
-LogicalResult verifyInlineAsmOperands(Operation *op);
+LogicalResult verifyInlineAsmOperands(Operation *op, bool isPure);
 
 class DialectInferLayoutInterface
     : public DialectInterface::Base<DialectInferLayoutInterface> {

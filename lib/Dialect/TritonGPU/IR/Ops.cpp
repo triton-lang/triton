@@ -60,7 +60,7 @@ LogicalResult InlineAsmOp::verify() {
         !isa_and_present<DistributedEncodingTrait>(tensor.getEncoding()))
       return emitOpError("requires explicit distributed tensor layouts");
   }
-  return verifyInlineAsmOperands(*this);
+  return verifyInlineAsmOperands(*this, getPure());
 }
 
 namespace {

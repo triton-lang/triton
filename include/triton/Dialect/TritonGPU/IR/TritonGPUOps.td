@@ -41,9 +41,10 @@ def TTG_InlineAsmOp : TTG_Op<"inline_asm", [
     Results are packed according to their explicit types and layouts. There is
     no elementwise broadcasting, chunking, or subword packing.
 
-    Impure assembly reads and writes every memory descriptor operand. Accesses
-    must remain within the descriptor views. The caller must complete any
-    asynchronous accesses before allowing the affected storage to be reused.
+    Assembly with memory descriptor operands must be impure and reads and writes
+    every descriptor operand. Accesses must remain within the descriptor views.
+    The caller must complete any asynchronous accesses before allowing the
+    affected storage to be reused.
     Scalar results must be uniform and replicated tensor elements must agree.
   }];
   let arguments = (ins StrAttr:$asm_string, StrAttr:$constraints, BoolAttr:$pure,
