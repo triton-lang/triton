@@ -68,30 +68,6 @@ unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
       getBitwidth(srcTy), numBanks, srcTile, dstTile);
 }
 
-// Both `atomic_cas` and `atomic_rmw` may need scratch memory to store values
-// because Triton's block-based programming model ensures that
-// all threads sharing the same partition of the tensor see the same values,
-// even for threads that do not participate in the atomic operation
-static SmallVector<unsigned> getRepShapeForAtomic(Value result) {
-  SmallVector<unsigned> smemShape;
-  if (!result.use_empty()) {
-    if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
-      auto freeVariableMasks =
-          gpu::toLinearLayout(tensorTy).getFreeVariableMasks();
-      if (llvm::any_of(freeVariableMasks, [](auto variableMask) {
-            return variableMask.second != 0;
-          })) {
-        // The tensor has broadcasted dimensions
-        smemShape = convertType<unsigned>(gpu::getShapePerCTA(tensorTy));
-      }
-    } else {
-      // If the result is a scalar, we need to allocate a single element.
-      smemShape.push_back(1);
-    }
-  }
-  return smemShape;
-}
-
 static unsigned getResultBroadcastScratchSize(Value result) {
   if (result.use_empty())
     return 0;
@@ -154,13 +130,9 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     return getResultBroadcastScratchSize(poll.getResult());
   }
   if (isa<gpu::LocalAtomicScatterRMWOp>(op) || isa<AtomicOpInterface>(op)) {
-    auto value = op->getOperand(0);
-    auto smemShape = getRepShapeForAtomic(op->getResult(0));
-    auto elems = getNumScratchElements(smemShape);
-    if (elems == 0)
+    if (op->getNumResults() == 0)
       return 0;
-    auto elemTy = getElementTypeOrSelf(getPointeeType(value.getType()));
-    return elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
+    return getResultBroadcastScratchSize(op->getResult(0));
   }
   if (isa<ttng::TensormapCreateOp>(op)) {
     constexpr int32_t kTMASize = 128;
@@ -174,6 +146,8 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
 
 std::optional<uint16_t> getAtomicScratchBroadcastMask(Operation *op) {
   if (!isa<AtomicOpInterface, AtomicPollOp, gpu::LocalAtomicScatterRMWOp>(op))
+    return std::nullopt;
+  if (op->getNumResults() == 0)
     return std::nullopt;
 
   Type resultTy = op->getResult(0).getType();
@@ -198,6 +172,8 @@ bool hasCrossCTAScratch(Operation *op) {
     return poll.getTimeout() && !poll.getResult().use_empty() &&
            getAtomicScratchBroadcastMask(op).value_or(0) != 0;
   if (isa<AtomicOpInterface, gpu::LocalAtomicScatterRMWOp>(op)) {
+    if (op->getNumResults() == 0)
+      return false;
     Value result = op->getResult(0);
     if (result.use_empty())
       return false;

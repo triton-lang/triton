@@ -48,6 +48,21 @@ def is_expert_scheduling_enabled(arch):
     return arch in ["gfx1250"]
 
 
+def get_llvm_flags(arch):
+    """LLVM command line flags for every LLVM pipeline run of a compilation.
+
+    These are process-wide LLVM options: compilations sharing a process can only
+    run in parallel while they use identical flags. Prefer per-function LLVM
+    attributes (see make_llir) whenever LLVM offers one.
+    """
+    flags = []
+    # LLVM has no per-function attribute for the AMDGPU register pressure
+    # trackers yet.
+    if arch in ["gfx942", "gfx950"]:
+        flags.append("amdgpu-use-amdgpu-trackers")
+    return flags
+
+
 def is_fpsan_supported(arch):
     return arch in ["gfx942", "gfx950", "gfx1250"]
 
@@ -433,7 +448,7 @@ class HIPBackend(BaseBackend):
         target_features = ''
         if knobs.compilation.enable_asan:
             target_features = '+xnack'
-        llvm.attach_datalayout(llvm_mod, target_triple, options.arch, target_features)
+        llvm.attach_datalayout(llvm_mod, target_triple, options.arch, target_features, get_llvm_flags(options.arch))
 
         # Set various control constants on the LLVM module so that device
         # libraries can resolve references to them.
@@ -447,8 +462,8 @@ class HIPBackend(BaseBackend):
         # Set kernel attributes first given this may affect later optimizations.
         # The kernel is the only non-declaration function with external linkage;
         # instrumentation helpers (e.g. ConSan) use internal linkage.
-        fns = [fn for fn in llvm_mod.get_functions() if not fn.is_declaration()]
-        kernel_fn = next((fn for fn in fns if fn.is_external_linkage()), None)
+        kernel_fn = next(
+            (fn for fn in llvm_mod.get_functions() if not fn.is_declaration() and fn.is_external_linkage()), None)
         if not kernel_fn:
             raise RuntimeError("Could not find kernel function")
         kernel_fn.set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
@@ -505,8 +520,15 @@ class HIPBackend(BaseBackend):
             if len(paths) > 0:
                 llvm.link_extern_libs(llvm_mod, paths)
 
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion,
-                             disable_vector_combine=True)
+        if is_expert_scheduling_enabled(options.arch):
+            # LLVM reads this attribute per function. Apply it after linking so
+            # external device-library definitions are covered as well.
+            for fn in llvm_mod.get_functions():
+                if not fn.is_declaration():
+                    fn.add_fn_attr("amdgpu-expert-scheduling-mode", "true")
+
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', get_llvm_flags(options.arch),
+                             options.enable_fp_fusion, disable_vector_combine=True)
 
         # Architectures with architected SGPRs store the workgroup id in ttmp9 (X) and ttmp7 (Y[15:0], Z[31:16]).
         # These attributes are used to determine if Z should be masked out when loading Y. They are inferred during
@@ -546,11 +568,7 @@ class HIPBackend(BaseBackend):
         assert len(names) == 1
         metadata["name"] = names[0]
         # llvm -> hsaco
-        flags = []
-        if options.arch in ["gfx942", "gfx950"]:
-            flags.append("amdgpu-use-amdgpu-trackers")
-        if is_expert_scheduling_enabled(options.arch):
-            flags.append("amdgpu-expert-scheduling-mode")
+        flags = get_llvm_flags(options.arch)
         features = ''
         target_triple = amd.get_target_triple(options.arch)
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
@@ -592,6 +610,7 @@ class HIPBackend(BaseBackend):
             stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
             stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options)
         elif language == Language.GLUON:
+            stages["glir"] = lambda src, metadata: src
             stages["ttgir"] = lambda src, metadata: self.gluon_to_ttgir(src, metadata, options)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["amdgcn"] = lambda src, metadata: self.make_amdgcn(src, metadata, options)

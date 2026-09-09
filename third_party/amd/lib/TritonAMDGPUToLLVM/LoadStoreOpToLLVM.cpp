@@ -1824,7 +1824,7 @@ struct BufferAtomicRMWOpConversion
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
     Type ptrType = getPointerTypeWithShape(ptr, offset);
 
-    unsigned numElems = getTotalElemsPerThread(ptrType);
+    unsigned numElems = getUniqueElemsPerThread(ptrType);
     unsigned vec = getVectorSize(ptr, offset, axisAnalysisPass);
 
     // v4f16 and v4bf16 variants of buffer atomics do not exist.
@@ -1842,14 +1842,17 @@ struct BufferAtomicRMWOpConversion
     }
 
     // Get the offsets and value
-    SmallVector<Value> offsetElems = unpackTensorElements(
-        loc, llOffset, rewriter, op.getOffsets().getType());
+    SmallVector<Value> offsetElems =
+        unpackUniqueTensorElements(loc, llOffset, rewriter);
     SmallVector<Value> valueElems =
-        unpackTensorElements(loc, llData, rewriter, data.getType());
+        unpackUniqueTensorElements(loc, llData, rewriter);
 
     // Get the mask
-    SmallVector<Value> maskElems =
-        getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
+    SmallVector<Value> maskElems;
+    if (llMask) {
+      vec = std::min<unsigned>(vec, getMaskAlignment(mask));
+      maskElems = unpackUniqueTensorElements(loc, llMask, rewriter);
+    }
 
     Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
     SmallVector<Value> loadedVals;
@@ -1879,13 +1882,7 @@ struct BufferAtomicRMWOpConversion
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value threadPred = emitRedundantThreadPredicateNonNull(
         freeVarMasks, rewriter, loc, targetInfo);
-    uint32_t regMask = freeVarMasks[str_attr("reg")];
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
-      if (!isCanonicalIndex(vecStart, regMask)) {
-        // Don't emit store ops for redundant elements within a thread
-        continue;
-      }
-
       Value pred =
           llMask ? b.and_(threadPred, maskElems[vecStart]) : threadPred;
 
@@ -1915,9 +1912,8 @@ struct BufferAtomicRMWOpConversion
       return failure();
     }
 
-    finalizeTensorAtomicResults(op, dyn_cast<RankedTensorType>(valueTy),
-                                rewriter, loadedVals, valueElemTy, b,
-                                threadPred, targetInfo, getTypeConverter());
+    finalizeAtomicResults(op, rewriter, loadedVals, valueElemTy, b, threadPred,
+                          targetInfo, getTypeConverter());
     return success();
   }
 };
@@ -1961,19 +1957,19 @@ struct BufferAtomicCASOpConversion
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
     Type ptrType = getPointerTypeWithShape(ptr, offset);
 
-    unsigned numElems = getTotalElemsPerThread(ptrType);
+    unsigned numElems = getUniqueElemsPerThread(ptrType);
     // Max supported vectorization for i32 and i64 is 1x
     // on CDNA3 and CDNA4
     // BUFFER_ATOMIC_CMPSWAP(i32) and BUFFER_ATOMIC_CMPSWAP_X2(i64)
     unsigned vec = 1u;
 
     // Get the offsets, val, and cmp
-    SmallVector<Value> offsetElems = unpackTensorElements(
-        loc, llOffset, rewriter, op.getOffsets().getType());
+    SmallVector<Value> offsetElems =
+        unpackUniqueTensorElements(loc, llOffset, rewriter);
     SmallVector<Value> valElems =
-        unpackTensorElements(loc, llVal, rewriter, op.getVal().getType());
+        unpackUniqueTensorElements(loc, llVal, rewriter);
     SmallVector<Value> cmpElems =
-        unpackTensorElements(loc, llCmp, rewriter, op.getCmp().getType());
+        unpackUniqueTensorElements(loc, llCmp, rewriter);
 
     SmallVector<Value> maskElems =
         getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
@@ -2033,9 +2029,8 @@ struct BufferAtomicCASOpConversion
       return failure();
     }
 
-    finalizeTensorAtomicResults(op, dyn_cast<RankedTensorType>(valueTy),
-                                rewriter, loadedVals, valueElemTy, b,
-                                threadPred, targetInfo, getTypeConverter());
+    finalizeAtomicResults(op, rewriter, loadedVals, valueElemTy, b, threadPred,
+                          targetInfo, getTypeConverter());
     return success();
   }
 };
@@ -2152,16 +2147,12 @@ struct AtomicCASOpConversion
     Value llMask = adaptor.getMask();
 
     // prep data by unpacking to get data ready
-    auto ptrElements =
-        unpackTensorElements(loc, llPtr, rewriter, op.getPtr().getType());
-    auto cmpElements =
-        unpackTensorElements(loc, llCmp, rewriter, op.getCmp().getType());
-    auto valElements =
-        unpackTensorElements(loc, llVal, rewriter, op.getVal().getType());
+    auto ptrElements = unpackUniqueTensorElements(loc, llPtr, rewriter);
+    auto cmpElements = unpackUniqueTensorElements(loc, llCmp, rewriter);
+    auto valElements = unpackUniqueTensorElements(loc, llVal, rewriter);
     SmallVector<Value> maskElements;
     if (llMask)
-      maskElements =
-          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
+      maskElements = unpackUniqueTensorElements(loc, llMask, rewriter);
 
     auto memOrdering = op.getSem();
     auto atomicMemOrdering = getMemoryOrdering(memOrdering);
@@ -2182,7 +2173,7 @@ struct AtomicCASOpConversion
     if (!valueElemTy.isSignlessInteger()) {
       valueElemIntTy = rewriter.getIntegerType(valueElemNBits);
     }
-    auto elemsPerThread = getTotalElemsPerThread(op.getVal().getType());
+    auto elemsPerThread = getUniqueElemsPerThread(op.getVal().getType());
     SmallVector<Value> resultVals(elemsPerThread);
 
     auto successOrdering = *atomicMemOrdering;
@@ -2192,15 +2183,9 @@ struct AtomicCASOpConversion
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
     Value threadPred = emitRedundantThreadPredicateNonNull(
         freeVarMasks, rewriter, loc, targetInfo);
-    uint32_t regMask = freeVarMasks[str_attr("reg")];
 
     // atomic ops
     for (size_t i = 0; i < elemsPerThread; i += 1) {
-      if (tensorTy && (i & ~regMask) != i) {
-        resultVals[i] = resultVals[i & ~regMask];
-        continue;
-      }
-
       Value casVal = valElements[i];
       Value casCmp = cmpElements[i];
       Value casPtr = ptrElements[i];
@@ -2296,8 +2281,8 @@ struct AtomicCASOpConversion
       }
     }
 
-    finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals, valueElemTy,
-                                b, threadPred, targetInfo, getTypeConverter());
+    finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, threadPred,
+                          targetInfo, getTypeConverter());
     return success();
   }
 };
@@ -2367,14 +2352,11 @@ struct AtomicRMWOpConversion
     Value llVal = adaptor.getVal();
     Value llMask = adaptor.getMask();
 
-    auto valElements =
-        unpackTensorElements(loc, llVal, rewriter, op.getVal().getType());
-    auto ptrElements =
-        unpackTensorElements(loc, llPtr, rewriter, op.getPtr().getType());
+    auto valElements = unpackUniqueTensorElements(loc, llVal, rewriter);
+    auto ptrElements = unpackUniqueTensorElements(loc, llPtr, rewriter);
     SmallVector<Value> maskElements;
     if (llMask)
-      maskElements =
-          unpackTensorElements(loc, llMask, rewriter, op.getMask().getType());
+      maskElements = unpackUniqueTensorElements(loc, llMask, rewriter);
 
     auto tensorTy = dyn_cast<RankedTensorType>(opResult.getType());
     Type valueElemTy =
@@ -2432,7 +2414,7 @@ struct AtomicRMWOpConversion
     }
 
     auto vecTy = vec_ty(valueElemTy, vec);
-    auto elemsPerThread = getTotalElemsPerThread(val.getType());
+    auto elemsPerThread = getUniqueElemsPerThread(val.getType());
 
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
     Value threadPred = emitRedundantThreadPredicateNonNull(
@@ -2513,8 +2495,8 @@ struct AtomicRMWOpConversion
         }
       }
     }
-    finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals, valueElemTy,
-                                b, threadPred, targetInfo, getTypeConverter());
+    finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, threadPred,
+                          targetInfo, getTypeConverter());
     return success();
   }
 };

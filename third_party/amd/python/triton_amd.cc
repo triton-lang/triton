@@ -9,6 +9,7 @@
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "passes.h"
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
+#include "triton/Tools/LLVMOptions.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/GlobalVariable.h"
@@ -333,6 +334,10 @@ static HipBlasInit initialize_hipblas_op(py::object &A, py::object &B,
 
 static std::optional<std::string> lldInvoke(const char *inPath,
                                             const char *outPath) {
+  // LLD resets every LLVM command line option while parsing its arguments, so
+  // it must not run while a compilation that depends on those options is in
+  // flight.
+  mlir::triton::tools::ExclusiveLLVMOptionAccess exclusiveOptions;
   // Workaround: Disable parallelism to avoid hangs caused by LLVM's thread pool
   // when the following code is executed in a forked child process.
   // Context: lld::elf::LinkerDriver::link uses parallelFor which uses the
@@ -552,13 +557,17 @@ void init_triton_amd(py::module_ &m) {
     }
   });
 
-  m.def("link_hsaco",
-        [](const std::string &inPath, const std::string &outPath) {
-          if (auto errString = lldInvoke(inPath.c_str(), outPath.c_str()))
-            throw std::runtime_error("LLD failed to link hsaco source " +
-                                     inPath + " into object file " + outPath +
-                                     " because " + errString.value());
-        });
+  m.def(
+      "link_hsaco",
+      [](const std::string &inPath, const std::string &outPath) {
+        if (auto errString = lldInvoke(inPath.c_str(), outPath.c_str()))
+          throw std::runtime_error("LLD failed to link hsaco source " + inPath +
+                                   " into object file " + outPath +
+                                   " because " + errString.value());
+      },
+      // Linking may wait for in-flight compilations on other threads; do not
+      // hold the GIL meanwhile.
+      py::call_guard<py::gil_scoped_release>());
 
   m.def("add_scalarize_packed_fops_llvm_pass", [](llvm::Function *fn) {
     mlir::triton::AMD::runScalarizePackedFOpsPass(*fn);
@@ -579,7 +588,9 @@ void init_triton_amd(py::module_ &m) {
                                .attr("find_libraries")("hipblaslt");
           auto path = libraries.attr("__getitem__")(0);
           auto pathString = path.attr("__str__")();
-          const char *pathChars = PyUnicode_AsUTF8(pathString.ptr());
+          Py_ssize_t name_size;
+          const char *pathChars =
+              PyUnicode_AsUTF8AndSize(pathString.ptr(), &name_size);
           if (pathChars == nullptr)
             throw py::python_error();
           hipblasLtPath = pathChars;

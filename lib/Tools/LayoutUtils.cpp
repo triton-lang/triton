@@ -36,30 +36,23 @@ bool squareSublayoutIsIdentity(const LinearLayout &ll,
       ll, dimNames, [](int b, int32_t basis) { return basis == (1 << b); });
 }
 
-LinearLayout invertAndComposeBlockLocal(const LinearLayout &A,
-                                        const LinearLayout &B) {
+LinearLayout invertAndComposeLocal(const LinearLayout &A, const LinearLayout &B,
+                                   ArrayRef<StringAttr> localDims) {
   auto cvt = B.invertAndCompose(A);
-  assert(!cvt.getInDimNames().empty());
-  auto kBlock =
-      StringAttr::get(cvt.getInDimNames().begin()->getContext(), "block");
-  assert(A.hasInDim(kBlock) && B.hasInDim(kBlock));
-  assert(A.getInDimSize(kBlock) == B.getInDimSize(kBlock));
-
-  // A zero block basis does not affect A's outputs, so force that output
-  // coordinate to equal the corresponding input block bit. This does not
-  // change the composition.
   auto bases = cvt.getBases();
-  int blockOutIdx = cvt.getOutDimIndex(kBlock);
-  uint64_t nonZeroBlockBases =
-      getInputBasisMask(A, kBlock, llvm::to_vector(A.getOutDimNames()));
-  for (unsigned i = 0; i < A.getInDimSizeLog2(kBlock); ++i) {
-    if (nonZeroBlockBases & (uint64_t{1} << i))
-      continue;
-    int blockBit = 1 << i;
+  for (StringAttr dim : localDims) {
+    assert(A.hasInDim(dim) && B.hasInDim(dim));
+    assert(A.getInDimSize(dim) == B.getInDimSize(dim));
+    // A zero source basis leaves its output coordinate free. Choose the
+    // corresponding input bit to keep the replicated value local.
+    int outIdx = cvt.getOutDimIndex(dim);
+    uint64_t nonZeroBases =
+        getInputBasisMask(A, dim, llvm::to_vector(A.getOutDimNames()));
     for (auto &inDimBases : llvm::make_second_range(bases))
       for (auto &basis : inDimBases)
-        basis[blockOutIdx] &= ~blockBit;
-    bases[kBlock][i][blockOutIdx] |= blockBit;
+        basis[outIdx] &= nonZeroBases;
+    for (auto [i, basis] : llvm::enumerate(bases[dim]))
+      basis[outIdx] |= (uint64_t{1} << i) & ~nonZeroBases;
   }
   return LinearLayout(std::move(bases), cvt.getOutDims(),
                       /*requireSurjective=*/false);
@@ -424,12 +417,32 @@ actionAdditiveStrides(const LinearLayout &layout, const LinearLayout addrLayout,
   blockBits |= getOutputBasisMask(addrLayout, addrInDims, addrOutDims[1]);
   SmallVector<size_t> front, back;
   auto layoutNamedBases = layout.getBases();
-  assert(layoutNamedBases.lookup(kReg).size() >= regBasisPerVec &&
+  const auto &regBases = layoutNamedBases.lookup(kReg);
+  assert(regBases.size() >= regBasisPerVec &&
          "layout must have at least log2(regsPerInst) register bases");
-  for (auto [idx, basis] : llvm::enumerate(layoutNamedBases.lookup(kReg))) {
-    bool isAdditive =
-        (basis[0] & offsetBits) == 0 && (basis[1] & blockBits) == 0;
-    if (idx < regBasisPerVec || isAdditive) {
+
+  // If a register basis overlaps the dynamic address, it must remain in the
+  // outer xor offset. Any other register basis that overlaps it must remain
+  // there as well; otherwise the inner loop would add two non-disjoint values.
+  // Compute this transitive closure before partitioning the register bases.
+  SmallVector<bool> isAdditive(regBases.size(), true);
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (auto [idx, basis] : llvm::enumerate(regBases)) {
+      if (idx < regBasisPerVec || !isAdditive[idx])
+        continue;
+      if ((basis[0] & offsetBits) == 0 && (basis[1] & blockBits) == 0)
+        continue;
+      isAdditive[idx] = false;
+      offsetBits |= basis[0];
+      blockBits |= basis[1];
+      changed = true;
+    }
+  }
+
+  for (size_t idx = 0; idx < regBases.size(); ++idx) {
+    if (idx < regBasisPerVec || isAdditive[idx]) {
       front.push_back(idx);
     } else {
       back.push_back(idx);

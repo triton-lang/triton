@@ -4,6 +4,7 @@ from triton_kernels.tensor import wrap_torch_tensor, convert_layout, empty, FP4
 from triton_kernels.tensor_details.layout import HopperMXScaleLayout, HopperMXValueLayout, StridedLayout
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp
 from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
+from triton_kernels.tensor_details.layout_details import hopper_scale
 from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
 from triton_kernels.target_info import cuda_capability_geq
 import triton.language as tl
@@ -349,6 +350,27 @@ def test_mxfp4_scale_zero_sized_roundtrip(shape, mx_axis, num_warps, device):
 # ------------------------------------------------------------
 # Triton tests
 # ------------------------------------------------------------
+
+
+@triton.jit
+def _gather_scale(S, Rows, Cols, Out, STRIDES: tl.constexpr):
+    i = tl.arange(0, 4)
+    rows = tl.load(Rows + i)
+    cols = tl.load(Cols + i)
+    ptrs = hopper_scale.swizzle_mx_scale_hopper_ptr(S, rows, cols, *STRIDES, 4)
+    tl.store(Out + i, tl.load(ptrs))
+
+
+def test_scale_ptr_gather(device):
+    data = torch.arange(131 * 9, device=device).reshape(131, 9).to(torch.uint8)
+    packed = convert_layout(wrap_torch_tensor(data), HopperMXScaleLayout(-1, 4)).data
+    rows, cols = torch.tensor([[130, 0, 65, 31], [8, 1, 5, 0]], device=device)
+    gathered = torch.empty(4, dtype=torch.uint8, device=device)
+
+    _gather_scale[(1, )](packed, rows, cols, gathered, packed.stride())
+
+    assert torch.equal(gathered, data[rows, cols])
+
 
 # ------------------ upcast mxfp4 to bf16 --------------------
 

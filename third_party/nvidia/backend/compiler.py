@@ -82,6 +82,11 @@ def get_ptx_version_from_options(options, arch: int):
     return ptx_version
 
 
+def get_llvm_flags():
+    """LLVM command line flags used throughout NVIDIA LLVM lowering."""
+    return ["nvptx-mad-wide-opt", "nvptx-short-ptr"]
+
+
 @functools.lru_cache()
 def get_features(options, arch: int):
     ptx_version = get_ptx_version_from_options(options, arch)
@@ -485,8 +490,8 @@ class CUDABackend(BaseBackend):
         proc = sm_arch_from_capability(cap_llvm)
         features = get_features(options, cap_llvm)
         triple = 'nvptx64-nvidia-cuda'
-        nvidia.set_short_ptr()
-        llvm.attach_datalayout(llvm_mod, triple, proc, features)
+        flags = get_llvm_flags()
+        llvm.attach_datalayout(llvm_mod, triple, proc, features, flags)
         if options.enable_reflect_ftz:
             nvidia.set_nvvm_reflect_ftz(llvm_mod)
 
@@ -498,6 +503,9 @@ class CUDABackend(BaseBackend):
         llvm.optimize_module(
             llvm_mod,
             llvm.OPTIMIZE_O3,
+            # Same LLVM flags as make_ptx: compilations sharing a process only
+            # run in parallel while their flag sets are identical.
+            flags=flags,
             disable_slp_vectorizer=capability == 80,
             expand_masked_div_rem=True,
         )
@@ -534,7 +542,7 @@ class CUDABackend(BaseBackend):
 
         proc = sm_arch_from_capability(cap_llvm)
         features = get_features(opt, cap_llvm)
-        flags = ["nvptx-mad-wide-opt"]
+        flags = get_llvm_flags()
         canonicalize_gep = is_enabled(opt, "fpsan")
         ret = llvm.translate_to_asm(src, triple, proc, features, flags, opt.enable_fp_fusion, False, canonicalize_gep,
                                     sched4reg=opt.sched4reg)
@@ -646,6 +654,7 @@ please share the reproducer above with Triton project.
             stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options, capability)
             stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, capability)
         elif language == Language.GLUON:
+            stages["glir"] = lambda src, metadata: src
             stages["ttgir"] = lambda src, metadata: self.gluon_to_ttgir(src, metadata, options, capability)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, capability)
         stages["ptx"] = lambda src, metadata: self.make_ptx(src, metadata, options, self.target.arch)

@@ -48,6 +48,8 @@ class Epilogue:
     specs: FnSpecs = FnSpecs.default()
     fn_arg_values_matmul: tuple[object, ...] = tuple()
     fn_arg_values_finalize: tuple[object, ...] = tuple()
+    # Shared-memory bytes per output element after the activation's N reduction.
+    # A pairwise FP32 reduction needs 8 bytes even when its output is packed FP4.
     effective_itemsize: float | None = None
 
 class FnName(Enum):

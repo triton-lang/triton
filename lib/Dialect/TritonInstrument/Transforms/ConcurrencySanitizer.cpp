@@ -96,7 +96,7 @@ int getCurrentThread(Operation *op, const ConSanTargetHooks &hooks,
                      const AuxDataMap::ThreadLayout &threadLayout) {
   // Default partition is 0, other partitions are idx + 1
   int thread = maybeGetPartitionIdx(op).value_or(-1) + 1;
-  if (hooks.isTMAOp(op)) {
+  if (hooks.isTMAOp(op) || isa<ttng::AsyncCopyMbarrierArriveOp>(op)) {
     assert(threadLayout.hasTMAThreads() &&
            "TMA thread class must exist when instrumenting a TMA op");
     thread += threadLayout.tmaThreadOffset;
@@ -510,15 +510,16 @@ void extendXorSpan(uint32_t &span, uint32_t basis, int numCTAs) {
 
 LinearLayout getLocalLoadStoreConversion(ttg::MemDescType memDescTy,
                                          RankedTensorType regTy) {
-  return invertAndComposeBlockLocal(
-      ttg::toLinearLayoutIgnoringPadding(memDescTy),
-      ttg::toLinearLayout(regTy));
+  auto kBlock = StringAttr::get(memDescTy.getContext(), "block");
+  return invertAndComposeLocal(ttg::toLinearLayoutIgnoringPadding(memDescTy),
+                               ttg::toLinearLayout(regTy), {kBlock});
 }
 
 LinearLayout getLocalGatherScatterConversion(ttg::MemDescType memDescTy,
                                              RankedTensorType regTy,
                                              unsigned axis) {
   MLIRContext *ctx = memDescTy.getContext();
+  auto kBlock = StringAttr::get(ctx, "block");
   LinearLayout sharedLayout = ttg::toLinearLayoutIgnoringPadding(memDescTy);
   SmallVector<StringAttr> allDims =
       standardOutDimNames(ctx, memDescTy.getRank());
@@ -532,7 +533,7 @@ LinearLayout getLocalGatherScatterConversion(ttg::MemDescType memDescTy,
       LinearLayout::identity1D(sharedLayout.getOutDimSize(axisDim), axisDim,
                                axisDim);
   indexedLayout = indexedLayout.transposeOuts(allDims);
-  return invertAndComposeBlockLocal(sharedLayout, indexedLayout);
+  return invertAndComposeLocal(sharedLayout, indexedLayout, {kBlock});
 }
 
 uint32_t getXorImageMask(const LinearLayout &layout, StringAttr outDim,
@@ -634,8 +635,9 @@ Value getScratchReadCTAs(ImplicitLocOpBuilder &b, Operation *op,
   if (auto convert = dyn_cast<ttg::ConvertLayoutOp>(op)) {
     LinearLayout srcLayout = ttg::toLinearLayout(convert.getSrc().getType());
     LinearLayout dstLayout = ttg::toLinearLayout(convert.getType());
+    auto kBlock = b.getStringAttr("block");
     Value loadCTAs = getLocalMemoryRecipientCTAs(
-        b, invertAndComposeBlockLocal(srcLayout, dstLayout));
+        b, invertAndComposeLocal(srcLayout, dstLayout, {kBlock}));
     return arith::OrIOp::create(b, ownerCTAs, loadCTAs);
   }
 
@@ -813,7 +815,7 @@ private:
       return true;
 
     // NVIDIA broadcasts scalar atomic results; AMD executes them in each CTA.
-    if (isa<tt::AtomicRMWOp, tt::AtomicCASOp>(op) &&
+    if (isa<tt::AtomicOpInterface>(op) && op->getNumResults() == 1 &&
         !isa<RankedTensorType>(op->getResult(0).getType()))
       return !hooks.hasUnsummarizableCalleeState(op);
 
@@ -1425,6 +1427,10 @@ private:
         if (opInfo->trackingKind ==
             MemEffectsOpInfo::TrackingKind::CommitCount) {
           assert(memType == MemType::SHARED_MEM);
+          if (auxData.hasAsyncCopyMbarriers &&
+              opInfo->commitKind == CommitKind::AsyncCp)
+            funcBuilder.createPublishWriteVisibilityCall(
+                b, bufferMask, 0, pred, memType, op, effectCTAs);
           funcBuilder.createStageAccessForCommitCall(
               b, bufferMask, baseThread, pred, memType, opInfo->commitKind, op);
         }
@@ -1488,6 +1494,13 @@ private:
           funcBuilder.createTrackVisibleAccessesCall(
               b, barrier, thread, combinedPred, MemType::SHARED_MEM, op,
               recipientCTAs, completionBufferMask);
+      } else if (barrierInfo.trackingMode ==
+                 MemEffectsOpInfo::BarrierTrackingMode::AsyncCopies) {
+        funcBuilder.createTrackAsyncCopiesForBarrierCall(
+            b, barrier, baseThread, combinedPred, op, recipientCTAs);
+        funcBuilder.createTrackVisibleAccessesCall(
+            b, barrier, thread, combinedPred, MemType::SHARED_MEM, op,
+            recipientCTAs, completionBufferMask);
       }
       if (barrierInfo.count > 0 || barrierInfo.txCount != 0) {
         funcBuilder.createVerifyAndUpdateBarrierStateCall(
