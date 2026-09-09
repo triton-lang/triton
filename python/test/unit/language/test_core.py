@@ -4617,10 +4617,9 @@ def test_scaled_dot_minimum_scale(rhs_scale, normal_type, fast_math, device):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("rhs_scale", [False, True])
 @pytest.mark.parametrize("normal_type", ["bf16", "fp16"])
-@pytest.mark.parametrize("scale_factor", [16, 32])
-@pytest.mark.parametrize("scale_dtype", [torch.uint8, torch.float8_e4m3fn])
+@pytest.mark.parametrize("scale_dtype, scale_factor", [(torch.uint8, 32), (torch.float8_e4m3fn, 16)])
 @pytest.mark.enable_warmup(min_capability=9)
-def test_scaled_dot_zero_scale(rhs_scale, normal_type, scale_factor, scale_dtype, device):
+def test_scaled_dot_zero_scale(rhs_scale, normal_type, scale_dtype, scale_factor, device):
     if not is_interpreter() and (not is_cuda() or torch.cuda.get_device_capability() < (8, 9)):
         pytest.skip("requires CUDA FP8 support")
 
@@ -4633,8 +4632,7 @@ def test_scaled_dot_zero_scale(rhs_scale, normal_type, scale_factor, scale_dtype
     _scaled_dot_scale_kernel[(1, )](x, w, scales, out, rhs_scale, normal_type, scale_factor, False, num_warps=8)
     if is_compile_warmup():
         return
-    is_e8m0 = scale_dtype == torch.uint8 and (scale_factor == 32 or tl.target_info.is_hip())
-    expected = 2.0**-112 if normal_type == "bf16" and is_e8m0 else 0.0
+    expected = 2.0**-112 if normal_type == "bf16" and scale_dtype == torch.uint8 else 0.0
     torch.testing.assert_close(out, torch.full_like(out, expected), rtol=0, atol=0)
 
 

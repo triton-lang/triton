@@ -388,40 +388,6 @@ module attributes {"ttg.target" = "cuda:107", "ttg.num-ctas" = 1 : i32, "ttg.num
     %out = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %zero lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<32x32xi8, #dot_A>, tensor<32x2xi8, #blocked> * tensor<32x32xi8, #dot_B>, tensor<32x2xi8, #blocked> -> tensor<32x32xf32, #blocked>
     tt.return %out : tensor<32x32xf32, #blocked>
   }
-
-  // CHECK-LABEL: @dot_scaled_ue5m3_i8_decomposition
-  tt.func public @dot_scaled_ue5m3_i8_decomposition(
-      %a: tensor<32x32xi8, #dot_A>, %scale_a: tensor<32x4xi8, #blocked>,
-      %b: tensor<32x32xi8, #dot_B>, %scale_b: tensor<32x4xi8, #blocked>) -> tensor<32x32xf32, #blocked> {
-    // CHECK-NOT: arith.maxui
-    // CHECK: %[[SCALE_BITS:.*]] = arith.shli {{.*}} : tensor<{{.*}}xi16,
-    // CHECK-NEXT: %[[SCALE:.*]] = tt.bitcast %[[SCALE_BITS]] : {{.*}} -> tensor<{{.*}}xbf16,
-    // CHECK-NEXT: {{.*}}tti.experimental_fpsan_embed %[[SCALE]]
-    // CHECK-NOT: arith.maxui
-    // CHECK: tti.dot_i8
-    // CHECK-NOT: arith.maxui
-    // CHECK: tt.return
-    %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
-    %out = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %zero lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<32x32xi8, #dot_A>, tensor<32x4xi8, #blocked> * tensor<32x32xi8, #dot_B>, tensor<32x4xi8, #blocked> -> tensor<32x32xf32, #blocked>
-    tt.return %out : tensor<32x32xf32, #blocked>
-  }
-
-  // A smaller output uses scalar emulation instead of i8 dot instructions.
-  // CHECK-LABEL: @dot_scaled_ue5m3_scalar_emulation
-  tt.func public @dot_scaled_ue5m3_scalar_emulation(
-      %a: tensor<16x32xi8, #dot_A>, %scale_a: tensor<16x4xi8, #blocked>,
-      %b: tensor<32x16xi8, #dot_B>, %scale_b: tensor<16x4xi8, #blocked>) -> tensor<16x16xf32, #blocked> {
-    // CHECK-NOT: arith.maxui
-    // CHECK: %[[SCALE_BITS:.*]] = arith.shli {{.*}} : tensor<{{.*}}xi16,
-    // CHECK-NEXT: %[[SCALE:.*]] = tt.bitcast %[[SCALE_BITS]] : {{.*}} -> tensor<{{.*}}xbf16,
-    // CHECK-NEXT: {{.*}}tti.experimental_fpsan_embed %[[SCALE]]
-    // CHECK-NOT: arith.maxui
-    // CHECK-NOT: tti.dot_i8
-    // CHECK: tt.return
-    %zero = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #blocked>
-    %out = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %zero lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<16x32xi8, #dot_A>, tensor<16x4xi8, #blocked> * tensor<32x16xi8, #dot_B>, tensor<16x4xi8, #blocked> -> tensor<16x16xf32, #blocked>
-    tt.return %out : tensor<16x16xf32, #blocked>
-  }
 }
 
 // -----

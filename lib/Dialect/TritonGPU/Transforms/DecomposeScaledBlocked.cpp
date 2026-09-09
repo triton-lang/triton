@@ -15,16 +15,6 @@ using namespace mlir::triton::gpu;
 
 namespace mlir::triton::gpu {
 
-namespace {
-
-bool isE8M0Scale(DotScaledOp op) {
-  // NVIDIA uses group-16 integer scales for UE5M3; AMD uses E8M0.
-  return op.deduceScaleFactor() == 32 ||
-         getAMDArch(op->getParentOfType<ModuleOp>()).has_value();
-}
-
-} // namespace
-
 SmallVector<int, 2> DecomposeScaledBlocked::getTransposeOrder(int rank) {
   assert(rank >= 2);
   auto transOrder = llvm::to_vector<2>(llvm::seq<int>(rank - 2));
@@ -68,7 +58,7 @@ DecomposeScaledBlocked::getComputeType(ScaleDotElemType aType,
 TypedValue<RankedTensorType>
 DecomposeScaledBlocked::scaleTo16(PatternRewriter &rewriter,
                                   TypedValue<RankedTensorType> scale,
-                                  FloatType computeType, bool isE8M0) const {
+                                  FloatType computeType) const {
   auto loc = scale.getLoc();
   auto scaleTy = scale.getType();
   assert(computeType == rewriter.getBF16Type() ||
@@ -97,7 +87,7 @@ DecomposeScaledBlocked::scaleTo16(PatternRewriter &rewriter,
   auto shift =
       SplatOp::create(rewriter, loc, scaleTy.clone(intType), shiftConst);
   Value scaleBits = arith::ShLIOp::create(rewriter, loc, zexted, shift);
-  if (computeType.isBF16() && isE8M0) {
+  if (computeType.isBF16()) {
     // E8M0 byte zero is 2^-127, which is subnormal in bf16 and rounds to
     // zero in fp16.
     auto minScaleBits = arith::ConstantIntOp::create(rewriter, loc, 0x0040, 16);
@@ -199,7 +189,7 @@ TypedValue<RankedTensorType> DecomposeScaledBlocked::maskNan(
   TypedValue<RankedTensorType> scaleIsNan;
   if (isa<FloatType>(scaleTy.getElementType())) {
     auto computeType = cast<FloatType>(mxfp.getType().getElementType());
-    auto scaleFp = scaleTo16(rewriter, scale, computeType, /*isE8M0=*/false);
+    auto scaleFp = scaleTo16(rewriter, scale, computeType);
     scaleIsNan = cast<TypedValue<RankedTensorType>>(
         arith::CmpFOp::create(rewriter, loc, arith::CmpFPredicate::UNO, scaleFp,
                               scaleFp)
@@ -288,8 +278,7 @@ TypedValue<RankedTensorType> DecomposeScaledBlocked::extendAndBroadcastScale(
   }
 
   // 1) Cast scale to compute type (fp16/bf16)
-  auto scale16 =
-      scaleTo16(rewriter, scale, computeType, isE8M0Scale(scaledDotOp));
+  auto scale16 = scaleTo16(rewriter, scale, computeType);
 
   // 2) Broadcast scale to the same shape as v and convert the layout
   return broadcastScale(rewriter, scaledDotOp, scale16, kDim,
