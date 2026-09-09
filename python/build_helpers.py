@@ -565,8 +565,9 @@ class NvidiaToolchainPackage:
 
     def archive(self, system, arch):
         filename = f"{self.component}-{system}-{arch}-{self.version}-archive.tar.xz"
-        url = f"https://developer.download.nvidia.com/compute/cuda/redist/{self.component}/{system}-{arch}/{filename}"
-        return DependencyArchive(url, f"oaiartifacts/wheels/triton_wheel/nvidia/{filename}")
+        path = f"{self.component}/{system}-{arch}/{filename}"
+        url = f"https://developer.download.nvidia.com/compute/cuda/redist/{path}"
+        return DependencyArchive(url, f"nvidia-cuda-redist/{path}")
 
 
 def get_nvidia_toolchain_packages():
