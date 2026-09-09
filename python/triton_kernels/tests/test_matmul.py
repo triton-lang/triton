@@ -154,13 +154,12 @@ def _build_test_op_cases():
         Case(*even_shape, "ragged", "float8_e5m2", "float8_e5m2", epilogue_subtile=val)
         for val in (1, 2, 4)
     ])
-    if is_cuda():
-        test_cases.extend([
-            Case(*odd_shape2, "plain", lhs, rhs, dtype, b_transpose=b_transpose)
-            for dtype in ("float16", "bfloat16")
-            for lhs, rhs in (("float8_e4m3fn", dtype), (dtype, "float8_e4m3fn"))
-            for b_transpose in (False, True)
-        ])
+    test_cases.extend([
+        Case(*odd_shape2, "plain", lhs, rhs, dtype, b_transpose=b_transpose)
+        for dtype in ("float16", "bfloat16")
+        for lhs, rhs in (("float8_e4m3fn", dtype), (dtype, "float8_e4m3fn"))
+        for b_transpose in (False, True)
+    ])
     # fp32
     test_cases.extend([
         Case(1024, 1000, 2048, "ragged", "float32", "float32", b_transpose=True)
@@ -373,6 +372,9 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     elif is_hip():
         if a_dtype.is_nvfp4 or b_dtype.is_nvfp4 or c_dtype.is_nvfp4:
             pytest.skip("NVFP4 matmul not tested on AMD GPU")
+        if (a_dtype.has_global_scale != b_dtype.has_global_scale
+                and not (a_dtype.has_mx_scale or b_dtype.has_mx_scale)):
+            pytest.skip("Unscaled mixed FP8 matmul is only tested on CUDA")
         if a_dtype.is_any_float8 and b_dtype.has_mx_scale and not (is_hip_cdna4() or is_hip_gfx1250()):
             pytest.skip("float8 x mx only supported on CDNA4 and gfx1250")
         if a_dtype.is_any_float8 and b_dtype.name == "mxfloat8_e4m3fn":
