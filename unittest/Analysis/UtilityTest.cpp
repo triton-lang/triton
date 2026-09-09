@@ -7,8 +7,10 @@
 #include "llvm/Support/Signals.h"
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <deque>
 #include <set>
+#include <vector>
 
 namespace mlir {
 
@@ -96,19 +98,33 @@ TEST(Analysis, SharedMemoryEffectsPreserveResourceAndKind) {
 
 TEST(Analysis, AddressSetExhaustiveEightUnitUniverse) {
   constexpr unsigned universe = 8;
-  auto fromMask = [](unsigned mask) {
+  auto fromMask = [](unsigned mask, uint32_t offset = 0) {
     triton::AddressSet result;
     for (unsigned bit = 0; bit < universe; ++bit)
       if (mask & (1u << bit))
-        result.set(bit);
+        result.set(bit + offset);
+    return result;
+  };
+  auto vectorFromMask = [](unsigned mask) {
+    std::vector<uint32_t> result;
+    for (unsigned bit = 0; bit < universe; ++bit)
+      if (mask & (1u << bit))
+        result.push_back(bit);
     return result;
   };
 
   for (unsigned lhsMask = 0; lhsMask < (1u << universe); ++lhsMask) {
     triton::AddressSet lhs = fromMask(lhsMask);
+    auto lhsVector = vectorFromMask(lhsMask);
+    EXPECT_EQ(lhs.translated(0), lhs);
+    EXPECT_EQ(lhs.translated(3), fromMask(lhsMask, 3));
 
     for (unsigned rhsMask = 0; rhsMask < (1u << universe); ++rhsMask) {
       triton::AddressSet rhs = fromMask(rhsMask);
+      auto rhsVector = vectorFromMask(rhsMask);
+      EXPECT_EQ(lhs < rhs, std::lexicographical_compare(
+                               lhsVector.begin(), lhsVector.end(),
+                               rhsVector.begin(), rhsVector.end()));
       EXPECT_EQ(lhs.intersects(rhs), (lhsMask & rhsMask) != 0);
       EXPECT_EQ(lhs.contains(rhs), (rhsMask & ~lhsMask) == 0);
       EXPECT_EQ(lhs.intersection(rhs), fromMask(lhsMask & rhsMask));
