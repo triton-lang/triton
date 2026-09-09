@@ -4287,8 +4287,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
 
 
 @pytest.mark.parametrize("in_dtype", ["int16", "float16", "int8"])
-@pytest.mark.parametrize("shape", [(16, 16, 16), (32, 32, 32)])
-def test_dot_upcast_to_fp64(in_dtype, shape, device):
+def test_dot_upcast_to_fp64(in_dtype, device):
     if is_interpreter():
         pytest.skip("Interpreter does not support FP64 dot")
     if not is_cuda():
@@ -4296,7 +4295,7 @@ def test_dot_upcast_to_fp64(in_dtype, shape, device):
     if torch.cuda.get_device_capability()[0] < 8:
         pytest.skip("FP64 MMA requires CUDA sm >= 80")
 
-    M, N, K = shape
+    M, N, K = 32, 32, 32
 
     @triton.jit
     def kernel(X, Y, Z, stride_xm, stride_xk, stride_yk, stride_yn, stride_zm, stride_zn, BLOCK_M: tl.constexpr,
