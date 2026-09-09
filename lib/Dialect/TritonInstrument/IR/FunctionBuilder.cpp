@@ -1832,8 +1832,20 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
           clearTable(readVisibilityType);
         if (clearReadTracking)
           clearTable(readTrackingType);
-        if (clearCopies)
-          clearTable(copiesType);
+        if (clearCopies) {
+          // Copy counters have no K/T axis to stream.
+          Value copiesPtr = entryBlock->getArgument(nextArg++);
+          Value copiesMask =
+              convertAndBroadcast(fb, bufferMask, {1}, copiesType);
+          Value ctaMask =
+              createCTASetMask(fb, copiesType, /*dim=*/0, effectCTAs);
+          copiesMask = arith::AndIOp::create(fb, copiesMask, ctaMask);
+          Value zero =
+              tti::createConstIntTensor(fb, fb.getLoc(), 0, copiesType);
+          tti::createStoreScratchMemory(fb, fb.getLoc(), copiesPtr, zero,
+                                        copiesType, /*currentCTAOnly=*/false,
+                                        copiesMask);
+        }
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
