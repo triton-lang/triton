@@ -1147,7 +1147,7 @@ GSAN_DEVICE void releaseAtomicShadowRange(AtomicEventState *event) {
 
 GSAN_DEVICE void beginAtomicAccess(GlobalState *globals,
                                    AtomicEventState *event, bool pred,
-                                   uintptr_t address, int nBytes,
+                                   uintptr_t address, int nBytes, bool doesRead,
                                    uint32_t semRaw, uint32_t scopeRaw,
                                    Location loc) {
   initAtomicEventState(event);
@@ -1161,23 +1161,25 @@ GSAN_DEVICE void beginAtomicAccess(GlobalState *globals,
 
   auto sem = decodeAtomicSem(semRaw);
   auto scope = decodeAtomicScope(scopeRaw);
-  for (uint8_t i = 0; i < event->numCells; ++i) {
-    auto *cell = event->cells[i];
-    auto write = cell->writeClock;
-    assertOrderedOrCompatible(state, scope, write, loc,
-                              "Read after write race detected");
-    recordRead(state, cell, scope);
-  }
-  if (hasAcquire(sem)) {
+  if (doesRead) {
     for (uint8_t i = 0; i < event->numCells; ++i) {
-      auto write = event->cells[i]->writeClock;
-      maybeMergeAcquire(state, scope, write, loc);
+      auto *cell = event->cells[i];
+      auto write = cell->writeClock;
+      assertOrderedOrCompatible(state, scope, write, loc,
+                                "Read after write race detected");
+      recordRead(state, cell, scope);
+    }
+    if (hasAcquire(sem)) {
+      for (uint8_t i = 0; i < event->numCells; ++i) {
+        auto write = event->cells[i]->writeClock;
+        maybeMergeAcquire(state, scope, write, loc);
+      }
     }
   }
 }
 
 GSAN_DEVICE void endAtomicAccess(AtomicEventState *event, bool pred,
-                                 bool didWrite, uint32_t semRaw,
+                                 bool didWrite, bool isRmw, uint32_t semRaw,
                                  uint32_t scopeRaw, Location loc) {
   if (!pred || event->threadState == nullptr)
     return;
@@ -1201,10 +1203,10 @@ GSAN_DEVICE void endAtomicAccess(AtomicEventState *event, bool pred,
     ScalarClock newWriteClock;
     if (hasRelease(sem)) {
       epoch_t token;
-      if (canAccumulateReleaseRmw(state, scope, previousWrite))
+      if (isRmw && canAccumulateReleaseRmw(state, scope, previousWrite))
         token = publishCurrentVectorClockWithPriorRelease(state, previousWrite,
                                                           loc);
-      else if (previousWrite.isRelease) {
+      else if (isRmw && previousWrite.isRelease) {
         const auto *previousSnapshot =
             getSnapshotForWrite(state, previousWrite, loc);
         assert_msg(loc, dominatesSnapshot(state, previousSnapshot),
@@ -1216,7 +1218,7 @@ GSAN_DEVICE void endAtomicAccess(AtomicEventState *event, bool pred,
       }
       newWriteClock = makePublishedClock(state, scope, token);
     } else {
-      if (previousWrite.isRelease) {
+      if (isRmw && previousWrite.isRelease) {
         auto token = propagateClockBufferSnapshot(state, previousWrite, loc);
         newWriteClock = makePublishedClock(state, scope, token);
       } else {
@@ -1245,8 +1247,9 @@ struct AtomicElementHandler {
   GSAN_DEVICE void operator()(uintptr_t address) const {
     AtomicEventState event;
     beginAtomicAccess(globals, &event, /*pred=*/true, address, bytesPerElem,
-                      sem, scope, loc);
-    endAtomicAccess(&event, /*pred=*/true, /*didWrite=*/true, sem, scope, loc);
+                      /*doesRead=*/true, sem, scope, loc);
+    endAtomicAccess(&event, /*pred=*/true, /*didWrite=*/true,
+                    /*isRmw=*/true, sem, scope, loc);
   }
 };
 
@@ -1439,21 +1442,23 @@ extern "C" GSAN_DEVICE void __triton_gsan_atomic_tensor_desc(
                          bytesPerElem, sem, scope, warpId, numWarps, loc);
 }
 
-extern "C" GSAN_DEVICE void __triton_gsan_atomic_begin_scalar(
-    void *globalState, void *eventState, int pred, gsan::uintptr_t address,
-    int bytesPerElem, int sem, int scope, const char *file, unsigned line) {
+extern "C" GSAN_DEVICE void
+__triton_gsan_atomic_begin_scalar(void *globalState, void *eventState, int pred,
+                                  gsan::uintptr_t address, int bytesPerElem,
+                                  int doesRead, int sem, int scope,
+                                  const char *file, unsigned line) {
   auto loc = gsan::Location{file, line};
   gsan::beginAtomicAccess(
       reinterpret_cast<gsan::GlobalState *>(globalState),
       reinterpret_cast<gsan::AtomicEventState *>(eventState), pred != 0,
-      address, bytesPerElem, sem, scope, loc);
+      address, bytesPerElem, doesRead != 0, sem, scope, loc);
 }
 
 extern "C" GSAN_DEVICE void
 __triton_gsan_atomic_end_scalar(void *eventState, int pred, int didWrite,
-                                int sem, int scope, const char *file,
+                                int isRmw, int sem, int scope, const char *file,
                                 unsigned line) {
   auto loc = gsan::Location{file, line};
   gsan::endAtomicAccess(reinterpret_cast<gsan::AtomicEventState *>(eventState),
-                        pred != 0, didWrite != 0, sem, scope, loc);
+                        pred != 0, didWrite != 0, isRmw != 0, sem, scope, loc);
 }
