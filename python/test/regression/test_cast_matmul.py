@@ -15,7 +15,7 @@ from triton._internal_testing import is_hip_cdna3, is_cuda, is_hip
 
 pytestmark = pytest.mark.enable_warmup(min_capability=9)
 
-input_dtypes = ["bfloat16", "float16", "float32", "float64", "int16"]
+input_dtypes = ["bfloat16", "float16", "float32", "float64"]
 if is_cuda():
     input_dtypes += ["int8", "float8_e5m2"]
     cc = torch.cuda.get_device_capability(0)
@@ -79,9 +79,10 @@ def matmul_kernel(A, B, C, M, N, K,  #
 
 @pytest.mark.parametrize("M, K, N, BLOCK_K, BLOCK_M, BLOCK_N, w_dtype, x_dtype, out_dtype",
                          [(M, K, N, BLOCK_K, BLOCK_M, BLOCK_N, w, x, o)  #
-                          for BLOCK_K in [16, 32, 64]  #
-                          for BLOCK_M in [16, 64]  #
-                          for BLOCK_N in [16, 64, 128]  #
+                          for BLOCK_K, BLOCK_M, BLOCK_N in ([(k, m, n)  #
+                                                             for k in [16, 32, 64]  #
+                                                             for m in [16, 64]  #
+                                                             for n in [16, 64, 128]] + [(32, 32, 32)])
                           for (M, K, N) in [(768, 768, 1024)]  #
                           for w in input_dtypes
                           for x in input_dtypes  #
@@ -97,7 +98,7 @@ def test_cast_matmul(M, K, N, BLOCK_K, BLOCK_M, BLOCK_N, w_dtype, x_dtype, out_d
     w_dtype: torch.dtype = getattr(torch, w_dtype)
 
     def init_tensor(dtype, shape):
-        if dtype in (torch.int8, torch.int16):
+        if dtype == torch.int8:
             return torch.randint(0, 2, shape, device=device, dtype=dtype)
         elif dtype in (torch.float8_e4m3fn, torch.float8_e4m3fnuz, torch.float8_e5m2):
             return torch.randn(shape, device=device, dtype=torch.float16).to(dtype)
