@@ -944,6 +944,43 @@ def test_atomic_scalar_masks():
     tl.atomic_xor(ptrs, 1, mask=True)
 
 
+@pytest.mark.parametrize("dtype", [tl.int1, tl.int8, tl.uint8, tl.int16, tl.int32, tl.int64], ids=str)
+def test_atomic_load_store(dtype):
+
+    @triton.jit
+    def kernel(dtype: tl.constexpr):
+        BLOCK: tl.constexpr = 128
+        ptr = tl.full((BLOCK, ), 0, tl.int64).to(tl.pointer_type(dtype), bitcast=True)
+        offs = tl.arange(0, BLOCK)
+        ptrs = ptr + offs
+        mask = offs < 64
+        # CHECK: %{{.*}} = tt.atomic_load acquire, gpu, %{{.*}}, %{{.*}} : (tensor<128x!tt.ptr<[[TYPE:i(8|16|32|64)]]>>, tensor<128xi1>) -> tensor<128x[[TYPE]]>
+        value = tl.atomic_load(ptrs, mask=mask)
+        tl.static_assert(value.dtype == dtype)
+        # CHECK: tt.atomic_store release, gpu, %{{.*}}, %{{.*}}, %{{.*}} : tensor<128x!tt.ptr<[[TYPE]]>>
+        tl.atomic_store(ptrs, value, mask=mask)
+        # CHECK: %{{.*}} = tt.atomic_load relaxed, sys
+        tl.atomic_load(ptrs, sem="relaxed", scope="sys")
+        # CHECK: tt.atomic_store relaxed, cta
+        tl.atomic_store(ptrs, 1, sem="relaxed", scope="cta")
+
+    run_filecheck_test(kernel, args=(dtype, ))
+
+
+@doesnt_compile
+@triton.jit
+def test_atomic_load_rejects_release_semantics():
+    ptr = tl.to_tensor(0).to(tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    tl.atomic_load(ptr, sem="release")
+
+
+@doesnt_compile
+@triton.jit
+def test_atomic_store_rejects_acquire_semantics():
+    ptr = tl.to_tensor(0).to(tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    tl.atomic_store(ptr, 1, sem="acquire")
+
+
 @filecheck_test
 @triton.jit
 def test_atomic_poll():

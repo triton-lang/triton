@@ -679,22 +679,11 @@ struct AtomicCASOpConversion
                                            casCmp, casVal, op.getSem(),
                                            op.getScope(), threadPred);
 
-      if (tensorTy) {
-        resultVals[i] = old;
-      } else {
-        if (op.getResult().use_empty()) {
-          rewriter.eraseOp(op);
-          return success();
-        }
-        Value ret = broadcastScalarAtomicResult(op, valueElemTy, old, rewriter,
-                                                b, threadPred, targetInfo);
-        rewriter.replaceOp(op, {ret});
-        return success();
-      }
+      resultVals[i] = old;
     }
 
-    finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals, valueElemTy,
-                                b, threadPred, targetInfo, getTypeConverter());
+    finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, threadPred,
+                          targetInfo, getTypeConverter());
     return success();
   }
 };
@@ -838,6 +827,7 @@ public:
     auto freeVarMasks = getFreeVariableMasks(ptr.getType());
     Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
                                                          loc, targetInfo);
+    Value resultPred = threadPred;
 
     SmallVector<Value> resultVals(elemsPerThread);
 
@@ -868,13 +858,9 @@ public:
                 : triton::nvgpu::MemSemantic::RELAXED,
             ScopeMap[op.getScope()]);
 
-        if (op.getResult().use_empty()) {
-          rewriter.eraseOp(op);
-          return success();
-        }
-        Value ret = broadcastScalarAtomicResult(op, valueElemTy, loadAcquireOp,
-                                                rewriter, b, pred, targetInfo);
-        rewriter.replaceOp(op, {ret});
+        resultVals[i] = loadAcquireOp;
+        finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, pred,
+                              targetInfo, getTypeConverter());
         return success();
       }
 
@@ -1002,22 +988,16 @@ public:
           resultVals[i] = ret;
         }
       } else {
-        if (op.getResult().use_empty()) {
-          rewriter.eraseOp(op);
-          return success();
-        }
-        Value ret = broadcastScalarAtomicResult(op, valueElemTy, *old, rewriter,
-                                                b, pred, targetInfo);
-        rewriter.replaceOp(op, {ret});
-        return success();
+        resultVals[i] = *old;
+        resultPred = pred;
       }
     }
     if (useRed) {
       rewriter.eraseOp(op);
       return success();
     }
-    finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals, valueElemTy,
-                                b, threadPred, targetInfo, getTypeConverter());
+    finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, resultPred,
+                          targetInfo, getTypeConverter());
     return success();
   }
 };
@@ -1121,18 +1101,16 @@ struct AsyncCopyGlobalToLocalOpConversion
     Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
                                                          loc, targetInfo);
 
-    FailureOr<Value> l2Policy =
-        createCachePolicy(*cachePolicy, rewriter, loc, computeCapability, op);
-    if (failed(l2Policy))
-      return failure();
-    Value l2PolicyReg = *l2Policy;
+    // Disable fractional L2 policies for cp.async: ptxas 13.3.33 can
+    // miscompile them into illegal instructions on Blackwell.
     auto l2PrefetchSizeAttr = cachePolicy->detailed
                                   ? cachePolicy->detailed.getL2PrefetchSize()
                                   : IntegerAttr();
     int64_t l2PrefetchSize =
         l2PrefetchSizeAttr ? l2PrefetchSizeAttr.getInt() : 0;
 
-    auto emitCpAsync = [&b, threadPred, ptrTy, l2PolicyReg, l2PrefetchSize,
+    auto emitCpAsync = [&b, threadPred, ptrTy, l2PrefetchSize,
+                        cacheModifier = cachePolicy->modifier,
                         hasMask =
                             bool(llMask)](RewriterBase &rewriter, Location loc,
                                           ArrayRef<Value> vals, Value shmemAddr,
@@ -1144,9 +1122,12 @@ struct AsyncCopyGlobalToLocalOpConversion
       auto elemTy = vecTy.getElementType();
       auto nBytes = vecTy.getNumElements() * elemTy.getIntOrFloatBitWidth() / 8;
       assert(nBytes == 16 || nBytes == 8 || nBytes == 4);
-      // Tune CG and CA.
+      // Prefer CG for 16-byte copies unless CA was explicitly requested.
+      // Smaller copies must use CA because CG only supports 16-byte transfers.
       CacheModifier srcCacheModifier =
-          nBytes == 16 ? CacheModifier::CG : CacheModifier::CA;
+          nBytes == 16 && cacheModifier != CacheModifier::CA
+              ? CacheModifier::CG
+              : CacheModifier::CA;
 
       auto structElem = vals[startIdx];
       auto srcElem = b.extract_val(ptrTy, structElem, 0);
@@ -1157,8 +1138,7 @@ struct AsyncCopyGlobalToLocalOpConversion
           *ptxBuilder.create<PTXCpAsyncLoadInstr>(srcCacheModifier);
       copyAsyncOp.o("L2::64B", l2PrefetchSize == 64)
           .o("L2::128B", l2PrefetchSize == 128)
-          .o("L2::256B", l2PrefetchSize == 256)
-          .o("L2::cache_hint", l2PolicyReg != Value());
+          .o("L2::256B", l2PrefetchSize == 256);
       auto *dstOperand = ptxBuilder.newAddrOperand(shmemAddr, "r");
       auto *srcOperand = ptxBuilder.newAddrOperand(srcElem, "l");
       auto *copySize = ptxBuilder.newConstantOperand(nBytes);
@@ -1174,14 +1154,8 @@ struct AsyncCopyGlobalToLocalOpConversion
         auto selectOp = b.select(maskElem, b.i32_val(nBytes), b.i32_val(0));
         srcSize = ptxBuilder.newOperand(selectOp, "r");
       }
-      if (l2PolicyReg) {
-        auto *policyOperand = ptxBuilder.newOperand(l2PolicyReg, "l");
-        copyAsyncOp(dstOperand, srcOperand, copySize, srcSize, policyOperand)
-            .maybePredicate(threadPred);
-      } else {
-        copyAsyncOp(dstOperand, srcOperand, copySize, srcSize)
-            .maybePredicate(threadPred);
-      }
+      copyAsyncOp(dstOperand, srcOperand, copySize, srcSize)
+          .maybePredicate(threadPred);
       ptxBuilder.launch(rewriter, loc, void_ty(ctx));
       return {};
     };
@@ -1298,15 +1272,15 @@ struct AsyncTMACopyGlobalToLocalOpConversion
 
     int rank = op.getCoord().size();
 
+    auto ctx = op.getContext();
+    auto kBlock = str_attr("block");
     auto msgToPackedOffset = getMsgToPackedOffsetLayout(smemTy, tmaMode);
     auto smemLayout = ttg::toLinearLayout(smemTy);
     auto msgToShared =
-        invertAndComposeBlockLocal(smemLayout, msgToPackedOffset);
+        invertAndComposeLocal(smemLayout, msgToPackedOffset, {kBlock});
     auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, smemTy);
 
-    auto ctx = op.getContext();
     auto kMsg = str_attr("msg");
-    auto kBlock = str_attr("block");
     const auto numCopies = msgToOffset.getInDimSize(kMsg);
     auto ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
     // We multicast if the flag is on and the block layout has broadcasting
@@ -1674,7 +1648,7 @@ static LogicalResult iterateGatherScatterIndices(
   // of the 0th element of row 4 will not be at the start of the segment.
   LinearLayout sharedLayout = getUnswizzledLayout(smemType);
   LinearLayout msgToShared =
-      invertAndComposeBlockLocal(sharedLayout, msgLayout);
+      invertAndComposeLocal(sharedLayout, msgLayout, {kBlock});
 
   // If there are too few rows, warps will have redundant data.
   auto freeVars = xCoordsLayout.getFreeVariableMasks();

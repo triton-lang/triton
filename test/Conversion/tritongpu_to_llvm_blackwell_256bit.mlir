@@ -1,8 +1,10 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=88' -cse | FileCheck --check-prefixes=BW256,FP8,LEGACY %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=103 ptx-version=88' -cse | FileCheck --check-prefix=SM103 %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' -cse | FileCheck --check-prefixes=PRE_BW,FP8,LEGACY %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=91' -cse | FileCheck --check-prefixes=FP8,LEGACY %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=92' -cse | FileCheck --check-prefixes=FP8,PACKED %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=86' -cse | FileCheck --check-prefixes=FP8,FP4,LEGACY,FP16-NATIVE %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=88' -cse | FileCheck --check-prefixes=BW256,FP8,FP4,LEGACY,FP16-NATIVE %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=103 ptx-version=88' -cse | FileCheck --check-prefixes=SM103,FP8,FP4,LEGACY,FP16-NATIVE %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=92' -cse | FileCheck --check-prefixes=PRE_BW,FP8,FP4,LEGACY,FP16-LEGACY %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=91' -cse | FileCheck --check-prefixes=FP8,FP4,LEGACY,FP16-NATIVE %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=92' -cse | FileCheck --check-prefixes=FP8,FP4,PACKED,FP16-NATIVE %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=103 ptx-version=92' -cse | FileCheck --check-prefixes=SM103,FP8,FP4,PACKED,FP16-NATIVE %s
 
 // Test 256-bit global load with 8x f32 (v8.b32) on Blackwell
 #blocked_8xf32 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
@@ -119,5 +121,43 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   tt.func private @fp8e4_to_bf16(%in: tensor<64xf8E4M3FN, #blocked_fp8>) -> tensor<64xbf16, #blocked_fp8> {
     %out = tt.fp_to_fp %in : tensor<64xf8E4M3FN, #blocked_fp8> -> tensor<64xbf16, #blocked_fp8>
     tt.return %out : tensor<64xbf16, #blocked_fp8>
+  }
+}
+
+// -----
+
+#packed_fp4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#unpacked_fp4 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // FP4-LABEL: @fp4_to_bf16
+  // PACKED: .reg .b8 b<4>;
+  // PACKED-SAME: mov.b32 {b0, b1, b2, b3}, $4;
+  // PACKED-SAME: cvt.rn.bf16x2.e2m1x2 $0, b0;
+  // PACKED-SAME: cvt.rn.bf16x2.e2m1x2 $1, b1;
+  // PACKED-SAME: cvt.rn.bf16x2.e2m1x2 $2, b2;
+  // PACKED-SAME: cvt.rn.bf16x2.e2m1x2 $3, b3;
+  // LEGACY-NOT: cvt.rn.bf16x2.e2m1x2
+  // LEGACY: prmt.b32
+  // LEGACY-NOT: cvt.rn.bf16x2.e2m1x2
+  tt.func private @fp4_to_bf16(%in: tensor<128xi8, #packed_fp4>) -> tensor<256xbf16, #unpacked_fp4> {
+    %out = ttg.fp4_to_fp %in {axis = 0 : i32} : tensor<128xi8, #packed_fp4> -> tensor<256xbf16, #unpacked_fp4>
+    tt.return %out : tensor<256xbf16, #unpacked_fp4>
+  }
+
+  // FP4-LABEL: @fp4_to_fp16
+  // FP4-NOT: cvt.rn.bf16x2.e2m1x2
+  // FP16-NATIVE: .reg .b8 b<4>;
+  // FP16-NATIVE-SAME: mov.b32 {b0, b1, b2, b3}, $4;
+  // FP16-NATIVE-SAME: cvt.rn.f16x2.e2m1x2 $0, b0;
+  // FP16-NATIVE-SAME: cvt.rn.f16x2.e2m1x2 $1, b1;
+  // FP16-NATIVE-SAME: cvt.rn.f16x2.e2m1x2 $2, b2;
+  // FP16-NATIVE-SAME: cvt.rn.f16x2.e2m1x2 $3, b3;
+  // FP16-LEGACY-NOT: cvt.rn.f16x2.e2m1x2
+  // FP16-LEGACY: cvt.rn.f16x2.e4m3x2
+  // FP16-LEGACY-NOT: cvt.rn.f16x2.e2m1x2
+  // FP4-NOT: cvt.rn.bf16x2.e2m1x2
+  tt.func private @fp4_to_fp16(%in: tensor<128xi8, #packed_fp4>) -> tensor<256xf16, #unpacked_fp4> {
+    %out = ttg.fp4_to_fp %in {axis = 0 : i32} : tensor<128xi8, #packed_fp4> -> tensor<256xf16, #unpacked_fp4>
+    tt.return %out : tensor<256xf16, #unpacked_fp4>
   }
 }

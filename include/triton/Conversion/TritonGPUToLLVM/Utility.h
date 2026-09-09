@@ -14,6 +14,7 @@
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 
 #include <optional>
 
@@ -726,6 +727,14 @@ std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp);
 
 std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering);
 
+/// Emit `bodyBuilder` inline when `pred` is null. Otherwise, emit it only when
+/// `pred` is true and merge its results with `falseValues` in a continuation
+/// block.
+SmallVector<Value>
+emitPredicated(RewriterBase &rewriter, Location loc, Value pred,
+               ValueRange falseValues,
+               llvm::function_ref<SmallVector<Value>()> bodyBuilder);
+
 /// Insert CTA or cluster barriers around an atomic operation according to its
 /// acquire/release semantics. `emitBarrierAfter` may be false when result
 /// staging already emits the required barrier after the atomic instruction.
@@ -792,13 +801,12 @@ broadcastTensorResult(Operation *op, RankedTensorType tensorTy,
                       TritonLLVMOpBuilder &b, Value threadPred,
                       const TargetInfoBase &targetInfo);
 
-void finalizeTensorAtomicResults(Operation *op, RankedTensorType tensorTy,
-                                 ConversionPatternRewriter &rewriter,
-                                 SmallVector<Value> &resultVals,
-                                 Type valueElemTy, TritonLLVMOpBuilder &b,
-                                 Value threadPred,
-                                 const TargetInfoBase &targetInfo,
-                                 const LLVMTypeConverter *typeConverter);
+/// Synchronize an atomic result, then replace the op.
+void finalizeAtomicResults(Operation *op, ConversionPatternRewriter &rewriter,
+                           SmallVector<Value> &resultVals, Type valueElemTy,
+                           TritonLLVMOpBuilder &b, Value threadPred,
+                           const TargetInfoBase &targetInfo,
+                           const LLVMTypeConverter *typeConverter);
 
 // -----------------------------------------------------------------------
 // FuncOp conversion utilities

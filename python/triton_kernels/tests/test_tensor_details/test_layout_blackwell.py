@@ -2,6 +2,7 @@ import math
 import pytest
 import torch
 import triton
+import triton.language as tl
 from torch._subclasses.fake_tensor import FakeTensorMode
 from triton_kernels.tensor_details.layout import (
     BlackwellActMXScaleLayout,
@@ -11,6 +12,7 @@ from triton_kernels.tensor_details.layout import (
     StridedLayout,
 )
 from triton_kernels.tensor_details.dtype import FP4
+from triton_kernels.tensor_details.layout_details import blackwell_scale
 from triton_kernels.tensor import make_ragged_tensor_metadata, make_ragged_tensor_metadata_torch, wrap_torch_tensor, convert_layout, empty
 
 # ------------------------------------------------------------
@@ -699,3 +701,37 @@ def test_scale_convert_layout_fake(layout, monkeypatch):
         restored = convert_layout(out, StridedLayout())
         assert list(restored.data.shape) == list(shape)
         assert convert_layout(out, StridedLayout(), out=restored) is restored
+
+
+@triton.jit
+def _gather_scale_column(S, Rows, Out, STRIDES: tl.constexpr):
+    i = tl.arange(0, 4)
+    rows = tl.load(Rows + i)
+    ptrs = blackwell_scale.swizzle_mx_scale_bw_ptr(S, 0, rows, 0, *STRIDES)
+    tl.store(Out + i, tl.load(ptrs))
+
+
+def test_scale_ptr_gather_column(device):
+    data = torch.arange(9 * 8, device=device).reshape(9, 8).to(torch.uint8)
+    packed = convert_layout(wrap_torch_tensor(data), BlackwellMXScaleLayout()).data
+    rows = torch.tensor([8, 0, 5, 2], device=device)
+    gathered = torch.empty(4, dtype=torch.uint8, device=device)
+
+    _gather_scale_column[(1, )](packed, rows, gathered, packed.stride()[1:])
+
+    assert torch.equal(gathered, data[rows, 0])
+
+
+# The one-byte base stands in for a large allocation; do not specialize its pointer range.
+@triton.jit(do_not_specialize=["S"])
+def _scale_ptr_offset(S, Out, outer, inner):
+    # Two int32 stride products sum to 2**31; inspect the pointer without loading it.
+    ptr = blackwell_scale.swizzle_mx_scale_bw_ptr(S, outer, inner, 0, 2**31 - 1024, 512, 256, 1, INDEX_TYPE=tl.int32)
+    tl.store(Out, ptr.to(tl.int64) - S.to(tl.int64))
+
+
+def test_scale_ptr_large_offset(device):
+    base = torch.empty(1, dtype=torch.uint8, device=device)
+    offset = torch.empty((), dtype=torch.int64, device=device)
+    _scale_ptr_offset[(1, )](base, offset, 128, 8)
+    assert offset.item() == 2**31
