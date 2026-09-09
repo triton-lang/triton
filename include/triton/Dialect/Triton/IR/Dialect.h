@@ -29,6 +29,24 @@ struct GlobalMemory : public SideEffects::Resource::Base<GlobalMemory> {
   SideEffects::Resource *getParent() const override { return nullptr; }
 };
 
+// Dialects define how their types behave as inline assembly operands without
+// exposing those types to the Triton dialect.
+class DialectInlineAsmInterface
+    : public DialectInterface::Base<DialectInlineAsmInterface> {
+public:
+  DialectInlineAsmInterface(Dialect *dialect) : Base(dialect) {}
+
+  virtual void getOperandEffects(
+      OpOperand &operand,
+      SmallVectorImpl<MemoryEffects::EffectInstance> &effects) const = 0;
+  virtual LogicalResult verifyOperand(OpOperand &operand) const = 0;
+};
+
+void getInlineAsmEffects(
+    Operation *op, bool isPure,
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects);
+LogicalResult verifyInlineAsmOperands(Operation *op);
+
 class DialectInferLayoutInterface
     : public DialectInterface::Base<DialectInferLayoutInterface> {
 public:

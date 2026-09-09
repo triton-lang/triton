@@ -44,45 +44,6 @@ static void printOffsets(mlir::OpAsmPrinter &p, mlir::Operation *op,
 
 namespace mlir::triton::gpu {
 
-void getInlineAsmEffects(
-    Operation *op, bool isPure,
-    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
-  if (isPure)
-    return;
-  effects.emplace_back(MemoryEffects::Read::get());
-  effects.emplace_back(MemoryEffects::Write::get());
-  for (OpOperand &operand : op->getOpOperands()) {
-    auto desc = dyn_cast<MemDescType>(operand.get().getType());
-    if (!desc)
-      continue;
-    if (isa<SharedMemorySpaceAttr>(desc.getMemorySpace())) {
-      effects.push_back(
-          makeShared<MemoryEffects::Read>(&operand, SharedKind::Generic));
-      effects.push_back(
-          makeShared<MemoryEffects::Write>(&operand, SharedKind::Generic));
-    } else {
-      effects.emplace_back(MemoryEffects::Read::get(), &operand,
-                           nvidia_gpu::TensorMemory::get());
-      effects.emplace_back(MemoryEffects::Write::get(), &operand,
-                           nvidia_gpu::TensorMemory::get());
-    }
-  }
-}
-
-LogicalResult verifyInlineAsmMemDescOperands(Operation *op) {
-  for (Type type : op->getOperandTypes()) {
-    auto desc = dyn_cast<MemDescType>(type);
-    if (!desc)
-      continue;
-    if (auto layout =
-            dyn_cast<PartitionedSharedEncodingAttr>(desc.getEncoding());
-        layout && layout.getNumPartitions() != 1)
-      return op->emitOpError(
-          "inline assembly requires memory descriptors with a single base");
-  }
-  return success();
-}
-
 void InlineAsmOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
   getInlineAsmEffects(*this, getPure(), effects);
@@ -98,7 +59,7 @@ LogicalResult InlineAsmOp::verify() {
     if (tensor && !isa_and_present<DistributedEncodingTrait>(tensor.getEncoding()))
       return emitOpError("requires explicit distributed tensor layouts");
   }
-  return verifyInlineAsmMemDescOperands(*this);
+  return verifyInlineAsmOperands(*this);
 }
 
 namespace {

@@ -10,7 +10,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -1521,10 +1520,32 @@ LogicalResult SplitOp::fold(FoldAdaptor adaptor,
 }
 
 // -- ElementwiseInlineAsmOp --
+void getInlineAsmEffects(
+    Operation *op, bool isPure,
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  if (isPure)
+    return;
+  effects.emplace_back(MemoryEffects::Read::get());
+  effects.emplace_back(MemoryEffects::Write::get());
+  for (OpOperand &operand : op->getOpOperands())
+    if (auto *interface = operand.get().getType().getDialect()
+                              .getRegisteredInterface<DialectInlineAsmInterface>())
+      interface->getOperandEffects(operand, effects);
+}
+
+LogicalResult verifyInlineAsmOperands(Operation *op) {
+  for (OpOperand &operand : op->getOpOperands())
+    if (auto *interface = operand.get().getType().getDialect()
+                              .getRegisteredInterface<DialectInlineAsmInterface>())
+      if (failed(interface->verifyOperand(operand)))
+        return failure();
+  return success();
+}
+
 void ElementwiseInlineAsmOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
-  gpu::getInlineAsmEffects(*this, getPure(), effects);
+  getInlineAsmEffects(*this, getPure(), effects);
 }
 
 Speculation::Speculatability ElementwiseInlineAsmOp::getSpeculatability() {
@@ -1554,7 +1575,7 @@ LogicalResult ElementwiseInlineAsmOp::verify() {
              << getPackedElement();
     }
   }
-  return gpu::verifyInlineAsmMemDescOperands(*this);
+  return verifyInlineAsmOperands(*this);
 }
 
 // -- ExternElementwiseOp --
