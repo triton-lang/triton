@@ -136,13 +136,12 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         output_counts = [tensor_count(ty) for ty in result_types]
         input_counts = [tensor_count(arg.type) if isinstance(arg, ttgl.tensor) else 1 for arg in args]
         counts = output_counts + input_counts
-        groups = []
-        cursor = 0
-        for count in counts:
-            groups.append(tuple(f"${i}" for i in range(cursor, cursor + count)))
-            cursor += count
-
         if isinstance(asm, (ConstexprFunction, BoundConstexprFunction)):
+            groups = []
+            cursor = 0
+            for count in counts:
+                groups.append(tuple(f"${i}" for i in range(cursor, cursor + count)))
+                cursor += count
             asm = asm(tuple(groups[:len(output_counts)]), tuple(groups[len(output_counts):]))
         _check(isinstance(asm, str), lambda: "inline_asm expects a string or constexpr function returning a string",
                TypeError)

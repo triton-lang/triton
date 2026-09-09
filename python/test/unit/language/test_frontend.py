@@ -533,6 +533,53 @@ def test_list_comprehension_if_filter():
     run_parser(kernel)
 
 
+def test_list_comprehension_tuple_target():
+
+    @triton.jit
+    def kernel():
+        vals: tl.constexpr = [a + b for a, b in ((1, 2), (3, 4))]
+        tl.static_assert(len(vals) == 2)
+        tl.static_assert(vals[0] == 3)
+        tl.static_assert(vals[1] == 7)
+
+        nested: tl.constexpr = [a + b + c for a, (b, c) in ((1, (2, 3)), (4, (5, 6)))]
+        tl.static_assert(len(nested) == 2)
+        tl.static_assert(nested[0] == 6)
+        tl.static_assert(nested[1] == 15)
+
+    run_parser(kernel)
+
+
+def test_list_comprehension_tuple_target_rejects_mismatch():
+
+    @triton.jit
+    def kernel():
+        vals = [a + b for a, b in ((1, 2, 3), )]  # noqa: F841
+
+    with pytest.raises(CompilationError, match="too many values to unpack"):
+        run_parser(kernel)
+
+
+def test_list_comprehension_tuple_target_rejects_scalar_item():
+
+    @triton.jit
+    def kernel():
+        vals = [a + b for a, b in (1, 2)]  # noqa: F841
+
+    with pytest.raises(CompilationError, match="cannot unpack non-iterable value"):
+        run_parser(kernel)
+
+
+def test_list_comprehension_tuple_target_rejects_starred_target():
+
+    @triton.jit
+    def kernel():
+        vals = [a for a, *rest in ((1, 2, 3), )]  # noqa: F841
+
+    with pytest.raises(CompilationError, match="starred assignment targets are not supported"):
+        run_parser(kernel)
+
+
 def test_named_expr_respects_prior_constexpr_annotation():
 
     @triton.jit
@@ -895,6 +942,43 @@ def test_atomic_scalar_masks():
     tl.atomic_or(ptrs, 1, mask=True)
     # CHECK: {{.*}} = tt.atomic_rmw xor, acq_rel, gpu
     tl.atomic_xor(ptrs, 1, mask=True)
+
+
+@pytest.mark.parametrize("dtype", [tl.int1, tl.int8, tl.uint8, tl.int16, tl.int32, tl.int64], ids=str)
+def test_atomic_load_store(dtype):
+
+    @triton.jit
+    def kernel(dtype: tl.constexpr):
+        BLOCK: tl.constexpr = 128
+        ptr = tl.full((BLOCK, ), 0, tl.int64).to(tl.pointer_type(dtype), bitcast=True)
+        offs = tl.arange(0, BLOCK)
+        ptrs = ptr + offs
+        mask = offs < 64
+        # CHECK: %{{.*}} = tt.atomic_load acquire, gpu, %{{.*}}, %{{.*}} : (tensor<128x!tt.ptr<[[TYPE:i(8|16|32|64)]]>>, tensor<128xi1>) -> tensor<128x[[TYPE]]>
+        value = tl.atomic_load(ptrs, mask=mask)
+        tl.static_assert(value.dtype == dtype)
+        # CHECK: tt.atomic_store release, gpu, %{{.*}}, %{{.*}}, %{{.*}} : tensor<128x!tt.ptr<[[TYPE]]>>
+        tl.atomic_store(ptrs, value, mask=mask)
+        # CHECK: %{{.*}} = tt.atomic_load relaxed, sys
+        tl.atomic_load(ptrs, sem="relaxed", scope="sys")
+        # CHECK: tt.atomic_store relaxed, cta
+        tl.atomic_store(ptrs, 1, sem="relaxed", scope="cta")
+
+    run_filecheck_test(kernel, args=(dtype, ))
+
+
+@doesnt_compile
+@triton.jit
+def test_atomic_load_rejects_release_semantics():
+    ptr = tl.to_tensor(0).to(tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    tl.atomic_load(ptr, sem="release")
+
+
+@doesnt_compile
+@triton.jit
+def test_atomic_store_rejects_acquire_semantics():
+    ptr = tl.to_tensor(0).to(tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    tl.atomic_store(ptr, 1, sem="acquire")
 
 
 @filecheck_test
@@ -1541,3 +1625,16 @@ def test_const_ptr_is_constant_addrspace():
         tl.store(Out + offs, tl.load(In + offs, mask=mask), mask=mask)
 
     run_filecheck_test(kernel, args=(MockTensor(tl.float32), MockTensor(tl.float32), 8, 128))
+
+
+def test_cache_policy_ir_attrs():
+
+    @triton.jit
+    def kernel(In, Out, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        # CHECK: %[[VALUE:.*]] = tt.load {{.*}} {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_first>}
+        value = tl.load(In + offsets, cache_modifier=".cg", eviction_policy="evict_first")
+        # CHECK: tt.store {{.*}} {cachePolicy = #tt.cache_policy<cache_modifier = wt, eviction_policy = evict_last>}
+        tl.store(Out + offsets, value, cache_modifier=".wt", eviction_policy="evict_last")
+
+    run_filecheck_test(kernel, args=(MockTensor(tl.float32), MockTensor(tl.float32), 128))

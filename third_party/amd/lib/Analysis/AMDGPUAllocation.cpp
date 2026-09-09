@@ -38,8 +38,9 @@ static unsigned getBufferAtomicScratchSizeInBytes(Operation *op) {
   if (!tensorTy)
     return 0;
   auto freeVariableMasks = gpu::toLinearLayout(tensorTy).getFreeVariableMasks();
-  bool hasBroadcast = llvm::any_of(freeVariableMasks,
-                                   [](auto mask) { return mask.second != 0; });
+  bool hasBroadcast = llvm::any_of(freeVariableMasks, [](auto mask) {
+    return mask.first.getValue() != "register" && mask.second != 0;
+  });
   if (!hasBroadcast)
     return 0;
   auto smemShape = convertType<unsigned>(gpu::getShapePerCTA(tensorTy));

@@ -998,10 +998,9 @@ class TritonSemantic(Generic[TensorTy]):
                 raise ValueError(f"Memory semantic {scope_option} not supported")
         return scope
 
-    def load(self, ptr: TensorTy, mask: Optional[TensorTy], other: Optional[TensorTy], cache_modifier: str,
-             eviction_policy: str, is_volatile: bool) -> TensorTy:
-        cache = self._str_to_load_cache_modifier(cache_modifier)
-        eviction = self._str_to_eviction_policy(eviction_policy)
+    def load(self, ptr: TensorTy, mask: Optional[TensorTy], other: Optional[TensorTy], cache_policy,
+             is_volatile: bool) -> TensorTy:
+        cache_policy = cache_policy._to_ir(self.builder)
         if not ptr.type.scalar.is_ptr():
             raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.load`")
 
@@ -1047,25 +1046,23 @@ class TritonSemantic(Generic[TensorTy]):
 
         # Build IR
         if mask is None:
-            ret = self.tensor(self.builder.create_load(ptr.handle, cache, eviction, is_volatile), dst_ty)
+            ret = self.tensor(self.builder.create_load(ptr.handle, cache_policy, is_volatile), dst_ty)
         else:
             ret = self.tensor(
-                self.builder.create_masked_load(ptr.handle, mask.handle, other.handle if other else None, cache,
-                                                eviction, is_volatile), dst_ty)
+                self.builder.create_masked_load(ptr.handle, mask.handle, other.handle if other else None, cache_policy,
+                                                is_volatile), dst_ty)
         if is_bool:
             ret = self.cast(ret, tl.int1)
         return ret
 
-    def descriptor_load(self, desc: tl.tensor_descriptor_base, offsets, cache_modifier: str,
-                        eviction_policy: str) -> TensorTy:
+    def descriptor_load(self, desc: tl.tensor_descriptor_base, offsets, cache_policy) -> TensorTy:
         assert isinstance(desc, tl.tensor_descriptor_base), \
             f"expected a tensor descriptor, got {type(desc).__name__}"
         ndim = len(desc.block_shape)
         assert len(offsets) == ndim, f"expected {ndim} offsets, but got {len(offsets)}"
 
         offsets = self._convert_to_ir_values(offsets, require_i64=False)
-        x = self.builder.create_descriptor_load(desc.handle, offsets, self._str_to_load_cache_modifier(cache_modifier),
-                                                self._str_to_eviction_policy(eviction_policy))
+        x = self.builder.create_descriptor_load(desc.handle, offsets, cache_policy._to_ir(self.builder))
         return self.tensor(x, desc.block_type)
 
     def validate_store_like(self, desc: tl.tensor_descriptor_base, value: TensorTy, offsets) -> None:
@@ -1196,10 +1193,8 @@ class TritonSemantic(Generic[TensorTy]):
             raise ValueError(f"Expected pointer argument to have shape {ptr.shape} but got {ptr_shape}")
         return ptr, val, mask
 
-    def store(self, ptr: TensorTy, val: TensorTy, mask: Optional[TensorTy], cache_modifier: str,
-              eviction_policy: str) -> TensorTy:
-        cache = self._str_to_store_cache_modifier(cache_modifier)
-        eviction = self._str_to_eviction_policy(eviction_policy)
+    def store(self, ptr: TensorTy, val: TensorTy, mask: Optional[TensorTy], cache_policy) -> TensorTy:
+        cache_policy = cache_policy._to_ir(self.builder)
         if ptr.type.is_const() or ptr.type.scalar.is_const():
             raise ValueError("Cannot store to a constant pointer")
 
@@ -1232,15 +1227,86 @@ class TritonSemantic(Generic[TensorTy]):
 
         # Build IR
         if mask is None:
-            return self.tensor(self.builder.create_store(ptr.handle, val.handle, cache, eviction), tl.void)
+            return self.tensor(self.builder.create_store(ptr.handle, val.handle, cache_policy), tl.void)
         if not mask.type.scalar.is_bool():
             raise ValueError("Mask must have boolean scalar type")
-        return self.tensor(self.builder.create_masked_store(ptr.handle, val.handle, mask.handle, cache, eviction),
-                           tl.void)
+        return self.tensor(self.builder.create_masked_store(ptr.handle, val.handle, mask.handle, cache_policy), tl.void)
 
 #########
 # atomic
 #########
+
+    def _validate_atomic_load_store_element_type(self, element_ty: tl.dtype, op: str):
+        if not (element_ty.is_int() or element_ty.is_floating()):
+            raise ValueError(f"atomic_{op} only supports integer and floating-point elements")
+
+    def _validate_atomic_rmw_element_type(self, element_ty: tl.dtype, op: str):
+        if element_ty is tl.float16 and op != 'add':
+            raise ValueError("atomic_" + op + " does not support fp16")
+        if element_ty is tl.bfloat16 and op != 'add':
+            raise ValueError("atomic_" + op + " does not support bf16")
+        if element_ty in [tl.int16, tl.uint16] or element_ty.primitive_bitwidth < 16:
+            raise ValueError("atomic_" + op + " does not support " + str(element_ty))
+
+    def _atomic_typechecking_impl(self, ptr: TensorTy, val: Optional[TensorTy], mask: Optional[TensorTy], op: str):
+        if not ptr.type.scalar.is_ptr():
+            raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.atomic_{op}`")
+        if val is not None and (ptr.type.is_const() or ptr.type.scalar.is_const()):
+            raise ValueError("Cannot store to a constant pointer")
+
+        if not ptr.type.is_block():
+            if val is not None and val.type.is_block():
+                raise ValueError("Value argument cannot be block type if pointer argument is not a block")
+            if mask is not None and mask.type.is_block():
+                raise ValueError("Mask argument cannot be block type if pointer argument is not a block")
+        elif val is None:
+            if mask is not None:
+                ptr, mask = self.broadcast_impl_value(ptr, mask)
+        else:
+            ptr, val, mask = self._broadcast_ptr_val_mask(ptr, val, mask)
+
+        element_ty = ptr.type.scalar.element_ty
+        if op in ("load", "store") and element_ty == tl.int1:
+            element_ty = tl.int8
+            ptr = self.cast(ptr, tl.pointer_type(element_ty, ptr.type.scalar.address_space))
+        if val is not None:
+            val = self.cast(val, element_ty)
+
+        if mask is None:
+            mask_ir = self.builder.get_int1(True)
+            mask_ty = tl.int1
+            if ptr.type.is_block():
+                mask_ty = ptr.type.with_element_ty(tl.int1)
+                mask_ir = self.builder.create_splat(mask_ty.to_ir(self.builder), mask_ir)
+            mask = self.tensor(mask_ir, mask_ty)
+        elif not mask.type.scalar.is_bool():
+            raise ValueError("Mask must have boolean scalar type")
+        return ptr, val, mask
+
+    def atomic_load(self, ptr: TensorTy, mask: Optional[TensorTy], sem: str, scope: str) -> TensorTy:
+        ptr_ty = ptr.type.scalar
+        ptr, _, mask = self._atomic_typechecking_impl(ptr, None, mask, "load")
+        self._validate_atomic_load_store_element_type(ptr.type.scalar.element_ty, "load")
+        sem = self._str_to_sem(sem, default=ir.MEM_SEMANTIC.ACQUIRE)
+        if sem not in [ir.MEM_SEMANTIC.ACQUIRE, ir.MEM_SEMANTIC.RELAXED]:
+            raise ValueError("atomic_load only supports acquire and relaxed semantics")
+        scope = self._str_to_scope(scope)
+        result_ty = ptr.type.with_element_ty(ptr.type.scalar.element_ty) if ptr.type.is_block() else ptr.type.element_ty
+        handle = self.builder.create_atomic_load(ptr.handle, mask.handle, sem, scope)
+        result = self.tensor(handle, result_ty)
+        if ptr_ty.element_ty == tl.int1:
+            result = self.cast(result, tl.int1)
+        return result
+
+    def atomic_store(self, ptr: TensorTy, val: TensorTy, mask: Optional[TensorTy], sem: str, scope: str) -> TensorTy:
+        ptr, val, mask = self._atomic_typechecking_impl(ptr, val, mask, "store")
+        self._validate_atomic_load_store_element_type(ptr.type.scalar.element_ty, "store")
+        sem = self._str_to_sem(sem, default=ir.MEM_SEMANTIC.RELEASE)
+        if sem not in [ir.MEM_SEMANTIC.RELEASE, ir.MEM_SEMANTIC.RELAXED]:
+            raise ValueError("atomic_store only supports release and relaxed semantics")
+        scope = self._str_to_scope(scope)
+        self.builder.create_atomic_store(ptr.handle, val.handle, mask.handle, sem, scope)
+        return self.tensor(None, tl.void)
 
     def atomic_poll(self, ptr: TensorTy, expected: TensorTy, sem: str, scope: str,
                     timeout_ns: Optional[TensorTy]) -> TensorTy:
@@ -1284,29 +1350,8 @@ class TritonSemantic(Generic[TensorTy]):
 
     def atom_red_typechecking_impl(self, ptr: TensorTy, val: TensorTy, mask: TensorTy,
                                    op: str) -> Tuple[TensorTy, TensorTy, TensorTy]:
-        if not ptr.type.scalar.is_ptr():
-            raise ValueError("Pointer argument of store instruction is " + ptr.type.__repr__())
-        if ptr.type.is_const() or ptr.type.element_ty.is_const():
-            raise ValueError("Cannot store to a constant pointer")
-        element_ty = ptr.type.scalar.element_ty
-        if element_ty is tl.float16 and op != 'add':
-            raise ValueError("atomic_" + op + " does not support fp16")
-        if element_ty is tl.bfloat16 and op != 'add':
-            raise ValueError("atomic_" + op + " does not support bf16")
-        if element_ty in [tl.int16, tl.uint16] or element_ty.primitive_bitwidth < 16:
-            raise ValueError("atomic_" + op + " does not support " + str(element_ty))
-        if ptr.type.is_block():
-            ptr, val, mask = self._broadcast_ptr_val_mask(ptr, val, mask)
-        val = self.cast(val, ptr.type.scalar.element_ty)
-        if mask is None:
-            mask_ir = self.builder.get_int1(True)
-            mask_ty = tl.int1
-            if ptr.type.is_block():
-                mask_ty = ptr.type.with_element_ty(tl.int1)
-                mask_ir = self.builder.create_splat(mask_ty.to_ir(self.builder), mask_ir)
-            mask = self.tensor(mask_ir, mask_ty)
-        elif not mask.type.scalar.is_bool():
-            raise ValueError("Mask must have boolean scalar type")
+        ptr, val, mask = self._atomic_typechecking_impl(ptr, val, mask, op)
+        self._validate_atomic_rmw_element_type(ptr.type.scalar.element_ty, op)
         return ptr, val, mask
 
     def _signbit(self, x: TensorTy) -> TensorTy:

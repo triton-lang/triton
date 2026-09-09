@@ -426,7 +426,7 @@ def make_default_opt_flags_nvidia(
         ns = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, epilogue_subtile=ep,
                                                  occupancy_target=occupancy_target,
                                                  swap_xw=swap_xw,
-                                                 w_transpose=w_transpose)
+                                                 w_transpose=w_transpose, num_warps=num_warps)
         if ns > num_stages:
             epilogue_subtile, num_stages = ep, ns
 

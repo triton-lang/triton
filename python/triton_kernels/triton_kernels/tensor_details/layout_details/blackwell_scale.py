@@ -70,7 +70,7 @@ class BlackwellActMXScaleLayoutTransformation(ScaleLayoutTransformation):
             B, M, K = 1, *self.shape
             added_leading_batch_dim = True
             if self.ragged_metadata is None:
-                M_pad = (M + self.ALIGN_M - 1) // self.ALIGN_M * self.ALIGN_M
+                M_pad = (M + (self.ALIGN_M - 1)) // self.ALIGN_M * self.ALIGN_M
                 mode = "batched"
             else:
                 # In ragged mode, input often include padded tokens
@@ -84,9 +84,9 @@ class BlackwellActMXScaleLayoutTransformation(ScaleLayoutTransformation):
                 mode = "ragged"
         else:
             B, M, K = self.shape
-            M_pad = (M + self.ALIGN_M - 1) // self.ALIGN_M * self.ALIGN_M
+            M_pad = (M + (self.ALIGN_M - 1)) // self.ALIGN_M * self.ALIGN_M
             mode = "batched"
-        K_pad = (K + self.ALIGN_K - 1) // self.ALIGN_K * self.ALIGN_K  # min multiple of ALIGN_K
+        K_pad = (K + (self.ALIGN_K - 1)) // self.ALIGN_K * self.ALIGN_K  # min multiple of ALIGN_K
         # initialize attributes
         object.__setattr__(self, "B", B)
         object.__setattr__(self, "M", M)
@@ -169,8 +169,8 @@ class BlackwellMXScaleLayoutTransformation(ScaleLayoutTransformation):
         object.__setattr__(self, "ALIGN_K", 8)
         object.__setattr__(self, "ALIGN_N", 128)
         object.__setattr__(self, "SWIZZLE_K", 4)
-        object.__setattr__(self, "K_pad", (K + self.ALIGN_K - 1) // self.ALIGN_K * self.ALIGN_K)
-        object.__setattr__(self, "N_pad", (N + self.ALIGN_N - 1) // self.ALIGN_N * self.ALIGN_N)
+        object.__setattr__(self, "K_pad", (K + (self.ALIGN_K - 1)) // self.ALIGN_K * self.ALIGN_K)
+        object.__setattr__(self, "N_pad", (N + (self.ALIGN_N - 1)) // self.ALIGN_N * self.ALIGN_N)
 
     @property
     def storage_shape(self) -> list[int]:
@@ -532,24 +532,39 @@ def unswizzle_act_mx_scale_bw(
 
 
 @triton.jit
+def swizzle_mx_scale_bw_ptr(base, outer, inner, leading_block, stride_outer, stride_inner, stride_half, stride_lane,
+                            SIZE_OUTER: tl.constexpr = SWIZZLE_SIZE_OUTER,
+                            SIZE_INNER: tl.constexpr = SWIZZLE_SIZE_INNER, SIZE_LANE: tl.constexpr = SWIZZLE_SIZE_LANE,
+                            SIZE_HALF: tl.constexpr = SWIZZLE_SIZE_HALF, INDEX_TYPE: tl.constexpr = tl.int64):
+    """Pointers for broadcastable scale coordinates, without bounds masking.
+
+    ``outer`` indexes the non-MX axis; ``inner`` indexes scales along the MX axis.
+    ``leading_block`` is the batch or segment origin in outer storage tiles.
+    Strides are in elements. Each stride product uses ``INDEX_TYPE`` before
+    being added to the pointer.
+    """
+    outer = tl.to_tensor(outer)
+    inner = tl.to_tensor(inner)
+    outer_block = leading_block + outer // SIZE_OUTER
+    inner_group = inner // SIZE_INNER
+    outer_lane = outer % SIZE_OUTER
+    inner_linear = ((outer_lane % SIZE_LANE * (SIZE_OUTER // SIZE_LANE) + outer_lane // SIZE_LANE) * SIZE_INNER +
+                    inner % SIZE_INNER)
+    half = inner_linear // SIZE_HALF
+    lane = inner_linear % SIZE_HALF
+    return (base + tl.cast(outer_block, INDEX_TYPE) * stride_outer + tl.cast(inner_group, INDEX_TYPE) * stride_inner +
+            tl.cast(half, INDEX_TYPE) * stride_half + tl.cast(lane, INDEX_TYPE) * stride_lane)
+
+
+@triton.jit
 def swizzle_mx_scale_bw_store_ptr(base, rows, cols, leading_idx, n_cols, stride_outer, stride_inner, stride_half,
                                   stride_lane, SIZE_OUTER: tl.constexpr = SWIZZLE_SIZE_OUTER,
                                   SIZE_INNER: tl.constexpr = SWIZZLE_SIZE_INNER,
                                   SIZE_LANE: tl.constexpr = SWIZZLE_SIZE_LANE,
                                   SIZE_HALF: tl.constexpr = SWIZZLE_SIZE_HALF, INDEX_TYPE: tl.constexpr = tl.int64):
-    col_block = cols // SIZE_OUTER
-    outer = leading_idx * tl.cdiv(n_cols, SIZE_OUTER) + col_block
-    inner_group = rows // SIZE_INNER
-    col_lane = cols - col_block * SIZE_OUTER
-    col_quad = col_lane // SIZE_LANE
-    col_lane_inner = col_lane - col_quad * SIZE_LANE
-    row_lane = rows - inner_group * SIZE_INNER
-    inner_linear = ((col_lane_inner[None, :] * (SIZE_OUTER // SIZE_LANE) + col_quad[None, :]) * SIZE_INNER +
-                    row_lane[:, None])
-    half = inner_linear // SIZE_HALF
-    inner = inner_linear - half * SIZE_HALF
-    return (base + outer.to(INDEX_TYPE)[None, :] * stride_outer + inner_group.to(INDEX_TYPE)[:, None] * stride_inner +
-            half.to(INDEX_TYPE) * stride_half + inner.to(INDEX_TYPE) * stride_lane)
+    return swizzle_mx_scale_bw_ptr(base, cols[None, :], rows[:, None], leading_idx * tl.cdiv(n_cols, SIZE_OUTER),
+                                   stride_outer, stride_inner, stride_half, stride_lane, SIZE_OUTER, SIZE_INNER,
+                                   SIZE_LANE, SIZE_HALF, INDEX_TYPE)
 
 
 @triton.jit
@@ -639,16 +654,7 @@ def swizzle_act_mx_scale_bw_store_ptr(base, rows, cols, leading_m_block, stride_
                                       SIZE_INNER: tl.constexpr = SWIZZLE_SIZE_INNER,
                                       SIZE_LANE: tl.constexpr = SWIZZLE_SIZE_LANE,
                                       SIZE_HALF: tl.constexpr = SWIZZLE_SIZE_HALF, INDEX_TYPE: tl.constexpr = tl.int64):
-    row_block = rows // SIZE_OUTER
-    outer = leading_m_block + row_block
-    inner_group = cols // SIZE_INNER
-    col_lane = cols - inner_group * SIZE_INNER
-    row_lane = rows - row_block * SIZE_OUTER
-    row_quad = row_lane // SIZE_LANE
-    row_lane_inner = row_lane - row_quad * SIZE_LANE
-    inner_linear = ((row_lane_inner[:, None] * (SIZE_OUTER // SIZE_LANE) + row_quad[:, None]) * SIZE_INNER +
-                    col_lane[None, :])
-    half = inner_linear // SIZE_HALF
-    inner = inner_linear - half * SIZE_HALF
-    return (base + outer.to(INDEX_TYPE)[:, None] * stride_outer + inner_group.to(INDEX_TYPE)[None, :] * stride_inner +
-            half.to(INDEX_TYPE) * stride_half + inner.to(INDEX_TYPE) * stride_lane)
+    leading_m_block = tl.broadcast_to(tl.to_tensor(leading_m_block), rows.shape)
+    return swizzle_mx_scale_bw_ptr(base, rows[:, None], cols[None, :], leading_m_block[:, None], stride_outer,
+                                   stride_inner, stride_half, stride_lane, SIZE_OUTER, SIZE_INNER, SIZE_LANE, SIZE_HALF,
+                                   INDEX_TYPE)

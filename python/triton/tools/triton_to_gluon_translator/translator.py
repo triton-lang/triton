@@ -104,6 +104,8 @@ def add_expr_rewrites(rewrites: list[RewriteFn]) -> None:
 
     rewrites.append(expr_rewrite(triton.jit, "gluon.jit"))
     rewrites.append(expr_rewrite(tl.debug_barrier, "gl.barrier"))
+    rewrites.append(expr_rewrite(tl.load, "gl.load"))
+    rewrites.append(expr_rewrite(tl.store, "gl.store"))
 
 
 @dataclass
