@@ -273,7 +273,7 @@ void ConvertTritonGPUToLLVM::populateConversionPatterns(
   mlir::triton::NVIDIA::populateTCGen5MMAOpToLLVMPattern(
       typeConverter, patterns, benefit, targetInfo);
   mlir::triton::NVIDIA::populateFp4ToFpToLLVMPatterns(typeConverter, patterns,
-                                                      benefit);
+                                                      targetInfo, benefit);
   mlir::triton::populateInstrumentationToLLVMPatterns(typeConverter, patterns,
                                                       targetInfo);
   mlir::triton::populateFpSanToLLVMPatterns(typeConverter, patterns);
