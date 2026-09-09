@@ -14,6 +14,7 @@ include "mlir/Interfaces/ControlFlowInterfaces.td" // BranchOpInterface
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 include "mlir/Interfaces/CallInterfaces.td" // CallOpInterface
 include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 
 
 //
@@ -917,7 +918,7 @@ def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [
     elems it receives is unspecified.
   }];
 
-  let arguments = (ins StrAttr:$asm_string, StrAttr:$constraints, BoolAttr:$pure, I32Attr:$packed_element, Variadic<AnyTypeOf<[TT_Type]>>:$args);
+  let arguments = (ins StrAttr:$asm_string, StrAttr:$constraints, BoolAttr:$pure, I32Attr:$packed_element, Variadic<AnyTypeOf<[TT_Type, TTG_MemDescType]>>:$args);
   let results = (outs Variadic<TT_Type>:$result);
 
   let assemblyFormat = [{

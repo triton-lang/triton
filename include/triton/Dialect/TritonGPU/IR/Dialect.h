@@ -102,6 +102,11 @@ struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
   SideEffects::Resource *getParent() const override { return nullptr; }
 };
 
+void getInlineAsmEffects(
+    Operation *op, bool isPure,
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects);
+LogicalResult verifyInlineAsmMemDescOperands(Operation *op);
+
 class SharedMemoryEffect {
 public:
   SharedMemoryEffect(std::nullptr_t) : effect(nullptr) {}

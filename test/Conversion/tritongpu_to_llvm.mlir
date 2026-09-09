@@ -3265,3 +3265,31 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.prof
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @threadwise_inline_asm
+  tt.func @threadwise_inline_asm(%x: tensor<256xi32, #blocked>, %bias: i32) {
+    %mem = ttg.local_alloc %x : (tensor<256xi32, #blocked>) -> !ttg.memdesc<256xi32, #shared, #ttg.shared_memory, mutable>
+    // CHECK: llvm.inline_asm has_side_effects
+    // CHECK-SAME: "add.u32 $0, $5, $4; add.u32 $1, $6, $4; ld.shared.u32 $2, [$3];"
+    // CHECK-SAME: "=&r,=&r,=&r,r,r,r,r"
+    // CHECK-SAME: (i32, i32, i32, i32) -> !llvm.struct<(i32, i32, i32)>
+    %y, %scalar = ttg.inline_asm "add.u32 $0, $5, $4; add.u32 $1, $6, $4; ld.shared.u32 $2, [$3];" {constraints = "=&r,=&r,=&r,r,r,r,r", pure = false} %mem, %bias, %x : (!ttg.memdesc<256xi32, #shared, #ttg.shared_memory, mutable>, i32, tensor<256xi32, #blocked>) -> (tensor<256xi32, #blocked>, i32)
+    // CHECK-NOT: llvm.inline_asm
+    // CHECK: llvm.return
+    tt.return
+  }
+
+  // CHECK-LABEL: @threadwise_inline_asm_no_results
+  tt.func @threadwise_inline_asm_no_results() {
+    // CHECK: llvm.inline_asm has_side_effects {{.*}}"bar.sync 0;", "" : () -> !llvm.void
+    ttg.inline_asm "bar.sync 0;" {constraints = "", pure = false} : () -> ()
+    // CHECK-NOT: llvm.inline_asm
+    // CHECK: llvm.return
+    tt.return
+  }
+}

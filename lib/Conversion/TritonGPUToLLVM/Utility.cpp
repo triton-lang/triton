@@ -38,6 +38,23 @@ static int __builtin_ctz(unsigned x) {
 
 namespace mlir {
 
+Value triton::getMemDescAddress(RewriterBase &rewriter, Location loc,
+                                const LLVMTypeConverter *typeConverter,
+                                gpu::MemDescType type, Value lowered) {
+  TritonLLVMOpBuilder b(loc, rewriter);
+  auto i32Ty = rewriter.getIntegerType(32);
+  if (isa<nvidia_gpu::TensorMemorySpaceAttr>(type.getMemorySpace()))
+    return b.ptrtoint(i32Ty, lowered);
+  Type elemTy = typeConverter->convertType(type.getElementType());
+  auto object = LLVM::getSharedMemoryObjectFromStruct(loc, lowered, elemTy,
+                                                       rewriter);
+  auto offset = object.getShmemOffset(loc, rewriter, type);
+  offset = b.mul(offset, b.i32_val(getIntOrFloatOrPtrBitWidth(elemTy) / 8));
+  // Strip the cluster CTA index from shared addresses.
+  return b.and_(b.add(offset, b.ptrtoint(i32Ty, object.getBase())),
+                b.i32_val((1u << 24) - 1));
+}
+
 namespace triton::gpu {
 
 std::pair<SmallVector<LocalMemOpTile>, SmallVector<LocalMemOpTile>>

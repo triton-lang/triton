@@ -805,4 +805,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.call @tmem_entry_b() : () -> ()
     tt.return
   }
+
+  // WAIT-LABEL: @inline_asm_tmem_effects
+  // CHECK: ttng.tmem_alloc
+  // WAIT: ttng.tmem_wait store
+  // WAIT-NEXT: ttg.inline_asm
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: {{.*}}ttng.tmem_load
+  tt.func @inline_asm_tmem_effects(%data: tensor<128x128xf32, #blocked>) -> tensor<128x128xf32, #blocked> {
+    %mem = ttng.tmem_alloc %data {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttg.inline_asm "// access descriptor" {constraints = "r", pure = false} %mem : (!ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>) -> ()
+    %result = ttng.tmem_load %mem : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    tt.return %result : tensor<128x128xf32, #blocked>
+  }
 }

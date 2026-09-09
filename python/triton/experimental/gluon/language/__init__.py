@@ -61,6 +61,7 @@ from ._core import (
     num_ctas,
     histogram,
     inline_asm_elementwise,
+    inline_asm,
     join,
     load,
     map_elementwise,

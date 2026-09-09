@@ -211,6 +211,10 @@ struct ElementwiseInlineAsmOpConversion
     SmallVector<Value> packedOperands;
     unsigned numPackedElements = op.getPackedElement();
     for (int i = 0, e = op.getNumOperands(); i < e; i++) {
+      if (isa<MemDescType>(op.getOperand(i).getType())) {
+        packedOperands.push_back(operands[0][i]);
+        continue;
+      }
       Type elemTy = getElementTypeOrSelf(op.getOperand(i));
       unsigned bitWidth =
           elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : 64;
@@ -315,14 +319,21 @@ struct ElementwiseInlineAsmOpConversion
 
     // Layout is unpackedOperands[operand][elem].
     SmallVector<SmallVector<Value>> unpackedOperands;
-    for (auto operand : adaptor.getOperands()) {
-      auto subOperands = unpackUniqueTensorElements(loc, operand, rewriter);
-      unpackedOperands.push_back(subOperands);
-    }
-
     auto resultTy = op->getResult(0).getType();
     int numElemsPerThread =
         isa<RankedTensorType>(resultTy) ? getUniqueElemsPerThread(resultTy) : 1;
+    for (auto [original, operand] :
+         llvm::zip(op.getOperands(), adaptor.getOperands())) {
+      SmallVector<Value> subOperands;
+      if (auto desc = dyn_cast<MemDescType>(original.getType())) {
+        Value address = getMemDescAddress(rewriter, loc, getTypeConverter(),
+                                          desc, operand);
+        subOperands.assign(numElemsPerThread, address);
+      } else {
+        subOperands = unpackUniqueTensorElements(loc, operand, rewriter);
+      }
+      unpackedOperands.push_back(subOperands);
+    }
 
     // These are checked by the verifier, so we don't need to raise a nice
     // error.
@@ -377,6 +388,63 @@ struct ElementwiseInlineAsmOpConversion
     }
 
     rewriter.replaceOp(op, outs);
+    return success();
+  }
+};
+
+struct InlineAsmOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::InlineAsmOp> {
+  using ConvertOpToLLVMPattern<triton::gpu::InlineAsmOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::InlineAsmOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto *ctx = op.getContext();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    SmallVector<Value> operands;
+    for (auto [original, lowered] :
+         llvm::zip(op.getOperands(), adaptor.getOperands())) {
+      if (auto desc = dyn_cast<MemDescType>(original.getType())) {
+        operands.push_back(getMemDescAddress(rewriter, loc, getTypeConverter(),
+                                             desc, lowered));
+      } else {
+        llvm::append_range(operands, unpackTensorElements(
+                                         loc, lowered, rewriter,
+                                         original.getType()));
+      }
+    }
+
+    SmallVector<Type> resultTypes;
+    for (Type type : op.getResultTypes()) {
+      Type elemTy = getTypeConverter()->convertType(getElementTypeOrSelf(type));
+      resultTypes.append(getTotalElemsPerThread(type), elemTy);
+    }
+    Type resultType = LLVM::LLVMVoidType::get(ctx);
+    if (resultTypes.size() == 1)
+      resultType = resultTypes.front();
+    else if (!resultTypes.empty())
+      resultType = struct_ty(resultTypes);
+    auto call = LLVM::InlineAsmOp::create(
+        rewriter, loc, resultType, operands, op.getAsmString(),
+        op.getConstraints(), !op.getPure(), false, LLVM::TailCallKind::None,
+        LLVM::AsmDialectAttr::get(rewriter.getContext(), LLVM::AsmDialect::AD_ATT),
+        ArrayAttr());
+
+    SmallVector<Value> results;
+    unsigned cursor = 0;
+    for (Type type : op.getResultTypes()) {
+      SmallVector<Value> elements;
+      for (unsigned i = 0; i < getTotalElemsPerThread(type); ++i) {
+        elements.push_back(resultTypes.size() == 1
+                               ? call.getResult(0)
+                               : b.extract_val(call.getResult(0), cursor));
+        ++cursor;
+      }
+      results.push_back(packTensorElements(loc, getTypeConverter(), elements,
+                                           rewriter, type));
+    }
+    rewriter.replaceOp(op, results);
     return success();
   }
 };
@@ -707,6 +775,7 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
                                               benefit);
   patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter, benefit);
+  patterns.add<InlineAsmOpConversion>(typeConverter, benefit);
   patterns.add<AbsIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SelectOpConversion>(typeConverter, axisInfoAnalysis, benefit);

@@ -49,6 +49,11 @@ createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
 
 namespace mlir::triton {
 
+// The address of the descriptor's logical origin in its memory space.
+Value getMemDescAddress(RewriterBase &rewriter, Location loc,
+                        const LLVMTypeConverter *typeConverter,
+                        gpu::MemDescType type, Value lowered);
+
 struct TritonLLVMOpBuilder {
   TritonLLVMOpBuilder(Location loc, OpBuilder &builder)
       : loc(loc), builder(&builder) {}

@@ -10,6 +10,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -1523,10 +1524,7 @@ LogicalResult SplitOp::fold(FoldAdaptor adaptor,
 void ElementwiseInlineAsmOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
-  if (getPure())
-    return;
-  effects.emplace_back(MemoryEffects::Write::get());
-  effects.emplace_back(MemoryEffects::Read::get());
+  gpu::getInlineAsmEffects(*this, getPure(), effects);
 }
 
 Speculation::Speculatability ElementwiseInlineAsmOp::getSpeculatability() {
@@ -1536,17 +1534,27 @@ Speculation::Speculatability ElementwiseInlineAsmOp::getSpeculatability() {
 }
 
 LogicalResult ElementwiseInlineAsmOp::verify() {
-  if (getNumOperands() >= 1) {
-    auto tensorType = dyn_cast<RankedTensorType>(getOperand(0).getType());
-    size_t numInputElems = tensorType ? tensorType.getNumElements() : 0;
-    if (numInputElems % this->getPackedElement() != 0) {
+  if (getPackedElement() <= 0)
+    return emitOpError("packed_element must be positive");
+  RankedTensorType tensorType;
+  for (Type type : llvm::concat<Type>(getOperandTypes(), getResultTypes())) {
+    auto tensor = dyn_cast<RankedTensorType>(type);
+    if (!tensor)
+      continue;
+    if (tensorType && tensor.getShape() != tensorType.getShape())
+      return emitOpError("requires matching tensor shapes");
+    if (tensorType && tensor.getEncoding() != tensorType.getEncoding())
+      return emitOpError("requires matching tensor encodings");
+    tensorType = tensor;
+    size_t numInputElems = tensor.getNumElements();
+    if (numInputElems % getPackedElement() != 0) {
       return emitError("number of input elements ")
              << numInputElems
              << " must be a multiple of the op's packed_element attribute, "
              << getPackedElement();
     }
   }
-  return success();
+  return gpu::verifyInlineAsmMemDescOperands(*this);
 }
 
 // -- ExternElementwiseOp --

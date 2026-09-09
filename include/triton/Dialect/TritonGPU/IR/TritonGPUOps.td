@@ -29,6 +29,32 @@ class TTG_Op<string mnemonic, list<Trait> traits = []> :
        !listconcat(traits, [VerifyTensorLayoutsTrait, VerifyMemDescLayoutsTrait])> {
 }
 
+def TTG_InlineAsmOp : TTG_Op<"inline_asm", [
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+  DeclareOpInterfaceMethods<ConditionallySpeculatable>
+]> {
+  let summary = "Run inline assembly once per thread with explicit tensor layouts";
+  let description = [{
+    Each tensor operand is unpacked into all of its per-thread elements in
+    register order, including replicated register positions. Scalars and memory
+    descriptors contribute one operand; descriptors are passed as i32 addresses.
+    Results are packed according to their explicit types and layouts. There is
+    no elementwise broadcasting, chunking, or subword packing.
+
+    Impure assembly reads and writes every memory descriptor operand. Accesses
+    must remain within the descriptor views. The caller must complete any
+    asynchronous accesses before allowing the affected storage to be reused.
+    Scalar results must be uniform and replicated tensor elements must agree.
+  }];
+  let arguments = (ins StrAttr:$asm_string, StrAttr:$constraints, BoolAttr:$pure,
+                       Variadic<AnyTypeOf<[TT_Type, TTG_MemDescType]>>:$args);
+  let results = (outs Variadic<TT_Type>:$result);
+  let assemblyFormat = [{
+    $asm_string attr-dict ($args^)? `:` functional-type($args, $result)
+  }];
+  let hasVerifier = 1;
+}
+
 def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
                                  [SameOperandsAndResultShape,
                                   SameOperandsAndResultElementType,

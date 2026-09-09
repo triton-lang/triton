@@ -148,6 +148,55 @@ expect_zero = builtin(tl_core.expect_zero)
 where = builtin(tl_core.where)
 
 
+@builtin
+def inline_asm(asm, constraints="", args=(), result_types=(), is_pure=False, _semantic=None):
+    """Execute one inline assembly block per participating thread.
+
+    Tensor inputs are unpacked in their layout's register order, including
+    replicated register positions. Scalar inputs are uniform and memory
+    descriptors become one uniform ``i32`` address of their logical origin.
+    Inputs are not broadcast, and elements smaller than 32 bits are not packed.
+
+    ``result_types`` is a scalar dtype, a :class:`distributed_type`, or a
+    sequence of these types. A single type returns one tensor; a sequence
+    returns a tuple. The default empty sequence produces no results. Tensor
+    inputs and outputs require explicit distributed layouts. Scalar outputs
+    must be uniform, and replicated tensor elements must agree with the layout.
+
+    ``asm`` may be a string or a ``@gluon.constexpr_function`` returning a
+    string. The function receives ``(outputs, inputs)``, each a tuple of
+    operand-reference tuples. References are numbered outputs first, then
+    inputs, e.g. ``(("$0", "$1"),)``. Only these strings, not runtime values,
+    are passed to the function. Normal Python iteration and slicing can be
+    used to generate assembly for large groups of per-thread elements.
+
+    ``constraints`` is an LLVM constraint string, or a tuple with one constraint
+    per logical output followed by each input. Tuple entries are repeated for
+    every element in their group. Use a string for explicitly numbered ties or
+    clobbers.
+
+    Unless ``is_pure`` is true, the assembly conservatively reads and writes
+    every descriptor operand. All such accesses must be within those views.
+    Callers must complete asynchronous accesses before allowing storage reuse,
+    and must satisfy the assembly instructions' synchronization requirements.
+
+    Example::
+
+        @gluon.constexpr_function
+        def add_bias(outputs, inputs):
+            out, = outputs
+            x, bias = inputs
+            return "\\n".join(
+                f"add.f32 {dst}, {src}, {bias[0]};"
+                for dst, src in zip(out, x)
+            )
+
+        y = gl.inline_asm(add_bias, ("=&f", "f", "f"), [x, bias],
+                          x.type, is_pure=True)
+    """
+    return _semantic.inline_asm(asm, constraints, args, result_types, is_pure)
+
+
 class distributed_type(block_type):
 
     def __init__(self, element_ty: dtype, shape: List[int], layout):
