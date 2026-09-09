@@ -1101,18 +1101,16 @@ struct AsyncCopyGlobalToLocalOpConversion
     Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
                                                          loc, targetInfo);
 
-    FailureOr<Value> l2Policy =
-        createCachePolicy(*cachePolicy, rewriter, loc, computeCapability, op);
-    if (failed(l2Policy))
-      return failure();
-    Value l2PolicyReg = *l2Policy;
+    // Disable fractional L2 policies for cp.async: ptxas 13.3.33 can
+    // miscompile them into illegal instructions on Blackwell.
     auto l2PrefetchSizeAttr = cachePolicy->detailed
                                   ? cachePolicy->detailed.getL2PrefetchSize()
                                   : IntegerAttr();
     int64_t l2PrefetchSize =
         l2PrefetchSizeAttr ? l2PrefetchSizeAttr.getInt() : 0;
 
-    auto emitCpAsync = [&b, threadPred, ptrTy, l2PolicyReg, l2PrefetchSize,
+    auto emitCpAsync = [&b, threadPred, ptrTy, l2PrefetchSize,
+                        cacheModifier = cachePolicy->modifier,
                         hasMask =
                             bool(llMask)](RewriterBase &rewriter, Location loc,
                                           ArrayRef<Value> vals, Value shmemAddr,
@@ -1124,9 +1122,12 @@ struct AsyncCopyGlobalToLocalOpConversion
       auto elemTy = vecTy.getElementType();
       auto nBytes = vecTy.getNumElements() * elemTy.getIntOrFloatBitWidth() / 8;
       assert(nBytes == 16 || nBytes == 8 || nBytes == 4);
-      // Tune CG and CA.
+      // Prefer CG for 16-byte copies unless CA was explicitly requested.
+      // Smaller copies must use CA because CG only supports 16-byte transfers.
       CacheModifier srcCacheModifier =
-          nBytes == 16 ? CacheModifier::CG : CacheModifier::CA;
+          nBytes == 16 && cacheModifier != CacheModifier::CA
+              ? CacheModifier::CG
+              : CacheModifier::CA;
 
       auto structElem = vals[startIdx];
       auto srcElem = b.extract_val(ptrTy, structElem, 0);
@@ -1137,8 +1138,7 @@ struct AsyncCopyGlobalToLocalOpConversion
           *ptxBuilder.create<PTXCpAsyncLoadInstr>(srcCacheModifier);
       copyAsyncOp.o("L2::64B", l2PrefetchSize == 64)
           .o("L2::128B", l2PrefetchSize == 128)
-          .o("L2::256B", l2PrefetchSize == 256)
-          .o("L2::cache_hint", l2PolicyReg != Value());
+          .o("L2::256B", l2PrefetchSize == 256);
       auto *dstOperand = ptxBuilder.newAddrOperand(shmemAddr, "r");
       auto *srcOperand = ptxBuilder.newAddrOperand(srcElem, "l");
       auto *copySize = ptxBuilder.newConstantOperand(nBytes);
@@ -1154,14 +1154,8 @@ struct AsyncCopyGlobalToLocalOpConversion
         auto selectOp = b.select(maskElem, b.i32_val(nBytes), b.i32_val(0));
         srcSize = ptxBuilder.newOperand(selectOp, "r");
       }
-      if (l2PolicyReg) {
-        auto *policyOperand = ptxBuilder.newOperand(l2PolicyReg, "l");
-        copyAsyncOp(dstOperand, srcOperand, copySize, srcSize, policyOperand)
-            .maybePredicate(threadPred);
-      } else {
-        copyAsyncOp(dstOperand, srcOperand, copySize, srcSize)
-            .maybePredicate(threadPred);
-      }
+      copyAsyncOp(dstOperand, srcOperand, copySize, srcSize)
+          .maybePredicate(threadPred);
       ptxBuilder.launch(rewriter, loc, void_ty(ctx));
       return {};
     };
