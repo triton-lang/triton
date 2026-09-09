@@ -1,6 +1,4 @@
 import functools
-import ctypes
-import importlib.util
 import os
 import subprocess
 import triton
@@ -109,18 +107,19 @@ def _get_path_to_hip_runtime_dylib():
         return local_lib
     paths.append(local_lib)
 
+    import site
     # First search the HIP runtime dynamic library packaged with PyTorch. It's very likely
     # that we run Triton together with PyTorch. This makes sure we use the same dynamic
     # library to avoid version mismatch.
-    try:
-        torch_spec = importlib.util.find_spec("torch")
-    except (ImportError, ValueError):
-        torch_spec = None
-    if torch_spec and torch_spec.submodule_search_locations:
-        for location in torch_spec.submodule_search_locations:
-            candidates = sorted(path for path in Path(location, "lib").glob(f"{lib_name}*") if path.is_file())
-            if candidates:
-                return str(candidates[0])
+    site_packages = site.getsitepackages()
+    user_site = site.getusersitepackages()
+    if site.ENABLE_USER_SITE:  # ENABLE_USER_SITE is initialized in getusersitepackages()
+        site_packages = [user_site] + site_packages
+    for path in site_packages:
+        path = os.path.join(path, "torch", "lib", lib_name)
+        if os.path.exists(path):
+            return path
+        paths.append(path)
 
     # Then try to see if developer provides a HIP runtime dynamic library using LD_LIBARAY_PATH.
     env_ld_library_path = os.getenv("LD_LIBRARY_PATH")
@@ -164,7 +163,7 @@ def _get_path_to_hip_runtime_dylib():
     # each line looks like the following:
     # libamdhip64.so.6 (libc6,x86-64) => /opt/rocm-6.0.2/lib/libamdhip64.so.6
     # libamdhip64.so (libc6,x86-64) => /opt/rocm-6.0.2/lib/libamdhip64.so
-    locs = [line.split()[-1] for line in libs.splitlines() if line.lstrip().startswith(lib_name)]
+    locs = [line.split()[-1] for line in libs.splitlines() if line.strip().endswith(lib_name)]
     for loc in locs:
         if os.path.exists(loc):
             return loc
@@ -400,15 +399,17 @@ class HIPDriver(GPUDriver):
 
     @staticmethod
     def is_active():
-        # Avoid importing a framework just to discover that HIP is unavailable.
         try:
-            libhip = ctypes.CDLL(_get_path_to_hip_runtime_dylib())
-            count = ctypes.c_int()
-            status = libhip.hipGetDeviceCount(ctypes.byref(count))
-            if status == 100 or (status == 0 and count.value == 0):  # hipErrorNoDevice or an empty device list
-                return False
-        except (RuntimeError, OSError, AttributeError, subprocess.CalledProcessError):
-            pass  # Let the existing Torch check handle uncertain discovery.
+            import amdsmi
+            amdsmi.amdsmi_init()
+            try:
+                if not amdsmi.amdsmi_get_processor_handles():
+                    return False
+            finally:
+                amdsmi.amdsmi_shut_down()
+        except Exception:
+            # Missing or unusable management support must not rule out HIP.
+            pass
         try:
             import torch
             return torch.cuda.is_available() and (torch.version.hip is not None)

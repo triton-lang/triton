@@ -51,8 +51,11 @@ def test_backend_discovery_without_torch(cuda_active):
             return original_import(name, *args, **kwargs)
         builtins.__import__ = no_torch_import
 
-        amd_driver._get_path_to_hip_runtime_dylib = lambda: "libamdhip64.so"
-        amd_driver.ctypes.CDLL = lambda path: SimpleNamespace(hipGetDeviceCount=lambda count: 100)
+        sys.modules["amdsmi"] = SimpleNamespace(
+            amdsmi_init=lambda: None,
+            amdsmi_get_processor_handles=lambda: [],
+            amdsmi_shut_down=lambda: None,
+        )
 
         cuda_active = sys.argv[1] == "1"
         target = GPUTarget("cuda", 103, 32)
@@ -79,80 +82,69 @@ def test_backend_discovery_without_torch(cuda_active):
 
 
 @pytest.mark.parametrize("torch_loaded", [False, True])
-@pytest.mark.parametrize("runtime, available, hip, expected", [
-    ("missing", True, "7.0", True),
-    ("no_devices", True, "7.0", False),
-    ("no_device_status", True, "7.0", False),
-    ("unknown_status", True, "7.0", True),
-    ("missing_symbol", True, "7.0", True),
-    ("found", True, "7.0", True),
-    ("configuration_error", True, "7.0", True),
-    ("os_error", True, "7.0", True),
-    ("subprocess_error", True, "7.0", True),
-    ("found", False, "7.0", False),
-    ("found", True, None, False),
+@pytest.mark.parametrize("management, available, hip, expected", [
+    ("empty", True, "7.0", False),
+    ("present", True, "7.0", True),
+    ("present", False, "7.0", False),
+    ("present", True, None, False),
+    ("missing_module", True, "7.0", True),
+    ("missing_library", True, "7.0", True),
+    ("init_failure", True, "7.0", True),
+    ("query_failure", True, "7.0", True),
+    ("shutdown_failure", True, "7.0", True),
 ])
-def test_hip_driver_runtime_lookup(runtime, available, hip, expected, torch_loaded, monkeypatch):
+def test_hip_driver_amdsmi_fallback(management, available, hip, expected, torch_loaded, monkeypatch):
     import builtins
     from triton.backends.amd import driver
 
-    lookups = []
+    class AmdSmiException(Exception):
+        pass
 
-    def find_runtime():
-        lookups.append(True)
-        if runtime == "missing":
-            raise RuntimeError("no HIP runtime")
-        if runtime == "configuration_error":
-            raise RuntimeError("invalid HIP runtime configuration")
-        if runtime == "os_error":
-            raise OSError("cannot search for HIP runtime")
-        if runtime == "subprocess_error":
-            raise subprocess.CalledProcessError(1, "ldconfig")
-        return "libamdhip64.so"
+    calls = []
 
-    def get_device_count(pointer):
-        if runtime == "unknown_status":
-            return 999
-        if runtime == "no_device_status":
-            return 100
-        driver.ctypes.cast(pointer, driver.ctypes.POINTER(driver.ctypes.c_int))[0] = int(runtime != "no_devices")
-        return 0
+    def init():
+        calls.append("init")
+        if management == "init_failure":
+            raise AmdSmiException("initialization failed")
 
-    imports = []
+    def get_handles():
+        calls.append("query")
+        if management == "query_failure":
+            raise AmdSmiException("enumeration failed")
+        return [] if management in ("empty", "shutdown_failure") else [object()]
+
+    def shutdown():
+        calls.append("shutdown")
+        if management == "shutdown_failure":
+            raise AmdSmiException("shutdown failed")
+
+    amdsmi = SimpleNamespace(amdsmi_init=init, amdsmi_get_processor_handles=get_handles, amdsmi_shut_down=shutdown)
     original_import = builtins.__import__
 
-    def import_torch(name, *args, **kwargs):
+    def import_dependency(name, *args, **kwargs):
+        if name == "amdsmi":
+            calls.append("amdsmi")
+            if management == "missing_module":
+                raise ImportError("amdsmi is not installed")
+            if management == "missing_library":
+                raise KeyError("libamd_smi.so")
+            return amdsmi
         if name == "torch":
-            imports.append(name)
+            calls.append("torch")
             return SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: available),
                                    version=SimpleNamespace(hip=hip))
         return original_import(name, *args, **kwargs)
 
     if not torch_loaded:
         monkeypatch.delitem(sys.modules, "torch")
-    monkeypatch.setattr(builtins, "__import__", import_torch)
-    monkeypatch.setattr(driver, "_get_path_to_hip_runtime_dylib", find_runtime)
-    library = SimpleNamespace() if runtime == "missing_symbol" else SimpleNamespace(hipGetDeviceCount=get_device_count)
-    monkeypatch.setattr(driver.ctypes, "CDLL", lambda path: library)
+    monkeypatch.setattr(builtins, "__import__", import_dependency)
     assert driver.HIPDriver.is_active() is expected
-    assert lookups == [True]
-    assert imports == ([] if runtime in ("no_devices", "no_device_status") else ["torch"])
 
-
-def test_hip_runtime_versioned_torch_library(tmp_path, monkeypatch):
-    from triton.backends.amd import driver
-
-    library = tmp_path / "torch" / "lib" / "libamdhip64.so.6"
-    library.parent.mkdir(parents=True)
-    library.touch()
-    monkeypatch.setattr(driver.knobs.amd, "libhip_path", None)
-    monkeypatch.setitem(sys.modules, "rocm_sdk", None)
-    monkeypatch.setattr(driver, "_find_already_mmapped_dylib_on_linux", lambda name: None)
-    monkeypatch.setattr(driver, "__file__", str(tmp_path / "backend" / "driver.py"))
-    monkeypatch.setattr(driver.importlib.util, "find_spec",
-                        lambda name: SimpleNamespace(submodule_search_locations=[str(library.parent.parent)]))
-    driver._get_path_to_hip_runtime_dylib.cache_clear()
-    try:
-        assert driver._get_path_to_hip_runtime_dylib() == str(library)
-    finally:
-        driver._get_path_to_hip_runtime_dylib.cache_clear()
+    expected_calls = ["amdsmi"]
+    if management not in ("missing_module", "missing_library"):
+        expected_calls.append("init")
+        if management != "init_failure":
+            expected_calls.extend(["query", "shutdown"])
+    if management != "empty":
+        expected_calls.append("torch")
+    assert calls == expected_calls
