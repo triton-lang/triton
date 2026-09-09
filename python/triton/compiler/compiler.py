@@ -224,6 +224,21 @@ class CompileTimer:
 
 
 def compile(src, target=None, options=None, _env_vars=None):
+    """
+    Compiles a kernel to a device binary.
+
+    This is the lowering entry point used by :func:`triton.jit`; it can also be
+    called directly for ahead-of-time compilation.
+
+    :param src: the kernel to compile, given either as an :code:`ASTSource`
+        (a ``@triton.jit`` function together with its signature) or as a path or
+        string pointing at a textual IR module.
+    :param target: the :code:`GPUTarget` to compile for; defaults to the target of
+        the currently active device.
+    :param options: backend-specific compilation options (e.g. :code:`num_warps`,
+        :code:`num_stages`) layered over the backend defaults.
+    :returns: a compiled kernel that can be launched on the device.
+    """
     compilation_listener = knobs.compilation.listener
     if compilation_listener:
         timer = CompileTimer()
