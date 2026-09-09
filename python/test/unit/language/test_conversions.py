@@ -286,9 +286,12 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
                 launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
             return
     elif is_hip():
-        if src_dtype in FP8_DTYPES and is_hip_rdna3():
+        if (src_dtype in FP8_DTYPES and is_hip_rdna3()
+                and (src_dtype, dst_dtype) != ('float8e4nv', 'float16')):
             pytest.skip(f"{src_dtype} is not supported on AMDGPU RDNA3")
-        if  (src_dtype == 'float8e4nv' and not (is_hip_cdna3() or is_hip_cdna4())):
+        if (src_dtype == 'float8e4nv'
+                and not (is_hip_cdna3() or is_hip_cdna4()
+                         or (is_hip_rdna3() and dst_dtype == 'float16'))):
             pytest.skip(f"upcasting {src_dtype} to {dst_dtype} not supported in this architecture")
         if  src_dtype == 'float8e4b15':
             # If the dtype should error out in the given device, we assert that and return
@@ -310,6 +313,19 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
     }[src_dtype]
 
     upcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), *stuff, device=device)
+
+
+def test_fp8e4nv_to_fp16_nan(device):
+    if not (is_hip() and (is_hip_rdna3() or is_hip_cdna3())):
+        pytest.skip("AMD software conversion test")
+
+    src = torch.tensor([0x7f, -1], dtype=torch.int8, device=device)
+    dst = launch_type_convert_triton(
+        src, tl.float8e4nv, tl.float16, device=device, BLOCK_SIZE=2
+    )
+    bits = [value & 0xffff for value in dst.cpu().tolist()]
+    assert bits == [0x7e00, 0xfe00]
+
 
 @pytest.mark.parametrize("src_dtype, dst_dtype, rounding, max_repr", [
     ('float32', 'float16', 'rtne', 0x477fe000),
