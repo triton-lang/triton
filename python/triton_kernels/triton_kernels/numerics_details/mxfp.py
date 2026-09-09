@@ -21,6 +21,8 @@ class DequantScaleRoundingMode(Enum):
     # 2^round_down(log2(max/max_power_of_2_q)) follows the OCP standard ~50% of
     # chance of clipping the max value.
     ROUND_DOWN = 1
+    # Round directly represented E4M3 block scales to nearest, ties to even.
+    ROUND_NEAREST = 2
 
 def downcast_to_mxfp(x: torch.Tensor, out_dtype: torch.dtype, axis: int,
                      scale_dtype: torch.dtype = torch.uint8,
@@ -38,6 +40,8 @@ def downcast_to_mxfp(x: torch.Tensor, out_dtype: torch.dtype, axis: int,
     if not isinstance(x, Tensor):
         x = wrap_torch_tensor(x)
     assert scale_dtype == torch.uint8 or scale_dtype == torch.float8_e4m3fn, f"Invalid scale dtype {scale_dtype=}"
+    assert DEQUANT_SCALE_ROUNDING_MODE != DequantScaleRoundingMode.ROUND_NEAREST or scale_dtype == torch.float8_e4m3fn, \
+        "ROUND_NEAREST requires E4M3 scales"
     if isinstance(out_dtype, torch.dtype):
         out_dtype = {
             torch.uint8: FP4,
@@ -50,8 +54,8 @@ def downcast_to_mxfp(x: torch.Tensor, out_dtype: torch.dtype, axis: int,
     assert out_dtype in (FP4, FP8_E4M3FN, FP8_E5M2), f"Invalid output dtype {out_dtype=}"
     if scale_dtype == torch.float8_e4m3fn:
         assert out_dtype == FP4, f"Direct float8 scales are only supported for FP4 values. Got {out_dtype=}"
-        assert DEQUANT_SCALE_ROUNDING_MODE == DequantScaleRoundingMode.ROUND_UP, \
-            "Direct float8 scales only support ROUND_UP in downcast_to_mxfp"
+        assert DEQUANT_SCALE_ROUNDING_MODE in (DequantScaleRoundingMode.ROUND_UP, DequantScaleRoundingMode.ROUND_NEAREST), \
+            "Direct float8 scales only support ROUND_UP or ROUND_NEAREST in downcast_to_mxfp"
     # handle negative `axis``
     axis = axis if axis >= 0 else axis + x.ndim
     # downcast
@@ -197,7 +201,7 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
     """
     Converts the src tensor to the output format specified by out_quant_type.
       axis: The axis along which the tensors are contiguous and quantization is applied.
-      DEQUANT_SCALE_ROUNDING_MODE: 0 for ROUND_UP, 1 for ROUND_DOWN.
+      DEQUANT_SCALE_ROUNDING_MODE: ROUND_UP, ROUND_DOWN, or ROUND_NEAREST (E4M3 scales only).
 
     Returns:
       out_quant_tensor: Quantized tensor in mx format.
@@ -219,10 +223,12 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
     is_fp8 = "float8" in str(out_quant_type)
     assert is_fp4 or is_fp8, f"Invalid input tensor dtype {out_quant_type}"
     assert scale_dtype == torch.uint8 or scale_dtype == torch.float8_e4m3fn, f"Invalid scale dtype {scale_dtype=}"
+    assert DEQUANT_SCALE_ROUNDING_MODE != DequantScaleRoundingMode.ROUND_NEAREST or scale_dtype == torch.float8_e4m3fn, \
+        "ROUND_NEAREST requires E4M3 scales"
     if scale_dtype == torch.float8_e4m3fn:
         assert is_fp4, f"Direct float8 scales are only supported for FP4 values. Got {out_quant_type=}"
-        assert DEQUANT_SCALE_ROUNDING_MODE == DequantScaleRoundingMode.ROUND_UP, \
-            "Direct float8 scales only support ROUND_UP in downcast_to_mxfp_torch"
+        assert DEQUANT_SCALE_ROUNDING_MODE in (DequantScaleRoundingMode.ROUND_UP, DequantScaleRoundingMode.ROUND_NEAREST), \
+            "Direct float8 scales only support ROUND_UP or ROUND_NEAREST in downcast_to_mxfp_torch"
 
     device = src_tensor.device
 
@@ -260,7 +266,7 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
 
     # Choose a max quantization value depending on type.
     max_quant_val = get_max_quant_val(out_quant_type)
-    if DEQUANT_SCALE_ROUNDING_MODE == DequantScaleRoundingMode.ROUND_UP:
+    if DEQUANT_SCALE_ROUNDING_MODE in (DequantScaleRoundingMode.ROUND_UP, DequantScaleRoundingMode.ROUND_NEAREST):
         dequant_scale = max_val / max_quant_val
     else:
         dequant_scale = max_val / (2 ** math.floor(math.log2(max_quant_val)))
@@ -276,6 +282,8 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
         # Direct fp8 scales keep the existing plain cast semantics here: the
         # stored scale is rounded by the fp8 conversion rather than forced
         # upward despite the ROUND_UP mode name.
+        if DEQUANT_SCALE_ROUNDING_MODE == DequantScaleRoundingMode.ROUND_NEAREST:
+            dequant_scale = dequant_scale.clamp(max=448.0)
         dequant_scale_rounded = dequant_scale.to(scale_dtype).to(torch.float32)
 
     # Compute the quantization scale.
