@@ -1211,10 +1211,9 @@ emitPredicated(RewriterBase &rewriter, Location loc, Value pred,
   return results;
 }
 
-Operation *insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
-                                        bool emitBarrierAfter,
-                                        RewriterBase &rewriter,
-                                        const TargetInfoBase &targetInfo) {
+void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
+                                  bool emitBarrierAfter, RewriterBase &rewriter,
+                                  const TargetInfoBase &targetInfo) {
   auto emitBarrier = [&] {
     if (triton::gpu::lookupNumCTAs(op) == 1)
       targetInfo.barrier(op->getLoc(), rewriter, triton::gpu::AddrSpace::Local);
@@ -1228,16 +1227,12 @@ Operation *insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
     rewriter.setInsertionPoint(op);
     emitBarrier();
   }
-  Operation *trailingBarrier = nullptr;
   if (emitBarrierAfter && (memOrdering == MemSemantic::ACQUIRE ||
                            memOrdering == MemSemantic::ACQUIRE_RELEASE)) {
     OpBuilder::InsertionGuard guard(rewriter);
     rewriter.setInsertionPointAfter(op);
-    Operation *nextOp = op->getNextNode();
     emitBarrier();
-    trailingBarrier = nextOp ? nextOp->getPrevNode() : &op->getBlock()->back();
   }
-  return trailingBarrier;
 }
 
 bool atomicResultHasOrderingBarrier(Operation *op) {

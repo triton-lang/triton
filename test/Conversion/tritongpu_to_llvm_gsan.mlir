@@ -44,9 +44,9 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
   // CHECK: llvm.load %{{.*}} atomic syncscope("device") monotonic
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  // CHECK-NEXT: llvm.fence syncscope("device") acquire
   // CHECK: nvvm.barrier
   // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> i32
-  // CHECK: llvm.fence syncscope("device") acquire
   // CHECK: llvm.fence release
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
   // CHECK: llvm.store %{{.*}}, %{{.*}} atomic monotonic
@@ -102,9 +102,11 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
 
   // CHECK-LABEL: llvm.func @sharded_atomic_load_acquire
   // CHECK-COUNT-4: llvm.load %{{.*}} atomic monotonic
-  // CHECK: nvvm.barrier
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
   // CHECK-NEXT: llvm.fence acquire
-  // CHECK: llvm.return
+  // CHECK: nvvm.barrier
+  // CHECK: llvm.call @__triton_gsan_kernel_exit
+  // CHECK-NEXT: llvm.return
   tt.func @sharded_atomic_load_acquire(
       %ptrs: tensor<512x!tt.ptr<i32>, #blocked4>,
       %mask: tensor<512xi1, #blocked4>) {

@@ -738,12 +738,9 @@ emitPredicated(RewriterBase &rewriter, Location loc, Value pred,
 /// Insert CTA or cluster barriers around an atomic operation according to its
 /// acquire/release semantics. `emitBarrierAfter` may be false when result
 /// staging already emits the required barrier after the atomic instruction.
-/// Returns the last operation in the trailing barrier sequence, if one was
-/// emitted.
-Operation *insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
-                                        bool emitBarrierAfter,
-                                        RewriterBase &rewriter,
-                                        const TargetInfoBase &targetInfo);
+void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
+                                  bool emitBarrierAfter, RewriterBase &rewriter,
+                                  const TargetInfoBase &targetInfo);
 
 /// Whether atomic result broadcast barrier is sufficient for acquire ordering.
 /// Must run after scratch allocation.

@@ -548,8 +548,8 @@ struct AtomicLoadOpConversion
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto sem = op.getSem();
-    Operation *orderingBarrier = insertAtomicOrderingBarriers(
-        op, sem, !atomicResultHasOrderingBarrier(op), rewriter, targetInfo);
+    insertAtomicOrderingBarriers(op, sem, !atomicResultHasOrderingBarrier(op),
+                                 rewriter, targetInfo);
 
     StringRef syncScope = targetInfo.getAtomicSyncScope(op.getScope());
     auto ptrElements =
@@ -577,13 +577,11 @@ struct AtomicLoadOpConversion
           LLVM::AtomicOrdering::monotonic, syncScope));
     }
 
-    finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, threadPred,
-                          targetInfo, getTypeConverter());
-    if (orderingBarrier)
-      rewriter.setInsertionPointAfter(orderingBarrier);
     if (sem == MemSemantic::ACQUIRE)
       LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::acquire,
                             syncScope);
+    finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, threadPred,
+                          targetInfo, getTypeConverter());
     return success();
   }
 
