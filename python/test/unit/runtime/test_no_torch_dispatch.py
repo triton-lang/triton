@@ -15,7 +15,8 @@ def test_nvidia_kernel_dispatch_without_torch():
         pytest.skip("Requires CUDA and TMAs")
 
     env = os.environ.copy()
-    env.pop("TRITON_DEFAULT_BACKEND", None)
+    # force cuda driver to avoid importing torch when checking for other backends.
+    env["TRITON_DEFAULT_BACKEND"] = "nvidia"
     # force compilation to ensure there is no torch dependencies in the compiler.
     env["TRITON_ALWAYS_COMPILE"] = "1"
 
@@ -50,9 +51,8 @@ def test_backend_discovery_without_torch(cuda_active):
             return original_import(name, *args, **kwargs)
         builtins.__import__ = no_torch_import
 
-        def missing_hip_runtime():
-            raise amd_driver._HIPRuntimeNotFoundError("no HIP runtime")
-        amd_driver._get_path_to_hip_runtime_dylib = missing_hip_runtime
+        amd_driver._get_path_to_hip_runtime_dylib = lambda: "libamdhip64.so"
+        amd_driver.ctypes.CDLL = lambda path: SimpleNamespace(hipGetDeviceCount=lambda count: 100)
 
         cuda_active = sys.argv[1] == "1"
         target = GPUTarget("cuda", 103, 32)
@@ -80,7 +80,7 @@ def test_backend_discovery_without_torch(cuda_active):
 
 @pytest.mark.parametrize("torch_loaded", [False, True])
 @pytest.mark.parametrize("runtime, available, hip, expected", [
-    ("missing", True, "7.0", False),
+    ("missing", True, "7.0", True),
     ("no_devices", True, "7.0", False),
     ("no_device_status", True, "7.0", False),
     ("unknown_status", True, "7.0", True),
@@ -101,7 +101,7 @@ def test_hip_driver_runtime_lookup(runtime, available, hip, expected, torch_load
     def find_runtime():
         lookups.append(True)
         if runtime == "missing":
-            raise driver._HIPRuntimeNotFoundError("no HIP runtime")
+            raise RuntimeError("no HIP runtime")
         if runtime == "configuration_error":
             raise RuntimeError("invalid HIP runtime configuration")
         if runtime == "os_error":
@@ -136,7 +136,7 @@ def test_hip_driver_runtime_lookup(runtime, available, hip, expected, torch_load
     monkeypatch.setattr(driver.ctypes, "CDLL", lambda path: library)
     assert driver.HIPDriver.is_active() is expected
     assert lookups == [True]
-    assert imports == ([] if runtime in ("missing", "no_devices", "no_device_status") else ["torch"])
+    assert imports == ([] if runtime in ("no_devices", "no_device_status") else ["torch"])
 
 
 def test_hip_runtime_versioned_torch_library(tmp_path, monkeypatch):

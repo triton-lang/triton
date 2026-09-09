@@ -20,10 +20,6 @@ ARG_KERNEL = None
 ARG_TUPLE = None
 
 
-class _HIPRuntimeNotFoundError(RuntimeError):
-    pass
-
-
 def _find_already_mmapped_dylib_on_linux(lib_name):
     import platform
     if platform.system() != 'Linux':
@@ -180,7 +176,7 @@ def _get_path_to_hip_runtime_dylib():
         return common_install_path
     paths.append(common_install_path)
 
-    raise _HIPRuntimeNotFoundError(f"cannot locate {lib_name} after attempted paths {paths}")
+    raise RuntimeError(f"cannot locate {lib_name} after attempted paths {paths}")
 
 
 class HIPUtils(object):
@@ -411,8 +407,6 @@ class HIPDriver(GPUDriver):
             status = libhip.hipGetDeviceCount(ctypes.byref(count))
             if status == 100 or (status == 0 and count.value == 0):  # hipErrorNoDevice or an empty device list
                 return False
-        except _HIPRuntimeNotFoundError:
-            return False
         except (RuntimeError, OSError, AttributeError, subprocess.CalledProcessError):
             pass  # Let the existing Torch check handle uncertain discovery.
         try:
