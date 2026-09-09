@@ -515,10 +515,6 @@ getTaskTopRegion(triton::FuncOp funcOp,
       Operation *op = &bodyOp;
       if (op->getNumRegions() <= 0)
         continue;
-      // If this op does not contain both a producer taskId and a consumer
-      // taskId, continue.
-      if (getAsyncTaskIds(op).size() == 1)
-        continue;
       if (isAsyncTaskTopOp(op))
         asyncTaskOps.push_back(op);
     }
