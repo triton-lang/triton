@@ -3,7 +3,6 @@ import ctypes
 import importlib.util
 import os
 import subprocess
-import sys
 import triton
 from pathlib import Path
 from triton import knobs
@@ -409,17 +408,16 @@ class HIPDriver(GPUDriver):
     @staticmethod
     def is_active():
         # Avoid importing a framework just to discover that HIP is unavailable.
-        if "torch" not in sys.modules:
-            try:
-                libhip = ctypes.CDLL(_get_path_to_hip_runtime_dylib())
-                count = ctypes.c_int()
-                status = libhip.hipGetDeviceCount(ctypes.byref(count))
-                if status == 100 or (status == 0 and count.value == 0):  # hipErrorNoDevice or an empty device list
-                    return False
-            except _HIPRuntimeNotFoundError:
+        try:
+            libhip = ctypes.CDLL(_get_path_to_hip_runtime_dylib())
+            count = ctypes.c_int()
+            status = libhip.hipGetDeviceCount(ctypes.byref(count))
+            if status == 100 or (status == 0 and count.value == 0):  # hipErrorNoDevice or an empty device list
                 return False
-            except (RuntimeError, OSError, AttributeError, subprocess.CalledProcessError):
-                pass  # Let the existing Torch check handle uncertain discovery.
+        except _HIPRuntimeNotFoundError:
+            return False
+        except (RuntimeError, OSError, AttributeError, subprocess.CalledProcessError):
+            pass  # Let the existing Torch check handle uncertain discovery.
         try:
             import torch
             return torch.cuda.is_available() and (torch.version.hip is not None)

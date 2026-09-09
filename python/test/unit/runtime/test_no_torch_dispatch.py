@@ -78,6 +78,7 @@ def test_backend_discovery_without_torch(cuda_active):
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
+@pytest.mark.parametrize("torch_loaded", [False, True])
 @pytest.mark.parametrize("runtime, available, hip, expected", [
     ("missing", True, "7.0", False),
     ("no_devices", True, "7.0", False),
@@ -91,11 +92,14 @@ def test_backend_discovery_without_torch(cuda_active):
     ("found", False, "7.0", False),
     ("found", True, None, False),
 ])
-def test_hip_driver_runtime_lookup(runtime, available, hip, expected, monkeypatch):
+def test_hip_driver_runtime_lookup(runtime, available, hip, expected, torch_loaded, monkeypatch):
     import builtins
     from triton.backends.amd import driver
 
+    lookups = []
+
     def find_runtime():
+        lookups.append(True)
         if runtime == "missing":
             raise driver._HIPRuntimeNotFoundError("no HIP runtime")
         if runtime == "configuration_error":
@@ -124,25 +128,15 @@ def test_hip_driver_runtime_lookup(runtime, available, hip, expected, monkeypatc
                                    version=SimpleNamespace(hip=hip))
         return original_import(name, *args, **kwargs)
 
-    monkeypatch.delitem(sys.modules, "torch")
+    if not torch_loaded:
+        monkeypatch.delitem(sys.modules, "torch")
     monkeypatch.setattr(builtins, "__import__", import_torch)
     monkeypatch.setattr(driver, "_get_path_to_hip_runtime_dylib", find_runtime)
     library = SimpleNamespace() if runtime == "missing_symbol" else SimpleNamespace(hipGetDeviceCount=get_device_count)
     monkeypatch.setattr(driver.ctypes, "CDLL", lambda path: library)
     assert driver.HIPDriver.is_active() is expected
+    assert lookups == [True]
     assert imports == ([] if runtime in ("missing", "no_devices", "no_device_status") else ["torch"])
-
-
-def test_hip_driver_reuses_loaded_torch(monkeypatch):
-    from triton.backends.amd import driver
-
-    def unexpected_probe():
-        raise AssertionError("Torch is already loaded")
-
-    monkeypatch.setattr(driver, "_get_path_to_hip_runtime_dylib", unexpected_probe)
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(torch.version, "hip", "7.0")
-    assert driver.HIPDriver.is_active()
 
 
 def test_hip_runtime_versioned_torch_library(tmp_path, monkeypatch):
