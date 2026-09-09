@@ -1,6 +1,8 @@
 #include "PartitionAttrs.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
@@ -9,10 +11,12 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir;
 using namespace triton;
 using namespace triton::gpu;
+namespace ttng = mlir::triton::nvidia_gpu;
 
 //===----------------------------------------------------------------------===//
 // Pass Definition
@@ -86,6 +90,113 @@ void clearInternalWarpSpecializationAttrs(ModuleOp mod) {
   });
 }
 
+// Resolve a response-ring view through the explicit partition capture list.
+Value getCLCResponseAllocation(Value value, WarpSpecializeOp ws) {
+  while (auto index = value.getDefiningOp<MemDescIndexOp>())
+    value = index.getSrc();
+  auto arg = dyn_cast<BlockArgument>(value);
+  if (arg && arg.getOwner()->getParentOp() == ws.getPartitionOp())
+    return ws.getPartitionOp().getExplicitCaptures()[arg.getArgNumber()];
+  return value;
+}
+
+// Match a worker whose first tile is unconditional and whose subsequent
+// iterations are controlled solely by the response from this CLC queue.
+Value getCLCContinuationAllocation(scf::WhileOp loop, WarpSpecializeOp ws) {
+  if (!loop.getBefore().hasOneBlock() || !loop.getAfter().hasOneBlock() ||
+      !llvm::hasSingleElement(loop.getBefore().front()) ||
+      !llvm::equal(loop.getConditionOp().getArgs(), loop.getBeforeArguments()))
+    return {};
+  auto condition =
+      dyn_cast<BlockArgument>(loop.getConditionOp().getCondition());
+  if (!condition || condition.getOwner() != &loop.getBefore().front() ||
+      !matchPattern(loop.getInits()[condition.getArgNumber()], m_One()))
+    return {};
+  auto canceled = loop.getYieldOp()
+                      .getOperand(condition.getArgNumber())
+                      .getDefiningOp<ttng::CLCIsCanceledOp>();
+  if (!canceled || canceled->getBlock() != &loop.getAfter().front())
+    return {};
+  auto response =
+      canceled.getClcResult().getDefiningOp<ttng::CLCLoadResultOp>();
+  if (!response || response->getBlock() != &loop.getAfter().front())
+    return {};
+  return getCLCResponseAllocation(response.getSrc(), ws);
+}
+
+void throttleCLC(WarpSpecializeOp ws) {
+  // The automatic CLC pipeline currently supports single-CTA workers. Leave
+  // other warp-specialized kernels and unmatched control flow unchanged.
+  if (lookupNumCTAs(ws) != 1)
+    return;
+  SmallVector<ttng::CLCTryCancelOp> requests;
+  ws.walk([&](ttng::CLCTryCancelOp op) { requests.push_back(op); });
+  if (requests.size() != 1)
+    return;
+  auto request = requests.front();
+  auto scheduler = request->getParentOfType<scf::WhileOp>();
+  if (!scheduler ||
+      scheduler->getBlock()->getParentOp() != ws.getPartitionOp() ||
+      request->getBlock() != &scheduler.getAfter().front())
+    return;
+  Value response = getCLCContinuationAllocation(scheduler, ws);
+  if (!response ||
+      response != getCLCResponseAllocation(request.getResult(), ws))
+    return;
+
+  scf::WhileOp loaderLoop;
+  bool unsupported = false;
+  ws.walk([&](ttng::AsyncTMACopyGlobalToLocalOp op) {
+    auto loop = op->getParentOfType<scf::WhileOp>();
+    if (!loop || loop->getBlock()->getParentOp() != ws.getPartitionOp() ||
+        loop == scheduler || (loaderLoop && loaderLoop != loop)) {
+      unsupported = true;
+      return;
+    }
+    loaderLoop = loop;
+  });
+  if (unsupported || !loaderLoop ||
+      getCLCContinuationAllocation(loaderLoop, ws) != response)
+    return;
+
+  // Authorize one request at the start of each loader tile, before waiting
+  // for input buffers. Loader admission allows input prefetch to
+  // run ahead of MMA. Keep response and accumulator buffering independent.
+  OpBuilder builder(ws);
+  Location loc = request.getLoc();
+  auto barrierType = cast<MemDescType>(request.getMbarrier().getType());
+  Value credit = LocalAllocOp::create(builder, loc, barrierType);
+  ttng::InitBarrierOp::create(builder, loc, credit, 1);
+  ws.getPartitionOp().getExplicitCapturesMutable().append(credit);
+  for (Region *region : ws.getPartitionRegions())
+    region->front().addArgument(barrierType, loc);
+
+  builder.setInsertionPointToStart(&loaderLoop.getAfter().front());
+  Value loaderCredit = loaderLoop->getBlock()->getArguments().back();
+  ttng::ArriveBarrierOp::create(builder, loc, loaderCredit, 1);
+
+  builder.setInsertionPoint(scheduler);
+  Value zero = arith::ConstantIntOp::create(builder, loc, 0, 32);
+  Value one = arith::ConstantIntOp::create(builder, loc, 1, 32);
+  Value schedulerCredit = scheduler->getBlock()->getArguments().back();
+  scheduler = addIterArgsToLoop(builder, scheduler, ValueRange{zero});
+  Value phase = scheduler.getAfterArguments().back();
+  builder.setInsertionPointToStart(&scheduler.getAfter().front());
+  ttng::WaitBarrierOp::create(builder, loc, schedulerCredit, phase);
+  builder.setInsertionPoint(scheduler.getYieldOp());
+  Value nextPhase = arith::XOrIOp::create(builder, loc, phase, one);
+  scheduler.getYieldOp().getResultsMutable().append(nextPhase);
+
+  // The loader cannot admit its next tile without the current CLC response.
+  // This dependency prevents two arrivals before the scheduler consumes a
+  // credit, so a single phase-tracked barrier suffices. The failed terminal
+  // request consumes the final tile's credit and requires no additional
+  // arrival.
+  builder.setInsertionPointAfter(ws);
+  ttng::InvalBarrierOp::create(builder, loc, credit);
+  LocalDeallocOp::create(builder, loc, credit);
+}
+
 std::unique_ptr<Pass> createVerifyWarpSpecializationPartitionsPass() {
   return std::make_unique<VerifyWarpSpecializationPartitions>();
 }
@@ -93,6 +204,10 @@ std::unique_ptr<Pass> createVerifyWarpSpecializationPartitionsPass() {
 } // namespace
 
 void AutomaticWarpSpecialization::runOnOperation() {
+  if (clcThrottle != "none" && clcThrottle != "load") {
+    getOperation().emitError("clc-throttle must be 'none' or 'load'");
+    return signalPassFailure();
+  }
   OpPassManager pm;
   auto addPassWithPartitionVerifier = [&](std::unique_ptr<Pass> pass) {
     pm.addPass(std::move(pass));
@@ -120,4 +235,6 @@ void AutomaticWarpSpecialization::runOnOperation() {
   // desc updates in nested loops.
   multiBufferTMADescriptors(getOperation(), numStages);
   clearInternalWarpSpecializationAttrs(getOperation());
+  if (clcThrottle != "none")
+    getOperation().walk(throttleCLC);
 }

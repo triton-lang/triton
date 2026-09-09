@@ -290,11 +290,11 @@ def _clc_ws_tma_matmul_kernel(
     tl.atomic_add(counts + tile_id, 1)
 
 
-def _run_clc_ws_tma_matmul(M, N, K, device, num_ctas):
+def _run_clc_ws_tma_matmul(M, N, K, device, num_ctas, clc_throttle, dtype=torch.float16):
     block_m, block_n, block_k = 128, 64, 64
     torch.manual_seed(42)
-    a = torch.randn((M, K), dtype=torch.float16, device=device)
-    b = torch.randn((K, N), dtype=torch.float16, device=device)
+    a = torch.randn((M, K), dtype=torch.float16, device=device).to(dtype)
+    b = torch.randn((K, N), dtype=torch.float16, device=device).to(dtype)
     c = torch.empty((M, N), dtype=torch.float16, device=device)
     num_tiles = triton.cdiv(M, block_m) * triton.cdiv(N, block_n)
     counts = torch.zeros((num_tiles, ), dtype=torch.int32, device=device)
@@ -302,39 +302,76 @@ def _run_clc_ws_tma_matmul(M, N, K, device, num_ctas):
     b_desc = TensorDescriptor.from_tensor(b, [block_k, block_n])
     c_desc = TensorDescriptor.from_tensor(c, [block_m, block_n])
 
-    compiled = _clc_ws_tma_matmul_kernel[(num_tiles, )](
-        a_desc,
-        b_desc,
-        c_desc,
-        counts,
-        M,
-        N,
-        K,
-        block_m,
-        block_n,
-        block_k,
-        num_warps=4,
-        num_stages=2,
-        num_ctas=num_ctas,
-        clc=True,
-    )
+    def launch():
+        return _clc_ws_tma_matmul_kernel[(num_tiles, )](
+            a_desc,
+            b_desc,
+            c_desc,
+            counts,
+            M,
+            N,
+            K,
+            block_m,
+            block_n,
+            block_k,
+            num_warps=4,
+            num_stages=2,
+            num_ctas=num_ctas,
+            clc=True,
+            clc_throttle=clc_throttle,
+        )
+
+    compiled = launch()
     _assert_clc_ws_ir(compiled)
     expected = torch.matmul(a.float(), b.float()).half()
     torch.testing.assert_close(c, expected, atol=3e-2, rtol=3e-2)
-    return counts
-
-
-@requires_clc
-@pytest.mark.parametrize("M,N,K", [(512, 512, 192), (4096, 2048, 512), (2048, 2048, 128)])
-def test_clc_ws_tma_matmul_1cta(M, N, K, device):
-    counts = _run_clc_ws_tma_matmul(M, N, K, device, 1)
     assert torch.all(counts == 1)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        launch()
+    for _ in range(2):
+        a.copy_(torch.randn(a.shape, dtype=torch.float16, device=device).to(dtype))
+        c.fill_(float("nan"))
+        counts.zero_()
+        graph.replay()
+        expected = torch.matmul(a.float(), b.float()).half()
+        torch.testing.assert_close(c, expected, atol=3e-2, rtol=3e-2)
+        assert torch.all(counts == 1)
 
 
 @requires_clc
-def test_clc_ws_consan_1cta(device, fresh_knobs):
+@pytest.mark.parametrize("M,N,K", [
+    pytest.param(128, 64, 128, id="no-pending-work"),
+    pytest.param(513, 576, 192, id="partial-tiles"),
+    (512, 512, 192),
+    (4096, 2048, 512),
+    pytest.param(2048, 2048, 128, id="many-tiles"),
+    pytest.param(2176, 1088, 4096, id="long-k-tail"),
+])
+@pytest.mark.parametrize("clc_throttle", ["none", "load"])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e4m3fn])
+def test_clc_ws_tma_matmul_1cta(M, N, K, device, clc_throttle, dtype):
+    _run_clc_ws_tma_matmul(M, N, K, device, 1, clc_throttle, dtype)
+
+
+@requires_clc
+@pytest.mark.parametrize("single_tile", [True, False], ids=["no-pending-work", "phase-reuse"])
+@pytest.mark.parametrize("clc_throttle", ["none", "load"])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e4m3fn])
+def test_clc_ws_consan_1cta(device, fresh_knobs, single_tile, clc_throttle, dtype):
     triton.knobs.compilation.instrumentation_mode = "consan"
     num_sms = torch.cuda.get_device_properties(device).multi_processor_count
-    num_tiles = max(64, num_sms * 32)
-    counts = _run_clc_ws_tma_matmul(128, num_tiles * 64, 128, device, 1)
-    assert torch.all(counts == 1)
+    num_tiles = 1 if single_tile else max(64, num_sms * 32)
+    _run_clc_ws_tma_matmul(128, num_tiles * 64, 128, device, 1, clc_throttle, dtype)
+
+
+@requires_clc
+@pytest.mark.parametrize("options,match", [
+    ({"clc": True, "clc_throttle": "mma"}, "clc_throttle must be"),
+    ({"clc": True, "clc_throttle": "invalid"}, "clc_throttle must be"),
+    ({"clc_throttle": "load"}, "clc_throttle requires clc=True"),
+])
+def test_clc_throttle_invalid_options(options, match):
+    from triton.backends.nvidia.compiler import CUDAOptions
+    with pytest.raises(ValueError, match=match):
+        CUDAOptions(**options)
