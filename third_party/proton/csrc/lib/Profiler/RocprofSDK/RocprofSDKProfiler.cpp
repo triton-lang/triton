@@ -1413,8 +1413,8 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStart() {
     // still alive.
     std::call_once(state.registerShutdownFlag, []() {
       if (std::atexit(&finalizeRocprofilerClient) != 0)
-        throw std::runtime_error(
-            "[PROTON] Failed to register ROCprofiler shutdown handler");
+        throw makeRuntimeError(
+            "Failed to register ROCprofiler shutdown handler");
     });
     std::lock_guard<std::mutex> lock(state.mutex);
     if (!state.profilingStarted) {
