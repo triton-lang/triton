@@ -4806,7 +4806,8 @@ def test_full(dtype_str, shape, device):
 @pytest.mark.parametrize("shape", [(), (1, ), (128, )])
 @pytest.mark.parametrize("value", [
     0.0, -0.0, 1.0, 0.1, -0.1, 1.1, 1.0625, 1.1875, 1.125, 1.375, 1.0625 + 2**-30, 1.125 + 2**-30, 2**-9,
-    2**-10 + 2**-20, 2**-16, 2**-17, 2**-18, -2**-18, 240.0, 248.0, 448.0, 464.0, 465.0, 57344.0, 61440.0,
+    2**-10 + 2**-20, 2**-16, 2**-17, 2**-18, -2**-18, 240.0, 248.0, 448.0, 464.0, -464.0, 464.0 + 2**-20, 465.0, -465.0,
+    57344.0, 61440.0,
     float("inf"),
     float("-inf"),
     float("nan")
@@ -4827,7 +4828,9 @@ def test_full_fp8(dtype, shape, value, device):
     kernel[(1, )](out, value, shape)
     actual = out.cpu()
     expected = torch.full((128, ), value, dtype=torch.float32, device="cpu").to(dtype)
-    if torch.isnan(expected.float()).all():
+    # E4M3 constants overflow to NaN; newer PyTorch versions saturate to +/-448.
+    overflows_e4m3 = dtype == torch.float8_e4m3fn and abs(np.float32(value)) > 464
+    if overflows_e4m3 or torch.isnan(expected.float()).all():
         assert torch.isnan(actual.float()).all()
     else:
         torch.testing.assert_close(actual.view(torch.uint8), expected.view(torch.uint8))
