@@ -322,8 +322,8 @@ struct ElementwiseInlineAsmOpConversion
     for (auto [original, operand] :
          llvm::zip(op.getOperands(), adaptor.getOperands())) {
       if (auto desc = dyn_cast<MemDescType>(original.getType())) {
-        Value address = getMemDescAddress(rewriter, loc, getTypeConverter(),
-                                          desc, operand);
+        Value address =
+            getMemDescAddress(rewriter, loc, getTypeConverter(), desc, operand);
         unpackedOperands.emplace_back(
             getUniqueElemsPerThread(op->getResult(0).getType()), address);
         continue;
