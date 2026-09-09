@@ -398,6 +398,10 @@ void AssignDescriptorMemoryLayouts::runOnFunction(FuncOp &func) {
 
       auto setEncoding = [&](Value v) {
         auto typedVal = cast<TypedValue<TensorDescType>>(v);
+        if (auto desiredEncoding = getDesiredDescriptorEncoding(typedVal)) {
+          updateEncoding({typedVal}, EncodingInfo{desiredEncoding});
+          return;
+        }
         valueToEncodingInfo.try_emplace(typedVal, einfo);
         if (forcedToDefault)
           worklist.insert(typedVal);

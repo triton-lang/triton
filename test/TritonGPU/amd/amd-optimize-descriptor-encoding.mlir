@@ -221,3 +221,38 @@ tt.func public @descriptor_fallback(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: i32,
   tt.return
 }
 }
+
+// -----
+// Test that TDM loads inherit the explicit shared allocation encoding through
+// descriptor updates.
+#padded = #ttg.padded_shared<[128:+8] {order = [1, 0], shape = [128, 32]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250"} {
+// CHECK-DAG: #[[$TDM_PADDED:.*]] = #ttg.padded_shared<[128:+8] {order = [1, 0], shape = [128, 32]}>
+// CHECK-LABEL: @tdm_load_allocation_encoding
+tt.func public @tdm_load_allocation_encoding(%desc: !tt.tensordesc<128x32xf16>, %m: i32, %k: i32) {
+  // CHECK-SAME: %[[DESC:.*]]: !tt.tensordesc<128x32xf16, #[[$TDM_PADDED]]>
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #padded, #smem, mutable>
+  // CHECK: %[[POSITIONED:.*]] = amdg.update_tensor_descriptor %[[DESC]] {{.*}} : !tt.tensordesc<128x32xf16, #[[$TDM_PADDED]]>
+  %positioned = amdg.update_tensor_descriptor %desc add_offsets = [%m, %k] : !tt.tensordesc<128x32xf16>
+  // CHECK: amdg.async_tdm_copy_global_to_local %[[POSITIONED]] into {{.*}} : !tt.tensordesc<128x32xf16, #[[$TDM_PADDED]]> -> !ttg.memdesc<128x32xf16, #[[$TDM_PADDED]], #smem, mutable>
+  %token = amdg.async_tdm_copy_global_to_local %positioned into %alloc : !tt.tensordesc<128x32xf16> -> !ttg.memdesc<128x32xf16, #padded, #smem, mutable>
+  tt.return
+}
+}
+
+// -----
+// Test that TDM stores inherit a swizzled source allocation encoding.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250"} {
+// CHECK-DAG: #[[$TDM_SHARED:.*]] = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+// CHECK-LABEL: @tdm_store_allocation_encoding
+tt.func public @tdm_store_allocation_encoding(%desc: !tt.tensordesc<32x32xf16>) {
+  // CHECK-SAME: %[[DESC:.*]]: !tt.tensordesc<32x32xf16, #[[$TDM_SHARED]]>
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<32x32xf16, #shared, #smem, mutable>
+  // CHECK: amdg.async_tdm_copy_local_to_global %[[DESC]] from {{.*}} : !ttg.memdesc<32x32xf16, #[[$TDM_SHARED]], #smem, mutable> -> !tt.tensordesc<32x32xf16, #[[$TDM_SHARED]]>
+  amdg.async_tdm_copy_local_to_global %desc from %alloc : !ttg.memdesc<32x32xf16, #shared, #smem, mutable> -> !tt.tensordesc<32x32xf16>
+  tt.return
+}
+}
