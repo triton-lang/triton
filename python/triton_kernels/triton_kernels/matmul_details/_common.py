@@ -26,6 +26,16 @@ def get_scaled_dot_format_string(dtype: tl.dtype):
 
 
 @triton.jit
+def matmul_dot(x, w, acc, max_num_imprecise_acc: tl.constexpr, allow_tf32: tl.constexpr):
+    if (x.dtype == tl.float8e4nv and (w.dtype == tl.float16 or w.dtype == tl.bfloat16)
+            or w.dtype == tl.float8e4nv and (x.dtype == tl.float16 or x.dtype == tl.bfloat16)):
+        return tl.dot_scaled(x, None, get_scaled_dot_format_string(x.dtype), w, None,
+                             get_scaled_dot_format_string(w.dtype), acc=acc, fast_math=True)
+    else:
+        return tl.dot(x, w, acc, max_num_imprecise_acc=max_num_imprecise_acc, allow_tf32=allow_tf32)
+
+
+@triton.jit
 def xcd_swizzle(pid, domain_size, XCD_SWIZZLE: tl.constexpr):
     """
     Swizzle the program id based on integer XCD_SWIZZLE.

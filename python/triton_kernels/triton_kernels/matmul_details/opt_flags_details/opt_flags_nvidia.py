@@ -2,7 +2,7 @@ import torch
 import triton
 from triton_kernels import target_info
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
-from triton_kernels.tensor import FP4, FP16, FP32, BF16, Tensor
+from triton_kernels.tensor import FP4, FP8_E4M3FN, FP16, FP32, BF16, Tensor
 from triton_kernels.tensor_details.layout import HopperMXScaleLayout
 from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, BlackwellMXScaleLayout
 
@@ -152,17 +152,14 @@ def compute_num_stages(
     act_size = lhs_dtype.bitwidth / 8
     weight_size = rhs_dtype.bitwidth / 8
     has_native_mxfp = target_info.cuda_capability_geq(10, 0)
-    if has_native_mxfp and precision_config.b_mx_scale is not None and lhs_dtype in [FP16, BF16]:
-        # For fp16/bf16 x mxfp, we upcast weight on the fly, so size
-        # smem_capacity accordingly.
-        # w/o this, gets the following error:
-        # "triton.runtime.errors.OutOfResources: out of resource: shared memory, Required: 263356, Hardware limit: 232448. Reducing block sizes or `num_stages` may help"
-        # for x.shape = [2048, >=4096] bf16 x [32, >=4096, >=4096] float8_e4m3fn
-        # block_m=64, block_n=256, block_k=128, split_k=1, is_persistent=True -> leading to num_stages=4
+    is_unscaled = precision_config.a_mx_scale is None and precision_config.b_mx_scale is None
+    if (lhs_dtype in (FP16, BF16) and
+        (has_native_mxfp and precision_config.b_mx_scale is not None or is_unscaled and rhs_dtype == FP8_E4M3FN)):
+        # Mixed 16-bit dots stage widened FP8/MXFP weights in shared memory.
         weight_size = 2
-    if has_native_mxfp and precision_config.a_mx_scale is not None and rhs_dtype in [FP16, BF16]:
-        # For mxfp x fp16/bf16, we upcast activations on the fly, so size
-        # smem_capacity accordingly.
+    if (has_native_mxfp and rhs_dtype in (FP16, BF16)
+            and (precision_config.a_mx_scale is not None or is_unscaled and lhs_dtype == FP8_E4M3FN)):
+        # Blackwell also needs space for widened activation tiles.
         act_size = 2
 
     stage_size = block_m * block_k * act_size + block_k * block_n * weight_size
@@ -232,10 +229,9 @@ def compute_num_stages(
         smem_capacity -= epilogue_smem
         if x_transpose:
             smem_capacity -= int(block_m * block_k * act_size)
-        if rhs_dtype == FP32 and not w_transpose:
-            # For fp32 B, a non-transposed input requires a transpose after its
-            # TMA load before MMA. Persistent lowering materializes one extra
-            # BLOCK_K x BLOCK_N tile for that conversion.
+        if (rhs_dtype == FP32 and not w_transpose or has_native_mxfp and is_unscaled and lhs_dtype == FP8_E4M3FN
+                and rhs_dtype in (FP16, BF16) and w_transpose != swap_xw):
+            # Different TMA and MMA layouts require an extra B tile for conversion.
             smem_capacity -= int(block_k * block_n * weight_size)
     if is_persistent and not has_native_mxfp and epilogue_reduction_n > 1:
         # Hopper fused reductions materialize an additional reduced-N output

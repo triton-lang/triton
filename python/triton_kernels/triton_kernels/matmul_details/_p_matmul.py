@@ -23,6 +23,7 @@ from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_b
 from ._common import (
     compute_offsets,
     get_scaled_dot_format_string,
+    matmul_dot,
     make_matmul_repr,
     matmul_launch_metadata,
     compute_pids,
@@ -244,7 +245,17 @@ def _p_matmul(
         THREADS_PER_BLOCK: tl.constexpr = tl.extra.cuda.num_threads()
         local_absmax = tl.full([THREADS_PER_BLOCK], 0.0, tl.uint32)
 
-    DISALLOW_ACC_MULTI_BUFFER: tl.constexpr = is_w_microscaled and BLOCK_M * BLOCK_N >= 128 * 256
+    # A widened FP8 lhs needs tensor memory alongside the accumulator.
+    dot_lhs_type: tl.constexpr = w_type if SWAP_XW else x_type
+    dot_rhs_type: tl.constexpr = x_type if SWAP_XW else w_type
+    upcast_lhs: tl.constexpr = dot_lhs_type == tl.float8e4nv and (dot_rhs_type == tl.float16 or dot_rhs_type == tl.bfloat16)
+    dot_m: tl.constexpr = BLOCK_N if SWAP_XW else BLOCK_M
+    dot_n: tl.constexpr = BLOCK_M if SWAP_XW else BLOCK_N
+    acc_columns: tl.constexpr = tl.cdiv(dot_m, 128) * dot_n
+    DISALLOW_ACC_MULTI_BUFFER: tl.constexpr = (
+        is_w_microscaled and BLOCK_M * BLOCK_N >= 128 * 256
+        or upcast_lhs and acc_columns >= 256
+    )
 
     loop_start = 0 if CLC else tl.program_id(0)
     loop_end = 1 if CLC else num_blocks
@@ -487,9 +498,9 @@ def _p_matmul(
                         acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, w_format, acc=acc, fast_math=True)
             else:
                 if SWAP_XW:
-                    acc = tl.dot(w.T, x.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
+                    acc = matmul_dot(w.T, x.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
                 else:
-                    acc = tl.dot(x, w, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
+                    acc = matmul_dot(x, w, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
 
             if is_x_microscaled and XMxScalePtrs is not None:
                 XMxScalePtrs += (MX_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
