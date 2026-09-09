@@ -991,7 +991,7 @@ def _select_mid64_config(slice_size: int) -> KernelConfig | None:
         OCCUPANCY=2,
     )
     if slice_size == 36:
-        return replace(p, ACC_NUM_BUFS=2, REUSE_GATHER_INDICES=True, INLINE_MMA_INPUT_RELEASE=True)
+        return replace(p, ACC_NUM_BUFS=2, INLINE_MMA_INPUT_RELEASE=True)
     if slice_size == 40:
         return replace(p, BAND_N=22, MAXNREG=56)
     if slice_size == 48:
@@ -999,7 +999,7 @@ def _select_mid64_config(slice_size: int) -> KernelConfig | None:
     if slice_size == 56:
         return replace(p, LOAD_ACTIVATION_REGS=72)
     if slice_size == 64:
-        return replace(p, X_GATHER_MULTICAST=False, W_SCALE_MULTICAST=False, REUSE_GATHER_INDICES=True)
+        return replace(p, X_GATHER_MULTICAST=False, W_SCALE_MULTICAST=False)
     if slice_size == 72:
         return p
     return None
@@ -1034,7 +1034,7 @@ def _select_high128_config(slice_size: int) -> KernelConfig | None:
     if slice_size == 384:
         return replace(p, LOAD_ACTIVATION_REGS=104)
     if slice_size == 416:
-        return replace(p, REUSE_GATHER_INDICES=True)
+        return p
     if slice_size == 448:
         return replace(p, BAND_N=22)
     if slice_size == 736:
@@ -1047,7 +1047,6 @@ def _select_high128_config(slice_size: int) -> KernelConfig | None:
             BAND_N=24,
             FORCE_EPILOGUE_WARPS_N1=False,
             W_SCALE_MULTICAST=False,
-            REUSE_GATHER_INDICES=True,
             INLINE_MMA_INPUT_RELEASE=True,
         )
     if slice_size == 960:
