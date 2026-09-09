@@ -26,7 +26,9 @@ def get_scaled_dot_format_string(dtype: tl.dtype):
 
 
 @triton.jit
-def matmul_dot(x, w, acc, max_num_imprecise_acc: tl.constexpr, allow_tf32: tl.constexpr):
+def matmul_dot(x, w, acc, swap_xw: tl.constexpr, max_num_imprecise_acc: tl.constexpr, allow_tf32: tl.constexpr):
+    if swap_xw:
+        x, w = w.T, x.T
     # Expose the 16-bit dot before the compiler chooses operand layouts.
     if x.dtype == tl.float8e4nv and (w.dtype == tl.float16 or w.dtype == tl.bfloat16):
         x = x.to(w.dtype)

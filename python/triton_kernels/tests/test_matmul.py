@@ -685,8 +685,8 @@ def test_matmul_mixed_fp8_resource_limits(shape, fp8_lhs, constraints, device, o
     a = torch.randn((m, k), device=device).to(a_dtype)
     b = torch.randn((n, k), device=device).to(b_dtype).mT
 
-    with opt_flags.scoped_opt_flags_constraints(constraints):
-        actual = matmul(a, b, None, precision_config=PrecisionConfig(out_dtype=torch.bfloat16))
+    opt_flags.update_opt_flags_constraints(constraints)
+    actual = matmul(a, b, None, precision_config=PrecisionConfig(out_dtype=torch.bfloat16))
 
     expected = torch.matmul(a.float(), b.float()).to(torch.bfloat16)
     assert_close(expected, actual)
@@ -705,13 +705,12 @@ def test_matmul_mixed_fp8_preserves_fp16_precision(fp8_lhs, is_persistent, devic
     # Rounding the FP16 operand to BF16 would erase the residual.
     b[0, :] = 1 + 2**-10
     b[1, :] = 1
-    if fp8_lhs:
-        a = a.to(torch.float8_e4m3fn)
-    else:
-        a, b = b.mT.contiguous(), a.mT.contiguous().to(torch.float8_e4m3fn)
+    a = a.to(torch.float8_e4m3fn)
+    if not fp8_lhs:
+        a, b = b.mT.contiguous(), a.mT.contiguous()
 
-    with opt_flags.scoped_opt_flags_constraints(dict(is_persistent=is_persistent, split_k=1)):
-        actual = matmul(a, b, None, precision_config=PrecisionConfig(out_dtype=torch.float16))
+    opt_flags.update_opt_flags_constraints(dict(is_persistent=is_persistent, split_k=1))
+    actual = matmul(a, b, None, precision_config=PrecisionConfig(out_dtype=torch.float16))
 
     expected = torch.full((128, 128), 2**-10, dtype=torch.float16, device=device)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)

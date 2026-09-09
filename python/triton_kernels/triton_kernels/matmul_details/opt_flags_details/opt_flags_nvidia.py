@@ -79,13 +79,14 @@ def compute_block_n(n: int, arch, precision_config):
 def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_dtype, precision_config, has_y_acc_in):
     lhs_width = lhs_dtype.bitwidth
     rhs_width = rhs_dtype.bitwidth
-    # block_k needs to match the cacheline size (1024 bits)
-    block_k = int(1024 // min(lhs_width, rhs_width))
     has_native_mxfp = target_info.cuda_capability_geq(10, 0)
     if (not has_native_mxfp and target_info.cuda_capability_geq(9, 0)
             and is_unscaled_mixed_fp8(precision_config, lhs_dtype, rhs_dtype)):
         # Limit register pressure from Hopper's FP8-to-16-bit conversion.
         block_k = 64
+    else:
+        # block_k needs to match the cacheline size (1024 bits)
+        block_k = int(1024 // min(lhs_width, rhs_width))
     if rhs_width == 4 and not has_native_mxfp:
         block_k = 128
     elif is_persistent and is_x_scale_swizzled(precision_config):
@@ -161,20 +162,28 @@ def compute_num_stages(
         return 3
     if swap_xw is None:
         swap_xw = compute_swap_xw(precision_config, block_m, is_persistent, lhs_dtype, rhs_dtype)
+    is_mixed_fp8 = is_unscaled_mixed_fp8(precision_config, lhs_dtype, rhs_dtype)
     act_size = lhs_dtype.bitwidth / 8
     weight_size = rhs_dtype.bitwidth / 8
     has_native_mxfp = target_info.cuda_capability_geq(10, 0)
-    if has_native_mxfp and lhs_dtype in (FP16, BF16) and precision_config.b_mx_scale is not None:
+    if has_native_mxfp and precision_config.b_mx_scale is not None and lhs_dtype in [FP16, BF16]:
+        # For fp16/bf16 x mxfp, we upcast weight on the fly, so size
+        # smem_capacity accordingly.
+        # w/o this, gets the following error:
+        # "triton.runtime.errors.OutOfResources: out of resource: shared memory, Required: 263356, Hardware limit: 232448. Reducing block sizes or `num_stages` may help"
+        # for x.shape = [2048, >=4096] bf16 x [32, >=4096, >=4096] float8_e4m3fn
+        # block_m=64, block_n=256, block_k=128, split_k=1, is_persistent=True -> leading to num_stages=4
         weight_size = 2
-    if has_native_mxfp and rhs_dtype in (FP16, BF16) and precision_config.a_mx_scale is not None:
+    if has_native_mxfp and precision_config.a_mx_scale is not None and rhs_dtype in [FP16, BF16]:
+        # For mxfp x fp16/bf16, we upcast activations on the fly, so size
+        # smem_capacity accordingly.
         act_size = 2
 
     stage_size = block_m * block_k * act_size + block_k * block_n * weight_size
     device_props = torch.cuda.get_device_properties(0)
     smem_capacity = device_props.shared_memory_per_block_optin
     smem_capacity //= occupancy_target
-    if (is_unscaled_mixed_fp8(precision_config, lhs_dtype, rhs_dtype)
-            and (lhs_dtype if swap_xw else rhs_dtype) == FP8_E4M3FN):
+    if is_mixed_fp8 and (lhs_dtype if swap_xw else rhs_dtype) == FP8_E4M3FN:
         # A computed RHS needs one widened tile in addition to its input ring.
         # The regular pipeline replaces one raw FP8 slot with that widened tile.
         rhs_elements = block_k * (block_m if swap_xw else block_n)
@@ -214,8 +223,7 @@ def compute_num_stages(
         # pipelined layout conversion before store of the accumulator
         # note: layout conversion has some padding
         epilogue_smem = int((block_m + 4) * acc_block_n * acc_size)
-        if (has_native_mxfp and not swap_xw and block_m == 64 and epilogue_subtile > 1
-                and is_unscaled_mixed_fp8(precision_config, lhs_dtype, rhs_dtype)):
+        if has_native_mxfp and not swap_xw and block_m == 64 and epilogue_subtile > 1 and is_mixed_fp8:
             # The first accumulator split needs FP32 redistribution scratch
             # alongside the output tile, before any activation reduction.
             epilogue_smem += block_m * (block_n // 2) * 4
@@ -246,7 +254,9 @@ def compute_num_stages(
         if x_transpose:
             smem_capacity -= int(block_m * block_k * act_size)
         if rhs_dtype == FP32 and not w_transpose:
-            # Different TMA and MMA layouts require an extra B tile for conversion.
+            # For fp32 B, a non-transposed input requires a transpose after its
+            # TMA load before MMA. Persistent lowering materializes one extra
+            # BLOCK_K x BLOCK_N tile for that conversion.
             smem_capacity -= int(block_k * block_n * weight_size)
     if is_persistent and not has_native_mxfp and epilogue_reduction_n > 1:
         # Hopper fused reductions materialize an additional reduced-N output
