@@ -142,6 +142,7 @@ def compute_num_stages(
     epilogue_reduction_n=1,
     *,
     epilogue_subtile,
+    num_warps,
     occupancy_target,
     swap_xw=None,
     w_transpose=False,
@@ -185,6 +186,8 @@ def compute_num_stages(
         scale_block_size = mx_block_size or int(MXFP_BLOCK_SIZE)
         stage_size += block_n * (block_k // scale_block_size)
 
+    fp4_reduction = (has_native_mxfp and lhs_dtype == rhs_dtype == out_dtype == FP4 and epilogue_reduction_n == 2
+                     and epilogue_effective_itemsize == 8 and not has_y_acc_in)
     if is_persistent:
         # Per-stage wait barrier
         stage_size += 8
@@ -209,6 +212,23 @@ def compute_num_stages(
             # for the unreduced output tile before the narrower TMA-store tile.
             if epilogue_reduction_n > 1 or epilogue_subtile > 1:
                 epilogue_smem += int(block_m * block_n * out_itemsize)
+        if fp4_reduction:
+            # FP32 splitting and packed stores reuse conversion scratch.
+            epilogue_smem = int(block_m * acc_block_n * acc_size)
+            if swap_xw and block_m == 128 and num_warps == 4:
+                # The transposed four-warp layout reuses scratch across
+                # 128-column replicas of the accumulator.
+                epilogue_smem = block_m * min(block_n, 128) * 4
+            elif swap_xw and num_warps == 4 and epilogue_subtile > 1:
+                # Forming four subtiles first splits the accumulator in half.
+                epilogue_smem = max(epilogue_smem, block_m * (block_n // 2) * 4)
+            elif swap_xw and num_warps >= 8:
+                # Subtile splitting can convert the full FP32 tile across warps.
+                epilogue_smem = max(epilogue_smem, block_m * block_n * 4)
+            # Scale-pipeline barriers plus alignment and warp-specialization
+            # bookkeeping are live alongside the operand and conversion buffers.
+            stage_size += 16
+            smem_capacity -= 256
         smem_capacity -= epilogue_smem
         if x_transpose:
             smem_capacity -= int(block_m * block_k * act_size)

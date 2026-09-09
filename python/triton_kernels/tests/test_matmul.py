@@ -571,7 +571,10 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             if c_dtype.is_nvfp4
             else FnSpecs(FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn, (), ())
         )
-        epilogue = Epilogue(epilogue_spec, tuple(), tuple(), effective_itemsize=2.0 if c_dtype.is_nvfp4 else 6.0)
+        effective_itemsize = 2.0 if c_dtype.is_nvfp4 else 6.0
+        if c_dtype.is_nvfp4 and fused_activation is not None and fused_activation.specs.reduction_n > 1:
+            effective_itemsize = 4 * fused_activation.specs.reduction_n
+        epilogue = Epilogue(epilogue_spec, tuple(), tuple(), effective_itemsize=effective_itemsize)
 
 
     # --- triton implementation ---
