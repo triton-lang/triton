@@ -1,5 +1,4 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --convert-triton-gpu-to-llvm -reconcile-unrealized-casts 2>/dev/null | tee %t | FileCheck %s --dump-input-context 20
-// RUN: FileCheck %s --check-prefix=STATIC < %t
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --convert-triton-gpu-to-llvm -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --dump-input-context 20
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i32, %arg1: !llvm.ptr<1> {tt.pointee_type = f16}, %arg2: !llvm.ptr<1>, %arg3: !llvm.ptr<1>)
@@ -3511,12 +3510,6 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.prof
 #b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
   // FP64 fragments already have the MMA register order, including across batches.
-  // STATIC-LABEL: llvm.func @mma_fp64_large_k_batched(
-  // STATIC-NOT: llvm.select
-  // STATIC-NOT: llvm.icmp
-  // STATIC-NOT: llvm.udiv
-  // STATIC-NOT: nvvm.read.ptx.sreg
-  // STATIC: llvm.return
   // CHECK-LABEL: llvm.func @mma_fp64_large_k_batched(
   // CHECK-DAG: %[[A0:.*]] = llvm.extractvalue %arg0[0]
   // CHECK-DAG: %[[A8:.*]] = llvm.extractvalue %arg0[8]

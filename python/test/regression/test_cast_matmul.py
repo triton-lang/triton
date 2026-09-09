@@ -15,7 +15,7 @@ from triton._internal_testing import is_hip_cdna3, is_cuda, is_hip
 
 pytestmark = pytest.mark.enable_warmup(min_capability=9)
 
-input_dtypes = ["bfloat16", "float16", "float32"]
+input_dtypes = ["bfloat16", "float16", "float32", "float64", "int16"]
 if is_cuda():
     input_dtypes += ["int8", "float8_e5m2"]
     cc = torch.cuda.get_device_capability(0)
@@ -29,7 +29,7 @@ elif is_hip_cdna3():
         "float8_e4m3fnuz",
     ]
 
-out_dtypes = ["float16", "float32"]
+out_dtypes = ["float16", "float32", "float64"]
 
 
 @triton.jit
@@ -85,14 +85,14 @@ def matmul_kernel(A, B, C, M, N, K,  #
                           for (M, K, N) in [(768, 768, 1024)]  #
                           for w in input_dtypes
                           for x in input_dtypes  #
-                          for o in out_dtypes] + [(32, 32, 32, block_k, 32, 32, dtype, "float64", "float64")
-                                                  for block_k in [16, 32]
-                                                  for dtype in ["int16", "float16", "int8"]])
+                          for o in out_dtypes])
 def test_cast_matmul(M, K, N, BLOCK_K, BLOCK_M, BLOCK_N, w_dtype, x_dtype, out_dtype, device):
     if is_hip() and (BLOCK_K, BLOCK_M, BLOCK_N) in ((64, 64, 128), (64, 16, 128)):
         pytest.skip("skip as they run out of shared memory")
     if x_dtype == w_dtype:
         pytest.skip("skip the same input dtype")
+    if "float64" in (x_dtype, w_dtype) and any(t.startswith("float8") for t in (x_dtype, w_dtype)):
+        pytest.skip("FP8 to FP64 conversion is not supported")
     x_dtype: torch.dtype = getattr(torch, x_dtype)
     w_dtype: torch.dtype = getattr(torch, w_dtype)
 

@@ -76,18 +76,18 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     const LLVMTypeConverter *typeConverter, Location loc,
     ConversionPatternRewriter &rewriter, Value value, int batch, int repOuter,
     int repK, RankedTensorType type, const NumRegisters &numRegisters) {
+  auto ctx = rewriter.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto elems = unpackTensorElements(loc, value, rewriter, type);
   auto eltTy = typeConverter->convertType(type.getElementType());
   auto bitwidth = eltTy.getIntOrFloatBitWidth();
   int numElemsPerVec = std::max(32 / bitwidth, 1u);
-  auto vecTy = vec_ty(eltTy, numElemsPerVec);
 
   auto dot = cast<DotOperandEncodingAttr>(type.getEncoding());
   int kWidth = dot.getKWidth();
   int outerRegs = dot.getOpIdx() == 0 ? numRegisters.m : numRegisters.n;
 
-  auto reg = rewriter.getStringAttr("register");
+  auto reg = str_attr("register");
   auto srcLayout = triton::gpu::toLinearLayout(type);
   auto removeBroadcast = actionRemoveBroadcastedRegs(srcLayout);
   srcLayout = removeBroadcast.apply(srcLayout);
@@ -102,11 +102,6 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
   int kTileSize =
       std::min<int>(numRegisters.k, elemsPerThread[order[0]] / kWidth);
 
-  auto element = rewriter.getStringAttr("element");
-  auto outer = rewriter.getStringAttr("outer");
-  auto k = rewriter.getStringAttr("k");
-  auto kTiles = rewriter.getStringAttr("kTiles");
-  auto tile = rewriter.getStringAttr("tile");
   int size = elems.size();
   // Reorder scalar entries in elems into MMA operand registers:
   //   element: scalar within a packed operand (32 bits, or 64 bits for fp64).
@@ -132,12 +127,14 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
   //   tile=1 uses the same pattern, adding 16 to each scalar index.
   auto mapping =
       LinearLayout::identity1D(size, reg, reg)
-          .reshapeIns({{element, numElemsPerVec},
-                       {k, kWidth / numElemsPerVec},
-                       {outer, outerSize},
-                       {kTiles, kTileSize},
-                       {tile, size / (kWidth * outerSize * kTileSize)}})
-          .transposeIns({element, outer, kTiles, k, tile})
+          .reshapeIns(
+              {{str_attr("element"), numElemsPerVec},
+               {str_attr("k"), kWidth / numElemsPerVec},
+               {str_attr("outer"), outerSize},
+               {str_attr("kTiles"), kTileSize},
+               {str_attr("tile"), size / (kWidth * outerSize * kTileSize)}})
+          .transposeIns({str_attr("element"), str_attr("outer"),
+                         str_attr("kTiles"), str_attr("k"), str_attr("tile")})
           .reshapeIns({{reg, size}});
 
   SmallVector<Value> mmaElems;
@@ -145,15 +142,15 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     mmaElems.push_back(elems[mapping.apply({{reg, i}})[0].second]);
 
   // Restore only the repeated slots required by the native MMA operands.
-  auto mmaDot = DotOperandEncodingAttr::get(type.getContext(), dot.getOpIdx(),
-                                            dot.getParent(), numElemsPerVec);
-  elems = broadcastAs(mmaElems,
-                      triton::gpu::toLinearLayout(type.getShape(), mmaDot));
+  dot = DotOperandEncodingAttr::get(ctx, dot.getOpIdx(), dot.getParent(),
+                                    numElemsPerVec);
+  elems =
+      broadcastAs(mmaElems, triton::gpu::toLinearLayout(type.getShape(), dot));
 
   ValueTableV2 vals;
   int offset = 0;
   auto packVec = [&](std::array<int, 3> dstIdx) {
-    Value vec = b.undef(vecTy);
+    Value vec = b.undef(vec_ty(eltTy, numElemsPerVec));
     for (int i = 0; i < numElemsPerVec; ++i)
       vec = b.insert_element(vec, b.bitcast(elems[offset + i], eltTy),
                              b.i32_val(i));
