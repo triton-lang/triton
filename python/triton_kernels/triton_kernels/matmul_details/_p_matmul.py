@@ -307,7 +307,6 @@ def _p_matmul(
             else:
                 offs_x_m = tl.load(GatherIndx + slice_off_m.to(index_type) + offs_m, mask=mask_m, other=-1)
         if X_TMA_MODE is None:
-            XBase = X + off_x_z.to(index_type) * stride_x_z
             offs_m = off_m + tl.arange(0, BLOCK_M)
             offs_m = tl.max_contiguous(tl.multiple_of(offs_m % shape_m, BLOCK_M), BLOCK_M)
             # no needs to bounds-check here because `offs_m` wraps around M dim
@@ -315,7 +314,6 @@ def _p_matmul(
                 tl.static_assert(HAS_GATHER)
                 offs_m = tl.load(GatherIndx + slice_off_m.to(index_type) + offs_m)
             offs_x_m = offs_m.to(index_type)[:, None] * stride_x_m
-            offs_x_k = (off_k_x0.to(index_type) // block_div + tl.arange(0, BLOCK_K // block_div))[None, :] * stride_x_k
 
         XMxScalePtrs = None
         if is_x_microscaled and stride_x_mx_z is not None: # x is mx but not using TMA
@@ -378,8 +376,11 @@ def _p_matmul(
                 x = x.reshape(BLOCK_M, BLOCK_K // block_div)
             else:
                 tl.static_assert(X_TMA_MODE is None)
-                XPtrs = XBase + offs_x_m + offs_x_k
-                XBase += (BLOCK_K // block_div) * SPLIT_K * stride_x_k
+                offs_x_k = (off_k_x0.to(index_type) // block_div
+                            + ki.to(index_type) * (BLOCK_K // block_div) * SPLIT_K
+                            + tl.arange(0, BLOCK_K // block_div))[None, :] * stride_x_k
+                # Keep the aligned base pointer outside the flattened loop's conditional prologue.
+                XPtrs = X + (off_x_z.to(index_type) * stride_x_z + offs_x_m + offs_x_k)
                 mask_k = tl.arange(0, BLOCK_K // block_div) * block_div < K - off_k_x
                 if EVEN_K:
                     if SPLIT_K > 1:

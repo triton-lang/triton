@@ -360,7 +360,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         if device_capability < 10 and (a_dtype.is_nvfp4 or b_dtype.is_nvfp4 or c_dtype.is_nvfp4):
             pytest.skip("NVFP4 matmul only tested on Blackwell or newer")
         if device_capability < 9 and (a_dtype.uses_fp8e4nv or b_dtype.uses_fp8e4nv or c_dtype.uses_fp8e4nv):
-            pytest.skip("FP8 E4M3FN is not supported on A100")
+            pytest.skip("FP8 E4M3FN tests require Hopper or newer")
         if b_dtype.is_any_float8 and device_capability < 9:
             pytest.skip("Float8 not tested on A100")
         if act_dtype_str == "float16" and b_dtype.has_mx_scale and device_capability >= 10:
