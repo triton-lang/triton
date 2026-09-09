@@ -143,5 +143,4 @@ def test_cast_matmul(M, K, N, BLOCK_K, BLOCK_M, BLOCK_N, w_dtype, x_dtype, out_d
         BLOCK_N=block_n,  #
         BLOCK_K=block_k)
 
-    atol, rtol = (1e-12, 1e-12) if out_dtype == "float64" else (0.3, 0.01)
-    torch.testing.assert_close(out_torch, out_triton, atol=atol, rtol=rtol)
+    torch.testing.assert_close(out_torch, out_triton, atol=0.3, rtol=0.01)

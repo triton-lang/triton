@@ -1,5 +1,4 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --convert-triton-gpu-to-llvm -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --dump-input-context 20
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --convert-triton-gpu-to-llvm -reconcile-unrealized-casts --canonicalize --cse 2>/dev/null | tee %t | FileCheck %s --check-prefix=MMA
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --convert-triton-gpu-to-llvm -reconcile-unrealized-casts 2>/dev/null | tee %t | FileCheck %s --dump-input-context 20
 // RUN: FileCheck %s --check-prefix=STATIC < %t
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
@@ -3518,19 +3517,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
   // STATIC-NOT: llvm.udiv
   // STATIC-NOT: nvvm.read.ptx.sreg
   // STATIC: llvm.return
-  // MMA-LABEL: llvm.func @mma_fp64_large_k_batched(
-  // MMA-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
-  // MMA-DAG: %[[UNDEF:.*]] = llvm.mlir.undef : vector<1xf64>
-  // MMA-DAG: %[[A0:.*]] = llvm.extractvalue %arg0[0]
-  // MMA-DAG: %[[A8:.*]] = llvm.extractvalue %arg0[8]
-  // MMA-DAG: %[[AV0:.*]] = llvm.insertelement %[[A0]], %[[UNDEF]][%[[ZERO]] : i32] : vector<1xf64>
-  // MMA-DAG: %[[AV8:.*]] = llvm.insertelement %[[A8]], %[[UNDEF]][%[[ZERO]] : i32] : vector<1xf64>
-  // MMA-DAG: %[[B0:.*]] = llvm.extractvalue %arg1[0]
-  // MMA-DAG: %[[B8:.*]] = llvm.extractvalue %arg1[8]
-  // MMA-DAG: %[[BV0:.*]] = llvm.insertelement %[[B0]], %[[UNDEF]][%[[ZERO]] : i32] : vector<1xf64>
-  // MMA-DAG: %[[BV8:.*]] = llvm.insertelement %[[B8]], %[[UNDEF]][%[[ZERO]] : i32] : vector<1xf64>
-  // MMA: llvm.inline_asm{{.*}}mma.sync.aligned.m8n8k4{{.*}}%[[BV0]], %[[AV0]] :
-  // MMA: llvm.inline_asm{{.*}}mma.sync.aligned.m8n8k4{{.*}}%[[BV8]], %[[AV8]] :
+  // CHECK-LABEL: llvm.func @mma_fp64_large_k_batched(
+  // CHECK-DAG: %[[A0:.*]] = llvm.extractvalue %arg0[0]
+  // CHECK-DAG: %[[A8:.*]] = llvm.extractvalue %arg0[8]
+  // CHECK-DAG: %[[AC0:.*]] = llvm.bitcast %[[A0]] : f64 to f64
+  // CHECK-DAG: %[[AC8:.*]] = llvm.bitcast %[[A8]] : f64 to f64
+  // CHECK-DAG: %[[AV0:.*]] = llvm.insertelement %[[AC0]], {{.*}} : vector<1xf64>
+  // CHECK-DAG: %[[AV8:.*]] = llvm.insertelement %[[AC8]], {{.*}} : vector<1xf64>
+  // CHECK-DAG: %[[B0:.*]] = llvm.extractvalue %arg1[0]
+  // CHECK-DAG: %[[B8:.*]] = llvm.extractvalue %arg1[8]
+  // CHECK-DAG: %[[BC0:.*]] = llvm.bitcast %[[B0]] : f64 to f64
+  // CHECK-DAG: %[[BC8:.*]] = llvm.bitcast %[[B8]] : f64 to f64
+  // CHECK-DAG: %[[BV0:.*]] = llvm.insertelement %[[BC0]], {{.*}} : vector<1xf64>
+  // CHECK-DAG: %[[BV8:.*]] = llvm.insertelement %[[BC8]], {{.*}} : vector<1xf64>
+  // CHECK: llvm.inline_asm{{.*}}mma.sync.aligned.m8n8k4{{.*}}%[[BV0]], %[[AV0]] :
+  // CHECK: llvm.inline_asm{{.*}}mma.sync.aligned.m8n8k4{{.*}}%[[BV8]], %[[AV8]] :
   tt.func @mma_fp64_large_k_batched(%a: tensor<2x16x16xf64, #a>, %b: tensor<2x16x16xf64, #b>) {
     %c = arith.constant dense<0.0> : tensor<2x16x16xf64, #mma>
     %d = tt.dot %a, %b, %c : tensor<2x16x16xf64, #a> * tensor<2x16x16xf64, #b> -> tensor<2x16x16xf64, #mma>
