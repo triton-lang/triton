@@ -198,7 +198,8 @@ template <typename Op>
 struct InlineAsmOpConversion : public ConvertOpToLLVMPattern<Op> {
   using ConvertOpToLLVMPattern<Op>::ConvertOpToLLVMPattern;
   using typename ConvertOpToLLVMPattern<Op>::OpAdaptor;
-  static constexpr bool elementwise = std::is_same_v<Op, ElementwiseInlineAsmOp>;
+  static constexpr bool elementwise =
+      std::is_same_v<Op, ElementwiseInlineAsmOp>;
 
   LogicalResult
   matchAndRewrite(Op op, OpAdaptor adaptor,
@@ -248,7 +249,7 @@ struct InlineAsmOpConversion : public ConvertOpToLLVMPattern<Op> {
     }
     Type returnType = resultTypes.empty()       ? LLVM::LLVMVoidType::get(ctx)
                       : resultTypes.size() == 1 ? resultTypes.front()
-                                               : struct_ty(resultTypes);
+                                                : struct_ty(resultTypes);
     SmallVector<SmallVector<Value>> outputs(op.getNumResults());
     for (unsigned offset = 0; offset < numElems; offset += pack) {
       SmallVector<Value> operands;
@@ -265,7 +266,8 @@ struct InlineAsmOpConversion : public ConvertOpToLLVMPattern<Op> {
       auto call = LLVM::InlineAsmOp::create(
           rewriter, loc, returnType, operands, op.getAsmString(),
           op.getConstraints(), !op.getPure(), false, LLVM::TailCallKind::None,
-          LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT), ArrayAttr());
+          LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
+          ArrayAttr());
       if (resultTypes.empty())
         continue;
       auto results = resultTypes.size() == 1
@@ -621,7 +623,7 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
                                               benefit);
   patterns.add<InlineAsmOpConversion<ElementwiseInlineAsmOp>,
                InlineAsmOpConversion<triton::gpu::InlineAsmOp>>(typeConverter,
-                                                               benefit);
+                                                                benefit);
   patterns.add<AbsIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SelectOpConversion>(typeConverter, axisInfoAnalysis, benefit);

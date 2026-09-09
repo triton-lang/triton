@@ -146,14 +146,16 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         _check(isinstance(asm, str), lambda: "inline_asm expects a string or constexpr function returning a string",
                TypeError)
         if not isinstance(constraints, str):
-            _check(len(constraints) == len(counts),
-                   lambda: "inline_asm requires one constraint per output and input group")
+            _check(
+                len(constraints) == len(counts),
+                lambda: "inline_asm requires one constraint per output and input group")
             constraints = ",".join(
                 ttgl._unwrap_if_constexpr(constraint)
-                for constraint, count in zip(constraints, counts) for _ in range(count))
+                for constraint, count in zip(constraints, counts)
+                for _ in range(count))
 
-        call = self.builder.create_threadwise_inline_asm(
-            asm, constraints, [arg.handle for arg in args], [ty.to_ir(self.builder) for ty in result_types], is_pure)
+        call = self.builder.create_threadwise_inline_asm(asm, constraints, [arg.handle for arg in args],
+                                                         [ty.to_ir(self.builder) for ty in result_types], is_pure)
         results = tuple(self.tensor(call.get_result(i), ty) for i, ty in enumerate(result_types))
         return results if multiple_outputs else results[0]
 

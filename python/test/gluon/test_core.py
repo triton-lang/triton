@@ -58,8 +58,7 @@ def _inline_asm_shared_load(outputs, inputs):
     out, = outputs
     base, offsets = inputs
     loads = "\n".join(
-        f"add.u32 addr, {base[0]}, {offset}; ld.shared.f32 {dst}, [addr];"
-        for dst, offset in zip(out, offsets))
+        f"add.u32 addr, {base[0]}, {offset}; ld.shared.f32 {dst}, [addr];" for dst, offset in zip(out, offsets))
     return "{ .reg .u32 addr;\n" + loads + "\n}"
 
 
@@ -74,8 +73,11 @@ def _inline_asm_tmem_load(outputs, inputs):
 
 
 @pytest.mark.parametrize("memory_space,threadwise,pack", [
-    ("shared", False, 1), ("shared", False, 4), ("shared", True, 1),
-    ("tensor", False, 32), ("tensor", True, 32),
+    ("shared", False, 1),
+    ("shared", False, 4),
+    ("shared", True, 1),
+    ("tensor", False, 32),
+    ("tensor", True, 32),
 ])
 def test_inline_asm_memdesc_view(memory_space, threadwise, pack, device):
     if not is_cuda() or (memory_space == "tensor" and not (is_blackwell() or is_blackwell_ultra() or is_rubin())):
@@ -91,8 +93,8 @@ def test_inline_asm_memdesc_view(memory_space, threadwise, pack, device):
         constraints = ",".join(["=&f"] * pack + ["r"] * (pack + 1))
 
     @gluon.jit
-    def kernel(X, Y, TMEM: ttgl.constexpr, THREADWISE: ttgl.constexpr, PACK: ttgl.constexpr,
-               ASM: ttgl.constexpr, CONSTRAINTS: ttgl.constexpr):
+    def kernel(X, Y, TMEM: ttgl.constexpr, THREADWISE: ttgl.constexpr, PACK: ttgl.constexpr, ASM: ttgl.constexpr,
+               CONSTRAINTS: ttgl.constexpr):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
         r = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))
         c = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, layout))
@@ -106,8 +108,8 @@ def test_inline_asm_memdesc_view(memory_space, threadwise, pack, device):
             cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, output_layout))
             offsets = ((rows[:, None] // 32 * 32) << 16) + cols[None, :] * 0
         else:
-            parent = ttgl.allocate_shared_memory(ttgl.float32, [128, 64],
-                                                 ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0]), values)
+            parent = ttgl.allocate_shared_memory(ttgl.float32, [128, 64], ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0]),
+                                                 values)
             view = parent.slice(32, 32, dim=1)
             rows = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, layout))
             cols = ttgl.arange(0, 32, layout=ttgl.SliceLayout(0, layout))
@@ -128,8 +130,7 @@ def test_inline_asm_memdesc_view(memory_space, threadwise, pack, device):
 def _inline_asm_sum(outputs, inputs):
     out, = outputs
     values, = inputs
-    return f"mov.u32 {out[0]}, 0;\n" + "\n".join(
-        f"add.u32 {out[0]}, {out[0]}, {value};" for value in values)
+    return f"mov.u32 {out[0]}, 0;\n" + "\n".join(f"add.u32 {out[0]}, {out[0]}, {value};" for value in values)
 
 
 @pytest.mark.parametrize("elementwise", [False, True])
@@ -140,26 +141,25 @@ def test_inline_asm_memdesc_store(elementwise, device):
     @gluon.jit
     def kernel(Out, ELEMENTWISE: ttgl.constexpr):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
-        parent = ttgl.allocate_shared_memory(
-            ttgl.int32, [256], ttgl.SwizzledSharedLayout(1, 1, 1, [0]),
-            ttgl.full([256], 0, ttgl.int32, layout))
+        parent = ttgl.allocate_shared_memory(ttgl.int32, [256], ttgl.SwizzledSharedLayout(1, 1, 1, [0]),
+                                             ttgl.full([256], 0, ttgl.int32, layout))
         view = parent.slice(128, 128)
         offsets = ttgl.arange(0, 128, layout=layout)
         if ELEMENTWISE:
             ttgl.inline_asm_elementwise(
-                "{ .reg .u32 addr; add.u32 addr, $1, $2; st.shared.u32 [addr], $3; mov.u32 $0, 0; }",
-                "=r,r,r,r", [view, offsets * 4, offsets + 1], ttgl.int32, False, 1)
+                "{ .reg .u32 addr; add.u32 addr, $1, $2; st.shared.u32 [addr], $3; mov.u32 $0, 0; }", "=r,r,r,r",
+                [view, offsets * 4, offsets + 1], ttgl.int32, False, 1)
         else:
-            ttgl.inline_asm("{ .reg .u32 addr; add.u32 addr, $0, $1; st.shared.u32 [addr], $2; }",
-                            "r,r,r", [view, offsets * 4, offsets + 1])
+            ttgl.inline_asm("{ .reg .u32 addr; add.u32 addr, $0, $1; st.shared.u32 [addr], $2; }", "r,r,r",
+                            [view, offsets * 4, offsets + 1])
         load_layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
         result = parent.load(load_layout)
         ttgl.store(Out + ttgl.arange(0, 256, layout=load_layout), result)
 
     out = torch.empty(256, dtype=torch.int32, device=device)
-    kernel[(1,)](out, elementwise)
-    expected = torch.cat((torch.zeros(128, dtype=torch.int32, device=device),
-                          torch.arange(1, 129, dtype=torch.int32, device=device)))
+    kernel[(1, )](out, elementwise)
+    expected = torch.cat((torch.zeros(128, dtype=torch.int32,
+                                      device=device), torch.arange(1, 129, dtype=torch.int32, device=device)))
     torch.testing.assert_close(out, expected, atol=0, rtol=0)
 
 
@@ -197,9 +197,9 @@ def test_inline_asm_replicated_registers(device):
 
     @gluon.jit
     def kernel(X, Y, bias):
-        layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
-            reg_bases=[[0], [1]], lane_bases=[[2], [4], [8], [16], [32]],
-            warp_bases=[[64], [128]], block_bases=[], shape=[256])
+        layout: ttgl.constexpr = ttgl.DistributedLinearLayout(reg_bases=[[0], [1]], lane_bases=[[2], [4], [8], [16],
+                                                                                                [32]],
+                                                              warp_bases=[[64], [128]], block_bases=[], shape=[256])
         offsets = ttgl.arange(0, 256, layout=layout)
         x = ttgl.load(X + offsets)
         y = ttgl.inline_asm(_inline_asm_add_bias, ("=&r", "r", "r"), [x, bias], x.type, is_pure=True)

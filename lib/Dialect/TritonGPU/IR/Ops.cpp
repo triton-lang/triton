@@ -56,7 +56,8 @@ Speculation::Speculatability InlineAsmOp::getSpeculatability() {
 LogicalResult InlineAsmOp::verify() {
   for (Type type : llvm::concat<Type>(getOperandTypes(), getResultTypes())) {
     auto tensor = dyn_cast<RankedTensorType>(type);
-    if (tensor && !isa_and_present<DistributedEncodingTrait>(tensor.getEncoding()))
+    if (tensor &&
+        !isa_and_present<DistributedEncodingTrait>(tensor.getEncoding()))
       return emitOpError("requires explicit distributed tensor layouts");
   }
   return verifyInlineAsmOperands(*this);

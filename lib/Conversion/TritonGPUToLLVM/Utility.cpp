@@ -46,8 +46,8 @@ Value triton::getMemDescAddress(RewriterBase &rewriter, Location loc,
   if (isa<nvidia_gpu::TensorMemorySpaceAttr>(type.getMemorySpace()))
     return b.ptrtoint(i32Ty, lowered);
   Type elemTy = typeConverter->convertType(type.getElementType());
-  auto object = LLVM::getSharedMemoryObjectFromStruct(loc, lowered, elemTy,
-                                                       rewriter);
+  auto object =
+      LLVM::getSharedMemoryObjectFromStruct(loc, lowered, elemTy, rewriter);
   auto offset = object.getShmemOffset(loc, rewriter, type);
   offset = b.mul(offset, b.i32_val(getIntOrFloatOrPtrBitWidth(elemTy) / 8));
   // Strip the cluster CTA index from shared addresses.

@@ -292,7 +292,7 @@ public:
     Location loc = op.getLoc();
     Value converted =
         getMemDescAddress(rewriter, loc, getTypeConverter(),
-                           op.getMemdesc().getType(), adaptor.getMemdesc());
+                          op.getMemdesc().getType(), adaptor.getMemdesc());
     rewriter.replaceOp(op, converted);
     return success();
   }

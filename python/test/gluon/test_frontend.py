@@ -111,18 +111,19 @@ def _inline_asm_bad_generator(outputs, inputs):
 
 def test_inline_asm_frontend_invalid_generator():
     with pytest.raises(CompilationError, match="returning a string"):
-        run_parser(_inline_asm_frontend_kernel,
-                   *make_args(_inline_asm_bad_generator, ("=&r", "=r", "r", "r")), target=BLACKWELL_TARGET)
+        run_parser(_inline_asm_frontend_kernel, *make_args(_inline_asm_bad_generator, ("=&r", "=r", "r", "r")),
+                   target=BLACKWELL_TARGET)
 
 
 def test_inline_asm_frontend_invalid_constraints():
     with pytest.raises(CompilationError, match="one constraint per output and input group"):
-        run_parser(_inline_asm_frontend_kernel,
-                   *make_args(_inline_asm_frontend_generator, ("=r",)), target=BLACKWELL_TARGET)
+        run_parser(_inline_asm_frontend_kernel, *make_args(_inline_asm_frontend_generator, ("=r", )),
+                   target=BLACKWELL_TARGET)
 
 
 @pytest.mark.parametrize("layout", [ttgl.AutoLayout(), ttgl.CoalescedLayout()])
 def test_inline_asm_frontend_unresolved_layout(layout):
+
     @gluon.jit
     def kernel(LAYOUT: ttgl.constexpr):
         x = ttgl.full([128], 0, ttgl.int32, LAYOUT)
