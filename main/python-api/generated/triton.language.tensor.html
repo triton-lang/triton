@@ -185,17 +185,23 @@ write <code class="code docutils literal notranslate"><span class="pre">x+y</spa
 <tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_cas</span></code>(self, cmp, val[, sem, scope, ...])</p></td>
 <td><p>Forwards to <a class="reference internal" href="triton.language.atomic_cas.html#triton.language.atomic_cas" title="triton.language.atomic_cas"><code class="xref py py-func docutils literal notranslate"><span class="pre">atomic_cas()</span></code></a> free function</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_max</span></code>(self, val[, mask, sem, scope, ...])</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_load</span></code>(self[, mask, sem, scope, _semantic])</p></td>
+<td><p>Forwards to <a class="reference internal" href="triton.language.atomic_load.html#triton.language.atomic_load" title="triton.language.atomic_load"><code class="xref py py-func docutils literal notranslate"><span class="pre">atomic_load()</span></code></a> free function</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_max</span></code>(self, val[, mask, sem, scope, ...])</p></td>
 <td><p>Forwards to <a class="reference internal" href="triton.language.atomic_max.html#triton.language.atomic_max" title="triton.language.atomic_max"><code class="xref py py-func docutils literal notranslate"><span class="pre">atomic_max()</span></code></a> free function</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_min</span></code>(self, val[, mask, sem, scope, ...])</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_min</span></code>(self, val[, mask, sem, scope, ...])</p></td>
 <td><p>Forwards to <a class="reference internal" href="triton.language.atomic_min.html#triton.language.atomic_min" title="triton.language.atomic_min"><code class="xref py py-func docutils literal notranslate"><span class="pre">atomic_min()</span></code></a> free function</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_or</span></code>(self, val[, mask, sem, scope, ...])</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_or</span></code>(self, val[, mask, sem, scope, ...])</p></td>
 <td><p>Forwards to <a class="reference internal" href="triton.language.atomic_or.html#triton.language.atomic_or" title="triton.language.atomic_or"><code class="xref py py-func docutils literal notranslate"><span class="pre">atomic_or()</span></code></a> free function</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_poll</span></code>(self, expected_value[, sem, ...])</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_poll</span></code>(self, expected_value[, sem, ...])</p></td>
 <td><p>Forwards to <a class="reference internal" href="triton.language.atomic_poll.html#triton.language.atomic_poll" title="triton.language.atomic_poll"><code class="xref py py-func docutils literal notranslate"><span class="pre">atomic_poll()</span></code></a> free function</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_store</span></code>(self, val[, mask, sem, scope, ...])</p></td>
+<td><p>Forwards to <a class="reference internal" href="triton.language.atomic_store.html#triton.language.atomic_store" title="triton.language.atomic_store"><code class="xref py py-func docutils literal notranslate"><span class="pre">atomic_store()</span></code></a> free function</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">atomic_xchg</span></code>(self, val[, mask, sem, scope, ...])</p></td>
 <td><p>Forwards to <a class="reference internal" href="triton.language.atomic_xchg.html#triton.language.atomic_xchg" title="triton.language.atomic_xchg"><code class="xref py py-func docutils literal notranslate"><span class="pre">atomic_xchg()</span></code></a> free function</p></td>

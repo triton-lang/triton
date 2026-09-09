@@ -164,14 +164,26 @@
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.amd.cdna4.buffer_atomic_xor.html#triton.experimental.gluon.language.amd.cdna4.buffer_atomic_xor" title="triton.experimental.gluon.language.amd.cdna4.buffer_atomic_xor"><code class="xref py py-obj docutils literal notranslate"><span class="pre">buffer_atomic_xor</span></code></a></p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.amd.cdna4.get_mfma_scale_layout.html#triton.experimental.gluon.language.amd.cdna4.get_mfma_scale_layout" title="triton.experimental.gluon.language.amd.cdna4.get_mfma_scale_layout"><code class="xref py py-obj docutils literal notranslate"><span class="pre">get_mfma_scale_layout</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.amd.cdna4.compute_efficient_padded_shared_layout.html#triton.experimental.gluon.language.amd.cdna4.compute_efficient_padded_shared_layout" title="triton.experimental.gluon.language.amd.cdna4.compute_efficient_padded_shared_layout"><code class="xref py py-obj docutils literal notranslate"><span class="pre">compute_efficient_padded_shared_layout</span></code></a></p></td>
+<td><p>Compute an efficient padded shared layout that avoids bank conflicts.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.amd.cdna4.get_mfma_scale_layout.html#triton.experimental.gluon.language.amd.cdna4.get_mfma_scale_layout" title="triton.experimental.gluon.language.amd.cdna4.get_mfma_scale_layout"><code class="xref py py-obj docutils literal notranslate"><span class="pre">get_mfma_scale_layout</span></code></a></p></td>
 <td><p>Get the scale layout for MFMA scaled operands.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.amd.cdna4.load_shared_fp4_repacked.html#triton.experimental.gluon.language.amd.cdna4.load_shared_fp4_repacked" title="triton.experimental.gluon.language.amd.cdna4.load_shared_fp4_repacked"><code class="xref py py-obj docutils literal notranslate"><span class="pre">load_shared_fp4_repacked</span></code></a></p></td>
+<td><p>Load M/N-packed fp4 bytes from shared memory into a K-packed MFMA dot operand layout.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.amd.cdna4.mfma.html#triton.experimental.gluon.language.amd.cdna4.mfma" title="triton.experimental.gluon.language.amd.cdna4.mfma"><code class="xref py py-obj docutils literal notranslate"><span class="pre">mfma</span></code></a></p></td>
 <td><p>Computes matrix multiplication <code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">*</span> <span class="pre">b</span> <span class="pre">+</span> <span class="pre">acc</span></code> using AMD native matrix core units.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.amd.cdna4.mfma_scaled.html#triton.experimental.gluon.language.amd.cdna4.mfma_scaled" title="triton.experimental.gluon.language.amd.cdna4.mfma_scaled"><code class="xref py py-obj docutils literal notranslate"><span class="pre">mfma_scaled</span></code></a></p></td>
 <td><p>AMD Scaled MFMA operation.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.amd.cdna4.scaled_downcast.html#triton.experimental.gluon.language.amd.cdna4.scaled_downcast" title="triton.experimental.gluon.language.amd.cdna4.scaled_downcast"><code class="xref py py-obj docutils literal notranslate"><span class="pre">scaled_downcast</span></code></a></p></td>
+<td><p>Scale and convert FP16, BF16, or FP32 values to a low-precision MX format, dividing by the raw E8M0 <code class="docutils literal notranslate"><span class="pre">scale</span></code> payload (<code class="docutils literal notranslate"><span class="pre">int8</span></code> or <code class="docutils literal notranslate"><span class="pre">uint8</span></code>).</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.amd.cdna4.scaled_upcast.html#triton.experimental.gluon.language.amd.cdna4.scaled_upcast" title="triton.experimental.gluon.language.amd.cdna4.scaled_upcast"><code class="xref py py-obj docutils literal notranslate"><span class="pre">scaled_upcast</span></code></a></p></td>
+<td><p>Upcast an fp4 or fp8 tensor and fold raw E8M0 scale payload into the CDNA4 scaled-upcast op.</p></td>
 </tr>
 </tbody>
 </table>

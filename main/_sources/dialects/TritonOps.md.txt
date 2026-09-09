@@ -110,6 +110,44 @@ Interfaces: `AtomicOpInterface`
 
 
 
+### `tt.atomic_load` (triton::AtomicLoadOp)
+
+_Atomically load from a pointer or tensor of pointers_
+
+Syntax:
+
+```
+operation ::= `tt.atomic_load` $sem `,` $scope `,` $ptr (`,` $mask^)? attr-dict `:`
+              functional-type(operands, $result)
+```
+
+Traits: `SameLoadStoreOperandsAndResultEncoding`, `SameLoadStoreOperandsAndResultShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `AtomicOpInterface`, `InferTypeOpInterface`, `PredicatedOpInterface`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>sem</code></td><td>::mlir::triton::MemSemanticAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4</td></tr>
+<tr><td><code>scope</code></td><td>::mlir::triton::MemSyncScopeAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `ptr` | ptr or ranked tensor of ptr values |
+| `mask` | 1-bit signless integer or ranked tensor of 1-bit signless integer values |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+
+
+
 ### `tt.atomic_poll` (triton::AtomicPollOp)
 
 _Poll an atomic value_
@@ -198,6 +236,39 @@ Interfaces: `AtomicOpInterface`, `PredicatedOpInterface`
 | Result | Description |
 | :----: | ----------- |
 | `result` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+
+
+
+### `tt.atomic_store` (triton::AtomicStoreOp)
+
+_Atomically store through a pointer or tensor of pointers_
+
+Syntax:
+
+```
+operation ::= `tt.atomic_store` $sem `,` $scope `,` $ptr `,` $value (`,` $mask^)? attr-dict `:`
+              type($ptr)
+```
+
+Traits: `SameLoadStoreOperandsEncoding`, `SameLoadStoreOperandsShape`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `AtomicOpInterface`, `PredicatedOpInterface`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>sem</code></td><td>::mlir::triton::MemSemanticAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4</td></tr>
+<tr><td><code>scope</code></td><td>::mlir::triton::MemSyncScopeAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `ptr` | ptr or ranked tensor of ptr values |
+| `value` | floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `mask` | 1-bit signless integer or ranked tensor of 1-bit signless integer values |
 
 
 

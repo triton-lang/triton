@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.amd.cdna4.scaled\_upcast
+===========================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna4
+
+.. autofunction:: scaled_upcast

@@ -22,10 +22,12 @@
       ~tensor.atomic_add
       ~tensor.atomic_and
       ~tensor.atomic_cas
+      ~tensor.atomic_load
       ~tensor.atomic_max
       ~tensor.atomic_min
       ~tensor.atomic_or
       ~tensor.atomic_poll
+      ~tensor.atomic_store
       ~tensor.atomic_xchg
       ~tensor.atomic_xor
       ~tensor.broadcast_to

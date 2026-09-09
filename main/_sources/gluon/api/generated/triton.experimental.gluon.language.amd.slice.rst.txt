@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.amd.slice
+============================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd
+
+.. autofunction:: slice

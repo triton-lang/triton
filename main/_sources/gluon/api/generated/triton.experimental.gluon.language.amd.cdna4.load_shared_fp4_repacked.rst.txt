@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.amd.cdna4.load\_shared\_fp4\_repacked
+========================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna4
+
+.. autofunction:: load_shared_fp4_repacked

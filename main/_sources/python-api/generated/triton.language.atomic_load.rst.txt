@@ -1,0 +1,6 @@
+﻿triton.language.atomic\_load
+============================
+
+.. currentmodule:: triton.language
+
+.. autofunction:: atomic_load

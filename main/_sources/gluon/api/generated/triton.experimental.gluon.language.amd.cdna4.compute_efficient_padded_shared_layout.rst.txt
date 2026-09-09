@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.amd.cdna4.compute\_efficient\_padded\_shared\_layout
+=======================================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna4
+
+.. autofunction:: compute_efficient_padded_shared_layout

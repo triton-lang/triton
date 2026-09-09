@@ -29,7 +29,7 @@
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="triton.experimental.gluon.language.amd.cdna5.async_copy" href="generated/triton.experimental.gluon.language.amd.cdna5.async_copy.html" />
-    <link rel="prev" title="triton.experimental.gluon.language.amd.cdna4.mfma_scaled" href="generated/triton.experimental.gluon.language.amd.cdna4.mfma_scaled.html" /> 
+    <link rel="prev" title="triton.experimental.gluon.language.amd.cdna4.scaled_upcast" href="generated/triton.experimental.gluon.language.amd.cdna4.scaled_upcast.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -155,8 +155,14 @@
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.amd.cdna5.get_wmma_scale_layout.html#triton.experimental.gluon.language.amd.cdna5.get_wmma_scale_layout" title="triton.experimental.gluon.language.amd.cdna5.get_wmma_scale_layout"><code class="xref py py-obj docutils literal notranslate"><span class="pre">get_wmma_scale_layout</span></code></a></p></td>
 <td><p>Get the scale layout for WMMA scaled operands.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.amd.cdna5.make_partitioned_dot_layouts.html#triton.experimental.gluon.language.amd.cdna5.make_partitioned_dot_layouts" title="triton.experimental.gluon.language.amd.cdna5.make_partitioned_dot_layouts"><code class="xref py py-obj docutils literal notranslate"><span class="pre">make_partitioned_dot_layouts</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.amd.cdna5.load_shared_fp4_repacked.html#triton.experimental.gluon.language.amd.cdna5.load_shared_fp4_repacked" title="triton.experimental.gluon.language.amd.cdna5.load_shared_fp4_repacked"><code class="xref py py-obj docutils literal notranslate"><span class="pre">load_shared_fp4_repacked</span></code></a></p></td>
+<td><p>Load M/N-packed fp4 bytes from shared memory into a K-packed WMMA dot operand layout.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.amd.cdna5.make_partitioned_dot_layouts.html#triton.experimental.gluon.language.amd.cdna5.make_partitioned_dot_layouts" title="triton.experimental.gluon.language.amd.cdna5.make_partitioned_dot_layouts"><code class="xref py py-obj docutils literal notranslate"><span class="pre">make_partitioned_dot_layouts</span></code></a></p></td>
 <td><p>Create partitioned shared memory layouts and WMMA layout for a CDNA5 GEMM in order to avoid LDS partition conflicts.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.amd.cdna5.scaled_downcast.html#triton.experimental.gluon.language.amd.cdna5.scaled_downcast" title="triton.experimental.gluon.language.amd.cdna5.scaled_downcast"><code class="xref py py-obj docutils literal notranslate"><span class="pre">scaled_downcast</span></code></a></p></td>
+<td><p>Scale and convert FP16, BF16, or FP32 values to a low-precision MX format, dividing by the raw E8M0 <code class="docutils literal notranslate"><span class="pre">scale</span></code> payload (<code class="docutils literal notranslate"><span class="pre">int8</span></code> or <code class="docutils literal notranslate"><span class="pre">uint8</span></code>).</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.language.amd.cdna5.scaled_upcast.html#triton.experimental.gluon.language.amd.cdna5.scaled_upcast" title="triton.experimental.gluon.language.amd.cdna5.scaled_upcast"><code class="xref py py-obj docutils literal notranslate"><span class="pre">scaled_upcast</span></code></a></p></td>
 <td><p>Upcast an fp4 or fp8 tensor and fold raw E8M0 scale payload into the CDNA5 scaled-upcast op.</p></td>
@@ -178,7 +184,7 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="generated/triton.experimental.gluon.language.amd.cdna4.mfma_scaled.html" class="btn btn-neutral float-left" title="triton.experimental.gluon.language.amd.cdna4.mfma_scaled" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="generated/triton.experimental.gluon.language.amd.cdna4.scaled_upcast.html" class="btn btn-neutral float-left" title="triton.experimental.gluon.language.amd.cdna4.scaled_upcast" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
         <a href="generated/triton.experimental.gluon.language.amd.cdna5.async_copy.html" class="btn btn-neutral float-right" title="triton.experimental.gluon.language.amd.cdna5.async_copy" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
