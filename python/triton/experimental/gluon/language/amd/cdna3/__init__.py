@@ -5,14 +5,15 @@ from triton import knobs
 from triton.experimental.gluon.language import _core as ttgl
 from triton._C.libtriton import ir
 from ..._core import builtin, int8, uint8, _unwrap_if_constexpr
-from .._ops import _scaled_upcast
+from .._ops import _scaled_upcast, get_scaled_upcast_fp4_scale_layout
 
 if TYPE_CHECKING:
     from ..._semantic import GluonSemantic
 
 __all__ = [
     "buffer_atomic_add", "buffer_atomic_and", "buffer_atomic_min", "buffer_atomic_max", "buffer_atomic_or",
-    "buffer_atomic_xor", "buffer_atomic_xor", "buffer_load", "buffer_store", "mfma", "scaled_upcast"
+    "buffer_atomic_xor", "buffer_atomic_xor", "buffer_load", "buffer_store", "mfma", "scaled_upcast",
+    "get_scaled_upcast_fp4_scale_layout"
 ]
 
 _atomic_op_str_to_op = {
