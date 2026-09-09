@@ -1258,8 +1258,7 @@ Value scaleI8ToF32Payload(PatternRewriter &rewriter, Location loc,
 }
 
 Value scaleI8ToComputePayload(PatternRewriter &rewriter, Location loc,
-                              Value scaleI, FloatType computeElem,
-                              bool isE8M0) {
+                              Value scaleI, FloatType computeElem) {
   unsigned computeWidth = computeElem.getIntOrFloatBitWidth();
   Type computeIntTy = getTypeWithElement(
       scaleI.getType(), IntegerType::get(rewriter.getContext(), computeWidth));
@@ -1276,7 +1275,7 @@ Value scaleI8ToComputePayload(PatternRewriter &rewriter, Location loc,
   unsigned shiftValue = computeElem.getFPMantissaWidth() - 1;
   auto shift = getUIntConstantLike(rewriter, loc, computeIntTy, shiftValue);
   Value rawCompute = arith::ShLIOp::create(rewriter, loc, scaleComputeI, shift);
-  if (computeElem == rewriter.getBF16Type() && isE8M0) {
+  if (computeElem == rewriter.getBF16Type()) {
     auto minScale = getUIntConstantLike(rewriter, loc, computeIntTy, 0x0040);
     rawCompute = arith::MaxUIOp::create(rewriter, loc, rawCompute, minScale);
   }
@@ -1285,12 +1284,10 @@ Value scaleI8ToComputePayload(PatternRewriter &rewriter, Location loc,
 
 Value castDotScaledScaleToComputePayload(PatternRewriter &rewriter,
                                          Location loc, Value scaleSlice,
-                                         FloatType computeElem, bool isE8M0) {
-  if (isa<Float8E8M0FNUType>(getElementTypeOrSelf(scaleSlice.getType()))) {
-    isE8M0 = true;
+                                         FloatType computeElem) {
+  if (isa<Float8E8M0FNUType>(getElementTypeOrSelf(scaleSlice.getType())))
     scaleSlice = arith::BitcastOp::create(
         rewriter, loc, getIntTypeLike(scaleSlice.getType()), scaleSlice);
-  }
   Type computeIntTy =
       getTypeWithElement(scaleSlice.getType(),
                          IntegerType::get(rewriter.getContext(),
@@ -1299,9 +1296,8 @@ Value castDotScaledScaleToComputePayload(PatternRewriter &rewriter,
     Value payload = embedToInt(rewriter, loc, scaleSlice);
     return castFloatPayloadToType(rewriter, loc, payload, computeIntTy);
   }
-  return scaleI8ToComputePayload(rewriter, loc,
-                                 embedToInt(rewriter, loc, scaleSlice),
-                                 computeElem, isE8M0);
+  return scaleI8ToComputePayload(
+      rewriter, loc, embedToInt(rewriter, loc, scaleSlice), computeElem);
 }
 
 struct DotScaleConfig {
@@ -1351,24 +1347,18 @@ Value emulateDotStep(PatternRewriter &rewriter, Location loc, Value aSlice,
   Value aI;
   Value bI;
   if (scale.computeElem) {
-    bool isAMD = getAMDArch(rewriter.getInsertionBlock()
-                                ->getParentOp()
-                                ->getParentOfType<ModuleOp>())
-                     .has_value();
     aI = castDotScaledOperandToComputePayload(
         rewriter, loc, aSlice, scale.aElemType, scale.computeElem);
     bI = castDotScaledOperandToComputePayload(
         rewriter, loc, bSlice, scale.bElemType, scale.computeElem);
     if (aScaleSlice) {
       auto aScaleI = castDotScaledScaleToComputePayload(
-          rewriter, loc, aScaleSlice, scale.computeElem,
-          scale.aScaleFactor == 32 || isAMD);
+          rewriter, loc, aScaleSlice, scale.computeElem);
       aI = arith::MulIOp::create(rewriter, loc, aI, aScaleI);
     }
     if (bScaleSlice) {
       auto bScaleI = castDotScaledScaleToComputePayload(
-          rewriter, loc, bScaleSlice, scale.computeElem,
-          scale.bScaleFactor == 32 || isAMD);
+          rewriter, loc, bScaleSlice, scale.computeElem);
       bI = arith::MulIOp::create(rewriter, loc, bI, bScaleI);
     }
   } else {
@@ -1485,8 +1475,8 @@ Value loadScaledScaleK32(PatternRewriter &rewriter, Location loc, bool isLhs,
   Value compact = loadScratchStrided2D(rewriter, loc, groupPtr, compactLoadTy,
                                        /*stride0=*/isLhs ? 1 : scaleStride,
                                        /*stride1=*/isLhs ? scaleStride : 1);
-  compact = castDotScaledScaleToComputePayload(
-      rewriter, loc, compact, scale.computeElem, /*isE8M0=*/scaleFactor == 32);
+  compact = castDotScaledScaleToComputePayload(rewriter, loc, compact,
+                                               scale.computeElem);
 
   auto expandedShape = compactShape;
   expandedShape.insert(expandedShape.begin() + expandAxis, 1);
@@ -2147,8 +2137,7 @@ struct PackedArithPattern : public OpRewritePattern<ttng::PackedArithOp> {
       }
 
       Value payload = castDotScaledScaleToComputePayload(
-          rewriter, loc, operand, cast<FloatType>(resultTy.getElementType()),
-          /*isE8M0=*/true);
+          rewriter, loc, operand, cast<FloatType>(resultTy.getElementType()));
       if (payload.getType() != resultIntTy)
         payload =
             ttg::ConvertLayoutOp::create(rewriter, loc, resultIntTy, payload);

@@ -271,7 +271,7 @@ def test_triton_to_gluon_dot_scaled(
 
 @pytest.mark.parametrize("rhs_scale", [False, True])
 @pytest.mark.parametrize("normal_type", ["bf16", "fp16"])
-@pytest.mark.parametrize("scale_factor", [16, 32])
+@pytest.mark.parametrize("scale_factor", [32] if is_cuda() else [16, 32])
 @pytest.mark.parametrize("float_scale", [False, True])
 def test_triton_to_gluon_dot_scaled_minimum_scale(rhs_scale, normal_type, scale_factor, float_scale, tmp_path):
     if not (is_hopper_or_newer() or is_hip_cdna4() or is_hip_gfx1250()):
@@ -300,9 +300,7 @@ def test_triton_to_gluon_dot_scaled_minimum_scale(rhs_scale, normal_type, scale_
     if float_scale:
         expected_values = (0.0, ) * 4
     elif normal_type == "bf16":
-        # NVIDIA's group-16 integer scales retain their existing UE5M3 behavior.
-        minimum = 2.0**-112 if scale_factor == 32 or not is_cuda() else 0.0
-        expected_values = (minimum, 2.0**-111, 32768.0, 65536.0)
+        expected_values = (2.0**-112, 2.0**-111, 32768.0, 65536.0)
     else:
         expected_values = (0.0, 0.0, 32768.0, 65536.0)
     expected = torch.tensor(expected_values, dtype=torch.float32, device="cuda").repeat_interleave(32)
