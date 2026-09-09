@@ -16,7 +16,7 @@ from triton_kernels.numerics_details.mxfp import (
     upcast_from_mxfp_torch,
 )
 from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile
-from triton_kernels.target_info import is_cuda
+from triton_kernels.target_info import cuda_capability_geq, is_cuda
 from triton_kernels.tensor import convert_layout, wrap_torch_tensor
 from triton_kernels.tensor_details.layout import StridedLayout
 from triton_kernels.testing import assert_close, assert_equal
@@ -296,6 +296,8 @@ def test_mxfp_casting(
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("axis", [0, -1])
 def test_nvfp4_nearest_even_scales(convert, dtype, axis, device):
+    if convert is downcast_to_mxfp and not cuda_capability_geq(10, 0):
+        pytest.skip("NVFP4 requires Blackwell or newer")
     # Unrounded scale, independently specified E4M3 scale, and packed FP4 values.
     cases = [
         (0.0, 0.0, 0x00),
@@ -332,6 +334,8 @@ def test_nvfp4_nearest_even_scales(convert, dtype, axis, device):
 @pytest.mark.parametrize("convert", [downcast_to_mxfp, downcast_to_mxfp_torch], ids=["triton", "torch"])
 @pytest.mark.parametrize("axis", [0, -1])
 def test_nvfp4_nearest_saturates_scale(convert, axis, device):
+    if convert is downcast_to_mxfp and not cuda_capability_geq(10, 0):
+        pytest.skip("NVFP4 requires Blackwell or newer")
     x = torch.full((2, 16), 6144.0, dtype=torch.float32, device=device)
     if axis == 0:
         x = x.T.contiguous()
