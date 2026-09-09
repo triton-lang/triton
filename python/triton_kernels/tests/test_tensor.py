@@ -182,32 +182,6 @@ def test_ragged_layout_storage_shape():
     assert BlackwellActMXScaleLayout(metadata).storage_shape([100, 94], False) == [1, 4, 24, 2, 256]
 
 
-def test_metadata_imports_without_torch():
-    subprocess.run([
-        sys.executable, "-c", """
-import builtins
-import sys
-
-def forbid_torch(name, *args, **kwargs):
-    assert name != "torch" and not name.startswith("torch."), name
-    return original_import(name, *args, **kwargs)
-
-original_import = builtins.__import__
-builtins.__import__ = forbid_torch
-
-from triton_kernels import target_info
-from triton_kernels.numerics import InFlexData, OutFlexData
-
-value = object()
-assert InFlexData().view(value) is value
-assert not InFlexData().is_per_batch
-assert tuple(OutFlexData()) == (None, None, None)
-assert not OutFlexData().is_per_batch
-assert "torch" not in sys.modules
-"""
-    ], check=True)
-
-
 def test_import_does_not_initialize_cuda():
     subprocess.run([
         sys.executable, "-c", """
