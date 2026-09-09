@@ -4,6 +4,7 @@ import triton
 import triton.language as tl
 from triton.experimental import gluon
 from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
+from triton.backends.compiler import GPUTarget
 from triton.compiler.code_generator import CodeGenerator
 from triton.runtime.jit import MockTensor
 from triton.compiler.errors import CompilationError
@@ -23,6 +24,23 @@ def test_jit_variadic_keyword_arguments(jit):
 
     with pytest.raises(TypeError, match=r"JIT functions do not support \*\*kwargs"):
         jit(kernel)
+
+
+@pytest.mark.parametrize("target", [GPUTarget("cuda", 90, 32), GPUTarget("hip", "gfx1250", 32)], ids=["cuda", "hip"])
+@pytest.mark.parametrize("use_legacy_alias", [False, True], ids=["fence", "debug_barrier"])
+@pytest.mark.parametrize("num_ctas", [1, 2], ids=["single_cta", "cluster"])
+def test_fence_is_target_independent(target, use_legacy_alias, num_ctas):
+    assert tl.debug_barrier is tl.fence
+
+    @triton.jit
+    def kernel(USE_LEGACY_ALIAS: tl.constexpr):
+        if USE_LEGACY_ALIAS:
+            tl.debug_barrier()
+        else:
+            tl.fence()
+
+    module = run_parser(kernel, args=(use_legacy_alias, ), kwargs={"num_ctas": num_ctas}, target=target)
+    assert "tt.fence" in module.str_nodebug()
 
 
 def doesnt_compile(kernel):

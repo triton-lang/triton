@@ -121,6 +121,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerTritonAMDGPUSinkLayoutConversions();
   mlir::registerTritonAMDGPUPrepareIfCombining();
   mlir::registerTritonAMDGPUMoveUpPrologueLoads();
+  mlir::registerTritonAMDGPULowerFence();
   mlir::registerTritonAMDGPUBlockPingpong();
   mlir::registerTritonAMDGPUPipeline();
   mlir::registerTritonAMDGPUScheduleLoops();
