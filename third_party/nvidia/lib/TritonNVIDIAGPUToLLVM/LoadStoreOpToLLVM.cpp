@@ -1278,15 +1278,15 @@ struct AsyncTMACopyGlobalToLocalOpConversion
 
     int rank = op.getCoord().size();
 
+    auto ctx = op.getContext();
+    auto kBlock = str_attr("block");
     auto msgToPackedOffset = getMsgToPackedOffsetLayout(smemTy, tmaMode);
     auto smemLayout = ttg::toLinearLayout(smemTy);
     auto msgToShared =
-        invertAndComposeBlockLocal(smemLayout, msgToPackedOffset);
+        invertAndComposeLocal(smemLayout, msgToPackedOffset, {kBlock});
     auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, smemTy);
 
-    auto ctx = op.getContext();
     auto kMsg = str_attr("msg");
-    auto kBlock = str_attr("block");
     const auto numCopies = msgToOffset.getInDimSize(kMsg);
     auto ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
     // We multicast if the flag is on and the block layout has broadcasting
@@ -1654,7 +1654,7 @@ static LogicalResult iterateGatherScatterIndices(
   // of the 0th element of row 4 will not be at the start of the segment.
   LinearLayout sharedLayout = getUnswizzledLayout(smemType);
   LinearLayout msgToShared =
-      invertAndComposeBlockLocal(sharedLayout, msgLayout);
+      invertAndComposeLocal(sharedLayout, msgLayout, {kBlock});
 
   // If there are too few rows, warps will have redundant data.
   auto freeVars = xCoordsLayout.getFreeVariableMasks();

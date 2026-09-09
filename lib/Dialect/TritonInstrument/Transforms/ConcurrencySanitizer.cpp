@@ -510,15 +510,16 @@ void extendXorSpan(uint32_t &span, uint32_t basis, int numCTAs) {
 
 LinearLayout getLocalLoadStoreConversion(ttg::MemDescType memDescTy,
                                          RankedTensorType regTy) {
-  return invertAndComposeBlockLocal(
-      ttg::toLinearLayoutIgnoringPadding(memDescTy),
-      ttg::toLinearLayout(regTy));
+  auto kBlock = StringAttr::get(memDescTy.getContext(), "block");
+  return invertAndComposeLocal(ttg::toLinearLayoutIgnoringPadding(memDescTy),
+                               ttg::toLinearLayout(regTy), {kBlock});
 }
 
 LinearLayout getLocalGatherScatterConversion(ttg::MemDescType memDescTy,
                                              RankedTensorType regTy,
                                              unsigned axis) {
   MLIRContext *ctx = memDescTy.getContext();
+  auto kBlock = StringAttr::get(ctx, "block");
   LinearLayout sharedLayout = ttg::toLinearLayoutIgnoringPadding(memDescTy);
   SmallVector<StringAttr> allDims =
       standardOutDimNames(ctx, memDescTy.getRank());
@@ -532,7 +533,7 @@ LinearLayout getLocalGatherScatterConversion(ttg::MemDescType memDescTy,
       LinearLayout::identity1D(sharedLayout.getOutDimSize(axisDim), axisDim,
                                axisDim);
   indexedLayout = indexedLayout.transposeOuts(allDims);
-  return invertAndComposeBlockLocal(sharedLayout, indexedLayout);
+  return invertAndComposeLocal(sharedLayout, indexedLayout, {kBlock});
 }
 
 uint32_t getXorImageMask(const LinearLayout &layout, StringAttr outDim,
@@ -634,8 +635,9 @@ Value getScratchReadCTAs(ImplicitLocOpBuilder &b, Operation *op,
   if (auto convert = dyn_cast<ttg::ConvertLayoutOp>(op)) {
     LinearLayout srcLayout = ttg::toLinearLayout(convert.getSrc().getType());
     LinearLayout dstLayout = ttg::toLinearLayout(convert.getType());
+    auto kBlock = b.getStringAttr("block");
     Value loadCTAs = getLocalMemoryRecipientCTAs(
-        b, invertAndComposeBlockLocal(srcLayout, dstLayout));
+        b, invertAndComposeLocal(srcLayout, dstLayout, {kBlock}));
     return arith::OrIOp::create(b, ownerCTAs, loadCTAs);
   }
 

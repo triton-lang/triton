@@ -64,7 +64,8 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   auto sharedLayout = toLinearLayoutIgnoringPadding(memDescTy);
-  auto cvt = invertAndComposeBlockLocal(sharedLayout, regLayout);
+  auto kBlock = str_attr("block");
+  auto cvt = invertAndComposeLocal(sharedLayout, regLayout, {kBlock});
 
   lowerLocalLdSt(loc, ctx, cvt, inVals, llvmElemTy, memDescTy, smemObj,
                  rewriter, targetInfo,
@@ -194,7 +195,8 @@ public:
     auto regLayout =
         toLinearLayout(regTy).removeZeroBasesAlongDim(str_attr("register"));
     auto sharedLayout = toLinearLayoutIgnoringPadding(memDescTy);
-    auto cvt = invertAndComposeBlockLocal(sharedLayout, regLayout);
+    auto kBlock = str_attr("block");
+    auto cvt = invertAndComposeLocal(sharedLayout, regLayout, {kBlock});
 
     auto outVals = lowerLocalLdSt(loc, ctx, cvt, {}, llvmElemTy, memDescTy,
                                   smemObj, rewriter, targetInfo,
