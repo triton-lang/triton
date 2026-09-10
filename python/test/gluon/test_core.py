@@ -6131,7 +6131,7 @@ def test_tcgen05_mma_scaled_sliced_a_scales(M, K, parent_m, compact, use_acc, of
         N: ttgl.constexpr = 128
         reg: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
         k = ttgl.arange(0, K, ttgl.SliceLayout(0, reg))[None, :]
-        a = (1 + k // 128 + ttgl.zeros([M, K], ttgl.int32, reg)).to(ttgl.float8e5)
+        a = (1.0 + k // 128 + ttgl.zeros([M, K], ttgl.float32, reg)).to(ttgl.float8e5)
         b = ttgl.full([K, N], 1, ttgl.float8e5, reg)
         smem_a = ttgl.allocate_shared_memory(ttgl.float8e5, [M, K], ttgl.NVMMASharedLayout(128, 8, transposed=False), a)
         smem_b = ttgl.allocate_shared_memory(ttgl.float8e5, [K, N], ttgl.NVMMASharedLayout(128, 8, transposed=True), b)
