@@ -305,13 +305,12 @@ SmallVector<AllocationSlice> MembarAnalysis::getAllocationSlices(Value value) {
   };
   Allocation::BufferIdSetT bufferIds;
   if (accessMode == AccessMode::AllocatorAliasesOnly) {
-    // Allocation identity survives unknown geometry. Direct argument effects
+    // Allocation identity survives unknown geometry. Argument effects
     // have no local IDs; retain them until a caller binds their allocation.
     bufferIds = allocation.getAllBufferIdsWithAliases(value);
-    auto argument = dyn_cast<BlockArgument>(value);
-    if (argument && argument.getOwner() == &function.getBlocks().front()) {
+    for (unsigned argument : allocation.getAliasedArgumentIndices(value)) {
       AllocationSlice slice(Interval<size_t>{});
-      slice.argumentIndex = argument.getArgNumber();
+      slice.argumentIndex = argument;
       slices.push_back(std::move(slice));
     }
   } else if (footprint) {
@@ -355,11 +354,6 @@ void MembarAnalysis::updateMemoryEffects(Operation *op, MembarInfo *membarInfo,
                   slice.translateToCallsite(call, callee, regions)};
             Value actual = call.getArgOperands()[*slice.argumentIndex];
             auto slices = getAllocationSlices(actual);
-            if (!actual.getDefiningOp<triton::gpu::LocalAllocOp>() &&
-                llvm::none_of(slices, [](const AllocationSlice &bound) {
-                  return bound.argumentIndex.has_value();
-                }))
-              return SmallVector<AllocationSlice>{};
             // A callee can reinterpret the argument's view. Retain the caller's
             // allocation IDs, but cover each whole allocation without shifting.
             for (AllocationSlice &bound : slices) {
