@@ -206,7 +206,8 @@ public:
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    if (triton::gpu::lookupNumWarps(op) == 1) {
+    int numWarps = triton::gpu::lookupNumWarps(op);
+    if (numWarps == 1) {
       // If there is only one warp, the warp ID is always 0.
       rewriter.replaceOp(op, b.i32_val(0));
       return success();
@@ -214,6 +215,15 @@ public:
 
     Value tid = NVVM::ThreadIdXOp::create(rewriter, loc, i32_ty);
     Value warpId = b.udiv(tid, b.i32_val(32));
+    auto func = op->getParentOfType<FunctionOpInterface>();
+    if (func->hasAttr("ws_num_warps")) {
+      // Outlined helpers use relative IDs. Worker starts are congruent to
+      // moduleWarps modulo their width; default helpers have zero offset.
+      int moduleWarps =
+          triton::gpu::lookupNumWarps(func->getParentOfType<ModuleOp>());
+      warpId = b.sub(warpId, b.i32_val(moduleWarps % numWarps));
+      warpId = b.and_(warpId, b.i32_val(numWarps - 1));
+    }
     if (!op.getOmitUniformHint()) {
       // This indicates to PTXAS that the result and its derived values are
       // uniform across the warp. For example, if a branch condition derives

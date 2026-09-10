@@ -416,10 +416,18 @@ Value getThreadId(OpBuilder &rewriter, Location loc) {
 
   TritonLLVMOpBuilder b(loc, rewriter);
 
-  // If this is being created inside a warp specialize op, compute the relative
-  // thread ID within the warp group.
-  if (std::optional<int> startId =
-          getWarpGroupStartThreadId(rewriter.getInsertionBlock())) {
+  std::optional<int> startId =
+      getWarpGroupStartThreadId(rewriter.getInsertionBlock());
+  auto func = lookupPt->getParentOfType<FunctionOpInterface>();
+  if (!startId && func->hasAttr("ws_num_warps")) {
+    // Outlined helpers use relative IDs. Descending worker sizes place each
+    // W-warp partition at moduleWarps mod W; default helpers have
+    // W=moduleWarps.
+    int moduleWarps =
+        triton::gpu::lookupNumWarps(func->getParentOfType<ModuleOp>());
+    startId = (moduleWarps % numWarps) * threadsPerWarp;
+  }
+  if (startId) {
     tid = arith::SubIOp::create(rewriter, loc, tid, b.i32_val(*startId));
   }
 

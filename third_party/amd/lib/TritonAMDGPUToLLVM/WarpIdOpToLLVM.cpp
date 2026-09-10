@@ -42,6 +42,16 @@ public:
 
     if (targetInfo.supportsWaveId()) {
       warpId = ROCDL::WaveId::create(rewriter, loc, i32_ty);
+      auto func = op->getParentOfType<FunctionOpInterface>();
+      if (func->hasAttr("ws_num_warps")) {
+        // Outlined helpers use relative IDs. Worker starts are congruent to
+        // moduleWarps modulo their width; default helpers have zero offset.
+        int numWarps = triton::gpu::lookupNumWarps(op);
+        int moduleWarps =
+            triton::gpu::lookupNumWarps(func->getParentOfType<ModuleOp>());
+        warpId = b.sub(warpId, b.i32_val(moduleWarps % numWarps));
+        warpId = b.and_(warpId, b.i32_val(numWarps - 1));
+      }
     } else {
       int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
       Value warpSizeVal = b.i32_val(threadsPerWarp);

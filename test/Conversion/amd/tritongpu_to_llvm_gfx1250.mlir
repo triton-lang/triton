@@ -142,3 +142,37 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return %0 : tensor<64xbf16, #blocked>
   }
 }
+
+// -----
+
+#blocked8 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 12 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // The eight-warp worker starts at physical wave 4. Its outlined range must
+  // use the same relative wave IDs as its caller's range.
+  // GFX1250-LABEL: llvm.func internal @outlined_indices_8
+  // GFX1250: [[WAVE:%.*]] = rocdl.wave.id : i32
+  // GFX1250: [[OFFSET:%.*]] = llvm.mlir.constant(4 : i32) : i32
+  // GFX1250: [[REL:%.*]] = llvm.sub [[WAVE]], [[OFFSET]] : i32
+  // GFX1250: [[MASK:%.*]] = llvm.mlir.constant(7 : i32) : i32
+  // GFX1250: llvm.and [[REL]], [[MASK]] : i32
+  tt.func private @outlined_indices_8() -> tensor<256xi32, #blocked8> attributes {noinline = true, "ttg.num-warps" = 8 : i32} {
+    %range = tt.make_range {start = 0 : i32, end = 256 : i32} : tensor<256xi32, #blocked8>
+    tt.return %range : tensor<256xi32, #blocked8>
+  }
+
+  tt.func @call_outlined_indices_8(%out: !tt.ptr<i32>) {
+    ttg.warp_specialize(%out) attributes {warpGroupStartIds = array<i32: 4>}
+    default {
+      ttg.warp_yield
+    }
+    partition0(%arg0: !tt.ptr<i32>) num_warps(8) {
+      %values = tt.call @outlined_indices_8() : () -> tensor<256xi32, #blocked8>
+      %range = tt.make_range {start = 0 : i32, end = 256 : i32} : tensor<256xi32, #blocked8>
+      %base = tt.splat %arg0 : !tt.ptr<i32> -> tensor<256x!tt.ptr<i32>, #blocked8>
+      %ptrs = tt.addptr %base, %range : tensor<256x!tt.ptr<i32>, #blocked8>, tensor<256xi32, #blocked8>
+      tt.store %ptrs, %values : tensor<256x!tt.ptr<i32>, #blocked8>
+      ttg.warp_return
+    } : (!tt.ptr<i32>) -> ()
+    tt.return
+  }
+}

@@ -4460,6 +4460,10 @@ std::optional<int> triton::gpu::maybeLookupNumWarps(Operation *op) {
     unsigned idx = op->getParentRegion()->getRegionNumber();
     return partitions.getParentOp().getPartitionNumWarps()[idx];
   }
+  // Function conversion preserves an outlined helper's warp count here.
+  if (isa<FunctionOpInterface>(op))
+    if (auto attr = op->getAttrOfType<IntegerAttr>("ws_num_warps"))
+      return attr.getInt();
   if (Operation *parent = op->getParentOp())
     return maybeLookupNumWarps(parent);
   return {};
