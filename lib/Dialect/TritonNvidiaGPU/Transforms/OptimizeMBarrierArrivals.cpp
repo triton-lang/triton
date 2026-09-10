@@ -203,8 +203,8 @@ static void distributeArrivals(gpu::LocalAllocOp alloc,
 }
 
 static bool isSynchronizationCandidate(Operation *op) {
-  if (auto arrive = dyn_cast<ArriveBarrierOp>(op))
-    return arrive.getPerWarp();
+  if (auto barrier = dyn_cast<gpu::MBarrierOpInterface>(op))
+    return barrier.isPerWarp();
   auto barrier = dyn_cast<gpu::BarrierOp>(op);
   return barrier && barrier.isWarp();
 }
@@ -225,7 +225,16 @@ public:
     for (Operation *op : foldableOps) {
       if (auto arrive = dyn_cast<ArriveBarrierOp>(op))
         arrive.setPerWarp(false);
-      else
+      else if (auto expect = dyn_cast<BarrierExpectOp>(op)) {
+        expect.setPerWarp(false);
+        OpBuilder builder(op);
+        builder.setInsertionPointAfter(op);
+        // Register all bytes before supplying the remaining arrivals.
+        auto arrive = ArriveBarrierOp::create(
+            builder, expect.getLoc(), expect.getAlloc(),
+            gpu::lookupNumWarps(expect) - 1, expect.getPred());
+        arrive.setFromCTAAttr(expect.getFromCTAAttr());
+      } else
         cast<gpu::BarrierOp>(op).erase();
     }
   }
@@ -235,7 +244,7 @@ private:
               OpBuilder *) override {
     if (isSynchronizationCandidate(op)) {
       bool canFold = info->warpsSynced;
-      if (isa<ArriveBarrierOp>(op))
+      if (isa<gpu::MBarrierOpInterface>(op))
         canFold &= info->allPathsFromEntrySynced && !info->pending.hasEffects();
       // A later predecessor or backedge can invalidate an earlier decision.
       if (canFold)

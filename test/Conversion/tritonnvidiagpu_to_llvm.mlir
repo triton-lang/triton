@@ -548,7 +548,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
   // The helper's two warps split the bytes and preserve identity routing.
   // CHECK-LABEL: expect_barrier_distributed
-  // CHECK: nvvm.bar.warp.sync
   // CHECK: nvvm.elect.sync
   // CHECK-NOT: nvvm.read.ptx.sreg.tid.x
   // CHECK: @$0 mbarrier.arrive.expect_tx.shared::cta.b64 _, [$1], 8192;

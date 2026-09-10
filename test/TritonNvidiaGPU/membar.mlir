@@ -293,6 +293,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
+  // Preserve the helper's arrival count, predicate, and identity routing.
+  // CLEANUP-LABEL: @expectation_after_cta
+  // CLEANUP-NEXT: ttg.barrier local
+  // CLEANUP-NEXT: ttng.barrier_expect %[[BAR:.*]], 1024 {fromCTA = 0 : i32}, %[[PRED:.*]] :
+  // CLEANUP-NEXT: ttng.arrive_barrier %[[BAR]], 1, %[[PRED]] {fromCTA = 0 : i32} :
+  // CLEANUP-NEXT: tt.return
+  tt.func private @expectation_after_cta(%bar: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %pred: i1) attributes {noinline = true, "ttg.num-warps" = 2 : i32} {
+    ttg.barrier local
+    ttng.barrier_expect %bar, 1024 {fromCTA = 0 : i32, per_warp}, %pred : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+
   // Tensor arithmetic preserves synchronization across CFG edges.
   // CLEANUP-LABEL: @arrival_after_tensor_arithmetic
   // CLEANUP: ttg.barrier local

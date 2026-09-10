@@ -274,7 +274,6 @@ struct BarrierExpectConversion
         loc, rewriter, smemObj.getBase(), barrierTy);
     Value multicastMask;
     if (op.getPerWarp()) {
-      LLVM::NVIDIA::createSyncWarp(loc, rewriter);
       // Match the fixed full-mask leader used by each warp's TMA copies.
       // One-CTA expectations have only identity routing.
       pred = LLVM::NVIDIA::createElectPredicate(loc, rewriter);
