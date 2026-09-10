@@ -4805,9 +4805,10 @@ def test_full(dtype_str, shape, device):
                          [torch.float8_e4m3fn, torch.float8_e5m2, torch.float8_e4m3fnuz, torch.float8_e5m2fnuz])
 @pytest.mark.parametrize("shape", [(), (1, ), (128, )])
 @pytest.mark.parametrize("value", [
-    0.0, -0.0, 1.0, 0.1, -0.1, 1.1, 1.0625, 1.1875, 1.125, 1.375, 1.0625 + 2**-30, 1.125 + 2**-30, 2**-9,
-    2**-10 + 2**-20, 2**-16, 2**-17, 2**-18, -2**-18, 240.0, 248.0, 448.0, 464.0, -464.0, 464.0 + 2**-20, 465.0, -465.0,
-    57344.0, 61440.0,
+    0.0, -0.0, 1.0, 0.1, -0.1, 1.1, 1.0625, 1.1875, 1.125, 1.375, 1.875, 1.9375, 1.0625 + 2**-30, 1.125 + 2**-30,
+    1.0625 + 2**-23, 1.125 + 2**-23, 2**-9, 2**-10 + 2**-20, 2**-16, 2**-17, 2**-18, -2**-18, 2**-18 + 2**-30, 240.0,
+    248.0, 448.0, 464.0, -464.0, 464.0 + 2**-20, 465.0, -465.0, 57344.0, -57344.0, 61440.0, -61440.0, 65504.0, 1e10,
+    -1e10,
     float("inf"),
     float("-inf"),
     float("nan")
@@ -4819,18 +4820,25 @@ def test_full_fp8(dtype, shape, value, device):
         pytest.skip("FNUZ formats are not supported on CUDA")
 
     @triton.jit
-    def kernel(out, value: tl.constexpr, shape: tl.constexpr):
+    def kernel(src, out, value: tl.constexpr, shape: tl.constexpr):
         a = tl.full(shape, value, out.dtype.element_ty)
+        b = tl.full(shape, tl.load(src), out.dtype.element_ty)
         tl.static_assert(a.shape == shape)
+        tl.static_assert(b.shape == shape)
         tl.store(out + tl.arange(0, 128), a)
+        tl.store(out + 128 + tl.arange(0, 128), b)
 
-    out = torch.empty((128, ), dtype=dtype, device=device)
-    kernel[(1, )](out, value, shape)
+    src = torch.tensor([value], dtype=torch.float32)
+    out = torch.empty((2, 128), dtype=dtype, device=device)
+    kernel[(1, )](src.to(device), out, value, shape)
     actual = out.cpu()
-    expected = torch.full((128, ), value, dtype=torch.float32, device="cpu").to(dtype)
-    # E4M3 constants overflow to NaN; newer PyTorch versions saturate to +/-448.
-    overflows_e4m3 = dtype == torch.float8_e4m3fn and abs(np.float32(value)) > 464
-    if overflows_e4m3 or torch.isnan(expected.float()).all():
+    # FP8 casts saturate, except that FNUZ formats map infinities to NaN.
+    max_value = torch.finfo(dtype).max
+    expected = src.clamp(-max_value, max_value)
+    if triton_dtype in (tl.float8e4b8, tl.float8e5b16) and torch.isinf(src).all():
+        expected.fill_(float("nan"))
+    expected = expected.to(dtype).expand_as(actual)
+    if torch.isnan(expected.float()).all():
         assert torch.isnan(actual.float()).all()
     else:
         torch.testing.assert_close(actual.view(torch.uint8), expected.view(torch.uint8))

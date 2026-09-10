@@ -1,4 +1,4 @@
-#include "llvm/ADT/APFloat.h"
+#include "fp8.h"
 
 #include <atomic>
 #include <cmath>
@@ -752,18 +752,24 @@ void init_triton_interpreter(py::module_ &m) {
   m.def("fma_fp32", &fma_array<float>);
   m.def("fma_fp64", &fma_array<double>);
 
-  m.def("get_fp8", [](float value, const std::string &dtype) {
+  m.def("convert_fp8", [](const AnyArray &input, const std::string &dtype) {
+    require_dtype<float>(input, "input");
     static const std::map<std::string, const llvm::fltSemantics *> semantics = {
         {"fp8e4nv", &llvm::APFloat::Float8E4M3FN()},
         {"fp8e5", &llvm::APFloat::Float8E5M2()},
         {"fp8e4b8", &llvm::APFloat::Float8E4M3FNUZ()},
         {"fp8e5b16", &llvm::APFloat::Float8E5M2FNUZ()},
     };
-    llvm::APFloat result(value);
-    bool losesInfo;
-    result.convert(*semantics.at(dtype), llvm::APFloat::rmNearestTiesToEven,
-                   &losesInfo);
-    return result.bitcastToAPInt().getZExtValue();
+    const auto &dstSemantics = *semantics.at(dtype);
+    py::object ret = numpy_empty(input.size(), py::str("uint8"));
+    auto ret_array = py::cast<MutableArray>(ret);
+    auto *out = static_cast<uint8_t *>(ret_array.data());
+    for (size_t i = 0; i < input.size(); ++i) {
+      float value;
+      memcpy(&value, const_element_data(input, i), sizeof(value));
+      out[i] = convertFp8(value, dstSemantics).bitcastToAPInt().getZExtValue();
+    }
+    return ret.attr("reshape")(shape_list(input));
   });
 
   m.def("load",

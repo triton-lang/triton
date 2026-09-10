@@ -1,4 +1,5 @@
 #include "ir.h"
+#include "fp8.h"
 
 #include <cstring>
 #include <nanobind/nanobind.h>
@@ -997,8 +998,9 @@ void init_triton_ir(py::module_ &m) {
            })
       .def("get_fp8",
            [](TritonOpBuilder &self, float v, Type type) -> Value {
-             return self.create<arith::ConstantOp>(
-                 self.getBuilder().getFloatAttr(type, v));
+             auto floatType = cast<FloatType>(type);
+             return self.create<arith::ConstantFloatOp>(
+                 floatType, convertFp8(v, floatType.getFloatSemantics()));
            })
       .def("get_fp16",
            [](TritonOpBuilder &self, float v) -> Value {
