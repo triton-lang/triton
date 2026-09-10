@@ -493,7 +493,7 @@ tt.func @fuse_attr_speculate(%lb: i32, %ub: i32) {
   %c1_i32 = arith.constant 1 : i32
 
   // CHECK: [[LEN:%.*]] = arith.subi [[UB]], [[LB]]
-  // CHECK: [[IS_ZERO:%.*]] = arith.cmpi eq, [[LEN]], %c0_i32
+  // CHECK: [[IS_ZERO:%.*]] = arith.cmpi sle, [[LEN]], %c0_i32
 
   // CHECK: scf.if [[IS_ZERO]]
   // CHECK-NEXT: scf.for %{{.*}} = [[LB]] to [[UB]] step %c1_i32
@@ -525,7 +525,7 @@ tt.func @fuse_attr_speculate(%lb: i32, %ub: i32) {
 tt.func @speculate_hoist(%lb: i32, %ub: i32) {
   %c1_i32 = arith.constant 1 : i32
 
-  // CHECK: [[IS_ZERO:%.*]] = arith.cmpi eq, [[UB]], %c0_i32
+  // CHECK: [[IS_ZERO:%.*]] = arith.cmpi sle, [[UB]], %c0_i32
 
   // CHECK: scf.if [[IS_ZERO]]
   scf.for %i = %lb to %ub step %c1_i32 : i32 {
@@ -613,7 +613,7 @@ tt.func @assume_not_dominating_loop(%lb: i32, %ub: i32, %flag: i1) {
   // it must still be emitted (the assume on the other branch is not in force
   // here). The buggy pass instead replaced this guard with `arith.constant
   // true` because it matched the assume without a dominance check.
-  // CHECK: [[IS_ZERO:%.*]] = arith.cmpi eq, [[UB]], %c0_i32
+  // CHECK: [[IS_ZERO:%.*]] = arith.cmpi sle, [[UB]], %c0_i32
   // CHECK: scf.if [[IS_ZERO]]
   // CHECK-NEXT: scf.for %{{.*}} = %c0_i32 to [[UB]] step %c1_i32
   // CHECK-NEXT:   "prologue"
@@ -634,5 +634,29 @@ tt.func @assume_not_dominating_loop(%lb: i32, %ub: i32, %flag: i1) {
     } {tt.flatten}
     scf.yield
   }
+  tt.return
+}
+
+// -----
+
+// The inner loop runs from 5 to 3, so its trip count is negative, not zero.
+// Speculation must still take the empty branch: the inner body is unpredicated
+// in the non-empty branch, so it would otherwise run once per outer iteration.
+// CHECK-LABEL: @speculate_empty_inner
+// CHECK: "prologue"
+// CHECK-NOT: "body"
+tt.func @speculate_empty_inner() {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c3_i32 = arith.constant 3 : i32
+  %c4_i32 = arith.constant 4 : i32
+  %c5_i32 = arith.constant 5 : i32
+  scf.for %i = %c0_i32 to %c4_i32 step %c1_i32 : i32 {
+    "prologue"(%i) : (i32) -> ()
+    scf.for %j = %c5_i32 to %c3_i32 step %c1_i32 : i32 {
+      "body"(%i, %j) : (i32, i32) -> ()
+      scf.yield
+    }
+  } {tt.flatten}
   tt.return
 }

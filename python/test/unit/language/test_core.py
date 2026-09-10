@@ -6999,6 +6999,26 @@ def test_tl_range_fuse_dependent(device):
     torch.testing.assert_close(out_j, ref_j, atol=0, rtol=0)
 
 
+@pytest.mark.parametrize("inner_ub", [3, 6])
+def test_tl_range_fuse_empty_inner(inner_ub, device):
+    # The inner loop is empty when its upper bound is below its lower bound. Its
+    # trip count is then negative rather than zero, which loop fusion must still
+    # speculate as empty: the fused loop does not predicate the inner body.
+
+    @triton.jit
+    def kernel(inner_ub, out_ptr):
+        acc = tl.full((), 0, tl.int32)
+        for _ in tl.range(0, 4, flatten=True):
+            for _ in tl.range(5, inner_ub):
+                acc += 1
+        tl.store(out_ptr, acc)
+
+    out = torch.empty((), dtype=torch.int32, device=device)
+    compiled_kernel = kernel[(1, )](inner_ub, out, num_warps=1)
+    assert "tt.flatten" in compiled_kernel.asm["ttir"]
+    assert out.item() == 4 * len(range(5, inner_ub))
+
+
 def test_tl_range_option_none():
 
     @triton.jit

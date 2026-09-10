@@ -1162,11 +1162,15 @@ static LogicalResult speculateInnerLoopLength(scf::ForOp outerLoop,
   // Mark the inner loop.
   innerLoop->setAttr(kMustExecuteAttrName, b.getUnitAttr());
 
-  // Speculate on whether the length of the inner loop is zero.
+  // Speculate on whether the inner loop is empty. The `else` branch keeps the
+  // must-execute marking above, which drops the predicate around the inner
+  // body, so this has to prove the trip count is positive. `computeNumIters`
+  // returns ceildivsi(ub - lb, step), which is negative rather than zero when
+  // the bounds are reversed, so test for a non-positive length.
   Value lenInner = computeNumIters(b, innerLoop);
   auto zeroAttr = IntegerAttr::get(lenInner.getType(), 0);
   Value innerLoopEmpty =
-      arith::CmpIOp::create(b, arith::CmpIPredicate::eq, lenInner,
+      arith::CmpIOp::create(b, arith::CmpIPredicate::sle, lenInner,
                             arith::ConstantOp::create(b, zeroAttr));
   auto ifOp = scf::IfOp::create(b, outerLoop.getResultTypes(), innerLoopEmpty);
 
