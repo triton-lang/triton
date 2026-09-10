@@ -32,6 +32,9 @@ class TritonSemantic(Generic[TensorTy]):
     def __init__(self, builder):
         self.builder = builder
 
+    def to_inline_asm_operand(self, arg):
+        return self.to_tensor(arg)
+
 # ===----------------------------------------------------------------------===##
 # Programming Model
 # ===----------------------------------------------------------------------===##
@@ -358,7 +361,7 @@ class TritonSemantic(Generic[TensorTy]):
 # other arithmetic ops
 ##############
 
-    def minimum(self, x: TensorTy, y: TensorTy, propagate_nan: tl.PropagateNan):
+    def minimum(self, x: TensorTy | numbers.Number, y: TensorTy | numbers.Number, propagate_nan: tl.PropagateNan):
         x, y = self.binary_op_type_checking_impl(x, y)
         dtype = x.dtype
         if dtype.is_floating():
@@ -375,7 +378,7 @@ class TritonSemantic(Generic[TensorTy]):
         else:
             raise TypeError(f"Unexpected dtype {dtype}")
 
-    def maximum(self, x: TensorTy, y: TensorTy, propagate_nan: tl.PropagateNan):
+    def maximum(self, x: TensorTy | numbers.Number, y: TensorTy | numbers.Number, propagate_nan: tl.PropagateNan):
         x, y = self.binary_op_type_checking_impl(x, y)
         dtype = x.dtype
         if dtype.is_floating():
