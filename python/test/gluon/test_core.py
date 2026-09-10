@@ -1224,7 +1224,8 @@ def test_mbarrier_multiple_tma_expectations(device, expect_before_copy, synchron
     ptx = compiled.asm["ptx"]
     # Check the physical counts before launch so a mismatch fails without hanging.
     assert re.findall(r"mbarrier\.init\.shared::cta\.b64\s+\[[^\]]+\],\s*(\d+)", ptx) == ["8"]
-    byte_counts = re.findall(r"mbarrier\.arrive\.expect_tx\.shared::cta\.b64\s+_,\s*\[[^\]]+\],\s*(\d+)", ptx)
+    expectations = list(re.finditer(r"mbarrier\.arrive\.expect_tx\.shared::cta\.b64\s+_,\s*\[[^\]]+\],\s*(\d+)", ptx))
+    byte_counts = [expect.group(1) for expect in expectations]
     # Membar already synchronizes the first expectation when it precedes copies.
     assert byte_counts == [
         "4096" if synchronize_expect or expect_before_copy else "1024",
@@ -1232,6 +1233,13 @@ def test_mbarrier_multiple_tma_expectations(device, expect_before_copy, synchron
     ]
     arrival_counts = re.findall(r"mbarrier\.arrive\.shared::cta\.b64\s+_,\s*\[[^\]]+\],\s*(\d+)", ptx)
     assert arrival_counts == ["3"] * byte_counts.count("4096")
+    # Folding must not add a CTA barrier before the next copy or wait.
+    for expect in expectations:
+        if expect.group(1) == "4096":
+            following = ptx[expect.end():]
+            next_op = re.search(r"cp\.async\.bulk\.tensor\.|mbarrier\.try_wait\.", following)
+            assert next_op is not None
+            assert not re.search(r"\bbar(?:rier)?\.sync\b", following[:next_op.start()])
     kernel[(1, )](desc, out, iterations, expect_before_copy, synchronize_expect, num_warps=4)
     torch.testing.assert_close(out, inp[-32:])
 
