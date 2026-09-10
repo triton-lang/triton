@@ -1219,6 +1219,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
+// N=8 scale stores use the allocation's 16 physical rows.
+#linear = #ttg.linear<{register = [[0, 1]], lane = [[1, 0], [2, 0], [4, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
+#tmem_scales = #ttng.tensor_memory_scales_encoding<>
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+// CHECK-LABEL: @store_8x2_scales
+tt.func private @store_8x2_scales(%arg0: !ttg.memdesc<8x2xi8, #tmem_scales, #ttng.tensor_memory, mutable>, %arg1: tensor<8x2xi8, #linear>) {
+  %true = arith.constant true
+  // CHECK: @$0 tcgen05.st.sync.aligned.16x32bx2.x1.b32 [$1 + 0], 0, {$2}
+  ttng.tmem_store %arg1, %arg0, %true : tensor<8x2xi8, #linear> -> !ttg.memdesc<8x2xi8, #tmem_scales, #ttng.tensor_memory, mutable>
+  tt.return
+}
+}
+
+// -----
+
 // Test basic reduction with min
 // The reduction output has 1 value per thread per message
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>

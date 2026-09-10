@@ -259,6 +259,7 @@ computeTMemLdStEncodingInfo(RankedTensorType regTy, MemDescType memTy,
   auto kBlock = S("block");
   auto kWarp = S("warp");
   auto kRow = S("row");
+  auto kLane = S("lane");
   auto cvt = regLayout.invertAndCompose(memLayout);
   auto maybeSublayout = cvt.quotient({kBlock});
   if (!maybeSublayout) {
@@ -287,6 +288,16 @@ computeTMemLdStEncodingInfo(RankedTensorType regTy, MemDescType memTy,
   auto bases = cvt.getBases();
   bases[kWarp][0] = {32, 0};
   bases[kWarp][1] = {64, 0};
+  if (isa<TensorMemoryScalesEncodingAttr>(memTy.getEncoding()) &&
+      memTy.getShape().front() == 8 &&
+      memTy.getAllocShape().take_back(2).front() == 8 &&
+      memLayout.getInDimSize(kBlock) == 1 &&
+      cvt.getBasis(kLane, 3) == ArrayRef{0, 0}) {
+    // A scale allocation owns at least 16 rows per warp. Use its unused rows
+    // for the upper eight lanes of each store. Scale descriptors are
+    // store-only.
+    bases[kLane][3] = {8, 0};
+  }
   cvt = LinearLayout(std::move(bases), cvt.getOutDims(),
                      /*isSurjective=*/cvt.isSurjective());
 

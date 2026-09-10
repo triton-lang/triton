@@ -2381,6 +2381,40 @@ def test_tmem_copy_2d():
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("K", [2, 4, 8, 16])
+@pytest.mark.parametrize("num_warps", [4, 8])
+def test_tmem_scales_narrow_rows(K, num_warps):
+
+    @gluon.jit
+    def kernel(inp, out, guard_out, K: ttgl.constexpr):
+        COLS: ttgl.constexpr = 1 if K <= 4 else K // 2
+        word_layout: ttgl.constexpr = TensorMemoryLayout([64, COLS], col_stride=1)
+        guard = allocate_tensor_memory(ttgl.int32, [64, COLS], word_layout)
+        guard.store(ttgl.full([64, COLS], -7, ttgl.int32, guard.get_reg_layout()))
+        scales = allocate_tensor_memory(ttgl.uint8, [8, K], TensorMemoryScalesLayout())
+        layout: ttgl.constexpr = scales.get_reg_layout()
+        rows = ttgl.arange(0, 8, layout=ttgl.SliceLayout(1, layout))[:, None]
+        cols = ttgl.arange(0, K, layout=ttgl.SliceLayout(0, layout))[None, :]
+        scales.store(ttgl.load(inp + rows * K + cols))
+
+        # Read the physical words to check the scale rows in every warp's block.
+        words = scales.reinterpret(ttgl.int32, [64, COLS], word_layout)
+        result_layout: ttgl.constexpr = words.get_reg_layout()
+        rows = ttgl.arange(0, 64, layout=ttgl.SliceLayout(1, result_layout))[:, None]
+        cols = ttgl.arange(0, COLS, layout=ttgl.SliceLayout(0, result_layout))[None, :]
+        ttgl.store(out + rows * COLS + cols, words.load())
+        ttgl.store(guard_out + rows * COLS + cols, guard.load())
+
+    inp = torch.arange(8 * K, device="cuda").reshape(8, K).to(torch.uint8)
+    out = torch.empty((64, 1 if K <= 4 else K // 2), dtype=torch.int32, device="cuda")
+    guard = torch.empty_like(out)
+    kernel[(1, )](inp, out, guard, K, num_warps=num_warps)
+    scale_bytes = out[:, ::2].contiguous().flatten().view(torch.uint8).reshape(4, 16, -1)[:, :8, :K]
+    torch.testing.assert_close(scale_bytes, inp.expand(4, -1, -1), atol=0, rtol=0)
+    torch.testing.assert_close(guard, torch.full_like(guard, -7), atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_pipeline_stage_subslice_index_reinterpret():
 
     @gluon.jit

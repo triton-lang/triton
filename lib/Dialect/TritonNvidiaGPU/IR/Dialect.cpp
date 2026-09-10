@@ -385,6 +385,25 @@ getDistributedLayoutForTmemLdSt(gpu::MemDescType memType, TMemAccessAtom atom,
          "This layout is inferred sometimes for the 32x32b atom");
   auto ll = toLinearLayout(memType);
   auto bitwidth = memType.getElementTypeBitWidth();
+  if (atom == TMemAccessAtom::I32x32b &&
+      isa<TensorMemoryScalesEncodingAttr>(memType.getEncoding()) &&
+      memType.getShape().front() == 8 &&
+      memType.getAllocShape().take_back(2).front() == 8 &&
+      ll.getInDimSize(StringAttr::get(memType.getContext(), "block")) == 1) {
+    // The allocation reserves 16 rows per warp. Infer the physical access,
+    // then broadcast the unused rows in the register layout.
+    auto bases = ll.getBases();
+    bases[StringAttr::get(memType.getContext(), "row")][3] = {8, 0};
+    auto dims = ll.getOutDims();
+    dims[0].second = 16;
+    auto physicalLayout =
+        LinearLayout(std::move(bases), dims, /*requireSurjective=*/true);
+    auto layout = getDistributedLayoutForTmemLdSt(physicalLayout, atom,
+                                                  numWarps, bitwidth);
+    if (layout)
+      return layout->resizeOutDim(dims[0].first, 8);
+    return std::nullopt;
+  }
   return getDistributedLayoutForTmemLdSt(ll, atom, numWarps, bitwidth);
 }
 

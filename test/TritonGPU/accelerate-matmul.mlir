@@ -1036,6 +1036,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: sm100_dot_scaled_nvfp4_n8
   // CHECK-NOT: ttg.fp4_to_fp
+  // CHECK-NOT: tt.reshape
+  // CHECK-NOT: tt.broadcast
+  // CHECK: ttng.tmem_alloc {{.*}} : (tensor<8x4xf8E4M3FN, {{.*}}>) -> !ttg.memdesc<8x4xf8E4M3FN,
   // CHECK: ttng.tc_gen5_mma_scaled
   // CHECK-NOT: tt.dot_scaled
   // CHECK: tt.return

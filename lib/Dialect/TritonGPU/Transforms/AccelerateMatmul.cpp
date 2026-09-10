@@ -324,18 +324,6 @@ static Value createTmemScaleOperand(Value tensor, Attribute tmemEncoding,
                                     Attribute tensorMemorySpace, int numWarps,
                                     Location loc, PatternRewriter &rewriter) {
   auto tensorType = cast<RankedTensorType>(tensor.getType());
-  if (tensorType.getShape()[0] == 8) {
-    // Repeat N=8 scale rows to fill the minimum 16-row TMEM store.
-    int64_t k = tensorType.getShape()[1];
-    auto expanded =
-        ReshapeOp::create(rewriter, loc, ArrayRef<int64_t>{1, 8, k}, tensor);
-    auto broadcast = BroadcastOp::create(
-        rewriter, loc, expanded.getType().clone({2, 8, k}), expanded);
-    auto padded =
-        ReshapeOp::create(rewriter, loc, ArrayRef<int64_t>{16, k}, broadcast);
-    tensor = padded;
-    tensorType = padded.getType();
-  }
   auto tmemType =
       MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
                        tmemEncoding, tensorMemorySpace,
@@ -872,7 +860,7 @@ public:
     }
 
     bool isFp4MMA = isAFP4 && isBFP4;
-    // K-packed FP4 supports 128x8 MMA; keep its scale padding within one CTA.
+    // K-packed FP4 supports 128x8 MMA with a single CTA.
     int minN = isFp4MMA && dotOp.getLhsKPack() && dotOp.getRhsKPack() &&
                        lookupNumCTAs(dotOp) == 1
                    ? 8
