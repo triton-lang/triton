@@ -122,6 +122,7 @@ static Interval<int> getLiveIntervals(Value value, Liveness &liveness,
   auto liveOperations = liveness.resolveLiveness(value);
   // Views and selects keep their possible source allocations live.
   SmallVector<Operation *> users(value.getUsers());
+  // Select/view paths can converge on shared users.
   DenseSet<Operation *> seen;
   while (!users.empty()) {
     Operation *user = users.pop_back_val();
