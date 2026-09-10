@@ -186,8 +186,8 @@ ThreadSyncInfo getThreadSyncInfo(Operation *op) {
     // SM90.
     return {ThreadSyncKind::Ordinary, ThreadSyncIssuer::Warp0Leader};
   }
-  if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op);
-      arrive && arrive.getPerWarp())
+  if (auto barrier = dyn_cast<triton::gpu::MBarrierOpInterface>(op);
+      barrier && barrier.isPerWarp())
     return {ThreadSyncKind::WarpPublication};
   if (isa<ttng::ArriveBarrierOp, ttng::BarrierExpectOp>(op)) {
     auto fromCTA = isa<ttng::ArriveBarrierOp>(op)

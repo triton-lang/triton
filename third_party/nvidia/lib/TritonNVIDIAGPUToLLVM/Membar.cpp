@@ -6,7 +6,9 @@
 
 #include "mlir/Pass/PassManager.h"
 #include "triton/Analysis/Allocation.h"
+#include "triton/Analysis/BufferRegion.h"
 #include "triton/Analysis/Membar.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierInsertion.h"
@@ -41,8 +43,14 @@ struct TritonNvidiaGPUMembar
 
     ModuleAllocation allocation(
         mod, ttng::getNvidiaAllocationAnalysisScratchSizeFn(targetInfo));
+    auto solver = createDataFlowSolver();
+    auto *regions = solver->load<triton::BufferRegionAnalysis>(
+        triton::BufferRegionAnalysis::Mode::AllMemory, &allocation);
+    if (failed(solver->initializeAndRun(mod)))
+      llvm::report_fatal_error("failed to analyze allocated buffer regions");
 
-    ttng::runClusterBarrierInsertion(allocation, computeCapability);
+    // Synchronization insertion preserves this geometry.
+    ttng::runClusterBarrierInsertion(allocation, computeCapability, *regions);
     if (failed(ttng::runCrossCTAMBarrierInitSyncInsertion(allocation,
                                                           computeCapability))) {
       signalPassFailure();
@@ -50,7 +58,7 @@ struct TritonNvidiaGPUMembar
     }
 
     ModuleMembarAnalysis membarPass(allocation, NVIDIA::canSkipBarSync);
-    membarPass.run();
+    membarPass.runAnalysis<MembarAnalysis>(*regions);
   }
 };
 

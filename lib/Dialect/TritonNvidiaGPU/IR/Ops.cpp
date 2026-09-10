@@ -499,6 +499,8 @@ LogicalResult ArriveBarrierOp::canonicalize(ArriveBarrierOp op,
 
 TypedValue<MemDescType> ArriveBarrierOp::getBarrier() { return getAlloc(); }
 
+bool ArriveBarrierOp::isPerWarp() { return getPerWarp(); }
+
 Value ArriveBarrierOp::getPredicateOperand() { return getPred(); }
 
 void ArriveBarrierOp::setPredicateOperand(Value pred) {
