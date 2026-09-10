@@ -768,8 +768,8 @@ def TTG_BarrierOp : TTG_Op<"barrier"> {
 
     A `barrier` operation only provides synchronization and memory guarantees on the selected address spaces in the CTA.
 
-    Warp scope synchronizes all lanes of each participating warp and orders only
-    their shared memory accesses. It supports only the `local` address space.
+    Warp scope currently supports only the `local` address space. It synchronizes
+    all lanes of each participating warp and orders their shared memory accesses.
 
     The mandatory `addrspace` attribute is a bitmask describing which address spaces will be visible when the `barrier` completes:
 

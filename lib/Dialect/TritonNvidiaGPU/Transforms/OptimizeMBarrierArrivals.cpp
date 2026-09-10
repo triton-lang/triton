@@ -209,6 +209,12 @@ static bool isSynchronizationCandidate(Operation *op) {
   return barrier && barrier.isWarp();
 }
 
+// Fold warp barriers and distributed mbarrier arrivals using Membar's
+// synchronization state.
+//   ttg.barrier local; ttg.barrier warp local -> ttg.barrier local
+//   ttg.barrier warp local; ttg.barrier local -> ttg.barrier local
+//   ttg.barrier local; ttng.arrive_barrier %bar, 4 {per_warp}
+//     -> ttg.barrier local; ttng.arrive_barrier %bar, 4
 class SynchronizationAnalysis : public MembarAnalysis {
 public:
   using MembarAnalysis::MembarAnalysis;
@@ -240,24 +246,23 @@ private:
 
     if (auto barrier = dyn_cast<gpu::BarrierOp>(op)) {
       if (barrier.isWarp()) {
-        // Later warp barriers already fold through warpsSynced.
-        if (!pendingWarp)
-          pendingWarp = op;
+        if (!firstWarpBarrier)
+          firstWarpBarrier = op;
       } else {
-        if (barrier.hasLocal() && pendingWarp)
-          foldableOps.insert(pendingWarp);
-        pendingWarp = nullptr;
+        if (barrier.hasLocal() && firstWarpBarrier)
+          foldableOps.insert(firstWarpBarrier);
+        firstWarpBarrier = nullptr;
       }
     } else if (op->getNumRegions() || op->hasTrait<OpTrait::IsTerminator>() ||
                hasThreadEffects(op) ||
                allocation.getBufferId(op) != Allocation::InvalidBufferId) {
-      // Pure operations can still use shared scratch during lowering.
-      pendingWarp = nullptr;
+      firstWarpBarrier = nullptr;
     }
     MembarAnalysis::update(op, info, funcMap, /*builder=*/nullptr);
   }
 
-  Operation *pendingWarp = nullptr;
+  // First warp barrier that a later CTA barrier can make redundant.
+  Operation *firstWarpBarrier = nullptr;
   llvm::SmallPtrSet<Operation *, 16> foldableOps;
 };
 
