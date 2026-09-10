@@ -324,35 +324,25 @@ static Value createTmemScaleOperand(Value tensor, Attribute tmemEncoding,
                                     Attribute tensorMemorySpace, int numWarps,
                                     Location loc, PatternRewriter &rewriter) {
   auto tensorType = cast<RankedTensorType>(tensor.getType());
-  auto shape = llvm::to_vector(tensorType.getShape());
-  // TMEM stores need at least 16 rows, even when an N=8 MMA only reads eight.
-  shape[0] = std::max<int64_t>(shape[0], 16);
-  auto tmemType = MemDescType::get(shape, tensorType.getElementType(),
-                                   tmemEncoding, tensorMemorySpace,
-                                   /*mutableMemory=*/false);
-  auto tmemLayout = nvidia_gpu::getDefaultLayoutForTmemLdSt(tmemType, numWarps);
-  auto stagedType =
-      RankedTensorType::get(shape, tensorType.getElementType(), tmemLayout);
-  Value converted;
-  if (shape[0] != tensorType.getShape()[0]) {
-    // Repeat the scale rows into padding without reading beyond the input.
-    SmallVector<int64_t> expandedShape = {shape[0] / tensorType.getShape()[0],
-                                          tensorType.getShape()[0], shape[1]};
-    auto *ctx = tensorType.getContext();
-    auto expandedLayout = LinearEncodingAttr::get(
-        ctx, reshapeLayout(ctx, toLinearLayout(stagedType), expandedShape));
-    auto sliceLayout = SliceEncodingAttr::get(ctx, 0, expandedLayout);
-    auto sliceType = tensorType.cloneWithEncoding(sliceLayout);
-    Value slice = ConvertLayoutOp::create(rewriter, loc, sliceType, tensor);
-    Value expanded = ExpandDimsOp::create(rewriter, loc, slice, 0);
-    auto expandedType = RankedTensorType::get(
-        expandedShape, tensorType.getElementType(), expandedLayout);
-    Value broadcast =
-        BroadcastOp::create(rewriter, loc, expandedType, expanded);
-    converted = ReshapeOp::create(rewriter, loc, stagedType, broadcast);
-  } else {
-    converted = ConvertLayoutOp::create(rewriter, loc, stagedType, tensor);
+  if (tensorType.getShape()[0] == 8) {
+    // Repeat N=8 scale rows to fill the minimum 16-row TMEM store.
+    int64_t k = tensorType.getShape()[1];
+    auto expanded =
+        ReshapeOp::create(rewriter, loc, ArrayRef<int64_t>{1, 8, k}, tensor);
+    auto broadcast = BroadcastOp::create(
+        rewriter, loc, expanded.getType().clone({2, 8, k}), expanded);
+    auto padded =
+        ReshapeOp::create(rewriter, loc, ArrayRef<int64_t>{16, k}, broadcast);
+    tensor = padded;
+    tensorType = padded.getType();
   }
+  auto tmemType =
+      MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
+                       tmemEncoding, tensorMemorySpace,
+                       /*mutableMemory=*/false);
+  auto tmemLayout = nvidia_gpu::getDefaultLayoutForTmemLdSt(tmemType, numWarps);
+  auto stagedType = tensorType.cloneWithEncoding(tmemLayout);
+  Value converted = ConvertLayoutOp::create(rewriter, loc, stagedType, tensor);
   return triton::nvidia_gpu::TMEMAllocOp::create(rewriter, loc, tmemType,
                                                  /*token=*/Type(), converted);
 }
