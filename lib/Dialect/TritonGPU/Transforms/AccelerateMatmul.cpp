@@ -568,15 +568,15 @@ public:
       //   (a) K >= 4;
       //   (b) minBitwidth >= 128 / K.
       //
-      // To preserve native operand packing, also impose:
+      // Native operand packing is preserved by the invariant:
       //   (c) minBitwidth <= computeBitwidth.
       // Raising it for (b) could violate (c) only if 128 / K > computeBitwidth,
       // hence K < 128 / computeBitwidth. This contradicts the CUDA frontend's
       // requirement K >= 256 / computeBitwidth, which also implies (a).
       minBitwidth = std::max<int64_t>(minBitwidth,
                                       4 * 32 / getShapePerCTA(oldAType).back());
-      minBitwidth =
-          std::min<int>(minBitwidth, oldAType.getElementTypeBitWidth());
+      assert(minBitwidth <= oldAType.getElementTypeBitWidth() &&
+             "minBitwidth must not exceed the dot operand bitwidth");
       a = convertDotOperandForMMA(a, 0, minBitwidth, mmaResult.newRetType,
                                   rewriter);
       b = convertDotOperandForMMA(b, 1, minBitwidth, mmaResult.newRetType,
