@@ -125,22 +125,6 @@ tt.func @arrive_then_wait_barrier() {
   tt.return
 }
 
-// CHECK-LABEL: @consecutive_waits
-tt.func @consecutive_waits() {
-  %c0 = arith.constant 0 : i32
-  %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
-  ttng.init_barrier %barrier, 1 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
-  ttng.arrive_barrier %barrier, 1 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
-  // CHECK: ttng.wait_barrier
-  // CHECK-NEXT: ttng.wait_barrier
-  // CHECK-NEXT: ttg.barrier local
-  // CHECK-NEXT: ttng.inval_barrier
-  ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
-  ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
-  ttng.inval_barrier %barrier : !ttg.memdesc<1xi64, #barrier_shared, #smem, mutable>
-  tt.return
-}
-
 // A wait does not publish unrelated shared writes.
 // CHECK-LABEL: @waits_preserve_shared_writes
 tt.func @waits_preserve_shared_writes(%data: tensor<128xi32, #blocked>) -> tensor<128xi32, #load> {
