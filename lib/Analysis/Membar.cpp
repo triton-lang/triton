@@ -4,7 +4,10 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/MBarrierUtilities.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 
 namespace ttng = mlir::triton::nvidia_gpu;
@@ -198,6 +201,56 @@ ThreadSyncInfo getThreadSyncInfo(Operation *op) {
   return {};
 }
 
+// Every observer stays in this region and CTA. Follow views and selects;
+// calls, captures and raw-address escapes reject the proof.
+bool hasRegionLocalUses(Value root) {
+  if (ttng::hasCrossCTASharedAccess(root.getDefiningOp()).value_or(false))
+    return false;
+  SmallVector<Value> worklist{root};
+  llvm::SmallPtrSet<Value, 8> seen;
+  while (!worklist.empty()) {
+    Value value = worklist.pop_back_val();
+    if (!seen.insert(value).second)
+      continue;
+    for (OpOperand &use : value.getUses()) {
+      Operation *user = use.getOwner();
+      if (user->hasTrait<OpTrait::MemDescViewTrait>() ||
+          isa<arith::SelectOp>(user)) {
+        llvm::append_range(worklist, user->getResults());
+        continue;
+      }
+      if (user->getParentRegion() != root.getParentRegion())
+        return false;
+      // TMEM loads and stores only access the issuing CTA's tensor memory.
+      if (isa<triton::gpu::LocalDeallocOp, ttng::TMEMLoadOp, ttng::TMEMStoreOp>(
+              user))
+        continue;
+      // Wait dependencies only keep allocations live.
+      if (auto wait = dyn_cast<ttng::WaitBarrierOp>(user);
+          wait && wait.getAlloc() != value)
+        continue;
+      auto barrier = dyn_cast<triton::gpu::MBarrierOpInterface>(user);
+      if (barrier && llvm::is_contained(barrier.getBarriers(), value)) {
+        if (ttng::hasCrossCTAMBarrierUse(barrier) ||
+            ttng::hasCGABroadcast(
+                cast<triton::gpu::MemDescType>(value.getType())))
+          return false;
+        if (isa<ttng::InitBarrierOp, ttng::InvalBarrierOp>(user))
+          continue;
+        for (const auto &access : triton::getMemoryAccesses(user))
+          if (access.value == value &&
+              access.sharedKind != triton::gpu::SharedKind::Barrier)
+            return false;
+        continue;
+      }
+      auto crossCTA = ttng::hasCrossCTASharedAccess(user);
+      if (!crossCTA || *crossCTA)
+        return false;
+    }
+  }
+  return true;
+}
+
 bool hasOnlyGlobalReads(Operation *op) {
   auto effects = getEffectsRecursively(op);
   return effects && !effects->empty() &&
@@ -220,20 +273,50 @@ bool haveSameThreadSyncIssuer(Operation *lhs, Operation *rhs) {
 
 } // namespace
 
-bool BlockInfo::requiresThreadSync(const BlockInfo &other) const {
+bool MembarAnalysis::isRegionLocal(Value value) {
+  auto *footprint = regions.getFootprint(value);
+  return footprint &&
+         llvm::all_of(footprint->regionInfo.views, [&](auto &view) {
+           Value root = view.allocation->getResult(0);
+           auto [it, inserted] =
+               regionLocalAllocations.try_emplace(root, false);
+           if (inserted)
+             it->second = hasRegionLocalUses(root);
+           return it->second;
+         });
+}
+
+bool MembarAnalysis::mayNotifyPeer(Operation *op) {
+  // Nested operations are checked separately; region scratch is private.
+  if (isa<RegionBranchOpInterface, triton::AtomicLoadOp, triton::AtomicPollOp>(
+          op))
+    return false;
+  auto effects = getEffectsRecursively(op);
+  return !effects || llvm::any_of(*effects, [&](const auto &effect) {
+    return isa<MemoryEffects::Write>(effect.getEffect()) &&
+           (!effect.getValue() || !isRegionLocal(effect.getValue()));
+  });
+}
+
+bool MembarAnalysis::requiresThreadSync(const BlockInfo &pending,
+                                        const BlockInfo &effects) {
   // Only effect -> demand edges require a rendezvous; independent completion
   // operations can publish together.
   // The maps also include implicit scratch and translated callee accesses.
   bool hasSharedAccesses =
-      !other.syncReadSlices.empty() || !other.syncWriteSlices.empty();
-  for (Operation *before : threadEffects) {
+      !effects.syncReadSlices.empty() || !effects.syncWriteSlices.empty();
+  for (Operation *before : pending.threadEffects) {
     auto sync = getThreadSyncInfo(before);
-    for (Operation *after : other.threadDemands)
+    auto wait = dyn_cast<ttng::WaitBarrierOp>(before);
+    for (Operation *after : effects.threadDemands)
       if ((sync.requiresAfter() &&
            (sync.kind != ThreadSyncKind::SharedCompletionNeedsSync ||
             hasSharedAccesses || !hasOnlyGlobalReads(after))) ||
           (getThreadSyncInfo(after).requiresBefore() &&
-           !haveSameThreadSyncIssuer(before, after)))
+           !haveSameThreadSyncIssuer(before, after)) ||
+          // A notification can let a peer advance a pending wait's phase.
+          // Private counter updates are already ordered by the slice hazards.
+          (wait && !isRegionLocal(wait.getAlloc()) && mayNotifyPeer(after)))
         return true;
   }
   return false;
@@ -253,7 +336,7 @@ void MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
            (filter &&
             filter(before, after, beforeIsRead, afterIsRead, allocation));
   };
-  if (!pending.requiresThreadSync(effects) &&
+  if (!requiresThreadSync(pending, effects) &&
       !pending.isIntersected(effects, canSkip, &allocation, sliceFilter))
     return;
   // The barrier clears incoming state. The operation's own effects still
