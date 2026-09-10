@@ -598,19 +598,18 @@ def mxfp4_to_bf16_triton(x, scale, mx_axis: tl.constexpr):
     if mx_axis == 0:
         x = x.trans()
 
-    # upcast scale to bfloat16
-    # Add bias missing from the bf16 upcasting sequence
-    # triton / LLVM generates terrible code for this sequence
-    # scale = scale.to(tl.uint16)
-    # scale = scale << 7
-    # scale = scale.to(tl.bfloat16, bitcast=True)
+    # Decode four scales together, preserving E8M0's minimum in each BF16 lane.
     scale = tl.inline_asm_elementwise(
         r"""
         {
+            .reg .b32 min_scale;
+            mov.b32 min_scale, 0x00400040;
             prmt.b32 $0, $2, 0, 0x5140;
             shl.b32 $0, $0, 7;
+            vmax2.u32.u32.u32 $0, $0, min_scale, $0;
             prmt.b32 $1, $2, 0, 0x7362;
             shl.b32 $1, $1, 7;
+            vmax2.u32.u32.u32 $1, $1, min_scale, $1;
         }
         """,
         constraints="=r,=r,r",
