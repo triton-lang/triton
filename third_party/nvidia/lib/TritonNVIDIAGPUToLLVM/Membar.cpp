@@ -109,16 +109,9 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
     // Data accessed by these ops may still add barriers
     if (signalsCompletion(before) && signalsCompletion(after))
       return true;
-  }
 
-  if (isa<ttng::WaitBarrierOp>(after)) {
-    // All threads must register incrementing arrivals before any can wait.
-    if (auto arrive = dyn_cast<ttng::AsyncCopyMbarrierArriveOp>(before))
-      return arrive.getNoIncrement();
-    // Signals and waits can access the same live barrier concurrently;
-    // accesses to distinct barriers are independent.
-    if (isa<ttng::TMALoadLikeOpInterface, ttng::BarrierExpectOp,
-            ttng::ArriveBarrierOp, ttng::TCGen5CommitOp>(before))
+    // A wait can observe a live counter concurrently with signals or waits.
+    if (isa<ttng::WaitBarrierOp>(after))
       return true;
   }
 

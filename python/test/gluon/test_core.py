@@ -431,7 +431,7 @@ def test_local_store_transposed_cga_to_non_transposed_alloc():
 
 @gluon.jit
 def async_shared_store_kernel(out, BLOCK: ttgl.constexpr):
-    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=[[0]])
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0], cga_layout=[[0]])
     shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[0], cga_layout=[[0]])
 
     offsets = ttgl.arange(0, BLOCK, layout=layout)
@@ -441,6 +441,7 @@ def async_shared_store_kernel(out, BLOCK: ttgl.constexpr):
     mbarrier.init(bar, count=1)
     mbarrier.expect(bar, smem.nbytes_per_cta)
     hopper.async_store(smem, values, bar)
+    mbarrier.wait(bar, phase=0, deps=[smem])
     mbarrier.wait(bar, phase=0, deps=[smem])
     result = smem.load(layout)
     mbarrier.invalidate(bar)
@@ -466,11 +467,12 @@ def async_shared_store_f16_kernel(out, BLOCK: ttgl.constexpr):
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
-def test_async_shared_store():
+@pytest.mark.parametrize("num_warps", [4, 8])
+def test_async_shared_store(num_warps):
     block = 128
     out = torch.empty((block, ), device="cuda", dtype=torch.int32)
 
-    compiled = async_shared_store_kernel[(1, )](out, block, num_warps=4, num_ctas=2)
+    compiled = async_shared_store_kernel[(1, )](out, block, num_warps=num_warps, num_ctas=2)
 
     assert "st.async.weak.shared::cluster.mbarrier::complete_tx::bytes" in compiled.asm["ptx"]
     torch.testing.assert_close(out, torch.arange(block, device="cuda", dtype=torch.int32))
@@ -1110,9 +1112,12 @@ def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK:
     )
     mbar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(mbar, count=1)
-    async_copy.mbarrier_arrive(mbar)
     mbarrier.arrive(mbar)
     mbarrier.wait(mbar, 0)
+    async_copy.mbarrier_arrive(mbar)
+    mbarrier.wait(mbar, 0)
+    mbarrier.arrive(mbar)
+    mbarrier.wait(mbar, 1)
 
     val = smem.load(block_layout)
     ttgl.store(out + xindex * YBLOCK + yindex, val)
@@ -1340,8 +1345,10 @@ def test_mbarrier_automatic_warp_arrivals(producer_warps, num_ctas):
     assert Counter(expected_inits) <= Counter(map(int, init_counts))
     arrive_counts = re.findall(r"mbarrier\.arrive\.shared::(?:cta|cluster)\.b64\s+_,\s*\[[^\]]+\](?:,\s*(\d+))?;", ptx)
     # The launch rendezvous covers the first bootstrap arrival's full count.
-    expected_arrivals = [scale, scale // producer_warps, 1, scale // 4]
-    assert Counter(expected_arrivals) <= Counter(int(count or 1) for count in arrive_counts)
+    # A CTA barrier before the consumer's arrival can also fold its full count.
+    expected_arrivals = [scale, scale // producer_warps, 1]
+    actual_arrivals = Counter(int(count or 1) for count in arrive_counts)
+    assert any(Counter(expected_arrivals + [count]) <= actual_arrivals for count in (scale // 4, scale))
     assert "bar.warp.sync" in ptx
     kernel[(8, )](inp, out, iterations, block, producer_warps, num_warps=4, num_ctas=num_ctas)
     torch.testing.assert_close(out, inp + 1)
