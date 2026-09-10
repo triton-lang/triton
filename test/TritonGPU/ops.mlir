@@ -539,3 +539,15 @@ module attributes {"ttg.target" = "hip:gfx1260", "ttg.num-ctas" = 1 : i32, "ttg.
     tt.return
   }
 }
+
+// -----
+
+// CHECK-LABEL: @barrier_scopes
+tt.func @barrier_scopes() {
+  // CHECK-NEXT: ttg.barrier local
+  ttg.barrier local
+  // CHECK-NEXT: ttg.barrier warp local
+  ttg.barrier warp local
+  // CHECK-NEXT: tt.return
+  tt.return
+}

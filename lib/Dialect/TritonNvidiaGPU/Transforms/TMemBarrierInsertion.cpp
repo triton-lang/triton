@@ -321,6 +321,15 @@ private:
     waitsBefore.erase(op);
     BlockInfo &pending = info->pending;
 
+    if (auto barrier = dyn_cast<gpu::BarrierOp>(op);
+        barrier && barrier.isWarp()) {
+      // Complete each warp's accesses before its rendezvous, retaining
+      // dependencies on other warps for later hazards and publications.
+      if (barrier.hasLocal())
+        flush(op, pending);
+      return;
+    }
+
     // Choose the barrier before placing waits.
     auto syncBefore = [&](const BlockInfo &effects) {
       if (Operation *barrier = syncIfNeeded(op, effects, info, builder))

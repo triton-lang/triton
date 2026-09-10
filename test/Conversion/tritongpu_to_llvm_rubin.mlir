@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=94' -cse | FileCheck %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=93' -cse | FileCheck %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-optimize-synchronization --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=94' -cse | FileCheck %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-optimize-synchronization --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=93' -cse | FileCheck %s
 
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
@@ -246,10 +246,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2], [4]]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107"} {
-  // Every warp contributes to the same routed targets, using lane zero as issuer.
+  // A local barrier lets one thread contribute each target's full count.
   // CHECK-LABEL: @distributed_arrival_multicast_routes
   tt.func @distributed_arrival_multicast_routes(%barrier: !ttg.memdesc<8xi64, #barrier, #smem, mutable>) {
     // CHECK: nvvm.bar.warp.sync
+    // CHECK-NOT: nvvm.bar.warp.sync
     // CHECK: %[[LANE:.*]] = nvvm.read.ptx.sreg.laneid : i32
     // CHECK: %[[LANE_ZERO:.*]] = llvm.icmp "eq" %[[LANE]], %{{.*}} : i32
     // CHECK: %[[CTA:.*]] = nvvm.read.ptx.sreg.cluster.ctarank
@@ -259,13 +260,16 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: %[[MASK:.*]] = llvm.shl %[[C5]], %[[MASK_BASE]] : i32
     // CHECK: @$0 mbarrier.arrive.shared::cluster.multicast::cluster::32b.b64 _, [$1], 2, $2;
     // CHECK-SAME: "b,r,r" %[[ROUTED_PRED]], %{{[^,]+}}, %[[MASK]]
+    ttg.barrier warp local
     ttng.arrive_barrier %barrier, 8 {fromCTA = 5 : i32, per_warp} : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
-    // CHECK: nvvm.bar.warp.sync
+    // CHECK: nvvm.barrier
+    // CHECK-NOT: nvvm.bar.warp.sync
     // CHECK: %[[MULTICAST_CTA:.*]] = nvg.cluster_id
     // CHECK: %[[MULTICAST_BASE:.*]] = llvm.and %[[MULTICAST_CTA]], %[[C5]] : i32
     // CHECK: %[[MULTICAST_MASK:.*]] = llvm.shl %[[C5]], %[[MULTICAST_BASE]] : i32
-    // CHECK: @$0 mbarrier.arrive.shared::cluster.multicast::cluster::32b.b64 _, [$1], 3, $2;
-    // CHECK-SAME: "b,r,r" %[[LANE_ZERO]], %{{[^,]+}}, %[[MULTICAST_MASK]]
+    // CHECK: @$0 mbarrier.arrive.shared::cluster.multicast::cluster::32b.b64 _, [$1], 12, $2;
+    // CHECK-SAME: "b,r,r" %{{[^,]+}}, %{{[^,]+}}, %[[MULTICAST_MASK]]
+    ttg.barrier local
     ttng.arrive_barrier %barrier, 12 {multicastCTA = 2 : i32, per_warp} : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
     tt.return
   }
@@ -281,6 +285,7 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: %[[DIRECT_PRED:.*]] = llvm.and %[[DIRECT_FIRST]], %arg1 : i1
     // CHECK: @$0 mbarrier.arrive.shared::cluster.multicast::cluster::32b.b64 _, [$1], 2, $2;
     // CHECK-SAME: "b,r,r" %[[DIRECT_PRED]],
+    ttg.barrier warp local
     ttng.arrive_barrier %barrier, 8, %pred {multicastCTA = 2 : i32, per_warp} : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
     tt.return
   }

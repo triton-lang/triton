@@ -719,7 +719,7 @@ static bool hasLocalBarrierBefore(Operation *exec) {
     if (isa<ROCDL::SchedBarrier, ROCDL::SetPrioOp>(scan))
       continue;
     if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(scan))
-      return barrier.hasLocal();
+      return !barrier.isWarp() && barrier.hasLocal();
     return false;
   }
   return false;
@@ -754,7 +754,7 @@ static bool collectLoopClusters(scf::ForOp forOp,
   if (op && isa<ROCDL::SchedBarrier>(op)) {
     op = op->getPrevNode();
     if (auto barrier = dyn_cast_or_null<triton::gpu::BarrierOp>(op))
-      bars[0] = barrier.hasLocal();
+      bars[0] = !barrier.isWarp() && barrier.hasLocal();
   }
 
   // bars[1..K-1]: barrier immediately preceding each cluster's execute_region.
@@ -978,7 +978,7 @@ static void eliminateRedundantCondBarriers(ModuleOp m,
         // inserted between the two pipelines.
         auto preBarrier =
             dyn_cast_or_null<triton::gpu::BarrierOp>(postLoopCB->getNextNode());
-        if (!preBarrier || !preBarrier.hasLocal()) {
+        if (!preBarrier || preBarrier.isWarp() || !preBarrier.hasLocal()) {
           LDBG("post-loop cond_barrier not immediately followed by prelude "
                "ttg.barrier local; skipping");
           continue;

@@ -426,10 +426,8 @@ struct ArriveBarrierOpConversion
         typeConverter->convertType(barrierTy.getElementType()), rewriter);
 
     unsigned count = op.getCount();
-    if (op.getPerWarp()) {
-      LLVM::NVIDIA::createSyncWarp(loc, rewriter);
+    if (op.getPerWarp())
       count /= ttg::lookupNumWarps(op);
-    }
 
     bool isCrossClusterBarrier =
         op.isMulticast() || LLVM::NVIDIA::getCGABroadcastMask(barrierTy) != 0;
