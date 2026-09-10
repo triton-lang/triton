@@ -1030,6 +1030,37 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked_k = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: sm100_dot_scaled_nvfp4_n8
+  // CHECK-NOT: ttg.fp4_to_fp
+  // CHECK: ttng.tc_gen5_mma_scaled
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: tt.return
+  tt.func public @sm100_dot_scaled_nvfp4_n8(%a: tensor<128x32xi8, #blocked>, %scale_a: tensor<128x4xf8E4M3FN, #blocked>, %b: tensor<32x8xi8, #blocked_k>, %scale_b: tensor<8x4xf8E4M3FN, #blocked>) -> tensor<128x8xf32, #blocked> {
+    %cst = arith.constant dense<0.0> : tensor<128x8xf32, #blocked>
+    %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e2m1 rhs = e2m1 {fastMath = false, lhs_k_pack = true, rhs_k_pack = true}
+      : tensor<128x32xi8, #blocked>, tensor<128x4xf8E4M3FN, #blocked> * tensor<32x8xi8, #blocked_k>, tensor<8x4xf8E4M3FN, #blocked> -> tensor<128x8xf32, #blocked>
+    tt.return %d : tensor<128x8xf32, #blocked>
+  }
+
+  // CHECK-LABEL: sm100_dot_scaled_nvfp4_n4_fallback
+  // CHECK: ttg.fp4_to_fp
+  // CHECK-NOT: ttng.tc_gen5_mma_scaled
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: tt.return
+  tt.func public @sm100_dot_scaled_nvfp4_n4_fallback(%a: tensor<128x32xi8, #blocked>, %scale_a: tensor<128x4xf8E4M3FN, #blocked>, %b: tensor<32x4xi8, #blocked_k>, %scale_b: tensor<4x4xf8E4M3FN, #blocked>) -> tensor<128x4xf32, #blocked> {
+    %cst = arith.constant dense<0.0> : tensor<128x4xf32, #blocked>
+    %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e2m1 rhs = e2m1 {fastMath = false, lhs_k_pack = true, rhs_k_pack = true}
+      : tensor<128x32xi8, #blocked>, tensor<128x4xf8E4M3FN, #blocked> * tensor<32x4xi8, #blocked_k>, tensor<4x4xf8E4M3FN, #blocked> -> tensor<128x4xf32, #blocked>
+    tt.return %d : tensor<128x4xf32, #blocked>
+  }
+}
+
+// -----
+
 // We previously asserted that a tmem allocation must fit in the available tmem.
 // This would cause an assertion failure if the result matrix was too large.
 // Check that we allow the large result in AccelerateMatmul, and leave it to

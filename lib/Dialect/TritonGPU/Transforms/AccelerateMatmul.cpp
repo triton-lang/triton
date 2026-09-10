@@ -324,13 +324,35 @@ static Value createTmemScaleOperand(Value tensor, Attribute tmemEncoding,
                                     Attribute tensorMemorySpace, int numWarps,
                                     Location loc, PatternRewriter &rewriter) {
   auto tensorType = cast<RankedTensorType>(tensor.getType());
-  auto tmemType =
-      MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
-                       tmemEncoding, tensorMemorySpace,
-                       /*mutableMemory=*/false);
+  auto shape = llvm::to_vector(tensorType.getShape());
+  // TMEM stores need at least 16 rows, even when an N=8 MMA only reads eight.
+  shape[0] = std::max<int64_t>(shape[0], 16);
+  auto tmemType = MemDescType::get(shape, tensorType.getElementType(),
+                                   tmemEncoding, tensorMemorySpace,
+                                   /*mutableMemory=*/false);
   auto tmemLayout = nvidia_gpu::getDefaultLayoutForTmemLdSt(tmemType, numWarps);
-  auto stagedType = tensorType.cloneWithEncoding(tmemLayout);
-  Value converted = ConvertLayoutOp::create(rewriter, loc, stagedType, tensor);
+  auto stagedType =
+      RankedTensorType::get(shape, tensorType.getElementType(), tmemLayout);
+  Value converted;
+  if (shape[0] != tensorType.getShape()[0]) {
+    // Repeat the scale rows into padding without reading beyond the input.
+    SmallVector<int64_t> expandedShape = {shape[0] / tensorType.getShape()[0],
+                                          tensorType.getShape()[0], shape[1]};
+    auto *ctx = tensorType.getContext();
+    auto expandedLayout = LinearEncodingAttr::get(
+        ctx, reshapeLayout(ctx, toLinearLayout(stagedType), expandedShape));
+    auto sliceLayout = SliceEncodingAttr::get(ctx, 0, expandedLayout);
+    auto sliceType = tensorType.cloneWithEncoding(sliceLayout);
+    Value slice = ConvertLayoutOp::create(rewriter, loc, sliceType, tensor);
+    Value expanded = ExpandDimsOp::create(rewriter, loc, slice, 0);
+    auto expandedType = RankedTensorType::get(
+        expandedShape, tensorType.getElementType(), expandedLayout);
+    Value broadcast =
+        BroadcastOp::create(rewriter, loc, expandedType, expanded);
+    converted = ReshapeOp::create(rewriter, loc, stagedType, broadcast);
+  } else {
+    converted = ConvertLayoutOp::create(rewriter, loc, stagedType, tensor);
+  }
   return triton::nvidia_gpu::TMEMAllocOp::create(rewriter, loc, tmemType,
                                                  /*token=*/Type(), converted);
 }
@@ -842,8 +864,6 @@ public:
       return failure();
     if (numWarps != 4 && numWarps != 8)
       return failure();
-    if (retShapePerCTA[0] < 128 || retShapePerCTA[1] < 16)
-      return failure();
     Location loc = dotOp.getLoc();
     // operands
     Value a = dotOp.getA();
@@ -862,6 +882,13 @@ public:
     }
 
     bool isFp4MMA = isAFP4 && isBFP4;
+    // K-packed FP4 supports 128x8 MMA; keep its scale padding within one CTA.
+    int minN = isFp4MMA && dotOp.getLhsKPack() && dotOp.getRhsKPack() &&
+                       lookupNumCTAs(dotOp) == 1
+                   ? 8
+                   : 16;
+    if (retShapePerCTA[0] < 128 || retShapePerCTA[1] < minN)
+      return failure();
     bool requiresFp4Padding =
         nvidia_gpu::TargetFeatures(computeCapability).requiresFp4Padding();
 

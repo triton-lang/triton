@@ -1136,6 +1136,45 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
             assert "kind::mxf8f6f4" in ptx
 
 
+@pytest.mark.parametrize("BLOCK_M", [128, 256])
+@pytest.mark.parametrize("BLOCK_K", [64, 128, 256])
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("num_stages", [1, 3])
+@pytest.mark.parametrize("scale_type, VEC_SIZE", [("float8_e8m0fnu", 32), ("float8_e4m3fn", 16)])
+def test_block_scale_fp4_narrow_n(BLOCK_M, BLOCK_K, num_warps, num_stages, scale_type, VEC_SIZE, device):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] != 10:
+        pytest.skip("Requires fifth-generation NVIDIA tensor cores")
+
+    torch.manual_seed(42)
+    M, N, K = 2 * BLOCK_M, 8, 4 * BLOCK_K
+    a_fp4 = MXFP4Tensor(size=(M, K), device=device).random()
+    b_fp4 = MXFP4Tensor(size=(N, K), device=device).random()
+    a = a_fp4.to_packed_tensor(dim=1)
+    b = b_fp4.to_packed_tensor(dim=1).T
+    a_scale = torch.rand((M, K // VEC_SIZE), device=device)
+    b_scale = torch.rand((N, K // VEC_SIZE), device=device)
+    if scale_type == "float8_e8m0fnu":
+        a_scale_ref = MXScaleTensor(a_scale)
+        b_scale_ref = MXScaleTensor(b_scale)
+        a_scale = a_scale_ref.data
+        b_scale = b_scale_ref.data
+    else:
+        a_scale = a_scale_ref = a_scale.to(torch.float8_e4m3fn)
+        b_scale = b_scale_ref = b_scale.to(torch.float8_e4m3fn)
+    a_ref = a_fp4.to(torch.float32) * a_scale_ref.to(torch.float32).repeat_interleave(VEC_SIZE, dim=1)
+    b_ref = b_fp4.to(torch.float32) * b_scale_ref.to(torch.float32).repeat_interleave(VEC_SIZE, dim=1)
+    output = torch.empty((M, N), dtype=torch.float32, device=device)
+    kernel = block_scale_fp4_matmul[(M // BLOCK_M, )](a, b, output, a_scale, b_scale, M, N, K, a_scale.stride(0),
+                                                      *a.stride(), *b.stride(), *output.stride(), VEC_SIZE, BLOCK_M, N,
+                                                      BLOCK_K, NUM_STAGES=num_stages, PACK_ALONG_K=True,
+                                                      num_warps=num_warps)
+    if is_compile_warmup():
+        return
+    torch.testing.assert_close(output, a_ref @ b_ref.T, atol=1e-3, rtol=1e-3)
+    kind = "mxf4nvf4" if scale_type == "float8_e4m3fn" else "mxf4"
+    assert f"tcgen05.mma.cta_group::1.kind::{kind}.block_scale" in kernel.asm["ptx"]
+
+
 @triton.jit
 def rhs_scaled_n_packed_fp4_matmul(A, B, BS, C):
     a = tl.load(A + tl.arange(0, 128)[:, None] * 32 + tl.arange(0, 32)[None, :])
