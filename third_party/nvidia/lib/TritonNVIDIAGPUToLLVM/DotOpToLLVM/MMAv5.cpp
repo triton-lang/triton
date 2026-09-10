@@ -945,8 +945,8 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
           ttng::getTmemAllocSizes(cast<MemDescType>(op.getAScale().getType()))
               .numCols,
           numRepM * numRepKWords);
-      int scaleIdxA = linearizeScaleBlockIdx(op.getAScale(), m, wordIdx, numRepM,
-                                             numRepKWords);
+      int scaleIdxA = linearizeScaleBlockIdx(op.getAScale(), m, wordIdx,
+                                             numRepM, numRepKWords);
       offsetA = scaleIdxA * numColPerScaleBlockA;
     }
     if (useK96) {

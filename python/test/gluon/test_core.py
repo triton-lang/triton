@@ -6131,7 +6131,7 @@ def test_tcgen05_mma_scaled_sliced_a_scales(M, K, parent_m, compact, use_acc, of
         N: ttgl.constexpr = 128
         reg: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
         k = ttgl.arange(0, K, ttgl.SliceLayout(0, reg))[None, :]
-        a = ttgl.broadcast_to((1 + k // 128).to(ttgl.float8e5), [M, K])
+        a = (1 + k // 128 + ttgl.zeros([M, K], ttgl.int32, reg)).to(ttgl.float8e5)
         b = ttgl.full([K, N], 1, ttgl.float8e5, reg)
         smem_a = ttgl.allocate_shared_memory(ttgl.float8e5, [M, K], ttgl.NVMMASharedLayout(128, 8, transposed=False), a)
         smem_b = ttgl.allocate_shared_memory(ttgl.float8e5, [K, N], ttgl.NVMMASharedLayout(128, 8, transposed=True), b)
@@ -6172,7 +6172,9 @@ def test_tcgen05_mma_scaled_sliced_a_scales(M, K, parent_m, compact, use_acc, of
     out = torch.empty((M, 128), dtype=torch.float32, device="cuda")
     kernel[(1, )](out, M, K, parent_m, compact, use_acc, offset, num_warps=4)
     # Unequal K-word contributions expose scale-word permutations; the oracle is exact.
-    expected = torch.tensor([32 * sum((1 + j // 4) * 2**((row + offset) // 128 + j // 4) for j in range(K // 32)) +
-                             (3 if use_acc else 0) for row in range(M)],
-                            dtype=torch.float32, device="cuda")
+    expected = torch.tensor([
+        32 * sum((1 + j // 4) * 2**((row + offset) // 128 + j // 4)
+                 for j in range(K // 32)) + (3 if use_acc else 0)
+        for row in range(M)
+    ], dtype=torch.float32, device="cuda")
     torch.testing.assert_close(out, expected[:, None].expand_as(out), atol=0, rtol=0)
