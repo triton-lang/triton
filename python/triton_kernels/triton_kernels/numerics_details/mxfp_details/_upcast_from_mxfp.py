@@ -20,6 +20,13 @@ def upcast_mxfp_scale(scale, dst_dtype: tl.constexpr):
 
 
 @triton.jit
+def _is_nan_mxfp_scale(scale, dst_scale):
+    if dst_scale.dtype == tl.float32:
+        return dst_scale == float("inf")
+    return scale == 0xFF
+
+
+@triton.jit
 def _upcast_mxfp4_values(tensor, dst_dtype: tl.constexpr):
     tl.static_assert(tensor.dtype == tl.uint8)
     tl.static_assert(dst_dtype == tl.float16 or dst_dtype == tl.bfloat16 or dst_dtype == tl.float32)
@@ -90,7 +97,7 @@ def upcast_mxfp4_tile(tensor, scale, dst_dtype: tl.constexpr):
         tl.static_assert(dst_dtype == tl.float16)
         max_fin = 65504
     out_tensor = tl.clamp(out_tensor, min=-max_fin, max=max_fin)
-    out_tensor = tl.where(scale == 0xFF, float("nan"), out_tensor)
+    out_tensor = tl.where(_is_nan_mxfp_scale(scale, dst_scale), float("nan"), out_tensor)
     return out_tensor.to(dst_dtype).reshape([tensor.shape[0], tensor.shape[1] * 2])
 
 
@@ -178,25 +185,9 @@ def _upcast_from_mxfp(
     else:
         dst_scale = scale.to(dst_dtype)
 
-    # Now upcast the tensor.
-    intermediate_dtype: tl.constexpr = tl.bfloat16 if dst_dtype == tl.float32 else dst_dtype
+    # FP32 avoids a BF16 round trip before clamping and preserves FP8 NaNs during conversion.
     if is_fp8:
-        dst_tensor = tensor.to(intermediate_dtype)
-        if tensor.dtype == tl.float8e5:
-            from_e_bits: tl.constexpr = 5
-            from_m_bits: tl.constexpr = 2
-            to_e_bits: tl.constexpr = 8 if intermediate_dtype == tl.bfloat16 else 5
-            to_m_bits: tl.constexpr = 7 if intermediate_dtype == tl.bfloat16 else 10
-
-            # Preserve infs and nans. FIXME Fp8E5M2_to_Bf16 doesn't preserve them!
-            non_finite_mask_src: tl.constexpr = ((1 << from_e_bits) - 1) << from_m_bits
-            non_finite_mask_dst: tl.constexpr = ((1 << to_e_bits) - 1) << to_m_bits
-            dst_tensor = tl.where(
-                (tensor.to(tl.uint8, bitcast=True) & non_finite_mask_src) == non_finite_mask_src,
-                (dst_tensor.to(tl.uint16, bitcast=True) | non_finite_mask_dst).to(intermediate_dtype, bitcast=True),
-                dst_tensor,
-            )
-
+        dst_tensor = tensor.to(tl.float32 if dst_dtype == tl.bfloat16 else dst_dtype)
     else:
         assert is_fp4
         dst_tensor = _upcast_mxfp4_values(tensor, dst_dtype)
@@ -214,11 +205,10 @@ def _upcast_from_mxfp(
     else:
         tl.static_assert(dst_dtype == tl.float16)
         max_fin = 65504
-    # TODO: handle infinity same as upcast_from_mxfp_torch together with the
-    # above FIXME
+    # TODO: preserve source infinities as in upcast_from_mxfp_torch.
     out_tensor = tl.clamp(out_tensor, min=-max_fin, max=max_fin)
     # Correct any NaNs encoded via OCP E8M0 scales.
     if scale_is_ocp:
-        out_tensor = tl.where(scale == 0xFF, float("nan"), out_tensor)
+        out_tensor = tl.where(_is_nan_mxfp_scale(scale, dst_scale), float("nan"), out_tensor)
     out_tensor = out_tensor.reshape([BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_DIM])
     out_desc.store([start_out.to(tl.int32), start_out_quant.to(tl.int32)], out_tensor)
