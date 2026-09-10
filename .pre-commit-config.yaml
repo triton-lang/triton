@@ -49,6 +49,13 @@ repos:
   # do this itself.  This lets us use anchors, which avoids code duplication.
   - repo: local
     hooks:
+    - id: generate-type-stubs
+      name: Regenerate Triton type stubs
+      language: python
+      entry: python python/triton/tools/generate_type_stubs.py
+      files: ^python/triton/(language/.*\.py|runtime/.*\.py|compiler/.*\.py|errors\.py|__init__\.py|tools/generate_type_stubs\.py)$
+      pass_filenames: false
+
     - id: expand-yaml-anchors
       name: Expand YAML anchors
       language: golang

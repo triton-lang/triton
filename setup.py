@@ -203,6 +203,12 @@ class CMakeBuildPy(build_py):
 
     def run(self) -> None:
         self.run_command('build_ext')
+        # Type stubs are generated rather than checked in; see
+        # python/triton/tools/generate_type_stubs.py.
+        subprocess.check_call([
+            sys.executable,
+            os.path.join(get_base_dir(), "python", "triton", "tools", "generate_type_stubs.py"),
+        ])
         return super().run()
 
 
@@ -593,7 +599,8 @@ MAX_PYTHON = (3, 14)
 
 PYTHON_REQUIRES = f">={MIN_PYTHON[0]}.{MIN_PYTHON[1]},<{MAX_PYTHON[0]}.{MAX_PYTHON[1] + 1}"
 BASE_CLASSIFIERS = [
-    "Development Status :: 4 - Beta", "Intended Audience :: Developers", "Topic :: Software Development :: Build Tools"
+    "Development Status :: 4 - Beta", "Intended Audience :: Developers", "Topic :: Software Development :: Build Tools",
+    "Typing :: Typed"
 ]
 PYTHON_CLASSIFIERS = [
     f"Programming Language :: Python :: {MIN_PYTHON[0]}.{m}" for m in range(MIN_PYTHON[1], MAX_PYTHON[1] + 1)
@@ -628,6 +635,8 @@ setup(
             "include/**/*.h",
             "include/**/*.h.inc",
             "include/**/*.td",
+            "py.typed",
+            "**/*.pyi",
         ],
     },
     ext_modules=[CMakeExtension("triton", "triton/_C/")],
