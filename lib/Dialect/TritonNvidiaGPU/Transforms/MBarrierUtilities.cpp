@@ -54,6 +54,41 @@ bool isCrossCTAGatherScatter(ttg::MemDescType memDescTy, RankedTensorType regTy,
   return !conversion.isIdentityOnOutDim(kBlock);
 }
 
+std::optional<bool> hasCrossCTASharedAccess(Operation *op) {
+  if (auto load = dyn_cast<ttg::LocalLoadOp>(op))
+    return isCrossCTALoadStore(load.getSrc().getType(), load.getType());
+  if (auto store = dyn_cast<ttg::LocalStoreOp>(op))
+    return isCrossCTALoadStore(store.getDst().getType(),
+                               store.getSrc().getType());
+  if (auto alloc = dyn_cast<ttg::LocalAllocOp>(op))
+    return alloc.getSrc() &&
+           isCrossCTALoadStore(alloc.getType(), alloc.getSrc().getType());
+  if (auto gather = dyn_cast<ttg::LocalGatherOp>(op))
+    return isCrossCTAGatherScatter(gather.getSrc().getType(), gather.getType(),
+                                   gather.getAxis());
+  if (auto scatter = dyn_cast<ttg::LocalScatterOp>(op))
+    return isCrossCTAGatherScatter(scatter.getDst().getType(),
+                                   scatter.getValues().getType(),
+                                   scatter.getAxis());
+  if (auto atomic = dyn_cast<ttg::LocalAtomicScatterRMWOp>(op))
+    return isCrossCTAGatherScatter(atomic.getDst().getType(),
+                                   atomic.getValues().getType(),
+                                   atomic.getAxis());
+  if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
+    if (ttg::lookupNumCTAs(op) == 1)
+      return false;
+    if (tma.getMulticast())
+      return true;
+    auto type = cast<ttg::MemDescType>(tma.getResult().getType());
+    auto encoding = type.getEncoding();
+    // Subview offsets can select another CTA.
+    if (ttg::dropPipeliningDim(type.getShape(), encoding) ==
+        ttg::dropPipeliningDim(type.getAllocShape(), encoding))
+      return false;
+  }
+  return std::nullopt;
+}
+
 bool hasTCGen5CommitCrossCTA(Operation *op) {
   SmallVector<Value> descs;
   if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op))
@@ -63,6 +98,26 @@ bool hasTCGen5CommitCrossCTA(Operation *op) {
   else
     return false;
   return !ttng::getCTABroadcastMasks(ttng::getModuleTwoCTAs(op), descs).empty();
+}
+
+bool hasCrossCTAMBarrierUse(ttg::MBarrierOpInterface barrier) {
+  Operation *op = barrier.getOperation();
+  int numCTAs = ttg::lookupNumCTAs(op);
+  if (numCTAs == 1)
+    return false;
+  if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op))
+    return tma.getMulticast();
+  if (isa<ttng::CLCTryCancelOp>(op))
+    return true;
+  if (auto store = dyn_cast<ttng::AsyncSharedStoreOp>(op))
+    return isCrossCTALoadStore(store.getDst().getType(),
+                               store.getSrc().getType());
+  if (auto expect = dyn_cast<ttng::BarrierExpectOp>(op))
+    return expect.getFromCTA().value_or(numCTAs - 1) != numCTAs - 1;
+  if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op))
+    return arrive.isMulticast() ||
+           arrive.getFromCTA().value_or(numCTAs - 1) != numCTAs - 1;
+  return hasTCGen5CommitCrossCTA(op);
 }
 
 bool requiresCrossCTAMBarrierInitSync(
@@ -79,23 +134,8 @@ bool requiresCrossCTAMBarrierInitSync(
   // across CTAs even though the barrier allocation itself looks per-CTA.
   return funcOp
       ->walk<WalkOrder::PreOrder>([&](ttg::MBarrierOpInterface user) {
-        Operation *op = user.getOperation();
-        bool crossCTA = false;
-        if (isa<ttng::MMAv5OpInterface, ttng::TCGen5CommitOp>(op))
-          crossCTA = hasTCGen5CommitCrossCTA(op);
-        else if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op))
-          crossCTA = tma.getMulticast();
-        else if (isa<ttng::CLCTryCancelOp>(op))
-          crossCTA = true;
-        else if (auto store = dyn_cast<ttng::AsyncSharedStoreOp>(op))
-          crossCTA = isCrossCTALoadStore(store.getDst().getType(),
-                                         store.getSrc().getType());
-        else if (auto expect = dyn_cast<ttng::BarrierExpectOp>(op))
-          crossCTA = expect.getFromCTA().has_value();
-        else if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op))
-          crossCTA = arrive.isMulticast() || arrive.getFromCTA().has_value();
-
-        return crossCTA && llvm::any_of(user.getBarriers(), aliasesBarrier)
+        return llvm::any_of(user.getBarriers(), aliasesBarrier) &&
+                       hasCrossCTAMBarrierUse(user)
                    ? WalkResult::interrupt()
                    : WalkResult::advance();
       })
