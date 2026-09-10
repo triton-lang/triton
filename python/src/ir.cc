@@ -1015,16 +1015,6 @@ void init_triton_ir(py::module_ &m) {
              return self.create<arith::ConstantOp>(
                  self.getBuilder().getF64FloatAttr(v));
            })
-      .def("get_null_value",
-           [](TritonOpBuilder &self, Type type) -> Value {
-             if (auto floatTy = dyn_cast<FloatType>(type))
-               return self.create<arith::ConstantFloatOp>(
-                   floatTy, APFloat(floatTy.getFloatSemantics(), 0));
-             else if (auto intTy = dyn_cast<IntegerType>(type))
-               return self.create<arith::ConstantIntOp>(intTy, 0);
-             else
-               throw std::runtime_error("Not implemented");
-           })
       .def("get_all_ones_value",
            [](TritonOpBuilder &self, Type type) -> Value {
              uint64_t val = 0xFFFFFFFFFFFFFFFF;

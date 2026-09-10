@@ -1086,9 +1086,9 @@ def test_fp8_div_mod_promotion():
 
     @triton.jit
     def kernel():
-        x = tl.full((8, ), 0, tl.float16).to(tl.float8e5)
-        y = tl.full((8, ), 0, tl.float16).to(tl.float8e5)
-        z = tl.full((8, ), 0, tl.float16).to(tl.float8e4nv)
+        x = tl.full((8, ), 0, tl.float8e5)
+        y = tl.full((8, ), 0, tl.float8e5)
+        z = tl.full((8, ), 0, tl.float8e4nv)
         h = tl.full((8, ), 0, tl.float16)
         b = tl.full((8, ), 0, tl.bfloat16)
         d = tl.full((8, ), 0, tl.float64)

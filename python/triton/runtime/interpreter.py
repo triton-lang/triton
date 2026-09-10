@@ -505,9 +505,6 @@ class InterpreterBuilder:
     def get_fp64(self, value):
         return TensorHandle(np.array([value], dtype=np.float64), tl.float64)
 
-    def get_null_value(self, type):
-        return TensorHandle(np.array([0], dtype=_get_np_dtype(type)), type)
-
     # programming model
     def create_get_program_id(self, axis):
         if self.grid_idx is None:
