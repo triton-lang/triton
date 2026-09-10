@@ -171,8 +171,8 @@ tt.func @loop_carried_token_not_from_async_wait(%a_ptr: tensor<16x16x!tt.ptr<f16
 }
 
 
-// Check that we do not get a barrier for an if where both branches yield an AsyncToken from AsyncWait.
-// The refill of the same buffer that follows the LocalLoad still needs one.
+// Waits from both branches are published before the next local load.
+// The refill also waits for the local load to finish.
 // CHECK-LABEL: async_wait_inside_if
 tt.func @async_wait_inside_if(%cond: i1, %a_ptr: tensor<16x16x!tt.ptr<f16>, #AL>, %loopIterCount: i32) {
   %c0_i32 = arith.constant 0 : i32
@@ -184,8 +184,8 @@ tt.func @async_wait_inside_if(%cond: i1, %a_ptr: tensor<16x16x!tt.ptr<f16>, #AL>
 
   // CHECK: cf.br
   %loop_result:1 = scf.for %arg14 = %c0_i32 to %loopIterCount step %c1_i32 iter_args(%arg10 = %2) -> (!ttg.async.token)  : i32 {
-    // CHECK-NOT: ttg.barrier local
-    // CHECK: ttg.local_load
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: ttg.local_load
     // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: ttg.async_copy_global_to_local
     %6 = ttg.local_load %alloc token %arg10 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL>
@@ -619,14 +619,15 @@ tt.func @pipelined_loop_refill_after_synced_local_load(%A: !tt.ptr<f16>, %ub: i3
     %cgi = ttg.async_commit_group tokens %ldi
 
     // CHECK: ttg.async_wait
-    // CHECK-NEXT: ttg.barrier local
     // CHECK-NOT: ttg.barrier local
     %w = ttg.async_wait %cgi {num = 2 : i32}
 
     %ip1 = arith.addi %i, %c1_i32 : i32
     %j = arith.remsi %ip1, %c3_i32 : i32
     %sj = ttg.memdesc_index %alloc[%j] : !ttg.memdesc<3x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
-    // CHECK: ttg.local_load
+    // CHECK: ttg.memdesc_index
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: ttg.local_load
     // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: amdg.buffer_load_to_local
     %v = ttg.local_load %sj token %w : !ttg.memdesc<128x32xf16, #shared, #smem, mutable> -> tensor<128x32xf16, #AL>
