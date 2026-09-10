@@ -560,14 +560,16 @@ def TT_ReshapeOp : TT_Op<"reshape", [Pure,
 }
 
 def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
-                                         SameOperandsAndResultElementType,
-                                         SameOperandsAndResultEncoding]> {
+                                         SameOperandsAndResultElementType]> {
     let summary = "broadcast a tensor";
 
     let description = [{
       For a given tensor, broadcast changes one or more dimensions with size 1
       to a new size, e.g. tensor<1x32x1xf32> -> tensor<2x32x4xf32>.  You cannot
       change the size of a non-1 dimension.
+      After projecting the result layout onto the source shape, the layouts
+      must match up to repeated registers. Broadcasting cannot permute registers
+      or move data between threads.
     }];
 
     let arguments = (ins TT_Tensor:$src);
