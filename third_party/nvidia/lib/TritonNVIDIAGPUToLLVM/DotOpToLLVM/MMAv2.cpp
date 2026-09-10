@@ -22,14 +22,26 @@ SmallVector<Value> loadC(Value tensor, Value llTensor, Location loc,
                          ConversionPatternRewriter &rewriter) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto tensorTy = cast<RankedTensorType>(tensor.getType());
-  size_t fcSize = triton::gpu::getTotalElemsPerThread(tensor.getType());
-
   assert(isa<NvidiaMmaEncodingAttr>(tensorTy.getEncoding()) &&
          "Currently, we only support $c with a mma layout.");
   auto elems = unpackTensorElements(loc, llTensor, rewriter, tensorTy);
-  assert(elems.size() == fcSize);
-
+  auto elemsPerThread = triton::gpu::getElemsPerThread(tensorTy);
+  unsigned rank = tensorTy.getRank();
   auto numMmaRets = tensorTy.getElementType().getIntOrFloatBitWidth() / 8;
+  unsigned tileM = numMmaRets == 8 ? 1u : 2u;
+  unsigned innerM = std::min(tileM, elemsPerThread[rank - 2]);
+  unsigned innerN = std::min(2u, elemsPerThread[rank - 1]);
+  size_t fcSize = elems.size() * (2 * tileM) / (innerM * innerN);
+  SmallVector<Value> instructionElems;
+  for (unsigned i = 0; i < fcSize; ++i) {
+    // Supply repeated values for instruction slots outside the tensor shape.
+    unsigned n = i % 2 % innerN;
+    unsigned m = i / 2 % tileM % innerM;
+    unsigned tile = i / (2 * tileM);
+    instructionElems.push_back(elems[n + innerN * (m + innerM * tile)]);
+  }
+  elems = std::move(instructionElems);
+
   assert(numMmaRets == 8 || numMmaRets == 4 || numMmaRets == 2);
   if (numMmaRets == 8 || numMmaRets == 4) {
     return elems;
@@ -75,6 +87,7 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     ConversionPatternRewriter &rewriter, Value value, int batch, int repOuter,
     int repK, RankedTensorType type, const NumRegisters &numRegisters) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto dot = cast<DotOperandEncodingAttr>(type.getEncoding());
   auto elems = unpackTensorElements(loc, value, rewriter, type);
   auto eltTy = typeConverter->convertType(type.getElementType());
   int offset{};
@@ -82,12 +95,34 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
   auto bitwidth = eltTy.getIntOrFloatBitWidth();
   auto numElemsPerVec = std::max(32 / bitwidth, 1u);
   auto vecTy = vec_ty(eltTy, numElemsPerVec);
+  auto kWidth = dot.getKWidth();
+  auto shape = triton::gpu::getShapePerCTA(type);
+  auto rank = shape.size();
+  unsigned tileM = dot.getOpIdx() == 0 ? numRegisters.m : numRegisters.n;
+  unsigned tileK = numRegisters.k;
+  unsigned sizeK = shape[dot.getOpIdx() == 0 ? rank - 1 : rank - 2];
+  unsigned sizeM = shape[dot.getOpIdx() == 0 ? rank - 2 : rank - 1];
+  unsigned innerK = std::min(kWidth, sizeK);
+  unsigned innerM = std::min(tileM, std::max(1u, sizeM / 8));
+  unsigned outerK = std::min(tileK, std::max(1u, sizeK / (4 * kWidth)));
+  unsigned numElems =
+      elems.size() * (kWidth * tileM * tileK) / (innerK * innerM * outerK);
+  SmallVector<unsigned> si;
 
   auto packVec = [&](std::array<int, 3> dstIdx) {
     Value vec = b.undef(vecTy);
     for (auto i = 0; i < numElemsPerVec; ++i) {
-      vec = b.insert_element(vec, b.bitcast(elems[offset + i], eltTy),
-                             b.i32_val(i));
+      unsigned idx = offset + i;
+      if (!si.empty())
+        idx = idx / si.size() * si.size() + si[idx % si.size()];
+      // Reuse the compact operand values where an instruction tile extends
+      // beyond the tensor's K or M dimension.
+      unsigned k = idx % kWidth % innerK;
+      unsigned m = idx / kWidth % tileM % innerM;
+      unsigned kOuter = idx / (kWidth * tileM) % tileK % outerK;
+      unsigned rep = idx / (kWidth * tileM * tileK);
+      idx = k + innerK * (m + innerM * (kOuter + outerK * rep));
+      vec = b.insert_element(vec, b.bitcast(elems[idx], eltTy), b.i32_val(i));
     }
     if (bitwidth == 64) {
       vals[dstIdx] = vec;
@@ -97,8 +132,6 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     offset += numElemsPerVec;
   };
 
-  auto dot = cast<DotOperandEncodingAttr>(type.getEncoding());
-  auto kWidth = dot.getKWidth();
   auto largeK = bitwidth * kWidth > std::max(32u, bitwidth);
 
   assert((bitwidth != 64 || largeK == false) &&
@@ -111,7 +144,6 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     // Using kWidth = 8 and bitwidth = 2 as an example,
     // we split the MMA into 4 sub-MMAs, each with a stride 4 x 32-bit along the
     // K dimension.
-    llvm::SmallVector<unsigned> si;
     auto kIters = kWidth / (std::max(32 / bitwidth, 1u));
 
     if (dot.getOpIdx() == 0) {
@@ -175,7 +207,7 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
         size_t mmaWidth = kWidth / numElemsPerVec / 2;
         size_t repMma = elemsPerTile / (mmaWidth * elemsPerMma);
         for (size_t rep = 0; rep < repMma; ++rep)
-          for (size_t tile = 0; tile < elems.size() / elemsPerTile; ++tile)
+          for (size_t tile = 0; tile < numElems / elemsPerTile; ++tile)
             for (size_t mmaKWidth = 0; mmaKWidth < mmaWidth; ++mmaKWidth)
               for (size_t kTile = 0; kTile < 2; ++kTile)
                 for (size_t mTile = 0; mTile < 2; ++mTile)
@@ -217,7 +249,7 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
         size_t mmaWidth = kWidth / numElemsPerVec / 2;
         size_t repMma = elemsPerTile / (mmaWidth * elemsPerMma);
         for (size_t rep = 0; rep < repMma; ++rep)
-          for (size_t tile = 0; tile < elems.size() / elemsPerTile; ++tile)
+          for (size_t tile = 0; tile < numElems / elemsPerTile; ++tile)
             for (size_t mmaKWidth = 0; mmaKWidth < mmaWidth; ++mmaKWidth)
               for (size_t kTile = 0; kTile < 2; ++kTile)
                 for (size_t e = 0; e < numElemsPerVec; ++e) {
@@ -227,15 +259,6 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
                                e);
                 }
       }
-    }
-
-    auto step = si.size();
-    SmallVector<Value> perm(step);
-    for (auto i = 0; i < elems.size() / step; ++i) {
-      for (auto j = 0; j < step; ++j) {
-        perm[j] = elems[i * step + si[j]];
-      }
-      std::copy(perm.begin(), perm.end(), elems.begin() + i * step);
     }
   }
 
@@ -766,8 +789,7 @@ LogicalResult convertMMAImpl(
 
   auto rank = dTensorTy.getRank();
   auto elemsPerThread = triton::gpu::getElemsPerThread(dTensorTy);
-  auto batchOffset =
-      elemsPerThread[rank - 2] * elemsPerThread[rank - 1] / numCPackedElem;
+  auto batchOffset = repM * repN * numRegisters.m * 2 / numCPackedElem;
   auto callMma = [&](unsigned b, unsigned m, unsigned n, unsigned k) {
     PTXBuilder builder;
     auto &mma = *builder.create(mmaInstruction);
@@ -799,13 +821,19 @@ LogicalResult convertMMAImpl(
   Type resElemTy = dTensorTy.getElementType();
 
   // replace with new packed result
-  SmallVector<Value> results(fc.size() * numCPackedElem);
+  unsigned innerM =
+      std::min<unsigned>(numRegisters.m, elemsPerThread[rank - 2]);
+  unsigned innerN = std::min(2u, elemsPerThread[rank - 1]);
+  SmallVector<Value> results;
   for (int i = 0; i < fc.size(); ++i) {
     for (int j = 0; j < numCPackedElem; ++j) {
-      results[i * numCPackedElem + j] =
+      unsigned idx = i * numCPackedElem + j;
+      if (idx % 2 >= innerN || idx / 2 % numRegisters.m >= innerM)
+        continue;
+      results.push_back(
           numCPackedElem > 1
               ? tb.bitcast(tb.extract_element(fc[i], tb.i32_val(j)), resElemTy)
-              : tb.bitcast(fc[i], resElemTy);
+              : tb.bitcast(fc[i], resElemTy));
     }
   }
   Value res =
