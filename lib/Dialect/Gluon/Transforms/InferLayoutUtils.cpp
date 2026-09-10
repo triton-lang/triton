@@ -31,6 +31,10 @@ struct LayoutInfo {
   bool mayVary = false;
 
   operator bool() { return bool(encoding); }
+
+  bool operator==(const LayoutInfo &other) const {
+    return encoding == other.encoding && mayVary == other.mayVary;
+  }
 };
 
 uint64_t hashWithMemo(Attribute attr,
@@ -78,6 +82,22 @@ LayoutInfo combineInfo(LayoutInfo lhs, LayoutInfo rhs, Operation *op,
 bool encodingsMayVary(Operation *op) {
   return isa<triton::JoinOp, triton::SplitOp, triton::ReshapeOp,
              triton::TransOp>(op);
+}
+
+Attribute inferDstEncodingWithHint(
+    Operation *op, Attribute srcEncoding,
+    const llvm::MapVector<Value, LayoutInfo> &valueToEncoding) {
+  if (encodingsMayVary(op) && op->getNumResults() == 1) {
+    auto it = valueToEncoding.find(op->getResult(0));
+    if (it != valueToEncoding.end()) {
+      // Keep an existing result when inverse inference accepts this input.
+      // A default join can otherwise choose a different valid register order.
+      Attribute hint = it->second.encoding;
+      if (inferSrcEncoding(op, hint) == srcEncoding)
+        return hint;
+    }
+  }
+  return inferDstEncoding(op, srcEncoding);
 }
 
 LogicalResult
@@ -155,7 +175,8 @@ LogicalResult inferLayout(
                                   worklist, hashMemo)))
           return failure();
       } else {
-        auto dstEnc = inferDstEncoding(op, info.encoding);
+        auto dstEnc =
+            inferDstEncodingWithHint(op, info.encoding, valueToEncoding);
         if (dstEnc) {
           bool mayVary = info.mayVary || encodingsMayVary(op);
           LayoutInfo dstInfo{dstEnc, mayVary};
