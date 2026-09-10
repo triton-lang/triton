@@ -40,19 +40,24 @@ def plus_a_reduce(x, a):
 
 @pytest.mark.parametrize("dtype", [torch.float8_e4m3fn, torch.float8_e5m2, torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("k", [4, 16])
-def test_reduce_mxfp_scale_boundaries(dtype, k, device):
+@pytest.mark.parametrize("scale", [0, 1, 127, 255])
+def test_reduce_mxfp_scale_boundaries(dtype, k, scale, device):
+    uses_fp8_emulation = is_cuda() and torch.cuda.get_device_capability() < (8, 9)
+    if uses_fp8_emulation and dtype == torch.float8_e4m3fn:
+        pytest.skip("E4M3 conversion requires CUDA capability 8.9 or newer")
+
     x = torch.full((k, 3, 128), 4, dtype=dtype, device=device).requires_grad_()
-    scales = torch.tensor([0, 1, 127, 255], dtype=torch.uint8, device=device)
-    scales = scales.repeat(k, 3, 1)
+    scales = torch.full((k, 3, 4), scale, dtype=torch.uint8, device=device)
     y, _ = reduce(x, dim=0, x_mxscale=scales, y_has_mx=False, y_dtype=torch.float32)
-    decoded = torch.tensor([2.0**-127, 2.0**-126, 1, float("nan")], dtype=torch.float64)
-    expected = (4 * k * decoded).repeat_interleave(32).expand(3, -1).to(device=device, dtype=torch.float32)
+    decoded = float("nan") if scale == 255 else 2.0**(scale - 127)
+    expected = torch.full_like(y, 4 * k * decoded)
     torch.testing.assert_close(y, expected, rtol=0, atol=0, equal_nan=True)
 
-    dy = torch.tensor([2.0**120, 2.0**120, 1, 1], dtype=torch.float32, device=device)
-    y.backward(dy.repeat_interleave(32).expand_as(y))
-    expected_grad = torch.tensor([2.0**-7, 2.0**-6, 1, float("nan")], dtype=torch.float32, device=device)
-    expected_grad = expected_grad.repeat_interleave(32).repeat(k, 3, 1).to(dtype)
+    if uses_fp8_emulation and dtype == torch.float8_e5m2 and scale == 255:
+        pytest.skip("E5M2 NaN downcast requires CUDA capability 8.9 or newer")
+    dy = 2.0**120 if scale < 127 else 1.0
+    y.backward(torch.full_like(y, dy))
+    expected_grad = torch.full_like(x, dy * decoded)
     torch.testing.assert_close(x.grad.float(), expected_grad.float(), rtol=0, atol=0, equal_nan=True)
 
 
