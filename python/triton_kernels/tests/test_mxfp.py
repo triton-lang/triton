@@ -54,6 +54,62 @@ def _upcast_mxfp4_tile_kernel(
     tl.store(out + offs_m * stride_out_m + offs_k * stride_out_k, out_tile)
 
 
+def _mxfp_scale_boundary_data(src_dtype, dst_dtype, device):
+    values = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, get_max_quant_val(src_dtype)], dtype=torch.float64)
+    values = torch.cat((values, -values)).repeat(2)
+    scale = torch.tensor([0, 1, 2, 125, 126, 127, 128, 255], dtype=torch.uint8).repeat(64, 1)
+    expected = torch.ldexp(values[None, None, :], scale.to(torch.int32)[..., None] - 127)
+    expected = expected.masked_fill(scale[..., None] == 255, float("nan"))
+    expected = expected.clamp(torch.finfo(dst_dtype).min, torch.finfo(dst_dtype).max).to(dst_dtype).flatten(1)
+    if src_dtype == torch.uint8:
+        nibbles = torch.arange(16, dtype=torch.uint8).repeat(2)
+        tensor = nibbles[::2] | (nibbles[1::2] << 4)
+    else:
+        tensor = values.to(src_dtype)
+    tensor = tensor.repeat(scale.shape)
+    return tensor.to(device), scale.to(device), expected.to(device)
+
+
+@pytest.mark.parametrize("upcast", [upcast_from_mxfp, upcast_from_mxfp_torch])
+@pytest.mark.parametrize("src_dtype", [torch.uint8, torch.float8_e4m3fn, torch.float8_e5m2])
+@pytest.mark.parametrize("dst_dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("axis", [0, -1])
+def test_mxfp_upcast_scale_boundaries(upcast, src_dtype, dst_dtype, axis, device):
+    tensor, scale, expected = _mxfp_scale_boundary_data(src_dtype, dst_dtype, device)
+    tensor, scale, expected = (x.transpose(axis, -1) for x in (tensor, scale, expected))
+    actual = upcast(tensor, scale, dst_dtype, axis)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.parametrize("dst_dtype", [torch.float16, torch.bfloat16, torch.float32])
+def test_mxfp_upcast_torch_nan_scale(dst_dtype):
+    tensor = torch.tensor([float("inf"), -float("inf"), float("nan"), 1], dtype=torch.float8_e5m2).repeat(2, 8)
+    scale = torch.tensor([[127], [255]], dtype=torch.uint8)
+    expected = tensor.to(dst_dtype)
+    expected[1] = float("nan")
+    actual = upcast_from_mxfp_torch(tensor, scale, dst_dtype, axis=-1)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.parametrize("dst_dtype", [torch.float16, torch.bfloat16, torch.float32])
+def test_mxfp4_tile_upcast_scale_boundaries(dst_dtype, device):
+    tensor, scale, expected = _mxfp_scale_boundary_data(torch.uint8, dst_dtype, device)
+    actual = torch.empty_like(expected)
+    _upcast_mxfp4_tile_kernel[(1, )](
+        actual,
+        tensor,
+        scale,
+        *actual.stride(),
+        *tensor.stride(),
+        *scale.stride(),
+        tensor.shape[0],
+        tensor.shape[1],
+        scale.shape[1],
+        {torch.float16: tl.float16, torch.bfloat16: tl.bfloat16, torch.float32: tl.float32}[dst_dtype],
+    )
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
+
+
 @pytest.mark.skipif(not is_cuda(), reason="Only supported on cuda")
 @pytest.mark.parametrize("dst_dtype", ["float16", "bfloat16", "float32"])
 def test_mxfp4_tile_upcast_matches_reference(dst_dtype, device):

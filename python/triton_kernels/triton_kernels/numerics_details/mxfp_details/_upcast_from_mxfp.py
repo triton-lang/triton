@@ -6,6 +6,20 @@ from triton_kernels.target_info import cuda_capability_geq
 
 
 @triton.jit
+def upcast_mxfp_scale(scale, dst_dtype: tl.constexpr):
+    # E8M0 byte zero is 2**-127, which is subnormal in BF16 and FP32.
+    # Callers handle the NaN scale byte separately.
+    if dst_dtype == tl.bfloat16:
+        bits = tl.maximum(scale.to(tl.uint16) << 7, 0x0040)
+        return bits.to(tl.uint16).to(dst_dtype, bitcast=True)
+    else:
+        bits = scale.to(tl.uint32) << 23
+        if dst_dtype == tl.float32:
+            bits = tl.maximum(bits, 0x00400000)
+        return bits.to(tl.float32, bitcast=True).to(dst_dtype)
+
+
+@triton.jit
 def _upcast_mxfp4_values(tensor, dst_dtype: tl.constexpr):
     tl.static_assert(tensor.dtype == tl.uint8)
     tl.static_assert(dst_dtype == tl.float16 or dst_dtype == tl.bfloat16 or dst_dtype == tl.float32)
@@ -62,13 +76,7 @@ def upcast_mxfp4_tile(tensor, scale, dst_dtype: tl.constexpr):
     tl.static_assert(tensor.shape[0] == scale.shape[0])
     tl.static_assert(tensor.shape[1] * 2 == scale.shape[1] * MXFP_BLOCK_SIZE)
 
-    if dst_dtype == tl.bfloat16:
-        dst_scale = (scale.to(tl.uint16) << 7).to(dst_dtype, bitcast=True)
-    else:
-        dst_scale = (scale.to(tl.uint32) << 23).to(tl.float32, bitcast=True)
-        if dst_dtype == tl.float16:
-            dst_scale = dst_scale.to(tl.float16)
-
+    dst_scale = upcast_mxfp_scale(scale, dst_dtype)
     dst_tensor = _upcast_mxfp4_values(tensor, dst_dtype)
     dst_tensor = dst_tensor.reshape([tensor.shape[0], scale.shape[1], MXFP_BLOCK_SIZE])
     dst_scale = dst_scale.reshape([scale.shape[0], scale.shape[1], 1])
@@ -165,12 +173,8 @@ def _upcast_from_mxfp(
     scale = tl.load(scale_ptr_base + scale_offsets, mask=full_scale_mask)
 
     # Upcast the scale to the destination type.
-    if scale_is_ocp and dst_dtype == tl.bfloat16:
-        dst_scale = (scale.to(tl.uint16) << 7).to(dst_dtype, bitcast=True)
-    elif scale_is_ocp:
-        dst_scale = (scale.to(tl.uint32) << 23).to(tl.float32, bitcast=True)
-        if dst_dtype == tl.float16:
-            dst_scale = dst_scale.to(tl.float16)
+    if scale_is_ocp:
+        dst_scale = upcast_mxfp_scale(scale, dst_dtype)
     else:
         dst_scale = scale.to(dst_dtype)
 
