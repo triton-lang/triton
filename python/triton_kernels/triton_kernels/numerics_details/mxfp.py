@@ -415,7 +415,7 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
     # 3.3895e+38 / 2**120 ~= 254.9976 -> round to 256 in fp8e4m3fn
     # Dequantization: 256 * 2**120 > 3.4e38 overflowing 3.38953139e38
     finfo = torch.finfo(target_dtype)
-    out_padded = (padded_tensor * dq_scale_padded).clamp(finfo.min, finfo.max)
+    out_padded = out_padded.clamp(finfo.min, finfo.max)
     if tensor.dtype == torch.float8_e5m2:
         # fp8e5m2 can have inf and we want to preserve so separately handle
         out_padded = out_padded.where(~padded_tensor.isinf() | dq_scale_padded.isnan(), padded_tensor.to(target_dtype))

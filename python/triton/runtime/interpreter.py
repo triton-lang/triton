@@ -260,14 +260,11 @@ def _umulhi_64(a, b):
 def _dot_scaled_scale_to_f32(scale_handle, compute_type):
     scale = scale_handle.data
     assert scale.dtype in (np.uint8, np.int8)
-    scale = scale.astype(np.uint8)
-    scale = scale.astype(np.int32)
-    scale = scale << 23
+    bits = scale.view(np.uint8).astype(np.int32) << 23
     if compute_type == tl.bfloat16 and scale_handle.dtype.is_int():
         # E8M0 byte zero is 2^-127, which rounds to zero in FP16.
-        scale = np.maximum(scale, 0x00400000)
-    scale = scale.view(np.float32)
-    return scale
+        bits = np.maximum(bits, 0x00400000)
+    return bits.view(np.float32)
 
 
 def _e2m1_to_f32(value):
