@@ -979,6 +979,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // WAIT-LABEL: @elementwise_inline_asm_tmem_effects
   // CHECK: ttng.tmem_alloc
   // WAIT: ttng.tmem_wait store
+  // WAIT-NEXT: ttg.barrier local
   // WAIT-NEXT: {{.*}}tt.elementwise_inline_asm
   // CHECK-NEXT: ttg.barrier local
   // CHECK-NEXT: {{.*}}ttng.tmem_load
