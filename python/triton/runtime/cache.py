@@ -1,4 +1,5 @@
 import json
+import errno
 import os
 import uuid
 from abc import ABC, abstractmethod
@@ -123,7 +124,14 @@ class FileCacheManager(CacheManager):
         # Replace is guaranteed to be atomic on POSIX systems if it succeeds
         # so filepath cannot see a partial write
         os.replace(temp_path, filepath)
-        os.removedirs(temp_dir)
+        try:
+            os.rmdir(temp_dir)
+        except OSError as e:
+            # Linux's NFSv4 client can surface NFS4ERR_FILE_OPEN as EBUSY after
+            # retrying REMOVE. The cache file is already atomically published,
+            # so leave the empty private temp dir rather than fail the write.
+            if e.errno != errno.EBUSY:
+                raise
         return filepath
 
 
