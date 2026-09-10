@@ -5,6 +5,7 @@ import re
 from typing import Optional
 import math
 import textwrap
+import warnings
 from fractions import Fraction
 
 import numpy as np
@@ -2886,6 +2887,92 @@ def test_argmax_argmin_with_nan(device):
     idx.zero_()
     argmax_kernel[(1, )](x_nan_end, val, idx, N=3, BLOCK=4)
     assert val.item() == 5.0, f"expected 5.0, got {val.item()}"
+    assert idx.item() == 1, f"expected 1, got {idx.item()}"
+
+
+@pytest.mark.interpreter
+def test_argmax_argmin_all_nan(device):
+    # Regression test for: https://github.com/triton-lang/triton/issues/11615
+    # np.nanargmax/np.nanargmin raise ValueError("All-NaN slice encountered")
+    # and np.nanmax/np.nanmin emit RuntimeWarning on all-NaN slices, but the
+    # JIT combine functions are pure NaN-is-always-False comparisons, so an
+    # all-NaN reduction never raises there: with tie_break_left it always
+    # keeps the rightmost element, returning value NaN and index equal to the
+    # last position. The interpreter must match that, not crash.
+    @triton.jit
+    def argmax_kernel(x_ptr, val_ptr, idx_ptr, N: tl.constexpr, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        mask = offsets < N
+        x = tl.load(x_ptr + offsets, mask=mask, other=-float("inf"))
+        val = tl.max(x, axis=0)
+        idx = tl.argmax(x, axis=0)
+        tl.store(val_ptr, val)
+        tl.store(idx_ptr, idx)
+
+    @triton.jit
+    def argmin_kernel(x_ptr, val_ptr, idx_ptr, N: tl.constexpr, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        mask = offsets < N
+        x = tl.load(x_ptr + offsets, mask=mask, other=float("inf"))
+        val = tl.min(x, axis=0)
+        idx = tl.argmin(x, axis=0)
+        tl.store(val_ptr, val)
+        tl.store(idx_ptr, idx)
+
+    # All 4 lanes are real NaN (no mask padding) so a masked-out other=-inf/inf
+    # value can't hide as the reduction's "last element".
+    x = torch.full((4, ), float("nan"), dtype=torch.float32, device=device)
+    val = torch.empty((), dtype=torch.float32, device=device)
+    idx = torch.empty((), dtype=torch.int32, device=device)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        argmax_kernel[(1, )](x, val, idx, N=4, BLOCK=4)
+    assert math.isnan(val.item()), f"expected nan, got {val.item()}"
+    assert idx.item() == 3, f"expected 3, got {idx.item()}"
+
+    val.zero_()
+    idx.zero_()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        argmin_kernel[(1, )](x, val, idx, N=4, BLOCK=4)
+    assert math.isnan(val.item()), f"expected nan, got {val.item()}"
+    assert idx.item() == 3, f"expected 3, got {idx.item()}"
+
+
+@pytest.mark.interpreter
+def test_argmax_argmin_int64_precision(device):
+    # Regression test for: https://github.com/triton-lang/triton/pull/11616
+    # The all-NaN fixup path substitutes inf for NaN via np.where, which
+    # promotes integer data to float64. Integer dtypes can never contain NaN,
+    # so that path must never run for them: for int64 >= 2**53, float64
+    # can't represent consecutive integers distinctly, silently corrupting
+    # the result (e.g. argmax([2**53, 2**53+1]) would wrongly return 0).
+    @triton.jit
+    def argmax_kernel(x_ptr, idx_ptr, N: tl.constexpr, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        mask = offsets < N
+        x = tl.load(x_ptr + offsets, mask=mask, other=-2**62)
+        idx = tl.argmax(x, axis=0)
+        tl.store(idx_ptr, idx)
+
+    @triton.jit
+    def argmin_kernel(x_ptr, idx_ptr, N: tl.constexpr, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        mask = offsets < N
+        x = tl.load(x_ptr + offsets, mask=mask, other=2**62)
+        idx = tl.argmin(x, axis=0)
+        tl.store(idx_ptr, idx)
+
+    idx = torch.empty((), dtype=torch.int32, device=device)
+
+    x = torch.tensor([2**53, 2**53 + 1], dtype=torch.int64, device=device)
+    argmax_kernel[(1, )](x, idx, N=2, BLOCK=2)
+    assert idx.item() == 1, f"expected 1, got {idx.item()}"
+
+    x = torch.tensor([2**53 + 1, 2**53], dtype=torch.int64, device=device)
+    idx.zero_()
+    argmin_kernel[(1, )](x, idx, N=2, BLOCK=2)
     assert idx.item() == 1, f"expected 1, got {idx.item()}"
 
 
