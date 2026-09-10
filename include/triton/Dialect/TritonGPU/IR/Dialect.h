@@ -69,18 +69,20 @@ int lookupNumCTAs(Operation *op);
 
 template <typename Key, typename Value> class Cache {
 public:
-  std::optional<Value> get(const Key &key) {
+  // Entries are immutable and unordered_map preserves their addresses across
+  // insertion and rehashing. References remain valid for the dialect lifetime.
+  const Value *get(const Key &key) {
     std::shared_lock lock(mutex);
     auto it = cache.find(key);
     if (it != cache.end()) {
-      return it->second;
+      return &it->second;
     }
-    return std::nullopt;
+    return nullptr;
   }
 
-  void set(Key key, Value result) {
+  const Value &set(Key key, Value result) {
     std::scoped_lock lock(mutex);
-    cache.emplace(std::move(key), std::move(result));
+    return cache.emplace(std::move(key), std::move(result)).first->second;
   }
 
 private:

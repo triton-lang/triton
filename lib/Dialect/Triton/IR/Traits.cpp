@@ -122,6 +122,7 @@ LogicalResult OpTrait::impl::verifyTensorSize(Operation *op) {
 // on the op.  They do depend on the *module*, though, and a layout is attached
 // to a module only by virtue of being used in one of the module's ops.
 LogicalResult OpTrait::impl::verifyTensorLayouts(Operation *op) {
+  SmallVector<Type, 4> checkedTypes;
   auto checkLayout = [&](Value val, auto makeErr) -> LogicalResult {
     // Only ranked tensors can have layouts.
     auto rankedTy = dyn_cast<RankedTensorType>(val.getType());
@@ -131,6 +132,10 @@ LogicalResult OpTrait::impl::verifyTensorLayouts(Operation *op) {
     mlir::Attribute layout = rankedTy.getEncoding();
     if (!layout)
       return success();
+    // The layout verifier depends on the type and operation, not the SSA value.
+    if (llvm::is_contained(checkedTypes, rankedTy))
+      return success();
+    checkedTypes.push_back(rankedTy);
 
     Dialect &dialect = layout.getDialect();
     auto verifyLayoutInterface =

@@ -31,6 +31,7 @@ class TritonGPUReduceDataDuplicationPass
 public:
   void runOnOperation() override {
     ModuleOp mod = getOperation();
+    bool changed = false;
     mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
       OpBuilder builder(cvtOp);
       auto srcType = cast<RankedTensorType>(cvtOp.getSrc().getType());
@@ -59,7 +60,10 @@ public:
           builder, cvtOp.getLoc(), dstType, tmp);
       cvtOp.replaceAllUsesWith(newConvert.getResult());
       cvtOp.erase();
+      changed = true;
     });
+    if (!changed)
+      markAllAnalysesPreserved();
   }
 };
 

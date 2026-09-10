@@ -1224,8 +1224,8 @@ partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
   return baseLayout * partLayout * extension;
 }
 
-LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
-                                              Attribute layout) {
+const LinearLayout &TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
+                                                     Attribute layout) {
   CacheKey key{std::vector<int64_t>(shape.begin(), shape.end()), layout};
   if (auto result = llCache.get(key)) {
     return *result;
@@ -1269,8 +1269,7 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
     }
   }
 
-  llCache.set(std::move(key), result);
-  return result;
+  return llCache.set(std::move(key), std::move(result));
 }
 
 LinearLayout toLinearLayout(RankedTensorType type) {

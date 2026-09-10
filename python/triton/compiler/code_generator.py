@@ -347,10 +347,10 @@ class CodeGenerator(ast.NodeVisitor):
         self.function_name = function_name
         self.is_kernel = is_kernel
         self.cur_node = None
+        self.unused_result_node = None
         self.noinline = noinline
         self.caller_context = caller_context
         self.scf_stack = []
-        self._loop_carry_discovery_depth = 0
         self.ret_type = None
         # SSA-construction
         # name => language.tensor
@@ -471,57 +471,74 @@ class CodeGenerator(ast.NodeVisitor):
         self.builder.restore_insertion_point(ip)
         self.builder.set_loc(loc)
 
-    @contextlib.contextmanager
-    def _discovering_loop_carries(self):
-        # Nested loops need result placeholders, not a second complete body,
-        # while generating IR that an enclosing _find_carries will discard.
-        # This gives depth + 1 innermost-body visits instead of 2**depth.
-        self._loop_carry_discovery_depth += 1
-        try:
-            yield
-        finally:
-            self._loop_carry_discovery_depth -= 1
-
-    def _find_carries(self, node, liveins, ignore: set[str] = set()):
-        # create loop body block
+    def _lower_loop_body(self, node, liveins, ignore=()):
+        # Lower once using distinct placeholders for potentially assigned names.
+        # Keeping names distinct is essential when their initial values alias.
         block = self.builder.create_block()
         self.builder.set_insertion_point_to_start(block)
-        # dry visit loop body
-        self.scf_stack.append(node)
-        with self._discovering_loop_carries():
-            self.visit_compound_statement(node.body)
-        self.scf_stack.pop()
-        block.erase()
+        placeholders = {}
+        assigned_names = {
+            child.id
+            for stmt in node.body
+            for child in ast.walk(stmt)
+            if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store)
+        }
+        for name, value in liveins.items():
+            if name in ignore or name not in assigned_names or not _is_triton_value(value):
+                continue
+            original = flatten_values_to_ir([value])
+            start = block.get_num_arguments()
+            for handle in original:
+                block.add_argument(handle.get_type())
+            handles = [block.arg(start + i) for i in range(len(original))]
+            for handle, value_handle in zip(handles, original):
+                handle.set_loc(value_handle.get_loc())
+            placeholders[name] = (handles, original)
+            self.lscope[name] = next(unflatten_ir_values(handles, [value.type]))
 
-        # If a variable (name) has changed value within the loop, then it's
-        # a loop-carried variable. (The new and old value must be of the
-        # same type)
+        self.scf_stack.append(node)
+        self.visit_compound_statement(node.body)
+        self.scf_stack.pop()
+
+        names = []
         init_tys = []
         init_handles = []
-        names = []
-
+        yield_handles = []
         for name, live_val in liveins.items():
             if name in ignore:
                 continue
-
             if _is_triton_value(live_val):
                 loop_val = self.lscope[name]
                 self._verify_loop_carried_variable(name, loop_val, live_val)
-
-                live_handles = flatten_values_to_ir([live_val])
                 loop_handles = flatten_values_to_ir([loop_val])
-                if live_handles != loop_handles:
+                original = flatten_values_to_ir([live_val])
+                incoming, original = placeholders.get(name, (original, original))
+                if incoming != loop_handles:
                     names.append(name)
                     init_tys.append(live_val.type)
-                    init_handles.extend(live_handles)
+                    init_handles.extend(original)
+                    yield_handles.extend(loop_handles)
             else:
                 assert name not in self.local_defs, f'Loop carried variable {name} is not a triton value'
-
-        # reset local scope to not pick up local defs from the dry run.
         self.lscope = liveins.copy()
         self.local_defs = {}
+        return names, init_handles, init_tys, (block, placeholders, yield_handles)
 
-        return names, init_handles, init_tys
+    def _merge_loop_body(self, body, destination, names, block_args):
+        block, placeholders, yields = body
+        args = dict(zip(names, block_args))
+        replacements = {}
+        arguments = []
+        for name, (handles, original) in placeholders.items():
+            incoming = flatten_values_to_ir([args[name]]) if name in args else original
+            for placeholder, actual in zip(handles, incoming):
+                replacements[placeholder.id()] = actual
+                arguments.append(actual)
+        resolved_yields = [replacements.get(handle.id(), handle) for handle in yields]
+        # The merge replaces temporary block arguments with actual loop inputs.
+        block.merge_block_before(destination, arguments)
+        self.builder.set_insertion_point_to_end(destination)
+        return resolved_yields
 
     #
     # AST visitor
@@ -1199,7 +1216,7 @@ class CodeGenerator(ast.NodeVisitor):
             liveins, insert_block = sr
             ip, last_loc = self._get_insertion_point_and_loc()
 
-            names, init_handles, init_fe_tys = self._find_carries(node, liveins)
+            names, init_handles, init_fe_tys, body = self._lower_loop_body(node, liveins)
 
             init_tys = [h.get_type() for h in init_handles]
             self._set_insertion_point_and_loc(ip, last_loc)
@@ -1234,19 +1251,7 @@ class CodeGenerator(ast.NodeVisitor):
             for arg, init in zip(body_handles, init_handles):
                 arg.set_loc(init.get_loc())
             body_args = unflatten_ir_values(body_handles, init_fe_tys)
-            for name, val in zip(names, body_args):
-                self.lscope[name] = val
-                self.local_defs[name] = val
-                self._maybe_set_loc_to_name(val, name)
-            self.scf_stack.append(node)
-            # An enclosing carry-discovery pass discards this loop. Its result
-            # types and identities suffice; yield the body arguments instead
-            # of recursively generating the body a second time.
-            if not self._loop_carry_discovery_depth:
-                self.visit_compound_statement(node.body)
-            self.scf_stack.pop()
-
-            yield_handles = flatten_values_to_ir(self.lscope[name] for name in names)
+            yield_handles = self._merge_loop_body(body, after_block, names, body_args)
             self.builder.create_yield_op(yield_handles)
 
         # WhileOp defines new values, update the symbol table (lscope, local_defs)
@@ -1359,7 +1364,7 @@ class CodeGenerator(ast.NodeVisitor):
             liveins, insert_block = sr
             ip, last_loc = self._get_insertion_point_and_loc()
 
-            names, init_handles, init_tys = self._find_carries(node, liveins, ignore={node.target.id})
+            names, init_handles, init_tys, body = self._lower_loop_body(node, liveins, ignore={node.target.id})
 
             # create ForOp
             self._set_insertion_point_and_loc(ip, last_loc)
@@ -1377,20 +1382,12 @@ class CodeGenerator(ast.NodeVisitor):
             if disable_licm:
                 for_op.set_attr("llvm.loop_annotation", self.builder.get_disable_loop_licm_attr())
 
-            self.scf_stack.append(node)
             for_op_body = for_op.get_body(0)
-            self.builder.set_insertion_point_to_start(for_op_body)
             block_handles = [for_op_body.arg(i + 1) for i in range(len(init_handles))]
-            block_args = unflatten_ir_values(block_handles, init_tys)
+            block_args = list(unflatten_ir_values(block_handles, init_tys))
             for name, val in zip(names, block_args):
                 self._maybe_set_loc_to_name(val, name)
-                self.set_value(name, val)
-            # See visit_While: only the enclosing dry run observes this loop's
-            # results. The final lowering still generates the real body.
-            if not self._loop_carry_discovery_depth:
-                self.visit_compound_statement(node.body)
-            self.scf_stack.pop()
-            yield_handles = flatten_values_to_ir(self.lscope[name] for name in names)
+            yield_handles = self._merge_loop_body(body, for_op_body, names, block_args)
 
             # create YieldOp
             if len(yield_handles) > 0:
@@ -1459,7 +1456,7 @@ class CodeGenerator(ast.NodeVisitor):
                                       codegen_fns=self.builder.codegen_fns, module_map=self.builder.module_map,
                                       caller_context=caller_context, is_gluon=self.is_gluon)
             try:
-                generator.visit(fn.parse())
+                generator.visit(fn._get_ast())
             except Exception as e:
                 # Wrap the error in the callee with the location of the call.
                 if knobs.compilation.front_end_debugging:
@@ -1482,7 +1479,7 @@ class CodeGenerator(ast.NodeVisitor):
             fn = fn.__func__
 
         mur = getattr(fn, '_must_use_result', False)
-        if mur and getattr(node, '_is_unused', False):
+        if mur and node is self.unused_result_node:
             error_message = ["The result of %s is not being used." % ast.unparse(node.func)]
             if isinstance(mur, str):
                 error_message.append(mur)
@@ -1631,8 +1628,12 @@ class CodeGenerator(ast.NodeVisitor):
         return self.get_Attribute(lhs, node.attr)
 
     def visit_Expr(self, node):
-        node.value._is_unused = True
-        ast.NodeVisitor.generic_visit(self, node)
+        previous = self.unused_result_node
+        self.unused_result_node = node.value
+        try:
+            self.visit(node.value)
+        finally:
+            self.unused_result_node = previous
 
     def visit_NoneType(self, node):
         return None
@@ -1773,7 +1774,7 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
                               jit_fn=fn, is_kernel=True, file_name=fn.file_name, begin_line=fn.def_file_line_number,
                               begin_col=fn.def_file_col_number, options=options, codegen_fns=codegen_fns,
                               module_map=module_map, module=module, is_gluon=fn.is_gluon())
-    generator.visit(fn.parse())
+    generator.visit(fn._get_ast())
     module = generator.module
     # module takes ownership of the context
     module.context = context

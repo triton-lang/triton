@@ -213,9 +213,12 @@ struct F32DotTCPass : public impl::TritonGPUF32DotTCBase<F32DotTCPass> {
       decomposePatterns.add<TF32x3>(context);
     }
     decomposePatterns.add<BF16xN>(context);
-    if (applyPatternsGreedily(m, std::move(decomposePatterns)).failed()) {
-      signalPassFailure();
-    }
+    bool changed = false;
+    if (failed(applyPatternsGreedily(m, std::move(decomposePatterns), {},
+                                     &changed)))
+      return signalPassFailure();
+    if (!changed)
+      markAllAnalysesPreserved();
   }
 };
 

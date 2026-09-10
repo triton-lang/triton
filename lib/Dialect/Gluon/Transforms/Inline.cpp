@@ -1,4 +1,5 @@
 #include "triton/Dialect/Gluon/Transforms/Passes.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
@@ -26,4 +27,7 @@ void Inline::runOnOperation() {
   }));
   if (failed(pm.run(getOperation())))
     return signalPassFailure();
+  // Liveness is needed for cleanup after inlining, not after each callee is
+  // processed. Analyze the completed module once.
+  runDeadIterArgElimination(getOperation());
 }

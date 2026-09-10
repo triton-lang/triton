@@ -348,8 +348,10 @@ struct TMemWaitInsertionPass
                          ? WalkResult::interrupt()
                          : WalkResult::advance();
             })
-             .wasInterrupted())
+             .wasInterrupted()) {
+      markAllAnalysesPreserved();
       return;
+    }
     // Run after TMEM and shared-memory barrier insertion. Calls and returns
     // complete pending accesses, so this pass needs no call summaries.
     if (failed(runTMemAnalysis<TMemWaitAnalysis>(mod)))
@@ -370,8 +372,10 @@ struct TMemBarrierInsertionPass
                          ? WalkResult::advance()
                          : WalkResult::interrupt();
             })
-             .wasInterrupted())
+             .wasInterrupted()) {
+      markAllAnalysesPreserved();
       return;
+    }
     if (failed(runTMemAnalysis<TMemBarrierAnalysis>(mod, filterFn)))
       return signalPassFailure();
   }

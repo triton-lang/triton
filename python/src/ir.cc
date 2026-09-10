@@ -510,16 +510,20 @@ void init_triton_ir(py::module_ &m) {
            [](Block &self, Block &dst) { self.moveBefore(&dst); })
       .def("insert_before", &Block::insertBefore)
       .def("get_parent", &Block::getParent, ret::reference)
-      .def("merge_block_before",
-           [](Block &self, Block &dst) {
-             // ref: RewriterBase::mergeBlocks()
-             if (self.getNumArguments() != 0)
-               throw std::runtime_error(
-                   "This block has arguments, don't merge");
-             dst.getOperations().splice(dst.begin(), self.getOperations());
-             self.dropAllUses();
-             self.erase();
-           })
+      .def(
+          "merge_block_before",
+          [](Block &self, Block &dst, const std::vector<Value> &arguments) {
+            // ref: RewriterBase::mergeBlocks()
+            if (self.getNumArguments() != arguments.size())
+              throw std::runtime_error("Block argument count does not match");
+            for (auto [argument, value] :
+                 llvm::zip_equal(self.getArguments(), arguments))
+              argument.replaceAllUsesWith(value);
+            dst.getOperations().splice(dst.begin(), self.getOperations());
+            self.dropAllUses();
+            self.erase();
+          },
+          py::arg("dst"), py::arg("arguments") = std::vector<Value>{})
       .def("replace_use_in_block_with",
            [](Block &self, Value &v, Value &newVal) {
              v.replaceUsesWithIf(newVal, [&](OpOperand &operand) {

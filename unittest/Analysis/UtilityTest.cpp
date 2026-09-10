@@ -109,6 +109,12 @@ TEST(Analysis, AddressSetExhaustiveEightUnitUniverse) {
 
     for (unsigned rhsMask = 0; rhsMask < (1u << universe); ++rhsMask) {
       triton::AddressSet rhs = fromMask(rhsMask);
+      std::vector<uint32_t> left, right;
+      for (uint32_t address : lhs)
+        left.push_back(address);
+      for (uint32_t address : rhs)
+        right.push_back(address);
+      EXPECT_EQ(lhs < rhs, left < right);
       EXPECT_EQ(lhs.intersects(rhs), (lhsMask & rhsMask) != 0);
       EXPECT_EQ(lhs.contains(rhs), (rhsMask & ~lhsMask) == 0);
       EXPECT_EQ(lhs.intersection(rhs), fromMask(lhsMask & rhsMask));
