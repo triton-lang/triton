@@ -660,16 +660,47 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
-  // Stores remain pending across branches. At the merge, wait before
+  // Complete the initializer before branching without repeating its store wait.
+  // Each path keeps its rendezvous, and loads complete before leaving the block.
+  // WAIT-LABEL: @wait_initializer_before_fork
+  // WAIT: ttng.tmem_alloc
+  // WAIT-NEXT: ttng.tmem_wait store
+  // WAIT-NEXT: cf.cond_br
+  // WAIT-NOT: ttng.tmem_wait store
+  // CHECK: ttg.barrier local
+  // WAIT: ttng.tmem_load
+  // WAIT-NEXT: tt.store
+  // WAIT-NEXT: ttng.tmem_wait load
+  // WAIT-NEXT: cf.br
+  // WAIT-NOT: ttng.tmem_wait store
+  // CHECK: ttg.barrier local
+  // WAIT: ttng.tmem_load
+  // WAIT-NEXT: ttng.tmem_wait load
+  // WAIT-NEXT: tt.return
+  tt.func @wait_initializer_before_fork(%condition: i1, %data: tensor<128x64xf32, #blocked>, %out: tensor<128x64x!tt.ptr<f32>, #blocked>) -> tensor<128x64xf32, #blocked> {
+    %mem = ttng.tmem_alloc %data {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x64xf32, #blocked>) -> !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable>
+    cf.cond_br %condition, ^body, ^merge
+  ^body:
+    %value = ttng.tmem_load %mem : !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x64xf32, #blocked>
+    tt.store %out, %value : tensor<128x64x!tt.ptr<f32>, #blocked>
+    cf.br ^merge
+  ^merge:
+    %result = ttng.tmem_load %mem : !ttg.memdesc<128x64xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x64xf32, #blocked>
+    tt.return %result : tensor<128x64xf32, #blocked>
+  }
+
+  // Complete stores before branching. The merge keeps its rendezvous before
   // overwriting %low, which may have been written by the left branch.
   // CHECK-LABEL: @wait_cfg_join
   // CHECK: cf.cond_br
   // CHECK: ttng.tmem_store
+  // CHECK-NEXT: ttng.tmem_wait store
   // CHECK-NEXT: cf.br
   // CHECK: ttng.tmem_store
+  // CHECK-NEXT: ttng.tmem_wait store
   // CHECK-NEXT: cf.br
-  // CHECK: ttng.tmem_wait store
-  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NOT: ttng.tmem_wait store
+  // CHECK: ttg.barrier local
   // CHECK-NEXT: ttng.tmem_store
   // CHECK-NEXT: ttng.tmem_wait store
   // CHECK-NEXT: tt.return
@@ -713,18 +744,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
-  // Carry pending stores across the backedge; the next iteration must wait
-  // before writing the same descriptor again.
+  // Complete stores before the backedge; the next iteration keeps its
+  // rendezvous before writing the same descriptor again.
   // CHECK-LABEL: @wait_cfg_backedge
   // CHECK: cf.br
-  // CHECK: cf.cond_br
-  // CHECK: ttng.tmem_wait store
-  // CHECK-NEXT: ttg.barrier local
-  // CHECK-NEXT: ttng.tmem_store
   // CHECK-NOT: ttng.tmem_wait
-  // CHECK: cf.br
-  // CHECK: ttng.tmem_wait store
-  // CHECK-NEXT: tt.return
+  // CHECK: cf.cond_br
+  // CHECK-NOT: ttng.tmem_wait
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttng.tmem_store
+  // CHECK-NEXT: %{{.*}} = arith.subi
+  // CHECK-NEXT: ttng.tmem_wait store
+  // CHECK-NEXT: cf.br
+  // CHECK-NOT: ttng.tmem_wait
+  // CHECK: tt.return
   tt.func @wait_cfg_backedge(%iterations: i32, %data: tensor<128x128xf32, #blocked>) {
     %true = arith.constant true
     %zero = arith.constant 0 : i32
