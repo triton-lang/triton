@@ -233,7 +233,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: llvm.icmp "eq"
     // CHECK-NOT: llvm.icmp "ult"
     // CHECK: nvvm.read.ptx.sreg.cluster.ctarank
-    // CHECK: nvg.cluster_id
     // CHECK-NOT: llvm.ptrtoint
     // CHECK-NOT: llvm.xor
     // CHECK: @$0 mbarrier.arrive.shared::cluster.multicast::cluster::32b.b64 _, [$1], 2, $2;
@@ -251,12 +250,10 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: @distributed_arrival_multicast_routes
   tt.func @distributed_arrival_multicast_routes(%barrier: !ttg.memdesc<8xi64, #barrier, #smem, mutable>) {
     // CHECK: nvvm.bar.warp.sync
-    // CHECK: %[[C32:.*]] = llvm.mlir.constant(32 : i32)
-    // CHECK: %[[LANE:.*]] = llvm.urem %{{.*}}, %[[C32]] : i32
+    // CHECK: %[[LANE:.*]] = nvvm.read.ptx.sreg.laneid : i32
     // CHECK: %[[LANE_ZERO:.*]] = llvm.icmp "eq" %[[LANE]], %{{.*}} : i32
-    // CHECK: nvvm.read.ptx.sreg.cluster.ctarank
+    // CHECK: %[[CTA:.*]] = nvvm.read.ptx.sreg.cluster.ctarank
     // CHECK: %[[ROUTED_PRED:.*]] = llvm.and %[[LANE_ZERO]], %{{.*}} : i1
-    // CHECK: %[[CTA:.*]] = nvg.cluster_id
     // CHECK: %[[C5:.*]] = llvm.mlir.constant(5 : i32)
     // CHECK: %[[MASK_BASE:.*]] = llvm.and %[[CTA]], %[[C5]] : i32
     // CHECK: %[[MASK:.*]] = llvm.shl %[[C5]], %[[MASK_BASE]] : i32
@@ -264,9 +261,27 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK-SAME: "b,r,r" %[[ROUTED_PRED]], %{{[^,]+}}, %[[MASK]]
     ttng.arrive_barrier %barrier, 8 {fromCTA = 5 : i32, per_warp} : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
     // CHECK: nvvm.bar.warp.sync
+    // CHECK: %[[MULTICAST_CTA:.*]] = nvg.cluster_id
+    // CHECK: %[[MULTICAST_BASE:.*]] = llvm.and %[[MULTICAST_CTA]], %[[C5]] : i32
+    // CHECK: %[[MULTICAST_MASK:.*]] = llvm.shl %[[C5]], %[[MULTICAST_BASE]] : i32
     // CHECK: @$0 mbarrier.arrive.shared::cluster.multicast::cluster::32b.b64 _, [$1], 3, $2;
-    // CHECK-SAME: "b,r,r" %[[LANE_ZERO]], %{{[^,]+}}, %[[MASK]]
+    // CHECK-SAME: "b,r,r" %[[LANE_ZERO]], %{{[^,]+}}, %[[MULTICAST_MASK]]
     ttng.arrive_barrier %barrier, 12 {multicastCTA = 2 : i32, per_warp} : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+
+  // A warp-covered direct multicast uses physical lane zero in each warp.
+  // CHECK-LABEL: @distributed_arrival_lane_multicast
+  tt.func @distributed_arrival_lane_multicast(%barrier: !ttg.memdesc<8xi64, #barrier, #smem, mutable>, %pred: i1) {
+    // CHECK: nvvm.bar.warp.sync
+    // CHECK-NOT: nvvm.read.ptx.sreg.tid.x
+    // CHECK-NOT: llvm.urem
+    // CHECK: %[[DIRECT_LANE:.*]] = nvvm.read.ptx.sreg.laneid : i32
+    // CHECK: %[[DIRECT_FIRST:.*]] = llvm.icmp "eq" %[[DIRECT_LANE]], %{{.*}} : i32
+    // CHECK: %[[DIRECT_PRED:.*]] = llvm.and %[[DIRECT_FIRST]], %arg1 : i1
+    // CHECK: @$0 mbarrier.arrive.shared::cluster.multicast::cluster::32b.b64 _, [$1], 2, $2;
+    // CHECK-SAME: "b,r,r" %[[DIRECT_PRED]],
+    ttng.arrive_barrier %barrier, 8, %pred {multicastCTA = 2 : i32, per_warp} : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
     tt.return
   }
 
@@ -277,7 +292,6 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: llvm.icmp "eq"
     // CHECK-NOT: llvm.icmp "ult"
     // CHECK: nvvm.read.ptx.sreg.cluster.ctarank
-    // CHECK: nvg.cluster_id
     // CHECK: llvm.mlir.constant(5 : i32)
     // CHECK: llvm.shl
     // CHECK-NOT: llvm.ptrtoint

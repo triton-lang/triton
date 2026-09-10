@@ -27,10 +27,18 @@
 #include "mlir/Pass/Pass.h"
 
 namespace mlir {
+class ModuleOp;
+
 namespace triton {
+class BufferRegionAnalysis;
+
 namespace nvidia_gpu {
 
 void registerConSanNVIDIAHooks();
+
+// Reuse converged buffer regions after allocation and before membar insertion.
+void optimizeMBarrierArrivals(ModuleOp mod, BufferRegionAnalysis &regions,
+                              int computeCapability);
 
 #define GEN_PASS_DECL
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"

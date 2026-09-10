@@ -102,7 +102,8 @@ FromCTALowering getFromCTALowering(Location loc,
 
   if (supportsMBarrierMulticast)
     return {pred, barrierPtr,
-            LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, broadcastMask)};
+            LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, broadcastMask,
+                                                 ctaId)};
 
   Value peerOffset = b.i32_val(0);
   unsigned srcBit = 0;
@@ -265,23 +266,33 @@ struct BarrierExpectConversion
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getAlloc(),
         typeConverter->convertType(barrierTy.getElementType()), rewriter);
-    // The partition-relative thread ID lowers the same or marginally better
-    // than an elect: LOP3.LUT vs. ELECT + ISETP.EQ.U32.AND.
-    Value id = getThreadId(rewriter, loc);
-    Value pred = b.icmp_eq(id, b.i32_val(0));
+    Value pred;
+    unsigned size = op.getSize();
     bool isCrossClusterBarrier =
         LLVM::NVIDIA::getCGABroadcastMask(barrierTy) != 0;
     Value barrierPtr = LLVM::NVIDIA::getLeaderAddress(
         loc, rewriter, smemObj.getBase(), barrierTy);
     Value multicastMask;
-    if (std::optional<uint32_t> fromCTA = op.getFromCTA()) {
-      FromCTALowering lowering =
-          getFromCTALowering(loc, rewriter, smemObj.getBase(), id, *fromCTA,
-                             supportsMBarrierMulticast);
-      pred = lowering.pred;
-      barrierPtr = lowering.barrierPtr;
-      multicastMask = lowering.multicastMask;
-      isCrossClusterBarrier = true;
+    if (op.getPerWarp()) {
+      LLVM::NVIDIA::createSyncWarp(loc, rewriter);
+      // Match the fixed full-mask leader used by each warp's TMA copies.
+      // One-CTA expectations have only identity routing.
+      pred = LLVM::NVIDIA::createElectPredicate(loc, rewriter);
+      size /= ttg::lookupNumWarps(op);
+    } else {
+      // The partition-relative thread ID lowers the same or marginally better
+      // than a warp-zero elect: LOP3.LUT vs. ELECT + ISETP.EQ.U32.AND.
+      Value id = getThreadId(rewriter, loc);
+      pred = b.icmp_eq(id, b.i32_val(0));
+      if (std::optional<uint32_t> fromCTA = op.getFromCTA()) {
+        FromCTALowering lowering =
+            getFromCTALowering(loc, rewriter, smemObj.getBase(), id, *fromCTA,
+                               supportsMBarrierMulticast);
+        pred = lowering.pred;
+        barrierPtr = lowering.barrierPtr;
+        multicastMask = lowering.multicastMask;
+        isCrossClusterBarrier = true;
+      }
     }
     pred = b.and_(pred, adaptor.getPred());
 
@@ -290,7 +301,7 @@ struct BarrierExpectConversion
         "@$0 mbarrier.arrive.expect_tx." +
         std::string(isCrossClusterBarrier ? "shared::cluster" : "shared::cta") +
         std::string(multicastMask ? ".multicast::cluster::32b" : "") +
-        ".b64 _, [$1], " + std::to_string(op.getSize()) +
+        ".b64 _, [$1], " + std::to_string(size) +
         std::string(multicastMask ? ", $2" : "") + ";";
     auto &expectOp = *expectPtxBuilder.create(expectPtx);
     SmallVector<PTXBuilder::Operand *, 3> operands = {
@@ -414,25 +425,24 @@ struct ArriveBarrierOpConversion
         loc, adaptor.getAlloc(),
         typeConverter->convertType(barrierTy.getElementType()), rewriter);
 
-    // The partition-relative thread ID lowers the same or marginally better
-    // than an elect: LOP3.LUT vs. ELECT + ISETP.EQ.U32.AND.
-    Value id;
     unsigned count = op.getCount();
     if (op.getPerWarp()) {
       LLVM::NVIDIA::createSyncWarp(loc, rewriter);
-      id = getLaneId(rewriter, loc);
       count /= ttg::lookupNumWarps(op);
-    } else {
-      id = getThreadId(rewriter, loc);
     }
-    Value pred = b.icmp_eq(id, b.i32_val(0));
 
     bool isCrossClusterBarrier =
         op.isMulticast() || LLVM::NVIDIA::getCGABroadcastMask(barrierTy) != 0;
     Value barrierPtr = LLVM::NVIDIA::getLeaderAddress(
         loc, rewriter, smemObj.getBase(), barrierTy);
     Value multicastMask;
+    Value pred;
+    // Partition starts are whole warps, so the physical lane needs no offset.
+    Value id = op.getPerWarp() ? NVVM::LaneIdOp::create(rewriter, loc,
+                                                        rewriter.getI32Type())
+                               : getThreadId(rewriter, loc);
     if (std::optional<uint32_t> fromCTA = op.getFromCTA()) {
+      // Routing may use several lane IDs to address peer CTAs.
       FromCTALowering lowering =
           getFromCTALowering(loc, rewriter, smemObj.getBase(), id, *fromCTA,
                              supportsMBarrierMulticast && !op.isMulticast());
@@ -440,20 +450,25 @@ struct ArriveBarrierOpConversion
       barrierPtr = lowering.barrierPtr;
       multicastMask = lowering.multicastMask;
       isCrossClusterBarrier = true;
+    } else {
+      pred = b.icmp_eq(id, b.i32_val(0));
     }
     if (op.getPred())
       pred = b.and_(pred, adaptor.getPred());
+    if (op.isMulticast())
+      multicastMask = LLVM::NVIDIA::createTMAMulticastMask(
+          loc, rewriter, static_cast<uint16_t>(op.getMulticastCTA()));
     // TODO: Add phase result as needed.
     std::stringstream ptxAsm;
     ptxAsm << "@$0 mbarrier.arrive."
            << (isCrossClusterBarrier ? "shared::cluster" : "shared::cta");
-    if (op.isMulticast() || multicastMask)
+    if (multicastMask)
       ptxAsm << ".multicast::cluster::32b";
     ptxAsm << ".b64 _, [$1]";
     if (count > 1) {
       ptxAsm << ", " << count;
     }
-    if (op.isMulticast() || multicastMask)
+    if (multicastMask)
       ptxAsm << ", $2";
     ptxAsm << ";";
 
@@ -461,10 +476,6 @@ struct ArriveBarrierOpConversion
     SmallVector<PTXBuilder::Operand *, 3> operands = {
         ptxBuilder.newOperand(pred, "b"),
         ptxBuilder.newOperand(barrierPtr, "r")};
-    if (op.isMulticast()) {
-      multicastMask = LLVM::NVIDIA::createTMAMulticastMask(
-          loc, rewriter, static_cast<uint16_t>(op.getMulticastCTA()));
-    }
     if (multicastMask)
       operands.push_back(ptxBuilder.newOperand(multicastMask, "r"));
 

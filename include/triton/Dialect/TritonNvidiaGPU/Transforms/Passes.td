@@ -156,8 +156,9 @@ def TritonNvidiaGPUOptimizeMBarrierArrivalsPass : Pass<"triton-nvidia-gpu-optimi
   let summary = "Distribute software mbarrier arrivals among partition warps";
 
   let description = [{
-    Scale counts of closed software-only mbarrier allocations and distribute
-    each arrival across its partition's warps. Run after warp counts are final
+    Scale closed software barriers and distribute count-one TMA expectations
+    through proven descriptor forwarding. Reject unknown or mixed allocation
+    origins. Run after warp counts and tensor-memory allocation are final
     and before membar insertion, which retains barrier-storage dependencies.
   }];
 

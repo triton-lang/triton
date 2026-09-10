@@ -320,7 +320,7 @@ def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier", [
 }
 
 def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
-    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>,
+    DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier", "isPerWarp"]>,
     DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "Signal a barrier of an expected number of bytes to be copied.";
 
@@ -330,6 +330,12 @@ def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
     been copied. The optional `fromCTA` attribute is a CTA-ID
     basis-selection mask: set bits are preserved and unset bits are zeroed
     when selecting the CTA that routes the arrival to each per-CTA barrier.
+
+    The compiler-owned `per_warp` flag distributes the expectation
+    across the execution region's warps in a one-CTA kernel. Each warp publishes
+    its prior effects and contributes one arrival and an equal share of the
+    expected bytes. The barrier's initialization count must be scaled to match;
+    `size` remains the total byte count.
   }];
 
   let hasVerifier = 1;
@@ -338,13 +344,14 @@ def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
     Arg<TTG_MemDescType, "", BarrierSharedWrite>:$alloc,
     I32Attr:$size,
     I1:$pred,
-    OptionalAttr<I32Attr>:$fromCTA
+    OptionalAttr<I32Attr>:$fromCTA,
+    UnitAttr:$per_warp
   );
 
   let builders = [
     OpBuilder<(ins "Value":$alloc, "uint32_t":$size, "Value":$pred), [{
-      build($_builder, $_state, alloc, $_builder.getI32IntegerAttr(size), pred,
-            /*fromCTA=*/IntegerAttr());
+      build($_builder, $_state, alloc, size, pred, /*fromCTA=*/IntegerAttr(),
+            /*per_warp=*/false);
     }]>
   ];
 

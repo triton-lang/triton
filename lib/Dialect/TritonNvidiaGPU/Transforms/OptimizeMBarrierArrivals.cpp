@@ -1,6 +1,12 @@
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "triton/Analysis/BufferRegion.h"
+#include "triton/Analysis/Membar.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
+#include "llvm/ADT/DenseSet.h"
 
 #include <numeric>
 
@@ -11,36 +17,99 @@ namespace mlir::triton::nvidia_gpu {
 
 namespace {
 
-// Follow views and WS captures without accepting descriptor escapes or joins
-// with another allocation. Scalar ring-buffer indices may still be dynamic.
-static LogicalResult
-collectSoftwareBarriers(gpu::LocalAllocOp alloc,
-                        SmallVectorImpl<InitBarrierOp> &inits,
-                        SmallVectorImpl<ArriveBarrierOp> &arrivals) {
+using DescriptorForwarding = DenseMap<OpOperand *, SmallVector<Value>>;
+
+// Enumerate forwarded uses, including captures owned by a parent operation.
+// BufferRegionAnalysis supplies the converged origin proof for each value.
+static DescriptorForwarding collectDescriptorForwarding(ModuleOp mod) {
+  DescriptorForwarding forwarding;
+  auto addEdge = [&](OpOperand &use, Value value) {
+    if (!isa<gpu::MemDescType>(value.getType()))
+      return;
+    forwarding[&use].push_back(value);
+  };
+  mod.walk([&](Operation *op) {
+    if (op->hasTrait<OpTrait::MemDescViewTrait>()) {
+      for (Value result : op->getResults())
+        addEdge(op->getOpOperand(0), result);
+    } else if (auto select = dyn_cast<arith::SelectOp>(op)) {
+      addEdge(op->getOpOperand(1), select.getResult());
+      addEdge(op->getOpOperand(2), select.getResult());
+    } else if (auto branch = dyn_cast<BranchOpInterface>(op)) {
+      for (auto [index, block] : llvm::enumerate(op->getSuccessors())) {
+        SuccessorOperands operands = branch.getSuccessorOperands(index);
+        for (BlockArgument arg : block->getArguments())
+          addEdge(
+              op->getOpOperand(operands.getOperandIndex(arg.getArgNumber())),
+              arg);
+      }
+    } else if (auto branch = dyn_cast<RegionBranchOpInterface>(op)) {
+      RegionBranchSuccessorMapping mapping;
+      branch.getSuccessorOperandInputMapping(mapping);
+      for (auto &[use, values] : mapping)
+        for (Value value : values)
+          addEdge(*use, value);
+    }
+  });
+  return forwarding;
+}
+
+struct BarrierUses {
+  SmallVector<InitBarrierOp> inits;
+  SmallVector<ArriveBarrierOp> arrivals;
+  SmallVector<BarrierExpectOp> expects;
+  bool hasTMA = false;
+};
+
+// Follow views and forwarded descriptors without accepting escapes or joins
+// with another origin. Scalar ring-buffer indices may still be dynamic.
+static LogicalResult collectBarrierUses(gpu::LocalAllocOp alloc,
+                                        const DescriptorForwarding &forwarding,
+                                        BufferRegionAnalysis &regions,
+                                        BarrierUses &uses) {
   SmallVector<Value> worklist{alloc.getResult()};
+  DenseSet<Value> visited;
   while (!worklist.empty()) {
     Value value = worklist.pop_back_val();
+    if (!visited.insert(value).second)
+      continue;
+    // Reject the whole allocation if any forwarded use has an unknown or mixed
+    // origin, even when other arrivals still have a known footprint.
+    const auto *footprint = regions.getFootprint(value);
+    if (!footprint ||
+        !llvm::all_of(footprint->regionInfo.views, [&](const auto &view) {
+          return view.allocation == alloc.getOperation();
+        }))
+      return failure();
     for (OpOperand &use : value.getUses()) {
       Operation *user = use.getOwner();
-      if (auto partitions = dyn_cast<gpu::WarpSpecializePartitionsOp>(user)) {
-        for (Region &region : partitions.getPartitionRegions())
-          worklist.push_back(region.getArgument(use.getOperandNumber()));
+      auto successors = forwarding.find(&use);
+      if (successors != forwarding.end()) {
+        auto effects = dyn_cast<MemoryEffectOpInterface>(user);
+        assert((effects
+                    ? effects.hasNoEffect()
+                    : user->hasTrait<OpTrait::HasRecursiveMemoryEffects>()) &&
+               "descriptor forwarding operations must not have own effects");
+        llvm::append_range(worklist, successors->second);
         continue;
       }
-      if (use.getOperandNumber() != 0)
-        return failure();
-      if (user->hasTrait<OpTrait::MemDescViewTrait>()) {
-        llvm::append_range(worklist, user->getResults());
+      // Wait dependencies only keep their allocations live.
+      if (isa<WaitBarrierOp>(user))
+        continue;
+      if (auto tma = dyn_cast<TMALoadLikeOpInterface>(user)) {
+        // The same allocation used as a TMA payload is not a closed barrier.
+        if (&use != &tma.getBarrierMutable())
+          return failure();
+        uses.hasTMA = true;
         continue;
       }
       if (auto init = dyn_cast<InitBarrierOp>(user)) {
-        inits.push_back(init);
+        uses.inits.push_back(init);
       } else if (auto arrive = dyn_cast<ArriveBarrierOp>(user)) {
-        if (arrive.getPerWarp())
-          return failure();
-        arrivals.push_back(arrive);
-      } else if (!isa<WaitBarrierOp, InvalBarrierOp, gpu::LocalDeallocOp>(
-                     user)) {
+        uses.arrivals.push_back(arrive);
+      } else if (auto expect = dyn_cast<BarrierExpectOp>(user)) {
+        uses.expects.push_back(expect);
+      } else if (!isa<InvalBarrierOp, gpu::LocalDeallocOp>(user)) {
         return failure();
       }
     }
@@ -48,26 +117,64 @@ collectSoftwareBarriers(gpu::LocalAllocOp alloc,
   return success();
 }
 
-static void distributeArrivals(gpu::LocalAllocOp alloc) {
-  SmallVector<InitBarrierOp> inits;
-  SmallVector<ArriveBarrierOp> arrivals;
-  if (failed(collectSoftwareBarriers(alloc, inits, arrivals)) ||
-      inits.empty() || arrivals.empty())
+static void distributeExpectations(ArrayRef<InitBarrierOp> inits,
+                                   ArrayRef<BarrierExpectOp> expects) {
+  unsigned numWarps = gpu::lookupNumWarps(expects.front());
+  if (numWarps == 1 || gpu::lookupNumCTAs(expects.front()) != 1)
     return;
+  constexpr uint64_t maxCount = (1 << 20) - 1;
+  uint64_t maxInitCount = 0;
+  for (InitBarrierOp init : inits)
+    maxInitCount = std::max(maxInitCount, uint64_t(init.getCount()));
+  if (maxInitCount > maxCount / numWarps)
+    return;
+  for (BarrierExpectOp expect : expects) {
+    // A phase has at most maxInitCount expectations. Bound the transaction
+    // balance even when copies complete before other warps add their shares.
+    // An already-distributed expectation must not scale initialization again.
+    if (expect.getPerWarp() || gpu::lookupNumWarps(expect) != numWarps ||
+        expect.getSize() > maxCount / maxInitCount ||
+        expect.getSize() % numWarps != 0)
+      return;
+  }
+
+  // Pending arrivals stay positive until every warp adds its byte share.
+  // After the final arrival, the balance is total bytes minus completed bytes.
+  OpBuilder builder(expects.front()->getContext());
+  for (InitBarrierOp init : inits)
+    init.setCountAttr(builder.getI32IntegerAttr(init.getCount() * numWarps));
+  for (BarrierExpectOp expect : expects)
+    expect.setPerWarp(true);
+}
+
+static void distributeArrivals(gpu::LocalAllocOp alloc,
+                               const DescriptorForwarding &forwarding,
+                               BufferRegionAnalysis &regions) {
+  BarrierUses uses;
+  if (failed(collectBarrierUses(alloc, forwarding, regions, uses)) ||
+      uses.inits.empty())
+    return;
+  if (!uses.expects.empty()) {
+    if (uses.arrivals.empty())
+      distributeExpectations(uses.inits, uses.expects);
+    return;
+  }
+  if (uses.hasTMA || uses.arrivals.empty())
+    return;
+
+  auto &inits = uses.inits;
+  auto &arrivals = uses.arrivals;
 
   constexpr uint64_t maxCount = (1 << 20) - 1;
   uint64_t scale = 1;
   for (ArriveBarrierOp arrive : arrivals) {
     uint64_t numWarps = gpu::lookupNumWarps(arrive);
-    if (numWarps <= 1)
-      continue;
     // Choose the smallest common scale making each total count divisible by
-    // its partition's warp count. Already-divisible counts need no scaling.
+    // its partition's warp count. Power-of-two widths bound the LCM by the
+    // largest width, including the no-op factor for one warp.
     uint64_t factor =
         numWarps / std::gcd(numWarps, uint64_t(arrive.getCount()));
     scale = std::lcm(scale, factor);
-    if (scale > maxCount)
-      return;
   }
   for (InitBarrierOp init : inits) {
     // Lowering counts all CTAs that contribute to the same physical barrier.
@@ -100,12 +207,30 @@ struct OptimizeMBarrierArrivalsPass
 
   void runOnOperation() override {
     ModuleOp mod = getOperation();
-    // Completing arrivals with an explicit count require SM90.
     if (computeCapability < 90)
       return;
-    mod.walk(distributeArrivals);
+    // Origin identity does not depend on target-specific scratch sizes.
+    ModuleAllocation allocation(mod);
+    auto solver = createDataFlowSolver();
+    auto *regions = solver->load<BufferRegionAnalysis>(
+        BufferRegionAnalysis::Mode::AllMemory, &allocation);
+    if (failed(solver->initializeAndRun(mod)))
+      return signalPassFailure();
+    optimizeMBarrierArrivals(mod, *regions, computeCapability);
   }
 };
 
 } // namespace
+
+void optimizeMBarrierArrivals(ModuleOp mod, BufferRegionAnalysis &regions,
+                              int computeCapability) {
+  // Completing arrivals with an explicit count requires SM90.
+  if (computeCapability < 90)
+    return;
+  auto forwarding = collectDescriptorForwarding(mod);
+  mod.walk([&](gpu::LocalAllocOp alloc) {
+    distributeArrivals(alloc, forwarding, regions);
+  });
+}
+
 } // namespace mlir::triton::nvidia_gpu
