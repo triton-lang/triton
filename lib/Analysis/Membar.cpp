@@ -331,8 +331,6 @@ bool MembarAnalysis::requiresThreadSync(const BlockInfo &pending,
 Operation *MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
                                         MembarInfo *membarInfo,
                                         OpBuilder *builder, bool cluster) {
-  if (!builder)
-    return nullptr;
   auto &pending = membarInfo->pending;
   auto canSkip = [&](Operation *before, Operation *after, bool beforeIsRead,
                      bool afterIsRead, Allocation *allocation) {
