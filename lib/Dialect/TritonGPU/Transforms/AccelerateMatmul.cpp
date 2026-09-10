@@ -570,8 +570,8 @@ public:
       //
       // To preserve native operand packing, also impose:
       //   (c) minBitwidth <= computeBitwidth.
-      // Raising it for (b) could violate (c) only if 128 / K > computeBitwidth, hence
-      // K < 128 / computeBitwidth. This contradicts the CUDA frontend's
+      // Raising it for (b) could violate (c) only if 128 / K > computeBitwidth,
+      // hence K < 128 / computeBitwidth. This contradicts the CUDA frontend's
       // requirement K >= 256 / computeBitwidth, which also implies (a).
       minBitwidth = std::max<int64_t>(minBitwidth,
                                       4 * 32 / getShapePerCTA(oldAType).back());
