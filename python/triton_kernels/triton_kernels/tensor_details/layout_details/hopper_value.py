@@ -598,18 +598,21 @@ def mxfp4_to_bf16_triton(x, scale, mx_axis: tl.constexpr):
     if mx_axis == 0:
         x = x.trans()
 
-    # Decode four scales together, preserving E8M0's minimum in each BF16 lane.
+    # Decode four E8M0 scales, including the minimum and NaN encodings.
     scale = tl.inline_asm_elementwise(
         r"""
         {
-            .reg .b32 min_scale;
+            .reg .b32 min_scale, zero;
             mov.b32 min_scale, 0x00400040;
+            mov.b32 zero, 0;
             prmt.b32 $0, $2, 0, 0x5140;
             shl.b32 $0, $0, 7;
             vmax2.u32.u32.u32 $0, $0, min_scale, $0;
+            fma.rn.bf16x2 $0, $0, zero, $0;
             prmt.b32 $1, $2, 0, 0x7362;
             shl.b32 $1, $1, 7;
             vmax2.u32.u32.u32 $1, $1, min_scale, $1;
+            fma.rn.bf16x2 $1, $1, zero, $1;
         }
         """,
         constraints="=r,=r,r",

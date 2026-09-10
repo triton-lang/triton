@@ -15,7 +15,7 @@ from triton_kernels.numerics_details.mxfp import (
     upcast_from_mxfp,
     upcast_from_mxfp_torch,
 )
-from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile
+from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile, upcast_mxfp_scale
 from triton_kernels.target_info import is_cuda
 from triton_kernels.tensor import convert_layout, wrap_torch_tensor
 from triton_kernels.tensor_details.layout import StridedLayout
@@ -24,6 +24,24 @@ from triton_kernels.testing import assert_close, assert_equal
 
 def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
     return torch.uint8 if dtype_str == "float4_e2m1" else getattr(torch, dtype_str)
+
+
+@triton.jit
+def _upcast_mxfp_scale_kernel(out, scale):
+    offsets = tl.arange(0, 256)
+    scale = tl.load(scale + offsets)
+    tl.store(out + offsets, upcast_mxfp_scale(scale, out.dtype.element_ty))
+
+
+@pytest.mark.parametrize("dst_dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("scale_dtype", [torch.uint8, torch.int8])
+def test_mxfp_scale_upcast(dst_dtype, scale_dtype, device):
+    scale = torch.arange(256, device=device).to(torch.uint8)
+    actual = torch.empty(256, dtype=dst_dtype, device=device)
+    expected = torch.ldexp(torch.ones(256, dtype=torch.float64, device=device), scale.to(torch.int32) - 127)
+    expected[-1] = float("nan")
+    _upcast_mxfp_scale_kernel[(1, )](actual, scale.view(scale_dtype))
+    torch.testing.assert_close(actual, expected.to(dst_dtype), rtol=0, atol=0, equal_nan=True)
 
 
 @triton.jit

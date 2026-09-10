@@ -264,7 +264,11 @@ def _dot_scaled_scale_to_f32(scale_handle, compute_type):
     if compute_type == tl.bfloat16 and scale_handle.dtype.is_int():
         # E8M0 byte zero is 2^-127, which rounds to zero in FP16.
         bits = np.maximum(bits, 0x00400000)
-    return bits.view(np.float32)
+    scale = bits.view(np.float32)
+    if scale_handle.dtype.is_int():
+        # FMA turns byte 255's infinity into NaN while preserving finite scales.
+        scale = _interpreter.fma_fp32(scale, np.zeros_like(scale), scale)
+    return scale
 
 
 def _e2m1_to_f32(value):

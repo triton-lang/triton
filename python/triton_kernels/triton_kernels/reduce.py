@@ -464,7 +464,6 @@ def _reduce_forward_inner(pid_s0, pid_s1,
                 xmx_ptrs = XMx + offs_r * stride_xmxr + offs_s0[:, None] * stride_xmx0 + offs_x_smx1[None, :] * stride_xmx1
                 xmx = tl.load(xmx_ptrs, mask=valid_s0[:, None] & valid_in_smx1[None, :], other=0.0)
                 xmx = upcast_mxfp_scale(xmx, tl.float32)
-                xmx = tl.where(xmx == float("inf"), float("nan"), xmx)
                 x = (xmx[:, :, None] * x.reshape([BLOCK_S0, BLOCK_X_S1 // 32, 32])).reshape([BLOCK_S0, BLOCK_X_S1])
             x = x * x_flex_scale
             if not IS_SCALE_NONE:
@@ -937,7 +936,6 @@ def _reduce_backward(
             xmx_ptrs = XMx + k * stride_xmxr + offs_s0[:, None] * stride_xmx0 + offs_x_smx1[None, :] * stride_xmx1
             xmx = tl.load(xmx_ptrs, mask=valid_s0[:, None] & valid_in_smx1[None, :], other=0)
             xmx = upcast_mxfp_scale(xmx, tl.float32)
-            xmx = tl.where(xmx == float("inf"), float("nan"), xmx)
             g = (g.reshape([BLOCK_S0, BLOCK_X_S1 // 32, 32]) * xmx[:, :, None]).reshape([BLOCK_S0, BLOCK_X_S1])
         # Multiply by global input flex scale
         g = g * x_flex_scale
