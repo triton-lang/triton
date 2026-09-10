@@ -144,6 +144,35 @@ tt.func @async_wait_pure_op_between_waits(%arg: tensor<32x16xf16, #AL>) {
   tt.return
 }
 
+// The conditional global read does not consume the copy's shared writes.
+// Keep one rendezvous at the join, before the shared layout conversion.
+// CHECK-LABEL: async_wait_conditional_global_read
+tt.func @async_wait_conditional_global_read(%ptrs: tensor<32x16x!tt.ptr<f16>, #AL>, %bias_ptrs: tensor<32x16x!tt.ptr<f16>, #AL>, %condition: i1) -> tensor<32x16xf16, #BL> {
+  %zero = arith.constant dense<0.0> : tensor<32x16xf16, #AL>
+  %smem = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %copy = ttg.async_copy_global_to_local %ptrs, %smem : tensor<32x16x!tt.ptr<f16>, #AL> -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %group = ttg.async_commit_group tokens %copy
+  // CHECK: ttg.async_wait
+  // CHECK-NEXT: cf.cond_br
+  // CHECK-NOT: ttg.barrier
+  // CHECK: tt.load
+  // CHECK-NEXT: cf.br
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: {{.*}} = ttg.convert_layout
+  // CHECK-NEXT: {{.*}} = ttg.local_load
+  ttg.async_wait %group {num = 0 : i32}
+  %bias = scf.if %condition -> tensor<32x16xf16, #AL> {
+    %loaded = tt.load %bias_ptrs : tensor<32x16x!tt.ptr<f16>, #AL>
+    scf.yield %loaded : tensor<32x16xf16, #AL>
+  } else {
+    scf.yield %zero : tensor<32x16xf16, #AL>
+  }
+  %converted = ttg.convert_layout %bias : tensor<32x16xf16, #AL> -> tensor<32x16xf16, #BL>
+  %value = ttg.local_load %smem : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<32x16xf16, #BL>
+  %result = arith.addf %value, %converted : tensor<32x16xf16, #BL>
+  tt.return %result : tensor<32x16xf16, #BL>
+}
+
 // CHECK-LABEL: async_wait_existing_barrier
 tt.func @async_wait_existing_barrier(%arg: tensor<32x16xf16, #AL>) {
   %cst0 = ttg.local_alloc %arg : (tensor<32x16xf16, #AL>) -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory>

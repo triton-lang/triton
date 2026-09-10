@@ -347,6 +347,9 @@ private:
   void updateExitState(MembarInfo *membarInfo) override;
 
 protected:
+  /// Shared-memory lifetime markers do not issue memory accesses.
+  static bool hasThreadEffects(Operation *operation);
+
   void updateMemoryEffects(Operation *operation, MembarInfo *membarInfo,
                            FuncMapT *funcMap, OpBuilder *builder,
                            bool cluster = false, BlockInfo effects = {});

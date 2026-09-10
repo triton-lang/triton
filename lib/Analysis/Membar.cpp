@@ -123,10 +123,12 @@ namespace {
 enum class ThreadSyncKind {
   Ordinary,
   Publication,
-  // Both completion kinds only establish completion or acquire state; they do
+  // Completions only establish completion or acquire state; they do
   // not access payload or consume another completion's unpublished effects.
   Completion,
   CompletionNeedsSync,
+  // These completions do not publish writes to global memory.
+  SharedCompletionNeedsSync,
 };
 
 enum class ThreadSyncIssuer {
@@ -145,16 +147,27 @@ struct ThreadSyncInfo {
   bool requiresBefore() const { return kind == ThreadSyncKind::Publication; }
 
   bool requiresAfter() const {
-    return kind == ThreadSyncKind::CompletionNeedsSync;
+    return kind == ThreadSyncKind::CompletionNeedsSync ||
+           kind == ThreadSyncKind::SharedCompletionNeedsSync;
   }
 
   bool isCompletionOnly() const {
     return kind == ThreadSyncKind::Completion ||
-           kind == ThreadSyncKind::CompletionNeedsSync;
+           kind == ThreadSyncKind::CompletionNeedsSync ||
+           kind == ThreadSyncKind::SharedCompletionNeedsSync;
   }
 };
 
 ThreadSyncInfo getThreadSyncInfo(Operation *op) {
+  // Acquires and proxy fences do not consume payload. Wait deps only keep
+  // allocations live; each thread fences its own completed accesses.
+  if (isa<ttng::WaitBarrierOp, ttng::FenceAsyncSharedOp>(op))
+    return {ThreadSyncKind::Completion};
+  if (isa<triton::gpu::AsyncWaitOp>(op))
+    return {ThreadSyncKind::SharedCompletionNeedsSync};
+  if (auto wait = dyn_cast<ttng::TMAStoreWaitOp>(op);
+      wait && wait.getReadOnly())
+    return {ThreadSyncKind::SharedCompletionNeedsSync};
   if (op->hasTrait<OpTrait::MemWaitOpTrait>() ||
       isa<ttng::TensormapFenceproxyAcquireOp>(op))
     return {ThreadSyncKind::CompletionNeedsSync};
@@ -185,6 +198,15 @@ ThreadSyncInfo getThreadSyncInfo(Operation *op) {
   return {};
 }
 
+bool hasOnlyGlobalReads(Operation *op) {
+  auto effects = getEffectsRecursively(op);
+  return effects && !effects->empty() &&
+         llvm::all_of(*effects, [](const auto &effect) {
+           return isa<MemoryEffects::Read>(effect.getEffect()) &&
+                  isa<triton::GlobalMemory>(effect.getResource());
+         });
+}
+
 // Whether both operations use the same fixed issuer in each CTA of one region.
 bool haveSameThreadSyncIssuer(Operation *lhs, Operation *rhs) {
   // Equal issuer kinds in different regions can denote different physical
@@ -201,12 +223,19 @@ bool haveSameThreadSyncIssuer(Operation *lhs, Operation *rhs) {
 bool BlockInfo::requiresThreadSync(const BlockInfo &other) const {
   // Only effect -> demand edges require a rendezvous; independent completion
   // operations can publish together.
-  for (Operation *before : threadEffects)
+  // The maps also include implicit scratch and translated callee accesses.
+  bool hasSharedAccesses =
+      !other.syncReadSlices.empty() || !other.syncWriteSlices.empty();
+  for (Operation *before : threadEffects) {
+    auto sync = getThreadSyncInfo(before);
     for (Operation *after : other.threadDemands)
-      if (getThreadSyncInfo(before).requiresAfter() ||
+      if ((sync.requiresAfter() &&
+           (sync.kind != ThreadSyncKind::SharedCompletionNeedsSync ||
+            hasSharedAccesses || !hasOnlyGlobalReads(after))) ||
           (getThreadSyncInfo(after).requiresBefore() &&
            !haveSameThreadSyncIssuer(before, after)))
         return true;
+  }
   return false;
 }
 
@@ -338,6 +367,15 @@ triton::BarrierStages MembarAnalysis::getBarrierStages(Operation *op) {
   return getLocalBarrierStages(op, &allocation);
 }
 
+bool MembarAnalysis::hasThreadEffects(Operation *op) {
+  auto effects = getEffectsRecursively(op);
+  return !effects || llvm::any_of(*effects, [](const auto &effect) {
+    return !isa<triton::gpu::SharedMemory>(effect.getResource()) ||
+           !isa<MemoryEffects::Allocate, MemoryEffects::Free>(
+               effect.getEffect());
+  });
+}
+
 void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
                             FuncMapT *funcMap, OpBuilder *builder) {
   auto sync = getThreadSyncInfo(op);
@@ -351,7 +389,7 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
       sync.requiresBefore() || sync.requiresAfter() ||
       getScratchBufferId(op, &allocation) != Allocation::InvalidBufferId ||
       (!controlFlow && !isReturn && !isa<ttng::ClusterBarrierOp>(op) &&
-       !isMemoryEffectFree(op));
+       hasThreadEffects(op));
 
   BlockInfo effects;
   if (hasEffects) {
@@ -361,6 +399,18 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
   }
   if (isReturn && isa<FunctionOpInterface>(op->getParentOp()))
     effects.threadDemands.insert(op);
+
+  // Finish completions that block every memory demand once before a loop.
+  // Shared-copy completions can still overlap independent global reads.
+  if (builder && bufferIndexAnalysis.entersLoop(op) &&
+      llvm::any_of(membarInfo->pending.threadEffects, [](Operation *effect) {
+        return getThreadSyncInfo(effect).kind ==
+               ThreadSyncKind::CompletionNeedsSync;
+      })) {
+    builder->setInsertionPoint(op);
+    insertBarrier(op, builder);
+    membarInfo->sync();
+  }
   updateMemoryEffects(op, membarInfo, funcMap, builder, /*cluster=*/false,
                       std::move(effects));
 }
