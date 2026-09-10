@@ -69,7 +69,7 @@ def test_runtime_scaled_upcast_fp4_compact_scale(k_packed, scale_k, spt_packed):
 
 
 @gluon.jit
-def _scaled_upcast_minimum_scale_kernel(x_ptr, scale_ptr, out_ptr, FP4: ttgl.constexpr, USE_CDNA4: ttgl.constexpr):
+def _scaled_upcast_scale_edges_kernel(x_ptr, scale_ptr, out_ptr, FP4: ttgl.constexpr, USE_CDNA4: ttgl.constexpr):
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [8, 8], [1, 1], [1, 0])
     input_k: ttgl.constexpr = 32 if FP4 else 64
     dtype: ttgl.constexpr = out_ptr.dtype.element_ty
@@ -102,18 +102,22 @@ def _scaled_upcast_minimum_scale_kernel(x_ptr, scale_ptr, out_ptr, FP4: ttgl.con
 @pytest.mark.skipif(not IS_CDNA3_OR_CDNA4, reason="Requires CDNA3 or CDNA4")
 @pytest.mark.parametrize("dtype", [torch.uint8, torch.float8_e4m3fn, torch.float8_e5m2])
 @pytest.mark.parametrize("out_dtype", [torch.bfloat16, torch.float16])
-def test_scaled_upcast_minimum_scale(dtype, out_dtype):
+@pytest.mark.parametrize("nan_scale", [False, True])
+def test_scaled_upcast_scale_edges(dtype, out_dtype, nan_scale):
     fp4 = dtype == torch.uint8
-    values = [0x11] * 4 + [0x66] * 4 if fp4 else [0.5] * 4 + [4.0] * 4
+    small_value = 0 if nan_scale else (0x11 if fp4 else 0.5)
+    values = [small_value] * 4 + [0x66 if fp4 else 4.0] * 4
     x = torch.tensor(values, dtype=dtype)[:, None].expand(8, 32 if fp4 else 64).contiguous().cuda()
-    scale = torch.tensor([0, 1, 127, 254] * 2, dtype=torch.uint8, device="cuda")
+    scale = torch.tensor([255] * 8 if nan_scale else [0, 1, 127, 254] * 2, dtype=torch.uint8, device="cuda")
     scale = scale[:, None].expand(8, 2 if fp4 else 64).contiguous()
     out = torch.empty((8, 64), dtype=out_dtype, device="cuda")
-    _scaled_upcast_minimum_scale_kernel[(1, )](x, scale, out, fp4, is_hip_cdna4(), num_warps=1,
-                                               allow_flush_denorm=False)
+    _scaled_upcast_scale_edges_kernel[(1, )](x, scale, out, fp4, is_hip_cdna4(), num_warps=1, allow_flush_denorm=False)
 
     # Both subnormal and normal BF16 results survive; the smallest FP16
     # results underflow after scaling.
-    expected = torch.tensor([2.0**-128, 2.0**-127, 0.5, 2.0**126, 2.0**-125, 2.0**-124, 4.0,
-                             float("inf")], dtype=torch.float64).to(out_dtype)[:, None].expand(8, 64)
-    torch.testing.assert_close(out.cpu(), expected, rtol=0, atol=0)
+    expected_values = [float("nan")] * 8 if nan_scale else [
+        2.0**-128, 2.0**-127, 0.5, 2.0**126, 2.0**-125, 2.0**-124, 4.0,
+        float("inf")
+    ]
+    expected = torch.tensor(expected_values, dtype=torch.float64).to(out_dtype)[:, None].expand(8, 64)
+    torch.testing.assert_close(out.cpu(), expected, rtol=0, atol=0, equal_nan=True)

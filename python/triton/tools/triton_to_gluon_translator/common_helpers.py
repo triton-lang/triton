@@ -179,12 +179,14 @@ def tl_dot_decomposed_scale_to_16(scale, compute_type: ttgl.constexpr):
     int_width: ttgl.constexpr = large_fp_type.primitive_bitwidth
     int_type: ttgl.constexpr = get_int_type(int_width)
 
+    if scale.dtype.is_int():
+        scale = ttgl.cast(scale, ttgl.uint8)
     zexted = ttgl.cast(scale, int_type)
     shift_value: ttgl.constexpr = large_fp_type.fp_mantissa_width
     shl_res = zexted << shift_value
     if compute_type == ttgl.bfloat16 and scale.dtype.is_int():
         # E8M0's minimum value (2**-127) is a BF16 subnormal.
-        shl_res = ttgl.where(scale == 0, 0x0040, shl_res)
+        shl_res = ttgl.cast(ttgl.maximum(shl_res, 0x0040), int_type)
     scale_fp = ttgl.cast(shl_res, large_fp_type, bitcast=True)
     if large_fp_type != compute_type:
         scale_fp = ttgl.cast(scale_fp, compute_type)

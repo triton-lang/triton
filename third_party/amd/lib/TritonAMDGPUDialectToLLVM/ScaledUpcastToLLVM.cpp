@@ -74,12 +74,15 @@ LogicalResult checkPk8ScaleType(Operation *op, RankedTensorType scaleTy) {
 Value scaleToF32(RewriterBase &rewriter, Location loc, Value scale,
                  bool preShifted) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  if (preShifted)
-    return b.bitcast(
+  Value value;
+  if (preShifted) {
+    value = b.bitcast(
         b.shl(b.zext(i32_ty, b.bitcast(scale, i16_ty)), b.i32_val(16)), f32_ty);
-  Value bits = b.shl(b.zext(i32_ty, scale), b.i32_val(23));
-  bits = b.select(b.icmp_eq(scale, b.i8_val(0)), b.i32_val(0x00400000), bits);
-  return b.bitcast(bits, f32_ty);
+  } else {
+    Value bits = b.shl(b.zext(i32_ty, scale), b.i32_val(23));
+    value = b.bitcast(b.umax(bits, b.i32_val(0x00400000)), f32_ty);
+  }
+  return b.fma(value, b.f32_val(0.0), value);
 }
 
 // Returns true if the scale layout gives lane `j` and lane `j^16` the same

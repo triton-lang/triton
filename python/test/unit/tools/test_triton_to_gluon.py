@@ -272,10 +272,11 @@ def test_triton_to_gluon_dot_scaled(
 @pytest.mark.parametrize("rhs_scale", [False, True])
 @pytest.mark.parametrize("normal_type", ["bf16", "fp16"])
 @pytest.mark.parametrize("scale_factor", [32] if is_cuda() else [16, 32])
-@pytest.mark.parametrize("float_scale", [False, True])
-def test_triton_to_gluon_dot_scaled_minimum_scale(rhs_scale, normal_type, scale_factor, float_scale, tmp_path):
+@pytest.mark.parametrize("scale_storage", ["uint8", "int8", "float"])
+def test_triton_to_gluon_dot_scaled_minimum_scale(rhs_scale, normal_type, scale_factor, scale_storage, tmp_path):
     if not (is_hopper_or_newer() or is_hip_cdna4() or is_hip_gfx1250()):
         pytest.skip("Requires Hopper, Blackwell, CDNA4, or gfx1250")
+    float_scale = scale_storage == "float"
     if float_scale and not is_cuda():
         pytest.skip("Floating-point scale controls require CUDA")
 
@@ -287,6 +288,8 @@ def test_triton_to_gluon_dot_scaled_minimum_scale(rhs_scale, normal_type, scale_
     scale_values = [0, 0, 0, 0] if float_scale else [0, 1, 127, 128]
     scales = torch.tensor(scale_values, dtype=scale_dtype, device="cuda")
     scales = scales.repeat_interleave(32)[:, None].expand(128, 128 // scale_factor).contiguous()
+    if scale_storage == "int8":
+        scales = scales.view(torch.int8)
     out = torch.empty((128, 128), dtype=torch.float32, device="cuda")
     ref = torch.empty_like(out)
 

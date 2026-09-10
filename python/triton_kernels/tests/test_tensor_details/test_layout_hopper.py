@@ -402,16 +402,23 @@ def _upcast_mxfp4_to_bf16(Y, X, XScale, x_stride_m, x_stride_n, x_scale_stride_m
 @pytest.mark.skipif(not cuda_capability_geq(9), reason="Only supported for capability >= 9")
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("mx_axis", [0, 1])
-@pytest.mark.parametrize("minimum_scale", [False, True])
-def test_upcast_mxfp4_to_bf16(num_warps, mx_axis, minimum_scale):
+@pytest.mark.parametrize("all_scales", [False, True])
+def test_upcast_mxfp4_to_bf16(num_warps, mx_axis, all_scales):
     shape = [64, 64]
     shape[1 - mx_axis] = 32 * num_warps
     scale_shape = [s // 32 if i == mx_axis else s for i, s in enumerate(shape)]
-    if minimum_scale:
+    if all_scales:
         x_fp4_val = empty(shape, FP4, "cuda", StridedLayout(mx_axis - 2)).storage.data
-        x_fp4_val.fill_(0x66)  # Two FP4 values of 4.0 per byte.
-        x_fp4_scale = torch.zeros(scale_shape, dtype=torch.uint8, device="cuda")
-        x_bf16 = torch.full(shape, 2.0**-125, dtype=torch.bfloat16, device="cuda")
+        pairs = torch.arange(shape[mx_axis] // 2, dtype=torch.uint8, device="cuda") * 2
+        packed = (pairs & 15) | (((pairs + 1) & 15) << 4)
+        x_fp4_val.copy_(packed[:, None] if mx_axis == 0 else packed[None, :])
+        x_fp4_scale = torch.arange(math.prod(scale_shape), device="cuda").to(torch.uint8).reshape(scale_shape)
+        values = torch.tensor([0., .5, 1., 1.5, 2., 3., 4., 6., -0., -.5, -1., -1.5, -2., -3., -4., -6.],
+                              dtype=torch.float64, device="cuda").repeat(shape[mx_axis] // 16)
+        values = values[:, None] if mx_axis == 0 else values[None, :]
+        expanded_scale = x_fp4_scale.repeat_interleave(32, dim=mx_axis)
+        x_bf16 = torch.ldexp(values.expand_as(expanded_scale), expanded_scale.to(torch.int32) - 127).to(torch.bfloat16)
+        x_bf16.masked_fill_(expanded_scale == 255, float("nan"))
     else:
         torch.manual_seed(0)
         torch.cuda.manual_seed(0)
@@ -433,7 +440,9 @@ def test_upcast_mxfp4_to_bf16(num_warps, mx_axis, minimum_scale):
         y.stride(0), y.stride(1),  #
         *value_block, *shape,  #
         *scale_block, mx_axis=mx_axis, num_warps=num_warps)
-    assert (y == x_bf16).all()
+    assert torch.equal(y.isnan(), x_bf16.isnan())
+    non_nan = ~x_bf16.isnan()
+    assert torch.equal(y.view(torch.int16)[non_nan], x_bf16.view(torch.int16)[non_nan])
 
 
 @pytest.mark.parametrize("shape,major", [(shape, major)
