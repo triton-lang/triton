@@ -9,7 +9,6 @@
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "llvm/ADT/DenseMap.h"
 
-#include <algorithm>
 #include <memory>
 #include <utility>
 
@@ -62,8 +61,6 @@ public:
             if (cta != otherCTA)
               continue;
             auto overlap = addresses.intersection(otherAddresses);
-            if (overlap.empty())
-              continue;
             // Descriptor offsets use integer addition, not layout XOR.
             for (uint32_t address : overlap) {
               if (lhs->getWarp(address - a.region.baseOffset) !=
@@ -104,8 +101,7 @@ private:
     unsigned bitwidth = memTy.getElementTypeBitWidth();
     unsigned elementsPerWord = 32 / bitwidth;
     auto rows = layout->getOutDimSize(row);
-    auto cols =
-        std::max<int32_t>(1, layout->getOutDimSize(col) / elementsPerWord);
+    auto cols = layout->getOutDimSize(col) / elementsPerWord;
     auto toWords = LinearLayout::identity1D(rows, row, row) *
                    LinearLayout::zeros1D(elementsPerWord, col, col) *
                    LinearLayout::identity1D(cols, col, col);
@@ -132,8 +128,7 @@ private:
     } else if (auto store = dyn_cast<TMEMStoreOp>(op)) {
       regTy = store.getSrc().getType();
       mem = store.getDst();
-    } else if (auto alloc = dyn_cast<TMEMAllocOp>(op);
-               alloc && alloc.getSrc()) {
+    } else if (auto alloc = dyn_cast<TMEMAllocOp>(op)) {
       regTy = alloc.getSrc().getType();
       mem = alloc.getResult();
     } else {
@@ -281,8 +276,11 @@ private:
     before.clear();
   }
 
-  // Update the state when we add or find a tmem_wait
-  void complete(TMEMWaitKind kind, BlockInfo &pending) {
+  void waitNow(Operation *op, TMEMWaitKind kind, BlockInfo &pending) {
+    if (accesses(beforeBarrier, kind).empty() &&
+        accesses(afterBarrier, kind).empty())
+      return;
+    waitsBefore[op].push_back(kind);
     // A wait after lastBarrier restores its preceding accesses for publication.
     // Later accesses are already in pending.
     auto &before = accesses(beforeBarrier, kind);
@@ -290,14 +288,6 @@ private:
       accesses(pending, kind)[slice].insert(ops.begin(), ops.end());
     before.clear();
     accesses(afterBarrier, kind).clear();
-  }
-
-  void waitNow(Operation *op, TMEMWaitKind kind, BlockInfo &pending) {
-    if (accesses(beforeBarrier, kind).empty() &&
-        accesses(afterBarrier, kind).empty())
-      return;
-    waitsBefore[op].push_back(kind);
-    complete(kind, pending);
   }
 
   void rememberBarrier(Operation *op, MembarInfo &info) {
@@ -327,10 +317,6 @@ private:
               OpBuilder *builder) override {
     waitsBefore.erase(op);
     BlockInfo &pending = info->pending;
-    if (auto wait = dyn_cast<TMEMWaitOp>(op)) {
-      complete(wait.getKind(), pending);
-      return;
-    }
 
     // Choose the barrier before placing waits.
     auto syncBefore = [&](const BlockInfo &effects) {
@@ -379,12 +365,12 @@ private:
     if (!info->allPathsFromEntrySynced)
       info->entryBlockInfo.join(effects);
 
-    // MMA and copies complete through mbarrier waits; only loads and stores
-    // remain pending.
-    if (needsTMemWait(op)) {
+    // MMA and copies complete through mbarriers. Other TMEM effects need
+    // ordering, but only loads and stores need tmem_wait.
+    if (!isa<MMAv5OpInterface, TMEMCopyOp>(op))
       pending.join(effects);
+    if (needsTMemWait(op))
       afterBarrier.join(effects);
-    }
   }
 
   // Planed tmem_wait insertions
