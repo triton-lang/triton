@@ -922,10 +922,6 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
                             int k) -> MMAInstOperands {
     auto [numRepM, numRepN, numRepK] = desc.repShape;
     int numRepKWords = ceil<int>(blockK, dot.mmaSizeK * mmasPerScaleWord);
-    int numColPerScaleBlockA = ceil<int>(
-        ttng::getTmemAllocSizes(cast<MemDescType>(op.getAScale().getType()))
-            .numCols,
-        numRepM * numRepKWords);
     int numColPerScaleBlockB = ceil<int>(
         ttng::getTmemAllocSizes(cast<MemDescType>(op.getBScale().getType()))
             .numCols,
@@ -934,11 +930,9 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
     int baseK = dot.getKOffset(k) / dot.mmaSizeK;
     int subWordIdx = baseK % mmasPerScaleWord;
     int wordIdx = baseK / mmasPerScaleWord;
-    int scaleIdxA = linearizeScaleBlockIdx(op.getAScale(), m, wordIdx, numRepM,
-                                           numRepKWords);
     int scaleIdxB = linearizeScaleBlockIdx(op.getBScale(), n, wordIdx, numRepN,
                                            numRepKWords);
-    int offsetA = scaleIdxA * numColPerScaleBlockA;
+    int offsetA;
     int offsetB = scaleIdxB * numColPerScaleBlockB;
     if (mxfpInstKind == mxfpKind::mxf8f6f4 || useK96) {
       // Sliced scales retain the parent layout's physical repetition strides.
@@ -946,6 +940,14 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
           ttng::getTMemSubSliceOffset(op.getAScale().getType(),
                                       m * desc.mmaSizeM, 0) +
           ttng::getTMemSubSliceOffset(op.getAScale().getType(), wordIdx * 4, 1);
+    } else {
+      int numColPerScaleBlockA = ceil<int>(
+          ttng::getTmemAllocSizes(cast<MemDescType>(op.getAScale().getType()))
+              .numCols,
+          numRepM * numRepKWords);
+      int scaleIdxA = linearizeScaleBlockIdx(op.getAScale(), m, wordIdx, numRepM,
+                                             numRepKWords);
+      offsetA = scaleIdxA * numColPerScaleBlockA;
     }
     if (useK96) {
       offsetB =

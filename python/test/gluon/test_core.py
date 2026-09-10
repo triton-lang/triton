@@ -6130,26 +6130,27 @@ def test_tcgen05_mma_scaled_sliced_a_scales(M, K, parent_m, compact, use_acc, of
                USE_ACC: ttgl.constexpr, OFFSET: ttgl.constexpr):
         N: ttgl.constexpr = 128
         reg: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
-        a = ttgl.full([M, K], 1, ttgl.float8e5, reg)
+        k = ttgl.arange(0, K, ttgl.SliceLayout(0, reg))[None, :]
+        a = ttgl.broadcast_to((1 + k // 128).to(ttgl.float8e5), [M, K])
         b = ttgl.full([K, N], 1, ttgl.float8e5, reg)
         smem_a = ttgl.allocate_shared_memory(ttgl.float8e5, [M, K], ttgl.NVMMASharedLayout(128, 8, transposed=False), a)
         smem_b = ttgl.allocate_shared_memory(ttgl.float8e5, [K, N], ttgl.NVMMASharedLayout(128, 8, transposed=True), b)
 
-        parent = allocate_tensor_memory(ttgl.uint8, [PARENT_M, K // 32], TensorMemoryScalesLayout())
-        preg: ttgl.constexpr = parent.get_reg_layout()
-        rows = ttgl.arange(0, PARENT_M, ttgl.SliceLayout(1, preg))[:, None]
-        scale_values = (127 + rows // 128 + ttgl.zeros([PARENT_M, K // 32], ttgl.int32, preg)).to(ttgl.uint8)
-        parent.store(scale_values)
-        view = parent.slice(OFFSET, M, dim=0)
         if COMPACT:
             scale_a = allocate_tensor_memory(ttgl.uint8, [M, K // 32], TensorMemoryScalesLayout())
             compact_reg: ttgl.constexpr = scale_a.get_reg_layout()
             compact_rows = ttgl.arange(0, M, ttgl.SliceLayout(1, compact_reg))[:, None]
-            compact_values = (127 + (compact_rows + OFFSET) // 128 +
-                              ttgl.zeros([M, K // 32], ttgl.int32, compact_reg)).to(ttgl.uint8)
+            compact_cols = ttgl.arange(0, K // 32, ttgl.SliceLayout(0, compact_reg))[None, :]
+            compact_values = (127 + (compact_rows + OFFSET) // 128 + compact_cols // 4).to(ttgl.uint8)
             scale_a.store(compact_values)
         else:
-            scale_a = view
+            parent = allocate_tensor_memory(ttgl.uint8, [PARENT_M, K // 32], TensorMemoryScalesLayout())
+            preg: ttgl.constexpr = parent.get_reg_layout()
+            rows = ttgl.arange(0, PARENT_M, ttgl.SliceLayout(1, preg))[:, None]
+            cols = ttgl.arange(0, K // 32, ttgl.SliceLayout(0, preg))[None, :]
+            scale_values = (127 + rows // 128 + cols // 4).to(ttgl.uint8)
+            parent.store(scale_values)
+            scale_a = parent.slice(OFFSET, M, dim=0)
         scale_b = allocate_tensor_memory(ttgl.uint8, [N, K // 32], TensorMemoryScalesLayout())
         scale_b.store(ttgl.full([N, K // 32], 127, ttgl.uint8, scale_b.get_reg_layout()))
 
@@ -6170,7 +6171,8 @@ def test_tcgen05_mma_scaled_sliced_a_scales(M, K, parent_m, compact, use_acc, of
 
     out = torch.empty((M, 128), dtype=torch.float32, device="cuda")
     kernel[(1, )](out, M, K, parent_m, compact, use_acc, offset, num_warps=4)
-    # Integer K and power-of-two scales have an exact, independent oracle.
-    expected = torch.tensor([K * 2**((row + offset) // 128) + (3 if use_acc else 0) for row in range(M)],
+    # Unequal K-word contributions expose scale-word permutations; the oracle is exact.
+    expected = torch.tensor([32 * sum((1 + j // 4) * 2**((row + offset) // 128 + j // 4) for j in range(K // 32)) +
+                             (3 if use_acc else 0) for row in range(M)],
                             dtype=torch.float32, device="cuda")
     torch.testing.assert_close(out, expected[:, None].expand_as(out), atol=0, rtol=0)
