@@ -307,8 +307,6 @@ def matmul(a, b, bias,
             or isinstance(b_scale_layout, HopperMXScaleLayout)):
         if not b_is_shuffled:
             assert b.stride(-2) == 1, "`w` must be column-major with Hopper-swizzled MX scales or non-strided MX value layouts"
-    is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
-    if is_hopper_fp8: assert b.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     # unpack a scale
     a_scale = precision_config.a_mx_scale
     a_has_mx = a_scale is not None
@@ -319,6 +317,10 @@ def matmul(a, b, bias,
     if not isinstance(a, Tensor):
         dtype = FP4 if a_has_mx and a.dtype == torch.uint8 else None
         a = wrap_torch_tensor(a, dtype=dtype)
+    # Mixed FP8/16-bit dots widen FP8 tiles and support either weight layout.
+    if (is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
+            and not opt_flags_nvidia.is_unscaled_mixed_fp8(precision_config, a.dtype, b.dtype)):
+        assert b.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     intermediate_out_dtype = precision_config.intermediate_out_dtype
     if intermediate_out_dtype is None:
         intermediate_out_dtype = torch.float64 if a.dtype == b.dtype == FP64 else torch.float32
