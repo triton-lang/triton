@@ -2,6 +2,7 @@
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "TritonAMDGPUTransforms/WmmaGroup.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -868,7 +869,7 @@ public:
     scale.getDefiningOp()->setAttr(AttrDecomposedDotScaledSource,
                                    BoolAttr::get(rewriter.getContext(), true));
 
-    TensorValue expandedScale;
+    Value reshapeScale;
     if (targetFeatures.supportsCvtPkScalePk8()) {
       // On architectures with CvtPkScalePk8 (e.g., GFX1250), the scale type
       // is int8, required by hardware instruction so type should not be
@@ -879,27 +880,28 @@ public:
       }
 
       auto newScaleType = resultType.clone(scale.getType().getElementType());
-      expandedScale = broadcastScale(rewriter, dotOp, scale, kDim,
-                                     newScaleType.getEncoding());
+      reshapeScale = broadcastScale(rewriter, dotOp, scale, kDim,
+                                    newScaleType.getEncoding());
     } else {
-      // Cast scale to bf16, broadcast it and convert the layout
+      // This is an exponent carrier; restore NaNs after the native upcast.
       FloatType bf16Type = rewriter.getBF16Type();
-      expandedScale = extendAndBroadcastScale(
-          rewriter, dotOp, scale, bf16Type, resultType.clone(bf16Type), opIdx);
+      reshapeScale = extendAndBroadcastScale(rewriter, dotOp, scale, bf16Type,
+                                             resultType.clone(bf16Type), opIdx,
+                                             /*handleNan=*/false);
     }
 
     // Upcast with scale
     TensorValue result;
     if (isFp4) {
       result = triton::amdgpu::ScaledUpcastFp4Op::create(
-          rewriter, loc, resultType, v, expandedScale, kDim);
+          rewriter, loc, resultType, v, reshapeScale, kDim);
     } else {
       result = triton::amdgpu::ScaledUpcastFp8Op::create(
-          rewriter, loc, resultType, v, expandedScale);
+          rewriter, loc, resultType, v, reshapeScale);
     }
 
     // If the scale is NaN, return NaN, else return the scaled value.
-    return maskNan(rewriter, dotOp, result, scale, expandedScale, kDim);
+    return maskNan(rewriter, dotOp, result, scale, kDim);
   }
 
 private:
