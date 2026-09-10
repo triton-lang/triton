@@ -6968,6 +6968,7 @@ def test_tma_cache_policy_ptx(target, rank, kind, multicast, policy, expected, t
         if kind == "im2col":
             assert all(re.search(r"\}, (?:%rs[0-9]+, )?%rd[0-9]+;", line) for line in loads)
 
+
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("M,K,parent_m,compact,use_acc,offset", [
     (256, 256, 512, False, False, 0),
@@ -6988,7 +6989,7 @@ def test_tcgen05_mma_scaled_sliced_a_scales(M, K, parent_m, compact, use_acc, of
         N: ttgl.constexpr = 128
         reg: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
         k = ttgl.arange(0, K, ttgl.SliceLayout(0, reg))[None, :]
-        a = (1 + k // 128 + ttgl.zeros([M, K], ttgl.int32, reg)).to(ttgl.float8e5)
+        a = (1.0 + k // 128 + ttgl.zeros([M, K], ttgl.float32, reg)).to(ttgl.float8e5)
         b = ttgl.full([K, N], 1, ttgl.float8e5, reg)
         smem_a = ttgl.allocate_shared_memory(ttgl.float8e5, [M, K], ttgl.NVMMASharedLayout(128, 8, transposed=False), a)
         smem_b = ttgl.allocate_shared_memory(ttgl.float8e5, [K, N], ttgl.NVMMASharedLayout(128, 8, transposed=True), b)
