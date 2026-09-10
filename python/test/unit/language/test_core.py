@@ -1605,6 +1605,7 @@ def test_noinline_returns_tensor(device):
 # ---------------
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype", [
     torch.bool, torch.int8, torch.uint8, torch.int16, torch.int32, torch.int64, torch.float16, torch.float32,
     torch.float64

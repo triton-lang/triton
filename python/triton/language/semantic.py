@@ -32,6 +32,9 @@ class TritonSemantic(Generic[TensorTy]):
     def __init__(self, builder):
         self.builder = builder
 
+    def to_inline_asm_operand(self, arg):
+        return self.to_tensor(arg)
+
 # ===----------------------------------------------------------------------===##
 # Programming Model
 # ===----------------------------------------------------------------------===##

@@ -914,3 +914,73 @@ tt.func public @padded_subview_unsupported_size(%arg0: !ttg.memdesc<2x32x32xf32,
 // expected-error @below {{alignment must be specified outside of the linear layout braces}}
 #shared = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [1, 0], [2, 0]], block = [], alignment = 16}>
 !alignment_in_layout = !ttg.memdesc<4x4xf32, #shared, #ttg.shared_memory>
+
+// -----
+
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 1], instrShape = [8, 8]}>
+#a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>
+#b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  tt.func @mma_fp64_large_k_replicated_lanes(%a: tensor<8x4xf64, #a>, %b: tensor<4x8xf64, #b>) {
+    %c = arith.constant dense<0.0> : tensor<8x8xf64, #mma>
+    // expected-error@+1 {{MMA operand layout requires K >= 4 * kWidth}}
+    %d = tt.dot %a, %b, %c : tensor<8x4xf64, #a> * tensor<4x8xf64, #b> -> tensor<8x8xf64, #mma>
+    tt.return
+  }
+}
+
+// -----
+
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 1], instrShape = [16, 8]}>
+#a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>
+#b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  tt.func @mma_fp32_large_k_replicated_lanes(%a: tensor<16x16xf32, #a>, %b: tensor<16x8xf32, #b>) {
+    %c = arith.constant dense<0.0> : tensor<16x8xf32, #mma>
+    // expected-error@+1 {{MMA operand layout requires K >= 4 * kWidth}}
+    %d = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<16x16xf32, #a> * tensor<16x8xf32, #b> -> tensor<16x8xf32, #mma>
+    tt.return
+  }
+}
+
+// -----
+
+#shared_inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #shared_inner}>
+#smem = #ttg.shared_memory
+tt.func @inline_asm_partitioned_descriptor(%mem: !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable>) {
+  // expected-error @+1 {{inline assembly requires memory descriptors with a single base}}
+  ttg.inline_asm "" {constraints = "r", pure = false} %mem : (!ttg.memdesc<128x16xf16, #partitioned, #smem, mutable>) -> ()
+  tt.return
+}
+
+// -----
+
+#shared_inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #shared_inner}>
+#smem = #ttg.shared_memory
+tt.func @elementwise_asm_partitioned_descriptor(%mem: !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable>) {
+  // expected-error @+1 {{inline assembly requires memory descriptors with a single base}}
+  %value = tt.elementwise_inline_asm "mov.u32 $0, 0;" {constraints = "=r,r", pure = false, packed_element = 1 : i32} %mem : !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable> -> i32
+  tt.return
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+!desc = !ttg.memdesc<128xi32, #shared, #ttg.shared_memory, mutable>
+tt.func @pure_inline_asm_shared_descriptor(%offset: i32, %mem: !desc) {
+  // expected-error @+1 {{requires pure=false for memory descriptor operands}}
+  %value = ttg.inline_asm "add.u32 $0, $1, $2;" {constraints = "=r,r,r", pure = true} %offset, %mem : (i32, !desc) -> i32
+  tt.return
+}
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 32, colStride = 1>
+!desc = !ttg.memdesc<128x32xi32, #tmem, #ttng.tensor_memory, mutable>
+tt.func @pure_elementwise_asm_tensor_descriptor(%offset: i32, %mem: !desc) {
+  // expected-error @+1 {{requires pure=false for memory descriptor operands}}
+  %value = tt.elementwise_inline_asm "add.u32 $0, $1, $2;" {constraints = "=r,r,r", pure = true, packed_element = 1 : i32} %offset, %mem : i32, !desc -> i32
+  tt.return
+}

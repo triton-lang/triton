@@ -324,6 +324,9 @@ private:
         for (auto alloc : info.getAllocs()) {
           if (allocation->valueBuffer.count(alloc))
             allocation->addAlias(value, alloc);
+          else if (auto argument = dyn_cast<BlockArgument>(alloc);
+                   argument && argument.getOwner()->getParentOp() == operation)
+            allocation->argumentAliases[value].insert(argument.getArgNumber());
         }
       }
     }

@@ -34,6 +34,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
+  // CHECK-LABEL: inline_asm_no_proxy_effects
+  tt.func @inline_asm_no_proxy_effects(%desc: !tt.tensordesc<64x64xf32, #shared>, %buffer: !ttg.memdesc<64x64xf32, #shared, #smem, mutable>, %bar: !ttg.memdesc<1xi64, #shared1, #smem, mutable>) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    // CHECK: ttg.inline_asm
+    // CHECK-NEXT: ttng.async_tma_copy_global_to_local
+    ttg.inline_asm "// opaque descriptor" {constraints = "r", pure = false} %buffer : (!ttg.memdesc<64x64xf32, #shared, #smem, mutable>) -> ()
+    ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buffer, %bar, %true : !tt.tensordesc<64x64xf32, #shared>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<64x64xf32, #shared, #smem, mutable>
+    tt.return
+  }
+
   // CHECK-LABEL: no_fence_for_disjoint_allocations
   tt.func @no_fence_for_disjoint_allocations(%desc: !tt.tensordesc<64x64xf32, #shared>, %bar: !ttg.memdesc<1xi64, #shared1, #smem, mutable>) {
     %c0 = arith.constant 0 : i32
