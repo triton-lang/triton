@@ -681,18 +681,6 @@ LogicalResult BufferRegionAnalysis::visitOperation(
       propagateIfChanged(result, result->join(info));
     return success();
   };
-  if (auto wsOp = dyn_cast<ttg::WarpSpecializeOp>(op)) {
-    for (Region *region : wsOp.getPartitionRegions()) {
-      if (region->empty())
-        continue;
-
-      Block &entry = region->front();
-      auto *exec =
-          getOrCreate<dataflow::Executable>(getProgramPointBefore(&entry));
-      propagateIfChanged(exec, exec->setToLive());
-    }
-    return success();
-  }
   if (auto localAllocOp = dyn_cast<ttg::LocalAllocOp>(op)) {
     // Descriptor views preserve memory space, so shared origins cannot
     // contribute to a tensor-memory footprint.

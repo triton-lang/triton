@@ -3635,53 +3635,6 @@ struct TritonGPUInferLayoutInterface
     if (allowReorder && dstEnc)
       if (!isExpensiveView(srcShape, srcEnc, dstShape, dstEnc))
         return success();
-
-    Attribute inferredDstEnc;
-    if (failed(inferReshapeOpEncodingImpl(srcShape, srcEnc, dstShape,
-                                          inferredDstEnc, loc)))
-      return failure();
-    // If the inferred encoding is equivalent to the encoding hint in dstEnc,
-    // prefer the hint. Otherwise, set dstEnc to the inferred encoding.
-    if (!isa_and_nonnull<DistributedEncodingTrait>(dstEnc) ||
-        failed(verifyLayoutsAreEqual(dstShape, inferredDstEnc, dstEnc,
-                                     /*loc=*/{},
-                                     /*ignoreRegBroadcast=*/false)))
-      dstEnc = inferredDstEnc;
-    return success();
-  }
-
-  LogicalResult inferReshapeOpEncodingImpl(ArrayRef<int64_t> srcShape,
-                                           Attribute srcEnc,
-                                           ArrayRef<int64_t> dstShape,
-                                           Attribute &dstEnc,
-                                           std::optional<Location> loc) const {
-    // If this reshape just introduces a new size 1 dimension, and the source is
-    // a slice along that dimension, use the slice parent as the result
-    // encoding.
-    if (auto sliceEnc = dyn_cast<SliceEncodingAttr>(srcEnc)) {
-      if (sliceEnc.paddedShape(srcShape) == dstShape &&
-          !isExpensiveView(srcShape, srcEnc, dstShape, sliceEnc.getParent())) {
-        dstEnc = sliceEnc.getParent();
-        return success();
-      }
-    }
-    // Inverse of the above. If the reshape removes a size 1 dimension, the
-    // destination can just be a slice of the source.
-    // TODO: Consider extending this and the case above to support chained
-    // slices for cases where multiple size 1 dimensions are removed or added.
-    if (isa<DistributedEncodingTrait>(srcEnc) &&
-        srcShape.size() == dstShape.size() + 1) {
-      for (unsigned dim = 0; dim < srcShape.size(); ++dim) {
-        if (srcShape[dim] == 1 &&
-            srcShape.take_front(dim) == dstShape.take_front(dim) &&
-            srcShape.drop_front(dim + 1) == dstShape.drop_front(dim)) {
-          dstEnc = SliceEncodingAttr::get(
-              srcEnc.getContext(), dim, cast<DistributedEncodingTrait>(srcEnc));
-          if (!isExpensiveView(srcShape, srcEnc, dstShape, dstEnc))
-            return success();
-        }
-      }
-    }
     auto result =
         inferReshapeOpLegacyEncoding(srcShape, srcEnc, dstShape, dstEnc);
     if (succeeded(result)) {
@@ -3894,6 +3847,44 @@ struct TritonGPUInferLayoutInterface
     }
 
     outEnc = inferEncodingFromLinearLayout(ctx, std::move(newLl), inEnc);
+    return success();
+  }
+};
+
+struct TritonGPUInlineAsmInterface : public DialectInlineAsmInterface {
+  using DialectInlineAsmInterface::DialectInlineAsmInterface;
+
+  void getOperandEffects(
+      OpOperand &operand,
+      SmallVectorImpl<MemoryEffects::EffectInstance> &effects) const override {
+    auto desc = dyn_cast<MemDescType>(operand.get().getType());
+    if (!desc)
+      return;
+    if (isa<SharedMemorySpaceAttr>(desc.getMemorySpace())) {
+      effects.push_back(
+          makeShared<MemoryEffects::Read>(&operand, SharedKind::Generic));
+      effects.push_back(
+          makeShared<MemoryEffects::Write>(&operand, SharedKind::Generic));
+    } else {
+      effects.emplace_back(MemoryEffects::Read::get(), &operand,
+                           nvidia_gpu::TensorMemory::get());
+      effects.emplace_back(MemoryEffects::Write::get(), &operand,
+                           nvidia_gpu::TensorMemory::get());
+    }
+  }
+
+  LogicalResult verifyOperand(OpOperand &operand, bool isPure) const override {
+    auto desc = dyn_cast<MemDescType>(operand.get().getType());
+    if (!desc)
+      return success();
+    if (isPure)
+      return operand.getOwner()->emitOpError(
+          "requires pure=false for memory descriptor operands");
+    if (auto layout =
+            dyn_cast<PartitionedSharedEncodingAttr>(desc.getEncoding());
+        layout && layout.getNumPartitions() != 1)
+      return operand.getOwner()->emitOpError(
+          "inline assembly requires memory descriptors with a single base");
     return success();
   }
 };
@@ -4422,6 +4413,7 @@ void TritonGPUDialect::initialize() {
   addInterfaces<TritonInlinerInterface>();
   addInterfaces<TritonGPUOpAsmInterface>();
   addInterfaces<TritonGPUInferLayoutInterface>();
+  addInterfaces<TritonGPUInlineAsmInterface>();
   addInterfaces<TritonGPUVerifyTensorLayoutInterface>();
 
   RankedTensorType::attachInterface<TensorModel>(*getContext());

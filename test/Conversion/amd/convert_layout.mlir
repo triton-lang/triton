@@ -224,3 +224,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [64, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [4, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+// CHECK-DAG: [[$LOCAL_MMRA_TAG:#[A-Za-z0-9_]+]] = #llvm.mmra_tag<"amdgpu-synchronize-as":"local">
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: convert_layout_warp_sync
+  tt.func @convert_layout_warp_sync(%arg0: tensor<64x32xf32, #blocked0>) {
+    // CHECK: llvm.store
+    // CHECK: llvm.fence syncscope("wavefront") release {llvm.mmra = [[$LOCAL_MMRA_TAG]]}
+    // CHECK-NEXT: rocdl.wave.barrier
+    // CHECK-NEXT: llvm.fence syncscope("wavefront") acquire {llvm.mmra = [[$LOCAL_MMRA_TAG]]}
+    // CHECK: llvm.load
+    // CHECK-NOT: rocdl.s.barrier
+    %0 = ttg.convert_layout %arg0 : tensor<64x32xf32, #blocked0> -> tensor<64x32xf32, #blocked1>
+    tt.return
+  }
+}

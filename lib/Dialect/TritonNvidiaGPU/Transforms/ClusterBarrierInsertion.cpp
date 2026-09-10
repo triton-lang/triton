@@ -84,20 +84,6 @@ bool isPreAllocAliasSliceFilter(const AllocationSlice &lhsSlice,
          allocation->isExplicitBuffer(bufferId);
 }
 
-bool hasUnresolvedCrossClusterDependency(const BlockInfo &blockInfo) {
-  auto hasDistributedDependency = [](const BlockInfo::SliceMapT &slices,
-                                     bool isRead) {
-    for (const auto &sliceAndOps : slices)
-      for (Operation *depOp : sliceAndOps.second)
-        if (isDistributedMultiCTAOp(depOp, isRead))
-          return true;
-    return false;
-  };
-
-  return hasDistributedDependency(blockInfo.syncReadSlices, /*isRead=*/true) ||
-         hasDistributedDependency(blockInfo.syncWriteSlices, /*isRead=*/false);
-}
-
 bool valueAliasesTrackedBuffers(Value value,
                                 const Allocation::BufferIdSetT &tracked,
                                 Allocation *allocation) {

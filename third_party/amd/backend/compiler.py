@@ -382,14 +382,13 @@ class HIPBackend(BaseBackend):
         if is_enabled(options, "consan") and is_consan_supported(options.arch):
             passes.ttgpuir.add_prepare_consan_captures(pm, "amd")
         amd.passes.ttgpuir.add_allocate_shared_memory(pm, options.arch)
-        # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after shared
+        # Instrumentation point here so an extension can override IRs above (e.g., ttir and ttgir).
+        instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
+        amd.passes.ttgpuir.add_membar(pm, options.arch)
         if is_enabled(options, "consan") and is_consan_supported(options.arch):
             passes.ttgpuir.add_concurrency_sanitizer(pm)
             passes.gluon.add_canonicalizer(pm)
             passes.common.add_cse(pm)
-        passes.ttgpuir.add_allocate_global_scratch_memory(pm)
-        # Instrumentation point here so an extension can override IRs above (e.g., ttir and ttgir).
-        instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         ## __HIP_FTZ is used to control the denorm flushing behavior of exp2 op as follows:
         ## 1. If __HIP_FTZ = 1, exp2 flushes denorms in input and output regardless
@@ -400,6 +399,8 @@ class HIPBackend(BaseBackend):
         ##    For now it is used as a controller for developers only.
         __HIP_FTZ = True
         amd.passes.ttgpuir.add_to_llvmir(pm, options.arch, __HIP_FTZ)
+        # Lower Proton segment values before warp specialization captures partition operands.
+        instrument(pm, point="llvmir-to-llvm", context=mod.context)
         amd.passes.ttgpuir.add_warp_specialize_to_llvm(pm, options.arch)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
@@ -409,9 +410,6 @@ class HIPBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
-
-        # This can not be moved below the di_scope pass
-        instrument(pm, point="llvmir-to-llvm", context=mod.context)
 
         if not knobs.compilation.disable_line_info and not knobs.compilation.dump_ir_extract_di_local_variables:
             passes.llvmir.add_di_scope(pm)

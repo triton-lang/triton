@@ -53,6 +53,22 @@ LogicalResult verifyCacheModifier(CacheModifier modifier,
 LogicalResult verifyCachePolicy(Operation *op, Attribute cachePolicy,
                                 CachePolicyOperation operation);
 
+// Dialects define how their types behave as inline assembly operands without
+// exposing those types to the Triton dialect.
+class DialectInlineAsmInterface
+    : public DialectInterface::Base<DialectInlineAsmInterface> {
+public:
+  DialectInlineAsmInterface(Dialect *dialect) : Base(dialect) {}
+
+  virtual void getOperandEffects(
+      OpOperand &operand,
+      SmallVectorImpl<MemoryEffects::EffectInstance> &effects) const = 0;
+  virtual LogicalResult verifyOperand(OpOperand &operand,
+                                      bool isPure) const = 0;
+};
+
+LogicalResult verifyInlineAsmOperands(Operation *op, bool isPure);
+
 class DialectInferLayoutInterface
     : public DialectInterface::Base<DialectInferLayoutInterface> {
 public:

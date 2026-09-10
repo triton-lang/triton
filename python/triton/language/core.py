@@ -4,7 +4,7 @@ import math
 from warnings import warn
 from contextlib import contextmanager
 from enum import Enum
-from functools import partial, wraps, cached_property
+from functools import wraps, cached_property
 import typing
 from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
@@ -3496,6 +3496,13 @@ def inline_asm_elementwise(asm: str, constraints: str, args: Sequence, dtype: Un
 
         The input tensors :code:`args` are implicitly broadcasted to the same shape.
 
+        In Gluon, :code:`args` may also contain shared or tensor memory
+        descriptors. Each descriptor contributes one :code:`i32` address per
+        invocation, independently of :code:`pack`, and does not participate in
+        broadcasting. Descriptor operands require :code:`is_pure=False`; the
+        assembly conservatively reads and writes the descriptor views, and
+        accesses must remain within their logical elements.
+
         :code:`dtype` can be a tuple of types, in which case the output is a
         tuple of tensors.
 
@@ -3592,22 +3599,12 @@ def inline_asm_elementwise(asm: str, constraints: str, args: Sequence, dtype: Un
     dtype = typing.cast(Sequence[_DtypeClass], dtype)
 
     res_tys = dtype
-    if dispatch_args := [_semantic.to_tensor(arg) for arg in args]:
-        bin_op_type_checking = partial(
-            _semantic.binary_op_type_checking_impl,
-            arithmetic_check=False,
-            allow_lhs_ptr=True,
-            allow_rhs_ptr=True,
-        )
-        broadcast_arg = dispatch_args[0]
-        # Get the broadcast shape over all the arguments
-        for item in dispatch_args:
-            _, broadcast_arg = bin_op_type_checking(item, broadcast_arg)
-        if broadcast_arg.shape:
-            # Change the shape of each argument based on the broadcast shape
-            for i, item in enumerate(dispatch_args):
-                dispatch_args[i], _ = bin_op_type_checking(item, broadcast_arg)
-            res_tys = [broadcast_arg.type.with_element_ty(dt) for dt in dtype]
+    dispatch_args = [_semantic.to_inline_asm_operand(arg) for arg in args]
+    tensor_args = _semantic.broadcast_tensors(*(arg for arg in dispatch_args if isinstance(arg, tensor)))
+    if tensor_args:
+        res_tys = [tensor_args[0].type.with_element_ty(dt) for dt in dtype]
+        tensors = iter(tensor_args)
+        dispatch_args = [next(tensors) if isinstance(arg, tensor) else arg for arg in dispatch_args]
     handles = [t.handle for t in dispatch_args]
     builder = _semantic.builder
     call = builder.create_inline_asm(asm, constraints, handles, [ty.to_ir(builder) for ty in res_tys], is_pure, pack)
