@@ -1118,6 +1118,43 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// CHECK: #[[$MMA:.+]] = #ttg.nvidia_mma<{versionMajor = 2,
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: fp32_small_k_i8_upcast
+  tt.func @fp32_small_k_i8_upcast(%pa: tensor<16x8x!tt.ptr<i8>, #blocked>,
+      %b: tensor<8x16xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<16x16xf32, #blocked> {
+    %a_i8 = tt.load %pa : tensor<16x8x!tt.ptr<i8>, #blocked>
+    %a_f32 = arith.sitofp %a_i8 : tensor<16x8xi8, #blocked> to tensor<16x8xf32, #blocked>
+    %a = ttg.convert_layout %a_f32 : tensor<16x8xf32, #blocked> -> tensor<16x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %c = arith.constant dense<0.0> : tensor<16x16xf32, #blocked>
+    // The i8 load suggests kWidth=4, but K=8 only has two elements per K lane.
+    // CHECK: tt.dot {{.*}} : tensor<16x8xf32, #ttg.dot_op<{opIdx = 0, parent = #[[$MMA]], kWidth = 2}>> * tensor<8x16xf32, #ttg.dot_op<{opIdx = 1, parent = #[[$MMA]], kWidth = 2}>>
+    %d = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<16x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<8x16xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<16x16xf32, #blocked>
+    tt.return %d : tensor<16x16xf32, #blocked>
+  }
+}
+
+// -----
+
+// CHECK: #[[$MMA:.+]] = #ttg.nvidia_mma<{versionMajor = 2,
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: fp64_small_k_f16_upcast
+  tt.func @fp64_small_k_f16_upcast(%a: tensor<16x4xf64, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+      %pb: tensor<4x16x!tt.ptr<f16>, #blocked>) -> tensor<16x16xf64, #blocked> {
+    %b_f16 = tt.load %pb : tensor<4x16x!tt.ptr<f16>, #blocked>
+    %b_f64 = arith.extf %b_f16 : tensor<4x16xf16, #blocked> to tensor<4x16xf64, #blocked>
+    %b = ttg.convert_layout %b_f64 : tensor<4x16xf64, #blocked> -> tensor<4x16xf64, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %c = arith.constant dense<0.0> : tensor<16x16xf64, #blocked>
+    // CHECK: tt.dot {{.*}} : tensor<16x4xf64, #ttg.dot_op<{opIdx = 0, parent = #[[$MMA]], kWidth = 1}>> * tensor<4x16xf64, #ttg.dot_op<{opIdx = 1, parent = #[[$MMA]], kWidth = 1}>>
+    %d = tt.dot %a, %b, %c : tensor<16x4xf64, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<4x16xf64, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<16x16xf64, #blocked>
+    tt.return %d : tensor<16x16xf64, #blocked>
+  }
+}
+
+// -----
+
 // Verify TF32 dot with N=8, K=8 (native WGMMA tile) selects MMAv3 on sm90.
 // CHECK: #[[$MMA:.+]] = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8, 8]}>
 #blocked_tf32_n8 = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
