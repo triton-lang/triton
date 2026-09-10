@@ -116,6 +116,11 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
       return true;
 
     auto wait = dyn_cast<ttng::WaitBarrierOp>(before);
+    auto expect = dyn_cast<ttng::BarrierExpectOp>(after);
+    // Every warp finishes its wait before contributing to the next phase.
+    if (wait && expect && expect.getPerWarp() &&
+        wait.getAlloc() == expect.getAlloc())
+      return true;
     auto arrive = dyn_cast<ttng::ArriveBarrierOp>(after);
     // Each CTA must wait and contribute before the next phase can complete.
     // Broadcast waits and nonidentity fromCTA routing omit participating CTAs.
