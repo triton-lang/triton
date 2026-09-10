@@ -984,3 +984,65 @@ tt.func @pure_elementwise_asm_tensor_descriptor(%offset: i32, %mem: !desc) {
   %value = tt.elementwise_inline_asm "add.u32 $0, $1, $2;" {constraints = "=r,r,r", pure = true, packed_element = 1 : i32} %offset, %mem : i32, !desc -> i32
   tt.return
 }
+
+// -----
+
+#src = #ttg.linear<{register = [], lane = [[1, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
+#dst = #ttg.linear<{register = [[1, 0], [0, 1]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @broadcast_requires_lane_movement(%arg: tensor<2x1xi32, #src>) {
+    // expected-error @+1 {{requires matching source and result layouts up to broadcasting}}
+    %result = tt.broadcast %arg : tensor<2x1xi32, #src> -> tensor<2x2xi32, #dst>
+    tt.return
+  }
+}
+
+// -----
+
+#src = #ttg.linear<{register = [], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[1, 0], [0, 0]], block = []}>
+#dst = #ttg.linear<{register = [[1, 0], [0, 1]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @broadcast_requires_warp_movement(%arg: tensor<2x1xi32, #src>) {
+    // expected-error @+1 {{requires matching source and result layouts up to broadcasting}}
+    %result = tt.broadcast %arg : tensor<2x1xi32, #src> -> tensor<2x2xi32, #dst>
+    tt.return
+  }
+}
+
+// -----
+
+#src = #ttg.linear<{register = [], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = [[1, 0]]}>
+#dst = #ttg.linear<{register = [[1, 0], [0, 1]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = [[0, 0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @broadcast_requires_block_movement(%arg: tensor<2x1xi32, #src>) {
+    // expected-error @+1 {{requires matching source and result layouts up to broadcasting}}
+    %result = tt.broadcast %arg : tensor<2x1xi32, #src> -> tensor<2x2xi32, #dst>
+    tt.return
+  }
+}
+
+// -----
+
+#src = #ttg.generic_linear<{register = [[1, 0, 0]], lane = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]], warp = [[0, 0, 1], [0, 0, 2]], block = []}>
+#dst = #ttg.generic_linear<{register = [[1, 0, 0], [0, 1, 0]], lane = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]], warp = [[1, 0, 1], [0, 0, 2]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // Every value is thread-local, but the low warp bit swaps source registers.
+  tt.func @broadcast_warp_dependent_registers(%arg: tensor<2x1x4xi32, #src>) {
+    // expected-error @+1 {{requires matching source and result layouts up to broadcasting}}
+    %result = tt.broadcast %arg : tensor<2x1x4xi32, #src> -> tensor<2x2x4xi32, #dst>
+    tt.return
+  }
+}
+
+// -----
+
+#src = #ttg.linear<{register = [[1, 0], [2, 0]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
+#dst = #ttg.linear<{register = [[2, 0], [0, 1], [1, 0]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // Register permutations require an explicit layout conversion.
+  tt.func @broadcast_requires_register_permutation(%arg: tensor<4x1xi32, #src>) {
+    // expected-error @+1 {{requires matching source and result layouts up to broadcasting}}
+    %result = tt.broadcast %arg : tensor<4x1xi32, #src> -> tensor<4x2xi32, #dst>
+    tt.return
+  }
+}

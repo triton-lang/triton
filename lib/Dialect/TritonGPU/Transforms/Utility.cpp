@@ -585,7 +585,7 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
-      isa<scf::WhileOp, scf::YieldOp, scf::ConditionOp,
+      isa<triton::BroadcastOp, scf::WhileOp, scf::YieldOp, scf::ConditionOp,
           nvidia_gpu::WarpGroupDotWaitOp>(op)) {
     return encoding;
   }
@@ -621,8 +621,8 @@ Attribute inferDstEncoding(Operation *op, Attribute encoding) {
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
-      isa<scf::WhileOp, scf::ForOp, scf::YieldOp, scf::ConditionOp,
-          nvidia_gpu::WarpGroupDotWaitOp>(op))
+      isa<triton::BroadcastOp, scf::WhileOp, scf::ForOp, scf::YieldOp,
+          scf::ConditionOp, nvidia_gpu::WarpGroupDotWaitOp>(op))
     return encoding;
   if (auto reduceOp = dyn_cast<triton::ReduceOp>(op))
     return inferDstEncoding(reduceOp, encoding);
@@ -661,6 +661,17 @@ bool isExpensiveLoadOrStore(Operation *op) {
 
 std::optional<SmallVector<OpOperand *>>
 canUseResultEncoding(Operation *op, Attribute targetEncoding) {
+  if (auto broadcast = dyn_cast<triton::BroadcastOp>(op)) {
+    auto dstType = broadcast.getType().cloneWithEncoding(targetEncoding);
+    auto srcType = broadcast.getSrc().getType();
+    if (failed(srcType.getEncoding()
+                   .getDialect()
+                   .getRegisteredInterface<DialectInferLayoutInterface>()
+                   ->verifyBroadcastOpEncoding(srcType, dstType)))
+      return std::nullopt;
+    return SmallVector<OpOperand *>{&broadcast.getSrcMutable()};
+  }
+
   if (auto convert = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
     if (mlir::isa<triton::gpu::NvidiaMmaEncodingAttr>(targetEncoding)) {
       auto srcEncoding = convert.getSrc().getType().getEncoding();

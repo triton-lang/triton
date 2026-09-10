@@ -1,4 +1,6 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --dump-input-context 20
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm -reconcile-unrealized-casts 2>/dev/null > %t
+// RUN: FileCheck %s --dump-input-context 20 < %t
+// RUN: FileCheck %s --check-prefix=LOCAL < %t
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i32, %arg1: !llvm.ptr<1> {tt.pointee_type = f16}, %arg2: !llvm.ptr<1>, %arg3: !llvm.ptr<1>)
@@ -649,6 +651,78 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK: llvm.insertvalue %[[T1]]
     %1 = tt.broadcast %0 : tensor<256x1xf32,#blocked2> -> tensor<256x4xf32, #blocked2>
     tt.return
+  }
+}
+
+// -----
+
+#src = #ttg.linear<{register = [[1, 0], [2, 0]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
+#dst = #ttg.linear<{register = [[1, 0], [0, 1], [2, 0]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: llvm.func internal @broadcast_repeat_registers
+  // LOCAL-LABEL: llvm.func internal @broadcast_repeat_registers
+  // LOCAL-NOT: {{(llvm.inline_asm|nvvm.shfl|llvm.load|llvm.store|llvm.call|llvm.select|nvvm.read.ptx.sreg|ttg.warp_id)}}
+  // LOCAL: llvm.return
+  tt.func private @broadcast_repeat_registers(%arg: tensor<4x1xi32, #src>) -> tensor<4x2xi32, #dst> {
+    // CHECK: %[[R0:.*]] = llvm.extractvalue %{{.*}}[0]
+    // CHECK: %[[R1:.*]] = llvm.extractvalue %{{.*}}[1]
+    // CHECK: %[[R2:.*]] = llvm.extractvalue %{{.*}}[2]
+    // CHECK: %[[R3:.*]] = llvm.extractvalue %{{.*}}[3]
+    // CHECK: llvm.insertvalue %[[R0]], %{{.*}}[0]
+    // CHECK: llvm.insertvalue %[[R1]], %{{.*}}[1]
+    // CHECK: llvm.insertvalue %[[R0]], %{{.*}}[2]
+    // CHECK: llvm.insertvalue %[[R1]], %{{.*}}[3]
+    // CHECK: llvm.insertvalue %[[R2]], %{{.*}}[4]
+    // CHECK: llvm.insertvalue %[[R3]], %{{.*}}[5]
+    // CHECK: llvm.insertvalue %[[R2]], %{{.*}}[6]
+    // CHECK: %[[RESULT:.*]] = llvm.insertvalue %[[R3]], %{{.*}}[7]
+    // CHECK: llvm.return %[[RESULT]]
+    %result = tt.broadcast %arg : tensor<4x1xi32, #src> -> tensor<4x2xi32, #dst>
+    tt.return %result : tensor<4x2xi32, #dst>
+  }
+}
+
+// -----
+
+#src = #ttg.linear<{register = [[1, 0]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = [[0, 0]]}>
+#dst = #ttg.linear<{register = [[1, 0]], lane = [[0, 1], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 2], [0, 4]], block = [[0, 8]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+  // Lanes, warps, and CTAs already contain the values they need.
+  // CHECK-LABEL: llvm.func internal @broadcast_replicated_threads
+  // LOCAL-LABEL: llvm.func internal @broadcast_replicated_threads
+  // LOCAL-NOT: {{(llvm.inline_asm|nvvm.shfl|llvm.load|llvm.store|llvm.call|llvm.select|nvvm.read.ptx.sreg|ttg.warp_id)}}
+  // LOCAL: llvm.return
+  tt.func private @broadcast_replicated_threads(%arg: tensor<2x1xi32, #src>) -> tensor<2x16xi32, #dst> {
+    // CHECK: %[[R0:.*]] = llvm.extractvalue %{{.*}}[0]
+    // CHECK: %[[R1:.*]] = llvm.extractvalue %{{.*}}[1]
+    // CHECK: llvm.insertvalue %[[R0]], %{{.*}}[0]
+    // CHECK: %[[RESULT:.*]] = llvm.insertvalue %[[R1]], %{{.*}}[1]
+    // CHECK: llvm.return %[[RESULT]]
+    %result = tt.broadcast %arg : tensor<2x1xi32, #src> -> tensor<2x16xi32, #dst>
+    tt.return %result : tensor<2x16xi32, #dst>
+  }
+}
+
+// -----
+
+#src = #ttg.generic_linear<{register = [[1, 0, 0]], lane = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]], warp = [[1, 0, 1], [0, 0, 2]], block = []}>
+#dst = #ttg.generic_linear<{register = [[1, 0, 0], [0, 1, 0]], lane = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]], warp = [[1, 0, 1], [0, 0, 2]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // Both layouts have the same warp-dependent register order.
+  // CHECK-LABEL: llvm.func internal @broadcast_generic_registers
+  // LOCAL-LABEL: llvm.func internal @broadcast_generic_registers
+  // LOCAL-NOT: {{(llvm.inline_asm|nvvm.shfl|llvm.load|llvm.store|llvm.call|llvm.select|nvvm.read.ptx.sreg|ttg.warp_id)}}
+  // LOCAL: llvm.return
+  tt.func private @broadcast_generic_registers(%arg: tensor<2x1x4xi32, #src>) -> tensor<2x2x4xi32, #dst> {
+    // CHECK: %[[R0:.*]] = llvm.extractvalue %{{.*}}[0]
+    // CHECK: %[[R1:.*]] = llvm.extractvalue %{{.*}}[1]
+    // CHECK: llvm.insertvalue %[[R0]], %{{.*}}[0]
+    // CHECK: llvm.insertvalue %[[R1]], %{{.*}}[1]
+    // CHECK: llvm.insertvalue %[[R0]], %{{.*}}[2]
+    // CHECK: %[[RESULT:.*]] = llvm.insertvalue %[[R1]], %{{.*}}[3]
+    // CHECK: llvm.return %[[RESULT]]
+    %result = tt.broadcast %arg : tensor<2x1x4xi32, #src> -> tensor<2x2x4xi32, #dst>
+    tt.return %result : tensor<2x2x4xi32, #dst>
   }
 }
 
