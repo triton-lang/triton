@@ -7,6 +7,7 @@ import torch
 import torch.nn.functional as F
 from .mxfp_details._upcast_from_mxfp import _upcast_from_mxfp
 from .mxfp_details._downcast_to_mxfp import _downcast_to_mxfp, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE, _quantize_mxfp8_fn, _quantize_mxfp4_fn, _quantize_nvfp4_fn
+from triton.tools.mxfp import fp8e8m0_to_float32
 from triton.tools.tensor_descriptor import TensorDescriptor
 from triton_kernels.tensor import Tensor, wrap_torch_tensor, empty
 from triton_kernels.tensor_details.layout import StridedLayout
@@ -391,7 +392,7 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
     if logical_quant_dim == 0:
         return fp32_tensor.to(target_dtype).transpose(axis, tensor.ndim - 1).contiguous()
     if scale.dtype == torch.uint8:
-        dq_scale = (scale.to(torch.int32) << 23).view(torch.float32)
+        dq_scale = fp8e8m0_to_float32(scale)
         scale_block_size = MXFP_BLOCK_SIZE.value
     else:
         dq_scale = scale.to(torch.float32)
@@ -417,7 +418,7 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
     out_padded = (padded_tensor * dq_scale_padded).clamp(finfo.min, finfo.max)
     if tensor.dtype == torch.float8_e5m2:
         # fp8e5m2 can have inf and we want to preserve so separately handle
-        out_padded = out_padded.where(~padded_tensor.isinf(), padded_tensor.to(target_dtype))
+        out_padded = out_padded.where(~padded_tensor.isinf() | dq_scale_padded.isnan(), padded_tensor.to(target_dtype))
 
     # Flatten back and remove the padded tail
     out_padded = out_padded.view(*fp32_tensor.shape[:-1], new_axis_shape)

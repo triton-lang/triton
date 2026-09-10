@@ -38,6 +38,24 @@ def plus_a_reduce(x, a):
     return tl.sum(y.reshape([x.shape[0], x.shape[1] // 2, 2]), axis=2)
 
 
+@pytest.mark.parametrize("dtype", [torch.float8_e4m3fn, torch.float8_e5m2, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("k", [4, 16])
+def test_reduce_mxfp_scale_boundaries(dtype, k, device):
+    x = torch.full((k, 3, 128), 4, dtype=dtype, device=device).requires_grad_()
+    scales = torch.tensor([0, 1, 127, 255], dtype=torch.uint8, device=device)
+    scales = scales.repeat(k, 3, 1)
+    y, _ = reduce(x, dim=0, x_mxscale=scales, y_has_mx=False, y_dtype=torch.float32)
+    decoded = torch.tensor([2.0**-127, 2.0**-126, 1, float("nan")], dtype=torch.float64)
+    expected = (4 * k * decoded).repeat_interleave(32).expand(3, -1).to(device=device, dtype=torch.float32)
+    torch.testing.assert_close(y, expected, rtol=0, atol=0, equal_nan=True)
+
+    dy = torch.tensor([2.0**120, 2.0**120, 1, 1], dtype=torch.float32, device=device)
+    y.backward(dy.repeat_interleave(32).expand_as(y))
+    expected_grad = torch.tensor([2.0**-7, 2.0**-6, 1, float("nan")], dtype=torch.float32, device=device)
+    expected_grad = expected_grad.repeat_interleave(32).repeat(k, 3, 1).to(dtype)
+    torch.testing.assert_close(x.grad.float(), expected_grad.float(), rtol=0, atol=0, equal_nan=True)
+
+
 @pytest.mark.parametrize("B, M, N, postprocess_fn", [
     (311, 384, 384, None),
     (384, 311, 384, None),

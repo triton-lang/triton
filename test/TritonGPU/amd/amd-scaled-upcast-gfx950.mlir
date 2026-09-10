@@ -1,11 +1,20 @@
 // RUN: triton-opt %s -split-input-file --allocate-amdgpu-shared-memory --convert-triton-amdgpu-to-llvm="gfx-arch=gfx950" --canonicalize --cse | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-amdgpu-shared-memory --convert-triton-amdgpu-to-llvm="gfx-arch=gfx942" --canonicalize --cse | FileCheck %s --check-prefix=SW
 
 #packed = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #unpacked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #scale = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: llvm.func @cvt_scalef32_bf16_fp4_compact_e8m0
+  // SW-LABEL: llvm.func @cvt_scalef32_bf16_fp4_compact_e8m0
   tt.func public @cvt_scalef32_bf16_fp4_compact_e8m0(%output: tensor<8x512x!tt.ptr<bf16>, #unpacked>, %x: tensor<8x256xi8, #packed>, %scale: tensor<8x16xi8, #scale>) {
+    // Software multiplication needs the numeric value of E8M0 byte zero.
+    // SW-DAG: %[[ZERO:.+]] = llvm.mlir.constant(0 : i8) : i8
+    // SW-DAG: %[[MIN:.+]] = llvm.mlir.constant(4194304 : i32) : i32
+    // SW: %[[IS_ZERO:.+]] = llvm.icmp "eq" %{{.+}}, %[[ZERO]] : i8
+    // SW: %[[BITS:.+]] = llvm.select %[[IS_ZERO]], %[[MIN]], %{{.+}} : i1, i32
+    // SW: %[[SCALE:.+]] = llvm.bitcast %[[BITS]] : i32 to f32
+    // SW: llvm.fmul %{{.+}}, %[[SCALE]] : f32
     // A raw E8M0 payload is shifted into the f32 exponent by 23.
     // CHECK-DAG: %[[C23:.+]] = llvm.mlir.constant(23 : i32) : i32
     // The 8 pk groups a thread holds span 2 scale blocks: groups 0-3 (16
