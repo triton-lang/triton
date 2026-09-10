@@ -511,6 +511,127 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     tt.return
   }
 
+  // Publish an external completion before entering the loop, so its first
+  // load does not acquire a rendezvous on every iteration or on the exit path.
+  // CHECK-LABEL: @completion_before_loop
+  tt.func private @completion_before_loop(%desc: !tt.ptr<i8>, %src: !tt.ptr<i32>, %count: i32) -> i32 {
+    %zero = arith.constant 0 : i32
+    %one = arith.constant 1 : i32
+    // CHECK: ttng.tensormap_fenceproxy_acquire
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: cf.br
+    // CHECK-NOT: ttg.barrier
+    // CHECK: tt.load
+    // CHECK-NOT: ttg.barrier
+    // CHECK: tt.return
+    ttng.tensormap_fenceproxy_acquire %desc : !tt.ptr<i8>
+    %sum = scf.for %i = %zero to %count step %one iter_args(%sum = %zero) -> (i32) : i32 {
+      %ptr = tt.addptr %src, %i : !tt.ptr<i32>, i32
+      %value = tt.load %ptr : !tt.ptr<i32>
+      %next = arith.addi %sum, %value : i32
+      scf.yield %next : i32
+    }
+    tt.return %sum : i32
+  }
+
+  // A completion produced inside the loop still needs a rendezvous in each
+  // iteration, after the acquire and before its following memory demand.
+  // CHECK-LABEL: @completion_inside_loop
+  tt.func private @completion_inside_loop(%desc: !tt.ptr<i8>, %src: !tt.ptr<i32>, %count: i32) -> i32 {
+    %zero = arith.constant 0 : i32
+    %one = arith.constant 1 : i32
+    // CHECK: cf.br
+    // CHECK-NOT: ttg.barrier
+    // CHECK: ttng.tensormap_fenceproxy_acquire
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: {{.*}} = tt.load
+    // CHECK-NOT: ttg.barrier
+    // CHECK: tt.return
+    %sum = scf.for %i = %zero to %count step %one iter_args(%sum = %zero) -> (i32) : i32 {
+      %ptr = tt.addptr %src, %i : !tt.ptr<i32>, i32
+      ttng.tensormap_fenceproxy_acquire %desc : !tt.ptr<i8>
+      %value = tt.load %ptr : !tt.ptr<i32>
+      %next = arith.addi %sum, %value : i32
+      scf.yield %next : i32
+    }
+    tt.return %sum : i32
+  }
+
+  // Shared-copy completion can overlap independent global reads in a loop.
+  // Keep its rendezvous at the later publication.
+  // CHECK-LABEL: @shared_completion_before_global_loop
+  tt.func private @shared_completion_before_global_loop(%src: !tt.ptr<i32>, %count: i32, %done: !barrier) -> i32 {
+    %zero = arith.constant 0 : i32
+    %one = arith.constant 1 : i32
+    // CHECK: ttg.async_wait
+    // CHECK-NEXT: cf.br
+    // CHECK-NOT: ttg.barrier
+    // CHECK: tt.load
+    // CHECK-NOT: ttg.barrier
+    // CHECK: cf.br
+    // CHECK: ttg.barrier local
+    // CHECK-NEXT: ttng.arrive_barrier
+    ttg.async_wait {num = 0 : i32}
+    %sum = scf.for %i = %zero to %count step %one iter_args(%sum = %zero) -> (i32) : i32 {
+      %ptr = tt.addptr %src, %i : !tt.ptr<i32>, i32
+      %value = tt.load %ptr : !tt.ptr<i32>
+      %next = arith.addi %sum, %value : i32
+      scf.yield %next : i32
+    }
+    ttng.arrive_barrier %done, 1 : !barrier
+    tt.return %sum : i32
+  }
+
+  // Read-only bulk waits complete shared-source reads; independent global
+  // reads can overlap, but publication still waits for every thread.
+  // CHECK-LABEL: @readonly_tma_wait_before_global_read
+  tt.func private @readonly_tma_wait_before_global_read(%src: !tt.ptr<i32>, %done: !barrier) -> i32 {
+    // CHECK: ttng.async_tma_store_wait
+    // CHECK-NEXT: {{.*}} = tt.load
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: ttng.arrive_barrier
+    ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
+    %value = tt.load %src : !tt.ptr<i32>
+    ttng.arrive_barrier %done, 1 : !barrier
+    tt.return %value : i32
+  }
+
+  // A full bulk wait can publish global writes to a following global read.
+  // CHECK-LABEL: @full_tma_wait_before_global_read
+  tt.func private @full_tma_wait_before_global_read(%src: !tt.ptr<i32>) -> i32 {
+    // CHECK: ttng.async_tma_store_wait
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: {{.*}} = tt.load
+    ttng.async_tma_store_wait {pendings = 0 : i32}
+    %value = tt.load %src : !tt.ptr<i32>
+    tt.return %value : i32
+  }
+
+  // Each thread can fence its own completed copies before all threads
+  // rendezvous for publication.
+  // CHECK-LABEL: @async_wait_through_proxy_fence
+  tt.func private @async_wait_through_proxy_fence(%done: !barrier) {
+    // CHECK: ttg.async_wait
+    // CHECK-NEXT: ttng.fence_async_shared
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: ttng.arrive_barrier
+    ttg.async_wait {num = 0 : i32}
+    ttng.fence_async_shared {bCluster = false}
+    ttng.arrive_barrier %done, 1 : !barrier
+    tt.return
+  }
+
+  // The fence itself must finish on every thread before one thread publishes.
+  // CHECK-LABEL: @proxy_fence_before_publication
+  tt.func private @proxy_fence_before_publication(%done: !barrier) {
+    // CHECK: ttng.fence_async_shared
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: ttng.arrive_barrier
+    ttng.fence_async_shared {bCluster = false}
+    ttng.arrive_barrier %done, 1 : !barrier
+    tt.return
+  }
+
   // Completion-only operations can publish together, but return cannot leave
   // their completion visible to only the issuing threads.
   // CHECK-LABEL: @completion_batch_at_return
@@ -524,6 +645,21 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     ttng.tensormap_fenceproxy_acquire %desc : !tt.ptr<i8>
     ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
     tt.return
+  }
+
+  // Liveness dependencies and global reads do not consume a shared completion.
+  // Keep it pending through the acquire and the load until the return.
+  // CHECK-LABEL: @completion_before_wait_dependencies
+  tt.func private @completion_before_wait_dependencies(%ready: !barrier, %payload: !ttg.memdesc<128xi32, #bar, #ttg.shared_memory, mutable>, %phase: i32, %ptr: !tt.ptr<i32>) -> i32 {
+    // CHECK: ttg.async_wait
+    // CHECK-NEXT: ttng.wait_barrier {{.*}} deps
+    // CHECK-NEXT: {{.*}} = tt.load
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: tt.return
+    ttg.async_wait {num = 0 : i32}
+    ttng.wait_barrier %ready, %phase deps %payload : !barrier, !ttg.memdesc<128xi32, #bar, #ttg.shared_memory, mutable>
+    %value = tt.load %ptr : !tt.ptr<i32>
+    tt.return %value : i32
   }
 
   // The conversion's interior barrier follows its initial scratch writes.
@@ -623,13 +759,12 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
 !barrier = !ttg.memdesc<2xi64, #bar, #ttg.shared_memory, mutable>
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 2 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // A relaxed cluster rendezvous preserves pending work without adding thread
-  // effects or demands.
+  // A relaxed cluster rendezvous preserves pending work. A global read can pass
+  // a shared completion, but the later publication needs a CTA rendezvous.
   // CHECK-LABEL: @relaxed_cluster_preserves_thread_state
   tt.func private @relaxed_cluster_preserves_thread_state(%src: !tt.ptr<i32>, %read_done: !barrier, %next_done: !barrier) -> i32 {
     // CHECK: ttg.async_wait
     // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
-    // CHECK-NEXT: ttg.barrier local
     // CHECK-NEXT: tt.load
     // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
     // CHECK-NEXT: ttg.barrier local
