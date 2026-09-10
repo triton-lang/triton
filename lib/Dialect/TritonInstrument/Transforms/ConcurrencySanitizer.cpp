@@ -1423,7 +1423,8 @@ private:
                                                   effectCTAs);
         } else {
           funcBuilder.createSetProxyAccessCall(b, bufferMask, baseThread, pred,
-                                               op, readCTAs);
+                                               op, readCTAs,
+                                               materialized.bufferIndex);
         }
       }
       if (effect.rw == RW::Read) {
