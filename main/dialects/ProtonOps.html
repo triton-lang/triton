@@ -231,9 +231,9 @@ Events can be classified as hardware or software events.
 Hardware events are provided by the hardware performance counters obtained in later passes that convert Triton to target-specific IR.
 Software events are provided by the user or the compiler.</p>
 <p>Example:</p>
-<div class="highlight-mlir notranslate"><div class="highlight"><pre><span></span>proton.record start &quot;name0&quot;
+<div class="highlight-mlir notranslate"><div class="highlight"><pre><span></span>proton.record start "name0"
 ...
-proton.record end &quot;name0&quot;
+proton.record end "name0"
 </pre></div>
 </div>
 <p>Scope names cannot be reused within the same function.</p>

@@ -737,7 +737,7 @@ Interfaces: `ConditionallySpeculatable`, `MemoryEffectOpInterface`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `args` | variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+| `args` | variadic of any non-token type |
 
 #### Results:
 

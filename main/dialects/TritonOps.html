@@ -1331,7 +1331,7 @@ elems it receives is unspecified.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">args</span></code></p></td>
-<td><p>variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values</p></td>
+<td><p>variadic of any non-token type</p></td>
 </tr>
 </tbody>
 </table>
@@ -1522,7 +1522,7 @@ tt.func @scribble(i32, i64, memref&lt;? x 128 x f32, #layout_map0&gt;) -&gt; f64
 
 // A function that returns its argument twice:
 tt.func @count(%x: i64) -&gt; (i64, i64)
-  attributes {fruit: &quot;banana&quot;} {
+  attributes {fruit: "banana"} {
   return %x, %x: i64, i64
 }
 

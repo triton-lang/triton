@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.inline\_asm
+==============================================
+
+.. currentmodule:: triton.experimental.gluon.language
+
+.. autofunction:: inline_asm

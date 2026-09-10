@@ -289,6 +289,55 @@ Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
 
 
 
+### `ttg.inline_asm` (triton::gpu::InlineAsmOp)
+
+_Run inline assembly once per thread with explicit tensor layouts_
+
+Syntax:
+
+```
+operation ::= `ttg.inline_asm` $asm_string attr-dict ($args^)? `:` functional-type($args, $result)
+```
+
+Each tensor operand is unpacked into all of its per-thread elements in
+register order, including replicated register positions. Scalars and memory
+descriptors contribute one operand; descriptors are passed as i32 addresses.
+Results are packed according to their explicit types and layouts. There is
+no elementwise broadcasting, chunking, or subword packing.
+
+Assembly with memory descriptor operands must be impure. Descriptor accesses
+are not modeled by the compiler. The caller must provide all synchronization
+for them, including barriers, fences, and asynchronous completion before
+storage reuse. Accesses must remain within the descriptor views.
+Scalar results must be uniform and replicated tensor elements must agree.
+
+Traits: `VerifyMemDescLayoutsTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `MemoryEffectOpInterface`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>asm_string</code></td><td>::mlir::StringAttr</td><td>string attribute</td></tr>
+<tr><td><code>constraints</code></td><td>::mlir::StringAttr</td><td>string attribute</td></tr>
+<tr><td><code>pure</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `args` | variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values or memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | variadic of floating-point or ranked tensor of floating-point values or integer or ranked tensor of integer values or ptr or ranked tensor of ptr values |
+
+
+
 ### `ttg.local_alloc` (triton::gpu::LocalAllocOp)
 
 _Allocate tensor_

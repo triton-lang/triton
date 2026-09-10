@@ -145,15 +145,15 @@
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_load_conv_common</span><span class="p">():</span>
-    <span class="n">module_name</span> <span class="o">=</span> <span class="s2">&quot;triton_examples_gluon_conv_common&quot;</span>
+    <span class="n">module_name</span> <span class="o">=</span> <span class="s2">"triton_examples_gluon_conv_common"</span>
     <span class="n">module</span> <span class="o">=</span> <span class="n">sys</span><span class="o">.</span><span class="n">modules</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">module_name</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">module</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">module</span>
 
-    <span class="n">module_path</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="vm">__file__</span><span class="p">)</span><span class="o">.</span><span class="n">with_name</span><span class="p">(</span><span class="s2">&quot;02-conv-common.py&quot;</span><span class="p">)</span>
+    <span class="n">module_path</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="vm">__file__</span><span class="p">)</span><span class="o">.</span><span class="n">with_name</span><span class="p">(</span><span class="s2">"02-conv-common.py"</span><span class="p">)</span>
     <span class="n">spec</span> <span class="o">=</span> <span class="n">importlib</span><span class="o">.</span><span class="n">util</span><span class="o">.</span><span class="n">spec_from_file_location</span><span class="p">(</span><span class="n">module_name</span><span class="p">,</span> <span class="n">module_path</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">spec</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">spec</span><span class="o">.</span><span class="n">loader</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ImportError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unable to load shared conv helpers from </span><span class="si">{</span><span class="n">module_path</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ImportError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Unable to load shared conv helpers from </span><span class="si">{</span><span class="n">module_path</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
     <span class="n">module</span> <span class="o">=</span> <span class="n">importlib</span><span class="o">.</span><span class="n">util</span><span class="o">.</span><span class="n">module_from_spec</span><span class="p">(</span><span class="n">spec</span><span class="p">)</span>
     <span class="n">sys</span><span class="o">.</span><span class="n">modules</span><span class="p">[</span><span class="n">module_name</span><span class="p">]</span> <span class="o">=</span> <span class="n">module</span>
@@ -349,7 +349,7 @@
 
 <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">load_partition</span><span class="p">(</span><span class="n">p</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Load partition: iterate over the persistent dgrad work items assigned to this CTA.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Load partition: iterate over the persistent dgrad work items assigned to this CTA."""</span>
     <span class="n">config</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">config</span>
     <span class="n">BLOCK_K</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">BLOCK_K</span>
 
@@ -393,7 +393,7 @@
 
 <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">mma_partition</span><span class="p">(</span><span class="n">p</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;MMA partition: accumulate all split-K dgrad work items assigned to this CTA.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""MMA partition: accumulate all split-K dgrad work items assigned to this CTA."""</span>
     <span class="n">config</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">config</span>
     <span class="n">load_state</span> <span class="o">=</span> <span class="n">Counter</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">p</span><span class="o">.</span><span class="n">load_empty_bars</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
     <span class="n">acc_state</span> <span class="o">=</span> <span class="n">Counter</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">p</span><span class="o">.</span><span class="n">acc_empty_bars</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
@@ -424,7 +424,7 @@
 
 <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">epilogue_partition</span><span class="p">(</span><span class="n">p</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Epilogue partition: store the persistent dgrad work items assigned to this CTA.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Epilogue partition: store the persistent dgrad work items assigned to this CTA."""</span>
     <span class="n">config</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">config</span>
     <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">BLOCK_M</span>
     <span class="n">BLOCK_N</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">BLOCK_N</span>
@@ -477,22 +477,22 @@
 
 
 <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="n">do_not_specialize</span><span class="o">=</span><span class="p">[</span>
-    <span class="s2">&quot;N&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;S_orig&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;H_sub&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;W_sub&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;H_full&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;W_full&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;conv_stride_h&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;conv_stride_w&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;sub_a&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;sub_b&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;r0&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;s0&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;R_eff&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;S_eff&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;pad_h&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;pad_w&quot;</span><span class="p">,</span>
+    <span class="s2">"N"</span><span class="p">,</span>
+    <span class="s2">"S_orig"</span><span class="p">,</span>
+    <span class="s2">"H_sub"</span><span class="p">,</span>
+    <span class="s2">"W_sub"</span><span class="p">,</span>
+    <span class="s2">"H_full"</span><span class="p">,</span>
+    <span class="s2">"W_full"</span><span class="p">,</span>
+    <span class="s2">"conv_stride_h"</span><span class="p">,</span>
+    <span class="s2">"conv_stride_w"</span><span class="p">,</span>
+    <span class="s2">"sub_a"</span><span class="p">,</span>
+    <span class="s2">"sub_b"</span><span class="p">,</span>
+    <span class="s2">"r0"</span><span class="p">,</span>
+    <span class="s2">"s0"</span><span class="p">,</span>
+    <span class="s2">"R_eff"</span><span class="p">,</span>
+    <span class="s2">"S_eff"</span><span class="p">,</span>
+    <span class="s2">"pad_h"</span><span class="p">,</span>
+    <span class="s2">"pad_w"</span><span class="p">,</span>
 <span class="p">])</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">conv2d_dgrad_kernel</span><span class="p">(</span>
     <span class="n">grad_y_desc</span><span class="p">,</span>
@@ -529,12 +529,12 @@
     <span class="n">num_acc_buffers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
     <span class="n">num_warps</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
 <span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Warp-specialized dgrad kernel.</span>
+<span class="w">    </span><span class="sd">"""Warp-specialized dgrad kernel.</span>
 
 <span class="sd">    Logical tile space = cdiv(M_sub, BLOCK_M) * cdiv(Ci, BLOCK_N), optionally</span>
 <span class="sd">    multiplied by split-K. Sub-problem parameters (sub_a/b, r0/s0, R_eff/S_eff,</span>
 <span class="sd">    pad) are per-launch constants.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">M_GEMM</span> <span class="o">=</span> <span class="n">N</span> <span class="o">*</span> <span class="n">H_sub</span> <span class="o">*</span> <span class="n">W_sub</span>
     <span class="n">config</span> <span class="o">=</span> <span class="n">DgradConfig</span><span class="p">(</span>
         <span class="n">N</span><span class="p">,</span>
@@ -619,13 +619,13 @@
     <span class="k">return</span> <span class="p">[</span>
         <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">(</span>
             <span class="p">{</span>
-                <span class="s2">&quot;BLOCK_M&quot;</span><span class="p">:</span> <span class="n">block_m</span><span class="p">,</span>
-                <span class="s2">&quot;BLOCK_N&quot;</span><span class="p">:</span> <span class="n">block_n</span><span class="p">,</span>
-                <span class="s2">&quot;BLOCK_K&quot;</span><span class="p">:</span> <span class="n">block_k</span><span class="p">,</span>
-                <span class="s2">&quot;GROUP_SIZE_M&quot;</span><span class="p">:</span> <span class="n">group_size_m</span><span class="p">,</span>
-                <span class="s2">&quot;SPLIT_K&quot;</span><span class="p">:</span> <span class="n">split_k</span><span class="p">,</span>
-                <span class="s2">&quot;num_buffers&quot;</span><span class="p">:</span> <span class="n">num_buffers</span><span class="p">,</span>
-                <span class="s2">&quot;num_acc_buffers&quot;</span><span class="p">:</span> <span class="n">num_acc_buffers</span><span class="p">,</span>
+                <span class="s2">"BLOCK_M"</span><span class="p">:</span> <span class="n">block_m</span><span class="p">,</span>
+                <span class="s2">"BLOCK_N"</span><span class="p">:</span> <span class="n">block_n</span><span class="p">,</span>
+                <span class="s2">"BLOCK_K"</span><span class="p">:</span> <span class="n">block_k</span><span class="p">,</span>
+                <span class="s2">"GROUP_SIZE_M"</span><span class="p">:</span> <span class="n">group_size_m</span><span class="p">,</span>
+                <span class="s2">"SPLIT_K"</span><span class="p">:</span> <span class="n">split_k</span><span class="p">,</span>
+                <span class="s2">"num_buffers"</span><span class="p">:</span> <span class="n">num_buffers</span><span class="p">,</span>
+                <span class="s2">"num_acc_buffers"</span><span class="p">:</span> <span class="n">num_acc_buffers</span><span class="p">,</span>
             <span class="p">},</span>
             <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">,</span>
         <span class="p">)</span>
@@ -666,32 +666,32 @@
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_prepare_dgrad_inputs</span><span class="p">(</span><span class="n">grad_output_nhwc</span><span class="p">,</span> <span class="n">weight_nhwc</span><span class="p">,</span> <span class="n">H_in</span><span class="p">,</span> <span class="n">W_in</span><span class="p">,</span> <span class="n">stride</span><span class="p">,</span> <span class="n">padding</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Validate inputs, pad channels, and compute sub-problem decomposition.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Validate inputs, pad channels, and compute sub-problem decomposition."""</span>
     <span class="k">if</span> <span class="n">grad_output_nhwc</span><span class="o">.</span><span class="n">dtype</span> <span class="o">!=</span> <span class="n">TORCH_GEMM_DTYPE</span> <span class="ow">or</span> <span class="n">weight_nhwc</span><span class="o">.</span><span class="n">dtype</span> <span class="o">!=</span> <span class="n">TORCH_GEMM_DTYPE</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;conv2d_dgrad expects bfloat16 grad-output and weight tensors, got </span><span class="si">{</span><span class="n">grad_output_nhwc</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2"> and </span><span class="si">{</span><span class="n">weight_nhwc</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="sa">f</span><span class="s2">"conv2d_dgrad expects bfloat16 grad-output and weight tensors, got </span><span class="si">{</span><span class="n">grad_output_nhwc</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2"> and </span><span class="si">{</span><span class="n">weight_nhwc</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">"</span>
         <span class="p">)</span>
 
-    <span class="n">stride_h</span><span class="p">,</span> <span class="n">stride_w</span> <span class="o">=</span> <span class="n">normalize_2d</span><span class="p">(</span><span class="n">stride</span><span class="p">,</span> <span class="s2">&quot;stride&quot;</span><span class="p">)</span>
-    <span class="n">pad_h</span><span class="p">,</span> <span class="n">pad_w</span> <span class="o">=</span> <span class="n">normalize_2d</span><span class="p">(</span><span class="n">padding</span><span class="p">,</span> <span class="s2">&quot;padding&quot;</span><span class="p">)</span>
+    <span class="n">stride_h</span><span class="p">,</span> <span class="n">stride_w</span> <span class="o">=</span> <span class="n">normalize_2d</span><span class="p">(</span><span class="n">stride</span><span class="p">,</span> <span class="s2">"stride"</span><span class="p">)</span>
+    <span class="n">pad_h</span><span class="p">,</span> <span class="n">pad_w</span> <span class="o">=</span> <span class="n">normalize_2d</span><span class="p">(</span><span class="n">padding</span><span class="p">,</span> <span class="s2">"padding"</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">stride_h</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">stride_w</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;stride must be positive, got </span><span class="si">{</span><span class="p">(</span><span class="n">stride_h</span><span class="p">,</span><span class="w"> </span><span class="n">stride_w</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"stride must be positive, got </span><span class="si">{</span><span class="p">(</span><span class="n">stride_h</span><span class="p">,</span><span class="w"> </span><span class="n">stride_w</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">pad_h</span> <span class="o">&lt;</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">pad_w</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;padding must be non-negative, got </span><span class="si">{</span><span class="p">(</span><span class="n">pad_h</span><span class="p">,</span><span class="w"> </span><span class="n">pad_w</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"padding must be non-negative, got </span><span class="si">{</span><span class="p">(</span><span class="n">pad_h</span><span class="p">,</span><span class="w"> </span><span class="n">pad_w</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
     <span class="n">N</span><span class="p">,</span> <span class="n">out_h</span><span class="p">,</span> <span class="n">out_w</span><span class="p">,</span> <span class="n">Co</span> <span class="o">=</span> <span class="n">grad_output_nhwc</span><span class="o">.</span><span class="n">shape</span>
     <span class="n">Co_w</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">Ci</span> <span class="o">=</span> <span class="n">weight_nhwc</span><span class="o">.</span><span class="n">shape</span>
     <span class="k">if</span> <span class="n">Co</span> <span class="o">!=</span> <span class="n">Co_w</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Channel dimension mismatch: grad-output has </span><span class="si">{</span><span class="n">Co</span><span class="si">}</span><span class="s2">, weight has </span><span class="si">{</span><span class="n">Co_w</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Channel dimension mismatch: grad-output has </span><span class="si">{</span><span class="n">Co</span><span class="si">}</span><span class="s2">, weight has </span><span class="si">{</span><span class="n">Co_w</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
     <span class="n">expected_out_h</span> <span class="o">=</span> <span class="p">(</span><span class="n">H_in</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">pad_h</span> <span class="o">-</span> <span class="n">R</span><span class="p">)</span> <span class="o">//</span> <span class="n">stride_h</span> <span class="o">+</span> <span class="mi">1</span>
     <span class="n">expected_out_w</span> <span class="o">=</span> <span class="p">(</span><span class="n">W_in</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">pad_w</span> <span class="o">-</span> <span class="n">S</span><span class="p">)</span> <span class="o">//</span> <span class="n">stride_w</span> <span class="o">+</span> <span class="mi">1</span>
     <span class="k">if</span> <span class="n">out_h</span> <span class="o">!=</span> <span class="n">expected_out_h</span> <span class="ow">or</span> <span class="n">out_w</span> <span class="o">!=</span> <span class="n">expected_out_w</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Grad-output shape mismatch: expected &quot;</span>
-                         <span class="sa">f</span><span class="s2">&quot;(</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">expected_out_h</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">expected_out_w</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">Co</span><span class="si">}</span><span class="s2">) from input/filter geometry, got &quot;</span>
-                         <span class="sa">f</span><span class="s2">&quot;(</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">out_h</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">out_w</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">Co</span><span class="si">}</span><span class="s2">).&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Grad-output shape mismatch: expected "</span>
+                         <span class="sa">f</span><span class="s2">"(</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">expected_out_h</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">expected_out_w</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">Co</span><span class="si">}</span><span class="s2">) from input/filter geometry, got "</span>
+                         <span class="sa">f</span><span class="s2">"(</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">out_h</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">out_w</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">Co</span><span class="si">}</span><span class="s2">)."</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">out_h</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">out_w</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Invalid convolution geometry for dgrad&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Invalid convolution geometry for dgrad"</span><span class="p">)</span>
 
     <span class="n">grad_output_nhwc</span> <span class="o">=</span> <span class="n">maybe_pad_ci_for_tma</span><span class="p">(</span><span class="n">grad_output_nhwc</span><span class="p">)</span>
     <span class="n">grad_output_nhwc</span> <span class="o">=</span> <span class="n">ensure_tma_compatible_strides</span><span class="p">(</span><span class="n">grad_output_nhwc</span><span class="p">)</span>
@@ -709,7 +709,7 @@
     <span class="n">W_sub</span> <span class="o">=</span> <span class="p">(</span><span class="n">W_in</span> <span class="o">+</span> <span class="n">stride_w</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">//</span> <span class="n">stride_w</span>
     <span class="n">subproblem_specs</span> <span class="o">=</span> <span class="n">_make_dgrad_subproblem_specs</span><span class="p">(</span><span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">stride_h</span><span class="p">,</span> <span class="n">stride_w</span><span class="p">,</span> <span class="n">pad_h</span><span class="p">,</span> <span class="n">pad_w</span><span class="p">)</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="n">subproblem_specs</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;No valid dgrad sub-problems were generated&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"No valid dgrad sub-problems were generated"</span><span class="p">)</span>
 
     <span class="k">return</span> <span class="p">(</span>
         <span class="n">grad_output_nhwc</span><span class="p">,</span>
@@ -749,7 +749,7 @@
         <span class="n">strides</span><span class="o">=</span><span class="nb">list</span><span class="p">(</span><span class="n">grad_output_nhwc</span><span class="o">.</span><span class="n">stride</span><span class="p">()),</span>
         <span class="n">block_shape</span><span class="o">=</span><span class="n">input_block_shape</span><span class="p">,</span>
         <span class="n">layout</span><span class="o">=</span><span class="n">input_layout</span><span class="p">,</span>
-        <span class="n">padding</span><span class="o">=</span><span class="s2">&quot;zero&quot;</span><span class="p">,</span>
+        <span class="n">padding</span><span class="o">=</span><span class="s2">"zero"</span><span class="p">,</span>
         <span class="n">element_strides</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span>
         <span class="n">pixel_box_lower_corner</span><span class="o">=</span><span class="p">[</span><span class="n">lower_h</span><span class="p">,</span> <span class="n">lower_w</span><span class="p">],</span>
         <span class="n">pixel_box_upper_corner</span><span class="o">=</span><span class="p">[</span><span class="n">upper_h</span><span class="p">,</span> <span class="n">upper_w</span><span class="p">],</span>
@@ -759,9 +759,9 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">_make_grid</span><span class="p">(</span><span class="n">num_sms</span><span class="p">,</span> <span class="n">M_GEMM</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">Co</span><span class="p">,</span> <span class="n">R_eff</span><span class="p">,</span> <span class="n">S_eff</span><span class="p">):</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">grid</span><span class="p">(</span><span class="n">meta</span><span class="p">):</span>
-        <span class="n">total_mn_tiles</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M_GEMM</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">&quot;BLOCK_M&quot;</span><span class="p">])</span> <span class="o">*</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">Ci</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">&quot;BLOCK_N&quot;</span><span class="p">])</span>
-        <span class="n">total_k_iters</span> <span class="o">=</span> <span class="n">R_eff</span> <span class="o">*</span> <span class="n">S_eff</span> <span class="o">*</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">Co</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">&quot;BLOCK_K&quot;</span><span class="p">])</span>
-        <span class="n">k_iters_per_split</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">total_k_iters</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">&quot;SPLIT_K&quot;</span><span class="p">])</span>
+        <span class="n">total_mn_tiles</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M_GEMM</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">"BLOCK_M"</span><span class="p">])</span> <span class="o">*</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">Ci</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">"BLOCK_N"</span><span class="p">])</span>
+        <span class="n">total_k_iters</span> <span class="o">=</span> <span class="n">R_eff</span> <span class="o">*</span> <span class="n">S_eff</span> <span class="o">*</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">Co</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">"BLOCK_K"</span><span class="p">])</span>
+        <span class="n">k_iters_per_split</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">total_k_iters</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">"SPLIT_K"</span><span class="p">])</span>
         <span class="n">active_split_k</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">total_k_iters</span><span class="p">,</span> <span class="n">k_iters_per_split</span><span class="p">)</span>
         <span class="n">total_tiles</span> <span class="o">=</span> <span class="n">total_mn_tiles</span> <span class="o">*</span> <span class="n">active_split_k</span>
         <span class="k">return</span> <span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">num_sms</span><span class="p">,</span> <span class="n">total_tiles</span><span class="p">),</span> <span class="p">)</span>
@@ -786,15 +786,15 @@
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_get_safe_dgrad_max_active_split_k</span><span class="p">(</span><span class="n">Co</span><span class="p">,</span> <span class="n">subproblem_specs</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">H_in</span><span class="p">,</span> <span class="n">W_in</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">kernel_meta</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return max active split-K across subproblems, or raise if workspace would be too large to index safely.&quot;&quot;&quot;</span>
-    <span class="n">max_active_split_k</span> <span class="o">=</span> <span class="n">_get_max_active_split_k</span><span class="p">(</span><span class="n">Co</span><span class="p">,</span> <span class="n">subproblem_specs</span><span class="p">,</span> <span class="n">kernel_meta</span><span class="p">[</span><span class="s2">&quot;BLOCK_K&quot;</span><span class="p">],</span> <span class="n">kernel_meta</span><span class="p">[</span><span class="s2">&quot;SPLIT_K&quot;</span><span class="p">])</span>
+<span class="w">    </span><span class="sd">"""Return max active split-K across subproblems, or raise if workspace would be too large to index safely."""</span>
+    <span class="n">max_active_split_k</span> <span class="o">=</span> <span class="n">_get_max_active_split_k</span><span class="p">(</span><span class="n">Co</span><span class="p">,</span> <span class="n">subproblem_specs</span><span class="p">,</span> <span class="n">kernel_meta</span><span class="p">[</span><span class="s2">"BLOCK_K"</span><span class="p">],</span> <span class="n">kernel_meta</span><span class="p">[</span><span class="s2">"SPLIT_K"</span><span class="p">])</span>
     <span class="k">if</span> <span class="n">max_active_split_k</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
         <span class="c1"># Workspace shape: (active_split_k * N, H_in, W_in, Ci); indexed in kernels by batch/row offsets.</span>
         <span class="c1"># Very large workspaces can exceed the addressing range supported by the generated code.</span>
         <span class="n">workspace_elems</span> <span class="o">=</span> <span class="n">max_active_split_k</span> <span class="o">*</span> <span class="n">N</span> <span class="o">*</span> <span class="n">H_in</span> <span class="o">*</span> <span class="n">W_in</span> <span class="o">*</span> <span class="n">Ci</span>
         <span class="k">if</span> <span class="n">workspace_elems</span> <span class="o">&gt;</span> <span class="p">(</span><span class="mi">2</span><span class="o">**</span><span class="mi">31</span> <span class="o">-</span> <span class="mi">1</span><span class="p">):</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;dgrad split-K workspace exceeds safe indexing range: &quot;</span>
-                             <span class="sa">f</span><span class="s2">&quot;active_split_k=</span><span class="si">{</span><span class="n">max_active_split_k</span><span class="si">}</span><span class="s2">, N=</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2">, H_in=</span><span class="si">{</span><span class="n">H_in</span><span class="si">}</span><span class="s2">, W_in=</span><span class="si">{</span><span class="n">W_in</span><span class="si">}</span><span class="s2">, Ci=</span><span class="si">{</span><span class="n">Ci</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"dgrad split-K workspace exceeds safe indexing range: "</span>
+                             <span class="sa">f</span><span class="s2">"active_split_k=</span><span class="si">{</span><span class="n">max_active_split_k</span><span class="si">}</span><span class="s2">, N=</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2">, H_in=</span><span class="si">{</span><span class="n">H_in</span><span class="si">}</span><span class="s2">, W_in=</span><span class="si">{</span><span class="n">W_in</span><span class="si">}</span><span class="s2">, Ci=</span><span class="si">{</span><span class="n">Ci</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">max_active_split_k</span>
 
 
@@ -933,7 +933,7 @@
 <span class="p">):</span>
     <span class="k">if</span> <span class="n">kernel_meta</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">kernel_meta</span> <span class="o">=</span> <span class="p">{}</span>
-    <span class="n">kernel_meta</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="s2">&quot;STORE_SPLIT_K_PARTIALS&quot;</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
+    <span class="n">kernel_meta</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="s2">"STORE_SPLIT_K_PARTIALS"</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
 
     <span class="n">M_GEMM</span> <span class="o">=</span> <span class="n">N</span> <span class="o">*</span> <span class="n">H_sub</span> <span class="o">*</span> <span class="n">W_sub</span>
     <span class="n">weight_desc</span> <span class="o">=</span> <span class="n">_make_dgrad_weight_descriptor</span><span class="p">(</span><span class="n">W_rot_flat</span><span class="p">,</span> <span class="n">weight_block_shape</span><span class="p">)</span>
@@ -1044,11 +1044,11 @@
             <span class="n">stride_h</span><span class="o">=</span><span class="n">stride_h</span><span class="p">,</span>
             <span class="n">stride_w</span><span class="o">=</span><span class="n">stride_w</span><span class="p">,</span>
             <span class="n">subproblem_specs</span><span class="o">=</span><span class="n">subproblem_specs</span><span class="p">,</span>
-            <span class="n">weight_block_shape</span><span class="o">=</span><span class="p">[</span><span class="n">kernel_meta</span><span class="p">[</span><span class="s2">&quot;BLOCK_N&quot;</span><span class="p">],</span> <span class="n">kernel_meta</span><span class="p">[</span><span class="s2">&quot;BLOCK_K&quot;</span><span class="p">]],</span>
-            <span class="n">input_block_shape</span><span class="o">=</span><span class="p">[</span><span class="n">kernel_meta</span><span class="p">[</span><span class="s2">&quot;BLOCK_M&quot;</span><span class="p">],</span> <span class="n">kernel_meta</span><span class="p">[</span><span class="s2">&quot;BLOCK_K&quot;</span><span class="p">]],</span>
+            <span class="n">weight_block_shape</span><span class="o">=</span><span class="p">[</span><span class="n">kernel_meta</span><span class="p">[</span><span class="s2">"BLOCK_N"</span><span class="p">],</span> <span class="n">kernel_meta</span><span class="p">[</span><span class="s2">"BLOCK_K"</span><span class="p">]],</span>
+            <span class="n">input_block_shape</span><span class="o">=</span><span class="p">[</span><span class="n">kernel_meta</span><span class="p">[</span><span class="s2">"BLOCK_M"</span><span class="p">],</span> <span class="n">kernel_meta</span><span class="p">[</span><span class="s2">"BLOCK_K"</span><span class="p">]],</span>
             <span class="n">kernel_meta</span><span class="o">=</span><span class="p">{</span>
                 <span class="o">**</span><span class="n">kernel_meta</span><span class="p">,</span>
-                <span class="s2">&quot;STORE_SPLIT_K_PARTIALS&quot;</span><span class="p">:</span> <span class="n">uses_split_k_workspace</span><span class="p">,</span>
+                <span class="s2">"STORE_SPLIT_K_PARTIALS"</span><span class="p">:</span> <span class="n">uses_split_k_workspace</span><span class="p">,</span>
             <span class="p">},</span>
         <span class="p">)</span>
         <span class="k">if</span> <span class="n">uses_split_k_workspace</span><span class="p">:</span>
@@ -1101,7 +1101,7 @@
         <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">synchronize</span><span class="p">()</span>
         <span class="k">return</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="n">run</span><span class="p">)</span>
     <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
-        <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;inf&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="s2">"inf"</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_select_dgrad_kernel_meta</span><span class="p">(</span>
@@ -1144,7 +1144,7 @@
     <span class="k">if</span> <span class="n">cached</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">return</span> <span class="nb">dict</span><span class="p">(</span><span class="n">cached</span><span class="p">)</span>
 
-    <span class="n">best_ms</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;inf&quot;</span><span class="p">)</span>
+    <span class="n">best_ms</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="s2">"inf"</span><span class="p">)</span>
     <span class="n">best_kernel_meta</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="k">for</span> <span class="n">config</span> <span class="ow">in</span> <span class="n">conv2d_dgrad_get_configs</span><span class="p">():</span>
         <span class="n">kernel_meta</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">all_kwargs</span><span class="p">()</span>
@@ -1172,18 +1172,18 @@
             <span class="n">best_kernel_meta</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">kernel_meta</span><span class="p">)</span>
 
     <span class="k">if</span> <span class="n">best_kernel_meta</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;Failed to autotune conv2d_dgrad: no valid kernel configurations.&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">"Failed to autotune conv2d_dgrad: no valid kernel configurations."</span><span class="p">)</span>
 
     <span class="n">_dgrad_autotune_cache</span><span class="p">[</span><span class="n">cache_key</span><span class="p">]</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">best_kernel_meta</span><span class="p">)</span>
     <span class="k">return</span> <span class="nb">dict</span><span class="p">(</span><span class="n">best_kernel_meta</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">conv2d_dgrad</span><span class="p">(</span><span class="n">grad_output_nhwc</span><span class="p">,</span> <span class="n">weight_nhwc</span><span class="p">,</span> <span class="n">H_in</span><span class="p">,</span> <span class="n">W_in</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">0</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Production dgrad entrypoint.</span>
+<span class="w">    </span><span class="sd">"""Production dgrad entrypoint.</span>
 
 <span class="sd">    Selects the best kernel configuration with host-side autotuning, then runs</span>
 <span class="sd">    deterministic two-pass split-K when reduction is needed.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="p">(</span><span class="n">grad_output_nhwc</span><span class="p">,</span> <span class="n">W_rot_flat</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">Co</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span>
      <span class="n">out_h</span><span class="p">,</span> <span class="n">out_w</span><span class="p">,</span> <span class="n">H_in</span><span class="p">,</span> <span class="n">W_in</span><span class="p">,</span> <span class="n">H_sub</span><span class="p">,</span> <span class="n">W_sub</span><span class="p">,</span>
      <span class="n">stride_h</span><span class="p">,</span> <span class="n">stride_w</span><span class="p">,</span> <span class="n">subproblem_specs</span><span class="p">)</span> <span class="o">=</span> \
@@ -1236,24 +1236,24 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">_make_dgrad_fixed_kernel_meta</span><span class="p">(</span><span class="n">SPLIT_K</span><span class="p">,</span> <span class="n">num_buffers</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">):</span>
     <span class="c1"># Keep the fixed path on a tile shape that is also covered by autotune configs.</span>
     <span class="k">return</span> <span class="p">{</span>
-        <span class="s2">&quot;BLOCK_M&quot;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span>
-        <span class="s2">&quot;BLOCK_N&quot;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span>
-        <span class="s2">&quot;BLOCK_K&quot;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span>
-        <span class="s2">&quot;GROUP_SIZE_M&quot;</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>
-        <span class="s2">&quot;SPLIT_K&quot;</span><span class="p">:</span> <span class="n">SPLIT_K</span><span class="p">,</span>
-        <span class="s2">&quot;num_buffers&quot;</span><span class="p">:</span> <span class="n">num_buffers</span><span class="p">,</span>
-        <span class="s2">&quot;num_acc_buffers&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
-        <span class="s2">&quot;num_warps&quot;</span><span class="p">:</span> <span class="n">num_warps</span><span class="p">,</span>
+        <span class="s2">"BLOCK_M"</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span>
+        <span class="s2">"BLOCK_N"</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span>
+        <span class="s2">"BLOCK_K"</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span>
+        <span class="s2">"GROUP_SIZE_M"</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>
+        <span class="s2">"SPLIT_K"</span><span class="p">:</span> <span class="n">SPLIT_K</span><span class="p">,</span>
+        <span class="s2">"num_buffers"</span><span class="p">:</span> <span class="n">num_buffers</span><span class="p">,</span>
+        <span class="s2">"num_acc_buffers"</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+        <span class="s2">"num_warps"</span><span class="p">:</span> <span class="n">num_warps</span><span class="p">,</span>
     <span class="p">}</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">conv2d_dgrad_fixed</span><span class="p">(</span><span class="n">grad_output_nhwc</span><span class="p">,</span> <span class="n">weight_nhwc</span><span class="p">,</span> <span class="n">H_in</span><span class="p">,</span> <span class="n">W_in</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">num_buffers</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
                        <span class="n">SPLIT_K</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Fixed-config dgrad entrypoint used for CI and debugging.</span>
+<span class="w">    </span><span class="sd">"""Fixed-config dgrad entrypoint used for CI and debugging.</span>
 
 <span class="sd">    Runs the kernel with a fixed supported tile shape instead of autotuning,</span>
 <span class="sd">    while still using deterministic two-pass split-K when reduction is needed.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="p">(</span><span class="n">grad_output_nhwc</span><span class="p">,</span> <span class="n">W_rot_flat</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">Co</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span>
      <span class="n">out_h</span><span class="p">,</span> <span class="n">out_w</span><span class="p">,</span> <span class="n">H_in</span><span class="p">,</span> <span class="n">W_in</span><span class="p">,</span> <span class="n">H_sub</span><span class="p">,</span> <span class="n">W_sub</span><span class="p">,</span>
      <span class="n">stride_h</span><span class="p">,</span> <span class="n">stride_w</span><span class="p">,</span> <span class="n">subproblem_specs</span><span class="p">)</span> <span class="o">=</span> \
@@ -1292,25 +1292,25 @@
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_assert_dgrad_correct</span><span class="p">(</span><span class="n">dgrad_fn</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">Co</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">stride</span><span class="p">,</span> <span class="n">padding</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Run dgrad and compare against PyTorch autograd reference.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Run dgrad and compare against PyTorch autograd reference."""</span>
     <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-    <span class="n">stride_h</span><span class="p">,</span> <span class="n">stride_w</span> <span class="o">=</span> <span class="n">normalize_2d</span><span class="p">(</span><span class="n">stride</span><span class="p">,</span> <span class="s2">&quot;stride&quot;</span><span class="p">)</span>
-    <span class="n">pad_h</span><span class="p">,</span> <span class="n">pad_w</span> <span class="o">=</span> <span class="n">normalize_2d</span><span class="p">(</span><span class="n">padding</span><span class="p">,</span> <span class="s2">&quot;padding&quot;</span><span class="p">)</span>
+    <span class="n">stride_h</span><span class="p">,</span> <span class="n">stride_w</span> <span class="o">=</span> <span class="n">normalize_2d</span><span class="p">(</span><span class="n">stride</span><span class="p">,</span> <span class="s2">"stride"</span><span class="p">)</span>
+    <span class="n">pad_h</span><span class="p">,</span> <span class="n">pad_w</span> <span class="o">=</span> <span class="n">normalize_2d</span><span class="p">(</span><span class="n">padding</span><span class="p">,</span> <span class="s2">"padding"</span><span class="p">)</span>
 
     <span class="n">out_h</span> <span class="o">=</span> <span class="p">(</span><span class="n">H</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">pad_h</span> <span class="o">-</span> <span class="n">R</span><span class="p">)</span> <span class="o">//</span> <span class="n">stride_h</span> <span class="o">+</span> <span class="mi">1</span>
     <span class="n">out_w</span> <span class="o">=</span> <span class="p">(</span><span class="n">W</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">pad_w</span> <span class="o">-</span> <span class="n">S</span><span class="p">)</span> <span class="o">//</span> <span class="n">stride_w</span> <span class="o">+</span> <span class="mi">1</span>
 
-    <span class="n">grad_out_nchw</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">N</span><span class="p">,</span> <span class="n">Co</span><span class="p">,</span> <span class="n">out_h</span><span class="p">,</span> <span class="n">out_w</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">TORCH_GEMM_DTYPE</span><span class="p">)</span>
+    <span class="n">grad_out_nchw</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">N</span><span class="p">,</span> <span class="n">Co</span><span class="p">,</span> <span class="n">out_h</span><span class="p">,</span> <span class="n">out_w</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">"cuda"</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">TORCH_GEMM_DTYPE</span><span class="p">)</span>
     <span class="n">grad_out_nhwc</span> <span class="o">=</span> <span class="n">grad_out_nchw</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
 
-    <span class="n">w_nchw</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">Co</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">TORCH_GEMM_DTYPE</span><span class="p">)</span>
+    <span class="n">w_nchw</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">Co</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">"cuda"</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">TORCH_GEMM_DTYPE</span><span class="p">)</span>
     <span class="n">w_nhwc</span> <span class="o">=</span> <span class="n">w_nchw</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
 
     <span class="n">triton_dgrad</span> <span class="o">=</span> <span class="n">dgrad_fn</span><span class="p">(</span><span class="n">grad_out_nhwc</span><span class="p">,</span> <span class="n">w_nhwc</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="n">stride</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="n">padding</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
 
     <span class="n">ref_dgrad</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">ops</span><span class="o">.</span><span class="n">aten</span><span class="o">.</span><span class="n">convolution_backward</span><span class="p">(</span>
         <span class="n">grad_out_nchw</span><span class="p">,</span>
-        <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">N</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">TORCH_GEMM_DTYPE</span><span class="p">),</span>
+        <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">N</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">"cuda"</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">TORCH_GEMM_DTYPE</span><span class="p">),</span>
         <span class="n">w_nchw</span><span class="p">,</span>
         <span class="n">bias_sizes</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
         <span class="n">stride</span><span class="o">=</span><span class="p">[</span><span class="n">stride_h</span><span class="p">,</span> <span class="n">stride_w</span><span class="p">],</span>
@@ -1342,10 +1342,10 @@
 
 
 <span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span>
-    <span class="s2">&quot;dgrad_fn,N,Ci,H,W,Co,R,S,stride,padding&quot;</span><span class="p">,</span>
+    <span class="s2">"dgrad_fn,N,Ci,H,W,Co,R,S,stride,padding"</span><span class="p">,</span>
     <span class="p">[(</span><span class="n">conv2d_dgrad_fixed</span><span class="p">,</span> <span class="o">*</span><span class="n">shape</span><span class="p">)</span> <span class="k">for</span> <span class="n">shape</span> <span class="ow">in</span> <span class="n">DGRAD_SHAPE_PARAMS</span><span class="p">],</span>
 <span class="p">)</span>
-<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">skipif</span><span class="p">(</span><span class="ow">not</span> <span class="n">is_blackwell</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Requires Blackwell GPU (SM 10.x)&quot;</span><span class="p">)</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">skipif</span><span class="p">(</span><span class="ow">not</span> <span class="n">is_blackwell</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">"Requires Blackwell GPU (SM 10.x)"</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">test_op</span><span class="p">(</span><span class="n">dgrad_fn</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">Co</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">stride</span><span class="p">,</span> <span class="n">padding</span><span class="p">):</span>
     <span class="n">_assert_dgrad_correct</span><span class="p">(</span><span class="n">dgrad_fn</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">Co</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">stride</span><span class="p">,</span> <span class="n">padding</span><span class="p">)</span>
 
@@ -1366,10 +1366,10 @@
     <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
     <span class="n">out_h</span> <span class="o">=</span> <span class="p">(</span><span class="n">H</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">pad_val</span> <span class="o">-</span> <span class="n">R</span><span class="p">)</span> <span class="o">//</span> <span class="n">stride_val</span> <span class="o">+</span> <span class="mi">1</span>
     <span class="n">out_w</span> <span class="o">=</span> <span class="p">(</span><span class="n">W</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">pad_val</span> <span class="o">-</span> <span class="n">S</span><span class="p">)</span> <span class="o">//</span> <span class="n">stride_val</span> <span class="o">+</span> <span class="mi">1</span>
-    <span class="n">x_nchw</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">N</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">TORCH_GEMM_DTYPE</span><span class="p">)</span>
-    <span class="n">grad_out_nchw</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">N</span><span class="p">,</span> <span class="n">Co</span><span class="p">,</span> <span class="n">out_h</span><span class="p">,</span> <span class="n">out_w</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">TORCH_GEMM_DTYPE</span><span class="p">)</span>
+    <span class="n">x_nchw</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">N</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">"cuda"</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">TORCH_GEMM_DTYPE</span><span class="p">)</span>
+    <span class="n">grad_out_nchw</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">N</span><span class="p">,</span> <span class="n">Co</span><span class="p">,</span> <span class="n">out_h</span><span class="p">,</span> <span class="n">out_w</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">"cuda"</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">TORCH_GEMM_DTYPE</span><span class="p">)</span>
     <span class="n">grad_out_nhwc</span> <span class="o">=</span> <span class="n">grad_out_nchw</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
-    <span class="n">w_nchw</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">Co</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">TORCH_GEMM_DTYPE</span><span class="p">)</span>
+    <span class="n">w_nchw</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">Co</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">"cuda"</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">TORCH_GEMM_DTYPE</span><span class="p">)</span>
     <span class="n">w_nhwc</span> <span class="o">=</span> <span class="n">w_nchw</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="k">return</span> <span class="n">x_nchw</span><span class="p">,</span> <span class="n">grad_out_nchw</span><span class="p">,</span> <span class="n">grad_out_nhwc</span><span class="p">,</span> <span class="n">w_nchw</span><span class="p">,</span> <span class="n">w_nhwc</span>
 
@@ -1392,24 +1392,24 @@
                                                          <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">PADDING</span><span class="p">]:</span>
     <span class="n">bench_configs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
         <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">Benchmark</span><span class="p">(</span>
-            <span class="n">x_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;kernel&quot;</span><span class="p">],</span>
-            <span class="n">x_vals</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;autotuned&quot;</span><span class="p">],</span>
-            <span class="n">line_arg</span><span class="o">=</span><span class="s2">&quot;provider&quot;</span><span class="p">,</span>
-            <span class="n">line_vals</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;gluon&quot;</span><span class="p">,</span> <span class="s2">&quot;torch&quot;</span><span class="p">],</span>
-            <span class="n">line_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;Gluon (autotuned)&quot;</span><span class="p">,</span> <span class="s2">&quot;PyTorch&quot;</span><span class="p">],</span>
-            <span class="n">styles</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;green&quot;</span><span class="p">,</span> <span class="s2">&quot;-&quot;</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;blue&quot;</span><span class="p">,</span> <span class="s2">&quot;-&quot;</span><span class="p">)],</span>
-            <span class="n">ylabel</span><span class="o">=</span><span class="s2">&quot;TFLOPS&quot;</span><span class="p">,</span>
-            <span class="n">plot_name</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;Dgrad N=</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2"> Ci=</span><span class="si">{</span><span class="n">Ci</span><span class="si">}</span><span class="s2"> Co=</span><span class="si">{</span><span class="n">Co</span><span class="si">}</span><span class="s2"> H=</span><span class="si">{</span><span class="n">H</span><span class="si">}</span><span class="s2"> W=</span><span class="si">{</span><span class="n">W</span><span class="si">}</span><span class="s2"> R=</span><span class="si">{</span><span class="n">R</span><span class="si">}</span><span class="s2"> S=</span><span class="si">{</span><span class="n">S</span><span class="si">}</span><span class="s2"> stride=</span><span class="si">{</span><span class="n">stride_val</span><span class="si">}</span><span class="s2"> pad=</span><span class="si">{</span><span class="n">pad_val</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+            <span class="n">x_names</span><span class="o">=</span><span class="p">[</span><span class="s2">"kernel"</span><span class="p">],</span>
+            <span class="n">x_vals</span><span class="o">=</span><span class="p">[</span><span class="s2">"autotuned"</span><span class="p">],</span>
+            <span class="n">line_arg</span><span class="o">=</span><span class="s2">"provider"</span><span class="p">,</span>
+            <span class="n">line_vals</span><span class="o">=</span><span class="p">[</span><span class="s2">"gluon"</span><span class="p">,</span> <span class="s2">"torch"</span><span class="p">],</span>
+            <span class="n">line_names</span><span class="o">=</span><span class="p">[</span><span class="s2">"Gluon (autotuned)"</span><span class="p">,</span> <span class="s2">"PyTorch"</span><span class="p">],</span>
+            <span class="n">styles</span><span class="o">=</span><span class="p">[(</span><span class="s2">"green"</span><span class="p">,</span> <span class="s2">"-"</span><span class="p">),</span> <span class="p">(</span><span class="s2">"blue"</span><span class="p">,</span> <span class="s2">"-"</span><span class="p">)],</span>
+            <span class="n">ylabel</span><span class="o">=</span><span class="s2">"TFLOPS"</span><span class="p">,</span>
+            <span class="n">plot_name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"Dgrad N=</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2"> Ci=</span><span class="si">{</span><span class="n">Ci</span><span class="si">}</span><span class="s2"> Co=</span><span class="si">{</span><span class="n">Co</span><span class="si">}</span><span class="s2"> H=</span><span class="si">{</span><span class="n">H</span><span class="si">}</span><span class="s2"> W=</span><span class="si">{</span><span class="n">W</span><span class="si">}</span><span class="s2"> R=</span><span class="si">{</span><span class="n">R</span><span class="si">}</span><span class="s2"> S=</span><span class="si">{</span><span class="n">S</span><span class="si">}</span><span class="s2"> stride=</span><span class="si">{</span><span class="n">stride_val</span><span class="si">}</span><span class="s2"> pad=</span><span class="si">{</span><span class="n">pad_val</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
             <span class="n">args</span><span class="o">=</span><span class="p">{</span>
-                <span class="s2">&quot;N&quot;</span><span class="p">:</span> <span class="n">N</span><span class="p">,</span>
-                <span class="s2">&quot;H&quot;</span><span class="p">:</span> <span class="n">H</span><span class="p">,</span>
-                <span class="s2">&quot;W&quot;</span><span class="p">:</span> <span class="n">W</span><span class="p">,</span>
-                <span class="s2">&quot;Ci&quot;</span><span class="p">:</span> <span class="n">Ci</span><span class="p">,</span>
-                <span class="s2">&quot;Co&quot;</span><span class="p">:</span> <span class="n">Co</span><span class="p">,</span>
-                <span class="s2">&quot;R&quot;</span><span class="p">:</span> <span class="n">R</span><span class="p">,</span>
-                <span class="s2">&quot;S&quot;</span><span class="p">:</span> <span class="n">S</span><span class="p">,</span>
-                <span class="s2">&quot;stride_val&quot;</span><span class="p">:</span> <span class="n">stride_val</span><span class="p">,</span>
-                <span class="s2">&quot;pad_val&quot;</span><span class="p">:</span> <span class="n">pad_val</span><span class="p">,</span>
+                <span class="s2">"N"</span><span class="p">:</span> <span class="n">N</span><span class="p">,</span>
+                <span class="s2">"H"</span><span class="p">:</span> <span class="n">H</span><span class="p">,</span>
+                <span class="s2">"W"</span><span class="p">:</span> <span class="n">W</span><span class="p">,</span>
+                <span class="s2">"Ci"</span><span class="p">:</span> <span class="n">Ci</span><span class="p">,</span>
+                <span class="s2">"Co"</span><span class="p">:</span> <span class="n">Co</span><span class="p">,</span>
+                <span class="s2">"R"</span><span class="p">:</span> <span class="n">R</span><span class="p">,</span>
+                <span class="s2">"S"</span><span class="p">:</span> <span class="n">S</span><span class="p">,</span>
+                <span class="s2">"stride_val"</span><span class="p">:</span> <span class="n">stride_val</span><span class="p">,</span>
+                <span class="s2">"pad_val"</span><span class="p">:</span> <span class="n">pad_val</span><span class="p">,</span>
             <span class="p">},</span>
         <span class="p">))</span>
 
@@ -1419,9 +1419,9 @@
     <span class="n">x_nchw</span><span class="p">,</span> <span class="n">grad_out_nchw</span><span class="p">,</span> <span class="n">grad_out_nhwc</span><span class="p">,</span> <span class="n">w_nchw</span><span class="p">,</span> <span class="n">w_nhwc</span> <span class="o">=</span> \
         <span class="n">_make_bench_inputs</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">Co</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">stride_val</span><span class="p">,</span> <span class="n">pad_val</span><span class="p">)</span>
 
-    <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s2">&quot;gluon&quot;</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s2">"gluon"</span><span class="p">:</span>
         <span class="n">fn</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">conv2d_dgrad</span><span class="p">(</span><span class="n">grad_out_nhwc</span><span class="p">,</span> <span class="n">w_nhwc</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="n">stride_val</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="n">pad_val</span><span class="p">)</span>
-    <span class="k">elif</span> <span class="n">provider</span> <span class="o">==</span> <span class="s2">&quot;torch&quot;</span><span class="p">:</span>
+    <span class="k">elif</span> <span class="n">provider</span> <span class="o">==</span> <span class="s2">"torch"</span><span class="p">:</span>
         <span class="n">fn</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">ops</span><span class="o">.</span><span class="n">aten</span><span class="o">.</span><span class="n">convolution_backward</span><span class="p">(</span>
             <span class="n">grad_out_nchw</span><span class="p">,</span>
             <span class="n">x_nchw</span><span class="p">,</span>
@@ -1436,7 +1436,7 @@
             <span class="n">output_mask</span><span class="o">=</span><span class="p">[</span><span class="kc">True</span><span class="p">,</span> <span class="kc">False</span><span class="p">,</span> <span class="kc">False</span><span class="p">],</span>
         <span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unsupported provider: </span><span class="si">{</span><span class="n">provider</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Unsupported provider: </span><span class="si">{</span><span class="n">provider</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
     <span class="k">return</span> <span class="n">_benchmark_tflops</span><span class="p">(</span>
         <span class="n">fn</span><span class="p">,</span>
@@ -1452,8 +1452,8 @@
     <span class="p">)</span>
 
 
-<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
-    <span class="n">bench</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s2">&quot;.&quot;</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>
+    <span class="n">bench</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s2">"."</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
 </section>

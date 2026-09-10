@@ -145,15 +145,15 @@
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_load_conv_common</span><span class="p">():</span>
-    <span class="n">module_name</span> <span class="o">=</span> <span class="s2">&quot;triton_examples_gluon_conv_common&quot;</span>
+    <span class="n">module_name</span> <span class="o">=</span> <span class="s2">"triton_examples_gluon_conv_common"</span>
     <span class="n">module</span> <span class="o">=</span> <span class="n">sys</span><span class="o">.</span><span class="n">modules</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">module_name</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">module</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">module</span>
 
-    <span class="n">module_path</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="vm">__file__</span><span class="p">)</span><span class="o">.</span><span class="n">with_name</span><span class="p">(</span><span class="s2">&quot;02-conv-common.py&quot;</span><span class="p">)</span>
+    <span class="n">module_path</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="vm">__file__</span><span class="p">)</span><span class="o">.</span><span class="n">with_name</span><span class="p">(</span><span class="s2">"02-conv-common.py"</span><span class="p">)</span>
     <span class="n">spec</span> <span class="o">=</span> <span class="n">importlib</span><span class="o">.</span><span class="n">util</span><span class="o">.</span><span class="n">spec_from_file_location</span><span class="p">(</span><span class="n">module_name</span><span class="p">,</span> <span class="n">module_path</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">spec</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">spec</span><span class="o">.</span><span class="n">loader</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ImportError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unable to load shared conv helpers from </span><span class="si">{</span><span class="n">module_path</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ImportError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Unable to load shared conv helpers from </span><span class="si">{</span><span class="n">module_path</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
     <span class="n">module</span> <span class="o">=</span> <span class="n">importlib</span><span class="o">.</span><span class="n">util</span><span class="o">.</span><span class="n">module_from_spec</span><span class="p">(</span><span class="n">spec</span><span class="p">)</span>
     <span class="n">sys</span><span class="o">.</span><span class="n">modules</span><span class="p">[</span><span class="n">module_name</span><span class="p">]</span> <span class="o">=</span> <span class="n">module</span>
@@ -224,7 +224,7 @@
 
     <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">get_program</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">pid</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Compute tile coordinates from program ID with grouped ordering.&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""Compute tile coordinates from program ID with grouped ordering."""</span>
         <span class="n">M_GEMM</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">M_GEMM</span>
         <span class="n">N_GEMM</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">Co</span>
 
@@ -256,7 +256,7 @@
 
     <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">get_m_offsets</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Decompose M-tile offset into (batch, out_y, out_x).&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""Decompose M-tile offset into (batch, out_y, out_x)."""</span>
         <span class="n">offs_m</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">pid_m</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">BLOCK_M</span>
         <span class="n">config</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span>
         <span class="n">out_x</span> <span class="o">=</span> <span class="n">offs_m</span> <span class="o">%</span> <span class="n">config</span><span class="o">.</span><span class="n">out_w</span>
@@ -292,7 +292,7 @@
 
 <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">load_partition</span><span class="p">(</span><span class="n">p</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Load partition: iterate over this CTA&#39;s assigned output tiles.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Load partition: iterate over this CTA's assigned output tiles."""</span>
     <span class="n">config</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">config</span>
     <span class="n">BLOCK_K</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">BLOCK_K</span>
 
@@ -343,7 +343,7 @@
 
 <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">mma_partition</span><span class="p">(</span><span class="n">p</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;MMA partition: accumulate over all tiles assigned to this CTA.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""MMA partition: accumulate over all tiles assigned to this CTA."""</span>
     <span class="n">config</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">config</span>
 
     <span class="n">num_k_iter</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">get_num_k_iterations</span><span class="p">()</span>
@@ -374,7 +374,7 @@
 
 <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">epilogue_partition</span><span class="p">(</span><span class="n">p</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Epilogue partition: store all tiles assigned to this CTA.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Epilogue partition: store all tiles assigned to this CTA."""</span>
     <span class="n">config</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">config</span>
     <span class="n">BLOCK_M</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">BLOCK_M</span>
     <span class="n">BLOCK_N</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">BLOCK_N</span>
@@ -416,13 +416,13 @@
 
 
 <span class="nd">@gluon</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="n">do_not_specialize</span><span class="o">=</span><span class="p">[</span>
-    <span class="s2">&quot;N&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;H&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;W&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;R&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;S&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;pad_h&quot;</span><span class="p">,</span>
-    <span class="s2">&quot;pad_w&quot;</span><span class="p">,</span>
+    <span class="s2">"N"</span><span class="p">,</span>
+    <span class="s2">"H"</span><span class="p">,</span>
+    <span class="s2">"W"</span><span class="p">,</span>
+    <span class="s2">"R"</span><span class="p">,</span>
+    <span class="s2">"S"</span><span class="p">,</span>
+    <span class="s2">"pad_h"</span><span class="p">,</span>
+    <span class="s2">"pad_w"</span><span class="p">,</span>
 <span class="p">])</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">conv2d_fprop_kernel</span><span class="p">(</span>
     <span class="n">in_desc</span><span class="p">,</span>
@@ -452,7 +452,7 @@
     <span class="n">num_acc_buffers</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
     <span class="n">num_warps</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
 <span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Warp-specialized forward convolution kernel.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Warp-specialized forward convolution kernel."""</span>
     <span class="n">M_GEMM</span> <span class="o">=</span> <span class="n">N</span> <span class="o">*</span> <span class="n">out_h</span> <span class="o">*</span> <span class="n">out_w</span>
     <span class="n">config</span> <span class="o">=</span> <span class="n">ConvConfig</span><span class="p">(</span>
         <span class="n">N</span><span class="p">,</span>
@@ -494,7 +494,7 @@
     <span class="n">TMEM_BLOCK_M</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="mi">64</span> <span class="k">if</span> <span class="n">BLOCK_M</span> <span class="o">==</span> <span class="mi">64</span> <span class="k">else</span> <span class="mi">128</span>
     <span class="n">tmem_layout</span><span class="p">:</span> <span class="n">gl</span><span class="o">.</span><span class="n">constexpr</span> <span class="o">=</span> <span class="n">TensorMemoryLayout</span><span class="p">(</span><span class="n">block</span><span class="o">=</span><span class="p">(</span><span class="n">TMEM_BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">),</span> <span class="n">col_stride</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
     <span class="c1"># Smaller tiles can profit from a double-buffered accumulator ring, but</span>
-    <span class="c1"># large 256x256 tiles exceed Blackwell&#39;s TMEM budget unless the ring depth</span>
+    <span class="c1"># large 256x256 tiles exceed Blackwell's TMEM budget unless the ring depth</span>
     <span class="c1"># is reduced to 1.</span>
     <span class="n">acc_bufs</span> <span class="o">=</span> <span class="n">allocate_tensor_memory</span><span class="p">(</span><span class="n">gl</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span> <span class="p">[</span><span class="n">num_acc_buffers</span><span class="p">,</span> <span class="n">BLOCK_M</span><span class="p">,</span> <span class="n">BLOCK_N</span><span class="p">],</span> <span class="n">tmem_layout</span><span class="p">)</span>
 
@@ -528,12 +528,12 @@
     <span class="k">return</span> <span class="p">[</span>
         <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">(</span>
             <span class="p">{</span>
-                <span class="s2">&quot;BLOCK_M&quot;</span><span class="p">:</span> <span class="n">block_m</span><span class="p">,</span>
-                <span class="s2">&quot;BLOCK_N&quot;</span><span class="p">:</span> <span class="n">block_n</span><span class="p">,</span>
-                <span class="s2">&quot;BLOCK_K&quot;</span><span class="p">:</span> <span class="n">block_k</span><span class="p">,</span>
-                <span class="s2">&quot;GROUP_SIZE_M&quot;</span><span class="p">:</span> <span class="n">group_size_m</span><span class="p">,</span>
-                <span class="s2">&quot;num_buffers&quot;</span><span class="p">:</span> <span class="n">num_buffers</span><span class="p">,</span>
-                <span class="s2">&quot;num_acc_buffers&quot;</span><span class="p">:</span> <span class="n">num_acc_buffers</span><span class="p">,</span>
+                <span class="s2">"BLOCK_M"</span><span class="p">:</span> <span class="n">block_m</span><span class="p">,</span>
+                <span class="s2">"BLOCK_N"</span><span class="p">:</span> <span class="n">block_n</span><span class="p">,</span>
+                <span class="s2">"BLOCK_K"</span><span class="p">:</span> <span class="n">block_k</span><span class="p">,</span>
+                <span class="s2">"GROUP_SIZE_M"</span><span class="p">:</span> <span class="n">group_size_m</span><span class="p">,</span>
+                <span class="s2">"num_buffers"</span><span class="p">:</span> <span class="n">num_buffers</span><span class="p">,</span>
+                <span class="s2">"num_acc_buffers"</span><span class="p">:</span> <span class="n">num_acc_buffers</span><span class="p">,</span>
             <span class="p">},</span>
             <span class="n">num_warps</span><span class="o">=</span><span class="n">num_warps</span><span class="p">,</span>
             <span class="n">pre_hook</span><span class="o">=</span><span class="n">pre_hook</span><span class="p">,</span>
@@ -549,14 +549,14 @@
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">conv2d_fprop_tma_set_block_size_hook</span><span class="p">(</span><span class="n">nargs</span><span class="p">):</span>
-    <span class="n">in_block_shape</span> <span class="o">=</span> <span class="p">[</span><span class="n">nargs</span><span class="p">[</span><span class="s2">&quot;BLOCK_M&quot;</span><span class="p">],</span> <span class="n">nargs</span><span class="p">[</span><span class="s2">&quot;BLOCK_K&quot;</span><span class="p">]]</span>
-    <span class="n">weight_block_shape</span> <span class="o">=</span> <span class="p">[</span><span class="n">nargs</span><span class="p">[</span><span class="s2">&quot;BLOCK_N&quot;</span><span class="p">],</span> <span class="n">nargs</span><span class="p">[</span><span class="s2">&quot;BLOCK_K&quot;</span><span class="p">]]</span>
+    <span class="n">in_block_shape</span> <span class="o">=</span> <span class="p">[</span><span class="n">nargs</span><span class="p">[</span><span class="s2">"BLOCK_M"</span><span class="p">],</span> <span class="n">nargs</span><span class="p">[</span><span class="s2">"BLOCK_K"</span><span class="p">]]</span>
+    <span class="n">weight_block_shape</span> <span class="o">=</span> <span class="p">[</span><span class="n">nargs</span><span class="p">[</span><span class="s2">"BLOCK_N"</span><span class="p">],</span> <span class="n">nargs</span><span class="p">[</span><span class="s2">"BLOCK_K"</span><span class="p">]]</span>
 
-    <span class="n">nargs</span><span class="p">[</span><span class="s2">&quot;in_desc&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">block_shape</span> <span class="o">=</span> <span class="n">in_block_shape</span>
-    <span class="n">nargs</span><span class="p">[</span><span class="s2">&quot;in_desc&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">(</span><span class="n">in_block_shape</span><span class="p">,</span> <span class="n">GL_GEMM_DTYPE</span><span class="p">)</span>
+    <span class="n">nargs</span><span class="p">[</span><span class="s2">"in_desc"</span><span class="p">]</span><span class="o">.</span><span class="n">block_shape</span> <span class="o">=</span> <span class="n">in_block_shape</span>
+    <span class="n">nargs</span><span class="p">[</span><span class="s2">"in_desc"</span><span class="p">]</span><span class="o">.</span><span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">(</span><span class="n">in_block_shape</span><span class="p">,</span> <span class="n">GL_GEMM_DTYPE</span><span class="p">)</span>
 
-    <span class="n">nargs</span><span class="p">[</span><span class="s2">&quot;weight_desc&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">block_shape</span> <span class="o">=</span> <span class="n">weight_block_shape</span>
-    <span class="n">nargs</span><span class="p">[</span><span class="s2">&quot;weight_desc&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">(</span><span class="n">weight_block_shape</span><span class="p">,</span> <span class="n">GL_GEMM_DTYPE</span><span class="p">)</span>
+    <span class="n">nargs</span><span class="p">[</span><span class="s2">"weight_desc"</span><span class="p">]</span><span class="o">.</span><span class="n">block_shape</span> <span class="o">=</span> <span class="n">weight_block_shape</span>
+    <span class="n">nargs</span><span class="p">[</span><span class="s2">"weight_desc"</span><span class="p">]</span><span class="o">.</span><span class="n">layout</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">NVMMASharedLayout</span><span class="o">.</span><span class="n">get_default_for</span><span class="p">(</span><span class="n">weight_block_shape</span><span class="p">,</span> <span class="n">GL_GEMM_DTYPE</span><span class="p">)</span>
 
 
 <span class="c1"># Key on the effective implicit-GEMM/convolution geometry instead of the full</span>
@@ -565,7 +565,7 @@
 <span class="c1"># cache without exposing meaningfully different tile choices.</span>
 <span class="n">conv2d_fprop_autotuned_kernel</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">autotune</span><span class="p">(</span>
     <span class="n">configs</span><span class="o">=</span><span class="n">conv2d_fprop_get_configs</span><span class="p">(</span><span class="n">pre_hook</span><span class="o">=</span><span class="n">conv2d_fprop_tma_set_block_size_hook</span><span class="p">),</span>
-    <span class="n">key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;out_h&quot;</span><span class="p">,</span> <span class="s2">&quot;out_w&quot;</span><span class="p">,</span> <span class="s2">&quot;stride_h&quot;</span><span class="p">,</span> <span class="s2">&quot;stride_w&quot;</span><span class="p">],</span>
+    <span class="n">key</span><span class="o">=</span><span class="p">[</span><span class="s2">"out_h"</span><span class="p">,</span> <span class="s2">"out_w"</span><span class="p">,</span> <span class="s2">"stride_h"</span><span class="p">,</span> <span class="s2">"stride_w"</span><span class="p">],</span>
 <span class="p">)(</span><span class="n">conv2d_fprop_kernel</span><span class="p">)</span>
 
 <span class="c1"># ===-----------------------------------------------------------------------===#</span>
@@ -576,16 +576,16 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">_prepare_conv_fprop_inputs</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">weight_tensor</span><span class="p">,</span> <span class="n">stride</span><span class="p">,</span> <span class="n">padding</span><span class="p">):</span>
     <span class="n">N</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">Ci</span> <span class="o">=</span> <span class="n">input_tensor</span><span class="o">.</span><span class="n">shape</span>
     <span class="n">Co</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">Ci_w</span> <span class="o">=</span> <span class="n">weight_tensor</span><span class="o">.</span><span class="n">shape</span>
-    <span class="k">assert</span> <span class="n">Ci</span> <span class="o">==</span> <span class="n">Ci_w</span><span class="p">,</span> <span class="s2">&quot;Input and weight channel dimensions must match&quot;</span>
+    <span class="k">assert</span> <span class="n">Ci</span> <span class="o">==</span> <span class="n">Ci_w</span><span class="p">,</span> <span class="s2">"Input and weight channel dimensions must match"</span>
     <span class="k">if</span> <span class="n">input_tensor</span><span class="o">.</span><span class="n">dtype</span> <span class="o">!=</span> <span class="n">TORCH_GEMM_DTYPE</span> <span class="ow">or</span> <span class="n">weight_tensor</span><span class="o">.</span><span class="n">dtype</span> <span class="o">!=</span> <span class="n">TORCH_GEMM_DTYPE</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">&quot;conv2d_fprop expects bfloat16 input/weight tensors, got </span><span class="si">{</span><span class="n">input_tensor</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2"> and </span><span class="si">{</span><span class="n">weight_tensor</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-    <span class="n">stride_h</span><span class="p">,</span> <span class="n">stride_w</span> <span class="o">=</span> <span class="n">normalize_2d</span><span class="p">(</span><span class="n">stride</span><span class="p">,</span> <span class="s2">&quot;stride&quot;</span><span class="p">)</span>
-    <span class="n">pad_h</span><span class="p">,</span> <span class="n">pad_w</span> <span class="o">=</span> <span class="n">normalize_2d</span><span class="p">(</span><span class="n">padding</span><span class="p">,</span> <span class="s2">&quot;padding&quot;</span><span class="p">)</span>
+            <span class="sa">f</span><span class="s2">"conv2d_fprop expects bfloat16 input/weight tensors, got </span><span class="si">{</span><span class="n">input_tensor</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2"> and </span><span class="si">{</span><span class="n">weight_tensor</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="n">stride_h</span><span class="p">,</span> <span class="n">stride_w</span> <span class="o">=</span> <span class="n">normalize_2d</span><span class="p">(</span><span class="n">stride</span><span class="p">,</span> <span class="s2">"stride"</span><span class="p">)</span>
+    <span class="n">pad_h</span><span class="p">,</span> <span class="n">pad_w</span> <span class="o">=</span> <span class="n">normalize_2d</span><span class="p">(</span><span class="n">padding</span><span class="p">,</span> <span class="s2">"padding"</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">stride_h</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">stride_w</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;stride must be positive, got </span><span class="si">{</span><span class="p">(</span><span class="n">stride_h</span><span class="p">,</span><span class="w"> </span><span class="n">stride_w</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"stride must be positive, got </span><span class="si">{</span><span class="p">(</span><span class="n">stride_h</span><span class="p">,</span><span class="w"> </span><span class="n">stride_w</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">pad_h</span> <span class="o">&lt;</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">pad_w</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;padding must be non-negative, got </span><span class="si">{</span><span class="p">(</span><span class="n">pad_h</span><span class="p">,</span><span class="w"> </span><span class="n">pad_w</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"padding must be non-negative, got </span><span class="si">{</span><span class="p">(</span><span class="n">pad_h</span><span class="p">,</span><span class="w"> </span><span class="n">pad_w</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
     <span class="c1"># The Hopper/Blackwell TMA path requires outer strides to be 16-byte aligned.</span>
     <span class="c1"># For NHWC/OHWI bf16 tensors this means padding the channel dimension for</span>
@@ -597,9 +597,9 @@
     <span class="n">out_h</span> <span class="o">=</span> <span class="p">(</span><span class="n">H</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">pad_h</span> <span class="o">-</span> <span class="n">R</span><span class="p">)</span> <span class="o">//</span> <span class="n">stride_h</span> <span class="o">+</span> <span class="mi">1</span>
     <span class="n">out_w</span> <span class="o">=</span> <span class="p">(</span><span class="n">W</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">pad_w</span> <span class="o">-</span> <span class="n">S</span><span class="p">)</span> <span class="o">//</span> <span class="n">stride_w</span> <span class="o">+</span> <span class="mi">1</span>
     <span class="k">if</span> <span class="n">out_h</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">out_w</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Invalid convolution geometry: computed output size &quot;</span>
-                         <span class="sa">f</span><span class="s2">&quot;(</span><span class="si">{</span><span class="n">out_h</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">out_w</span><span class="si">}</span><span class="s2">) from H=</span><span class="si">{</span><span class="n">H</span><span class="si">}</span><span class="s2">, W=</span><span class="si">{</span><span class="n">W</span><span class="si">}</span><span class="s2">, R=</span><span class="si">{</span><span class="n">R</span><span class="si">}</span><span class="s2">, S=</span><span class="si">{</span><span class="n">S</span><span class="si">}</span><span class="s2">, &quot;</span>
-                         <span class="sa">f</span><span class="s2">&quot;stride=</span><span class="si">{</span><span class="p">(</span><span class="n">stride_h</span><span class="p">,</span><span class="w"> </span><span class="n">stride_w</span><span class="p">)</span><span class="si">}</span><span class="s2">, padding=</span><span class="si">{</span><span class="p">(</span><span class="n">pad_h</span><span class="p">,</span><span class="w"> </span><span class="n">pad_w</span><span class="p">)</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Invalid convolution geometry: computed output size "</span>
+                         <span class="sa">f</span><span class="s2">"(</span><span class="si">{</span><span class="n">out_h</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">out_w</span><span class="si">}</span><span class="s2">) from H=</span><span class="si">{</span><span class="n">H</span><span class="si">}</span><span class="s2">, W=</span><span class="si">{</span><span class="n">W</span><span class="si">}</span><span class="s2">, R=</span><span class="si">{</span><span class="n">R</span><span class="si">}</span><span class="s2">, S=</span><span class="si">{</span><span class="n">S</span><span class="si">}</span><span class="s2">, "</span>
+                         <span class="sa">f</span><span class="s2">"stride=</span><span class="si">{</span><span class="p">(</span><span class="n">stride_h</span><span class="p">,</span><span class="w"> </span><span class="n">stride_w</span><span class="p">)</span><span class="si">}</span><span class="s2">, padding=</span><span class="si">{</span><span class="p">(</span><span class="n">pad_h</span><span class="p">,</span><span class="w"> </span><span class="n">pad_w</span><span class="p">)</span><span class="si">}</span><span class="s2">."</span><span class="p">)</span>
 
     <span class="n">output</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">N</span><span class="p">,</span> <span class="n">out_h</span><span class="p">,</span> <span class="n">out_w</span><span class="p">,</span> <span class="n">Co</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">input_tensor</span><span class="o">.</span><span class="n">device</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">TORCH_GEMM_DTYPE</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">input_tensor</span><span class="p">,</span> <span class="n">weight_tensor</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">Co</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">out_h</span><span class="p">,</span> <span class="n">out_w</span><span class="p">,</span> <span class="n">stride_h</span><span class="p">,</span> <span class="n">stride_w</span><span class="p">,</span> <span class="n">pad_h</span><span class="p">,</span> <span class="n">pad_w</span>
@@ -630,7 +630,7 @@
         <span class="n">strides</span><span class="o">=</span><span class="nb">list</span><span class="p">(</span><span class="n">input_tensor</span><span class="o">.</span><span class="n">stride</span><span class="p">()),</span>
         <span class="n">block_shape</span><span class="o">=</span><span class="n">input_block_shape</span><span class="p">,</span>
         <span class="n">layout</span><span class="o">=</span><span class="n">input_layout</span><span class="p">,</span>
-        <span class="n">padding</span><span class="o">=</span><span class="s2">&quot;zero&quot;</span><span class="p">,</span>
+        <span class="n">padding</span><span class="o">=</span><span class="s2">"zero"</span><span class="p">,</span>
         <span class="n">element_strides</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="n">stride_h</span><span class="p">,</span> <span class="n">stride_w</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span>
         <span class="n">pixel_box_lower_corner</span><span class="o">=</span><span class="p">[</span><span class="o">-</span><span class="n">pad_h</span><span class="p">,</span> <span class="o">-</span><span class="n">pad_w</span><span class="p">],</span>
         <span class="n">pixel_box_upper_corner</span><span class="o">=</span><span class="p">[</span><span class="n">upper_h</span><span class="p">,</span> <span class="n">upper_w</span><span class="p">],</span>
@@ -647,7 +647,7 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">_make_grid</span><span class="p">(</span><span class="n">num_sms</span><span class="p">,</span> <span class="n">M_GEMM</span><span class="p">,</span> <span class="n">N_GEMM</span><span class="p">):</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">grid</span><span class="p">(</span><span class="n">meta</span><span class="p">):</span>
-        <span class="n">num_tiles</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M_GEMM</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">&quot;BLOCK_M&quot;</span><span class="p">])</span> <span class="o">*</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N_GEMM</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">&quot;BLOCK_N&quot;</span><span class="p">])</span>
+        <span class="n">num_tiles</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M_GEMM</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">"BLOCK_M"</span><span class="p">])</span> <span class="o">*</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N_GEMM</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s2">"BLOCK_N"</span><span class="p">])</span>
         <span class="k">return</span> <span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">num_sms</span><span class="p">,</span> <span class="n">num_tiles</span><span class="p">),</span> <span class="p">)</span>
 
     <span class="k">return</span> <span class="n">grid</span>
@@ -703,11 +703,11 @@
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">conv2d_fprop</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">weight_tensor</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Production fprop entrypoint.</span>
+<span class="w">    </span><span class="sd">"""Production fprop entrypoint.</span>
 
 <span class="sd">    Selects the best kernel configuration with Triton autotuning for the given</span>
 <span class="sd">    convolution shape.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">input_tensor</span><span class="p">,</span> <span class="n">weight_tensor</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">Co</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">out_h</span><span class="p">,</span> <span class="n">out_w</span><span class="p">,</span> <span class="n">stride_h</span><span class="p">,</span> <span class="n">stride_w</span><span class="p">,</span> <span class="n">pad_h</span><span class="p">,</span> <span class="n">pad_w</span> <span class="o">=</span> \
         <span class="n">_prepare_conv_fprop_inputs</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">weight_tensor</span><span class="p">,</span> <span class="n">stride</span><span class="p">,</span> <span class="n">padding</span><span class="p">)</span>
 
@@ -759,28 +759,28 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">_make_conv2d_fprop_fixed_kernel_meta</span><span class="p">(</span><span class="n">num_buffers</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">):</span>
     <span class="c1"># Keep the fixed path on a tile shape that is also covered by autotune configs.</span>
     <span class="k">return</span> <span class="p">{</span>
-        <span class="s2">&quot;BLOCK_M&quot;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span>
-        <span class="s2">&quot;BLOCK_N&quot;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span>
-        <span class="s2">&quot;BLOCK_K&quot;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span>
-        <span class="s2">&quot;GROUP_SIZE_M&quot;</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>
-        <span class="s2">&quot;num_buffers&quot;</span><span class="p">:</span> <span class="n">num_buffers</span><span class="p">,</span>
-        <span class="s2">&quot;num_acc_buffers&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
-        <span class="s2">&quot;num_warps&quot;</span><span class="p">:</span> <span class="n">num_warps</span><span class="p">,</span>
+        <span class="s2">"BLOCK_M"</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span>
+        <span class="s2">"BLOCK_N"</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span>
+        <span class="s2">"BLOCK_K"</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span>
+        <span class="s2">"GROUP_SIZE_M"</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>
+        <span class="s2">"num_buffers"</span><span class="p">:</span> <span class="n">num_buffers</span><span class="p">,</span>
+        <span class="s2">"num_acc_buffers"</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+        <span class="s2">"num_warps"</span><span class="p">:</span> <span class="n">num_warps</span><span class="p">,</span>
     <span class="p">}</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">conv2d_fprop_fixed</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">weight_tensor</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">num_buffers</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="mi">4</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Fixed-config fprop entrypoint used for CI and debugging.</span>
+<span class="w">    </span><span class="sd">"""Fixed-config fprop entrypoint used for CI and debugging.</span>
 
 <span class="sd">    Runs the kernel with a fixed supported tile shape instead of autotuning.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
+<span class="sd">    """</span>
     <span class="n">input_tensor</span><span class="p">,</span> <span class="n">weight_tensor</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">Co</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">out_h</span><span class="p">,</span> <span class="n">out_w</span><span class="p">,</span> <span class="n">stride_h</span><span class="p">,</span> <span class="n">stride_w</span><span class="p">,</span> <span class="n">pad_h</span><span class="p">,</span> <span class="n">pad_w</span> <span class="o">=</span> \
         <span class="n">_prepare_conv_fprop_inputs</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">weight_tensor</span><span class="p">,</span> <span class="n">stride</span><span class="p">,</span> <span class="n">padding</span><span class="p">)</span>
 
     <span class="n">kernel_meta</span> <span class="o">=</span> <span class="n">_make_conv2d_fprop_fixed_kernel_meta</span><span class="p">(</span><span class="n">num_buffers</span><span class="p">,</span> <span class="n">num_warps</span><span class="p">)</span>
-    <span class="n">BLOCK_M</span> <span class="o">=</span> <span class="n">kernel_meta</span><span class="p">[</span><span class="s2">&quot;BLOCK_M&quot;</span><span class="p">]</span>
-    <span class="n">BLOCK_N</span> <span class="o">=</span> <span class="n">kernel_meta</span><span class="p">[</span><span class="s2">&quot;BLOCK_N&quot;</span><span class="p">]</span>
-    <span class="n">BLOCK_K</span> <span class="o">=</span> <span class="n">kernel_meta</span><span class="p">[</span><span class="s2">&quot;BLOCK_K&quot;</span><span class="p">]</span>
+    <span class="n">BLOCK_M</span> <span class="o">=</span> <span class="n">kernel_meta</span><span class="p">[</span><span class="s2">"BLOCK_M"</span><span class="p">]</span>
+    <span class="n">BLOCK_N</span> <span class="o">=</span> <span class="n">kernel_meta</span><span class="p">[</span><span class="s2">"BLOCK_N"</span><span class="p">]</span>
+    <span class="n">BLOCK_K</span> <span class="o">=</span> <span class="n">kernel_meta</span><span class="p">[</span><span class="s2">"BLOCK_K"</span><span class="p">]</span>
 
     <span class="n">M_GEMM</span> <span class="o">=</span> <span class="n">N</span> <span class="o">*</span> <span class="n">out_h</span> <span class="o">*</span> <span class="n">out_w</span>
     <span class="n">N_GEMM</span> <span class="o">=</span> <span class="n">Co</span>
@@ -830,11 +830,11 @@
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_assert_conv_fprop_correct</span><span class="p">(</span><span class="n">fprop_fn</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">Co</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">stride</span><span class="p">,</span> <span class="n">padding</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Run fprop_fn on NHWC tensors and compare against torch.nn.functional.conv2d.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Run fprop_fn on NHWC tensors and compare against torch.nn.functional.conv2d."""</span>
     <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-    <span class="n">x_nchw</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">N</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">TORCH_GEMM_DTYPE</span><span class="p">)</span>
+    <span class="n">x_nchw</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">N</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">"cuda"</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">TORCH_GEMM_DTYPE</span><span class="p">)</span>
     <span class="n">x_nhwc</span> <span class="o">=</span> <span class="n">x_nchw</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
-    <span class="n">w_nchw</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">Co</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">TORCH_GEMM_DTYPE</span><span class="p">)</span>
+    <span class="n">w_nchw</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">Co</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">"cuda"</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">TORCH_GEMM_DTYPE</span><span class="p">)</span>
     <span class="n">w_nhwc</span> <span class="o">=</span> <span class="n">w_nchw</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
 
     <span class="n">triton_out</span> <span class="o">=</span> <span class="n">fprop_fn</span><span class="p">(</span><span class="n">x_nhwc</span><span class="p">,</span> <span class="n">w_nhwc</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="n">stride</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="n">padding</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
@@ -843,7 +843,7 @@
     <span class="n">torch</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_close</span><span class="p">(</span><span class="n">triton_out</span><span class="p">,</span> <span class="n">torch_out</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">5e-2</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mf">5e-2</span><span class="p">)</span>
 
 
-<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;fprop_fn,N,Ci,H,W,Co,R,S,stride,padding&quot;</span><span class="p">,</span> <span class="p">[</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">"fprop_fn,N,Ci,H,W,Co,R,S,stride,padding"</span><span class="p">,</span> <span class="p">[</span>
     <span class="o">*</span><span class="p">[(</span><span class="n">conv2d_fprop_fixed</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="n">Co</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">stride</span><span class="p">,</span> <span class="n">padding</span><span class="p">)</span>
       <span class="k">for</span> <span class="n">N</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">128</span><span class="p">)</span>
       <span class="k">for</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">Co</span> <span class="ow">in</span> <span class="p">((</span><span class="mi">384</span><span class="p">,</span> <span class="mi">384</span><span class="p">),</span> <span class="p">(</span><span class="mi">416</span><span class="p">,</span> <span class="mi">416</span><span class="p">))</span>
@@ -852,7 +852,7 @@
       <span class="k">for</span> <span class="n">padding</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">)],</span> <span class="p">(</span><span class="n">conv2d_fprop_fixed</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">96</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">128</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="mi">0</span><span class="p">),</span>  <span class="c1"># asymmetric stride</span>
     <span class="p">(</span><span class="n">conv2d_fprop_fixed</span><span class="p">,</span> <span class="mi">16</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">96</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>  <span class="c1"># padded channels</span>
 <span class="p">])</span>
-<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">skipif</span><span class="p">(</span><span class="ow">not</span> <span class="n">is_blackwell</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Requires Blackwell GPU (SM 10.x)&quot;</span><span class="p">)</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">skipif</span><span class="p">(</span><span class="ow">not</span> <span class="n">is_blackwell</span><span class="p">(),</span> <span class="n">reason</span><span class="o">=</span><span class="s2">"Requires Blackwell GPU (SM 10.x)"</span><span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">test_op</span><span class="p">(</span><span class="n">fprop_fn</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">Co</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">stride</span><span class="p">,</span> <span class="n">padding</span><span class="p">):</span>
     <span class="n">_assert_conv_fprop_correct</span><span class="p">(</span><span class="n">fprop_fn</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">Co</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">stride</span><span class="p">,</span> <span class="n">padding</span><span class="p">)</span>
 
@@ -872,9 +872,9 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">_make_bench_inputs</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">Co</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">):</span>
     <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
 
-    <span class="n">x_nchw</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">N</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">TORCH_GEMM_DTYPE</span><span class="p">)</span>
+    <span class="n">x_nchw</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">N</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">"cuda"</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">TORCH_GEMM_DTYPE</span><span class="p">)</span>
     <span class="n">x_nhwc</span> <span class="o">=</span> <span class="n">x_nchw</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
-    <span class="n">w_nchw</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">Co</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">TORCH_GEMM_DTYPE</span><span class="p">)</span>
+    <span class="n">w_nchw</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">Co</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">"cuda"</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">TORCH_GEMM_DTYPE</span><span class="p">)</span>
     <span class="n">w_nhwc</span> <span class="o">=</span> <span class="n">w_nchw</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="k">return</span> <span class="n">x_nchw</span><span class="p">,</span> <span class="n">x_nhwc</span><span class="p">,</span> <span class="n">w_nchw</span><span class="p">,</span> <span class="n">w_nhwc</span>
 
@@ -897,24 +897,24 @@
                                                          <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">PADDING</span><span class="p">]:</span>
     <span class="n">bench_configs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
         <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">Benchmark</span><span class="p">(</span>
-            <span class="n">x_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;kernel&quot;</span><span class="p">],</span>
-            <span class="n">x_vals</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;autotuned&quot;</span><span class="p">],</span>
-            <span class="n">line_arg</span><span class="o">=</span><span class="s2">&quot;provider&quot;</span><span class="p">,</span>
-            <span class="n">line_vals</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;gluon&quot;</span><span class="p">,</span> <span class="s2">&quot;torch&quot;</span><span class="p">],</span>
-            <span class="n">line_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;Gluon (autotuned)&quot;</span><span class="p">,</span> <span class="s2">&quot;PyTorch&quot;</span><span class="p">],</span>
-            <span class="n">styles</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;green&quot;</span><span class="p">,</span> <span class="s2">&quot;-&quot;</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;blue&quot;</span><span class="p">,</span> <span class="s2">&quot;-&quot;</span><span class="p">)],</span>
-            <span class="n">ylabel</span><span class="o">=</span><span class="s2">&quot;TFLOPS&quot;</span><span class="p">,</span>
-            <span class="n">plot_name</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;Conv2d N=</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2"> Ci=</span><span class="si">{</span><span class="n">Ci</span><span class="si">}</span><span class="s2"> Co=</span><span class="si">{</span><span class="n">Co</span><span class="si">}</span><span class="s2"> H=</span><span class="si">{</span><span class="n">H</span><span class="si">}</span><span class="s2"> W=</span><span class="si">{</span><span class="n">W</span><span class="si">}</span><span class="s2"> R=</span><span class="si">{</span><span class="n">R</span><span class="si">}</span><span class="s2"> S=</span><span class="si">{</span><span class="n">S</span><span class="si">}</span><span class="s2"> stride=</span><span class="si">{</span><span class="n">stride_val</span><span class="si">}</span><span class="s2"> pad=</span><span class="si">{</span><span class="n">pad_val</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+            <span class="n">x_names</span><span class="o">=</span><span class="p">[</span><span class="s2">"kernel"</span><span class="p">],</span>
+            <span class="n">x_vals</span><span class="o">=</span><span class="p">[</span><span class="s2">"autotuned"</span><span class="p">],</span>
+            <span class="n">line_arg</span><span class="o">=</span><span class="s2">"provider"</span><span class="p">,</span>
+            <span class="n">line_vals</span><span class="o">=</span><span class="p">[</span><span class="s2">"gluon"</span><span class="p">,</span> <span class="s2">"torch"</span><span class="p">],</span>
+            <span class="n">line_names</span><span class="o">=</span><span class="p">[</span><span class="s2">"Gluon (autotuned)"</span><span class="p">,</span> <span class="s2">"PyTorch"</span><span class="p">],</span>
+            <span class="n">styles</span><span class="o">=</span><span class="p">[(</span><span class="s2">"green"</span><span class="p">,</span> <span class="s2">"-"</span><span class="p">),</span> <span class="p">(</span><span class="s2">"blue"</span><span class="p">,</span> <span class="s2">"-"</span><span class="p">)],</span>
+            <span class="n">ylabel</span><span class="o">=</span><span class="s2">"TFLOPS"</span><span class="p">,</span>
+            <span class="n">plot_name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"Conv2d N=</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2"> Ci=</span><span class="si">{</span><span class="n">Ci</span><span class="si">}</span><span class="s2"> Co=</span><span class="si">{</span><span class="n">Co</span><span class="si">}</span><span class="s2"> H=</span><span class="si">{</span><span class="n">H</span><span class="si">}</span><span class="s2"> W=</span><span class="si">{</span><span class="n">W</span><span class="si">}</span><span class="s2"> R=</span><span class="si">{</span><span class="n">R</span><span class="si">}</span><span class="s2"> S=</span><span class="si">{</span><span class="n">S</span><span class="si">}</span><span class="s2"> stride=</span><span class="si">{</span><span class="n">stride_val</span><span class="si">}</span><span class="s2"> pad=</span><span class="si">{</span><span class="n">pad_val</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
             <span class="n">args</span><span class="o">=</span><span class="p">{</span>
-                <span class="s2">&quot;N&quot;</span><span class="p">:</span> <span class="n">N</span><span class="p">,</span>
-                <span class="s2">&quot;H&quot;</span><span class="p">:</span> <span class="n">H</span><span class="p">,</span>
-                <span class="s2">&quot;W&quot;</span><span class="p">:</span> <span class="n">W</span><span class="p">,</span>
-                <span class="s2">&quot;Ci&quot;</span><span class="p">:</span> <span class="n">Ci</span><span class="p">,</span>
-                <span class="s2">&quot;Co&quot;</span><span class="p">:</span> <span class="n">Co</span><span class="p">,</span>
-                <span class="s2">&quot;R&quot;</span><span class="p">:</span> <span class="n">R</span><span class="p">,</span>
-                <span class="s2">&quot;S&quot;</span><span class="p">:</span> <span class="n">S</span><span class="p">,</span>
-                <span class="s2">&quot;stride_val&quot;</span><span class="p">:</span> <span class="n">stride_val</span><span class="p">,</span>
-                <span class="s2">&quot;pad_val&quot;</span><span class="p">:</span> <span class="n">pad_val</span><span class="p">,</span>
+                <span class="s2">"N"</span><span class="p">:</span> <span class="n">N</span><span class="p">,</span>
+                <span class="s2">"H"</span><span class="p">:</span> <span class="n">H</span><span class="p">,</span>
+                <span class="s2">"W"</span><span class="p">:</span> <span class="n">W</span><span class="p">,</span>
+                <span class="s2">"Ci"</span><span class="p">:</span> <span class="n">Ci</span><span class="p">,</span>
+                <span class="s2">"Co"</span><span class="p">:</span> <span class="n">Co</span><span class="p">,</span>
+                <span class="s2">"R"</span><span class="p">:</span> <span class="n">R</span><span class="p">,</span>
+                <span class="s2">"S"</span><span class="p">:</span> <span class="n">S</span><span class="p">,</span>
+                <span class="s2">"stride_val"</span><span class="p">:</span> <span class="n">stride_val</span><span class="p">,</span>
+                <span class="s2">"pad_val"</span><span class="p">:</span> <span class="n">pad_val</span><span class="p">,</span>
             <span class="p">},</span>
         <span class="p">))</span>
 
@@ -923,12 +923,12 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">bench</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">Co</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">,</span> <span class="n">stride_val</span><span class="p">,</span> <span class="n">pad_val</span><span class="p">,</span> <span class="n">kernel</span><span class="p">,</span> <span class="n">provider</span><span class="p">):</span>
     <span class="n">x_nchw</span><span class="p">,</span> <span class="n">x_nhwc</span><span class="p">,</span> <span class="n">w_nchw</span><span class="p">,</span> <span class="n">w_nhwc</span> <span class="o">=</span> <span class="n">_make_bench_inputs</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">Ci</span><span class="p">,</span> <span class="n">Co</span><span class="p">,</span> <span class="n">R</span><span class="p">,</span> <span class="n">S</span><span class="p">)</span>
 
-    <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s2">&quot;gluon&quot;</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s2">"gluon"</span><span class="p">:</span>
         <span class="n">fn</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">conv2d_fprop</span><span class="p">(</span><span class="n">x_nhwc</span><span class="p">,</span> <span class="n">w_nhwc</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="n">stride_val</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="n">pad_val</span><span class="p">)</span>
-    <span class="k">elif</span> <span class="n">provider</span> <span class="o">==</span> <span class="s2">&quot;torch&quot;</span><span class="p">:</span>
+    <span class="k">elif</span> <span class="n">provider</span> <span class="o">==</span> <span class="s2">"torch"</span><span class="p">:</span>
         <span class="n">fn</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="o">.</span><span class="n">functional</span><span class="o">.</span><span class="n">conv2d</span><span class="p">(</span><span class="n">x_nchw</span><span class="p">,</span> <span class="n">w_nchw</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="n">stride_val</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="n">pad_val</span><span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unsupported provider: </span><span class="si">{</span><span class="n">provider</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Unsupported provider: </span><span class="si">{</span><span class="n">provider</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
     <span class="k">return</span> <span class="n">_benchmark_tflops</span><span class="p">(</span>
         <span class="n">fn</span><span class="p">,</span>
@@ -944,8 +944,8 @@
     <span class="p">)</span>
 
 
-<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
-    <span class="n">bench</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s2">&quot;.&quot;</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>
+    <span class="n">bench</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s2">"."</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
 </section>

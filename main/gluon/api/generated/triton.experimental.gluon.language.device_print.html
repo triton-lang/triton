@@ -153,8 +153,8 @@ provide the values you want to print as arguments.  The first value must be a st
 be scalars or tensors.</p>
 <p>Calling the Python builtin <code class="code docutils literal notranslate"><span class="pre">print</span></code> is the same as calling this function, and the requirements for the arguments will match
 this function (not the normal requirements for <code class="code docutils literal notranslate"><span class="pre">print</span></code>).</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">tl</span><span class="o">.</span><span class="n">device_print</span><span class="p">(</span><span class="s2">&quot;pid&quot;</span><span class="p">,</span> <span class="n">pid</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;pid&quot;</span><span class="p">,</span> <span class="n">pid</span><span class="p">)</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">tl</span><span class="o">.</span><span class="n">device_print</span><span class="p">(</span><span class="s2">"pid"</span><span class="p">,</span> <span class="n">pid</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"pid"</span><span class="p">,</span> <span class="n">pid</span><span class="p">)</span>
 </pre></div>
 </div>
 <p>On CUDA, printfs are streamed through a buffer of limited size (on one host,

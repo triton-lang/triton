@@ -159,17 +159,17 @@ an optimal kernel.</p>
 
     <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">K</span><span class="p">):</span>
         <span class="c1"># Stage 0: prefetch tiles.</span>
-        <span class="k">with</span> <span class="n">gl</span><span class="o">.</span><span class="n">amd</span><span class="o">.</span><span class="n">warp_pipeline_stage</span><span class="p">(</span><span class="s2">&quot;load&quot;</span><span class="p">,</span> <span class="n">priority</span><span class="o">=</span><span class="mi">3</span><span class="p">):</span>
+        <span class="k">with</span> <span class="n">gl</span><span class="o">.</span><span class="n">amd</span><span class="o">.</span><span class="n">warp_pipeline_stage</span><span class="p">(</span><span class="s2">"load"</span><span class="p">,</span> <span class="n">priority</span><span class="o">=</span><span class="mi">3</span><span class="p">):</span>
             <span class="n">a</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">a_ptr</span> <span class="o">+</span> <span class="n">k</span><span class="p">)</span>
             <span class="n">b</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">b_ptr</span> <span class="o">+</span> <span class="n">k</span><span class="p">)</span>
 
         <span class="c1"># Stage 1: prepare MFMA operands.</span>
-        <span class="k">with</span> <span class="n">gl</span><span class="o">.</span><span class="n">amd</span><span class="o">.</span><span class="n">warp_pipeline_stage</span><span class="p">(</span><span class="s2">&quot;prep&quot;</span><span class="p">):</span>
+        <span class="k">with</span> <span class="n">gl</span><span class="o">.</span><span class="n">amd</span><span class="o">.</span><span class="n">warp_pipeline_stage</span><span class="p">(</span><span class="s2">"prep"</span><span class="p">):</span>
             <span class="n">a_tile</span> <span class="o">=</span> <span class="n">a</span>  <span class="c1"># Convert to the required dot-operand layout.</span>
             <span class="n">b_tile</span> <span class="o">=</span> <span class="n">b</span>  <span class="c1"># Convert to the required dot-operand layout.</span>
 
         <span class="c1"># Stage 2: compute.</span>
-        <span class="k">with</span> <span class="n">gl</span><span class="o">.</span><span class="n">amd</span><span class="o">.</span><span class="n">warp_pipeline_stage</span><span class="p">(</span><span class="s2">&quot;compute&quot;</span><span class="p">,</span> <span class="n">priority</span><span class="o">=</span><span class="mi">0</span><span class="p">):</span>
+        <span class="k">with</span> <span class="n">gl</span><span class="o">.</span><span class="n">amd</span><span class="o">.</span><span class="n">warp_pipeline_stage</span><span class="p">(</span><span class="s2">"compute"</span><span class="p">,</span> <span class="n">priority</span><span class="o">=</span><span class="mi">0</span><span class="p">):</span>
             <span class="n">acc</span> <span class="o">+=</span> <span class="n">a_tile</span> <span class="o">*</span> <span class="n">b_tile</span>
 
     <span class="n">gl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">c_ptr</span><span class="p">,</span> <span class="n">acc</span><span class="p">)</span>

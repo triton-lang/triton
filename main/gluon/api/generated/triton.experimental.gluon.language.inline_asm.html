@@ -6,7 +6,7 @@
   <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>triton.experimental.gluon.language.static_range &mdash; Triton  documentation</title>
+  <title>triton.experimental.gluon.language.inline_asm &mdash; Triton  documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=03e43079" />
       <link rel="stylesheet" type="text/css" href="../../../_static/css/theme.css?v=9edc463e" />
       <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery.css?v=fd6457a4" />
@@ -28,8 +28,8 @@
     <script src="../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
-    <link rel="next" title="triton.experimental.gluon.language.inline_asm" href="triton.experimental.gluon.language.inline_asm.html" />
-    <link rel="prev" title="triton.experimental.gluon.language.SwizzledSharedLayout" href="triton.experimental.gluon.language.SwizzledSharedLayout.html" /> 
+    <link rel="next" title="triton.experimental.gluon.language.inline_asm_elementwise" href="triton.experimental.gluon.language.inline_asm_elementwise.html" />
+    <link rel="prev" title="triton.experimental.gluon.language.static_range" href="triton.experimental.gluon.language.static_range.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -85,11 +85,12 @@
 <li class="toctree-l3"><a class="reference internal" href="../language.html#reduction-ops">Reduction Ops</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../language.html#scan-ops">Scan Ops</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../language.html#layout-classes">Layout Classes</a></li>
-<li class="toctree-l3 current"><a class="reference internal" href="../language.html#iterators">Iterators</a><ul class="current">
-<li class="toctree-l4 current"><a class="current reference internal" href="#">triton.experimental.gluon.language.static_range</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../language.html#iterators">Iterators</a></li>
+<li class="toctree-l3 current"><a class="reference internal" href="../language.html#inline-assembly">Inline Assembly</a><ul class="current">
+<li class="toctree-l4 current"><a class="current reference internal" href="#">triton.experimental.gluon.language.inline_asm</a></li>
+<li class="toctree-l4"><a class="reference internal" href="triton.experimental.gluon.language.inline_asm_elementwise.html">triton.experimental.gluon.language.inline_asm_elementwise</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="../language.html#inline-assembly">Inline Assembly</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../language.html#compiler-hints-and-debugging">Compiler Hints and Debugging</a></li>
 </ul>
 </li>
@@ -126,9 +127,9 @@
       <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../index.html">API Reference</a></li>
           <li class="breadcrumb-item"><a href="../language.html">Language API</a></li>
-      <li class="breadcrumb-item active">triton.experimental.gluon.language.static_range</li>
+      <li class="breadcrumb-item active">triton.experimental.gluon.language.inline_asm</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../../_sources/gluon/api/generated/triton.experimental.gluon.language.static_range.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../../_sources/gluon/api/generated/triton.experimental.gluon.language.inline_asm.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -136,52 +137,49 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="triton-experimental-gluon-language-static-range">
-<h1>triton.experimental.gluon.language.static_range<a class="headerlink" href="#triton-experimental-gluon-language-static-range" title="Link to this heading"></a></h1>
-<dl class="py class">
-<dt class="sig sig-object py" id="triton.experimental.gluon.language.static_range">
-<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.</span></span><span class="sig-name descname"><span class="pre">static_range</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">arg1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">arg2</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">step</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.static_range" title="Link to this definition"></a></dt>
-<dd><p>Iterator that counts upward forever.</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">kernel</span><span class="p">(</span><span class="o">...</span><span class="p">):</span>
-    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">tl</span><span class="o">.</span><span class="n">static_range</span><span class="p">(</span><span class="mi">10</span><span class="p">):</span>
-        <span class="o">...</span>
+  <section id="triton-experimental-gluon-language-inline-asm">
+<h1>triton.experimental.gluon.language.inline_asm<a class="headerlink" href="#triton-experimental-gluon-language-inline-asm" title="Link to this heading"></a></h1>
+<dl class="py function">
+<dt class="sig sig-object py" id="triton.experimental.gluon.language.inline_asm">
+<span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.</span></span><span class="sig-name descname"><span class="pre">inline_asm</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">asm</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">constraints</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">args</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">()</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">result_types</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">()</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">is_pure</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.inline_asm" title="Link to this definition"></a></dt>
+<dd><p>Execute one inline assembly block per participating thread.</p>
+<p>Tensor inputs are unpacked in their layout’s register order, including
+replicated register positions. Scalar inputs are uniform and memory
+descriptors become one uniform <code class="docutils literal notranslate"><span class="pre">i32</span></code> address of their logical origin.
+Inputs are not broadcast, and elements smaller than 32 bits are not packed.</p>
+<p><code class="docutils literal notranslate"><span class="pre">result_types</span></code> is a scalar dtype, a <a class="reference internal" href="triton.experimental.gluon.language.distributed_type.html#triton.experimental.gluon.language.distributed_type" title="triton.experimental.gluon.language.distributed_type"><code class="xref py py-class docutils literal notranslate"><span class="pre">distributed_type</span></code></a>, or a
+sequence of these types. A single type returns one tensor; a sequence
+returns a tuple. The default empty sequence produces no results. Tensor
+inputs and outputs require explicit distributed layouts. Scalar outputs
+must be uniform, and replicated tensor elements must agree with the layout.</p>
+<p><code class="docutils literal notranslate"><span class="pre">asm</span></code> may be a string or a <code class="docutils literal notranslate"><span class="pre">&#64;gluon.constexpr_function</span></code> returning a
+string. The function receives <code class="docutils literal notranslate"><span class="pre">(outputs,</span> <span class="pre">inputs)</span></code>, each a tuple of
+operand-reference tuples. References are numbered outputs first, then
+inputs, e.g. <code class="docutils literal notranslate"><span class="pre">((&quot;$0&quot;,</span> <span class="pre">&quot;$1&quot;),)</span></code>. Only these strings, not runtime values,
+are passed to the function. Normal Python iteration and slicing can be
+used to generate assembly for large groups of per-thread elements.</p>
+<p><code class="docutils literal notranslate"><span class="pre">constraints</span></code> is an LLVM constraint string, or a tuple with one constraint
+per logical output followed by each input. Tuple entries are repeated for
+every element in their group. Use a string for explicitly numbered ties or
+clobbers.</p>
+<p>Descriptor operands require <code class="docutils literal notranslate"><span class="pre">is_pure=False</span></code>. The compiler does not model
+their memory accesses or insert synchronization for them. Callers must
+provide barriers, fences, and asynchronous completion before storage reuse.
+All accesses must stay within the descriptor views.</p>
+<p>Example:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="nd">@gluon</span><span class="o">.</span><span class="n">constexpr_function</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">add_bias</span><span class="p">(</span><span class="n">outputs</span><span class="p">,</span> <span class="n">inputs</span><span class="p">):</span>
+    <span class="n">out</span><span class="p">,</span> <span class="o">=</span> <span class="n">outputs</span>
+    <span class="n">x</span><span class="p">,</span> <span class="n">bias</span> <span class="o">=</span> <span class="n">inputs</span>
+    <span class="k">return</span> <span class="s2">"</span><span class="se">\n</span><span class="s2">"</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">"add.f32 </span><span class="si">{</span><span class="n">dst</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">src</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">bias</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">;"</span>
+        <span class="k">for</span> <span class="n">dst</span><span class="p">,</span> <span class="n">src</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">out</span><span class="p">,</span> <span class="n">x</span><span class="p">)</span>
+    <span class="p">)</span>
+
+<span class="n">y</span> <span class="o">=</span> <span class="n">gl</span><span class="o">.</span><span class="n">inline_asm</span><span class="p">(</span><span class="n">add_bias</span><span class="p">,</span> <span class="p">(</span><span class="s2">"=&amp;f"</span><span class="p">,</span> <span class="s2">"f"</span><span class="p">,</span> <span class="s2">"f"</span><span class="p">),</span> <span class="p">[</span><span class="n">x</span><span class="p">,</span> <span class="n">bias</span><span class="p">],</span>
+                  <span class="n">x</span><span class="o">.</span><span class="n">type</span><span class="p">,</span> <span class="n">is_pure</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<dl class="field-list simple">
-<dt class="field-odd">Note<span class="colon">:</span></dt>
-<dd class="field-odd"><p>This is a special iterator used to implement similar semantics to Python’s <code class="code docutils literal notranslate"><span class="pre">range</span></code> in the context of
-<code class="code docutils literal notranslate"><span class="pre">triton.jit</span></code> functions. In addition, it also guides the compiler to unroll the loop aggressively.</p>
-</dd>
-<dt class="field-even">Parameters<span class="colon">:</span></dt>
-<dd class="field-even"><ul class="simple">
-<li><p><strong>arg1</strong> – the start value.</p></li>
-<li><p><strong>arg2</strong> – the end value.</p></li>
-<li><p><strong>step</strong> – the step value.</p></li>
-</ul>
-</dd>
-</dl>
-<dl class="py method">
-<dt class="sig sig-object py" id="triton.experimental.gluon.language.static_range.__init__">
-<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">arg1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">arg2</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">step</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.static_range.__init__" title="Link to this definition"></a></dt>
-<dd></dd></dl>
-
-<p class="rubric">Methods</p>
-<table class="autosummary longtable docutils align-default">
-<tbody>
-<tr class="row-odd"><td><p><a class="reference internal" href="#triton.experimental.gluon.language.static_range.__init__" title="triton.experimental.gluon.language.static_range.__init__"><code class="xref py py-obj docutils literal notranslate"><span class="pre">__init__</span></code></a>(self, arg1[, arg2, step])</p></td>
-<td><p></p></td>
-</tr>
-</tbody>
-</table>
-<p class="rubric">Attributes</p>
-<table class="autosummary longtable docutils align-default">
-<tbody>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">type</span></code></p></td>
-<td><p></p></td>
-</tr>
-</tbody>
-</table>
 </dd></dl>
 
 </section>
@@ -190,8 +188,8 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="triton.experimental.gluon.language.SwizzledSharedLayout.html" class="btn btn-neutral float-left" title="triton.experimental.gluon.language.SwizzledSharedLayout" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="triton.experimental.gluon.language.inline_asm.html" class="btn btn-neutral float-right" title="triton.experimental.gluon.language.inline_asm" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="triton.experimental.gluon.language.static_range.html" class="btn btn-neutral float-left" title="triton.experimental.gluon.language.static_range" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="triton.experimental.gluon.language.inline_asm_elementwise.html" class="btn btn-neutral float-right" title="triton.experimental.gluon.language.inline_asm_elementwise" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

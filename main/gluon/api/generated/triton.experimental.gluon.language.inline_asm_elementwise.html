@@ -29,7 +29,7 @@
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="triton.experimental.gluon.language.assume" href="triton.experimental.gluon.language.assume.html" />
-    <link rel="prev" title="triton.experimental.gluon.language.static_range" href="triton.experimental.gluon.language.static_range.html" /> 
+    <link rel="prev" title="triton.experimental.gluon.language.inline_asm" href="triton.experimental.gluon.language.inline_asm.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -87,6 +87,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../language.html#layout-classes">Layout Classes</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../language.html#iterators">Iterators</a></li>
 <li class="toctree-l3 current"><a class="reference internal" href="../language.html#inline-assembly">Inline Assembly</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="triton.experimental.gluon.language.inline_asm.html">triton.experimental.gluon.language.inline_asm</a></li>
 <li class="toctree-l4 current"><a class="current reference internal" href="#">triton.experimental.gluon.language.inline_asm_elementwise</a></li>
 </ul>
 </li>
@@ -144,6 +145,12 @@
 <dd><p>Execute inline assembly over a tensor.  Essentially, this is <code class="code docutils literal notranslate"><span class="pre">map</span></code>
 where the function is inline assembly.</p>
 <p>The input tensors <code class="code docutils literal notranslate"><span class="pre">args</span></code> are implicitly broadcasted to the same shape.</p>
+<p>In Gluon, <code class="code docutils literal notranslate"><span class="pre">args</span></code> may also contain shared or tensor memory
+descriptors. Each descriptor contributes one <code class="code docutils literal notranslate"><span class="pre">i32</span></code> address per
+invocation, independently of <code class="code docutils literal notranslate"><span class="pre">pack</span></code>, and does not participate in
+broadcasting. Descriptor operands require <code class="code docutils literal notranslate"><span class="pre">is_pure=False</span></code>; the
+assembly conservatively reads and writes the descriptor views, and
+accesses must remain within their logical elements.</p>
 <p><code class="code docutils literal notranslate"><span class="pre">dtype</span></code> can be a tuple of types, in which case the output is a
 tuple of tensors.</p>
 <p>Each invocation of the inline asm processes <code class="code docutils literal notranslate"><span class="pre">pack</span></code> elements at a
@@ -169,7 +176,7 @@ assembly:</p>
     <span class="c1"># - Return ai and mi.</span>
     <span class="c1"># Do the above 4 elements at a time.</span>
     <span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">d</span><span class="p">)</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">inline_asm_elementwise</span><span class="p">(</span>
-        <span class="n">asm</span><span class="o">=</span><span class="s2">&quot;&quot;&quot;</span>
+        <span class="n">asm</span><span class="o">=</span><span class="s2">"""</span>
 <span class="s2">        {</span>
 <span class="s2">            // Unpack `a` into `ai`.</span>
 <span class="s2">            .reg .b8 tmp&lt;4&gt;;</span>
@@ -189,17 +196,17 @@ assembly:</p>
 <span class="s2">        max.f32 $5, $5, $10;</span>
 <span class="s2">        max.f32 $6, $6, $11;</span>
 <span class="s2">        max.f32 $7, $7, $12;</span>
-<span class="s2">        &quot;&quot;&quot;</span><span class="p">,</span>
+<span class="s2">        """</span><span class="p">,</span>
         <span class="n">constraints</span><span class="o">=</span><span class="p">(</span>
             <span class="c1"># 8 output registers, namely</span>
             <span class="c1">#   $0=ai0, $1=ai1, $2=ai2, $3=ai3,</span>
             <span class="c1">#   $4=m0,  $5=m1,  $6=m2,  $7=m3.</span>
-            <span class="s2">&quot;=r,=r,=r,=r,=r,=r,=r,=r,&quot;</span>
+            <span class="s2">"=r,=r,=r,=r,=r,=r,=r,=r,"</span>
             <span class="c1"># 5 input registers, namely</span>
             <span class="c1">#   $8=ai,</span>
             <span class="c1">#   $9=b0, $10=b1, $11=b2, $12=b3.</span>
             <span class="c1"># The four elements from `a` are all packed into one register.</span>
-            <span class="s2">&quot;r,r,r,r,r&quot;</span><span class="p">),</span>
+            <span class="s2">"r,r,r,r,r"</span><span class="p">),</span>
         <span class="n">args</span><span class="o">=</span><span class="p">[</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">],</span>
         <span class="n">dtype</span><span class="o">=</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
         <span class="n">is_pure</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
@@ -233,7 +240,7 @@ assembly:</p>
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="triton.experimental.gluon.language.static_range.html" class="btn btn-neutral float-left" title="triton.experimental.gluon.language.static_range" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="triton.experimental.gluon.language.inline_asm.html" class="btn btn-neutral float-left" title="triton.experimental.gluon.language.inline_asm" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
         <a href="triton.experimental.gluon.language.assume.html" class="btn btn-neutral float-right" title="triton.experimental.gluon.language.assume" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
