@@ -168,6 +168,7 @@ struct BlockInfo {
   struct ThreadSyncState {
     IssuerSummary effectIssuers;
     CompletionSync completion = CompletionSync::None;
+    bool peerWaitNeedsSync = false;
 
     bool operator==(const ThreadSyncState &) const = default;
   } threadSync;
@@ -177,6 +178,7 @@ struct BlockInfo {
     bool hasDemandBeyondGlobalReads = false;
     // Only publication demands contribute to this issuer summary.
     IssuerSummary publicationIssuers;
+    bool mayNotifyPeer = false;
 
     bool operator==(const ThreadDemandState &) const = default;
   } threadDemands;
@@ -253,9 +255,6 @@ struct BlockInfo {
                          /*lhsIsRead=*/false, /*rhsIsRead=*/false, filter,
                          sliceFilter, allocation);
   }
-
-  /// Whether pending thread effects must rendezvous before the other's demands.
-  bool requiresThreadSync(const BlockInfo &other) const;
 
   /// Clears the effects because a barrier is inserted.
   void sync() {
@@ -397,6 +396,9 @@ protected:
                      bool cluster = false);
   virtual triton::BarrierStages getBarrierStages(Operation *operation);
 
+  /// Whether pending thread effects must rendezvous before upcoming demands.
+  bool requiresThreadSync(const BlockInfo &pending, const BlockInfo &effects);
+
   Allocation &allocation;
   MembarFilterFn filter;
   triton::BufferRegionAnalysis &regions;
@@ -409,6 +411,10 @@ private:
   MembarSliceFilterFn sliceFilter;
   AccessMode accessMode;
   BufferIndexAnalysis bufferIndexAnalysis;
+  DenseMap<Value, bool> regionLocalAllocations;
+
+  bool isRegionLocal(Value value);
+  bool mayNotifyPeer(Operation *op);
 };
 
 /// Inserts shared-memory and operation rendezvous barriers across a module,
