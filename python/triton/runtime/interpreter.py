@@ -818,10 +818,10 @@ class InterpreterBuilder:
         return TensorHandle(_interpreter.atomic_cas(ptr.data, cmp.data, val.data, sem), cmp.dtype.scalar)
 
     def create_atomic_load(self, ptr, mask, sem, scope):
-        return self.create_masked_load(ptr, mask, None, None, None, True)
+        return self.create_masked_load(ptr, mask, None, None, True)
 
     def create_atomic_store(self, ptr, val, mask, sem, scope):
-        return self.create_masked_store(ptr, val, mask, None, None)
+        return self.create_masked_store(ptr, val, mask, None)
 
     def create_atomic_poll(self, ptr, expected, timeout_ns, sem, scope):
         matched = np.zeros(ptr.data.shape, dtype=np.bool_)
