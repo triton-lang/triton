@@ -8,9 +8,17 @@
 
 namespace mlir {
 
+class PatternRewriter;
+
 namespace triton {
 
 enum class MemSemantic : uint32_t;
+class PredicatedOpInterface;
+
+// Opt in only when a false predicate suppresses all effects. Operations with
+// results need their own replacement semantics and are left unchanged.
+LogicalResult eraseIfPredicateIsFalse(PredicatedOpInterface op,
+                                      PatternRewriter &rewriter);
 
 namespace impl {
 
