@@ -12,6 +12,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierInsertion.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
 namespace mlir::triton {
 #define GEN_PASS_DEF_TRITONNVIDIAGPUMEMBAR
@@ -112,6 +113,16 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
 
     // A wait can observe a live counter concurrently with signals or waits.
     if (isa<ttng::WaitBarrierOp>(after))
+      return true;
+
+    auto wait = dyn_cast<ttng::WaitBarrierOp>(before);
+    auto arrive = dyn_cast<ttng::ArriveBarrierOp>(after);
+    // Each CTA must wait and contribute before the next phase can complete.
+    // Broadcast waits and nonidentity fromCTA routing omit participating CTAs.
+    if (wait && arrive && arrive.getPerWarp() &&
+        wait.getAlloc() == arrive.getAlloc() &&
+        !ttng::hasCGABroadcast(wait.getAlloc().getType()) &&
+        !arrive.getFromCTA())
       return true;
   }
 

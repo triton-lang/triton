@@ -1355,6 +1355,42 @@ def test_mbarrier_automatic_warp_arrivals(producer_warps, num_ctas):
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("num_ctas", [1, 2, 4])
+def test_mbarrier_wait_before_distributed_arrival(num_warps, num_ctas):
+
+    @gluon.jit
+    def kernel(inp, out, iterations, BLOCK: ttgl.constexpr):
+        cga_layout: ttgl.constexpr = ((1, ), (2, ))[:ttgl.num_ctas().bit_length() - 1]
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0], cga_layout=cga_layout)
+        offsets = ttgl.arange(0, BLOCK, layout=layout)
+        pid = ttgl.program_id(0)
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        mbarrier.arrive(bar)
+        total = ttgl.full([BLOCK], 0, ttgl.int32, layout)
+        for i in range(iterations):
+            # Retire earlier arrivals before testing the wait-to-arrive edge.
+            ttgl.barrier()
+            mbarrier.wait(bar, phase=i & 1)
+            total += ttgl.load(inp + (pid * iterations + i) * BLOCK + offsets)
+            mbarrier.arrive(bar)
+        mbarrier.wait(bar, phase=iterations & 1)
+        mbarrier.invalidate(bar)
+        ttgl.store(out + pid * BLOCK + offsets, total)
+
+    blocks, iterations, block = 16, 128, 32 * num_warps * num_ctas
+    inp = torch.arange(blocks * iterations * block, device="cuda", dtype=torch.int32)
+    out = torch.empty((blocks, block), device="cuda", dtype=torch.int32)
+    compiled = kernel[(blocks, )](inp, out, iterations, block, num_warps=num_warps, num_ctas=num_ctas)
+    arrive_counts = re.findall(r"mbarrier\.arrive\.shared::cta\.b64\s+_,\s*\[[^\]]+\](?:,\s*(\d+))?;",
+                               compiled.asm["ptx"])
+    # The bootstrap arrives for the CTA; each loop arrival counts one warp.
+    assert {int(count or 1) for count in arrive_counts} == {num_warps, 1}
+    torch.testing.assert_close(out, inp.reshape(blocks, iterations, block).sum(dim=1, dtype=torch.int32))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 @pytest.mark.parametrize("worker_warps", [2, 8])
 def test_mbarrier_automatic_warp_arrivals_noinline(worker_warps):
 
