@@ -216,12 +216,9 @@ public:
     Value tid = NVVM::ThreadIdXOp::create(rewriter, loc, i32_ty);
     Value warpId = b.udiv(tid, b.i32_val(32));
     auto func = op->getParentOfType<FunctionOpInterface>();
-    if (func->hasAttr("ws_num_warps")) {
-      // Outlined helpers use relative IDs. Worker starts are congruent to
-      // moduleWarps modulo their width; default helpers have zero offset.
-      int moduleWarps =
-          triton::gpu::lookupNumWarps(func->getParentOfType<ModuleOp>());
-      warpId = b.sub(warpId, b.i32_val(moduleWarps % numWarps));
+    if (auto offset = func->getAttrOfType<IntegerAttr>(
+            triton::gpu::AttrWarpIdOffsetName)) {
+      warpId = b.sub(warpId, b.i32_val(offset.getInt()));
       warpId = b.and_(warpId, b.i32_val(numWarps - 1));
     }
     if (!op.getOmitUniformHint()) {

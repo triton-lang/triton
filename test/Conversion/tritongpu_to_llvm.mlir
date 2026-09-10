@@ -3333,7 +3333,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
   // CHECK-LABEL: llvm.func internal @call_smem_nested(
   // CHECK-SAME: %[[NESTED_PARENT_SMEM:.*]]: !llvm.ptr<3>
-  // CHECK-SAME: ws_num_warps = 4 : i32
   tt.func private @call_smem_nested() attributes {noinline = true} {
     %inner = ttg.local_alloc : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
     // CHECK: %[[NESTED_CALL_OFFSET:.*]] = llvm.mlir.constant(128 : i32)
