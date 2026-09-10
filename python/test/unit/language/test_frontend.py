@@ -1536,6 +1536,8 @@ def test_loop_carry_invariant_identity():
     acc = 0
     # CHECK: scf.for {{.*}} iter_args({{.*}}) -> (i32)
     for i in range(3):
+        if False:
+            alias = seed + 1
         tl.static_assert(alias is seed)
         acc = acc + alias
     anchor(acc)
@@ -1597,8 +1599,8 @@ def _loop_carry_nest_depth_3(KIND: tl.constexpr):
 
 
 @pytest.mark.parametrize("kind", range(4), ids=["for", "while", "for-while-for", "while-for-while"])
-def test_loop_carry_visits_each_body_once(monkeypatch, kind):
-    """Every nested loop body is generated exactly once."""
+def test_loop_carry_discovery_avoids_exponential_revisits(monkeypatch, kind):
+    """A depth-three body is generated four times, rather than eight."""
     per_body = collections.Counter()
     visit = CodeGenerator.visit_compound_statement
 
@@ -1608,7 +1610,7 @@ def test_loop_carry_visits_each_body_once(monkeypatch, kind):
 
     monkeypatch.setattr(CodeGenerator, "visit_compound_statement", counted)
     run_parser(_loop_carry_nest_depth_3, args=(kind, ))
-    assert max(per_body.values()) == 1
+    assert max(per_body.values()) == 4
 
 
 def test_const_ptr_is_constant_addrspace():

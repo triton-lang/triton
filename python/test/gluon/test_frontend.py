@@ -2992,6 +2992,27 @@ def test_auto_layout():
     ttgl.set_auto_layout(i, ttgl.BlockedLayout([1], [32], [4], [0]))
 
 
+def test_auto_layout_dead_loop_carry():
+    from triton._C.libtriton import ir, passes
+
+    @gluon.jit
+    def kernel(output, n):
+        dead = ttgl.arange(0, 128, layout=ttgl.AutoLayout())
+        for i in range(n):
+            dead = dead + 1
+            ttgl.store(output, i)
+
+    module = run_parser(kernel, args=(MockTensor(ttgl.int32), 3))
+    pm = ir.pass_manager(module.context)
+    passes.gluon.add_inliner(pm)
+    passes.gluon.add_infer_coalesced_encodings(pm)
+    passes.gluon.add_resolve_auto_encodings(pm)
+    pm.run(module, "resolve_auto_layout")
+    text = module.str_nodebug()
+    assert "gluon.auto_encoding" not in text
+    assert "tt.store" in text
+
+
 @filecheck_test
 @gluon.jit
 def test_auto_layout_broadcast():

@@ -30,4 +30,9 @@ void Inline::runOnOperation() {
   // Liveness is needed for cleanup after inlining, not after each callee is
   // processed. Analyze the completed module once.
   runDeadIterArgElimination(getOperation());
+  // Remove dead carries before automatic layout inference sees their types.
+  OpPassManager cleanup;
+  cleanup.addPass(gluon::createGluonSimplifyControlFlow());
+  if (failed(runPipeline(cleanup, getOperation())))
+    return signalPassFailure();
 }
