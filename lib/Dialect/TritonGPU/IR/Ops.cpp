@@ -1711,10 +1711,8 @@ ParseResult BarrierOp::parse(OpAsmParser &parser, OperationState &result) {
 }
 
 LogicalResult BarrierOp::verify() {
-  if (isWarp() && getAddrSpace() != AddrSpace::Local &&
-      getAddrSpace() != AddrSpace::None)
-    return emitOpError(
-        "warp scope supports only the local or none address space");
+  if (isWarp() && getAddrSpace() != AddrSpace::Local)
+    return emitOpError("warp scope supports only the local address space");
   return success();
 }
 

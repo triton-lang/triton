@@ -394,8 +394,7 @@ triton::BarrierStages getLocalBarrierStages(Operation *op,
   triton::BarrierStages stages;
   // The local-memory mask guarantees ordering of local memory accesses.
   if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op)) {
-    stages.beforeMemoryEffects = stages.afterMemoryEffects =
-        barrier.hasLocal() && !barrier.isWarp();
+    stages.beforeMemoryEffects = stages.afterMemoryEffects = barrier.hasLocal();
     return stages;
   }
   // Explicit barriers have no accesses between their leading and trailing
@@ -474,8 +473,7 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
                             FuncMapT *funcMap, OpBuilder *builder) {
   if (auto barrier = dyn_cast<triton::gpu::BarrierOp>(op);
       barrier && barrier.isWarp()) {
-    if (barrier.hasLocal())
-      membarInfo->syncWarps();
+    membarInfo->syncWarps();
     return;
   }
   auto sync = getThreadSyncInfo(op);

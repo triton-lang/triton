@@ -630,7 +630,7 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::BarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (op.isWarp() || !mlir::triton::amdgpu::isCDNA(targetInfo.getISAFamily()))
+    if (!mlir::triton::amdgpu::isCDNA(targetInfo.getISAFamily()))
       return failure();
     // Check no other memory addrspaces are selected.
     // TensorRead/Write are allowed but noop.

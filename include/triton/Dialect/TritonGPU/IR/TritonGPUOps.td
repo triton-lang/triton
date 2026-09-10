@@ -757,12 +757,19 @@ def TTG_WarpReturnOp : TTG_Op<"warp_return", [
 def TTG_BarrierOp : TTG_Op<"barrier"> {
   let summary = "Synchronizes execution and memory accesses within a CTA or warp.";
   let description = [{
-    The `barrier` op synchronizes execution and accesses to the selected address
-    spaces. The default CTA scope waits for every thread in the CTA and makes
-    their preceding accesses visible throughout the CTA.
+    At the default CTA scope, the `barrier` op synchronises the execution and all operations between the selected address spaces for all
+    threads in the CTA. It is used to coordinate communication between threads in the CTA.
 
-    Warp scope synchronizes all lanes of each participating warp and orders
-    only their accesses. It supports the `none` and `local` address spaces.
+    This operation waits until all threads in the CTA have reached a `barrier` (for synchronization) and operations
+    between the selected address spaces made by these threads prior to the op are visible to all threads in the CTA.
+
+    Data hazards between threads accessing the same memory can be avoided by synchronising the
+    specified scope in-between these accesses with a `barrier`.
+
+    A `barrier` operation only provides synchronization and memory guarantees on the selected address spaces in the CTA.
+
+    Warp scope synchronizes all lanes of each participating warp and orders only
+    their shared memory accesses. It supports only the `local` address space.
 
     The mandatory `addrspace` attribute is a bitmask describing which address spaces will be visible when the `barrier` completes:
 

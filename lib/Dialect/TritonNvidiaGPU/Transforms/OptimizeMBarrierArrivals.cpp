@@ -206,13 +206,7 @@ static bool isSynchronizationCandidate(Operation *op) {
   if (auto arrive = dyn_cast<ArriveBarrierOp>(op))
     return arrive.getPerWarp();
   auto barrier = dyn_cast<gpu::BarrierOp>(op);
-  return barrier && barrier.isWarp() && barrier.hasLocal();
-}
-
-static void foldSynchronizedArrival(ArriveBarrierOp arrive) {
-  // Prior effects are synchronized across the region. One thread per routed
-  // target can contribute the full count.
-  arrive.setPerWarp(false);
+  return barrier && barrier.isWarp();
 }
 
 class SynchronizationAnalysis : public MembarAnalysis {
@@ -224,7 +218,7 @@ public:
     // Rewrite only after all predecessors and backedges have been analyzed.
     for (Operation *op : foldableOps) {
       if (auto arrive = dyn_cast<ArriveBarrierOp>(op))
-        foldSynchronizedArrival(arrive);
+        arrive.setPerWarp(false);
       else
         cast<gpu::BarrierOp>(op).erase();
     }
@@ -247,7 +241,7 @@ private:
     if (auto barrier = dyn_cast<gpu::BarrierOp>(op)) {
       if (barrier.isWarp()) {
         // Later warp barriers already fold through warpsSynced.
-        if (barrier.hasLocal() && !pendingWarp)
+        if (!pendingWarp)
           pendingWarp = op;
       } else {
         if (barrier.hasLocal() && pendingWarp)

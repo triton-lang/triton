@@ -317,8 +317,8 @@ struct MembarInfo {
   }
 };
 
-/// Classify whole-region barriers that synchronize local memory accesses in
-/// `op` relative to its memory effects.
+/// Classify the barriers that synchronize local memory accesses in `op`
+/// relative to its memory effects.
 triton::BarrierStages getLocalBarrierStages(Operation *op,
                                             Allocation *allocation);
 

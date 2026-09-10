@@ -325,8 +325,7 @@ private:
         barrier && barrier.isWarp()) {
       // Complete each warp's accesses before its rendezvous, retaining
       // dependencies on other warps for later hazards and publications.
-      if (barrier.hasLocal())
-        flush(op, pending);
+      flush(op, pending);
       return;
     }
 
