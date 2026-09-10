@@ -16,4 +16,5 @@ AMD CDNA 3
     buffer_atomic_or
     buffer_atomic_xchg
     buffer_atomic_xor
+    get_scaled_upcast_fp4_scale_layout
     mfma

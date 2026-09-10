@@ -4144,12 +4144,13 @@ def test_amd_scaled_downcast_fp8_cdna(target, fp8_format, ir_dtype):
 ], ids=["cdna3", "cdna4", "cdna5"])
 def test_amd_scaled_upcast_fp4_compact_scale_cdna(target, threads_per_warp, expect_layout):
     scaled_upcast = _get_amd_scaled_upcast(target)
+    get_scaled_upcast_fp4_scale_layout = _get_amd_scaled_upcast_fp4_scale_layout(target)
 
     @gluon.jit
     def kernel(THREADS_PER_WARP: ttgl.constexpr, EXPECT_LAYOUT: ttgl.constexpr):
         packed_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], THREADS_PER_WARP, [1, 1], [1, 0])
         src = ttgl.full([16, 32], 0x11, ttgl.uint8, packed_layout)
-        scale_layout: ttgl.constexpr = ttgl.amd.get_scaled_upcast_fp4_scale_layout(src, 32, ttgl.bfloat16, axis=1)
+        scale_layout: ttgl.constexpr = get_scaled_upcast_fp4_scale_layout(src, 32, ttgl.bfloat16, axis=1)
         ttgl.static_assert(scale_layout == EXPECT_LAYOUT)
         scale = ttgl.full([16, 2], 0x02, ttgl.uint8, scale_layout)
         scaled_upcast(src, scale, ttgl.bfloat16, axis=1)
@@ -4191,12 +4192,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 """)
 
 
-def _get_amd_scaled_upcast(target):
+def _get_amd_arch(target):
     if target == HIP_TARGET_CDNA3:
-        return ttgl.amd.cdna3.scaled_upcast
+        return ttgl.amd.cdna3
     if target == HIP_TARGET_CDNA4:
-        return ttgl.amd.cdna4.scaled_upcast
-    return ttgl.amd.cdna5.scaled_upcast
+        return ttgl.amd.cdna4
+    if target == HIP_TARGET_CDNA5:
+        return ttgl.amd.cdna5
+    raise ValueError(f"Unsupported AMD target: {target}")
+
+
+def _get_amd_scaled_upcast(target):
+    return _get_amd_arch(target).scaled_upcast
+
+
+def _get_amd_scaled_upcast_fp4_scale_layout(target):
+    return _get_amd_arch(target).get_scaled_upcast_fp4_scale_layout
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4, HIP_TARGET_CDNA5])
