@@ -97,6 +97,63 @@ usePermlaneSwapToOptimizeStore(PatternRewriter &rewriter, Value ptr, Value val,
   return newStore;
 }
 
+// Whether issuing the store directly in the layout of `srcType` is worth
+// skipping the relayout into the coalesced layout of `dstType`, the type the
+// original store used.
+//
+// For an MMA source it always is: the relayout is a pure LDS round trip and
+// the MFMA/WMMA layouts store acceptably.
+//
+// For a blocked source it is profitable when the store stays as wide and as
+// coalesced as it would be in the layout of `dstType`. Both layouts hold the
+// same number of elements per thread, so a shorter contiguous run means that
+// each store would cover fewer elements, thus needing more store instructions,
+// which would harm performance.
+static bool isProfitableBypassSource(RankedTensorType srcType,
+                                     RankedTensorType dstType) {
+  Attribute srcEncoding = srcType.getEncoding();
+  Attribute dstEncoding = dstType.getEncoding();
+  if (!srcEncoding || !dstEncoding)
+    return false;
+
+  // If the source is MMA, it is always profitable. If not (FMA), we check
+  // several things like contiguity, number of stores, etc.
+  if (isa<triton::gpu::MmaEncodingTrait>(srcEncoding))
+    return true;
+
+  auto srcBlocked = dyn_cast<triton::gpu::BlockedEncodingAttr>(srcEncoding);
+  auto dstBlocked = dyn_cast<triton::gpu::BlockedEncodingAttr>(dstEncoding);
+  if (!srcBlocked || !dstBlocked)
+    return false;
+
+  // A differing fastest-varying dimension would make the store run in a
+  // different axis, so the contiguous runs are not comparable.
+  const unsigned contigDim = srcBlocked.getOrder()[0];
+  if (contigDim != dstBlocked.getOrder()[0])
+    return false;
+
+  // Since we are considering using the src layout, make sure that
+  // lanes in that layout write to consecutive addresses.
+  if (triton::gpu::getThreadOrder(srcType)[0] != contigDim)
+    return false;
+
+  // Make sure that using the src layout would not increase the store count.
+  // A store is at most 128 bits wide, so we cap both runs at the number of
+  // elements that fit in it (4 for f32, 8 for f16): a src run of 8 f16 against
+  // a dst run of 16 needs no more stores, since neither can write more than 8
+  // elements at a time, and rejecting it would keep the LDS round trip for a
+  // penalty the hardware does not have.
+  Type elemType = dstType.getElementType();
+  const unsigned elemBitWidth =
+      elemType.isIntOrFloat() ? elemType.getIntOrFloatBitWidth() : 0;
+  const unsigned maxElems =
+      elemBitWidth ? std::max(128u / elemBitWidth, 1u) : ~0u;
+  return std::min(triton::gpu::getContigPerThread(srcType)[contigDim],
+                  maxElems) >=
+         std::min(triton::gpu::getContigPerThread(dstType)[contigDim],
+                  maxElems);
+}
+
 // convert(val) : xmma -> blocked
 // elementWiseOp(val) : blocked
 // ...
@@ -112,7 +169,8 @@ usePermlaneSwapToOptimizeStore(PatternRewriter &rewriter, Value ptr, Value val,
 //
 // Store with xmma layout directly
 //
-// xmma layout is either MFMA or WMMA
+// xmma layout is either MFMA or WMMA, or the blocked layout of an FMA dot when
+// that keeps the store as wide as the coalesced layout would.
 class BypassEpilogueSMEM : public mlir::OpRewritePattern<triton::StoreOp> {
 
 public:
@@ -151,8 +209,7 @@ public:
     if (!cvtOp)
       return mlir::failure();
 
-    auto encoding = cvtOp.getSrc().getType().getEncoding();
-    if (!isa<triton::gpu::MmaEncodingTrait>(encoding))
+    if (!isProfitableBypassSource(cvtOp.getSrc().getType(), valType))
       return mlir::failure();
 
     if (!cvtOp.getResult().hasOneUse())
