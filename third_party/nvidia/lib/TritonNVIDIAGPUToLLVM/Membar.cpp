@@ -5,10 +5,13 @@
 #include "TargetInfo.h"
 
 #include "triton/Analysis/Allocation.h"
+#include "triton/Analysis/BufferRegion.h"
 #include "triton/Analysis/Membar.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierInsertion.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
 namespace mlir::triton {
 #define GEN_PASS_DEF_TRITONNVIDIAGPUMEMBAR
@@ -29,16 +32,25 @@ struct TritonNvidiaGPUMembar
     NVIDIA::TargetInfo targetInfo(computeCapability, ptxVersion);
     ModuleAllocation allocation(
         mod, ttng::getNvidiaAllocationAnalysisScratchSizeFn(targetInfo));
+    auto solver = createDataFlowSolver();
+    auto *regions = solver->load<triton::BufferRegionAnalysis>(
+        triton::BufferRegionAnalysis::Mode::AllMemory, &allocation);
+    if (failed(solver->initializeAndRun(mod))) {
+      signalPassFailure();
+      return;
+    }
 
-    ttng::runClusterBarrierInsertion(allocation, computeCapability);
+    // Synchronization insertion and arrival attributes preserve this geometry.
+    ttng::runClusterBarrierInsertion(allocation, computeCapability, *regions);
     if (failed(ttng::runCrossCTAMBarrierInitSyncInsertion(allocation,
                                                           computeCapability))) {
       signalPassFailure();
       return;
     }
+    ttng::prepareMBarrierArrivals(mod, *regions, computeCapability);
 
     ModuleMembarAnalysis membarPass(allocation, NVIDIA::canSkipBarSync);
-    membarPass.run();
+    membarPass.runAnalysis<MembarAnalysis>(*regions);
   }
 };
 
