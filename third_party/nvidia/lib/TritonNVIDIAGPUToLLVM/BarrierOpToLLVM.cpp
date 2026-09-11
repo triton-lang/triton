@@ -266,23 +266,32 @@ struct BarrierExpectConversion
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getAlloc(),
         typeConverter->convertType(barrierTy.getElementType()), rewriter);
-    // The partition-relative thread ID lowers the same or marginally better
-    // than an elect: LOP3.LUT vs. ELECT + ISETP.EQ.U32.AND.
-    Value id = getThreadId(rewriter, loc);
-    Value pred = b.icmp_eq(id, b.i32_val(0));
+    Value pred;
+    unsigned size = op.getSize();
     bool isCrossClusterBarrier =
         LLVM::NVIDIA::getCGABroadcastMask(barrierTy) != 0;
     Value barrierPtr = LLVM::NVIDIA::getLeaderAddress(
         loc, rewriter, smemObj.getBase(), barrierTy);
     Value multicastMask;
-    if (std::optional<uint32_t> fromCTA = op.getFromCTA()) {
-      FromCTALowering lowering =
-          getFromCTALowering(loc, rewriter, smemObj.getBase(), id, *fromCTA,
-                             supportsMBarrierMulticast);
-      pred = lowering.pred;
-      barrierPtr = lowering.barrierPtr;
-      multicastMask = lowering.multicastMask;
-      isCrossClusterBarrier = true;
+    if (op.getPerWarp()) {
+      // Match the fixed full-mask leader used by each warp's TMA copies.
+      // One-CTA expectations have only identity routing.
+      pred = LLVM::NVIDIA::createElectPredicate(loc, rewriter);
+      size /= ttg::lookupNumWarps(op);
+    } else {
+      // The partition-relative thread ID lowers the same or marginally better
+      // than a warp-zero elect: LOP3.LUT vs. ELECT + ISETP.EQ.U32.AND.
+      Value id = getThreadId(rewriter, loc);
+      pred = b.icmp_eq(id, b.i32_val(0));
+      if (std::optional<uint32_t> fromCTA = op.getFromCTA()) {
+        FromCTALowering lowering =
+            getFromCTALowering(loc, rewriter, smemObj.getBase(), id, *fromCTA,
+                               supportsMBarrierMulticast);
+        pred = lowering.pred;
+        barrierPtr = lowering.barrierPtr;
+        multicastMask = lowering.multicastMask;
+        isCrossClusterBarrier = true;
+      }
     }
     pred = b.and_(pred, adaptor.getPred());
 
@@ -291,7 +300,7 @@ struct BarrierExpectConversion
         "@$0 mbarrier.arrive.expect_tx." +
         std::string(isCrossClusterBarrier ? "shared::cluster" : "shared::cta") +
         std::string(multicastMask ? ".multicast::cluster::32b" : "") +
-        ".b64 _, [$1], " + std::to_string(op.getSize()) +
+        ".b64 _, [$1], " + std::to_string(size) +
         std::string(multicastMask ? ", $2" : "") + ";";
     auto &expectOp = *expectPtxBuilder.create(expectPtx);
     SmallVector<PTXBuilder::Operand *, 3> operands = {
