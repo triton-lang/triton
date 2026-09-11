@@ -31,6 +31,7 @@ namespace ttng = mlir::triton::nvidia_gpu;
 namespace {
 
 Type getIntTypeLike(Type ty);
+Region *getScratchScopeRegion(Operation *anchor);
 bool isFloatLike(Type ty) { return isa<FloatType>(getElementTypeOrSelf(ty)); }
 bool isIntLike(Type ty) { return isa<IntegerType>(getElementTypeOrSelf(ty)); }
 
@@ -384,9 +385,12 @@ public:
       return info;
     }
 
+    // Build view pointers in the scope of their definitions, then remap the
+    // completed pointers to the consumer's scope.
     Value source = getFpSanTmemSource(memdesc);
     if (auto subslice = memdesc.getDefiningOp<ttng::TMEMSubSliceOp>()) {
-      auto baseInfo = getOrCreate(source, rewriter, scope);
+      auto baseInfo =
+          getOrCreate(source, rewriter, getScratchScopeRegion(subslice));
       if (!baseInfo || baseInfo->scaleSourceType)
         return std::nullopt;
 
@@ -421,7 +425,8 @@ public:
     }
 
     if (auto view = memdesc.getDefiningOp<ttg::MemDescIndexOp>()) {
-      auto baseInfo = getOrCreate(source, rewriter, scope);
+      auto baseInfo =
+          getOrCreate(source, rewriter, getScratchScopeRegion(view));
       if (!baseInfo || baseInfo->scaleSourceType)
         return std::nullopt;
 
@@ -451,17 +456,22 @@ public:
     }
 
     if (auto view = memdesc.getDefiningOp<ttg::MemDescReinterpretOp>()) {
-      auto baseInfo = getOrCreate(source, rewriter, scope);
+      auto baseInfo =
+          getOrCreate(source, rewriter, getScratchScopeRegion(view));
       if (!baseInfo)
         return std::nullopt;
 
       auto baseTy = cast<ttg::MemDescType>(source.getType());
       if (isa<ttng::TensorMemoryScalesEncodingAttr>(baseTy.getEncoding()) &&
-          !isa<ttng::TensorMemoryScalesEncodingAttr>(memTy.getEncoding()))
-        return ScratchInfo{baseInfo->ptr, baseInfo->tensorType, baseTy};
+          !isa<ttng::TensorMemoryScalesEncodingAttr>(memTy.getEncoding())) {
+        Value ptr = remapToScope(baseInfo->ptr, rewriter, scope, view.getLoc());
+        return ScratchInfo{ptr, baseInfo->tensorType, baseTy};
+      }
       if (baseInfo->scaleSourceType) {
         if (isa<ttng::TensorMemoryScalesEncodingAttr>(memTy.getEncoding()))
           return std::nullopt;
+        baseInfo->ptr =
+            remapToScope(baseInfo->ptr, rewriter, scope, view.getLoc());
         return baseInfo;
       }
 
