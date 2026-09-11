@@ -1,4 +1,6 @@
 import math
+from pathlib import Path
+import runpy
 import pytest
 import torch
 import triton
@@ -115,6 +117,22 @@ def get_src_element_ty_size(dtype_str):
     raise ValueError(f"Unknown dtype {dtype_str}")
 
 
+def assert_mmav5_asm(k, expect_two_ctas):
+    ttgir = k.asm["ttgir"]
+    count = ttgir.count("ttng.tc_gen5_mma")
+    assert count == 2, "The TTGIR does not match the expected MMAv5 pipeline pattern."
+    mma_lines = [line for line in ttgir.splitlines() if "ttng.tc_gen5_mma" in line]
+    if expect_two_ctas:
+        assert any("two_ctas" in line for line in mma_lines), "TTGIR does not contain a two_ctas MMAv5 op."
+    else:
+        assert all("two_ctas" not in line for line in mma_lines), "TTGIR unexpectedly contains a two_ctas MMAv5 op."
+
+    ptx = k.asm["ptx"]
+    assert ("32x32b" in ptx) or ("16x32b" in ptx), "PTX does not contain 32x32b or 16x32b"
+    cta_group = "cta_group::2" if expect_two_ctas else "cta_group::1"
+    assert cta_group in ptx, f"PTX does not contain {cta_group}"
+
+
 @pytest.mark.parametrize("dtype_src_str", ["float32", "tensorfloat32", "float16", "float8e5", "float64"])
 @pytest.mark.parametrize("dtype_dst_str", ["float32", "float16", "float64"])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES",
@@ -190,13 +208,61 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
     if (device == "cuda" and torch.cuda.get_device_capability()[0] == 10 and NUM_STAGES > 1 and BLOCK_M % 64 == 0
             and BLOCK_N % 8 == 0 and BLOCK_N > 16
             and not (precision == "ieee" and (dtype_src_str == "float32" or dtype_src_str == "float64"))):
-        ttgir = k.asm["ttgir"]
-        count = ttgir.count("ttng.tc_gen5_mma")
-        assert count == 2, "The TTGIR does not match the expected pattern."
-        ptx = k.asm["ptx"]
-        if "32x32b" not in ptx and "16x32b" not in ptx:
-            print(ptx)
-        assert ("32x32b" in ptx) or ("16x32b" in ptx), "PTX does not contain 32x32b or 16x32b"
+        assert_mmav5_asm(k, expect_two_ctas=False)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 10,
+                    reason="Requires compute capability == 10")
+def test_simple_matmul_mmav5_asm(device):
+    M, N, K = 1024, 512, 256
+    BLOCK_M, BLOCK_N, BLOCK_K = 256, 128, 32
+    torch.manual_seed(42)
+    a = torch.randn(M, K, dtype=torch.float16, device=device)
+    b = torch.randn(K, N, dtype=torch.float16, device=device)
+    output = torch.empty((M, N), dtype=torch.float16, device=device)
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+    k = matmul_kernel[grid](a, b, output, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), output.stride(0),
+                            output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES=4, PRECISION="ieee", num_warps=4,
+                            num_ctas=2)
+    if is_compile_warmup():
+        return
+
+    torch.testing.assert_close(torch.matmul(a, b).to(torch.float32), output.to(torch.float32), atol=0.06, rtol=0.06)
+    assert_mmav5_asm(k, expect_two_ctas=False)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("num_ctas", [1, 2])
+@pytest.mark.parametrize("warp_specialize", [False, True])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e4m3fn])
+@pytest.mark.parametrize("M, N, K", [(32, 32, 32), (512, 384, 192)])
+def test_tutorial_tma_matmul_num_ctas(num_ctas, warp_specialize, dtype, M, N, K, device, monkeypatch):
+    from triton._C.libtriton import nvidia
+    monkeypatch.setattr(nvidia.cublas, "CublasLt", lambda workspace: None)
+    tutorial = runpy.run_path(str(Path(__file__).parents[3] / "tutorials" / "09-persistent-matmul.py"))
+    kernel = tutorial["matmul_kernel_tma_2cta" if num_ctas == 2 else "matmul_kernel_tma"]
+    # Exercise the wrapper and descriptor hook without autotuning every config.
+    kernel.configs = [
+        config for config in kernel.configs if config.kwargs["BLOCK_SIZE_N"] == 128
+        and config.kwargs["BLOCK_SIZE_K"] == 64 and config.num_stages == 3 and config.num_warps == 4
+    ]
+    run = kernel.run
+
+    def checked_run(*args, **kwargs):
+        compiled = run(*args, **kwargs)
+        mma_lines = [line for line in compiled.asm["ttgir"].splitlines() if "ttng.tc_gen5_mma" in line]
+        assert mma_lines and all(("two_ctas" in line) == (num_ctas == 2) for line in mma_lines)
+        assert f"cta_group::{num_ctas}" in compiled.asm["ptx"]
+        return compiled
+
+    monkeypatch.setattr(kernel, "run", checked_run)
+    torch.manual_seed(0)
+    a = (torch.randn((M, K), device=device) * 0.25).to(dtype)
+    b = (torch.randn((K, N), device=device) * 0.25).to(dtype)
+    expected = torch.matmul(a.float(), b.float()).to(dtype).float()
+    actual = tutorial["matmul_tma"](a, b if num_ctas == 2 else b.T.contiguous(), warp_specialize, num_ctas)
+    tolerance = 0.125 if dtype == torch.float8_e4m3fn else 0.01
+    torch.testing.assert_close(actual.float(), expected, atol=tolerance, rtol=tolerance)
 
 
 def test_i4_m_minor_join_bk16_matmul(device):
