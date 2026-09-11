@@ -511,7 +511,7 @@ struct FpToFpOpConversion
 
     if (srcElementType.isBF16() && dstElementType.isF16()) {
       Value v = operands[0][0];
-      if (computeCapability < 90 || ptxVersion < 78) {
+      if (computeCapability < 90) {
         v = LLVM::FPExtOp::create(rewriter, loc, f32_ty, v);
         return {convertFp32ToFp16(loc, rewriter, v,
                                   roundingMode.value_or(RoundingMode::RTNE))};
