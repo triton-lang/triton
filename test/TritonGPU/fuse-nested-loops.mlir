@@ -5,6 +5,25 @@ tt.func @empty_function() {
   tt.return
 }
 
+// CHECK-LABEL: @duplicate_epilogue_outputs
+tt.func @duplicate_epilogue_outputs(%lb: i32, %ub: i32, %step: i32) {
+  %r:2 = scf.for %i = %lb to %ub step %step
+      iter_args(%a = %lb, %b = %ub) -> (i32, i32) : i32 {
+    scf.for %j = %lb to %ub step %step : i32 {
+      "body"() : () -> ()
+    }
+    // CHECK: [[RESULTS:%.*]]:2 = scf.if {{.*}} -> (i32, i32) {
+    // CHECK-NEXT: [[NEXT:%.*]] = "epilogue"([[A:%.*]], [[B:%.*]]) :
+    // CHECK-NEXT: scf.yield [[NEXT]], [[NEXT]] : i32, i32
+    // CHECK-NEXT: } else {
+    // CHECK-NEXT: scf.yield [[A]], [[B]] : i32, i32
+    %next = "epilogue"(%a, %b) : (i32, i32) -> i32
+    // CHECK: scf.yield {{.*}}[[RESULTS]]#0, [[RESULTS]]#1
+    scf.yield %next, %next : i32, i32
+  } {"ttg.always-fuse"}
+  tt.return
+}
+
 // CHECK-LABEL: @no_fusion
 tt.func @no_fusion(%lb: index, %ub: index, %step: index) -> index {
   %c0 = arith.constant 0 : index
