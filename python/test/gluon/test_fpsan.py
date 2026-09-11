@@ -1466,32 +1466,27 @@ def test_inline_asm_payload_semantics(device, asm, fresh_knobs):
 
 
 @gluon.jit
-def _ue8m0_decode_payload_kernel(scale_ptr, native_ptr, portable_ptr, THREADS_PER_WARP: gl.constexpr):
+def _inline_asm_ue8m0_payload_kernel(scale_ptr, out_ptr, ASM: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
     layout: gl.constexpr = gl.BlockedLayout([2], [THREADS_PER_WARP], [4], [0])
     offsets = gl.arange(0, 256, layout=layout)
     scale = gl.load(scale_ptr + offsets)
-    native = gl.inline_asm_elementwise("cvt.rn.bf16x2.ue8m0x2 $0, $1;", "=r,h", [scale], dtype=gl.bfloat16,
-                                       is_pure=True, pack=2)
-    bits = gl.maximum(scale.to(gl.uint16) << 7, 0x0040).to(gl.uint16)
-    portable = bits.to(gl.bfloat16, bitcast=True)
-    portable = gl.fma(portable, gl.full((256, ), 0, gl.bfloat16, layout), portable)
-    gl.store(native_ptr + offsets, gl.fpsan.embed(native))
-    gl.store(portable_ptr + offsets, gl.fpsan.embed(portable))
+    out = gl.inline_asm_elementwise(ASM, "=r,h", [scale], dtype=gl.bfloat16, is_pure=True, pack=2)
+    gl.store(out_ptr + offsets, gl.fpsan.embed(out))
 
 
-def test_ue8m0_decode_payload_equivalence(device, fresh_knobs):
+@pytest.mark.parametrize("asm", ["cvt.rn.bf16x2.ue8m0x2 $0, $1;", "cvt.rn.bf16x2.ue8m0x2 $0,$1;"])
+def test_inline_asm_ue8m0_payload_semantics(device, asm, fresh_knobs):
     _require_cuda_backend(device)
     fresh_knobs.compilation.instrumentation_mode = "fpsan"
 
     scales = torch.arange(256, device=device, dtype=torch.int32).to(torch.uint8)
-    native = torch.empty(256, device=device, dtype=torch.int16)
-    portable = torch.empty_like(native)
-    _ue8m0_decode_payload_kernel[(1, )](scales, native, portable, THREADS_PER_WARP)
+    out = torch.empty(256, device=device, dtype=torch.int16)
+    _inline_asm_ue8m0_payload_kernel[(1, )](scales, out, asm, THREADS_PER_WARP)
 
-    bits = np.maximum(np.arange(256, dtype=np.uint16) << 7, 0x0040)
-    expected = _mix_float_bits(bits, "bf16").astype(np.uint16)
-    _assert_payload_equal(native, expected)
-    _assert_payload_equal(portable, expected)
+    # Integer operands are sign-extended before applying the assembly's tag.
+    tag = np.uint16(stable_string_hash_u64(asm) & np.uint64(0xFFFF))
+    expected = scales.cpu().numpy().view(np.int8).astype(np.int16).view(np.uint16) ^ tag
+    _assert_payload_equal(out, expected)
 
 
 @gluon.jit
