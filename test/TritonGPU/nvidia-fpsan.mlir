@@ -384,6 +384,106 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 1, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // Each view must finish its shadow pointer before capturing it in the worker.
+  // CHECK-LABEL: @ws_partition_tmem_views(
+  // CHECK-SAME: %[[INDEX:[^:]+]]: i32
+  tt.func public @ws_partition_tmem_views(%index: i32) {
+    // CHECK-DAG: %[[STRIDE:.*]] = arith.constant 128 : i32
+    // CHECK: %[[INDEX_SCRATCH:.*]] = ttg.global_scratch_alloc
+    // CHECK: %[[CONST_VIEW:.*]] = tt.addptr %[[INDEX_SCRATCH]], %[[STRIDE]]
+    // CHECK: %[[OFFSET:.*]] = arith.muli %[[INDEX]], %[[STRIDE]]
+    // CHECK: %[[DYNAMIC_VIEW:.*]] = tt.addptr %[[INDEX_SCRATCH]], %[[OFFSET]]
+    // CHECK: %[[SUBSLICE_SCRATCH:.*]] = ttg.global_scratch_alloc
+    // CHECK: %[[SUBSLICE_VIEW:.*]] = tt.addptr %[[SUBSLICE_SCRATCH]], %[[STRIDE]]
+    // CHECK: %[[REINTERPRET_SCRATCH:.*]] = ttg.global_scratch_alloc {{.*}} : !tt.ptr<i16>
+    // CHECK: %[[REINTERPRET_VIEW:.*]] = tt.bitcast %[[REINTERPRET_SCRATCH]] : !tt.ptr<i16> -> !tt.ptr<i32>
+    // CHECK: ttg.warp_specialize(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[REINTERPRET_VIEW]], %[[SUBSLICE_VIEW]], %[[DYNAMIC_VIEW]], %[[CONST_VIEW]])
+    // CHECK: partition0(%{{.*}}: !ttg.memdesc<128x1xf32, #tmem, #ttng.tensor_memory, mutable>, %{{.*}}: !ttg.memdesc<128x1xf32, #tmem, #ttng.tensor_memory, mutable>, %{{.*}}: !ttg.memdesc<128x1xf32, #tmem, #ttng.tensor_memory, mutable, 128x2>, %{{.*}}: !ttg.memdesc<128x1xf32, #tmem, #ttng.tensor_memory, mutable>, %[[REINTERPRET_ARG:.*]]: !tt.ptr<i32>, %[[SUBSLICE_ARG:.*]]: !tt.ptr<i32>, %[[DYNAMIC_ARG:.*]]: !tt.ptr<i32>, %[[CONST_ARG:.*]]: !tt.ptr<i32>) num_warps(4)
+    // CHECK: tt.splat %[[CONST_ARG]] : !tt.ptr<i32>
+    // CHECK: tt.store
+    // CHECK: tt.splat %[[DYNAMIC_ARG]] : !tt.ptr<i32>
+    // CHECK: tt.store
+    // CHECK: tt.splat %[[SUBSLICE_ARG]] : !tt.ptr<i32>
+    // CHECK: tt.store
+    // CHECK: tt.splat %[[REINTERPRET_ARG]] : !tt.ptr<i32>
+    // CHECK: tt.store
+    // CHECK: ttg.warp_return
+    %one = arith.constant 1 : i32
+    %buffers = ttng.tmem_alloc : () -> !ttg.memdesc<2x128x1xf32, #tmem, #ttng.tensor_memory, mutable>
+    %constant_view = ttg.memdesc_index %buffers[%one] : !ttg.memdesc<2x128x1xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x1xf32, #tmem, #ttng.tensor_memory, mutable>
+    %dynamic_view = ttg.memdesc_index %buffers[%index] : !ttg.memdesc<2x128x1xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x1xf32, #tmem, #ttng.tensor_memory, mutable>
+    %wide = ttng.tmem_alloc : () -> !ttg.memdesc<128x2xf32, #tmem, #ttng.tensor_memory, mutable>
+    %subslice = ttng.tmem_subslice %wide {offset = 1 : i32, dim = 1 : i32} : !ttg.memdesc<128x2xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x1xf32, #tmem, #ttng.tensor_memory, mutable, 128x2>
+    %half = ttng.tmem_alloc : () -> !ttg.memdesc<128x2xf16, #tmem, #ttng.tensor_memory, mutable>
+    %reinterpret = ttg.memdesc_reinterpret %half : !ttg.memdesc<128x2xf16, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x1xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttg.warp_specialize(%constant_view, %dynamic_view, %subslice, %reinterpret)
+    default {
+      ttg.warp_yield
+    }
+    partition0(%arg0: !ttg.memdesc<128x1xf32, #tmem, #ttng.tensor_memory, mutable>, %arg1: !ttg.memdesc<128x1xf32, #tmem, #ttng.tensor_memory, mutable>, %arg2: !ttg.memdesc<128x1xf32, #tmem, #ttng.tensor_memory, mutable, 128x2>, %arg3: !ttg.memdesc<128x1xf32, #tmem, #ttng.tensor_memory, mutable>) num_warps(4) {
+      %true = arith.constant true
+      %value = arith.constant dense<1.0> : tensor<128x1xf32, #blocked>
+      ttng.tmem_store %value, %arg0, %true : tensor<128x1xf32, #blocked> -> !ttg.memdesc<128x1xf32, #tmem, #ttng.tensor_memory, mutable>
+      ttng.tmem_store %value, %arg1, %true : tensor<128x1xf32, #blocked> -> !ttg.memdesc<128x1xf32, #tmem, #ttng.tensor_memory, mutable>
+      ttng.tmem_store %value, %arg2, %true : tensor<128x1xf32, #blocked> -> !ttg.memdesc<128x1xf32, #tmem, #ttng.tensor_memory, mutable, 128x2>
+      ttng.tmem_store %value, %arg3, %true : tensor<128x1xf32, #blocked> -> !ttg.memdesc<128x1xf32, #tmem, #ttng.tensor_memory, mutable>
+      ttg.warp_return
+    } : (!ttg.memdesc<128x1xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x1xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x1xf32, #tmem, #ttng.tensor_memory, mutable, 128x2>, !ttg.memdesc<128x1xf32, #tmem, #ttng.tensor_memory, mutable>) -> ()
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
+#smem = #ttg.shared_memory
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#tmem_small_tile = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+#tmem_scales = #ttng.tensor_memory_scales_encoding<>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // Both the first physical alias and a further reinterpret retain the compact
+  // scale shadow and reconstruct its physical layout inside the worker.
+  // CHECK-LABEL: @ws_partition_tmem_scale_aliases
+  tt.func public @ws_partition_tmem_scale_aliases() {
+    // CHECK: %[[SCALE_SCRATCH:.*]] = ttg.global_scratch_alloc {{.*}}nbytes = 4096{{.*}} : !tt.ptr<i8>
+    // CHECK: ttg.warp_specialize(%{{.*}}, %{{.*}}, %{{.*}}, %[[SCALE_SCRATCH]])
+    // CHECK: partition0(%{{.*}}, %[[SCALE_ARG:.*]]: !tt.ptr<i8>) num_warps(4)
+    // CHECK: tt.splat %[[SCALE_ARG]] : !tt.ptr<i8> -> tensor<128x32x!tt.ptr<i8>,
+    // CHECK: tt.load
+    // CHECK: tt.trans
+    // CHECK: tt.broadcast
+    // CHECK: ttg.local_store
+    // CHECK: tt.splat %[[SCALE_ARG]] : !tt.ptr<i8> -> tensor<128x32x!tt.ptr<i8>,
+    // CHECK: tt.load
+    // CHECK: tt.trans
+    // CHECK: tt.broadcast
+    // CHECK: ttg.local_store
+    // CHECK: ttg.warp_return
+    %scales = ttng.tmem_alloc : () -> !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>
+    %physical = ttg.memdesc_reinterpret %scales : !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xi8, #tmem, #ttng.tensor_memory, mutable>
+    %retiled = ttg.memdesc_reinterpret %physical : !ttg.memdesc<128x128xi8, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xi8, #tmem_small_tile, #ttng.tensor_memory, mutable>
+    %output = ttg.local_alloc : () -> !ttg.memdesc<128x128xi8, #shared, #smem, mutable>
+    ttg.warp_specialize(%physical, %retiled, %output)
+    default {
+      ttg.warp_yield
+    }
+    partition0(%arg0: !ttg.memdesc<128x128xi8, #tmem, #ttng.tensor_memory, mutable>, %arg1: !ttg.memdesc<128x128xi8, #tmem_small_tile, #ttng.tensor_memory, mutable>, %arg2: !ttg.memdesc<128x128xi8, #shared, #smem, mutable>) num_warps(4) {
+      %value = ttng.tmem_load %arg0 : !ttg.memdesc<128x128xi8, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xi8, #blocked>
+      ttg.local_store %value, %arg2 : tensor<128x128xi8, #blocked> -> !ttg.memdesc<128x128xi8, #shared, #smem, mutable>
+      %retiled_value = ttng.tmem_load %arg1 : !ttg.memdesc<128x128xi8, #tmem_small_tile, #ttng.tensor_memory, mutable> -> tensor<128x128xi8, #blocked>
+      ttg.local_store %retiled_value, %arg2 : tensor<128x128xi8, #blocked> -> !ttg.memdesc<128x128xi8, #shared, #smem, mutable>
+      ttg.warp_return
+    } : (!ttg.memdesc<128x128xi8, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x128xi8, #tmem_small_tile, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x128xi8, #shared, #smem, mutable>) -> ()
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
 #shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
 #shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1]]}>
