@@ -8,7 +8,7 @@ from triton.experimental import gluon
 from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
 from triton.compiler.code_generator import CodeGenerator
 from triton.runtime.jit import MockTensor
-from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
+from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct
 import pytest
 from typing import NamedTuple
 
@@ -1180,6 +1180,27 @@ def test_return_in_while():
         run_parser(kernel)
 
     assert "Cannot have `return` statements inside `while` or `for` statements in triton" in str(e.value)
+
+
+def test_direct_return_in_dynamic_loop():
+
+    @triton.jit
+    def helper():
+        pid = tl.program_id(0)
+        while pid < 5:
+            pid += 1
+            return pid
+        return pid
+
+    @triton.jit
+    def kernel():
+        helper()
+
+    with pytest.raises(CompilationError) as exc:
+        run_parser(kernel)
+    error = exc.value.__cause__
+    assert isinstance(error, UnsupportedLanguageConstruct)
+    assert "Cannot have `return` statements inside `while` or `for` statements in triton." in str(error)
 
 
 class TensorPtr(NamedTuple):
