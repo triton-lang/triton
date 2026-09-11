@@ -86,9 +86,8 @@ def matmul_kernel(A, B, C, M, N, K,  #
                           for (M, K, N) in [(768, 768, 1024)]  #
                           for w in input_dtypes
                           for x in input_dtypes  #
-                          for o in out_dtypes] +
-                         ([(16, 8, 16, 8, 16, 16, "int8", "float32", "float32"),
-                           (16, 8, 16, 8, 16, 16, "float32", "int8", "float32")] if is_cuda() else []))
+                          for o in out_dtypes] + [(16, 8, 16, 8, 16, 16, "int8", "float32", "float32"),
+                                                  (16, 8, 16, 8, 16, 16, "float32", "int8", "float32")])
 def test_cast_matmul(M, K, N, BLOCK_K, BLOCK_M, BLOCK_N, w_dtype, x_dtype, out_dtype, device):
     if is_hip() and (BLOCK_K, BLOCK_M, BLOCK_N) in ((64, 64, 128), (64, 16, 128)):
         pytest.skip("skip as they run out of shared memory")
