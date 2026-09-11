@@ -6,10 +6,18 @@ on:
       - main
     paths:
       - cmake/llvm-build-info.json
+      - cmake/amd-llvm-build-info.json
+      - third_party/amd/backend/codegen/**
+      - include/triton/Tools/LLVMOptions.h
+      - lib/Tools/LLVMOptions.cpp
   pull_request:
     paths:
       - .github/workflows/llvm-build.yml
       - cmake/llvm-build-info.json
+      - cmake/amd-llvm-build-info.json
+      - third_party/amd/backend/codegen/**
+      - include/triton/Tools/LLVMOptions.h
+      - lib/Tools/LLVMOptions.cpp
   workflow_dispatch:
 
 env:
@@ -22,14 +30,57 @@ permissions:
 
 jobs:
 
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.packages.outputs.packages }}
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+    - name: Select changed LLVM packages
+      id: packages
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: |
+        python3 - <<'PYTHON'
+        import json
+        import os
+        import subprocess
+
+        if os.environ["EVENT_NAME"] == "workflow_dispatch":
+            packages = ["llvm", "amd-codegen"]
+        else:
+            changed = subprocess.check_output([
+                "git", "diff", "--name-only", os.environ["BASE_SHA"], os.environ["HEAD_SHA"]
+            ], text=True).splitlines()
+            workflow_changed = ".github/workflows/llvm-build.yml" in changed
+            packages = []
+            if workflow_changed or "cmake/llvm-build-info.json" in changed:
+                packages.append("llvm")
+            if workflow_changed or any(
+                path in {"cmake/amd-llvm-build-info.json", "include/triton/Tools/LLVMOptions.h",
+                         "lib/Tools/LLVMOptions.cpp"}
+                or path.startswith("third_party/amd/backend/codegen/") for path in changed
+            ):
+                packages.append("amd-codegen")
+        with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+            print("packages=" + json.dumps(packages), file=output)
+        PYTHON
+
   build:
-    name: Build on ${{ matrix.config.runner }}
+    needs: prepare
+    if: needs.prepare.outputs.packages != '[]'
+    name: Build ${{ matrix.package }} on ${{ matrix.config.runner }}
     runs-on: ${{ matrix.config.runs_on }}
     container: ${{ matrix.config.container }}
 
     strategy:
       fail-fast: true
       matrix:
+        package: ${{ fromJson(needs.prepare.outputs.packages) }}
         config:
         - {runner: 'Ubuntu 22.04', runs_on: 'ubuntu-22.04', target-os: 'ubuntu', arch: 'x64'}
         - {runner: 'Ubuntu 22.04 ARM64', runs_on: 'ubuntu-22.04-arm', target-os: 'ubuntu', arch: 'arm64'}
@@ -59,26 +110,49 @@ jobs:
     - name: Fetch LLVM Build Metadata
       shell: bash
       run: |
-        LLVM_COMMIT_HASH="$(jq -r '.llvm_hash' llvm-build/cmake/llvm-build-info.json)"
+        if [[ "${{ matrix.package }}" == "llvm" ]]; then
+          MANIFEST=llvm-build/cmake/llvm-build-info.json
+          echo 'llvm_projects=mlir;llvm;lld;clang' >> "$GITHUB_ENV"
+          echo 'llvm_targets=host;NVPTX;AMDGPU' >> "$GITHUB_ENV"
+          echo 'llvm_build_utils=ON' >> "$GITHUB_ENV"
+          echo 'llvm_include_tests=ON' >> "$GITHUB_ENV"
+          echo 'llvm_build_targets=check-mlir install-distribution' >> "$GITHUB_ENV"
+        else
+          MANIFEST=llvm-build/cmake/amd-llvm-build-info.json
+          echo 'llvm_projects=' >> "$GITHUB_ENV"
+          echo 'llvm_targets=AMDGPU' >> "$GITHUB_ENV"
+          echo 'llvm_build_utils=OFF' >> "$GITHUB_ENV"
+          echo 'llvm_include_tests=OFF' >> "$GITHUB_ENV"
+          echo 'llvm_build_targets=install-distribution' >> "$GITHUB_ENV"
+          echo 'LLVM_DISTRIBUTION_COMPONENTS=llvm-headers;llvm-libraries;cmake-exports' >> "$GITHUB_ENV"
+        fi
+        LLVM_COMMIT_HASH="$(jq -r '.llvm_hash' "$MANIFEST")"
         echo "Found LLVM commit hash: ${LLVM_COMMIT_HASH}"
         echo "llvm_commit_hash=${LLVM_COMMIT_HASH}" >> ${GITHUB_ENV}
 
-        LLVM_REPOSITORY="$(jq -r '.repository // "llvm/llvm-project"' llvm-build/cmake/llvm-build-info.json)"
+        LLVM_REPOSITORY="$(jq -r '.repository // "llvm/llvm-project"' "$MANIFEST")"
         echo "Found LLVM repository: ${LLVM_REPOSITORY}"
         echo "llvm_repository=${LLVM_REPOSITORY}" >> ${GITHUB_ENV}
 
-        LLVM_BUILD_NUMBER="$(jq -r '.build_number' llvm-build/cmake/llvm-build-info.json)"
+        LLVM_BUILD_NUMBER="$(jq -r '.build_number' "$MANIFEST")"
         echo "Found LLVM build number: ${LLVM_BUILD_NUMBER}"
+        echo "llvm_build_number=${LLVM_BUILD_NUMBER}" >> "$GITHUB_ENV"
 
         SHORT_LLVM_COMMIT_HASH="${LLVM_COMMIT_HASH:0:8}"
         echo "Short LLVM commit hash: ${SHORT_LLVM_COMMIT_HASH}"
         echo "short_llvm_commit_hash=${SHORT_LLVM_COMMIT_HASH}" >> ${GITHUB_ENV}
 
-        INSTALL_DIR="llvm-${SHORT_LLVM_COMMIT_HASH}-${{ matrix.config.target-os }}-${{ matrix.config.arch }}-${LLVM_BUILD_NUMBER}"
+        INSTALL_DIR="${{ matrix.package }}-${SHORT_LLVM_COMMIT_HASH}-${{ matrix.config.target-os }}-${{ matrix.config.arch }}-${LLVM_BUILD_NUMBER}"
         echo "LLVM installation directory name: ${INSTALL_DIR}"
         echo "llvm_install_dir=${INSTALL_DIR}" >> ${GITHUB_ENV}
+        if [[ "${{ matrix.package }}" == "llvm" ]]; then
+          echo "llvm_sdk_dir=${INSTALL_DIR}" >> "$GITHUB_ENV"
+        else
+          echo "llvm_sdk_dir=${{ github.workspace }}/llvm-project/install" >> "$GITHUB_ENV"
+        fi
 
     - name: Check LLVM Build Does Not Exist
+      if: github.event_name != 'pull_request'
       shell: bash
       run: |
         URL="https://oaitriton.blob.core.windows.net/public/llvm-builds/${{ env.llvm_install_dir }}.tar.gz"
@@ -118,8 +192,8 @@ jobs:
       uses: actions/cache@v6
       with:
         path: ${{ env.SCCACHE_DIR }}
-        key: ${{ matrix.config.target-os }}-${{ matrix.config.arch }}-${{ env.short_llvm_commit_hash }}
-        restore-keys: ${{ matrix.config.target-os }}-${{ matrix.config.arch }}-
+        key: ${{ matrix.package }}-${{ matrix.config.target-os }}-${{ matrix.config.arch }}-${{ env.short_llvm_commit_hash }}
+        restore-keys: ${{ matrix.package }}-${{ matrix.config.target-os }}-${{ matrix.config.arch }}-
 
     - name: Free disk space on Ubuntu
       if: matrix.config.arch == 'x64' && matrix.config.target-os == 'ubuntu'
@@ -139,23 +213,26 @@ jobs:
         -DCMAKE_BUILD_TYPE=Release
         -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
         -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
-        -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}"
+        -DCMAKE_INSTALL_PREFIX="${{ env.llvm_sdk_dir }}"
         -DCMAKE_LINKER=lld
-        -DLLVM_BUILD_UTILS=ON
+        -DLLVM_BUILD_UTILS=${{ env.llvm_build_utils }}
         -DLLVM_BUILD_TOOLS=ON
         -DLLVM_ENABLE_ASSERTIONS=ON
         -DMLIR_ENABLE_BINDINGS_PYTHON=OFF
-        -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld;clang"
+        -DLLVM_ENABLE_PROJECTS="${{ env.llvm_projects }}"
         -DLLVM_DISTRIBUTION_COMPONENTS="${{ env.LLVM_DISTRIBUTION_COMPONENTS }}"
-        -DLLVM_INSTALL_UTILS=ON
-        -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
+        -DLLVM_INSTALL_UTILS=${{ env.llvm_build_utils }}
+        -DLLVM_TARGETS_TO_BUILD="${{ env.llvm_targets }}"
+        -DLLVM_INCLUDE_TESTS=${{ env.llvm_include_tests }}
+        -DLLVM_ENABLE_PIC=ON
+        -DBUILD_SHARED_LIBS=OFF
+        -DLLVM_BUILD_LLVM_DYLIB=OFF
+        -DLLVM_LINK_LLVM_DYLIB=OFF
         -DLLVM_ENABLE_ZSTD=OFF
         $extra_cmake_flags
         llvm-project/llvm
 
-        ninja -C llvm-project/build check-mlir install-distribution
-
-        tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
+        ninja -C llvm-project/build ${{ env.llvm_build_targets }}
 
     - name: Configure, Build, Test, and Install LLVM (Windows)
       if: matrix.config.target-os == 'windows'
@@ -163,30 +240,73 @@ jobs:
         cmake -GNinja -Bllvm-project/build
         -DCMAKE_BUILD_TYPE=Release
         -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl
-        -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}"
-        -DLLVM_BUILD_UTILS=ON
+        -DCMAKE_INSTALL_PREFIX="${{ env.llvm_sdk_dir }}"
+        -DLLVM_BUILD_UTILS=${{ env.llvm_build_utils }}
         -DLLVM_BUILD_TOOLS=ON
         -DLLVM_ENABLE_ASSERTIONS=ON
         -DMLIR_ENABLE_BINDINGS_PYTHON=OFF
-        -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld;clang"
+        -DLLVM_ENABLE_PROJECTS="${{ env.llvm_projects }}"
         -DLLVM_DISTRIBUTION_COMPONENTS="${{ env.LLVM_DISTRIBUTION_COMPONENTS }}"
         -DLLVM_ENABLE_DIA_SDK=OFF
-        -DLLVM_INSTALL_UTILS=ON
-        -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
+        -DLLVM_INSTALL_UTILS=${{ env.llvm_build_utils }}
+        -DLLVM_TARGETS_TO_BUILD="${{ env.llvm_targets }}"
+        -DLLVM_INCLUDE_TESTS=${{ env.llvm_include_tests }}
+        -DLLVM_ENABLE_PIC=ON
+        -DBUILD_SHARED_LIBS=OFF
+        -DLLVM_BUILD_LLVM_DYLIB=OFF
+        -DLLVM_LINK_LLVM_DYLIB=OFF
         -DLLVM_ENABLE_ZSTD=OFF
         llvm-project/llvm
 
-        ninja -C llvm-project/build check-mlir install-distribution
+        ninja -C llvm-project/build ${{ env.llvm_build_targets }}
 
-        tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
 
+    - name: Build Standalone AMD Codegen
+      if: matrix.package == 'amd-codegen'
+      run: >
+        cmake -GNinja -B amd-codegen-build
+        -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_C_COMPILER=${{ matrix.config.target-os == 'windows' && 'cl' || 'clang' }}
+        -DCMAKE_CXX_COMPILER=${{ matrix.config.target-os == 'windows' && 'cl' || 'clang++' }}
+        -DLLVM_DIR="${{ env.llvm_sdk_dir }}/lib/cmake/llvm"
+        -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}"
+        -DTRITON_AMD_LLVM_REVISION="${{ env.llvm_commit_hash }}-${{ env.llvm_build_number }}"
+        llvm-build/third_party/amd/backend/codegen
+
+        ninja -C amd-codegen-build install
+
+    - name: Verify Standalone Library
+      if: matrix.package == 'amd-codegen'
+      shell: bash
+      run: |
+        python3 - <<'PY'
+        import ctypes
+        import os
+        import pathlib
+        import sys
+
+        filename = {
+            "win32": "triton_amd_codegen.dll",
+            "darwin": "libtriton_amd_codegen.dylib",
+        }.get(sys.platform, "libtriton_amd_codegen.so")
+        path = pathlib.Path(os.environ["llvm_install_dir"]) / "lib" / filename
+        library = ctypes.CDLL(str(path.resolve()))
+        library.triton_amdgpu_revision.restype = ctypes.c_char_p
+        expected = os.environ["llvm_commit_hash"] + "-" + os.environ["llvm_build_number"]
+        assert library.triton_amdgpu_revision().decode() == expected
+        print("Loaded standalone backend without importing Triton:", path)
+        PY
+
+    - name: Package Build Artifacts
+      shell: bash
+      run: tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
 
     - name: Upload Build Artifacts
       uses: actions/upload-artifact@v7
       with:
-        name: llvm-${{ matrix.config.target-os }}-${{ matrix.config.arch }}
+        name: ${{ matrix.package }}-${{ matrix.config.target-os }}-${{ matrix.config.arch }}
         path: |
-          ${{ github.workspace }}/llvm-*-${{ matrix.config.target-os }}-${{ matrix.config.arch }}-*.tar.gz
+          ${{ github.workspace }}/${{ env.llvm_install_dir }}.tar.gz
 
     - name: Azure login
       if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'main' }}
