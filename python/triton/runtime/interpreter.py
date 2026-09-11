@@ -564,6 +564,8 @@ class InterpreterBuilder:
     def create_fp_to_fp(self, src, dst_type, rounding_mode):
         src_element_type = src.dtype.scalar
         dst_element_type = dst_type.scalar
+        if src_element_type == tl.bfloat16 and dst_element_type == tl.float16:
+            return self.cast_impl(self.cast_impl(src, tl.float32), dst_type)
         data = _convert_float(src.data, src_element_type, dst_element_type, rounding_mode).view(_get_np_dtype(dst_type))
         return TensorHandle(data, dst_type.scalar)
 
