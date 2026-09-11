@@ -1,4 +1,6 @@
 import math
+from pathlib import Path
+import runpy
 import pytest
 import torch
 import triton
@@ -222,9 +224,45 @@ def test_simple_matmul_mmav5_asm(device):
     k = matmul_kernel[grid](a, b, output, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), output.stride(0),
                             output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES=4, PRECISION="ieee", num_warps=4,
                             num_ctas=2)
+    if is_compile_warmup():
+        return
 
     torch.testing.assert_close(torch.matmul(a, b).to(torch.float32), output.to(torch.float32), atol=0.06, rtol=0.06)
     assert_mmav5_asm(k, expect_two_ctas=False)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("num_ctas", [1, 2])
+@pytest.mark.parametrize("warp_specialize", [False, True])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float8_e4m3fn])
+@pytest.mark.parametrize("M, N, K", [(32, 32, 32), (512, 384, 192)])
+def test_tutorial_tma_matmul_num_ctas(num_ctas, warp_specialize, dtype, M, N, K, device, monkeypatch):
+    from triton._C.libtriton import nvidia
+    monkeypatch.setattr(nvidia.cublas, "CublasLt", lambda workspace: None)
+    tutorial = runpy.run_path(str(Path(__file__).parents[3] / "tutorials" / "09-persistent-matmul.py"))
+    kernel = tutorial["matmul_kernel_tma_2cta" if num_ctas == 2 else "matmul_kernel_tma"]
+    # Exercise the wrapper and descriptor hook without autotuning every config.
+    kernel.configs = [
+        config for config in kernel.configs if config.kwargs["BLOCK_SIZE_N"] == 128
+        and config.kwargs["BLOCK_SIZE_K"] == 64 and config.num_stages == 3 and config.num_warps == 4
+    ]
+    run = kernel.run
+
+    def checked_run(*args, **kwargs):
+        compiled = run(*args, **kwargs)
+        mma_lines = [line for line in compiled.asm["ttgir"].splitlines() if "ttng.tc_gen5_mma" in line]
+        assert mma_lines and all(("two_ctas" in line) == (num_ctas == 2) for line in mma_lines)
+        assert f"cta_group::{num_ctas}" in compiled.asm["ptx"]
+        return compiled
+
+    monkeypatch.setattr(kernel, "run", checked_run)
+    torch.manual_seed(0)
+    a = (torch.randn((M, K), device=device) * 0.25).to(dtype)
+    b = (torch.randn((K, N), device=device) * 0.25).to(dtype)
+    expected = torch.matmul(a.float(), b.float()).to(dtype).float()
+    actual = tutorial["matmul_tma"](a, b if num_ctas == 2 else b.T.contiguous(), warp_specialize, num_ctas)
+    tolerance = 0.125 if dtype == torch.float8_e4m3fn else 0.01
+    torch.testing.assert_close(actual.float(), expected, atol=tolerance, rtol=tolerance)
 
 
 def test_i4_m_minor_join_bk16_matmul(device):
