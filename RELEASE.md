@@ -40,7 +40,7 @@ At the release decision date, validation results determine whether to publish a 
 | PyTorch version | Triton release options | Release decision date | Target release date |
 | --- | --- | --- | --- |
 | 2.15 | 3.9 | --- | Oct 21, 2026 |
-| 2.16 | 3.9.1 or 3.10 | Nov 2026 | Dec 15, 2026 |
+| 2.16 | 3.9.1 or 3.10 | Nov 10, 2026 | Dec 15, 2026 |
 
 Patch releases (`X.Y.1`) are optional and are only published if major regressions are found in the corresponding minor release.
 
