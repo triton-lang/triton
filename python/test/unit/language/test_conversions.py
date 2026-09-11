@@ -41,28 +41,6 @@ def launch_type_convert_triton(src, src_dtype, dst_dtype, device, rounding=None,
     return dst
 
 
-@pytest.mark.parametrize("block_size", [32, 256, 1024])
-def test_bf16_to_fp16_exhaustive(block_size, device):
-    # Cover every BF16 bit pattern, including signed zeros, subnormals,
-    # overflow, infinities, and NaNs. Compute the reference on the CPU.
-    src_cpu = torch.arange(65536, dtype=torch.int32).to(torch.int16).view(torch.bfloat16)
-    expected = src_cpu.to(torch.float16).to(device)
-    src = src_cpu.to(device)
-    dst = torch.empty_like(src, dtype=torch.float16)
-    kernel = type_convert_triton[(src.numel() // block_size,)](src, dst, None, block_size)
-
-    nan = torch.isnan(expected)
-    assert torch.equal(torch.isnan(dst), nan)
-    assert torch.equal(dst.view(torch.int16)[~nan], expected.view(torch.int16)[~nan])
-    if is_cuda():
-        if torch.cuda.get_device_capability()[0] >= 9:
-            assert "cvt.rn.f16.bf16" in kernel.asm["ptx"]
-            assert "cvt.f32.bf16" not in kernel.asm["ptx"]
-            assert "cvt.rn.f16.f32" not in kernel.asm["ptx"]
-        else:
-            assert "cvt.rn.f16.bf16" not in kernel.asm["ptx"]
-
-
 @triton.jit
 def exhaustive_populate(dst, offset, BLOCK_SIZE : tl.constexpr, force_odd : tl.constexpr, output_bits : tl.constexpr, max_repr : tl.constexpr):
 

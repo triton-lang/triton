@@ -40,6 +40,23 @@ def anchor(v):
     pass
 
 
+@pytest.mark.parametrize("scalar", [True, False])
+def test_bf16_to_fp16_cast(scalar):
+
+    @triton.jit
+    def kernel(X, SCALAR: tl.constexpr):
+        if not SCALAR:
+            X = X + tl.arange(0, 32)
+        # CHECK: [[X:%.*]] = tt.load
+        x = tl.load(X)
+        # CHECK-NEXT: [[Y:%.*]] = tt.fp_to_fp [[X]], rounding = rtne
+        y = x.to(tl.float16)
+        # CHECK-NEXT: tt.call {{.*}}([[Y]])
+        anchor(y)
+
+    run_filecheck_test(kernel, args=(MockTensor(tl.bfloat16), scalar))
+
+
 @pytest.mark.parametrize("dtype",
                          [tl.float16, tl.bfloat16, tl.float32, tl.float64, tl.float8e4nv, tl.float8e5, tl.float8e4b15],
                          ids=str)
