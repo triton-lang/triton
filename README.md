@@ -5,7 +5,7 @@
 
 # Triton Conference 2026
 
-![Triton Banner](https://github.com/user-attachments/assets/[change this])
+![Triton Banner](https://github.com/user-attachments/assets/e35be818-ddd4-4cb2-81dd-461add31ab41)
 
 Triton Developer Conference registration is open: https://tritonconference2026.splashthat.com/
 
