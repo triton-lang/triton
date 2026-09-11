@@ -23,9 +23,9 @@ struct AllocationSlice;
 /// Callback to allow backend to provide more information on whether a barrier
 /// is needed between two operations. Even though two operations access the same
 /// shared memory they may not require a barrier in between them.
-using MembarFilterFn =
-    std::function<bool(Operation *, Operation *, bool /*lhsIsRead*/,
-                       bool /*rhsIsRead*/, Allocation *)>;
+using MembarFilterFn = std::function<bool(
+    Operation *, Operation *, bool /*lhsIsRead*/, bool /*rhsIsRead*/,
+    Allocation *, const AllocationSlice &, const AllocationSlice &)>;
 
 /// Slice-level filter to allow backends to ignore specific aliasing cases.
 using MembarSliceFilterFn =
@@ -81,6 +81,10 @@ public:
   // The owning BufferRegionAnalysis outlives every slice using this pointer.
   const triton::BufferRegionFootprint *physicalFootprint = nullptr;
 
+  // Effect classification is preserved when geometry is widened or translated.
+  // Unknown for implicit scratch and non-shared accesses.
+  std::optional<triton::gpu::SharedKind> sharedKind;
+
   // Buffer-index expression attached by BufferIndexAnalysis. It participates
   // in ordering/equality so accesses to different slots remain separate.
   // Must not be mutated after the slice is inserted into a sorted container
@@ -95,7 +99,8 @@ public:
 private:
   std::tuple<Interval<size_t>, Allocation::BufferId, const void *,
              llvm::ArrayRef<int32_t>, const BufferIndexExpr *, const void *,
-             const void *, std::optional<unsigned>>
+             const void *, std::optional<unsigned>,
+             std::optional<triton::gpu::SharedKind>>
   asTuple() const {
     return {allocationInterval,
             bufferId,
@@ -104,7 +109,8 @@ private:
             bufferIndexExpr,
             subsliceSource.getAsOpaquePointer(),
             physicalFootprint,
-            argumentIndex};
+            argumentIndex,
+            sharedKind};
   }
   // Offsets from subslice, borrowed from its immutable context-owned attribute.
   // Empty when offsets are unknown.
@@ -284,8 +290,8 @@ struct BlockInfo {
                                            rhsIsRead, allocation))
             for (auto lhsOp : lhs.second)
               for (auto rhsOp : rhs.second)
-                if (!filter ||
-                    !filter(lhsOp, rhsOp, lhsIsRead, rhsIsRead, allocation))
+                if (!filter || !filter(lhsOp, rhsOp, lhsIsRead, rhsIsRead,
+                                       allocation, lhs.first, rhs.first))
                   return true;
     return false;
   }
@@ -425,7 +431,9 @@ protected:
   triton::BufferRegionAnalysis &regions;
 
 private:
-  SmallVector<AllocationSlice> getAllocationSlices(Value value);
+  SmallVector<AllocationSlice>
+  getAllocationSlices(Value value,
+                      std::optional<triton::gpu::SharedKind> sharedKind);
   bool isRegionLocal(Value value);
   bool mayNotifyPeer(Operation *op);
   BlockInfo getThreadEffects(Operation *op);
