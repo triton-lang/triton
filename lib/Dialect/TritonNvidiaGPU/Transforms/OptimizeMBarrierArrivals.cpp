@@ -222,6 +222,7 @@ public:
   void run(FunctionOpInterface function, FuncMapT &funcMap) {
     MembarAnalysis::run(function, funcMap);
     // Rewrite only after all predecessors and backedges have been analyzed.
+    restoreExpectationCounts(function);
     for (Operation *op : foldableOps) {
       if (auto arrive = dyn_cast<ArriveBarrierOp>(op))
         arrive.setPerWarp(false);
@@ -240,6 +241,39 @@ public:
   }
 
 private:
+  void restoreExpectationCounts(FunctionOpInterface function) {
+    auto forwarding =
+        collectDescriptorForwarding(function->getParentOfType<ModuleOp>());
+    function->walk([&](gpu::LocalAllocOp alloc) {
+      BarrierUses uses;
+      if (failed(collectBarrierUses(alloc, forwarding, regions, uses)) ||
+          uses.inits.empty() || uses.expects.empty() || !uses.arrivals.empty())
+        return;
+      unsigned numWarps = gpu::lookupNumWarps(uses.expects.front());
+      if (numWarps == 1)
+        return;
+      for (BarrierExpectOp expect : uses.expects)
+        if (!expect.getPerWarp() || !foldableOps.contains(expect) ||
+            gpu::lookupNumWarps(expect) != numWarps ||
+            gpu::lookupNumCTAs(expect) != 1)
+          return;
+      for (InitBarrierOp init : uses.inits)
+        if (init.getCount() % numWarps != 0)
+          return;
+
+      // Every expectation now contributes once per CTA. Undo the common count
+      // scale instead of adding compensating arrivals after each expectation.
+      OpBuilder builder(alloc);
+      for (InitBarrierOp init : uses.inits)
+        init.setCountAttr(
+            builder.getI32IntegerAttr(init.getCount() / numWarps));
+      for (BarrierExpectOp expect : uses.expects) {
+        expect.setPerWarp(false);
+        foldableOps.erase(expect);
+      }
+    });
+  }
+
   void update(Operation *op, MembarInfo *info, FuncMapT *funcMap,
               OpBuilder *) override {
     if (isSynchronizationCandidate(op)) {

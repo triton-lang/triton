@@ -1223,7 +1223,8 @@ def test_mbarrier_multiple_tma_expectations(device, expect_before_copy, synchron
     compiled = kernel.warmup(desc, out, iterations, expect_before_copy, synchronize_expect, grid=(1, ), num_warps=4)
     ptx = compiled.asm["ptx"]
     # Check the physical counts before launch so a mismatch fails without hanging.
-    assert re.findall(r"mbarrier\.init\.shared::cta\.b64\s+\[[^\]]+\],\s*(\d+)", ptx) == ["8"]
+    initial_count = "2" if synchronize_expect else "8"
+    assert re.findall(r"mbarrier\.init\.shared::cta\.b64\s+\[[^\]]+\],\s*(\d+)", ptx) == [initial_count]
     expectations = list(re.finditer(r"mbarrier\.arrive\.expect_tx\.shared::cta\.b64\s+_,\s*\[[^\]]+\],\s*(\d+)", ptx))
     byte_counts = [expect.group(1) for expect in expectations]
     # Membar already synchronizes the first expectation when it precedes copies.
@@ -1232,7 +1233,7 @@ def test_mbarrier_multiple_tma_expectations(device, expect_before_copy, synchron
         "4096" if synchronize_expect else "1024",
     ]
     arrival_counts = re.findall(r"mbarrier\.arrive\.shared::cta\.b64\s+_,\s*\[[^\]]+\],\s*(\d+)", ptx)
-    assert arrival_counts == ["3"] * byte_counts.count("4096")
+    assert arrival_counts == ([] if synchronize_expect else ["3"] * byte_counts.count("4096"))
     # Folding must not add a CTA barrier before the next copy or wait.
     for expect in expectations:
         if expect.group(1) == "4096":

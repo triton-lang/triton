@@ -708,6 +708,40 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // All contributions use CTA rendezvous, including on the loop backedge.
+  // ARRIVAL-LABEL: @folded_expectations_loop_carried_view
+  // ARRIVAL: ttng.init_barrier {{.*}}, 8 :
+  // ARRIVAL: ttng.barrier_expect {{.*}}, 0 {per_warp},
+  // ARRIVAL: ttng.barrier_expect {{.*}}, 0 {per_warp},
+  // FOLD-LABEL: @folded_expectations_loop_carried_view
+  // FOLD: ttng.init_barrier {{.*}}, 2 :
+  // FOLD-NOT: ttng.arrive_barrier
+  // FOLD: ttng.barrier_expect {{.*}}, 0,
+  // FOLD-NOT: ttng.arrive_barrier
+  // FOLD: ttng.barrier_expect {{.*}}, 0,
+  // FOLD-NOT: ttng.arrive_barrier
+  // FOLD: ttng.inval_barrier
+  tt.func @folded_expectations_loop_carried_view(%n: i32, %index: i32) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %true = arith.constant true
+    %bars = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64, #shared, #smem, mutable>
+    %bar = ttg.memdesc_index %bars[%index] : !ttg.memdesc<2x1xi64, #shared, #smem, mutable> -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.init_barrier %bar, 2 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    %result:2 = scf.for %i = %c0 to %n step %c1 iter_args(%iter = %bar, %phase = %c0) -> (!ttg.memdesc<1xi64, #shared, #smem, mutable>, i32) : i32 {
+      ttg.barrier local
+      ttng.barrier_expect %iter, 0, %true : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+      ttg.barrier local
+      ttng.barrier_expect %iter, 0, %true : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+      ttng.wait_barrier %iter, %phase : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+      %next = ttg.memdesc_index %bars[%index] : !ttg.memdesc<2x1xi64, #shared, #smem, mutable> -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+      %next_phase = arith.xori %phase, %c1 : i32
+      scf.yield %next, %next_phase : !ttg.memdesc<1xi64, #shared, #smem, mutable>, i32
+    }
+    ttng.inval_barrier %result#0 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+
   // Expectations follow captured and loop-carried views of one allocation.
   // FLOW-LABEL: @distributed_expect_loop_carried_view
   // FLOW: ttng.init_barrier {{.*}}, 4 :
@@ -838,8 +872,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // ARRIVAL-NEXT: ttng.wait_barrier
   // ARRIVAL-NEXT: ttng.async_tma_copy_global_to_local
   // FOLD-LABEL: @tma_rows_reuse_payload
-  // FOLD: ttng.barrier_expect %[[BAR:.*]], 2048, %[[PRED:.*]] :
-  // FOLD-NEXT: ttng.arrive_barrier %[[BAR]], 3, %[[PRED]] :
+  // FOLD: ttng.init_barrier %[[FIRST:.*]], 1 :
+  // FOLD: ttng.init_barrier {{.*}}, 4 :
+  // FOLD: ttng.barrier_expect %[[FIRST]], 2048, {{.*}} :
+  // FOLD-NOT: ttng.arrive_barrier
   // FOLD: ttng.barrier_expect {{.*}}, 2048 {per_warp},
   tt.func @tma_rows_reuse_payload(%desc: !tt.tensordesc<16x64xf16, #shared>) -> tensor<16x64xf16, #blocked> {
     %c0 = arith.constant 0 : i32
