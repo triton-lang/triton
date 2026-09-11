@@ -157,24 +157,9 @@ def TritonNvidiaGPUOptimizeMBarrierArrivalsPass : Pass<"triton-nvidia-gpu-optimi
 
   let description = [{
     Analyze the completed shared-memory and tensor-memory synchronization to
-    clear unnecessary per-warp flags, then scale closed barrier groups once.
+    remove redundant warp barriers and clear unnecessary per-warp flags, then
+    scale closed barrier groups once.
     Run after both synchronization passes and before sanitizer insertion.
-  }];
-
-  let dependentDialects = [
-    "mlir::triton::gpu::TritonGPUDialect",
-    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
-  ];
-}
-
-def TritonNvidiaGPUOptimizeSynchronizationPass : Pass<"triton-nvidia-gpu-optimize-synchronization", "mlir::ModuleOp"> {
-  let summary = "Remove redundant warp synchronization";
-
-  let description = [{
-    Use Membar's memory and thread-effect dataflow to remove warp barriers
-    covered by preceding synchronization or a following local CTA barrier.
-    Run after memory synchronization and sanitizer insertion, without
-    introducing new synchronization.
   }];
 
   let dependentDialects = [
