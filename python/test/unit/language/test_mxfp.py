@@ -1,6 +1,15 @@
+import math
+
 import pytest
 import torch
-from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
+from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor, fp8e8m0_to_float32
+
+
+@pytest.mark.parametrize("dtype", [torch.uint8, torch.int8])
+def test_fp8e8m0_to_float32(dtype):
+    scale = torch.arange(256, dtype=torch.uint8).view(dtype)
+    expected = torch.tensor([math.ldexp(1.0, byte - 127) for byte in range(255)] + [float("nan")], dtype=torch.float32)
+    torch.testing.assert_close(fp8e8m0_to_float32(scale), expected, atol=0, rtol=0, equal_nan=True)
 
 
 class MXBaseTest:

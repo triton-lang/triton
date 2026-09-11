@@ -4379,7 +4379,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         tl.static_assert(x.dtype == tl.uint8)
 
         if to_type == tl.bfloat16:
-            upcasted_scale = (scale.to(tl.uint16) << 7).to(tl.bfloat16, bitcast=True)
+            upcasted_scale = tl.maximum(scale.to(tl.uint16) << 7, 0x0040).to(tl.uint16).to(tl.bfloat16, bitcast=True)
         else:
             tl.static_assert(to_type == tl.float16)
             scale_fp32 = (scale.to(tl.uint32) << 23).to(tl.float32, bitcast=True)
@@ -4571,6 +4571,70 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
     if is_hip_cdna4() and normal_type in ["bf16", "fp16"]:
         amdgcn = pgm.asm['amdgcn']
         assert (re.search(r"v_cvt_scalef32_pk_.*?(fp4|fp8|bf8).*?op_sel", amdgcn))
+
+
+@triton.jit
+def _scaled_dot_scale_kernel(X, W, S, Y, RHS_SCALE: tl.constexpr, NORMAL_TYPE: tl.constexpr, SCALE_FACTOR: tl.constexpr,
+                             FAST_MATH: tl.constexpr):
+    indices = tl.arange(0, 128)
+    offsets = indices[:, None] * 128 + indices[None, :]
+    x = tl.load(X + offsets)
+    w = tl.load(W + offsets)
+    scales = tl.load(S + indices[:, None] * (128 // SCALE_FACTOR) + tl.arange(0, 128 // SCALE_FACTOR)[None, :])
+    if RHS_SCALE:
+        y = tl.dot_scaled(x, None, NORMAL_TYPE, w, scales, "e4m3", fast_math=FAST_MATH)
+    else:
+        y = tl.dot_scaled(w, scales, "e4m3", x, None, NORMAL_TYPE, fast_math=FAST_MATH)
+    tl.store(Y + offsets, y)
+
+
+@pytest.mark.parametrize("rhs_scale", [False, True])
+@pytest.mark.parametrize("normal_type", ["bf16", "fp16"])
+@pytest.mark.parametrize("fast_math", [False, True])
+@pytest.mark.enable_warmup(min_capability=9)
+def test_scaled_dot_minimum_scale(rhs_scale, normal_type, fast_math, device):
+    if not is_cuda() or torch.cuda.get_device_capability() < (8, 9):
+        pytest.skip("requires CUDA FP8 support")
+
+    dtype = torch.bfloat16 if normal_type == "bf16" else torch.float16
+    x = torch.full((128, 128), 2.0**112 if normal_type == "bf16" else 1.0, dtype=dtype, device=device)
+    w = torch.full((128, 128), 256.0, dtype=torch.float8_e4m3fn, device=device)
+    scales = torch.empty((128, 4), dtype=torch.uint8, device=device)
+    out = torch.empty((128, 128), dtype=torch.float32, device=device)
+    # The decoded BF16 weight is normal despite its subnormal scale. FP16
+    # legitimately underflows for this scale; unit scales cover its live path.
+    expected_values = ((1.0, 2.0, 2.0**127, float("inf"), float("nan")) if normal_type == "bf16" else
+                       (0.0, 0.0, 32768.0, float("inf"), float("nan")))
+    for scale, expected in zip((0, 1, 127, 254, 255), expected_values):
+        if fast_math and scale == 255:
+            continue
+        scales.fill_(scale)
+        _scaled_dot_scale_kernel[(1, )](x, w, scales, out, rhs_scale, normal_type, 32, fast_math, num_warps=4)
+        if is_compile_warmup():
+            return
+        torch.testing.assert_close(out, torch.full_like(out, expected), rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("rhs_scale", [False, True])
+@pytest.mark.parametrize("normal_type", ["bf16", "fp16"])
+@pytest.mark.parametrize("scale_dtype, scale_factor", [(torch.uint8, 32), (torch.float8_e4m3fn, 16)])
+@pytest.mark.enable_warmup(min_capability=9)
+def test_scaled_dot_zero_scale(rhs_scale, normal_type, scale_dtype, scale_factor, device):
+    if not is_interpreter() and (not is_cuda() or torch.cuda.get_device_capability() < (8, 9)):
+        pytest.skip("requires CUDA FP8 support")
+
+    dtype = torch.bfloat16 if normal_type == "bf16" else torch.float16
+    x = torch.ones((128, 128), dtype=dtype, device=device)
+    w = torch.full((128, 128), 256.0, dtype=torch.float8_e4m3fn, device=device)
+    scales = torch.zeros((128, 128 // scale_factor), dtype=scale_dtype, device=device)
+    out = torch.empty((128, 128), dtype=torch.float32, device=device)
+    # Eight warps avoid a ptxas crash in the FP8-scale BF16 configuration.
+    _scaled_dot_scale_kernel[(1, )](x, w, scales, out, rhs_scale, normal_type, scale_factor, False, num_warps=8)
+    if is_compile_warmup():
+        return
+    expected = 2.0**-112 if normal_type == "bf16" and scale_dtype == torch.uint8 else 0.0
+    torch.testing.assert_close(out, torch.full_like(out, expected), rtol=0, atol=0)
 
 
 @pytest.mark.interpreter
@@ -6958,6 +7022,29 @@ def test_tl_range_fuse(device):
             ref[i, j] = k
             k += 1
     torch.testing.assert_close(out, ref, atol=0, rtol=0)
+
+
+@pytest.mark.parametrize("bounds", [(2, 5, 1), (5, 5, 1), (5, 2, 1), (5, 2, 2), (5, 4, 2), (2, 5, 2)])
+@pytest.mark.parametrize("flatten", [False, True])
+def test_tl_range_fuse_empty_inner_bounds(bounds, flatten, device):
+
+    @triton.jit
+    def kernel(x_ptr, out_ptr, lower, upper, step, FLATTEN: tl.constexpr):
+        acc = 7
+        for i in tl.range(3, flatten=FLATTEN):
+            acc += 10
+            for j in range(lower, upper, step):
+                acc += tl.load(x_ptr + j)
+            acc += 100
+        tl.store(out_ptr, acc)
+
+    lower, upper, step = bounds
+    x = torch.arange(32, dtype=torch.int32, device=device)
+    out = torch.empty((), dtype=torch.int32, device=device)
+    kernel[(1, )](x, out, lower, upper, step, flatten)
+    # Empty inner loops must still preserve the outer prologue and epilogue.
+    expected = 7 + 3 * (110 + sum(range(lower, upper, step)))
+    assert out.item() == expected
 
 
 def test_tl_range_fuse_dependent(device):

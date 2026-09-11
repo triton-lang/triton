@@ -3,7 +3,7 @@ import pytest
 import torch
 import triton
 import triton.language as tl
-from test_mxfp import MXFP4Tensor, MXScaleTensor
+from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor, fp8e8m0_to_float32
 import re
 from triton._internal_testing import is_compile_warmup, is_cuda, is_hip, is_hip_cdna3, is_hip_cdna4, is_hip_cdna, is_hip_gfx1250, is_rubin, is_blackwell
 
@@ -378,14 +378,6 @@ def mxfp_matmul(  #
     tl.store(output_ptrs, accumulator, mask=c_mask)
 
 
-def fp8e8m0_to_float32(scale):
-    scale = scale.view(torch.uint8)
-    scale = scale.to(torch.int32)
-    scale = scale << 23
-    scale = scale.view(torch.float32)
-    return scale
-
-
 @pytest.mark.interpreter
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
                                                        (128, 256, 256), (128, 128, 64), (128, 64, 128), (128, 16, 256),
@@ -697,11 +689,6 @@ def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A
         scales_shuffled = scales_shuffled.view(sm // 32, sn * 32)
         return scales_shuffled
 
-    def e8m0_to_f32(x):
-        x_f32 = 2**((x - 127).to(torch.float32))
-        x_f32[x_f32 == 128] = float("nan")
-        return x_f32
-
     def run_torch(x, w, x_scales, w_scales, dtype):
         # First convert the x and w inputs to f32.
         SCALE_GROUP_SIZE = 32
@@ -709,12 +696,10 @@ def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A
         w_f32 = w.to(torch.float32)
         # Next convert the e8m0 scales to f32.
         if x_scales is not None:
-            x_scales = x_scales.repeat_interleave(SCALE_GROUP_SIZE, dim=1).to(torch.float32)
-            x_scales_f32 = e8m0_to_f32(x_scales)
+            x_scales_f32 = fp8e8m0_to_float32(x_scales).repeat_interleave(SCALE_GROUP_SIZE, dim=1)
             x_f32 = x_f32 * x_scales_f32
         if w_scales is not None:
-            w_scales = w_scales.repeat_interleave(SCALE_GROUP_SIZE, dim=1).to(torch.float32)
-            w_scales_f32 = e8m0_to_f32(w_scales)
+            w_scales_f32 = fp8e8m0_to_float32(w_scales).repeat_interleave(SCALE_GROUP_SIZE, dim=1)
             w_f32 = w_f32 * w_scales_f32
         return torch.mm(x_f32, w_f32.T).to(dtype)
 
