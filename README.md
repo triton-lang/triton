@@ -3,20 +3,20 @@
 |-------------------- | -------------------- |
 | [![Documentation](https://github.com/triton-lang/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/) | [![Wheels](https://github.com/triton-lang/triton/actions/workflows/wheels.yml/badge.svg)](https://github.com/triton-lang/triton/actions/workflows/wheels.yml) |
 
-# Triton Conference 2025
+# Triton Conference 2026
 
-![Triton Banner](https://github.com/user-attachments/assets/b4b6972a-857c-417f-bf2c-f16f38a358c0)
+![Triton Banner](https://github.com/user-attachments/assets/[change this])
 
-The 3rd Triton Developer Conference took place on October 21, 2025 at the Microsoft Silicon Valley Campus in Mountain View, California.
+Triton Developer Conference registration is open: https://tritonconference2026.splashthat.com/
 
-### Conference Materials
+Folks, please join us at the Triton Developer Conference on October 19th at the San Jose Convention Center, just before PTC at the same venue!  We are finalizing an agenda with keynotes, technical talks, lightning talks, and posters.
 
-Conference recordings and materials are now available online:
+Registration and attendance are free.  Breakfast, lunch, as well as a happy hour organized by our Nvidia colleagues, are included!  Learn something new, share your experience, mingle with colleagues, and make new friends!
 
-- **Conference Videos:** [YouTube Playlist](https://www.youtube.com/playlist?list=PLc_vA1r0qoiQqCdWFDUDqI90oY5EjfGuO)
-- **Conference Slides:** [Google Drive Folder](https://drive.google.com/drive/folders/1KB6tD3UM1J0_eUp-F-JSlGrargLBawIr)
+To allow us to prepare correctly, please register and reserve your spot at your earliest convenience: https://tritonconference2026.splashthat.com/  You will see more info, including a draft agenda there soon, as well.
 
 For previous conference materials, see:
+- [2025 Conference Materials](docs/meetups/dev_conference_2025.md)
 - [2024 Conference Materials](docs/meetups/dev_conference_2024.md)
 - [2023 Conference Materials](docs/meetups/dev-meetup-2023.md)
 
