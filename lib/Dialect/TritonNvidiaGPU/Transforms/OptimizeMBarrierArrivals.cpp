@@ -59,6 +59,8 @@ static DescriptorForwarding collectDescriptorForwarding(ModuleOp mod) {
 struct BarrierUses {
   SmallVector<InitBarrierOp> inits;
   SmallVector<ArriveBarrierOp> arrivals;
+  SmallVector<BarrierExpectOp> expects;
+  bool hasTMA = false;
 };
 
 // Follow views and forwarded descriptors without accepting escapes or joins
@@ -96,10 +98,19 @@ static LogicalResult collectBarrierUses(gpu::LocalAllocOp alloc,
       // Wait dependencies only keep their allocations live.
       if (isa<WaitBarrierOp>(user))
         continue;
+      if (auto tma = dyn_cast<TMALoadLikeOpInterface>(user)) {
+        // The same allocation used as a TMA payload is not a closed barrier.
+        if (&use != &tma.getBarrierMutable())
+          return failure();
+        uses.hasTMA = true;
+        continue;
+      }
       if (auto init = dyn_cast<InitBarrierOp>(user)) {
         uses.inits.push_back(init);
       } else if (auto arrive = dyn_cast<ArriveBarrierOp>(user)) {
         uses.arrivals.push_back(arrive);
+      } else if (auto expect = dyn_cast<BarrierExpectOp>(user)) {
+        uses.expects.push_back(expect);
       } else if (!isa<InvalBarrierOp, gpu::LocalDeallocOp>(user)) {
         return failure();
       }
@@ -112,25 +123,48 @@ static LogicalResult collectBarrierUses(gpu::LocalAllocOp alloc,
 static uint64_t
 getDistributionScale(const BarrierUses &uses,
                      llvm::function_ref<bool(Operation *)> usePerWarp) {
-  if (uses.inits.empty() || !llvm::any_of(uses.arrivals, usePerWarp))
+  if (uses.inits.empty() || (!llvm::any_of(uses.arrivals, usePerWarp) &&
+                             !llvm::any_of(uses.expects, usePerWarp)))
     return 0;
   constexpr uint64_t maxCount = (1 << 20) - 1;
   uint64_t scale = 1;
-  for (ArriveBarrierOp arrive : uses.arrivals) {
-    if (!usePerWarp(arrive))
-      continue;
-    uint64_t numWarps = gpu::lookupNumWarps(arrive);
-    // The smallest scale making each count divisible by its warp count.
-    scale = std::lcm(
-        scale, numWarps / std::gcd(numWarps, uint64_t(arrive.getCount())));
-  }
-  for (ArriveBarrierOp arrive : uses.arrivals)
-    if (arrive.getCount() > maxCount / scale)
+  if (!uses.expects.empty()) {
+    scale = gpu::lookupNumWarps(uses.expects.front());
+    if (!uses.arrivals.empty() || scale == 1 ||
+        gpu::lookupNumCTAs(uses.expects.front()) != 1)
       return 0;
+    uint64_t maxInitCount = 0;
+    for (InitBarrierOp init : uses.inits)
+      maxInitCount = std::max(maxInitCount, uint64_t(init.getCount()));
+    for (BarrierExpectOp expect : uses.expects) {
+      // A phase has at most maxInitCount expectations. Bound the transaction
+      // balance even when copies complete before other warps add their shares.
+      if (gpu::lookupNumWarps(expect) != scale ||
+          expect.getSize() > maxCount / maxInitCount ||
+          expect.getSize() % scale != 0)
+        return 0;
+    }
+  } else {
+    if (uses.hasTMA)
+      return 0;
+    for (ArriveBarrierOp arrive : uses.arrivals) {
+      if (!usePerWarp(arrive))
+        continue;
+      uint64_t numWarps = gpu::lookupNumWarps(arrive);
+      // The smallest scale making each count divisible by its warp count.
+      scale = std::lcm(
+          scale, numWarps / std::gcd(numWarps, uint64_t(arrive.getCount())));
+    }
+    for (ArriveBarrierOp arrive : uses.arrivals)
+      if (arrive.getCount() > maxCount / scale)
+        return 0;
+  }
   for (InitBarrierOp init : uses.inits) {
     // Lowering counts all CTAs that contribute to the same physical barrier.
     uint64_t ctasPerBarrier =
-        gpu::lookupNumCTAs(init) / init.getAlloc().getType().getNumElements();
+        uses.expects.empty() ? gpu::lookupNumCTAs(init) /
+                                   init.getAlloc().getType().getNumElements()
+                             : 1;
     if (init.getCount() > maxCount / scale / ctasPerBarrier)
       return 0;
   }
@@ -244,6 +278,9 @@ struct OptimizeMBarrierArrivalsPass
       for (ArriveBarrierOp arrive : uses.arrivals)
         if (scalarOps.contains(arrive))
           arrive.setPerWarp(false);
+      for (BarrierExpectOp expect : uses.expects)
+        if (scalarOps.contains(expect))
+          expect.setPerWarp(false);
 
       uint64_t scale = getDistributionScale(uses, isPerWarp);
       if (!scale)
@@ -255,6 +292,16 @@ struct OptimizeMBarrierArrivalsPass
       for (ArriveBarrierOp arrive : uses.arrivals)
         arrive.setCountAttr(
             builder.getI32IntegerAttr(arrive.getCount() * scale));
+      for (BarrierExpectOp expect : uses.expects) {
+        if (expect.getPerWarp())
+          continue;
+        builder.setInsertionPointAfter(expect);
+        // Register all bytes before supplying the remaining arrivals.
+        auto arrive =
+            ArriveBarrierOp::create(builder, expect.getLoc(), expect.getAlloc(),
+                                    scale - 1, expect.getPred());
+        arrive.setFromCTAAttr(expect.getFromCTAAttr());
+      }
     });
   }
 };
@@ -292,6 +339,8 @@ void prepareMBarrierArrivals(ModuleOp mod, BufferRegionAnalysis &regions,
     if (failed(collectBarrierUses(alloc, forwarding, regions, uses)) ||
         !getDistributionScale(uses, [](Operation *) { return true; }))
       return;
+    for (BarrierExpectOp expect : uses.expects)
+      expect.setPerWarp(true);
     for (ArriveBarrierOp arrive : uses.arrivals)
       if (gpu::lookupNumWarps(arrive) > 1)
         arrive.setPerWarp(true);

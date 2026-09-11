@@ -546,6 +546,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
+  // The helper's two warps split the bytes and preserve identity routing.
+  // CHECK-LABEL: expect_barrier_distributed
+  // CHECK: nvvm.elect.sync
+  // CHECK-NOT: nvvm.read.ptx.sreg.tid.x
+  // CHECK: @$0 mbarrier.arrive.expect_tx.shared::cta.b64 _, [$1], 8192;
+  tt.func private @expect_barrier_distributed(%barrier: !ttg.memdesc<1xi64, #shared0, #smem, mutable>, %pred: i1) attributes {noinline = true, "ttg.num-warps" = 2 : i32} {
+    ttng.barrier_expect %barrier, 16384 {fromCTA = 0 : i32, per_warp}, %pred : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
+    tt.return
+  }
 }
 
 // -----
