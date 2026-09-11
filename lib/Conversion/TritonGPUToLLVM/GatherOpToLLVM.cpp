@@ -19,10 +19,6 @@ public:
                   ConversionPatternRewriter &rewriter) const override;
 
 private:
-  // Codegen the gather by storing the source tensor into shared memory and then
-  // gathering directly from shared memory.
-  void emitGatherInShared(GatherOp op, OpAdaptor adaptor,
-                          ConversionPatternRewriter &rewriter) const;
   // Codegen a warp-local gather by shuffling elements across the warp and
   // selecting from them.
   void emitWarpLocalGather(GatherOp op, OpAdaptor adaptor,
@@ -34,17 +30,9 @@ private:
 LogicalResult
 GatherOpConversion::matchAndRewrite(GatherOp op, OpAdaptor adaptor,
                                     ConversionPatternRewriter &rewriter) const {
-  GatherLoweringHelper helper(op);
-  // Specialize the lowering based on the source layout. Given that the cost of
-  // a warp shuffle is approximately half the cost of a roundtrip to shared
-  // memory with zero bank conflicts, we will need a more precise heuristic to
-  // choose between the two codegen paths and rely on the middle end to pick the
-  // right layout.
-  if (helper.isWarpLocal()) {
-    emitWarpLocalGather(op, adaptor, rewriter);
-  } else {
-    emitGatherInShared(op, adaptor, rewriter);
-  }
+  if (!GatherLoweringHelper(op).isWarpLocal())
+    return rewriter.notifyMatchFailure(op, "expected a warp-local gather");
+  emitWarpLocalGather(op, adaptor, rewriter);
   return success();
 }
 
@@ -61,82 +49,6 @@ static Value convertIndexToI32(Location loc, Value index,
     index = b.zext(i32_ty, index);
   }
   return index;
-}
-
-void GatherOpConversion::emitGatherInShared(
-    GatherOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const {
-  Location loc = op.getLoc();
-  auto *ctx = op.getContext();
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  RankedTensorType srcType = op.getSrc().getType();
-
-  // Compute the src subtensor shape owned by this CTA.
-  SmallVector<unsigned> srcShapePerCTA =
-      convertType<unsigned>(triton::gpu::getShapePerCTA(srcType));
-
-  // Grab the src values in this thread.
-  SmallVector<Value> srcValues =
-      unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
-
-  // Emit the indices of the src values owned by this thread.
-  auto srcLayout =
-      toLinearLayout(srcType).removeZeroBasesAlongDim(str_attr("register"));
-  SmallVector<SmallVector<Value>> srcIndices = emitIndices(
-      loc, rewriter, targetInfo, srcLayout, srcType, /*withCTAOffset=*/true);
-
-  // Store the src values owned by the thread into their respective location in
-  // the scratch memory.
-  assert(srcValues.size() == srcIndices.size());
-
-  // Get the base pointer to the scratch memory.
-  Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
-
-  // For each src element owned by the thread, index into the scratch memory and
-  // then store it.
-  Type elemType = getTypeConverter()->convertType(srcType.getElementType());
-  for (auto [value, indices] : llvm::zip(srcValues, srcIndices)) {
-    // Convert the index at each dim into a single offset given the shape of the
-    // tensor.
-    Value offset = LLVM::linearize(rewriter, loc, indices, srcShapePerCTA);
-    // Emit the offset into the shared memory and then store the value.
-    Value ptr = b.gep(smemBase.getType(), elemType, smemBase, offset);
-    targetInfo.storeShared(rewriter, loc, ptr, value, b.true_val());
-  }
-
-  // Synchronize the whole CTA.
-  b.barrier(triton::gpu::AddrSpace::Local);
-
-  // Grab the index values owned by this thread.
-  SmallVector<Value> idxValues =
-      unpackUniqueTensorElements(loc, adaptor.getIndices(), rewriter);
-
-  // Apply the layout of the destination tensor to obtain the indices of the
-  // column to gather along, then for each column, replace the index along the
-  // gather axis with the appropriate index value.
-  //
-  // I = LL(pid)
-  // idx = indices[I]
-  // I_gather = [I[d] if d != axis else idx for d in range(len(I))]
-  // out[I] = src[I_gather]
-  RankedTensorType dstType = op.getType();
-  auto dstLayout =
-      toLinearLayout(dstType).removeZeroBasesAlongDim(str_attr("register"));
-  SmallVector<SmallVector<Value>> dstIndices = emitIndices(
-      loc, rewriter, targetInfo, dstLayout, dstType, /*withCTAOffset=*/true);
-
-  unsigned axis = op.getAxis();
-  SmallVector<Value> results(dstIndices.size());
-  for (auto [i, idx, indices] : llvm::enumerate(idxValues, dstIndices)) {
-    indices[axis] = convertIndexToI32(loc, idx, rewriter);
-    Value offset = LLVM::linearize(rewriter, loc, indices, srcShapePerCTA);
-    Value ptr = b.gep(smemBase.getType(), elemType, smemBase, offset);
-    results[i] =
-        targetInfo.loadShared(rewriter, loc, ptr, elemType, b.true_val());
-  }
-
-  Value packed = packUniqueTensorElements(loc, getTypeConverter(), results,
-                                          rewriter, dstType);
-  rewriter.replaceOp(op, packed);
 }
 
 // High-level description of the algorithm:

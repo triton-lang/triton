@@ -108,10 +108,6 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     ScanLoweringHelper helper(scanOp);
     return helper.getScratchSizeInBytes();
   }
-  if (auto gatherOp = dyn_cast<GatherOp>(op)) {
-    GatherLoweringHelper helper(gatherOp);
-    return helper.getScratchSizeInBytes();
-  }
   if (auto histogram = dyn_cast<HistogramOp>(op)) {
     if (canUseWarpBallotHistogram(histogram) && gpu::lookupNumWarps(op) == 1)
       return 0;

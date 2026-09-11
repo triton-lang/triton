@@ -167,14 +167,11 @@ private:
 bool isCrossCTAGatherScatter(triton::gpu::MemDescType memDescTy,
                              RankedTensorType regTy, unsigned axis);
 
-// Helper class for lowering `tt.gather` operations. This class shares lowering
-// logic between shared memory allocation and LLVM codegen.
+// Helper class for lowering `tt.gather` operations.
 class GatherLoweringHelper {
 public:
   GatherLoweringHelper(triton::GatherOp gatherOp);
 
-  // Get the shared memory scratch size required by this op.
-  unsigned getScratchSizeInBytes();
   // Determine if the gather can be performed completely within a warp.
   bool isWarpLocal();
 

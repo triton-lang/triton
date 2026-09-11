@@ -1032,19 +1032,6 @@ unsigned ScanLoweringHelper::getAxisBlockStride() {
 GatherLoweringHelper::GatherLoweringHelper(triton::GatherOp gatherOp)
     : gatherOp(gatherOp) {}
 
-unsigned GatherLoweringHelper::getScratchSizeInBytes() {
-  // If the gather is warp-local, no scratch space is needed.
-  if (isWarpLocal())
-    return 0;
-
-  // Otherwise, performing the gather will require scratch space to communicate
-  // the source tensor across threads. For now, assume the whole source tensor
-  // is written back to shared memory.
-  RankedTensorType srcType = gatherOp.getSrc().getType();
-  return product(srcType.getShape()) *
-         ceil<unsigned>(srcType.getElementTypeBitWidth(), 8);
-}
-
 bool isCrossCTAGatherScatter(triton::gpu::MemDescType memDescTy,
                              RankedTensorType regTy, unsigned axis) {
   MLIRContext *ctx = memDescTy.getContext();

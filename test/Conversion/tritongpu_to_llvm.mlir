@@ -3179,68 +3179,6 @@ tt.func @gather_thread_local(%idx: tensor<32x1xi32, #gather_thread_local_idx>, %
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
-
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-
-tt.func @gather_in_shared(%arg0: tensor<16x4xi32, #blocked1>, %arg1: tensor<8x4xf32, #blocked>) {
-  // CHECK-LABEL: gather_in_shared
-  // CHECK: [[SMEM_BASE:%.*]] = llvm.mlir.addressof @global_smem
-  // CHECK-NEXT: [[SMEM:%.*]] = llvm.getelementptr [[SMEM_BASE]]
-  // CHECK: store
-  // CHECK-NEXT: nvvm.barrier
-
-  // CHECK: [[I0:%.*]] = llvm.extractvalue %arg0[0]
-
-  // CHECK: [[IDX:%.*]] = llvm.add {{.*}}, [[I0]]
-  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM]][[[IDX]]]
-  // CHECK: llvm.load [[PTR]]
-  // CHECK: llvm.load
-  // CHECK-NOT: llvm.load
-  // CHECK: return
-
-  %0 = tt.gather %arg1[%arg0] {axis = 0 : i32} : (tensor<8x4xf32, #blocked>, tensor<16x4xi32, #blocked1>) -> tensor<16x4xf32, #blocked1>
-  tt.return
-}
-
-}
-
-// -----
-
-#mma = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [8, 8]}>
-#dot = #ttg.dot_op<{opIdx=0, parent=#mma, kWidth=1}>
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
-
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-
-tt.func @gather_in_shared_dot_input(%arg0: tensor<16x4xi32, #blocked>, %arg1: tensor<8x4xf32, #dot>) {
-  // CHECK-LABEL: gather_in_shared_dot_input
-
-  // CHECK: [[S0:%.*]] = llvm.extractvalue %arg1[0]
-
-  // CHECK: [[SMEM_BASE:%.*]] = llvm.mlir.addressof @global_smem
-  // CHECK-NEXT: [[SMEM:%.*]] = llvm.getelementptr [[SMEM_BASE]]
-  // CHECK: insertelement [[S0]]
-  // CHECK: nvvm.barrier
-
-  // CHECK: [[I0:%.*]] = llvm.extractvalue %arg0[0]
-
-  // CHECK: [[IDX:%.*]] = llvm.add {{.*}}, [[I0]]
-  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM]][[[IDX]]]
-  // CHECK: llvm.load [[PTR]]
-  // CHECK: llvm.load
-  // CHECK-NOT: llvm.load
-  // CHECK: return
-
-  %0 = tt.gather %arg1[%arg0] {axis = 0 : i32} : (tensor<8x4xf32, #dot>, tensor<16x4xi32, #blocked>) -> tensor<16x4xf32, #blocked>
-  tt.return
-}
-
-}
-
-// -----
-
 #mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 2], instrShape = [16, 8]}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 3072 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
