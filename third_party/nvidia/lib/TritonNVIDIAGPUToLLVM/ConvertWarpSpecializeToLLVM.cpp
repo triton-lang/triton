@@ -81,7 +81,8 @@ public:
     if (numThreads == 32) {
       LLVM::NVIDIA::createSyncWarp(b.getLoc(), b);
     } else {
-      // Only this warp partition participates, so the barrier is not CTA-aligned.
+      // Only this warp partition participates, so the barrier is not
+      // CTA-aligned.
       NVVM::BarrierOp::create(b, b.getLoc(), handle, b.i32_val(numThreads),
                               /*aligned=*/false);
     }
