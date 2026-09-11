@@ -103,9 +103,12 @@ class TritonSemantic(Generic[TensorTy]):
         # 6) return fp16 if operands are different fp8
         if a_ty.is_fp8() and b_ty.is_fp8():
             return a_ty if a_ty == b_ty else tl.float16
+        if a_ty.is_fp8() or b_ty.is_fp8():
+            integer_ty = b_ty if a_ty.is_fp8() else a_ty
+            return tl.float16 if integer_ty.int_bitwidth <= 8 else tl.float32
         if not a_ty.is_int() or not b_ty.is_int():
             raise TypeError(f"unexpected type {a_ty} and {b_ty}")
-        # 6 ) both operands are integer and undergo
+        # 7) both operands are integer and undergo
         #    integer promotion
         if div_or_mod and a_ty.int_signedness != b_ty.int_signedness:
             raise TypeError("Cannot use /, #, or % with " + a_ty.__repr__() + " and " + b_ty.__repr__() +
@@ -171,8 +174,8 @@ class TritonSemantic(Generic[TensorTy]):
                 raise IncompatibleTypeErrorImpl(type_a, type_b)
 
     def binary_op_type_checking_impl(self, lhs: TensorTy | numbers.Number, rhs: TensorTy | numbers.Number,
-                                     allow_lhs_ptr=False, allow_rhs_ptr=False, arithmetic_check=True,
-                                     div_or_mod=False) -> Tuple[TensorTy, TensorTy]:
+                                     allow_lhs_ptr=False, allow_rhs_ptr=False, arithmetic_check=True, div_or_mod=False,
+                                     allow_fp8=False) -> Tuple[TensorTy, TensorTy]:
         lhs_is_scalar = isinstance(lhs, numbers.Number)
         rhs_is_scalar = isinstance(rhs, numbers.Number)
         if lhs_is_scalar:
@@ -189,6 +192,9 @@ class TritonSemantic(Generic[TensorTy]):
         self.check_ptr_type_impl(rhs_sca_ty, lhs_sca_ty, allow_rhs_ptr)
         if arithmetic_check and not lhs_sca_ty.is_ptr() and not rhs_sca_ty.is_ptr():
             ret_sca_ty = self.computation_type_impl(lhs_sca_ty, lhs_is_scalar, rhs_sca_ty, rhs_is_scalar, div_or_mod)
+            # FP8 supports selection, but arithmetic and comparisons require wider operands.
+            if ret_sca_ty.is_fp8() and not allow_fp8:
+                ret_sca_ty = tl.float16
             if (lhs_is_scalar and lhs_scalar < 0 and ret_sca_ty.is_int_unsigned()
                     or rhs_is_scalar and rhs_scalar < 0 and ret_sca_ty.is_int_unsigned()):
                 raise ValueError("Cannot perform a binary operation between an unsigned tensor and a negative scalar. "
@@ -331,8 +337,9 @@ class TritonSemantic(Generic[TensorTy]):
         other_scalar_ty = other.type.scalar
         if not input_scalar_ty.is_floating() or not other_scalar_ty.is_floating():
             raise TypeError("both operands of fdiv must have floating scalar type")
-        input, other = self.binary_op_type_checking_impl(input, other, False, False, False, True)
-        if ieee_rounding:
+        input, other = self.binary_op_type_checking_impl(input, other, div_or_mod=True)
+        # FP64 division is already correctly rounded.
+        if ieee_rounding and not input.dtype.is_fp64():
             ret = self.builder.create_precise_divf(input.handle, other.handle)
         else:
             ret = self.builder.create_fdiv(input.handle, other.handle)
@@ -396,9 +403,10 @@ class TritonSemantic(Generic[TensorTy]):
             raise TypeError(f"Unexpected dtype {dtype}")
 
     def clamp(self, x: TensorTy, min: TensorTy, max: TensorTy, propagate_nan: tl.PropagateNan):
-        min, max = self.binary_op_type_checking_impl(min, max)
-        x, min = self.binary_op_type_checking_impl(x, min)
+        min, max = self.binary_op_type_checking_impl(min, max, allow_fp8=True)
+        x, min = self.binary_op_type_checking_impl(x, min, allow_fp8=True)
         x, max = self.binary_op_type_checking_impl(x, max)
+        min = self.cast(min, x.dtype)
 
         dtype = x.dtype
         if dtype.is_floating():
@@ -478,6 +486,8 @@ class TritonSemantic(Generic[TensorTy]):
         if input_sca_ty.is_ptr():
             raise ValueError("wrong type argument to unary minus (" + input_sca_ty.__repr__() + ")")
         if input_sca_ty.is_floating():
+            if input_sca_ty.is_fp8():
+                input = self.cast(input, tl.float16)
             return self.tensor(self.builder.create_fneg(input.handle), input.type)
         _0 = self.tensor(self.builder.get_null_value(input_sca_ty.to_ir(self.builder)), input_sca_ty)
         return self.sub(_0, input, True)
@@ -830,6 +840,8 @@ class TritonSemantic(Generic[TensorTy]):
                                  "Source scalar type is " + str(src_sca_ty) + " and destination type is " +
                                  str(dst_sca_ty))
 
+        if src_sca_ty.is_floating() and src_sca_ty.is_fp8() and dst_sca_ty.is_fp64():
+            return self.cast(self.cast(input, tl.float32), dst_ty)
         if (src_sca_ty.is_fp8e4b15() or dst_sca_ty.is_fp8e4b15()):
             assert self.builder.codegen_fns.get(
                 "convert_custom_types") is not None, "target doesn't provide conversion for this type."
@@ -842,9 +854,8 @@ class TritonSemantic(Generic[TensorTy]):
             return self.tensor(
                 self.builder.create_fp_to_fp(input.handle, dst_ty.to_ir(self.builder), fp_downcast_rounding), dst_ty)
 
-        # bf16 <=> (not fp32)
-        if (src_sca_ty.is_fp16() and not dst_sca_ty.is_fp32()) or \
-           (src_sca_ty.is_bf16() and not dst_sca_ty.is_fp32()):
+        # FP32 is an exact intermediate for FP16/BF16 conversions.
+        if src_sca_ty in (tl.float16, tl.bfloat16) and not dst_sca_ty.is_fp32():
             return self.cast(self.cast(input, tl.float32), dst_sca_ty)
 
         # Standard floating types' casting: truncation
@@ -1706,7 +1717,7 @@ class TritonSemantic(Generic[TensorTy]):
                 f"tl.where with a non-boolean condition is deprecated and will error out in a future triton release. Got {condition.dtype}"
             )
         condition = self.cast(condition, tl.int1)
-        x, y = self.binary_op_type_checking_impl(x, y, True, True)
+        x, y = self.binary_op_type_checking_impl(x, y, True, True, allow_fp8=True)
         # x, y are broadcasted
         if condition.type.is_block():
             condition, x = self.broadcast_impl_value(condition, x)

@@ -481,7 +481,14 @@ struct AbsFOpConversion
       auto mask = (1u << (num_bits - 1u)) - 1u;
       auto maskAttr = rewriter.getIntegerAttr(elemTy, mask);
       auto maskConst = LLVM::ConstantOp::create(rewriter, loc, maskAttr);
-      return {b.and_(operands[0][0], maskConst)};
+      Value result = b.and_(operands[0][0], maskConst);
+      if (isa<Float8E4M3FNUZType, Float8E5M2FNUZType>(
+              getElementTypeOrSelf(op.getType()))) {
+        // FNUZ encodes NaN as the sign bit alone.
+        Value isNan = b.icmp_eq(operands[0][0], b.i8_val(0x80));
+        result = b.select(isNan, operands[0][0], result);
+      }
+      return {result};
     }
 
     return {LLVM::FAbsOp::create(rewriter, loc, elemTy, operands[0][0])};

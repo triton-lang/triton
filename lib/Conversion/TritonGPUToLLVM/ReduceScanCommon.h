@@ -54,21 +54,42 @@ inline SmallVector<Value> applyCombineOp(Location loc,
 
   rewriter.cloneRegionBefore(combineOp, parent,
                              std::next(currentBlock->getIterator()));
-  Block &newCombine = *currentBlock->getNextNode();
+  Block *newCombine = currentBlock->getNextNode();
 
   llvm::SmallVector<Value> combineArgs(2 * acc.size());
   for (unsigned i = 0; i < acc.size(); ++i) {
     combineArgs[i] = acc[i];
     combineArgs[acc.size() + i] = cur[i];
   }
+  TypeConverter::SignatureConversion signature(combineArgs.size());
+  for (unsigned i = 0; i < combineArgs.size(); ++i)
+    signature.addInputs(i, combineArgs[i].getType());
+  newCombine = rewriter.applySignatureConversion(newCombine, signature);
+
+  // Shuffles and branches need the LLVM representation of the combine values.
+  {
+    OpBuilder::InsertionGuard guard(rewriter);
+    Operation *terminator = newCombine->getTerminator();
+    rewriter.setInsertionPoint(terminator);
+    SmallVector<Value> results(terminator->getOperands());
+    for (unsigned i = 0; i < results.size(); ++i) {
+      Type type = acc[i].getType();
+      if (results[i].getType() != type)
+        results[i] =
+            UnrealizedConversionCastOp::create(rewriter, loc, type, results[i])
+                .getResult(0);
+    }
+    rewriter.modifyOpInPlace(terminator,
+                             [&] { terminator->setOperands(results); });
+  }
 
   auto isRegionSpeculatable =
-      std::all_of(newCombine.begin(), newCombine.end(),
+      std::all_of(newCombine->begin(), newCombine->end(),
                   [](auto &op) { return isSpeculatable(&op); });
 
   if (!pred || isRegionSpeculatable) {
     // Fast path, region has no side effects so we can unconditionally execute
-    return inlineCombineBlock(rewriter, newCombine, currentBlock,
+    return inlineCombineBlock(rewriter, *newCombine, currentBlock,
                               rewriter.getInsertionPoint(), combineArgs);
   }
 
@@ -84,7 +105,7 @@ inline SmallVector<Value> applyCombineOp(Location loc,
   // #thenBlock
   Block *thenBlock = currentBlock->splitBlock(rewriter.getInsertionPoint());
 
-  auto returnOp = newCombine.getTerminator();
+  auto returnOp = newCombine->getTerminator();
   auto results = SmallVector<Value>(returnOp->getOperands());
 
   rewriter.setInsertionPointToEnd(currentBlock);
@@ -96,11 +117,11 @@ inline SmallVector<Value> applyCombineOp(Location loc,
     thenBlockArgs.push_back(undef);
     thenBlock->addArgument(ty, loc);
   }
-  LLVM::CondBrOp::create(rewriter, loc, pred, &newCombine, combineArgs,
+  LLVM::CondBrOp::create(rewriter, loc, pred, newCombine, combineArgs,
                          thenBlock, thenBlockArgs);
 
   // Split a block after the call.
-  rewriter.setInsertionPointToEnd(&newCombine);
+  rewriter.setInsertionPointToEnd(newCombine);
   rewriter.replaceOpWithNewOp<LLVM::BrOp>(returnOp, results, thenBlock);
   rewriter.setInsertionPointToStart(thenBlock);
   return SmallVector<Value>(thenBlock->getArguments());
