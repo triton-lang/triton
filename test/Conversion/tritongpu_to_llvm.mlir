@@ -3324,6 +3324,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: llvm.func internal @call_smem_leaf(
+  // CHECK-SAME: ws_num_warps = 4 : i32
   tt.func private @call_smem_leaf() attributes {noinline = true} {
     %inner = ttg.local_alloc : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
     ttg.local_dealloc %inner : !ttg.memdesc<16xi32, #shared, #smem, mutable>
@@ -3556,6 +3557,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttg.inline_asm "bar.sync 0;" {constraints = "", pure = false} : () -> ()
     // CHECK-NOT: llvm.inline_asm
     // CHECK: llvm.return
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+  // A one-warp caller must issue both 16x64 messages from its outlined helper.
+  // CHECK-LABEL: llvm.func internal @outlined_single_warp_tma
+  // CHECK-SAME: ws_num_warps = 1 : i32
+  // CHECK-COUNT-2: cp.async.bulk.tensor.2d.shared::cta.global.mbarrier::complete_tx::bytes
+  // CHECK-NOT: cp.async.bulk.tensor
+  // CHECK: llvm.return
+  tt.func private @outlined_single_warp_tma(%desc: !tt.tensordesc<16x128xf16, #shared>, %dst: !ttg.memdesc<16x128xf16, #shared, #smem, mutable>, %bar: !ttg.memdesc<1xi64, #barrier, #smem, mutable>, %x: i32, %pred: i1) attributes {noinline = true, "ttg.num-warps" = 1 : i32} {
+    ttng.async_tma_copy_global_to_local %desc[%x, %x] %dst, %bar, %pred : !tt.tensordesc<16x128xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x128xf16, #shared, #smem, mutable>
     tt.return
   }
 }

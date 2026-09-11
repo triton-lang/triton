@@ -1040,6 +1040,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK: llvm.call @callee_zero_scratch
   // CHECK: llvm.func internal @callee_zero_scratch
   // CHECK-SAME: passthrough = ["noinline", "convergent"]
+  // CHECK-SAME: ws_num_warps = 4 : i32
   tt.func public @test_call_zero_scratch_no_grid_ops() attributes {noinline = false} {
     tt.call @callee_zero_scratch() : () -> ()
     tt.return
