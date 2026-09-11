@@ -1,3 +1,5 @@
+#include "triton/Tools/LLVMOptions.h"
+
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
@@ -25,7 +27,6 @@
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/PassRegistry.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Parallel.h"
@@ -55,6 +56,8 @@
 
 namespace {
 
+using mlir::triton::tools::ScopedLLVMOptions;
+
 constexpr uint32_t codegenABIVersion = 1;
 
 struct CodegenOptions {
@@ -73,18 +76,6 @@ struct CodegenOptions {
 };
 
 std::once_flag targetInitialization;
-
-bool setLLVMOption(llvm::StringRef name, bool value) {
-  auto options = llvm::cl::getRegisteredOptions();
-  auto option = options.find(name);
-  if (option == options.end())
-    return false;
-
-  auto *typedOption = static_cast<llvm::cl::opt<bool> *>(option->second);
-  bool previous = typedOption->getValue();
-  option->second->addOccurrence(1, name, value ? "true" : "false");
-  return previous;
-}
 
 char *copyString(llvm::StringRef value) {
   auto *result = static_cast<char *>(std::malloc(value.size() + 1));
@@ -147,15 +138,20 @@ triton_amdgpu_compile(const char *llvmIR, size_t llvmIRSize,
 
   std::call_once(targetInitialization, initializeTarget);
 
+  std::vector<ScopedLLVMOptions::Setting> settings;
   if (options->dumpIR)
-    setLLVMOption("print-after-all", true);
+    settings.emplace_back("print-after-all", "true");
+  if (options->enableTiming) {
+    settings.emplace_back("time-passes", "true");
+    settings.emplace_back("time-passes-per-run", "true");
+  }
 
   if (options->flags && options->flags[0]) {
     llvm::SmallVector<llvm::StringRef, 4> flags;
     llvm::StringRef(options->flags).split(flags, ',');
     for (llvm::StringRef flag : flags)
       if (!flag.empty())
-        setLLVMOption(flag, true);
+        settings.emplace_back(flag.str(), "true");
   }
 
   if (options->disabledPasses && options->disabledPasses[0]) {
@@ -163,8 +159,9 @@ triton_amdgpu_compile(const char *llvmIR, size_t llvmIRSize,
     llvm::StringRef(options->disabledPasses).split(disabledPasses, ',');
     for (llvm::StringRef pass : disabledPasses)
       if (!pass.empty())
-        setLLVMOption(pass, true);
+        settings.emplace_back(pass.str(), "true");
   }
+  ScopedLLVMOptions optionScope(settings);
 
   llvm::LLVMContext context;
   llvm::SMDiagnostic diagnostic;
@@ -211,11 +208,6 @@ triton_amdgpu_compile(const char *llvmIR, size_t llvmIRSize,
       machine->getTargetIRAnalysis()));
   inlinePasses.add(llvm::createAlwaysInlinerLegacyPass());
   inlinePasses.add(llvm::createVerifierPass());
-
-  if (options->enableTiming) {
-    llvm::TimePassesIsEnabled = true;
-    llvm::TimePassesPerRun = true;
-  }
 
   inlinePasses.run(*module);
 
@@ -270,6 +262,7 @@ triton_amdgpu_assemble(const char *assembly, size_t assemblySize,
 
   std::call_once(targetInitialization, initializeTarget);
 
+  ScopedLLVMOptions optionScope({});
   llvm::Triple targetTriple(triple);
   std::string targetError;
   const llvm::Target *target =

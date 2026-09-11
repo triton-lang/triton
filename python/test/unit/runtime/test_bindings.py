@@ -3,6 +3,7 @@ import triton.language as tl
 
 import torch
 import math
+import pytest
 
 _BLOCK_SIZE = 16
 
