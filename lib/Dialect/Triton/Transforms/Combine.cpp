@@ -66,6 +66,47 @@ using FastMathFlags = arith::FastMathFlags;
 
 #include "TritonCombine.inc"
 
+// Keep uniform loads scalar before assigning distributed tensor layouts.
+class CombineSplatLoadPattern : public OpRewritePattern<LoadOp> {
+public:
+  using OpRewritePattern<LoadOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(LoadOp op,
+                                PatternRewriter &rewriter) const override {
+    auto type = dyn_cast<RankedTensorType>(op.getType());
+    if (!type || type.getEncoding() || op.getIsVolatile())
+      return failure();
+    if (!op.getPtr().getDefiningOp<SplatOp>())
+      return failure();
+
+    for (Value operand : op->getOperands()) {
+      DenseElementsAttr constant;
+      if (!operand.getDefiningOp<SplatOp>() &&
+          !(matchPattern(operand, m_Constant(&constant)) && constant.isSplat()))
+        return failure();
+    }
+
+    auto scalar = [&](Value value) -> Value {
+      if (!value)
+        return {};
+      if (auto splat = value.getDefiningOp<SplatOp>())
+        return splat.getSrc();
+      DenseElementsAttr constant;
+      bool matched = matchPattern(value, m_Constant(&constant));
+      assert(matched && constant.isSplat());
+      return arith::ConstantOp::materialize(
+          rewriter, constant.getSplatValue<Attribute>(),
+          constant.getElementType(), op.getLoc());
+    };
+    auto load =
+        LoadOp::create(rewriter, op.getLoc(), type.getElementType(),
+                       scalar(op.getPtr()), scalar(op.getMask()),
+                       scalar(op.getOther()), op.getCachePolicyAttr(), false);
+    rewriter.replaceOpWithNewOp<SplatOp>(op, type, load);
+    return success();
+  }
+};
+
 // select(cond, load(ptrs, splat(cond), ???), other)
 //   => load(ptrs, splat(cond), other)
 class CombineSelectMaskedLoadPattern : public RewritePattern {
@@ -301,6 +342,7 @@ public:
     patterns.add<CombineDotAddFPattern>(context);
     patterns.add<CombineDotScaledAddFPattern>(context);
     patterns.add<CombineSelectMaskedLoadPattern>(context);
+    patterns.add<CombineSplatLoadPattern>(context);
     patterns.add<CombineAddPtrPattern>(context);
     patterns.add<CombineBroadcastMulReducePattern>(context);
     patterns.add<CombineReshapeReducePatterns>(context);

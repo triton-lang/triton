@@ -585,3 +585,69 @@ tt.func @test_combine_broadcast_mul_reduce_multiple_results(%arg0: tensor<32x16x
     }) : (tensor<32x16x32xf32>, tensor<32x16x32xf32>) -> (tensor<32x32xf32>, tensor<32x32xf32>)
     tt.return %5#0 : tensor<32x32xf32>
 }
+
+// CHECK-LABEL: @splat_load
+// CHECK-SAME: %[[P:.*]]: !tt.ptr<f32>
+// CHECK: %[[V:.*]] = tt.load %[[P]] {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_first>} : !tt.ptr<f32>
+// CHECK: %[[S:.*]] = tt.splat %[[V]] : f32 -> tensor<128xf32>
+// CHECK: tt.return %[[S]]
+tt.func @splat_load(%p: !tt.ptr<f32>) -> tensor<128xf32> {
+  %ps = tt.splat %p : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
+  %v = tt.load %ps {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_first>} : tensor<128x!tt.ptr<f32>>
+  tt.return %v : tensor<128xf32>
+}
+
+// CHECK-LABEL: @splat_load_uniform_mask
+// CHECK-SAME: %[[P:.*]]: !tt.ptr<f32>, %[[PRED:.*]]: i1
+// CHECK: %[[ZERO:.*]] = arith.constant 0.000000e+00 : f32
+// CHECK: %[[V:.*]] = tt.load %[[P]], %[[PRED]], %[[ZERO]] : !tt.ptr<f32>
+// CHECK: %[[S:.*]] = tt.splat %[[V]] : f32 -> tensor<8x16xf32>
+// CHECK: tt.return %[[S]]
+tt.func @splat_load_uniform_mask(%p: !tt.ptr<f32>, %pred: i1) -> tensor<8x16xf32> {
+  %ps = tt.splat %p : !tt.ptr<f32> -> tensor<8x16x!tt.ptr<f32>>
+  %mask = tt.splat %pred : i1 -> tensor<8x16xi1>
+  %zero = arith.constant dense<0.0> : tensor<8x16xf32>
+  %v = tt.load %ps, %mask, %zero : tensor<8x16x!tt.ptr<f32>>
+  tt.return %v : tensor<8x16xf32>
+}
+
+// CHECK-LABEL: @splat_load_varying_mask
+// CHECK: tt.load %{{.*}}, %{{.*}}, %{{.*}} : tensor<128x!tt.ptr<f32>>
+tt.func @splat_load_varying_mask(%p: !tt.ptr<f32>, %mask: tensor<128xi1>) -> tensor<128xf32> {
+  %ps = tt.splat %p : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
+  %zero = arith.constant dense<0.0> : tensor<128xf32>
+  %v = tt.load %ps, %mask, %zero : tensor<128x!tt.ptr<f32>>
+  tt.return %v : tensor<128xf32>
+}
+
+// CHECK-LABEL: @splat_load_varying_other
+// CHECK: tt.load %{{.*}}, %{{.*}}, %{{.*}} : tensor<128x!tt.ptr<f32>>
+tt.func @splat_load_varying_other(%p: !tt.ptr<f32>, %pred: i1, %other: tensor<128xf32>) -> tensor<128xf32> {
+  %ps = tt.splat %p : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
+  %mask = tt.splat %pred : i1 -> tensor<128xi1>
+  %v = tt.load %ps, %mask, %other : tensor<128x!tt.ptr<f32>>
+  tt.return %v : tensor<128xf32>
+}
+
+// CHECK-LABEL: @splat_load_volatile
+// CHECK: tt.load %{{.*}} {isVolatile = true} : tensor<128x!tt.ptr<f32>>
+tt.func @splat_load_volatile(%p: !tt.ptr<f32>) -> tensor<128xf32> {
+  %ps = tt.splat %p : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
+  %v = tt.load %ps {isVolatile = true} : tensor<128x!tt.ptr<f32>>
+  tt.return %v : tensor<128xf32>
+}
+
+// CHECK-LABEL: @splat_load_preserves_store_order
+// CHECK: %[[V0:.*]] = tt.load %[[P:.*]] : !tt.ptr<f32>
+// CHECK: %[[S0:.*]] = tt.splat %[[V0]] : f32 -> tensor<128xf32>
+// CHECK: tt.store %[[P]], %{{.*}} : !tt.ptr<f32>
+// CHECK: %[[V1:.*]] = tt.load %[[P]] : !tt.ptr<f32>
+// CHECK: %[[S1:.*]] = tt.splat %[[V1]] : f32 -> tensor<128xf32>
+// CHECK: tt.return %[[S0]], %[[S1]]
+tt.func @splat_load_preserves_store_order(%p: !tt.ptr<f32>, %new: f32) -> (tensor<128xf32>, tensor<128xf32>) {
+  %ps = tt.splat %p : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
+  %v0 = tt.load %ps : tensor<128x!tt.ptr<f32>>
+  tt.store %p, %new : !tt.ptr<f32>
+  %v1 = tt.load %ps : tensor<128x!tt.ptr<f32>>
+  tt.return %v0, %v1 : tensor<128xf32>, tensor<128xf32>
+}
