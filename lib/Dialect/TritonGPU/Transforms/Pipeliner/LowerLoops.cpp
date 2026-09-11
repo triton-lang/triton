@@ -103,24 +103,26 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
       topLevelWaitUsers.insert(topLevelUser);
     }
   }
-  for (Operation *topLevelUser : topLevelUsers) {
-    int _useStage = schedule[topLevelUser].first;
-    CoarseSchedule::Cluster _useCluster = schedule[topLevelUser].second;
-    if (*_useCluster > *defCluster) {
-      // Check if we need extra buffer due to unusual execution order
-      // The issue occurs when users of the load are scheduled in a later
-      // cluster, which happens when conditional code gets moved to epilogue
-      // cluster. This creates a race condition where the local load happens
-      // after the global-to-local copy for the next pipeline stage starts.
-      _useStage++;
+  auto getEffectiveUseStage = [&](Operation *user) {
+    int stage = schedule[user].first;
+    CoarseSchedule::Cluster cluster = schedule[user].second;
+    if (*cluster > *defCluster) {
+      // A later cluster can put the next iteration's producer before this use
+      // in the expanded schedule. Account for that overlap as an extra stage
+      // so their buffers cannot alias.
+      stage++;
     }
+    return stage;
+  };
+  for (Operation *topLevelUser : topLevelUsers) {
+    int _useStage = getEffectiveUseStage(topLevelUser);
     useStage = std::min(_useStage, useStage.value_or(_useStage));
   }
   // Waits tells us the buffer is still in use until the wait completes, we
   // can't simply load from the buffer and replace the uses of the buffer with
   // the load. The stage diff needs to account for the furthest wait.
   for (Operation *topLevelUser : topLevelWaitUsers) {
-    int _useStage = schedule[topLevelUser].first;
+    int _useStage = getEffectiveUseStage(topLevelUser);
     useStage = std::max(_useStage, useStage.value_or(_useStage));
   }
   if (!useStage)
