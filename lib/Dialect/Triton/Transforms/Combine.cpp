@@ -78,10 +78,13 @@ public:
     if (!type || !ptr || op.getIsVolatile())
       return failure();
 
-    for (Value operand : op->getOperands().drop_front()) {
+    for (Value operand : op->getOperands()) {
+      auto splat = operand.getDefiningOp<SplatOp>();
+      // A one-element tensor is not a scalar load operand.
+      if (splat && isa<TensorType>(splat.getSrc().getType()))
+        return failure();
       SplatElementsAttr constant;
-      if (!operand.getDefiningOp<SplatOp>() &&
-          !matchPattern(operand, m_Constant(&constant)))
+      if (!splat && !matchPattern(operand, m_Constant(&constant)))
         return failure();
     }
 

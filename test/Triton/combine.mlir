@@ -625,3 +625,21 @@ tt.func @splat_load_preserves_nonuniform_and_volatile(%p: !tt.ptr<f32>, %pred: i
   %c = tt.load %ps {isVolatile = true} : tensor<128x!tt.ptr<f32>>
   tt.return %a, %b, %c : tensor<128xf32>, tensor<128xf32>, tensor<128xf32>
 }
+
+// CHECK-LABEL: @splat_load_preserves_tensor_sources
+// CHECK: %[[A:.*]] = tt.load %{{.*}} : tensor<8x!tt.ptr<f32>>
+// CHECK: %[[B:.*]] = tt.load %{{.*}}, %{{.*}}, %{{.*}} : tensor<8x!tt.ptr<f32>>
+// CHECK: %[[C:.*]] = tt.load %{{.*}}, %{{.*}}, %{{.*}} : tensor<8x!tt.ptr<f32>>
+// CHECK: tt.return %[[A]], %[[B]], %[[C]]
+tt.func @splat_load_preserves_tensor_sources(%p: !tt.ptr<f32>, %pred: i1, %tensor_p: tensor<!tt.ptr<f32>>, %tensor_pred: tensor<i1>, %tensor_other: tensor<f32>) -> (tensor<8xf32>, tensor<8xf32>, tensor<8xf32>) {
+  %ps = tt.splat %p : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
+  %tensor_ps = tt.splat %tensor_p : tensor<!tt.ptr<f32>> -> tensor<8x!tt.ptr<f32>>
+  %mask = tt.splat %pred : i1 -> tensor<8xi1>
+  %tensor_mask = tt.splat %tensor_pred : tensor<i1> -> tensor<8xi1>
+  %other = tt.splat %tensor_other : tensor<f32> -> tensor<8xf32>
+  %zero = arith.constant dense<0.0> : tensor<8xf32>
+  %a = tt.load %tensor_ps : tensor<8x!tt.ptr<f32>>
+  %b = tt.load %ps, %tensor_mask, %zero : tensor<8x!tt.ptr<f32>>
+  %c = tt.load %ps, %mask, %other : tensor<8x!tt.ptr<f32>>
+  tt.return %a, %b, %c : tensor<8xf32>, tensor<8xf32>, tensor<8xf32>
+}
