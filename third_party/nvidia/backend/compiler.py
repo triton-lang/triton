@@ -442,7 +442,6 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_concurrency_sanitizer(pm)
             passes.gluon.add_canonicalizer(pm)
             passes.common.add_cse(pm)
-        nvidia.passes.ttnvgpuir.add_optimize_synchronization(pm)
         nvidia.passes.ttnvgpuir.add_cluster_barrier_mbar_allocator(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)

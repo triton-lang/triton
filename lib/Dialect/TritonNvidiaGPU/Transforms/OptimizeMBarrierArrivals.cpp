@@ -14,7 +14,6 @@
 namespace mlir::triton::nvidia_gpu {
 
 #define GEN_PASS_DEF_TRITONNVIDIAGPUOPTIMIZEMBARRIERARRIVALSPASS
-#define GEN_PASS_DEF_TRITONNVIDIAGPUOPTIMIZESYNCHRONIZATIONPASS
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
 
 namespace {
@@ -152,12 +151,9 @@ static bool isPerWarp(Operation *op) {
 //   ttg.barrier warp local; ttg.barrier local -> ttg.barrier local
 class SynchronizationAnalysis : public MembarAnalysis {
 public:
-  SynchronizationAnalysis(
-      Allocation &allocation, MembarFilterFn filter,
-      BufferRegionAnalysis &regions,
-      llvm::SmallPtrSetImpl<Operation *> *scalarOps = nullptr)
-      : MembarAnalysis(allocation, std::move(filter), regions),
-        scalarOps(scalarOps) {}
+  SynchronizationAnalysis(Allocation &allocation, BufferRegionAnalysis &regions,
+                          llvm::SmallPtrSetImpl<Operation *> &scalarOps)
+      : MembarAnalysis(allocation, nullptr, regions), scalarOps(scalarOps) {}
 
   void run(FunctionOpInterface function, FuncMapT &funcMap) {
     MembarAnalysis::run(function, funcMap);
@@ -166,14 +162,14 @@ public:
       if (auto barrier = dyn_cast<gpu::BarrierOp>(op))
         barrier.erase();
       else
-        scalarOps->insert(op);
+        scalarOps.insert(op);
     }
   }
 
 private:
   void update(Operation *op, MembarInfo *info, FuncMapT *funcMap,
               OpBuilder *) override {
-    bool candidate = scalarOps && isPerWarp(op);
+    bool candidate = isPerWarp(op);
     if (isSynchronizationCandidate(op) || candidate) {
       bool canFold = info->warpsSynced;
       if (candidate)
@@ -205,7 +201,7 @@ private:
   // First warp barrier that a later CTA barrier can make redundant.
   Operation *firstWarpBarrier = nullptr;
   llvm::SmallPtrSet<Operation *, 16> foldableOps;
-  llvm::SmallPtrSetImpl<Operation *> *scalarOps;
+  llvm::SmallPtrSetImpl<Operation *> &scalarOps;
 };
 
 struct OptimizeMBarrierArrivalsPass
@@ -216,8 +212,9 @@ struct OptimizeMBarrierArrivalsPass
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     if (!mod.walk([](Operation *op) {
-              return isPerWarp(op) ? WalkResult::interrupt()
-                                   : WalkResult::advance();
+              return isPerWarp(op) || isSynchronizationCandidate(op)
+                         ? WalkResult::interrupt()
+                         : WalkResult::advance();
             })
              .wasInterrupted())
       return;
@@ -231,8 +228,8 @@ struct OptimizeMBarrierArrivalsPass
     // Keep the provisional flags fixed through every function and backedge.
     llvm::SmallPtrSet<Operation *, 16> scalarOps;
     MembarAnalysis::runModule(mod, [&](FunctionOpInterface function) {
-      return SynchronizationAnalysis(*allocation.getFuncData(function), nullptr,
-                                     *regions, &scalarOps);
+      return SynchronizationAnalysis(*allocation.getFuncData(function),
+                                     *regions, scalarOps);
     });
 
     auto forwarding = collectDescriptorForwarding(mod);
@@ -256,26 +253,6 @@ struct OptimizeMBarrierArrivalsPass
         arrive.setCountAttr(
             builder.getI32IntegerAttr(arrive.getCount() * scale));
     });
-  }
-};
-
-struct OptimizeSynchronizationPass
-    : impl::TritonNvidiaGPUOptimizeSynchronizationPassBase<
-          OptimizeSynchronizationPass> {
-  using Base::Base;
-
-  void runOnOperation() override {
-    ModuleOp mod = getOperation();
-    if (!mod.walk([](Operation *op) {
-              return isSynchronizationCandidate(op) ? WalkResult::interrupt()
-                                                    : WalkResult::advance();
-            })
-             .wasInterrupted())
-      return;
-    // Coverage depends on scratch presence, not target-specific scratch sizes.
-    ModuleAllocation allocation(mod);
-    ModuleMembarAnalysis analysis(allocation);
-    analysis.run<SynchronizationAnalysis>();
   }
 };
 
