@@ -41,20 +41,21 @@ def anchor(v):
 
 
 @pytest.mark.parametrize("scalar", [True, False])
-def test_bf16_to_fp16_cast(scalar):
+@pytest.mark.parametrize("src_dtype, dst_dtype", [(tl.bfloat16, tl.float16), (tl.float16, tl.bfloat16)])
+def test_fp16_bf16_cast(scalar, src_dtype, dst_dtype):
 
     @triton.jit
-    def kernel(X, SCALAR: tl.constexpr):
+    def kernel(X, SCALAR: tl.constexpr, DTYPE: tl.constexpr):
         if not SCALAR:
             X = X + tl.arange(0, 32)
         # CHECK: [[X:%.*]] = tt.load
         x = tl.load(X)
         # CHECK-NEXT: [[Y:%.*]] = tt.fp_to_fp [[X]], rounding = rtne
-        y = x.to(tl.float16)
+        y = x.to(DTYPE)
         # CHECK-NEXT: tt.call {{.*}}([[Y]])
         anchor(y)
 
-    run_filecheck_test(kernel, args=(MockTensor(tl.bfloat16), scalar))
+    run_filecheck_test(kernel, args=(MockTensor(src_dtype), scalar, dst_dtype))
 
 
 @pytest.mark.parametrize("dtype",

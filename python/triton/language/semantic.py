@@ -830,8 +830,8 @@ class TritonSemantic(Generic[TensorTy]):
                                  "Source scalar type is " + str(src_sca_ty) + " and destination type is " +
                                  str(dst_sca_ty))
 
-        # Keep BF16 -> FP16 intact so backends can select a native conversion.
-        if src_sca_ty.is_bf16() and dst_sca_ty.is_fp16():
+        # Keep FP16 <-> BF16 intact so backends can select a native conversion.
+        if (src_sca_ty.is_bf16() and dst_sca_ty.is_fp16()) or (src_sca_ty.is_fp16() and dst_sca_ty.is_bf16()):
             return self.tensor(
                 self.builder.create_fp_to_fp(input.handle, dst_ty.to_ir(self.builder), ir.ROUNDING_MODE.RTNE), dst_ty)
 

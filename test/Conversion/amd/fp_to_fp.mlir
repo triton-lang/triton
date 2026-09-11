@@ -267,4 +267,18 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
     %rz = tt.fp_to_fp %arg, rounding = rtz : bf16 -> f16
     tt.return %rn, %rz : f16, f16
   }
+
+  // COMMON-LABEL: @fp16_to_bf16
+  // COMMON: llvm.fpext {{.*}} : f16 to f32
+  // GFX942: llvm.add
+  // GFX942: llvm.trunc {{.*}} : i32 to i16
+  // GFX950: llvm.fptrunc {{.*}} : vector<2xf32> to vector<2xbf16>
+  // COMMON: llvm.fpext {{.*}} : f16 to f32
+  // COMMON: llvm.lshr
+  // COMMON: llvm.trunc {{.*}} : i32 to i16
+  tt.func private @fp16_to_bf16(%arg: f16) -> (bf16, bf16) {
+    %rn = tt.fp_to_fp %arg : f16 -> bf16
+    %rz = tt.fp_to_fp %arg, rounding = rtz : f16 -> bf16
+    tt.return %rn, %rz : bf16, bf16
+  }
 }
