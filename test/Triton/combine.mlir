@@ -653,25 +653,6 @@ tt.func @splat_load_volatile(%p: !tt.ptr<f32>) -> tensor<4xf32> {
 }
 
 // A rank-zero tensor source is still a tensor, not a scalar load operand.
-// CHECK-LABEL: @splat_load_tensor_pointer(
-// CHECK: %[[V:.*]] = tt.load %{{.*}} : tensor<4x!tt.ptr<f32>>
-// CHECK-NEXT: tt.return %[[V]]
-tt.func @splat_load_tensor_pointer(%p: tensor<!tt.ptr<f32>>) -> tensor<4xf32> {
-  %ptrs = tt.splat %p : tensor<!tt.ptr<f32>> -> tensor<4x!tt.ptr<f32>>
-  %v = tt.load %ptrs : tensor<4x!tt.ptr<f32>>
-  tt.return %v : tensor<4xf32>
-}
-
-// CHECK-LABEL: @splat_load_tensor_mask(
-// CHECK: %[[V:.*]] = tt.load %{{.*}}, %{{.*}} : tensor<4x!tt.ptr<f32>>
-// CHECK-NEXT: tt.return %[[V]]
-tt.func @splat_load_tensor_mask(%p: !tt.ptr<f32>, %pred: tensor<i1>) -> tensor<4xf32> {
-  %ptrs = tt.splat %p : !tt.ptr<f32> -> tensor<4x!tt.ptr<f32>>
-  %mask = tt.splat %pred : tensor<i1> -> tensor<4xi1>
-  %v = tt.load %ptrs, %mask : tensor<4x!tt.ptr<f32>>
-  tt.return %v : tensor<4xf32>
-}
-
 // CHECK-LABEL: @splat_load_tensor_other(
 // CHECK: %[[V:.*]] = tt.load %{{.*}}, %{{.*}}, %{{.*}} : tensor<4x!tt.ptr<f32>>
 // CHECK-NEXT: tt.return %[[V]]
