@@ -1118,12 +1118,8 @@ def test_return_promotion():
     run_parser(kernel)
 
 
-def test_fp8_div_mod_promotion():
-    # `/` and `%` do not exist natively for floats narrower than fp32, so the
-    # result of a division or modulo with a floating operand is promoted to
-    # fp32 -- one rule covering fp8, fp16 and bfloat16, tensor and scalar
-    # operands alike. Other ops keep the existing promotions (same fp8 stays
-    # that fp8, mixed fp8 goes to float16).
+def test_fp8_arithmetic_promotion():
+    # FP8 computation uses FP16, or FP32 for division and modulo.
 
     @triton.jit
     def kernel():
@@ -1137,8 +1133,14 @@ def test_fp8_div_mod_promotion():
         tl.static_assert((x / y).dtype == tl.float32)
         tl.static_assert((x / z).dtype == tl.float32)
         tl.static_assert((x % y).dtype == tl.float32)
-        tl.static_assert((x * y).dtype == tl.float8e5)
+        tl.static_assert((x * y).dtype == tl.float16)
         tl.static_assert((x * z).dtype == tl.float16)
+        tl.static_assert((x + i.to(tl.int8)).dtype == tl.float16)
+        tl.static_assert((i + x).dtype == tl.float32)
+        tl.static_assert(tl.fma(x, y, b).dtype == tl.float32)
+        tl.static_assert(tl.clamp(b, x, y).dtype == tl.float32)
+        tl.static_assert(tl.where(i == 0, x, y).dtype == tl.float8e5)
+        tl.static_assert(tl.where(i == 0, 0, x).dtype == tl.float8e5)
         # fp16 and bfloat16 division/modulo upcast through the same rule
         tl.static_assert((h / h).dtype == tl.float32)
         tl.static_assert((h % h).dtype == tl.float32)
@@ -1148,16 +1150,14 @@ def test_fp8_div_mod_promotion():
         # integer division and modulo keep integer promotion
         tl.static_assert((i // i).dtype == tl.int32)
         tl.static_assert((i % i).dtype == tl.int32)
-        # A scalar operand doesn't participate in promotion, so / and % against
-        # a narrow float tensor must upcast to fp32 for the same reason, while other
-        # ops keep the tensor's type.
+        # Weak scalars follow the tensor's computation type.
         tl.static_assert((2.0 / x).dtype == tl.float32)
         tl.static_assert((x / 2.0).dtype == tl.float32)
         tl.static_assert((x % 2).dtype == tl.float32)
         tl.static_assert((h / 2.0).dtype == tl.float32)
         tl.static_assert((d / 2.0).dtype == tl.float64)
         tl.static_assert((d % 2.0).dtype == tl.float64)
-        tl.static_assert((x * 2.0).dtype == tl.float8e5)
+        tl.static_assert((x * 2.0).dtype == tl.float16)
         tl.static_assert((h * 2.0).dtype == tl.float16)
         tl.static_assert((i // 2).dtype == tl.int32)
 

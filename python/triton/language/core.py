@@ -2837,8 +2837,7 @@ def expect_zero(x, mask, _semantic=None):
         return _semantic.where(mask, 0, x)
     if _semantic.builder.options.debug:
         x_tensor = _semantic.to_tensor(x)
-        zero = _semantic.to_tensor(0)
-        cond = _semantic.or_(_semantic.equal(x_tensor, zero), _semantic.not_(mask))
+        cond = _semantic.or_(_semantic.equal(x_tensor, 0), _semantic.not_(mask))
         _semantic.device_assert(cond, "expect_zero expected x == 0 where mask is true", None)
     return x
 

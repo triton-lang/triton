@@ -18,7 +18,9 @@ The algorithm is as follows:
 
 4. **Prefer unsigned** Otherwise (same width, different signedness), they are promoted to the unsigned dtype: ``(int32, uint32) -> uint32``
 
-Division and modulo are an exception to the rules above: they do not exist natively for floating point dtypes narrower than ``float32``, so if either operand is a float (of any width), both operands are promoted to ``float32`` for these two operations. Integer division and modulo keep integer promotion.
+Arithmetic and comparison operations widen an FP8 common dtype to ``float16``. ``tl.where`` preserves matching FP8 dtypes. When mixing FP8 and integer tensors, integers of at most 8 bits use ``float16``; wider integers use ``float32``.
+
+Division and modulo require at least ``float32`` for floating point operands. Narrower floats are promoted to ``float32``, while ``float64`` is preserved. Integer division and modulo keep integer promotion.
 
 The rules are a bit different when they involve a scalar. By scalar here we mean a numeric literal, a variable marked with `tl.constexpr` or a combination of these. These are represented by NumPy scalars and have types ``bool``, ``int`` and ``float``.
 

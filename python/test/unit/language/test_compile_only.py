@@ -203,6 +203,8 @@ def test_compile_only_expect_zero(dtype) -> None:
     debug = triton.compile(src, target=target, options={"debug": True})
     assert "arith.select" not in debug.asm["ttir"]
     assert "tt.assert" in debug.asm["ttir"]
+    if dtype.startswith("fp8"):
+        assert re.search(r"arith.cmpf.*tensor<16xf16>", debug.asm["ttir"])
 
     fpsan = triton.compile(src, target=target, options={"instrumentation_mode": "fpsan"})
     assert "arith.select" in fpsan.asm["ttir"]

@@ -441,6 +441,66 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
             test_broadcast=(op != "%"), x_low=x_low, x_high=x_high, filter_y=filter_y, test_scalar=not skip_scalar_test)
 
 
+def test_fp8_arithmetic(device):
+    check_cuda_or_hip(device)
+
+    @triton.jit
+    def kernel(X, Y, Z, Out, SIZE: tl.constexpr):
+        offsets = tl.arange(0, SIZE)
+        x = tl.load(X + offsets)
+        y = tl.load(Y + offsets)
+        z = tl.load(Z + offsets)
+        results = (x + y, x - y, x * y, tl.minimum(x, y), tl.maximum(x, y), tl.fma(x, y, z), tl.clamp(x, z,
+                                                                                                      y), -x, x + 1.0,
+                   tl.sum(x, 0), tl.cumsum(x), tl.cumprod(x))
+        for i in tl.static_range(len(results)):
+            tl.static_assert(results[i].dtype == tl.float16)
+            tl.store(Out + i * SIZE + offsets, results[i])
+        fast = tl.fdiv(x, y)
+        precise = tl.fdiv(x, y, ieee_rounding=True)
+        tl.static_assert(fast.dtype == tl.float32 and precise.dtype == tl.float32)
+        tl.store(Out + len(results) * SIZE + offsets, fast)
+        tl.store(Out + (len(results) + 1) * SIZE + offsets, precise)
+
+    values = ([1.5, 192, -2, 4], [1.5, 192, 0.5, 2], [2**-16, 2**-16, -1, -1])
+    x, y, z = [torch.tensor(v, dtype=torch.float8_e5m2, device=device) for v in values]
+    a, b, c = x.float(), y.float(), z.float()
+    expected = torch.stack((a + b, a - b, a * b, torch.minimum(a, b), torch.maximum(a, b), a * b + c,
+                            torch.clamp(a, c, b), -a, a + 1.0, a.sum().expand_as(a), a.cumsum(0), a.cumprod(0)))
+    expected = torch.cat((expected.half().float(), (a / b).expand(2, -1)))
+    actual = torch.empty_like(expected)
+    kernel[(1, )](x, y, z, actual, SIZE=x.numel())
+    torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+
+
+@pytest.mark.parametrize("scan", [False, True])
+def test_fp8_selection_reduction(scan, device):
+    check_cuda_or_hip(device)
+
+    @triton.jit
+    def combine(a, ai, b, bi):
+        # Force scans to exercise conditional combine execution.
+        tl.device_assert(a == a)
+        return tl.where(a < b, a, b), ai + bi
+
+    @triton.jit(debug=True)
+    def kernel(X, Out, SCAN: tl.constexpr):
+        offsets = tl.arange(0, 128)
+        x = tl.load(X + offsets)
+        result, total = tl.associative_scan((x, offsets), 0, combine) if SCAN else tl.reduce((x, offsets), 0, combine)
+        tl.static_assert(result.dtype == x.dtype and total.dtype == tl.int32)
+        tl.store(Out + offsets, result)
+        tl.store(Out + 128 + offsets, total)
+
+    x = torch.tensor([2, 4, 1, 3] * 32, dtype=torch.float8_e5m2, device=device)
+    expected = x.float().cummin(0).values if scan else x.float().min().expand(128)
+    indices = torch.arange(128, device=device, dtype=torch.float32)
+    expected = torch.stack((expected, indices.cumsum(0) if scan else indices.sum().expand(128)))
+    actual = torch.empty_like(expected)
+    kernel[(1, )](x, actual, scan)
+    torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+
+
 def test_bfloat16_mul_rounds_to_nearest_even(device):
     # A bf16 multiply has to round to nearest even. Hardware multiply-accumulate
     # instructions that write a bf16 result may truncate instead, which is off by
@@ -685,7 +745,7 @@ def test_compare_op(dtype_x, dtype_y, op, mode_x, mode_y, num_ctas, device):
     (torch.float8_e5m2, [0, 2048, float("inf"), float("nan")], "f16"),
     (torch.int8, [1, 2, 3, 4], "f16"),
     (torch.int32, [0, 2049, 65536, 0], "f32"),
-    (torch.bfloat16, [2**-30, 2048, 65536, 0], "bf16"),
+    (torch.bfloat16, [2**-30, 2048, 65536, 0], "f32"),
     (torch.float64, [0, 2048 + 2**-30, 65536, 0], "f64"),
 ])
 def test_fp8_comparison(dtype, values, comparison_type, device):
@@ -1354,7 +1414,8 @@ def test_abs(dtype_x, device):
 @pytest.mark.parametrize("in_dtype", [tl.float8e4b15, tl.float8e4nv, tl.float8e5, tl.float8e4b8, tl.float8e5b16])
 def test_abs_fp8(in_dtype, device):
     if is_hip():
-        pytest.skip('test_abs_fp8 not supported on HIP.')
+        if in_dtype == tl.float8e4b15:
+            pytest.skip('float8e4b15 not supported on HIP.')
     elif is_cuda():
         cc = torch.cuda.get_device_capability()
         if in_dtype == tl.float8e4b15 and cc >= (9, 0):
@@ -1372,18 +1433,22 @@ def test_abs_fp8(in_dtype, device):
         tl.store(Z + off, z)
 
     f8_tensor = torch.tensor(range(-128, 128), dtype=torch.int8, device=device)
-    # f32_to_f8 doesn't handle nan, so we make sure f8_tensor doesn't contain any nan
-    all_exp_ones = (f8_tensor & 0b01111100) == 128 - 2**in_dtype.fp_mantissa_width
-    f8_tensor[all_exp_ones] = 0
     f8 = triton.reinterpret(f8_tensor, in_dtype)
     n_elements = f8_tensor.numel()
     out_f8 = torch.empty_like(f8_tensor)
     abs_kernel[(1, )](f8, triton.reinterpret(out_f8, in_dtype), n_elements)
 
-    f32_tensor = convert_float_to_float32(f8_tensor, in_dtype)
-    expect = f32_tensor.abs()
-    actual_f8 = convert_float_to_float32(out_f8, in_dtype)
-    torch.testing.assert_close(actual_f8, expect, equal_nan=True)
+    if in_dtype == tl.float8e4b15:
+        expected = convert_float_to_float32(f8_tensor, in_dtype).abs()
+        actual = convert_float_to_float32(out_f8, in_dtype)
+    else:
+        torch_dtype = {
+            tl.float8e4nv: torch.float8_e4m3fn, tl.float8e5: torch.float8_e5m2, tl.float8e4b8: torch.float8_e4m3fnuz,
+            tl.float8e5b16: torch.float8_e5m2fnuz
+        }[in_dtype]
+        expected = f8_tensor.view(torch_dtype).float().abs()
+        actual = out_f8.view(torch_dtype).float()
+    torch.testing.assert_close(actual, expected, equal_nan=True)
 
 
 # ----------------
