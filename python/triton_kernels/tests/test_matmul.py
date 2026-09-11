@@ -773,6 +773,144 @@ def test_mxfp8_act_scale_store_zeroes_partial_group(n, is_persistent, device):
         assert torch.all(unused_groups == 0xFF)
 
 
+def _make_dense_nvfp4_inputs(shape, tensor_scales, device):
+    from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
+    from triton_kernels.tensor import FP4
+
+    torch.manual_seed(0)
+    m, n, k = shape
+    values_a, scales_a = downcast_to_mxfp(
+        torch.randn((m, k), device=device, dtype=torch.bfloat16), torch.uint8,
+        axis=1, scale_dtype=torch.float8_e4m3fn, microblock_size=16,
+    )
+    values_b, scales_b = downcast_to_mxfp(
+        torch.randn((k, n), device=device, dtype=torch.bfloat16), torch.uint8,
+        axis=0, scale_dtype=torch.float8_e4m3fn, microblock_size=16,
+    )
+    ref_a = upcast_from_mxfp_torch(values_a, scales_a, torch.float32, axis=1)
+    ref_b = upcast_from_mxfp_torch(values_b, scales_b, torch.float32, axis=0)
+    a = wrap_torch_tensor(values_a, dtype=FP4)
+    b = convert_layout(wrap_torch_tensor(values_b, dtype=FP4), layout.BlackwellMXValueLayout())
+    sa = convert_layout(wrap_torch_tensor(scales_a), layout.BlackwellActMXScaleLayout(None))
+    sb = convert_layout(wrap_torch_tensor(scales_b), layout.BlackwellMXScaleLayout())
+    scale_a = torch.tensor(0.75, device=device) if tensor_scales else None
+    scale_b = torch.tensor(1.25, device=device) if tensor_scales else None
+    precision = PrecisionConfig(
+        a_mx_scale=sa, b_mx_scale=sb, a_microblock_size=16, b_microblock_size=16,
+        a_mx_tensor_scale=scale_a, b_mx_tensor_scale=scale_b, out_dtype=torch.bfloat16,
+    )
+    out = torch.full((m, n), float("nan"), device=device, dtype=torch.bfloat16)
+    arguments = dict(a=a, b=b, bias=None, precision_config=precision, c=out)
+    return arguments, ref_a, ref_b
+
+
+@pytest.mark.parametrize("shape,group", [
+    ((128, 512, 256), 1),
+    ((512, 768, 512), 4),
+    ((2048, 2048, 2048), 4),
+    ((8192, 512, 1024), 4),
+])
+@pytest.mark.parametrize("stages,epilogue", [(2, 1), (3, 4), (4, 4)])
+@pytest.mark.parametrize("tensor_scales", [False, True])
+def test_nvfp4_dense_aligned(shape, group, stages, epilogue, tensor_scales, device, monkeypatch):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("requires Blackwell or newer")
+    import triton_kernels.matmul as mm
+
+    monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", False)
+    arguments, ref_a, ref_b = _make_dense_nvfp4_inputs(shape, tensor_scales, device)
+    a, b, out = arguments["a"], arguments["b"], arguments["c"]
+    precision = arguments["precision_config"]
+    scale_a = precision.a_mx_tensor_scale
+    launches = []
+    original = mm.launch_nvfp4_matmul
+
+    def launch(*args):
+        compiled = original(*args)
+        launches.append(compiled)
+        return compiled
+
+    monkeypatch.setattr(mm, "launch_nvfp4_matmul", launch)
+    constraints = dict(block_m=128, block_n=256, block_k=256, num_warps=4,
+                       num_stages=stages, epilogue_subtile=epilogue, group_m=group,
+                       is_persistent=True, split_k=1, swap_xw=False, use_output_tma=False)
+    with opt_flags.scoped_opt_flags_constraints(constraints):
+        actual = matmul(a, b, None, precision_config=precision, c=out)
+        assert launches
+        assert "kind::mxf4nvf4.block_scale.block16" in launches[-1].asm["ptx"]
+        assert actual.data_ptr() == out.data_ptr()
+        reference = (ref_a * (0.75 if tensor_scales else 1.0)) @ (ref_b * (1.25 if tensor_scales else 1.0))
+        torch.testing.assert_close(actual.float(), reference, atol=0.01, rtol=0.01)
+
+        # Replaying a graph must read updated device-side tensor scales.
+        if tensor_scales:
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph):
+                matmul(a, b, None, precision_config=precision, c=out)
+            scale_a.fill_(0.5)
+            out.fill_(float("nan"))
+            graph.replay()
+            reference = (ref_a * 0.5) @ (ref_b * 1.25)
+            torch.testing.assert_close(out.float(), reference, atol=0.01, rtol=0.01)
+
+
+@pytest.mark.parametrize("variation", [
+    "default", "bias", "fiber_scale", "strided_output", "m_tail", "n_tail", "k_tail",
+    "split_k", "swap_xw", "output_tma", "out_fp32", "bitwise_invariance",
+])
+def test_nvfp4_dense_dispatch(variation, device, monkeypatch):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("requires Blackwell or newer")
+    import triton_kernels.matmul as mm
+
+    monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", False)
+    shape = {"m_tail": (640, 512, 512), "n_tail": (512, 384, 512),
+             "k_tail": (512, 512, 384), "default": (2048, 2048, 2048)}.get(variation, (512, 512, 512))
+    arguments, ref_a, ref_b = _make_dense_nvfp4_inputs(shape, False, device)
+    m, n, k = shape
+    precision = arguments["precision_config"]
+    constraints = dict(block_m=128, block_n=256, block_k=256, num_warps=4,
+                       num_stages=2, epilogue_subtile=4, group_m=4,
+                       is_persistent=True, split_k=1, swap_xw=False, use_output_tma=False)
+    if variation == "default":
+        constraints = {}
+    elif variation == "bias":
+        arguments["bias"] = torch.randn(n, device=device)
+    elif variation == "fiber_scale":
+        precision.a_mx_tensor_scale = torch.linspace(0.5, 1.5, m, device=device)
+        ref_a *= precision.a_mx_tensor_scale[:, None]
+    elif variation == "strided_output":
+        arguments["c"] = torch.empty((m, n * 2), device=device, dtype=torch.bfloat16)[:, :n]
+    elif variation == "split_k":
+        constraints["split_k"] = 2
+    elif variation == "swap_xw":
+        constraints["swap_xw"] = True
+    elif variation == "output_tma":
+        constraints["use_output_tma"] = True
+    elif variation == "out_fp32":
+        precision.out_dtype = torch.float32
+        arguments["c"] = torch.empty((m, n), device=device)
+    elif variation == "bitwise_invariance":
+        precision.enforce_bitwise_invariance = True
+
+    launches = []
+    original = mm.launch_nvfp4_matmul
+
+    def launch(*args):
+        compiled = original(*args)
+        launches.append(compiled)
+        return compiled
+
+    monkeypatch.setattr(mm, "launch_nvfp4_matmul", launch)
+    with opt_flags.scoped_opt_flags_constraints(constraints):
+        actual = matmul(**arguments)
+    assert bool(launches) == (variation == "default")
+    reference = ref_a @ ref_b
+    if arguments["bias"] is not None:
+        reference += arguments["bias"]
+    torch.testing.assert_close(actual.float(), reference, atol=0.01, rtol=0.01)
+
+
 def test_k_ragged_mxfp8_act_scale_swizzling(device):
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("requires Blackwell or newer")

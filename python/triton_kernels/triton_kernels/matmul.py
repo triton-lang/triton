@@ -16,6 +16,7 @@ from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXSc
 # details
 from .matmul_details._matmul import _matmul
 from .matmul_details._p_matmul import _p_matmul, get_per_device_per_stream_alloc_fn
+from .matmul_details._nvfp4_matmul import can_use_nvfp4_matmul, launch_nvfp4_matmul
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE
 from .numerics_details.mxfp_details._downcast_to_mxfp import NVFP_BLOCK_SIZE
 from .tensor_details.layout_details.strided import StridedLayout
@@ -522,6 +523,15 @@ def matmul(a, b, bias,
     if opt_flags.is_persistent and not opt_flags.clc:
         available_sms = target_info.num_sms() - opt_flags.idle_sms
         grid = min(opt_flags.occupancy_target * available_sms, grid)
+    if (target_info.cuda_capability_geq(10, 0)
+            and ragged_dimension is None and not has_gather and not has_scatter
+            and bias is None and betas is None and gammas is None and out_alpha is None
+            and fused_comm is None and c_acc_in is None
+            and fused_activation.specs == FnSpecs.default() and epilogue.specs == FnSpecs.default()
+            and flex == FlexCtx()
+            and can_use_nvfp4_matmul(a, b, out_matmul, a_scale, b_scale, precision_config, opt_flags)):
+        launch_nvfp4_matmul(a, b, out_matmul, a_scale, b_scale, a_tensor_scale, b_tensor_scale, opt_flags, grid)
+        return out_matmul.view(M, N)
     # canonicalize storage
     has_scatter_tma = has_scatter and out_matmul.element_size() <= 4 and target_info.has_tma_gather()
     c = wrap_torch_tensor(out_matmul.view(math.prod(out_matmul.shape[:-1]), out_matmul.shape[-1]) if has_scatter else out_matmul.view(math.prod(out_matmul.shape[:-2]), *out_matmul.shape[-2:]))
