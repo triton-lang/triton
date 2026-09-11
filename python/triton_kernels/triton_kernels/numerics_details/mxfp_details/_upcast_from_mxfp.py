@@ -33,7 +33,7 @@ def upcast_ue8m0_scale(scale, dst_dtype: tl.constexpr, handle_nan: tl.constexpr 
 
 
 @triton.jit
-def _is_nan_mxfp_scale(scale, dst_scale):
+def _is_nan_ue8m0_scale(scale, dst_scale):
     if dst_scale.dtype == tl.float32:
         return dst_scale == float("inf")
     return scale == 0xFF
@@ -110,7 +110,7 @@ def upcast_mxfp4_tile(tensor, scale, dst_dtype: tl.constexpr):
         tl.static_assert(dst_dtype == tl.float16)
         max_fin = 65504
     out_tensor = tl.clamp(out_tensor, min=-max_fin, max=max_fin)
-    out_tensor = tl.where(_is_nan_mxfp_scale(scale, dst_scale), float("nan"), out_tensor)
+    out_tensor = tl.where(_is_nan_ue8m0_scale(scale, dst_scale), float("nan"), out_tensor)
     return out_tensor.to(dst_dtype).reshape([tensor.shape[0], tensor.shape[1] * 2])
 
 
@@ -222,6 +222,6 @@ def _upcast_from_mxfp(
     out_tensor = tl.clamp(out_tensor, min=-max_fin, max=max_fin)
     # Correct any NaNs encoded via OCP E8M0 scales.
     if scale_is_ocp:
-        out_tensor = tl.where(_is_nan_mxfp_scale(scale, dst_scale), float("nan"), out_tensor)
+        out_tensor = tl.where(_is_nan_ue8m0_scale(scale, dst_scale), float("nan"), out_tensor)
     out_tensor = out_tensor.reshape([BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_DIM])
     out_desc.store([start_out.to(tl.int32), start_out_quant.to(tl.int32)], out_tensor)
