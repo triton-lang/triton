@@ -47,7 +47,7 @@ def is_hopper():
 @triton.jit
 def _attn_fwd_inner(acc, l_i, m_i, q,  #
                     desc_k, desc_v,  #
-                    offset_y, dtype: tl.constexpr, start_m, qk_scale,  #
+                    off_hz, dtype: tl.constexpr, start_m, qk_scale,  #
                     BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,  #
                     STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
                     N_CTX: tl.constexpr, warp_specialize: tl.constexpr, IS_HOPPER: tl.constexpr):
@@ -60,11 +60,9 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
     # causal = False
     else:
         lo, hi = 0, N_CTX
+    offset_y = off_hz * N_CTX
     offsetk_y = offset_y + lo
-    if dtype == tl.float8e5:
-        offsetv_y = offset_y * HEAD_DIM + lo
-    else:
-        offsetv_y = offset_y + lo
+    offsetv_y = offset_y + lo
     # loop over k, v and update accumulator
     for start_n in tl.range(lo, hi, BLOCK_N, warp_specialize=warp_specialize):
         start_n = tl.multiple_of(start_n, BLOCK_N)
@@ -95,7 +93,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
             acc = acc * alpha[:, None]
         # prepare p and v for the dot
         if dtype == tl.float8e5:
-            v = desc_v.load([0, offsetv_y]).T
+            v = desc_v.load([off_hz * HEAD_DIM, start_n]).T
         else:
             v = desc_v.load([offsetv_y, 0])
         p = p.to(dtype)
@@ -197,7 +195,8 @@ def _attn_fwd(sm_scale, M,  #
     desc_q = _maybe_make_tensor_desc(desc_q, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
                                      block_shape=[BLOCK_M, HEAD_DIM])
     if FP8_OUTPUT:
-        desc_v = _maybe_make_tensor_desc(desc_v, shape=[HEAD_DIM, y_dim], strides=[N_CTX, 1],
+        # FP8 V is physically laid out as [Z, H, HEAD_DIM, N_CTX].
+        desc_v = _maybe_make_tensor_desc(desc_v, shape=[Z * H * HEAD_DIM, N_CTX], strides=[N_CTX, 1],
                                          block_shape=[HEAD_DIM, BLOCK_N])
     else:
         desc_v = _maybe_make_tensor_desc(desc_v, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
@@ -227,7 +226,7 @@ def _attn_fwd(sm_scale, M,  #
     if STAGE & 1:
         acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q,  #
                                         desc_k, desc_v,  #
-                                        offset_y, dtype, start_m, qk_scale,  #
+                                        off_hz, dtype, start_m, qk_scale,  #
                                         BLOCK_M, HEAD_DIM, BLOCK_N,  #
                                         4 - STAGE, offs_m, offs_n, N_CTX,  #
                                         warp_specialize, IS_HOPPER)
@@ -235,7 +234,7 @@ def _attn_fwd(sm_scale, M,  #
     if STAGE & 2:
         acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q,  #
                                         desc_k, desc_v,  #
-                                        offset_y, dtype, start_m, qk_scale,  #
+                                        off_hz, dtype, start_m, qk_scale,  #
                                         BLOCK_M, HEAD_DIM, BLOCK_N,  #
                                         2, offs_m, offs_n, N_CTX,  #
                                         warp_specialize, IS_HOPPER)
@@ -529,8 +528,9 @@ class _attention(torch.autograd.Function):
             dummy_block = [1, 1]
             desc_q = TensorDescriptor(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=dummy_block)
             if q.dtype == torch.float8_e5m2:
-                desc_v = TensorDescriptor(v, shape=[HEAD_DIM_K, y_dim], strides=[q.shape[2], 1],
-                                          block_shape=dummy_block)
+                # FP8 V is physically laid out as [Z, H, HEAD_DIM, N_CTX].
+                desc_v = TensorDescriptor(v, shape=[q.shape[0] * q.shape[1] * HEAD_DIM_K, q.shape[2]],
+                                          strides=[q.shape[2], 1], block_shape=dummy_block)
             else:
                 desc_v = TensorDescriptor(v, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1],
                                           block_shape=dummy_block)
@@ -689,6 +689,27 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, warp_specialize, mode, provider, dtyp
     torch.testing.assert_close(tri_dv, ref_dv, atol=1e-2, rtol=rtol)
     torch.testing.assert_close(tri_dk, ref_dk, atol=1e-2, rtol=rtol)
     torch.testing.assert_close(tri_dq, ref_dq, atol=1e-2, rtol=rtol)
+
+
+@pytest.mark.enable_warmup
+def test_fp8_v_batch_head_descriptor():
+    if not TORCH_HAS_FP8:
+        pytest.skip("PyTorch does not have float8_e5m2")
+
+    Z, H, N_CTX, HEAD_DIM = 2, 2, 128, 64
+    torch.manual_seed(20)
+    q = torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=torch.float16, device=DEVICE).normal_(0.0, 0.5)
+    k = torch.empty_like(q).normal_(0.0, 0.5)
+    v = torch.empty_like(q).normal_(0.0, 0.5)
+    q = q.to(torch.float8_e5m2)
+    k = k.to(torch.float8_e5m2)
+    v = v.permute(0, 1, 3, 2).contiguous().permute(0, 1, 3, 2).to(torch.float8_e5m2)
+
+    scores = torch.matmul(q.float(), k.float().transpose(2, 3)) * 0.5
+    ref_out = torch.matmul(torch.softmax(scores, dim=-1), v.float())
+    tri_out = attention(q, k, v, False, 0.5, False).float()
+
+    torch.testing.assert_close(tri_out, ref_out, atol=0.125, rtol=0)
 
 
 try:
