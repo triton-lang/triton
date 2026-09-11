@@ -31,12 +31,14 @@ The following compatibility matrix reflects the CPython wheels published on PyPI
 
 ## Release Cadence
 
-Starting with PyTorch 2.14, Triton feature releases (`X.Y.0`) follow the PyTorch minor release cadence, typically coinciding with every one or two PyTorch minor releases depending on the scope of new features. Each Triton target date is one week before the corresponding PyTorch release date. Dates are tentative and follow the [PyTorch release cadence](https://github.com/pytorch/pytorch/blob/main/RELEASE.md#release-cadence).
+Starting with PyTorch 2.14, Triton feature releases (`X.Y.0`) follow the PyTorch minor release cadence, typically coinciding with every one or two PyTorch minor releases depending on the scope of new features. After each Triton release, evaluation of the next feature release begins immediately. At a designated release decision date, maintainers use Triton and downstream validation results to choose between a patch of the current release and the next feature release.
 
-| Triton version | PyTorch version | Release branch opened | Release date |
+Each Triton target date is one week before the corresponding PyTorch release date. Dates are tentative and follow the [PyTorch release cadence](https://github.com/pytorch/pytorch/blob/main/RELEASE.md#release-cadence).
+
+| PyTorch version | Triton release options | Release decision date | Target release date |
 | --- | --- | --- | --- |
-| 3.9 | 2.15 | Sep 2026 | Oct 21, 2026 |
-| 3.10 | 2.16 | Nov 2026 | Dec 15, 2026 |
+| 2.15 | 3.9 | --- | Oct 21, 2026 |
+| 2.16 | 3.9.1 or 3.10 | Nov 2026 | Dec 15, 2026 |
 
 Patch releases (`X.Y.1`) are optional and are only published if major regressions are found in the corresponding minor release.
 
