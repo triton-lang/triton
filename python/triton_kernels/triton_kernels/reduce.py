@@ -6,7 +6,7 @@ import torch
 import triton
 import triton.language as tl
 from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, quantize_mxfp4_fn, quantize_mxfp8_fn, quantize_nvfp4_fn
-from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp_scale
+from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_ue8m0_scale
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from triton_kernels.numerics import InFlexData, OutFlexData, MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
 from triton_kernels import target_info
@@ -463,7 +463,7 @@ def _reduce_forward_inner(pid_s0, pid_s1,
             if XMx is not None:
                 xmx_ptrs = XMx + offs_r * stride_xmxr + offs_s0[:, None] * stride_xmx0 + offs_x_smx1[None, :] * stride_xmx1
                 xmx = tl.load(xmx_ptrs, mask=valid_s0[:, None] & valid_in_smx1[None, :], other=0.0)
-                xmx = upcast_mxfp_scale(xmx, tl.float32)
+                xmx = upcast_ue8m0_scale(xmx, tl.float32)
                 x = (xmx[:, :, None] * x.reshape([BLOCK_S0, BLOCK_X_S1 // 32, 32])).reshape([BLOCK_S0, BLOCK_X_S1])
             x = x * x_flex_scale
             if not IS_SCALE_NONE:
@@ -935,7 +935,7 @@ def _reduce_backward(
         if XMx is not None:
             xmx_ptrs = XMx + k * stride_xmxr + offs_s0[:, None] * stride_xmx0 + offs_x_smx1[None, :] * stride_xmx1
             xmx = tl.load(xmx_ptrs, mask=valid_s0[:, None] & valid_in_smx1[None, :], other=0)
-            xmx = upcast_mxfp_scale(xmx, tl.float32)
+            xmx = upcast_ue8m0_scale(xmx, tl.float32)
             g = (g.reshape([BLOCK_S0, BLOCK_X_S1 // 32, 32]) * xmx[:, :, None]).reshape([BLOCK_S0, BLOCK_X_S1])
         # Multiply by global input flex scale
         g = g * x_flex_scale

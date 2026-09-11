@@ -15,7 +15,7 @@ from triton_kernels.numerics_details.mxfp import (
     upcast_from_mxfp,
     upcast_from_mxfp_torch,
 )
-from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile, upcast_mxfp_scale
+from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile, upcast_ue8m0_scale
 from triton_kernels.target_info import cuda_capability_geq, is_cuda
 from triton_kernels.tensor import convert_layout, wrap_torch_tensor
 from triton_kernels.tensor_details.layout import StridedLayout
@@ -27,21 +27,24 @@ def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
 
 
 @triton.jit
-def _upcast_mxfp_scale_kernel(out, scale):
-    offsets = tl.arange(0, 256)
+def _upcast_ue8m0_scale_kernel(out, scale, BLOCK_SIZE: tl.constexpr):
+    offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     scale = tl.load(scale + offsets)
-    tl.store(out + offsets, upcast_mxfp_scale(scale, out.dtype.element_ty))
+    tl.store(out + offsets, upcast_ue8m0_scale(scale, out.dtype.element_ty))
 
 
 @pytest.mark.parametrize("dst_dtype", [torch.float16, torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("scale_dtype", [torch.uint8, torch.int8])
-def test_mxfp_scale_upcast(dst_dtype, scale_dtype, device):
+@pytest.mark.parametrize("block_size", [1, 128, 256])
+def test_ue8m0_scale_upcast(dst_dtype, scale_dtype, block_size, device):
     scale = torch.arange(256, device=device).to(torch.uint8)
     actual = torch.empty(256, dtype=dst_dtype, device=device)
     expected = torch.ldexp(torch.ones(256, dtype=torch.float64, device=device), scale.to(torch.int32) - 127)
     expected[-1] = float("nan")
-    _upcast_mxfp_scale_kernel[(1, )](actual, scale.view(scale_dtype))
+    kernel = _upcast_ue8m0_scale_kernel[(256 // block_size, )](actual, scale.view(scale_dtype), block_size)
     torch.testing.assert_close(actual, expected.to(dst_dtype), rtol=0, atol=0, equal_nan=True)
+    if cuda_capability_geq(10, 0) and dst_dtype == torch.bfloat16 and block_size > 1:
+        assert "cvt.rn.bf16x2.ue8m0x2" in kernel.asm["ptx"]
 
 
 @triton.jit
