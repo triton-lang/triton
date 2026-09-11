@@ -171,6 +171,19 @@ struct ConvertLayoutOpSwizzlingConversion
       SmallVector<StringAttr> outDims = {kOffset};
       return cvt.sublayout(inDims, outDims);
     };
+    // When the source layout broadcasts a value across a group of threads
+    // (e.g. the partial held by every lane of a warp in the cross-warp
+    // epilogue of a `tt.reduce`), all redundant threads write the same shared
+    // memory address. Unpredicated, this is a data race when the combine is not
+    // bitwise-exact (e.g. a Welford combine where the lanes differ in the low
+    // bits), making the result non-deterministic. Predicate the store to the
+    // representative thread of each broadcast group.
+    Value storePred =
+        emitRedundantSharedStorePredicate(srcLayout, storeCvt, rewriter, loc,
+                                          targetInfo);
+    if (!storePred)
+      storePred = b.true_val();
+
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
     for (int i = 0; i < nReps; ++i) {
       if (i > 0)
@@ -185,7 +198,7 @@ struct ConvertLayoutOpSwizzlingConversion
                   /*affineBlockOffset=*/Value(), /*maskSpanAffineBlock=*/0,
                   laneId, warpId, rewriter, targetInfo,
                   /*maybeMaxVecElems=*/{},
-                  makeSharedStoreEmitter(targetInfo, b.true_val()));
+                  makeSharedStoreEmitter(targetInfo, storePred));
       } else {
         assert(idxSrc == 1 || idxSrc == 2);
         bool transpose = idxSrc == 2;

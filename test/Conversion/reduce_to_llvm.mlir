@@ -41,6 +41,13 @@ tt.func private @reduce_linear_layout(%arg0: tensor<32x16xi32, #linear>) -> tens
   // CHECK-NEXT: [[W3:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[WSUM2]], i32 2, i32 31)
   // CHECK-NEXT: [[WSUM3:%.*]] = add i32 [[WSUM2]], [[W3]]
 
+  // The reduction along lane bit 0 (mask 0x1) folds each {lane, lane^1} pair
+  // into the group's base lane. Broadcast that base lane's value to the whole
+  // group so every lane of the group holds the same reduced result.
+  // CHECK-NEXT: [[TID:%.*]] = tail call i32 @llvm.nvvm.read.ptx.sreg.tid.x()
+  // CHECK-NEXT: [[BASE:%.*]] = and i32 [[TID]], 1
+  // CHECK-NEXT: [[BRD0:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[WSUM3]], i32 [[BASE]], i32 31)
+
   // CHECK-NEXT: [[W4:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[SUM1]], i32 16, i32 31)
   // CHECK-NEXT: [[WSUM4:%.*]] = add i32 [[W4]], [[SUM1]]
   // CHECK-NEXT: [[W5:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[WSUM4]], i32 8, i32 31)
@@ -49,9 +56,10 @@ tt.func private @reduce_linear_layout(%arg0: tensor<32x16xi32, #linear>) -> tens
   // CHECK-NEXT: [[WSUM6:%.*]] = add i32 [[WSUM5]], [[W6]]
   // CHECK-NEXT: [[W7:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.bfly.i32(i32 -1, i32 [[WSUM6]], i32 2, i32 31)
   // CHECK-NEXT: [[WSUM7:%.*]] = add i32 [[WSUM6]], [[W7]]
+  // CHECK-NEXT: [[BRD1:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[WSUM7]], i32 [[BASE]], i32 31)
 
-  // CHECK-NEXT: [[DST0:%.*]] = insertvalue { i32, i32 } undef, i32 [[WSUM3]], 0
-  // CHECK-NEXT: [[DST1:%.*]] = insertvalue { i32, i32 } [[DST0]], i32 [[WSUM7]], 1
+  // CHECK-NEXT: [[DST0:%.*]] = insertvalue { i32, i32 } undef, i32 [[BRD0]], 0
+  // CHECK-NEXT: [[DST1:%.*]] = insertvalue { i32, i32 } [[DST0]], i32 [[BRD1]], 1
 
   %0 = "tt.reduce"(%arg0) ({
   ^bb0(%arg1: i32, %arg2: i32):
