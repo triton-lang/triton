@@ -14,6 +14,8 @@ from ._layouts import (SharedLayout, DistributedLayout, BlockedLayout, DotOperan
 from triton._C.libtriton import ir
 import triton.language.core as tl_core
 from triton.language.core import (
+    _CachePolicy as CachePolicy,
+    _normalize_cache_policy,
     aggregate_replace,
     base_value,
     base_type,
@@ -52,6 +54,7 @@ from triton.language.core import (
 # this file but we want to import them anyway so they are importable from here.
 __all__ = [
     "aggregate_replace",
+    "CachePolicy",
     "constexpr",
     "pointer_type",
     "void",
@@ -110,10 +113,12 @@ assume = builtin(tl_core.assume)
 atomic_add = builtin(tl_core.atomic_add)
 atomic_and = builtin(tl_core.atomic_and)
 atomic_cas = builtin(tl_core.atomic_cas)
+atomic_load = builtin(tl_core.atomic_load)
 atomic_max = builtin(tl_core.atomic_max)
 atomic_min = builtin(tl_core.atomic_min)
 atomic_or = builtin(tl_core.atomic_or)
 atomic_poll = builtin(tl_core.atomic_poll)
+atomic_store = builtin(tl_core.atomic_store)
 atomic_xchg = builtin(tl_core.atomic_xchg)
 atomic_xor = builtin(tl_core.atomic_xor)
 broadcast = builtin(tl_core.broadcast)
@@ -125,7 +130,6 @@ expand_dims = builtin(tl_core.expand_dims)
 gather = builtin(tl_core.gather)
 inline_asm_elementwise = builtin(tl_core.inline_asm_elementwise)
 join = builtin(tl_core.join)
-load = builtin(tl_core.load)
 map_elementwise = builtin(tl_core.map_elementwise)
 max_constancy = builtin(tl_core.max_constancy)
 max_contiguous = builtin(tl_core.max_contiguous)
@@ -141,11 +145,85 @@ reshape = builtin(tl_core.reshape)
 split = builtin(tl_core.split)
 static_assert = builtin(tl_core.static_assert)
 static_print = builtin(tl_core.static_print)
-store = builtin(tl_core.store)
 sub = builtin(tl_core.sub)
 to_tensor = builtin(tl_core.to_tensor)
 expect_zero = builtin(tl_core.expect_zero)
 where = builtin(tl_core.where)
+
+
+@builtin
+def inline_asm(asm, constraints="", args=(), result_types=(), is_pure=False, _semantic=None):
+    """Execute one inline assembly block per participating thread.
+
+    Tensor inputs are unpacked in their layout's register order, including
+    replicated register positions. Scalar inputs are uniform and memory
+    descriptors become one uniform ``i32`` address of their logical origin.
+    Inputs are not broadcast, and elements smaller than 32 bits are not packed.
+
+    ``result_types`` is a scalar dtype, a :class:`distributed_type`, or a
+    sequence of these types. A single type returns one tensor; a sequence
+    returns a tuple. The default empty sequence produces no results. Tensor
+    inputs and outputs require explicit distributed layouts. Scalar outputs
+    must be uniform, and replicated tensor elements must agree with the layout.
+
+    ``asm`` may be a string or a ``@gluon.constexpr_function`` returning a
+    string. The function receives ``(outputs, inputs)``, each a tuple of
+    operand-reference tuples. References are numbered outputs first, then
+    inputs, e.g. ``(("$0", "$1"),)``. Only these strings, not runtime values,
+    are passed to the function. Normal Python iteration and slicing can be
+    used to generate assembly for large groups of per-thread elements.
+
+    ``constraints`` is an LLVM constraint string, or a tuple with one constraint
+    per logical output followed by each input. Tuple entries are repeated for
+    every element in their group. Use a string for explicitly numbered ties or
+    clobbers.
+
+    Descriptor operands require ``is_pure=False``. The compiler does not model
+    their memory accesses or insert synchronization for them. Callers must
+    provide barriers, fences, and asynchronous completion before storage reuse.
+    All accesses must stay within the descriptor views.
+
+    Example::
+
+        @gluon.constexpr_function
+        def add_bias(outputs, inputs):
+            out, = outputs
+            x, bias = inputs
+            return "\\n".join(
+                f"add.f32 {dst}, {src}, {bias[0]};"
+                for dst, src in zip(out, x)
+            )
+
+        y = gl.inline_asm(add_bias, ("=&f", "f", "f"), [x, bias],
+                          x.type, is_pure=True)
+    """
+    return _semantic.inline_asm(asm, constraints, args, result_types, is_pure)
+
+
+@builtin
+def load(pointer, mask=None, other=None, *, cache_modifier=None, eviction_policy=None, volatile=False,
+         cache_policy=None, _semantic=None):
+    """Load from memory, optionally using a cache policy."""
+    mask = _unwrap_if_constexpr(mask)
+    other = _unwrap_if_constexpr(other)
+    if mask is not None:
+        mask = _semantic.to_tensor(mask)
+    if other is not None:
+        other = _semantic.to_tensor(other)
+    volatile = _unwrap_if_constexpr(volatile)
+    cache_policy = _normalize_cache_policy(cache_policy, cache_modifier, eviction_policy)
+    return _semantic.load(pointer, mask, other, cache_policy, volatile)
+
+
+@builtin
+def store(pointer, value, mask=None, *, cache_modifier=None, eviction_policy=None, cache_policy=None, _semantic=None):
+    """Store to memory, optionally using a cache policy."""
+    value = _semantic.to_tensor(value)
+    mask = _unwrap_if_constexpr(mask)
+    if mask is not None:
+        mask = _semantic.to_tensor(mask)
+    cache_policy = _normalize_cache_policy(cache_policy, cache_modifier, eviction_policy)
+    return _semantic.store(pointer, value, mask, cache_policy)
 
 
 class distributed_type(block_type):

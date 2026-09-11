@@ -48,6 +48,8 @@ class Epilogue:
     specs: FnSpecs = FnSpecs.default()
     fn_arg_values_matmul: tuple[object, ...] = tuple()
     fn_arg_values_finalize: tuple[object, ...] = tuple()
+    # Shared-memory bytes per output element after the activation's N reduction.
+    # A pairwise FP32 reduction needs 8 bytes even when its output is packed FP4.
     effective_itemsize: float | None = None
 
 class FnName(Enum):
@@ -145,6 +147,8 @@ class PrecisionConfig:
 def get_swap_xw(precision_config, opt_flags, lhs_dtype, rhs_dtype):
     if triton.runtime.driver.active.get_current_target().backend != "cuda":
         return False
+    if opt_flags.swap_xw is not None:
+        return opt_flags.swap_xw
     return opt_flags_nvidia.compute_swap_xw(precision_config, opt_flags.block_m, opt_flags.is_persistent, lhs_dtype, rhs_dtype)
 
 # ---------------------
@@ -303,8 +307,6 @@ def matmul(a, b, bias,
             or isinstance(b_scale_layout, HopperMXScaleLayout)):
         if not b_is_shuffled:
             assert b.stride(-2) == 1, "`w` must be column-major with Hopper-swizzled MX scales or non-strided MX value layouts"
-    is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
-    if is_hopper_fp8: assert b.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     # unpack a scale
     a_scale = precision_config.a_mx_scale
     a_has_mx = a_scale is not None
@@ -315,6 +317,10 @@ def matmul(a, b, bias,
     if not isinstance(a, Tensor):
         dtype = FP4 if a_has_mx and a.dtype == torch.uint8 else None
         a = wrap_torch_tensor(a, dtype=dtype)
+    # Mixed FP8/16-bit dots widen FP8 tiles and support either weight layout.
+    if (is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
+            and not opt_flags_nvidia.is_unscaled_mixed_fp8(precision_config, a.dtype, b.dtype)):
+        assert b.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     intermediate_out_dtype = precision_config.intermediate_out_dtype
     if intermediate_out_dtype is None:
         intermediate_out_dtype = torch.float64 if a.dtype == b.dtype == FP64 else torch.float32
@@ -557,6 +563,8 @@ def matmul(a, b, bias,
             or matmul_fused_activation.specs.reduction_n == 1
         )
     )
+    if opt_flags.use_output_tma is not None:
+        c_has_tma = opt_flags.use_output_tma
     c_logical_block_n = opt_flags.block_n // opt_flags.epilogue_subtile // matmul_fused_activation.specs.reduction_n
     c_tma_block_n = c_logical_block_n // precision_config.c_value_pack_factor
     out_tile_n = opt_flags.block_n // matmul_fused_activation.specs.reduction_n

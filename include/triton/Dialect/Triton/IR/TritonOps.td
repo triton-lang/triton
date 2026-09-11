@@ -231,8 +231,7 @@ def TT_LoadOp : TT_Op<"load", [
       TT_PtrLike:$ptr,
       Optional<TT_BoolLike>:$mask,
       Optional<TT_Type>:$other,
-      DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
-      DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict,
+      OptionalAttr<AnyAttr>:$cachePolicy,
       DefaultValuedAttr<BoolAttr, "false">:$isVolatile
     );
 
@@ -240,35 +239,22 @@ def TT_LoadOp : TT_Op<"load", [
 
     let builders = [
         // A tensor of pointers or a pointer to a scalar
-        OpBuilder<(ins "Value":$ptr, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+        OpBuilder<(ins "Value":$ptr,
+                       CArg<"bool", "false">:$isVolatile)>,
         // A tensor of pointers or a pointer to a scalar with mask
-        OpBuilder<(ins "Value":$ptr, "Value":$mask, "triton::CacheModifier":$cache,
-                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>
+        OpBuilder<(ins "Value":$ptr, "Value":$mask,
+                       CArg<"bool", "false">:$isVolatile)>,
+        // A tensor of pointers or a pointer to a scalar with mask and other
+        OpBuilder<(ins "Value":$ptr, "Value":$mask, "Value":$other,
+                       CArg<"bool", "false">:$isVolatile)>
     ];
 
-    // Specify `cacheModifier` and `evictionPolicy` explicitly in the
-    // assemblyFormat instead of as part of attr-dict so that they get printed
-    // as strings rather than opaque integers.
-    //
-    // Note there's no comma between `other` and `cacheModifier` and between
-    // `cacheModifier` and `evictionPolicy`.  This is due to an apparent
-    // limitation in the MLIR custom-format parser.  In oilist, the initial
-    // keywords of each clause have to be unique, so they can't be `,`.
-    //
-    // Even if we gave up on order-independence and used vanilla optional
-    // clauses, the format (`,` `foo` `=` $foo^)? (`,` `bar` `=` $bar^)?  will
-    // not match the string ", bar = 0" because after the initial comma (first
-    // token of the first optional clause) we expect to see "foo".
     let assemblyFormat = [{
       $ptr (`,` $mask^)? (`,` $other^)?
-      oilist(
-        `cacheModifier` `=` $cache |
-        `evictionPolicy` `=` $evict
-      )
       attr-dict `:` type($ptr)
     }];
 
+    let hasVerifier = 1;
     let hasCanonicalizer = 1;
 }
 
@@ -288,28 +274,24 @@ def TT_StoreOp : TT_Op<"store", [
       Arg<TT_PtrLike, "", [MemWrite<GlobalMemory>]>:$ptr,
       TT_Type:$value,
       Optional<TT_BoolLike>:$mask,
-      DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
-      DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
+      OptionalAttr<AnyAttr>:$cachePolicy,
       UnitAttr:$ignore_cta
     );
 
     let builders = [
         // A tensor of pointers or a pointer to a scalar
-        OpBuilder<(ins "Value":$ptr, "Value":$value, "triton::CacheModifier":$cache, "triton::EvictionPolicy":$evict)>
+        OpBuilder<(ins "Value":$ptr, "Value":$value)>,
+        // A tensor of pointers or a pointer to a scalar with mask
+        OpBuilder<(ins "Value":$ptr, "Value":$value, "Value":$mask,
+                       CArg<"bool", "false">:$ignore_cta)>
     ];
 
-    // Specify cacheModifier and evictionPolicy explicitly, instead of leaving
-    // them in attr-dict, because this way their values get printed as strings,
-    // rather than as opaque integers.
-    //
-    // Note there are no commas between mask, cacheModifier, and evictionPolicy,
-    // due to limitations in MLIR's asm parser.
     let assemblyFormat = [{
       $ptr `,` $value (`,` $mask^)?
-      oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
       attr-dict `:` type($ptr)
     }];
 
+    let hasVerifier = 1;
     let hasCanonicalizer = 1;
 }
 
@@ -330,28 +312,96 @@ def TT_GridDependencyLaunchDependentsOp
     let assemblyFormat = "attr-dict";
 }
 
+def TT_AtomicLoadOp : TT_Op<"atomic_load", [
+  AtomicOpInterface,
+  SameLoadStoreOperandsAndResultShape,
+  SameLoadStoreOperandsAndResultEncoding,
+  DeclareOpInterfaceMethods<PredicatedOpInterface>,
+  TypesMatchWith<"result matches ptr type", "ptr", "result",
+                 "getPointeeType($_self)">,
+  TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
+                 "getI1SameShape(getPointeeType($_self))",
+                 "($_op.getOperands().size() <= 1) || std::equal_to<>()">
+]> {
+    let summary = "Atomically load from a pointer or tensor of pointers";
+
+    let arguments = (ins
+      // Atomic loads are observable synchronization operations even when the
+      // loaded value is unused. Model that side effect so canonicalization and
+      // LICM cannot remove or coalesce polling loads.
+      Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+      Optional<TT_BoolLike>:$mask,
+      TT_MemSemanticAttr:$sem,
+      TT_MemSyncScopeAttr:$scope
+    );
+
+    let results = (outs TT_Type:$result);
+
+    let assemblyFormat = [{
+      $sem `,` $scope `,` $ptr (`,` $mask^)? attr-dict `:`
+      functional-type(operands, $result)
+    }];
+
+    let hasVerifier = 1;
+}
+
+def TT_AtomicStoreOp : TT_Op<"atomic_store", [
+  AtomicOpInterface,
+  SameLoadStoreOperandsShape,
+  SameLoadStoreOperandsEncoding,
+  DeclareOpInterfaceMethods<PredicatedOpInterface>,
+  TypesMatchWith<"value type matches ptr type", "ptr", "value",
+                 "getPointeeType($_self)">,
+  TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
+                 "getI1SameShape(getPointeeType($_self))",
+                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">
+]> {
+    let summary = "Atomically store through a pointer or tensor of pointers";
+
+    let arguments = (ins
+      Arg<TT_PtrLike, "", [MemWrite<GlobalMemory>]>:$ptr,
+      TT_Type:$value,
+      Optional<TT_BoolLike>:$mask,
+      TT_MemSemanticAttr:$sem,
+      TT_MemSyncScopeAttr:$scope
+    );
+
+    let assemblyFormat = [{
+      $sem `,` $scope `,` $ptr `,` $value (`,` $mask^)? attr-dict `:`
+      type($ptr)
+    }];
+
+    let hasVerifier = 1;
+}
+
 def TT_AtomicPollOp : TT_Op<"atomic_poll", [
+  SameOperandsAndResultEncoding,
   TypesMatchWith<"ptr type matches expected type", "expected", "ptr",
-                 "getPointerTypeSameShape($_self)">
+                 "getPointerTypeSameShape($_self)">,
+  TypesMatchWith<"result type matches expected shape", "expected", "result",
+                 "getI1SameShape($_self)">
 ]> {
     let summary = "poll an atomic value";
 
     let description = [{
-        Repeatedly load from $ptr with relaxed semantics on a single thread
-        until the loaded value equals $expected. For acquire semantics, issue
-        an acquire fence only after a successful poll. Other threads wait for
-        the polling thread to finish.
+        Repeatedly load each logical element of $ptr with relaxed semantics
+        until it equals $expected or the operation's timeout expires. One thread polls
+        each element; threads replicating that element wait for its result.
+        For acquire semantics, issue an acquire fence after each successful
+        poll. The block waits for all elements to finish. The result has the
+        same shape and encoding as $ptr. All elements share one timeout budget,
+        and each element is loaded at least once, even with a zero timeout.
     }];
 
     let arguments = (ins
-      Arg<TT_Ptr, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
-      TT_Int:$expected,
+      Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+      TT_IntLike:$expected,
       Optional<I64>:$timeout,
       TT_MemSemanticAttr:$sem,
       TT_MemSyncScopeAttr:$scope
     );
 
-    let results = (outs I1:$result);
+    let results = (outs TT_BoolLike:$result);
 
     let assemblyFormat = [{
       $sem `,` $scope `,` $ptr `,` $expected (`timeout` $timeout^)?
@@ -531,21 +581,6 @@ def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
     let hasVerifier = 1;
 }
 
-// Cat is not pure because it may reorder elements.
-def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
-                             SameTypeOperands,
-                             SameOperandsAndResultElementType]> {
-    let summary = "concatenate 2 tensors";
-
-    let arguments = (ins TT_Tensor:$lhs, TT_Tensor:$rhs);
-
-    let results = (outs TT_Tensor:$result);
-
-    let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
-
-    let hasVerifier = 1;
-}
-
 def TT_JoinOp : TT_Op<"join", [
     Pure, SameTypeOperands]> {
     let summary = "join two tensors along a new, minor dimension";
@@ -564,10 +599,12 @@ def TT_JoinOp : TT_Op<"join", [
     let results = (outs TT_Tensor:$result);
     let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
     let hasVerifier = 1;
+    let hasFolder = 1;
 }
 
 def TT_SplitOp : TT_Op<"split", [
   Pure,
+  SameResultsType,
   InferTypeOpAdaptorWithIsCompatible,
   TypesMatchWith<"outLHS and outRHS types match",
                   "outLHS", "outRHS", "$_self">,
@@ -584,6 +621,7 @@ def TT_SplitOp : TT_Op<"split", [
     let arguments = (ins TT_Tensor:$src);
     let results = (outs TT_Tensor:$outLHS, TT_Tensor:$outRHS);
     let assemblyFormat = "$src attr-dict `:` type($src) `->` type($outLHS)";
+    let hasFolder = 1;
 }
 
 def TT_TransOp : TT_Op<"trans", [Pure,
@@ -924,7 +962,7 @@ def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [
     elems it receives is unspecified.
   }];
 
-  let arguments = (ins StrAttr:$asm_string, StrAttr:$constraints, BoolAttr:$pure, I32Attr:$packed_element, Variadic<AnyTypeOf<[TT_Type]>>:$args);
+  let arguments = (ins StrAttr:$asm_string, StrAttr:$constraints, BoolAttr:$pure, I32Attr:$packed_element, Variadic<AnyType>:$args);
   let results = (outs Variadic<TT_Type>:$result);
 
   let assemblyFormat = [{
@@ -1283,18 +1321,13 @@ def TT_DescriptorLoadOp : TT_Op<"descriptor_load", [TT_DescriptorLoadLikeOpInter
   let arguments = (ins
     Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
     Variadic<I32>:$indices,
-    DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
-    DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict
+    OptionalAttr<AnyAttr>:$cachePolicy
   );
 
   let results = (outs TT_Tensor:$result);
 
   let assemblyFormat = [{
     $desc `[` $indices `]`
-    oilist(
-      `cacheModifier` `=` $cache |
-      `evictionPolicy` `=` $evict
-    )
     attr-dict `:` qualified(type($desc)) `->` type($result)
   }];
 

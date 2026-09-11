@@ -7,6 +7,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
@@ -25,30 +26,6 @@ namespace ttng = mlir::triton::nvidia_gpu;
 // The first 24 bits of the shared memory object are CTA-invariant
 // The next 4 bits are the CTA index
 constexpr uint32_t kSharedMemoryObjectMask = (1u << 24) - 1;
-
-////////////////////////////////////////////
-// Utility functions
-////////////////////////////////////////////
-
-Value createMemDescToI32(RewriterBase &rewriter, Location loc,
-                         const LLVMTypeConverter *typeConverter,
-                         ttg::MemDescType memDescTy, Value sharedMemStruct) {
-  TritonLLVMOpBuilder b(loc, rewriter);
-  auto i32Ty = rewriter.getIntegerType(32);
-  if (isa<ttng::TensorMemorySpaceAttr>(memDescTy.getMemorySpace())) {
-    return b.ptrtoint(i32Ty, sharedMemStruct);
-  }
-  assert(isa<ttg::SharedEncodingTrait>(memDescTy.getEncoding()) &&
-         "Unsupported memory encoding");
-  Type srcElemTy = typeConverter->convertType(memDescTy.getElementType());
-  auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, sharedMemStruct,
-                                                       srcElemTy, rewriter);
-  auto offset = smemObj.getShmemOffset(loc, rewriter, memDescTy);
-  auto elemSize = srcElemTy.getIntOrFloatBitWidth() / 8;
-  offset = b.mul(offset, b.i32_val(elemSize));
-  return b.and_(b.add(offset, b.ptrtoint(i32Ty, smemObj.getBase())),
-                b.i32_val(kSharedMemoryObjectMask));
-}
 
 ////////////////////////////////////////////
 // Patterns
@@ -314,8 +291,8 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     Value converted =
-        createMemDescToI32(rewriter, loc, getTypeConverter(),
-                           op.getMemdesc().getType(), adaptor.getMemdesc());
+        getMemDescAddress(rewriter, loc, getTypeConverter(),
+                          op.getMemdesc().getType(), adaptor.getMemdesc());
     rewriter.replaceOp(op, converted);
     return success();
   }

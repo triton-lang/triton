@@ -540,7 +540,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %2 = ttg.async_copy_global_to_local %0, %1 : tensor<256x32x!tt.ptr<f16>, #blocked1> -> <256x32xf16, #shared, #smem, mutable>
     %3 = ttg.local_load %1 : !ttg.memdesc<256x32xf16, #shared, #smem, mutable> -> tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
     %4 = ttg.local_alloc : () -> !ttg.memdesc<32x128xf16, #shared, #smem, mutable>
-    %5 = amdg.buffer_load_to_local %arg1[%cst_0] into %4 : <f16>[tensor<32x128xi32, #blocked>]  -> <32x128xf16, #shared, #smem, mutable>
+    %5 = amdg.buffer_load_to_local %arg1[%cst_0] into %4 : !tt.ptr<f16>[tensor<32x128xi32, #blocked>]  -> <32x128xf16, #shared, #smem, mutable>
     %6 = ttg.local_load %4 : !ttg.memdesc<32x128xf16, #shared, #smem, mutable> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
     %7 = tt.dot %3, %6, %cst : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<256x128xf32, #mma>
     tt.return

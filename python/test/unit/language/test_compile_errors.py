@@ -384,7 +384,7 @@ def test_fp8_support(fresh_triton_cache, dtype):
     elif dtype in supported_dtypes:
         ctx = contextlib.nullcontext()
     else:
-        ctx = pytest.raises(CompilationError, match="")
+        ctx = pytest.raises(CompilationError)
 
     with ctx as e:
         triton.compile(

@@ -348,10 +348,10 @@ struct FpToFpOpConversion
 
   explicit FpToFpOpConversion(LLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
-                              int computeCapability,
+                              int computeCapability, int ptxVersion,
                               PatternBenefit benefit = patternBenefitDefault)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
-        computeCapability(computeCapability) {}
+        computeCapability(computeCapability), ptxVersion(ptxVersion) {}
 
   static Value convertFp16ToFp32(Location loc,
                                  ConversionPatternRewriter &rewriter,
@@ -418,6 +418,10 @@ struct FpToFpOpConversion
 
     auto undefRounding = static_cast<RoundingMode>(-1);
 
+    // Blackwell and newer can convert packed BF16/FP8 values directly.
+    // Require PTX 9.2 to support both directions.
+    bool hasPackedBf16 = computeCapability >= 100 && ptxVersion >= 92;
+
     DenseMap<std::tuple<TypeID, TypeID, RoundingMode>, Fp8ConversionDesc>
         srcMap = {
             // F8 -> F16
@@ -434,11 +438,20 @@ struct FpToFpOpConversion
              Fp8E5M2_to_Bf16(computeCapability >= 90)},
             // cvt with .bf16.f16' requires .target sm_90 or higher
             {{F8E4M3TyID, BF16TyID, undefRounding},
-             Fp8E4M3Nv_to_Bf16(computeCapability >= 90)},
+             hasPackedBf16
+                 ? Fp8ConversionDesc{"cvt.rn.bf16x2.e4m3x2 $0, $1;", 16, 32, 2}
+                 : Fp8E4M3Nv_to_Bf16(computeCapability >= 90)},
             // BF16 -> F8
             {{BF16TyID, F8E5M2TyID, RoundingMode::RTNE},
-             Bf16_to_Fp8E5M2(computeCapability >= 89)},
-            {{BF16TyID, F8E4M3TyID, RoundingMode::RTNE}, Bf16_to_Fp8E4M3Nv},
+             hasPackedBf16
+                 ? Fp8ConversionDesc{"cvt.rn.satfinite.e5m2x2.bf16x2 $0, $1;",
+                                     32, 16, 2}
+                 : Bf16_to_Fp8E5M2(computeCapability >= 89)},
+            {{BF16TyID, F8E4M3TyID, RoundingMode::RTNE},
+             hasPackedBf16
+                 ? Fp8ConversionDesc{"cvt.rn.satfinite.e4m3x2.bf16x2 $0, $1;",
+                                     32, 16, 2}
+                 : Bf16_to_Fp8E4M3Nv},
             // F32 -> F8
             {{F32TyID, F8E4M3TyID, RoundingMode::RTNE}, Fp32_to_Fp8E4M3Nv},
             {{F32TyID, F8E5M2TyID, RoundingMode::RTNE}, Fp32_to_Fp8E5M2},
@@ -548,6 +561,7 @@ struct FpToFpOpConversion
 
 private:
   int computeCapability;
+  int ptxVersion;
 };
 
 struct FDivOpConversion
@@ -909,7 +923,8 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, benefit);
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
-                                   computeCapability, benefit);
+                                   computeCapability,
+                                   targetInfo.getPtxVersion(), benefit);
   patterns.add<PackedArithOpConversion>(typeConverter, benefit);
 
   // ExpOpConversionApprox will try using ex2.approx if the input type is

@@ -97,7 +97,7 @@ matchReduxKind(triton::ReduceOp op, int computeCapability,
   Operation *reduceOp = op.getSingleCombiner();
   if (!reduceOp)
     return std::nullopt;
-  if (computeCapability == 100 && reduceOp->getResultTypes()[0].isF32()) {
+  if (computeCapability / 10 == 10 && reduceOp->getResultTypes()[0].isF32()) {
     if (isa<arith::MinimumFOp, arith::MaximumFOp>(reduceOp))
       useNanQualifier = true;
     if (isa<arith::MaxNumFOp, arith::MaximumFOp>(reduceOp))
@@ -553,6 +553,41 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     return true;
   }
   return false;
+}
+
+unsigned TargetInfo::getReductionTreeArity(Operation *combinerOp) const {
+  int computeCapability = getComputeCapability();
+  Type resultType = combinerOp->getResult(0).getType();
+  // Consumer Blackwell lacks ternary forms; Thor only supports FP32.
+  if (computeCapability < 90 || computeCapability / 10 == 12 ||
+      (computeCapability / 10 == 11 && !resultType.isF32()))
+    return 2;
+
+  if (computeCapability >= 100 && getPtxVersion() >= 88 &&
+      isa<arith::MaximumFOp, arith::MinimumFOp, arith::MaxNumFOp,
+          arith::MinNumFOp>(combinerOp) &&
+      resultType.isF32())
+    return 3;
+
+  if (resultType.isInteger(32) &&
+      isa<arith::MinSIOp, arith::MaxSIOp, arith::MinUIOp, arith::MaxUIOp>(
+          combinerOp))
+    return 3;
+
+  auto vectorType = dyn_cast<VectorType>(resultType);
+  if (!vectorType || vectorType.getNumElements() != 2)
+    return 2;
+
+  Type elementType = vectorType.getElementType();
+  if (elementType.isInteger(16) &&
+      isa<LLVM::SMinOp, LLVM::SMaxOp, LLVM::UMinOp, LLVM::UMaxOp>(combinerOp))
+    return 3;
+  if ((elementType.isF16() || elementType.isBF16()) &&
+      isa<LLVM::MinNumOp, LLVM::MaxNumOp, LLVM::MinimumOp, LLVM::MaximumOp>(
+          combinerOp))
+    return 3;
+
+  return 2;
 }
 
 std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {

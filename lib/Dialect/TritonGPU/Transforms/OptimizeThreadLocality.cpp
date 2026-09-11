@@ -290,10 +290,12 @@ class TritonGPUOptimizeThreadLocalityPass
       auto yieldOp = dyn_cast<scf::YieldOp>(yieldOpOperand.getOwner());
       if (!yieldOp)
         return;
-      Block *block = reduce->getBlock();
-      Operation *parentOp = block->getParentOp();
-      auto forOp = dyn_cast<scf::ForOp>(parentOp);
+      // Get the parent forOp for the yield and ensure the reduce is inside the
+      // forOp block
+      auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp());
       if (!forOp)
+        return;
+      if (reduce->getBlock() != forOp.getBody())
         return;
       auto argNum = yieldOpOperand.getOperandNumber();
       auto oldAccum = forOp.getInitArgs()[argNum];

@@ -70,10 +70,17 @@ class AMDFMAVectorMultiplier : public FMAVectorMultiplier {
     auto vecTy = vec_ty(elemTy, vectorSize);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value vec = b.undef(vecTy);
+    Value zero = LLVM::ConstantOp::create(rewriter, loc, elemTy,
+                                          rewriter.getZeroAttr(elemTy));
     for (int elem = 0; elem < vectorSize; ++elem) {
       int elemPos = firstElemPos + elem;
-      vec =
-          b.insert_element(vecTy, vec, scalarValues[elemPos], b.i32_val(elem));
+      Value scalar;
+      if (elemPos < static_cast<int>(scalarValues.size())) {
+        scalar = scalarValues[elemPos];
+      } else {
+        scalar = zero;
+      }
+      vec = b.insert_element(vecTy, vec, scalar, b.i32_val(elem));
     }
     if (elemTy.isInteger(8)) {
       assert(vectorSize == 4);

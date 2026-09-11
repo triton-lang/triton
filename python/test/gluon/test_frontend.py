@@ -25,10 +25,25 @@ from triton.experimental.gluon.language.amd.cdna5 import (
 )
 from triton.experimental.gluon.language.extra import libdevice
 
-from triton._filecheck import filecheck_test, run_parser
+from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
 from triton.runtime.jit import MockTensor
 import triton.language as tl
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
+
+
+@filecheck_test
+@gluon.jit
+def test_atomic_poll_tensor():
+    # CHECK-LABEL: test_atomic_poll_tensor
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    offsets = ttgl.arange(0, 128, layout=layout)
+    ptrs = offsets.to(ttgl.int64).to(ttgl.pointer_type(ttgl.int32), bitcast=True)
+    # CHECK: tt.atomic_poll acquire, gpu, {{.*}} : tensor<128x!tt.ptr<i32>, #blocked>, tensor<128xi32, #blocked> -> tensor<128xi1, #blocked>
+    result = ttgl.atomic_poll(ptrs, 1)
+    ttgl.static_assert(result.type.layout == layout)
+    # CHECK: tt.atomic_poll acquire, gpu, {{.*}} timeout {{.*}} : tensor<128x!tt.ptr<i32>, #blocked>, tensor<128xi32, #blocked> -> tensor<128xi1, #blocked>
+    ttgl.atomic_poll(ptrs, offsets, timeout_ns=0)
+
 
 TARGET_PAT = re.compile('ttg.target = "[^"]*"')
 # HIP backend can add this attribute to function parameters
@@ -58,6 +73,86 @@ def anonymize_ir(ir):
 
 def make_args(*args, **kwargs):
     return args, kwargs
+
+
+@gluon.constexpr_function
+def _inline_asm_frontend_generator(outputs, inputs):
+    values, scalar = outputs
+    x, bias = inputs
+    return ("\n".join(f"add.u32 {dst}, {src}, {bias[0]};" for dst, src in zip(values, x)) +
+            f"\nmov.u32 {scalar[0]}, {bias[0]};")
+
+
+@gluon.jit
+def _inline_asm_frontend_kernel(ASM: ttgl.constexpr, CONSTRAINTS: ttgl.constexpr):
+    x = ttgl.arange(0, 512, layout=ttgl.BlockedLayout([4], [32], [4], [0]))
+    y, scalar = ttgl.inline_asm(ASM, CONSTRAINTS, [x, 17], (x.type, ttgl.uint32), is_pure=True)
+    return y, scalar
+
+
+@pytest.mark.parametrize("generated", [False, True])
+def test_inline_asm_frontend_operands(generated):
+    expected = "\n".join(f"add.u32 ${i}, ${5 + i}, $9;" for i in range(4)) + "\nmov.u32 $4, $9;"
+    asm = _inline_asm_frontend_generator if generated else expected
+    constraints = ("=&r", "=r", "r", "r") if generated else ",".join(["=&r"] * 4 + ["=r"] + ["r"] * 5)
+    mod = run_parser(_inline_asm_frontend_kernel, *make_args(asm, constraints), target=BLACKWELL_TARGET)
+    text = mod.str_nodebug()
+    assert 'ttg.inline_asm "add.u32 $0, $5, $9;' in text
+    assert "mov.u32 $4, $9;" in text
+    assert 'constraints = "=&r,=&r,=&r,=&r,=r,r,r,r,r,r"' in text
+    assert 'pure = true' in text
+    assert '-> (tensor<512xi32, #blocked>, i32)' in text
+
+
+@gluon.constexpr_function
+def _inline_asm_bad_generator(outputs, inputs):
+    return 17
+
+
+def test_inline_asm_frontend_invalid_generator():
+    with pytest.raises(CompilationError, match="returning a string"):
+        run_parser(_inline_asm_frontend_kernel, *make_args(_inline_asm_bad_generator, ("=&r", "=r", "r", "r")),
+                   target=BLACKWELL_TARGET)
+
+
+def test_inline_asm_frontend_invalid_constraints():
+    with pytest.raises(CompilationError, match="one constraint per output and input group"):
+        run_parser(_inline_asm_frontend_kernel, *make_args(_inline_asm_frontend_generator, ("=r", )),
+                   target=BLACKWELL_TARGET)
+
+
+@pytest.mark.parametrize("layout", [ttgl.AutoLayout(), ttgl.CoalescedLayout()])
+def test_inline_asm_frontend_unresolved_layout(layout):
+
+    @gluon.jit
+    def kernel(LAYOUT: ttgl.constexpr):
+        x = ttgl.full([128], 0, ttgl.int32, LAYOUT)
+        return ttgl.inline_asm("mov.u32 $0, $1;", "=r,r", [x], x.type, is_pure=True)
+
+    with pytest.raises(CompilationError, match="explicit distributed tensor layouts"):
+        run_parser(kernel, *make_args(layout), target=BLACKWELL_TARGET)
+
+
+@pytest.mark.parametrize("elementwise", [False, True])
+def test_inline_asm_shared_amd_compilation(elementwise):
+    import triton
+    from triton.experimental.gluon._runtime import GluonASTSource
+
+    @gluon.jit
+    def kernel(Out, ELEMENTWISE: ttgl.constexpr):
+        x = ttgl.arange(0, 256, layout=ttgl.BlockedLayout([1], [64], [4], [0]))
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [256], ttgl.SwizzledSharedLayout(1, 1, 1, [0]), x)
+        asm: ttgl.constexpr = "v_add_u32 $0, $1, $2\nds_read_b32 $0, $0\ns_waitcnt lgkmcnt(0)"
+        if ELEMENTWISE:
+            y = ttgl.inline_asm_elementwise(asm, "=&v,v,v", [smem, x * 4], ttgl.int32, False, 1)
+        else:
+            ttgl.barrier()
+            y = ttgl.inline_asm(asm, "=&v,v,v", [smem, x * 4], x.type)
+        ttgl.store(Out + x, y)
+
+    source = GluonASTSource(kernel, {"Out": "*i32", "ELEMENTWISE": "constexpr"}, {"ELEMENTWISE": elementwise})
+    compiled = triton.compile(source, target=HIP_TARGET_CDNA3)
+    assert "ds_read_b32" in compiled.asm["amdgcn"]
 
 
 @gluon.jit
@@ -247,6 +342,30 @@ def test_nvmma_layout_rank_mangling():
     assert module_text.count("tt.func private @test_frontend.allocate_with_nvmma_layout") == 2
     assert "!ttg.memdesc<16x16xf16" in module_text
     assert "!ttg.memdesc<2x16x16xf16" in module_text
+
+
+@gluon.jit
+def anchor_tmem_linear_layout(ll: ttgl.constexpr):
+    pass
+
+
+@gluon.jit
+def tmem_linear_layout_kernel():
+    layout_a: ttgl.constexpr = ttgl.to_linear_layout(TensorMemoryLayout(block=(128, 128), col_stride=1), (128, 128))
+    layout_b: ttgl.constexpr = ttgl.to_linear_layout(TensorMemoryLayout(block=(64, 64), col_stride=1), (128, 128))
+    anchor_tmem_linear_layout(layout_a)
+    anchor_tmem_linear_layout(layout_b)
+
+
+def test_tmem_linear_layout_mangling():
+    # Layouts with the same shape but different bases must get distinct
+    # specializations of the nested function. The mangled names contain
+    # non-identifier characters, so the symbols are printed quoted.
+    module = run_parser(tmem_linear_layout_kernel, target=BLACKWELL_TARGET)
+    module_text = module.str_nodebug()
+
+    specializations = re.findall(r'tt\.func private @"?test_frontend\.anchor_tmem_linear_layout', module_text)
+    assert len(specializations) == 2
 
 
 @filecheck_test
@@ -2571,6 +2690,182 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
+def detailed_cache_policy_kernel(inp, out, l1_load_policy: ttgl.constexpr, modifier_load_policy: ttgl.constexpr,
+                                 store_policy: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    offsets = ttgl.arange(0, 128, layout)
+    # CHECK: %[[L1_VALUE:.*]] = tt.load {{.*}} {cachePolicy = #ttng.cache_policy<l1 = no_allocate, l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = {{.*}} : f32, l2_prefetch_size = 128 : i32>}
+    l1_value = ttgl.load(inp + offsets, cache_policy=l1_load_policy)
+    # CHECK: %[[MODIFIER_VALUE:.*]] = tt.load {{.*}} {cachePolicy = #ttng.cache_policy<cache_modifier = cg, l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = {{.*}} : f32, l2_prefetch_size = 128 : i32>}
+    modifier_value = ttgl.load(inp + offsets, cache_policy=modifier_load_policy)
+    # CHECK: tt.store {{.*}} {cachePolicy = #ttng.cache_policy<l1 = no_allocate, l2_primary = evict_last, l2_secondary = evict_first, l2_fraction = {{.*}} : f32>}
+    ttgl.store(out + offsets, l1_value + modifier_value, cache_policy=store_policy)
+
+
+@gluon.jit
+def generic_cache_policy_kernel(inp, out, layout: ttgl.constexpr, load_policy: ttgl.constexpr,
+                                store_policy: ttgl.constexpr):
+    offsets = ttgl.arange(0, 256, layout)
+    # CHECK: %[[VALUE:.*]] = tt.load {{.*}} {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_last>}
+    value = ttgl.load(inp + offsets, cache_policy=load_policy)
+    # CHECK: tt.store {{.*}} {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_first>}
+    ttgl.store(out + offsets, value, cache_policy=store_policy)
+
+
+@gluon.jit
+def legacy_cache_policy_kernel(inp, out, layout: ttgl.constexpr):
+    offsets = ttgl.arange(0, 256, layout)
+    # CHECK: %[[VALUE:.*]] = tt.load {{.*}} {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_last>}
+    value = ttgl.load(inp + offsets, cache_modifier=".cg", eviction_policy="evict_last")
+    # CHECK: tt.store {{.*}} {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_first>}
+    ttgl.store(out + offsets, value, cache_modifier=".cs", eviction_policy="evict_first")
+
+
+@pytest.mark.parametrize("target", [HOPPER_TARGET, HIP_TARGET_CDNA4])
+def test_generic_cache_policy_frontend(target):
+    layout = ttgl.BlockedLayout([1], [target.warp_size], [4], [0])
+    load_policy = ttgl.CachePolicy(".cg", "evict_last")
+    store_policy = ttgl.CachePolicy(".cs", "evict_first")
+    run_filecheck_test(
+        generic_cache_policy_kernel,
+        *make_args(MockTensor(ttgl.float32), MockTensor(ttgl.float32), layout, load_policy, store_policy),
+        target=target,
+    )
+
+
+@pytest.mark.parametrize("target", [HOPPER_TARGET, HIP_TARGET_CDNA4])
+def test_legacy_cache_policy_normalization(target):
+    layout = ttgl.BlockedLayout([1], [target.warp_size], [4], [0])
+    run_filecheck_test(
+        legacy_cache_policy_kernel,
+        *make_args(MockTensor(ttgl.float32), MockTensor(ttgl.float32), layout),
+        target=target,
+    )
+
+
+def test_generic_cache_policy_validation():
+    assert ttgl.CachePolicy().cache_modifier == "none"
+    assert ttgl.CachePolicy(".cg").cache_modifier == "cg"
+    with pytest.raises(ValueError, match="Unsupported cache modifier"):
+        ttgl.CachePolicy(".invalid")
+    with pytest.raises(ValueError, match="Unsupported eviction policy"):
+        ttgl.CachePolicy(eviction_policy="evict_unchanged")
+
+
+def test_detailed_cache_policy_frontend():
+    l2_policy = ttgl.nvidia.ampere.FractionalEvictionPolicy("evict_last", 0.33, "evict_first")
+    l1_load_policy = ttgl.nvidia.ampere.CachePolicy(
+        l1="no_allocate",
+        l2=l2_policy,
+        l2_prefetch_size=128,
+    )
+    modifier_load_policy = ttgl.nvidia.ampere.CachePolicy(
+        cache_modifier=".cg",
+        l2=l2_policy,
+        l2_prefetch_size=128,
+    )
+    store_policy = ttgl.nvidia.ampere.CachePolicy(l1="no_allocate", l2=l2_policy)
+    run_filecheck_test(
+        detailed_cache_policy_kernel,
+        *make_args(
+            MockTensor(ttgl.float32),
+            MockTensor(ttgl.float32),
+            l1_load_policy,
+            modifier_load_policy,
+            store_policy,
+        ),
+    )
+
+
+def test_detailed_cache_policy_rejects_cache_modifier_with_l1():
+    invalid_policy = ttgl.nvidia.ampere.CachePolicy(cache_modifier=".cg", l1="no_allocate")
+    valid_policy = ttgl.nvidia.ampere.CachePolicy(l1="no_allocate")
+    with pytest.raises(
+            CompilationError,
+            match="cache modifier cannot be combined with an L1 eviction priority",
+    ):
+        run_parser(
+            detailed_cache_policy_kernel,
+            *make_args(
+                MockTensor(ttgl.float32),
+                MockTensor(ttgl.float32),
+                invalid_policy,
+                valid_policy,
+                valid_policy,
+            ),
+        )
+
+
+def test_detailed_cache_policy_validation():
+    assert not hasattr(ttgl.nvidia, "CachePolicy")
+    assert not hasattr(ttgl.nvidia, "FractionalEvictionPolicy")
+    assert ttgl.nvidia.hopper.CachePolicy is ttgl.nvidia.ampere.CachePolicy
+    assert ttgl.nvidia.blackwell.CachePolicy is ttgl.nvidia.ampere.CachePolicy
+    assert ttgl.nvidia.rubin.CachePolicy is ttgl.nvidia.ampere.CachePolicy
+    assert ttgl.nvidia.hopper.FractionalEvictionPolicy is ttgl.nvidia.ampere.FractionalEvictionPolicy
+    assert ttgl.nvidia.blackwell.FractionalEvictionPolicy is ttgl.nvidia.ampere.FractionalEvictionPolicy
+    assert ttgl.nvidia.rubin.FractionalEvictionPolicy is ttgl.nvidia.ampere.FractionalEvictionPolicy
+    assert ttgl.nvidia.ampere.CachePolicy(cache_modifier=".cg").cache_modifier == "cg"
+    assert ttgl.nvidia.ampere.CachePolicy(l2_prefetch_size=64).l2_prefetch_size == 64
+    with pytest.raises(ValueError, match="Unsupported cache modifier"):
+        ttgl.nvidia.ampere.CachePolicy(cache_modifier=".invalid")
+    with pytest.raises(ValueError, match="Unsupported L1"):
+        ttgl.nvidia.ampere.CachePolicy(l1="evict_immediately")
+    with pytest.raises(ValueError, match=r"\(0, 1\]"):
+        ttgl.nvidia.ampere.FractionalEvictionPolicy("evict_first", 0.0)
+    with pytest.raises(ValueError, match="Unsupported L2 secondary"):
+        ttgl.nvidia.ampere.FractionalEvictionPolicy("evict_first", 0.5, "evict_last")
+    with pytest.raises(ValueError, match="L2 prefetch size"):
+        ttgl.nvidia.ampere.CachePolicy(l2_prefetch_size=32)
+    with pytest.raises(ValueError, match="L2 prefetch size"):
+        ttgl.nvidia.ampere.CachePolicy(l2_prefetch_size=64.0)
+
+
+@gluon.jit
+def cache_policy_with_cache_modifier_kernel(inp, policy: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    offsets = ttgl.arange(0, 128, layout)
+    ttgl.load(inp + offsets, cache_modifier=".cg", cache_policy=policy)
+
+
+@gluon.jit
+def cache_policy_with_eviction_policy_kernel(inp, policy: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    offsets = ttgl.arange(0, 128, layout)
+    ttgl.load(inp + offsets, eviction_policy="evict_first", cache_policy=policy)
+
+
+@gluon.jit
+def store_cache_policy_with_cache_modifier_kernel(out, policy: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    offsets = ttgl.arange(0, 128, layout)
+    ttgl.store(out + offsets, 0.0, cache_modifier=".cs", cache_policy=policy)
+
+
+@gluon.jit
+def async_cache_policy_with_eviction_policy_kernel(inp, policy: ttgl.constexpr):
+    smem = ttgl.allocate_shared_memory(inp.dtype.element_ty, [128], ttgl.SwizzledSharedLayout(1, 1, 1, order=[0]))
+    layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
+    offsets = ttgl.arange(0, 128, layout)
+    async_copy.async_load(smem, inp + offsets, eviction_policy="evict_first", cache_policy=policy)
+
+
+@pytest.mark.parametrize(
+    "kernel, message",
+    [
+        (cache_policy_with_cache_modifier_kernel, "cache_policy and cache_modifier are mutually exclusive"),
+        (cache_policy_with_eviction_policy_kernel, "cache_policy and eviction_policy are mutually exclusive"),
+        (store_cache_policy_with_cache_modifier_kernel, "cache_policy and cache_modifier are mutually exclusive"),
+        (async_cache_policy_with_eviction_policy_kernel, "cache_policy and eviction_policy are mutually exclusive"),
+    ],
+)
+def test_detailed_cache_policy_rejects_legacy_policy_arguments(kernel, message):
+    policy = ttgl.nvidia.ampere.CachePolicy(l1="evict_first")
+    with pytest.raises(CompilationError, match=message):
+        run_parser(kernel, *make_args(MockTensor(ttgl.float32), policy))
+
+
+@gluon.jit
 def async_copy_kernel(inp, xnumel, XBLOCK: ttgl.constexpr):
     smem = ttgl.allocate_shared_memory(inp.dtype.element_ty, [XBLOCK], ttgl.SwizzledSharedLayout(1, 1, 1, order=[0]))
     block_layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
@@ -2585,6 +2880,26 @@ def async_copy_kernel(inp, xnumel, XBLOCK: ttgl.constexpr):
     async_copy.mbarrier_arrive(mbar, increment_count=False)
     async_copy.commit_group()
     async_copy.wait_group(0)
+
+
+@gluon.jit
+def detailed_cache_policy_async_copy_kernel(inp, policy: ttgl.constexpr):
+    smem = ttgl.allocate_shared_memory(inp.dtype.element_ty, [128], ttgl.SwizzledSharedLayout(1, 1, 1, order=[0]))
+    layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
+    offsets = ttgl.arange(0, 128, layout)
+    # CHECK: ttg.async_copy_global_to_local {{.*}} {cachePolicy = #ttng.cache_policy<l2_primary = evict_last, {{.*}}l2_prefetch_size = 256 : i32>}
+    async_copy.async_load(smem, inp + offsets, cache_policy=policy)
+
+
+def test_detailed_cache_policy_async_copy_frontend():
+    policy = ttgl.nvidia.ampere.CachePolicy(
+        l2=ttgl.nvidia.ampere.FractionalEvictionPolicy("evict_last", 0.82),
+        l2_prefetch_size=256,
+    )
+    run_filecheck_test(
+        detailed_cache_policy_async_copy_kernel,
+        *make_args(MockTensor(ttgl.float16), policy),
+    )
 
 
 @pytest.mark.parametrize("target", [AMPERE_TARGET, HOPPER_TARGET, BLACKWELL_TARGET])
@@ -2610,7 +2925,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %6 = ttg.async_copy_global_to_local %5, %0 : tensor<128x!tt.ptr<f16>, #blocked> -> <128xf16, #shared, #smem, mutable>
     %7 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x!tt.ptr<f16>, #blocked>
     %8 = tt.addptr %7, %1 : tensor<128x!tt.ptr<f16>, #blocked>, tensor<128xi32, #blocked>
-    %9 = ttg.async_copy_global_to_local %8, %0 mask %3 cacheModifier = ca evictionPolicy = evict_last {isVolatile = true} : tensor<128x!tt.ptr<f16>, #blocked> -> <128xf16, #shared, #smem, mutable>
+    %9 = ttg.async_copy_global_to_local %8, %0 mask %3 {cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_last>, isVolatile = true} : tensor<128x!tt.ptr<f16>, #blocked> -> <128xf16, #shared, #smem, mutable>
     %10 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
     ttng.async_copy_mbarrier_arrive %10 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
     ttng.async_copy_mbarrier_arrive %10 {noIncrement} : !ttg.memdesc<1xi64, #shared, #smem, mutable>
@@ -3141,7 +3456,8 @@ def amd_async_copy_shared_to_global(ptr):
 
     # test mask
     mask = (y_offset < 64)[:, None]
-    cdna5_async_copy.shared_to_global(ptr + offsets, smem, mask)
+    # CHECK: amdg.async_copy_local_to_global {{.*}} mask {{.*}} cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>
+    cdna5_async_copy.shared_to_global(ptr + offsets, smem, mask, cache_modifier=".cg")
 
     cdna5_async_copy.commit_group()
 
@@ -3149,6 +3465,7 @@ def amd_async_copy_shared_to_global(ptr):
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA5])
 def test_amd_async_copy_shared_to_global(target):
     ptr = MockTensor(ttgl.float16)
+    run_filecheck_test(amd_async_copy_shared_to_global, *make_args(ptr), target=target)
     mod = run_parser(amd_async_copy_shared_to_global, *make_args(ptr), target=target)
     expecttest.assert_expected_inline(
         anonymize_ir(mod.str_nodebug()), """\
@@ -3179,7 +3496,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %14 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x16x!tt.ptr<f16>, #blocked>
     %15 = tt.addptr %14, %8 : tensor<128x16x!tt.ptr<f16>, #blocked>, tensor<128x16xi32, #blocked>
     %16 = tt.broadcast %13 : tensor<128x1xi1, #blocked> -> tensor<128x16xi1, #blocked>
-    %17 = amdg.async_copy_local_to_global %0, %15 mask %16 : !ttg.memdesc<128x16xf16, #shared, #smem, mutable> -> tensor<128x16x!tt.ptr<f16>, #blocked>
+    %17 = amdg.async_copy_local_to_global %0, %15 mask %16 cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal> : !ttg.memdesc<128x16xf16, #shared, #smem, mutable> -> tensor<128x16x!tt.ptr<f16>, #blocked>
     %18 = ttg.async_commit_group
     tt.return
   }
@@ -3421,10 +3738,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %6 = tt.broadcast %4 : tensor<128x1xi32, #blocked> -> tensor<128x16xi32, #blocked>
     %7 = tt.broadcast %5 : tensor<1x16xi32, #blocked> -> tensor<128x16xi32, #blocked>
     %8 = arith.addi %6, %7 : tensor<128x16xi32, #blocked>
-    %9 = amdg.buffer_load_to_local %arg0[%8] into %0 : <f16>[tensor<128x16xi32, #blocked>]  -> <128x16xf16, #shared, #smem, mutable>
-    %10 = amdg.buffer_load_to_local %arg0[%8] cacheModifier = ca into %0 : <f16>[tensor<128x16xi32, #blocked>]  -> <128x16xf16, #shared, #smem, mutable>
-    %11 = amdg.buffer_load_to_local %arg0[%8] cacheModifier = cg into %0 : <f16>[tensor<128x16xi32, #blocked>]  -> <128x16xf16, #shared, #smem, mutable>
-    %12 = amdg.buffer_load_to_local %arg0[%8] cacheModifier = cv into %0 : <f16>[tensor<128x16xi32, #blocked>]  -> <128x16xf16, #shared, #smem, mutable>
+    %9 = amdg.buffer_load_to_local %arg0[%8] into %0 : !tt.ptr<f16>[tensor<128x16xi32, #blocked>]  -> <128x16xf16, #shared, #smem, mutable>
+    %10 = amdg.buffer_load_to_local %arg0[%8] cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_normal> into %0 : !tt.ptr<f16>[tensor<128x16xi32, #blocked>]  -> <128x16xf16, #shared, #smem, mutable>
+    %11 = amdg.buffer_load_to_local %arg0[%8] cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal> into %0 : !tt.ptr<f16>[tensor<128x16xi32, #blocked>]  -> <128x16xf16, #shared, #smem, mutable>
+    %12 = amdg.buffer_load_to_local %arg0[%8] cachePolicy = #tt.cache_policy<cache_modifier = cv, eviction_policy = evict_normal> into %0 : !tt.ptr<f16>[tensor<128x16xi32, #blocked>]  -> <128x16xf16, #shared, #smem, mutable>
     %c64_i32 = arith.constant 64 : i32
     %cst_1 = arith.constant dense<64> : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
     %13 = arith.cmpi slt, %1, %cst_1 : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
@@ -3432,17 +3749,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %cst_2 = arith.constant 0.000000e+00 : f16
     %cst_3 = arith.constant dense<0.000000e+00> : tensor<128x16xf16, #blocked>
     %15 = tt.broadcast %14 : tensor<128x1xi1, #blocked> -> tensor<128x16xi1, #blocked>
-    %16 = amdg.buffer_load_to_local %arg0[%8] mask = %15 other = %cst_3 into %0 : <f16>[tensor<128x16xi32, #blocked>] tensor<128x16xf16, #blocked> -> <128x16xf16, #shared, #smem, mutable>
+    %16 = amdg.buffer_load_to_local %arg0[%8] mask = %15 other = %cst_3 into %0 : !tt.ptr<f16>[tensor<128x16xi32, #blocked>] tensor<128x16xf16, #blocked> -> <128x16xf16, #shared, #smem, mutable>
     %cst_4 = arith.constant 0.000000e+00 : f16
     %cst_5 = arith.constant dense<0.000000e+00> : tensor<128x1xf16, #blocked>
     %17 = tt.broadcast %14 : tensor<128x1xi1, #blocked> -> tensor<128x16xi1, #blocked>
     %18 = tt.broadcast %cst_5 : tensor<128x1xf16, #blocked> -> tensor<128x16xf16, #blocked>
-    %19 = amdg.buffer_load_to_local %arg0[%8] mask = %17 other = %18 into %0 : <f16>[tensor<128x16xi32, #blocked>] tensor<128x16xf16, #blocked> -> <128x16xf16, #shared, #smem, mutable>
+    %19 = amdg.buffer_load_to_local %arg0[%8] mask = %17 other = %18 into %0 : !tt.ptr<f16>[tensor<128x16xi32, #blocked>] tensor<128x16xf16, #blocked> -> <128x16xf16, #shared, #smem, mutable>
     %20 = tt.broadcast %14 : tensor<128x1xi1, #blocked> -> tensor<128x16xi1, #blocked>
     %cst_6 = arith.constant 0.000000e+00 : f32
     %21 = arith.truncf %cst_6 : f32 to f16
     %22 = tt.splat %21 : f16 -> tensor<128x16xf16, #blocked>
-    %23 = amdg.buffer_load_to_local %arg0[%8] mask = %20 other = %22 into %0 : <f16>[tensor<128x16xi32, #blocked>] tensor<128x16xf16, #blocked> -> <128x16xf16, #shared, #smem, mutable>
+    %23 = amdg.buffer_load_to_local %arg0[%8] mask = %20 other = %22 into %0 : !tt.ptr<f16>[tensor<128x16xi32, #blocked>] tensor<128x16xf16, #blocked> -> <128x16xf16, #shared, #smem, mutable>
     tt.return
   }
 }
@@ -3488,20 +3805,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %cst = arith.constant dense<true> : tensor<64x64xi1, #blocked>
     %cst_0 = arith.constant 1.000000e+00 : f32
     %cst_1 = arith.constant dense<1.000000e+00> : tensor<64x64xf32, #blocked>
-    %3 = amdg.buffer_load %arg0[%2], %cst, %cst_1 cacheModifier = ca : tensor<64x64xf32, #blocked>
-    amdg.buffer_store %3, %arg1[%2], %cst cacheModifier = cs : tensor<64x64xf32, #blocked>
-    %4 = amdg.buffer_load %arg0[%2], %cst, %cst_1 cacheModifier = ca : tensor<64x64xf32, #blocked>
-    amdg.buffer_store %4, %arg1[%2], %cst cacheModifier = cs : tensor<64x64xf32, #blocked>
+    %3 = amdg.buffer_load %arg0[%2], %cst, %cst_1 {cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_normal>} : !tt.ptr<f32> -> tensor<64x64xf32, #blocked>
+    amdg.buffer_store %3, %arg1[%2], %cst {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_normal>} : !tt.ptr<f32> -> tensor<64x64xf32, #blocked>
+    %4 = amdg.buffer_load %arg0[%2], %cst, %cst_1 {cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_normal>} : !tt.ptr<f32> -> tensor<64x64xf32, #blocked>
+    amdg.buffer_store %4, %arg1[%2], %cst {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_normal>} : !tt.ptr<f32> -> tensor<64x64xf32, #blocked>
     %true_2 = arith.constant true
     %cst_3 = arith.constant dense<true> : tensor<64x64xi1, #gluon.auto_encoding>
     %cst_4 = arith.constant 1.000000e+00 : f32
     %cst_5 = arith.constant dense<1.000000e+00> : tensor<64x64xf32, #gluon.auto_encoding>
     %5 = gluon.set_auto_layout %cst_3 : tensor<64x64xi1, #gluon.auto_encoding> -> tensor<64x64xi1, #blocked>
     %6 = gluon.set_auto_layout %cst_5 : tensor<64x64xf32, #gluon.auto_encoding> -> tensor<64x64xf32, #blocked>
-    %7 = amdg.buffer_load %arg0[%2], %5, %6 : tensor<64x64xf32, #blocked>
+    %7 = amdg.buffer_load %arg0[%2], %5, %6 : !tt.ptr<f32> -> tensor<64x64xf32, #blocked>
     %8 = gluon.set_auto_layout %1 : tensor<64x64xi32, #gluon.auto_encoding> -> tensor<64x64xi32, #blocked>
     %9 = gluon.set_auto_layout %cst_3 : tensor<64x64xi1, #gluon.auto_encoding> -> tensor<64x64xi1, #blocked>
-    amdg.buffer_store %7, %arg1[%8], %9 : tensor<64x64xf32, #blocked>
+    amdg.buffer_store %7, %arg1[%8], %9 : !tt.ptr<f32> -> tensor<64x64xf32, #blocked>
     tt.return
   }
 }
@@ -3548,23 +3865,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %cst_1 = arith.constant dense<true> : tensor<64x1xi1, #blocked>
     %3 = tt.broadcast %cst_1 : tensor<64x1xi1, #blocked> -> tensor<64x64xi1, #blocked>
     %4 = arith.truncf %cst_0 : tensor<64x64xf32, #blocked> to tensor<64x64xf16, #blocked>
-    %5 = amdg.buffer_load %arg0[%2], %3, %4 cacheModifier = ca : tensor<64x64xf16, #blocked>
+    %5 = amdg.buffer_load %arg0[%2], %3, %4 {cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_normal>} : !tt.ptr<f16> -> tensor<64x64xf16, #blocked>
     %6 = tt.broadcast %cst_1 : tensor<64x1xi1, #blocked> -> tensor<64x64xi1, #blocked>
-    amdg.buffer_store %5, %arg1[%2], %6 cacheModifier = cs : tensor<64x64xf16, #blocked>
+    amdg.buffer_store %5, %arg1[%2], %6 {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_normal>} : !tt.ptr<f16> -> tensor<64x64xf16, #blocked>
     %true_2 = arith.constant true
     %cst_3 = arith.constant dense<true> : tensor<1x64xi1, #blocked>
     %7 = tt.broadcast %cst_3 : tensor<1x64xi1, #blocked> -> tensor<64x64xi1, #blocked>
     %8 = arith.truncf %cst_0 : tensor<64x64xf32, #blocked> to tensor<64x64xf16, #blocked>
-    %9 = amdg.buffer_load %arg0[%2], %7, %8 cacheModifier = ca : tensor<64x64xf16, #blocked>
+    %9 = amdg.buffer_load %arg0[%2], %7, %8 {cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_normal>} : !tt.ptr<f16> -> tensor<64x64xf16, #blocked>
     %10 = tt.broadcast %cst_3 : tensor<1x64xi1, #blocked> -> tensor<64x64xi1, #blocked>
-    amdg.buffer_store %9, %arg1[%2], %10 cacheModifier = cs : tensor<64x64xf16, #blocked>
+    amdg.buffer_store %9, %arg1[%2], %10 {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_normal>} : !tt.ptr<f16> -> tensor<64x64xf16, #blocked>
     %11 = tt.broadcast %cst_3 : tensor<1x64xi1, #blocked> -> tensor<64x64xi1, #blocked>
     %cst_4 = arith.constant 1.000000e+00 : f32
     %12 = arith.truncf %cst_4 : f32 to f16
     %13 = tt.splat %12 : f16 -> tensor<64x64xf16, #blocked>
-    %14 = amdg.buffer_load %arg0[%2], %11, %13 cacheModifier = ca : tensor<64x64xf16, #blocked>
+    %14 = amdg.buffer_load %arg0[%2], %11, %13 {cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_normal>} : !tt.ptr<f16> -> tensor<64x64xf16, #blocked>
     %15 = tt.broadcast %cst_3 : tensor<1x64xi1, #blocked> -> tensor<64x64xi1, #blocked>
-    amdg.buffer_store %14, %arg1[%2], %15 cacheModifier = cs : tensor<64x64xf16, #blocked>
+    amdg.buffer_store %14, %arg1[%2], %15 {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_normal>} : !tt.ptr<f16> -> tensor<64x64xf16, #blocked>
     tt.return
   }
 }
@@ -3845,17 +4162,84 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     %cst = arith.constant dense<17> : tensor<16x32xi8, #blocked>
     %c2_i8 = arith.constant 2 : i8
     %cst_0 = arith.constant dense<2> : tensor<16x64xi8, #blocked1>
-    %0 = arith.extui %cst_0 : tensor<16x64xi8, #blocked1> to tensor<16x64xi16, #blocked1>
-    %c7_i32 = arith.constant 7 : i32
-    %1 = arith.trunci %c7_i32 : i32 to i16
-    %2 = tt.splat %1 : i16 -> tensor<16x64xi16, #blocked1>
-    %3 = arith.shli %0, %2 : tensor<16x64xi16, #blocked1>
-    %4 = tt.bitcast %3 : tensor<16x64xi16, #blocked1> -> tensor<16x64xbf16, #blocked1>
-    %5 = amdg.scaled_upcast_fp4 %cst scale %4 {axis = 1 : i32} : tensor<16x32xi8, #blocked>, tensor<16x64xbf16, #blocked1> -> tensor<16x64xbf16, #blocked1>
+    %0 = amdg.scaled_upcast_fp4 %cst scale %cst_0 {axis = 1 : i32} : tensor<16x32xi8, #blocked>, tensor<16x64xi8, #blocked1> -> tensor<16x64xbf16, #blocked1>
     tt.return
   }
 }
 """)
+
+
+def _get_amd_scaled_downcast(target):
+    return ttgl.amd.cdna4.scaled_downcast if target.arch == "gfx950" else ttgl.amd.cdna5.scaled_downcast
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA4, HIP_TARGET_CDNA5], ids=["cdna4", "cdna5"])
+@pytest.mark.parametrize("dtype,ir_dtype", [(ttgl.float16, "f16"), (ttgl.float32, "f32")])
+def test_amd_scaled_downcast_fp4_float_dtypes(target, dtype, ir_dtype):
+    scaled_downcast = _get_amd_scaled_downcast(target)
+
+    @gluon.jit
+    def kernel():
+        unpacked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 8], [1, 1], [1, 0])
+        scale_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [8, 8], [1, 1], [1, 0])
+        input = ttgl.full([16, 64], 1.0, dtype, unpacked_layout)
+        scale = ttgl.full([16, 8], 0x7F, ttgl.uint8, scale_layout)
+        scaled_downcast(input, scale, "e2m1", axis=1)
+
+    module = run_parser(kernel, *make_args(num_warps=1), target=target)
+    module_text = module.str_nodebug()
+    assert "amdg.scaled_downcast_fp4" in module_text
+    assert f"tensor<16x64x{ir_dtype}" in module_text
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA4, HIP_TARGET_CDNA5], ids=["cdna4", "cdna5"])
+@pytest.mark.parametrize("fp8_format,ir_dtype", [("e4m3", "f8E4M3FN"), ("e5m2", "f8E5M2")])
+def test_amd_scaled_downcast_fp8_cdna(target, fp8_format, ir_dtype):
+    scaled_downcast = _get_amd_scaled_downcast(target)
+
+    @gluon.jit
+    def kernel(FORMAT: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 8], [1, 1], [1, 0])
+        scale_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [8, 8], [1, 1], [1, 0])
+        input = ttgl.full([16, 64], 1.0, ttgl.bfloat16, layout)
+        scale = ttgl.full([16, 8], 0x7F, ttgl.uint8, scale_layout)
+        scaled_downcast(input, scale, FORMAT, axis=1)
+
+    module = run_parser(kernel, *make_args(fp8_format, num_warps=1), target=target)
+    module_text = module.str_nodebug()
+    assert "amdg.scaled_downcast_fp8" in module_text
+    assert f"-> tensor<16x64x{ir_dtype}" in module_text
+
+
+@pytest.mark.parametrize("target, threads_per_warp, expect_layout", [
+    (HIP_TARGET_CDNA3, [8, 8],
+     ttgl.DistributedLinearLayout(reg_bases=[[8, 0]], lane_bases=[[0, 0], [0, 0], [0, 1], [1, 0], [2, 0], [4, 0]],
+                                  warp_bases=[], block_bases=[], shape=[16, 2])),
+    (HIP_TARGET_CDNA4, [8, 8],
+     ttgl.DistributedLinearLayout(reg_bases=[[8, 0]], lane_bases=[[0, 0], [0, 0], [0, 1], [1, 0], [2, 0], [4, 0]],
+                                  warp_bases=[], block_bases=[], shape=[16, 2])),
+    (HIP_TARGET_CDNA5, [8, 4],
+     ttgl.DistributedLinearLayout(reg_bases=[[0, 1], [8, 0]], lane_bases=[[0, 0], [0, 0], [1, 0], [2, 0], [4, 0]],
+                                  warp_bases=[], block_bases=[], shape=[16, 2])),
+], ids=["cdna3", "cdna4", "cdna5"])
+def test_amd_scaled_upcast_fp4_compact_scale_cdna(target, threads_per_warp, expect_layout):
+    scaled_upcast = _get_amd_scaled_upcast(target)
+
+    @gluon.jit
+    def kernel(THREADS_PER_WARP: ttgl.constexpr, EXPECT_LAYOUT: ttgl.constexpr):
+        packed_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], THREADS_PER_WARP, [1, 1], [1, 0])
+        src = ttgl.full([16, 32], 0x11, ttgl.uint8, packed_layout)
+        scale_layout: ttgl.constexpr = ttgl.amd.get_scaled_upcast_fp4_scale_layout(src, 32, ttgl.bfloat16, axis=1)
+        ttgl.static_assert(scale_layout == EXPECT_LAYOUT)
+        scale = ttgl.full([16, 2], 0x02, ttgl.uint8, scale_layout)
+        scaled_upcast(src, scale, ttgl.bfloat16, axis=1)
+
+    module = run_parser(kernel, *make_args(threads_per_warp, expect_layout, num_warps=1), target=target)
+    ir = anonymize_ir(module.str_nodebug())
+    assert "ttg.convert_layout" not in ir
+    assert "tensor<16x2xi8" in ir
+    assert "amdg.scaled_upcast_fp4" in ir
+    assert "tensor<16x64xbf16" in ir
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4], ids=["cdna3", "cdna4"])
@@ -3880,13 +4264,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     %1 = tt.splat %0 : f8E4M3FN -> tensor<16x64xf8E4M3FN, #blocked>
     %c2_i8 = arith.constant 2 : i8
     %cst_0 = arith.constant dense<2> : tensor<16x64xi8, #blocked>
-    %2 = arith.extui %cst_0 : tensor<16x64xi8, #blocked> to tensor<16x64xi16, #blocked>
-    %c7_i32 = arith.constant 7 : i32
-    %3 = arith.trunci %c7_i32 : i32 to i16
-    %4 = tt.splat %3 : i16 -> tensor<16x64xi16, #blocked>
-    %5 = arith.shli %2, %4 : tensor<16x64xi16, #blocked>
-    %6 = tt.bitcast %5 : tensor<16x64xi16, #blocked> -> tensor<16x64xbf16, #blocked>
-    %7 = amdg.scaled_upcast_fp8 %1 scale %6 : tensor<16x64xf8E4M3FN, #blocked>, tensor<16x64xbf16, #blocked> -> tensor<16x64xbf16, #blocked>
+    %2 = amdg.scaled_upcast_fp8 %1 scale %cst_0 : tensor<16x64xf8E4M3FN, #blocked>, tensor<16x64xi8, #blocked> -> tensor<16x64xbf16, #blocked>
     tt.return
   }
 }
@@ -4117,7 +4495,7 @@ def test_amd_wmma_scale_layout_for_multicta(target):
         a_layout: ttgl.constexpr = ttgl.DotOperandLayout(
             operand_index=0,  #
             parent=ttgl.amd.AMDWMMALayout(version=3, transposed=True, warp_bases=[[0, 1], [1, 0]],
-                                          instr_shape=[16, 16, 64], cga_layout=[[0, 0], [1, 0]]),  #
+                                          instr_shape=[16, 16, 64], cga_layout=[[0, 1], [1, 0]]),  #
             k_width=16)
         a_scale_layout: ttgl.constexpr = ttgl.amd.cdna5.get_wmma_scale_layout(a_layout, [64, 4])
         ttgl.full([64, 4], 0x02, ttgl.uint8, a_scale_layout)
@@ -4125,7 +4503,7 @@ def test_amd_wmma_scale_layout_for_multicta(target):
         b_layout: ttgl.constexpr = ttgl.DotOperandLayout(
             operand_index=1,  #
             parent=ttgl.amd.AMDWMMALayout(version=3, transposed=True, warp_bases=[[0, 1], [1, 0]],
-                                          instr_shape=[16, 16, 64], cga_layout=[[1, 0], [0, 0]]),  #
+                                          instr_shape=[16, 16, 64], cga_layout=[[0, 1], [1, 0]]),  #
             k_width=16,
         )
         b_scale_layout: ttgl.constexpr = ttgl.amd.cdna5.get_wmma_scale_layout(b_layout, [64, 4])
@@ -4301,52 +4679,52 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %0 = tt.make_range {end = 1 : i32, start = 0 : i32} : tensor<1xi32, #gluon.auto_encoding>
     %c1_i32 = arith.constant 1 : i32
     %cst = arith.constant dense<1> : tensor<1xi32, #gluon.auto_encoding>
-    %1 = amdg.buffer_atomic_rmw max, acq_rel, gpu, %cst, %arg0[%0] : tensor<1xi32, #gluon.auto_encoding>
-    %2 = amdg.buffer_atomic_rmw min, acq_rel, gpu, %cst, %arg0[%0] : tensor<1xi32, #gluon.auto_encoding>
-    %3 = amdg.buffer_atomic_rmw and, acq_rel, gpu, %cst, %arg0[%0] : tensor<1xi32, #gluon.auto_encoding>
-    %4 = amdg.buffer_atomic_rmw or, acq_rel, gpu, %cst, %arg0[%0] : tensor<1xi32, #gluon.auto_encoding>
+    %1 = amdg.buffer_atomic_rmw max, acq_rel, gpu, %cst, %arg0[%0] : !tt.ptr<i32> -> tensor<1xi32, #gluon.auto_encoding>
+    %2 = amdg.buffer_atomic_rmw min, acq_rel, gpu, %cst, %arg0[%0] : !tt.ptr<i32> -> tensor<1xi32, #gluon.auto_encoding>
+    %3 = amdg.buffer_atomic_rmw and, acq_rel, gpu, %cst, %arg0[%0] : !tt.ptr<i32> -> tensor<1xi32, #gluon.auto_encoding>
+    %4 = amdg.buffer_atomic_rmw or, acq_rel, gpu, %cst, %arg0[%0] : !tt.ptr<i32> -> tensor<1xi32, #gluon.auto_encoding>
     %c1_i32_0 = arith.constant 1 : i32
     %cst_1 = arith.constant dense<1> : tensor<1xi32, #gluon.auto_encoding>
-    %5 = amdg.buffer_atomic_rmw xor, acq_rel, gpu, %cst_1, %arg0[%0] : tensor<1xi32, #gluon.auto_encoding>
+    %5 = amdg.buffer_atomic_rmw xor, acq_rel, gpu, %cst_1, %arg0[%0] : !tt.ptr<i32> -> tensor<1xi32, #gluon.auto_encoding>
     %c1_i32_2 = arith.constant 1 : i32
     %cst_3 = arith.constant dense<1> : tensor<1xi32, #gluon.auto_encoding>
-    %6 = amdg.buffer_atomic_rmw umax, acq_rel, gpu, %cst_3, %arg1[%0] : tensor<1xi32, #gluon.auto_encoding>
-    %7 = amdg.buffer_atomic_rmw umin, acq_rel, gpu, %cst_3, %arg1[%0] : tensor<1xi32, #gluon.auto_encoding>
-    %8 = amdg.buffer_atomic_rmw add, acq_rel, gpu, %cst_3, %arg1[%0] : tensor<1xi32, #gluon.auto_encoding>
+    %6 = amdg.buffer_atomic_rmw umax, acq_rel, gpu, %cst_3, %arg1[%0] : !tt.ptr<i32> -> tensor<1xi32, #gluon.auto_encoding>
+    %7 = amdg.buffer_atomic_rmw umin, acq_rel, gpu, %cst_3, %arg1[%0] : !tt.ptr<i32> -> tensor<1xi32, #gluon.auto_encoding>
+    %8 = amdg.buffer_atomic_rmw add, acq_rel, gpu, %cst_3, %arg1[%0] : !tt.ptr<i32> -> tensor<1xi32, #gluon.auto_encoding>
     %9 = arith.extui %cst_3 : tensor<1xi32, #gluon.auto_encoding> to tensor<1xi64, #gluon.auto_encoding>
     %c0_i32 = arith.constant 0 : i32
     %c0_i32_4 = arith.constant 0 : i32
     %10 = arith.cmpi ne, %c0_i32, %c0_i32_4 : i32
     %11 = tt.splat %10 : i1 -> tensor<1xi1, #gluon.auto_encoding>
-    %12 = amdg.buffer_atomic_rmw exch, acq_rel, gpu, %9, %arg2[%0], %11 : tensor<1xi64, #gluon.auto_encoding>
+    %12 = amdg.buffer_atomic_rmw exch, acq_rel, gpu, %9, %arg2[%0], %11 : !tt.ptr<i64> -> tensor<1xi64, #gluon.auto_encoding>
     %c1_i32_5 = arith.constant 1 : i32
     %cst_6 = arith.constant dense<1> : tensor<1xi32, #gluon.auto_encoding>
     %13 = tt.call @triton.experimental.gluon.language._standard.zeros__Tc1T_cfp16_cAL() : () -> tensor<1xf16, #gluon.auto_encoding>
     %c0_i32_7 = arith.constant 0 : i32
     %cst_8 = arith.constant dense<0> : tensor<1xi32, #gluon.auto_encoding>
     %14 = arith.cmpi ne, %cst_6, %cst_8 : tensor<1xi32, #gluon.auto_encoding>
-    %15 = amdg.buffer_atomic_rmw fadd, acq_rel, gpu, %13, %arg3[%0], %14 : tensor<1xf16, #gluon.auto_encoding>
+    %15 = amdg.buffer_atomic_rmw fadd, acq_rel, gpu, %13, %arg3[%0], %14 : !tt.ptr<f16> -> tensor<1xf16, #gluon.auto_encoding>
     %c0_i32_9 = arith.constant 0 : i32
     %cst_10 = arith.constant dense<0> : tensor<1xi32, #gluon.auto_encoding>
     %16 = arith.cmpi ne, %cst_6, %cst_10 : tensor<1xi32, #gluon.auto_encoding>
-    %17 = amdg.buffer_atomic_rmw fadd, acq_rel, sys, %13, %arg3[%0], %16 : tensor<1xf16, #gluon.auto_encoding>
+    %17 = amdg.buffer_atomic_rmw fadd, acq_rel, sys, %13, %arg3[%0], %16 : !tt.ptr<f16> -> tensor<1xf16, #gluon.auto_encoding>
     %c0_i32_11 = arith.constant 0 : i32
     %cst_12 = arith.constant dense<0> : tensor<1xi32, #gluon.auto_encoding>
     %18 = arith.cmpi ne, %cst_6, %cst_12 : tensor<1xi32, #gluon.auto_encoding>
-    %19 = amdg.buffer_atomic_rmw fadd, relaxed, cta, %13, %arg3[%0], %18 : tensor<1xf16, #gluon.auto_encoding>
+    %19 = amdg.buffer_atomic_rmw fadd, relaxed, cta, %13, %arg3[%0], %18 : !tt.ptr<f16> -> tensor<1xf16, #gluon.auto_encoding>
     %20 = arith.extf %13 : tensor<1xf16, #gluon.auto_encoding> to tensor<1xf32, #gluon.auto_encoding>
     %c0_i32_13 = arith.constant 0 : i32
     %cst_14 = arith.constant dense<0> : tensor<1xi32, #gluon.auto_encoding>
     %21 = arith.cmpi ne, %cst_6, %cst_14 : tensor<1xi32, #gluon.auto_encoding>
-    %22 = amdg.buffer_atomic_rmw fadd, acq_rel, gpu, %20, %arg4[%0], %21 : tensor<1xf32, #gluon.auto_encoding>
+    %22 = amdg.buffer_atomic_rmw fadd, acq_rel, gpu, %20, %arg4[%0], %21 : !tt.ptr<f32> -> tensor<1xf32, #gluon.auto_encoding>
     %c0_i32_15 = arith.constant 0 : i32
     %cst_16 = arith.constant dense<0> : tensor<1xi32, #gluon.auto_encoding>
     %23 = arith.cmpi ne, %cst_6, %cst_16 : tensor<1xi32, #gluon.auto_encoding>
-    %24 = amdg.buffer_atomic_rmw fadd, acq_rel, sys, %20, %arg4[%0], %23 : tensor<1xf32, #gluon.auto_encoding>
+    %24 = amdg.buffer_atomic_rmw fadd, acq_rel, sys, %20, %arg4[%0], %23 : !tt.ptr<f32> -> tensor<1xf32, #gluon.auto_encoding>
     %c0_i32_17 = arith.constant 0 : i32
     %cst_18 = arith.constant dense<0> : tensor<1xi32, #gluon.auto_encoding>
     %25 = arith.cmpi ne, %cst_6, %cst_18 : tensor<1xi32, #gluon.auto_encoding>
-    %26 = amdg.buffer_atomic_rmw fadd, relaxed, cta, %20, %arg4[%0], %25 : tensor<1xf32, #gluon.auto_encoding>
+    %26 = amdg.buffer_atomic_rmw fadd, relaxed, cta, %20, %arg4[%0], %25 : !tt.ptr<f32> -> tensor<1xf32, #gluon.auto_encoding>
     tt.return
   }
   tt.func private @triton.experimental.gluon.language._standard.zeros__Tc1T_cfp16_cAL() -> tensor<1xf16, #gluon.auto_encoding> attributes {noinline = false} {
@@ -4385,17 +4763,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c0_i32_0 = arith.constant 0 : i32
     %2 = arith.cmpi ne, %c0_i32, %c0_i32_0 : i32
     %3 = tt.splat %2 : i1 -> tensor<1xi1, #gluon.auto_encoding>
-    %4 = amdg.buffer_atomic_rmw fadd, acq_rel, gpu, %1, %arg0[%0], %3 : tensor<1xbf16, #gluon.auto_encoding>
+    %4 = amdg.buffer_atomic_rmw fadd, acq_rel, gpu, %1, %arg0[%0], %3 : !tt.ptr<bf16> -> tensor<1xbf16, #gluon.auto_encoding>
     %c1_i32 = arith.constant 1 : i32
     %cst = arith.constant dense<1> : tensor<1xi32, #gluon.auto_encoding>
     %c0_i32_1 = arith.constant 0 : i32
     %cst_2 = arith.constant dense<0> : tensor<1xi32, #gluon.auto_encoding>
     %5 = arith.cmpi ne, %cst, %cst_2 : tensor<1xi32, #gluon.auto_encoding>
-    %6 = amdg.buffer_atomic_rmw fadd, acq_rel, sys, %1, %arg0[%0], %5 : tensor<1xbf16, #gluon.auto_encoding>
+    %6 = amdg.buffer_atomic_rmw fadd, acq_rel, sys, %1, %arg0[%0], %5 : !tt.ptr<bf16> -> tensor<1xbf16, #gluon.auto_encoding>
     %c0_i32_3 = arith.constant 0 : i32
     %cst_4 = arith.constant dense<0> : tensor<1xi32, #gluon.auto_encoding>
     %7 = arith.cmpi ne, %cst, %cst_4 : tensor<1xi32, #gluon.auto_encoding>
-    %8 = amdg.buffer_atomic_rmw fadd, relaxed, cta, %1, %arg0[%0], %7 : tensor<1xbf16, #gluon.auto_encoding>
+    %8 = amdg.buffer_atomic_rmw fadd, relaxed, cta, %1, %arg0[%0], %7 : !tt.ptr<bf16> -> tensor<1xbf16, #gluon.auto_encoding>
     tt.return
   }
   tt.func private @triton.experimental.gluon.language._standard.zeros__Tc1T_cbf16_cAL() -> tensor<1xbf16, #gluon.auto_encoding> attributes {noinline = false} {

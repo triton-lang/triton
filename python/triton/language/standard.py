@@ -50,17 +50,43 @@ def sigmoid(x):
     return 1 / (1 + math.exp(-x))
 
 
+@constexpr_function
+def _softmax_keep_dims_warning():
+    import warnings
+
+    warnings.warn(
+        "The keep_dims argument to tl.softmax is deprecated and ignored; softmax always preserves the input shape.",
+        stacklevel=2)
+
+
 @core._tensor_member_fn
 @jit
-@math._add_math_1arg_docstr("softmax")
-def softmax(x, dim=None, keep_dims=False, ieee_rounding=False):
+def softmax(x, dim=None, *, keep_dims=None, ieee_rounding=False):
+    """
+    Computes the softmax of :code:`x` along the given axis.
+
+    :param x: the input values
+    :type x: Block
+    :param dim: the axis along which to normalize. Defaults to 0 -- note that
+        this is *not* the last axis, unlike :code:`torch.softmax`.
+    :type dim: int | None
+    :param keep_dims: deprecated and ignored. Softmax always preserves the input shape.
+        Defaults to :code:`None`; any other value emits a warning.
+        Must be passed by keyword.
+    :type keep_dims: bool | None
+    :param ieee_rounding: whether the final division uses IEEE-compliant rounding.
+        Must be passed by keyword.
+    :type ieee_rounding: bool
+    """
+    if keep_dims is not None:
+        _softmax_keep_dims_warning()
     if dim is None:
         _dim: core.constexpr = 0
     else:
         _dim: core.constexpr = dim
-    z = x - max(x, _dim, keep_dims=keep_dims)
+    z = x - max(x, _dim, keep_dims=True)
     num = math.exp(z)
-    den = sum(num, _dim, keep_dims=keep_dims)
+    den = sum(num, _dim, keep_dims=True)
     return math.fdiv(num, den, ieee_rounding)
 
 
@@ -379,7 +405,7 @@ def _compare_and_swap(x, flip, i: core.constexpr):
     is_right = _indicator(n_dims, i)
 
     # conditional swap:
-    ret = core.where((x > y) != (flip ^ is_right), y, x)
+    ret = core.where((x > y) != (flip ^ is_right).to(core.int1), y, x)
     return ret
 
 

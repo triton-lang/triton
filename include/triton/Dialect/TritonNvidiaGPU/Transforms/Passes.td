@@ -24,15 +24,13 @@
 
 include "mlir/Pass/PassBase.td"
 
-def TritonGPUPlanCTAPass : Pass<"triton-nvidia-gpu-plan-cta", "mlir::ModuleOp"> {
-  let summary = "plan CTA";
+def TritonNvidiaGPUAssignCGALayoutsPass : Pass<"triton-nvidia-gpu-assign-cga-layouts", "mlir::ModuleOp"> {
+  let summary = "Assign CGA layouts";
 
   let description = [{
-    This pass computes and applies "optimized" CTA tilings to DotOp, ReduceOp
-    and StoreLikeOps operations.
+    This pass computes and assigns optimized CGA layouts to anchor ops such as DotOp and ReduceOp
+    operations.
   }];
-
-  let constructor = "mlir::triton::nvidia_gpu::createTritonNvidiaGPUPlanCTAPass()";
 
   let dependentDialects = [
     "mlir::triton::gpu::TritonGPUDialect",
@@ -76,6 +74,19 @@ def TritonNvidiaGPULowerCLCPass : Pass<"triton-nvidia-gpu-lower-clc", "mlir::Mod
   ];
 }
 
+def TritonNvidiaGPUOptimizeCTALocalityPass : Pass<"triton-nvidia-gpu-optimize-cta-locality", "mlir::ModuleOp"> {
+  let summary = "Optimize CTA locality";
+
+  let description = [{
+    This pass removes cross-CTA layout conversions by making their source and destination the same CGA layout.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
 def TritonGPUFenceInsertion : Pass<"triton-nvidia-gpu-fence-insertion", "mlir::ModuleOp"> {
   let summary = "Insert fences across generic and async proxy.";
 
@@ -102,11 +113,34 @@ def TritonGPUProxyFenceInsertion : Pass<"triton-nvidia-gpu-proxy-fence-insertion
   let summary = "Insert fences across generic and async proxy";
 
   let description = [{
-    This pass is to insert memory fences to ensure that memory operations are
-    properly ordered across generic and async operations.
+    Insert shared-memory fences between generic and asynchronous proxy
+    operations using fine-grained physical buffer-region alias analysis.
   }];
 
   let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+
+  let options = [
+    Option<"computeCapability", "compute-capability",
+           "int32_t", /*default*/"90",
+           "device compute capability">
+  ];
+}
+
+def TritonNvidiaGPUHoistMBarrierLifecyclePass : Pass<"triton-nvidia-gpu-hoist-mbarrier-lifecycle", "mlir::ModuleOp"> {
+  let summary = "Hoist cross-CTA mbarrier lifecycles to function scope";
+
+  let description = [{
+    This pass moves cross-CTA mbarrier initialization to the beginning of the
+    function and invalidation to function exits so cluster-visible mbarrier init
+    fences can be inserted outside loops.
+  }];
+
+  let dependentDialects = [
+    "mlir::arith::ArithDialect",
+    "mlir::scf::SCFDialect",
     "mlir::triton::gpu::TritonGPUDialect",
     "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
   ];
@@ -125,6 +159,21 @@ def TritonNvidiaGPUTMemBarrierInsertionPass : Pass<"triton-nvidia-gpu-tmem-barri
     This pass inserts CTA barriers between tensor-memory accesses that reuse
     aliasing physical tensor-memory storage and require ordering across logical
     allocation lifetimes.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
+def TritonNvidiaGPUTMemWaitInsertionPass : Pass<"triton-nvidia-gpu-tmem-wait-insertion", "mlir::ModuleOp"> {
+  let summary = "Insert tensor-memory completion waits";
+
+  let description = [{
+    This pass inserts load and store completion waits before dependent accesses
+    or synchronization boundaries, reusing existing CTA barriers where possible.
+    Run after tensor-memory allocation and barrier insertion, before lowering.
   }];
 
   let dependentDialects = [

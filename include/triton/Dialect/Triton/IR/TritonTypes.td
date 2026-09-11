@@ -58,14 +58,19 @@ def TT_PtrType : TritonTypeDef<"Pointer", "ptr"> {
         Pointer type in Triton IR type system. Pointer types may only point to scalar element types.
     }];
 
-    let parameters = (ins "Type":$pointeeType, "int":$addressSpace);
+    let parameters = (ins "Type":$pointeeType, "PtrAddrSpace":$addressSpace);
 
     let builders = [
         TypeBuilderWithInferredContext<(ins
             "Type":$pointeeType,
-            "int":$addressSpace
+            "PtrAddrSpace":$addressSpace
         ), [{
             return $_get(pointeeType.getContext(), pointeeType, addressSpace);
+        }]>,
+        TypeBuilderWithInferredContext<(ins
+            "Type":$pointeeType
+        ), [{
+            return $_get(pointeeType.getContext(), pointeeType, PtrAddrSpace::Global);
         }]>
     ];
 

@@ -41,7 +41,7 @@ class DType:
         self.is_nvfp4 = dtype_str in {"nvfp4_e2m1", "nvfp4_e2m1_fiber"}
         self.has_mx_scale = dtype_str.startswith("mx") or self.is_nvfp4
         self.is_any_float8 = "float8" in dtype_str
-        self.uses_fp8e4nv = dtype_str in {"mxfloat8_e4m3fn", "nvfp4_e2m1", "nvfp4_e2m1_fiber"}
+        self.uses_fp8e4nv = dtype_str in {"float8_e4m3fn", "mxfloat8_e4m3fn", "nvfp4_e2m1", "nvfp4_e2m1_fiber"}
         if dtype_str in {"float4_e2m1", "mxfloat4_e2m1", "nvfp4_e2m1", "nvfp4_e2m1_fiber"}:
             self.torch_dtype = torch.uint8
         else:
@@ -154,6 +154,12 @@ def _build_test_op_cases():
         Case(*even_shape, "ragged", "float8_e5m2", "float8_e5m2", epilogue_subtile=val)
         for val in (1, 2, 4)
     ])
+    test_cases.extend([
+        Case(*odd_shape2, "plain", lhs, rhs, dtype, b_transpose=b_transpose)
+        for dtype in ("float16", "bfloat16")
+        for lhs, rhs in (("float8_e4m3fn", dtype), (dtype, "float8_e4m3fn"))
+        for b_transpose in (False, True)
+    ])
     # fp32
     test_cases.extend([
         Case(1024, 1000, 2048, "ragged", "float32", "float32", b_transpose=True)
@@ -200,6 +206,10 @@ def _build_test_op_cases():
     # nvfp4 x dense
     test_cases.append(Case(128, 128, 128, "plain", "nvfp4_e2m1", "bfloat16", "bfloat16"))
     test_cases.append(Case(128, 128, 128, "plain", "nvfp4_e2m1_fiber", "bfloat16", "bfloat16"))
+    test_cases.extend([
+        Case(256, 256, 128, "ragged", "nvfp4_e2m1", rhs_dtype, "bfloat16", a_hbm_swizzling=True)
+        for rhs_dtype in ("bfloat16", "float16")
+    ])
     # mxfloat x mxfloat
     test_cases.extend([
         Case(16, 256, 256, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1"),
@@ -279,6 +289,13 @@ def _build_test_op_cases():
         Case(*shape, mode, "mxfloat8_e4m3fn", "mxfloat4_e2m1", a_hbm_swizzling=True, b_hbm_swizzling=True, split_k=split_k, swiglu_opts=(1.1, 7))
      for shape in [odd_shape2, even_shape] for mode in ["ragged", "batched"] for split_k in [1, 5]
     ])
+    # MXFP8 lhs x dense rhs needs TMEM headroom even with fused MX output.
+    test_cases.extend([
+        Case(32, 256, 128, "plain", "mxfloat8_e4m3fn", rhs_dtype, "mxfloat8_e4m3fn",
+             a_hbm_swizzling=True, c_hbm_swizzling=c_hbm_swizzling, swiglu_opts=(1.702, 7.0))
+        for rhs_dtype in ["bfloat16", "float16"]
+        for c_hbm_swizzling in [False, True]
+    ])
     # swiglu together with nvfp4 downcast epilogue
     test_cases.extend([
         Case(*shape, mode, "bfloat16", "bfloat16", "nvfp4_e2m1", swiglu_opts=(1.1, 7.0))
@@ -342,7 +359,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         if device_capability < 10 and (a_dtype.is_nvfp4 or b_dtype.is_nvfp4 or c_dtype.is_nvfp4):
             pytest.skip("NVFP4 matmul only tested on Blackwell or newer")
         if device_capability < 9 and (a_dtype.uses_fp8e4nv or b_dtype.uses_fp8e4nv or c_dtype.uses_fp8e4nv):
-            pytest.skip("MXFP8/NVFP4 tensors use fp8e4nv, which is not supported on A100")
+            pytest.skip("FP8 E4M3FN tests require Hopper or newer")
         if b_dtype.is_any_float8 and device_capability < 9:
             pytest.skip("Float8 not tested on A100")
         if act_dtype_str == "float16" and b_dtype.has_mx_scale and device_capability >= 10:
@@ -431,7 +448,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         if block_m == 16:
             pytest.skip("PassManager::run failed from Triton compiler")
     # TODO: should construct the test case differently rather than overriding here
-    if b_dtype.is_any_float8 and device_capability < 10:
+    if (b_dtype.is_any_float8 and device_capability < 10
+            and not (weight_dtype_str == "float8_e4m3fn" and act_dtype_str in ("float16", "bfloat16"))):
         b_transpose = True
 
     torch.manual_seed(0)
@@ -515,7 +533,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 
     # --- create precision config ---
     wrap_list = lambda vals: torch.tensor(vals, dtype=torch.float32, device=device)
-    flex_a = InFlexData(c_dtype.torch_dtype, wrap_list([1.25])) if c_dtype.has_global_scale else InFlexData()
+    flex_a = InFlexData(a_dtype.torch_dtype, wrap_list([1.25])) if a_dtype.has_global_scale else InFlexData()
     flex_b = InFlexData(b_dtype.torch_dtype, wrap_list([1.25])) if b_dtype.has_global_scale else InFlexData()
     if c_dtype.has_global_scale:
         flex_c = OutFlexData(c_dtype.torch_dtype, wrap_list([4.00]), wrap_list([0]), None)
@@ -560,7 +578,10 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
             if c_dtype.is_nvfp4
             else FnSpecs(FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn, (), ())
         )
-        epilogue = Epilogue(epilogue_spec, tuple(), tuple(), effective_itemsize=2.0 if c_dtype.is_nvfp4 else 6.0)
+        effective_itemsize = 2.0 if c_dtype.is_nvfp4 else 6.0
+        if c_dtype.is_nvfp4 and fused_activation is not None and fused_activation.specs.reduction_n > 1:
+            effective_itemsize = 4 * fused_activation.specs.reduction_n
+        epilogue = Epilogue(epilogue_spec, tuple(), tuple(), effective_itemsize=effective_itemsize)
 
 
     # --- triton implementation ---
@@ -643,6 +664,57 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     if c_dtype.has_global_scale and not is_compile_warmup():
         assert torch.all((ref_y_scale - tri_y_scale).abs() < 1e-10), \
                f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
+
+
+@pytest.mark.parametrize("shape, fp8_lhs, constraints", [
+    ((273, 544, 576), True, dict(block_m=64, block_n=256, block_k=128, split_k=1, is_persistent=True)),
+    ((273, 544, 576), False, dict(block_m=128, block_n=256, block_k=128, split_k=1, is_persistent=True, swap_xw=False)),
+    ((128, 256, 1024), True, {}),
+    ((273, 544, 576), False, {}),
+])
+def test_matmul_mixed_fp8_resource_limits(shape, fp8_lhs, constraints, device, opt_flags_scope):
+    if is_cuda() and torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("requires Hopper or newer")
+    if is_hip() and constraints.get("is_persistent"):
+        pytest.skip("Persistent kernel not supported on AMD GPU")
+
+    torch.manual_seed(0)
+    m, n, k = shape
+    a_dtype, b_dtype = (torch.float8_e4m3fn, torch.bfloat16) if fp8_lhs else (torch.bfloat16, torch.float8_e4m3fn)
+    a = torch.randn((m, k), device=device).to(a_dtype)
+    b = torch.randn((n, k), device=device).to(b_dtype).mT
+
+    opt_flags.update_opt_flags_constraints(constraints)
+    actual = matmul(a, b, None, precision_config=PrecisionConfig(out_dtype=torch.bfloat16))
+
+    expected = torch.matmul(a.float(), b.float()).to(torch.bfloat16)
+    assert_close(expected, actual)
+
+
+@pytest.mark.parametrize("fp8_lhs", [False, True])
+@pytest.mark.parametrize("is_persistent", [False, True])
+def test_matmul_mixed_fp8_preserves_fp16_precision(fp8_lhs, is_persistent, device, opt_flags_scope):
+    if is_cuda() and torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("requires Hopper or newer")
+    if is_hip() and is_persistent:
+        pytest.skip("Persistent kernel not supported on AMD GPU")
+
+    a = torch.zeros((128, 128), dtype=torch.float16, device=device)
+    b = torch.zeros_like(a)
+    a[:, 0] = 1
+    a[:, 1] = -1
+    # Rounding the FP16 operand to BF16 would erase the residual.
+    b[0, :] = 1 + 2**-10
+    b[1, :] = 1
+    a = a.to(torch.float8_e4m3fn)
+    if not fp8_lhs:
+        a, b = b.mT.contiguous(), a.mT.contiguous()
+
+    opt_flags.update_opt_flags_constraints(dict(is_persistent=is_persistent, split_k=1))
+    actual = matmul(a, b, None, precision_config=PrecisionConfig(out_dtype=torch.float16))
+
+    expected = torch.full((128, 128), 2**-10, dtype=torch.float16, device=device)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("is_persistent", [False, True])

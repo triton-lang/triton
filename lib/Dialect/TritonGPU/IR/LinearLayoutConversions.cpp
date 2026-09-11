@@ -591,9 +591,13 @@ LinearLayout chooseWmmaCTALinearLayout(MLIRContext *ctx, unsigned rank,
   return ret.transposeOuts(dims);
 }
 
-LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
-                                   ArrayRef<int64_t> shape) {
-  auto mfmaLayout = llvm::cast<AMDMfmaEncodingAttr>(dotMfmaLayout.getParent());
+LinearLayout
+AMDMfmaEncodingAttr::dotOperandToLinearLayout(Attribute dotOp,
+                                              ArrayRef<int64_t> shape) const {
+  auto dotMfmaLayout = cast<DotOperandEncodingAttr>(dotOp);
+  auto mfmaLayout = *this;
+  assert(mfmaLayout == dotMfmaLayout.getParent() &&
+         "dot operand parent must be this layout");
 
   auto rank = shape.size();
   bool hasBatchDim = rank == 3;
@@ -779,9 +783,13 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return combineCtaCgaWithShape(wmmaLayout, getCGALayout(), shape);
 }
 
-LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
-                                          ArrayRef<int64_t> shape) {
-  auto wmmaLayout = llvm::cast<AMDWmmaEncodingAttr>(dotWmmaLayout.getParent());
+LinearLayout
+AMDWmmaEncodingAttr::dotOperandToLinearLayout(Attribute dotOp,
+                                              ArrayRef<int64_t> shape) const {
+  auto dotWmmaLayout = cast<DotOperandEncodingAttr>(dotOp);
+  auto wmmaLayout = *this;
+  assert(wmmaLayout == dotWmmaLayout.getParent() &&
+         "dot operand parent must be this layout");
   unsigned version = wmmaLayout.getVersion();
   assert(version >= 1 && version <= 3 && "unexpected wmma version");
 
@@ -871,7 +879,8 @@ BlockedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
       identityStandardND(S("lane"), getThreadsPerWarp(), order) *
       identityStandardND(S("warp"), getWarpsPerCTA(), order);
 
-  return combineCtaCgaWithShape(ctaLayout, getCGALayout(), shape);
+  return combineCtaCgaWithShape(ctaLayout, getCGALayout(), shape)
+      .removeZeroBasesAlongDim(S("register"));
 }
 
 LinearLayout fmaDotToLinearLayout(DotOperandEncodingAttr operandLayout,
@@ -982,10 +991,13 @@ NvidiaMmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return combineCtaCgaWithShape(ctaLayout, getCGALayout(), shape);
 }
 
-LinearLayout nvidiaDotToLinearLayout(ArrayRef<int64_t> shape,
-                                     DotOperandEncodingAttr dot) {
+LinearLayout
+NvidiaMmaEncodingAttr::dotOperandToLinearLayout(Attribute dotOp,
+                                                ArrayRef<int64_t> shape) const {
+  auto dot = cast<DotOperandEncodingAttr>(dotOp);
+  auto mma = *this;
+  assert(mma == dot.getParent() && "dot operand parent must be this layout");
   int rank = shape.size();
-  auto mma = cast<NvidiaMmaEncodingAttr>(dot.getParent());
   int kWidth = dot.getKWidth();
   bool isA = dot.getOpIdx() == 0;
   MLIRContext *ctx = mma.getContext();
@@ -1012,21 +1024,18 @@ LinearLayout nvidiaDotToLinearLayout(ArrayRef<int64_t> shape,
                                            kDim, S("warp"))
                    .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
 
-  return combineCtaCgaWithShape(ctaLayout, getCGALayout(dot), shape);
+  return combineCtaCgaWithShape(ctaLayout, dot.getCGALayout(), shape);
 }
 
 LinearLayout
 DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   auto parent = getParent();
-  if (auto blockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(parent)) {
+  if (mlir::isa<BlockedEncodingAttr>(parent))
     return fmaDotToLinearLayout(*this, shape);
-  } else if (auto mfmaLayout = mlir::dyn_cast<AMDMfmaEncodingAttr>(parent)) {
-    return mfmaDotToLinearLayout(*this, shape);
-  } else if (auto wmmaLayout = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
-    return wmmaDotOperandToLinearLayout(*this, shape);
-  } else {
-    return nvidiaDotToLinearLayout(shape, *this);
-  }
+  if (auto mma = mlir::dyn_cast<MmaEncodingTrait>(parent))
+    return mma.dotOperandToLinearLayout(*this, shape);
+  llvm::report_fatal_error(
+      "unexpected parent layout in DotOperandEncodingAttr::toLinearLayout");
 }
 
 LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
@@ -1475,14 +1484,15 @@ LinearLayout chooseScaledWmmaScaleLayout(
   }
 
   if (dotOperandIdx == 1) {
-    // ctaLayout comes from the dot operand. For B in scaled dot,
+    // ctaLayout and cgaLayout come from the dot operand. For B in scaled dot,
     // - the operand is ordered as [K, N]
     // - the scale is ordered as [N, K / 32 or 16].
-    // Swap the last two dims of ctaLayout to match the tileLayout
+    // Swap the last two dims of both to match the tileLayout
     SmallVector<int32_t> order = {1, 0};
     if (hasBatchDim)
       order = {0, 2, 1};
     ctaLayout = transposeLinearLayout(ctaLayout, order);
+    cgaLayout = inferDotScaleCGALayoutFromOperand(cgaLayout, dotOperandIdx);
   }
 
   // Zero out M or N dim based on opIdx
@@ -1539,6 +1549,8 @@ LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx,
                                           ArrayRef<unsigned> warpsPerCTA,
                                           CGAEncodingAttr cgaLayout) {
   unsigned rank = shape.size();
+  assert((rank == 2 || rank == 3) && "scaled dot expects rank-2 or rank-3");
+  assert(warpsPerCTA.size() == rank && "warp layout must match operand rank");
   auto outDims = standardOutDimNames(ctx, rank);
   StringAttr kRegister = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
@@ -1547,25 +1559,31 @@ LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx,
   // - B: [K, N]
   // - aScale: [M, K / K_GROUP_SIZE]
   // - bScale: [N, K / K_GROUP_SIZE]
-  const unsigned kIdx = 1;
-  const unsigned mnIdx = 0;
+  const unsigned kIdx = rank - 1;
+  const unsigned mnIdx = rank - 2;
 
-  std::vector<std::vector<int32_t>> laneBase;
-  SmallVector<unsigned> order;
-  SmallVector<unsigned> mmaWarpsPerCTA;
-  if (opIdx == 0) {
-    laneBase = {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}};
-    order = SmallVector<unsigned>{1u, 0u};
-    mmaWarpsPerCTA = SmallVector<unsigned>{warpsPerCTA[0], warpsPerCTA[1]};
-  } else {
-    laneBase = {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}};
-    order = SmallVector<unsigned>{0u, 1u};
-    mmaWarpsPerCTA = SmallVector<unsigned>{warpsPerCTA[1], warpsPerCTA[0]};
+  std::vector<std::vector<int32_t>> laneBase(5, std::vector<int32_t>(rank, 0));
+  laneBase[2][mnIdx] = 1;
+  laneBase[3][mnIdx] = 2;
+  laneBase[4][mnIdx] = 4;
+  if (opIdx == 0)
+    laneBase[0][mnIdx] = 8;
+
+  SmallVector<unsigned> order = getMatrixOrder(rank, /*rowMajor=*/true);
+  SmallVector<unsigned> mmaWarpsPerCTA(warpsPerCTA.begin(), warpsPerCTA.end());
+  if (opIdx == 1) {
+    std::swap(mmaWarpsPerCTA[mnIdx], mmaWarpsPerCTA[kIdx]);
+    for (unsigned &dim : order) {
+      if (dim == mnIdx)
+        dim = kIdx;
+      else if (dim == kIdx)
+        dim = mnIdx;
+    }
   }
   LinearLayout LL =
-      LinearLayout::identity1D(shape[1], kRegister, outDims[kIdx]) *
-      LinearLayout({{kLane, laneBase}}, {outDims[mnIdx], outDims[kIdx]}) *
-      broadcastedDotOperandLayout(ctx, mmaWarpsPerCTA, order, 1u, kWarp);
+      LinearLayout::identity1D(shape[kIdx], kRegister, outDims[kIdx]) *
+      LinearLayout({{kLane, laneBase}}, outDims) *
+      broadcastedDotOperandLayout(ctx, mmaWarpsPerCTA, order, kIdx, kWarp);
   return combineCtaCgaWithShape(LL, cgaLayout, shape);
 }
 

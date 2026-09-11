@@ -37,7 +37,7 @@ except ImportError:
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from python.build_helpers import check_env_flag, get_base_dir, get_cmake_dir
+from python.build_helpers import check_env_flag, find_therock_rocm_include_dir, get_base_dir, get_cmake_dir
 
 
 def is_git_repo() -> bool:
@@ -250,11 +250,22 @@ class CMakeBuild(build_ext):
         if cupti_include_dir == "":
             cupti_include_dir = os.path.join(get_base_dir(), "third_party", "nvidia", "backend", "include")
         cmake_args += ["-DCUPTI_INCLUDE_DIR=" + cupti_include_dir]
+
         rocm_include_dir = get_env_with_keys(["TRITON_ROCM_INCLUDE_PATH"])
-        if rocm_include_dir == "":
-            rocm_include_dir = os.path.join(get_base_dir(), "third_party", "amd", "backend", "include")
-        cmake_args += ["-DROCM_INCLUDE_DIR=" + rocm_include_dir]
         rocprofiler_sdk_include_dir = get_env_with_keys(["TRITON_ROCPROFILER_SDK_INCLUDE_PATH"])
+        therock_include_dir = None
+        if not rocm_include_dir or not rocprofiler_sdk_include_dir:
+            therock_include_dir = find_therock_rocm_include_dir()
+        if therock_include_dir is not None:
+            print(f"Using TheRock ROCm headers from {therock_include_dir}", file=sys.stderr)
+
+        if not rocm_include_dir:
+            rocm_include_dir = therock_include_dir or os.path.join(get_base_dir(), "third_party", "amd", "backend",
+                                                                   "include")
+        cmake_args += ["-DROCM_INCLUDE_DIR=" + rocm_include_dir]
+
+        if not rocprofiler_sdk_include_dir:
+            rocprofiler_sdk_include_dir = therock_include_dir
         if rocprofiler_sdk_include_dir:
             cmake_args += ["-DROCPROFILER_SDK_INCLUDE_DIR=" + rocprofiler_sdk_include_dir]
         return cmake_args

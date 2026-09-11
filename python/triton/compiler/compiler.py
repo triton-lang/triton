@@ -90,7 +90,7 @@ class IRSource:
         self.path = path
         path = Path(path)
         self.ext = path.suffix[1:]
-        self.language = Language.TRITON
+        self.language = Language.GLUON if self.ext == "glir" else Language.TRITON
         self.src = path.read_text()
         ir.load_dialects(context)
         backend.load_dialects(context)
@@ -112,14 +112,14 @@ class IRSource:
             self.signature = {k: ty for k, ty in enumerate(func_ty)}
 
     def hash(self):
-        return hashlib.sha256(self.src.encode("utf-8")).hexdigest()
+        return hashlib.sha256(f"{self.ext}-{self.src}".encode("utf-8")).hexdigest()
 
     def make_ir(self, target: GPUTarget, options, codegen_fns, module_map, context):
         self.module.context = context
         return self.module
 
     def parse_options(self):
-        if self.ext == "ttgir":
+        if self.ext in ("glir", "ttgir"):
             num_warps = self.module.get_int_attr("ttg.num-warps")
             assert num_warps is not None, "Unable to parse ttg.num-warps attribute"
             options = {'num_warps': num_warps}
@@ -136,7 +136,7 @@ def max_shared_mem(device):
 
 
 def parse(full_name, ext, context):
-    if ext == "ttir" or ext == "ttgir":
+    if ext in ("ttir", "glir", "ttgir"):
         module = ir.parse_mlir_module(full_name, context)
         module.context = context
         return module
@@ -433,17 +433,21 @@ class CompiledKernel:
         # because it involves doing runtime things
         # (e.g., checking amount of shared memory on current device)
         self.module = None
+        self._module_pid = None
         self.function = None
         self._run = None
 
     def __del__(self):
 
-        if self.module is not None:
+        # Forked children inherit module handles that are still owned by the
+        # parent's GPU runtime and must not unload them.
+        if self.module is not None and self._module_pid == os.getpid():
             if knobs.runtime.kernel_unload_hook is not None:
                 knobs.runtime.kernel_unload_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
 
             driver.active.utils.unload_module(self.module)
             self.module = None
+            self._module_pid = None
 
     def _init_handles(self):
         if self.module is not None:
@@ -478,6 +482,7 @@ class CompiledKernel:
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, device)
+        self._module_pid = os.getpid()
         warp_size = driver.active.get_current_target().warp_size
         if self.metadata.num_warps * warp_size > self.n_max_threads:
             raise_(OutOfResources(self.metadata.num_warps * warp_size, self.n_max_threads, "threads"))
