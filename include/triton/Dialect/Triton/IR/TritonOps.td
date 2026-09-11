@@ -372,7 +372,6 @@ def TT_AtomicStoreOp : TT_Op<"atomic_store", [
     }];
 
     let hasVerifier = 1;
-    let hasCanonicalizeMethod = 1;
 }
 
 def TT_AtomicPollOp : TT_Op<"atomic_poll", [

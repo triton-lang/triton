@@ -30,6 +30,7 @@
 
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
+#include "mlir/IR/PatternMatch.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Interfaces.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -702,6 +703,37 @@ void TritonNvidiaGPUDialect::initialize() {
   addInterfaces<TritonNvidiaGPUVerifyTensorLayoutInterface>();
   addInterfaces<TritonGPUOpAsmInterface>();
   addInterfaces<TritonInlinerInterface>();
+}
+
+namespace {
+struct EraseFalsePredicatedOp
+    : OpInterfaceRewritePattern<triton::PredicatedOpInterface> {
+  using OpInterfaceRewritePattern::OpInterfaceRewritePattern;
+
+  LogicalResult matchAndRewrite(triton::PredicatedOpInterface op,
+                                PatternRewriter &rewriter) const override {
+    if (!isa<TritonNvidiaGPUDialect>(op->getDialect()))
+      return failure();
+    if (isa<TCGen5MMAOp, TCGen5MMAScaledOp>(op.getOperation()))
+      return failure();
+    // Dependencies keep allocations live even when the wait is predicated off.
+    if (auto wait = dyn_cast<WaitBarrierOp>(op.getOperation())) {
+      if (!wait.getDeps().empty())
+        return failure();
+    }
+    return triton::eraseIfPredicateIsFalse(op, rewriter);
+  }
+};
+} // namespace
+
+void mlir::triton::nvidia_gpu::populatePredicatedOpCanonicalizationPatterns(
+    RewritePatternSet &patterns) {
+  patterns.add<EraseFalsePredicatedOp>(patterns.getContext());
+}
+
+void TritonNvidiaGPUDialect::getCanonicalizationPatterns(
+    RewritePatternSet &patterns) const {
+  populatePredicatedOpCanonicalizationPatterns(patterns);
 }
 
 // verify TritonNvidiaGPU ops

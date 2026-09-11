@@ -59,6 +59,8 @@ LogicalResult verifyMMAv5Op(Operation *op);
 
 namespace mlir::triton::nvidia_gpu {
 
+void populatePredicatedOpCanonicalizationPatterns(RewritePatternSet &patterns);
+
 struct PackedArithTypeInfo {
   llvm::StringLiteral suffix;
   unsigned lanes, registerBits;

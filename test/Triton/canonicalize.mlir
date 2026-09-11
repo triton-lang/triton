@@ -1,9 +1,10 @@
-// RUN: triton-opt %s -split-input-file -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file -canonicalize | FileCheck %s --check-prefixes=CHECK,PREDICATE
+// RUN: triton-opt %s -split-input-file -gluon-canonicalize | FileCheck %s --check-prefix=PREDICATE
 
-// CHECK-LABEL: @false_store_predicates
-// CHECK-NEXT: tt.store %arg0, %arg1, %arg2 :
-// CHECK-NEXT: tt.atomic_store release, gpu, %arg0, %arg1, %arg2 :
-// CHECK-NEXT: tt.return
+// PREDICATE-LABEL: @false_store_predicates
+// PREDICATE-NEXT: tt.store %arg0, %arg1, %arg2 :
+// PREDICATE-NEXT: tt.atomic_store release, gpu, %arg0, %arg1, %arg2 :
+// PREDICATE-NEXT: tt.return
 tt.func @false_store_predicates(%ptr: !tt.ptr<i32>, %value: i32, %pred: i1, %ptrs: tensor<4x!tt.ptr<i32>>, %values: tensor<4xi32>) {
   %false = arith.constant false
   // m_Zero matches both scalar false and dense<false> tensor masks.

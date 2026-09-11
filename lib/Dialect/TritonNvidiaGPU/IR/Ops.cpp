@@ -430,8 +430,6 @@ LogicalResult BarrierExpectOp::verify() {
 
 LogicalResult BarrierExpectOp::canonicalize(BarrierExpectOp op,
                                             PatternRewriter &rewriter) {
-  if (succeeded(eraseIfPredicateIsFalse(op, rewriter)))
-    return success();
   return canonicalizeBarrierFromCTA(op, rewriter);
 }
 
@@ -448,14 +446,6 @@ Type BarrierExpectOp::getPredicateOperandTypeLike() {
 }
 
 // -- WaitBarrierOp --
-LogicalResult WaitBarrierOp::canonicalize(WaitBarrierOp op,
-                                          PatternRewriter &rewriter) {
-  // Dependencies keep allocations live even when the wait is predicated off.
-  if (!op.getDeps().empty())
-    return failure();
-  return eraseIfPredicateIsFalse(op, rewriter);
-}
-
 TypedValue<MemDescType> WaitBarrierOp::getBarrier() { return getAlloc(); }
 
 Value WaitBarrierOp::getPredicateOperand() { return getPred(); }
@@ -498,8 +488,6 @@ LogicalResult ArriveBarrierOp::verify() {
 
 LogicalResult ArriveBarrierOp::canonicalize(ArriveBarrierOp op,
                                             PatternRewriter &rewriter) {
-  if (succeeded(eraseIfPredicateIsFalse(op, rewriter)))
-    return success();
   return canonicalizeBarrierFromCTA(op, rewriter);
 }
 
@@ -843,12 +831,6 @@ bool AsyncTMAReduceOp::isSupportedReduceKind(DescriptorReduceKind kind,
 }
 
 // -- AsyncTMACopyGlobalToLocalOp --
-LogicalResult
-AsyncTMACopyGlobalToLocalOp::canonicalize(AsyncTMACopyGlobalToLocalOp op,
-                                          PatternRewriter &rewriter) {
-  return eraseIfPredicateIsFalse(op, rewriter);
-}
-
 LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
   auto descType = getDesc().getType();
   bool isIm2Col = isIm2ColDescriptor(descType);
@@ -912,11 +894,6 @@ LogicalResult AsyncTMAReduceOp::verify() {
 }
 
 // -- AsyncTMAGatherOp --
-LogicalResult AsyncTMAGatherOp::canonicalize(AsyncTMAGatherOp op,
-                                             PatternRewriter &rewriter) {
-  return eraseIfPredicateIsFalse(op, rewriter);
-}
-
 LogicalResult AsyncTMAGatherOp::verify() {
   auto resultType = getResult().getType();
   if (failed(verifyAsyncTMALoadOp(*this, getDesc().getType(), getBarrier(),
@@ -1311,11 +1288,6 @@ void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
 bool TCGen5MMAOp::isAsync() { return getIsAsync(); }
 
 // -- TCGen5CommitOp --
-LogicalResult TCGen5CommitOp::canonicalize(TCGen5CommitOp op,
-                                           PatternRewriter &rewriter) {
-  return eraseIfPredicateIsFalse(op, rewriter);
-}
-
 LogicalResult TCGen5CommitOp::verify() {
   auto numDescs = getDescs().size();
   if (numDescs > 4)
@@ -1694,11 +1666,6 @@ static LogicalResult verifyTMEMOperand(Operation *op, RankedTensorType type,
   for (Attribute layout : layouts)
     diag.attachNote() << "potential TMEM layout: " << layout;
   return diag;
-}
-
-LogicalResult TMEMStoreOp::canonicalize(TMEMStoreOp op,
-                                        PatternRewriter &rewriter) {
-  return eraseIfPredicateIsFalse(op, rewriter);
 }
 
 LogicalResult TMEMStoreOp::verify() {

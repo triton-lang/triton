@@ -133,7 +133,7 @@ def PredicatedOpInterface : OpInterface<"PredicatedOpInterface"> {
     can be combined with a pipeline predicate.
 
     A false predicate can still leave effects such as masked-copy zero filling
-    or MMA completion signals. Erasing an inactive operation requires a separate
+    or MMA synchronization. Erasing an inactive operation requires a separate
     guarantee that its predicate suppresses all effects.
   }];
 

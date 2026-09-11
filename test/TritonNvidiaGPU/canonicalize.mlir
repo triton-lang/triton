@@ -94,12 +94,12 @@ tt.func @false_tmem_store(%value: tensor<128x128xf32, #data>, %mem: !ttg.memdesc
   tt.return
 }
 
-// The predicate disables MMA, while the independent completion predicate stays true.
-// BARRIER-LABEL: @false_mma_keeps_completion
+// MMA with completion barriers still synchronizes its partition when false.
+// BARRIER-LABEL: @false_mma_keeps_synchronization
 // BARRIER: %[[FALSE:.*]] = arith.constant false
 // BARRIER: ttng.tc_gen5_mma %arg0, %arg1, %arg2, %[[FALSE]], %[[FALSE]], %arg3[
 // BARRIER-NEXT: tt.return
-tt.func @false_mma_keeps_completion(%a: !ttg.memdesc<128x128xf16, #shared_a, #smem>, %b: !ttg.memdesc<128x128xf16, #shared_b, #smem>, %d: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, %bar: !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>) {
+tt.func @false_mma_keeps_synchronization(%a: !ttg.memdesc<128x128xf16, #shared_a, #smem>, %b: !ttg.memdesc<128x128xf16, #shared_b, #smem>, %d: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, %bar: !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>) {
   %false = arith.constant false
   %true = arith.constant true
   ttng.tc_gen5_mma %a, %b, %d, %false, %false, %bar[%true] {is_async} : !ttg.memdesc<128x128xf16, #shared_a, #smem>, !ttg.memdesc<128x128xf16, #shared_b, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>

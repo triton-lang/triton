@@ -4,6 +4,7 @@
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
+#include "mlir/IR/PatternMatch.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -112,6 +113,30 @@ void TritonDialect::initialize() {
   // We can also add interface here.
   addInterfaces<TritonCachePolicyInterface>();
   addInterfaces<TritonInlinerInterface>();
+}
+
+namespace {
+struct EraseFalsePredicatedOp
+    : OpInterfaceRewritePattern<PredicatedOpInterface> {
+  using OpInterfaceRewritePattern::OpInterfaceRewritePattern;
+
+  LogicalResult matchAndRewrite(PredicatedOpInterface op,
+                                PatternRewriter &rewriter) const override {
+    if (!isa<TritonDialect>(op->getDialect()))
+      return failure();
+    return eraseIfPredicateIsFalse(op, rewriter);
+  }
+};
+} // namespace
+
+void mlir::triton::populatePredicatedOpCanonicalizationPatterns(
+    RewritePatternSet &patterns) {
+  patterns.add<EraseFalsePredicatedOp>(patterns.getContext());
+}
+
+void TritonDialect::getCanonicalizationPatterns(
+    RewritePatternSet &patterns) const {
+  populatePredicatedOpCanonicalizationPatterns(patterns);
 }
 
 Operation *TritonDialect::materializeConstant(OpBuilder &builder,

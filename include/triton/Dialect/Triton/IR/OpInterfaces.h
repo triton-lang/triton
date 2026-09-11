@@ -9,6 +9,7 @@
 namespace mlir {
 
 class PatternRewriter;
+class RewritePatternSet;
 
 namespace triton {
 
@@ -19,6 +20,8 @@ class PredicatedOpInterface;
 // Operations with results need their own replacement semantics.
 LogicalResult eraseIfPredicateIsFalse(PredicatedOpInterface op,
                                       PatternRewriter &rewriter);
+
+void populatePredicatedOpCanonicalizationPatterns(RewritePatternSet &patterns);
 
 namespace impl {
 

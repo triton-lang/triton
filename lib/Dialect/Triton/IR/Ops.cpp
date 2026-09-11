@@ -166,15 +166,12 @@ LogicalResult StoreOp::verify() {
 }
 
 // store(ptr, value, splat(1), ...) -> store(ptr, value, ...)
-// store(ptr, value, splat(0), ...) -> [none]
 struct CanonicalizeMaskedStorePattern : public OpRewritePattern<StoreOp> {
   CanonicalizeMaskedStorePattern(MLIRContext *context)
       : OpRewritePattern<StoreOp>(context, 1) {}
 
   LogicalResult matchAndRewrite(StoreOp storeOp,
                                 PatternRewriter &rewriter) const override {
-    if (succeeded(eraseIfPredicateIsFalse(storeOp, rewriter)))
-      return success();
     auto mask = storeOp.getMask();
     if (!mask || !matchPattern(mask, m_One()))
       return failure();
@@ -208,11 +205,6 @@ void AtomicStoreOp::setPredicateOperand(Value pred) {
 }
 
 Type AtomicStoreOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
-
-LogicalResult AtomicStoreOp::canonicalize(AtomicStoreOp op,
-                                          PatternRewriter &rewriter) {
-  return eraseIfPredicateIsFalse(op, rewriter);
-}
 
 static LogicalResult verifyAtomicLoadStoreType(Operation *op, Type ptrTy) {
   Type elementTy = getElementTypeOrSelf(getPointeeType(ptrTy));
