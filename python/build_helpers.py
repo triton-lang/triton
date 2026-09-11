@@ -607,6 +607,9 @@ def build_amd_codegen(amd_llvm_info: dict, helper_args: BuildHelperArgs):
         f"-DTRITON_AMD_LLVM_REVISION={revision}",
         "-DCMAKE_BUILD_TYPE=Release",
     ]
+    ninja_path = shutil.which("ninja")
+    if ninja_path is not None:
+        command.append(f"-DCMAKE_MAKE_PROGRAM={ninja_path}")
     if sys.platform != "win32":
         clang = os.path.join(llvm_path, "bin", "clang")
         clangxx = os.path.join(llvm_path, "bin", "clang++")
