@@ -1295,10 +1295,10 @@ class tensor(base_value):
     def reduce_or(self, axis=None, keep_dims=False) -> tensor:
         ...
 
-    def cumsum(self, axis=0, reverse=False) -> tensor:
+    def cumsum(self, axis=0, reverse=False, dtype=None) -> tensor:
         ...
 
-    def cumprod(self, axis=0, reverse=False) -> tensor:
+    def cumprod(self, axis=0, reverse=False, dtype=None) -> tensor:
         ...
 
     def sort(self, dim: constexpr = None, descending: constexpr = CONSTEXPR_0) -> tensor:
