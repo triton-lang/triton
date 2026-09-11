@@ -403,7 +403,8 @@ static LogicalResult runTMemAnalysis(ModuleOp mod) {
     return failure();
   TMemWarpOwnership ownership(*regions);
   auto filter = [&](Operation *lhs, Operation *rhs, bool /*lhsIsRead*/,
-                    bool /*rhsIsRead*/, Allocation *allocation) {
+                    bool /*rhsIsRead*/, Allocation *allocation,
+                    const AllocationSlice &, const AllocationSlice &) {
     // A completion wait orders same-warp RAW, WAR, and WAW dependencies.
     return ownership.isSameWarp(lhs, rhs, allocation);
   };
