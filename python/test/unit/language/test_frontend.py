@@ -441,6 +441,15 @@ def test_constexpr_function_from_jit():
     tl.arange(0, x)
 
 
+@filecheck_test
+@triton.jit
+def test_cdiv_constexpr():
+    # CHECK-LABEL: test_cdiv_constexpr
+    x: tl.constexpr = triton.cdiv(33, 32)
+    # CHECK: make_range {end = 2 : i32, start = 0 : i32}
+    tl.arange(0, x)
+
+
 def test_constexpr_function_from_python():
     assert constexpr_function(7) == 8
 
