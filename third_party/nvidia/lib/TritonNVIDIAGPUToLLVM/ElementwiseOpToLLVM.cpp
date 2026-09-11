@@ -381,28 +381,27 @@ struct FpToFpOpConversion
         .getResult(0);
   }
 
-  static Value convertFp32ToFp16(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const Value &v, const RoundingMode rounding) {
+  static Value convertToFp16(Location loc, ConversionPatternRewriter &rewriter,
+                             const Value &v, const RoundingMode rounding) {
     PTXBuilder builder;
     StringRef ptx;
     switch (rounding) {
     case RoundingMode::RTNE:
-      ptx = "cvt.rn.f16.f32";
+      ptx = v.getType().isBF16() ? "cvt.rn.f16.bf16" : "cvt.rn.f16.f32";
       break;
     case RoundingMode::RTZ:
-      ptx = "cvt.rz.f16.f32";
+      ptx = v.getType().isBF16() ? "cvt.rz.f16.bf16" : "cvt.rz.f16.f32";
       break;
     default:
-      emitError(loc) << "unsupported rounding mode for f32->f16 conversion: "
+      emitError(loc) << "unsupported rounding mode for conversion to f16: "
                      << stringifyRoundingMode(rounding) << "\n";
       llvm::report_fatal_error(
-          "unsupported rounding mode for f32->f16 conversion: " +
+          "unsupported rounding mode for conversion to f16: " +
           stringifyRoundingMode(rounding) + "\n");
     }
     auto &cvt = *builder.create(ptx.str());
     auto res = builder.newOperand("=h");
-    auto operand = builder.newOperand(v, "r");
+    auto operand = builder.newOperand(v, v.getType().isBF16() ? "h" : "r");
     cvt(res, operand);
     return builder.launch(rewriter, loc, f16_ty, false);
   }
@@ -509,13 +508,20 @@ struct FpToFpOpConversion
       }));
     }
 
-    if (srcElementType.isF32() && dstElementType.isF16()) {
+    if ((srcElementType.isF32() || srcElementType.isBF16()) &&
+        dstElementType.isF16()) {
+      if (srcElementType.isBF16())
+        roundingMode = roundingMode.value_or(RoundingMode::RTNE);
       assert(roundingMode.has_value() &&
-             "rounding mode must be specified for fp32->fp16 conversion");
+             "rounding mode must be specified for conversion to fp16");
       SmallVector<Value> outVals;
       for (Value v : operands[0]) {
+        // Direct BF16 -> FP16 conversion requires SM90 and PTX 7.8.
+        if (srcElementType.isBF16() &&
+            (computeCapability < 90 || ptxVersion < 78))
+          v = LLVM::FPExtOp::create(rewriter, loc, f32_ty, v);
         outVals.push_back(
-            convertFp32ToFp16(loc, rewriter, v, roundingMode.value()));
+            convertToFp16(loc, rewriter, v, roundingMode.value()));
       }
       return outVals;
     }
@@ -547,7 +553,7 @@ struct FpToFpOpConversion
     }
     if (useFP16IntermediateSrc)
       for (Value &v : inVals)
-        v = convertFp32ToFp16(loc, rewriter, v, RoundingMode::RTZ);
+        v = convertToFp16(loc, rewriter, v, RoundingMode::RTZ);
     inVals.resize(numElements, b.undef(typeConverter->convertType(srcType)));
     SmallVector<Value> outVals = cvtFunc(loc, rewriter, inVals);
     assert(outVals.size() == inVals.size());

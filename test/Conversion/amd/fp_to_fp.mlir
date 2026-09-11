@@ -254,3 +254,17 @@ tt.func @test_scalar_conversion(%arg0: f32) -> f8E4M3FN {
   %0 = tt.fp_to_fp %arg0, rounding = rtne : f32 -> f8E4M3FN
   tt.return %0 : f8E4M3FN
 }
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  // COMMON-LABEL: @bf16_to_fp16
+  // GFX942: llvm.fptrunc {{.*}} : f32 to f16
+  // GFX950: llvm.fptrunc {{.*}} : vector<2xf32> to vector<2xf16>
+  // COMMON: rocdl.cvt.pkrtz
+  tt.func private @bf16_to_fp16(%arg: bf16) -> (f16, f16) {
+    %rn = tt.fp_to_fp %arg : bf16 -> f16
+    %rz = tt.fp_to_fp %arg, rounding = rtz : bf16 -> f16
+    tt.return %rn, %rz : f16, f16
+  }
+}

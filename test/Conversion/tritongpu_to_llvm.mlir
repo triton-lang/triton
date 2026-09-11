@@ -3578,3 +3578,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @bf16_to_fp16_fallback
+  // CHECK: llvm.fpext {{.*}} : bf16 to f32
+  // CHECK: llvm.inline_asm {{.*}} "cvt.rn.f16.f32 $0, $1;", "=h,r"
+  // CHECK: llvm.fpext {{.*}} : bf16 to f32
+  // CHECK: llvm.inline_asm {{.*}} "cvt.rz.f16.f32 $0, $1;", "=h,r"
+  tt.func private @bf16_to_fp16_fallback(%arg: bf16) -> (f16, f16) {
+    %rn = tt.fp_to_fp %arg : bf16 -> f16
+    %rz = tt.fp_to_fp %arg, rounding = rtz : bf16 -> f16
+    tt.return %rn, %rz : f16, f16
+  }
+}

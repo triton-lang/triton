@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv='compute-capability=90 ptx-version=81' --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=81' | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv='compute-capability=90 ptx-version=77' --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=77' | FileCheck %s --check-prefix=OLD-PTX
 
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: @test_cluster_attr
@@ -713,4 +714,27 @@ tt.func @warpgroup_dot_wait_local_does_not_synchronize_warpgroups(%arg0: tensor<
   tt.return
 }
 
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @bf16_to_fp16
+  // CHECK-NOT: llvm.fpext
+  // CHECK: llvm.inline_asm {{.*}} "cvt.rn.f16.bf16 $0, $1;", "=h,h"
+  // CHECK-NOT: llvm.fpext
+  // CHECK: llvm.inline_asm {{.*}} "cvt.rz.f16.bf16 $0, $1;", "=h,h"
+  // CHECK-NOT: llvm.fpext
+  // CHECK: llvm.return
+  // OLD-PTX-LABEL: @bf16_to_fp16
+  // OLD-PTX: llvm.fpext {{.*}} : bf16 to f32
+  // OLD-PTX: llvm.inline_asm {{.*}} "cvt.rn.f16.f32 $0, $1;", "=h,r"
+  // OLD-PTX: llvm.fpext {{.*}} : bf16 to f32
+  // OLD-PTX: llvm.inline_asm {{.*}} "cvt.rz.f16.f32 $0, $1;", "=h,r"
+  tt.func private @bf16_to_fp16(%arg: tensor<128xbf16, #blocked>) -> (tensor<128xf16, #blocked>, tensor<128xf16, #blocked>) {
+    %rn = tt.fp_to_fp %arg : tensor<128xbf16, #blocked> -> tensor<128xf16, #blocked>
+    %rz = tt.fp_to_fp %arg, rounding = rtz : tensor<128xbf16, #blocked> -> tensor<128xf16, #blocked>
+    tt.return %rn, %rz : tensor<128xf16, #blocked>, tensor<128xf16, #blocked>
+  }
 }
