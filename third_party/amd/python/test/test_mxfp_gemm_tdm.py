@@ -18,7 +18,7 @@ import triton
 import triton.language as tl
 import argparse
 import pytest
-from triton.tools.mxfp import MXScaleTensor, MXFP4Tensor
+from triton.tools.mxfp import MXScaleTensor, MXFP4Tensor, fp8e8m0_to_float32
 from triton._internal_testing import is_hip_gfx1250
 
 # ============================================================================
@@ -72,14 +72,6 @@ def pack_scale(x: torch.Tensor, preshuffle_factor: int = 128) -> torch.Tensor:
     x = x.permute(0, 3, 2, 1, 4).contiguous()
     # Final shape: [NON_K // preshuffle_factor, K_SCALE * preshuffle_factor]
     return x.view(NON_K // preshuffle_factor, K_SCALE * preshuffle_factor)
-
-
-def fp8e8m0_to_float32(scale: torch.Tensor) -> torch.Tensor:
-    scale = scale.view(torch.uint8)
-    scale = scale.to(torch.int32)
-    scale = scale << 23  # Shift exponent to float32's exponent field (bits 23-30)
-    scale = scale.view(torch.float32)
-    return scale
 
 
 def torch_gemm_mxfp(a, b, a_scale, b_scale, scale_block: int, M: int, N: int, K: int) -> torch.Tensor:

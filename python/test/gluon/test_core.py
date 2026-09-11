@@ -25,7 +25,7 @@ from triton._internal_testing import (
     is_hopper,
 )
 from triton.compiler import max_shared_mem
-from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
+from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor, fp8e8m0_to_float32
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia.ampere import async_copy, mma_v2
@@ -3462,14 +3462,6 @@ def test_split_auto_layout_execution():
 
     kernel[(1, )](input, output, XBLOCK, num_warps=4)
     torch.testing.assert_close(output, ref)
-
-
-def fp8e8m0_to_float32(scale):
-    scale = scale.view(torch.uint8)
-    scale = scale.to(torch.int32)
-    scale = scale << 23
-    scale = scale.view(torch.float32)
-    return scale
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")

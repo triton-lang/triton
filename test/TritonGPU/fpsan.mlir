@@ -369,6 +369,53 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dot_A = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#dot_B = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+module attributes {"ttg.target" = "cuda:107", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @dot_scaled_e8m0_i8_decomposition
+  tt.func public @dot_scaled_e8m0_i8_decomposition(
+      %a: tensor<32x32xi8, #dot_A>, %scale_a: tensor<32x2xi8, #blocked>,
+      %b: tensor<32x32xi8, #dot_B>, %scale_b: tensor<32x2xi8, #blocked>) -> tensor<32x32xf32, #blocked> {
+    // CHECK: arith.constant dense<64> : tensor<{{.*}}xi16,
+    // CHECK: %[[SCALE_BITS:.*]] = arith.maxui {{.*}} : tensor<{{.*}}xi16,
+    // CHECK-NEXT: %[[SCALE:.*]] = tt.bitcast %[[SCALE_BITS]] : {{.*}} -> tensor<{{.*}}xbf16,
+    // CHECK-NEXT: {{.*}}tti.experimental_fpsan_embed %[[SCALE]]
+    // CHECK: arith.maxui
+    // CHECK: tti.dot_i8
+    // CHECK: tt.return
+    %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
+    %out = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %zero lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<32x32xi8, #dot_A>, tensor<32x2xi8, #blocked> * tensor<32x32xi8, #dot_B>, tensor<32x2xi8, #blocked> -> tensor<32x32xf32, #blocked>
+    tt.return %out : tensor<32x32xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dot_A = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#dot_B = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+module attributes {"ttg.target" = "hip:gfx1250", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // AMD group-16 integer scales still use E8M0.
+  // CHECK-LABEL: @dot_scaled_e8m0_group16_amd
+  tt.func public @dot_scaled_e8m0_group16_amd(
+      %a: tensor<32x32xi8, #dot_A>, %scale_a: tensor<32x4xi8, #blocked>,
+      %b: tensor<32x32xi8, #dot_B>, %scale_b: tensor<32x4xi8, #blocked>) -> tensor<32x32xf32, #blocked> {
+    // CHECK: arith.constant dense<64> : tensor<{{.*}}xi16,
+    // CHECK: %[[SCALE_BITS:.*]] = arith.maxui {{.*}} : tensor<{{.*}}xi16,
+    // CHECK-NEXT: %[[SCALE:.*]] = tt.bitcast %[[SCALE_BITS]] : {{.*}} -> tensor<{{.*}}xbf16,
+    // CHECK-NEXT: {{.*}}tti.experimental_fpsan_embed %[[SCALE]]
+    // CHECK: arith.maxui
+    // CHECK-NOT: tti.dot_i8
+    // CHECK: tt.return
+    %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
+    %out = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %zero lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<32x32xi8, #dot_A>, tensor<32x4xi8, #blocked> * tensor<32x32xi8, #dot_B>, tensor<32x4xi8, #blocked> -> tensor<32x32xf32, #blocked>
+    tt.return %out : tensor<32x32xf32, #blocked>
+  }
+}
+
+// -----
+
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 32, 16]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #smem = #ttg.shared_memory
@@ -800,6 +847,21 @@ tt.func public @inline_asm_unary_different_asm(%a: tensor<4xf32>) -> tensor<4xf3
   // CHECK-NOT: tt.elementwise_inline_asm
   %0 = tt.elementwise_inline_asm "cvt.rn.tf32.f32 $0, $1;" {constraints = "=r,r", packed_element = 1 : i32, pure = true} %a : tensor<4xf32> -> tensor<4xf32>
   tt.return %0 : tensor<4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: @inline_asm_ue8m0_to_bf16
+tt.func public @inline_asm_ue8m0_to_bf16(%scale: tensor<4xi8>) -> tensor<4xbf16> {
+  // CHECK-DAG: arith.constant dense<7> : tensor<4xi16>
+  // CHECK-DAG: arith.constant dense<64> : tensor<4xi16>
+  // CHECK: arith.extui
+  // CHECK: arith.shli
+  // CHECK: arith.maxui
+  // CHECK: tt.bitcast
+  // CHECK-NOT: tt.elementwise_inline_asm
+  %decoded = tt.elementwise_inline_asm "cvt.rn.bf16x2.ue8m0x2 $0, $1;" {constraints = "=r,h", packed_element = 2 : i32, pure = true} %scale : tensor<4xi8> -> tensor<4xbf16>
+  tt.return %decoded : tensor<4xbf16>
 }
 
 // -----

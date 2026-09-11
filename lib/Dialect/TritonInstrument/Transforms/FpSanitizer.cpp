@@ -1275,6 +1275,10 @@ Value scaleI8ToComputePayload(PatternRewriter &rewriter, Location loc,
   unsigned shiftValue = computeElem.getFPMantissaWidth() - 1;
   auto shift = getUIntConstantLike(rewriter, loc, computeIntTy, shiftValue);
   Value rawCompute = arith::ShLIOp::create(rewriter, loc, scaleComputeI, shift);
+  if (computeElem == rewriter.getBF16Type()) {
+    auto minScale = getUIntConstantLike(rewriter, loc, computeIntTy, 0x0040);
+    rawCompute = arith::MaxUIOp::create(rewriter, loc, rawCompute, minScale);
+  }
   return embedFloatBitsToInt(rewriter, loc, rawCompute, computeElem);
 }
 
@@ -3226,6 +3230,22 @@ struct ElementwiseInlineAsmPattern
         !hasNumericOperands(op.getOperands()) ||
         !llvm::all_of(op.getResultTypes(), isFloatLike))
       return failure();
+
+    auto srcTy = dyn_cast<RankedTensorType>(op.getOperand(0).getType());
+    auto dstTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+    if (op.getAsmString() == "cvt.rn.bf16x2.ue8m0x2 $0, $1;" &&
+        op.getConstraints() == "=r,h" && op.getPackedElement() == 2 &&
+        op.getNumOperands() == 1 && op.getNumResults() == 1 && srcTy && dstTy &&
+        srcTy.getElementType().isInteger(8) &&
+        dstTy.getElementType().isBF16()) {
+      // Preserve the portable E8M0 decoder's payload when using native
+      // conversion.
+      auto loc = op.getLoc();
+      Value payload = scaleI8ToComputePayload(rewriter, loc, op.getOperand(0),
+                                              rewriter.getBF16Type());
+      rewriter.replaceOp(op, unembedToFloat(rewriter, loc, payload, dstTy));
+      return success();
+    }
 
     uint64_t hash = stableStringHash(op.getAsmString());
     SmallVector<Value> results;
