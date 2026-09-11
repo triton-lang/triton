@@ -6,6 +6,7 @@
 // CHECK-NEXT: tt.return
 tt.func @false_store_predicates(%ptr: !tt.ptr<i32>, %value: i32, %pred: i1, %ptrs: tensor<4x!tt.ptr<i32>>, %values: tensor<4xi32>) {
   %false = arith.constant false
+  // m_Zero matches both scalar false and dense<false> tensor masks.
   %mask = arith.constant dense<false> : tensor<4xi1>
   tt.store %ptr, %value, %false : !tt.ptr<i32>
   tt.atomic_store release, gpu, %ptr, %value, %false : !tt.ptr<i32>
@@ -14,6 +15,27 @@ tt.func @false_store_predicates(%ptr: !tt.ptr<i32>, %value: i32, %pred: i1, %ptr
   tt.store %ptr, %value, %pred : !tt.ptr<i32>
   tt.atomic_store release, gpu, %ptr, %value, %pred : !tt.ptr<i32>
   tt.return
+}
+
+// -----
+
+// CHECK-LABEL: @load_false_mask_with_other
+// CHECK-NEXT: tt.return %arg1 : i32
+tt.func @load_false_mask_with_other(%ptr: !tt.ptr<i32>, %other: i32) -> i32 {
+  %false = arith.constant false
+  %value = tt.load %ptr, %false, %other : !tt.ptr<i32>
+  tt.return %value : i32
+}
+
+// -----
+
+// CHECK-LABEL: @load_true_mask
+// CHECK-NEXT: %[[VALUE:.*]] = tt.load %arg0 : !tt.ptr<i32>
+// CHECK-NEXT: tt.return %[[VALUE]] : i32
+tt.func @load_true_mask(%ptr: !tt.ptr<i32>) -> i32 {
+  %true = arith.constant true
+  %value = tt.load %ptr, %true : !tt.ptr<i32>
+  tt.return %value : i32
 }
 
 // -----

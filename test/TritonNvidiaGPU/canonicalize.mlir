@@ -69,6 +69,7 @@ tt.func @false_barrier_predicates(%bar: !ttg.memdesc<1xi64, #local_barrier, #sme
   ttng.arrive_barrier %bar, 1, %false : !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>
   ttng.wait_barrier %bar, %phase, %false : !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>
   ttng.tc_gen5_commit %bar, %false : !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>
+  // Keep the dependency-bearing wait so %mem stays live until the wait.
   ttng.wait_barrier %bar, %phase, %false deps %mem : !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>, !ttg.memdesc<16x64xf16, #shared_tma, #smem, mutable>
   ttng.wait_barrier %bar, %phase, %pred : !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>
   ttng.tc_gen5_commit %bar, %pred : !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>

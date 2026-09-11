@@ -3,6 +3,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/Interfaces/FunctionImplementation.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
@@ -121,29 +122,16 @@ struct CanonicalizeMaskedLoadPattern : public OpRewritePattern<LoadOp> {
     if (!mask)
       return failure();
 
-    auto constantMask = mask.getDefiningOp<arith::ConstantOp>();
-    if (!constantMask)
-      return failure();
-
-    auto splatMask = mlir::dyn_cast<SplatElementsAttr>(constantMask.getValue());
-    if (!splatMask)
-      return failure();
-
-    if (splatMask.getSplatValue<IntegerAttr>().getValue() == true) {
-      // mask = splat(1)
+    if (matchPattern(mask, m_One())) {
       rewriter.replaceOpWithNewOp<LoadOp>(
           loadOp, loadOp.getType(), loadOp.getPtr(), Value(), Value(),
           loadOp.getCachePolicyAttr(), loadOp.getIsVolatile());
-    } else {
-      // mask = splat(0)
-
-      // If there's no "other", the value is "undef".  Perhaps we want to
-      // optimize it in the future.x
-      auto otherVal = loadOp.getOther();
-      if (!otherVal)
-        return failure();
-      rewriter.replaceOp(loadOp, otherVal);
+      return success();
     }
+    // Without "other", a false-masked load produces an undefined value.
+    if (!matchPattern(mask, m_Zero()) || !loadOp.getOther())
+      return failure();
+    rewriter.replaceOp(loadOp, loadOp.getOther());
     return success();
   }
 };
