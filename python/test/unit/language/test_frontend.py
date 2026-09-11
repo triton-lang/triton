@@ -1118,27 +1118,6 @@ def test_return_promotion():
     run_parser(kernel)
 
 
-@pytest.mark.parametrize("float_dtype", [tl.float8e4nv, tl.float8e5], ids=str)
-@pytest.mark.parametrize("int_dtype", [tl.int1, tl.int32, tl.uint32], ids=str)
-def test_fp8_integer_promotion(float_dtype, int_dtype):
-
-    @triton.jit
-    def kernel(float_dtype: tl.constexpr, int_dtype: tl.constexpr):
-        x = tl.full((8, ), 1, float_dtype)
-        y = tl.full((), 0, int_dtype)
-        mask = tl.arange(0, 8) < 4
-        tl.static_assert((x + y).dtype == tl.float32)
-        tl.static_assert((y + x).dtype == tl.float32)
-        tl.static_assert((x == y).dtype == tl.int1)
-        tl.static_assert((y == x).dtype == tl.int1)
-        tl.static_assert(tl.where(mask, x, y).dtype == tl.float32)
-        tl.static_assert(tl.where(mask, y, x).dtype == tl.float32)
-        tl.static_assert((x * 2).dtype == float_dtype)
-        tl.static_assert(tl.where(mask, 0, x).dtype == float_dtype)
-
-    run_parser(kernel, args=(float_dtype, int_dtype))
-
-
 def test_fp8_div_mod_promotion():
     # `/` and `%` do not exist natively for floats narrower than fp32, so the
     # result of a division or modulo with a floating operand is promoted to

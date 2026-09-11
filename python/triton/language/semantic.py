@@ -103,8 +103,6 @@ class TritonSemantic(Generic[TensorTy]):
         # 6) return fp16 if operands are different fp8
         if a_ty.is_fp8() and b_ty.is_fp8():
             return a_ty if a_ty == b_ty else tl.float16
-        if a_ty.is_fp8() or b_ty.is_fp8():
-            return tl.float32
         if not a_ty.is_int() or not b_ty.is_int():
             raise TypeError(f"unexpected type {a_ty} and {b_ty}")
         # 6 ) both operands are integer and undergo
@@ -495,11 +493,31 @@ class TritonSemantic(Generic[TensorTy]):
 #                               Comparison Operators
 # ===----------------------------------------------------------------------===//
 
+    def comparison_op_type_checking_impl(self, lhs: TensorTy | numbers.Number,
+                                         rhs: TensorTy | numbers.Number) -> Tuple[TensorTy, TensorTy]:
+
+        def widen(x, other):
+            if not (isinstance(x, self.tensor) and x.dtype.is_floating() and x.dtype.is_fp8()):
+                return x
+            other_ty = other.dtype if isinstance(other, self.tensor) else self.to_tensor_type(other)
+            if other_ty in (tl.bfloat16, tl.float32, tl.float64):
+                dtype = other_ty
+            elif other_ty.is_int() and other_ty.int_bitwidth > 8:
+                dtype = tl.float32
+            else:
+                dtype = tl.float16
+            # Convert through FP32 for FP64 support and BF16 NaN/Inf preservation.
+            if dtype in (tl.bfloat16, tl.float64):
+                x = self.cast(x, tl.float32)
+            return self.cast(x, dtype)
+
+        return self.binary_op_type_checking_impl(widen(lhs, rhs), widen(rhs, lhs))
+
     def _bool_like(self, v: TensorTy) -> tl.block_type:
         return v.type.with_element_ty(tl.int1)
 
     def greater_than(self, input: TensorTy, other: TensorTy) -> TensorTy:
-        input, other = self.binary_op_type_checking_impl(input, other)
+        input, other = self.comparison_op_type_checking_impl(input, other)
         scalar_ty = input.type.scalar
         # float > float
         if scalar_ty.is_floating():
@@ -513,7 +531,7 @@ class TritonSemantic(Generic[TensorTy]):
         raise TypeError(f"unexpected type {scalar_ty}")
 
     def greater_equal(self, input: TensorTy, other: TensorTy) -> TensorTy:
-        input, other = self.binary_op_type_checking_impl(input, other)
+        input, other = self.comparison_op_type_checking_impl(input, other)
         scalar_ty = input.type.scalar
         # float >= float
         if scalar_ty.is_floating():
@@ -527,7 +545,7 @@ class TritonSemantic(Generic[TensorTy]):
         raise TypeError(f"unexpected type {scalar_ty}")
 
     def less_than(self, input: TensorTy, other: TensorTy) -> TensorTy:
-        input, other = self.binary_op_type_checking_impl(input, other)
+        input, other = self.comparison_op_type_checking_impl(input, other)
         scalar_ty = input.type.scalar
         # float < float
         if scalar_ty.is_floating():
@@ -541,7 +559,7 @@ class TritonSemantic(Generic[TensorTy]):
         raise TypeError(f"unexpected type {scalar_ty}")
 
     def less_equal(self, input: TensorTy, other: TensorTy) -> TensorTy:
-        input, other = self.binary_op_type_checking_impl(input, other)
+        input, other = self.comparison_op_type_checking_impl(input, other)
         scalar_ty = input.type.scalar
         # float < float
         if scalar_ty.is_floating():
@@ -555,7 +573,7 @@ class TritonSemantic(Generic[TensorTy]):
         raise TypeError(f"unexpected type {scalar_ty}")
 
     def equal(self, input: TensorTy, other: TensorTy) -> TensorTy:
-        input, other = self.binary_op_type_checking_impl(input, other)
+        input, other = self.comparison_op_type_checking_impl(input, other)
         scalar_ty = input.type.scalar
         # float == float
         if scalar_ty.is_floating():
@@ -566,7 +584,7 @@ class TritonSemantic(Generic[TensorTy]):
         raise TypeError(f"unexpected type {scalar_ty}")
 
     def not_equal(self, input: TensorTy, other: TensorTy) -> TensorTy:
-        input, other = self.binary_op_type_checking_impl(input, other)
+        input, other = self.comparison_op_type_checking_impl(input, other)
         scalar_ty = input.type.scalar
         # float == float
         if scalar_ty.is_floating():

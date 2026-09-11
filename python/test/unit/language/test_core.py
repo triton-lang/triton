@@ -681,6 +681,36 @@ def test_compare_op(dtype_x, dtype_y, op, mode_x, mode_y, num_ctas, device):
     _test_binary(dtype_x, dtype_y, expr, numpy_expr, mode_x=mode_x, mode_y=mode_y, device=device, num_ctas=num_ctas)
 
 
+@pytest.mark.parametrize("dtype, values, comparison_type", [
+    (torch.float8_e5m2, [0, 2048, float("inf"), float("nan")], "f16"),
+    (torch.int8, [1, 2, 3, 4], "f16"),
+    (torch.int32, [0, 2049, 65536, 0], "f32"),
+    (torch.bfloat16, [2**-30, 2048, 65536, 0], "bf16"),
+    (torch.float64, [0, 2048 + 2**-30, 65536, 0], "f64"),
+])
+def test_fp8_comparison(dtype, values, comparison_type, device):
+    check_cuda_or_hip(device)
+    if is_cuda():
+        check_type_supported(dtype, device)
+
+    @triton.jit
+    def kernel(X, Y, Z):
+        offsets = tl.arange(0, 4)
+        x = tl.load(X + offsets)
+        y = tl.load(Y + offsets)
+        tl.store(Z + offsets, x == y)
+        tl.store(Z + 4 + offsets, y < x)
+
+    x = torch.tensor([0, 2048, float("inf"), float("nan")], dtype=torch.float8_e5m2, device=device)
+    y = torch.tensor(values, dtype=dtype, device=device)
+    x_ref, y_ref = x.double(), y.double()
+    expected = torch.stack((x_ref == y_ref, y_ref < x_ref))
+    actual = torch.empty_like(expected)
+    compiled = kernel[(1, )](x, y, actual)
+    torch.testing.assert_close(actual, expected)
+    assert re.findall(r"arith.cmpf.* : tensor<4x(\w+)>", compiled.asm["ttir"]) == [comparison_type] * 2
+
+
 # ---------------
 # test broadcast
 # ---------------
