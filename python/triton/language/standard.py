@@ -293,6 +293,8 @@ def _sum_combine(a, b):
 @constexpr_function
 def _pick_sum_dtype(in_dtype, dtype):
     if dtype is not None:
+        if dtype.is_fp8():
+            raise ValueError("FP8 accumulation is not supported; use float16 or float32")
         return dtype
 
     # For integer bitwidths less than 32, pick int32 with the same sign to
@@ -301,6 +303,8 @@ def _pick_sum_dtype(in_dtype, dtype):
         return core.int32
     if in_dtype.is_int_unsigned() and in_dtype.int_bitwidth < 32:
         return core.uint32
+    if in_dtype.is_fp8():
+        return core.float16
     return in_dtype
 
 
