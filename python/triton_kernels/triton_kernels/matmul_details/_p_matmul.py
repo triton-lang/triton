@@ -361,10 +361,24 @@ def _p_matmul(
                 off_k_x = off_k_x0 + ki * BLOCK_K * SPLIT_K
                 off_k_w = off_k_w0 + ki * PACKED_BLOCK_K_W * SPLIT_K
 
-            # --- load x ---
             if USE_GATHER_TMA:
                 x = X.gather(offs_x_m, off_k_x // block_div)
-            elif X_TMA_MODE == "dense":
+
+            # --- load w ---
+            if W_SHUFFLED:
+                tile_k_idx = off_k_w // PACKED_BLOCK_K_W
+                tile_n_idx = off_n // BLOCK_N
+                w = tl.reshape(
+                    W.load([off_w_z.to(tl.int32), tile_k_idx.to(tl.int32), tile_n_idx.to(tl.int32), 0, 0]),
+                    (BLOCK_N, PACKED_BLOCK_K_W),
+                ).T
+            elif W_TRANSPOSE:
+                w = tl.reshape(W.load([off_w_z, off_w_n, off_k_w]), W.block_shape[1:]).T
+            else:
+                w = tl.reshape(W.load([off_w_z, off_k_w, off_w_n]), W.block_shape[1:])
+
+            # --- load x ---
+            if X_TMA_MODE == "dense" and not USE_GATHER_TMA:
                 if X_TRANSPOSE:
                     x = X.load([off_x_z, off_k_x // block_div, slice_off_m + off_m])
                     x = x.reshape(BLOCK_K // block_div, BLOCK_M).T
@@ -374,7 +388,7 @@ def _p_matmul(
             elif X_TMA_MODE == "ragged":
                 x = load_ragged(X, slice_off_m, shape_m, [off_x_z, off_m, off_k_x // block_div], ragged_dim=1)
                 x = x.reshape(BLOCK_M, BLOCK_K // block_div)
-            else:
+            elif not USE_GATHER_TMA:
                 tl.static_assert(X_TMA_MODE is None)
                 offs_x_k = (off_k_x0.to(index_type) // block_div
                             + ki.to(index_type) * (BLOCK_K // block_div) * SPLIT_K
@@ -424,19 +438,6 @@ def _p_matmul(
                     x_scales = tl.full((BLOCK_M, BLOCK_K // MX_PACK_DIVISOR), 127, dtype=tl.uint8)
                 else:
                     x_scales = tl.full((BLOCK_M, BLOCK_K // MX_PACK_DIVISOR), 1.0, dtype=tl.float8e4nv)
-
-            # --- load w ---
-            if W_SHUFFLED:
-                tile_k_idx = off_k_w // PACKED_BLOCK_K_W
-                tile_n_idx = off_n // BLOCK_N
-                w = tl.reshape(
-                    W.load([off_w_z.to(tl.int32), tile_k_idx.to(tl.int32), tile_n_idx.to(tl.int32), 0, 0]),
-                    (BLOCK_N, PACKED_BLOCK_K_W),
-                ).T
-            elif W_TRANSPOSE:
-                w = tl.reshape(W.load([off_w_z, off_w_n, off_k_w]), W.block_shape[1:]).T
-            else:
-                w = tl.reshape(W.load([off_w_z, off_k_w, off_w_n]), W.block_shape[1:])
 
             # --- load w_scale ---
             w_format: tl.constexpr = get_scaled_dot_format_string(w.dtype)
