@@ -585,6 +585,10 @@ def download_codegen_llvm(backend: str, llvm_info: dict, helper_args: BuildHelpe
 
 
 def build_amd_codegen(amd_llvm_info: dict, helper_args: BuildHelperArgs):
+    ninja_path = shutil.which("ninja")
+    if ninja_path is None:
+        raise RuntimeError("Cannot find ninja on PATH")
+
     llvm_path = download_codegen_llvm("amd", amd_llvm_info, helper_args)
     revision = f'{amd_llvm_info["llvm_hash"]}-{amd_llvm_info["build_number"]}'
     system_suffix = get_llvm_system_suffix(helper_args)
@@ -598,6 +602,7 @@ def build_amd_codegen(amd_llvm_info: dict, helper_args: BuildHelperArgs):
         "cmake",
         "-G",
         "Ninja",
+        f"-DCMAKE_MAKE_PROGRAM={ninja_path}",
         "-S",
         source_path,
         "-B",
