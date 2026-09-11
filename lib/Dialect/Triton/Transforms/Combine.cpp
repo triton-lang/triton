@@ -75,7 +75,7 @@ public:
                                 PatternRewriter &rewriter) const override {
     auto type = dyn_cast<RankedTensorType>(op.getType());
     auto ptr = op.getPtr().getDefiningOp<SplatOp>();
-    if (!type || type.getEncoding() || !ptr || op.getIsVolatile())
+    if (!type || !ptr || op.getIsVolatile())
       return failure();
 
     for (Value operand : op->getOperands().drop_front()) {
