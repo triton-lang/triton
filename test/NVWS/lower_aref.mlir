@@ -707,3 +707,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0], [2, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 4 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:100"} {
+  // CHECK: #[[$PAIR:.*]] = #ttg.swizzled_shared<{{.*}}CGALayout = {{\[\[0\], \[1\]\]}}{{.*}}>
+  // CHECK-LABEL: @two_cta_mma_consumer
+  tt.func @two_cta_mma_consumer() {
+    %c0 = arith.constant 0 : i32
+    // Completion of the load is shared within each pair; release is per CTA.
+    // CHECK: %[[EMPTY:.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x4xi64,
+    // CHECK: %[[FULL:.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x2xi64, #[[$PAIR]],
+    // CHECK-COUNT-3: ttng.init_barrier
+    %buf = ttg.local_alloc : () -> !ttg.memdesc<3x512x64xf16, #shared, #smem, mutable>
+    %aref = nvws.aref.create %buf : <[!ttg.memdesc<3x512x64xf16, #shared, #smem, mutable>]>
+    // CHECK: %[[BAR:.*]] = ttg.memdesc_index %[[FULL]]
+    // CHECK: ttng.wait_barrier %[[BAR]]
+    %view, %token = nvws.aref.get.enter %aref[%c0, %c0] {ttg.partition = array<i32: 1>} : <[!ttg.memdesc<3x512x64xf16, #shared, #smem, mutable>]> -> !ttg.memdesc<512x64xf16, #shared, #smem, mutable, 1x512x64>, !ttg.async.token
+    // CHECK: %[[RELEASE:.*]] = ttg.memdesc_index %[[EMPTY]]
+    // CHECK: ttng.tc_gen5_commit %[[RELEASE]]
+    nvws.aref.get.exit %aref[%c0], %token [#nvws.async_op<tc5mma>] {ttg.partition = array<i32: 1>} : <[!ttg.memdesc<3x512x64xf16, #shared, #smem, mutable>]>, !ttg.async.token
+    tt.return
+  }
+}

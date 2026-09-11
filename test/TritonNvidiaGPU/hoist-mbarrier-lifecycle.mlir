@@ -743,3 +743,35 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#barrierEnc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1], [2]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // Two-CTA commit broadcasts to each pair even with a per-CTA barrier.
+  // CHECK-LABEL: tt.func @hoist_two_cta_commit_lifecycle
+  // CHECK: %[[BAR:.*]] = ttg.local_alloc : () -> !ttg.memdesc<4xi64,
+  // CHECK-NEXT: ttng.init_barrier %[[BAR]], 1
+  // CHECK: scf.for {{.*}} iter_args(%[[PHASE:.*]] = %{{.*}}) -> (i32)
+  // CHECK: ttng.tc_gen5_commit %[[BAR]]
+  // CHECK-NEXT: ttng.wait_barrier %[[BAR]], %[[PHASE]]
+  // CHECK-NEXT: %[[NEXT:.*]] = arith.xori %[[PHASE]],
+  // CHECK: scf.yield %[[NEXT]]
+  // CHECK: ttng.inval_barrier %[[BAR]]
+  // CHECK-NEXT: tt.return
+  tt.func @hoist_two_cta_commit_lifecycle() {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c4 = arith.constant 4 : i32
+    scf.for %i = %c0 to %c4 step %c1 : i32 {
+      %bar = ttg.local_alloc : () -> !ttg.memdesc<4xi64, #barrierEnc, #smem, mutable>
+      ttng.init_barrier %bar, 1 : !ttg.memdesc<4xi64, #barrierEnc, #smem, mutable>
+      ttng.tc_gen5_commit %bar : !ttg.memdesc<4xi64, #barrierEnc, #smem, mutable>
+      ttng.wait_barrier %bar, %c0 : !ttg.memdesc<4xi64, #barrierEnc, #smem, mutable>
+      ttng.inval_barrier %bar : !ttg.memdesc<4xi64, #barrierEnc, #smem, mutable>
+    }
+    tt.return
+  }
+}
