@@ -567,6 +567,9 @@ class CodeGenerator(ast.NodeVisitor):
 
     # By design, only non-kernel functions can return
     def visit_Return(self, node):
+        if self.scf_stack:
+            raise self._unsupported(node,
+                                    "Cannot have `return` statements inside `while` or `for` statements in triton.")
         ret_value = self.visit(node.value)
         if ret_value is None:
             ret_value = language.constexpr(None)

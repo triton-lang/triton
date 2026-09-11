@@ -6,7 +6,7 @@ from triton.experimental import gluon
 from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
 from triton.compiler.code_generator import CodeGenerator
 from triton.runtime.jit import MockTensor
-from triton.compiler.errors import CompilationError
+from triton.compiler.errors import CompilationError, UnsupportedLanguageConstruct
 import pytest
 from typing import NamedTuple
 
@@ -788,6 +788,61 @@ def test_return_in_while():
         run_parser(kernel)
 
     assert "Cannot have `return` statements inside `while` or `for` statements in triton" in str(e.value)
+
+
+@pytest.mark.parametrize("kind", ["while", "for", "tl.range", "nested"])
+def test_direct_return_in_dynamic_loop(kind):
+
+    @triton.jit
+    def helper(KIND: tl.constexpr):
+        pid = tl.program_id(0)
+        if KIND == "while":
+            while pid < 5:
+                pid += 1
+                return pid
+        elif KIND == "for":
+            for i in range(pid):
+                return pid
+        elif KIND == "tl.range":
+            for i in tl.range(pid):
+                return pid
+        else:
+            for i in tl.static_range(2):
+                while pid < 5:
+                    pid += 1
+                    return pid
+        return pid
+
+    @triton.jit
+    def kernel(KIND: tl.constexpr):
+        helper(KIND)
+
+    with pytest.raises(CompilationError) as exc:
+        run_parser(kernel, args=(kind, ))
+    error = exc.value.__cause__
+    assert isinstance(error, UnsupportedLanguageConstruct)
+    assert "Cannot have `return` statements inside `while` or `for` statements in triton" in str(error)
+    assert error.src.splitlines()[error.node.lineno - 1].strip() == "return pid"
+
+
+@pytest.mark.parametrize("static", [False, True])
+def test_returning_helper_in_dynamic_loop(static):
+
+    @triton.jit
+    def helper(value, STATIC: tl.constexpr):
+        if STATIC:
+            for i in tl.static_range(2):
+                if i == 0:
+                    return value
+        return value
+
+    @triton.jit
+    def kernel(STATIC: tl.constexpr):
+        pid = tl.program_id(0)
+        while pid < 5:
+            pid = helper(pid + 1, STATIC)
+
+    assert run_parser(kernel, args=(static, )).verify()
 
 
 class TensorPtr(NamedTuple):
