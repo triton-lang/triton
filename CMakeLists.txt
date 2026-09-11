@@ -180,8 +180,11 @@ endif()
 
 # Customized release build type with assertions: TritonRelBuildWithAsserts
 if(NOT MSVC)
-  set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
-  set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g")
+  # We only enforce -Wunused in this build mode where we know NDEBUG is not set.
+  # This avoids spurious warnings in NDEBUG builds about things that are only
+  # used in asserts.
+  set(CMAKE_C_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g -Wunused")
+  set(CMAKE_CXX_FLAGS_TRITONRELBUILDWITHASSERTS "-O2 -g -Wunused")
   set(CMAKE_C_FLAGS_TRITONBUILDWITHO1 "-O1")
   set(CMAKE_CXX_FLAGS_TRITONBUILDWITHO1 "-O1")
 else()
