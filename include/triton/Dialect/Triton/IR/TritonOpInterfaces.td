@@ -131,6 +131,10 @@ def PredicatedOpInterface : OpInterface<"PredicatedOpInterface"> {
   let description = [{
     Common interface for operations that carry a predicate or mask operand that
     can be combined with a pipeline predicate.
+
+    A false predicate can still leave effects such as masked-copy zero filling
+    or MMA completion signals. Erasing an inactive operation requires a separate
+    guarantee that its predicate suppresses all effects.
   }];
 
   let cppNamespace = "::mlir::triton";
