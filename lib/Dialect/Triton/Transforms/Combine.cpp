@@ -66,6 +66,49 @@ using FastMathFlags = arith::FastMathFlags;
 
 #include "TritonCombine.inc"
 
+// Keep uniform loads scalar before assigning distributed tensor layouts.
+class CombineSplatLoadPattern : public OpRewritePattern<LoadOp> {
+public:
+  using OpRewritePattern<LoadOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(LoadOp op,
+                                PatternRewriter &rewriter) const override {
+    auto type = dyn_cast<RankedTensorType>(op.getType());
+    auto ptr = op.getPtr().getDefiningOp<SplatOp>();
+    if (!type || !ptr || op.getIsVolatile())
+      return failure();
+
+    for (Value operand : op->getOperands()) {
+      auto splat = operand.getDefiningOp<SplatOp>();
+      // A one-element tensor is not a scalar load operand.
+      if (splat && isa<TensorType>(splat.getSrc().getType()))
+        return failure();
+      SplatElementsAttr constant;
+      if (!splat && !matchPattern(operand, m_Constant(&constant)))
+        return failure();
+    }
+
+    auto getScalar = [&](Value value) -> Value {
+      if (!value)
+        return {};
+      if (auto splat = value.getDefiningOp<SplatOp>())
+        return splat.getSrc();
+      SplatElementsAttr constant;
+      bool matched = matchPattern(value, m_Constant(&constant));
+      assert(matched);
+      return arith::ConstantOp::materialize(
+          rewriter, constant.getSplatValue<Attribute>(),
+          constant.getElementType(), op.getLoc());
+    };
+    auto load = LoadOp::create(rewriter, op.getLoc(), type.getElementType(),
+                               ptr.getSrc(), getScalar(op.getMask()),
+                               getScalar(op.getOther()),
+                               op.getCachePolicyAttr(), false);
+    rewriter.replaceOpWithNewOp<SplatOp>(op, type, load);
+    return success();
+  }
+};
+
 // select(cond, load(ptrs, splat(cond), ???), other)
 //   => load(ptrs, splat(cond), other)
 class CombineSelectMaskedLoadPattern : public RewritePattern {
@@ -301,6 +344,7 @@ public:
     patterns.add<CombineDotAddFPattern>(context);
     patterns.add<CombineDotScaledAddFPattern>(context);
     patterns.add<CombineSelectMaskedLoadPattern>(context);
+    patterns.add<CombineSplatLoadPattern>(context);
     patterns.add<CombineAddPtrPattern>(context);
     patterns.add<CombineBroadcastMulReducePattern>(context);
     patterns.add<CombineReshapeReducePatterns>(context);

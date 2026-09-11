@@ -585,3 +585,81 @@ tt.func @test_combine_broadcast_mul_reduce_multiple_results(%arg0: tensor<32x16x
     }) : (tensor<32x16x32xf32>, tensor<32x16x32xf32>) -> (tensor<32x32xf32>, tensor<32x32xf32>)
     tt.return %5#0 : tensor<32x32xf32>
 }
+
+// CHECK-LABEL: @splat_load(
+// CHECK-SAME: %[[P:.*]]: !tt.ptr<f32>
+// CHECK: %[[V:.*]] = tt.load %[[P]] {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_first>} : !tt.ptr<f32>
+// CHECK-NEXT: %[[S:.*]] = tt.splat %[[V]] : f32 -> tensor<4xf32>
+// CHECK-NEXT: tt.return %[[S]]
+tt.func @splat_load(%p: !tt.ptr<f32>) -> tensor<4xf32> {
+  %ptrs = tt.splat %p : !tt.ptr<f32> -> tensor<4x!tt.ptr<f32>>
+  %v = tt.load %ptrs {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_first>} : tensor<4x!tt.ptr<f32>>
+  tt.return %v : tensor<4xf32>
+}
+
+// CHECK-LABEL: @splat_load_uniform_mask(
+// CHECK-SAME: %[[P:.*]]: !tt.ptr<f32>, %[[PRED:.*]]: i1
+// CHECK: %[[ZERO:.*]] = arith.constant 0.000000e+00 : f32
+// CHECK: %[[V:.*]] = tt.load %[[P]], %[[PRED]], %[[ZERO]] : !tt.ptr<f32>
+// CHECK-NEXT: %[[S:.*]] = tt.splat %[[V]] : f32 -> tensor<2x2xf32>
+// CHECK-NEXT: tt.return %[[S]]
+tt.func @splat_load_uniform_mask(%p: !tt.ptr<f32>, %pred: i1) -> tensor<2x2xf32> {
+  %ptrs = tt.splat %p : !tt.ptr<f32> -> tensor<2x2x!tt.ptr<f32>>
+  %mask = tt.splat %pred : i1 -> tensor<2x2xi1>
+  %zero = arith.constant dense<0.0> : tensor<2x2xf32>
+  %v = tt.load %ptrs, %mask, %zero : tensor<2x2x!tt.ptr<f32>>
+  tt.return %v : tensor<2x2xf32>
+}
+
+// CHECK-LABEL: @splat_load_uniform_other(
+// CHECK-SAME: %[[P:.*]]: !tt.ptr<f32>, %[[PRED:.*]]: i1, %[[OTHER:.*]]: f32
+// CHECK: %[[V:.*]] = tt.load %[[P]], %[[PRED]], %[[OTHER]] : !tt.ptr<f32>
+// CHECK-NEXT: %[[S:.*]] = tt.splat %[[V]] : f32 -> tensor<4xf32>
+// CHECK-NEXT: tt.return %[[S]]
+tt.func @splat_load_uniform_other(%p: !tt.ptr<f32>, %pred: i1, %other: f32) -> tensor<4xf32> {
+  %ptrs = tt.splat %p : !tt.ptr<f32> -> tensor<4x!tt.ptr<f32>>
+  %mask = tt.splat %pred : i1 -> tensor<4xi1>
+  %fallback = tt.splat %other : f32 -> tensor<4xf32>
+  %v = tt.load %ptrs, %mask, %fallback : tensor<4x!tt.ptr<f32>>
+  tt.return %v : tensor<4xf32>
+}
+
+// CHECK-LABEL: @splat_load_nonuniform_mask(
+// CHECK: %[[V:.*]] = tt.load %{{.*}}, %{{.*}} : tensor<4x!tt.ptr<f32>>
+// CHECK-NEXT: tt.return %[[V]]
+tt.func @splat_load_nonuniform_mask(%p: !tt.ptr<f32>, %mask: tensor<4xi1>) -> tensor<4xf32> {
+  %ptrs = tt.splat %p : !tt.ptr<f32> -> tensor<4x!tt.ptr<f32>>
+  %v = tt.load %ptrs, %mask : tensor<4x!tt.ptr<f32>>
+  tt.return %v : tensor<4xf32>
+}
+
+// CHECK-LABEL: @splat_load_nonuniform_other(
+// CHECK: %[[V:.*]] = tt.load %{{.*}}, %{{.*}}, %{{.*}} : tensor<4x!tt.ptr<f32>>
+// CHECK-NEXT: tt.return %[[V]]
+tt.func @splat_load_nonuniform_other(%p: !tt.ptr<f32>, %pred: i1, %other: tensor<4xf32>) -> tensor<4xf32> {
+  %ptrs = tt.splat %p : !tt.ptr<f32> -> tensor<4x!tt.ptr<f32>>
+  %mask = tt.splat %pred : i1 -> tensor<4xi1>
+  %v = tt.load %ptrs, %mask, %other : tensor<4x!tt.ptr<f32>>
+  tt.return %v : tensor<4xf32>
+}
+
+// CHECK-LABEL: @splat_load_volatile(
+// CHECK: %[[V:.*]] = tt.load %{{.*}} {isVolatile = true} : tensor<4x!tt.ptr<f32>>
+// CHECK-NEXT: tt.return %[[V]]
+tt.func @splat_load_volatile(%p: !tt.ptr<f32>) -> tensor<4xf32> {
+  %ptrs = tt.splat %p : !tt.ptr<f32> -> tensor<4x!tt.ptr<f32>>
+  %v = tt.load %ptrs {isVolatile = true} : tensor<4x!tt.ptr<f32>>
+  tt.return %v : tensor<4xf32>
+}
+
+// A rank-zero tensor source is still a tensor, not a scalar load operand.
+// CHECK-LABEL: @splat_load_tensor_other(
+// CHECK: %[[V:.*]] = tt.load %{{.*}}, %{{.*}}, %{{.*}} : tensor<4x!tt.ptr<f32>>
+// CHECK-NEXT: tt.return %[[V]]
+tt.func @splat_load_tensor_other(%p: !tt.ptr<f32>, %pred: i1, %other: tensor<f32>) -> tensor<4xf32> {
+  %ptrs = tt.splat %p : !tt.ptr<f32> -> tensor<4x!tt.ptr<f32>>
+  %mask = tt.splat %pred : i1 -> tensor<4xi1>
+  %fallback = tt.splat %other : tensor<f32> -> tensor<4xf32>
+  %v = tt.load %ptrs, %mask, %fallback : tensor<4x!tt.ptr<f32>>
+  tt.return %v : tensor<4xf32>
+}
