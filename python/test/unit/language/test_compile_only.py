@@ -56,6 +56,68 @@ def test_compile_only_sort_keeps_comparisons_boolean() -> None:
     assert "arith.extui" not in compiled.asm["ttgir"]
 
 
+# NVIDIA Triton hoists the local_alloc & removes the duplicates inside the loop. AMD Triton does not
+# hoist but removes the duplicates. Gluon keeps both.
+@pytest.mark.parametrize(
+    "frontend, target, expected_allocations, hoist_source",
+    [
+        pytest.param("triton", GPUTarget("cuda", 90, 32), 1, True, id="nvidia-triton"),
+        pytest.param("triton", GPUTarget("hip", "gfx950", 64), 1, False, id="amd-triton"),
+        pytest.param("gluon", GPUTarget("cuda", 90, 32), 2, False, id="nvidia-gluon"),
+        pytest.param("gluon", GPUTarget("hip", "gfx950", 64), 2, False, id="amd-gluon"),
+    ],
+)
+def test_compile_only_gather_shared_source(frontend, target, expected_allocations, hoist_source):
+    from triton.experimental import gluon
+    from triton.experimental.gluon import language as gl
+
+    @triton.jit
+    def triton_kernel(Src, Idx, Out, N, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        values = tl.load(Src + offsets)
+        indices = tl.load(Idx + offsets)
+        for i in range(N):
+            shifted = (indices + i) & (BLOCK - 1)
+            result = tl.gather(values, shifted, axis=0)
+            result += tl.gather(values, (shifted + 1) & (BLOCK - 1), axis=0)
+            tl.store(Out + i * BLOCK + offsets, result)
+
+    @gluon.jit
+    def gluon_kernel(Src, Idx, Out, N, BLOCK: gl.constexpr, WARP: gl.constexpr):
+        offsets = gl.arange(0, BLOCK, layout=gl.BlockedLayout([1], [WARP], [4], [0]))
+        values = gl.load(Src + offsets)
+        indices = gl.load(Idx + offsets)
+        for i in range(N):
+            shifted = (indices + i) & (BLOCK - 1)
+            result = gl.gather(values, shifted, axis=0)
+            result += gl.gather(values, (shifted + 1) & (BLOCK - 1), axis=0)
+            gl.store(Out + i * BLOCK + offsets, result)
+
+    # Compile without launching: three int32 pointers and a runtime loop bound.
+    signature = {"Src": "*i32", "Idx": "*i32", "Out": "*i32", "N": "i32"}
+    if frontend == "gluon":
+        source = gluon.GluonASTSource(
+            fn=gluon_kernel,
+            signature=signature,
+            constexprs={"BLOCK": 512, "WARP": target.warp_size},
+        )
+    else:
+        source = ASTSource(
+            fn=triton_kernel,
+            signature=signature,
+            constexprs={"BLOCK": 512},
+        )
+    compiled = triton.compile(source, target=target)
+    ttgir = compiled.asm["ttgir"]
+    assert ttgir.count("ttg.local_alloc") == expected_allocations
+    assert ttgir.count("ttg.local_gather") == 2
+    assert "tt.gather" not in ttgir
+    if hoist_source:
+        before_loop, loop_body = ttgir.split("scf.for")
+        assert before_loop.count("ttg.local_alloc") == expected_allocations
+        assert "ttg.local_alloc" not in loop_body
+
+
 def test_compile_only_sm100() -> None:
 
     @triton.jit

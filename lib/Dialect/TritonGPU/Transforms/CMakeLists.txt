@@ -3,6 +3,7 @@ add_triton_library(TritonGPUTransforms
   Coalesce.cpp
   F32DotTC.cpp
   FuseNestedLoops.cpp
+  GatherToLocalGather.cpp
   CombineTensorSelectAndIf.cpp
   DecomposeScaledBlocked.cpp
   DescriptorMemoryLayouts.cpp

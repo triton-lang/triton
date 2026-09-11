@@ -444,6 +444,7 @@ class HIPBackend(BaseBackend):
         if is_in_thread_transpose_enabled(options.arch):
             amd.passes.ttgpuir.add_in_thread_transpose(pm)
             passes.ttgpuir.add_remove_layout_conversions(pm)
+        passes.ttgpuir.add_gather_to_local_gather(pm)
         amd.passes.ttgpuir.add_move_up_prologue_loads(pm)
         if use_block_pingpong and options.num_stages > 1:
             amd.passes.ttgpuir.add_block_pingpong(pm, options.num_stages)
@@ -494,6 +495,7 @@ class HIPBackend(BaseBackend):
             amd.passes.ttgpuir.add_fp_sanitizer(pm)
             passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
 
+        passes.ttgpuir.add_gather_to_local_gather(pm)
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod

@@ -367,6 +367,7 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_remove_layout_conversions(pm)
         nvidia.passes.ttnvgpuir.add_interleave_tmem(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
+        passes.ttgpuir.add_gather_to_local_gather(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
         passes.ttir.add_loop_aware_cse(pm)
         passes.common.add_symbol_dce(pm)
@@ -409,7 +410,8 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_remove_layout_conversions(pm, True)
             passes.common.add_canonicalizer(pm)
             passes.common.add_cse(pm)
-
+        # Decide gather locality after sanitizer layout cleanup.
+        passes.ttgpuir.add_gather_to_local_gather(pm)
         pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
