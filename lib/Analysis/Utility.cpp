@@ -1045,6 +1045,39 @@ unsigned GatherLoweringHelper::getScratchSizeInBytes() {
          ceil<unsigned>(srcType.getElementTypeBitWidth(), 8);
 }
 
+bool isCrossCTAGatherScatter(triton::gpu::MemDescType memDescTy,
+                             RankedTensorType regTy, unsigned axis) {
+  MLIRContext *ctx = memDescTy.getContext();
+  LinearLayout sharedLayout =
+      triton::gpu::toLinearLayoutIgnoringPadding(memDescTy);
+  SmallVector<StringAttr> allDims =
+      standardOutDimNames(ctx, memDescTy.getRank());
+  StringAttr axisDim = allDims[axis];
+  auto kRegister = StringAttr::get(ctx, "register");
+  auto kBlock = StringAttr::get(ctx, "block");
+
+  // Runtime indices may select any shard of the indexed axis.
+  if (!sharedLayout.sublayoutIsZero({kBlock}, {axisDim}))
+    return true;
+
+  LinearLayout regLayout = triton::gpu::toLinearLayout(regTy)
+                               .removeZeroBasesAlongDim(kRegister)
+                               .transposeOuts(allDims);
+  // Replace `axis` with a descriptor-sized input, then check whether the
+  // remaining result coordinates select a remote CTA.
+  SmallVector<StringAttr> nonIndexedDims = allDims;
+  nonIndexedDims.erase(nonIndexedDims.begin() + axis);
+  LinearLayout indexedLayout =
+      regLayout.sublayout(llvm::to_vector(regLayout.getInDimNames()),
+                          nonIndexedDims) *
+      LinearLayout::identity1D(sharedLayout.getOutDimSize(axisDim), axisDim,
+                               axisDim);
+  indexedLayout = indexedLayout.transposeOuts(allDims);
+  LinearLayout conversion =
+      invertAndComposeLocal(sharedLayout, indexedLayout, {kBlock});
+  return !conversion.isIdentityOnOutDim(kBlock);
+}
+
 bool GatherLoweringHelper::isWarpLocal() {
   // The gather is warp-local if for each column along the gather axis in the
   // source and index tensors, all the elements are owned by the same warp.

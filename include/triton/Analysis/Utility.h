@@ -164,6 +164,9 @@ private:
   SmallVector<unsigned> order;
 };
 
+bool isCrossCTAGatherScatter(triton::gpu::MemDescType memDescTy,
+                             RankedTensorType regTy, unsigned axis);
+
 // Helper class for lowering `tt.gather` operations. This class shares lowering
 // logic between shared memory allocation and LLVM codegen.
 class GatherLoweringHelper {
