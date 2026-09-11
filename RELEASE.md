@@ -35,6 +35,8 @@ Starting with PyTorch 2.14, Triton feature releases (`X.Y.0`) follow the PyTorch
 
 Each Triton target date is one week before the corresponding PyTorch release date. Dates are tentative and follow the [PyTorch release cadence](https://github.com/pytorch/pytorch/blob/main/RELEASE.md#release-cadence).
 
+At the release decision date, validation results determine whether to publish a patch or the next feature release.
+
 | PyTorch version | Triton release options | Release decision date | Target release date |
 | --- | --- | --- | --- |
 | 2.15 | 3.9 | --- | Oct 21, 2026 |
