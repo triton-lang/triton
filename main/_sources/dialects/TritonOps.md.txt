@@ -1741,7 +1741,7 @@ tensors, src[..., 0] and src[..., 1].
 For example, if the input shape is 4x8x2xf32, returns two tensors of
 shape 4x8xf32.
 
-Traits: `AlwaysSpeculatableImplTrait`, `InferTypeOpAdaptor`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `InferTypeOpAdaptor`, `SameResultsType`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 

@@ -248,7 +248,7 @@ the 2D layout [1] expected by tl.dot_scaled.</p>
 <span class="kn">import</span><span class="w"> </span><span class="nn">triton.language</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tl</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">triton.profiler</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">proton</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">triton.tools.tensor_descriptor</span><span class="w"> </span><span class="kn">import</span> <span class="n">TensorDescriptor</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">triton.tools.mxfp</span><span class="w"> </span><span class="kn">import</span> <span class="n">MXFP4Tensor</span><span class="p">,</span> <span class="n">MXScaleTensor</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.tools.mxfp</span><span class="w"> </span><span class="kn">import</span> <span class="n">MXFP4Tensor</span><span class="p">,</span> <span class="n">MXScaleTensor</span><span class="p">,</span> <span class="n">fp8e8m0_to_float32</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">is_cuda</span><span class="p">():</span>
@@ -776,21 +776,14 @@ the 2D layout [1] expected by tl.dot_scaled.</p>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">validate_block_scaled_amd</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">block_scale_type</span><span class="o">=</span><span class="s2">"mxfp4"</span><span class="p">,</span> <span class="n">mfma_nonkdim</span><span class="o">=</span><span class="mi">16</span><span class="p">):</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="nf">e8m0_to_f32</span><span class="p">(</span><span class="n">x</span><span class="p">):</span>
-        <span class="n">x_f32</span> <span class="o">=</span> <span class="mi">2</span><span class="o">**</span><span class="p">((</span><span class="n">x</span> <span class="o">-</span> <span class="mi">127</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">))</span>
-        <span class="n">x_f32</span><span class="p">[</span><span class="n">x_f32</span> <span class="o">==</span> <span class="mi">128</span><span class="p">]</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="s2">"nan"</span><span class="p">)</span>
-        <span class="k">return</span> <span class="n">x_f32</span>
-
     <span class="k">def</span><span class="w"> </span><span class="nf">run_torch</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">w</span><span class="p">,</span> <span class="n">x_scales</span><span class="p">,</span> <span class="n">w_scales</span><span class="p">,</span> <span class="n">dtype</span><span class="p">):</span>
         <span class="c1"># First convert the x and w inputs to f32.</span>
         <span class="n">x_f32</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
         <span class="n">w_f32</span> <span class="o">=</span> <span class="n">w</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
         <span class="c1"># Next convert the e8m0 scales to f32.</span>
-        <span class="n">x_scales</span> <span class="o">=</span> <span class="n">x_scales</span><span class="o">.</span><span class="n">repeat_interleave</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-        <span class="n">x_scales_f32</span> <span class="o">=</span> <span class="n">e8m0_to_f32</span><span class="p">(</span><span class="n">x_scales</span><span class="p">)</span>
+        <span class="n">x_scales_f32</span> <span class="o">=</span> <span class="n">fp8e8m0_to_float32</span><span class="p">(</span><span class="n">x_scales</span><span class="p">)</span><span class="o">.</span><span class="n">repeat_interleave</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
         <span class="n">x_f32</span> <span class="o">=</span> <span class="n">x_f32</span> <span class="o">*</span> <span class="n">x_scales_f32</span>
-        <span class="n">w_scales</span> <span class="o">=</span> <span class="n">w_scales</span><span class="o">.</span><span class="n">repeat_interleave</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-        <span class="n">w_scales_f32</span> <span class="o">=</span> <span class="n">e8m0_to_f32</span><span class="p">(</span><span class="n">w_scales</span><span class="p">)</span>
+        <span class="n">w_scales_f32</span> <span class="o">=</span> <span class="n">fp8e8m0_to_float32</span><span class="p">(</span><span class="n">w_scales</span><span class="p">)</span><span class="o">.</span><span class="n">repeat_interleave</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
         <span class="n">w_f32</span> <span class="o">=</span> <span class="n">w_f32</span> <span class="o">*</span> <span class="n">w_scales_f32</span>
         <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">mm</span><span class="p">(</span><span class="n">x_f32</span><span class="p">,</span> <span class="n">w_f32</span><span class="o">.</span><span class="n">T</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span>
 
@@ -901,7 +894,7 @@ the 2D layout [1] expected by tl.dot_scaled.</p>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>⛔ This example requires GPU support for block scaled matmul
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.031 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.019 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-10-block-scaled-matmul-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/336ead1bb945ae9dc42eab20e58658f6/10-block-scaled-matmul.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">10-block-scaled-matmul.ipynb</span></code></a></p>
