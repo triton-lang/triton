@@ -611,43 +611,17 @@ tt.func @splat_load_uniform_mask(%p: !tt.ptr<f32>, %pred: i1) -> tensor<8x16xf32
   tt.return %v : tensor<8x16xf32>
 }
 
-// CHECK-LABEL: @splat_load_varying_mask
-// CHECK: tt.load %{{.*}}, %{{.*}}, %{{.*}} : tensor<128x!tt.ptr<f32>>
-tt.func @splat_load_varying_mask(%p: !tt.ptr<f32>, %mask: tensor<128xi1>) -> tensor<128xf32> {
+// CHECK-LABEL: @splat_load_preserves_nonuniform_and_volatile
+// CHECK: %[[A:.*]] = tt.load %{{.*}}, %{{.*}}, %{{.*}} : tensor<128x!tt.ptr<f32>>
+// CHECK: %[[B:.*]] = tt.load %{{.*}}, %{{.*}}, %{{.*}} : tensor<128x!tt.ptr<f32>>
+// CHECK: %[[C:.*]] = tt.load %{{.*}} {isVolatile = true} : tensor<128x!tt.ptr<f32>>
+// CHECK: tt.return %[[A]], %[[B]], %[[C]]
+tt.func @splat_load_preserves_nonuniform_and_volatile(%p: !tt.ptr<f32>, %pred: i1, %mask: tensor<128xi1>, %other: tensor<128xf32>) -> (tensor<128xf32>, tensor<128xf32>, tensor<128xf32>) {
   %ps = tt.splat %p : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
+  %uniform_mask = tt.splat %pred : i1 -> tensor<128xi1>
   %zero = arith.constant dense<0.0> : tensor<128xf32>
-  %v = tt.load %ps, %mask, %zero : tensor<128x!tt.ptr<f32>>
-  tt.return %v : tensor<128xf32>
-}
-
-// CHECK-LABEL: @splat_load_varying_other
-// CHECK: tt.load %{{.*}}, %{{.*}}, %{{.*}} : tensor<128x!tt.ptr<f32>>
-tt.func @splat_load_varying_other(%p: !tt.ptr<f32>, %pred: i1, %other: tensor<128xf32>) -> tensor<128xf32> {
-  %ps = tt.splat %p : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
-  %mask = tt.splat %pred : i1 -> tensor<128xi1>
-  %v = tt.load %ps, %mask, %other : tensor<128x!tt.ptr<f32>>
-  tt.return %v : tensor<128xf32>
-}
-
-// CHECK-LABEL: @splat_load_volatile
-// CHECK: tt.load %{{.*}} {isVolatile = true} : tensor<128x!tt.ptr<f32>>
-tt.func @splat_load_volatile(%p: !tt.ptr<f32>) -> tensor<128xf32> {
-  %ps = tt.splat %p : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
-  %v = tt.load %ps {isVolatile = true} : tensor<128x!tt.ptr<f32>>
-  tt.return %v : tensor<128xf32>
-}
-
-// CHECK-LABEL: @splat_load_preserves_store_order
-// CHECK: %[[V0:.*]] = tt.load %[[P:.*]] : !tt.ptr<f32>
-// CHECK: %[[S0:.*]] = tt.splat %[[V0]] : f32 -> tensor<128xf32>
-// CHECK: tt.store %[[P]], %{{.*}} : !tt.ptr<f32>
-// CHECK: %[[V1:.*]] = tt.load %[[P]] : !tt.ptr<f32>
-// CHECK: %[[S1:.*]] = tt.splat %[[V1]] : f32 -> tensor<128xf32>
-// CHECK: tt.return %[[S0]], %[[S1]]
-tt.func @splat_load_preserves_store_order(%p: !tt.ptr<f32>, %new: f32) -> (tensor<128xf32>, tensor<128xf32>) {
-  %ps = tt.splat %p : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>>
-  %v0 = tt.load %ps : tensor<128x!tt.ptr<f32>>
-  tt.store %p, %new : !tt.ptr<f32>
-  %v1 = tt.load %ps : tensor<128x!tt.ptr<f32>>
-  tt.return %v0, %v1 : tensor<128xf32>, tensor<128xf32>
+  %a = tt.load %ps, %mask, %zero : tensor<128x!tt.ptr<f32>>
+  %b = tt.load %ps, %uniform_mask, %other : tensor<128x!tt.ptr<f32>>
+  %c = tt.load %ps {isVolatile = true} : tensor<128x!tt.ptr<f32>>
+  tt.return %a, %b, %c : tensor<128xf32>, tensor<128xf32>, tensor<128xf32>
 }

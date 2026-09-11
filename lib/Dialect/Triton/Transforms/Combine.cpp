@@ -74,34 +74,33 @@ public:
   LogicalResult matchAndRewrite(LoadOp op,
                                 PatternRewriter &rewriter) const override {
     auto type = dyn_cast<RankedTensorType>(op.getType());
-    if (!type || type.getEncoding() || op.getIsVolatile())
-      return failure();
-    if (!op.getPtr().getDefiningOp<SplatOp>())
+    auto ptr = op.getPtr().getDefiningOp<SplatOp>();
+    if (!type || type.getEncoding() || !ptr || op.getIsVolatile())
       return failure();
 
-    for (Value operand : op->getOperands()) {
-      DenseElementsAttr constant;
+    for (Value operand : op->getOperands().drop_front()) {
+      SplatElementsAttr constant;
       if (!operand.getDefiningOp<SplatOp>() &&
-          !(matchPattern(operand, m_Constant(&constant)) && constant.isSplat()))
+          !matchPattern(operand, m_Constant(&constant)))
         return failure();
     }
 
-    auto scalar = [&](Value value) -> Value {
+    auto getScalar = [&](Value value) -> Value {
       if (!value)
         return {};
       if (auto splat = value.getDefiningOp<SplatOp>())
         return splat.getSrc();
-      DenseElementsAttr constant;
+      SplatElementsAttr constant;
       bool matched = matchPattern(value, m_Constant(&constant));
-      assert(matched && constant.isSplat());
+      assert(matched);
       return arith::ConstantOp::materialize(
           rewriter, constant.getSplatValue<Attribute>(),
           constant.getElementType(), op.getLoc());
     };
-    auto load =
-        LoadOp::create(rewriter, op.getLoc(), type.getElementType(),
-                       scalar(op.getPtr()), scalar(op.getMask()),
-                       scalar(op.getOther()), op.getCachePolicyAttr(), false);
+    auto load = LoadOp::create(rewriter, op.getLoc(), type.getElementType(),
+                               ptr.getSrc(), getScalar(op.getMask()),
+                               getScalar(op.getOther()),
+                               op.getCachePolicyAttr(), false);
     rewriter.replaceOpWithNewOp<SplatOp>(op, type, load);
     return success();
   }
