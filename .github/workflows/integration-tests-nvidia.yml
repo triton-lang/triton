@@ -101,7 +101,6 @@ jobs:
           PYTEST_ADDOPTS: ""
         run: python3 -m pytest -n 0 -s -vv python/test/microbenchmark/consan_performance.py
       - name: Warm Triton compile cache
-        timeout-minutes: 10
         run: |
           trace_dir="$RUNNER_TEMP/triton-ci-compile-trace"
           echo "TRITON_CI_COMPILE_TRACE_DIR=$trace_dir" >> "$GITHUB_ENV"
