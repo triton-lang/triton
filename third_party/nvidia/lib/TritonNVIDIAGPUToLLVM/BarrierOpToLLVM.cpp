@@ -85,14 +85,13 @@ struct FromCTALowering {
 
 FromCTALowering getFromCTALowering(Location loc,
                                    ConversionPatternRewriter &rewriter,
-                                   Value barrierPtr, uint32_t fromCTA,
+                                   Value barrierPtr, Value id, uint32_t fromCTA,
                                    bool supportsMBarrierMulticast) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   uint32_t broadcastMask =
       (triton::gpu::lookupNumCTAs(rewriter) - 1) & ~fromCTA;
   Type i32Ty = rewriter.getIntegerType(32);
 
-  Value id = getThreadId(rewriter, loc);
   Value pred =
       supportsMBarrierMulticast
           ? b.icmp_eq(id, b.i32_val(0))
@@ -103,7 +102,8 @@ FromCTALowering getFromCTALowering(Location loc,
 
   if (supportsMBarrierMulticast)
     return {pred, barrierPtr,
-            LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, broadcastMask)};
+            LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, broadcastMask,
+                                                 ctaId)};
 
   Value peerOffset = b.i32_val(0);
   unsigned srcBit = 0;
@@ -277,7 +277,7 @@ struct BarrierExpectConversion
     Value multicastMask;
     if (std::optional<uint32_t> fromCTA = op.getFromCTA()) {
       FromCTALowering lowering =
-          getFromCTALowering(loc, rewriter, smemObj.getBase(), *fromCTA,
+          getFromCTALowering(loc, rewriter, smemObj.getBase(), id, *fromCTA,
                              supportsMBarrierMulticast);
       pred = lowering.pred;
       barrierPtr = lowering.barrierPtr;
@@ -408,6 +408,15 @@ struct ArriveBarrierOpConversion
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::ArriveBarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    unsigned count = op.getCount();
+    if (op.getPerWarp()) {
+      unsigned numWarps = ttg::lookupNumWarps(op);
+      if (count % numWarps != 0)
+        return op.emitOpError("per_warp count must be divisible by the warp "
+                              "count before lowering");
+      count /= numWarps;
+    }
+
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto barrierTy = op.getAlloc().getType();
@@ -415,38 +424,44 @@ struct ArriveBarrierOpConversion
         loc, adaptor.getAlloc(),
         typeConverter->convertType(barrierTy.getElementType()), rewriter);
 
-    // The partition-relative thread ID lowers the same or marginally better
-    // than an elect: LOP3.LUT vs. ELECT + ISETP.EQ.U32.AND.
-    Value id = getThreadId(rewriter, loc);
-    Value pred = b.icmp_eq(id, b.i32_val(0));
-
     bool isCrossClusterBarrier =
         op.isMulticast() || LLVM::NVIDIA::getCGABroadcastMask(barrierTy) != 0;
     Value barrierPtr = LLVM::NVIDIA::getLeaderAddress(
         loc, rewriter, smemObj.getBase(), barrierTy);
     Value multicastMask;
+    Value pred;
+    // Partition starts are whole warps, so the physical lane needs no offset.
+    Value id = op.getPerWarp() ? NVVM::LaneIdOp::create(rewriter, loc,
+                                                        rewriter.getI32Type())
+                               : getThreadId(rewriter, loc);
     if (std::optional<uint32_t> fromCTA = op.getFromCTA()) {
+      // Routing may use several lane IDs to address peer CTAs.
       FromCTALowering lowering =
-          getFromCTALowering(loc, rewriter, smemObj.getBase(), *fromCTA,
+          getFromCTALowering(loc, rewriter, smemObj.getBase(), id, *fromCTA,
                              supportsMBarrierMulticast && !op.isMulticast());
       pred = lowering.pred;
       barrierPtr = lowering.barrierPtr;
       multicastMask = lowering.multicastMask;
       isCrossClusterBarrier = true;
+    } else {
+      pred = b.icmp_eq(id, b.i32_val(0));
     }
     if (op.getPred())
       pred = b.and_(pred, adaptor.getPred());
+    if (op.isMulticast())
+      multicastMask = LLVM::NVIDIA::createTMAMulticastMask(
+          loc, rewriter, static_cast<uint16_t>(op.getMulticastCTA()));
     // TODO: Add phase result as needed.
     std::stringstream ptxAsm;
     ptxAsm << "@$0 mbarrier.arrive."
            << (isCrossClusterBarrier ? "shared::cluster" : "shared::cta");
-    if (op.isMulticast() || multicastMask)
+    if (multicastMask)
       ptxAsm << ".multicast::cluster::32b";
     ptxAsm << ".b64 _, [$1]";
-    if (op.getCount() > 1) {
-      ptxAsm << ", " << op.getCount();
+    if (count > 1) {
+      ptxAsm << ", " << count;
     }
-    if (op.isMulticast() || multicastMask)
+    if (multicastMask)
       ptxAsm << ", $2";
     ptxAsm << ";";
 
@@ -454,10 +469,6 @@ struct ArriveBarrierOpConversion
     SmallVector<PTXBuilder::Operand *, 3> operands = {
         ptxBuilder.newOperand(pred, "b"),
         ptxBuilder.newOperand(barrierPtr, "r")};
-    if (op.isMulticast()) {
-      multicastMask = LLVM::NVIDIA::createTMAMulticastMask(
-          loc, rewriter, static_cast<uint16_t>(op.getMulticastCTA()));
-    }
     if (multicastMask)
       operands.push_back(ptxBuilder.newOperand(multicastMask, "r"));
 

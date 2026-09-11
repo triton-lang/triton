@@ -304,7 +304,8 @@ private:
 } // namespace
 
 void runClusterBarrierInsertion(ModuleAllocation &moduleAllocation,
-                                int computeCapability) {
+                                int computeCapability,
+                                BufferRegionAnalysis &regions) {
   ModuleOp mod = moduleAllocation.getModuleOp();
   if (computeCapability < 90)
     return;
@@ -321,7 +322,7 @@ void runClusterBarrierInsertion(ModuleAllocation &moduleAllocation,
   };
 
   ModuleMembarAnalysis analysis(moduleAllocation, filterFn);
-  analysis.run<ClusterBarrierAnalysis>();
+  analysis.runAnalysis<ClusterBarrierAnalysis>(regions);
 }
 
 LogicalResult
