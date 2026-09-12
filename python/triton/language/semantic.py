@@ -602,11 +602,15 @@ class TritonSemantic(Generic[TensorTy]):
         # scalar
         if dtype is None:
             raise ValueError("dtype must be specified when value is not a tensor")
-        if value == 0:
-            value = self.builder.get_null_value(dtype.to_ir(self.builder))
-        elif dtype.is_fp8():
-            value = self.builder.get_fp32(value)
-            value = self.builder.create_fp_trunc(value, dtype.to_ir(self.builder))
+        if dtype.is_int() and value == 0:
+            # For BC, we explicitly allow e.g. tl.full((), 0.0, tl.int32)
+            # which raises a type error for non-zero values.
+            value = 0
+        if dtype.is_fp8():
+            # Validate target support
+            dtype.to_ir(self.builder)
+            value = self.tensor(self.builder.get_fp32(value), tl.float32)
+            return self.cast(value, dtype)
         else:
             get_value_fn = getattr(self.builder, f"get_{dtype.name}")
             value = get_value_fn(value)
@@ -1763,7 +1767,8 @@ class TritonSemantic(Generic[TensorTy]):
 
     def histogram(self, input: TensorTy, num_bins: int, mask: Optional[TensorTy]) -> TensorTy:
         assert len(input.shape) == 1, "histogram only supports 1D input"
-        assert input.dtype.is_int(), "histogram only supports integer input"
+        if not (input.dtype.is_int() and input.dtype.int_bitwidth == 32):
+            raise ValueError(f"histogram only supports 32-bit integer input, but got {input.dtype}")
         if mask is not None:
             mask = self.broadcast_impl_shape(mask, input.shape)
             if not mask.type.scalar.is_bool():

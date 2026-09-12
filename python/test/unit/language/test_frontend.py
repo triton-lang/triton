@@ -26,6 +26,35 @@ def anchor(v):
     pass
 
 
+@pytest.mark.parametrize("dtype",
+                         [tl.float16, tl.bfloat16, tl.float32, tl.float64, tl.float8e4nv, tl.float8e5, tl.float8e4b15],
+                         ids=str)
+def test_scalar_constant_preserves_signed_zero(dtype):
+
+    @triton.jit
+    def kernel(dtype: tl.constexpr):
+        # CHECK: arith.constant -0.000000e+00
+        anchor(tl.full((), -0.0, dtype))
+        # CHECK: arith.constant 0.000000e+00
+        anchor(tl.full((), 0.0, dtype))
+
+    run_filecheck_test(kernel, args=(dtype, ))
+
+
+@pytest.mark.parametrize("dtype",
+                         [tl.int1, tl.int8, tl.int16, tl.int32, tl.int64, tl.uint8, tl.uint16, tl.uint32, tl.uint64],
+                         ids=str)
+@pytest.mark.parametrize("value", [0.0, -0.0])
+def test_scalar_constant_float_zero_to_integer(dtype, value):
+
+    @triton.jit
+    def kernel(dtype: tl.constexpr, value: tl.constexpr):
+        # CHECK: arith.constant {{0|false}}
+        anchor(tl.full((), value, dtype))
+
+    run_filecheck_test(kernel, args=(dtype, value))
+
+
 @triton.aggregate
 class Pair:
     first: tl.tensor
@@ -421,6 +450,29 @@ def test_tuple_assignment_constexpr_tuple_normalizes_recursively():
     run_parser(kernel)
 
 
+def test_list_comprehension_if_filter():
+
+    @triton.jit
+    def kernel():
+        # an `if` filter drops the elements whose condition is false
+        vals: tl.constexpr = [x for x in (10, 20, 30, 40) if x >= 30]
+        tl.static_assert(len(vals) == 2)
+        tl.static_assert(vals[0] == 30)
+        tl.static_assert(vals[1] == 40)
+
+        # multiple `if` clauses compose as "and"
+        multi: tl.constexpr = [x for x in (0, 1, 2, 3, 4, 5) if x > 1 if x % 2 == 0]
+        tl.static_assert(len(multi) == 2)
+        tl.static_assert(multi[0] == 2)
+        tl.static_assert(multi[1] == 4)
+
+        # an unfiltered comprehension is unchanged
+        allv: tl.constexpr = [x for x in (10, 20, 30, 40)]
+        tl.static_assert(len(allv) == 4)
+
+    run_parser(kernel)
+
+
 def test_named_expr_respects_prior_constexpr_annotation():
 
     @triton.jit
@@ -559,6 +611,19 @@ def test_call_in_while():
             trivial_return()
         else:
             trivial_return()
+
+
+@filecheck_test
+@triton.jit
+def test_while_integer_condition():
+    # CHECK-LABEL: test_while_integer_condition
+    i = tl.program_id(0)
+    # CHECK: scf.while
+    # CHECK: [[COND:%.*]] = arith.cmpi ne, %{{.*}}, %{{.*}} : i32
+    # CHECK: scf.condition([[COND]])
+    while i:
+        i -= 1
+    anchor(i)
 
 
 def test_return_in_while():
