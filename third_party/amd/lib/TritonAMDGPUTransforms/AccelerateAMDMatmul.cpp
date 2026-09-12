@@ -2,6 +2,7 @@
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "TritonAMDGPUTransforms/WmmaGroup.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -884,10 +885,11 @@ public:
       reshapeScale = mlir::triton::gpu::ConvertLayoutOp::create(
           rewriter, loc, newScaleType, reshapeScale);
     } else {
-      // Cast scale to bf16, broadcast it and convert the layout
+      // This is an exponent carrier; restore NaNs after the native upcast.
       FloatType bf16Type = rewriter.getBF16Type();
       reshapeScale = extendAndBroadcastScale(rewriter, dotOp, scale, bf16Type,
-                                             resultType.clone(bf16Type), opIdx);
+                                             resultType.clone(bf16Type), opIdx,
+                                             /*handleNan=*/false);
     }
 
     // Upcast with scale
