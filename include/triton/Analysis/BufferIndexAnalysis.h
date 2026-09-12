@@ -1,0 +1,90 @@
+#ifndef TRITON_ANALYSIS_BUFFER_INDEX_ANALYSIS_H
+#define TRITON_ANALYSIS_BUFFER_INDEX_ANALYSIS_H
+
+#include "triton/Analysis/Allocation.h"
+
+#include "mlir/IR/Dominance.h"
+#include "mlir/IR/Value.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
+#include <memory>
+#include <vector>
+
+namespace mlir {
+
+class Block;
+class Operation;
+struct AllocationSlice;
+struct BufferIndexExpr;
+
+/// Extends membar's slice disjointness check for multi-buffered shared-memory
+/// allocations selected by `ttg.memdesc_index`.
+///
+/// The analysis is intentionally narrow. It decomposes the dynamic slot index
+/// into `base + constantOffset`, optionally under a positive constant modulus,
+/// and proves two accesses disjoint only when the expressions have the same
+/// base and different offsets modulo the same modulus.
+/// Scalar indices follow Triton's block-programming semantics. Comparisons
+/// also require the same indexed source in the same dynamic iteration:
+/// a source change can change both the origin and the byte stride of a slot.
+///
+/// Recognized index shapes:
+///   1. integer constants,
+///   2. `arith.addi` with one constant operand,
+///   3. `arith.remsi` with a positive constant modulus,
+///   4. the pipeliner's select/cmpi one-step wrap:
+///        select(cmpi sge(base + 1, N), 0, base + 1)
+///        select(cmpi slt(base + 1, N), base + 1, 0)
+///      only when -1 <= base < N is proven.
+///
+/// This is a per-function analysis. It owns dominance information used to
+/// detect cf-form loop backedges and interns the analyzed expressions whose
+/// pointers are stored on `AllocationSlice`. The select/cmpi recurrence base
+/// must be provably in `[-1, N)`, which is checked from the loop-header block
+/// argument's incoming operands.
+///
+/// Buffer-index reasoning is disabled for functions with irreducible control
+/// flow because not every cyclic edge is a dominance backedge in such CFGs.
+///
+/// Unknown arithmetic, dynamic or non-positive moduli, nested moduli, different
+/// SSA bases, and slices carried across cf-form backedges all fail the
+/// disjointness proof and fall back to normal membar aliasing.
+///
+/// The class owns and interns the analyzed expressions attached to
+/// `AllocationSlice`; callers must not keep those payloads beyond the lifetime
+/// of this analysis.
+class BufferIndexAnalysis {
+public:
+  explicit BufferIndexAnalysis(FunctionOpInterface funcOp);
+  ~BufferIndexAnalysis();
+
+  /// Builds an `AllocationSlice` for `value` and attaches a buffer-index
+  /// expression to it. Callers in membar should use this rather than the raw
+  /// `AllocationSlice` constructor so index expressions are attached
+  /// consistently.
+  AllocationSlice makeSlice(Value value, Interval<size_t> allocationInterval,
+                            Allocation::BufferId bufferId);
+
+  /// Returns true if `successor` may revisit definitions from `terminator`'s
+  /// dynamic iteration. Uses dominance for reducible cf-form loops and
+  /// conservatively invalidates region-to-region, nested and irreducible CFG
+  /// edges, whose reducibility is not established by this analysis.
+  bool isBackedgeSuccessor(Operation *terminator, Block *successor) const;
+
+private:
+  void attachBufferIndex(AllocationSlice &slice, Value value);
+  const BufferIndexExpr *intern(BufferIndexExpr expr);
+
+  DominanceInfo dominanceInfo;
+  bool hasReducibleCFG;
+  std::vector<std::unique_ptr<BufferIndexExpr>> expressions;
+};
+
+/// Returns true only if the buffer-index expressions attached to `a` and `b`
+/// provably denote different buffer slots in the same dynamic iteration.
+/// Stateless; accesses only the payload pointers.
+bool areBufferIndicesProvablyDifferent(const AllocationSlice &a,
+                                       const AllocationSlice &b);
+
+} // namespace mlir
+
+#endif // TRITON_ANALYSIS_BUFFER_INDEX_ANALYSIS_H

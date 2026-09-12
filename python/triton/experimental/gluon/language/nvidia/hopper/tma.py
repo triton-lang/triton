@@ -173,12 +173,9 @@ def _emit_alignment_check(desc, coord, fn_name: str, arg_name: str, _semantic=No
     elem_bytes = dtype.primitive_bitwidth // 8
     align = align_bytes // elem_bytes
 
-    align_val = ttgl.to_tensor(align, _semantic=_semantic)
-    zero = ttgl.to_tensor(0, _semantic=_semantic)
-
     coord = ttgl.to_tensor(coord, _semantic=_semantic)
-    rem = coord.__mod__(align_val, _semantic=_semantic)
-    is_zero = rem.__eq__(zero, _semantic=_semantic)
+    rem = coord.__mod__(align, _semantic=_semantic)
+    is_zero = rem.__eq__(0, _semantic=_semantic)
 
     fp4_padded = "with fp4_padded=True " if desc.layout.fp4_padded else ""
     ttgl.device_assert(

@@ -250,14 +250,8 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
       arefTy.getBaseType(), [](Type type) { return cast<MemDescType>(type); }));
   auto depth = getArefDepth(arefBufTypes[0]);
 
-  SetVector<Operation *> arefUsers;
-  for (auto user : op->getUsers())
-    arefUsers.insert(user);
-  auto sorted = topologicalSort(arefUsers);
-
   ImplicitLocOpBuilder b1(op->getLoc(), op), b2(op->getLoc(), op);
-  auto op1 = op->getBlock()->findAncestorOpInBlock(*sorted.back());
-  b2.setInsertionPointAfter(op1);
+  b2.setInsertionPoint(op->getBlock()->getTerminator());
 
   auto emptyMbars = createBarriers(b1, b2, depth, count.consumerPendingCount);
   auto fullMbars = createBarriers(b1, b2, depth, count.producerPendingCount);

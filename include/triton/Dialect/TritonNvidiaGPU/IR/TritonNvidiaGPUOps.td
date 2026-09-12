@@ -107,17 +107,6 @@ def TTNG_FenceMBarrierInitReleaseClusterOp : TTNG_Op<
   }];
 }
 
-def TTNG_ClusterArriveOp : TTNG_Op<"cluster_arrive", []> {
-  let arguments = (ins DefaultValuedAttr<BoolAttr, "false">:$relaxed);
-  let assemblyFormat = "attr-dict";
-  let hasVerifier = 1;
-}
-
-def TTNG_ClusterWaitOp : TTNG_Op<"cluster_wait", []> {
-  let assemblyFormat = "attr-dict";
-  let hasVerifier = 1;
-}
-
 def TTNG_ClusterBarrierOp : TTNG_Op<"cluster_barrier", []> {
   let arguments = (ins DefaultValuedAttr<BoolAttr, "false">:$relaxed);
   let summary = "Synchronize all warps at cluster scope";
@@ -326,7 +315,6 @@ def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier", [
     https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-mbarrier-inval
   }];
 
-  let hasVerifier = 1;
   let arguments = (ins Arg<TTG_MemDescType, "", GenericSharedWrite>:$alloc);
   let assemblyFormat = "$alloc attr-dict `:` qualified(type($alloc))";
 }
@@ -370,6 +358,7 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
     DeclareOpInterfaceMethods<MBarrierOpInterface, ["getBarrier"]>,
     DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "wait until the mbarrier phase completes.";
+  let hasCanonicalizeMethod = 1;
 
   let description = [{
     Blocks the program progress until the mbarrier object in `alloc` completes
@@ -411,7 +400,6 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [AttrSizedOperandSegments,
     $alloc `,` $phase (`,` $pred^)? (`deps` $deps^)?
     attr-dict `:` qualified(type($alloc)) (`,` type($deps)^)?
   }];
-  let hasVerifier = 1;
 }
 
 def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [
@@ -524,6 +512,7 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
     AttrSizedOperandSegments, DeclareOpInterfaceMethods<MBarrierOpInterface>,
     DeclareOpInterfaceMethods<PredicatedOpInterface>, TMALoadLikeOpInterface]> {
   let summary = "copy data based on descriptor from global memory to local memory asynchronously";
+  let hasCanonicalizeMethod = 1;
 
   let description = [{
     This operation copies data from global memory to local memory
@@ -642,6 +631,7 @@ def TTNG_AsyncTMAGatherOp : TTNG_Op<"async_tma_gather", [
     DeclareOpInterfaceMethods<MBarrierOpInterface>,
     DeclareOpInterfaceMethods<PredicatedOpInterface>, TMALoadLikeOpInterface]> {
   let summary = "gather data based on descriptor from global memory to local memory asynchronously";
+  let hasCanonicalizeMethod = 1;
 
   let description = [{
     This operation gathers multiple rows of data from a global memory matrix to
@@ -852,6 +842,7 @@ def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments,
     DeclareOpInterfaceMethods<MBarrierOpInterface>,
     DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "make an mbarrier track completion of all prior async tcgen5 ops";
+  let hasCanonicalizeMethod = 1;
 
   let description = [{
     The `ttng.tc_gen5_commit` is an asynchronous operation that makes the
@@ -892,6 +883,22 @@ def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit", [AttrSizedOperandSegments,
   }];
 
   let hasVerifier = 1;
+}
+
+// Inserted by TMEM synchronization and instrumentation before lowering.
+def TTNG_TMEMWaitOp : TTNG_Op<"tmem_wait"> {
+  let summary = "Wait for tensor memory loads or stores to complete";
+  let description = [{
+    Waits for all prior tensor memory loads or stores issued by the executing
+    threads, as selected by `kind`. All threads in each executing warp must
+    execute this operation. It does not synchronize different warps or wait for
+    asynchronous MMA or tensor memory copy operations.
+
+    Lowers to `tcgen05.wait::ld.sync.aligned` or
+    `tcgen05.wait::st.sync.aligned`.
+  }];
+  let arguments = (ins TTNG_TMEMWaitKindAttr:$kind);
+  let assemblyFormat = "$kind attr-dict";
 }
 
 def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load", [AttrSizedResultSegments]> {
@@ -998,6 +1005,7 @@ def TTNG_TMEMLoadOp : TTNG_Op<"tmem_load", [AttrSizedResultSegments]> {
 def TTNG_TMEMStoreOp : TTNG_Op<"tmem_store", [
     DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "Store a distributed tensor into a buffer in tensor memory";
+  let hasCanonicalizeMethod = 1;
 
   let description = [{
     This is similar to ttg.local_store except the source layout is restricted to

@@ -16,14 +16,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     %8 = tt.addptr %7, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
     // Load 8 elements from A with two vectorized load instruction
     // CHECK-COUNT-2: llvm.load {{.*}} : !llvm.ptr<1> -> vector<4xf32>
-    %9 = tt.load %6 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256x!tt.ptr<f32>, #blocked0>
+    %9 = tt.load %6 : tensor<256x!tt.ptr<f32>, #blocked0>
     // Load 8 elements from B with two vectorized load instruction
     // CHECK-COUNT-2: llvm.load {{.*}} : !llvm.ptr<1> -> vector<4xf32>
-    %10 = tt.load %8 {cache = 1 : i32, evict = 1 : i32, isVolatile = false} : tensor<256x!tt.ptr<f32>, #blocked0>
+    %10 = tt.load %8 : tensor<256x!tt.ptr<f32>, #blocked0>
     %11 = arith.addf %9, %10 : tensor<256xf32, #blocked0>
     %12 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<256x!tt.ptr<f32>, #blocked0>
     %13 = tt.addptr %12, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
     tt.store %13, %11 : tensor<256x!tt.ptr<f32>, #blocked0>
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: volatile_load_in_loop
+  tt.func @volatile_load_in_loop(%flag: !tt.ptr<i32>) {
+    %c0_i32 = arith.constant 0 : i32
+    scf.while : () -> () {
+      // CHECK: scf.while
+      // CHECK: llvm.load volatile
+      %0 = tt.load %flag {isVolatile = true} : !tt.ptr<i32>
+      %1 = arith.cmpi eq, %0, %c0_i32 : i32
+      scf.condition(%1)
+    } do {
+      scf.yield
+    }
     tt.return
   }
 }

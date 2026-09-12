@@ -104,6 +104,7 @@ tt.func private @convert_layout_blocked_blocked_vec(%arg0: tensor<16x16xi32, #bl
 }
 
 // CHECK-LABEL: convert_layout_blocked_blocked
+// ALLOC-LABEL: @convert_layout_blocked_blocked
 tt.func private @convert_layout_blocked_blocked(%arg0: tensor<16x16xi32, #blocked0>) -> tensor<16x16xi32, #blocked1> {
   // This conversion looks like:
   //             dst_lane
@@ -125,6 +126,7 @@ tt.func private @convert_layout_blocked_blocked(%arg0: tensor<16x16xi32, #blocke
   // CHECK-NOT: shfl.sync.idx
   // CHECK: store
 
+  // ALLOC: ttg.convert_layout %arg0 {allocation.offset = 0 : i32, allocation.size = 1024 : i32}
   %0 = ttg.convert_layout %arg0 : tensor<16x16xi32, #blocked0> -> tensor<16x16xi32, #blocked1>
   tt.return %0 : tensor<16x16xi32, #blocked1>
 }

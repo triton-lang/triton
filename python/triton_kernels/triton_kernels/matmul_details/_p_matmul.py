@@ -23,6 +23,7 @@ from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_b
 from ._common import (
     compute_offsets,
     get_scaled_dot_format_string,
+    matmul_dot,
     make_matmul_repr,
     matmul_launch_metadata,
     compute_pids,
@@ -244,7 +245,19 @@ def _p_matmul(
         THREADS_PER_BLOCK: tl.constexpr = tl.extra.cuda.num_threads()
         local_absmax = tl.full([THREADS_PER_BLOCK], 0.0, tl.uint32)
 
-    DISALLOW_ACC_MULTI_BUFFER: tl.constexpr = is_w_microscaled and BLOCK_M * BLOCK_N >= 128 * 256
+    # A widened FP8 lhs needs tensor memory alongside the accumulator.
+    dot_lhs_type: tl.constexpr = w_type if SWAP_XW else x_type
+    dot_rhs_type: tl.constexpr = x_type if SWAP_XW else w_type
+    upcast_lhs: tl.constexpr = (not is_x_microscaled and not is_w_microscaled
+                              and dot_lhs_type == tl.float8e4nv
+                              and (dot_rhs_type == tl.float16 or dot_rhs_type == tl.bfloat16))
+    dot_m: tl.constexpr = BLOCK_N if SWAP_XW else BLOCK_M
+    dot_n: tl.constexpr = BLOCK_M if SWAP_XW else BLOCK_N
+    acc_columns: tl.constexpr = tl.cdiv(dot_m, 128) * dot_n
+    DISALLOW_ACC_MULTI_BUFFER: tl.constexpr = (
+        is_w_microscaled and BLOCK_M * BLOCK_N >= 128 * 256
+        or upcast_lhs and acc_columns >= 256
+    )
 
     loop_start = 0 if CLC else tl.program_id(0)
     loop_end = 1 if CLC else num_blocks
@@ -294,7 +307,6 @@ def _p_matmul(
             else:
                 offs_x_m = tl.load(GatherIndx + slice_off_m.to(index_type) + offs_m, mask=mask_m, other=-1)
         if X_TMA_MODE is None:
-            XBase = X + off_x_z.to(index_type) * stride_x_z
             offs_m = off_m + tl.arange(0, BLOCK_M)
             offs_m = tl.max_contiguous(tl.multiple_of(offs_m % shape_m, BLOCK_M), BLOCK_M)
             # no needs to bounds-check here because `offs_m` wraps around M dim
@@ -302,7 +314,6 @@ def _p_matmul(
                 tl.static_assert(HAS_GATHER)
                 offs_m = tl.load(GatherIndx + slice_off_m.to(index_type) + offs_m)
             offs_x_m = offs_m.to(index_type)[:, None] * stride_x_m
-            offs_x_k = (off_k_x0.to(index_type) // block_div + tl.arange(0, BLOCK_K // block_div))[None, :] * stride_x_k
 
         XMxScalePtrs = None
         if is_x_microscaled and stride_x_mx_z is not None: # x is mx but not using TMA
@@ -336,7 +347,12 @@ def _p_matmul(
         k_tiles = tl.cdiv(loop_k, BLOCK_K * SPLIT_K)
         loop_bound = tl.maximum(k_tiles, 1)
         tl.assume(loop_bound > 0)  # Currently necessary for the compiler to flatten the loop properly.
-        for ki in tl.range(loop_bound, disallow_acc_multi_buffer=DISALLOW_ACC_MULTI_BUFFER):
+        for ki in tl.range(
+            loop_bound,
+            disallow_acc_multi_buffer=DISALLOW_ACC_MULTI_BUFFER,
+            # CLC needs warp specialization enabled on the inner loop.
+            warp_specialize=CLC,
+        ):
             if RAGGED_DIMENSION == "K" and ki >= k_tiles:
                 # Tile #ki does not exist: use out-of-bound indices to mask all loads.
                 off_k_x = K
@@ -360,8 +376,11 @@ def _p_matmul(
                 x = x.reshape(BLOCK_M, BLOCK_K // block_div)
             else:
                 tl.static_assert(X_TMA_MODE is None)
-                XPtrs = XBase + offs_x_m + offs_x_k
-                XBase += (BLOCK_K // block_div) * SPLIT_K * stride_x_k
+                offs_x_k = (off_k_x0.to(index_type) // block_div
+                            + ki.to(index_type) * (BLOCK_K // block_div) * SPLIT_K
+                            + tl.arange(0, BLOCK_K // block_div))[None, :] * stride_x_k
+                # Keep the aligned base pointer outside the flattened loop's conditional prologue.
+                XPtrs = X + (off_x_z.to(index_type) * stride_x_z + offs_x_m + offs_x_k)
                 mask_k = tl.arange(0, BLOCK_K // block_div) * block_div < K - off_k_x
                 if EVEN_K:
                     if SPLIT_K > 1:
@@ -481,10 +500,7 @@ def _p_matmul(
                     else:
                         acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, w_format, acc=acc, fast_math=True)
             else:
-                if SWAP_XW:
-                    acc = tl.dot(w.T, x.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
-                else:
-                    acc = tl.dot(x, w, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
+                acc = matmul_dot(x, w, acc, SWAP_XW, MAX_NUM_IMPRECISE_ACC, ALLOW_TF32)
 
             if is_x_microscaled and XMxScalePtrs is not None:
                 XMxScalePtrs += (MX_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k

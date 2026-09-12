@@ -41,53 +41,29 @@ struct ConvertLayoutOpConversion
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
-    auto kBlock = str_attr("block");
-    auto kWarp = str_attr("warp");
-    auto kLane = str_attr("lane");
     auto kRegister = str_attr("register");
 
     auto srcLayout = toLinearLayout(srcTy).removeZeroBasesAlongDim(kRegister);
     auto dstLayout = toLinearLayout(dstTy).removeZeroBasesAlongDim(kRegister);
     LinearLayout conversion = minimalCvtLayout(srcLayout, dstLayout);
 
-    auto dims = conversion.getInDimNames();
-    auto srcEnc = cast<RankedTensorType>(srcTy).getEncoding();
-    auto dstEnc = cast<RankedTensorType>(dstTy).getEncoding();
-    if ((isGenericLinearEncoding(srcEnc) || isGenericLinearEncoding(dstEnc)) &&
-        llvm::range_size(dims) > 1)
-      return op.emitError("ConvertLayoutOp  supports GenericLinearEncoding "
-                          " only when the conversion is transfer between "
-                          "values in the same thread.");
     assert(to_vector(conversion.getInDimNames()) ==
            to_vector(conversion.getOutDimNames()));
-    if (llvm::is_contained(dims, kBlock) || llvm::is_contained(dims, kWarp)) {
-      // Transfer between values in the same CTA, or across CTAs. We move values
-      // through (distributed) shared memory.
-      transferSwizzlingLocalMem(op, adaptor.getSrc(), srcLayout, dstLayout,
-                                rewriter);
-      return success();
-    } else if (llvm::is_contained(dims, kLane)) {
-      // Case 3. Transfer between values in the same warp, in which case we try
-      //         to move values using warp shuffles, though if the pattern is
-      //         expensive enough we fall back to using shared memory
-      if (cvtNeedsWarpShuffle(op))
-        return transferWithinWarp(op, srcLayout, dstLayout, adaptor, rewriter);
-
-      transferSwizzlingLocalMem(op, adaptor.getSrc(), srcLayout, dstLayout,
-                                rewriter);
-      return success();
-    } else if (llvm::is_contained(dims, kRegister)) {
-      // Case 4. Transfer between values in the same thread, in which case we
-      //         simply reorder the elements of adaptor.getSrc().
-      return transferWithinThread(op, conversion, adaptor, rewriter);
-    } else {
-      // Cast 5. The two layouts are equivalent. We should probably remove
-      // these in RemoveLayoutConversion.
+    if (conversion.getNumInDims() == 0) {
       assert(adaptor.getSrc().getType() ==
              getTypeConverter()->convertType(dstTy));
       rewriter.replaceOp(op, adaptor.getSrc());
       return success();
     }
+    if (conversion.getNumInDims() == 1)
+      return transferWithinThread(op, conversion, adaptor, rewriter);
+
+    if (cvtNeedsWarpShuffle(op))
+      return transferWithinWarp(op, srcLayout, dstLayout, adaptor, rewriter);
+
+    transferSwizzlingLocalMem(op, adaptor.getSrc(), srcLayout, dstLayout,
+                              rewriter);
+    return success();
   }
 
   LogicalResult
@@ -174,7 +150,7 @@ struct ConvertLayoutOpConversion
     auto reps = LinearLayout::identity1D(nReps, kReg, kReps);
 
     auto totalStoreCvt = srcLayout.invertAndCompose(smem);
-    auto totalLoadCvt = invertAndComposeBlockLocal(smem, dstLayout);
+    auto totalLoadCvt = invertAndComposeLocal(smem, dstLayout, {kBlock});
 
     // The permutation exists by construction of the reps dimension in
     // optimalSwizzling
@@ -279,16 +255,14 @@ struct ConvertLayoutOpConversion
     auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
     int bitwidth = getIntOrFloatOrPtrBitWidth(elemTy);
 
-    auto factors =
+    auto [pReg, shuffleMap, mixedTranspositions, nPack] =
         getWarpLayoutConvertDecomposition(srcLayout, dstLayout, bitwidth);
-    auto &[pReg, pLane, mixedTranspositions, nPack] = factors;
     int m = mixedTranspositions.size();
-    bool pLaneIsTrivial = squareSublayoutIsIdentity(pLane, kLane);
-    assert((m > 0 || !pLaneIsTrivial) && "Shuffles not needed for conversion");
+    bool isXorShuffle = squareSublayoutIsIdentity(shuffleMap, kLane);
 
-    // The desired layout conversion can be expressed as a permutation P of
-    // hardware index bits for the `kLane` and `kReg` dimensions. The `factors`
-    // of P describe a decomposition
+    // In permutation cases, the desired layout conversion can be expressed as
+    // a permutation P of hardware index bits for the `kLane` and `kReg`
+    // dimensions. The `factors` of P describe a decomposition
     //
     //                 P = P_mixed \circ P_lane \circ P_reg,
     //
@@ -300,7 +274,7 @@ struct ConvertLayoutOpConversion
     //    at a time using 1.5 * R selects/permutes and .5 * R shuffles each.
     //  - An in-place `Swap` method which can simultaneously implement P_lane
     //    and multiple mixed transpositions at a time using 2 * m * R selects/
-    //    permutes and either (1 - (1/2)^m) * R shuffles if `pLaneIsTrivial` and
+    //    permutes and either (1 - (1/2)^m) * R shuffles if `isXorShuffle` and
     //    R shuffles otherwise.
     // Here, R denotes the number of 32-bit registers in use after packing (or
     // splitting, if applied to 64-bit types or pointers), and in the `Swap`
@@ -311,21 +285,10 @@ struct ConvertLayoutOpConversion
     // layout, then we broadcast along the register dimension to match size. The
     // removal of broadcasting above and introduction here is expected by the
     // `factors`.
-    int regDim = inVals.size();
-    int pRegDim = pReg.getInDimSize(kReg);
-    if (pRegDim > regDim) {
-      SmallVector<Value> original(inVals.begin(), inVals.end());
-      inVals.clear();
-      inVals.reserve(pRegDim);
-      while (inVals.size() < pRegDim)
-        inVals.append(original.begin(), original.end());
-      regDim = pRegDim;
-    }
-
-    // Apply pReg.
+    int regDim = pReg.getInDimSize(kReg);
     SmallVector<Value> newInVals(regDim);
-    for (const auto &[i, v] : llvm::enumerate(inVals))
-      newInVals[pReg.apply({{kReg, i}})[0].second] = v;
+    for (int r = 0; r < regDim; ++r)
+      newInVals[pReg.apply({{kReg, r}})[0].second] = inVals[r % inVals.size()];
     inVals = std::move(newInVals);
 
     // Pack registers if possible.
@@ -371,12 +334,13 @@ struct ConvertLayoutOpConversion
     };
 
     SmallVector<Value> outVals;
-    if (m == 1 && pLaneIsTrivial && isShippable(mixedTranspositions[0])) {
+    if (m == 1 && isXorShuffle && isShippable(mixedTranspositions[0])) {
       outVals = transferWithinWarpShipImpl(loc, rewriter, inVals, nPack,
                                            mixedTranspositions[0]);
     } else {
-      outVals = transferWithinWarpSwapImpl(loc, rewriter, inVals, nPack, pLane,
-                                           pLaneIsTrivial, mixedTranspositions);
+      outVals =
+          transferWithinWarpSwapImpl(loc, rewriter, inVals, nPack, shuffleMap,
+                                     isXorShuffle, mixedTranspositions);
     }
 
     // Unpack registers if needed.
@@ -416,11 +380,14 @@ struct ConvertLayoutOpConversion
 
   SmallVector<Value> transferWithinWarpSwapImpl(
       Location loc, ConversionPatternRewriter &rewriter, ArrayRef<Value> inVals,
-      int nPack, const LinearLayout &pLane, bool pLaneIsTrivial,
+      int nPack, const LinearLayout &shuffleMap, bool isXorShuffle,
       ArrayRef<TranspositionInfo> mixedTranspositions) const {
     auto *ctx = rewriter.getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto kReg = str_attr("register");
     auto kLane = str_attr("lane");
+    auto kWarp = str_attr("warp");
+    auto kBlock = str_attr("block");
 
     SmallVector<Value> vals(inVals.begin(), inVals.end());
     int numRegs = inVals.size();
@@ -444,24 +411,22 @@ struct ConvertLayoutOpConversion
     // of each transposition together. The two combined `selp` stages each use
     // `numRegs` selects per transposition, while the `shfl` stage only requires
     // code emission when at least one of the `r_i` bits is on, resulting in
-    // `(1 - (1/2)^m) * numRegs` shuffles in total. If `pLane` is nontrivial,
+    // `(1 - (1/2)^m) * numRegs` shuffles in total. If `P_lane` is nontrivial,
     // then we can conjugate its effects through the first two stages and fuse
     // it with the second stage, resulting in `numRegs` shuffles instead.
-    Value laneId = getLaneId(rewriter, loc);
-    auto pLaneInv = pLane.invert();
-    const auto &pLInvBases = pLaneInv.getBases().lookup(kLane);
-
+    Value laneId, warpId;
+    std::tie(laneId, warpId) = getLaneAndWarpId(rewriter, loc);
     // Implement r_i ^= l_j using `numRegs` independent selects or permutes.
     auto applySwap = [&](TranspositionInfo t, bool preShuf) {
-      int rIdx = t.transposition.first - nPack;
-      int origLIdx = t.transposition.second;
-      int lIdx = preShuf ? llvm::Log2_32(pLInvBases[origLIdx][0]) : origLIdx;
+      int rIdx = t.regBit - nPack;
+      int lIdx = preShuf ? t.srcLane : t.dstLane;
       uint16_t topSel = preShuf ? t.topPreSel : t.topPostSel;
       uint16_t botSel = preShuf ? t.botPreSel : t.botPostSel;
 
       SmallVector<Value> newVals(numRegs);
-      Value lBitVal = b.and_(laneId, b.i32_val(1 << lIdx));
-      Value lBitOff = b.icmp_eq(lBitVal, b.i32_val(0));
+      Value lBitOff = b.true_val();
+      if (lIdx >= 0)
+        lBitOff = b.icmp_eq(b.and_(laneId, b.i32_val(1 << lIdx)), b.i32_val(0));
 
       int tileSize = 1 << (rIdx + 1);
       int numTiles = numRegs / tileSize;
@@ -495,18 +460,22 @@ struct ConvertLayoutOpConversion
       vals = applySwap(t, /*preShuf=*/true);
     // Stage 2 (shfl)
     Value laneIdPerm;
-    if (!pLaneIsTrivial)
-      laneIdPerm = triton::gpu::matrixVectorProd(b, pLaneInv, laneId);
+    if (!isXorShuffle) {
+      SmallVector<std::pair<StringAttr, Value>> indices{{kLane, laneId}};
+      if (!shuffleMap.sublayoutIsZero(kWarp, kLane))
+        indices.push_back({kWarp, warpId});
+      if (!shuffleMap.sublayoutIsZero(kBlock, kLane))
+        indices.push_back({kBlock, targetInfo.getClusterCTAId(rewriter, loc)});
+      auto dims = to_vector(llvm::make_first_range(indices));
+      laneIdPerm = applyLinearLayout(loc, rewriter,
+                                     shuffleMap.sublayout(dims, kLane), indices)
+                       .front()
+                       .second;
+    }
+    auto registerToLane = shuffleMap.sublayout(kReg, kLane);
     for (int r = 0; r < numRegs; ++r) {
-      int mask = 0;
-      for (const auto &t : mixedTranspositions) {
-        int rIdx = t.transposition.first - nPack;
-        int lIdx = t.transposition.second;
-        if (r & (1 << rIdx)) {
-          mask |= pLInvBases[lIdx][0];
-        }
-      }
-      if (pLaneIsTrivial) {
+      int mask = registerToLane.apply({{kReg, r << nPack}})[0].second;
+      if (isXorShuffle) {
         if (mask != 0)
           vals[r] = targetInfo.shuffleXor(rewriter, loc, vals[r], mask);
       } else {
@@ -528,8 +497,8 @@ struct ConvertLayoutOpConversion
     // `transferWithinWarpSwapImpl`, but uses auxiliary registers to hold the
     // values to be shuffled, resulting in fewer emitted instructions.
     int numRegs = inVals.size();
-    int rIdx = t.transposition.first - nPack;
-    int lIdx = t.transposition.second;
+    int rIdx = t.regBit - nPack;
+    int lIdx = t.dstLane;
     int tileSize = 1 << (rIdx + 1);
     int numTiles = numRegs / tileSize;
 

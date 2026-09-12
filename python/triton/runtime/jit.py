@@ -161,12 +161,10 @@ class DependenciesFinder(ast.NodeVisitor):
             return None
 
         def name_lookup(name):
-            val = self.globals.get(name, None)
-            if val is not None:
-                return val, self.globals
-            val = self.nonlocals.get(name, None)
-            if val is not None:
-                return val, self.nonlocals
+            if name in self.nonlocals:
+                return self.nonlocals[name], self.nonlocals
+            if name in self.globals:
+                return self.globals[name], self.globals
             return None, None
 
         val, var_dict = name_lookup(node.id)
@@ -195,7 +193,11 @@ class DependenciesFinder(ast.NodeVisitor):
     def visit_FunctionDef(self, node):
         # Save the local name, which may hide the global name.
         self.local_names = {arg.arg for arg in node.args.args}
-        self.generic_visit(node)
+        for child in ast.iter_child_nodes(node):
+            self.visit(child)
+            # Keyword-only parameters shadow globals in the body, but not in defaults.
+            if child is node.args and node.args.kwonlyargs:
+                self.local_names.update(arg.arg for arg in node.args.kwonlyargs)
 
     def visit_arguments(self, node):
         # The purpose of this function is to visit everything in `arguments`
@@ -424,15 +426,21 @@ def create_function_from_signature(sig, kparams, backend):
             else:
                 specialization.append(f"{ret}")
 
-    # compute argument string for a given parameter
-    def arg(name_param):
-        name, param = name_param
+    # compute argument strings, preserving the keyword-only separator
+    arg_list = []
+    has_star = False
+    for name, param in sig.parameters.items():
         if param.kind == inspect.Parameter.VAR_POSITIONAL:
-            return f"*{name}"
-        return name if param.default is inspect.Parameter.empty else f"{name}=default_{name}"
+            arg_list.append(f"*{name}")
+            has_star = True
+            continue
+        if param.kind == inspect.Parameter.KEYWORD_ONLY and not has_star:
+            arg_list.append("*")
+            has_star = True
+        arg_list.append(name if param.default is inspect.Parameter.empty else f"{name}=default_{name}")
 
     func_body = f"""
-def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options"])}):
+def dynamic_func({", ".join(arg_list + ["**options"])}):
     params = {{{', '.join([f"'{name}': {name}" for name in sig.parameters.keys()])}}}
     specialization = [{','.join(specialization)}]
     return params, specialization, options
@@ -794,14 +802,17 @@ class JITFunction(JITCallable, KernelInterface[T]):
         self.do_not_specialize_on_alignment = do_not_specialize_on_alignment
         self._repr = repr
         self.launch_metadata = launch_metadata
-        # Register for simple deserialization of JITFunction constants
-        _triton_jit_function_registry[f"{self.module}:{self.fn.__qualname__}"] = self
 
         self.params = []
         for i, param in enumerate(self.signature.parameters.values()):
+            if param.kind == inspect.Parameter.VAR_KEYWORD:
+                raise TypeError(f"JIT functions do not support **{param.name} parameters")
             dns = i in do_not_specialize or param.name in do_not_specialize
             dns_oa = i in do_not_specialize_on_alignment or param.name in do_not_specialize_on_alignment
             self.params.append(KernelParam(i, param, dns, dns_oa))
+
+        # Register for simple deserialization of JITFunction constants
+        _triton_jit_function_registry[f"{self.module}:{self.fn.__qualname__}"] = self
 
         # cache of just-in-time compiled kernels
         self.device_caches = defaultdict(self.create_binder)
@@ -895,7 +906,12 @@ class JITFunction(JITCallable, KernelInterface[T]):
                 self._call_hook(knobs.runtime.jit_post_compile_hook, key, signature, target, device, constexprs,
                                 options, [attrs], warmup)
 
-            kernel = async_mode.submit(cache_key, async_compile, finalize_compile)
+            def cleanup_compile(future_kernel):
+                # On failure, remove the unresolved placeholder so its Future does not retain compiler locals.
+                if kernel_cache.get(key) is future_kernel:
+                    del kernel_cache[key]
+
+            kernel = async_mode.submit(cache_key, async_compile, finalize_compile, cleanup_compile)
             kernel_cache[key] = kernel
         else:
             kernel = self.compile(src, target=target, options=options.__dict__)

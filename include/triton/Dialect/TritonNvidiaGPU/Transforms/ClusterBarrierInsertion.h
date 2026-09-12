@@ -14,7 +14,7 @@ void runClusterBarrierInsertion(ModuleAllocation &moduleAllocation,
                                 int computeCapability);
 
 /// Inserts the mbarrier-init sequencing ops
-/// (fence_mbarrier_init_release_cluster + cluster_arrive/wait(relaxed=true))
+/// (fence_mbarrier_init_release_cluster + cluster_barrier(relaxed=true))
 /// for cross-CTA mbarriers using the provided allocation analysis.
 LogicalResult
 runCrossCTAMBarrierInitSyncInsertion(ModuleAllocation &moduleAllocation,

@@ -7,6 +7,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <algorithm>
+#include <functional>
 #include <numeric>
 
 namespace mlir {
@@ -132,6 +133,9 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding);
 
 bool isExpensiveLoadOrStore(Operation *op);
 
+// Return true if an operation may be cloned by layout rematerialization.
+bool canBeRematerialized(Operation *op);
+
 // Return true if the op can use the target encoding for its result.
 bool canUseResultEncoding(Operation *op, Attribute targetEncoding);
 
@@ -155,6 +159,9 @@ scf::WhileOp replaceWhileOpWithNewSignature(OpBuilder &rewriter,
                                             scf::WhileOp loop,
                                             ValueRange newIterOperands,
                                             TypeRange newResultTypes);
+[[nodiscard]] scf::WhileOp addIterArgsToLoop(OpBuilder &rewriter,
+                                             scf::WhileOp loop,
+                                             ValueRange newIterOperands);
 
 // Replace IfOp with a new IfOp with extra results operands. The YieldOp is not
 // updated and needs to be updated separately for the bodies to be correct.
@@ -181,6 +188,15 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
 /// The slice is returned in \p slice, and the desired layout of each value in
 /// the slice is stored in \p layouts.
 LogicalResult getConvertBackwardSlice(
+    OpOperand &root, SetVector<Value> &slice, Attribute rootEncoding,
+    DenseMap<Value, Attribute> &layout,
+    std::function<bool(Operation *)> stopPropagation = nullptr,
+    std::function<Value(OpOperand &, Attribute)> getExistingConversion =
+        nullptr);
+
+/// Like getConvertBackwardSlice, but requires the resulting slice to be
+/// non-empty and fully rematerializable.
+LogicalResult getRematerializableSlice(
     OpOperand &root, SetVector<Value> &slice, Attribute rootEncoding,
     DenseMap<Value, Attribute> &layout,
     std::function<bool(Operation *)> stopPropagation = nullptr,
@@ -221,8 +237,18 @@ std::optional<StringRef> getAMDArch(Operation *module);
 std::optional<mlir::triton::gpu::SwizzledSharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible);
 
+// Replace the CGA layout while preserving intra-CTA layout choices and
+// recursing through Slice and DotOperand parents. For example, a blocked
+// layout with threadsPerWarp=[1, 32] keeps that value under the new CGA layout.
+FailureOr<Attribute> cloneWithCGALayout(RankedTensorType tensorTy,
+                                        triton::gpu::CGAEncodingAttr cgaLayout);
+
+// Whether the operand follows the operation's distributed data encoding.
+// Descriptor gather/scatter offsets have an independent encoding.
+bool isDistributedOpEncodingOperand(OpOperand &operand);
+
 // Convert \param op to use \param encoding attribute.
-// Skips operands if they're in shared encoding.
+// Leaves descriptor indices and non-tensor operands unchanged.
 Operation *convertDistributedOpEncoding(Attribute encoding, Operation *op);
 
 // Returns the original memory allocation for a memdesc value
@@ -288,10 +314,6 @@ bool comesFromLoadOrBlockArg(Value v);
 // For structured control flow ops, returns the values associated with the
 // `resultIdx`th result.
 SmallVector<Value> getTiedArgs(Operation *op, int resultIdx);
-
-// Verifies the provided memory descriptor type used for barrier allocation
-LogicalResult verifyBarrierType(Operation *op,
-                                mlir::triton::gpu::MemDescType barrierType);
 
 // Get a boolean if the Value is an arith::ConstantOp
 std::optional<bool> getBoolFromConstant(Value cst);

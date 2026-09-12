@@ -352,7 +352,6 @@ lowerDsReadTr(Operation *op,
   }
 
   // Perform computation in bytes, LLVM optimises this better
-  assert(bitWidth >= 8);
   auto i8Tile =
       zerosLike(LinearLayout::identity1D(bitWidth / 8, kReg, kOffset));
   auto i8AddrLayout = i8Tile * addrLayout;
@@ -610,9 +609,8 @@ struct LocalAtomicScatterRMWOpConversion
       return success();
     }
 
-    finalizeTensorAtomicResults(op, info.valuesTy, rewriter, results,
-                                info.llvmElemTy, b, info.threadPred, targetInfo,
-                                getTypeConverter());
+    finalizeAtomicResults(op, rewriter, results, info.llvmElemTy, b,
+                          info.threadPred, targetInfo, getTypeConverter());
     return success();
   }
 

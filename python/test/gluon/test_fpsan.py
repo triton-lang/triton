@@ -1466,6 +1466,30 @@ def test_inline_asm_payload_semantics(device, asm, fresh_knobs):
 
 
 @gluon.jit
+def _inline_asm_ue8m0_payload_kernel(scale_ptr, out_ptr, ASM: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
+    layout: gl.constexpr = gl.BlockedLayout([2], [THREADS_PER_WARP], [4], [0])
+    offsets = gl.arange(0, 256, layout=layout)
+    scale = gl.load(scale_ptr + offsets)
+    out = gl.inline_asm_elementwise(ASM, "=r,h", [scale], dtype=gl.bfloat16, is_pure=True, pack=2)
+    gl.store(out_ptr + offsets, gl.fpsan.embed(out))
+
+
+@pytest.mark.parametrize("asm", ["cvt.rn.bf16x2.ue8m0x2 $0, $1;", "cvt.rn.bf16x2.ue8m0x2 $0,$1;"])
+def test_inline_asm_ue8m0_payload_semantics(device, asm, fresh_knobs):
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+
+    scales = torch.arange(256, device=device, dtype=torch.int32).to(torch.uint8)
+    out = torch.empty(256, device=device, dtype=torch.int16)
+    _inline_asm_ue8m0_payload_kernel[(1, )](scales, out, asm, THREADS_PER_WARP)
+
+    # Integer operands are sign-extended before applying the assembly's tag.
+    tag = np.uint16(stable_string_hash_u64(asm) & np.uint64(0xFFFF))
+    expected = scales.cpu().numpy().view(np.int8).astype(np.int16).view(np.uint16) ^ tag
+    _assert_payload_equal(out, expected)
+
+
+@gluon.jit
 def _swiglu_tanh_kernel(gate_ptr, linear_ptr, out_ptr, BLOCK: gl.constexpr, THREADS_PER_WARP: gl.constexpr):
     layout: gl.constexpr = gl.BlockedLayout(size_per_thread=[2], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4],
                                             order=[0])
@@ -1757,7 +1781,7 @@ def _dot_scaled_compute_payload_elem(val: np.uint64, elem_type: str, compute_typ
 
 def _dot_scaled_scale_payload(raw_scale: np.uint64, compute_type: str) -> np.uint64:
     if compute_type == "bf16":
-        raw_bf16 = (raw_scale & np.uint64(0xFF)) << np.uint64(7)
+        raw_bf16 = np.maximum((raw_scale & np.uint64(0xFF)) << np.uint64(7), np.uint64(0x0040))
         return _mix_float_scalar(raw_bf16, 16, 0x3F80)
     if compute_type == "fp16":
         raw_f32 = (raw_scale & np.uint64(0xFF)) << np.uint64(23)
@@ -1837,7 +1861,7 @@ def _mm_scaled_payload_u32(a_u8: np.ndarray, b_u8: np.ndarray, a_scale_u8: np.nd
             payload = _mix_float_bits_to_payload_u64(raw_scale, 8, 0x38)
             return _cast_float_payload_u64(payload, 8, 16)
         assert scale_type == "e8m0"
-        raw_bf16 = (raw_scale & np.uint64(0xFF)) << np.uint64(7)
+        raw_bf16 = np.maximum((raw_scale & np.uint64(0xFF)) << np.uint64(7), np.uint64(0x0040))
         return _mix_float_bits_to_payload_u64(raw_bf16, 16, 0x3F80)
 
     a_payload = compute_payload_matrix(unpack_payload_matrix(a_u8, a_pack, pack_axis=1), type_a)
@@ -2513,6 +2537,55 @@ def test_tcgen05_mma_warp_specialize_partition(device, partition_warps, fresh_kn
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("num_ctas", [1, 2, 4])
+def test_tcgen05_mma_independent_ctas(device, num_ctas, fresh_knobs):
+    _require_cuda_backend(device)
+    fresh_knobs.compilation.instrumentation_mode = "fpsan"
+    m, n, k = 64, 64 * num_ctas, 32
+    replicated = tuple((0, 0) for _ in range(num_ctas.bit_length() - 1))
+    columns = tuple((0, 1 << i) for i in range(num_ctas.bit_length() - 1))
+    b_rows = tuple((1 << i, 0) for i in range(num_ctas.bit_length() - 1))
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, out_ptr, N: gl.constexpr, ACGA: gl.constexpr, BCGA: gl.constexpr, DCGA: gl.constexpr):
+        al: gl.constexpr = gl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], cga_layout=ACGA)
+        bl: gl.constexpr = gl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0], cga_layout=BCGA)
+        am = gl.arange(0, 64, gl.SliceLayout(1, al))
+        ak = gl.arange(0, 32, gl.SliceLayout(0, al))
+        bn = gl.arange(0, N, gl.SliceLayout(1, bl))
+        bk = gl.arange(0, 32, gl.SliceLayout(0, bl))
+        a = gl.load(a_ptr + am[:, None] * 32 + ak[None, :])
+        b = gl.load(b_ptr + bn[:, None] * 32 + bk[None, :])
+        ash: gl.constexpr = gl.NVMMASharedLayout.get_default_for((64, 32), gl.bfloat16, cga_layout=ACGA)
+        bsh: gl.constexpr = gl.NVMMASharedLayout.get_default_for((N, 32), gl.bfloat16, cga_layout=BCGA)
+        smem_a = gl.allocate_shared_memory(gl.bfloat16, (64, 32), ash, a)
+        smem_b = gl.allocate_shared_memory(gl.bfloat16, (N, 32), bsh, b)
+        tmem_layout: gl.constexpr = TensorMemoryLayout((64, 64), col_stride=1, cga_layout=DCGA)
+        acc = allocate_tensor_memory(gl.float32, (64, N), tmem_layout)
+        layout: gl.constexpr = acc.get_reg_layout()
+        rows = gl.arange(0, 64, gl.SliceLayout(1, layout))
+        cols = gl.arange(0, N, gl.SliceLayout(0, layout))
+        offsets = rows[:, None] * N + cols[None, :]
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        # Independent MMAs own columns; FPSan may compute using a row partition.
+        tcgen05_mma(smem_a, smem_b.permute((1, 0)), acc, use_acc=False, multicast=False, mbarriers=[bar])
+        mbarrier.wait(bar, phase=0, deps=[smem_a, smem_b])
+        mbarrier.invalidate(bar)
+        gl.store(out_ptr + offsets, acc.load())
+
+    rs = np.random.RandomState(0)
+    a_bits = _random_float_bits(rs, (m, k), "bf16")
+    b_bits = _random_float_bits(rs, (n, k), "bf16")
+    expected = _mm_payload_bits(a_bits, b_bits.T, None, "bf16", "bf16", "f32")
+    _, a = _as_float_bits_tensor(a_bits, "bf16")
+    _, b = _as_float_bits_tensor(b_bits, "bf16")
+    out, output = _as_float_bits_tensor(np.empty((m, n), dtype=np.int32), "f32")
+    kernel[(1, )](a, b, output, n, replicated, b_rows, columns, num_warps=4, num_ctas=num_ctas)
+    _assert_payload_equal(out, expected)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("use_acc", [False, True])
 def test_tcgen05_mma_two_ctas(device, use_acc, fresh_knobs):
     _require_cuda_backend(device)
@@ -2677,8 +2750,8 @@ def test_tcgen05_mma_scaled(device, type_a, type_b, m, n, k, scale_factor, scale
     else:
         b_bits = rs.randint(20, 40, size=(packed_k_b, n), dtype=np.uint8)
         b_ref_bits = b_bits
-    a_scale_bits = rs.randint(1, 4, size=(m, k // scale_factor), dtype=np.int8)
-    b_scale_bits = rs.randint(1, 4, size=(n, k // scale_factor), dtype=np.int8)
+    a_scale_bits = rs.randint(0, 4, size=(m, k // scale_factor), dtype=np.int8)
+    b_scale_bits = rs.randint(0, 4, size=(n, k // scale_factor), dtype=np.int8)
     if scale_type == "e4m3":
         a_scale_bits = rs.randint(1, 0x40, size=(m, k // scale_factor), dtype=np.uint8)
         b_scale_bits = rs.randint(1, 0x40, size=(n, k // scale_factor), dtype=np.uint8)

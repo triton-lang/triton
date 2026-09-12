@@ -1,4 +1,4 @@
-// RUN: triton-opt %s --allocate-amdgpu-shared-memory --convert-triton-amdgpu-to-llvm="gfx-arch=gfx1250" | FileCheck %s
+// RUN: triton-opt %s --allocate-amdgpu-shared-memory --triton-amdgpu-membar="gfx-arch=gfx1250" --convert-triton-amdgpu-to-llvm="gfx-arch=gfx1250" | FileCheck %s
 
 // A barrier must be inserted between a convert_layout and a buffer_atomic_rmw
 // when they share the same LDS scratch region.
@@ -24,8 +24,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       tt.reduce.return %4 : i64
     }) : (tensor<2x64xi64, #blocked1>) -> tensor<64xi64, #ttg.slice<{dim = 0, parent = #blocked1}>>
     %2 = ttg.convert_layout %1 : tensor<64xi64, #ttg.slice<{dim = 0, parent = #blocked1}>> -> tensor<64xi64, #blocked>
-    %3 = amdg.buffer_atomic_rmw add, acq_rel, gpu, %2, %arg0[%0] : tensor<64xi64, #blocked>
-    amdg.buffer_store %3, %arg1[%0] : tensor<64xi64, #blocked>
+    %3 = amdg.buffer_atomic_rmw add, acq_rel, gpu, %2, %arg0[%0] : !tt.ptr<i64> -> tensor<64xi64, #blocked>
+    amdg.buffer_store %3, %arg1[%0] : !tt.ptr<i64> -> tensor<64xi64, #blocked>
     tt.return
   }
 }

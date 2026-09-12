@@ -7,11 +7,14 @@ add_triton_library(TritonNvidiaGPUTransforms
   ConSanNVIDIA.cpp
   FenceInsertion.cpp
   FuseTMemLoadReduce.cpp
+  HoistMBarrierLifecycle.cpp
   InterleaveTMem.cpp
+  MBarrierUtilities.cpp
   MMALowering.cpp
+  OptimizeCTALocality.cpp
   OptimizeDescriptorEncoding.cpp
   OptimizeTMemLayouts.cpp
-  PlanCTA.cpp
+  AssignCGALayouts.cpp
   PromoteLHSToTMem.cpp
   ProxyFenceInsertion.cpp
   RemoveTMEMTokens.cpp

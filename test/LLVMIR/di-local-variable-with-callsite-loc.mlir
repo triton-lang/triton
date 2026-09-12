@@ -1,4 +1,4 @@
-// RUN: LLVM_EXTRACT_DI_LOCAL_VARIABLES=1 triton-opt %s -o - --mlir-print-debuginfo --mlir-use-nameloc-as-prefix --enable-line-info --extract-variable-info | \
+// RUN: env LLVM_EXTRACT_DI_LOCAL_VARIABLES=1 triton-opt %s -o - --mlir-print-debuginfo --mlir-use-nameloc-as-prefix --enable-line-info --extract-variable-info | \
 // RUN: mlir-translate --mlir-to-llvmir | FileCheck %s
 
 // Regression test for a crash when CallSiteLoc operations coexist with

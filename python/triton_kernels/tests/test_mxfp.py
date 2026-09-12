@@ -15,8 +15,8 @@ from triton_kernels.numerics_details.mxfp import (
     upcast_from_mxfp,
     upcast_from_mxfp_torch,
 )
-from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile
-from triton_kernels.target_info import is_cuda
+from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile, upcast_ue8m0_scale
+from triton_kernels.target_info import cuda_capability_geq, is_cuda
 from triton_kernels.tensor import convert_layout, wrap_torch_tensor
 from triton_kernels.tensor_details.layout import StridedLayout
 from triton_kernels.testing import assert_close, assert_equal
@@ -24,6 +24,27 @@ from triton_kernels.testing import assert_close, assert_equal
 
 def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
     return torch.uint8 if dtype_str == "float4_e2m1" else getattr(torch, dtype_str)
+
+
+@triton.jit
+def _upcast_ue8m0_scale_kernel(out, scale, BLOCK_SIZE: tl.constexpr):
+    offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    scale = tl.load(scale + offsets)
+    tl.store(out + offsets, upcast_ue8m0_scale(scale, out.dtype.element_ty))
+
+
+@pytest.mark.parametrize("dst_dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("scale_dtype", [torch.uint8, torch.int8])
+@pytest.mark.parametrize("block_size", [1, 128, 256])
+def test_ue8m0_scale_upcast(dst_dtype, scale_dtype, block_size, device):
+    scale = torch.arange(256, device=device).to(torch.uint8)
+    actual = torch.empty(256, dtype=dst_dtype, device=device)
+    expected = torch.ldexp(torch.ones(256, dtype=torch.float64, device=device), scale.to(torch.int32) - 127)
+    expected[-1] = float("nan")
+    kernel = _upcast_ue8m0_scale_kernel[(256 // block_size, )](actual, scale.view(scale_dtype), block_size)
+    torch.testing.assert_close(actual, expected.to(dst_dtype), rtol=0, atol=0, equal_nan=True)
+    if cuda_capability_geq(10, 0) and dst_dtype == torch.bfloat16 and block_size > 1:
+        assert "cvt.rn.bf16x2.ue8m0x2" in kernel.asm["ptx"]
 
 
 @triton.jit
@@ -52,6 +73,65 @@ def _upcast_mxfp4_tile_kernel(
     out_tile = upcast_mxfp4_tile(tensor, scale, dst_dtype)
     offs_k = tl.arange(0, PACKED_K * 2)[None, :]
     tl.store(out + offs_m * stride_out_m + offs_k * stride_out_k, out_tile)
+
+
+def _mxfp_scale_boundary_data(src_dtype, dst_dtype, device):
+    values = torch.tensor([0, 0.5, 1, 1.5, 2, 3, 4, get_max_quant_val(src_dtype)], dtype=torch.float64)
+    values = torch.cat((values, -values)).repeat(2)
+    scale = torch.tensor([0, 1, 2, 125, 126, 127, 128, 255], dtype=torch.uint8).repeat(64, 1)
+    expected = torch.ldexp(values[None, None, :], scale.to(torch.int32)[..., None] - 127)
+    expected = expected.masked_fill(scale[..., None] == 255, float("nan"))
+    expected = expected.clamp(torch.finfo(dst_dtype).min, torch.finfo(dst_dtype).max).to(dst_dtype).flatten(1)
+    if src_dtype == torch.uint8:
+        nibbles = torch.arange(16, dtype=torch.uint8).repeat(2)
+        tensor = nibbles[::2] | (nibbles[1::2] << 4)
+    else:
+        tensor = values.to(src_dtype)
+    tensor = tensor.repeat(scale.shape)
+    return tensor.to(device), scale.to(device), expected.to(device)
+
+
+@pytest.mark.parametrize("upcast", [upcast_from_mxfp, upcast_from_mxfp_torch])
+@pytest.mark.parametrize("src_dtype", [torch.uint8, torch.float8_e4m3fn, torch.float8_e5m2])
+@pytest.mark.parametrize("dst_dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("axis", [0, -1])
+def test_mxfp_upcast_scale_boundaries(upcast, src_dtype, dst_dtype, axis, device):
+    if (upcast is upcast_from_mxfp and src_dtype == torch.float8_e4m3fn and is_cuda()
+            and torch.cuda.get_device_capability() < (8, 9)):
+        pytest.skip("E4M3 conversion requires CUDA capability 8.9 or newer")
+    tensor, scale, expected = _mxfp_scale_boundary_data(src_dtype, dst_dtype, device)
+    tensor, scale, expected = (x.transpose(axis, -1) for x in (tensor, scale, expected))
+    actual = upcast(tensor, scale, dst_dtype, axis)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.parametrize("dst_dtype", [torch.float16, torch.bfloat16, torch.float32])
+def test_mxfp_upcast_torch_nan_scale(dst_dtype):
+    tensor = torch.tensor([float("inf"), -float("inf"), float("nan"), 1], dtype=torch.float8_e5m2).repeat(2, 8)
+    scale = torch.tensor([[127], [255]], dtype=torch.uint8)
+    expected = tensor.to(dst_dtype)
+    expected[1] = float("nan")
+    actual = upcast_from_mxfp_torch(tensor, scale, dst_dtype, axis=-1)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.parametrize("dst_dtype", [torch.float16, torch.bfloat16, torch.float32])
+def test_mxfp4_tile_upcast_scale_boundaries(dst_dtype, device):
+    tensor, scale, expected = _mxfp_scale_boundary_data(torch.uint8, dst_dtype, device)
+    actual = torch.empty_like(expected)
+    _upcast_mxfp4_tile_kernel[(1, )](
+        actual,
+        tensor,
+        scale,
+        *actual.stride(),
+        *tensor.stride(),
+        *scale.stride(),
+        tensor.shape[0],
+        tensor.shape[1],
+        scale.shape[1],
+        {torch.float16: tl.float16, torch.bfloat16: tl.bfloat16, torch.float32: tl.float32}[dst_dtype],
+    )
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Only supported on cuda")
@@ -236,6 +316,7 @@ def test_downcast_to_mxfp_accepts_pitched_strided_input(device):
         ((1, 320, 160), 2, "float8_e5m2", DequantScaleRoundingMode.ROUND_UP, torch.uint8, MXFP_BLOCK_SIZE.value),
         ((2, 16, 512), -1, "float8_e4m3fn", DequantScaleRoundingMode.ROUND_DOWN, torch.uint8, MXFP_BLOCK_SIZE.value),
         ((2, 64, 3), 1, "float4_e2m1", DequantScaleRoundingMode.ROUND_UP, torch.float8_e4m3fn, NVFP_BLOCK_SIZE.value),
+        ((2, 64, 3), 1, "float4_e2m1", DequantScaleRoundingMode.ROUND_NEAREST, torch.float8_e4m3fn, NVFP_BLOCK_SIZE.value),
     ],
 )
 # fmt: on
@@ -289,6 +370,87 @@ def test_mxfp_casting(
 
     # Dequantized result should be close to the original, though tolerance is large due to the precision loss.
     assert_close(x, dequant, maxtol=0.5, rmstol=0.15)
+
+
+@pytest.mark.parametrize("convert", [downcast_to_mxfp, downcast_to_mxfp_torch], ids=["triton", "torch"])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("axis", [0, -1])
+def test_nvfp4_nearest_even_scales(convert, dtype, axis, device):
+    if convert is downcast_to_mxfp and not cuda_capability_geq(10, 0):
+        pytest.skip("NVFP4 requires Blackwell or newer")
+    # Unrounded scale, independently specified E4M3 scale, and packed FP4 values.
+    cases = [
+        (0.0, 0.0, 0x00),
+        (2**-11, 0.0, 0x00),
+        (2**-10, 0.0, 0x00),
+        (2**-9, 2**-9, 0x77),
+        (3 * 2**-10, 2**-8, 0x66),
+        (2**-8, 2**-8, 0x77),
+        (1.03125, 1.0, 0x77),
+        (1.0625, 1.0, 0x77),
+        (1.09375, 1.125, 0x77),
+        (1.1875, 1.25, 0x77),
+        (1.21875, 1.25, 0x77),
+        (432.0, 448.0, 0x77),
+        (448.0, 448.0, 0x77),
+        (464.0, 448.0, 0x77),
+    ]
+    x = torch.tensor([6 * scale for scale, _, _ in cases], dtype=dtype, device=device)
+    x = x[:, None].repeat(1, NVFP_BLOCK_SIZE.value)
+    expected_scale = torch.tensor([scale for _, scale, _ in cases], device=device)[:, None]
+    expected_quant = torch.tensor([quant for _, _, quant in cases], dtype=torch.uint8, device=device)
+    expected_quant = expected_quant[:, None].repeat(1, NVFP_BLOCK_SIZE.value // 2)
+    if axis == 0:
+        x = x.T.contiguous()
+        expected_scale = expected_scale.T
+        expected_quant = expected_quant.T
+
+    quant, scale = convert(x, torch.uint8, axis, scale_dtype=torch.float8_e4m3fn, microblock_size=NVFP_BLOCK_SIZE.value,
+                           DEQUANT_SCALE_ROUNDING_MODE=DequantScaleRoundingMode.ROUND_NEAREST)
+    assert_equal(scale.float(), expected_scale)
+    assert_equal(quant, expected_quant)
+
+
+@pytest.mark.parametrize("convert", [downcast_to_mxfp, downcast_to_mxfp_torch], ids=["triton", "torch"])
+@pytest.mark.parametrize("axis", [0, -1])
+def test_nvfp4_nearest_saturates_scale(convert, axis, device):
+    if convert is downcast_to_mxfp and not cuda_capability_geq(10, 0):
+        pytest.skip("NVFP4 requires Blackwell or newer")
+    x = torch.full((2, 16), 6144.0, dtype=torch.float32, device=device)
+    if axis == 0:
+        x = x.T.contiguous()
+    quant, scale = convert(x, torch.uint8, axis, scale_dtype=torch.float8_e4m3fn, microblock_size=NVFP_BLOCK_SIZE.value,
+                           DEQUANT_SCALE_ROUNDING_MODE=DequantScaleRoundingMode.ROUND_NEAREST)
+    assert_equal(scale.float(), torch.full_like(scale, 448.0).float())
+    assert_equal(quant, torch.full_like(quant, 0x77))
+
+
+@pytest.mark.parametrize("convert", [downcast_to_mxfp, downcast_to_mxfp_torch], ids=["triton", "torch"])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("axis", [0, -1])
+@pytest.mark.parametrize("shape", [(0, 16), (2, 0)])
+def test_nvfp4_nearest_empty(convert, dtype, axis, shape, device):
+    x = torch.empty(shape, dtype=dtype, device=device)
+    if axis == 0:
+        x = x.T.contiguous()
+    quant, scale = convert(x, torch.uint8, axis, scale_dtype=torch.float8_e4m3fn, microblock_size=NVFP_BLOCK_SIZE.value,
+                           DEQUANT_SCALE_ROUNDING_MODE=DequantScaleRoundingMode.ROUND_NEAREST)
+    quant_shape, scale_shape = list(x.shape), list(x.shape)
+    quant_shape[axis] //= 2
+    scale_shape[axis] //= NVFP_BLOCK_SIZE.value
+    assert quant.shape == tuple(quant_shape)
+    assert scale.shape == tuple(scale_shape)
+    assert quant.dtype == torch.uint8
+    assert scale.dtype == torch.float8_e4m3fn
+
+
+@pytest.mark.parametrize("convert", [downcast_to_mxfp, downcast_to_mxfp_torch], ids=["triton", "torch"])
+@pytest.mark.parametrize("shape", [(2, 32), (0, 32), (2, 0)])
+def test_mxfp_nearest_rejects_e8m0(convert, shape, device):
+    x = torch.empty(shape, dtype=torch.float32, device=device)
+    with pytest.raises(AssertionError, match="ROUND_NEAREST requires E4M3 scales"):
+        convert(x, torch.uint8, axis=-1, scale_dtype=torch.uint8,
+                DEQUANT_SCALE_ROUNDING_MODE=DequantScaleRoundingMode.ROUND_NEAREST)
 
 
 def _benchmark_mxfp_quantization(shape, src_dtype: torch.dtype, target_quant_dtype: torch.dtype, n_iters=1000):

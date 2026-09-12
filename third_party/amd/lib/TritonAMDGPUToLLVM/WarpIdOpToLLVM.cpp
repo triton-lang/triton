@@ -11,7 +11,6 @@
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
-using triton::amdgpu::ISAFamily;
 
 namespace {
 
@@ -43,26 +42,27 @@ public:
 
     if (targetInfo.supportsWaveId()) {
       warpId = ROCDL::WaveId::create(rewriter, loc, i32_ty);
+      auto func = op->getParentOfType<FunctionOpInterface>();
+      if (auto offset =
+              func->getAttrOfType<IntegerAttr>(AttrWarpIdOffsetName)) {
+        int numWarps = triton::gpu::lookupNumWarps(op);
+        warpId = b.sub(warpId, b.i32_val(offset.getInt()));
+        warpId = b.and_(warpId, b.i32_val(numWarps - 1));
+      }
     } else {
       int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
       Value warpSizeVal = b.i32_val(threadsPerWarp);
       Value tid = getThreadId(rewriter, loc);
       warpId = b.udiv(tid, warpSizeVal);
-      auto isaFamily = targetInfo.getISAFamily();
-      if (ISAFamily::CDNA3 == isaFamily || ISAFamily::CDNA4 == isaFamily) {
-        // On GFX9, there is no dedicated hardware instruction to read
-        // `wave_id`. The value is instead computed from `workitem.id.x`. Per
-        // the GFX9 ABI, `workitem.id.x` is initialized in a vector register,
-        // and vector instructions are generated for IR operations that depend
-        // on `wave_id`.
-        //
-        // A `v_readfirstlane` instruction is inserted at the end of these
-        // vector sequences to transfer the value from a vector register to a
-        // scalar register, initializing `$m0`.
-        auto call =
-            ROCDL::ReadfirstlaneOp::create(rewriter, loc, {i32_ty}, warpId);
-        warpId = call.getRes();
-      }
+
+      // `warpId` is derived from the thread id, so LLVM's uniformity analysis
+      // conservatively treats it as divergent even though every lane in a wave
+      // computes the same value. `v_readfirstlane` moves it into an SGPR and
+      // lets LLVM propagate uniformity to dependent ops, selecting SALU/SGPRs
+      // instead of VALU/VGPRs.
+      auto call =
+          ROCDL::ReadfirstlaneOp::create(rewriter, loc, {i32_ty}, warpId);
+      warpId = call.getRes();
     }
 
     if (startWarpId) {

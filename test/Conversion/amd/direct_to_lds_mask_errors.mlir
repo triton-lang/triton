@@ -43,7 +43,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
     // expected-error@+2 {{The mask is the limiting factor}}
     // expected-error@+1 {{failed to legalize operation 'amdg.buffer_load_to_local' that was explicitly marked illegal}}
-    %8 = amdg.buffer_load_to_local %arg0[%3] mask = %7 into %arg2 : <f16>[tensor<32x64xi32, #blocked>] -> <32x64xf16, #shared, #smem, mutable>
+    %8 = amdg.buffer_load_to_local %arg0[%3] mask = %7 into %arg2 : !tt.ptr<f16>[tensor<32x64xi32, #blocked>] -> <32x64xf16, #shared, #smem, mutable>
     tt.return
   }
 }

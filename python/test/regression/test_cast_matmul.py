@@ -15,7 +15,7 @@ from triton._internal_testing import is_hip_cdna3, is_cuda, is_hip
 
 pytestmark = pytest.mark.enable_warmup(min_capability=9)
 
-input_dtypes = ["bfloat16", "float16", "float32"]
+input_dtypes = ["bfloat16", "float16", "float32", "float64"]
 if is_cuda():
     input_dtypes += ["int8", "float8_e5m2"]
     cc = torch.cuda.get_device_capability(0)
@@ -29,7 +29,7 @@ elif is_hip_cdna3():
         "float8_e4m3fnuz",
     ]
 
-out_dtypes = ["float16", "float32"]
+out_dtypes = ["float16", "float32", "float64"]
 
 
 @triton.jit
@@ -58,7 +58,7 @@ def matmul_kernel(A, B, C, M, N, K,  #
     # pointers
     A = A + (ram[:, None] * stride_am + rk[None, :] * stride_ak)
     B = B + (rk[:, None] * stride_bk + rbn[None, :] * stride_bn)
-    acc_dtype = tl.float16 if compute_dtype == tl.float16 and C.dtype.element_ty == tl.float16 else tl.float32
+    acc_dtype = tl.float32 if compute_dtype == tl.float16 and C.dtype.element_ty != tl.float16 else compute_dtype
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=acc_dtype)
     for k in range(0, tl.cdiv(K, BLOCK_K)):
         k_remaining = K - k * BLOCK_K
@@ -79,18 +79,23 @@ def matmul_kernel(A, B, C, M, N, K,  #
 
 @pytest.mark.parametrize("M, K, N, BLOCK_K, BLOCK_M, BLOCK_N, w_dtype, x_dtype, out_dtype",
                          [(M, K, N, BLOCK_K, BLOCK_M, BLOCK_N, w, x, o)  #
-                          for BLOCK_K in [16, 32, 64]  #
-                          for BLOCK_M in [16, 64]  #
-                          for BLOCK_N in [16, 64, 128]  #
+                          for BLOCK_K, BLOCK_M, BLOCK_N in ([(k, m, n)  #
+                                                             for k in [16, 32, 64]  #
+                                                             for m in [16, 64]  #
+                                                             for n in [16, 64, 128]] + [(32, 32, 32)])
                           for (M, K, N) in [(768, 768, 1024)]  #
                           for w in input_dtypes
                           for x in input_dtypes  #
-                          for o in out_dtypes])
+                          for o in out_dtypes] +
+                         ([(16, 8, 16, 8, 16, 16, "int8", "float32", "float32"),
+                           (16, 8, 16, 8, 16, 16, "float32", "int8", "float32")] if is_cuda() else []))
 def test_cast_matmul(M, K, N, BLOCK_K, BLOCK_M, BLOCK_N, w_dtype, x_dtype, out_dtype, device):
     if is_hip() and (BLOCK_K, BLOCK_M, BLOCK_N) in ((64, 64, 128), (64, 16, 128)):
         pytest.skip("skip as they run out of shared memory")
     if x_dtype == w_dtype:
         pytest.skip("skip the same input dtype")
+    if "float64" in (x_dtype, w_dtype) and any(t.startswith("float8") for t in (x_dtype, w_dtype)):
+        pytest.skip("FP8 to FP64 conversion is not supported")
     x_dtype: torch.dtype = getattr(torch, x_dtype)
     w_dtype: torch.dtype = getattr(torch, w_dtype)
 
@@ -106,9 +111,8 @@ def test_cast_matmul(M, K, N, BLOCK_K, BLOCK_M, BLOCK_N, w_dtype, x_dtype, out_d
         # a holds the larger dtype
         if a_dtype.itemsize < b_dtype.itemsize:
             a_dtype, b_dtype = b_dtype, a_dtype
-        # float64 matmul is not supported by triton
         if a_dtype == torch.float64:
-            return torch.float32
+            return torch.float64
         # If they are both 1 byte or float16 and (1 byte or float16)
         if a_dtype.itemsize == 1 or (a_dtype == torch.float16 and b_dtype != torch.bfloat16):
             return torch.float16

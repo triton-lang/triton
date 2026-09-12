@@ -125,6 +125,11 @@ static AllocatorState *alloc = nullptr;
 static GSanConfig config;
 static std::mutex mut;
 
+bool hasLiveAllocations() {
+  return alloc != nullptr &&
+         alloc->treeRoot.maxFreeBlockSize != alloc->treeRoot.size;
+}
+
 CUmemAllocationHandleType getRequestedShareableHandleType() {
   if (config.shareableHandleTypeConfigured)
     return config.shareableHandleType;
@@ -460,6 +465,22 @@ CUresult refreshConfigForDevice(int device) {
   return CUDA_SUCCESS;
 }
 
+CUresult initializeRuntimeState(CUdeviceptr deviceAddr, size_t allocSize) {
+  CUresult err = cuMemsetD8(deviceAddr, 0, allocSize);
+  if (err != CUDA_SUCCESS)
+    return err;
+
+  gsan::GlobalState globals = {};
+  globals.reserveBase = static_cast<uintptr_t>(alloc->reserveBaseAddress);
+  globals.globalsBase = static_cast<uintptr_t>(alloc->globalStateAddress);
+  globals.rngSeed = config.rngSeed;
+  globals.numSms = static_cast<gsan::thread_id_t>(config.numSMs);
+  globals.numDevices = static_cast<gsan::thread_id_t>(config.numGPUs);
+  globals.numThreads = static_cast<gsan::thread_id_t>(config.numThreads);
+  globals.clockBufferSize = config.clockBufferSize;
+  return cuMemcpyHtoD(deviceAddr, &globals, sizeof(globals));
+}
+
 CUresult ensureRuntimeStateMapped(int device) {
   if (alloc == nullptr)
     return CUDA_ERROR_NOT_INITIALIZED;
@@ -503,7 +524,6 @@ CUresult ensureRuntimeStateMapped(int device) {
   CUmemGenericAllocationHandle allocHandle = 0;
   bool mapped = false;
   CUmemAccessDesc accessDesc = {};
-  gsan::GlobalState globals = {};
   CUdeviceptr deviceAddr =
       alloc->globalStateAddress + deviceRank * gsan::kPerDeviceStateStride;
 
@@ -523,18 +543,7 @@ CUresult ensureRuntimeStateMapped(int device) {
   if (err != CUDA_SUCCESS)
     goto error;
 
-  err = cuMemsetD8(deviceAddr, 0, allocSize);
-  if (err != CUDA_SUCCESS)
-    goto error;
-
-  globals.reserveBase = static_cast<uintptr_t>(alloc->reserveBaseAddress);
-  globals.globalsBase = static_cast<uintptr_t>(alloc->globalStateAddress);
-  globals.rngSeed = config.rngSeed;
-  globals.numSms = static_cast<gsan::thread_id_t>(config.numSMs);
-  globals.numDevices = static_cast<gsan::thread_id_t>(config.numGPUs);
-  globals.numThreads = static_cast<gsan::thread_id_t>(config.numThreads);
-  globals.clockBufferSize = config.clockBufferSize;
-  err = cuMemcpyHtoD(deviceAddr, &globals, sizeof(globals));
+  err = initializeRuntimeState(deviceAddr, allocSize);
   if (err != CUDA_SUCCESS)
     goto error;
 
@@ -1302,6 +1311,80 @@ PyObject *pyFreezeConfig([[maybe_unused]] PyObject *self, PyObject *const *args,
   Py_RETURN_NONE;
 }
 
+PyObject *pyHasLiveAllocations([[maybe_unused]] PyObject *self,
+                               [[maybe_unused]] PyObject *args) {
+  std::lock_guard lg(mut);
+  return PyBool_FromLong(hasLiveAllocations());
+}
+
+PyObject *pyReset([[maybe_unused]] PyObject *self, PyObject *const *args,
+                  Py_ssize_t nargs) {
+  if (nargs != 0) {
+    PyErr_Format(PyExc_TypeError,
+                 "%s.reset expected 0 positional arguments, got %zd",
+                 kModuleName, nargs);
+    return nullptr;
+  }
+
+  std::lock_guard lg(mut);
+  if (alloc == nullptr)
+    Py_RETURN_NONE;
+
+  if (hasLiveAllocations()) {
+    PyErr_SetString(PyExc_AssertionError,
+                    "cannot reset GSan while GSan allocations are still live");
+    return nullptr;
+  }
+
+  CUcontext originalContext = nullptr;
+  CUresult err = cuCtxGetCurrent(&originalContext);
+  if (err != CUDA_SUCCESS) {
+    printCUDAError(err);
+    PyErr_SetString(PyExc_RuntimeError,
+                    "failed to get the current CUDA context for GSan reset");
+    return nullptr;
+  }
+
+  for (int device = 0; device < static_cast<int>(gsan::kMaxGPUs); ++device) {
+    if (!config.configuredDeviceRanks[device])
+      continue;
+
+    int deviceRank = config.deviceRanks[device];
+    if (alloc->perDeviceHandles[deviceRank] == 0)
+      continue;
+
+    CUcontext deviceContext = nullptr;
+    err = cuDevicePrimaryCtxRetain(&deviceContext, device);
+    if (err == CUDA_SUCCESS)
+      err = cuCtxSetCurrent(deviceContext);
+    if (err == CUDA_SUCCESS)
+      err = cuCtxSynchronize();
+    if (err == CUDA_SUCCESS) {
+      CUdeviceptr deviceAddr =
+          alloc->globalStateAddress + deviceRank * gsan::kPerDeviceStateStride;
+      err = initializeRuntimeState(deviceAddr, alloc->perDeviceStateSize);
+    }
+
+    CUresult restoreErr = cuCtxSetCurrent(originalContext);
+    if (err == CUDA_SUCCESS)
+      err = restoreErr;
+    if (deviceContext != nullptr) {
+      CUresult releaseErr = cuDevicePrimaryCtxRelease(device);
+      if (err == CUDA_SUCCESS)
+        err = releaseErr;
+    }
+
+    if (err != CUDA_SUCCESS) {
+      printCUDAError(err);
+      PyErr_SetString(PyExc_RuntimeError,
+                      "failed to reinitialize GSan runtime state");
+      return nullptr;
+    }
+  }
+
+  Py_RETURN_NONE;
+}
+
 PyObject *pyGetReservePointer([[maybe_unused]] PyObject *self,
                               PyObject *const *args, Py_ssize_t nargs) {
   if (nargs != 0) {
@@ -1604,6 +1687,11 @@ PyMethodDef kGSanAllocatorMethods[] = {
      "Configure GSan topology and runtime tuning fields."},
     {"freeze_config", reinterpret_cast<PyCFunction>(pyFreezeConfig),
      METH_FASTCALL, "Prevent later changes to the GSan allocator config."},
+    {"has_live_allocations",
+     reinterpret_cast<PyCFunction>(pyHasLiveAllocations), METH_NOARGS,
+     "Return whether the GSan allocation reserve has live allocations."},
+    {"reset", reinterpret_cast<PyCFunction>(pyReset), METH_FASTCALL,
+     "Reset GSan runtime state when there are no live allocations."},
     {"get_reserve_pointer", reinterpret_cast<PyCFunction>(pyGetReservePointer),
      METH_FASTCALL, "Return the reserve base pointer as an integer."},
     {"get_reserve_size", reinterpret_cast<PyCFunction>(pyGetReserveSize),
