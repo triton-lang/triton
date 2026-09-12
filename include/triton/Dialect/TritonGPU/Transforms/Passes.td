@@ -210,7 +210,8 @@ def TritonGPUAccelerateMatmul : Pass<"tritongpu-accelerate-matmul", "mlir::Modul
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
-                           "mlir::triton::TritonDialect"];
+                           "mlir::triton::TritonDialect",
+                           "mlir::math::MathDialect"];
 }
 
 def TritonGPUOptimizeDotOperands : Pass<"tritongpu-optimize-dot-operands", "mlir::ModuleOp"> {

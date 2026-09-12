@@ -251,6 +251,25 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked_k = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: unscaled_lhs_keeps_mn_packed_rhs
+  tt.func public @unscaled_lhs_keeps_mn_packed_rhs(
+      %a: tensor<128x64xbf16, #blocked_k>,
+      %b: tensor<64x64xi8, #blocked>,
+      %scale_b: tensor<128x2xi8, #blocked>) -> tensor<128x128xf32, #blocked> {
+    // CHECK-NOT: tt.dot_scaled
+    // CHECK: ttg.fp4_to_fp %{{.*}} {axis = 0 : i32} : tensor<64x64xi8, {{.*}}> -> tensor<128x64xbf16, {{.*}}>
+    // CHECK: ttng.tc_gen5_mma
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    %d = tt.dot_scaled %a, %b scale %scale_b, %cst lhs = bf16 rhs = e2m1 {fastMath = false, rhs_k_pack = false} : tensor<128x64xbf16, #blocked_k> * tensor<64x64xi8, #blocked>, tensor<128x2xi8, #blocked> -> tensor<128x128xf32, #blocked>
+    tt.return %d : tensor<128x128xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
@@ -496,7 +515,14 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     %scale: tensor<128x2xi8, #blocked1>,
     %b_bf16: tensor<64x128xbf16, #blocked>
     ) -> tensor<128x128xf32, #blocked> {
+    // CHECK-DAG: %[[MIN_SCALE:.*]] = arith.constant dense<64>
+    // CHECK-DAG: %[[ZERO:.*]] = arith.constant dense<0.000000e+00> : tensor<{{.*}}xbf16,
     // CHECK: ttg.fp4_to_fp
+    // CHECK: %[[SHIFTED_SCALE:.*]] = arith.shli
+    // CHECK: %[[SCALE_BITS:.*]] = arith.maxui %[[SHIFTED_SCALE]], %[[MIN_SCALE]]
+    // CHECK: %[[SCALE:.*]] = tt.bitcast %[[SCALE_BITS]] : {{.*}} -> tensor<{{.*}}xbf16,
+    // CHECK: math.fma %[[SCALE]], %[[ZERO]], %[[SCALE]]
+    // CHECK-NOT: arith.select
     // CHECK: ttng.warp_group_dot
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
     %result = tt.dot_scaled %a scale %scale, %b_bf16, %cst lhs = e2m1 rhs = bf16 {fastMath = false} : tensor<128x32xi8, #blocked2>, tensor<128x2xi8, #blocked1> * tensor<64x128xbf16, #blocked> -> tensor<128x128xf32, #blocked>
@@ -869,6 +895,10 @@ module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num
 module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @sm120_dot_scaled_fp16_fp8_fallback
   // CHECK-NOT: tt.dot_scaled
+  // CHECK: %[[SCALE_BITS:.*]] = arith.shli
+  // CHECK: %[[SCALE_F32:.*]] = tt.bitcast %[[SCALE_BITS]] : {{.*}} -> tensor<{{.*}}xf32,
+  // CHECK: %[[DECODED_SCALE:.*]] = math.fma %[[SCALE_F32]], %{{.*}}, %[[SCALE_F32]]
+  // CHECK: arith.truncf %[[DECODED_SCALE]] : {{.*}} to tensor<{{.*}}xf16,
   // CHECK: tt.dot
   // CHECK-NOT: tt.dot_scaled
   // CHECK: tt.return
@@ -919,8 +949,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttg.fp4_to_fp
   // CHECK: tt.fp_to_fp
   // CHECK: arith.mulf
-  // CHECK: arith.cmpf uno
-  // CHECK: arith.select
+  // CHECK-NOT: arith.cmpf uno
+  // CHECK-NOT: arith.select
   // CHECK-NOT: ttng.tc_gen5_mma_scaled
   // CHECK: ttng.tc_gen5_mma
   // CHECK-NOT: tt.dot_scaled
