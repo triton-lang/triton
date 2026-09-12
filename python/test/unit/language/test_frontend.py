@@ -110,6 +110,52 @@ def test_minimum_maximum_tensor_promotion(op, other_dtype, expected_dtype):
     run_parser(kernel, args=(op, other_dtype, expected_dtype))
 
 
+@pytest.mark.parametrize(
+    "dtype, expected_dtype",
+    [(dtype, tl.bfloat16)
+     for dtype in [tl.float8e4nv, tl.float8e5, tl.float8e4b15, tl.float8e4b8, tl.float8e5b16, tl.bfloat16]] +
+    [(tl.float16, tl.float16), (tl.float32, tl.float32), (tl.float64, tl.float64), (tl.int1, tl.float32),
+     (tl.int32, tl.float32)])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_bfloat16_mixed_promotion(dtype, expected_dtype, reverse):
+
+    @triton.jit
+    def kernel(dtype: tl.constexpr, expected_dtype: tl.constexpr, reverse: tl.constexpr):
+        x = tl.full((8, ), 1, tl.bfloat16)
+        y = tl.full((8, ), 2, tl.float32).to(dtype)
+        if reverse:
+            x, y = y, x
+        tl.static_assert((x + y).dtype == expected_dtype)
+        tl.static_assert((x - y).dtype == expected_dtype)
+        tl.static_assert((x * y).dtype == expected_dtype)
+        tl.static_assert(tl.minimum(x, y).dtype == expected_dtype)
+        tl.static_assert(tl.maximum(x, y).dtype == expected_dtype)
+        tl.static_assert(tl.where(tl.arange(0, 8) % 2 == 0, x, y).dtype == expected_dtype)
+        division_dtype: tl.constexpr = tl.float64 if dtype == tl.float64 else tl.float32
+        tl.static_assert((x / y).dtype == division_dtype)
+        tl.static_assert((x % y).dtype == division_dtype)
+
+    run_parser(kernel, args=(dtype, expected_dtype, reverse),
+               kwargs=dict(supported_fp8_dtypes=("fp8e4nv", "fp8e5", "fp8e4b15", "fp8e4b8", "fp8e5b16")))
+
+
+@pytest.mark.parametrize("op", [tl.fma, tl.clamp])
+@pytest.mark.parametrize("dtype", [tl.float8e4nv, tl.float8e5])
+@pytest.mark.parametrize("third_dtype", [tl.bfloat16, tl.float16, tl.float32])
+def test_bfloat16_fp8_ternary_promotion(op, dtype, third_dtype):
+
+    @triton.jit
+    def kernel(op: tl.constexpr, dtype: tl.constexpr, third_dtype: tl.constexpr):
+        x = tl.full((8, ), 1, tl.bfloat16)
+        y = tl.full((8, ), 1, tl.float32).to(dtype)
+        z = tl.full((8, ), 1, third_dtype)
+        tl.static_assert(op(x, y, z).dtype == third_dtype)
+        tl.static_assert(op(y, z, x).dtype == third_dtype)
+        tl.static_assert(op(z, x, y).dtype == third_dtype)
+
+    run_parser(kernel, args=(op, dtype, third_dtype))
+
+
 @pytest.mark.parametrize("op", ["minimum", "maximum", "clamp", "cumsum", "cumprod"])
 @pytest.mark.parametrize("dtype", [tl.bfloat16, tl.float16, tl.float32], ids=str)
 def test_bfloat16_promotion_elementwise_and_scan(op, dtype):

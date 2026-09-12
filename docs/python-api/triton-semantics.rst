@@ -10,15 +10,17 @@ Type Promotion
 
 The algorithm is as follows:
 
-1. **Kind** If one tensor is of a dtype of a higher kind, the other tensor is promoted to this dtype: ``(int32, bfloat16) -> bfloat16``
+1. **Kind** If one tensor is of a dtype of a higher kind, the other tensor is promoted to this dtype: ``(int32, float16) -> float16``. Mixed ``bfloat16`` and integer tensors use ``float32``.
 
-2. **Width** If both tensors are of dtypes of the same kind, and one of them is of a higher width, the other one is promoted to this dtype: ``(float32, float16) -> float32``
+2. **Width** If both tensors are of dtypes of the same kind, and one of them is of a higher width, the other one is promoted to this dtype: ``(float32, float16) -> float32``, ``(bfloat16, float8e4nv) -> bfloat16``
 
 3. **Prefer float16** If both tensors are of the same width and signedness but different dtypes (``float16`` and ``bfloat16`` or different ``fp8`` types), they are both promoted to ``float16``. ``(float16, bfloat16) -> float16``
 
 4. **Prefer unsigned** Otherwise (same width, different signedness), they are promoted to the unsigned dtype: ``(int32, uint32) -> uint32``
 
 Division and modulo are an exception to the rules above: they do not exist natively for floating point dtypes narrower than ``float32``, so if either operand is a float (of any width), both operands are promoted to ``float32`` for these two operations. Integer division and modulo keep integer promotion.
+
+The width rule makes ``bfloat16`` the common dtype for ``bfloat16`` and FP8 tensors. Finite FP8 values are exactly representable in ``bfloat16``, but arithmetic results can round: adding FP8 ``1`` and ``bfloat16`` ``1/256`` produces ``bfloat16`` ``1``, rather than the ``float32`` result ``1.00390625``. Cast an operand to ``float32`` before the operation when that precision is required.
 
 The rules are a bit different when they involve a scalar. By scalar here we mean a numeric literal, a variable marked with `tl.constexpr` or a combination of these. These are represented by NumPy scalars and have types ``bool``, ``int`` and ``float``.
 

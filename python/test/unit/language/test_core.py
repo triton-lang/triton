@@ -441,6 +441,32 @@ def test_bin_op(dtype_x, dtype_y, op, num_ctas, device):
             test_broadcast=(op != "%"), x_low=x_low, x_high=x_high, filter_y=filter_y, test_scalar=not skip_scalar_test)
 
 
+@pytest.mark.parametrize("op, reference", [(tl.add, torch.add), (tl.sub, torch.sub), (tl.mul, torch.mul)])
+@pytest.mark.parametrize("dtype", [torch.float8_e4m3fn, torch.float8_e5m2])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_bfloat16_fp8_promotion(op, reference, dtype, reverse, device):
+    check_type_supported("bfloat16", device)
+    check_type_supported(torch_dtype_name(dtype), device)
+
+    @triton.jit
+    def kernel(X, Y, Z, op: tl.constexpr, SIZE: tl.constexpr):
+        offsets = tl.arange(0, SIZE)
+        result = op(tl.load(X + offsets), tl.load(Y + offsets))
+        tl.static_assert(result.dtype == tl.bfloat16)
+        tl.store(Z + offsets, result)
+
+    x = torch.tensor([0, 1, -1, 1.25, -1.5, 2**-9, 128, 256], dtype=torch.float32, device=device).to(dtype)
+    y = torch.tensor([0, 2**-8, 2**-9, -2**-8, 1.0078125, -1.0078125, 1, 3], dtype=torch.bfloat16, device=device)
+    x, y = x.repeat_interleave(8), y.repeat(8)
+    if reverse:
+        x, y = y, x
+    # A float32 output exposes rounding in the operation, including 1 + 2**-8.
+    result = torch.empty(x.shape, dtype=torch.float32, device=device)
+    kernel[(1, )](x, y, result, op, x.numel())
+    expected = reference(x.float(), y.float()).bfloat16().float()
+    torch.testing.assert_close(result, expected, rtol=0, atol=0)
+
+
 def test_bfloat16_mul_rounds_to_nearest_even(device):
     # A bf16 multiply has to round to nearest even. Hardware multiply-accumulate
     # instructions that write a bf16 result may truncate instead, which is off by
