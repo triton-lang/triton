@@ -1,9 +1,11 @@
 import functools
 import os
+import platform
 import subprocess
 import triton
 from pathlib import Path
 from triton import knobs
+from triton._C.libtriton import amd
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver, decompose_descriptor, expand_signature, wrap_handle_tensordesc_impl
 from triton.runtime import _allocation
@@ -19,51 +21,9 @@ ARG_TUPLE = None
 
 
 def _find_already_mmapped_dylib_on_linux(lib_name):
-    import platform
-    if platform.system() != 'Linux':
+    if platform.system() != "Linux":
         return None
-
-    # Use dl_iterate_phdr to walk through the list of shared libraries at runtime.
-    # See https://www.man7.org/linux/man-pages/man3/dl_iterate_phdr.3.html for details.
-
-    import ctypes
-    from ctypes import c_char, c_int, c_size_t, c_void_p, c_char_p, POINTER
-
-    class DlPhdrInfo(ctypes.Structure):
-        _fields_ = [
-            ('dlpi_addr', c_void_p),
-            ('dlpi_name', c_char_p),
-            # We don't care about the remaining fields.
-        ]
-
-    # callback_t must use POINTER(c_char) to avoid copying.
-    callback_t = ctypes.CFUNCTYPE(c_int, POINTER(DlPhdrInfo), POINTER(c_size_t), POINTER(c_char))
-
-    # Load libc and get the dl_iterate_phdr symbol.
-    try:
-        dl_iterate_phdr = ctypes.CDLL('libc.so.6').dl_iterate_phdr
-    except Exception:
-        return None
-    # argtypes must use c_char_p to accept create_string_buffer.
-    dl_iterate_phdr.argtypes = [callback_t, c_char_p]
-    dl_iterate_phdr.restype = c_int
-
-    max_path_length = 4096
-    path = ctypes.create_string_buffer(max_path_length + 1)
-
-    # Define callback to get the loaded dylib path.
-    def callback(info, size, data):
-        dlpi_name = info.contents.dlpi_name
-        p = Path(os.fsdecode(dlpi_name))
-        if lib_name in p.name:
-            # Found the dylib; get its path.
-            ctypes.memmove(data, dlpi_name, min(max_path_length, len(dlpi_name)))
-            return 1
-        return 0
-
-    if dl_iterate_phdr(callback_t(callback), path):
-        return os.fsdecode(ctypes.string_at(path))
-    return None
+    return amd.find_loaded_library(lib_name)
 
 
 @functools.lru_cache()
