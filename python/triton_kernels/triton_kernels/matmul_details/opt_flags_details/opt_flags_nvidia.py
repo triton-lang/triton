@@ -216,12 +216,14 @@ def compute_num_stages(
     if is_persistent:
         # Per-stage wait barrier
         stage_size += 8
-        out_itemsize = (out_dtype.bitwidth / 8) * (1.25 if has_y_acc_in else 1.0)
-        if target_info.cuda_capability_geq(10, 0):
+        out_itemsize = out_dtype.bitwidth / 8
+        if has_y_acc_in and has_native_mxfp:
+            out_itemsize *= 1.25
+        if has_native_mxfp:
             acc_size = epilogue_effective_itemsize or out_itemsize
         else:
             acc_size = out_itemsize
-        if target_info.cuda_capability_geq(10, 0) and epilogue_subtile is not None:
+        if epilogue_subtile is not None and (has_native_mxfp or has_y_acc_in):
             acc_block_n = block_n // epilogue_subtile // epilogue_reduction_n
         else:
             acc_block_n = block_n // epilogue_reduction_n
@@ -229,14 +231,16 @@ def compute_num_stages(
         # pipelined layout conversion before store of the accumulator
         # note: layout conversion has some padding
         epilogue_smem = int((block_m + 4) * acc_block_n * acc_size)
+        if has_y_acc_in and not has_native_mxfp:
+            # The accumulation load overlaps the pipelined TMA store buffer.
+            epilogue_smem += int(block_m * acc_block_n * out_itemsize)
         if has_native_mxfp and not swap_xw and block_m == 64 and epilogue_subtile > 1 and is_promoted:
             # The first accumulator split needs FP32 redistribution scratch
             # alongside the output tile, before any activation reduction.
             epilogue_smem += block_m * (block_n // 2) * 4
-        if swap_xw:
-            # The fp32 accumulator stays in TMEM for the Blackwell SWAP_XW
-            # persistent path. Fused reductions such as swiglu still need smem
-            # for the unreduced output tile before the narrower TMA-store tile.
+        if swap_xw and (has_native_mxfp or compute_dtype is None):
+            # Keep full-tile conversion scratch for TMEM and scaled outputs;
+            # plain Hopper dots split their register accumulator directly.
             if epilogue_reduction_n > 1 or epilogue_subtile > 1:
                 epilogue_smem += int(block_m * block_n * out_itemsize)
         if fp4_reduction:

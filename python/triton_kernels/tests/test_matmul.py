@@ -999,14 +999,13 @@ def test_matmul_mixed_range_and_precision(a_dtype, b_dtype, promoted_dtype, reve
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
-@pytest.mark.parametrize("a_dtype, b_dtype", [
-    (lhs, rhs) for lhs, rhs, promoted in _mixed_dtype_cases() if promoted == torch.float32
-])
+@pytest.mark.parametrize("a_dtype, b_dtype, promoted_dtype", _mixed_dtype_cases())
 @pytest.mark.parametrize("reverse", [False, True])
 @pytest.mark.parametrize("b_transpose", [False, True])
 @pytest.mark.parametrize("allow_tf32", [False, True])
-def test_matmul_mixed_fp64_accumulation(a_dtype, b_dtype, reverse, b_transpose, allow_tf32,
-                                      device, opt_flags_scope):
+@pytest.mark.parametrize("out_dtype", _supported_float_dtypes())
+def test_matmul_mixed_accumulation(a_dtype, b_dtype, promoted_dtype, reverse, b_transpose, allow_tf32, out_dtype,
+                                 device, opt_flags_scope):
     if reverse:
         a_dtype, b_dtype = b_dtype, a_dtype
     torch.manual_seed(0)
@@ -1015,10 +1014,11 @@ def test_matmul_mixed_fp64_accumulation(a_dtype, b_dtype, reverse, b_transpose, 
     b = torch.randn((n, k) if b_transpose else (k, n), dtype=torch.float64, device=device).to(b_dtype)
     if b_transpose:
         b = b.mT
-    actual = torch.randn((m, n), dtype=torch.float64, device=device)
+    actual = torch.randn((m, n), dtype=torch.float64, device=device).to(out_dtype)
     expected = actual.clone()
-    config = PrecisionConfig(out_dtype=torch.float64, allow_tf32=allow_tf32)
-    expected = matmul(a.float(), b.float(), None, c=expected, c_acc_in=expected, precision_config=config)
+    config = PrecisionConfig(out_dtype=out_dtype, allow_tf32=allow_tf32)
+    expected = matmul(a.to(promoted_dtype), b.to(promoted_dtype), None, c=expected, c_acc_in=expected,
+                      precision_config=config)
     actual = matmul(a, b, None, c=actual, c_acc_in=actual, precision_config=config)
     torch.testing.assert_close(actual.view(torch.uint8), expected.view(torch.uint8), rtol=0, atol=0)
 

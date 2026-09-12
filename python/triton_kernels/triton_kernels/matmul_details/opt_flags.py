@@ -465,8 +465,11 @@ def make_default_opt_flags_nvidia(
             subtiles_to_check = [constraints["epilogue_subtile"]]
         elif is_large_ragged_nvfp4:
             subtiles_to_check = [2]
+        elif out_dtype == FP4:
+            subtiles_to_check = [1]
         else:
-            subtiles_to_check = [1] if out_dtype == FP4 else [1, 2, 4]
+            # Splitting Hopper's register accumulator four ways slows stores.
+            subtiles_to_check = [1, 2, 4] if is_blackwell_or_newer else [1, 2]
         num_stages = -1
         for ep in subtiles_to_check:
             ns = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, epilogue_subtile=ep,
