@@ -295,13 +295,18 @@ struct FpToFpOpConversion
         .getResult(0);
   }
 
-  static Value convertFp16ToBf16(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 Value value, bool hasNativeBf16) {
-    if (!hasNativeBf16)
-      return convertFp32ToBf16(loc, rewriter,
-                               convertFp16ToFp32(loc, rewriter, value),
-                               RoundingMode::RTNE);
+  static Value convertFp8ToBf16(Location loc,
+                                ConversionPatternRewriter &rewriter,
+                                Value value, int computeCapability) {
+    if (computeCapability < 90) {
+      auto fp32 = convertFp16ToFp32(loc, rewriter, value);
+      if (computeCapability >= 80)
+        return convertFp32ToBf16(loc, rewriter, fp32, RoundingMode::RTNE);
+      // The input is an exact FP16 widening of FP8, so no rounding is needed.
+      auto b = TritonLLVMOpBuilder(loc, rewriter);
+      auto bits = b.lshr(b.bitcast(fp32, i32_ty), b.i32_val(16));
+      return b.bitcast(b.trunc(i16_ty, bits), bf16_ty);
+    }
     PTXBuilder builder;
     auto &cvt = *builder.create("cvt.bf16.f16");
     auto result = builder.newOperand("=h");
@@ -355,16 +360,15 @@ struct FpToFpOpConversion
       // FP16 represents every FP8 value, including infinities and NaNs.
       auto conversion = getConversionFunc(
           srcTy, Float16Type::get(srcTy.getContext()), std::nullopt);
-      return {
-          [toFp16 = conversion.first, hasNativeBf16 = computeCapability >= 90](
-              Location loc, ConversionPatternRewriter &rewriter,
-              const SmallVector<Value> &values) {
-            auto result = toFp16(loc, rewriter, values);
-            for (Value &value : result)
-              value = convertFp16ToBf16(loc, rewriter, value, hasNativeBf16);
-            return result;
-          },
-          conversion.second};
+      return {[toFp16 = conversion.first, capability = computeCapability](
+                  Location loc, ConversionPatternRewriter &rewriter,
+                  const SmallVector<Value> &values) {
+                auto result = toFp16(loc, rewriter, values);
+                for (Value &value : result)
+                  value = convertFp8ToBf16(loc, rewriter, value, capability);
+                return result;
+              },
+              conversion.second};
     }
 
     DenseMap<std::tuple<TypeID, TypeID, RoundingMode>, Fp8ConversionDesc>
