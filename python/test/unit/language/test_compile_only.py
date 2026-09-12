@@ -407,3 +407,32 @@ def test_fp8_compiles_for_multiple_architectures_cuda():
     src = ASTSource(fn=fp8_convert, signature={"src": "*fp32", "dst": "*fp8e5"}, constexprs={})
     triton.compile(src, target=GPUTarget("cuda", 90, 32))
     triton.compile(src, target=GPUTarget("cuda", 80, 32))
+
+
+def test_compile_only_warp_specialize_host_descriptor() -> None:
+    # Host-side descriptors have fixed TMA box dimensions, so the warp
+    # specialization pass must not split their tile across consumer groups.
+    # See https://github.com/triton-lang/triton/issues/11587.
+
+    @triton.jit
+    def matmul(out_desc, a_desc, b_desc, K, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
+        off_m = tl.program_id(0) * BLOCK_M
+        off_n = tl.program_id(1) * BLOCK_N
+        acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+        for k in tl.range(0, tl.cdiv(K, BLOCK_K), warp_specialize=True, num_stages=2):
+            a = a_desc.load([off_m, k * BLOCK_K])
+            b = b_desc.load([k * BLOCK_K, off_n])
+            acc = tl.dot(a, b, acc)
+        out_desc.store([off_m, off_n], acc)
+
+    src = triton.compiler.ASTSource(
+        fn=matmul, signature={
+            "out_desc": "tensordesc<fp32[128,128]>",
+            "a_desc": "tensordesc<fp16[128,64]>",
+            "b_desc": "tensordesc<fp16[64,128]>",
+            "K": "i32",
+            "BLOCK_M": "constexpr",
+            "BLOCK_N": "constexpr",
+            "BLOCK_K": "constexpr",
+        }, constexprs={"BLOCK_M": 128, "BLOCK_N": 128, "BLOCK_K": 64})
+    triton.compile(src, target=GPUTarget("cuda", 90, 32), options={"num_warps": 4})

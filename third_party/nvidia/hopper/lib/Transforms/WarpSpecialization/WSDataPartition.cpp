@@ -342,6 +342,14 @@ static bool getBackwardSliceToPartition(Value v,
       auto yieldArg = forOp.getYieldedValues()[bbArg.getArgNumber() - 1];
       if (!getBackwardSliceToPartition(yieldArg, partitionScheme, currentDim))
         return false;
+    } else if (isa<TensorDescType>(v.getType())) {
+      // A descriptor passed in as a function argument is built on the host,
+      // which fixes its TMA box dimensions. Unlike a MakeTensorDescOp result,
+      // it cannot be re-blocked to match a partitioned tile, so partitioning
+      // here would leave the copy's destination and the descriptor block
+      // disagreeing on shape.
+      LDBG("cannot partition a host side tensor descriptor");
+      return false;
     }
   }
 
