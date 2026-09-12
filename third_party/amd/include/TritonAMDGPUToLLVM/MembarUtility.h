@@ -7,23 +7,27 @@
 namespace mlir::triton::AMD {
 
 // Filter function used in the AMDGPU backend to filter unnecessary barriers
-// during Membar Analysis. Filters applied by this function:
-// 1) Do not create barriers between AsyncCopyGlobalToLocal and LocalLoad if the
-// LocalLoad is synced by AsyncWait. This prevents a redundant barrier between
-// LocalLoad and prefetches because membar cannot see that subviews from the
-// same shared allocation do not alias when pipelining loads. See
-// amdgpu_membar.mlir for examples. This filter can produce wrong IR/assembly if
-// we pipeline with a single buffer in lds because it filters out a required
-// ttg.barrier between the LocalLoad and the prefetches. However the pipeliner
-// will always use at least 2 buffers so this IR cannot be produced. Example
-// membar input IR to produce incorrect results:
+// during Membar Analysis. Membar calls the filter with the pending (earlier)
+// access as op1 and the current access as op2; the filters below rely on that
+// ordering to tell RAW from WAR. Filters applied by this function:
+// 1) Do not create a barrier between an AsyncCopyGlobalToLocal and a LocalLoad
+// that follows it into the same buffer, if the LocalLoad is synced by
+// AsyncWait. Such a LocalLoad is ordered after the AsyncLoads its token waits
+// for, so the barrier membar would add is redundant: membar cannot see that
+// subviews from the same shared allocation do not alias when pipelining loads.
+// See amdgpu_membar.mlir for examples.
+// This filter is direction-aware and applies to the RAW direction only. The
+// wait says nothing about what follows the read, so an AsyncCopyGlobalToLocal
+// that refills the same buffer after a synced LocalLoad must still wait for
+// every thread to finish reading it (WAR), and only a barrier orders that.
+// Example membar input IR, where both barriers below are required and emitted:
 //   %tile_a = ttg.memdesc_index
 //   %1 = AsyncCopyGlobalToLocal %ptr %tile_a
 //   scf.for
 //     %2 = AsyncWait %1
 //      # Membar will add a required ttg.barrier here
 //     %3 = LocalLoad %tile_a
-//      # Requires ttg.barrier but filter will prevent it
+//      # WAR: membar will add the required ttg.barrier here
 //     %4 = AsyncCopyGlobalToLocal %ptr_2 %tile_a
 //     scf.yield
 // 2) Do not create barriers between two async loads. The synchronization

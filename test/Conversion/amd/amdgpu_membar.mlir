@@ -562,6 +562,8 @@ tt.func @tdm_refill_after_synced_local_load(%desc: !tt.tensordesc<128x128xf16, #
   // CHECK: amdg.async_tdm_copy_global_to_local
   %tok0 = amdg.async_tdm_copy_global_to_local %d into %r : !tt.tensordesc<128x128xf16, #shared> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
   // CHECK: amdg.async_wait
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NOT: ttg.barrier local
   %wait = amdg.async_wait %tok0 {num_inst = 0 : i32}
   // CHECK: ttg.local_load
   // CHECK-NEXT: ttg.barrier local
@@ -613,6 +615,7 @@ tt.func @pipelined_loop_refill_after_synced_local_load(%A: !tt.ptr<f16>, %ub: i3
 
     // CHECK: ttg.async_wait
     // CHECK-NEXT: ttg.barrier local
+    // CHECK-NOT: ttg.barrier local
     %w = ttg.async_wait %cgi {num = 2 : i32}
 
     %ip1 = arith.addi %i, %c1_i32 : i32
@@ -625,6 +628,8 @@ tt.func @pipelined_loop_refill_after_synced_local_load(%A: !tt.ptr<f16>, %ub: i3
     %ldj = amdg.buffer_load_to_local %A[%offset] into %sj : !tt.ptr<f16>[tensor<128x32xi32, #AL>] -> <128x32xf16, #shared, #smem, mutable>
     %cgj = ttg.async_commit_group tokens %ldj
 
+    // CHECK-NOT: ttg.barrier local
+    // CHECK: cf.br
     scf.yield %j : i32
   }
   tt.return
