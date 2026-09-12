@@ -75,7 +75,7 @@ def test_scalar_constant_float_zero_to_integer(dtype, value):
     (tl.float16, 0, tl.float16),
     (tl.float32, 0.0, tl.float32),
     (tl.float64, 0.0, tl.float64),
-    (tl.bfloat16, 0.0, tl.float32),
+    (tl.bfloat16, 0.0, tl.bfloat16),
     (tl.int8, False, tl.int8),
     (tl.int16, 0, tl.int16),
     (tl.uint16, 0, tl.uint16),
@@ -95,19 +95,58 @@ def test_minimum_maximum_scalar_promotion(op, dtype, value, expected_dtype):
 
 
 @pytest.mark.parametrize("op", [tl.minimum, tl.maximum])
-@pytest.mark.parametrize("other_dtype", [tl.float32, tl.bfloat16])
-def test_minimum_maximum_tensor_promotion(op, other_dtype):
+@pytest.mark.parametrize("other_dtype, expected_dtype", [(tl.float32, tl.float32), (tl.bfloat16, tl.float16)])
+def test_minimum_maximum_tensor_promotion(op, other_dtype, expected_dtype):
 
     @triton.jit
-    def kernel(op: tl.constexpr, other_dtype: tl.constexpr):
+    def kernel(op: tl.constexpr, other_dtype: tl.constexpr, expected_dtype: tl.constexpr):
         x = tl.full((8, ), 1, tl.float16)
         y = tl.full((), 0.0, other_dtype)
         lhs = op(x, y)
         rhs = op(y, x)
-        tl.static_assert(lhs.dtype == tl.float32)
-        tl.static_assert(rhs.dtype == tl.float32)
+        tl.static_assert(lhs.dtype == expected_dtype)
+        tl.static_assert(rhs.dtype == expected_dtype)
 
-    run_parser(kernel, args=(op, other_dtype))
+    run_parser(kernel, args=(op, other_dtype, expected_dtype))
+
+
+@pytest.mark.parametrize("op", ["minimum", "maximum", "clamp", "cumsum", "cumprod"])
+@pytest.mark.parametrize("dtype", [tl.bfloat16, tl.float16, tl.float32], ids=str)
+def test_bfloat16_promotion_elementwise_and_scan(op, dtype):
+
+    @triton.jit
+    def kernel(op: tl.constexpr, dtype: tl.constexpr):
+        x = tl.full((32, ), 1, tl.bfloat16)
+        y = tl.full((32, ), 2, dtype)
+        if op == "clamp":
+            result = tl.clamp(x, -y, y)
+        elif op == "minimum" or op == "maximum":
+            result = getattr(tl, op)(x, y)
+        else:
+            result = getattr(tl, op)(x, dtype=None if dtype == tl.bfloat16 else dtype)
+        tl.static_assert(result.dtype == dtype)
+
+    run_parser(kernel, args=(op, dtype))
+
+
+@pytest.mark.parametrize("op", ["min", "max"])
+@pytest.mark.parametrize("return_indices", [False, True])
+@pytest.mark.parametrize("tie_break_left", [False, True])
+def test_bfloat16_promotion_reduction(op, return_indices, tie_break_left):
+
+    @triton.jit
+    def kernel(op: tl.constexpr, return_indices: tl.constexpr, tie_break_left: tl.constexpr):
+        x = tl.full((32, ), 1, tl.bfloat16)
+        result = getattr(tl, op)(x, 0, return_indices=return_indices, return_indices_tie_break_left=tie_break_left)
+        if return_indices:
+            value, index = result
+            tl.static_assert(value.dtype == tl.bfloat16)
+            tl.static_assert(index.dtype == tl.int32)
+        else:
+            # Ordinary min/max reductions still widen all small input types.
+            tl.static_assert(result.dtype == tl.float32)
+
+    run_parser(kernel, args=(op, return_indices, tie_break_left))
 
 
 @triton.aggregate
