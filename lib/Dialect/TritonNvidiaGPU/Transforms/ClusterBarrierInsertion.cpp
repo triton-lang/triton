@@ -315,7 +315,9 @@ void runClusterBarrierInsertion(ModuleAllocation &moduleAllocation,
     return;
 
   MembarFilterFn filterFn = [](Operation *lhs, Operation *rhs, bool lhsIsRead,
-                               bool rhsIsRead, Allocation * /*allocation*/) {
+                               bool rhsIsRead, Allocation * /*allocation*/,
+                               const AllocationSlice &,
+                               const AllocationSlice &) {
     // Filter ops that do not touch distributed shared memory. Whether the
     // aliasing was already present in TTGIR is handled per-allocation slice.
     bool lhsDist = isDistributedMultiCTAOp(lhs, lhsIsRead);

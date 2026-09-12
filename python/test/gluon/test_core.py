@@ -1110,9 +1110,12 @@ def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK:
     )
     mbar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(mbar, count=1)
-    async_copy.mbarrier_arrive(mbar)
     mbarrier.arrive(mbar)
     mbarrier.wait(mbar, 0)
+    async_copy.mbarrier_arrive(mbar)
+    mbarrier.wait(mbar, 0)
+    mbarrier.arrive(mbar)
+    mbarrier.wait(mbar, 1)
 
     val = smem.load(block_layout)
     ttgl.store(out + xindex * YBLOCK + yindex, val)
@@ -1219,6 +1222,74 @@ def test_mbarrier_tma_progress(device):
     assert re.search(r"\bbar(?:rier)?\.sync\b", ptx[wait:copy])
     kernel[(1, )](desc, num_warps=4)
     torch.cuda.synchronize(device)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("expect_before_copy", [True, False])
+@pytest.mark.parametrize("synchronize_expect", [True, False])
+def test_mbarrier_multiple_tma_expectations(device, expect_before_copy, synchronize_expect):
+
+    @gluon.jit
+    def kernel(desc, out, iterations, EXPECT_BEFORE_COPY: ttgl.constexpr, SYNCHRONIZE_EXPECT: ttgl.constexpr):
+        a = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
+        b = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=2)
+        for i in range(iterations):
+            if EXPECT_BEFORE_COPY:
+                if SYNCHRONIZE_EXPECT:
+                    ttgl.barrier()
+                mbarrier.expect(bar, desc.nbytes_per_cta)
+            tma.async_load(desc, [32 * i, 0], bar, a)
+            if not EXPECT_BEFORE_COPY:
+                if SYNCHRONIZE_EXPECT:
+                    ttgl.barrier()
+                mbarrier.expect(bar, desc.nbytes_per_cta)
+            if EXPECT_BEFORE_COPY:
+                if SYNCHRONIZE_EXPECT:
+                    ttgl.barrier()
+                mbarrier.expect(bar, desc.nbytes_per_cta)
+            tma.async_load(desc, [32 * i + 16, 0], bar, b)
+            if not EXPECT_BEFORE_COPY:
+                if SYNCHRONIZE_EXPECT:
+                    ttgl.barrier()
+                mbarrier.expect(bar, desc.nbytes_per_cta)
+            mbarrier.wait(bar, i & 1, deps=[a, b])
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+        rows = ttgl.arange(0, 16, ttgl.SliceLayout(1, layout))[:, None]
+        cols = ttgl.arange(0, 64, ttgl.SliceLayout(0, layout))[None, :]
+        ttgl.store(out + rows * 64 + cols, a.load(layout))
+        ttgl.store(out + (rows + 16) * 64 + cols, b.load(layout))
+        mbarrier.invalidate(bar)
+
+    iterations = 64
+    inp = torch.arange(iterations * 32 * 64, dtype=torch.float32, device=device).reshape(-1, 64)
+    out = torch.empty((32, 64), dtype=inp.dtype, device=device)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
+    desc = TensorDescriptor.from_tensor(inp, [16, 64], shared_layout)
+    compiled = kernel.warmup(desc, out, iterations, expect_before_copy, synchronize_expect, grid=(1, ), num_warps=4)
+    ptx = compiled.asm["ptx"]
+    # Check the physical counts before launch so a mismatch fails without hanging.
+    initial_count = "2" if synchronize_expect else "8"
+    assert re.findall(r"mbarrier\.init\.shared::cta\.b64\s+\[[^\]]+\],\s*(\d+)", ptx) == [initial_count]
+    expectations = list(re.finditer(r"mbarrier\.arrive\.expect_tx\.shared::cta\.b64\s+_,\s*\[[^\]]+\],\s*(\d+)", ptx))
+    byte_counts = [expect.group(1) for expect in expectations]
+    # Membar already synchronizes the first expectation when it precedes copies.
+    assert byte_counts == [
+        "4096" if synchronize_expect or expect_before_copy else "1024",
+        "4096" if synchronize_expect else "1024",
+    ]
+    arrival_counts = re.findall(r"mbarrier\.arrive\.shared::cta\.b64\s+_,\s*\[[^\]]+\],\s*(\d+)", ptx)
+    assert arrival_counts == ([] if synchronize_expect else ["3"] * byte_counts.count("4096"))
+    # Folding must not add a CTA barrier before the next copy or wait.
+    for expect in expectations:
+        if expect.group(1) == "4096":
+            following = ptx[expect.end():]
+            next_op = re.search(r"cp\.async\.bulk\.tensor\.|mbarrier\.try_wait\.", following)
+            assert next_op is not None
+            assert not re.search(r"\bbar(?:rier)?\.sync\b", following[:next_op.start()])
+    kernel[(1, )](desc, out, iterations, expect_before_copy, synchronize_expect, num_warps=4)
+    torch.testing.assert_close(out, inp[-32:])
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
@@ -1387,11 +1458,47 @@ def test_mbarrier_automatic_warp_arrivals(producer_warps, num_ctas):
     assert Counter(expected_inits) <= Counter(map(int, init_counts))
     arrive_counts = re.findall(r"mbarrier\.arrive\.shared::(?:cta|cluster)\.b64\s+_,\s*\[[^\]]+\](?:,\s*(\d+))?;", ptx)
     # The launch rendezvous covers the first bootstrap arrival's full count.
-    expected_arrivals = [scale, scale // producer_warps, 1, scale // 4]
-    assert Counter(expected_arrivals) <= Counter(int(count or 1) for count in arrive_counts)
+    # A CTA barrier before the consumer's arrival can also fold its full count.
+    expected_arrivals = [scale, scale // producer_warps, 1]
+    actual_arrivals = Counter(int(count or 1) for count in arrive_counts)
+    assert any(Counter(expected_arrivals + [count]) <= actual_arrivals for count in (scale // 4, scale))
     assert "bar.warp.sync" in ptx
     kernel[(8, )](inp, out, iterations, block, producer_warps, num_warps=4, num_ctas=num_ctas)
     torch.testing.assert_close(out, inp + 1)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_mbarrier_wait_before_distributed_arrival():
+
+    @gluon.jit
+    def kernel(inp, out, iterations, BLOCK: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        offsets = ttgl.arange(0, BLOCK, layout=layout)
+        pid = ttgl.program_id(0)
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        mbarrier.arrive(bar)
+        total = ttgl.full([BLOCK], 0, ttgl.int32, layout)
+        for i in range(iterations):
+            # Retire earlier arrivals before testing the wait-to-arrive edge.
+            ttgl.barrier()
+            mbarrier.wait(bar, phase=i & 1)
+            total += ttgl.load(inp + (pid * iterations + i) * BLOCK + offsets)
+            mbarrier.arrive(bar)
+        mbarrier.wait(bar, phase=iterations & 1)
+        mbarrier.invalidate(bar)
+        ttgl.store(out + pid * BLOCK + offsets, total)
+
+    blocks, iterations, block = 16, 128, 128
+    inp = torch.arange(blocks * iterations * block, device="cuda", dtype=torch.int32)
+    out = torch.empty((blocks, block), device="cuda", dtype=torch.int32)
+    compiled = kernel.warmup(inp, out, iterations, block, grid=(blocks, ), num_warps=4)
+    arrive_counts = re.findall(r"mbarrier\.arrive\.shared::cta\.b64\s+_,\s*\[[^\]]+\](?:,\s*(\d+))?;",
+                               compiled.asm["ptx"])
+    # The bootstrap arrives for the CTA; each loop arrival counts one warp.
+    assert {int(count or 1) for count in arrive_counts} == {4, 1}
+    kernel[(blocks, )](inp, out, iterations, block, num_warps=4)
+    torch.testing.assert_close(out, inp.reshape(blocks, iterations, block).sum(dim=1, dtype=torch.int32))
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
