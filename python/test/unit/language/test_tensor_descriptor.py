@@ -4,7 +4,7 @@ import numpy as np
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_hopper, is_sm12x, is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy
+from triton._internal_testing import is_hopper, is_sm12x, is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy, run_in_process
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from typing import Optional
 from triton._internal_testing import is_compile_warmup, is_cuda, is_hip, is_hip_cdna3
@@ -1820,3 +1820,76 @@ def test_tensor_descriptor_store_downcast(dtype_str, device):
     kernel[(grid_m, grid_n)](desc, M, N, M_BLOCK=M_BLOCK, N_BLOCK=N_BLOCK)
     ref = torch.arange(M * N, dtype=torch.float32, device=device).reshape(M, N).to(torch_dtype)
     torch.testing.assert_close(out, ref)
+
+
+@pytest.mark.parametrize("dtype_str, misaligned_stride, aligned_stride",
+                         [("float16", 511, 512),  # 2 bytes: 1022 B rejected, 1024 B ok
+                          ("bfloat16", 511, 512),  # 2 bytes
+                          ("float32", 255, 256),  # 4 bytes: 1020 B rejected, 1024 B ok
+                          ])
+def test_tensor_descriptor_stride_alignment(dtype_str, misaligned_stride, aligned_stride, device, with_allocator):
+    if not is_cuda():
+        pytest.skip("Requires TMA support")
+    dtype = getattr(torch, dtype_str)
+
+    @triton.jit
+    def kernel(a_ptr, M, N, stride_m: tl.constexpr, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+        desc = tl.make_tensor_descriptor(a_ptr, shape=[M, N], strides=[stride_m, 1], block_shape=[M_BLOCK, N_BLOCK])
+        desc.load([0, 0])
+
+    a = torch.empty((32, aligned_stride), dtype=dtype, device=device)
+
+    with pytest.raises(CompilationError, match="16-byte aligned"):
+        kernel[(1, )](a, 32, misaligned_stride, stride_m=misaligned_stride, M_BLOCK=8, N_BLOCK=64)
+
+    kernel[(1, )](a, 32, aligned_stride, stride_m=aligned_stride, M_BLOCK=8, N_BLOCK=64)
+
+
+def _run_tensor_descriptor_dynamic_iisan(device, stride_m_val, base_byte_offset=0):
+    triton.knobs.refresh_knobs()
+
+    @triton.jit
+    def kernel(a_ptr, M, N, stride_m, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+        desc = tl.make_tensor_descriptor(
+            a_ptr,
+            shape=[M, N],
+            strides=[stride_m, 1],
+            block_shape=[M_BLOCK, N_BLOCK],
+        )
+        desc.load([0, 0])
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        return torch.empty(size, dtype=torch.int8, device=device)
+
+    triton.set_allocator(alloc_fn)
+
+    n_bytes = 32 * 512 * 2  # bfloat16
+    buf = torch.empty(n_bytes + base_byte_offset, dtype=torch.int8, device=device)
+    a = buf[base_byte_offset:base_byte_offset + n_bytes].view(torch.bfloat16).reshape(32, 512)
+
+    kernel[(1, )](a, 32, 512, stride_m_val, M_BLOCK=8, N_BLOCK=64)
+    torch.cuda.synchronize()
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires TMA (Hopper+)")
+def test_tensor_descriptor_alignment_iisan_dynamic(device):
+
+    base_env = {"CUDA_LAUNCH_BLOCKING": "1", "TRITON_INSTRUMENTATION_MODE": "iisan"}
+
+    ok = run_in_process(_run_tensor_descriptor_dynamic_iisan, (device, 512, 0), env=base_env)
+    assert ok.exc is None, ok.exc
+
+    bad_stride = run_in_process(_run_tensor_descriptor_dynamic_iisan, (device, 511, 0), env=base_env)
+    assert bad_stride.exc is not None
+    assert "device-side assert" in str(bad_stride.exc).lower(), bad_stride.exc
+
+    bad_ptr = run_in_process(_run_tensor_descriptor_dynamic_iisan, (device, 512, 8), env=base_env)
+    assert bad_ptr.exc is not None
+    assert "device-side assert" in str(bad_ptr.exc).lower(), bad_ptr.exc
+
+    without_iisan = run_in_process(
+        _run_tensor_descriptor_dynamic_iisan,
+        (device, 511, 0),
+        env={"CUDA_LAUNCH_BLOCKING": "1", "TRITON_INSTRUMENTATION_MODE": ""},
+    )
+    assert without_iisan.exc is None, without_iisan.exc
