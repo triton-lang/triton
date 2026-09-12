@@ -164,7 +164,7 @@ private:
         continue;
       // A basic block can be broken into several virtual blocks. Find all
       // virtual blocks that belong to the basic block containing the return.
-      SmallVector<std::pair<VirtualBlock, StateT>> exitBlocks;
+      SmallVector<std::pair<VirtualBlock, StateT>, 1> exitBlocks;
       for (auto &[block, state] : outputs)
         if (block.first == &exit)
           exitBlocks.emplace_back(block, state);
