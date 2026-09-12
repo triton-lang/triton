@@ -32,9 +32,12 @@ public:
       : AxisInfo(contiguity, divisibility, constancy, std::nullopt) {}
 
   AxisInfo(ArrayRef<int64_t> contiguity, ArrayRef<int64_t> divisibility,
-           ArrayRef<int64_t> constancy, std::optional<APInt> constantValue)
+           ArrayRef<int64_t> constancy, std::optional<APInt> constantValue,
+           bool nonNegative = false)
       : contiguity(contiguity), divisibility(divisibility),
-        constancy(constancy), constantValue(std::move(constantValue)) {
+        constancy(constancy), constantValue(std::move(constantValue)),
+        nonNegative(nonNegative || (this->constantValue &&
+                                    !this->constantValue->isNegative())) {
     assert(divisibility.size() == contiguity.size());
     assert(constancy.size() == contiguity.size());
     int64_t globalDivisibility = getGlobalDivisibility();
@@ -125,6 +128,14 @@ public:
 
   const std::optional<APInt> &getConstantValue() const { return constantValue; }
 
+  // Whether every element is known to be non-negative as a signed integer.
+  //
+  // Truncating division and remainder only respect the group structure that
+  // contiguity and divisibility describe when the dividend is non-negative:
+  // [-64, -63, ..., -33] / 32 is [-2, -1, ..., -1], not a constant group, and
+  // [-64, -63, ..., -33] % 32 is [0, -31, ..., -1], not a contiguous one.
+  bool isNonNegative() const { return nonNegative; }
+
   static void initPessimisticStateFromFunc(int argNumber,
                                            FunctionOpInterface funcOp,
                                            DimVectorT *contiguity,
@@ -140,7 +151,8 @@ public:
             (constantValue && other.constantValue &&
              constantValue->getBitWidth() ==
                  other.constantValue->getBitWidth() &&
-             *constantValue == *other.constantValue));
+             *constantValue == *other.constantValue)) &&
+           nonNegative == other.nonNegative;
   }
 
   static AxisInfo getPessimisticValueState(Value value);
@@ -163,6 +175,7 @@ public:
       os << *constantValue;
     else
       os << "<none>";
+    os << ", non_negative = " << (nonNegative ? "true" : "false");
   }
 
 private:
@@ -172,6 +185,9 @@ private:
 
   // Exact fixed-width integer scalar or splat bits, if known.
   std::optional<APInt> constantValue;
+
+  // Every element is >= 0 as a signed integer. Never set for pointers.
+  bool nonNegative = false;
 };
 
 class AxisInfoVisitor {
@@ -218,6 +234,13 @@ class AxisInfoAnalysis : public dataflow::SparseForwardDataFlowAnalysis<
 protected:
   AxisInfoVisitorList visitors;
 
+  // Values that an `llvm.intr.assume` in the entry block of their function
+  // proves non-negative. The entry block runs on every execution of the
+  // function, so the fact holds wherever the value is used.
+  DenseSet<Value> assumedNonNegative;
+
+  AxisInfo applyAssumptions(Value value, AxisInfo info) const;
+
   void setToEntryState(dataflow::Lattice<AxisInfo> *lattice) override;
 
   void visitNonControlFlowArguments(
@@ -233,6 +256,8 @@ public:
   AxisInfoAnalysis(DataFlowSolver &solver);
   using dataflow::SparseForwardDataFlowAnalysis<
       dataflow::Lattice<AxisInfo>>::getLatticeElement;
+
+  LogicalResult initialize(Operation *top) override;
 
   LogicalResult
   visitOperation(Operation *op,
