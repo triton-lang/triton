@@ -33,16 +33,19 @@ def get_scaled_dot_format_string(dtype: tl.dtype):
 
 
 @triton.jit
+def upcast_fp8(x):
+    # FP8-to-FP64 conversion needs this lossless intermediate.
+    return x.to(tl.float32) if x.dtype.is_fp8() else x
+
+
+@triton.jit
 def matmul_dot(x, w, acc, swap_xw: tl.constexpr, max_num_imprecise_acc: tl.constexpr, allow_tf32: tl.constexpr,
                compute_dtype: tl.constexpr):
     if swap_xw:
         x, w = w.T, x.T
-    # FP8 conversion instructions stop at FP32; this intermediate is lossless.
     if compute_dtype == tl.float64:
-        if x.dtype.is_fp8():
-            x = x.to(tl.float32)
-        if w.dtype.is_fp8():
-            w = w.to(tl.float32)
+        x = upcast_fp8(x)
+        w = upcast_fp8(w)
     x = x.to(compute_dtype)
     w = w.to(compute_dtype)
     return tl.dot(x, w, acc, max_num_imprecise_acc=max_num_imprecise_acc, allow_tf32=allow_tf32)

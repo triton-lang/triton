@@ -29,6 +29,7 @@ from ._common import (
     matmul_launch_metadata,
     compute_pids,
     output_mx_scale_store_ptr,
+    upcast_fp8,
 )
 
 
@@ -655,7 +656,6 @@ def _p_matmul(
                     off_kz = pid_k * batch_size + start_z1
                     acc = Y.load([off_kz, off_m1, out_off_n])
                     acc = acc.reshape(out.shape)
-                    out += acc * load_scale(ScalePtr)
                 else:
                     offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
                     mask_n = offs_y_n < yN
@@ -663,7 +663,9 @@ def _p_matmul(
                     AccPtrs = YPtr + pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n[None, :] * stride_y_n
                     mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
                     acc = tl.load(AccPtrs, mask=mask, other=0.0)
-                    out += acc * load_scale(ScalePtr)
+                if out.dtype == tl.float64:
+                    acc = upcast_fp8(acc)
+                out += acc * load_scale(ScalePtr)
 
             if MASK_ACC:
                 out = tl.where(mask_m[:, None], out, 0.0)

@@ -21,6 +21,7 @@ from ._common import (
     matmul_launch_metadata,
     compute_pids,
     output_mx_scale_store_ptr,
+    upcast_fp8,
 )
 
 
@@ -587,7 +588,10 @@ def _matmul(
             AccPtrs = YPtrs
         else:
             AccPtrs = OutAcc + start_z_out.to(index_type) * stride_acc_z + offs_y_m.to(index_type)[:, None] * stride_acc_m + offs_y_n.to(index_type)[None, :] * stride_acc_n
-        out += tl.load(AccPtrs, mask=mask, other=0.0) * load_scale(ScalePtr)
+        acc = tl.load(AccPtrs, mask=mask, other=0.0)
+        if out.dtype == tl.float64:
+            acc = upcast_fp8(acc)
+        out += acc * load_scale(ScalePtr)
 
     if is_out_microscaled:
         MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MX_BLOCK_SIZE

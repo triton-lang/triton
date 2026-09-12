@@ -941,7 +941,8 @@ def test_matmul_mixed_dtypes(a_dtype, b_dtype, promoted_dtype, reverse, b_transp
     (torch.float64, torch.float64),
 ])
 @pytest.mark.parametrize("shape, constraints", _MIXED_MATMUL_CASES)
-def test_matmul_fp64_fp8_output_rounding(a_dtype, b_dtype, out_dtype, midpoint, shape, constraints,
+@pytest.mark.parametrize("accumulate", [False, True])
+def test_matmul_fp64_fp8_output_rounding(a_dtype, b_dtype, out_dtype, midpoint, shape, constraints, accumulate,
                                         device, opt_flags_scope):
     if out_dtype not in _supported_float_dtypes():
         pytest.skip("output format is not supported by this backend")
@@ -960,8 +961,12 @@ def test_matmul_fp64_fp8_output_rounding(a_dtype, b_dtype, out_dtype, midpoint, 
         a[:, 0] = 1
         b[0, :] = values.repeat(triton.cdiv(n, values.numel()))[:n]
         expected = b[:1, :].expand(m, n)
-    opt_flags.update_opt_flags_constraints(constraints)
-    actual = matmul(a, b, None, precision_config=PrecisionConfig(out_dtype=out_dtype, allow_tf32=False))
+    c = torch.full((m, n), 0.5, dtype=torch.float64, device=device).to(out_dtype) if accumulate else None
+    if accumulate:
+        expected = expected + 0.5
+    opt_flags.update_opt_flags_constraints(dict(constraints, split_k=1) if accumulate else constraints)
+    actual = matmul(a, b, None, c=c, c_acc_in=c,
+                    precision_config=PrecisionConfig(out_dtype=out_dtype, allow_tf32=False))
     expected = expected.float().to(out_dtype)
     torch.testing.assert_close(actual.contiguous().view(torch.uint8), expected.contiguous().view(torch.uint8),
                                rtol=0, atol=0)
