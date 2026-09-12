@@ -773,17 +773,18 @@ def test_mxfp8_act_scale_store_zeroes_partial_group(n, is_persistent, device):
         assert torch.all(unused_groups == 0xFF)
 
 
-@pytest.mark.parametrize("shape,scale_kind", [
-    ((128, 256, 256), "a_only"),
-    ((192, 384, 256), "scalar"),
-    ((2, 128, 256, 256), "scalar"),
-    ((128, 256, 256), "fiber"),
+@pytest.mark.parametrize("shape,scale_kind,configuration", [
+    ((128, 256, 256), "a_only", "fixed"),
+    ((192, 384, 1024), "scalar", "default"),
+    ((2, 128, 256, 256), "scalar", "fixed"),
+    ((128, 256, 256), "fiber", "fixed"),
 ])
-def test_nvfp4_tensor_scales(shape, scale_kind, device, monkeypatch):
+def test_nvfp4_tensor_scales(shape, scale_kind, configuration, device, monkeypatch):
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("requires Blackwell or newer")
     from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
     from triton_kernels.tensor import FP4
+    import triton_kernels.matmul as matmul_module
 
     monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", False)
     torch.manual_seed(0)
@@ -809,11 +810,24 @@ def test_nvfp4_tensor_scales(shape, scale_kind, device, monkeypatch):
         a_mx_scale=sa, b_mx_scale=sb, a_microblock_size=16, b_microblock_size=16,
         a_mx_tensor_scale=scale_a, b_mx_tensor_scale=scale_b, out_dtype=torch.bfloat16,
     )
-    constraints = dict(block_m=128, block_n=256, block_k=256, num_warps=4,
-                       num_stages=3, epilogue_subtile=4, group_m=4,
-                       is_persistent=True, split_k=1, swap_xw=False, use_output_tma=False)
+    constraints = {} if configuration == "default" else dict(
+        block_m=128, block_n=256, block_k=256, num_warps=4,
+        num_stages=3, epilogue_subtile=4, group_m=4,
+        is_persistent=True, split_k=1, swap_xw=False, use_output_tma=False,
+    )
+    selected_flags = []
+    make_flags = matmul_module.make_opt_flags
+
+    def record_flags(*args, **kwargs):
+        flags = make_flags(*args, **kwargs)
+        selected_flags.append(flags)
+        return flags
+
+    monkeypatch.setattr(matmul_module, "make_opt_flags", record_flags)
     with opt_flags.scoped_opt_flags_constraints(constraints):
         actual = matmul(a, b, None, precision_config=precision)
+    if configuration == "default" and torch.cuda.get_device_capability() >= (10, 3):
+        assert selected_flags[0].num_stages == 3
     ref_a *= scale_a[..., None] if scale_kind == "fiber" else scale_a
     if scale_b is not None:
         ref_b *= scale_b
