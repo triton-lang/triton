@@ -381,6 +381,28 @@ tt.func @intermediate_use_cust_stages(%lb : index, %ub : index, %step : index,
 
 // -----
 
+#tiny_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#tiny_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 32, rank = 1}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  // CHECK-LABEL: @unaligned_tma_stage_size
+  // CHECK: scf.for
+  // CHECK: tt.descriptor_load
+  // CHECK-NOT: tt.latency
+  // CHECK: "use"
+  tt.func @unaligned_tma_stage_size(%desc: !tt.tensordesc<4xf32, #tiny_shared>,
+                                    %lb: index, %ub: index, %step: index) {
+    %c0 = arith.constant 0 : i32
+    scf.for %iv = %lb to %ub step %step {
+      %load = tt.descriptor_load %desc[%c0] : !tt.tensordesc<4xf32, #tiny_shared> -> tensor<4xf32, #tiny_blocked>
+      "use"(%load) : (tensor<4xf32, #tiny_blocked>) -> ()
+    } {tt.num_stages = 3 : i32}
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
