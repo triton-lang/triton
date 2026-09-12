@@ -1,5 +1,6 @@
 import torch
 import triton
+from triton_kernels.matmul_details._common import get_compute_dtype
 from triton_kernels.target_info import get_cdna_version, get_rdna_version
 
 
@@ -23,9 +24,10 @@ def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, precisi
     if get_rdna_version() in (3, 4) and block_m == 64:
         block_n = 256
 
-    # Match a 128B cacheline, accounting for widened unscaled FP8 operands.
-    if precision_config.a_mx_scale is None and precision_config.b_mx_scale is None:
-        block_k = int(128 // max(lhs_width, rhs_width))
+    # Match a 128B cacheline in the promoted compute type.
+    compute_dtype = get_compute_dtype(precision_config, lhs_dtype, rhs_dtype)
+    if compute_dtype is not None:
+        block_k = 1024 // compute_dtype.bitwidth
     else:
         block_k = int(128 // min(lhs_width, rhs_width))
 

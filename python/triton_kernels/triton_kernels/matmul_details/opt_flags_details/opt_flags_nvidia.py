@@ -1,17 +1,11 @@
 import torch
 import triton
 from triton_kernels import target_info
-from triton_kernels.matmul_details._common import is_unscaled_mixed_fp32
+from triton_kernels.matmul_details._common import get_compute_dtype
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
-from triton_kernels.tensor import FP4, FP8_E4M3FN, FP16, FP32, BF16, Tensor
+from triton_kernels.tensor import FP4, FP16, FP32, BF16, Tensor
 from triton_kernels.tensor_details.layout import HopperMXScaleLayout
 from triton_kernels.tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, BlackwellMXScaleLayout
-
-
-def is_unscaled_mixed_fp8(precision_config, lhs_dtype, rhs_dtype):
-    return (precision_config.a_mx_scale is None and precision_config.b_mx_scale is None
-            and (lhs_dtype == FP8_E4M3FN and rhs_dtype in (FP16, BF16)
-                 or rhs_dtype == FP8_E4M3FN and lhs_dtype in (FP16, BF16)))
 
 
 def is_x_scale_swizzled(precision_config):
@@ -81,13 +75,10 @@ def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_d
     lhs_width = lhs_dtype.bitwidth
     rhs_width = rhs_dtype.bitwidth
     has_native_mxfp = target_info.cuda_capability_geq(10, 0)
-    if is_unscaled_mixed_fp32(precision_config, lhs_dtype, rhs_dtype):
-        # Match FP32 x FP32's reduction order, including automatic split-K.
-        block_k = 32
-    elif (not has_native_mxfp and target_info.cuda_capability_geq(9, 0)
-          and is_unscaled_mixed_fp8(precision_config, lhs_dtype, rhs_dtype)):
-        # Limit register pressure from Hopper's FP8-to-16-bit conversion.
-        block_k = 64
+    compute_dtype = get_compute_dtype(precision_config, lhs_dtype, rhs_dtype)
+    if compute_dtype is not None:
+        # Match the promoted operands' reduction order, including automatic split-K.
+        block_k = 1024 // compute_dtype.bitwidth
     else:
         # block_k needs to match the cacheline size (1024 bits)
         block_k = int(1024 // min(lhs_width, rhs_width))
@@ -97,7 +88,7 @@ def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_d
         # x scale has been swizzled to BlackwellActMXScaleLayout, enforce block_k to be multiple of 128
         block_k = max(block_k, 128)
     elif k is not None:  # cover small k case
-        min_block_k = 32 if is_persistent or lhs_width != 16 or rhs_width != 16 else 16
+        min_block_k = 16 if not is_persistent and compute_dtype in (FP16, BF16) else 32
         block_k = max(min_block_k, min(triton.next_power_of_2(k), block_k))
     if (is_persistent and k is not None and k >= 256
             and is_blackwell_mx_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype)
@@ -112,7 +103,8 @@ def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_d
                 and isinstance(precision_config.b_mx_scale.storage.layout, BlackwellMXScaleLayout)):
             # Blackwell scale swizzling loads four K-scale columns at a time.
             block_k = max(block_k, 4 * MXFP_BLOCK_SIZE.value)
-    if has_y_acc_in and lhs_width == rhs_width == 16 and not target_info.cuda_capability_geq(10, 0):
+    if (has_y_acc_in and not target_info.cuda_capability_geq(10, 0)
+            and (compute_dtype in (FP16, BF16) or compute_dtype is None and lhs_width == rhs_width == 16)):
         block_k = min(block_k, 32)
     return block_k
 
@@ -166,7 +158,8 @@ def compute_num_stages(
         return 3
     if swap_xw is None:
         swap_xw = compute_swap_xw(precision_config, block_m, is_persistent, lhs_dtype, rhs_dtype)
-    is_mixed_fp8 = is_unscaled_mixed_fp8(precision_config, lhs_dtype, rhs_dtype)
+    compute_dtype = get_compute_dtype(precision_config, lhs_dtype, rhs_dtype)
+    is_promoted = compute_dtype is not None and (lhs_dtype != compute_dtype or rhs_dtype != compute_dtype)
     act_size = lhs_dtype.bitwidth / 8
     weight_size = rhs_dtype.bitwidth / 8
     has_native_mxfp = target_info.cuda_capability_geq(10, 0)
@@ -187,9 +180,9 @@ def compute_num_stages(
     device_props = torch.cuda.get_device_properties(0)
     smem_capacity = device_props.shared_memory_per_block_optin
     smem_capacity //= occupancy_target
-    if is_mixed_fp8 or is_unscaled_mixed_fp32(precision_config, lhs_dtype, rhs_dtype):
+    if is_promoted:
         rhs_size = act_size if swap_xw else weight_size
-        dot_size = max(act_size, weight_size)
+        dot_size = compute_dtype.bitwidth / 8
         if rhs_size < dot_size:
             # A computed RHS needs one widened tile in addition to its input ring.
             # The regular pipeline replaces one input slot with that widened tile.
@@ -230,7 +223,7 @@ def compute_num_stages(
         # pipelined layout conversion before store of the accumulator
         # note: layout conversion has some padding
         epilogue_smem = int((block_m + 4) * acc_block_n * acc_size)
-        if has_native_mxfp and not swap_xw and block_m == 64 and epilogue_subtile > 1 and is_mixed_fp8:
+        if has_native_mxfp and not swap_xw and block_m == 64 and epilogue_subtile > 1 and is_promoted:
             # The first accumulator split needs FP32 redistribution scratch
             # alongside the output tile, before any activation reduction.
             epilogue_smem += block_m * (block_n // 2) * 4
@@ -271,6 +264,10 @@ def compute_num_stages(
         smem_capacity -= int(block_m * acc_block_n * out_itemsize)
     smem_capacity = max(smem_capacity, 0)
     max_stages = 5 if rhs_dtype == FP4 else 4  # maybe 5 everywhere; just haven't tested
+    if (compute_dtype == FP32 and not precision_config.allow_tf32 and (rhs_dtype if swap_xw else lhs_dtype) == FP32
+            and (lhs_dtype if swap_xw else rhs_dtype) != FP32):
+        # Mixed load widths make the pipelined IEEE RHS spill registers.
+        max_stages = 1
     b_mx_scale_layout = None if not isinstance(precision_config.b_mx_scale,
                                                Tensor) else precision_config.b_mx_scale.storage.layout
     if (is_persistent and rhs_dtype == FP4 and isinstance(b_mx_scale_layout, HopperMXScaleLayout)

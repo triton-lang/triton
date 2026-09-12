@@ -1,6 +1,6 @@
 import triton
 import triton.language as tl
-from triton_kernels.tensor_details.dtype import BF16, FP16, FP32
+from triton_kernels.tensor_details.dtype import promote_dtype
 from triton_kernels.tensor_details.layout_details.blackwell_scale import (
     SWIZZLE_SIZE_OUTER,
     swizzle_act_mx_scale_bw_store_ptr,
@@ -12,9 +12,10 @@ from triton_kernels.tensor_details.layout_details.blackwell_scale import (
 # -----------------------------------------------------------------------------
 
 
-def is_unscaled_mixed_fp32(precision_config, lhs_dtype, rhs_dtype):
-    return (precision_config.a_mx_scale is None and precision_config.b_mx_scale is None
-            and (lhs_dtype == FP32 and rhs_dtype in (FP16, BF16) or rhs_dtype == FP32 and lhs_dtype in (FP16, BF16)))
+def get_compute_dtype(precision_config, lhs_dtype, rhs_dtype):
+    if precision_config.a_mx_scale is not None or precision_config.b_mx_scale is not None:
+        return None
+    return promote_dtype(lhs_dtype, rhs_dtype)
 
 
 @triton.constexpr_function
@@ -32,18 +33,18 @@ def get_scaled_dot_format_string(dtype: tl.dtype):
 
 
 @triton.jit
-def matmul_dot(x, w, acc, swap_xw: tl.constexpr, max_num_imprecise_acc: tl.constexpr, allow_tf32: tl.constexpr):
+def matmul_dot(x, w, acc, swap_xw: tl.constexpr, max_num_imprecise_acc: tl.constexpr, allow_tf32: tl.constexpr,
+               compute_dtype: tl.constexpr):
     if swap_xw:
         x, w = w.T, x.T
-    # Promote mixed operands before the compiler chooses dot layouts.
-    if x.dtype == tl.float8e4nv and (w.dtype == tl.float16 or w.dtype == tl.bfloat16):
-        x = x.to(w.dtype)
-    elif w.dtype == tl.float8e4nv and (x.dtype == tl.float16 or x.dtype == tl.bfloat16):
-        w = w.to(x.dtype)
-    elif x.dtype == tl.float32 and (w.dtype == tl.float16 or w.dtype == tl.bfloat16):
-        w = w.to(x.dtype)
-    elif w.dtype == tl.float32 and (x.dtype == tl.float16 or x.dtype == tl.bfloat16):
-        x = x.to(w.dtype)
+    # FP8 conversion instructions stop at FP32; this intermediate is lossless.
+    if compute_dtype == tl.float64:
+        if x.dtype.is_fp8():
+            x = x.to(tl.float32)
+        if w.dtype.is_fp8():
+            w = w.to(tl.float32)
+    x = x.to(compute_dtype)
+    w = w.to(compute_dtype)
     return tl.dot(x, w, acc, max_num_imprecise_acc=max_num_imprecise_acc, allow_tf32=allow_tf32)
 
 
