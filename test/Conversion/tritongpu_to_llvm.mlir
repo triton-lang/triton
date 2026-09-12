@@ -3578,3 +3578,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: @fp8e5_to_bf16_sm80
+  // CHECK: prmt.b32
+  // CHECK: llvm.fpext
+  // CHECK: llvm.nvvm.f2bf16.rn
+  tt.func private @fp8e5_to_bf16_sm80(%in: tensor<128xf8E5M2, #blocked>) -> tensor<128xbf16, #blocked> {
+    %out = tt.fp_to_fp %in : tensor<128xf8E5M2, #blocked> -> tensor<128xbf16, #blocked>
+    tt.return %out : tensor<128xbf16, #blocked>
+  }
+}

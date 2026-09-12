@@ -4422,20 +4422,11 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             scale_fp32 = (scale.to(tl.uint32) << 23).to(tl.float32, bitcast=True)
             upcasted_scale = scale_fp32.to(tl.float16)
 
-        to_e_bits: tl.constexpr = 8 if to_type == tl.bfloat16 else 5
         to_m_bits: tl.constexpr = 7 if to_type == tl.bfloat16 else 10
         if is_fp8:
             if e_bits == 5 and m_bits == 2:
                 x_f8 = x.to(tl.float8e5, bitcast=True)
                 upcasted_x = x_f8.to(to_type)
-                # Preserve infs and nans. FIXME Fp8E5M2_to_Bf16 doesn't preserve them!
-                non_finite_mask: tl.constexpr = ((1 << e_bits) - 1) << m_bits
-                non_finite_mask_16bit: tl.constexpr = ((1 << to_e_bits) - 1) << to_m_bits
-                upcasted_x = tl.where(
-                    x & non_finite_mask == non_finite_mask,
-                    (upcasted_x.to(tl.uint16, bitcast=True) | non_finite_mask_16bit).to(to_type, bitcast=True),
-                    upcasted_x,
-                )
             else:
                 tl.static_assert(e_bits == 4 and m_bits == 3)
                 x_f8 = x.to(tl.float8e4nv, bitcast=True)
@@ -4556,8 +4547,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         scale_y = None
 
     def make_finite(x, dtype):
-        # e5m2 has too many non-finite values when sampled uniformly (1 / 32) and
-        # Fp8E5M2_to_Bf16 doesn't preserve NaNs (fixme)
+        # e5m2 has too many non-finite values when sampled uniformly (1 / 32).
         if dtype not in ("e5m2", "e4m3"):
             return x
         if dtype == "e5m2" and comp_dtype == torch.float16:

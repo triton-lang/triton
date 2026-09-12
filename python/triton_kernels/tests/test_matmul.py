@@ -852,6 +852,17 @@ def test_matmul_mixed_dtypes(a_dtype, b_dtype, promoted_dtype, reverse, b_transp
     b = torch.randn((n, k) if b_transpose else (k, n), dtype=torch.float64, device=device).to(b_dtype)
     if b_transpose:
         b = b.mT
+    if a.element_size() == 1 or b.element_size() == 1:
+        fp8 = a if a.element_size() == 1 else b.mT
+        bits = {
+            torch.float8_e4m3fn: [0x00, 0x80, 0x01, 0x81, 0x7f, 0xff],
+            torch.float8_e5m2: [0x00, 0x80, 0x01, 0x81, 0x7c, 0xfc, 0x7d, 0x7e, 0x7f, 0xfd, 0xfe, 0xff],
+            torch.float8_e4m3fnuz: [0x00, 0x01, 0x81, 0x80],
+            torch.float8_e5m2fnuz: [0x00, 0x01, 0x81, 0x80],
+        }[fp8.dtype]
+        # Isolate special values to a few output rows or columns; keep the rest random.
+        fp8[:len(bits)].zero_()
+        fp8[:len(bits), 0] = torch.tensor(bits, dtype=torch.uint8, device=device).view(fp8.dtype)
     opt_flags.update_opt_flags_constraints(constraints)
     expected = matmul(a.to(promoted_dtype), b.to(promoted_dtype), None,
                       precision_config=PrecisionConfig(out_dtype=out_dtype, allow_tf32=allow_tf32))
@@ -860,6 +871,8 @@ def test_matmul_mixed_dtypes(a_dtype, b_dtype, promoted_dtype, reverse, b_transp
         assert actual.dtype == expected.dtype == (promoted_dtype if out_dtype is None else out_dtype)
         torch.testing.assert_close(actual.contiguous().view(torch.uint8), expected.contiguous().view(torch.uint8),
                                    rtol=0, atol=0)
+        if actual.dtype == torch.float64:
+            assert torch.all(actual.view(torch.int64)[torch.isnan(actual)] == 0x7ff8000000000000)
 
 
 @pytest.mark.parametrize("out_dtype, midpoint", [
