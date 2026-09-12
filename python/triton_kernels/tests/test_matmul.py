@@ -727,8 +727,8 @@ def test_matmul_mixed_preserves_precision(dtype, other_dtype, allow_tf32, high_p
                                         device, opt_flags_scope):
     if other_dtype == torch.float8_e4m3fn and is_cuda() and torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("requires Hopper or newer")
-    if is_hip() and is_persistent:
-        pytest.skip("Persistent kernel not supported on AMD GPU")
+    if is_persistent and (is_hip() or torch.cuda.get_device_capability()[0] < 9):
+        pytest.skip("persistent matmul requires Hopper or newer")
 
     # FP32 values expose FP16 overflow; the residual exposes BF16 rounding
     # and TF32 use when disabled. The FP8 case preserves FP16's extra mantissa bits.
