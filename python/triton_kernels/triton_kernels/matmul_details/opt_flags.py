@@ -114,6 +114,9 @@ def make_default_opt_flags_amd(
     block_n, block_k = opt_flags_amd.compute_block_nk(
         n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, precision_config
     )
+    # Loading an FP64 accumulator needs LDS for the conversion to the MFMA layout.
+    if has_y_acc_in and get_compute_dtype(precision_config, lhs_dtype, rhs_dtype) == FP64:
+        block_n = min(block_n, 128)
     is_persistent = constraints.get("is_persistent", False)
     # split_k:
     split_k = 1
