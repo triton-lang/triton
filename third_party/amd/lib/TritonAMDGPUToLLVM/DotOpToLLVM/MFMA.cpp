@@ -26,6 +26,7 @@
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/Utils/IndexingUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include <limits>
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -477,6 +478,13 @@ struct DotOpMFMAConversionHelper {
       bool preserveBF16, bool isConstantScale = false) const {
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     auto elems = unpackTensorElements(loc, value, rewriter, tensorType);
+    if (type.isF32() && allowXF32) {
+      // XF32 truncates the low 13 mantissa bits, which can turn signaling NaNs
+      // into infinity. Quiet them before truncation.
+      Value nan = tb.f32_val(std::numeric_limits<float>::quiet_NaN());
+      for (Value &elem : elems)
+        elem = tb.select(tb.fcmp_eq(elem, elem), elem, nan);
+    }
     // number of kBase-element vectors
     int numVecInKBase = kRepInKWidth * kWidth / kBase;
     if (numVecInKBase == 0) {

@@ -4664,6 +4664,39 @@ def test_scaled_dot_zero_scale(rhs_scale, normal_type, scale_dtype, scale_factor
     torch.testing.assert_close(out, torch.full_like(out, expected), rtol=0, atol=0)
 
 
+@pytest.mark.parametrize("rhs", [False, True])
+@pytest.mark.parametrize("mma_nonk_size", [16, 32])
+def test_dot_tf32_special_values(rhs, mma_nonk_size, device):
+    if not is_hip_cdna3():
+        pytest.skip("XF32 instructions require CDNA3")
+
+    @triton.jit
+    def kernel(A, B, C):
+        offsets = tl.arange(0, 32)[:, None] * 32 + tl.arange(0, 32)[None, :]
+        a = tl.load(A + offsets)
+        b = tl.load(B + offsets)
+        tl.store(C + offsets, tl.dot(a, b, input_precision="tf32"))
+
+    # Include signaling NaNs whose payload would disappear at TF32 precision.
+    bits = torch.tensor([
+        0x7f800001, 0x7f801fff, 0x7fa00000, 0x7fc00000, 0xff800001, 0xff801fff, 0xffa00000, 0xffc00000, 0x7f800000,
+        0xff800000, 0x00000000, 0x80000000, 0x3f800000, 0xbf800000, 0x40600000, 0xc0600000
+    ], dtype=torch.uint32, device=device)
+    values = bits.view(torch.float32)
+    a = torch.zeros((32, 32), device=device)
+    a[:len(values), 0] = values
+    b = torch.ones((32, 32), device=device)
+    expected = values[:, None].expand(-1, 32)
+    if rhs:
+        a, b = b.mT.contiguous(), a.mT.contiguous()
+        expected = expected.mT
+    actual = torch.empty((32, 32), device=device)
+    kernel[(1, )](a, b, actual, matrix_instr_nonkdim=mma_nonk_size)
+    if not is_compile_warmup():
+        actual = actual[:, :len(values)] if rhs else actual[:len(values), :]
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
     "B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str",
