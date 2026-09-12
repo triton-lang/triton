@@ -183,7 +183,7 @@ def compute_num_stages(
     if is_promoted:
         rhs_size = act_size if swap_xw else weight_size
         dot_size = compute_dtype.bitwidth / 8
-        if is_persistent and compute_dtype == FP32 and not precision_config.allow_tf32:
+        if is_persistent and not has_native_mxfp and compute_dtype == FP32 and not precision_config.allow_tf32:
             # IEEE dots redistribute both operands through shared memory.
             # The input-stage estimate already includes one narrow LHS tile.
             lhs_size = weight_size if swap_xw else act_size
@@ -259,10 +259,10 @@ def compute_num_stages(
         smem_capacity -= epilogue_smem
         if x_transpose:
             smem_capacity -= int(block_m * block_k * act_size)
-        if rhs_dtype == FP32 and not w_transpose:
-            # For fp32 B, a non-transposed input requires a transpose after its
-            # TMA load before MMA. Persistent lowering materializes one extra
-            # BLOCK_K x BLOCK_N tile for that conversion.
+        if rhs_dtype == FP32 and (not w_transpose
+                                  or has_native_mxfp and compute_dtype == FP32 and not precision_config.allow_tf32):
+            # FP32 B can need a separate layout-conversion tile after its TMA load.
+            # Blackwell's IEEE path needs this buffer for either memory order.
             smem_capacity -= int(block_k * block_n * weight_size)
     if is_persistent and not has_native_mxfp and epilogue_reduction_n > 1:
         # Hopper fused reductions materialize an additional reduced-N output
