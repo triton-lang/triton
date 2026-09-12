@@ -135,7 +135,6 @@ jobs:
       - name: Run C++ unittests
         run: make test-cpp
       - name: Warm Triton compile cache
-        timeout-minutes: 10
         shell: bash
         run: |
           trace_dir="$RUNNER_TEMP/triton-ci-compile-trace"
