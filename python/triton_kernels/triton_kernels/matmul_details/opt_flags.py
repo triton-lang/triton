@@ -337,9 +337,8 @@ def make_default_opt_flags_nvidia(
 
     # adjust block_n based on is_persistent signal
     block_n = block_n_tma if is_persistent else block_n
-    if (is_persistent and constraints.get("block_n") is None
-            and not cuda_capability_geq(10, 0) and out_dtype == FP64):
-        # Hopper's unsplit FP64 epilogue needs room alongside the input stages.
+    if is_persistent and constraints.get("block_n") is None and out_dtype == FP64:
+        # FP64 epilogue conversions need room alongside the input stages.
         # Keep its output tile within 128 KiB of shared memory.
         block_n = min(block_n, 128 * 128 // block_m)
     if (is_persistent and constraints.get("block_n", None) is None
