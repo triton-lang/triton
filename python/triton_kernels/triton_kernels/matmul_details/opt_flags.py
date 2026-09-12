@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import triton
 from triton_kernels import target_info
 from triton_kernels.target_info import get_cdna_version, get_rdna_version, cuda_capability_geq
-from triton_kernels.tensor import FP4, FP32, FP64, Tensor, torch_dtype_to_dtype
+from triton_kernels.tensor import FP4, BF16, FP32, FP64, Tensor, torch_dtype_to_dtype
 import torch
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
 from triton_kernels.tensor_details.layout_details.strided import StridedLayout
@@ -339,6 +339,15 @@ def make_default_opt_flags_nvidia(
 
     # adjust block_n based on is_persistent signal
     block_n = block_n_tma if is_persistent else block_n
+    if (not is_persistent and not enforce_bitwise_invariance
+            and cuda_capability_geq(9, 0) and not cuda_capability_geq(10, 0)
+            and compute_dtype == lhs_dtype == BF16 and rhs_dtype.bitwidth == 8
+            and out_dtype.bitwidth >= 32 and routing_data is None
+            and block_m == 128 and block_n == 256
+            and constraints.get("block_n") is None and grid_size_tma >= n_sms):
+        # Smaller tiles reduce register pressure while widening FP8 weights.
+        # Keep the original grid saturated so split-K still matches BF16 inputs.
+        block_n = 128
     if is_persistent and constraints.get("block_n") is None and out_dtype == FP64:
         # FP64 epilogue conversions need room alongside the input stages.
         # Keep its output tile within 128 KiB of shared memory.

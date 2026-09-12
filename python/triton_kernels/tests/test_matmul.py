@@ -849,6 +849,13 @@ _MIXED_MATMUL_OUTPUT_CASES = [
     (torch.float32, dtype, torch.float32, torch.float32, (8192, 2048, 128), {}, 2)
     for dtype in (torch.float8_e4m3fn, torch.float8_e5m2)
     if dtype in _supported_float_dtypes()
+] + [
+    # Cover automatic split-K and the smaller regular tile for FP8 weights.
+    (torch.bfloat16, dtype, torch.bfloat16, out_dtype, shape, {}, 1)
+    for dtype, out_dtype, shape in itertools.product(
+        (torch.float8_e4m3fn, torch.float8_e5m2), (torch.float32, torch.float64),
+        ((1024, 1024, 1024), (4096, 1024, 272), (4097, 1024, 272), (2049, 4097, 272)))
+    if dtype in _supported_float_dtypes()
 ])
 @pytest.mark.enable_warmup(priority=2)
 def test_matmul_mixed_dtypes(a_dtype, b_dtype, promoted_dtype, reverse, b_transpose, allow_tf32,
@@ -878,10 +885,24 @@ def test_matmul_mixed_dtypes(a_dtype, b_dtype, promoted_dtype, reverse, b_transp
     opt_flags.update_opt_flags_constraints(constraints)
     expected = matmul(a.to(promoted_dtype), b.to(promoted_dtype), None,
                       precision_config=PrecisionConfig(out_dtype=out_dtype, allow_tf32=allow_tf32))
+    check_accuracy = repeats > 1 and not allow_tf32 and expected.dtype == torch.float32 and not is_compile_warmup()
+    if check_accuracy:
+        a_fp64, b_fp64 = a.double(), b.double()
+        reference = a_fp64 @ b_fp64
+        finite = torch.isfinite(reference)
+        # A length-K FP32 dot has error bounded by gamma_(2K) * sum(abs(a*b)).
+        roundoff = k * torch.finfo(torch.float32).eps
+        atol = roundoff / (1 - roundoff) * (a_fp64.abs() @ b_fp64.abs())[finite].max().item()
+        torch.testing.assert_close(expected.double(), reference, rtol=0, atol=atol, equal_nan=True,
+                                   msg=lambda msg: f"Promoted-input matmul versus FP64 reference:\n{msg}")
     for _ in range(repeats):
         actual = matmul(a, b, None, precision_config=PrecisionConfig(out_dtype=out_dtype, allow_tf32=allow_tf32))
         if not is_compile_warmup():
             assert actual.dtype == expected.dtype == (promoted_dtype if out_dtype is None else out_dtype)
+            if check_accuracy:
+                torch.testing.assert_close(actual.double(), reference, rtol=0, atol=atol, equal_nan=True,
+                                           msg=lambda msg: f"Mixed-input matmul versus FP64 reference:\n{msg}")
+                torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
             torch.testing.assert_close(actual.contiguous().view(torch.uint8), expected.contiguous().view(torch.uint8),
                                        rtol=0, atol=0)
             if actual.dtype in (torch.float32, torch.float64):
