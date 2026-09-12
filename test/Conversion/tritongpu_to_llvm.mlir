@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --dump-input-context 20
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv='compute-capability=89 ptx-version=81' --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm='compute-capability=89 ptx-version=81' -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --check-prefix=SM89
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i32, %arg1: !llvm.ptr<1> {tt.pointee_type = f16}, %arg2: !llvm.ptr<1>, %arg3: !llvm.ptr<1>)
@@ -3590,5 +3591,37 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
   tt.func private @fp8e5_to_bf16_sm80(%in: tensor<128xf8E5M2, #blocked>) -> tensor<128xbf16, #blocked> {
     %out = tt.fp_to_fp %in : tensor<128xf8E5M2, #blocked> -> tensor<128xbf16, #blocked>
     tt.return %out : tensor<128xbf16, #blocked>
+  }
+
+  // SM89-LABEL: @fp32_to_fp8e5_rtne
+  // SM89-NOT: cvt.rz.f16.f32
+  // SM89: cvt.rn.satfinite.e5m2x2.f32
+  // CHECK-LABEL: @fp32_to_fp8e5_rtne
+  // CHECK-NOT: cvt.rz.f16.f32
+  // CHECK: llvm.fadd
+  // CHECK: llvm.intr.umin
+  // CHECK: llvm.icmp "ugt"
+  // CHECK: llvm.return
+  tt.func private @fp32_to_fp8e5_rtne(%in: tensor<128xf32, #blocked>) -> tensor<128xf8E5M2, #blocked> {
+    %out = tt.fp_to_fp %in, rounding = rtne : tensor<128xf32, #blocked> -> tensor<128xf8E5M2, #blocked>
+    tt.return %out : tensor<128xf8E5M2, #blocked>
+  }
+
+  // CHECK-LABEL: @fp16_to_fp8e5_rtne
+  // CHECK: llvm.fpext
+  // CHECK: llvm.fadd
+  // CHECK: llvm.return
+  tt.func private @fp16_to_fp8e5_rtne(%in: tensor<128xf16, #blocked>) -> tensor<128xf8E5M2, #blocked> {
+    %out = tt.fp_to_fp %in, rounding = rtne : tensor<128xf16, #blocked> -> tensor<128xf8E5M2, #blocked>
+    tt.return %out : tensor<128xf8E5M2, #blocked>
+  }
+
+  // CHECK-LABEL: @bf16_to_fp8e5_rtne
+  // CHECK: llvm.fpext
+  // CHECK: llvm.fadd
+  // CHECK: llvm.return
+  tt.func private @bf16_to_fp8e5_rtne(%in: tensor<128xbf16, #blocked>) -> tensor<128xf8E5M2, #blocked> {
+    %out = tt.fp_to_fp %in, rounding = rtne : tensor<128xbf16, #blocked> -> tensor<128xf8E5M2, #blocked>
+    tt.return %out : tensor<128xf8E5M2, #blocked>
   }
 }
