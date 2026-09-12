@@ -245,12 +245,14 @@ def _p_matmul(
         THREADS_PER_BLOCK: tl.constexpr = tl.extra.cuda.num_threads()
         local_absmax = tl.full([THREADS_PER_BLOCK], 0.0, tl.uint32)
 
-    # A widened FP8 lhs needs tensor memory alongside the accumulator.
+    # A widened lhs needs tensor memory alongside the accumulator.
     dot_lhs_type: tl.constexpr = w_type if SWAP_XW else x_type
     dot_rhs_type: tl.constexpr = x_type if SWAP_XW else w_type
-    upcast_lhs: tl.constexpr = (not is_x_microscaled and not is_w_microscaled
-                              and dot_lhs_type == tl.float8e4nv
-                              and (dot_rhs_type == tl.float16 or dot_rhs_type == tl.bfloat16))
+    upcast_lhs: tl.constexpr = (
+        not is_x_microscaled and not is_w_microscaled
+        and (dot_lhs_type == tl.float8e4nv and (dot_rhs_type == tl.float16 or dot_rhs_type == tl.bfloat16)
+             or (dot_lhs_type == tl.float16 or dot_lhs_type == tl.bfloat16) and dot_rhs_type == tl.float32)
+    )
     dot_m: tl.constexpr = BLOCK_N if SWAP_XW else BLOCK_M
     dot_n: tl.constexpr = BLOCK_M if SWAP_XW else BLOCK_N
     acc_columns: tl.constexpr = tl.cdiv(dot_m, 128) * dot_n

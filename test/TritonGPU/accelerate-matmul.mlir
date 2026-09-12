@@ -1139,9 +1139,43 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-warps" = 4 : i32} {
     %a_f32 = arith.sitofp %a_i8 : tensor<16x8xi8, #blocked> to tensor<16x8xf32, #blocked>
     %a = ttg.convert_layout %a_f32 : tensor<16x8xf32, #blocked> -> tensor<16x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
     %c = arith.constant dense<0.0> : tensor<16x16xf32, #blocked>
-    // The i8 load suggests kWidth=4, but K=8 only has two elements per K lane.
-    // CHECK: tt.dot {{.*}} : tensor<16x8xf32, #ttg.dot_op<{opIdx = 0, parent = #[[$MMA]], kWidth = 2}>> * tensor<8x16xf32, #ttg.dot_op<{opIdx = 1, parent = #[[$MMA]], kWidth = 2}>>
+    // The i8 load must not change FP32's native operand packing.
+    // CHECK: tt.dot {{.*}} : tensor<16x8xf32, #ttg.dot_op<{opIdx = 0, parent = #[[$MMA]], kWidth = 1}>> * tensor<8x16xf32, #ttg.dot_op<{opIdx = 1, parent = #[[$MMA]], kWidth = 1}>>
     %d = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<16x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<8x16xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<16x16xf32, #blocked>
+    tt.return %d : tensor<16x16xf32, #blocked>
+  }
+}
+
+// -----
+
+// CHECK: #[[$MMA:.+]] = #ttg.nvidia_mma<{versionMajor = 2,
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.target" = "cuda:90", "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: fp32_bf16_upcast_lhs
+  tt.func @fp32_bf16_upcast_lhs(%pa: tensor<16x32x!tt.ptr<bf16>, #blocked>,
+      %pb: tensor<32x16x!tt.ptr<f32>, #blocked>) -> tensor<16x16xf32, #blocked> {
+    %a_bf16 = tt.load %pa : tensor<16x32x!tt.ptr<bf16>, #blocked>
+    %b_f32 = tt.load %pb : tensor<32x16x!tt.ptr<f32>, #blocked>
+    %a_f32 = arith.extf %a_bf16 : tensor<16x32xbf16, #blocked> to tensor<16x32xf32, #blocked>
+    %a = ttg.convert_layout %a_f32 : tensor<16x32xf32, #blocked> -> tensor<16x32xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %b = ttg.convert_layout %b_f32 : tensor<32x16xf32, #blocked> -> tensor<32x16xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %c = arith.constant dense<0.0> : tensor<16x16xf32, #blocked>
+    // CHECK: tt.dot {{.*}} : tensor<16x32xf32, #ttg.dot_op<{opIdx = 0, parent = #[[$MMA]], kWidth = 1}>> * tensor<32x16xf32, #ttg.dot_op<{opIdx = 1, parent = #[[$MMA]], kWidth = 1}>>
+    %d = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<16x32xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x16xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<16x16xf32, #blocked>
+    tt.return %d : tensor<16x16xf32, #blocked>
+  }
+
+  // CHECK-LABEL: fp32_f16_upcast_rhs
+  tt.func @fp32_f16_upcast_rhs(%pa: tensor<16x32x!tt.ptr<f32>, #blocked>,
+      %pb: tensor<32x16x!tt.ptr<f16>, #blocked>) -> tensor<16x16xf32, #blocked> {
+    %a_f32 = tt.load %pa : tensor<16x32x!tt.ptr<f32>, #blocked>
+    %b_f16 = tt.load %pb : tensor<32x16x!tt.ptr<f16>, #blocked>
+    %b_f32 = arith.extf %b_f16 : tensor<32x16xf16, #blocked> to tensor<32x16xf32, #blocked>
+    %a = ttg.convert_layout %a_f32 : tensor<16x32xf32, #blocked> -> tensor<16x32xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %b = ttg.convert_layout %b_f32 : tensor<32x16xf32, #blocked> -> tensor<32x16xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %c = arith.constant dense<0.0> : tensor<16x16xf32, #blocked>
+    // CHECK: tt.dot {{.*}} : tensor<16x32xf32, #ttg.dot_op<{opIdx = 0, parent = #[[$MMA]], kWidth = 1}>> * tensor<32x16xf32, #ttg.dot_op<{opIdx = 1, parent = #[[$MMA]], kWidth = 1}>>
+    %d = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<16x32xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x16xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<16x16xf32, #blocked>
     tt.return %d : tensor<16x16xf32, #blocked>
   }
 }

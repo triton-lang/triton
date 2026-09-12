@@ -14,6 +14,7 @@ from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.target_info import is_cuda
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
 # details
+from .matmul_details._common import is_unscaled_mixed_fp32
 from .matmul_details._matmul import _matmul
 from .matmul_details._p_matmul import _p_matmul, get_per_device_per_stream_alloc_fn
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE
@@ -31,7 +32,7 @@ from .matmul_details.opt_flags import (
 )
 from .matmul_details.opt_flags_details import opt_flags_nvidia
 from .specialize import FnSpecs, SpecializationModule, ClosureArg
-from .tensor import Storage, Tensor, UINT8, FP4, FP64, wrap_torch_tensor, RaggedTensorMetadata, is_tma_compliant, make_tma, convert_layout
+from .tensor import Storage, Tensor, UINT8, FP4, FP32, FP64, wrap_torch_tensor, RaggedTensorMetadata, is_tma_compliant, make_tma, convert_layout
 from .tensor import dtype_to_torch_dtype, torch_dtype_to_dtype
 from .reduce import reduce
 from .reduce import PostprocessFn as ReducePostprocessFn
@@ -161,6 +162,13 @@ class MatmulAllocation:
     output: tuple[tuple[int], torch.dtype]
     scratchpads: dict[str, tuple]
 
+
+def _get_out_dtype(precision_config, lhs_dtype, rhs_dtype):
+    return precision_config.out_dtype or (
+        FP32 if is_unscaled_mixed_fp32(precision_config, lhs_dtype, rhs_dtype) else lhs_dtype
+    )
+
+
 def init_allocation(x, w, precision_config, fused_activation,
                     gather_indx, scatter_indx, batch_dim,
                     n_reduce_shards, opt_flags, intermediate_out_dtype):
@@ -176,7 +184,7 @@ def init_allocation(x, w, precision_config, fused_activation,
     y_rows = M
     y_rows *= n_reduce_shards
     out_shape = (batch_dim, y_rows, N // fused_activation.specs.reduction_n)
-    out_dtype = precision_config.out_dtype or x.dtype
+    out_dtype = _get_out_dtype(precision_config, x.dtype, w.dtype)
     out_shape = out_shape[:-1] + (out_shape[-1] // precision_config.c_value_pack_factor, )
     output = (out_shape, out_dtype)
     # ---- scratchpad -----#
@@ -403,7 +411,7 @@ def matmul(a, b, bias,
     if a.ndim == 3 and b.ndim == 3:
         assert a.shape[0] == b.shape[0]
     # compute optimization flags
-    out_dtype = precision_config.out_dtype or a.dtype
+    out_dtype = _get_out_dtype(precision_config, a.dtype, b.dtype)
     out_dtype = torch_dtype_to_dtype(out_dtype)
     if out_dtype == UINT8 and precision_config.c_mx_scale is not None:
         out_dtype = FP4

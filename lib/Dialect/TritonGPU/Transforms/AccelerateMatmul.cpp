@@ -560,8 +560,12 @@ public:
           mmaResult.newAcc, nullptr, dotOp.getInputPrecision(),
           dotOp.getMaxNumImpreciseAcc(), false);
     } else {
+      // Wider packing changes FP32's reduction order to match the load type.
+      // Keep native packing so widening inputs preserves FP32 accumulation.
       int minBitwidth =
-          std::min(computeOrigBitWidth(a), computeOrigBitWidth(b));
+          oldAType.getElementType().isF32()
+              ? 32
+              : std::min(computeOrigBitWidth(a), computeOrigBitWidth(b));
       // Let K = getShapePerCTA(oldAType).back() and computeBitwidth be the
       // dot operand bitwidth. Since kWidth = max(32 / minBitwidth, 1),
       // MMAv2's four K lanes require 4 * max(32 / minBitwidth, 1) <= K.
