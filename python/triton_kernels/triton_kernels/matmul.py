@@ -284,7 +284,7 @@ def matmul(a, b, bias,
 
     Unscaled floating inputs use their least common lossless dtype: FP16/BF16
     promotes to FP32, and distinct FP8 formats promote to FP16. Output defaults
-    to that dtype. FP32 computation honors allow_tf32. FP64 NaNs are canonicalized;
+    to that dtype. FP32 computation honors allow_tf32. NaNs are canonicalized;
     FP64-to-FP8 output conversion uses an FP32 intermediate.
 
     matmul can be optionally fused with all gather or scatter at the end for the output. When fused_comm is specified, the m-th row of the output will be stored to (m * n_reduce_shards + reduce_rank) -th row

@@ -884,8 +884,12 @@ def test_matmul_mixed_dtypes(a_dtype, b_dtype, promoted_dtype, reverse, b_transp
             assert actual.dtype == expected.dtype == (promoted_dtype if out_dtype is None else out_dtype)
             torch.testing.assert_close(actual.contiguous().view(torch.uint8), expected.contiguous().view(torch.uint8),
                                        rtol=0, atol=0)
-            if actual.dtype == torch.float64:
-                assert torch.all(actual.view(torch.int64)[torch.isnan(actual)] == 0x7ff8000000000000)
+            if actual.dtype in (torch.float32, torch.float64):
+                int_dtype, nan_bits = {
+                    torch.float32: (torch.int32, 0x7fc00000),
+                    torch.float64: (torch.int64, 0x7ff8000000000000),
+                }[actual.dtype]
+                assert torch.all(actual.view(int_dtype)[torch.isnan(actual)] == nan_bits)
 
 
 @pytest.mark.parametrize("out_dtype, midpoint", [

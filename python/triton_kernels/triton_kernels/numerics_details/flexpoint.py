@@ -153,7 +153,7 @@ def update_scale(x, scale_ptr, Out) -> None:
 
 @triton.jit
 def cast_output(x, dtype: tl.constexpr):
-    if x.dtype == tl.float64 or dtype == tl.float64:
+    if x.dtype.is_floating():
         # Different lossless upcasts can carry different NaN payloads.
         x = tl.where(x == x, x, float("nan"))
     # FP8 output conversion uses FP32 only after all epilogue arithmetic.
