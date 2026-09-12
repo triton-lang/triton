@@ -350,7 +350,10 @@ def make_default_opt_flags_nvidia(
         # a mx scale has been swizzled to BlackwellActMXScaleLayout, enforce block_m=128 to align with swizzling layout
         block_m = 128
     swap_xw = constraints.get("swap_xw")
-    if is_persistent and ((is_mixed_fp8 and rhs_dtype == FP8_E4M3FN) or (is_mixed_fp32 and lhs_dtype == FP32)):
+    if is_persistent and (
+        (is_mixed_fp8 and rhs_dtype == FP8_E4M3FN)
+        or (is_mixed_fp32 and lhs_dtype == FP32 and precision_config.allow_tf32)
+    ):
         # Widen the narrower operand in the MMA's lhs, avoiding an expanded RHS buffer.
         if swap_xw is None and block_n >= 64:
             swap_xw = True

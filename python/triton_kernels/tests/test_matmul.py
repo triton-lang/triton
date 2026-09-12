@@ -753,18 +753,21 @@ def test_matmul_mixed_preserves_precision(dtype, other_dtype, allow_tf32, high_p
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("fp32_lhs", [False, True])
-@pytest.mark.parametrize("b_transpose", [False, True])
 @pytest.mark.parametrize("allow_tf32", [False, True])
-@pytest.mark.parametrize("shape, step, constraints", [
-    ((16, 512, 256), 1, {}),
-    ((65536, 128, 128), 1, {}),
-    ((65536, 128, 132), 1, {}),
-    ((727, 577, 859), 1, {}),
-    ((512, 256, 128), 2, {}),
-    *[(shape, 1, dict(is_persistent=is_persistent, split_k=1))
-      for shape in ((16, 512, 256), (65536, 128, 128))
-      for is_persistent in (False, True)],
-])
+@pytest.mark.parametrize("shape, step, constraints, b_transpose", [
+    (shape, step, constraints, b_transpose)
+    for shape, step, constraints in [
+        ((16, 512, 256), 1, {}),
+        ((65536, 128, 128), 1, {}),
+        ((65536, 128, 132), 1, {}),
+        ((727, 577, 859), 1, {}),
+        ((512, 256, 128), 2, {}),
+        *[(shape, 1, dict(is_persistent=is_persistent, split_k=1))
+          for shape in ((16, 512, 256), (65536, 128, 128))
+          for is_persistent in (False, True)],
+    ]
+    for b_transpose in (False, True)
+] + [((128, 256, 128), 1, dict(is_persistent=True, split_k=1), False)])
 @pytest.mark.enable_warmup(priority=2)
 def test_matmul_mixed_fp32_matches_cast(dtype, fp32_lhs, b_transpose, allow_tf32, shape, step,
                                        constraints, device, opt_flags_scope):
