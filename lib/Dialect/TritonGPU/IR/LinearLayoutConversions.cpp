@@ -1217,9 +1217,8 @@ partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
   // each CTA own interleaved fragments of the clustered tile instead of one
   // contiguous per-CTA tile.
   LinearLayout localLayout = getLayoutWithinBlock(baseLayout);
-  auto localPieceShape =
-      getShapePerCTA(partitioned.getCGALayout().getCTASplitNum(),
-                     partitionShape);
+  auto localPieceShape = getShapePerCTA(
+      partitioned.getCGALayout().getCTASplitNum(), partitionShape);
   llvm::SmallDenseMap<StringAttr, int64_t> localPieceShapeMap;
   for (auto [dim, size] : llvm::zip(outDimNames, localPieceShape))
     localPieceShapeMap[dim] = size;

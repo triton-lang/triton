@@ -56,14 +56,12 @@ TEST_F(PaddedTest, TestPartitionedMultiCTAIsCTALocal) {
 
   // Split dim0 over two CTAs and multicast along the second block bit.
   auto cgaLL =
-      LinearLayout({{S("block"), {{1, 0}, {0, 0}}}},
-                   {S("dim0"), S("dim1")});
+      LinearLayout({{S("block"), {{1, 0}, {0, 0}}}}, {S("dim0"), S("dim1")});
   auto cgaLayout = CGAEncodingAttr::get(&ctx, cgaLL);
-  auto inner = PaddedSharedEncodingAttr::get(
-      &ctx, intervalPads, order, pieceShape, cgaLayout);
+  auto inner = PaddedSharedEncodingAttr::get(&ctx, intervalPads, order,
+                                             pieceShape, cgaLayout);
   auto partitioned = PartitionedSharedEncodingAttr::get(
-      &ctx, /*numPartitions=*/2, /*numGroups=*/2, /*partitionDim=*/0,
-      inner);
+      &ctx, /*numPartitions=*/2, /*numGroups=*/2, /*partitionDim=*/0, inner);
 
   auto ll = paddedLinearLayout(fullShape, partitioned);
 
@@ -82,14 +80,12 @@ TEST_F(PaddedTest, TestPartitionedSwizzledMultiCTAIsCTALocalInDim1) {
 
   // Split dim1 over two CTAs and multicast along the second block bit.
   auto cgaLL =
-      LinearLayout({{S("block"), {{0, 1}, {0, 0}}}},
-                   {S("dim0"), S("dim1")});
+      LinearLayout({{S("block"), {{0, 1}, {0, 0}}}}, {S("dim0"), S("dim1")});
   auto cgaLayout = CGAEncodingAttr::get(&ctx, cgaLL);
   auto inner = SwizzledSharedEncodingAttr::get(
       &ctx, /*vec=*/1, /*perPhase=*/1, /*maxPhase=*/1, order, cgaLayout);
   auto partitioned = PartitionedSharedEncodingAttr::get(
-      &ctx, /*numPartitions=*/2, /*numGroups=*/2, /*partitionDim=*/1,
-      inner);
+      &ctx, /*numPartitions=*/2, /*numGroups=*/2, /*partitionDim=*/1, inner);
 
   auto ll = toLinearLayout(fullShape, partitioned);
 
