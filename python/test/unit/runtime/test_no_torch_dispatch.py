@@ -9,12 +9,11 @@ from triton._internal_testing import is_cuda
 
 
 def test_nvidia_kernel_dispatch_without_torch():
-    if not is_cuda() and torch.cuda.get_device_capability()[0] >= 9:
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("Requires CUDA and TMAs")
 
     env = os.environ.copy()
-    # force cuda driver to avoid importing torch when checking for other backends.
-    env["TRITON_DEFAULT_BACKEND"] = "nvidia"
+    env.pop("TRITON_DEFAULT_BACKEND", None)
     # force compilation to ensure there is no torch dependencies in the compiler.
     env["TRITON_ALWAYS_COMPILE"] = "1"
 
