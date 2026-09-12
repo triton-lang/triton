@@ -815,8 +815,8 @@ def _mixed_dtype_cases():
     # This table is independent of the implementation's promotion helper.
     return [
         *[(lhs, rhs, torch.float16) for lhs, rhs in itertools.combinations(float8, 2)],
-        *[(lhs, rhs, rhs) for lhs in float8
-          for rhs in (torch.float16, torch.bfloat16, torch.float32, torch.float64)],
+        *[(lhs, rhs, rhs) for lhs, rhs in itertools.product(
+            float8, (torch.float16, torch.bfloat16, torch.float32, torch.float64))],
         (torch.float16, torch.bfloat16, torch.float32),
         (torch.float16, torch.float32, torch.float32),
         (torch.float16, torch.float64, torch.float64),
@@ -832,19 +832,27 @@ _MIXED_MATMUL_CASES = [
     ((67, 80, 272), dict(is_persistent=True, split_k=1)),
 ]
 
+_MIXED_MATMUL_OUTPUT_CASES = [
+    (out_dtype, *case)
+    for out_dtype, case in itertools.product([None, *_supported_float_dtypes()], _MIXED_MATMUL_CASES)
+] + [(torch.float64, (128, 256, 128), dict(is_persistent=True, split_k=1))]
 
-@pytest.mark.parametrize("a_dtype, b_dtype, promoted_dtype", _mixed_dtype_cases())
+
 @pytest.mark.parametrize("reverse", [False, True])
 @pytest.mark.parametrize("b_transpose", [False, True])
 @pytest.mark.parametrize("allow_tf32", [False, True])
-@pytest.mark.parametrize("out_dtype, shape, constraints", [
-    (out_dtype, shape, constraints)
-    for out_dtype in [None, *_supported_float_dtypes()]
-    for shape, constraints in _MIXED_MATMUL_CASES
-] + [(torch.float64, (128, 256, 128), dict(is_persistent=True, split_k=1))])
+@pytest.mark.parametrize("a_dtype, b_dtype, promoted_dtype, out_dtype, shape, constraints, repeats", [
+    (*dtypes, *case, 1)
+    for dtypes, case in itertools.product(_mixed_dtype_cases(), _MIXED_MATMUL_OUTPUT_CASES)
+] + [
+    # Exercise successive output tiles and repeated launches of the persistent kernel.
+    (torch.float32, dtype, torch.float32, torch.float32, (8192, 2048, 128), {}, 2)
+    for dtype in (torch.float8_e4m3fn, torch.float8_e5m2)
+    if dtype in _supported_float_dtypes()
+])
 @pytest.mark.enable_warmup(priority=2)
 def test_matmul_mixed_dtypes(a_dtype, b_dtype, promoted_dtype, reverse, b_transpose, allow_tf32,
-                            out_dtype, shape, constraints, device, opt_flags_scope):
+                            out_dtype, shape, constraints, repeats, device, opt_flags_scope):
     if constraints.get("is_persistent") and (is_hip() or torch.cuda.get_device_capability()[0] < 9):
         pytest.skip("persistent matmul requires Hopper or newer")
     if reverse:
@@ -870,13 +878,14 @@ def test_matmul_mixed_dtypes(a_dtype, b_dtype, promoted_dtype, reverse, b_transp
     opt_flags.update_opt_flags_constraints(constraints)
     expected = matmul(a.to(promoted_dtype), b.to(promoted_dtype), None,
                       precision_config=PrecisionConfig(out_dtype=out_dtype, allow_tf32=allow_tf32))
-    actual = matmul(a, b, None, precision_config=PrecisionConfig(out_dtype=out_dtype, allow_tf32=allow_tf32))
-    if not is_compile_warmup():
-        assert actual.dtype == expected.dtype == (promoted_dtype if out_dtype is None else out_dtype)
-        torch.testing.assert_close(actual.contiguous().view(torch.uint8), expected.contiguous().view(torch.uint8),
-                                   rtol=0, atol=0)
-        if actual.dtype == torch.float64:
-            assert torch.all(actual.view(torch.int64)[torch.isnan(actual)] == 0x7ff8000000000000)
+    for _ in range(repeats):
+        actual = matmul(a, b, None, precision_config=PrecisionConfig(out_dtype=out_dtype, allow_tf32=allow_tf32))
+        if not is_compile_warmup():
+            assert actual.dtype == expected.dtype == (promoted_dtype if out_dtype is None else out_dtype)
+            torch.testing.assert_close(actual.contiguous().view(torch.uint8), expected.contiguous().view(torch.uint8),
+                                       rtol=0, atol=0)
+            if actual.dtype == torch.float64:
+                assert torch.all(actual.view(torch.int64)[torch.isnan(actual)] == 0x7ff8000000000000)
 
 
 @pytest.mark.parametrize("out_dtype, midpoint", [
