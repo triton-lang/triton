@@ -661,8 +661,9 @@ def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, c_half_desc, MMAI
     for ki in gl.static_range(0, BLOCK_K * (num_buffers - 2), BLOCK_K):
         producer = issue_loads_stealb(producer, a_desc, b_desc, off_m, off_n, ki, bars, a_bufs, b_bufs, STEALB,
                                       num_buffers)
-    k = BLOCK_K * (num_buffers - 2)
-    producer = issue_loads_stealb(producer, a_desc, b_desc, off_m, off_n, k, bars, a_bufs, b_bufs, STEALB, num_buffers)
+    k_peel = BLOCK_K * (num_buffers - 2)
+    producer = issue_loads_stealb(producer, a_desc, b_desc, off_m, off_n, k_peel, bars, a_bufs, b_bufs, STEALB,
+                                  num_buffers)
 
     for _ in range(num_tiles):
         consumer, mma = issue_mma_stealb(consumer, mma, bars, a_bufs, b_bufs, STEALB, num_buffers)
