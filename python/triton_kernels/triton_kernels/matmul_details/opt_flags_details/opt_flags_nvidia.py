@@ -183,6 +183,12 @@ def compute_num_stages(
     if is_promoted:
         rhs_size = act_size if swap_xw else weight_size
         dot_size = compute_dtype.bitwidth / 8
+        if is_persistent and compute_dtype == FP32 and not precision_config.allow_tf32:
+            # IEEE dots redistribute both operands through shared memory.
+            # The input-stage estimate already includes one narrow LHS tile.
+            lhs_size = weight_size if swap_xw else act_size
+            lhs_elements = block_k * (block_n if swap_xw else block_m)
+            smem_capacity -= int(lhs_elements * (dot_size - lhs_size))
         if rhs_size < dot_size:
             # A computed RHS needs one widened tile in addition to its input ring.
             # The regular pipeline replaces one input slot with that widened tile.

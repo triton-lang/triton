@@ -754,8 +754,8 @@ def test_matmul_mixed_preserves_precision(dtype, other_dtype, allow_tf32, high_p
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("fp32_lhs", [False, True])
 @pytest.mark.parametrize("allow_tf32", [False, True])
-@pytest.mark.parametrize("shape, step, constraints, b_transpose", [
-    (shape, step, constraints, b_transpose)
+@pytest.mark.parametrize("shape, step, constraints, b_transpose, out_dtype", [
+    (shape, step, constraints, b_transpose, None)
     for shape, step, constraints in [
         ((16, 512, 256), 1, {}),
         ((65536, 128, 128), 1, {}),
@@ -767,10 +767,13 @@ def test_matmul_mixed_preserves_precision(dtype, other_dtype, allow_tf32, high_p
           for is_persistent in (False, True)],
     ]
     for b_transpose in (False, True)
-] + [((128, 256, 128), 1, dict(is_persistent=True, split_k=1), False)])
+] + [
+    ((128, 256, 128), 1, dict(is_persistent=True, split_k=1), False, None),
+    ((8192, 2048, 256), 1, {}, True, torch.bfloat16),
+])
 @pytest.mark.enable_warmup(priority=2)
 def test_matmul_mixed_fp32_matches_cast(dtype, fp32_lhs, b_transpose, allow_tf32, shape, step,
-                                       constraints, device, opt_flags_scope):
+                                       constraints, out_dtype, device, opt_flags_scope):
     if constraints.get("is_persistent") and (is_hip() or torch.cuda.get_device_capability()[0] < 9):
         pytest.skip("persistent matmul requires Hopper or newer")
 
@@ -785,11 +788,12 @@ def test_matmul_mixed_fp32_matches_cast(dtype, fp32_lhs, b_transpose, allow_tf32
         b = torch.randn((k, n * b_step), dtype=b_dtype, device=device)[:, ::b_step]
 
     opt_flags.update_opt_flags_constraints(constraints)
-    expected = matmul(a.float(), b.float(), None, precision_config=PrecisionConfig(allow_tf32=allow_tf32))
-    actual = matmul(a, b, None, precision_config=PrecisionConfig(allow_tf32=allow_tf32))
+    expected = matmul(a.float(), b.float(), None,
+                      precision_config=PrecisionConfig(out_dtype=out_dtype, allow_tf32=allow_tf32))
+    actual = matmul(a, b, None, precision_config=PrecisionConfig(out_dtype=out_dtype, allow_tf32=allow_tf32))
     if not is_compile_warmup():
-        assert actual.dtype == expected.dtype == torch.float32
-        torch.testing.assert_close(actual.view(torch.int32), expected.view(torch.int32), rtol=0, atol=0)
+        assert actual.dtype == expected.dtype == (out_dtype or torch.float32)
+        torch.testing.assert_close(actual.view(torch.uint8), expected.view(torch.uint8), rtol=0, atol=0)
 
 
 def _supported_float_dtypes():
