@@ -13,6 +13,24 @@
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir::triton::gpu {
+
+static bool isSm80FourWarpScalarByteLoad(Operation *op, int numWarps,
+                                         RankedTensorType tensorType,
+                                         ArrayRef<int64_t> contiguity) {
+  if (!isa<triton::LoadOp>(op) || numWarps != 4 || tensorType.getRank() != 2 ||
+      getElementBitWidth(tensorType) != 8 ||
+      !llvm::all_of(contiguity, [](int64_t value) { return value == 1; }))
+    return false;
+
+  auto moduleOp = op->getParentOfType<ModuleOp>();
+  auto targetAttr =
+      moduleOp
+          ? moduleOp->getAttrOfType<StringAttr>(triton::gpu::AttrTargetName)
+          : nullptr;
+  return targetAttr && targetAttr.getValue().starts_with("cuda:") &&
+         getNVIDIAComputeCapability(moduleOp) == 80;
+}
+
 BlockedEncodingAttr
 buildCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
                        int numWarps, int threadsPerWarp,
@@ -30,19 +48,40 @@ buildCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
 
   auto contiguity = axisInfoAnalysis.getAxisInfo(ptr)->getContiguity();
   SmallVector<unsigned> order = getOrderFromContiguity(contiguity);
-  LDBG("order=[" << triton::join(order, ", ") << "]");
 
   auto matchesShape = [&refTensorType](const Value &val) {
     auto rttType = dyn_cast<RankedTensorType>(val.getType());
     return rttType && rttType.getShape() == refTensorType.getShape();
   };
+  llvm::SetVector<Operation *> slice;
+  if (ptr.getDefiningOp())
+    slice = mlir::getSlice(op);
+
+  if (isSm80FourWarpScalarByteLoad(op, numWarps, refTensorType, contiguity)) {
+    // All-one i8 roots can inherit sizePerThread=16 from a coalesced peer
+    // because their default orders tie. On SM80 with four warps this spills;
+    // use the alternate order to keep the weak root scalar.
+    bool borrowsWideLayout = llvm::any_of(slice, [&](Operation *use) {
+      Value val = getMemAccessPtr(use);
+      if (!val || use == op || !matchesShape(val))
+        return false;
+      auto currOrder = getOrderFromContiguity(
+          axisInfoAnalysis.getAxisInfo(val)->getContiguity());
+      return order == currOrder &&
+             getNumElementsPerThread(use, order, axisInfoAnalysis,
+                                     shapePerCTA) >= 16;
+    });
+    if (borrowsWideLayout)
+      order = {0, 1};
+  }
+  LDBG("order=[" << triton::join(order, ", ") << "]");
 
   // The desired divisibility is the maximum divisibility among all dependent
   // pointers which have the same shape and order as `ptr`.
   llvm::SmallSetVector<Operation *, 32> memAccessesSameOrder;
   memAccessesSameOrder.insert(op);
   if (ptr.getDefiningOp()) {
-    for (Operation *use : mlir::getSlice(op)) {
+    for (Operation *use : slice) {
       Value val = getMemAccessPtr(use);
       if (!val || !matchesShape(val) || memAccessesSameOrder.contains(use))
         continue;
