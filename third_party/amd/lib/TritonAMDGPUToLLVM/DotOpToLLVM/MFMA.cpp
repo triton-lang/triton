@@ -300,10 +300,6 @@ struct DotOpMFMAConversionHelper {
 
     intrinsicName = maybeMfmaIntrinsic->name;
 
-    // If we are using XF32, the kWidth (and kBase) is double that of F32.
-    if (aTensorTy.getElementType().isF32() && allowXF32)
-      kWidth *= 2;
-
     const auto kDimInstrSize = mfmaLayout.getInstrShapeForOperand(kWidth, 0)[1];
 
     auto repA = mfmaLayout.getRepForOperand(aTensorTy.getShape(), kWidth, 0);

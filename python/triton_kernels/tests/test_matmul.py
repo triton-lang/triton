@@ -17,6 +17,7 @@ from triton_kernels.matmul import apply_precision, matmul_set_idle_sms, matmul, 
 # numerics utilities
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.meta import Closure
+from triton_kernels.fpsan import embed, unembed
 from triton_kernels.numerics_details.mxfp import upcast_from_mxfp, quantize_mxfp8_fn, quantize_nvfp4_fn, downcast_to_mxfp_torch, upcast_from_mxfp_torch, MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 # testing utilities
 from triton_kernels.testing import assert_close, make_random_tensor
@@ -713,6 +714,50 @@ def test_matmul_mixed_fp8_resource_limits(shape, fp8_lhs, constraints, device, o
 
     expected = torch.matmul(a.float(), b.float()).to(torch.bfloat16)
     assert_close(expected, actual)
+
+
+@pytest.mark.parametrize("fp8_lhs", [False, True])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("out_dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float8_e4m3fn, torch.float8_e5m2])
+@pytest.mark.parametrize("b_transpose", [False, True])
+@pytest.mark.parametrize("use_fpsan", [False, True])
+@pytest.mark.parametrize("shape, constraints", [
+    ((64, 128, 1024), {}),
+    ((67, 80, 272), dict(is_persistent=False, split_k=3)),
+    ((67, 80, 272), dict(is_persistent=True, split_k=1)),
+])
+def test_matmul_mixed_fp8_matches_upcast(fp8_lhs, dtype, out_dtype, b_transpose, use_fpsan, shape,
+                                        constraints, device, opt_flags_scope, fresh_knobs):
+    if is_cuda() and torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("requires Hopper or newer")
+    if is_hip() and constraints.get("is_persistent"):
+        pytest.skip("Persistent kernel not supported on AMD GPU")
+    if use_fpsan and is_hip() and not (is_hip_cdna3() or is_hip_cdna4() or is_hip_gfx1250()):
+        pytest.skip("FPSan requires gfx942, gfx950, or gfx1250")
+
+    fresh_knobs.compilation.instrumentation_mode = "fpsan" if use_fpsan else ""
+    torch.manual_seed(0)
+    m, n, k = shape
+    a_dtype, b_dtype = (torch.float8_e4m3fn, dtype) if fp8_lhs else (dtype, torch.float8_e4m3fn)
+    a = torch.randn((m, k), device=device).to(a_dtype)
+    b = torch.randn((n, k) if b_transpose else (k, n), device=device).to(b_dtype)
+    b = b.mT if b_transpose else b
+
+    fp8 = a if fp8_lhs else b
+    # FPSan widening sign-extends payloads; a Torch float cast would change them.
+    upcast = unembed(embed(fp8).to(torch.int16), dtype) if use_fpsan else fp8.to(dtype)
+    a_upcast, b_upcast = (upcast, b) if fp8_lhs else (a, upcast)
+    opt_flags.update_opt_flags_constraints(constraints)
+    config = PrecisionConfig(out_dtype=out_dtype)
+    actual = matmul(a, b, None, precision_config=config)
+    expected = matmul(a_upcast, b_upcast, None, precision_config=config)
+
+    if use_fpsan:
+        torch.testing.assert_close(actual.contiguous().view(torch.uint8), expected.contiguous().view(torch.uint8),
+                                   rtol=0, atol=0)
+    else:
+        # Allow output rounding and small FP32 accumulation-order differences.
+        torch.testing.assert_close(actual.float(), expected.float(), rtol=torch.finfo(out_dtype).eps, atol=1e-4)
 
 
 @pytest.mark.parametrize("dtype, other_dtype, allow_tf32", [
