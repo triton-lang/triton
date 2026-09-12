@@ -7,13 +7,14 @@ from dataclasses import dataclass
 import triton
 from triton_kernels import target_info
 from triton_kernels.target_info import get_cdna_version, get_rdna_version, cuda_capability_geq
-from triton_kernels.tensor import FP4, FP8_E4M3FN, FP32, Tensor, torch_dtype_to_dtype
+from triton_kernels.tensor import FP4, BF16, FP32, FP64, Tensor, torch_dtype_to_dtype
 import torch
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
 from triton_kernels.tensor_details.layout_details.strided import StridedLayout
 from triton_kernels.tensor_details.layout_details.base import Layout
 from triton_kernels.tensor_details.layout_details.blackwell_value_shuffled import BlackwellMX4ValueShuffledLayout
 from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
+from ._common import get_compute_dtype
 
 _MIN_NVFP4_RAGGED_TRAIN_ROWS = 65_536
 
@@ -113,6 +114,9 @@ def make_default_opt_flags_amd(
     block_n, block_k = opt_flags_amd.compute_block_nk(
         n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, precision_config
     )
+    # Loading an FP64 accumulator needs LDS for the conversion to the MFMA layout.
+    if has_y_acc_in and get_compute_dtype(precision_config, lhs_dtype, rhs_dtype) == FP64:
+        block_n = min(block_n, 128)
     is_persistent = constraints.get("is_persistent", False)
     # split_k:
     split_k = 1
@@ -225,7 +229,7 @@ def make_default_opt_flags_nvidia(
     constraints_supported = {"block_m", "block_n", "block_k", "split_k", "is_persistent", "clc", "epilogue_subtile", "num_stages", "idle_sms", "max_allowable_mn", "num_warps", "disable_mx4_block_swap", "swap_xw", "group_m", "use_output_tma"}
     unsupported = set(constraints.keys()) - constraints_supported
     assert not unsupported, f"Given unsupported constraint: {unsupported}"
-    is_mixed_fp8 = opt_flags_nvidia.is_unscaled_mixed_fp8(precision_config, lhs_dtype, rhs_dtype)
+    compute_dtype = get_compute_dtype(precision_config, lhs_dtype, rhs_dtype)
     is_large_ragged_nvfp4 = (
         routing_data is not None
         and m >= _MIN_NVFP4_RAGGED_TRAIN_ROWS
@@ -284,6 +288,12 @@ def make_default_opt_flags_nvidia(
         block_n, block_n_tma = 256, 256
     else:
         block_n, block_n_tma = opt_flags_nvidia.compute_block_n(n, arch, precision_config)
+    if compute_dtype == FP64:
+        # FP64 accumulators need smaller tiles to avoid spilling registers.
+        if constraints.get("block_m") is None:
+            block_m = min(block_m, 64)
+        if constraints.get("block_n") is None:
+            block_n, block_n_tma = min(block_n, 64), min(block_n_tma, 64)
     # is_persistent
     grid_size_tma = opt_flags_nvidia.compute_grid_size(routing_data, batch_size, m, n, block_m, block_n_tma)
     n_sms = torch.cuda.get_device_properties(0).multi_processor_count
@@ -315,10 +325,13 @@ def make_default_opt_flags_nvidia(
         is_persistent = True
     else:
         has_simple_epilogue = precision_config.max_num_imprecise_acc is None
+        # IEEE FP32 accumulators spill in the persistent kernel.
         is_persistent = (
             supports_persistent and has_simple_epilogue
-            and (tiles_per_sm >= 2.0 or lhs_dtype.bitwidth <= 8 or is_mixed_fp8)
-            and (out_dtype.bitwidth < 32 or lhs_dtype.bitwidth == 32 or rhs_dtype.bitwidth == 32)
+            and (compute_dtype != FP32 or precision_config.allow_tf32)
+            and (tiles_per_sm >= 2.0 or (compute_dtype or lhs_dtype).bitwidth <= 8)
+            and (out_dtype.bitwidth < 32 or compute_dtype == FP32
+                 or compute_dtype is None and (lhs_dtype == FP32 or rhs_dtype == FP32))
         )
         # TMA is slower for batched matmuls with small m/n/k.
         if m * n * k < 131072:
@@ -329,8 +342,30 @@ def make_default_opt_flags_nvidia(
 
     # adjust block_n based on is_persistent signal
     block_n = block_n_tma if is_persistent else block_n
+    if (not is_persistent and not enforce_bitwise_invariance
+            and cuda_capability_geq(9, 0) and not cuda_capability_geq(10, 0)
+            and compute_dtype == lhs_dtype == BF16 and rhs_dtype.bitwidth == 8
+            and precision_config.c_mx_scale is None and routing_data is None
+            and block_m == 128 and block_n == 256
+            and constraints.get("block_n") is None and grid_size_tma >= n_sms):
+        # Smaller tiles reduce register pressure while widening FP8 weights.
+        # Keep the original grid saturated so split-K still matches BF16 inputs.
+        block_n = 128
+    if is_persistent and constraints.get("block_n") is None and out_dtype == FP64:
+        # Blackwell can store FP64 output in subtiles; otherwise reserve room
+        # for the full output tile alongside the input stages.
+        block_n_fallback = min(block_n, 128 * 128 // block_m)
+        if (not cuda_capability_geq(10, 0) or compute_dtype != FP32
+                or (rhs_dtype != FP32 and not w_transpose)
+                or enforce_bitwise_invariance or any(value is not None for value in constraints.values())
+                or opt_flags_nvidia.compute_grid_size(None, batch_size, m, n, block_m, block_n) < n_sms):
+            # Preserve explicit plans and small-grid split-K. Widening
+            # row-major weights also runs faster with the smaller tile.
+            block_n = block_n_fallback
+    else:
+        block_n_fallback = block_n
     if (is_persistent and constraints.get("block_n", None) is None
-            and cuda_capability_geq(10, 0) and (lhs_dtype == FP32 or rhs_dtype == FP32)
+            and cuda_capability_geq(10, 0) and compute_dtype == FP32
             and not x_uses_tma_when_persistent):
         # Blackwell's fp32/tf32 persistent dot stages an operand in TMEM in
         # addition to the accumulator. A 128x256 accumulator already consumes
@@ -349,13 +384,12 @@ def make_default_opt_flags_nvidia(
         # a mx scale has been swizzled to BlackwellActMXScaleLayout, enforce block_m=128 to align with swizzling layout
         block_m = 128
     swap_xw = constraints.get("swap_xw")
-    if is_mixed_fp8 and rhs_dtype == FP8_E4M3FN and is_persistent:
-        # Convert FP8 in the MMA's lhs registers/TMEM, avoiding a widened RHS buffer.
+    if (is_persistent and compute_dtype is not None and rhs_dtype != compute_dtype
+            and lhs_dtype == compute_dtype
+            and (compute_dtype.bitwidth == 16 or compute_dtype == FP32 and precision_config.allow_tf32)):
+        # Widen the narrower operand in the MMA's lhs, avoiding an expanded RHS buffer.
         if swap_xw is None and block_n >= 64:
             swap_xw = True
-        if (swap_xw and not enforce_bitwise_invariance and slice_size >= block_n > block_m
-                and constraints.get("block_m") is None and constraints.get("block_n") is None):
-            block_m, block_n = block_n, block_m
     # block k
     if constraints.get("block_k", None) is not None:
         block_k = constraints["block_k"]
@@ -380,67 +414,78 @@ def make_default_opt_flags_nvidia(
         # Split-K writes full-N scratch and applies fused reductions in the
         # reduce kernel, not in the matmul epilogue.
         epilogue_reduction_n = 1
-    compute_num_stages_args = (
-        precision_config,
-        is_persistent,
-        block_m,
-        block_n,
-        block_k,
-        torch_dtype_to_dtype(intermediate_out_dtype) if split_k > 1 else out_dtype,
-        lhs_dtype,
-        rhs_dtype,
-        x_transpose,
-        epilogue_effective_itemsize,
-        has_y_acc_in,
-        mx_block_size,
-        epilogue_reduction_n,
-    )
+    while True:
+        compute_num_stages_args = (
+            precision_config,
+            is_persistent,
+            block_m,
+            block_n,
+            block_k,
+            torch_dtype_to_dtype(intermediate_out_dtype) if split_k > 1 else out_dtype,
+            lhs_dtype,
+            rhs_dtype,
+            x_transpose,
+            epilogue_effective_itemsize,
+            has_y_acc_in,
+            mx_block_size,
+            epilogue_reduction_n,
+        )
 
-    num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, is_persistent, precision_config, constraints)
-    if is_large_ragged_nvfp4 and constraints.get("num_warps", None) is None:
-        # Eight warps overrun GB300 TMEM for the large ragged NVFP4 tile.
-        num_warps = 4
-    if (constraints.get("num_warps", None) is None
-            and is_persistent
-            and block_n <= 128
-            and block_k >= 256
-            and opt_flags_nvidia.is_blackwell_mx_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype)
-            and precision_config.c_mx_scale is None):
-        num_warps = max(num_warps, 8)
+        num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, is_persistent, precision_config, constraints)
+        if compute_dtype == FP64 and constraints.get("num_warps") is None:
+            num_warps = max(num_warps, 4)
+        if is_large_ragged_nvfp4 and constraints.get("num_warps", None) is None:
+            # Eight warps overrun GB300 TMEM for the large ragged NVFP4 tile.
+            num_warps = 4
+        if (constraints.get("num_warps", None) is None
+                and is_persistent
+                and block_n <= 128
+                and block_k >= 256
+                and opt_flags_nvidia.is_blackwell_mx_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype)
+                and precision_config.c_mx_scale is None):
+            num_warps = max(num_warps, 8)
 
-    # Occupancy target and maxnreg (for Hopper)
-    occupancy_target = 1
-    is_hopper_scale = isinstance(b_mx_scale_layout, HopperMXScaleLayout)
-    if is_hopper_scale:
-        occupancy_target = 16 // num_warps
-        if precision_config.a_mx_scale is not None and precision_config.c_mx_scale is not None:
-            # Hopper MXFP4 RHS plus MX input/output needs more than the
-            # 128-register cap implied by the default occupancy target.
-            occupancy_target = 1
-    threads_per_warp = 32
-    reg_per_sm = 64 * 1024
-    max_reg_per_thread = 256
-    is_blackwell_or_newer = cuda_capability_geq(10, 0)
-    if is_persistent and not is_blackwell_or_newer:
-        maxnreg = reg_per_sm // (num_warps * threads_per_warp * occupancy_target)
-        maxnreg = min(max_reg_per_thread, maxnreg)
-    else:
-        maxnreg = None
+        # Occupancy target and maxnreg (for Hopper)
+        occupancy_target = 1
+        is_hopper_scale = isinstance(b_mx_scale_layout, HopperMXScaleLayout)
+        if is_hopper_scale:
+            occupancy_target = 16 // num_warps
+            if precision_config.a_mx_scale is not None and precision_config.c_mx_scale is not None:
+                # Hopper MXFP4 RHS plus MX input/output needs more than the
+                # 128-register cap implied by the default occupancy target.
+                occupancy_target = 1
+        threads_per_warp = 32
+        reg_per_sm = 64 * 1024
+        max_reg_per_thread = 256
+        is_blackwell_or_newer = cuda_capability_geq(10, 0)
+        if is_persistent and not is_blackwell_or_newer:
+            maxnreg = reg_per_sm // (num_warps * threads_per_warp * occupancy_target)
+            maxnreg = min(max_reg_per_thread, maxnreg)
+        else:
+            maxnreg = None
 
-    if constraints.get("epilogue_subtile", None) is not None:
-        subtiles_to_check = [constraints["epilogue_subtile"]]
-    elif is_large_ragged_nvfp4:
-        subtiles_to_check = [2]
-    else:
-        subtiles_to_check = [1] if out_dtype == FP4 else [1, 2, 4]
-    num_stages = -1
-    for ep in subtiles_to_check:
-        ns = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, epilogue_subtile=ep,
-                                                 occupancy_target=occupancy_target,
-                                                 swap_xw=swap_xw,
-                                                 w_transpose=w_transpose, num_warps=num_warps)
-        if ns > num_stages:
-            epilogue_subtile, num_stages = ep, ns
+        if constraints.get("epilogue_subtile", None) is not None:
+            subtiles_to_check = [constraints["epilogue_subtile"]]
+        elif is_large_ragged_nvfp4:
+            subtiles_to_check = [2]
+        elif out_dtype == FP4:
+            subtiles_to_check = [1]
+        else:
+            # Splitting Hopper's register accumulator four ways slows stores.
+            subtiles_to_check = [1, 2, 4] if is_blackwell_or_newer else [1, 2]
+        num_stages = -1
+        for ep in subtiles_to_check:
+            ns = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, epilogue_subtile=ep,
+                                                     occupancy_target=occupancy_target,
+                                                     swap_xw=swap_xw,
+                                                     w_transpose=w_transpose, num_warps=num_warps)
+            if ns > num_stages:
+                epilogue_subtile, num_stages = ep, ns
+
+        # A full FP64 output tile may not fit even with one input stage.
+        if num_stages >= 1 or block_n <= block_n_fallback:
+            break
+        block_n = block_n_fallback
 
     # A smaller epilogue may fit a stage; clamp only after comparing candidates.
     num_stages = max(1, num_stages)

@@ -1,5 +1,6 @@
 import triton
 import triton.language as tl
+from triton_kernels.tensor_details.dtype import promote_dtype
 from triton_kernels.tensor_details.layout_details.blackwell_scale import (
     SWIZZLE_SIZE_OUTER,
     swizzle_act_mx_scale_bw_store_ptr,
@@ -9,6 +10,12 @@ from triton_kernels.tensor_details.layout_details.blackwell_scale import (
 # -----------------------------------------------------------------------------
 #                                  Utilities
 # -----------------------------------------------------------------------------
+
+
+def get_compute_dtype(precision_config, lhs_dtype, rhs_dtype):
+    if precision_config.a_mx_scale is not None or precision_config.b_mx_scale is not None:
+        return None
+    return promote_dtype(lhs_dtype, rhs_dtype)
 
 
 @triton.constexpr_function
@@ -26,14 +33,21 @@ def get_scaled_dot_format_string(dtype: tl.dtype):
 
 
 @triton.jit
-def matmul_dot(x, w, acc, swap_xw: tl.constexpr, max_num_imprecise_acc: tl.constexpr, allow_tf32: tl.constexpr):
+def upcast_fp8(x):
+    # FP8-to-FP64 conversion needs this lossless intermediate.
+    return x.to(tl.float32) if x.dtype.is_fp8() else x
+
+
+@triton.jit
+def matmul_dot(x, w, acc, swap_xw: tl.constexpr, max_num_imprecise_acc: tl.constexpr, allow_tf32: tl.constexpr,
+               compute_dtype: tl.constexpr):
     if swap_xw:
         x, w = w.T, x.T
-    # Expose the 16-bit dot before the compiler chooses operand layouts.
-    if x.dtype == tl.float8e4nv and (w.dtype == tl.float16 or w.dtype == tl.bfloat16):
-        x = x.to(w.dtype)
-    elif w.dtype == tl.float8e4nv and (x.dtype == tl.float16 or x.dtype == tl.bfloat16):
-        w = w.to(x.dtype)
+    if compute_dtype == tl.float64:
+        x = upcast_fp8(x)
+        w = upcast_fp8(w)
+    x = x.to(compute_dtype)
+    w = w.to(compute_dtype)
     return tl.dot(x, w, acc, max_num_imprecise_acc=max_num_imprecise_acc, allow_tf32=allow_tf32)
 
 

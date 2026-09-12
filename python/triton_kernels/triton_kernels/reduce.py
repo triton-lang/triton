@@ -7,7 +7,7 @@ import triton
 import triton.language as tl
 from triton_kernels.numerics_details.mxfp import MXFP_BLOCK_SIZE, quantize_mxfp4_fn, quantize_mxfp8_fn, quantize_nvfp4_fn
 from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_ue8m0_scale
-from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
+from triton_kernels.numerics_details.flexpoint import cast_output, float_to_flex, load_scale
 from triton_kernels.numerics import InFlexData, OutFlexData, MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
 from triton_kernels import target_info
 from typing import Optional
@@ -500,7 +500,7 @@ def _reduce_forward_inner(pid_s0, pid_s1,
             offs_y_s1 = blk_s1 * (BLOCK_Y_S1 // 2) + tl.arange(0, BLOCK_Y_S1 // 2)
             valid_y_s1 = offs_y_s1 < tl.cdiv(Y_S1, 2)
         y_ptrs = Y + offs_s0[:, None] * stride_y0 + offs_y_s1[None, :] * stride_y1
-        tl.store(y_ptrs, y, mask=valid_s0[:, None] & valid_y_s1[None, :])
+        tl.store(y_ptrs, cast_output(y, Y.dtype.element_ty), mask=valid_s0[:, None] & valid_y_s1[None, :])
 
 
 @triton.jit(launch_metadata=reduce_launch_metadata)

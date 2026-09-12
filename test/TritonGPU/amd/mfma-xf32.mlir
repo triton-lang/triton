@@ -31,6 +31,7 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
     %arg1: tensor<128x64xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>) {
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
     // Check that we don't generate xf32 instructions if the input precision is "ieee"
+    // CHECK-NOT: llvm.fcmp
     // CHECK: rocdl.mfma.f32.16x16x4f32
     %dot = tt.dot %arg0, %arg1, %cst_0, inputPrecision = ieee :
       tensor<64x128xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<128x64xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<64x64xf32, #mma>
@@ -65,6 +66,15 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
   // CHECK-LABEL: @mfma_xf32_small_k(
   tt.func @mfma_xf32_small_k(%a: tensor<16x8xf32, #a>, %b: tensor<8x16xf32, #b>) -> tensor<16x16xf32, #mma> {
     %zero = arith.constant dense<0.0> : tensor<16x16xf32, #mma>
+    // Quiet NaNs in both operands before XF32 discards their low payload bits.
+    // CHECK: llvm.fcmp "oeq"
+    // CHECK: llvm.select
+    // CHECK: llvm.fcmp "oeq"
+    // CHECK: llvm.select
+    // CHECK: llvm.fcmp "oeq"
+    // CHECK: llvm.select
+    // CHECK: llvm.fcmp "oeq"
+    // CHECK: llvm.select
     // CHECK: rocdl.mfma.f32.16x16x8.xf32 {{.*}} : (vector<2xf32>, vector<2xf32>, vector<4xf32>) -> vector<4xf32>
     // CHECK-NOT: rocdl.mfma
     // CHECK: llvm.return

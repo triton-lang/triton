@@ -1,5 +1,6 @@
-// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 | FileCheck --check-prefixes=COMMON,GFX942 %s
+// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 | FileCheck --check-prefixes=COMMON,GFX942,SOFTWARE %s
 // RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck --check-prefixes=COMMON,GFX950 %s
+// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx90a | FileCheck --check-prefix=SOFTWARE %s
 
 //  CHECK-LABEL: f16_to_f32
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -173,6 +174,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 //  CHECK-LABEL: upcast_from_f8
+// SOFTWARE-LABEL: upcast_from_f8
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func @upcast_from_f8(%arg0: tensor<8x8xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>,
@@ -195,6 +197,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // GFX950: rocdl.cvt.scalef32.pk.bf16.bf8 %[[VR5]][true]
     // GFX950: rocdl.cvt.scalef32.pk.bf16.bf8 %[[VR6:.*]][false]
     // GFX950: rocdl.cvt.scalef32.pk.bf16.bf8 %[[VR6]][true]
+    // The software conversion preserves E5M2 infinities and NaNs.
+    // SOFTWARE-COUNT-8: llvm.icmp "uge" {{.*}} : i8
+    // SOFTWARE: llvm.select {{.*}} : i1, bf16
     %2 = tt.fp_to_fp %arg0 : tensor<8x8xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
 
     // GFX950: rocdl.cvt.scalef32.pk.f32.fp8 %[[VR7:.*]][false]
@@ -213,6 +218,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // GFX950: rocdl.cvt.scalef32.pk.bf16.fp8 %[[VR11]][true]
     // GFX950: rocdl.cvt.scalef32.pk.bf16.fp8 %[[VR12:.*]][false]
     // GFX950: rocdl.cvt.scalef32.pk.bf16.fp8 %[[VR12]][true]
+    // E4M3FN has two NaN encodings and no infinity encodings.
+    // SOFTWARE-COUNT-8: llvm.icmp "uge" {{.*}} : i8
+    // SOFTWARE: llvm.select {{.*}} : i1, bf16
     %5 = tt.fp_to_fp %arg1 : tensor<8x8xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
 
     // GFX942: rocdl.cvt.pk.f32.bf8 %[[VR13:.*]][false]

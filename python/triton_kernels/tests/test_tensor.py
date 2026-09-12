@@ -11,7 +11,23 @@ import triton
 import triton.language as tl
 from triton_kernels.fpsan import embed, unembed
 from triton_kernels.tensor_details.bitmatrix import _keyed_add
-from triton_kernels.tensor_details.dtype import BIT, FP4, UINT8
+from triton_kernels.tensor_details.dtype import (
+    BIT,
+    FP4,
+    UINT8,
+    FP8_E4M3FN,
+    FP8_E4M3FNUZ,
+    FP8_E5M2,
+    FP8_E5M2FNUZ,
+    FP16,
+    BF16,
+    FP32,
+    FP64,
+    INT16,
+    INT32,
+    INT64,
+    promote_dtype,
+)
 from triton_kernels.tensor import (
     convert_layout,
     dtype_to_torch_dtype,
@@ -22,6 +38,7 @@ from triton_kernels.tensor import (
     remap_ragged_tensor_metadata_torch,
     make_bitmatrix_metadata,
     make_bitmatrix_metadata_torch,
+    torch_dtype_to_dtype,
     wrap_torch_tensor,
 )
 from triton_kernels.testing import assert_equal
@@ -72,6 +89,50 @@ def _strided_conversion_data(shape, dtype, source_dim, destination_dim):
     bits = torch.arange(256, dtype=torch.uint8).repeat(triton.cdiv(nbytes, 256))[:nbytes]
     values = bits.view(dtype).reshape(shape)
     return values, values
+
+
+@pytest.mark.parametrize(("lhs_dtype", "expected"), [
+    (FP8_E4M3FN, [FP8_E4M3FN, FP16, FP16, FP16, FP16, BF16, FP32, FP64]),
+    (FP8_E4M3FNUZ, [FP16, FP8_E4M3FNUZ, FP16, FP16, FP16, BF16, FP32, FP64]),
+    (FP8_E5M2, [FP16, FP16, FP8_E5M2, FP16, FP16, BF16, FP32, FP64]),
+    (FP8_E5M2FNUZ, [FP16, FP16, FP16, FP8_E5M2FNUZ, FP16, BF16, FP32, FP64]),
+    (FP16, [FP16, FP16, FP16, FP16, FP16, FP32, FP32, FP64]),
+    (BF16, [BF16, BF16, BF16, BF16, FP32, BF16, FP32, FP64]),
+    (FP32, [FP32, FP32, FP32, FP32, FP32, FP32, FP32, FP64]),
+    (FP64, [FP64, FP64, FP64, FP64, FP64, FP64, FP64, FP64]),
+])
+def test_promote_dtype(lhs_dtype, expected):
+    rhs_dtypes = [FP8_E4M3FN, FP8_E4M3FNUZ, FP8_E5M2, FP8_E5M2FNUZ, FP16, BF16, FP32, FP64]
+    for rhs_dtype, dtype in zip(rhs_dtypes, expected):
+        assert promote_dtype(lhs_dtype, rhs_dtype) == dtype
+        assert promote_dtype(rhs_dtype, lhs_dtype) == dtype
+
+
+@pytest.mark.parametrize(("dtype", "torch_dtype"), [
+    (UINT8, torch.uint8),
+    (FP8_E4M3FN, torch.float8_e4m3fn),
+    (FP8_E4M3FNUZ, torch.float8_e4m3fnuz),
+    (FP8_E5M2, torch.float8_e5m2),
+    (FP8_E5M2FNUZ, torch.float8_e5m2fnuz),
+    (FP16, torch.float16),
+    (BF16, torch.bfloat16),
+    (FP32, torch.float32),
+    (FP64, torch.float64),
+    (INT16, torch.int16),
+    (INT32, torch.int32),
+    (INT64, torch.int64),
+])
+def test_dtype_roundtrip(dtype, torch_dtype):
+    tensor = wrap_torch_tensor(torch.empty((2, 3), dtype=torch_dtype))
+    assert tensor.dtype == dtype
+    assert dtype_to_torch_dtype(tensor.dtype) == torch_dtype
+    assert empty((2, 3), dtype=dtype, device="cpu").data.dtype == torch_dtype
+
+
+@pytest.mark.parametrize("dtype", [torch.float8_e8m0fnu, torch.complex64])
+def test_torch_dtype_to_dtype_unsupported(dtype):
+    with pytest.raises(ValueError, match="Unknown dtype"):
+        torch_dtype_to_dtype(dtype)
 
 
 @pytest.mark.parametrize("dtype", [

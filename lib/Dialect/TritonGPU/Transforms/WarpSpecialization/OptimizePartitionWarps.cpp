@@ -100,6 +100,11 @@ static LogicalResult relayoutWarps(ModuleAxisInfoAnalysis &axisInfo,
   replacer.recursivelyReplaceElementsIn(*container, /*replaceAttrs=*/false,
                                         /*replaceLocs=*/false,
                                         /*replaceTypes=*/true);
+  // Layout conversions are identities after dropping the old encodings.
+  container->walk([](ConvertLayoutOp op) {
+    op.getResult().replaceAllUsesWith(op.getSrc());
+    op.erase();
+  });
 
   ModuleOp mod = axisInfo.getModuleOp();
   auto target = mod->getAttrOfType<StringAttr>(AttrTargetName);

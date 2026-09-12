@@ -4422,20 +4422,11 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             scale_fp32 = (scale.to(tl.uint32) << 23).to(tl.float32, bitcast=True)
             upcasted_scale = scale_fp32.to(tl.float16)
 
-        to_e_bits: tl.constexpr = 8 if to_type == tl.bfloat16 else 5
         to_m_bits: tl.constexpr = 7 if to_type == tl.bfloat16 else 10
         if is_fp8:
             if e_bits == 5 and m_bits == 2:
                 x_f8 = x.to(tl.float8e5, bitcast=True)
                 upcasted_x = x_f8.to(to_type)
-                # Preserve infs and nans. FIXME Fp8E5M2_to_Bf16 doesn't preserve them!
-                non_finite_mask: tl.constexpr = ((1 << e_bits) - 1) << m_bits
-                non_finite_mask_16bit: tl.constexpr = ((1 << to_e_bits) - 1) << to_m_bits
-                upcasted_x = tl.where(
-                    x & non_finite_mask == non_finite_mask,
-                    (upcasted_x.to(tl.uint16, bitcast=True) | non_finite_mask_16bit).to(to_type, bitcast=True),
-                    upcasted_x,
-                )
             else:
                 tl.static_assert(e_bits == 4 and m_bits == 3)
                 x_f8 = x.to(tl.float8e4nv, bitcast=True)
@@ -4556,8 +4547,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         scale_y = None
 
     def make_finite(x, dtype):
-        # e5m2 has too many non-finite values when sampled uniformly (1 / 32) and
-        # Fp8E5M2_to_Bf16 doesn't preserve NaNs (fixme)
+        # e5m2 has too many non-finite values when sampled uniformly (1 / 32).
         if dtype not in ("e5m2", "e4m3"):
             return x
         if dtype == "e5m2" and comp_dtype == torch.float16:
@@ -4672,6 +4662,39 @@ def test_scaled_dot_zero_scale(rhs_scale, normal_type, scale_dtype, scale_factor
         return
     expected = 2.0**-112 if normal_type == "bf16" and scale_dtype == torch.uint8 else 0.0
     torch.testing.assert_close(out, torch.full_like(out, expected), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("rhs", [False, True])
+@pytest.mark.parametrize("mma_nonk_size", [16, 32])
+def test_dot_tf32_special_values(rhs, mma_nonk_size, device):
+    if not is_hip_cdna3():
+        pytest.skip("XF32 instructions require CDNA3")
+
+    @triton.jit
+    def kernel(A, B, C):
+        offsets = tl.arange(0, 32)[:, None] * 32 + tl.arange(0, 32)[None, :]
+        a = tl.load(A + offsets)
+        b = tl.load(B + offsets)
+        tl.store(C + offsets, tl.dot(a, b, input_precision="tf32"))
+
+    # Include signaling NaNs whose payload would disappear at TF32 precision.
+    bits = torch.tensor([
+        0x7f800001, 0x7f801fff, 0x7fa00000, 0x7fc00000, 0xff800001, 0xff801fff, 0xffa00000, 0xffc00000, 0x7f800000,
+        0xff800000, 0x00000000, 0x80000000, 0x3f800000, 0xbf800000, 0x40600000, 0xc0600000
+    ], dtype=torch.uint32, device=device)
+    values = bits.view(torch.float32)
+    a = torch.zeros((32, 32), device=device)
+    a[:len(values), 0] = values
+    b = torch.ones((32, 32), device=device)
+    expected = values[:, None].expand(-1, 32)
+    if rhs:
+        a, b = b.mT.contiguous(), a.mT.contiguous()
+        expected = expected.mT
+    actual = torch.empty((32, 32), device=device)
+    kernel[(1, )](a, b, actual, matrix_instr_nonkdim=mma_nonk_size)
+    if not is_compile_warmup():
+        actual = actual[:, :len(values)] if rhs else actual[:len(values), :]
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
 
 
 @pytest.mark.interpreter

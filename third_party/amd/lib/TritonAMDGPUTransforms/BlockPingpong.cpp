@@ -648,12 +648,9 @@ LogicalResult Pingponger::transformTwoPPClusters(OpBuilder &builder,
   appendSlicedLoadAB(/*slice=*/1);
   appendOp(ROCDL::SchedBarrier::create(builder, loc, SchedGroupMask::none));
   appendOp(gLoadOps[1]);
-  // The first cluster just fits into the two cluster pingpong and cannot
-  // include wait of the local_load inserted by the ttg.barrier, using s.barrier
-  // instead. backend will schedule the local memory fences later in the dot0
-  // cluster.
-  appendOp(ROCDL::SBarrierOp::create(builder, loc));
-  appendOp(ROCDL::SchedBarrier::create(builder, loc, SchedGroupMask::none));
+  // Finish these LDS reads before the other warp group can overwrite the
+  // shared buffer.
+  appendClusterBarrier(builder, loc);
 
   // dot0 (1/2)
   appendOpWithPrio(builder, dotSliceOps[0], loc);
