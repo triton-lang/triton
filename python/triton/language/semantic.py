@@ -479,8 +479,7 @@ class TritonSemantic(Generic[TensorTy]):
             raise ValueError("wrong type argument to unary minus (" + input_sca_ty.__repr__() + ")")
         if input_sca_ty.is_floating():
             return self.tensor(self.builder.create_fneg(input.handle), input.type)
-        _0 = self.tensor(self.builder.get_null_value(input_sca_ty.to_ir(self.builder)), input_sca_ty)
-        return self.sub(_0, input, True)
+        return self.sub(self.scalar_constant(0, input_sca_ty), input, True)
 
     def invert(self, input: TensorTy) -> TensorTy:
         input_sca_ty = input.type.scalar
@@ -610,8 +609,7 @@ class TritonSemantic(Generic[TensorTy]):
             value = self.tensor(self.builder.get_fp32(value), tl.float32)
             return self.cast(value, dtype)
         elif dtype.is_fp8():
-            value = self.builder.get_fp32(value)
-            value = self.builder.create_fp_trunc(value, dtype.to_ir(self.builder))
+            value = self.builder.get_fp8(value, dtype.to_ir(self.builder))
         else:
             get_value_fn = getattr(self.builder, f"get_{dtype.name}")
             value = get_value_fn(value)
@@ -871,9 +869,7 @@ class TritonSemantic(Generic[TensorTy]):
            (src_sca_ty.int_bitwidth != dst_sca_ty.int_bitwidth or src_sca_ty.int_signedness != dst_sca_ty.int_signedness):
             sign_extend = src_sca_ty.is_int_signed() and not src_sca_ty.is_bool()
             if dst_sca_ty.is_bool():
-                ty = input.dtype.to_ir(self.builder)
-                _0 = self.tensor(self.builder.get_null_value(ty), input.dtype)
-                return self.not_equal(input, _0)
+                return self.not_equal(input, self.scalar_constant(0, input.dtype))
             else:
                 return self.tensor(self.builder.create_int_cast(input.handle, dst_ty.to_ir(self.builder), sign_extend),
                                    dst_ty)
@@ -881,9 +877,7 @@ class TritonSemantic(Generic[TensorTy]):
         # Casting standard floating types to integer types
         if src_sca_ty.is_standard_floating() and dst_sca_ty.is_int():
             if dst_sca_ty.is_bool():
-                ty = input.dtype.to_ir(self.builder)
-                _0 = self.tensor(self.builder.get_null_value(ty), input.dtype)
-                return self.not_equal(input, _0)
+                return self.not_equal(input, self.scalar_constant(0, input.dtype))
             elif dst_sca_ty.is_int_signed():
                 return self.tensor(self.builder.create_fp_to_si(input.handle, dst_ty.to_ir(self.builder)), dst_ty)
             else:

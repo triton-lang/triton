@@ -24,6 +24,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/ADT/FloatingPointMode.h"
 #include <type_traits>
 
 using namespace mlir;
@@ -561,9 +562,9 @@ SmallVector<Value> scalePk4DowncastToFp8(Location loc,
 }
 
 template <typename ConvertOp>
-SmallVector<Value> scalePk8DowncastToFp8(Location loc,
-                                         ConversionPatternRewriter &rewriter,
-                                         const SmallVector<Value> &v) {
+SmallVector<Value>
+scalePk8DowncastToFp8(Location loc, ConversionPatternRewriter &rewriter,
+                      const SmallVector<Value> &v, Type dstTy) {
   const size_t inSize = 8;
   assert(v.size() == inSize);
 
@@ -601,9 +602,22 @@ SmallVector<Value> scalePk8DowncastToFp8(Location loc,
   assert(vFPInTy && vFPResTy && vFPOutTy);
 
   // convert SmallVector to llvm vector
+  auto srcTy = cast<FloatType>(v[0].getType());
+  auto max =
+      llvm::APFloat::getLargest(cast<FloatType>(dstTy).getFloatSemantics());
+  bool losesInfo;
+  max.convert(srcTy.getFloatSemantics(), llvm::APFloat::rmNearestTiesToEven,
+              &losesInfo);
+  Value maxValue = LLVM::ConstantOp::create(rewriter, loc, srcTy,
+                                            rewriter.getFloatAttr(srcTy, max));
   Value inVec = b.undef(vFPInTy);
   for (size_t i = 0; i < inSize; ++i) {
-    inVec = b.insert_element(vFPInTy, inVec, v[i], b.i32_val(i));
+    // GFX1250 clamps finite overflow but does not saturate infinite inputs.
+    Value isInf = LLVM::IsFPClass::create(
+        rewriter, loc, i1_ty, v[i], rewriter.getI32IntegerAttr(llvm::fcInf));
+    Value signedMax = LLVM::CopySignOp::create(rewriter, loc, maxValue, v[i]);
+    Value value = b.select(isInf, signedMax, v[i]);
+    inVec = b.insert_element(vFPInTy, inVec, value, b.i32_val(i));
   }
 
   auto resVec = ConvertOp::create(rewriter, loc, vFPResTy, inVec, b.f32_val(1));
@@ -1492,7 +1506,7 @@ public:
     if (isa<Float8E4M3FNType>(dstTy)) {
       if (isaFamily == ISAFamily::GFX1250) {
         return scalePk8DowncastToFp8<ROCDL::CvtScaleF32Pk8Fp8F16Op>(
-            loc, rewriter, v);
+            loc, rewriter, v, dstTy);
       } else if (isaFamily == ISAFamily::CDNA4) {
         return scalePk4DowncastToFp8<ROCDL::CvtScaleF32PkFp8F16Op>(loc,
                                                                    rewriter, v);
@@ -1583,7 +1597,7 @@ public:
       } else if (isa<Float8E5M2Type>(dstTy)) {
         if (isaFamily == ISAFamily::GFX1250) {
           return scalePk8DowncastToFp8<ROCDL::CvtScaleF32Pk8Bf8F16Op>(
-              loc, rewriter, v);
+              loc, rewriter, v, dstTy);
         } else if (isaFamily == ISAFamily::CDNA4) {
           return scalePk4DowncastToFp8<ROCDL::CvtScaleF32PkBf8F16Op>(
               loc, rewriter, v);
@@ -1727,7 +1741,7 @@ public:
     if (isa<Float8E4M3FNType>(dstTy)) {
       if (isaFamily == ISAFamily::GFX1250) {
         return scalePk8DowncastToFp8<ROCDL::CvtScaleF32Pk8Fp8Bf16Op>(
-            loc, rewriter, v);
+            loc, rewriter, v, dstTy);
       } else if (isaFamily == ISAFamily::CDNA4) {
         return scalePk4DowncastToFp8<ROCDL::CvtScaleF32PkFp8Bf16Op>(
             loc, rewriter, v);
@@ -1809,7 +1823,7 @@ public:
     if (isa<Float8E5M2Type>(dstTy)) {
       if (isaFamily == ISAFamily::GFX1250) {
         return scalePk8DowncastToFp8<ROCDL::CvtScaleF32Pk8Bf8Bf16Op>(
-            loc, rewriter, v);
+            loc, rewriter, v, dstTy);
       } else if (isaFamily == ISAFamily::CDNA4) {
         return scalePk4DowncastToFp8<ROCDL::CvtScaleF32PkBf8Bf16Op>(
             loc, rewriter, v);
@@ -2093,7 +2107,7 @@ public:
     } else if (isa<Float8E4M3FNType>(dstTy)) {
       if (isaFamily == ISAFamily::GFX1250) {
         return scalePk8DowncastToFp8<ROCDL::CvtScaleF32Pk8Fp8F32Op>(
-            loc, rewriter, inVals);
+            loc, rewriter, inVals, dstTy);
       } else if (isaFamily == ISAFamily::CDNA4) {
         return scalePk4DowncastToFp8<ROCDL::CvtScaleF32PkFp8F32Op>(
             loc, rewriter, inVals);
@@ -2175,7 +2189,7 @@ public:
       } else if (isa<Float8E5M2Type>(dstTy)) {
         if (isaFamily == ISAFamily::GFX1250) {
           return scalePk8DowncastToFp8<ROCDL::CvtScaleF32Pk8Bf8F32Op>(
-              loc, rewriter, inVals);
+              loc, rewriter, inVals, dstTy);
         } else if (isaFamily == ISAFamily::CDNA4) {
           return scalePk4DowncastToFp8<ROCDL::CvtScaleF32PkBf8F32Op>(
               loc, rewriter, inVals);

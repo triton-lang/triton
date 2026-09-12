@@ -7,7 +7,7 @@ import pytest
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_rdna3, is_hip_rdna4, is_hip_gfx1250
+from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2, is_hip_cdna3, is_hip_cdna4, is_hip_rdna3
 
 FP8_DTYPES = ('float8e5', 'float8e4b15', 'float8e4nv', 'float8e4b8', 'float8e5b16')
 
@@ -338,11 +338,8 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
 def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
 
     if is_cuda():
-        if src_dtype != 'float32' and torch.cuda.get_device_capability(0) < (9, 0):
-            pytest.skip("non-float32 downcast tests only supported on NVGPU with compute capability 9.0+")
-
-        if dst_dtype in ('float8e5', 'float8e4nv') and rounding == 'rtne' and torch.cuda.get_device_capability(0) < (9, 0):
-            pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on NVGPU with compute capability 9.0+")
+        if dst_dtype == 'float8e4nv' and torch.cuda.get_device_capability(0) < (8, 9):
+            pytest.skip("float8e4nv requires compute capability 8.9+")
 
         if dst_dtype in ('float8e5b16', 'float8e4b8') and rounding == 'rtne':
             pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on AMDGPU CDNA3")
@@ -374,17 +371,11 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
 @pytest.mark.parametrize("src_dtype", ["float32", "float16", "bfloat16"])
 def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device, rounding="rtne"):
     if is_cuda():
-        if src_dtype != 'float32' and torch.cuda.get_device_capability(0) < (9, 0):
-            pytest.skip("non-float32 downcast tests only supported on NVGPU with compute capability 9.0+")
-
-        if dst_dtype in ('float8e5', 'float8e4nv') and rounding == 'rtne' and torch.cuda.get_device_capability(0) < (9, 0):
-            pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on NVGPU with compute capability 9.0+")
+        if dst_dtype == 'float8e4nv' and torch.cuda.get_device_capability(0) < (8, 9):
+            pytest.skip("float8e4nv requires compute capability 8.9+")
 
     if dst_dtype in FP8_DTYPES and is_hip_rdna3():
         pytest.skip(f"{dst_dtype} is not supported on AMDGPU RDNA3")
-
-    if mode in ('inf', '-inf') and (is_hip_rdna4() or is_hip_gfx1250()):
-        pytest.skip(f"clamping from `{mode}` is not supported on AMDGPU GFX12")
 
     converter = {
         tl.float8e4nv: torch.float8_e4m3fn,
@@ -433,6 +424,44 @@ def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device, round
         assert(torch.all(torch.isnan(dst)))
     else:
         torch.testing.assert_close(dst, torch.full_like(dst, expected_result))
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("src_dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("dst_dtype", [
+    torch.float8_e4m3fn, torch.float8_e5m2, torch.float8_e4m3fnuz, torch.float8_e5m2fnuz,
+])
+def test_typeconvert_downcast_special_values(src_dtype, dst_dtype, device):
+    fnuz = dst_dtype in (torch.float8_e4m3fnuz, torch.float8_e5m2fnuz)
+    if is_cuda():
+        if fnuz:
+            pytest.skip("FNUZ formats are not supported on CUDA")
+        if dst_dtype == torch.float8_e4m3fn and torch.cuda.get_device_capability(0) < (8, 9):
+            pytest.skip("float8e4m3fn requires compute capability 8.9+")
+    if is_hip_rdna3():
+        pytest.skip("FP8 is not supported on AMDGPU RDNA3")
+
+    values = [
+        0.0, -0.0, 1.0625 + 2**-23, -1.0625 - 2**-23,
+        1.0625, -1.0625, 1.125 + 2**-23, -1.125 - 2**-23,
+        1.1875, -1.1875, 1.875, 1.9375, 2**-16, -2**-16, 2**-17, -2**-17,
+        2**-18, -2**-18, 240.0, -240.0, 248.0, -248.0, 448.0, -448.0,
+        465.0, -465.0, 61440.0, -61440.0, 1e10, float("inf"), float("-inf"), float("nan"),
+    ]
+    src = torch.tensor(values, dtype=src_dtype, device=device)
+    dst = torch.empty(src.shape, dtype=dst_dtype, device=device)
+    type_convert_triton[(1,)](src, dst, "rtne", len(values))
+
+    actual = dst.cpu()
+    src = src.cpu().float()
+    max_value = torch.finfo(dst_dtype).max
+    expected = src.clamp(-max_value, max_value)
+    if fnuz:
+        expected[src.isinf()] = float("nan")
+    expected = expected.to(dst_dtype)
+    is_nan = expected.float().isnan()
+    torch.testing.assert_close(actual.float().isnan(), is_nan)
+    torch.testing.assert_close(actual.view(torch.uint8)[~is_nan], expected.view(torch.uint8)[~is_nan])
 
 
 @pytest.mark.parametrize("src_dtype", ['float8e4b8', 'float8e5b16'])

@@ -176,6 +176,14 @@ def _get_np_dtype(tt_dtype):
 
 
 def _convert_float(input, input_dtype, output_dtype, rounding_mode):
+    if input_dtype in (tl.float16, tl.bfloat16,
+                       tl.float32) and output_dtype in (tl.float8e4nv, tl.float8e5, tl.float8e4b8,
+                                                        tl.float8e5b16) and rounding_mode == _ir.ROUNDING_MODE.RTNE:
+        if input_dtype == tl.bfloat16:
+            input = (input.astype(np.uint32) << 16).view(np.float32)
+        else:
+            input = input.astype(np.float32, copy=False)
+        return _interpreter.convert_fp8(input, output_dtype.name)
     input_uint_dtype = getattr(np, f"uint{input_dtype.primitive_bitwidth}")
     output_unint_dtype = getattr(np, f"uint{output_dtype.primitive_bitwidth}")
     input_bin = np.frombuffer(input.tobytes(), dtype=input_uint_dtype)
@@ -500,14 +508,14 @@ class InterpreterBuilder:
     def get_bf16(self, value):
         return self.create_fp_trunc(self.get_fp32(value), tl.bfloat16)
 
+    def get_fp8(self, value, dtype):
+        return self.create_fp_to_fp(self.get_fp32(value), dtype, _ir.ROUNDING_MODE.RTNE)
+
     def get_fp32(self, value):
         return TensorHandle(np.array([value], dtype=np.float32), tl.float32)
 
     def get_fp64(self, value):
         return TensorHandle(np.array([value], dtype=np.float64), tl.float64)
-
-    def get_null_value(self, type):
-        return TensorHandle(np.array([0], dtype=_get_np_dtype(type)), type)
 
     # programming model
     def create_get_program_id(self, axis):
