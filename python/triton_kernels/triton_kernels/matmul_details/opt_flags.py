@@ -342,16 +342,25 @@ def make_default_opt_flags_nvidia(
     if (not is_persistent and not enforce_bitwise_invariance
             and cuda_capability_geq(9, 0) and not cuda_capability_geq(10, 0)
             and compute_dtype == lhs_dtype == BF16 and rhs_dtype.bitwidth == 8
-            and out_dtype.bitwidth >= 32 and routing_data is None
+            and precision_config.c_mx_scale is None and routing_data is None
             and block_m == 128 and block_n == 256
             and constraints.get("block_n") is None and grid_size_tma >= n_sms):
         # Smaller tiles reduce register pressure while widening FP8 weights.
         # Keep the original grid saturated so split-K still matches BF16 inputs.
         block_n = 128
     if is_persistent and constraints.get("block_n") is None and out_dtype == FP64:
-        # FP64 epilogue conversions need room alongside the input stages.
-        # Keep its output tile within 128 KiB of shared memory.
-        block_n = min(block_n, 128 * 128 // block_m)
+        # Blackwell can store FP64 output in subtiles; otherwise reserve room
+        # for the full output tile alongside the input stages.
+        block_n_fallback = min(block_n, 128 * 128 // block_m)
+        if (not cuda_capability_geq(10, 0) or compute_dtype != FP32
+                or (rhs_dtype != FP32 and not w_transpose)
+                or enforce_bitwise_invariance or any(value is not None for value in constraints.values())
+                or opt_flags_nvidia.compute_grid_size(None, batch_size, m, n, block_m, block_n) < n_sms):
+            # Preserve explicit plans and small-grid split-K. Widening
+            # row-major weights also runs faster with the smaller tile.
+            block_n = block_n_fallback
+    else:
+        block_n_fallback = block_n
     if (is_persistent and constraints.get("block_n", None) is None
             and cuda_capability_geq(10, 0) and compute_dtype == FP32
             and not x_uses_tma_when_persistent):
@@ -402,69 +411,75 @@ def make_default_opt_flags_nvidia(
         # Split-K writes full-N scratch and applies fused reductions in the
         # reduce kernel, not in the matmul epilogue.
         epilogue_reduction_n = 1
-    compute_num_stages_args = (
-        precision_config,
-        is_persistent,
-        block_m,
-        block_n,
-        block_k,
-        torch_dtype_to_dtype(intermediate_out_dtype) if split_k > 1 else out_dtype,
-        lhs_dtype,
-        rhs_dtype,
-        x_transpose,
-        epilogue_effective_itemsize,
-        has_y_acc_in,
-        mx_block_size,
-        epilogue_reduction_n,
-    )
+    while True:
+        compute_num_stages_args = (
+            precision_config,
+            is_persistent,
+            block_m,
+            block_n,
+            block_k,
+            torch_dtype_to_dtype(intermediate_out_dtype) if split_k > 1 else out_dtype,
+            lhs_dtype,
+            rhs_dtype,
+            x_transpose,
+            epilogue_effective_itemsize,
+            has_y_acc_in,
+            mx_block_size,
+            epilogue_reduction_n,
+        )
 
-    num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, is_persistent, precision_config, constraints)
-    if compute_dtype == FP64 and constraints.get("num_warps") is None:
-        num_warps = max(num_warps, 4)
-    if is_large_ragged_nvfp4 and constraints.get("num_warps", None) is None:
-        # Eight warps overrun GB300 TMEM for the large ragged NVFP4 tile.
-        num_warps = 4
-    if (constraints.get("num_warps", None) is None
-            and is_persistent
-            and block_n <= 128
-            and block_k >= 256
-            and opt_flags_nvidia.is_blackwell_mx_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype)
-            and precision_config.c_mx_scale is None):
-        num_warps = max(num_warps, 8)
+        num_warps = opt_flags_nvidia.compute_num_warps(block_m, block_n, is_persistent, precision_config, constraints)
+        if compute_dtype == FP64 and constraints.get("num_warps") is None:
+            num_warps = max(num_warps, 4)
+        if is_large_ragged_nvfp4 and constraints.get("num_warps", None) is None:
+            # Eight warps overrun GB300 TMEM for the large ragged NVFP4 tile.
+            num_warps = 4
+        if (constraints.get("num_warps", None) is None
+                and is_persistent
+                and block_n <= 128
+                and block_k >= 256
+                and opt_flags_nvidia.is_blackwell_mx_lhs_dense_rhs(precision_config, lhs_dtype, rhs_dtype)
+                and precision_config.c_mx_scale is None):
+            num_warps = max(num_warps, 8)
 
-    # Occupancy target and maxnreg (for Hopper)
-    occupancy_target = 1
-    is_hopper_scale = isinstance(b_mx_scale_layout, HopperMXScaleLayout)
-    if is_hopper_scale:
-        occupancy_target = 16 // num_warps
-        if precision_config.a_mx_scale is not None and precision_config.c_mx_scale is not None:
-            # Hopper MXFP4 RHS plus MX input/output needs more than the
-            # 128-register cap implied by the default occupancy target.
-            occupancy_target = 1
-    threads_per_warp = 32
-    reg_per_sm = 64 * 1024
-    max_reg_per_thread = 256
-    is_blackwell_or_newer = cuda_capability_geq(10, 0)
-    if is_persistent and not is_blackwell_or_newer:
-        maxnreg = reg_per_sm // (num_warps * threads_per_warp * occupancy_target)
-        maxnreg = min(max_reg_per_thread, maxnreg)
-    else:
-        maxnreg = None
+        # Occupancy target and maxnreg (for Hopper)
+        occupancy_target = 1
+        is_hopper_scale = isinstance(b_mx_scale_layout, HopperMXScaleLayout)
+        if is_hopper_scale:
+            occupancy_target = 16 // num_warps
+            if precision_config.a_mx_scale is not None and precision_config.c_mx_scale is not None:
+                # Hopper MXFP4 RHS plus MX input/output needs more than the
+                # 128-register cap implied by the default occupancy target.
+                occupancy_target = 1
+        threads_per_warp = 32
+        reg_per_sm = 64 * 1024
+        max_reg_per_thread = 256
+        is_blackwell_or_newer = cuda_capability_geq(10, 0)
+        if is_persistent and not is_blackwell_or_newer:
+            maxnreg = reg_per_sm // (num_warps * threads_per_warp * occupancy_target)
+            maxnreg = min(max_reg_per_thread, maxnreg)
+        else:
+            maxnreg = None
 
-    if constraints.get("epilogue_subtile", None) is not None:
-        subtiles_to_check = [constraints["epilogue_subtile"]]
-    elif is_large_ragged_nvfp4:
-        subtiles_to_check = [2]
-    else:
-        subtiles_to_check = [1] if out_dtype == FP4 else [1, 2, 4]
-    num_stages = -1
-    for ep in subtiles_to_check:
-        ns = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, epilogue_subtile=ep,
-                                                 occupancy_target=occupancy_target,
-                                                 swap_xw=swap_xw,
-                                                 w_transpose=w_transpose, num_warps=num_warps)
-        if ns > num_stages:
-            epilogue_subtile, num_stages = ep, ns
+        if constraints.get("epilogue_subtile", None) is not None:
+            subtiles_to_check = [constraints["epilogue_subtile"]]
+        elif is_large_ragged_nvfp4:
+            subtiles_to_check = [2]
+        else:
+            subtiles_to_check = [1] if out_dtype == FP4 else [1, 2, 4]
+        num_stages = -1
+        for ep in subtiles_to_check:
+            ns = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, epilogue_subtile=ep,
+                                                     occupancy_target=occupancy_target,
+                                                     swap_xw=swap_xw,
+                                                     w_transpose=w_transpose, num_warps=num_warps)
+            if ns > num_stages:
+                epilogue_subtile, num_stages = ep, ns
+
+        # A full FP64 output tile may not fit even with one input stage.
+        if num_stages >= 1 or block_n <= block_n_fallback:
+            break
+        block_n = block_n_fallback
 
     # A smaller epilogue may fit a stage; clamp only after comparing candidates.
     num_stages = max(1, num_stages)

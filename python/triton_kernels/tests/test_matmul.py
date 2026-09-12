@@ -364,14 +364,13 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
     b_dtype = DType(weight_dtype_str)
     c_dtype = DType(output_dtype_str or act_dtype_str)
     device_capability = torch.cuda.get_device_capability()[0]
-    # TODO: remove when Triton FP8 supports proper RTNE
     if is_cuda():
         if device_capability < 10 and (a_dtype.is_nvfp4 or b_dtype.is_nvfp4 or c_dtype.is_nvfp4):
             pytest.skip("NVFP4 matmul only tested on Blackwell or newer")
         if device_capability < 9 and (a_dtype.uses_fp8e4nv or b_dtype.uses_fp8e4nv or c_dtype.uses_fp8e4nv):
             pytest.skip("FP8 E4M3FN tests require Hopper or newer")
-        if b_dtype.is_any_float8 and device_capability < 9:
-            pytest.skip("Float8 not tested on A100")
+        if b_dtype.is_any_float8 and b_dtype.has_mx_scale and device_capability < 9:
+            pytest.skip("Scaled FP8 weights require Hopper or newer")
         if act_dtype_str == "float16" and b_dtype.has_mx_scale and device_capability >= 10:
             pytest.skip("float16 x mx not supported with cuda capability >= 10")
         if b_dtype.has_mx_scale and a_dtype.has_global_scale and device_capability < 10:
@@ -596,15 +595,18 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
 
 
     # --- triton implementation ---
-    is_mixed_fp32 = {act_dtype_str, weight_dtype_str} in ({"float32", "float16"}, {"float32", "bfloat16"})
-    fp32_reference_succeeded = False
+    is_mixed = (a_dtype.torch_dtype != b_dtype.torch_dtype
+                and not a_dtype.has_mx_scale and not b_dtype.has_mx_scale)
+    promoted_reference_succeeded = False
     try:
-        if is_mixed_fp32:
-            fp32_y = matmul(a.float(), b.float(), bias,
+        if is_mixed:
+            promoted_dtype = next(common for lhs, rhs, common in _mixed_dtype_cases()
+                                  if {lhs, rhs} == {a_dtype.torch_dtype, b_dtype.torch_dtype})
+            promoted_y = matmul(a.to(promoted_dtype), b.to(promoted_dtype), bias,
                             a_ragged_metadata, b_ragged_metadata,
                             gather_indx, scatter_indx, precision_opt,
                             gammas=gammas, epilogue=epilogue, fused_activation=fused_activation)
-            fp32_reference_succeeded = True
+            promoted_reference_succeeded = True
         tri_y = matmul(a, b, bias,
                            a_ragged_metadata, b_ragged_metadata,
                            gather_indx, scatter_indx, precision_opt,
@@ -613,11 +615,12 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
         if c_dtype.has_global_scale:
             tri_y_scale = precision_opt.flex_ctx.out_data.actual_scale.clone()
     except (opt_flags.InapplicableConstraint, NotImplementedError) as e:
-        if fp32_reference_succeeded or (is_persistent and c.numel() == 0):
+        if promoted_reference_succeeded or (is_persistent and c.numel() == 0):
             raise
         pytest.skip(f"inapplicable opt_flags constraint {e}")
-    if is_mixed_fp32 and not is_compile_warmup():
-        torch.testing.assert_close(tri_y.view(torch.int32), fp32_y.view(torch.int32), rtol=0, atol=0)
+    if is_mixed and not is_compile_warmup():
+        torch.testing.assert_close(tri_y.contiguous().view(torch.uint8), promoted_y.contiguous().view(torch.uint8),
+                                   rtol=0, atol=0)
     # --- torch implementation ---
     # Fused NVFP4 output quantizes the float32 activation result and applies
     # expected_scale inside downcast_to_mxfp_torch, so keep the reference in
@@ -852,10 +855,25 @@ _MIXED_MATMUL_OUTPUT_CASES = [
 ] + [
     # Cover automatic split-K and the smaller regular tile for FP8 weights.
     (torch.bfloat16, dtype, torch.bfloat16, out_dtype, shape, {}, 1)
-    for dtype, out_dtype, shape in itertools.product(
-        (torch.float8_e4m3fn, torch.float8_e5m2), (torch.float32, torch.float64),
-        ((1024, 1024, 1024), (4096, 1024, 272), (4097, 1024, 272), (2049, 4097, 272)))
+    for dtype, (out_dtype, shape) in itertools.product(
+        (torch.float8_e4m3fn, torch.float8_e5m2), [
+            *itertools.product(
+                (torch.float32, torch.float64),
+                ((1024, 1024, 1024), (4096, 1024, 272), (4097, 1024, 272), (2049, 4097, 272))),
+            *itertools.product(
+                (torch.float8_e4m3fn, torch.float8_e5m2, torch.float16, torch.bfloat16),
+                ((4097, 1031, 272), (4096, 4096, 264))),
+        ])
+    if dtype in _supported_float_dtypes() and out_dtype in _supported_float_dtypes()
+] + [
+    # FP64 output must fit the automatic persistent tile and preserve split-K.
+    (dtype, torch.float32, torch.float32, torch.float64, (4096, 4096, 128), {}, 1)
+    for dtype in (torch.float8_e4m3fn, torch.float8_e5m2, torch.float16, torch.bfloat16)
     if dtype in _supported_float_dtypes()
+] + [
+    (torch.float16, torch.bfloat16, torch.float32, torch.float64, (4096, 4096, 128), {}, 1),
+    (torch.float16, torch.float32, torch.float32, torch.float64,
+     (1024, 1024, 1024), dict(is_persistent=True), 1),
 ])
 @pytest.mark.enable_warmup(priority=2)
 def test_matmul_mixed_dtypes(a_dtype, b_dtype, promoted_dtype, reverse, b_transpose, allow_tf32,
