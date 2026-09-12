@@ -659,3 +659,30 @@ tt.func @assume_not_dominating_loop(%lb: i32, %ub: i32, %flag: i1) {
   }
   tt.return
 }
+
+// -----
+
+// CHECK-LABEL: @hoisted_bound_load_is_masked
+// The scalar load that bounds the inner loop is hoisted above the outer loop so
+// the fused trip count can be computed before it, but the outer loop may run
+// zero times and the source program then never reads %q. The hoisted load must
+// carry the outer loop trip test as its mask, as triton-licm gives the same
+// load one pass later.
+// CHECK-SAME: [[Q:%.*]]: !tt.ptr<i32>, [[M:%.*]]: i32
+tt.func @hoisted_bound_load_is_masked(%q: !tt.ptr<i32>, %m: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  // CHECK: [[RUNS:%.*]] = arith.cmpi sgt, [[M]], %c0_i32
+  // CHECK: tt.load [[Q]], [[RUNS]]
+  // CHECK: scf.for
+  scf.for %i = %c0_i32 to %m step %c1_i32 : i32 {
+    %bound = tt.load %q : !tt.ptr<i32>
+    "prologue"(%i) : (i32) -> ()
+    scf.for %j = %c0_i32 to %bound step %c1_i32 : i32 {
+      "body"(%i, %j) : (i32, i32) -> ()
+      scf.yield
+    }
+    scf.yield
+  } {tt.flatten}
+  tt.return
+}
