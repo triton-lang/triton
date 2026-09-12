@@ -322,8 +322,10 @@ def make_default_opt_flags_nvidia(
         is_persistent = True
     else:
         has_simple_epilogue = precision_config.max_num_imprecise_acc is None
+        # IEEE FP32 accumulators spill in the persistent kernel.
         is_persistent = (
             supports_persistent and has_simple_epilogue
+            and (compute_dtype != FP32 or precision_config.allow_tf32)
             and (tiles_per_sm >= 2.0 or (compute_dtype or lhs_dtype).bitwidth <= 8)
             and (out_dtype.bitwidth < 32 or compute_dtype == FP32
                  or compute_dtype is None and (lhs_dtype == FP32 or rhs_dtype == FP32))
