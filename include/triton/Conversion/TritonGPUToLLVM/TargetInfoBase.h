@@ -77,6 +77,9 @@ public:
                           SmallVector<Value> &acc, triton::ReduceOp op,
                           unsigned reduceLaneIdMask) const = 0;
 
+  virtual Value warpPrefixPopcount(RewriterBase &rewriter, Location loc,
+                                   Value pred) const = 0;
+
   virtual std::string getMulhiFuncName(Type resultElementTy) const = 0;
   // Emits LLVM code with |rewriter| to print a message following the given
   // format from the device. |formatStrStart| is the pointer to the start of
