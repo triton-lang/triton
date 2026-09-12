@@ -21,3 +21,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     tt.return %D : tensor<16x16xi32, #mma0>
   }
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // Preparation may mark logical counts; lowering requires finalized counts.
+  tt.func @arrive_barrier_unfinalized(%bar: !ttg.memdesc<1xi64, #shared, #smem, mutable>) {
+    // expected-error@+2 {{per_warp count must be divisible by the warp count before lowering}}
+    // expected-error@+1 {{failed to legalize operation 'ttng.arrive_barrier' that was explicitly marked illegal}}
+    ttng.arrive_barrier %bar, 1 {per_warp} : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    tt.return
+  }
+}
