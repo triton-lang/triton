@@ -3136,6 +3136,24 @@ def test_optimize_thread_locality(op, BLOCK_N, N, num_pid_n, device):
     np.testing.assert_allclose(y_tri, y_ref, rtol=0.01, atol=1e-3)
 
 
+@pytest.mark.interpreter
+def test_optimize_thread_locality_preserves_rows(device):
+
+    @triton.jit
+    def kernel(x, y):
+        rows = tl.arange(0, 256)
+        result = tl.zeros((256, ), dtype=tl.float32)
+        for _ in range(2):
+            values = tl.load(x + rows[:, None] + 256 * tl.arange(0, 2)[None, :])
+            result += tl.sum(values, axis=1)
+        tl.store(y + rows, result)
+
+    x = torch.arange(256, device=device, dtype=torch.float32).repeat(2)
+    y = torch.empty(256, device=device)
+    kernel[(1, )](x, y, num_warps=1)
+    torch.testing.assert_close(y, 4 * x[:256])
+
+
 def test_no_rematerialization_op():
 
     if torch.version.hip:
@@ -6802,6 +6820,7 @@ def gather_test_kernel_1d(src_ptr, idx_ptr, out_ptr, axis: tl.constexpr, src_dim
 @pytest.mark.parametrize("src_shape, indices_shape, axis", [
     ([32], [64], 0),
     ([4, 4], [8, 4], 0),
+    ([4, 4], [4096, 4], 0),
     ([128, 64], [256, 64], 0),
     ([128, 64], [128, 128], 1),
 ])

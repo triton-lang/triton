@@ -176,10 +176,13 @@ static LogicalResult setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
   assert(llvm::none_of(warpsPerCTA, [](unsigned c) { return c == 0; }));
 
   // Just set `sizePerThread` to 1 along other dimensions and let broadcasting
-  // handling it. This also means we can use the same layout between the source
-  // and index tensors for simplicity.
+  // handle it. This also means we can use the same layout between the source
+  // and index tensors for simplicity. Along the gather axis, make sure the
+  // layout covers both tensors, which may have different dimension sizes.
   SmallVector<unsigned> sizePerThread(rank, 1);
-  sizePerThread[axis] = srcType.getDimSize(axis) / threadsPerWarp[axis];
+  sizePerThread[axis] =
+      std::max(srcType.getDimSize(axis), idxType.getDimSize(axis)) /
+      threadsPerWarp[axis];
 
   // Overflow by broadcasting along the gather axis since this is the most
   // predictable.
@@ -449,14 +452,41 @@ private:
   Operation *createReduce(OpBuilder &builder, triton::ReduceOp reduce,
                           Type viewOpTensorType) const {
     auto srcType = cast<RankedTensorType>(reduce.getOperands()[0].getType());
+    auto dstType = cast<RankedTensorType>(viewOpTensorType);
+    auto dstShape = dstType.getShape();
     auto rank = srcType.getShape().size();
+    auto blocked = cast<BlockedEncodingAttr>(srcType.getEncoding());
+    int64_t elemsPerThread = dstShape.back();
+    int64_t sizePerThread = std::min<int64_t>(
+        blocked.getSizePerThread()[reduce.getAxis()], elemsPerThread);
+
+    // Group register-owned elements without permuting non-reduction axes:
+    // [..., N] -> [..., R, H, S] -> [..., H, R, S] -> [..., H, R * S].
+    SmallVector<int64_t> factorShape(srcType.getShape().begin(),
+                                     srcType.getShape().end());
+    factorShape.back() = elemsPerThread / sizePerThread;
+    factorShape.push_back(dstShape[rank - 1]);
+    factorShape.push_back(sizePerThread);
+    SmallVector<int32_t> transposeOrder(rank + 2);
+    std::iota(transposeOrder.begin(), transposeOrder.end(), 0);
+    std::swap(transposeOrder[rank - 1], transposeOrder[rank]);
+
     builder.setInsertionPointAfter(reduce);
     IRMapping mapping;
     for (auto operand : reduce.getOperands()) {
-      auto viewOp = triton::ReshapeOp::create(
-          builder, reduce.getLoc(), viewOpTensorType, operand,
-          /*allowReorder=*/true, /*efficientLayout=*/true);
-      mapping.map(operand, viewOp);
+      auto factored = triton::ReshapeOp::create(builder, reduce.getLoc(),
+                                                factorShape, operand);
+      auto transposed = triton::TransOp::create(builder, reduce.getLoc(),
+                                                factored, transposeOrder);
+      auto viewOp = triton::ReshapeOp::create(builder, reduce.getLoc(),
+                                              dstShape, transposed);
+      viewOp.setEfficientLayout(true);
+      auto converted =
+          ConvertLayoutOp::create(builder, reduce.getLoc(), dstType, viewOp);
+      assert(cvtReordersRegisters(viewOp.getType(), converted.getType()) &&
+             "thread locality optimization requires a register-only layout "
+             "conversion");
+      mapping.map(operand, converted);
     }
 
     auto newReduce = cloneWithInferType(builder, &(*reduce), mapping);
