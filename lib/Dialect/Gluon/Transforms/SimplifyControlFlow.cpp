@@ -25,7 +25,6 @@ struct SimplifyControlFlow
 } // namespace
 
 void SimplifyControlFlow::runOnOperation() {
-  runDeadIterArgElimination(getOperation());
   MLIRContext *ctx = &getContext();
   RewritePatternSet patterns(&getContext());
 

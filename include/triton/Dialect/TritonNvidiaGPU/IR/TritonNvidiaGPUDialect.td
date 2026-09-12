@@ -43,6 +43,16 @@ def TritonNvidiaGPU_Dialect : Dialect {
 
   let useDefaultAttributePrinterParser = 1;
   let useDefaultTypePrinterParser = 1;
+
+  let extraClassDeclaration = [{
+    bool isTMemLayoutCompatible(RankedTensorType tensorType,
+                                gpu::MemDescType memType, int maxnreg);
+
+    private:
+      llvm::DenseMap<std::tuple<RankedTensorType, gpu::MemDescType, int>, bool>
+          tmemLayoutCache;
+      llvm::sys::SmartRWMutex<true> tmemLayoutCacheMutex;
+  }];
 }
 
 #endif

@@ -196,8 +196,11 @@ struct CoalesceAsyncCopyPass
     patterns.add<CoalesceCheapAsyncCopyGlobalToLocal>(
         axisInfoAnalysis, coalescedAsyncCopyMap, context);
 
-    if (failed(applyPatternsGreedily(m, std::move(patterns))))
-      signalPassFailure();
+    bool changed = false;
+    if (failed(applyPatternsGreedily(m, std::move(patterns), {}, &changed)))
+      return signalPassFailure();
+    if (!changed)
+      markAllAnalysesPreserved();
   }
 };
 

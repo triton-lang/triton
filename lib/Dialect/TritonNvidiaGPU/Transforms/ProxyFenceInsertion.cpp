@@ -145,8 +145,10 @@ struct ProxyFenceInsertionPass
       ProxyFenceInsertionPass>::TritonGPUProxyFenceInsertionBase;
 
   void runOnOperation() override {
-    if (computeCapability < 90)
+    if (computeCapability < 90) {
+      markAllAnalysesPreserved();
       return;
+    }
 
     ModuleOp module = getOperation();
     uint8_t scopes = 0;
@@ -156,8 +158,10 @@ struct ProxyFenceInsertionPass
       return scopes & kClusterScope ? WalkResult::interrupt()
                                     : WalkResult::advance();
     });
-    if (!scopes)
+    if (!scopes) {
+      markAllAnalysesPreserved();
       return;
+    }
 
     auto solver = createDataFlowSolver();
     auto *regions = solver->load<BufferRegionAnalysis>();

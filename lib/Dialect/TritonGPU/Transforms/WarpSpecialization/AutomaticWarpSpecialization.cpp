@@ -40,6 +40,7 @@ struct VerifyWarpSpecializationPartitions
       return WalkResult::advance();
     });
     (void)result;
+    markAllAnalysesPreserved();
   }
 };
 
@@ -94,6 +95,25 @@ std::unique_ptr<Pass> createVerifyWarpSpecializationPartitionsPass() {
 
 void AutomaticWarpSpecialization::runOnOperation() {
   OpPassManager pm;
+  bool hasWarpSpecializationWork =
+      getOperation()
+          .walk([](Operation *op) {
+            if (isa<LoopLikeOpInterface, WarpSpecializeOp>(op) ||
+                op->getName().getDialectNamespace() == "nvws")
+              return WalkResult::interrupt();
+            return WalkResult::advance();
+          })
+          .wasInterrupted();
+  if (!hasWarpSpecializationWork) {
+    // Retain the general simplifications, but there is nothing to partition,
+    // pipeline, or lower when there are no loops or warp-specialization ops.
+    pm.addPass(createSCCPPass());
+    pm.addPass(createCSEPass());
+    if (failed(runPipeline(pm, getOperation())))
+      return signalPassFailure();
+    clearInternalWarpSpecializationAttrs(getOperation());
+    return;
+  }
   auto addPassWithPartitionVerifier = [&](std::unique_ptr<Pass> pass) {
     pm.addPass(std::move(pass));
     pm.addPass(createVerifyWarpSpecializationPartitionsPass());

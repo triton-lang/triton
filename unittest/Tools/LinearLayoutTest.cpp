@@ -38,6 +38,27 @@ TEST_F(LinearLayoutTest, Empty) {
   EXPECT_THAT(to_vector(layout.getOutDimNames()), IsEmpty());
 }
 
+TEST_F(LinearLayoutTest, MatrixMultipleDimensionsAndZeroRows) {
+  LinearLayout layout({{S("a"), {{1, 1}, {2, 0}}}, {S("b"), {{2, 0}, {3, 0}}}},
+                      {{S("x"), 8}, {S("y"), 2}},
+                      /*requireSurjective=*/false);
+  auto matrix = getMatrix(layout);
+  EXPECT_EQ(matrix[0], 0b1001u);
+  EXPECT_EQ(matrix[1], 0b1110u);
+  EXPECT_EQ(matrix[2], 0u);
+  EXPECT_EQ(matrix[3], 0b0001u);
+}
+
+TEST_F(LinearLayoutTest, MatrixHighestColumn) {
+  std::vector<std::vector<int32_t>> bases(64, {0});
+  bases.front()[0] = 1;
+  bases.back()[0] = 1;
+  LinearLayout layout({{S("a"), bases}}, {{S("x"), 2}},
+                      /*requireSurjective=*/true);
+  auto matrix = getMatrix(layout);
+  EXPECT_EQ(matrix[0], (uint64_t{1} << 63) | 1);
+}
+
 TEST_F(LinearLayoutTest, Identity1D) {
   LinearLayout layout =
       LinearLayout::identity1D(32, S("testIns"), S("testOuts"));

@@ -564,6 +564,29 @@ def test_cache_closure():
     assert "cst has changed since we compiled this kernel, from constexpr[42] to constexpr[43]" in str(e.value)
 
 
+def test_ast_source_updates_and_public_parse(device):
+
+    @triton.jit
+    def kernel(out):
+        tl.store(out, 1)
+
+    first = torch.empty((), dtype=torch.int32, device=device)
+    kernel[(1, )](first)
+    assert first.item() == 1
+
+    # A caller may edit its parsed tree without changing future compilations.
+    public_tree = kernel.parse()
+    public_tree.body[0].body.clear()
+    second = torch.empty((), dtype=torch.int64, device=device)
+    kernel[(1, )](second)
+    assert second.item() == 1
+
+    kernel._unsafe_update_src(kernel.src.replace("out, 1", "out, 2"))
+    kernel.device_caches.clear()
+    kernel[(1, )](first)
+    assert first.item() == 2
+
+
 CLOSURE_SHADOW_GLOBAL = tl.constexpr(3)
 
 

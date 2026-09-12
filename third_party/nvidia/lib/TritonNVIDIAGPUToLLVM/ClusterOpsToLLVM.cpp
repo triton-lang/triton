@@ -252,15 +252,19 @@ struct InitializeWSClusterBarriers
     ModuleOp mod = getOperation();
     auto countAttr = mod->getAttrOfType<IntegerAttr>(
         triton::nvidia_gpu::kWSClusterBarrierCountAttrName);
-    if (!countAttr || countAttr.getInt() == 0)
+    if (!countAttr || countAttr.getInt() == 0) {
+      markAllAnalysesPreserved();
       return;
+    }
 
     auto funcs = mod.getOps<LLVM::LLVMFuncOp>();
     auto kernelIt = llvm::find_if(funcs, [](LLVM::LLVMFuncOp func) {
       return func->hasAttr(NVVM::NVVMDialect::getKernelFuncAttrName());
     });
-    if (kernelIt == funcs.end())
+    if (kernelIt == funcs.end()) {
+      markAllAnalysesPreserved();
       return;
+    }
     LLVM::LLVMFuncOp kernel = *kernelIt;
 
     NVIDIA::TargetInfo targetInfo(computeCapability, ptxVersion);
