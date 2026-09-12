@@ -351,12 +351,93 @@ public:
   }
 };
 
+// Whether wgmma.mma_async has an encoding for these element types, shape and
+// operand layouts (PTX ISA, asynchronous warpgroup level matrix instructions).
+// `needTransArgs` and `floatTypeWGMMA` describe the admitted form.
+static bool isSupportedWGMMA(ttn::WGMMAEltType eltTypeA,
+                             ttn::WGMMAEltType eltTypeB,
+                             ttn::WGMMAEltType eltTypeC, unsigned m, unsigned n,
+                             unsigned k, bool transA, bool transB,
+                             bool &needTransArgs, bool &floatTypeWGMMA) {
+  using namespace ttn;
+  bool supported = false;
+  // Below instructions do support transposing, must pass `trans` arguments
+  supported |=
+      (eltTypeA == WGMMAEltType::f16) && (eltTypeB == WGMMAEltType::f16) &&
+      (eltTypeC == WGMMAEltType::f16 || eltTypeC == WGMMAEltType::f32) &&
+      (m == 64 && 8 <= n && n <= 256 && k == 16);
+  supported |= (eltTypeA == WGMMAEltType::bf16) &&
+               (eltTypeB == WGMMAEltType::bf16) &&
+               (eltTypeC == WGMMAEltType::f32) &&
+               (m == 64 && 8 <= n && n <= 256 && k == 16);
+  needTransArgs = supported;
+  floatTypeWGMMA = supported;
+  // Below instructions do not support transposing
+  if (!supported && !transA && !transB) {
+    supported |= (eltTypeA == WGMMAEltType::tf32) &&
+                 (eltTypeB == WGMMAEltType::tf32) &&
+                 (eltTypeC == WGMMAEltType::f32) &&
+                 (m == 64 && 8 <= n && n <= 256 && k == 8);
+    supported |=
+        (eltTypeA == WGMMAEltType::e4m3 || eltTypeA == WGMMAEltType::e5m2) &&
+        (eltTypeB == WGMMAEltType::e4m3 || eltTypeB == WGMMAEltType::e5m2) &&
+        (eltTypeC == WGMMAEltType::f16 || eltTypeC == WGMMAEltType::f32) &&
+        (m == 64 && 8 <= n && n <= 256 && k == 32);
+    floatTypeWGMMA = supported;
+    // Below instructions are integer-based
+    supported |= (eltTypeA == WGMMAEltType::s8) &&
+                 (eltTypeB == WGMMAEltType::s8) &&
+                 (eltTypeC == WGMMAEltType::s32) &&
+                 (m == 64 && 8 <= n && n <= 224 && k == 32);
+  }
+  return supported;
+}
+
+// Whether `op` has a wgmma.mma_async encoding at all.
+static bool hasWGMMAEncoding(ttn::WGMMAOp op) {
+  using namespace ttn;
+  bool needTransArgs = false, floatTypeWGMMA = false;
+  return isSupportedWGMMA(
+      op.getEltTypeA(), op.getEltTypeB(), op.getEltTypeC(), op.getM(),
+      op.getN(), op.getK(), op.getLayoutA() == WGMMALayout::col,
+      op.getLayoutB() == WGMMALayout::row, needTransArgs, floatTypeWGMMA);
+}
+
+// A form with no wgmma.mma_async encoding is reported on the op instead of
+// tripping the assertion in getPtxAsm, which took the whole process down
+// (triton-lang/triton#11586: an s8 operand B left untransposed by warp
+// specialization). Called once per op after the rewrite, so the greedy driver
+// retrying the pattern does not repeat the diagnostic.
+static InFlightDiagnostic reportUnsupportedWGMMA(ttn::WGMMAOp op) {
+  using namespace ttn;
+  bool transA = op.getLayoutA() == WGMMALayout::col;
+  bool transB = op.getLayoutB() == WGMMALayout::row;
+  bool needTransArgs = false, floatTypeWGMMA = false;
+  InFlightDiagnostic diag =
+      op.emitOpError() << "unsupported wgmma instruction m" << op.getM() << "n"
+                       << op.getN() << "k" << op.getK()
+                       << " with A=" << stringifyWGMMAEltType(op.getEltTypeA())
+                       << ", B=" << stringifyWGMMAEltType(op.getEltTypeB())
+                       << ", C=" << stringifyWGMMAEltType(op.getEltTypeC())
+                       << ", layoutA=" << stringifyWGMMALayout(op.getLayoutA())
+                       << ", layoutB=" << stringifyWGMMALayout(op.getLayoutB());
+  if ((transA || transB) &&
+      isSupportedWGMMA(op.getEltTypeA(), op.getEltTypeB(), op.getEltTypeC(),
+                       op.getM(), op.getN(), op.getK(), false, false,
+                       needTransArgs, floatTypeWGMMA))
+    diag << "; this element type combination exists only for untransposed "
+            "operands";
+  return diag;
+}
+
 class WGMMAOpPattern : public OpRewritePattern<ttn::WGMMAOp> {
 public:
   using OpRewritePattern<ttn::WGMMAOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(ttn::WGMMAOp op,
                                 PatternRewriter &rewriter) const override {
+    if (!hasWGMMAEncoding(op))
+      return rewriter.notifyMatchFailure(op, "no wgmma.mma_async encoding");
     return rewriteAsPtxAsm(op, rewriter, getPtxAsm(op),
                            getOperandsAndConstraints(op),
                            getOutputConstraints(op));
@@ -433,37 +514,11 @@ public:
     // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#asynchronous-warpgroup-level-matrix-instructions-wgmma-mma
     bool transA = layoutA == WGMMALayout::col;
     bool transB = layoutB == WGMMALayout::row;
-    bool supported = false, needTransArgs = false, floatTypeWGMMA = false;
+    bool needTransArgs = false, floatTypeWGMMA = false;
     assert(m % 8 == 0 && n % 8 == 0 && k % 8 == 0);
-    // Below instructions do support transposing, must pass `trans` arguments
-    supported |=
-        (eltTypeA == WGMMAEltType::f16) && (eltTypeB == WGMMAEltType::f16) &&
-        (eltTypeC == WGMMAEltType::f16 || eltTypeC == WGMMAEltType::f32) &&
-        (m == 64 && 8 <= n && n <= 256 && k == 16);
-    supported |= (eltTypeA == WGMMAEltType::bf16) &&
-                 (eltTypeB == WGMMAEltType::bf16) &&
-                 (eltTypeC == WGMMAEltType::f32) &&
-                 (m == 64 && 8 <= n && n <= 256 && k == 16);
-    needTransArgs = supported;
-    floatTypeWGMMA = supported;
-    // Below instructions do not support transposing
-    if (!supported && !transA && !transB) {
-      supported |= (eltTypeA == WGMMAEltType::tf32) &&
-                   (eltTypeB == WGMMAEltType::tf32) &&
-                   (eltTypeC == WGMMAEltType::f32) &&
-                   (m == 64 && 8 <= n && n <= 256 && k == 8);
-      supported |=
-          (eltTypeA == WGMMAEltType::e4m3 || eltTypeA == WGMMAEltType::e5m2) &&
-          (eltTypeB == WGMMAEltType::e4m3 || eltTypeB == WGMMAEltType::e5m2) &&
-          (eltTypeC == WGMMAEltType::f16 || eltTypeC == WGMMAEltType::f32) &&
-          (m == 64 && 8 <= n && n <= 256 && k == 32);
-      floatTypeWGMMA = supported;
-      // Below instructions are integer-based
-      supported |= (eltTypeA == WGMMAEltType::s8) &&
-                   (eltTypeB == WGMMAEltType::s8) &&
-                   (eltTypeC == WGMMAEltType::s32) &&
-                   (m == 64 && 8 <= n && n <= 224 && k == 32);
-    }
+    [[maybe_unused]] bool supported =
+        isSupportedWGMMA(eltTypeA, eltTypeB, eltTypeC, m, n, k, transA, transB,
+                         needTransArgs, floatTypeWGMMA);
     assert(supported && "WGMMA type or shape is not supported");
 
     // Operands
@@ -674,6 +729,15 @@ public:
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
+    // A wgmma the pattern declined is still in the module: report it and fail
+    // the pass here rather than in the LLVM translation.
+    bool declined = false;
+    mod.walk([&](ttn::WGMMAOp op) {
+      declined = true;
+      (void)reportUnsupportedWGMMA(op);
+    });
+    if (declined)
+      return signalPassFailure();
 
     lowerTensorMemoryAlloc(mod);
     makeAllWarpGroupsIsolatedFromAbove(mod);
