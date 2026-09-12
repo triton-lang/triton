@@ -710,7 +710,8 @@ void init_triton_llvm(py::module_ &m) {
       [](llvm::Module *mod, const llvm::OptimizationLevel &opt,
          std::string arch, std::string features, std::vector<std::string> flags,
          bool enable_fp_fusion, bool disable_slp_vectorizer,
-         bool disable_vector_combine, bool expand_masked_div_rem) {
+         bool disable_vector_combine, bool expand_masked_div_rem,
+         unsigned simplify_vector_elts_depth) {
         if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
           return;
         // Declare the same flags as codegen even though IR optimization does
@@ -720,6 +721,11 @@ void init_triton_llvm(py::module_ &m) {
         options.enable(flags);
         options.enableFlagsFromDisableLLVMOptEnv();
         options.enablePrintAfterAllIfRequested();
+        // How deep SimplifyDemandedVectorElts walks an extract/insert chain
+        // before giving up. 0 keeps LLVM's default.
+        if (simplify_vector_elts_depth != 0)
+          options.set("instcombine-simplify-vector-elts-depth",
+                      std::to_string(simplify_vector_elts_depth));
         ScopedLLVMOptions optionScope(options.settings);
         using namespace llvm;
         LoopAnalysisManager lam;
@@ -838,6 +844,7 @@ void init_triton_llvm(py::module_ &m) {
       py::arg("disable_slp_vectorizer") = false,
       py::arg("disable_vector_combine") = false,
       py::arg("expand_masked_div_rem") = false,
+      py::arg("simplify_vector_elts_depth") = 0,
       py::call_guard<py::gil_scoped_release>());
 
   m.def(
