@@ -999,6 +999,30 @@ def test_matmul_mixed_range_and_precision(a_dtype, b_dtype, promoted_dtype, reve
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
+@pytest.mark.parametrize("a_dtype, b_dtype", [
+    (lhs, rhs) for lhs, rhs, promoted in _mixed_dtype_cases() if promoted == torch.float32
+])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("b_transpose", [False, True])
+@pytest.mark.parametrize("allow_tf32", [False, True])
+def test_matmul_mixed_fp64_accumulation(a_dtype, b_dtype, reverse, b_transpose, allow_tf32,
+                                      device, opt_flags_scope):
+    if reverse:
+        a_dtype, b_dtype = b_dtype, a_dtype
+    torch.manual_seed(0)
+    m, n, k = 4096, 4096, 128
+    a = torch.randn((m, k), dtype=torch.float64, device=device).to(a_dtype)
+    b = torch.randn((n, k) if b_transpose else (k, n), dtype=torch.float64, device=device).to(b_dtype)
+    if b_transpose:
+        b = b.mT
+    actual = torch.randn((m, n), dtype=torch.float64, device=device)
+    expected = actual.clone()
+    config = PrecisionConfig(out_dtype=torch.float64, allow_tf32=allow_tf32)
+    expected = matmul(a.float(), b.float(), None, c=expected, c_acc_in=expected, precision_config=config)
+    actual = matmul(a, b, None, c=actual, c_acc_in=actual, precision_config=config)
+    torch.testing.assert_close(actual.view(torch.uint8), expected.view(torch.uint8), rtol=0, atol=0)
+
+
 @pytest.mark.parametrize("a_dtype, b_dtype, promoted_dtype, out_dtype, shape, constraints, b_transpose", [
     (torch.float8_e4m3fn, dtype, dtype, out_dtype, shape, constraints, b_transpose)
     for dtype in (torch.float16, torch.bfloat16)
