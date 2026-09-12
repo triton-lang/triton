@@ -455,10 +455,14 @@ def TT_AtomicCASOp : TT_Op<"atomic_cas", [
   AtomicOpInterface,
   SameOperandsAndResultShape,
   SameOperandsAndResultEncoding,
+  DeclareOpInterfaceMethods<PredicatedOpInterface>,
   TypesMatchWith<"ptr type matches cmp type", "cmp", "ptr",
                   "getPointerTypeSameShape($_self)">,
   TypesMatchWith<"ptr type matches value type", "val", "ptr",
-                  "getPointerTypeSameShape($_self)">
+                  "getPointerTypeSameShape($_self)">,
+  TypesMatchWith<"mask type matches value type",
+                 "val", "mask", "getI1SameShape($_self)",
+                 "($_op.getOperands().size() <= 3) || std::equal_to<>()">
 ]> {
     let summary = "atomic cas";
 
@@ -476,6 +480,7 @@ def TT_AtomicCASOp : TT_Op<"atomic_cas", [
       Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
       TT_Type:$cmp,
       TT_Type:$val,
+      Optional<TT_BoolLike>:$mask,
       TT_MemSemanticAttr:$sem,
       TT_MemSyncScopeAttr:$scope
     );
@@ -485,7 +490,7 @@ def TT_AtomicCASOp : TT_Op<"atomic_cas", [
     // Explicitly list $sem and $scope rather than relying on attr-dict so
     // they're printed as strings rather than opaque integers.
     let assemblyFormat = [{
-      $sem `,` $scope `,` $ptr `,` $cmp `,` $val attr-dict `:`
+      $sem `,` $scope `,` $ptr `,` $cmp `,` $val (`,` $mask^)?  attr-dict `:`
       functional-type(operands, $result)
      }];
 }

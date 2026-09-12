@@ -193,6 +193,14 @@ void AtomicRMWOp::setPredicateOperand(Value pred) {
 
 Type AtomicRMWOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
 
+Value AtomicCASOp::getPredicateOperand() { return getMask(); }
+
+void AtomicCASOp::setPredicateOperand(Value pred) {
+  getMaskMutable().assign(pred);
+}
+
+Type AtomicCASOp::getPredicateOperandTypeLike() { return getPtr().getType(); }
+
 Value AtomicLoadOp::getPredicateOperand() { return getMask(); }
 
 void AtomicLoadOp::setPredicateOperand(Value pred) {
