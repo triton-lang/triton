@@ -156,20 +156,29 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @end_cluster_barrier_without_shared_memory
+  // CHECK-NEXT: ttng.cluster_barrier
+  // CHECK-NEXT: tt.return
+  tt.func @end_cluster_barrier_without_shared_memory() {
+    tt.return
+  }
+}
+
+// -----
+
 #sharedA = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
 #sharedB = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1]]}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  // Negative test: in 2CTA kernels with non-zero tensor memory size, TMEM
-  // teardown sync at kernel exit means we should not add an extra cluster barrier.
-  // CHECK-LABEL: @no_end_cluster_barrier_for_mma_with_tmem_teardown
+  // CHECK-LABEL: @end_cluster_barrier_for_mma_with_tmem_teardown
   // CHECK: ttng.tmem_alloc
   // CHECK: ttng.tc_gen5_mma
-  // CHECK-NOT: ttng.cluster_barrier
-  // CHECK: tt.return
-  tt.func @no_end_cluster_barrier_for_mma_with_tmem_teardown() {
+  // CHECK: ttng.cluster_barrier
+  // CHECK-NEXT: tt.return
+  tt.func @end_cluster_barrier_for_mma_with_tmem_teardown() {
     %true = arith.constant true
     %a = ttg.local_alloc : () -> !ttg.memdesc<256x32xf16, #sharedA, #smem, mutable>
     %b = ttg.local_alloc : () -> !ttg.memdesc<32x128xf16, #sharedB, #smem, mutable>
@@ -353,7 +362,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // Negative test: no cluster barrier should be inserted for multiCTA when the layouts don't cross CTAs
   // CHECK-LABEL: @no_cluster_convert_block_trivial
   // CHECK-NOT: ttng.cluster_barrier
-  // CHECK: tt.return
+  // CHECK: ttg.local_load
+
+  // FIXME: Conservatively insert a cluster barrier.
+  // CHECK-NEXT: ttng.cluster_barrier
+  // CHECK-NEXT: tt.return
   tt.func @no_cluster_convert_block_trivial() -> tensor<256x128xf16, #blockedSrc> {
     %cst = arith.constant dense<0.000000e+00> : tensor<256x128xf16, #blockedSrc>
     %cvt = ttg.convert_layout %cst : tensor<256x128xf16, #blockedSrc> -> tensor<256x128xf16, #blockedDst>
@@ -409,10 +422,12 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  // Negative test: no cluster barrier should be inserted for multiCTA reduce when the axis is not split
+  // No dependency barrier is needed when the reduction axis is not split.
   // CHECK-LABEL: @no_cluster_reduce_unsplit_axis
   // CHECK-NOT: ttng.cluster_barrier
-  // CHECK: tt.return
+  // CHECK: ttg.local_load
+  // CHECK-NEXT: ttng.cluster_barrier
+  // CHECK-NEXT: tt.return
   tt.func @no_cluster_reduce_unsplit_axis() -> tensor<256xf16, #slice1> {
     %cst = arith.constant dense<0.000000e+00> : tensor<256x128xf16, #blockedSplitM>
     %red = "tt.reduce"(%cst) ({
@@ -583,7 +598,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
   // CHECK: ttng.wait_barrier
   // CHECK: ttng.cluster_barrier
-  // CHECK: tt.return
+  // CHECK-NEXT: tt.return
   tt.func @no_cluster_when_same_allocation(%desc: !tt.tensordesc<64x128xf16, #nvmma>) -> tensor<64x128xf16, #blocked> {
     %c0 = arith.constant 0 : i32
     %true = arith.constant true
