@@ -226,6 +226,7 @@ def make_default_opt_flags_nvidia(
     unsupported = set(constraints.keys()) - constraints_supported
     assert not unsupported, f"Given unsupported constraint: {unsupported}"
     is_mixed_fp8 = opt_flags_nvidia.is_unscaled_mixed_fp8(precision_config, lhs_dtype, rhs_dtype)
+    is_mixed_fp32 = opt_flags_nvidia.is_unscaled_mixed_fp32(precision_config, lhs_dtype, rhs_dtype)
     is_large_ragged_nvfp4 = (
         routing_data is not None
         and m >= _MIN_NVFP4_RAGGED_TRAIN_ROWS
@@ -349,11 +350,11 @@ def make_default_opt_flags_nvidia(
         # a mx scale has been swizzled to BlackwellActMXScaleLayout, enforce block_m=128 to align with swizzling layout
         block_m = 128
     swap_xw = constraints.get("swap_xw")
-    if is_mixed_fp8 and rhs_dtype == FP8_E4M3FN and is_persistent:
-        # Convert FP8 in the MMA's lhs registers/TMEM, avoiding a widened RHS buffer.
+    if is_persistent and ((is_mixed_fp8 and rhs_dtype == FP8_E4M3FN) or (is_mixed_fp32 and lhs_dtype == FP32)):
+        # Widen the narrower operand in the MMA's lhs, avoiding an expanded RHS buffer.
         if swap_xw is None and block_n >= 64:
             swap_xw = True
-        if (swap_xw and not enforce_bitwise_invariance and slice_size >= block_n > block_m
+        if (is_mixed_fp8 and swap_xw and not enforce_bitwise_invariance and slice_size >= block_n > block_m
                 and constraints.get("block_m") is None and constraints.get("block_n") is None):
             block_m, block_n = block_n, block_m
     # block k
