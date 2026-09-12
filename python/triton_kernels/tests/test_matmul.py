@@ -822,6 +822,67 @@ def test_mxfp8_act_scale_store_zeroes_partial_group(n, is_persistent, device):
         assert torch.all(unused_groups == 0xFF)
 
 
+@pytest.mark.parametrize("shape,scale_kind,configuration", [
+    ((128, 256, 256), "a_only", "fixed"),
+    ((192, 384, 1024), "scalar", "default"),
+    ((2, 128, 256, 256), "scalar", "fixed"),
+    ((128, 256, 256), "fiber", "fixed"),
+])
+def test_nvfp4_tensor_scales(shape, scale_kind, configuration, device, monkeypatch):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("requires Blackwell or newer")
+    from triton_kernels.numerics_details.mxfp import downcast_to_mxfp
+    from triton_kernels.tensor import FP4
+    import triton_kernels.matmul as matmul_module
+
+    monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", False)
+    torch.manual_seed(0)
+    batch = shape[:-3]
+    m, n, k = shape[-3:]
+    values_a, scales_a = downcast_to_mxfp(
+        torch.randn((*batch, m, k), device=device, dtype=torch.bfloat16), torch.uint8,
+        axis=-1, scale_dtype=torch.float8_e4m3fn, microblock_size=16,
+    )
+    values_b, scales_b = downcast_to_mxfp(
+        torch.randn((*batch, k, n), device=device, dtype=torch.bfloat16), torch.uint8,
+        axis=-2, scale_dtype=torch.float8_e4m3fn, microblock_size=16,
+    )
+    ref_a = upcast_from_mxfp_torch(values_a, scales_a, torch.float32, axis=-1)
+    ref_b = upcast_from_mxfp_torch(values_b, scales_b, torch.float32, axis=-2)
+    a = wrap_torch_tensor(values_a, dtype=FP4)
+    b = convert_layout(wrap_torch_tensor(values_b, dtype=FP4), layout.BlackwellMXValueLayout())
+    sa = convert_layout(wrap_torch_tensor(scales_a), layout.BlackwellActMXScaleLayout(None))
+    sb = convert_layout(wrap_torch_tensor(scales_b), layout.BlackwellMXScaleLayout())
+    scale_a = torch.linspace(0.5, 1.5, m, device=device) if scale_kind == "fiber" else torch.tensor(0.75, device=device)
+    scale_b = None if scale_kind == "a_only" else torch.tensor(1.25, device=device)
+    precision = PrecisionConfig(
+        a_mx_scale=sa, b_mx_scale=sb, a_microblock_size=16, b_microblock_size=16,
+        a_mx_tensor_scale=scale_a, b_mx_tensor_scale=scale_b, out_dtype=torch.bfloat16,
+    )
+    constraints = {} if configuration == "default" else dict(
+        block_m=128, block_n=256, block_k=256, num_warps=4,
+        num_stages=3, epilogue_subtile=4, group_m=4,
+        is_persistent=True, split_k=1, swap_xw=False, use_output_tma=False,
+    )
+    selected_flags = []
+    make_flags = matmul_module.make_opt_flags
+
+    def record_flags(*args, **kwargs):
+        flags = make_flags(*args, **kwargs)
+        selected_flags.append(flags)
+        return flags
+
+    monkeypatch.setattr(matmul_module, "make_opt_flags", record_flags)
+    with opt_flags.scoped_opt_flags_constraints(constraints):
+        actual = matmul(a, b, None, precision_config=precision)
+    if configuration == "default" and torch.cuda.get_device_capability() >= (10, 3):
+        assert selected_flags[0].num_stages == 3
+    ref_a *= scale_a[..., None] if scale_kind == "fiber" else scale_a
+    if scale_b is not None:
+        ref_b *= scale_b
+    torch.testing.assert_close(actual.float(), ref_a @ ref_b, atol=0.01, rtol=0.01)
+
+
 def test_k_ragged_mxfp8_act_scale_swizzling(device):
     if not is_cuda() or torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("requires Blackwell or newer")
