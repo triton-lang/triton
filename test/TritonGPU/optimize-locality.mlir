@@ -622,19 +622,35 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // -----
 
-// CHECK-LABEL: remains_unchanged
-// CHECK: %[[CST:.*]] = arith.constant dense
-// CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[CST]]) -> {{.*}}
+// This case used to be skipped purely because the reduce operand was produced
+// by arith.mulf rather than directly by tt.load. That restriction was scope, not
+// semantics, so the loop is now optimized like any other max reduction.
+//
+// Note the accumulator init here is dense<0.0>, which is NOT the identity of
+// maximumf (-inf). That is still correct: the rewritten loop starts its new
+// accumulator at the true neutral element (-inf) and folds the original 0.0 back
+// in after the loop via `arith.maximumf %[[CVT_OUTPUT]], %[[CST]]`, so the result
+// is max(0.0, max over all elements) exactly as before. @max_reduce_zero_int_accumulator
+// above is the same loop without the mulf and asserts this same behavior.
+// CHECK-LABEL: max_reduce_of_elementwise_zero_accumulator
+// CHECK: %[[CST:.*]] = arith.constant dense<0.000000e+00>
+// CHECK-NEXT: %[[CST1:.*]] = arith.constant dense<0xFF800000>
+// CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[CST1]]) -> {{.*}}
 // CHECK: %[[LOAD:.*]] = tt.load
 // CHECK: %[[MULF:.*]] = arith.mulf %[[LOAD]], %[[LOAD]]
-// CHECK-NEXT: %[[REDUCE:.*]] = "tt.reduce"(%[[MULF]]) <{axis = 1 : i32}>
+// CHECK: tt.reshape %[[MULF]]
+// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.maximumf
 // CHECK: arith.maximumf %[[FOR_ARG]], %[[REDUCE]]
 // CHECK-NEXT: scf.yield
+// CHECK: %[[FINAL_REDUCE:.*]] = "tt.reduce"(%[[LOOP_OUTPUT]]) <{axis = 1 : i32}>
+// CHECK: arith.maximumf
+// CHECK: %[[CVT_OUTPUT:.*]] = ttg.convert_layout %[[FINAL_REDUCE]]
+// CHECK: arith.maximumf %[[CVT_OUTPUT]], %[[CST]]
 #blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @remains_unchanged(
+  tt.func public @max_reduce_of_elementwise_zero_accumulator(
     %arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
     %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32},
     %arg2: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 8 : i32},
@@ -883,4 +899,453 @@ tt.func @skip_optimize_on_1d_tensor(%arg0: tensor<256xf32, #blocked>, %arg1: ten
   tt.return %0 : tensor<8xf32, #blocked>
 }
 
+}
+
+// -----
+
+// Reduce of an elementwise op (x*x -- the variance / sum-of-squares pattern).
+// The operand of the reduce is produced by arith.mulf inside the loop rather
+// than directly by a tt.load, which used to disable the optimization.
+// CHECK-LABEL: reduce_of_elementwise
+// CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = {{%.*}}) -> {{.*}}
+// CHECK: %[[LOAD:.*]] = tt.load
+// CHECK: %[[MUL:.*]] = arith.mulf %[[LOAD]], %[[LOAD]]
+// CHECK: %[[FACTORED:.*]] = tt.reshape %[[MUL]] : {{.*}} -> tensor<{{32x2x32x2xf32.*}}>
+// CHECK-NEXT: %[[TRANSPOSED:.*]] = tt.trans %[[FACTORED]] {order = array<i32: 0, 2, 1, 3>}
+// CHECK-NEXT: tt.reshape %[[TRANSPOSED]] efficient_layout
+// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
+// CHECK: arith.addf %[[FOR_ARG]], %[[REDUCE]]
+// CHECK-NEXT: scf.yield
+// CHECK: %[[FINAL_REDUCE:.*]] = "tt.reduce"(%[[LOOP_OUTPUT]]) <{axis = 1 : i32}>
+// CHECK: %[[CVT_OUTPUT:.*]] = ttg.convert_layout %[[FINAL_REDUCE]]
+// The original accumulator init is folded back in after the loop.
+// CHECK: arith.addf %[[CVT_OUTPUT]], {{%.*}}
+// CHECK: tt.store
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @reduce_of_elementwise(
+    %18: tensor<32x128x!tt.ptr<f32>, #blocked> {tt.divisibility = 16 : i32},
+    %11: i32 {tt.divisibility = 16 : i32},
+    %25: tensor<32x!tt.ptr<f32>, #blocked1> {tt.divisibility = 16 : i32}
+    ) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %c128_i32 = arith.constant 128 : i32
+    %1 = tt.get_program_id y : i32
+    %2 = tt.get_num_programs y : i32
+    %12 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %19 = scf.for %arg3 = %1 to %11 step %2 iter_args(%arg4 = %cst) -> (tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>)  : i32 {
+      %27 = arith.muli %arg3, %c128_i32 : i32
+      %28 = tt.splat %27 : i32 -> tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+      %29 = arith.addi %28, %12 : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+      %30 = tt.expand_dims %29 {axis = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x128xi32, #blocked>
+      %31 = tt.broadcast %30 : tensor<1x128xi32, #blocked> -> tensor<32x128xi32, #blocked>
+      %32 = tt.addptr %18, %31 : tensor<32x128x!tt.ptr<f32>, #blocked>, tensor<32x128xi32, #blocked>
+      %33 = tt.load %32 : tensor<32x128x!tt.ptr<f32>, #blocked>
+      %sq = arith.mulf %33, %33 : tensor<32x128xf32, #blocked>
+      %34 = "tt.reduce"(%sq) <{axis = 1 : i32}> ({
+      ^bb0(%arg5: f32, %arg6: f32):
+        %36 = arith.addf %arg5, %arg6 : f32
+        tt.reduce.return %36 : f32
+      }) : (tensor<32x128xf32, #blocked>) -> tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %35 = arith.addf %arg4, %34 : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      scf.yield %35 : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    }
+    %26 = ttg.convert_layout %19 : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<32xf32, #blocked1>
+    tt.store %25, %26 : tensor<32x!tt.ptr<f32>, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
+// Reduce of tt.exp (the softmax denominator pattern) is likewise optimized.
+// CHECK-LABEL: reduce_of_exp
+// CHECK: %[[EXP:.*]] = math.exp
+// CHECK: tt.reshape %[[EXP]]
+// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
+// CHECK: "tt.reduce"({{%.*}}) <{axis = 1 : i32}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @reduce_of_exp(
+    %18: tensor<32x128x!tt.ptr<f32>, #blocked> {tt.divisibility = 16 : i32},
+    %11: i32 {tt.divisibility = 16 : i32},
+    %25: tensor<32x!tt.ptr<f32>, #blocked1> {tt.divisibility = 16 : i32}
+    ) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %c128_i32 = arith.constant 128 : i32
+    %1 = tt.get_program_id y : i32
+    %2 = tt.get_num_programs y : i32
+    %12 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %19 = scf.for %arg3 = %1 to %11 step %2 iter_args(%arg4 = %cst) -> (tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>)  : i32 {
+      %27 = arith.muli %arg3, %c128_i32 : i32
+      %28 = tt.splat %27 : i32 -> tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+      %29 = arith.addi %28, %12 : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+      %30 = tt.expand_dims %29 {axis = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x128xi32, #blocked>
+      %31 = tt.broadcast %30 : tensor<1x128xi32, #blocked> -> tensor<32x128xi32, #blocked>
+      %32 = tt.addptr %18, %31 : tensor<32x128x!tt.ptr<f32>, #blocked>, tensor<32x128xi32, #blocked>
+      %33 = tt.load %32 : tensor<32x128x!tt.ptr<f32>, #blocked>
+      %ex = math.exp %33 : tensor<32x128xf32, #blocked>
+      %34 = "tt.reduce"(%ex) <{axis = 1 : i32}> ({
+      ^bb0(%arg5: f32, %arg6: f32):
+        %36 = arith.addf %arg5, %arg6 : f32
+        tt.reduce.return %36 : f32
+      }) : (tensor<32x128xf32, #blocked>) -> tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %35 = arith.addf %arg4, %34 : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      scf.yield %35 : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    }
+    %26 = ttg.convert_layout %19 : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<32xf32, #blocked1>
+    tt.store %25, %26 : tensor<32x!tt.ptr<f32>, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
+// Negative test: the reduce operand is loop-invariant (defined outside the
+// loop), so there is no per-iteration value to accumulate thread-locally and
+// the optimization must be skipped. The reduce stays on axis 1 inside the loop.
+// CHECK-LABEL: loop_invariant_reduce_operand
+// CHECK: scf.for
+// CHECK-NOT: tt.trans
+// CHECK: "tt.reduce"({{.*}}) <{axis = 1 : i32}>
+// CHECK-NOT: <{axis = 2 : i32}>
+// CHECK: scf.yield
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @loop_invariant_reduce_operand(
+    %18: tensor<32x128x!tt.ptr<f32>, #blocked> {tt.divisibility = 16 : i32},
+    %11: i32 {tt.divisibility = 16 : i32},
+    %25: tensor<32x!tt.ptr<f32>, #blocked1> {tt.divisibility = 16 : i32}
+    ) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %1 = tt.get_program_id y : i32
+    %2 = tt.get_num_programs y : i32
+    // Loaded once, outside the loop.
+    %invariant = tt.load %18 : tensor<32x128x!tt.ptr<f32>, #blocked>
+    %19 = scf.for %arg3 = %1 to %11 step %2 iter_args(%arg4 = %cst) -> (tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>)  : i32 {
+      %34 = "tt.reduce"(%invariant) <{axis = 1 : i32}> ({
+      ^bb0(%arg5: f32, %arg6: f32):
+        %36 = arith.addf %arg5, %arg6 : f32
+        tt.reduce.return %36 : f32
+      }) : (tensor<32x128xf32, #blocked>) -> tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %35 = arith.addf %arg4, %34 : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      scf.yield %35 : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    }
+    %26 = ttg.convert_layout %19 : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<32xf32, #blocked1>
+    tt.store %25, %26 : tensor<32x!tt.ptr<f32>, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
+// Negative test: the reduce result is combined with %31 (an ordinary in-loop
+// value), not with the loop-carried accumulator, even though the combined
+// result is yielded. This is not an accumulation, so the loop must not be
+// rewritten. Reduced from @multi_rematerialize_loop_arg in combine.mlir, which
+// asserted in the rewrite before the accumulator operand was validated.
+// CHECK-LABEL: reduce_update_is_not_accumulator
+// CHECK: scf.for
+// CHECK-NOT: tt.trans
+// CHECK: "tt.reduce"({{.*}}) <{axis = 1 : i32}>
+// CHECK: scf.yield
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @reduce_update_is_not_accumulator(
+    %ptrs: tensor<32x128x!tt.ptr<f32>, #blocked>,
+    %ub: i32,
+    %other: tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    ) -> tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %res = scf.for %i = %c0 to %ub step %c1 iter_args(%acc = %cst) -> (tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>)  : i32 {
+      %v = tt.load %ptrs : tensor<32x128x!tt.ptr<f32>, #blocked>
+      // The accumulator is scaled into a fresh value first ...
+      %scaled = arith.mulf %acc, %other : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %r = "tt.reduce"(%v) <{axis = 1 : i32}> ({
+      ^bb0(%a: f32, %b: f32):
+        %s = arith.addf %a, %b : f32
+        tt.reduce.return %s : f32
+      }) : (tensor<32x128xf32, #blocked>) -> tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      // ... so this addf combines the reduce with %scaled, not with %acc.
+      %upd = arith.addf %scaled, %r : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      scf.yield %upd : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    }
+    tt.return %res : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+  }
+}
+
+// -----
+
+// Negative test: the inner reduction combines with arith.addf but the loop
+// update combines with arith.mulf, i.e. a product of per-iteration sums. The
+// rewrite seeds the new accumulator with the INNER reduction's neutral element
+// (0 for addf) and then folds partials with the OUTER op (mulf), which would
+// multiply everything by zero and silently return 0. The two combiners must
+// match, so the loop is left alone.
+// NOTE: this miscompiles on an unmodified tree as well when the reduce operand
+// comes straight from a tt.load -- see @mul_outer_add_inner_from_load below.
+// CHECK-LABEL: mul_outer_add_inner
+// CHECK: %[[CST:.*]] = arith.constant dense<1.000000e+00>
+// CHECK: scf.for {{.*}} iter_args({{.*}} = %[[CST]])
+// CHECK-NOT: tt.trans
+// CHECK: "tt.reduce"({{.*}}) <{axis = 1 : i32}>
+// CHECK: arith.mulf
+// CHECK: scf.yield
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @mul_outer_add_inner(%arg0: tensor<32x128x!tt.ptr<f32>, #blocked>, %ub: i32) -> tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>> {
+    %one = arith.constant dense<1.000000e+00> : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %r = scf.for %i = %c0 to %ub step %c1 iter_args(%acc = %one) -> (tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>) : i32 {
+      %v = tt.load %arg0 : tensor<32x128x!tt.ptr<f32>, #blocked>
+      %sq = arith.mulf %v, %v : tensor<32x128xf32, #blocked>
+      %red = "tt.reduce"(%sq) <{axis = 1 : i32}> ({
+      ^bb0(%a: f32, %b: f32):
+        %s = arith.addf %a, %b : f32
+        tt.reduce.return %s : f32
+      }) : (tensor<32x128xf32, #blocked>) -> tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %upd = arith.mulf %acc, %red : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      scf.yield %upd : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    }
+    tt.return %r : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+  }
+}
+
+// -----
+
+// Same mismatched-combiner bug, but with the reduce operand fed directly by
+// tt.load. This form is accepted by the original tt.load-only filter too, so it
+// miscompiles on an unmodified tree; the combiner check fixes it there as well.
+// CHECK-LABEL: mul_outer_add_inner_from_load
+// CHECK: %[[CST:.*]] = arith.constant dense<1.000000e+00>
+// CHECK: scf.for {{.*}} iter_args({{.*}} = %[[CST]])
+// CHECK-NOT: tt.trans
+// CHECK: "tt.reduce"({{.*}}) <{axis = 1 : i32}>
+// CHECK: arith.mulf
+// CHECK: scf.yield
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @mul_outer_add_inner_from_load(%arg0: tensor<32x128x!tt.ptr<f32>, #blocked>, %ub: i32) -> tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>> {
+    %one = arith.constant dense<1.000000e+00> : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %r = scf.for %i = %c0 to %ub step %c1 iter_args(%acc = %one) -> (tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>) : i32 {
+      %v = tt.load %arg0 : tensor<32x128x!tt.ptr<f32>, #blocked>
+      %red = "tt.reduce"(%v) <{axis = 1 : i32}> ({
+      ^bb0(%a: f32, %b: f32):
+        %s = arith.addf %a, %b : f32
+        tt.reduce.return %s : f32
+      }) : (tensor<32x128xf32, #blocked>) -> tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %upd = arith.mulf %acc, %red : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      scf.yield %upd : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    }
+    tt.return %r : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+  }
+}
+
+// -----
+
+// Negative test: the reduce operand transitively depends on the accumulator
+// (%acc is broadcast and added to the loaded tile before the reduce). The
+// rewrite carries the accumulation in a NEW loop-carried value and leaves the
+// original iter_arg frozen at its init, so the operand would read the initial
+// accumulator on every iteration instead of the previous update, silently
+// changing the recurrence.
+// CHECK-LABEL: operand_reads_accum
+// CHECK: scf.for {{.*}} iter_args(%[[ACC:.*]] = {{%.*}})
+// CHECK-NOT: tt.trans
+// CHECK: tt.expand_dims %[[ACC]]
+// CHECK: "tt.reduce"({{.*}}) <{axis = 1 : i32}>
+// CHECK: arith.addf %[[ACC]]
+// CHECK: scf.yield
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @operand_reads_accum(%arg0: tensor<32x128x!tt.ptr<f32>, #blocked>, %ub: i32) -> tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>> {
+    %zero = arith.constant dense<0.000000e+00> : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %r = scf.for %i = %c0 to %ub step %c1 iter_args(%acc = %zero) -> (tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>) : i32 {
+      %v = tt.load %arg0 : tensor<32x128x!tt.ptr<f32>, #blocked>
+      %e = tt.expand_dims %acc {axis = 1 : i32} : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<32x1xf32, #blocked>
+      %b = tt.broadcast %e : tensor<32x1xf32, #blocked> -> tensor<32x128xf32, #blocked>
+      %mix = arith.addf %v, %b : tensor<32x128xf32, #blocked>
+      %red = "tt.reduce"(%mix) <{axis = 1 : i32}> ({
+      ^bb0(%a: f32, %bb: f32):
+        %s = arith.addf %a, %bb : f32
+        tt.reduce.return %s : f32
+      }) : (tensor<32x128xf32, #blocked>) -> tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %upd = arith.addf %acc, %red : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      scf.yield %upd : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    }
+    tt.return %r : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+  }
+}
+
+// -----
+
+// Negative test: the accumulator's loop result has two uses. The rewrite
+// redirects that result to the post-loop value by rewriting a single use in
+// place, so with more than one use the remaining uses would keep reading the
+// partial loop result. Requiring exactly one use also rules out the zero-use
+// case, where there is no use to redirect at all.
+// NOTE: this aborts on an unmodified tree as well when the reduce is fed
+// straight from a tt.load -- see @multi_use_loop_result_from_load below.
+// CHECK-LABEL: multi_use_loop_result
+// CHECK: %[[LOOP:.*]] = scf.for
+// CHECK-NOT: tt.trans
+// CHECK: "tt.reduce"({{.*}}) <{axis = 1 : i32}>
+// CHECK: scf.yield
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @multi_use_loop_result(
+    %18: tensor<32x128x!tt.ptr<f32>, #blocked> {tt.divisibility = 16 : i32},
+    %11: i32 {tt.divisibility = 16 : i32},
+    %25: tensor<32x!tt.ptr<f32>, #blocked1> {tt.divisibility = 16 : i32}
+    ) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %c128_i32 = arith.constant 128 : i32
+    %1 = tt.get_program_id y : i32
+    %2 = tt.get_num_programs y : i32
+    %12 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %19 = scf.for %arg3 = %1 to %11 step %2 iter_args(%arg4 = %cst) -> (tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>)  : i32 {
+      %27 = arith.muli %arg3, %c128_i32 : i32
+      %28 = tt.splat %27 : i32 -> tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+      %29 = arith.addi %28, %12 : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+      %30 = tt.expand_dims %29 {axis = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x128xi32, #blocked>
+      %31 = tt.broadcast %30 : tensor<1x128xi32, #blocked> -> tensor<32x128xi32, #blocked>
+      %32 = tt.addptr %18, %31 : tensor<32x128x!tt.ptr<f32>, #blocked>, tensor<32x128xi32, #blocked>
+      %33 = tt.load %32 : tensor<32x128x!tt.ptr<f32>, #blocked>
+      %sq = arith.mulf %33, %33 : tensor<32x128xf32, #blocked>
+      %34 = "tt.reduce"(%sq) <{axis = 1 : i32}> ({
+      ^bb0(%arg5: f32, %arg6: f32):
+        %36 = arith.addf %arg5, %arg6 : f32
+        tt.reduce.return %36 : f32
+      }) : (tensor<32x128xf32, #blocked>) -> tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %35 = arith.addf %arg4, %34 : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      scf.yield %35 : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    }
+    %26 = ttg.convert_layout %19 : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<32xf32, #blocked1>
+    tt.store %25, %26 : tensor<32x!tt.ptr<f32>, #blocked1>
+    %40 = arith.addf %19, %19 : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %41 = ttg.convert_layout %40 : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<32xf32, #blocked1>
+    tt.store %25, %41 : tensor<32x!tt.ptr<f32>, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
+// Same multi-use bug with the reduce operand fed directly by tt.load. This form
+// is accepted by the original tt.load-only filter too, so it aborts on an
+// unmodified tree; the loop-result use check fixes it there as well.
+// CHECK-LABEL: multi_use_loop_result_from_load
+// CHECK: %[[LOOP:.*]] = scf.for
+// CHECK-NOT: tt.trans
+// CHECK: "tt.reduce"({{.*}}) <{axis = 1 : i32}>
+// CHECK: scf.yield
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @multi_use_loop_result_from_load(
+    %18: tensor<32x128x!tt.ptr<f32>, #blocked> {tt.divisibility = 16 : i32},
+    %11: i32 {tt.divisibility = 16 : i32},
+    %25: tensor<32x!tt.ptr<f32>, #blocked1> {tt.divisibility = 16 : i32}
+    ) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %c128_i32 = arith.constant 128 : i32
+    %1 = tt.get_program_id y : i32
+    %2 = tt.get_num_programs y : i32
+    %12 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %19 = scf.for %arg3 = %1 to %11 step %2 iter_args(%arg4 = %cst) -> (tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>)  : i32 {
+      %27 = arith.muli %arg3, %c128_i32 : i32
+      %28 = tt.splat %27 : i32 -> tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+      %29 = arith.addi %28, %12 : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+      %30 = tt.expand_dims %29 {axis = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x128xi32, #blocked>
+      %31 = tt.broadcast %30 : tensor<1x128xi32, #blocked> -> tensor<32x128xi32, #blocked>
+      %32 = tt.addptr %18, %31 : tensor<32x128x!tt.ptr<f32>, #blocked>, tensor<32x128xi32, #blocked>
+      %33 = tt.load %32 : tensor<32x128x!tt.ptr<f32>, #blocked>
+      %34 = "tt.reduce"(%33) <{axis = 1 : i32}> ({
+      ^bb0(%arg5: f32, %arg6: f32):
+        %36 = arith.addf %arg5, %arg6 : f32
+        tt.reduce.return %36 : f32
+      }) : (tensor<32x128xf32, #blocked>) -> tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %35 = arith.addf %arg4, %34 : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      scf.yield %35 : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    }
+    %26 = ttg.convert_layout %19 : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<32xf32, #blocked1>
+    tt.store %25, %26 : tensor<32x!tt.ptr<f32>, #blocked1>
+    %40 = arith.addf %19, %19 : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %41 = ttg.convert_layout %40 : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<32xf32, #blocked1>
+    tt.store %25, %41 : tensor<32x!tt.ptr<f32>, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
+// Negative test for the cross-accumulator case: reduction B's operand reads
+// accumulator A, which reduction A would rewrite. Rewriting A freezes A's
+// original iter_arg at its init, so B would read the init value every
+// iteration. Eligibility depends on the whole candidate set, so B is rejected
+// against every accumulator about to be rewritten, not just its own. A is still
+// rewritten because nothing feeding it reads an accumulator.
+// CHECK-LABEL: two_accums_cross_dep
+// CHECK: scf.for
+// Reduction A is rewritten onto the new thread-locality axis ...
+// CHECK: "tt.reduce"({{.*}}) <{axis = 2 : i32}>
+// ... while reduction B keeps its original axis.
+// CHECK: "tt.reduce"({{.*}}) <{axis = 1 : i32}>
+// CHECK: scf.yield
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @two_accums_cross_dep(
+    %18: tensor<32x128x!tt.ptr<f32>, #blocked> {tt.divisibility = 16 : i32},
+    %11: i32 {tt.divisibility = 16 : i32},
+    %25: tensor<32x!tt.ptr<f32>, #blocked1> {tt.divisibility = 16 : i32}
+    ) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %c128_i32 = arith.constant 128 : i32
+    %1 = tt.get_program_id y : i32
+    %2 = tt.get_num_programs y : i32
+    %12 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %19:2 = scf.for %arg3 = %1 to %11 step %2 iter_args(%accA = %cst, %accB = %cst)
+        -> (tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>)  : i32 {
+      %27 = arith.muli %arg3, %c128_i32 : i32
+      %28 = tt.splat %27 : i32 -> tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+      %29 = arith.addi %28, %12 : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+      %30 = tt.expand_dims %29 {axis = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x128xi32, #blocked>
+      %31 = tt.broadcast %30 : tensor<1x128xi32, #blocked> -> tensor<32x128xi32, #blocked>
+      %32 = tt.addptr %18, %31 : tensor<32x128x!tt.ptr<f32>, #blocked>, tensor<32x128xi32, #blocked>
+      %33 = tt.load %32 : tensor<32x128x!tt.ptr<f32>, #blocked>
+      %rA = "tt.reduce"(%33) <{axis = 1 : i32}> ({
+      ^bb0(%a1: f32, %a2: f32):
+        %s = arith.addf %a1, %a2 : f32
+        tt.reduce.return %s : f32
+      }) : (tensor<32x128xf32, #blocked>) -> tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %updA = arith.addf %accA, %rA : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %eA = tt.expand_dims %accA {axis = 1 : i32} : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<32x1xf32, #blocked>
+      %bA = tt.broadcast %eA : tensor<32x1xf32, #blocked> -> tensor<32x128xf32, #blocked>
+      %mixed = arith.addf %33, %bA : tensor<32x128xf32, #blocked>
+      %rB = "tt.reduce"(%mixed) <{axis = 1 : i32}> ({
+      ^bb0(%b1: f32, %b2: f32):
+        %s2 = arith.addf %b1, %b2 : f32
+        tt.reduce.return %s2 : f32
+      }) : (tensor<32x128xf32, #blocked>) -> tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %updB = arith.addf %accB, %rB : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      scf.yield %updA, %updB : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    }
+    %26 = ttg.convert_layout %19#1 : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<32xf32, #blocked1>
+    tt.store %25, %26 : tensor<32x!tt.ptr<f32>, #blocked1>
+    %50 = ttg.convert_layout %19#0 : tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<32xf32, #blocked1>
+    tt.store %25, %50 : tensor<32x!tt.ptr<f32>, #blocked1>
+    tt.return
+  }
 }

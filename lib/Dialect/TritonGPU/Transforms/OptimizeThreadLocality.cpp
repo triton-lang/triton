@@ -1,6 +1,7 @@
 #include <memory>
 #include <numeric>
 
+#include "llvm/ADT/TypeSwitch.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
@@ -253,7 +254,15 @@ class TritonGPUOptimizeThreadLocalityPass
       signalPassFailure();
     }
 
-    DenseSet<triton::ReduceOp> reduceOps;
+    // A reduce that passes every local precondition, together with the
+    // accumulator it would rewrite. Whether it is actually safe to rewrite also
+    // depends on the other candidates, so that is decided once the walk is done.
+    struct Candidate {
+      triton::ReduceOp reduce;
+      Value accumulator;
+      Block *block;
+    };
+    SmallVector<Candidate> candidates;
     mod.walk([&](triton::ReduceOp reduce) -> void {
       auto srcType = cast<RankedTensorType>(reduce.getOperands()[0].getType());
       auto rank = srcType.getShape().size();
@@ -271,8 +280,20 @@ class TritonGPUOptimizeThreadLocalityPass
       // inner dim.
       if (reduce.getAxis() != rank - 1)
         return;
+      // The rewrite re-materializes the reduce's operands through a pure
+      // reshape/transpose/convert_layout chain inserted right after the reduce,
+      // and clones the reduce itself after the loop with every operand remapped
+      // to the new loop result. Neither step inspects or moves the operand's
+      // producer, so the producer does not need to be any particular op -- it
+      // only has to be re-evaluated on every iteration for the per-iteration
+      // partial accumulation to be meaningful. Require the operand to be
+      // produced inside the loop body: a loop-invariant operand (defined
+      // outside the loop) gains nothing from the transform, and a block
+      // argument may alias the accumulator being rewritten.
+      auto *loopBlock = reduce->getBlock();
       for (auto operand : reduce->getOperands()) {
-        if (!operand.getDefiningOp<triton::LoadOp>())
+        Operation *def = operand.getDefiningOp();
+        if (!def || def->getBlock() != loopBlock)
           return;
       }
       auto elemsPerThread =
@@ -297,13 +318,75 @@ class TritonGPUOptimizeThreadLocalityPass
         return;
       if (reduce->getBlock() != forOp.getBody())
         return;
+      // The rewrite treats `user` as `accum = combine(accum, reduce)` and
+      // requires its other operand to be the loop-carried accumulator that the
+      // yield writes back (see the isa<BlockArgument> assertion below). Verify
+      // that here instead of assuming it: an update such as
+      // `arith.addf %someValue, %reduce` that happens to be yielded is not an
+      // accumulation and must be skipped.
+      if (user->getNumOperands() != 2)
+        return;
+      OpOperand &reduceUse = *(reduce->getUses().begin());
+      auto accumOperand =
+          user->getOperand(reduceUse.getOperandNumber() == 0 ? 1 : 0);
+      auto blockArg = dyn_cast<BlockArgument>(accumOperand);
+      if (!blockArg || blockArg.getOwner() != forOp.getBody())
+        return;
       auto argNum = yieldOpOperand.getOperandNumber();
+      // The accumulator read must be the same loop-carried value the yield
+      // writes back, otherwise the rewrite would rewire an unrelated iter_arg.
+      if (blockArg.getArgNumber() - forOp.getNumInductionVars() != argNum)
+        return;
+      // The rewrite seeds the new accumulator with the INNER reduction's
+      // neutral element (createAccum) but folds the per-iteration partials with
+      // the OUTER combiner (createUpdate), and reduces the extra dimension after
+      // the loop with the inner reduction again (createPostLoopReduce). That is
+      // only valid when both combine with the same associative and commutative
+      // operation. Mixing them, e.g. `acc = mul(acc, sum(x))`, seeds the product
+      // accumulator with add's identity 0 and silently produces 0.
+      if (!hasSameReductionSemantics(reductionOp.value(), user))
+        return;
       auto oldAccum = forOp.getInitArgs()[argNum];
       auto cstOp = oldAccum.getDefiningOp<arith::ConstantOp>();
       if (!cstOp)
         return;
-      reduceOps.insert(reduce);
+      // The rewrite redirects the accumulator's loop result to the final value
+      // by rewriting a single use in place, so that result must have exactly
+      // one use. With several uses only the first would be redirected and the
+      // rest would keep reading the partial loop result; with none there is no
+      // use to redirect and dereferencing uses().begin() is invalid.
+      if (!forOp.getResult(argNum).hasOneUse())
+        return;
+      candidates.push_back({reduce, accumOperand, loopBlock});
     });
+
+    // Reject candidates whose reduce operands read any accumulator that is
+    // about to be rewritten, not just their own. Rewriting an accumulator
+    // leaves its original iter_arg frozen at the init value, so a reduce that
+    // reads a rewritten accumulator -- its own or another one in the same loop
+    // -- would silently observe the init value on every iteration.
+    //
+    // Eligibility is therefore a property of the whole candidate set, not of a
+    // single reduce. Dropping a candidate can only ever remove an accumulator
+    // from the set, which can never invalidate a candidate that was already
+    // valid, so a fixed-point iteration would be needed to *re-admit*
+    // candidates rather than to reject them. Take the conservative route and
+    // reject against the full initial set in one pass: it is a single linear
+    // check, it never admits an unsafe rewrite, and the only cost is missing
+    // the rare loop where dropping one reduction would have made another legal.
+    DenseSet<Value> accumulators;
+    for (const auto &candidate : candidates)
+      accumulators.insert(candidate.accumulator);
+
+    DenseSet<triton::ReduceOp> reduceOps;
+    for (const auto &candidate : candidates) {
+      bool readsAccumulator =
+          llvm::any_of(candidate.reduce->getOperands(), [&](Value operand) {
+            return dependsOnAnyValue(operand, accumulators, candidate.block);
+          });
+      if (!readsAccumulator)
+        reduceOps.insert(candidate.reduce);
+    }
 
     IRRewriter builder(&getContext());
     for (auto reduce : reduceOps) {
@@ -378,6 +461,57 @@ class TritonGPUOptimizeThreadLocalityPass
   };
 
 private:
+  // Returns true if `a` and `b` combine values with the same associative and
+  // commutative operation, so that partial results produced by one can be
+  // folded by the other. Dispatch on the op TYPE rather than comparing names,
+  // and require the fastmath flags to agree as well, since they change the
+  // arithmetic the op is allowed to perform.
+  bool hasSameReductionSemantics(Operation *a, Operation *b) const {
+    if (!a || !b)
+      return false;
+    return llvm::TypeSwitch<Operation *, bool>(a)
+        .Case<arith::AddFOp, arith::MulFOp, arith::MaximumFOp, arith::MaxNumFOp,
+              arith::MinimumFOp, arith::MinNumFOp>([&](auto aOp) {
+          auto bOp = dyn_cast<decltype(aOp)>(b);
+          return bOp && aOp.getFastmath() == bOp.getFastmath();
+        })
+        // Integer combiners carry no flags that affect the arithmetic.
+        .Case<arith::AddIOp, arith::MulIOp, arith::MaxSIOp, arith::MaxUIOp,
+              arith::MinSIOp, arith::MinUIOp, arith::AndIOp, arith::OrIOp,
+              arith::XOrIOp>(
+            [&](auto aOp) { return isa<decltype(aOp)>(b); })
+        .Default([](Operation *) { return false; });
+  }
+
+  // Returns true if `value` transitively depends on any value in `targets`,
+  // only walking through operations inside `block`. Values produced outside the
+  // block (loop invariants, other block arguments) terminate the walk.
+  bool dependsOnAnyValue(Value value, const DenseSet<Value> &targets,
+                         Block *block) const {
+    SmallVector<Value> worklist{value};
+    SmallPtrSet<Value, 16> visited;
+    while (!worklist.empty()) {
+      Value current = worklist.pop_back_val();
+      if (targets.contains(current))
+        return true;
+      if (!visited.insert(current).second)
+        continue;
+      Operation *def = current.getDefiningOp();
+      // A block argument that is not a target carries no further dependence we
+      // can inspect; anything defined outside the loop body cannot depend on
+      // an accumulator either.
+      if (!def || def->getBlock() != block)
+        continue;
+      llvm::append_range(worklist, def->getOperands());
+      // Nested regions may capture the accumulator too, so include the values
+      // they reference from the enclosing scope.
+      def->walk([&](Operation *nested) {
+        llvm::append_range(worklist, nested->getOperands());
+      });
+    }
+    return false;
+  }
+
   std::optional<Operation *> getReductionOp(triton::ReduceOp reduce) const {
     auto numRegions = reduce->getNumRegions();
     if (numRegions != 1)
