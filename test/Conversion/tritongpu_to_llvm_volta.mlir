@@ -28,4 +28,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.store %a_ptr_init, %cst_0, %cst {cachePolicy = #tt.cache_policy<cache_modifier = none, eviction_policy = evict_last>} : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.return
   }
+
+  // CHECK-LABEL: @fp8e5_to_bf16
+  // CHECK: prmt.b32
+  // CHECK: llvm.fpext
+  // CHECK: llvm.lshr
+  // CHECK: llvm.trunc
+  tt.func private @fp8e5_to_bf16(%in: tensor<512xf8E5M2, #blocked0>) -> tensor<512xbf16, #blocked0> {
+    %out = tt.fp_to_fp %in : tensor<512xf8E5M2, #blocked0> -> tensor<512xbf16, #blocked0>
+    tt.return %out : tensor<512xbf16, #blocked0>
+  }
 }

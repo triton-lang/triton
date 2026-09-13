@@ -311,6 +311,67 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
 
     upcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), *stuff, device=device)
 
+
+@pytest.mark.parametrize("src_dtype, src_type", [
+    (torch.float8_e4m3fn, tl.float8e4nv),
+    (torch.float8_e5m2, tl.float8e5),
+    (torch.float8_e4m3fnuz, tl.float8e4b8),
+    (torch.float8_e5m2fnuz, tl.float8e5b16),
+])
+@pytest.mark.parametrize("dst_dtype, dst_type", [
+    (torch.float16, tl.float16),
+    (torch.bfloat16, tl.bfloat16),
+    (torch.float32, tl.float32),
+])
+def test_typeconvert_fp8_all_values(src_dtype, src_type, dst_dtype, dst_type, device):
+    target = triton.runtime.driver.active.get_current_target()
+    supported = triton.compiler.make_backend(target).parse_options({}).supported_fp8_dtypes
+    if src_type.name not in supported:
+        pytest.skip("input format is not supported by this backend")
+    bits = torch.arange(256, dtype=torch.uint8, device=device)
+    actual = launch_type_convert_triton(bits, src_type, dst_type, device, BLOCK_SIZE=256).view(dst_dtype)
+    expected = bits.view(src_dtype).to(dst_dtype)
+    # Compare NaN classifications and exact bits for all remaining values.
+    torch.testing.assert_close(torch.isnan(actual), torch.isnan(expected))
+    mask = ~torch.isnan(expected)
+    torch.testing.assert_close(actual.view(matching_int(dst_type))[mask],
+                               expected.view(matching_int(dst_type))[mask], rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("src_dtype, src_type", [
+    (torch.float16, tl.float16),
+    (torch.bfloat16, tl.bfloat16),
+    (torch.float32, tl.float32),
+])
+@pytest.mark.parametrize("dst_dtype, dst_type, max_code", [
+    (torch.float8_e5m2, tl.float8e5, 0x7b),
+    (torch.float8_e4m3fn, tl.float8e4nv, 0x7e),
+])
+def test_typeconvert_fp8_rounding_edges(src_dtype, src_type, dst_dtype, dst_type, max_code, device):
+    if not is_cuda():
+        pytest.skip("tests NVIDIA saturating FP8 conversion")
+    if dst_type == tl.float8e4nv and torch.cuda.get_device_capability() < (8, 9):
+        pytest.skip("E4M3 conversion requires SM89")
+    if src_type.primitive_bitwidth == 16:
+        values = torch.arange(65536, dtype=torch.int32, device=device).to(torch.int16).view(src_dtype)
+    else:
+        levels = torch.arange(max_code + 1, dtype=torch.uint8, device=device).view(dst_dtype).float()
+        midpoints = (levels[:-1] + levels[1:]) / 2
+        infinity = torch.full_like(midpoints, float("inf"))
+        values = torch.cat((torch.nextafter(midpoints, -infinity), midpoints,
+                            torch.nextafter(midpoints, infinity), levels,
+                            torch.tensor([float("inf"), float("nan"), torch.finfo(src_dtype).max], device=device)))
+        values = torch.cat((values, -values))
+        values = torch.cat((values, torch.zeros(-values.numel() % 256, device=device)))
+    actual = launch_type_convert_triton(values, src_type, dst_type, device,
+                                       rounding="rtne", BLOCK_SIZE=256).view(dst_dtype)
+    limit = torch.finfo(dst_dtype).max
+    expected = values.clamp(-limit, limit).to(dst_dtype)
+    torch.testing.assert_close(torch.isnan(actual), torch.isnan(expected))
+    mask = ~torch.isnan(expected)
+    torch.testing.assert_close(actual.view(torch.uint8)[mask], expected.view(torch.uint8)[mask], rtol=0, atol=0)
+
+
 @pytest.mark.parametrize("src_dtype, dst_dtype, rounding, max_repr", [
     ('float32', 'float16', 'rtne', 0x477fe000),
     ('float32', 'float16', 'rtz', 0x477fe000),
