@@ -108,3 +108,105 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: llvm.func @cvt_scalef32_bf16_fp8_1_element
+  // SW-LABEL: llvm.func @cvt_scalef32_bf16_fp8_1_element
+  tt.func public @cvt_scalef32_bf16_fp8_1_element(%x: tensor<32x16xf8E5M2, #blocked>, %scale: tensor<32x16xbf16, #blocked>) -> tensor<32x16xbf16, #blocked> {
+    // CHECK-COUNT-1: rocdl.cvt.scalef32.pk.bf16.bf8
+    // CHECK-NOT: rocdl.cvt.scalef32.pk.bf16.bf8
+    // CHECK: llvm.return
+    // SW-COUNT-1: llvm.fmul
+    // SW-NOT: llvm.fmul
+    // SW: llvm.return
+    %up = amdg.scaled_upcast_fp8 %x scale %scale : tensor<32x16xf8E5M2, #blocked>, tensor<32x16xbf16, #blocked> -> tensor<32x16xbf16, #blocked>
+    tt.return %up : tensor<32x16xbf16, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: llvm.func @cvt_scalef32_bf16_fp8_2_element
+  // SW-LABEL: llvm.func @cvt_scalef32_bf16_fp8_2_element
+  tt.func public @cvt_scalef32_bf16_fp8_2_element(%x: tensor<64x16xf8E5M2, #blocked>, %scale: tensor<64x16xbf16, #blocked>) -> tensor<64x16xbf16, #blocked> {
+    // Each register belongs to a different scale block.
+    // CHECK: %[[S0:.+]] = llvm.extractvalue %arg1[0]
+    // CHECK: %[[S1:.+]] = llvm.extractvalue %arg1[1]
+    // CHECK: %[[B0:.+]] = llvm.bitcast %[[S0]] : bf16 to i16
+    // CHECK: %[[E0:.+]] = llvm.zext %[[B0]] : i16 to i32
+    // CHECK: %[[H0:.+]] = llvm.shl %[[E0]], %{{.+}} : i32
+    // CHECK: %[[F0:.+]] = llvm.bitcast %[[H0]] : i32 to f32
+    // CHECK: %[[C0:.+]] = rocdl.cvt.scalef32.pk.bf16.bf8 %{{.+}}[false], %[[F0]]
+    // CHECK: %[[O0:.+]] = llvm.extractelement %[[C0]]
+    // CHECK: %[[B1:.+]] = llvm.bitcast %[[S1]] : bf16 to i16
+    // CHECK: %[[E1:.+]] = llvm.zext %[[B1]] : i16 to i32
+    // CHECK: %[[H1:.+]] = llvm.shl %[[E1]], %{{.+}} : i32
+    // CHECK: %[[F1:.+]] = llvm.bitcast %[[H1]] : i32 to f32
+    // CHECK: %[[C1:.+]] = rocdl.cvt.scalef32.pk.bf16.bf8 %{{.+}}[false], %[[F1]]
+    // CHECK: %[[O1:.+]] = llvm.extractelement %[[C1]]
+    // CHECK: %[[R0:.+]] = llvm.insertvalue %[[O0]], %{{.+}}[0]
+    // CHECK: %[[R1:.+]] = llvm.insertvalue %[[O1]], %[[R0]][1]
+    // CHECK: llvm.return %[[R1]]
+    // SW: %[[S0:.+]] = llvm.extractvalue %arg1[0]
+    // SW: %[[S1:.+]] = llvm.extractvalue %arg1[1]
+    // SW: %[[B0:.+]] = llvm.bitcast %[[S0]] : bf16 to i16
+    // SW: %[[E0:.+]] = llvm.zext %[[B0]] : i16 to i32
+    // SW: %[[H0:.+]] = llvm.shl %[[E0]], %{{.+}} : i32
+    // SW: %[[F0:.+]] = llvm.bitcast %[[H0]] : i32 to f32
+    // SW: %[[N0:.+]] = llvm.intr.fma(%[[F0]], %{{.+}}, %[[F0]])
+    // SW: llvm.fmul %{{.+}}, %[[N0]]
+    // SW: %[[B1:.+]] = llvm.bitcast %[[S1]] : bf16 to i16
+    // SW: %[[E1:.+]] = llvm.zext %[[B1]] : i16 to i32
+    // SW: %[[H1:.+]] = llvm.shl %[[E1]], %{{.+}} : i32
+    // SW: %[[F1:.+]] = llvm.bitcast %[[H1]] : i32 to f32
+    // SW: %[[N1:.+]] = llvm.intr.fma(%[[F1]], %{{.+}}, %[[F1]])
+    // SW: llvm.fmul %{{.+}}, %[[N1]]
+    %up = amdg.scaled_upcast_fp8 %x scale %scale : tensor<64x16xf8E5M2, #blocked>, tensor<64x16xbf16, #blocked> -> tensor<64x16xbf16, #blocked>
+    tt.return %up : tensor<64x16xbf16, #blocked>
+  }
+}
+
+// -----
+
+#packed = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+#unpacked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // Each register has its own scale, including the two fp4 values in a byte.
+  // CHECK-LABEL: llvm.func @cvt_scalef32_bf16_fp4_distinct_scales
+  // SW-LABEL: llvm.func @cvt_scalef32_bf16_fp4_distinct_scales
+  tt.func public @cvt_scalef32_bf16_fp4_distinct_scales(%x: tensor<256xi8, #packed>, %scale: tensor<512xbf16, #unpacked>) -> tensor<512xbf16, #unpacked> {
+    // CHECK: %[[S0:.+]] = llvm.extractvalue %{{.+}}[0] : !llvm.struct<(bf16, bf16, bf16, bf16, bf16, bf16, bf16, bf16)>
+    // CHECK: %[[S1:.+]] = llvm.extractvalue %{{.+}}[1] : !llvm.struct<(bf16, bf16, bf16, bf16, bf16, bf16, bf16, bf16)>
+    // CHECK: %[[B0:.+]] = llvm.bitcast %[[S0]] : bf16 to i16
+    // CHECK: %[[Z0:.+]] = llvm.zext %[[B0]] : i16 to i32
+    // CHECK: %[[H0:.+]] = llvm.shl %[[Z0]], %{{.+}} : i32
+    // CHECK: %[[F0:.+]] = llvm.bitcast %[[H0]] : i32 to f32
+    // CHECK: rocdl.cvt.scalef32.pk.bf16.fp4 %{{.+}}, %[[F0]] : vector<2xbf16>
+    // CHECK: %[[B1:.+]] = llvm.bitcast %[[S1]] : bf16 to i16
+    // CHECK: %[[Z1:.+]] = llvm.zext %[[B1]] : i16 to i32
+    // CHECK: %[[H1:.+]] = llvm.shl %[[Z1]], %{{.+}} : i32
+    // CHECK: %[[F1:.+]] = llvm.bitcast %[[H1]] : i32 to f32
+    // CHECK: rocdl.cvt.scalef32.pk.bf16.fp4 %{{.+}}, %[[F1]] : vector<2xbf16>
+    // SW: %[[S0:.+]] = llvm.extractvalue %{{.+}}[0] : !llvm.struct<(bf16, bf16, bf16, bf16, bf16, bf16, bf16, bf16)>
+    // SW: %[[S1:.+]] = llvm.extractvalue %{{.+}}[1] : !llvm.struct<(bf16, bf16, bf16, bf16, bf16, bf16, bf16, bf16)>
+    // SW: %[[B0:.+]] = llvm.bitcast %[[S0]] : bf16 to i16
+    // SW: %[[Z0:.+]] = llvm.zext %[[B0]] : i16 to i32
+    // SW: %[[H0:.+]] = llvm.shl %[[Z0]], %{{.+}} : i32
+    // SW: %[[F0:.+]] = llvm.bitcast %[[H0]] : i32 to f32
+    // SW: %[[N0:.+]] = llvm.intr.fma(%[[F0]], %{{.+}}, %[[F0]]) : (f32, f32, f32) -> f32
+    // SW: llvm.fmul %{{.+}}, %[[N0]] : f32
+    // SW: %[[B1:.+]] = llvm.bitcast %[[S1]] : bf16 to i16
+    // SW: %[[Z1:.+]] = llvm.zext %[[B1]] : i16 to i32
+    // SW: %[[H1:.+]] = llvm.shl %[[Z1]], %{{.+}} : i32
+    // SW: %[[F1:.+]] = llvm.bitcast %[[H1]] : i32 to f32
+    // SW: %[[N1:.+]] = llvm.intr.fma(%[[F1]], %{{.+}}, %[[F1]]) : (f32, f32, f32) -> f32
+    // SW: llvm.fmul %{{.+}}, %[[N1]] : f32
+    %up = amdg.scaled_upcast_fp4 %x scale %scale {axis = 0 : i32} : tensor<256xi8, #packed>, tensor<512xbf16, #unpacked> -> tensor<512xbf16, #unpacked>
+    tt.return %up : tensor<512xbf16, #unpacked>
+  }
+}
