@@ -288,6 +288,12 @@ def make_default_opt_flags_nvidia(
         block_n, block_n_tma = 256, 256
     else:
         block_n, block_n_tma = opt_flags_nvidia.compute_block_n(n, arch, precision_config)
+    if compute_dtype == FP64 and has_y_acc_in:
+        # FP64 accumulation needs room for input and epilogue conversions.
+        if constraints.get("block_m") is None:
+            block_m = min(block_m, 64)
+        if constraints.get("block_n") is None:
+            block_n, block_n_tma = min(block_n, 64), min(block_n_tma, 64)
     # is_persistent
     grid_size_tma = opt_flags_nvidia.compute_grid_size(routing_data, batch_size, m, n, block_m, block_n_tma)
     n_sms = torch.cuda.get_device_properties(0).multi_processor_count
