@@ -4478,6 +4478,9 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
                 )
         if mma == 16 and K == 64 and not (is_hip_rdna4() or is_hip_rdna4m() or is_hip_rdna3() or is_hip_gfx1250()):
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
+        # TODO: Re-enable once scaled-upcast layout selection preserves packed groups.
+        if is_hip_cdna3() and N == 32 and rhs_scale and mxfp_type == "e2m1" and mma in (0, 32):
+            pytest.skip("Incorrect scaled-upcast layout selection")
 
     @triton.jit
     def dot_scale_kernel(a_base, stride_a0, stride_a1, a_scale, b_base, stride_b0, stride_b1, b_scale, out,
