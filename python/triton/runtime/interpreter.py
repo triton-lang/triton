@@ -147,11 +147,11 @@ def _get_signed_np_dtype(dtype):
 def _round_f32_to_tf32(data):
     # TMA loads through a TFLOAT32 tensor map round to nearest even at 10 mantissa bits, with
     # Inf and NaN left as they are; RewriteTensorDescriptorToPointer emits the same arithmetic.
-    bits = np.ascontiguousarray(data, dtype=np.float32).view(np.uint32)
+    bits = np.asarray(data, dtype=np.float32).view(np.uint32)
     special = (bits & np.uint32(0x7F800000)) == np.uint32(0x7F800000)
     round_bias = ((bits >> np.uint32(13)) & np.uint32(1)) + np.uint32(0x00000FFF)
     rounded = (bits + round_bias) & np.uint32(0xFFFFE000)
-    return np.where(special, bits, rounded).astype(np.uint32).view(np.float32)
+    return np.where(special, bits, rounded).view(np.float32)
 
 
 def _get_np_dtype(tt_dtype):
