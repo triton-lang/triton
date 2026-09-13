@@ -467,3 +467,54 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+
+// -----
+
+#operand = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#accumulator = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#raw = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+#lhs_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+#lhs_reg = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[32, 0], [64, 0]], block = []}>
+#acc_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: @computed_mma_operands
+  // OPT-LABEL: @computed_mma_operands
+  tt.func @computed_mma_operands(%a: !tt.tensordesc<128x64xf8E4M3FN, #raw>, %b: !tt.tensordesc<64x128xf8E5M2, #raw>, %tiles: i32) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c64 = arith.constant 64 : i32
+    %false = arith.constant false
+    %true = arith.constant true
+    %acc, %token = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    // CHECK-DAG: ttng.tmem_alloc : () -> !ttg.memdesc<2x128x64xf16
+    // CHECK-DAG: ttg.local_alloc : () -> !ttg.memdesc<2x64x128xf16
+    // OPT-DAG: ttng.tmem_alloc : () -> !ttg.memdesc<2x128x64xf16
+    // OPT-DAG: ttg.local_alloc : () -> !ttg.memdesc<2x64x128xf16
+    %result:2 = scf.for %k = %c0 to %tiles step %c1 iter_args(%dep = %token, %use_acc = %false) -> (!ttg.async.token, i1) : i32 {
+      %offset = arith.muli %k, %c64 : i32
+      %a_raw = tt.descriptor_load %a[%c0, %offset] : !tt.tensordesc<128x64xf8E4M3FN, #raw> -> tensor<128x64xf8E4M3FN, #operand>
+      %b_raw = tt.descriptor_load %b[%offset, %c0] : !tt.tensordesc<64x128xf8E5M2, #raw> -> tensor<64x128xf8E5M2, #operand>
+      %a_value = tt.fp_to_fp %a_raw : tensor<128x64xf8E4M3FN, #operand> -> tensor<128x64xf16, #operand>
+      %b_value = tt.fp_to_fp %b_raw : tensor<64x128xf8E5M2, #operand> -> tensor<64x128xf16, #operand>
+      %a_layout = ttg.convert_layout %a_value : tensor<128x64xf16, #operand> -> tensor<128x64xf16, #lhs_reg>
+      %a_buffer = ttng.tmem_alloc %a_layout : (tensor<128x64xf16, #lhs_reg>) -> !ttg.memdesc<128x64xf16, #lhs_tmem, #ttng.tensor_memory>
+      %b_buffer = ttg.local_alloc %b_value : (tensor<64x128xf16, #operand>) -> !ttg.memdesc<64x128xf16, #shared, #smem>
+      // CHECK: ttng.tc_gen5_mma
+      // CHECK-SAME: is_async
+      // CHECK-NOT: wait_barrier
+      // CHECK: ttng.tc_gen5_commit
+      // OPT: ttng.tc_gen5_mma
+      // OPT-SAME: is_async
+      // OPT-NOT: wait_barrier
+      // OPT: ttng.tc_gen5_commit
+      %next = ttng.tc_gen5_mma %a_buffer, %b_buffer, %acc[%dep], %use_acc, %true : !ttg.memdesc<128x64xf16, #lhs_tmem, #ttng.tensor_memory>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
+      scf.yield %next, %true : !ttg.async.token, i1
+    } {tt.warp_specialize, tt.num_stages = 2 : i32}
+    %value, %done = ttng.tmem_load %acc[%result#0] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #accumulator>
+    "consume"(%value) : (tensor<128x128xf32, #accumulator>) -> ()
+    tt.return
+  }
+}

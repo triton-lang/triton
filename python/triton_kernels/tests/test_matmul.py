@@ -693,32 +693,56 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, do_gamma, 
                f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
 
 
-@pytest.mark.parametrize("shape, fp8_lhs, constraints", [
-    ((273, 544, 576), True, dict(block_m=64, block_n=256, block_k=128, split_k=1, is_persistent=True)),
-    ((273, 544, 576), False, dict(block_m=128, block_n=256, block_k=128, split_k=1, is_persistent=True, swap_xw=False)),
-    ((128, 256, 1024), True, {}),
-    ((273, 544, 576), False, {}),
+@pytest.mark.parametrize("shape, a_dtype, b_dtype, b_transpose, out_dtype, constraints", [
+    ((273, 544, 576), torch.float8_e4m3fn, torch.bfloat16, True, torch.bfloat16,
+     dict(block_m=64, block_n=256, block_k=128, split_k=1, is_persistent=True)),
+    ((273, 544, 576), torch.bfloat16, torch.float8_e4m3fn, True, torch.bfloat16,
+     dict(block_m=128, block_n=256, block_k=128, split_k=1, is_persistent=True, swap_xw=False)),
+    ((128, 256, 1024), torch.float8_e4m3fn, torch.bfloat16, True, torch.bfloat16, {}),
+    ((273, 544, 576), torch.bfloat16, torch.float8_e4m3fn, True, torch.bfloat16, {}),
+] + [
+    # Keep TMA strides aligned while exercising tails in all three dimensions.
+    ((129, 272, 1040), dtype, dtype, b_transpose, out_dtype,
+     dict(block_m=128, block_n=256, block_k=128, split_k=1, is_persistent=True))
+    for dtype, b_transpose, out_dtype in itertools.product(
+        (torch.float8_e4m3fn, torch.float8_e5m2), (False, True),
+        (torch.float8_e4m3fn, torch.float8_e5m2, torch.float16, torch.bfloat16))
+] + [
+    ((129, 272, 1040), a_dtype, torch.float32, False, out_dtype,
+     dict(block_m=128, block_n=256, block_k=32, split_k=1, is_persistent=True,
+          swap_xw=False, epilogue_subtile=epilogue_subtile))
+    for a_dtype, out_dtype, epilogue_subtile in [
+        (torch.float32, torch.float8_e5m2, 1),
+        (torch.bfloat16, torch.float8_e4m3fn, 1),
+        (torch.float8_e5m2, torch.bfloat16, 2),
+        (torch.float16, torch.float64, 4),
+    ]
 ])
 @pytest.mark.parametrize("max_num_imprecise_acc", [None, 32])
-def test_matmul_mixed_fp8_resource_limits(shape, fp8_lhs, constraints, max_num_imprecise_acc, device,
-                                         opt_flags_scope):
+def test_matmul_resource_limits(shape, a_dtype, b_dtype, b_transpose, out_dtype, constraints,
+                                max_num_imprecise_acc, device, opt_flags_scope):
     if is_cuda() and torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("requires Hopper or newer")
     if is_hip() and constraints.get("is_persistent"):
         pytest.skip("Persistent kernel not supported on AMD GPU")
+    if is_hopper() and out_dtype == torch.float64:
+        pytest.skip("128x256 FP64 output requires Blackwell epilogue subtiles")
 
     torch.manual_seed(0)
     m, n, k = shape
-    a_dtype, b_dtype = (torch.float8_e4m3fn, torch.bfloat16) if fp8_lhs else (torch.bfloat16, torch.float8_e4m3fn)
     a = torch.randn((m, k), device=device).to(a_dtype)
-    b = torch.randn((n, k), device=device).to(b_dtype).mT
+    b = torch.randn((n, k) if b_transpose else (k, n), device=device).to(b_dtype)
+    if b_transpose:
+        b = b.mT
 
     opt_flags.update_opt_flags_constraints(constraints)
     actual = matmul(a, b, None, precision_config=PrecisionConfig(
-        out_dtype=torch.bfloat16, max_num_imprecise_acc=max_num_imprecise_acc))
+        out_dtype=out_dtype, max_num_imprecise_acc=max_num_imprecise_acc, allow_tf32=True))
 
-    expected = torch.matmul(a.float(), b.float()).to(torch.bfloat16)
-    assert_close(expected, actual)
+    expected = torch.matmul(a.float(), b.float())
+    # Compare in FP32 with tolerances for TF32 and output rounding.
+    eps = torch.finfo(out_dtype).eps
+    assert_close(expected, actual.float(), maxtol=max(2e-2, eps), rmstol=max(4e-3, eps / 4))
 
 
 @pytest.mark.parametrize("dtype, other_dtype, allow_tf32", [
@@ -856,7 +880,7 @@ _MIXED_MATMUL_OUTPUT_CASES = [
     for dtype in (torch.float8_e4m3fn, torch.float8_e5m2)
     if dtype in _supported_float_dtypes()
 ] + [
-    # Cover automatic split-K and irregular shapes with FP8 weights.
+    # Cover automatic split-K and the smaller regular tile for FP8 weights.
     (torch.bfloat16, dtype, torch.bfloat16, out_dtype, shape, {}, 1)
     for dtype, (out_dtype, shape) in itertools.product(
         (torch.float8_e4m3fn, torch.float8_e5m2), [
