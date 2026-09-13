@@ -529,6 +529,18 @@ def test_named_expr():
     anchor(y)
 
 
+@pytest.mark.parametrize("value", [[[1, 2], [3, 4]], ((1, 2), (3, 4)), ([1, 2], (3, 4))])
+def test_nested_constexpr_tuple_comparison(value):
+
+    @triton.jit
+    def kernel(value: tl.constexpr):
+        tl.static_assert([[1, 2], [3, 4]] == value)
+        tl.static_assert(value == [[1, 2], [3, 4]])
+        tl.static_assert([[1, 2], [3, 5]] != value)
+
+    run_parser(kernel, args=(value, ))
+
+
 def test_tuple_assignment_respects_prior_constexpr_annotation():
 
     @triton.jit

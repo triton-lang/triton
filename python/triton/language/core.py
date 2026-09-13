@@ -380,7 +380,7 @@ def _unwrap_if_constexpr(o):
 def _normalize_tuple(t):
     normalized_tuple = _unwrap_if_constexpr(t)
     if isinstance(normalized_tuple, (list, builtins.tuple)):
-        normalized_tuple = tuple(normalized_tuple)
+        normalized_tuple = tuple(_normalize_tuple(x) for x in normalized_tuple)
     return normalized_tuple
 
 
