@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import itertools
 import torch
 import triton
+import triton.language as tl
 from enum import Enum, auto
 import math
 from typing import Callable
@@ -14,6 +15,7 @@ from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.target_info import is_cuda
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
 # details
+from .matmul_details._common import get_compute_dtype
 from .matmul_details._matmul import _matmul
 from .matmul_details._p_matmul import _p_matmul, get_per_device_per_stream_alloc_fn
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE
@@ -31,11 +33,22 @@ from .matmul_details.opt_flags import (
 )
 from .matmul_details.opt_flags_details import opt_flags_nvidia
 from .specialize import FnSpecs, SpecializationModule, ClosureArg
-from .tensor import Storage, Tensor, UINT8, FP4, FP64, wrap_torch_tensor, RaggedTensorMetadata, is_tma_compliant, make_tma, convert_layout
+from .tensor import Storage, Tensor, UINT8, FP4, FP8_E4M3FN, FP8_E4M3FNUZ, FP8_E5M2, FP8_E5M2FNUZ, FP16, BF16, FP32, FP64, wrap_torch_tensor, RaggedTensorMetadata, is_tma_compliant, make_tma, convert_layout
 from .tensor import dtype_to_torch_dtype, torch_dtype_to_dtype
 from .reduce import reduce
 from .reduce import PostprocessFn as ReducePostprocessFn
 from .tensor_details.ragged_tensor import ragged_metadata_fields
+
+_TL_FLOAT_DTYPES = {
+    FP8_E4M3FN: tl.float8e4nv,
+    FP8_E4M3FNUZ: tl.float8e4b8,
+    FP8_E5M2: tl.float8e5,
+    FP8_E5M2FNUZ: tl.float8e5b16,
+    FP16: tl.float16,
+    BF16: tl.bfloat16,
+    FP32: tl.float32,
+    FP64: tl.float64,
+}
 
 @dataclass(frozen=True)
 class FusedActivation:
@@ -161,6 +174,11 @@ class MatmulAllocation:
     output: tuple[tuple[int], torch.dtype]
     scratchpads: dict[str, tuple]
 
+
+def _get_out_dtype(precision_config, lhs_dtype, rhs_dtype):
+    return precision_config.out_dtype or get_compute_dtype(precision_config, lhs_dtype, rhs_dtype) or lhs_dtype
+
+
 def init_allocation(x, w, precision_config, fused_activation,
                     gather_indx, scatter_indx, batch_dim,
                     n_reduce_shards, opt_flags, intermediate_out_dtype):
@@ -176,7 +194,7 @@ def init_allocation(x, w, precision_config, fused_activation,
     y_rows = M
     y_rows *= n_reduce_shards
     out_shape = (batch_dim, y_rows, N // fused_activation.specs.reduction_n)
-    out_dtype = precision_config.out_dtype or x.dtype
+    out_dtype = _get_out_dtype(precision_config, x.dtype, w.dtype)
     out_shape = out_shape[:-1] + (out_shape[-1] // precision_config.c_value_pack_factor, )
     output = (out_shape, out_dtype)
     # ---- scratchpad -----#
@@ -264,6 +282,11 @@ def matmul(a, b, bias,
     for e in num_experts:
         Y[idxs_y_m(e), :] += matmul(X[idxs_x_m(e), :], W[e, :, :])
 
+    Unscaled floating inputs use their least common lossless dtype: FP16/BF16
+    promotes to FP32, and distinct FP8 formats promote to FP16. Output defaults
+    to that dtype. FP32 computation honors allow_tf32. NaNs are canonicalized;
+    FP64-to-FP8 output conversion uses an FP32 intermediate.
+
     matmul can be optionally fused with all gather or scatter at the end for the output. When fused_comm is specified, the m-th row of the output will be stored to (m * n_reduce_shards + reduce_rank) -th row
     of each rank id in range [scatter_shard_indx[m] * n_reduce_shards, (scatter_shard_indx[m] + 1) * n_reduce_shards) if scatter_shard_indx is not None, otherwise the output will be all gathered across all reduce ranks.
     When scatter_shard_indx is specified, the caller should ensure that the indices of different shards do not conflict.
@@ -324,13 +347,13 @@ def matmul(a, b, bias,
     if not isinstance(a, Tensor):
         dtype = FP4 if a_has_mx and a.dtype == torch.uint8 else None
         a = wrap_torch_tensor(a, dtype=dtype)
-    # Mixed FP8/16-bit dots widen FP8 tiles and support either weight layout.
+    compute_dtype = get_compute_dtype(precision_config, a.dtype, b.dtype)
     if (is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
-            and not opt_flags_nvidia.is_unscaled_mixed_fp8(precision_config, a.dtype, b.dtype)):
-        assert b.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
+            and compute_dtype is None):
+        assert b.stride(-2) == 1, "Scaled FP8 weights must be column-major on capability < 10"
     intermediate_out_dtype = precision_config.intermediate_out_dtype
     if intermediate_out_dtype is None:
-        intermediate_out_dtype = torch.float64 if a.dtype == b.dtype == FP64 else torch.float32
+        intermediate_out_dtype = torch.float64 if compute_dtype == FP64 else torch.float32
     a_scale_dtype = None if a_scale is None else a_scale.storage.data.dtype
     b_scale_dtype = None if b_scale is None else b_scale.storage.data.dtype
     # NOTE: uint8 scale means OCP E8M0 here. Direct NVFP-style scales stay float8_e4m3fn.
@@ -403,7 +426,7 @@ def matmul(a, b, bias,
     if a.ndim == 3 and b.ndim == 3:
         assert a.shape[0] == b.shape[0]
     # compute optimization flags
-    out_dtype = precision_config.out_dtype or a.dtype
+    out_dtype = _get_out_dtype(precision_config, a.dtype, b.dtype)
     out_dtype = torch_dtype_to_dtype(out_dtype)
     if out_dtype == UINT8 and precision_config.c_mx_scale is not None:
         out_dtype = FP4
@@ -555,7 +578,7 @@ def matmul(a, b, bias,
     a_tma_block_size = [1, opt_flags.block_k] if has_gather_tma else [1, opt_flags.block_m, opt_flags.block_k]
     a_tma_mode = None if not a_has_tma else "ragged" if ragged_dimension == "M" and not has_gather_tma else "dense"
     a_tensor_or_tma = make_tma(a, a_tma_block_size, a_tma_mode) if a_has_tma else a.storage.data
-    if a_has_tma and precision_config.allow_tf32 and a.storage.data.dtype == torch.float32:
+    if a_has_tma and compute_dtype == FP32 and precision_config.allow_tf32 and a.storage.data.dtype == torch.float32:
         a_tensor_or_tma.round_f32_to_tf32 = True
     # create tma descriptor for y
     c_has_tma = (
@@ -591,7 +614,7 @@ def matmul(a, b, bias,
     # create tma descriptor for w
     b_has_tma = opt_flags.is_persistent
     b_tensor_or_tma = make_tma(b, [1, opt_flags.block_k, opt_flags.block_n], "dense") if b_has_tma else b.storage.data
-    if b_has_tma and precision_config.allow_tf32 and b.storage.data.dtype == torch.float32:
+    if b_has_tma and compute_dtype == FP32 and precision_config.allow_tf32 and b.storage.data.dtype == torch.float32:
         b_tensor_or_tma.round_f32_to_tf32 = True
     # create tma descriptor for w_scale
     b_scale_has_tma = opt_flags.is_persistent and b_scale is not None
@@ -718,6 +741,7 @@ def matmul(a, b, bias,
                    opt_flags.block_k,
                    opt_flags.group_m,
                    XCD_SWIZZLE=opt_flags.xcd_swizzle,
+                   COMPUTE_DTYPE=_TL_FLOAT_DTYPES.get(compute_dtype),
                    SWIZZLE_MX_VALUE=b.storage.layout.name,
                    SWIZZLE_MX_SCALE="STRIDED" if b_scale is None else b_scale.storage.layout.name,
                    MX_BLOCK_SIZE=mx_block_size,

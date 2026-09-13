@@ -11,7 +11,7 @@ from .tensor_details import ragged_tensor as ragged_tensor_details
 from .tensor_details.layout import BlackwellMXValueLayout, Layout, StridedLayout
 from .tensor_details.ragged_tensor import RaggedTensorMetadata
 from .tensor_details.dtype import IntegerType, FloatType, DataType
-from .tensor_details.dtype import FP4, UINT8, FP8_E4M3FN, FP8_E4M3FNUZ, FP8_E5M2, FP16, BF16, FP32, FP64, INT16, INT32, INT64
+from .tensor_details.dtype import FP4, UINT8, FP8_E4M3FN, FP8_E4M3FNUZ, FP8_E5M2, FP8_E5M2FNUZ, FP16, BF16, FP32, FP64, INT16, INT32, INT64
 
 
 # storage
@@ -318,6 +318,7 @@ def dtype_to_torch_dtype(dtype: DataType) -> torch.dtype:
         FP8_E4M3FN: torch.float8_e4m3fn,
         FP8_E4M3FNUZ: torch.float8_e4m3fnuz,
         FP8_E5M2: torch.float8_e5m2,
+        FP8_E5M2FNUZ: torch.float8_e5m2fnuz,
         BF16: torch.bfloat16,
         FP32: torch.float32,
         FP16: torch.float16,
@@ -337,6 +338,7 @@ def torch_dtype_to_dtype(dtype: torch.dtype) -> DataType:
         "float8_e4m3fn": FP8_E4M3FN,
         "float8_e4m3fnuz": FP8_E4M3FNUZ,
         "float8_e5m2": FP8_E5M2,
+        "float8_e5m2fnuz": FP8_E5M2FNUZ,
         "float16": FP16,
         "bfloat16": BF16,
         "float32": FP32,
@@ -347,9 +349,7 @@ def torch_dtype_to_dtype(dtype: torch.dtype) -> DataType:
     }
     if id in vals:
         return vals[id]
-    if "float8" in id:
-        return FP8_E4M3FN
-    assert False, f"Unknown dtype: {id}"
+    raise ValueError(f"Unknown dtype: {id}")
 
 
 def empty(shape: tuple[int], dtype: DataType, device: torch.device, layout=None,

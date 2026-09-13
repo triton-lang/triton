@@ -11,6 +11,7 @@ from triton_kernels.tensor_details.layout_details.blackwell_scale import (
     unswizzle_act_mx_scale_bw,
 )
 from triton_kernels.numerics_details.flexpoint import (
+    cast_output,
     float_to_flex,
     load_scale,
     nan_propagating_absmax_reduce,
@@ -28,6 +29,7 @@ from ._common import (
     matmul_launch_metadata,
     compute_pids,
     output_mx_scale_store_ptr,
+    upcast_fp8,
 )
 
 
@@ -114,6 +116,7 @@ def _p_matmul(
              NUM_SMS: tl.constexpr,
              X_TMA_MODE: tl.constexpr,
              Y_TMA_MODE: tl.constexpr,
+             COMPUTE_DTYPE: tl.constexpr,
              Y_MX_SCALE_LAYOUT: tl.constexpr = None,
              OUT_N_TILE_ALIGNED: tl.constexpr = False,
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
@@ -245,12 +248,9 @@ def _p_matmul(
         THREADS_PER_BLOCK: tl.constexpr = tl.extra.cuda.num_threads()
         local_absmax = tl.full([THREADS_PER_BLOCK], 0.0, tl.uint32)
 
-    # A widened FP8 lhs needs tensor memory alongside the accumulator.
+    # A widened lhs needs tensor memory alongside the accumulator.
     dot_lhs_type: tl.constexpr = w_type if SWAP_XW else x_type
-    dot_rhs_type: tl.constexpr = x_type if SWAP_XW else w_type
-    upcast_lhs: tl.constexpr = (not is_x_microscaled and not is_w_microscaled
-                              and dot_lhs_type == tl.float8e4nv
-                              and (dot_rhs_type == tl.float16 or dot_rhs_type == tl.bfloat16))
+    upcast_lhs: tl.constexpr = COMPUTE_DTYPE is not None and dot_lhs_type != COMPUTE_DTYPE
     dot_m: tl.constexpr = BLOCK_N if SWAP_XW else BLOCK_M
     dot_n: tl.constexpr = BLOCK_M if SWAP_XW else BLOCK_N
     acc_columns: tl.constexpr = tl.cdiv(dot_m, 128) * dot_n
@@ -337,7 +337,7 @@ def _p_matmul(
                 XTensorScalePtrs += slice_off_m * stride_x_tensor_scale_m
             XTensorScalePtrs += scale_offs_m.to(index_type) * stride_x_tensor_scale_m
 
-        acc_dtype: tl.constexpr = tl.float64 if x_type == tl.float64 and w_type == tl.float64 else tl.float32
+        acc_dtype: tl.constexpr = tl.float64 if COMPUTE_DTYPE == tl.float64 else tl.float32
         acc = tl.zeros((BLOCK_N, BLOCK_M) if SWAP_XW else (BLOCK_M, BLOCK_N), dtype=acc_dtype)
 
         # ------------------------------------------------------------
@@ -389,7 +389,7 @@ def _p_matmul(
                         x = tl.load(XPtrs)
                 else:
                     x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
-                if x.dtype == tl.float32 and ALLOW_TF32:
+                if x.dtype == tl.float32 and COMPUTE_DTYPE == tl.float32 and ALLOW_TF32:
                     # since data are not loaded from TMA we need to explicitly round to tf32.
                     x = round_f32_to_tf32(x)
             # --- load x_scale ---
@@ -500,7 +500,7 @@ def _p_matmul(
                     else:
                         acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, w_format, acc=acc, fast_math=True)
             else:
-                acc = matmul_dot(x, w, acc, SWAP_XW, MAX_NUM_IMPRECISE_ACC, ALLOW_TF32)
+                acc = matmul_dot(x, w, acc, SWAP_XW, MAX_NUM_IMPRECISE_ACC, ALLOW_TF32, COMPUTE_DTYPE)
 
             if is_x_microscaled and XMxScalePtrs is not None:
                 XMxScalePtrs += (MX_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
@@ -656,7 +656,6 @@ def _p_matmul(
                     off_kz = pid_k * batch_size + start_z1
                     acc = Y.load([off_kz, off_m1, out_off_n])
                     acc = acc.reshape(out.shape)
-                    out += acc * load_scale(ScalePtr)
                 else:
                     offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
                     mask_n = offs_y_n < yN
@@ -664,7 +663,9 @@ def _p_matmul(
                     AccPtrs = YPtr + pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n[None, :] * stride_y_n
                     mask = mask_m[:, None] if OUT_N_TILE_ALIGNED else mask_m[:, None] & mask_n[None, :]
                     acc = tl.load(AccPtrs, mask=mask, other=0.0)
-                    out += acc * load_scale(ScalePtr)
+                if out.dtype == tl.float64:
+                    acc = upcast_fp8(acc)
+                out += acc * load_scale(ScalePtr)
 
             if MASK_ACC:
                 out = tl.where(mask_m[:, None], out, 0.0)
@@ -748,7 +749,7 @@ def _p_matmul(
                 if EPILOGUE_FN is not None and not IS_EPILOGUE_QUANT_MX:
                     out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=YPtr.dtype.element_ty, pid=len(accs)*tile_id1 + a_i)
 
-            out = out.to(YPtr.dtype.element_ty)
+            out = cast_output(out, YPtr.dtype.element_ty)
             if is_out_fp4:
                 out_off_n = out_off_n // 2
                 offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N // 2)
