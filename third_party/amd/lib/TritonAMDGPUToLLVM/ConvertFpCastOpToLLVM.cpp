@@ -2450,8 +2450,14 @@ struct FpToFpOpConversion
     }
     const size_t maxElementsPerThread = maybeMaxElementsPerThread.value();
 
-    auto converter = getConverter(srcElementType, dstElementType,
-                                  maxElementsPerThread, roundingMode);
+    bool useFp32Intermediate =
+        (srcElementType.isBF16() && dstElementType.isF16()) ||
+        (srcElementType.isF16() && dstElementType.isBF16());
+    if (useFp32Intermediate)
+      roundingMode = roundingMode.value_or(RoundingMode::RTNE);
+    auto converter =
+        getConverter(useFp32Intermediate ? f32_ty : srcElementType,
+                     dstElementType, maxElementsPerThread, roundingMode);
     if (converter == nullptr) {
       std::string rmError;
       if (roundingMode.has_value())
@@ -2477,6 +2483,11 @@ struct FpToFpOpConversion
     }
     inVals.resize(numElements,
                   b.undef(typeConverter->convertType(srcElementType)));
+
+    if (useFp32Intermediate)
+      for (Value &v : inVals)
+        v = srcElementType.isBF16() ? AMD::convertBf16ToFp32(loc, rewriter, v)
+                                    : Fp16ToFp32OneValue(loc, rewriter, v);
 
     auto maybeOutVals = converter->convert(loc, rewriter, inVals);
     assert(maybeOutVals.has_value());
