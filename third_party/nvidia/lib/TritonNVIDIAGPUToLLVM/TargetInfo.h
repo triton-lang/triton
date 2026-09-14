@@ -75,6 +75,9 @@ public:
                   unsigned reduceLaneIdMask) const override;
   unsigned getReductionTreeArity(Operation *combinerOp) const override;
 
+  Value warpPrefixPopcount(RewriterBase &rewriter, Location loc,
+                           Value pred) const override;
+
   std::string getMulhiFuncName(Type resultElementTy) const override;
 
   void printf(RewriterBase &rewriter, Value formatStrStart,

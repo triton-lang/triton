@@ -165,6 +165,17 @@ StringRef TargetInfo::getAtomicSyncScope(MemSyncScope scope) const {
   llvm_unreachable("unknown memory synchronization scope");
 }
 
+Value TargetInfo::warpPrefixPopcount(RewriterBase &rewriter, Location loc,
+                                     Value pred) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  // Inclusive lane mask selecting lanes [0, laneId]: (-1) >> (31 - laneId).
+  Value laneId = getLaneId(rewriter, loc);
+  Value laneMask = b.lshr(b.i32_val(-1), b.sub(b.i32_val(31), laneId));
+  Value warpBits = ballot(rewriter, loc, i32_ty, pred);
+  return LLVM::CtPopOp::create(rewriter, loc, i32_ty,
+                               b.and_(warpBits, laneMask));
+}
+
 void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
                          triton::gpu::AddrSpace targets) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
