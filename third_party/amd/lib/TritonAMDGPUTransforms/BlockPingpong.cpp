@@ -648,8 +648,8 @@ LogicalResult Pingponger::transformTwoPPClusters(OpBuilder &builder,
   appendSlicedLoadAB(/*slice=*/1);
   appendOp(ROCDL::SchedBarrier::create(builder, loc, SchedGroupMask::none));
   appendOp(gLoadOps[1]);
-  // Finish these LDS reads before the other warp group can overwrite the
-  // shared buffer.
+  // Ensure all local loads complete before the other warp group can overwrite
+  // the shared-memory buffer for the next iteration.
   appendClusterBarrier(builder, loc);
 
   // dot0 (1/2)

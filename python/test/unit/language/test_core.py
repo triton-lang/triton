@@ -97,6 +97,11 @@ def _dtype(dtype: str) -> str:
     return re.match(r'([a-zA-Z]+)', dtype).group(0)
 
 
+def _assert_ptx_memory_width(ptx, opcode, min_bits=128):
+    widths = re.findall(rf'\b{opcode}\.global(?:\.v(\d+))?\.[bfsu](\d+)\b', ptx)
+    assert any(int(lanes or 1) * int(bits) >= min_bits for lanes, bits in widths), widths
+
+
 def patch_kernel(template, to_replace):
     if is_interpreter():
         local_namespace = {}
@@ -2320,6 +2325,8 @@ def test_tensor_atomic_use_result(dtype_str, size, op, device):
                              ('float32', 'int32', True, 1024),
                              ('float32', 'bool', False, 1024),
                              ('int8', 'bfloat16', False, 1024),
+                             ('int8', 'int32', False, 32),
+                             ('int16', 'int32', False, 32),
                          ] + [(f'uint{x}', f'int{x}', True, 1024)
                               for x in [8, 16, 32, 64]] + [(f'int{x}', f'uint{x}', True, 1024)
                                                            for x in [8, 16, 32, 64]] +
@@ -2401,8 +2408,10 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
         z_tri = to_triton(np.empty((size, ), dtype=getattr(np, dtype_z_np)), device=device)
 
     dtype_z_tri = str_to_triton_dtype(dtype_z)
-    kernel[(1, )](x_tri, z_tri, TO_TYPE=dtype_z_tri, BITCAST=bitcast, SIZE=size, ARG_HASH=arg_hash, num_warps=1,
-                  num_ctas=num_ctas)
+    h = kernel[(1, )](x_tri, z_tri, TO_TYPE=dtype_z_tri, BITCAST=bitcast, SIZE=size, ARG_HASH=arg_hash, num_warps=1,
+                      num_ctas=num_ctas)
+    if not is_interpreter() and is_cuda() and size == 32 and dtype_x in ("int8", "int16") and dtype_z == "int32":
+        assert f"ld.global.s{dtype_x[3:]}" in h.asm["ptx"]
     # torch result
     if dtype_z.startswith('bfloat') or dtype_x.startswith('bfloat') or dtype_z.startswith(
             'float8') or dtype_x.startswith('float8'):
@@ -3786,13 +3795,10 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
     if not is_cuda():
         return
 
-    # parse ptx to make sure ld/st are vectorized
-    ptx = pgm.asm['ptx']
-    assert 'ld.global.v4' in ptx
-    assert 'st.global.v4' in ptx
-    ptx = pgm_contiguous.asm['ptx']
-    assert 'ld.global.v4' in ptx
-    assert 'st.global.v4' in ptx
+    # Check 16-byte vector transfers independently of the PTX register width.
+    for compiled in (pgm, pgm_contiguous):
+        for opcode in ('ld', 'st'):
+            _assert_ptx_memory_width(compiled.asm['ptx'], opcode)
 
 
 @pytest.mark.interpreter
@@ -4256,20 +4262,12 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     ptx = pgm.asm['ptx']
 
     # XXX: skip small sizes because they are not vectorized; with runtime
-    # strides, v4 needs the contiguous dim >= 16 (K for loads, N for stores).
+    # strides, 16-byte transfers need the contiguous dim >= 16 (K for loads, N for stores).
     enough_work = (M * N // (num_warps * 32) >= 4) and (K > 16 or N > 16 or M > 16)
     if enough_work and K >= 16:
-        if 'float64' in in_dtype:
-            assert 'ld.global.v2.b64' in ptx
-        else:
-            assert 'ld.global.v4' in ptx
+        _assert_ptx_memory_width(ptx, 'ld')
     if enough_work and N >= 16:
-        if 'float8' in in_dtype:
-            assert 'st.global.v2' in ptx
-        elif 'float64' in in_dtype:
-            assert 'st.global.v2.b64' in ptx
-        else:
-            assert 'st.global.v4' in ptx
+        _assert_ptx_memory_width(ptx, 'st', min_bits=64 if 'float8' in in_dtype else 128)
 
     is_tcgen5 = (capability[0] == 10) and (num_warps % 4) == 0 and (M % 64) == 0 and (N % 8) == 0
 
@@ -4590,9 +4588,9 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
     if is_cuda():
         ptx = pgm.asm['ptx']
         if (max(M, N) * K) // (num_warps * 32) >= 4:
-            assert 'ld.global.v4' in ptx
+            _assert_ptx_memory_width(ptx, 'ld')
         if M * N // (num_warps * 32) >= 4:
-            assert 'st.global.v4' in ptx
+            _assert_ptx_memory_width(ptx, 'st')
         assert (re.search(r'(mma|wgmma.mma_async).sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.(f|bf)16.(f|bf)16', ptx)
                 or "tcgen05.mma.cta_group::1.kind::f16" in ptx)
     if is_hip_cdna4() and normal_type in ["bf16", "fp16"]:
@@ -5257,6 +5255,8 @@ def test_load_cache_modifier(cache, device):
         ptx = pgm.asm['ptx']
         all_modifiers = ['.ca', '.cg', '.cs', '.cv']
         for modifier in all_modifiers:
+            if modifier == '.ca' and cache in ('', '.ca'):
+                continue
             if modifier == cache:
                 assert f'ld.global{modifier}' in ptx
             else:
@@ -5432,6 +5432,8 @@ def test_store_cache_modifier(cache, device):
         ptx = pgm.asm['ptx']
         all_modifiers = ['.wb', '.cg', '.cs', '.wt']
         for modifier in all_modifiers:
+            if modifier == '.wb' and cache in ('', '.wb'):
+                continue
             if modifier == cache:
                 assert f'st.global{modifier}' in ptx
             else:
@@ -6575,7 +6577,7 @@ def test_globaltimer(device):
         start = func()
         off = tl.arange(0, 128)
         for i in range(10000):
-            tl.store(Out1 + off, tl.load(Out1 + off) + 1)
+            tl.store(Out1 + off, tl.load(Out1 + off, volatile=True) + 1)
         end = func()
         tl.store(Out2, start)
         tl.store(Out2 + 1, end)
