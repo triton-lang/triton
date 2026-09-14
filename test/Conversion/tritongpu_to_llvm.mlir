@@ -3603,9 +3603,9 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
   // CHECK-LABEL: @fp16_to_fp8e5_rtne
   // CHECK-NOT: llvm.fpext
   // CHECK: llvm.add
-  // CHECK: llvm.lshr
   // CHECK: llvm.intr.umin
   // CHECK: llvm.select
+  // CHECK: llvm.lshr
   // CHECK: llvm.return
   tt.func private @fp16_to_fp8e5_rtne(%in: tensor<128xf16, #blocked>) -> tensor<128xf8E5M2, #blocked> {
     %out = tt.fp_to_fp %in, rounding = rtne : tensor<128xf16, #blocked> -> tensor<128xf8E5M2, #blocked>
