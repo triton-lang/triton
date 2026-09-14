@@ -20,9 +20,9 @@ computeHistogram(Location loc, ConversionPatternRewriter &rewriter,
                  Value baseSharedMemPtr, const SmallVector<Value> &srcValues,
                  const SmallVector<Value> &maskValues, int numBins,
                  int numThreadPerWarp, const SmallVector<Value> &indices,
-                 Value threadId, Value threadPred, int numWarps, int numCTAs,
-                 int ctaBroadcastMask, Operation *sourceOp,
-                 const TargetInfoBase &targetInfo) {
+                 Value threadId, Value threadPred, int numWarps,
+                 int numCTAsToCombine, int ctaBroadcastMask,
+                 Operation *sourceOp, const TargetInfoBase &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> histogramValues;
   // Initialize the shared memory with zeros.
@@ -57,7 +57,7 @@ computeHistogram(Location loc, ConversionPatternRewriter &rewriter,
     rewriter.setInsertionPointToStart(thenBlock);
   }
 
-  if (numCTAs > 1)
+  if (numCTAsToCombine > 1)
     targetInfo.clusterBarrier(loc, rewriter, sourceOp);
   else
     b.barrier(triton::gpu::AddrSpace::Local);
@@ -65,11 +65,11 @@ computeHistogram(Location loc, ConversionPatternRewriter &rewriter,
     Value sharedMemPtr =
         b.gep(baseSharedMemPtr.getType(), i32_ty, baseSharedMemPtr, index);
     Value val = b.i32_val(0);
-    for (int cta = 0; cta < numCTAs; ++cta) {
+    for (int cta = 0; cta < numCTAsToCombine; ++cta) {
       // Replicated CTAs do not accumulate inputs and contribute only zeros.
       if (cta & ctaBroadcastMask)
         continue;
-      Value ctaId = numCTAs > 1 ? b.i32_val(cta) : Value();
+      Value ctaId = numCTAsToCombine > 1 ? b.i32_val(cta) : Value();
       Value partial = targetInfo.loadDShared(rewriter, loc, sharedMemPtr, ctaId,
                                              i32_ty, b.true_val());
       val = b.add(val, partial);
