@@ -3600,6 +3600,38 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
     %out = tt.fp_to_fp %in : tensor<128xf8E5M2, #blocked> -> tensor<128xbf16, #blocked>
     tt.return %out : tensor<128xbf16, #blocked>
   }
+
+  // SM89-LABEL: @fp32_to_fp8e5_rtne
+  // SM89-NOT: cvt.rz.f16.f32
+  // SM89: cvt.rn.satfinite.e5m2x2.f32
+  // CHECK-LABEL: @fp32_to_fp8e5_rtne
+  // CHECK-NOT: cvt.rz.f16.f32
+  // CHECK: llvm.fadd
+  // CHECK: llvm.intr.umin
+  // CHECK: llvm.icmp "ugt"
+  // CHECK: llvm.return
+  tt.func private @fp32_to_fp8e5_rtne(%in: tensor<128xf32, #blocked>) -> tensor<128xf8E5M2, #blocked> {
+    %out = tt.fp_to_fp %in, rounding = rtne : tensor<128xf32, #blocked> -> tensor<128xf8E5M2, #blocked>
+    tt.return %out : tensor<128xf8E5M2, #blocked>
+  }
+
+  // CHECK-LABEL: @fp16_to_fp8e5_rtne
+  // CHECK: llvm.fpext
+  // CHECK: llvm.fadd
+  // CHECK: llvm.return
+  tt.func private @fp16_to_fp8e5_rtne(%in: tensor<128xf16, #blocked>) -> tensor<128xf8E5M2, #blocked> {
+    %out = tt.fp_to_fp %in, rounding = rtne : tensor<128xf16, #blocked> -> tensor<128xf8E5M2, #blocked>
+    tt.return %out : tensor<128xf8E5M2, #blocked>
+  }
+
+  // CHECK-LABEL: @bf16_to_fp8e5_rtne
+  // CHECK: llvm.fpext
+  // CHECK: llvm.fadd
+  // CHECK: llvm.return
+  tt.func private @bf16_to_fp8e5_rtne(%in: tensor<128xbf16, #blocked>) -> tensor<128xf8E5M2, #blocked> {
+    %out = tt.fp_to_fp %in, rounding = rtne : tensor<128xbf16, #blocked> -> tensor<128xf8E5M2, #blocked>
+    tt.return %out : tensor<128xf8E5M2, #blocked>
+  }
 }
 
 // -----
