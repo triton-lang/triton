@@ -276,20 +276,32 @@ struct LoadGroupInfo {
   bool hasTMALoad = false;
 };
 
-static bool loadFeedsTwoCTAMMA(Operation *loadOp) {
+struct LoadConsumerInfo {
+  bool hasTwoCTAMMA = false;
+  bool hasOtherConsumers = false;
+};
+
+static LoadConsumerInfo getLoadConsumerInfo(Operation *loadOp) {
+  LoadConsumerInfo info;
+  info.hasOtherConsumers = mustLoadToRegisters(loadOp);
   SetVector<Operation *> worklist;
   worklist.insert(loadOp->user_begin(), loadOp->user_end());
   for (unsigned i = 0; i < worklist.size(); ++i) {
     Operation *op = worklist[i];
     auto mma = dyn_cast<ttng::MMAv5OpInterface>(op);
     if (mma) {
-      if (mma.getTwoCtas())
-        return true;
+      info.hasTwoCTAMMA |= mma.getTwoCtas();
+      info.hasOtherConsumers |= !mma.getTwoCtas();
       continue;
     }
+    // Allocations and views forward the loaded data; completion waits only
+    // track its lifetime. Other operations can read it in every CTA.
+    if (!isa<ttg::LocalAllocOp, ttng::WaitBarrierOp>(op) &&
+        !op->hasTrait<OpTrait::MemDescViewTrait>())
+      info.hasOtherConsumers = true;
     worklist.insert(op->user_begin(), op->user_end());
   }
-  return false;
+  return info;
 }
 
 static int getMMAv5CompletionBarrierCount(ttng::MMAv5OpInterface mma) {
@@ -422,11 +434,14 @@ void createTMABarrierAndWait(
     int numBuffers = asyncLoads[group[0]].stageDiff;
     const LoadGroupInfo loadGroup = loadGroups.find(numBuffers)->second;
     bool hasTwoCTAMMAUser = false;
+    bool hasOtherConsumers = false;
     for (Operation *op : group) {
       auto tensorTy = cast<RankedTensorType>(op->getResultTypes()[0]);
       int loadSize = product(getShapePerCTA(tensorTy));
       sizeInBytes += loadSize * tensorTy.getElementTypeBitWidth() / 8;
-      hasTwoCTAMMAUser |= loadFeedsTwoCTAMMA(op);
+      auto consumers = getLoadConsumerInfo(op);
+      hasTwoCTAMMAUser |= consumers.hasTwoCTAMMA;
+      hasOtherConsumers |= consumers.hasOtherConsumers;
     }
 
     Value barrierAlloc = triton::createBarrierAlloc(
@@ -444,11 +459,17 @@ void createTMABarrierAndWait(
         builder, barrierAlloc, loadGroup.extractIdx);
     auto wait =
         ttng::WaitBarrierOp::create(builder, barrierViewWait, loadGroup.phase);
+    Operation *waitOp = wait;
+    if (hasTwoCTAMMAUser && hasOtherConsumers) {
+      // Only the leader waits on a pair-shared barrier. Publish completion to
+      // the other CTAs before any ordinary consumer reads the loaded data.
+      waitOp = ttng::ClusterBarrierOp::create(builder);
+    }
 
     // Update the async loads info.
     for (Operation *op : group) {
       asyncLoads[op].barrier = barrier;
-      asyncLoads[op].waitOp = wait;
+      asyncLoads[op].waitOp = waitOp;
     }
   }
 }
