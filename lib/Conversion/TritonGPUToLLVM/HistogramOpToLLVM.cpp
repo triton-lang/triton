@@ -61,8 +61,6 @@ computeHistogram(Location loc, ConversionPatternRewriter &rewriter,
     targetInfo.clusterBarrier(loc, rewriter, sourceOp);
   else
     b.barrier(triton::gpu::AddrSpace::Local);
-  // The source layout selects which CTAs contribute partial counts; the
-  // destination layout selects which bins each CTA reads from their sum.
   for (Value index : indices) {
     Value sharedMemPtr =
         b.gep(baseSharedMemPtr.getType(), i32_ty, baseSharedMemPtr, index);
@@ -120,8 +118,7 @@ public:
     auto srcType = op.getSrc().getType();
     auto freeVarMasks = getFreeVariableMasks(srcType);
     bool crossCTA = hasCrossCTAScratch(op);
-    // When combining partial histograms, count replicated inputs only once
-    // across the cluster. Otherwise each CTA computes the complete histogram.
+    // Each CTA computes its own histogram.
     if (!crossCTA)
       freeVarMasks[str_attr("block")] = 0;
     Value threadPred =
