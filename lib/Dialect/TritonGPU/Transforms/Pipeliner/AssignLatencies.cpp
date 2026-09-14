@@ -288,6 +288,9 @@ private:
   }
 
   bool isWarpSpecialized(scf::ForOp forOp) {
+    // Automatic warp specialization is skipped for multi-CTA kernels.
+    if (ttg::lookupNumCTAs(forOp) > 1)
+      return false;
     scf::ForOp current = forOp;
     do {
       if (current->hasAttr(kWarpSpecializeAttrName)) {
