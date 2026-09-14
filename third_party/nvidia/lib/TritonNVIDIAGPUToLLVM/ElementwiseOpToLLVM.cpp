@@ -364,15 +364,15 @@ struct FpToFpOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value bits = b.zext(i32_ty, b.bitcast(v, i16_ty));
     Value magnitude = b.and_(bits, b.i32_val(0x7fff));
-    Value sign = b.and_(b.lshr(bits, b.i32_val(8)), b.i32_val(0x80));
 
     // Their shared exponent bias lets this rounding handle subnormals too.
     Value odd = b.and_(b.lshr(magnitude, b.i32_val(8)), b.i32_val(1));
     Value rounded = b.add(b.add(magnitude, b.i32_val(0x7f)), odd);
-    Value result = b.umin(b.lshr(rounded, b.i32_val(8)), b.i32_val(0x7b));
-    result = b.select(b.icmp_ugt(magnitude, b.i32_val(0x7c00)), b.i32_val(0x7f),
-                      result);
-    return b.trunc(i8_ty, b.or_(result, sign));
+    Value result = b.umin(rounded, b.i32_val(0x7b00));
+    result = b.select(b.icmp_ugt(magnitude, b.i32_val(0x7c00)),
+                      b.i32_val(0x7f00), result);
+    result = b.or_(result, b.and_(bits, b.i32_val(0x8000)));
+    return b.trunc(i8_ty, b.lshr(result, b.i32_val(8)));
   }
 
   static Value convertFp32ToFp8E5M2(Location loc,
