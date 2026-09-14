@@ -4594,6 +4594,11 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         large_tolerance = True
     atol = 2e-4 if large_tolerance else 1e-5
     rtol = 2e-2 if large_tolerance else 1e-2
+    # Interpreter + CPU has larger precision gap: kernel uses float32 matmul
+    # while reference uses fp16 matmul on CPU.
+    if is_interpreter() and device == 'cpu' and normal_type == 'fp16':
+        atol = 2e-3
+        rtol = 5e-2
     torch.testing.assert_close(z, z_ref, atol=atol, rtol=rtol)
 
     # make sure ld/st are vectorized
