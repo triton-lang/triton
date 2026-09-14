@@ -40,6 +40,24 @@ def anchor(v):
     pass
 
 
+@pytest.mark.parametrize("scalar", [True, False])
+@pytest.mark.parametrize("src_dtype, dst_dtype", [(tl.bfloat16, tl.float16), (tl.float16, tl.bfloat16)])
+def test_fp16_bf16_cast(scalar, src_dtype, dst_dtype):
+
+    @triton.jit
+    def kernel(X, SCALAR: tl.constexpr, DTYPE: tl.constexpr):
+        if not SCALAR:
+            X = X + tl.arange(0, 32)
+        # CHECK: [[X:%.*]] = tt.load
+        x = tl.load(X)
+        # CHECK-NEXT: [[Y:%.*]] = tt.fp_to_fp [[X]], rounding = rtne
+        y = x.to(DTYPE)
+        # CHECK-NEXT: tt.call {{.*}}([[Y]])
+        anchor(y)
+
+    run_filecheck_test(kernel, args=(MockTensor(src_dtype), scalar, dst_dtype))
+
+
 @pytest.mark.parametrize("dtype",
                          [tl.float16, tl.bfloat16, tl.float32, tl.float64, tl.float8e4nv, tl.float8e5, tl.float8e4b15],
                          ids=str)
@@ -67,6 +85,86 @@ def test_scalar_constant_float_zero_to_integer(dtype, value):
         anchor(tl.full((), value, dtype))
 
     run_filecheck_test(kernel, args=(dtype, value))
+
+
+@pytest.mark.parametrize("op", [tl.minimum, tl.maximum])
+@pytest.mark.parametrize("dtype, value, expected_dtype", [
+    (tl.float16, 0.0, tl.float16),
+    (tl.float16, 0, tl.float16),
+    (tl.float32, 0.0, tl.float32),
+    (tl.float64, 0.0, tl.float64),
+    (tl.bfloat16, 0.0, tl.bfloat16),
+    (tl.int8, False, tl.int8),
+    (tl.int16, 0, tl.int16),
+    (tl.uint16, 0, tl.uint16),
+    (tl.int16, 0.0, tl.float32),
+])
+def test_minimum_maximum_scalar_promotion(op, dtype, value, expected_dtype):
+
+    @triton.jit
+    def kernel(op: tl.constexpr, dtype: tl.constexpr, value: tl.constexpr, expected_dtype: tl.constexpr):
+        x = tl.full((8, ), 1, dtype)
+        lhs = op(x, value)
+        rhs = op(value, x)
+        tl.static_assert(lhs.dtype == expected_dtype)
+        tl.static_assert(rhs.dtype == expected_dtype)
+
+    run_parser(kernel, args=(op, dtype, value, expected_dtype))
+
+
+@pytest.mark.parametrize("op", [tl.minimum, tl.maximum])
+@pytest.mark.parametrize("other_dtype, expected_dtype", [(tl.float32, tl.float32), (tl.bfloat16, tl.float16)])
+def test_minimum_maximum_tensor_promotion(op, other_dtype, expected_dtype):
+
+    @triton.jit
+    def kernel(op: tl.constexpr, other_dtype: tl.constexpr, expected_dtype: tl.constexpr):
+        x = tl.full((8, ), 1, tl.float16)
+        y = tl.full((), 0.0, other_dtype)
+        lhs = op(x, y)
+        rhs = op(y, x)
+        tl.static_assert(lhs.dtype == expected_dtype)
+        tl.static_assert(rhs.dtype == expected_dtype)
+
+    run_parser(kernel, args=(op, other_dtype, expected_dtype))
+
+
+@pytest.mark.parametrize("op", ["minimum", "maximum", "clamp", "cumsum", "cumprod"])
+@pytest.mark.parametrize("dtype", [tl.bfloat16, tl.float16, tl.float32], ids=str)
+def test_bfloat16_promotion_elementwise_and_scan(op, dtype):
+
+    @triton.jit
+    def kernel(op: tl.constexpr, dtype: tl.constexpr):
+        x = tl.full((32, ), 1, tl.bfloat16)
+        y = tl.full((32, ), 2, dtype)
+        if op == "clamp":
+            result = tl.clamp(x, -y, y)
+        elif op == "minimum" or op == "maximum":
+            result = getattr(tl, op)(x, y)
+        else:
+            result = getattr(tl, op)(x, dtype=None if dtype == tl.bfloat16 else dtype)
+        tl.static_assert(result.dtype == dtype)
+
+    run_parser(kernel, args=(op, dtype))
+
+
+@pytest.mark.parametrize("op", ["min", "max"])
+@pytest.mark.parametrize("return_indices", [False, True])
+@pytest.mark.parametrize("tie_break_left", [False, True])
+def test_bfloat16_promotion_reduction(op, return_indices, tie_break_left):
+
+    @triton.jit
+    def kernel(op: tl.constexpr, return_indices: tl.constexpr, tie_break_left: tl.constexpr):
+        x = tl.full((32, ), 1, tl.bfloat16)
+        result = getattr(tl, op)(x, 0, return_indices=return_indices, return_indices_tie_break_left=tie_break_left)
+        if return_indices:
+            value, index = result
+            tl.static_assert(value.dtype == tl.bfloat16)
+            tl.static_assert(index.dtype == tl.int32)
+        else:
+            # Ordinary min/max reductions still widen all small input types.
+            tl.static_assert(result.dtype == tl.float32)
+
+    run_parser(kernel, args=(op, return_indices, tie_break_left))
 
 
 @triton.aggregate
@@ -397,6 +495,15 @@ def test_constexpr_function_from_jit():
     # CHECK-LABEL: test_constexpr_function
     x: tl.constexpr = constexpr_function(7)
     # CHECK: make_range {end = 8 : i32, start = 0 : i32}
+    tl.arange(0, x)
+
+
+@filecheck_test
+@triton.jit
+def test_cdiv_constexpr():
+    # CHECK-LABEL: test_cdiv_constexpr
+    x: tl.constexpr = triton.cdiv(33, 32)
+    # CHECK: make_range {end = 2 : i32, start = 0 : i32}
     tl.arange(0, x)
 
 
@@ -942,6 +1049,43 @@ def test_atomic_scalar_masks():
     tl.atomic_or(ptrs, 1, mask=True)
     # CHECK: {{.*}} = tt.atomic_rmw xor, acq_rel, gpu
     tl.atomic_xor(ptrs, 1, mask=True)
+
+
+@pytest.mark.parametrize("dtype", [tl.int1, tl.int8, tl.uint8, tl.int16, tl.int32, tl.int64], ids=str)
+def test_atomic_load_store(dtype):
+
+    @triton.jit
+    def kernel(dtype: tl.constexpr):
+        BLOCK: tl.constexpr = 128
+        ptr = tl.full((BLOCK, ), 0, tl.int64).to(tl.pointer_type(dtype), bitcast=True)
+        offs = tl.arange(0, BLOCK)
+        ptrs = ptr + offs
+        mask = offs < 64
+        # CHECK: %{{.*}} = tt.atomic_load acquire, gpu, %{{.*}}, %{{.*}} : (tensor<128x!tt.ptr<[[TYPE:i(8|16|32|64)]]>>, tensor<128xi1>) -> tensor<128x[[TYPE]]>
+        value = tl.atomic_load(ptrs, mask=mask)
+        tl.static_assert(value.dtype == dtype)
+        # CHECK: tt.atomic_store release, gpu, %{{.*}}, %{{.*}}, %{{.*}} : tensor<128x!tt.ptr<[[TYPE]]>>
+        tl.atomic_store(ptrs, value, mask=mask)
+        # CHECK: %{{.*}} = tt.atomic_load relaxed, sys
+        tl.atomic_load(ptrs, sem="relaxed", scope="sys")
+        # CHECK: tt.atomic_store relaxed, cta
+        tl.atomic_store(ptrs, 1, sem="relaxed", scope="cta")
+
+    run_filecheck_test(kernel, args=(dtype, ))
+
+
+@doesnt_compile
+@triton.jit
+def test_atomic_load_rejects_release_semantics():
+    ptr = tl.to_tensor(0).to(tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    tl.atomic_load(ptr, sem="release")
+
+
+@doesnt_compile
+@triton.jit
+def test_atomic_store_rejects_acquire_semantics():
+    ptr = tl.to_tensor(0).to(tl.int64).to(tl.pointer_type(tl.int32), bitcast=True)
+    tl.atomic_store(ptr, 1, sem="acquire")
 
 
 @filecheck_test

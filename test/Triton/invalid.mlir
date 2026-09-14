@@ -1,5 +1,37 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+tt.func @atomic_load_i1(%ptr: !tt.ptr<i1>) {
+  // expected-error @+1 {{does not support sub-byte elements}}
+  %value = tt.atomic_load acquire, gpu, %ptr : (!tt.ptr<i1>) -> i1
+  tt.return
+}
+
+// -----
+
+tt.func @atomic_store_i1(%ptr: !tt.ptr<i1>, %value: i1) {
+  // expected-error @+1 {{does not support sub-byte elements}}
+  tt.atomic_store release, gpu, %ptr, %value : !tt.ptr<i1>
+  tt.return
+}
+
+// -----
+
+tt.func @atomic_load_tensor_i1(%ptr: tensor<32x!tt.ptr<i1>>) {
+  // expected-error @+1 {{does not support sub-byte elements}}
+  %value = tt.atomic_load acquire, gpu, %ptr : (tensor<32x!tt.ptr<i1>>) -> tensor<32xi1>
+  tt.return
+}
+
+// -----
+
+tt.func @atomic_store_tensor_i1(%ptr: tensor<32x!tt.ptr<i1>>, %value: tensor<32xi1>) {
+  // expected-error @+1 {{does not support sub-byte elements}}
+  tt.atomic_store release, gpu, %ptr, %value : tensor<32x!tt.ptr<i1>>
+  tt.return
+}
+
+// -----
+
 tt.func @atomic_poll_mismatched_result(%ptr: tensor<32x!tt.ptr<i32>>, %expected: tensor<32xi32>) {
   // expected-error @+1 {{result type matches expected shape}}
   %matched = tt.atomic_poll acquire, gpu, %ptr, %expected : tensor<32x!tt.ptr<i32>>, tensor<32xi32> -> i1
@@ -299,6 +331,15 @@ tt.func public @fn(%arg0: f32) {
     %a, %b = tt.split %arg0 : f32 -> f16
     tt.return
 }
+
+// -----
+
+tt.func public @split_result_type_mismatch(%arg0: tensor<32x2xf32>) {
+    // expected-error @+1 {{outLHS and outRHS types match}}
+    %parts:2 = "tt.split"(%arg0) : (tensor<32x2xf32>) -> (tensor<32xf32>, tensor<32xf16>)
+    tt.return
+}
+
 // -----
 
 tt.func public @fn(%arg0: tensor<2xf32>) {

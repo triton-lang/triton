@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-tensor-memory-allocation -test-print-membar | FileCheck --dump-input=fail --dump-input-context=30 %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-tensor-memory-allocation --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=80' | FileCheck --dump-input=fail --dump-input-context=30 %s
 
 // -----
 
@@ -112,6 +112,52 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %cvt = ttg.convert_layout %value : tensor<256x128xf16, #blockedCallSrc> -> tensor<256x128xf16, #blockedCallDst>
     %dst = ttg.local_alloc : () -> !ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable>
     tt.call @forward_store_argument(%dst) : (!ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable>) -> ()
+    %result = ttg.local_load %dst : !ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable> -> tensor<256x128xf16, #blockedCallDst>
+    tt.return %cvt, %result : tensor<256x128xf16, #blockedCallDst>, tensor<256x128xf16, #blockedCallDst>
+  }
+
+  // An indexed call argument retains the allocation's reuse dependency.
+  // CHECK-LABEL: @cluster_call_indexed_argument_reuses_scratch
+  // CHECK: ttg.convert_layout{{.*}}allocation.offset = [[INDEXED_OFFSET:[0-9]+]]
+  // CHECK-DAG: ttg.local_alloc {allocation.offset = [[INDEXED_OFFSET]]
+  // CHECK-DAG: ttg.memdesc_index
+  // CHECK-DAG: ttng.cluster_barrier{{$}}
+  // CHECK: tt.call @forward_store_argument
+  tt.func @cluster_call_indexed_argument_reuses_scratch(%slot: i32) -> (tensor<256x128xf16, #blockedCallDst>, tensor<256x128xf16, #blockedCallDst>) {
+    %c1 = arith.constant 1 : i32
+    %index = arith.andi %slot, %c1 : i32
+    %value = arith.constant dense<0.0> : tensor<256x128xf16, #blockedCallSrc>
+    %cvt = ttg.convert_layout %value : tensor<256x128xf16, #blockedCallSrc> -> tensor<256x128xf16, #blockedCallDst>
+    %stages = ttg.local_alloc : () -> !ttg.memdesc<2x256x128xf16, #sharedCall, #ttg.shared_memory, mutable>
+    %dst = ttg.memdesc_index %stages[%index] : !ttg.memdesc<2x256x128xf16, #sharedCall, #ttg.shared_memory, mutable> -> !ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable>
+    tt.call @forward_store_argument(%dst) : (!ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable>) -> ()
+    %result = ttg.local_load %dst : !ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable> -> tensor<256x128xf16, #blockedCallDst>
+    tt.return %cvt, %result : tensor<256x128xf16, #blockedCallDst>, tensor<256x128xf16, #blockedCallDst>
+  }
+
+  tt.func private @store_indexed_argument(%stages: !ttg.memdesc<2x256x128xf16, #sharedCall, #ttg.shared_memory, mutable>, %slot: i32) attributes {noinline = true} {
+    %c1 = arith.constant 1 : i32
+    %index = arith.andi %slot, %c1 : i32
+    %dst = ttg.memdesc_index %stages[%index] : !ttg.memdesc<2x256x128xf16, #sharedCall, #ttg.shared_memory, mutable> -> !ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable>
+    %value = arith.constant dense<3.0> : tensor<256x128xf16, #blockedCallDst>
+    ttg.local_store %value, %dst : tensor<256x128xf16, #blockedCallDst> -> !ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable>
+    tt.return
+  }
+
+  // Indexing inside the callee must retain the caller allocation's effects.
+  // CHECK-LABEL: @cluster_callee_indexed_argument_reuses_scratch
+  // CHECK: ttg.convert_layout{{.*}}allocation.offset = [[CALLEE_INDEXED_OFFSET:[0-9]+]]
+  // CHECK-DAG: ttg.local_alloc {allocation.offset = [[CALLEE_INDEXED_OFFSET]]
+  // CHECK-DAG: ttng.cluster_barrier{{$}}
+  // CHECK: tt.call @store_indexed_argument
+  tt.func @cluster_callee_indexed_argument_reuses_scratch(%slot: i32) -> (tensor<256x128xf16, #blockedCallDst>, tensor<256x128xf16, #blockedCallDst>) {
+    %value = arith.constant dense<0.0> : tensor<256x128xf16, #blockedCallSrc>
+    %cvt = ttg.convert_layout %value : tensor<256x128xf16, #blockedCallSrc> -> tensor<256x128xf16, #blockedCallDst>
+    %stages = ttg.local_alloc : () -> !ttg.memdesc<2x256x128xf16, #sharedCall, #ttg.shared_memory, mutable>
+    tt.call @store_indexed_argument(%stages, %slot) : (!ttg.memdesc<2x256x128xf16, #sharedCall, #ttg.shared_memory, mutable>, i32) -> ()
+    %c1 = arith.constant 1 : i32
+    %index = arith.andi %slot, %c1 : i32
+    %dst = ttg.memdesc_index %stages[%index] : !ttg.memdesc<2x256x128xf16, #sharedCall, #ttg.shared_memory, mutable> -> !ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable>
     %result = ttg.local_load %dst : !ttg.memdesc<256x128xf16, #sharedCall, #ttg.shared_memory, mutable> -> tensor<256x128xf16, #blockedCallDst>
     tt.return %cvt, %result : tensor<256x128xf16, #blockedCallDst>, tensor<256x128xf16, #blockedCallDst>
   }

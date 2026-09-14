@@ -694,6 +694,33 @@ void init_gluon_ir(py::module_ &m) {
              check(ty.getEncoding(), "expected a tensor with an encoding");
              return layoutToGluon(ty.getEncoding(), self.isRubin());
            })
+      .def("get_scaled_upcast_fp4_scale_layout",
+           [](GluonOpBuilder &self, Value input, int64_t scaleSize,
+              Type elemType, int32_t axis) -> py::object {
+             auto inputTy = cast<RankedTensorType>(input.getType());
+             auto resultTy = ttg::inferFp4ToFpResultType(
+                 inputTy, elemType, axis, self.getLastLoc());
+             check(succeeded(resultTy),
+                   "failed to infer scaled_upcast_fp4 result type");
+
+             SmallVector<int64_t> scaleShape(resultTy->getShape());
+             scaleShape[axis] = scaleSize;
+             auto scaleLayout = ttag::inferScaledUpcastFp4ScaleLayout(
+                 ttg::toLinearLayout(*resultTy), scaleShape, axis,
+                 [&]() { return mlir::emitError(self.getLastLoc()); });
+             check(succeeded(scaleLayout),
+                   "failed to infer scaled_upcast_fp4 scale layout");
+
+             auto *ctx = self.getContext();
+             Attribute encoding;
+             if (ttg::isPermutationMatrixLayout(*scaleLayout))
+               encoding =
+                   ttg::LinearEncodingAttr::get(ctx, std::move(*scaleLayout));
+             else
+               encoding = ttg::GenericLinearEncodingAttr::get(
+                   ctx, std::move(*scaleLayout));
+             return layoutToGluon(encoding, self.isRubin());
+           })
       .def("get_gluon_layout_from_memdesc",
            [](GluonOpBuilder &self, Value memdesc) -> py::object {
              auto ty = dyn_cast<ttg::MemDescType>(memdesc.getType());
@@ -915,6 +942,17 @@ void init_gluon_ir(py::module_ &m) {
       .def("create_memdesc_reinterpret",
            [](GluonOpBuilder &self, Type resultType, Value src) -> Value {
              return self.create<ttg::MemDescReinterpretOp>(resultType, src);
+           })
+      .def("get_total_elems_per_thread",
+           [](GluonOpBuilder &, Type type) {
+             return ttg::getTotalElemsPerThread(type);
+           })
+      .def("create_threadwise_inline_asm",
+           [](GluonOpBuilder &self, const std::string &assembly,
+              const std::string &constraints, const std::vector<Value> &args,
+              const std::vector<Type> &resultTypes, bool isPure) -> OpState {
+             return self.create<ttg::InlineAsmOp>(resultTypes, assembly,
+                                                  constraints, isPure, args);
            })
       .def("create_set_auto_layout",
            [](GluonOpBuilder &self, Attribute layout, Value value) -> Value {

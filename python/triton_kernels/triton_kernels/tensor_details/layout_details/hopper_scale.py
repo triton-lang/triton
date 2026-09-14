@@ -59,7 +59,7 @@ class HopperMXScaleLayoutTransformation(ScaleLayoutTransformation):
         if self.mx_axis == len(leading_shape):
             M, K = K, M
         align_m = 32 * self.num_warps
-        M = (M + align_m - 1) // align_m * align_m
+        M = (M + (align_m - 1)) // align_m * align_m
         K = (K + 1) // 2 * 2
         return [*leading_shape, M, K]
 
@@ -145,6 +145,21 @@ class HopperMXScaleLayoutTransformation(ScaleLayoutTransformation):
         data = data[..., :self.M, :self.K]
         data = data.contiguous()
         return data
+
+
+@triton.jit
+def swizzle_mx_scale_hopper_ptr(base, outer, inner, stride_outer, stride_inner, num_warps: tl.constexpr,
+                                INDEX_TYPE: tl.constexpr = tl.int64):
+    """Pointers for broadcastable scale coordinates, without bounds masking.
+
+    ``outer`` indexes the non-MX axis; ``inner`` indexes scales along the MX axis.
+    Strides are in elements, in physical outer/inner order. ``base`` points to
+    the batch origin. Each stride product uses ``INDEX_TYPE`` before being
+    added to the pointer.
+    """
+    outer_block = outer // (32 * num_warps) * num_warps + outer // 16 % num_warps
+    inner_lane = (inner // 2 * 64 + outer // (16 * num_warps) % 2 * 32 + outer % 8 * 4 + inner % 2 * 2 + outer // 8 % 2)
+    return base + tl.cast(outer_block, INDEX_TYPE) * stride_outer + tl.cast(inner_lane, INDEX_TYPE) * stride_inner
 
 
 @triton.jit

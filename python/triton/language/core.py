@@ -4,7 +4,7 @@ import math
 from warnings import warn
 from contextlib import contextmanager
 from enum import Enum
-from functools import partial, wraps, cached_property
+from functools import wraps, cached_property
 import typing
 from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
@@ -1178,6 +1178,12 @@ class tensor(base_value):
     def store(self, value, mask=None, *, cache_modifier="", eviction_policy="") -> tensor:
         ...
 
+    def atomic_load(self, mask=None, sem=None, scope=None) -> tensor:
+        ...
+
+    def atomic_store(self, value, mask=None, sem=None, scope=None) -> tensor:
+        ...
+
     def atomic_cas(self, cmp, val, sem=None, scope=None) -> tensor:
         ...
 
@@ -1289,10 +1295,10 @@ class tensor(base_value):
     def reduce_or(self, axis=None, keep_dims=False) -> tensor:
         ...
 
-    def cumsum(self, axis=0, reverse=False) -> tensor:
+    def cumsum(self, axis=0, reverse=False, dtype=None) -> tensor:
         ...
 
-    def cumprod(self, axis=0, reverse=False) -> tensor:
+    def cumprod(self, axis=0, reverse=False, dtype=None) -> tensor:
         ...
 
     def sort(self, dim: constexpr = None, descending: constexpr = CONSTEXPR_0) -> tensor:
@@ -2576,6 +2582,58 @@ def make_tensor_descriptor(
 # -----------------------
 
 
+@_tensor_member_fn
+@builtin
+def atomic_load(pointer, mask=None, sem=None, scope=None, _semantic=None):
+    """
+    Atomically loads from the memory locations specified by :code:`pointer`.
+
+    :param pointer: The memory locations to load from.
+    :type pointer: Block of dtype=triton.PointerDType
+    :param mask: If :code:`mask[idx]` is false, the corresponding load is not
+        performed and the result is unspecified.
+    :type mask: Block of triton.int1, optional
+    :param sem: Specifies the memory semantics. Acceptable values are
+        "acquire" (default) and "relaxed".
+    :type sem: str, optional
+    :param scope: Defines the scope of threads that observe the synchronizing
+        effect. Acceptable values are "gpu" (default), "cta", and "sys".
+    :type scope: str, optional
+    """
+    sem = _unwrap_if_constexpr(sem)
+    scope = _unwrap_if_constexpr(scope)
+    mask = _unwrap_if_constexpr(mask)
+    return _semantic.atomic_load(pointer, mask, sem, scope)
+
+
+@_tensor_member_fn
+@builtin
+def atomic_store(pointer, val, mask=None, sem=None, scope=None, _semantic=None):
+    """
+    Atomically stores :code:`val` into the memory locations specified by
+    :code:`pointer`.
+
+    :param pointer: The memory locations to store to.
+    :type pointer: Block of dtype=triton.PointerDType
+    :param val: The values to store.
+    :type val: Block of dtype=pointer.dtype.element_ty
+    :param mask: If :code:`mask[idx]` is false, the corresponding store is not
+        performed.
+    :type mask: Block of triton.int1, optional
+    :param sem: Specifies the memory semantics. Acceptable values are
+        "release" (default) and "relaxed".
+    :type sem: str, optional
+    :param scope: Defines the scope of threads that observe the synchronizing
+        effect. Acceptable values are "gpu" (default), "cta", and "sys".
+    :type scope: str, optional
+    """
+    val = _semantic.to_tensor(val)
+    sem = _unwrap_if_constexpr(sem)
+    scope = _unwrap_if_constexpr(scope)
+    mask = _unwrap_if_constexpr(mask)
+    return _semantic.atomic_store(pointer, val, mask, sem, scope)
+
+
 def _add_atomic_docstr(name: str, has_cmp: bool = False) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
@@ -2850,10 +2908,8 @@ def minimum(x, y, propagate_nan: constexpr = PropagateNan.NONE, _semantic=None):
 
     .. seealso:: :class:`tl.PropagateNan`
     """
-    x = _semantic.to_tensor(x)
-    y = _semantic.to_tensor(y)
-    x = _promote_bfloat16_to_float32(x, _semantic=_semantic)
-    y = _promote_bfloat16_to_float32(y, _semantic=_semantic)
+    x = _unwrap_if_constexpr(x)
+    y = _unwrap_if_constexpr(y)
     propagate_nan = _unwrap_if_constexpr(propagate_nan)
     return _semantic.minimum(x, y, propagate_nan)
 
@@ -2872,10 +2928,8 @@ def maximum(x, y, propagate_nan: constexpr = PropagateNan.NONE, _semantic=None):
 
     .. seealso:: :class:`tl.PropagateNan`
     """
-    x = _semantic.to_tensor(x)
-    y = _semantic.to_tensor(y)
-    x = _promote_bfloat16_to_float32(x, _semantic=_semantic)
-    y = _promote_bfloat16_to_float32(y, _semantic=_semantic)
+    x = _unwrap_if_constexpr(x)
+    y = _unwrap_if_constexpr(y)
     propagate_nan = _unwrap_if_constexpr(propagate_nan)
     return _semantic.maximum(x, y, propagate_nan)
 
@@ -2901,9 +2955,6 @@ def clamp(x, min, max, propagate_nan: constexpr = PropagateNan.NONE, _semantic=N
     x = _semantic.to_tensor(x)
     min = _semantic.to_tensor(min)
     max = _semantic.to_tensor(max)
-    x = _promote_bfloat16_to_float32(x, _semantic=_semantic)
-    min = _promote_bfloat16_to_float32(min, _semantic=_semantic)
-    max = _promote_bfloat16_to_float32(max, _semantic=_semantic)
 
     propagate_nan = _unwrap_if_constexpr(propagate_nan)
 
@@ -3008,16 +3059,6 @@ def reduce(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=
 
 
 @builtin
-def _promote_bfloat16_to_float32(t, _semantic=None):
-    scalar_ty = t.type.scalar
-
-    # hardware doesn't support FMAX, FMIN, CMP for bfloat16
-    if scalar_ty is bfloat16:
-        return t.to(float32, _semantic=_semantic)
-    return t
-
-
-@builtin
 def _reduce_with_indices(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=None):
     axis = _unwrap_if_constexpr(axis)
     n = input.shape[axis]
@@ -3055,7 +3096,7 @@ def _add_scan_docstr(name: str, dtype_arg: str = None) -> Callable[[T], T]:
 
         if dtype_arg is not None:
             docstr += f"""
-    :param {dtype_arg}: the desired data type of the returned tensor. If specified, the input tensor is casted to :code:`{dtype_arg}` before the operation is performed. If not specified, small integer types (< 32 bits) are upcasted to prevent overflow. Note that :code:`tl.bfloat16` inputs are automatically promoted to :code:`tl.float32`.
+    :param {dtype_arg}: the desired data type of the returned tensor. If specified, the input tensor is casted to :code:`{dtype_arg}` before the operation is performed. If not specified, signed integer dtypes narrower than 32 bits are upcasted to :code:`tl.int32`, while unsigned integer and bool dtypes narrower than 32 bits are upcasted to :code:`tl.uint32`. Other dtypes are kept as-is.
     :type {dtype_arg}: tl.dtype"""
 
         func.__doc__ = docstr.format(name=name)
@@ -3438,6 +3479,13 @@ def inline_asm_elementwise(asm: str, constraints: str, args: Sequence, dtype: Un
 
         The input tensors :code:`args` are implicitly broadcasted to the same shape.
 
+        In Gluon, :code:`args` may also contain shared or tensor memory
+        descriptors. Each descriptor contributes one :code:`i32` address per
+        invocation, independently of :code:`pack`, and does not participate in
+        broadcasting. Descriptor operands require :code:`is_pure=False`; the
+        assembly conservatively reads and writes the descriptor views, and
+        accesses must remain within their logical elements.
+
         :code:`dtype` can be a tuple of types, in which case the output is a
         tuple of tensors.
 
@@ -3534,22 +3582,12 @@ def inline_asm_elementwise(asm: str, constraints: str, args: Sequence, dtype: Un
     dtype = typing.cast(Sequence[_DtypeClass], dtype)
 
     res_tys = dtype
-    if dispatch_args := [_semantic.to_tensor(arg) for arg in args]:
-        bin_op_type_checking = partial(
-            _semantic.binary_op_type_checking_impl,
-            arithmetic_check=False,
-            allow_lhs_ptr=True,
-            allow_rhs_ptr=True,
-        )
-        broadcast_arg = dispatch_args[0]
-        # Get the broadcast shape over all the arguments
-        for item in dispatch_args:
-            _, broadcast_arg = bin_op_type_checking(item, broadcast_arg)
-        if broadcast_arg.shape:
-            # Change the shape of each argument based on the broadcast shape
-            for i, item in enumerate(dispatch_args):
-                dispatch_args[i], _ = bin_op_type_checking(item, broadcast_arg)
-            res_tys = [broadcast_arg.type.with_element_ty(dt) for dt in dtype]
+    dispatch_args = [_semantic.to_inline_asm_operand(arg) for arg in args]
+    tensor_args = _semantic.broadcast_tensors(*(arg for arg in dispatch_args if isinstance(arg, tensor)))
+    if tensor_args:
+        res_tys = [tensor_args[0].type.with_element_ty(dt) for dt in dtype]
+        tensors = iter(tensor_args)
+        dispatch_args = [next(tensors) if isinstance(arg, tensor) else arg for arg in dispatch_args]
     handles = [t.handle for t in dispatch_args]
     builder = _semantic.builder
     call = builder.create_inline_asm(asm, constraints, handles, [ty.to_ir(builder) for ty in res_tys], is_pure, pack)

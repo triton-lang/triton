@@ -3,6 +3,18 @@
 
 include "mlir/Pass/PassBase.td"
 
+def TritonAMDGPUMembar : Pass<"triton-amdgpu-membar", "mlir::ModuleOp"> {
+    let summary = "Insert AMD shared-memory synchronization before lowering";
+
+    let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                             "mlir::triton::amdgpu::TritonAMDGPUDialect"];
+
+    let options = [
+        Option<"gfxArch", "gfx-arch", "std::string", /*default*/"std::string{}",
+               "Specify the GFX architecture name, e.g., gfx942, gfx950, etc.">,
+    ];
+}
+
 def AllocateAMDGPUSharedMemory : Pass<"allocate-amdgpu-shared-memory", "mlir::ModuleOp"> {
   let summary = "Add metadata for shared memory allocation";
   let constructor = "mlir::triton::createAllocateAMDGPUSharedMemoryPass(\"\")";

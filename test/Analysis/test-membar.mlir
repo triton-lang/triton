@@ -1,5 +1,5 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory -test-print-membar | FileCheck %s
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory -test-tritonamdgpu-membar | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx942' | FileCheck %s
 
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #sliceAd0 = #ttg.slice<{dim = 0, parent = #AL}>
@@ -209,6 +209,19 @@ tt.func @async_wait_before_atomic_acquire_no_scratch(%ptr: !tt.ptr<i32>, %arg: t
   // CHECK: ttg.local_load
   ttg.async_wait {num = 0 : i32}
   %unused = tt.atomic_cas acquire, gpu, %ptr, %c0_i32, %c0_i32 : (!tt.ptr<i32>, i32, i32) -> i32
+  %result = ttg.local_load %smem : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<32x16xf16, #AL>
+  tt.return
+}
+
+// CHECK-LABEL: async_wait_before_atomic_load_acquire_no_scratch
+tt.func @async_wait_before_atomic_load_acquire_no_scratch(%ptr: !tt.ptr<i32>, %arg: tensor<32x16xf16, #AL>) {
+  %smem = ttg.local_alloc %arg : (tensor<32x16xf16, #AL>) -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory>
+  // CHECK: ttg.async_wait
+  // CHECK-NEXT: %{{.*}} = tt.atomic_load acquire
+  // CHECK-NOT: ttg.barrier local
+  // CHECK: ttg.local_load
+  ttg.async_wait {num = 0 : i32}
+  %unused = tt.atomic_load acquire, gpu, %ptr : (!tt.ptr<i32>) -> i32
   %result = ttg.local_load %smem : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory> -> tensor<32x16xf16, #AL>
   tt.return
 }

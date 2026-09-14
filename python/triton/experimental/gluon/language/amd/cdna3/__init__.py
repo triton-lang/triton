@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 from triton import knobs
 from triton.experimental.gluon.language import _core as ttgl
 from triton._C.libtriton import ir
-from ..._core import builtin, int8, uint8, uint16, bfloat16, _unwrap_if_constexpr
+from ..._core import builtin, int8, uint8, _unwrap_if_constexpr
 from .._ops import _scaled_upcast
 
 if TYPE_CHECKING:
@@ -181,17 +181,6 @@ def mfma(a, b, acc, _semantic: GluonSemantic = None):
     return ttgl.tensor(handle, ret_type)
 
 
-def _convert_e8m0_scale_to_bf16(scale, _semantic=None):
-    # Mirror scaleTo16() for BF16 compute: reinterpret raw E8M0 bytes as the
-    # shifted BF16 payload expected by the non-gfx1250 scaled-upcast path.
-    if scale.dtype == int8:
-        scale = _semantic.bitcast(scale, uint8)
-    scale = _semantic.cast(scale, uint16)
-    shift = _semantic.cast(_semantic.to_tensor(7), uint16)
-    scale = _semantic.shl(scale, shift)
-    return _semantic.bitcast(scale, bfloat16)
-
-
 @builtin
 def scaled_upcast(src, scale, elem_type, axis=None, _semantic=None):
     """
@@ -204,14 +193,12 @@ def scaled_upcast(src, scale, elem_type, axis=None, _semantic=None):
     The ``scale`` tensor must use raw E8M0 payload in ``int8`` or ``uint8``, and must
     already have the expanded output shape and scaled-upcast result layout.
     For fp4 inputs, that is the canonical unpacked layout implied by ``src``
-    and ``axis``. ``elem_type`` must be ``fp16`` or ``bf16``. CDNA3 converts
-    those bytes to the internal ``bf16`` scale form expected by the AMD op.
+    and ``axis``. ``elem_type`` must be ``fp16`` or ``bf16``.
     """
     axis = _unwrap_if_constexpr(axis)
     elem_type = _unwrap_if_constexpr(elem_type)
     assert scale.dtype in (int8, uint8), \
         f"Expected scale to use raw E8M0 payload in int8/uint8 but got {scale.dtype}"
-    scale = _convert_e8m0_scale_to_bf16(scale, _semantic)
     return _scaled_upcast(src, scale, elem_type, axis, _semantic)
 
 
