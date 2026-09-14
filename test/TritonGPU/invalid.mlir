@@ -31,6 +31,18 @@ tt.func public @memdesc_non_power_of_two_layout_allocation(%arg0: !ttg.memdesc<2
 
 // -----
 
+#inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0], [2, 0]]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
+  // expected-error @+1 {{per-CTA allocation extent along partitionDim must be divisible by numPartitions * numGroups; got 2 and 4}}
+  tt.func public @partitioned_extent_too_small_per_cta(%arg0: !ttg.memdesc<8x16xi32, #partitioned, #smem, mutable>) {
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 // expected-error @+1 {{shape has 0 dimension}}

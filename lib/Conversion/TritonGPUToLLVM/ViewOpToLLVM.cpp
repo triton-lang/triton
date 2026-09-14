@@ -511,7 +511,11 @@ struct MemDescSubsliceOpConversion
       SmallVector<std::pair<StringAttr, int32_t>> namedOffsets;
       for (auto [dim, off] : llvm::zip(dimNames, layoutOffsets))
         namedOffsets.push_back({dim, off});
-      auto partitionLayout = ll.invert().sublayout(dimNames, {kPartition});
+      // A clustered layout can broadcast along a block dimension, so the full
+      // layout is surjective but not square.  The partition projection only
+      // needs one valid inverse.
+      auto partitionLayout =
+          ll.pseudoinvert().sublayout(dimNames, {kPartition});
       int32_t partitionShift = partitionLayout.apply(namedOffsets)[0].second;
       SmallVector<Value> rotated(newBases.size());
       for (size_t i = 0; i < newBases.size(); ++i)
