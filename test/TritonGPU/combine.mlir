@@ -2509,12 +2509,15 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-LABEL: assertop
-// CHECK: %[[L:.+]] = tt.load %{{.*}} : tensor<1024x!tt.ptr<i1>, #blocked>
-// CHECK: tt.assert %[[L]]
+// CHECK: %[[L:.+]] = tt.load %{{.*}} : tensor<1024x!tt.ptr<i8>, #blocked>
+// CHECK: %[[COND:.+]] = arith.cmpi ne, %[[L]], %{{.*}} : tensor<1024xi8, #blocked>
+// CHECK: tt.assert %[[COND]]
 
-tt.func @assertop(%ptr: tensor<1024x!tt.ptr<i1>, #blocked>) {
-  %0 = tt.load %ptr : tensor<1024x!tt.ptr<i1>, #blocked>
-  %1 = ttg.convert_layout %0 : tensor<1024xi1, #blocked> -> tensor<1024xi1, #blocked1>
+tt.func @assertop(%ptr: tensor<1024x!tt.ptr<i8>, #blocked>) {
+  %zero = arith.constant dense<0> : tensor<1024xi8, #blocked>
+  %0 = tt.load %ptr : tensor<1024x!tt.ptr<i8>, #blocked>
+  %cond = arith.cmpi ne, %0, %zero : tensor<1024xi8, #blocked>
+  %1 = ttg.convert_layout %cond : tensor<1024xi1, #blocked> -> tensor<1024xi1, #blocked1>
   tt.assert %1, "cond must be true " : tensor<1024xi1, #blocked1>
   tt.return
 }
