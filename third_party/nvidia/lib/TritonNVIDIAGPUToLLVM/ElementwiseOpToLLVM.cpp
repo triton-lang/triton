@@ -358,6 +358,23 @@ struct FpToFpOpConversion
     return builder.launch(rewriter, loc, f16_ty, false);
   }
 
+  static Value convertFp16ToFp8E5M2(Location loc,
+                                    ConversionPatternRewriter &rewriter,
+                                    Value v) {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Value bits = b.zext(i32_ty, b.bitcast(v, i16_ty));
+    Value magnitude = b.and_(bits, b.i32_val(0x7fff));
+    Value sign = b.and_(b.lshr(bits, b.i32_val(8)), b.i32_val(0x80));
+
+    // Their shared exponent bias lets this rounding handle subnormals too.
+    Value odd = b.and_(b.lshr(magnitude, b.i32_val(8)), b.i32_val(1));
+    Value rounded = b.add(b.add(magnitude, b.i32_val(0x7f)), odd);
+    Value result = b.umin(b.lshr(rounded, b.i32_val(8)), b.i32_val(0x7b));
+    result = b.select(b.icmp_ugt(magnitude, b.i32_val(0x7c00)), b.i32_val(0x7f),
+                      result);
+    return b.trunc(i8_ty, b.or_(result, sign));
+  }
+
   static Value convertFp32ToFp8E5M2(Location loc,
                                     ConversionPatternRewriter &rewriter,
                                     Value v) {
@@ -532,9 +549,13 @@ struct FpToFpOpConversion
       SmallVector<Value> outVals;
       for (const auto &operand : operands) {
         Value value = operand[0];
-        if (!srcElementType.isF32())
-          value = b.fpext(f32_ty, value);
-        outVals.push_back(convertFp32ToFp8E5M2(loc, rewriter, value));
+        if (srcElementType.isF16()) {
+          outVals.push_back(convertFp16ToFp8E5M2(loc, rewriter, value));
+        } else {
+          if (srcElementType.isBF16())
+            value = b.fpext(f32_ty, value);
+          outVals.push_back(convertFp32ToFp8E5M2(loc, rewriter, value));
+        }
       }
       return outVals;
     }
