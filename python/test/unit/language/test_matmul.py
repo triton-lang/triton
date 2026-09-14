@@ -265,6 +265,45 @@ def test_tutorial_tma_matmul_num_ctas(num_ctas, warp_specialize, dtype, M, N, K,
     torch.testing.assert_close(actual.float(), expected, atol=tolerance, rtol=tolerance)
 
 
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("num_ctas", [2, 4])
+@pytest.mark.parametrize("num_stages", [1, 3])
+@pytest.mark.parametrize("K", [64, 1024])
+def test_tma_matmul_mixed_consumers(num_ctas, num_stages, K, device):
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    @triton.jit
+    def kernel(A, B, C, X, K: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr):
+        acc = tl.full((BM, BN), 0, tl.float32)
+        aux = tl.full((BM, BK), 0, tl.float32)
+        for k in range(K // BK):
+            a = A.load([0, k * BK])
+            b = B.load([k * BK, 0])
+            aux += a.to(tl.float32)
+            acc = tl.dot(a, b, acc)
+        C.store([0, 0], acc.to(tl.float16))
+        X.store([0, 0], aux)
+
+    M, N, BLOCK_K = 128 * num_ctas, 128, 64
+    torch.manual_seed(0)
+    a = torch.randn((M, K), device=device, dtype=torch.float16) * 0.1
+    b = torch.randn((K, N), device=device, dtype=torch.float16) * 0.1
+    c = torch.empty((M, N), device=device, dtype=torch.float16)
+    aux = torch.empty((M, BLOCK_K), device=device, dtype=torch.float32)
+    a_desc = TensorDescriptor(a, a.shape, a.stride(), [M, BLOCK_K])
+    b_desc = TensorDescriptor(b, b.shape, b.stride(), [BLOCK_K, N])
+    c_desc = TensorDescriptor(c, c.shape, c.stride(), [M, N])
+    aux_desc = TensorDescriptor(aux, aux.shape, aux.stride(), [M, BLOCK_K])
+    compiled = kernel[(1, )](a_desc, b_desc, c_desc, aux_desc, K, M, N, BLOCK_K, num_ctas=num_ctas,
+                             num_stages=num_stages, num_warps=4)
+    if is_compile_warmup():
+        return
+    assert "two_ctas" in compiled.asm["ttgir"]
+    torch.testing.assert_close(c, a @ b, atol=0.01, rtol=0.01)
+    expected_aux = a.float().reshape(M, K // BLOCK_K, BLOCK_K).sum(1)
+    torch.testing.assert_close(aux, expected_aux, atol=0.001, rtol=0.001)
+
+
 def test_i4_m_minor_join_bk16_matmul(device):
     if not is_cuda():
         pytest.skip("i4 M-minor join regression is CUDA-specific")
