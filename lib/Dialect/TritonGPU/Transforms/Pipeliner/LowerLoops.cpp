@@ -280,13 +280,13 @@ struct LoadGroupInfo {
 };
 
 struct TMALoadWaitRequirements {
+  // The load is used by a MMAv5 op with two CTAs
   bool needsPairWait = false;
+  // The load will be used by multiple CTAs not in the two-cta mode, we need to
+  // wait for all to finish
   bool needsAllCTAWait = false;
 };
 
-// Follow the operand-to-argument/result mappings rather than treating a region
-// or branch as a consumer. This also covers explicit warp-specialization
-// captures through WarpSpecializePartitionsOp's RegionBranchOpInterface.
 static bool followControlFlowOperand(OpOperand &use,
                                      SetVector<Value> &worklist) {
   Operation *op = use.getOwner();
@@ -344,9 +344,6 @@ static TMALoadWaitRequirements getTMALoadWaitRequirements(Operation *loadOp) {
       }
       if (followControlFlowOperand(use, worklist))
         continue;
-      // Descriptor selects, allocations and views forward the loaded data;
-      // completion waits only track its lifetime. Tensor selects and other
-      // operations can read the data in every CTA.
       auto select = dyn_cast<arith::SelectOp>(op);
       bool selectsDescriptor =
           select && isa<ttg::MemDescType>(select.getType());
@@ -362,9 +359,6 @@ static TMALoadWaitRequirements getTMALoadWaitRequirements(Operation *loadOp) {
 static int getMMAv5CompletionBarrierCount(ttng::MMAv5OpInterface mma) {
   SmallVector<Value> descs = mma.getCompletionDescs();
 
-  // Each mask describes CTA-id bits that are broadcast for one completion
-  // descriptor. For cta_group::2, getCTABroadcastMasks also adds the CTA-pair
-  // bit even when there are no descriptor operands.
   SmallVector<uint16_t> broadcastMasks =
       ttng::getCTABroadcastMasks(mma.getTwoCtas(), descs);
   if (broadcastMasks.empty())
@@ -377,8 +371,7 @@ static int getMMAv5CompletionBarrierCount(ttng::MMAv5OpInterface mma) {
     if (mma.getTwoCtas() && (cta & 1))
       continue;
     for (uint16_t broadcastMask : broadcastMasks) {
-      // Count CTAs that issue the multicast commit. Broadcast bits may vary
-      // within a group; fixed, non-broadcast bits must be zero.
+      // Count CTAs that issue the multicast commit
       if ((cta & (~broadcastMask & ctaMask)) == 0) {
         ++count;
         break;
@@ -515,8 +508,6 @@ void createTMABarrierAndWait(
         ttng::WaitBarrierOp::create(builder, barrierViewWait, loadGroup.phase);
     Operation *waitOp = wait;
     if (waitRequirements.needsPairWait && waitRequirements.needsAllCTAWait) {
-      // Only the leader waits on a pair-shared barrier. Publish completion to
-      // the other CTAs before any ordinary consumer reads the loaded data.
       waitOp = ttng::ClusterBarrierOp::create(builder);
     }
 
