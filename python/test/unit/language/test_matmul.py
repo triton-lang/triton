@@ -230,17 +230,22 @@ def test_simple_matmul_mmav5_asm(device):
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize("num_ctas", [2, 4])
-@pytest.mark.parametrize("num_stages", [1, 3])
-@pytest.mark.parametrize("K", [64, 1024])
-def test_tma_matmul_mixed_consumers(num_ctas, num_stages, K, device):
+@pytest.mark.parametrize("num_ctas, num_stages, K, warp_specialize", [
+    (2, 3, 1024, False),
+    (2, 3, 1024, True),
+    (2, 1, 1024, False),
+    (2, 3, 64, False),
+    (4, 3, 1024, False),
+])
+def test_tma_matmul_mixed_consumers(num_ctas, num_stages, K, warp_specialize, device):
     from triton.tools.tensor_descriptor import TensorDescriptor
 
     @triton.jit
-    def kernel(A, B, C, X, K: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr):
+    def kernel(A, B, C, X, K: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr,
+               WARP_SPECIALIZE: tl.constexpr):
         acc = tl.full((BM, BN), 0, tl.float32)
         aux = tl.full((BM, BK), 0, tl.float32)
-        for k in range(K // BK):
+        for k in tl.range(K // BK, warp_specialize=WARP_SPECIALIZE):
             a = A.load([0, k * BK])
             b = B.load([k * BK, 0])
             aux += a.to(tl.float32)
@@ -259,10 +264,12 @@ def test_tma_matmul_mixed_consumers(num_ctas, num_stages, K, device):
     c_desc = TensorDescriptor(c, c.shape, c.stride(), [M, N])
     aux_desc = TensorDescriptor(aux, aux.shape, aux.stride(), [M, BLOCK_K])
     compiled = kernel[(1, )](a_desc, b_desc, c_desc, aux_desc, K, M, N, BLOCK_K, num_ctas=num_ctas,
-                             num_stages=num_stages, num_warps=4)
+                             num_stages=num_stages, num_warps=4, WARP_SPECIALIZE=warp_specialize)
     if is_compile_warmup():
         return
-    assert "two_ctas" in compiled.asm["ttgir"]
+    expect_two_ctas = num_ctas == 2 and num_stages > 1 and K > BLOCK_K
+    assert ("two_ctas" in compiled.asm["ttgir"]) == expect_two_ctas
+    assert "ttg.warp_specialize" not in compiled.asm["ttgir"]
     torch.testing.assert_close(c, a @ b, atol=0.01, rtol=0.01)
     expected_aux = a.float().reshape(M, K // BLOCK_K, BLOCK_K).sum(1)
     torch.testing.assert_close(aux, expected_aux, atol=0.001, rtol=0.001)

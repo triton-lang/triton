@@ -227,6 +227,9 @@ def TritonGPUAccelerateMatmul : Pass<"tritongpu-accelerate-matmul", "mlir::Modul
     (e.g., Nvidia tensor cores)
   }];
 
+  let options = [Option<"numStages", "num-stages", "int32_t", "3",
+                        "Default number of pipeline stages">];
+
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
                            "mlir::triton::TritonDialect",
