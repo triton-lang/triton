@@ -256,7 +256,16 @@ def _base32(key):
 
 
 def get_cache_manager(key) -> CacheManager:
-    cls = knobs.cache.manager_class or FileCacheManager
+    cls = knobs.cache.manager_class
+    if cls is None:
+        backend = knobs.cache.backend
+        if backend == "sqlite":
+            from .sqlite_cache import SQLiteCacheManager
+            cls = SQLiteCacheManager
+        elif backend == "file":
+            cls = FileCacheManager
+        else:
+            raise ValueError(f"Unknown TRITON_CACHE_BACKEND: {backend!r}")
     return cls(_base32(key))
 
 

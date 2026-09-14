@@ -341,6 +341,7 @@ cache: cache_knobs
 
 
 class cache_knobs(base_knobs):
+    backend: env_str = env_str("TRITON_CACHE_BACKEND", "file")
     home_dir: env_str = env_str("TRITON_HOME", os.path.expanduser("~/"))
 
     dump_dir = env_str_callable_default("TRITON_DUMP_DIR", lambda: cache.get_triton_dir("dump"))
