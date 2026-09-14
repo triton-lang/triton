@@ -113,6 +113,27 @@ tt.func @local_load_tmem_alloc(%arg0: i32) {
   tt.return
 }
 
+// CHECK-LABEL: @relayout_converted_tmem_store
+tt.func @relayout_converted_tmem_store(%src: !ttg.memdesc<64x64xf8E5M2, #shared, #smem>, %dst: !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>) {
+  ttg.warp_specialize(%src, %dst)
+  default {
+    ttg.warp_yield
+  }
+  // CHECK: partition0({{.*}}) num_warps(4)
+  partition0(%input: !ttg.memdesc<64x64xf8E5M2, #shared, #smem>, %output: !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>) num_warps(8) {
+    // CHECK: ttg.local_load {{.*}} -> tensor<64x64xf8E5M2, #{{.*}}>
+    %value = ttg.local_load %input : !ttg.memdesc<64x64xf8E5M2, #shared, #smem> -> tensor<64x64xf8E5M2, #blocked2d_8>
+    // CHECK: tt.fp_to_fp {{.*}} -> tensor<64x64xf32, #{{.*}}>
+    %wide = tt.fp_to_fp %value : tensor<64x64xf8E5M2, #blocked2d_8> -> tensor<64x64xf32, #blocked2d_8>
+    %converted = ttg.convert_layout %wide : tensor<64x64xf32, #blocked2d_8> -> tensor<64x64xf32, #blocked_tmem>
+    %true = arith.constant true
+    // CHECK: ttng.tmem_store {{.*}} : tensor<64x64xf32, #{{.*}}> ->
+    ttng.tmem_store %converted, %output, %true : tensor<64x64xf32, #blocked_tmem> -> !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttg.warp_return
+  } : (!ttg.memdesc<64x64xf8E5M2, #shared, #smem>, !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>) -> ()
+  tt.return
+}
+
 // CHECK-LABEL: @medium_tensor_computation
 tt.func @medium_tensor_computation(%arg0: i32) {
   %alloc = ttg.local_alloc : () -> !ttg.memdesc<128x64xf16, #shared, #smem, mutable>
