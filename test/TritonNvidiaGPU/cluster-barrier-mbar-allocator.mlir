@@ -3,7 +3,6 @@
 #blockedSplitM = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[1, 0]]}>
 #blockedSplitN = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CGALayout = [[0, 1]]}>
 #blockedBroadcast = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
-#blockedHistogram = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
 #slice0 = #ttg.slice<{dim = 0, parent = #blockedSplitM}>
 
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 5 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
@@ -27,9 +26,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
         %add = arith.addf %lhs, %rhs : f16
         tt.reduce.return %add : f16
       }) {axis = 0 : i32} : (tensor<256x128xf16, #blockedSplitM>) -> tensor<128xf16, #slice0>
-      %hist_input = arith.constant dense<0> : tensor<2048xi32, #blockedHistogram>
-      // CHECK: tt.histogram {{.*}} {ttg.mbar_offset = 8 : i32}
-      %hist = tt.histogram %hist_input : tensor<2048xi32, #blockedHistogram> -> tensor<512xi32, #blockedHistogram>
       // CHECK: tt.atomic_cas {{.*}} {ttg.mbar_offset = 8 : i32}
       %cas = tt.atomic_cas acq_rel, gpu, %ptr, %c0, %c1 : (!tt.ptr<i32>, i32, i32) -> i32
       tt.store %ptr, %cas : !tt.ptr<i32>

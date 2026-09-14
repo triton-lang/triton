@@ -171,7 +171,10 @@ bool hasCrossCTAScratch(Operation *op) {
   if (auto histogram = dyn_cast<HistogramOp>(op)) {
     auto block = StringAttr::get(op->getContext(), "block");
     auto layout = gpu::toLinearLayout(histogram.getSrc().getType());
-    // Fully replicated inputs can compute the complete histogram locally.
+    // Each CTA accumulates its inputs into a full set of local bins. Splitting
+    // the input makes these counts partial and requires aggregation regardless
+    // of the result layout. With fully replicated inputs, even split result
+    // bins can be read locally because every CTA has the complete histogram.
     return layout.getFreeVariableMasks().lookup(block) !=
            layout.getInDimSize(block) - 1;
   }

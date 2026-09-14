@@ -21,7 +21,8 @@ computeHistogram(Location loc, ConversionPatternRewriter &rewriter,
                  const SmallVector<Value> &maskValues, int numBins,
                  int numThreadPerWarp, const SmallVector<Value> &indices,
                  Value threadId, Value threadPred, int numWarps, int numCTAs,
-                 Operation *sourceOp, const TargetInfoBase &targetInfo) {
+                 int ctaBroadcastMask, Operation *sourceOp,
+                 const TargetInfoBase &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> histogramValues;
   // Initialize the shared memory with zeros.
@@ -60,12 +61,16 @@ computeHistogram(Location loc, ConversionPatternRewriter &rewriter,
     targetInfo.clusterBarrier(loc, rewriter, sourceOp);
   else
     b.barrier(triton::gpu::AddrSpace::Local);
-  // Sum the CTA-local partial histograms in the requested result layout.
+  // The source layout selects which CTAs contribute partial counts; the
+  // destination layout selects which bins each CTA reads from their sum.
   for (Value index : indices) {
     Value sharedMemPtr =
         b.gep(baseSharedMemPtr.getType(), i32_ty, baseSharedMemPtr, index);
     Value val = b.i32_val(0);
     for (int cta = 0; cta < numCTAs; ++cta) {
+      // Replicated CTAs do not accumulate inputs and contribute only zeros.
+      if (cta & ctaBroadcastMask)
+        continue;
       Value ctaId = numCTAs > 1 ? b.i32_val(cta) : Value();
       Value partial = targetInfo.loadDShared(rewriter, loc, sharedMemPtr, ctaId,
                                              i32_ty, b.true_val());
@@ -136,7 +141,8 @@ public:
     SmallVector<Value> histogramValue = computeHistogram(
         loc, rewriter, baseSharedMemPtr, srcValues, maskValues, numBins,
         numThreadsPerWarp, innerDimIndices, threadId, threadPred, numWarps,
-        crossCTA ? triton::gpu::lookupNumCTAs(op) : 1, op, targetInfo);
+        crossCTA ? triton::gpu::lookupNumCTAs(op) : 1,
+        freeVarMasks.lookup(str_attr("block")), op, targetInfo);
 
     Value results = packUniqueTensorElements(loc, typeConverter, histogramValue,
                                              rewriter, op.getType());

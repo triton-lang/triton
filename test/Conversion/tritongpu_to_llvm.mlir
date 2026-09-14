@@ -3485,6 +3485,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#histSrc = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0], [1]]}>
+#histDst = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1], [2]]}>
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CTA bit 0 broadcasts the input. Only CTAs 0 and 2 accumulate counts;
+  // loading the zero partial histograms from CTAs 1 and 3 is unnecessary.
+  // CHECK-LABEL: @histogram_skips_replicated_ctas
+  // CHECK-COUNT-2: nvvm.mapa
+  // CHECK-NOT: nvvm.mapa
+  // CHECK: llvm.return
+  tt.func @histogram_skips_replicated_ctas(%src: tensor<256xi32, #histSrc>, %out_ptr: tensor<512x!tt.ptr<i32>, #histDst>) {
+    %hist = tt.histogram %src : tensor<256xi32, #histSrc> -> tensor<512xi32, #histDst>
+    tt.store %out_ptr, %hist : tensor<512x!tt.ptr<i32>, #histDst>
+    tt.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.profile_scratch_memory_alignment = 128 : i32, ttg.profile_scratch_memory_size = 2304 : i32} {
   // CHECK-LABEL: @profile_scratch_ptr_uses_i64
   // CHECK: %[[CLUSTER_Z:.*]] = nvvm.read.ptx.sreg.clusterid.z : i32
