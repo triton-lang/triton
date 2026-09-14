@@ -2585,23 +2585,28 @@ def test_umulhi(dtype_str, device):
 
 
 @pytest.mark.parametrize("masked", [False, True])
-def test_umulhi_known_bits(masked, device):
+@pytest.mark.parametrize("dtype_str", ["int32", "int64"])
+def test_umulhi_known_bits(masked, dtype_str, device):
 
     @triton.jit
-    def kernel(X, Z, MASKED: tl.constexpr):
+    def kernel(X, Z, MASKED: tl.constexpr, DTYPE: tl.constexpr):
         offsets = tl.arange(0, 32)
-        x = tl.load(X + offsets).to(tl.uint32)
+        x = tl.load(X + offsets).to(DTYPE)
         if MASKED:
-            y = x >> 16
-            x = x & 65535
+            half_bits: tl.constexpr = DTYPE.primitive_bitwidth // 2
+            y = x >> half_bits
+            x = x & ((1 << half_bits) - 1)
         else:
-            y = tl.full((), 256, tl.uint32)
+            y = tl.full((), 256, DTYPE)
         tl.store(Z + offsets, tl.umulhi(x, y))
 
-    x = torch.tensor([0, 1, -1, -2**31, 2**31 - 1, 65535, 65536, -65536] * 4, dtype=torch.int32, device=device)
+    bits = torch.iinfo(getattr(torch, dtype_str)).bits
+    half = 1 << (bits // 2)
+    x = torch.tensor([0, 1, -1, -2**(bits - 1), 2**(bits - 1) - 1, half - 1, half, -half] * 4,
+                     dtype=getattr(torch, dtype_str), device=device)
     output = torch.empty_like(x)
-    compiled = kernel[(1, )](x, output, masked)
-    expected = torch.zeros_like(x) if masked else ((x.to(torch.int64) & 0xFFFFFFFF) >> 24).to(torch.int32)
+    compiled = kernel[(1, )](x, output, masked, getattr(tl, f"uint{bits}"))
+    expected = torch.zeros_like(x) if masked else (x >> (bits - 8)) & 255
     torch.testing.assert_close(output, expected)
     if is_cuda():
         assert "mul.hi." not in compiled.asm["ptx"]
