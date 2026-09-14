@@ -365,25 +365,14 @@ struct FpToFpOpConversion
                                     ConversionPatternRewriter &rewriter,
                                     Value v) {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Value bits = b.bitcast(v, i32_ty);
-    Value magnitude = b.and_(bits, b.i32_val(0x7fffffff));
-    Value sign = b.and_(b.lshr(bits, b.i32_val(24)), b.i32_val(0x80));
-
-    // Round the mantissa to nearest even and adjust the exponent bias.
-    constexpr int roundingBias = (15 - 127) * (1 << 23) + (1 << 20) - 1;
-    Value odd = b.and_(b.lshr(magnitude, b.i32_val(21)), b.i32_val(1));
-    Value rounded = b.add(b.add(magnitude, b.i32_val(roundingBias)), odd);
-    Value result = b.lshr(rounded, b.i32_val(21));
-
-    // At 2^7, FP32 addition rounds at the E5M2 subnormal spacing, 2^-16.
-    Value subnormal = b.fadd(b.bitcast(magnitude, f32_ty), b.f32_val(128.0f));
-    subnormal = b.sub(b.bitcast(subnormal, i32_ty), b.i32_val(0x43000000));
-    result = b.select(b.icmp_ult(magnitude, b.i32_val(0x38800000)), subnormal,
-                      result);
-    result = b.umin(result, b.i32_val(0x7b));
-    result = b.select(b.icmp_ugt(magnitude, b.i32_val(0x7f800000)),
-                      b.i32_val(0x7f), result);
-    return b.trunc(i8_ty, b.or_(result, sign));
+    Value half = convertFp32ToFp16(loc, rewriter, v, RoundingMode::RTZ);
+    // Round the intermediate to odd to avoid double rounding: every E5M2
+    // midpoint has an even FP16 encoding, and exact midpoints stay unchanged.
+    Value inexact =
+        LLVM::FCmpOp::create(rewriter, loc, LLVM::FCmpPredicate::une, v,
+                             convertFp16ToFp32(loc, rewriter, half));
+    Value bits = b.or_(b.bitcast(half, i16_ty), b.zext(i16_ty, inexact));
+    return convertFp16ToFp8E5M2(loc, rewriter, b.bitcast(bits, f16_ty));
   }
 
   std::pair<ConverterT, size_t>

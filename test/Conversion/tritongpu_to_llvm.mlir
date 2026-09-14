@@ -3588,8 +3588,10 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
   // SM89-NOT: cvt.rz.f16.f32
   // SM89: cvt.rn.satfinite.e5m2x2.f32
   // CHECK-LABEL: @fp32_to_fp8e5_rtne
-  // CHECK-NOT: cvt.rz.f16.f32
-  // CHECK: llvm.fadd
+  // CHECK: cvt.rz.f16.f32
+  // CHECK: llvm.fpext
+  // CHECK: llvm.fcmp "une"
+  // CHECK: llvm.or
   // CHECK: llvm.intr.umin
   // CHECK: llvm.icmp "ugt"
   // CHECK: llvm.return
