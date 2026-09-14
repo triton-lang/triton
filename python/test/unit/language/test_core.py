@@ -2588,9 +2588,43 @@ def test_umulhi(dtype_str, device):
     x_tri = to_triton(x, device=device, dst_type=dtype_str)
     y_tri = to_triton(y, device=device, dst_type=dtype_str)
     z_tri = to_triton(np.zeros_like(x), device=device, dst_type=dtype_str)
-    kernel[(1, )](x_tri, y_tri, z_tri, N=N)
+    compiled = kernel[(1, )](x_tri, y_tri, z_tri, N=N)
 
     np.testing.assert_equal(umulhi_ref(x, y), to_numpy(z_tri))
+    if not is_interpreter() and is_cuda():
+        assert f"mul.hi.u{np_dtype.itemsize * 8}" in compiled.asm["ptx"]
+    elif not is_interpreter() and is_hip():
+        assert "v_mul_hi_u32" in compiled.asm["amdgcn"]
+
+
+@pytest.mark.parametrize("masked", [False, True])
+@pytest.mark.parametrize("dtype_str", ["int32", "int64"])
+def test_umulhi_known_bits(masked, dtype_str, device):
+
+    @triton.jit
+    def kernel(X, Z, MASKED: tl.constexpr, DTYPE: tl.constexpr):
+        offsets = tl.arange(0, 32)
+        x = tl.load(X + offsets).to(DTYPE)
+        if MASKED:
+            half_bits: tl.constexpr = DTYPE.primitive_bitwidth // 2
+            y = x >> half_bits
+            x = x & ((1 << half_bits) - 1)
+        else:
+            y = tl.full((), 256, DTYPE)
+        tl.store(Z + offsets, tl.umulhi(x, y))
+
+    bits = torch.iinfo(getattr(torch, dtype_str)).bits
+    half = 1 << (bits // 2)
+    x = torch.tensor([0, 1, -1, -2**(bits - 1), 2**(bits - 1) - 1, half - 1, half, -half] * 4,
+                     dtype=getattr(torch, dtype_str), device=device)
+    output = torch.empty_like(x)
+    compiled = kernel[(1, )](x, output, masked, getattr(tl, f"uint{bits}"))
+    expected = torch.zeros_like(x) if masked else (x >> (bits - 8)) & 255
+    torch.testing.assert_close(output, expected)
+    if is_cuda():
+        assert "mul.hi." not in compiled.asm["ptx"]
+    elif is_hip():
+        assert "mul_hi" not in compiled.asm["amdgcn"]
 
 
 @pytest.mark.interpreter
