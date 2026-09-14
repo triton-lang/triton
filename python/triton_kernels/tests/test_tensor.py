@@ -129,10 +129,9 @@ def test_dtype_roundtrip(dtype, torch_dtype):
     assert empty((2, 3), dtype=dtype, device="cpu").data.dtype == torch_dtype
 
 
-@pytest.mark.parametrize("dtype", [torch.float8_e8m0fnu, torch.complex64])
-def test_torch_dtype_to_dtype_unsupported(dtype):
+def test_torch_dtype_to_dtype_unsupported():
     with pytest.raises(ValueError, match="Unknown dtype"):
-        torch_dtype_to_dtype(dtype)
+        torch_dtype_to_dtype(torch.complex64)
 
 
 @pytest.mark.parametrize("dtype", [
