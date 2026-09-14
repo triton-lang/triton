@@ -165,10 +165,12 @@ public:
                                         Value effectCTAs);
   // setReadVisibility: record the actual reader in the visibility columns of
   // each observer, including any synthetic peers.
+  // bufferIndex is optional and requires a proven one-hot bufferMask.
   void createSetReadVisibilityCall(ImplicitLocOpBuilder &b, Value bufferMask,
                                    int reader, uint64_t observerMask,
                                    Value pred, MemType memType,
-                                   Operation *insertPoint, Value effectCTAs);
+                                   Operation *insertPoint, Value effectCTAs,
+                                   Value bufferIndex = nullptr);
   // trackVisibleAccesses: snapshot the available read and write visibility
   // frontiers into their independent tracking tables for the barrier's current
   // phase.
@@ -184,6 +186,10 @@ public:
                                             Operation *insertPoint,
                                             Value barrierCTAs,
                                             Value effectCTAs);
+  void createTrackAsyncCopiesForBarrierCall(ImplicitLocOpBuilder &b, Value mbar,
+                                            int thread, Value pred,
+                                            Operation *insertPoint,
+                                            Value barrierCTAs);
   // transferVisibleAccesses: transfer the requested barrier phase's
   // independently tracked write and read visibility to all threads in
   // threadMask.
@@ -231,7 +237,7 @@ public:
   // and invalidate prior proxy-fence coverage for that source thread.
   void createSetProxyAccessCall(ImplicitLocOpBuilder &b, Value bufferMask,
                                 int thread, Value pred, Operation *insertPoint,
-                                Value effectCTAs);
+                                Value effectCTAs, Value bufferIndex = {});
   // fenceProxyAccesses: mark all generic accesses visible to the current base
   // thread as covered by fence.proxy.async. A CTA fence covers the current
   // buffer row; a cluster fence covers every cluster buffer row.

@@ -246,6 +246,16 @@ def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
                     "SmallVector<unsigned>",
                     "getRepOrderForOperand",
                     (ins "int":$opIdx)>,
+    InterfaceMethod<"Convert a dot operand whose parent is this MMA layout to a LinearLayout.",
+                    "LinearLayout",
+                    "dotOperandToLinearLayout",
+                    (ins "::mlir::Attribute":$dotOp,
+                         "ArrayRef<int64_t>":$shape),
+                    /*methodBody=*/[{}],
+                    /*defaultImplementation=*/[{
+                      llvm::report_fatal_error(
+                          "this MMA layout is not a valid dot-operand parent");
+                    }]>,
   ];
 }
 

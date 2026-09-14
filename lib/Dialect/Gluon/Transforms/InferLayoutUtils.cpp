@@ -5,6 +5,7 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Gluon/Transforms/Passes.h"
+#include "triton/Dialect/Triton/IR/Traits.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/MapVector.h"
@@ -23,14 +24,18 @@ namespace mlir::triton::gluon {
 namespace {
 struct LayoutInfo {
   Attribute encoding;
-  // Some operations can infer one of many encodings,
-  // we model this by setting the mayVary flag on encodings
-  // derived from these ops.
-  // If "may vary" is set then we allow conflicts, and when
-  // resolving conflicts we prefer encodings that are not allowed to vary.
-  bool mayVary = false;
+  // Some operations can infer one of many encodings, we model this by
+  // incrementing the "distance" each time a fuzzy inference occurs.
+  // We preferrentially resolve to encodings with smallest distance, but ban
+  // ambiguity when there is zero distance, since that implies set_auto_layout
+  // was called on the op.
+  unsigned distance = 0;
 
   operator bool() { return bool(encoding); }
+
+  bool operator==(const LayoutInfo &other) const {
+    return encoding == other.encoding && distance == other.distance;
+  }
 };
 
 uint64_t hashWithMemo(Attribute attr,
@@ -60,14 +65,15 @@ bool compare(Attribute a, Attribute b,
 
 LayoutInfo combineInfo(LayoutInfo lhs, LayoutInfo rhs, Operation *op,
                        llvm::MapVector<Attribute, uint64_t> &hashMemo) {
+  if (lhs.distance != rhs.distance)
+    return lhs.distance < rhs.distance ? lhs : rhs;
+
   // Sort inputs so this operation is commutative
   if (compare(lhs.encoding, rhs.encoding, hashMemo)) {
     std::swap(lhs, rhs);
   }
-  if (lhs.mayVary)
+  if (lhs.distance != 0)
     return rhs;
-  if (rhs.mayVary)
-    return lhs;
   if (lhs.encoding == rhs.encoding)
     return lhs;
   op->emitOpError("found conflicting encodings for value:\n  ")
@@ -78,6 +84,24 @@ LayoutInfo combineInfo(LayoutInfo lhs, LayoutInfo rhs, Operation *op,
 bool encodingsMayVary(Operation *op) {
   return isa<triton::JoinOp, triton::SplitOp, triton::ReshapeOp,
              triton::TransOp>(op);
+}
+
+bool hasSameOperandsAndResultEncoding(Operation *op) {
+  return op->hasTrait<OpTrait::SameOperandsAndResultType>() ||
+         op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
+         op->hasTrait<OpTrait::SameLoadStoreOperandsAndResultEncoding>();
+}
+
+bool hasSameOperandsEncoding(Operation *op) {
+  return op->hasTrait<OpTrait::SameTypeOperands>() ||
+         op->hasTrait<OpTrait::SameOperandsEncoding>() ||
+         op->hasTrait<OpTrait::SameLoadStoreOperandsEncoding>() ||
+         hasSameOperandsAndResultEncoding(op);
+}
+
+bool hasSameResultsEncoding(Operation *op) {
+  return op->hasTrait<OpTrait::SameResultsType>() ||
+         hasSameOperandsAndResultEncoding(op);
 }
 
 LogicalResult
@@ -99,7 +123,8 @@ updateEncoding(ArrayRef<Value> values, LayoutInfo info, FuncOp *func,
     }
     LLVM_DEBUG({
       DBGS() << "Setting value:\n\t" << value << "\nto encoding:\n\t"
-             << it->second.encoding << "\n";
+             << it->second.encoding << " (distance " << it->second.distance
+             << ")\n";
     });
     worklist.insert(value);
   }
@@ -128,10 +153,20 @@ LogicalResult inferLayout(
   llvm::PriorityWorklist<Value> worklist;
   llvm::MapVector<Attribute, uint64_t> hashMemo;
   for (auto &[value, encoding] : seedEncodings) {
-    if (failed(updateEncoding({value}, LayoutInfo{encoding, false}, &func,
+    if (failed(updateEncoding({value}, LayoutInfo{encoding, 0}, &func,
                               valueToEncoding, worklist, hashMemo)))
       return failure();
   }
+
+  // Equality constraints propagate without introducing an encoding choice.
+  auto propagateSameEncoding = [&](ValueRange values, LayoutInfo info) {
+    SmallVector<Value> inferredValues;
+    for (Value value : values)
+      if (typeCheck(value.getType()))
+        inferredValues.push_back(value);
+    return updateEncoding(inferredValues, info, &func, valueToEncoding,
+                          worklist, hashMemo);
+  };
 
   // Propagate encodings through the graph until fixed point, or conflict
   while (!worklist.empty()) {
@@ -142,6 +177,9 @@ LogicalResult inferLayout(
     // Propagate to users
     for (OpOperand &use : val.getUses()) {
       auto op = use.getOwner();
+      if (hasSameOperandsEncoding(op) &&
+          failed(propagateSameEncoding(op->getOperands(), info)))
+        return failure();
       if (isa<scf::ForOp, scf::WhileOp>(op)) {
         auto offset = 3 * isa<scf::ForOp>(op);
         auto tiedArgs = getTiedArgs(op, use.getOperandNumber() - offset);
@@ -157,8 +195,8 @@ LogicalResult inferLayout(
       } else {
         auto dstEnc = inferDstEncoding(op, info.encoding);
         if (dstEnc) {
-          bool mayVary = info.mayVary || encodingsMayVary(op);
-          LayoutInfo dstInfo{dstEnc, mayVary};
+          unsigned distance = info.distance + encodingsMayVary(op);
+          LayoutInfo dstInfo{dstEnc, distance};
           if (failed(updateEncoding(llvm::to_vector_of<Value>(op->getResults()),
                                     dstInfo, &func, valueToEncoding, worklist,
                                     hashMemo)))
@@ -170,6 +208,9 @@ LogicalResult inferLayout(
     // Propagate to defining ops
     if (auto opResult = dyn_cast<OpResult>(val)) {
       auto definingOp = opResult.getOwner();
+      if (hasSameResultsEncoding(definingOp) &&
+          failed(propagateSameEncoding(definingOp->getResults(), info)))
+        return failure();
       if (isa<scf::ForOp, scf::WhileOp, scf::IfOp>(definingOp)) {
         auto tiedArgs = getTiedArgs(definingOp, opResult.getResultNumber());
         if (failed(updateEncoding(tiedArgs, info, &func, valueToEncoding,
@@ -178,8 +219,8 @@ LogicalResult inferLayout(
       } else {
         auto srcEncoding = inferSrcEncoding(definingOp, info.encoding);
         if (srcEncoding) {
-          bool mayVary = info.mayVary || encodingsMayVary(definingOp);
-          LayoutInfo srcInfo{srcEncoding, mayVary};
+          unsigned distance = info.distance + encodingsMayVary(definingOp);
+          LayoutInfo srcInfo{srcEncoding, distance};
           llvm::SmallVector<Value> tensorOperands;
           for (auto operand : definingOp->getOperands())
             if (isa<RankedTensorType>(operand.getType()))

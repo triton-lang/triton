@@ -1,6 +1,6 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 --convert-builtin-func-to-llvm | FileCheck %s --enable-var-scope --check-prefixes=CHECK,COMMON
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck %s --enable-var-scope --check-prefixes=GFX950,COMMON
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s --enable-var-scope --check-prefixes=GFX1250,COMMON
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx942' --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 --convert-builtin-func-to-llvm | FileCheck %s --enable-var-scope --check-prefixes=CHECK,COMMON
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx950' --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck %s --enable-var-scope --check-prefixes=GFX950,COMMON
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --triton-amdgpu-membar='gfx-arch=gfx1250' --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 | FileCheck %s --enable-var-scope --check-prefixes=GFX1250,COMMON
 
 // COMMON-DAG: [[$LOCAL_MMRA_TAG:#[A-Za-z0-9_]+]] = #llvm.mmra_tag<"amdgpu-synchronize-as":"local">
 // COMMON-DAG: [[$GLOBAL_MMRA_TAG:#[A-Za-z0-9_]+]] = #llvm.mmra_tag<"amdgpu-synchronize-as":"global">
@@ -990,6 +990,49 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
 // -----
 
+#blocked4_atomic = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: @atomic_load_store
+  // COMMON: llvm.load %{{.*}} atomic syncscope("agent") monotonic
+  // COMMON-NOT: rocdl.s.barrier
+  // COMMON: llvm.fence syncscope("agent") acquire
+  // COMMON: rocdl.s.barrier
+  // COMMON: llvm.load %{{.*}} : !llvm.ptr<3> -> i32
+  // COMMON: llvm.fence syncscope("workgroup") release
+  // COMMON: llvm.store %{{.*}}, %{{.*}} atomic syncscope("workgroup") monotonic
+  tt.func public @atomic_load_store(%ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>, %mask: i1) {
+    %loaded = tt.atomic_load acquire, gpu, %ptr, %mask : (!tt.ptr<i32>, i1) -> i32
+    tt.atomic_store release, cta, %out, %loaded, %mask : !tt.ptr<i32>
+    tt.return
+  }
+
+  // COMMON-LABEL: @sharded_atomic_load_acquire
+  // COMMON-COUNT-4: llvm.load %{{.*}} atomic syncscope("agent") monotonic
+  // COMMON-NOT: rocdl.s.barrier
+  // COMMON: llvm.fence syncscope("agent") acquire
+  // COMMON: rocdl.s.barrier
+  // COMMON: llvm.return
+  tt.func public @sharded_atomic_load_acquire(
+      %ptrs: tensor<1024x!tt.ptr<i32>, #blocked4_atomic>,
+      %mask: tensor<1024xi1, #blocked4_atomic>) {
+    %loaded = tt.atomic_load acquire, gpu, %ptrs, %mask : (tensor<1024x!tt.ptr<i32>, #blocked4_atomic>, tensor<1024xi1, #blocked4_atomic>) -> tensor<1024xi32, #blocked4_atomic>
+    tt.return
+  }
+
+  // COMMON-LABEL: @sharded_atomic_store_release
+  // COMMON: llvm.fence syncscope("agent") release
+  // COMMON-COUNT-4: llvm.store %{{.*}}, %{{.*}} atomic syncscope("agent") monotonic
+  tt.func public @sharded_atomic_store_release(
+      %ptrs: tensor<1024x!tt.ptr<i32>, #blocked4_atomic>,
+      %values: tensor<1024xi32, #blocked4_atomic>,
+      %mask: tensor<1024xi1, #blocked4_atomic>) {
+    tt.atomic_store release, gpu, %ptrs, %values, %mask : tensor<1024x!tt.ptr<i32>, #blocked4_atomic>
+    tt.return
+  }
+}
+
+// -----
+
 // Make sure there is no rocdl.grid.dim.* generated when global_scratch_memory_size is 0.
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32, ttg.global_scratch_memory_size = 0 : i32, ttg.global_scratch_memory_alignment = 1 : i32} {
   // CHECK-LABEL: @test_call_zero_scratch_no_grid_ops
@@ -997,6 +1040,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK: llvm.call @callee_zero_scratch
   // CHECK: llvm.func internal @callee_zero_scratch
   // CHECK-SAME: passthrough = ["noinline", "convergent"]
+  // CHECK-SAME: ws_num_warps = 4 : i32
   tt.func public @test_call_zero_scratch_no_grid_ops() attributes {noinline = false} {
     tt.call @callee_zero_scratch() : () -> ()
     tt.return

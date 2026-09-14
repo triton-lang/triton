@@ -146,7 +146,6 @@ def test_runtime_scaled_upcast_fp4(compact_scale, BLOCK_K):
     def scaled_upcast_fp4_kernel(x_ptr, scale_ptr, y_ptr, BLOCK_M: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
                                  SCALE_FACTOR: ttgl.constexpr, COMPACT_SCALE: ttgl.constexpr):
         packed_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [8, 4], [4, 1], [1, 0])
-        compact_layout: ttgl.constexpr = ttgl.BlockedLayout([1, BLOCK_K // SCALE_FACTOR], [8, 4], [4, 1], [1, 0])
         unpacked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 4], [4, 1], [1, 0])
 
         offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, packed_layout))
@@ -155,7 +154,8 @@ def test_runtime_scaled_upcast_fp4(compact_scale, BLOCK_K):
         x = ttgl.load(x_ptr + x_offsets)
 
         if COMPACT_SCALE:
-            scale_layout: ttgl.constexpr = compact_layout
+            scale_layout: ttgl.constexpr = ttgl.amd.get_scaled_upcast_fp4_scale_layout(
+                x, SCALE_FACTOR, ttgl.bfloat16, axis=1)
             scale_k: ttgl.constexpr = BLOCK_K // SCALE_FACTOR
         else:
             scale_layout: ttgl.constexpr = unpacked_layout
@@ -1782,7 +1782,7 @@ def test_compile_tensor_copy(BLOCK_M, BLOCK_N, NUM_BUFFERS, ASYNC_LOAD_TYPE, NUM
     if ASYNC_LOAD_TYPE in {"DEVICE_TDM", "HOST_TDM"}:
         pattern = {"tensor_load_to_lds", "s_wait_tensorcnt 0x0"}
     else:
-        ASYNC_LOAD_TYPE == "ASYNC_COPY"
+        assert ASYNC_LOAD_TYPE == "ASYNC_COPY"
         pattern = {"global_load_async_to_lds", "s_wait_asynccnt 0x0"}
     for p in pattern:
         assert re.search(p, amdgcn), f"Can't find {p} in amdgcn"

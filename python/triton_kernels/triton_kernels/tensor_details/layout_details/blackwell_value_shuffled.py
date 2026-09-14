@@ -7,7 +7,7 @@ import triton.language as tl
 
 from triton_kernels.tensor_details.layout_details import strided
 from .base import Layout, LayoutTransformation
-from .blackwell_value import BlackwellMXValueLayoutTransformation, strides_major_dim_m2
+from .blackwell_value import BlackwellMXValueLayoutTransformation, unswizzle_mxfp4
 from .torch_utils import repack
 
 
@@ -105,11 +105,10 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
         if (isinstance(destination, BlackwellMXValueLayoutTransformation) and self.is_fp4 and data.device.type == "cuda"
                 and data.dtype == torch.uint8 and list(data.shape) == self.storage_shape):
             if out is None:
-                out_shape = destination.storage_shape
-                out = torch.empty_strided(out_shape, strides_major_dim_m2(out_shape), device=data.device,
+                out = torch.empty_strided(destination.storage_shape, destination.storage_strides, device=data.device,
                                           dtype=data.dtype)
             # Only logical bytes are written; plain Blackwell padding is unspecified.
-            return self._convert_data(data, inverse=True, major_dim=len(self.shape) - 2, out=out)
+            return self._convert_data(data, inverse=True, major_dim=-2, out=out)
         if (data.device.type != "cuda" or data.dtype != torch.uint8
                 or not isinstance(destination, strided.StridedLayoutTransformation)
                 or destination.order[0] < len(self.shape) - 2):
@@ -120,7 +119,7 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
         if (isinstance(source, BlackwellMXValueLayoutTransformation) and self.is_fp4 and data.device.type == "cuda"
                 and data.dtype == torch.uint8 and list(data.shape) == source.storage_shape):
             # Blackwell values already pack K; only their physical tiling changes.
-            return self._convert_data(data, inverse=False, major_dim=len(self.shape) - 2, out=out)
+            return self._convert_data(data, inverse=False, major_dim=-2, out=out)
         if (not isinstance(source, strided.StridedLayoutTransformation) or not self.is_fp4
                 or not source._can_convert_fp4(data)):
             return super()._convert_data_from(data, source, out=out)
@@ -134,37 +133,33 @@ class BlackwellMX4ValueShuffledTransformation(LayoutTransformation):
         if data.device.type != "cuda" or data.dtype != torch.uint8:
             return self._unswizzle_data_torch(data) if inverse else self._swizzle_data_torch(data)
 
+        if inverse:
+            return unswizzle_mxfp4(data, self.shape, major_dim, out=out, block_shape=(self.block_k // 2, self.block_n))
+
         if out is None:
-            if inverse:
-                destination = strided.StridedLayout(major_dim).make_transformation(self.shape, True)
-                out = torch.empty_strided(destination.storage_shape, destination.storage_strides, dtype=data.dtype,
-                                          device=data.device)
-            else:
-                out = torch.empty(storage_shape, dtype=data.dtype, device=data.device)
-        strided_data, shuffled = (out, data) if inverse else (data, out)
+            out = torch.empty(storage_shape, dtype=data.dtype, device=data.device)
         E, num_tiles_k, num_tiles_n, tile_n, tile_k = storage_shape
-        K_packed, N_packed = self.shape[-2] // 2, self.shape[-1] // 2
         K_pad, N_pad = num_tiles_k * tile_k, num_tiles_n * tile_n
         block_k, block_n = 64, 128
-        grid_k = triton.cdiv(K_packed if inverse else K_pad, block_k)
-        grid_n = triton.cdiv(2 * N_packed if inverse else N_pad, 2 * block_n)
+        pack_k = major_dim % len(self.shape) == len(self.shape) - 2
+        grid_k = triton.cdiv(K_pad, block_k)
+        grid_n = triton.cdiv(N_pad, 2 * block_n)
         grid = (E * grid_k * grid_n, )
         if grid[0] > 0:
             with torch.cuda.device(data.device):
                 _convert_shuffled_mxfp4[grid](
-                    strided_data,
-                    shuffled,
+                    data,
+                    out,
                     tuple(self.shape),
                     tuple(storage_shape),
-                    strided_data.stride(),
-                    shuffled.stride(),
+                    data.stride(),
+                    out.stride(),
                     GRID_K=grid_k,
                     GRID_N=grid_n,
-                    INVERSE=inverse,
-                    PACK_K=major_dim % len(self.shape) == len(self.shape) - 2,
+                    PACK_K=pack_k,
                     BLOCK_K=block_k,
                     BLOCK_N=block_n,
-                    num_warps=4,
+                    num_warps=4 if pack_k else 8,
                 )
         return out
 
@@ -243,7 +238,6 @@ def _convert_shuffled_mxfp4(
     SHUFFLED_STRIDES: tl.constexpr,
     GRID_K: tl.constexpr,
     GRID_N: tl.constexpr,
-    INVERSE: tl.constexpr,
     PACK_K: tl.constexpr,
     BLOCK_K: tl.constexpr,
     BLOCK_N: tl.constexpr,
@@ -273,29 +267,24 @@ def _convert_shuffled_mxfp4(
         strided_odd = strided_even + STRIDED_STRIDES[-2]
 
     shuffled_k = k // TILE_K * SHUFFLED_STRIDES[1] + k % TILE_K * SHUFFLED_STRIDES[4]
-    even_n, odd_n = 2 * n, 2 * n + 1
-    shuffled_even = Shuffled + batch * SHUFFLED_STRIDES[0] + shuffled_k[:, None] + \
-        (even_n // TILE_N * SHUFFLED_STRIDES[2] + even_n % TILE_N * SHUFFLED_STRIDES[3])[None, :]
-    shuffled_odd = Shuffled + batch * SHUFFLED_STRIDES[0] + shuffled_k[:, None] + \
-        (odd_n // TILE_N * SHUFFLED_STRIDES[2] + odd_n % TILE_N * SHUFFLED_STRIDES[3])[None, :]
     mask = (k[:, None] < K_PACKED) & (n[None, :] < N_PACKED)
 
-    if INVERSE:
-        a = tl.load(shuffled_even, mask, other=0).to(tl.uint32)
-        b = tl.load(shuffled_odd, mask, other=0).to(tl.uint32)
-    else:
-        a = tl.load(strided_even, mask, other=0).to(tl.uint32)
-        b = tl.load(strided_odd, mask, other=0).to(tl.uint32)
+    a = tl.load(strided_even, mask, other=0)
+    b = tl.load(strided_odd, mask, other=0)
     if PACK_K:
-        lo, hi = a, b
+        even_n, odd_n = 2 * n, 2 * n + 1
+        shuffled_even = Shuffled + batch * SHUFFLED_STRIDES[0] + shuffled_k[:, None] + \
+            (even_n // TILE_N * SHUFFLED_STRIDES[2] + even_n % TILE_N * SHUFFLED_STRIDES[3])[None, :]
+        shuffled_odd = Shuffled + batch * SHUFFLED_STRIDES[0] + shuffled_k[:, None] + \
+            (odd_n // TILE_N * SHUFFLED_STRIDES[2] + odd_n % TILE_N * SHUFFLED_STRIDES[3])[None, :]
+        tl.store(shuffled_even, a, (k[:, None] < K_PAD) & (even_n[None, :] < N_PAD))
+        tl.store(shuffled_odd, b, (k[:, None] < K_PAD) & (odd_n[None, :] < N_PAD))
     else:
         # Transposing a 2x2 group of FP4 nibbles is its own inverse.
         lo = (a & 0x0F) | ((b & 0x0F) << 4)
         hi = (a >> 4) | (b & 0xF0)
-
-    if INVERSE:
-        tl.store(strided_even, lo, mask)
-        tl.store(strided_odd, hi, mask)
-    else:
-        tl.store(shuffled_even, lo, (k[:, None] < K_PAD) & (even_n[None, :] < N_PAD))
-        tl.store(shuffled_odd, hi, (k[:, None] < K_PAD) & (odd_n[None, :] < N_PAD))
+        values = tl.join(lo, hi).reshape((BLOCK_K, 2 * BLOCK_N))
+        cols = pid % GRID_N * (2 * BLOCK_N) + tl.arange(0, 2 * BLOCK_N)
+        offsets = batch * SHUFFLED_STRIDES[0] + shuffled_k[:, None] + (cols // TILE_N * SHUFFLED_STRIDES[2] +
+                                                                       cols % TILE_N * SHUFFLED_STRIDES[3])[None, :]
+        tl.store(Shuffled + offsets, values, (k[:, None] < K_PAD) & (cols[None, :] < N_PAD))

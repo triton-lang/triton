@@ -10,7 +10,7 @@ from triton.experimental.gluon.language._semantic import _check, _compute_tmem_r
 from . import tma
 from . import clc
 from ..hopper import async_store, cluster, fence_async_shared, mbarrier
-from ..ampere import async_copy, mma_v2
+from ..ampere import CachePolicy, FractionalEvictionPolicy, async_copy, mma_v2
 
 from triton._C.libtriton import ir
 import triton._C.libtriton.gluon_ir as gluon_ir
@@ -19,6 +19,8 @@ if TYPE_CHECKING:
     from ..._semantic import GluonSemantic
 
 __all__ = [
+    "CachePolicy",
+    "FractionalEvictionPolicy",
     "add2",
     "allocate_tensor_memory",
     "async_copy",

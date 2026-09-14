@@ -5,7 +5,7 @@
 // CHECK-DAG: [[Y_OFFSET_CST:%.*]] = arith.constant dense<321>
 // CHECK: scf.for {{.*}} iter_args({{.*}}, {{.*}}, [[X_BASE:%.*]] = {{.*}}, [[Y_BASE:%.*]] = {{.*}})
 // CHECK:   amdg.buffer_load [[X_BASE]]{{\[}}[[X_OFFSET_CST]]{{\]}} :
-// CHECK:   amdg.buffer_load [[Y_BASE]]{{\[}}[[Y_OFFSET_CST]]{{\]}} cacheModifier = cg :
+// CHECK:   amdg.buffer_load [[Y_BASE]]{{\[}}[[Y_OFFSET_CST]]{{\]}} {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>} :
 // CHECK:   [[NEXT_X_BASE:%.*]] = tt.addptr [[X_BASE]], %c64_i32
 // CHECK:   [[NEXT_Y_BASE:%.*]] = tt.addptr [[Y_BASE]]
 // CHECK:   scf.yield {{.*}}, [[NEXT_X_BASE]], [[NEXT_Y_BASE]]
@@ -38,7 +38,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %step = tt.splat %tmp : i32 -> tensor<64x32xi32, #blocked>
     %for:2 = scf.for %idx = %c0 to %c128 step %c1 iter_args(%Xoffset = %Xoffset_init, %Yoffset = %Yoffset_init) -> (tensor<16x64xi32, #blocked>, tensor<64x32xi32, #blocked>) {
       %x = amdg.buffer_load %X[%Xoffset] : !tt.ptr<f16> -> tensor<16x64xf16, #blocked>
-      %y = amdg.buffer_load %Y[%Yoffset] cacheModifier = cg : !tt.ptr<f16> -> tensor<64x32xf16, #blocked>
+      %y = amdg.buffer_load %Y[%Yoffset] {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>} : !tt.ptr<f16> -> tensor<64x32xf16, #blocked>
 
       ttg.local_store %x, %x_dummy_buffer : tensor<16x64xf16, #blocked> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
       ttg.local_store %y, %y_dummy_buffer : tensor<64x32xf16, #blocked> -> !ttg.memdesc<64x32xf16, #shared, #smem, mutable, 64x32>
@@ -336,8 +336,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 // CHECK-DAG: [[Z_OFFSET:%.*]] = arith.constant dense<789> : tensor<32x32xi32, #blocked>
 // CHECK: scf.for {{.*}} iter_args({{%.*}}[[Y_OFFSET:%.*]] = [[Y_OFFSET_INIT]]
 // CHECK-DAG: amdg.buffer_load {{%.*\[}}[[X_OFFSET]]{{\]}} : !tt.ptr<f16> -> tensor<16x64xf16, #blocked>
-// CHECK-DAG: amdg.buffer_load {{%.*\[}}[[Y_OFFSET]]{{\]}} cacheModifier = cg : !tt.ptr<f16> -> tensor<64x32xf16, #blocked>
-// CHECK-DAG: amdg.buffer_load {{%.*\[}}[[Z_OFFSET]]{{\]}} cacheModifier = cg : !tt.ptr<f16> -> tensor<32x32xf16, #blocked>
+// CHECK-DAG: amdg.buffer_load {{%.*\[}}[[Y_OFFSET]]{{\]}} {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>} : !tt.ptr<f16> -> tensor<64x32xf16, #blocked>
+// CHECK-DAG: amdg.buffer_load {{%.*\[}}[[Z_OFFSET]]{{\]}} {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>} : !tt.ptr<f16> -> tensor<32x32xf16, #blocked>
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -367,8 +367,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
     %for:3 = scf.for %iter = %iter_first to %iter_last step %iter_step iter_args(%Xoffset = %Xoffset_init, %Yoffset = %Yoffset_init, %Zoffset = %Zoffset_init) -> (tensor<16x64xi32, #blocked>, tensor<64x32xi32, #blocked>, tensor<32x32xi32, #blocked>) {
       %x = amdg.buffer_load %X[%Xoffset] : !tt.ptr<f16> -> tensor<16x64xf16, #blocked>
-      %y = amdg.buffer_load %Y[%Yoffset] cacheModifier = cg : !tt.ptr<f16> -> tensor<64x32xf16, #blocked>
-      %z = amdg.buffer_load %Z[%Zoffset] cacheModifier = cg : !tt.ptr<f16> -> tensor<32x32xf16, #blocked>
+      %y = amdg.buffer_load %Y[%Yoffset] {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>} : !tt.ptr<f16> -> tensor<64x32xf16, #blocked>
+      %z = amdg.buffer_load %Z[%Zoffset] {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>} : !tt.ptr<f16> -> tensor<32x32xf16, #blocked>
 
       ttg.local_store %x, %x_dummy_buffer : tensor<16x64xf16, #blocked> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
       ttg.local_store %y, %y_dummy_buffer : tensor<64x32xf16, #blocked> -> !ttg.memdesc<64x32xf16, #shared, #smem, mutable, 64x32>
@@ -392,8 +392,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 // CHECK-DAG: [[Z_OFFSET_INIT:%.*]] = arith.constant dense<789> : tensor<32x32xi32, #blocked>
 // CHECK: scf.for {{.*}} iter_args([[X_OFFSET:%.*]] = [[X_OFFSET_INIT]], {{.*}}[[Z_OFFSET:%.*]] = [[Z_OFFSET_INIT]]
 // CHECK-DAG: amdg.buffer_load {{%.*\[}}[[X_OFFSET]]{{\]}} : !tt.ptr<f16> -> tensor<16x64xf16, #blocked>
-// CHECK-DAG: amdg.buffer_load {{%.*\[}}[[Y_OFFSET]]{{\]}} cacheModifier = cg : !tt.ptr<f16> -> tensor<64x32xf16, #blocked>
-// CHECK-DAG: amdg.buffer_load {{%.*\[}}[[Z_OFFSET]]{{\]}} cacheModifier = cg : !tt.ptr<f16> -> tensor<32x32xf16, #blocked>
+// CHECK-DAG: amdg.buffer_load {{%.*\[}}[[Y_OFFSET]]{{\]}} {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>} : !tt.ptr<f16> -> tensor<64x32xf16, #blocked>
+// CHECK-DAG: amdg.buffer_load {{%.*\[}}[[Z_OFFSET]]{{\]}} {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>} : !tt.ptr<f16> -> tensor<32x32xf16, #blocked>
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -423,8 +423,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
     %for:3 = scf.for %iter = %iter_first to %iter_last step %iter_step iter_args(%Xoffset = %Xoffset_init, %Yoffset = %Yoffset_init, %Zoffset = %Zoffset_init) -> (tensor<16x64xi32, #blocked>, tensor<64x32xi32, #blocked>, tensor<32x32xi32, #blocked>) {
       %x = amdg.buffer_load %X[%Xoffset] : !tt.ptr<f16> -> tensor<16x64xf16, #blocked>
-      %y = amdg.buffer_load %Y[%Yoffset] cacheModifier = cg : !tt.ptr<f16> -> tensor<64x32xf16, #blocked>
-      %z = amdg.buffer_load %Z[%Zoffset] cacheModifier = cg : !tt.ptr<f16> -> tensor<32x32xf16, #blocked>
+      %y = amdg.buffer_load %Y[%Yoffset] {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>} : !tt.ptr<f16> -> tensor<64x32xf16, #blocked>
+      %z = amdg.buffer_load %Z[%Zoffset] {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>} : !tt.ptr<f16> -> tensor<32x32xf16, #blocked>
 
       ttg.local_store %x, %x_dummy_buffer : tensor<16x64xf16, #blocked> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable, 16x64>
       ttg.local_store %y, %y_dummy_buffer : tensor<64x32xf16, #blocked> -> !ttg.memdesc<64x32xf16, #shared, #smem, mutable, 64x32>

@@ -31,6 +31,7 @@ namespace ttng = mlir::triton::nvidia_gpu;
 namespace {
 
 Type getIntTypeLike(Type ty);
+Region *getScratchScopeRegion(Operation *anchor);
 bool isFloatLike(Type ty) { return isa<FloatType>(getElementTypeOrSelf(ty)); }
 bool isIntLike(Type ty) { return isa<IntegerType>(getElementTypeOrSelf(ty)); }
 
@@ -384,9 +385,12 @@ public:
       return info;
     }
 
+    // Build view pointers in the scope of their definitions, then remap the
+    // completed pointers to the consumer's scope.
     Value source = getFpSanTmemSource(memdesc);
     if (auto subslice = memdesc.getDefiningOp<ttng::TMEMSubSliceOp>()) {
-      auto baseInfo = getOrCreate(source, rewriter, scope);
+      auto baseInfo =
+          getOrCreate(source, rewriter, getScratchScopeRegion(subslice));
       if (!baseInfo || baseInfo->scaleSourceType)
         return std::nullopt;
 
@@ -421,7 +425,8 @@ public:
     }
 
     if (auto view = memdesc.getDefiningOp<ttg::MemDescIndexOp>()) {
-      auto baseInfo = getOrCreate(source, rewriter, scope);
+      auto baseInfo =
+          getOrCreate(source, rewriter, getScratchScopeRegion(view));
       if (!baseInfo || baseInfo->scaleSourceType)
         return std::nullopt;
 
@@ -451,17 +456,22 @@ public:
     }
 
     if (auto view = memdesc.getDefiningOp<ttg::MemDescReinterpretOp>()) {
-      auto baseInfo = getOrCreate(source, rewriter, scope);
+      auto baseInfo =
+          getOrCreate(source, rewriter, getScratchScopeRegion(view));
       if (!baseInfo)
         return std::nullopt;
 
       auto baseTy = cast<ttg::MemDescType>(source.getType());
       if (isa<ttng::TensorMemoryScalesEncodingAttr>(baseTy.getEncoding()) &&
-          !isa<ttng::TensorMemoryScalesEncodingAttr>(memTy.getEncoding()))
-        return ScratchInfo{baseInfo->ptr, baseInfo->tensorType, baseTy};
+          !isa<ttng::TensorMemoryScalesEncodingAttr>(memTy.getEncoding())) {
+        Value ptr = remapToScope(baseInfo->ptr, rewriter, scope, view.getLoc());
+        return ScratchInfo{ptr, baseInfo->tensorType, baseTy};
+      }
       if (baseInfo->scaleSourceType) {
         if (isa<ttng::TensorMemoryScalesEncodingAttr>(memTy.getEncoding()))
           return std::nullopt;
+        baseInfo->ptr =
+            remapToScope(baseInfo->ptr, rewriter, scope, view.getLoc());
         return baseInfo;
       }
 
@@ -1058,9 +1068,7 @@ static Value loadScratchStrided2D(PatternRewriter &rewriter, Location loc,
   auto storageTy = getScratchStorageType(tensorTy);
   auto ptrTensor = createPointerTensorStrided2D(rewriter, loc, base, storageTy,
                                                 stride0, stride1);
-  Value stored =
-      tt::LoadOp::create(rewriter, loc, ptrTensor, CacheModifier::NONE,
-                         EvictionPolicy::NORMAL, false);
+  Value stored = tt::LoadOp::create(rewriter, loc, ptrTensor);
   if (isFloatLike(tensorTy))
     return unembedToFloat(rewriter, loc, stored, tensorTy);
   return stored;
@@ -1085,7 +1093,6 @@ static Operation *storeScratchStrided2D(PatternRewriter &rewriter, Location loc,
   if (isFloatLike(tensorTy))
     stored = embedToInt(rewriter, loc, tensor);
   return tt::StoreOp::create(rewriter, loc, ptrTensor, stored, Value(),
-                             CacheModifier::NONE, EvictionPolicy::NORMAL,
                              ignoreCTA);
 }
 
@@ -1278,6 +1285,10 @@ Value scaleI8ToComputePayload(PatternRewriter &rewriter, Location loc,
   unsigned shiftValue = computeElem.getFPMantissaWidth() - 1;
   auto shift = getUIntConstantLike(rewriter, loc, computeIntTy, shiftValue);
   Value rawCompute = arith::ShLIOp::create(rewriter, loc, scaleComputeI, shift);
+  if (computeElem == rewriter.getBF16Type()) {
+    auto minScale = getUIntConstantLike(rewriter, loc, computeIntTy, 0x0040);
+    rawCompute = arith::MaxUIOp::create(rewriter, loc, rawCompute, minScale);
+  }
   return embedFloatBitsToInt(rewriter, loc, rawCompute, computeElem);
 }
 
@@ -2661,7 +2672,7 @@ struct TMEMCopyPattern : public OpRewritePattern<ttng::TMEMCopyOp> {
     auto srcRegTy = RankedTensorType::get(
         srcMemTy.getShape(), srcMemTy.getElementType(), srcEncoding);
     if (scratch->usesSharedClusterState()) {
-      // Match the lead-CTA TMA wait before both CTAs emulate the TMEM copy.
+      // Make shared operands visible before the CTAs emulate the TMEM copy.
       ttng::ClusterBarrierOp::create(rewriter, loc);
     }
     Value srcReg =
@@ -2685,12 +2696,12 @@ private:
 };
 
 struct TCGen5CommitPattern : public OpRewritePattern<ttng::TCGen5CommitOp> {
-  TCGen5CommitPattern(MLIRContext *ctx, bool twoCTAs)
-      : OpRewritePattern(ctx), twoCTAs(twoCTAs) {}
+  TCGen5CommitPattern(MLIRContext *ctx, bool sharedClusterState)
+      : OpRewritePattern(ctx), sharedClusterState(sharedClusterState) {}
 
   LogicalResult matchAndRewrite(ttng::TCGen5CommitOp op,
                                 PatternRewriter &rewriter) const override {
-    if (twoCTAs)
+    if (sharedClusterState)
       createGlobalScratchBarrier(rewriter, op.getLoc(),
                                  /*sharedClusterState=*/true);
     createSynchronousCompletionArrive(rewriter, op.getLoc(), op.getBarrier(),
@@ -2700,7 +2711,7 @@ struct TCGen5CommitPattern : public OpRewritePattern<ttng::TCGen5CommitOp> {
   }
 
 private:
-  bool twoCTAs;
+  bool sharedClusterState;
 };
 
 struct WarpGroupDotPattern : public OpRewritePattern<ttng::WarpGroupDotOp> {
@@ -3274,7 +3285,7 @@ static FpSanCallsRequiringInlining
 getFpSanCallsRequiringInlining(ModuleOp module) {
   DenseMap<Operation *, FpSanInliningRequirement> functions;
   DenseMap<Operation *, FpSanInliningRequirement> producers;
-  bool twoCTAs = hasTwoCTAMma(module);
+  bool sharedClusterState = ttg::lookupNumCTAs(module) > 1;
 
   module.walk([&](Operation *op) {
     auto operands = getFpSanTmemOperands(op);
@@ -3310,7 +3321,8 @@ getFpSanCallsRequiringInlining(ModuleOp module) {
                         op, "warp specialization requires kernel context"});
     // A callee receives a per-CTA scratch base, not the cluster base needed by
     // TMEM emulation. Its generated cluster barriers also need kernel context.
-    if (twoCTAs && (!operands.empty() || isa<ttng::TCGen5CommitOp>(op)))
+    if (sharedClusterState &&
+        (!operands.empty() || isa<ttng::TCGen5CommitOp>(op)))
       functions.try_emplace(
           function, FpSanInliningRequirement{
                         op, "FPSan cluster scratch and barriers require kernel "
@@ -3363,7 +3375,9 @@ public:
     getOperation()->setAttr(kHomomorphicCastsAttr,
                             BoolAttr::get(&getContext(), homomorphicCasts));
 
-    TmemScratchManager scratch(twoCTAs);
+    // MMA emulation can redistribute accumulator elements across all CTAs.
+    bool sharedClusterState = ttg::lookupNumCTAs(getOperation()) > 1;
+    TmemScratchManager scratch(sharedClusterState);
     RewritePatternSet patterns(&getContext());
     patterns.add<BinaryFloatToIntPattern<arith::AddFOp, arith::AddIOp>,
                  BinaryFloatToIntPattern<arith::SubFOp, arith::SubIOp>,
@@ -3393,7 +3407,7 @@ public:
                  TCGen5MMAPattern, TCGen5MMAScaledPattern>(&getContext(),
                                                            &scratch);
     patterns.add<WarpGroupDotPattern>(&getContext());
-    patterns.add<TCGen5CommitPattern>(&getContext(), twoCTAs);
+    patterns.add<TCGen5CommitPattern>(&getContext(), sharedClusterState);
 
     LogicalResult result =
         applyPatternsGreedily(getOperation(), std::move(patterns));
