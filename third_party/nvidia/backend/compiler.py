@@ -39,8 +39,7 @@ def min_dot_size(target: GPUTarget):
 
 
 def get_ptxas(arch: int) -> knobs.NvidiaTool:
-    # Hopper register-input WGMMA requires the liveness fix in ptxas 13.3.
-    return knobs.nvidia.ptxas_blackwell if arch >= 90 else knobs.nvidia.ptxas
+    return knobs.nvidia.ptxas_blackwell if arch >= 100 else knobs.nvidia.ptxas
 
 
 @functools.lru_cache()

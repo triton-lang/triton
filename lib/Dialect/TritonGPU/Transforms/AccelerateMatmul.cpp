@@ -382,8 +382,8 @@ static bool canWidenKWidthForJoin(int loadBitWidth,
   });
 }
 
-// Finds the load width used for operand packing.
-static int computeOrigBitWidth(Value x, bool packFloatUpcasts = true) {
+// Finds the bitwidth with which the value x is loaded
+static int computeOrigBitWidth(Value x) {
   SetVector<Operation *> slice;
   mlir::BackwardSliceOptions opt;
   opt.omitBlockArguments = true;
@@ -401,8 +401,6 @@ static int computeOrigBitWidth(Value x, bool packFloatUpcasts = true) {
     if (isa<LoadOp, DescriptorLoadLikeOpInterface>(op)) {
       if (auto tensorTy =
               dyn_cast<RankedTensorType>(op->getResultTypes().front())) {
-        if (!packFloatUpcasts && isa<FloatType>(tensorTy.getElementType()))
-          continue;
         origBitWidth =
             std::min<int>(origBitWidth, tensorTy.getElementTypeBitWidth());
       }
@@ -562,13 +560,8 @@ public:
           mmaResult.newAcc, nullptr, dotOp.getInputPrecision(),
           dotOp.getMaxNumImpreciseAcc(), false);
     } else {
-      // Floating promotions retain the compute type's reduction order.
-      // Integer and packed FP4 sources can still use wider operand packing.
       int minBitwidth =
-          oldAType.getElementType().isF32()
-              ? 32
-              : std::min(computeOrigBitWidth(a, /*packFloatUpcasts=*/false),
-                         computeOrigBitWidth(b, /*packFloatUpcasts=*/false));
+          std::min(computeOrigBitWidth(a), computeOrigBitWidth(b));
       // Let K = getShapePerCTA(oldAType).back() and computeBitwidth be the
       // dot operand bitwidth. Since kWidth = max(32 / minBitwidth, 1),
       // MMAv2's four K lanes require 4 * max(32 / minBitwidth, 1) <= K.
