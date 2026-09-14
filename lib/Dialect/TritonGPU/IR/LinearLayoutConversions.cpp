@@ -1320,9 +1320,11 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
 
 LinearLayout
 PartitionedSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
-  assert(!isa<PaddedSharedEncodingAttr>(getPartitionLayout()) &&
-         "toLinearLayout does not support partitioned layouts wrapping "
-         "padded layouts; use paddedLinearLayout instead");
+  if (isa<PaddedSharedEncodingAttr>(getPartitionLayout())) {
+    llvm::report_fatal_error(
+        "toLinearLayout does not support partitioned layouts wrapping padded "
+        "layouts; use paddedLinearLayout instead");
+  }
   return partitionedSharedToLinearLayout(shape, *this);
 }
 
