@@ -3440,6 +3440,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %1 = tt.precise_sqrt %arg0 : tensor<256xf32, #blocked>
     tt.return
   }
+
+  // CHECK-LABEL: precise_math_f64
+  tt.func public @precise_math_f64(%arg0 : tensor<256xf64, #blocked>, %arg1 : tensor<256xf64, #blocked>) {
+    // CHECK: llvm.call_intrinsic "llvm.nvvm.div.rn.d"
+    %0 = tt.precise_divf %arg0, %arg1 : tensor<256xf64, #blocked>
+    tt.return
+  }
 }
 
 // -----

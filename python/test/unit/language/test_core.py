@@ -1309,6 +1309,25 @@ def test_fdiv_ieee_rounding(device):
     assert torch.all(out_ieee == out_rn)  # bitwise exact
 
 
+@pytest.mark.interpreter
+def test_fdiv_ieee_rounding_fp64(device):
+
+    @triton.jit
+    def kernel(X, Y, OUT, BLOCK: tl.constexpr):
+        offs = tl.arange(0, BLOCK)
+        x = tl.load(X + offs)
+        y = tl.load(Y + offs)
+        tl.store(OUT + offs, tl.math.fdiv(x, y, ieee_rounding=True))
+
+    shape = (128, )
+    x = torch.randn(shape, dtype=torch.float64, device=device)
+    y = torch.randn(shape, dtype=torch.float64, device=device) + 1e-6
+    out = torch.zeros(shape, dtype=torch.float64, device=device)
+
+    kernel[(1, )](x, y, out, BLOCK=shape[0], num_ctas=1)
+    assert torch.all(out == x / y)  # bitwise exact
+
+
 # ----------------
 # test abs
 # ----------------
