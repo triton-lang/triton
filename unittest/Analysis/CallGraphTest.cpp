@@ -11,8 +11,7 @@
 
 namespace mlir {
 
-static OwningOpRef<ModuleOp> parseModule(MLIRContext &context,
-                                         StringRef ir) {
+static OwningOpRef<ModuleOp> parseModule(MLIRContext &context, StringRef ir) {
   context.loadDialect<func::FuncDialect>();
   return parseSourceString<ModuleOp>(ir, &context);
 }
