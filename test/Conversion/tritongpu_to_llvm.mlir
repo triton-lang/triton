@@ -2210,7 +2210,9 @@ tt.func @test_get_program_id(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
   %blockidx = tt.get_program_id x: i32
   %blockidy = tt.get_program_id y: i32
   %blockidz = tt.get_program_id z : i32
-  // CHECK: clusterid.x
+  // CHECK-DAG: [[CLUSTER_WIDTH:%.*]] = llvm.mlir.constant(4 : i32) : i32
+  // CHECK-DAG: [[CTA_X:%.*]] = nvvm.read.ptx.sreg.ctaid.x : i32
+  // CHECK: llvm.udiv [[CTA_X]], [[CLUSTER_WIDTH]] : i32
   // CHECK: clusterid.y
   // CHECK: clusterid.z
   %v0 = arith.addi %blockidx, %blockidy : i32
