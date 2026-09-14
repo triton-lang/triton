@@ -848,7 +848,7 @@ _MIXED_MATMUL_OUTPUT_CASES = [
     for dtype in (torch.float8_e4m3fn, torch.float8_e5m2)
     if dtype in _supported_float_dtypes()
 ] + [
-    # Cover automatic split-K and irregular shapes with FP8 weights.
+    # Cover automatic split-K and the smaller regular tile for FP8 weights.
     (torch.bfloat16, dtype, torch.bfloat16, out_dtype, shape, {}, 1)
     for dtype, (out_dtype, shape) in itertools.product(
         (torch.float8_e4m3fn, torch.float8_e5m2), [
