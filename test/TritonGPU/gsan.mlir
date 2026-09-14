@@ -23,7 +23,7 @@ module attributes {"ttg.num-warps" = 1 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: tt.func @instrumented_atomic_poll
   tt.func @instrumented_atomic_poll(%ptr: !tt.ptr<i32>, %expected: i32) {
-    // CHECK: %[[MATCHED:.*]] = tt.atomic_poll acquire, sys, %[[PTR:.*]], %{{.*}}
+    // CHECK: %[[MATCHED:.*]] = tt.atomic_poll acquire, sys, %[[PTR:.*]], %{{.*}} : !tt.ptr<i32>, i32 -> i1
     // CHECK-NEXT: tti.experimental_gsan_atomic_poll acquire, sys, %[[PTR]], %[[MATCHED]] : !tt.ptr<i32>
     // CHECK-NEXT: ttg.barrier local
     %matched = tt.atomic_poll acquire, sys, %ptr, %expected : !tt.ptr<i32>, i32 -> i1
