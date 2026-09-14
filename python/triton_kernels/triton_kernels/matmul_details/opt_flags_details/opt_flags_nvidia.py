@@ -1,6 +1,7 @@
 import torch
 import triton
 from triton_kernels import target_info
+from triton_kernels.matmul_details._common import is_unscaled_mixed_fp32
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 from triton_kernels.tensor import FP4, FP8_E4M3FN, FP16, FP32, BF16, Tensor
 from triton_kernels.tensor_details.layout import HopperMXScaleLayout
@@ -80,8 +81,11 @@ def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_d
     lhs_width = lhs_dtype.bitwidth
     rhs_width = rhs_dtype.bitwidth
     has_native_mxfp = target_info.cuda_capability_geq(10, 0)
-    if (not has_native_mxfp and target_info.cuda_capability_geq(9, 0)
-            and is_unscaled_mixed_fp8(precision_config, lhs_dtype, rhs_dtype)):
+    if is_unscaled_mixed_fp32(precision_config, lhs_dtype, rhs_dtype):
+        # Match FP32 x FP32's reduction order, including automatic split-K.
+        block_k = 32
+    elif (not has_native_mxfp and target_info.cuda_capability_geq(9, 0)
+          and is_unscaled_mixed_fp8(precision_config, lhs_dtype, rhs_dtype)):
         # Limit register pressure from Hopper's FP8-to-16-bit conversion.
         block_k = 64
     else:
@@ -163,6 +167,7 @@ def compute_num_stages(
     if swap_xw is None:
         swap_xw = compute_swap_xw(precision_config, block_m, is_persistent, lhs_dtype, rhs_dtype)
     is_mixed_fp8 = is_unscaled_mixed_fp8(precision_config, lhs_dtype, rhs_dtype)
+    is_mixed_fp32 = is_unscaled_mixed_fp32(precision_config, lhs_dtype, rhs_dtype)
     act_size = lhs_dtype.bitwidth / 8
     weight_size = rhs_dtype.bitwidth / 8
     has_native_mxfp = target_info.cuda_capability_geq(10, 0)
@@ -183,11 +188,20 @@ def compute_num_stages(
     device_props = torch.cuda.get_device_properties(0)
     smem_capacity = device_props.shared_memory_per_block_optin
     smem_capacity //= occupancy_target
-    if is_mixed_fp8 and (lhs_dtype if swap_xw else rhs_dtype) == FP8_E4M3FN:
-        # A computed RHS needs one widened tile in addition to its input ring.
-        # The regular pipeline replaces one raw FP8 slot with that widened tile.
-        rhs_elements = block_k * (block_m if swap_xw else block_n)
-        smem_capacity -= rhs_elements * (2 if is_persistent else 1)
+    if is_mixed_fp8 or is_mixed_fp32:
+        rhs_size = act_size if swap_xw else weight_size
+        dot_size = max(act_size, weight_size)
+        if is_mixed_fp32 and is_persistent and not has_native_mxfp and not precision_config.allow_tf32:
+            # IEEE dots redistribute both operands through shared memory.
+            # One narrow LHS tile is already included in the stage estimate.
+            lhs_size = weight_size if swap_xw else act_size
+            lhs_elements = block_k * (block_n if swap_xw else block_m)
+            smem_capacity -= int(lhs_elements * (dot_size - lhs_size))
+        if rhs_size < dot_size:
+            # A computed RHS needs one widened tile in addition to its input ring.
+            # The regular pipeline replaces one input slot with that widened tile.
+            rhs_elements = block_k * (block_m if swap_xw else block_n)
+            smem_capacity -= int(rhs_elements * (dot_size if is_persistent else dot_size - rhs_size))
     if has_native_mxfp:
         # 4-bit e2m1 operands are padded 2x
         # https://docs.nvidia.com/cuda/parallel-thread-execution/#packing-format-used-for-matrix-a-and-b-by-kind-mxf8f6f4-in-shared-memory
@@ -253,10 +267,9 @@ def compute_num_stages(
         smem_capacity -= epilogue_smem
         if x_transpose:
             smem_capacity -= int(block_m * block_k * act_size)
-        if rhs_dtype == FP32 and not w_transpose:
-            # For fp32 B, a non-transposed input requires a transpose after its
-            # TMA load before MMA. Persistent lowering materializes one extra
-            # BLOCK_K x BLOCK_N tile for that conversion.
+        if rhs_dtype == FP32 and (not w_transpose or has_native_mxfp and not precision_config.allow_tf32):
+            # FP32 B needs a layout-conversion tile for row-major MMA inputs
+            # and for Blackwell IEEE dots in either memory order.
             smem_capacity -= int(block_k * block_n * weight_size)
     if is_persistent and not has_native_mxfp and epilogue_reduction_n > 1:
         # Hopper fused reductions materialize an additional reduced-N output
