@@ -125,6 +125,10 @@ private:
     if (visited.count(funcOp)) {
       llvm::report_fatal_error("Cycle detected in call graph");
     }
+    // Mark the current recursion path before descending: without this the
+    // cycle check above can never fire, and a cyclic call graph recurses
+    // until the stack gives out instead of reporting the cycle (#11726).
+    visited.insert(funcOp);
     if constexpr (UpdateNodeOrder == WalkOrder::PreOrder) {
       updateNodeFn(funcOp);
     }
