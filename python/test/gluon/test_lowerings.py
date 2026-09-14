@@ -1042,6 +1042,7 @@ def _histogram_cases():
     for src_cga, dst_cga in [
         ([[1]], [[1]]),
         ([[0], [1]], [[0], [0]]),
+        ([[0], [0]], [[1], [2]]),
     ]:
         src = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0], cga_layout=src_cga)
         dst = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0], cga_layout=dst_cga)
