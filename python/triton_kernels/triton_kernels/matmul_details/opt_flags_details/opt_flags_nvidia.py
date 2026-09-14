@@ -292,10 +292,6 @@ def compute_num_stages(
         smem_capacity -= int(block_m * acc_block_n * out_itemsize)
     smem_capacity = max(smem_capacity, 0)
     max_stages = 5 if rhs_dtype == FP4 else 4  # maybe 5 everywhere; just haven't tested
-    if (compute_dtype == FP32 and not precision_config.allow_tf32 and (rhs_dtype if swap_xw else lhs_dtype) == FP32
-            and (lhs_dtype if swap_xw else rhs_dtype) != FP32):
-        # Mixed load widths make the pipelined IEEE RHS spill registers.
-        max_stages = 1
     b_mx_scale_layout = None if not isinstance(precision_config.b_mx_scale,
                                                Tensor) else precision_config.b_mx_scale.storage.layout
     if (is_persistent and rhs_dtype == FP4 and isinstance(b_mx_scale_layout, HopperMXScaleLayout)
