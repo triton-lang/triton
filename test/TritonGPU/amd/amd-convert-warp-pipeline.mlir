@@ -775,13 +775,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // ---- Flat pipeline with pre-existing barrier between stages ----
 //
-// An async_wait between flat pipeline stages is preserved before the
-// boundary's single synchronization barrier.
+// An async_wait between flat pipeline stages is preserved. The AMD backend
+// expands the wait with an s_barrier, so this pass must not add another one.
 //
 // Stage layout: stage0 -- async_wait -- stage1 -- (nothing) -- stage2
 //
 // Expected between stage0 and stage1:
-//   sched_barrier + async_wait + s_barrier + sched_barrier
+//   sched_barrier + async_wait + sched_barrier
 // Expected between stage1 and stage2:
 //   sched_barrier + s_barrier + sched_barrier
 
@@ -822,13 +822,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // Stage 0 ops.
 // CHECK: tt.store
 //
-// Between stage 0 and 1: existing async_wait followed by one s_barrier.
+// Between stage 0 and 1: existing async_wait, with no duplicate s_barrier.
 // The per-mem-op barrier (non_mem_non_sideeffect) follows stage 0's store; the
 // cluster barrier (none) is next.
 // CHECK: rocdl.sched.barrier non_mem_non_sideeffect
 // CHECK-NEXT: rocdl.sched.barrier none
 // CHECK-NEXT: amdg.async_wait
-// CHECK-NEXT: rocdl.s.barrier
 // CHECK-NEXT: rocdl.sched.barrier none
 // Stage 1 ops.
 // CHECK: tt.store
@@ -1792,11 +1791,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // Stage 1: write WAW buffer, read WAR buffer.
 // CHECK: ttg.local_store
 // CHECK: ttg.local_load
-// The existing async wait does not provide an LDS fence. bars[2] therefore
-// adds a LOCAL barrier after it for the concurrent stage0 -> stage2 RAW.
+// The AMD backend expands the existing async wait with an s_barrier, which
+// covers the concurrent stage0 -> stage2 RAW without another LOCAL barrier.
 // CHECK: rocdl.sched.barrier none
 // CHECK-NEXT: amdg.async_wait
-// CHECK-NEXT: ttg.barrier local
 // CHECK-NEXT: rocdl.sched.barrier none
 // Stage 2: read RAW buffer.
 // CHECK: ttg.local_load

@@ -269,6 +269,14 @@ static void emitClusterPriority(OpBuilder &r, Location loc,
   }
 }
 
+// GFX1250 async waits expand to the wait instruction followed by an
+// s_barrier. Do not add a second synchronization barrier at the same boundary.
+static bool waitIncludesBarrier(Operation *op) {
+  return isa<triton::amdgpu::AsyncWaitOp,
+             triton::amdgpu::AsyncTDMWait,
+             triton::amdgpu::AsyncTDMIntrinsicWait>(op);
+}
+
 // Materialize a boundary containing a pre-existing wait or barrier. Every
 // boundary has exactly one synchronization barrier; waits precede it, while an
 // existing barrier is reused or upgraded with the required LDS fence.
@@ -297,7 +305,8 @@ static void materializeExistingBoundary(OpBuilder &b, Location loc,
   ROCDL::SchedBarrier::create(b, loc, ROCDL::SchedGroupMask::none);
   b.setInsertionPointAfter(existingOp);
   if (!isa<ROCDL::BarrierOp, gpu::BarrierOp, triton::gpu::BarrierOp>(
-          existingOp)) {
+          existingOp) &&
+      !waitIncludesBarrier(existingOp)) {
     if (needLocal)
       triton::gpu::BarrierOp::create(b, loc, triton::gpu::AddrSpace::Local);
     else

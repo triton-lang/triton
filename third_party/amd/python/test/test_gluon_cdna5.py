@@ -17,6 +17,36 @@ from triton._C.libtriton.gluon_ir import make_cga_layout
 
 
 @gluon.jit
+def tdm_wait_only_kernel():
+    ttgl.amd.cdna5.tdm.async_wait(0)
+
+
+@gluon.jit
+def async_copy_wait_only_kernel():
+    ttgl.amd.cdna5.async_copy.wait_group(0)
+
+
+@pytest.mark.parametrize(
+    "kernel,wait_instruction",
+    [
+        (tdm_wait_only_kernel, "s_wait_tensorcnt"),
+        (async_copy_wait_only_kernel, "s_wait_asynccnt"),
+    ],
+)
+def test_async_wait_emits_barrier(kernel, wait_instruction):
+    compiled = triton.compile(
+        gluon._runtime.GluonASTSource(kernel, {}, {}),
+        target=GPUTarget("hip", "gfx1250", 32),
+    )
+    pattern = (
+        rf"{wait_instruction} 0x0\s+"
+        r"s_barrier_signal -1\s+"
+        r"s_barrier_wait -1"
+    )
+    assert re.search(pattern, compiled.asm["amdgcn"])
+
+
+@gluon.jit
 def gemm_kernel(a_ptr, b_ptr, c_ptr,  #
                 M, N, K,  #
                 stride_am, stride_ak,  #
