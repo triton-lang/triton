@@ -535,13 +535,14 @@ struct FpToFpOpConversion
       SmallVector<Value> outVals;
       for (const auto &operand : operands) {
         Value value = operand[0];
-        if (srcElementType.isF16()) {
-          outVals.push_back(convertFp16ToFp8E5M2(loc, rewriter, value));
-        } else {
-          if (srcElementType.isBF16())
-            value = b.fpext(f32_ty, value);
-          outVals.push_back(convertFp32ToFp8E5M2(loc, rewriter, value));
+        if (srcElementType.isBF16()) {
+          // BF16 is exact in FP16 throughout E5M2's nonzero rounding range.
+          value = convertFp32ToFp16(loc, rewriter, b.fpext(f32_ty, value),
+                                    RoundingMode::RTNE);
         }
+        outVals.push_back(srcElementType.isF32()
+                              ? convertFp32ToFp8E5M2(loc, rewriter, value)
+                              : convertFp16ToFp8E5M2(loc, rewriter, value));
       }
       return outVals;
     }
