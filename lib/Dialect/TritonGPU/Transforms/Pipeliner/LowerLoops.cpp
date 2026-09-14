@@ -1,6 +1,6 @@
-#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -15,6 +15,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/StrUtil.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -278,32 +279,84 @@ struct LoadGroupInfo {
   bool hasTMALoad = false;
 };
 
-struct LoadConsumerInfo {
-  bool hasTwoCTAMMA = false;
-  bool hasOtherConsumers = false;
+struct TMALoadWaitRequirements {
+  bool needsPairWait = false;
+  bool needsAllCTAWait = false;
 };
 
-static LoadConsumerInfo getLoadConsumerInfo(Operation *loadOp) {
-  LoadConsumerInfo info;
-  info.hasOtherConsumers = mustLoadToRegisters(loadOp);
-  SetVector<Operation *> worklist;
-  worklist.insert(loadOp->user_begin(), loadOp->user_end());
-  for (unsigned i = 0; i < worklist.size(); ++i) {
-    Operation *op = worklist[i];
-    auto mma = dyn_cast<ttng::MMAv5OpInterface>(op);
-    if (mma) {
-      info.hasTwoCTAMMA |= mma.getTwoCtas();
-      info.hasOtherConsumers |= !mma.getTwoCtas();
-      continue;
+// Follow the operand-to-argument/result mappings rather than treating a region
+// or branch as a consumer. This also covers explicit warp-specialization
+// captures through WarpSpecializePartitionsOp's RegionBranchOpInterface.
+static bool followControlFlowOperand(OpOperand &use,
+                                     SetVector<Value> &worklist) {
+  Operation *op = use.getOwner();
+  if (auto branch = dyn_cast<BranchOpInterface>(op)) {
+    if (auto argument =
+            branch.getSuccessorBlockArgument(use.getOperandNumber())) {
+      worklist.insert(*argument);
+      return true;
     }
-    // Allocations and views forward the loaded data; completion waits only
-    // track its lifetime. Other operations can read it in every CTA.
-    if (!isa<ttg::LocalAllocOp, ttng::WaitBarrierOp>(op) &&
-        !op->hasTrait<OpTrait::MemDescViewTrait>())
-      info.hasOtherConsumers = true;
-    worklist.insert(op->user_begin(), op->user_end());
+    return false;
   }
-  return info;
+
+  auto followSuccessor = [&](OperandRange operands, ValueRange inputs) {
+    unsigned index = use.getOperandNumber();
+    if (operands.empty() || index < operands.getBeginOperandIndex() ||
+        index >= operands.getBeginOperandIndex() + operands.size())
+      return false;
+    worklist.insert(inputs[index - operands.getBeginOperandIndex()]);
+    return true;
+  };
+  SmallVector<RegionSuccessor> successors;
+  bool forwarded = false;
+  if (auto branch = dyn_cast<RegionBranchOpInterface>(op)) {
+    branch.getSuccessorRegions(RegionBranchPoint::parent(), successors);
+    for (RegionSuccessor successor : successors)
+      forwarded |= followSuccessor(branch.getEntrySuccessorOperands(successor),
+                                   branch.getSuccessorInputs(successor));
+  } else if (auto terminator =
+                 dyn_cast<RegionBranchTerminatorOpInterface>(op)) {
+    // ReturnLike can provide this interface even without a region-branch
+    // parent.
+    auto parent = dyn_cast<RegionBranchOpInterface>(op->getParentOp());
+    if (!parent)
+      return false;
+    parent.getSuccessorRegions(RegionBranchPoint(terminator), successors);
+    for (RegionSuccessor successor : successors)
+      forwarded |= followSuccessor(terminator.getSuccessorOperands(successor),
+                                   parent.getSuccessorInputs(successor));
+  }
+  return forwarded;
+}
+
+static TMALoadWaitRequirements getTMALoadWaitRequirements(Operation *loadOp) {
+  TMALoadWaitRequirements requirements;
+  requirements.needsAllCTAWait = mustLoadToRegisters(loadOp);
+  SetVector<Value> worklist;
+  worklist.insert(loadOp->result_begin(), loadOp->result_end());
+  for (unsigned i = 0; i < worklist.size(); ++i) {
+    for (OpOperand &use : worklist[i].getUses()) {
+      Operation *op = use.getOwner();
+      if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
+        requirements.needsPairWait |= mma.getTwoCtas();
+        requirements.needsAllCTAWait |= !mma.getTwoCtas();
+        continue;
+      }
+      if (followControlFlowOperand(use, worklist))
+        continue;
+      // Descriptor selects, allocations and views forward the loaded data;
+      // completion waits only track its lifetime. Tensor selects and other
+      // operations can read the data in every CTA.
+      auto select = dyn_cast<arith::SelectOp>(op);
+      bool selectsDescriptor =
+          select && isa<ttg::MemDescType>(select.getType());
+      if (!isa<ttg::LocalAllocOp, ttng::WaitBarrierOp>(op) &&
+          !op->hasTrait<OpTrait::MemDescViewTrait>() && !selectsDescriptor)
+        requirements.needsAllCTAWait = true;
+      worklist.insert(op->result_begin(), op->result_end());
+    }
+  }
+  return requirements;
 }
 
 static int getMMAv5CompletionBarrierCount(ttng::MMAv5OpInterface mma) {
@@ -435,19 +488,18 @@ void createTMABarrierAndWait(
     int sizeInBytes = 0;
     int numBuffers = asyncLoads[group[0]].stageDiff;
     const LoadGroupInfo loadGroup = loadGroups.find(numBuffers)->second;
-    bool hasTwoCTAMMAUser = false;
-    bool hasOtherConsumers = false;
+    TMALoadWaitRequirements waitRequirements;
     for (Operation *op : group) {
       auto tensorTy = cast<RankedTensorType>(op->getResultTypes()[0]);
       int loadSize = product(getShapePerCTA(tensorTy));
       sizeInBytes += loadSize * tensorTy.getElementTypeBitWidth() / 8;
-      auto consumers = getLoadConsumerInfo(op);
-      hasTwoCTAMMAUser |= consumers.hasTwoCTAMMA;
-      hasOtherConsumers |= consumers.hasOtherConsumers;
+      auto loadRequirements = getTMALoadWaitRequirements(op);
+      waitRequirements.needsPairWait |= loadRequirements.needsPairWait;
+      waitRequirements.needsAllCTAWait |= loadRequirements.needsAllCTAWait;
     }
 
     Value barrierAlloc = triton::createBarrierAlloc(
-        forOp, numBuffers, /*arriveCount=*/1, hasTwoCTAMMAUser);
+        forOp, numBuffers, /*arriveCount=*/1, waitRequirements.needsPairWait);
     OpBuilderForStage builder(forOp.getLoc(), group[0], schedule);
     Value barrier = triton::createSingleBufferView(builder, barrierAlloc,
                                                    loadGroup.insertIdx);
@@ -462,13 +514,13 @@ void createTMABarrierAndWait(
     auto wait =
         ttng::WaitBarrierOp::create(builder, barrierViewWait, loadGroup.phase);
     Operation *waitOp = wait;
-    if (hasTwoCTAMMAUser && hasOtherConsumers) {
+    if (waitRequirements.needsPairWait && waitRequirements.needsAllCTAWait) {
       // Only the leader waits on a pair-shared barrier. Publish completion to
       // the other CTAs before any ordinary consumer reads the loaded data.
       waitOp = ttng::ClusterBarrierOp::create(builder);
     }
 
-    // Update the async loads info.
+    // Update the async loads requirements.
     for (Operation *op : group) {
       asyncLoads[op].barrier = barrier;
       asyncLoads[op].waitOp = waitOp;
