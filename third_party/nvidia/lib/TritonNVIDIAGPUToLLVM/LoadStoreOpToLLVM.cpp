@@ -1186,6 +1186,10 @@ struct AsyncCopyGlobalToLocalOpConversion
       auto *srcSize = copySize;
       if (hasMask) {
         // A masked copy still writes zeros to its shared-memory destination.
+        // XXX(Keren): Always assume other = 0 for now.
+        // When 'other != 0' is supported, we will need to fold the
+        // op.getMask() and redundantDataMask() into the same predicate, the
+        // way it is done for LoadOp.
         auto ignoreSrc = b.xor_(maskElem, b.true_val());
         srcSize = ptxBuilder.newOperand(ignoreSrc, "b");
       }
