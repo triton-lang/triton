@@ -4027,7 +4027,6 @@ def test_shared_gather(N, M):
     torch.testing.assert_close(output, expected)
 
 
-@pytest.mark.skipif(is_hip(), reason="AMD lowering of pointer elements in shared memory is added separately")
 @pytest.mark.parametrize("write", ["local_alloc", "local_store", "local_scatter"])
 @pytest.mark.parametrize("read", ["local_load", "local_gather"])
 def test_shared_memory_pointers(write, read, device):
