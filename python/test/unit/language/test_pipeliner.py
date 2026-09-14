@@ -153,14 +153,6 @@ def mxfp_to_bf16_kernel(
         if e_bits == 5 and m_bits == 2:
             x_f8 = x.to(tl.float8e5, bitcast=True)
             x_bf16 = x_f8.to(tl.bfloat16)
-            # Preserve infs and nans. FIXME Fp8E5M2_to_Bf16 doesn't preserve them!
-            non_finite_mask: tl.constexpr = ((1 << e_bits) - 1) << m_bits
-            non_finite_mask_bf16: tl.constexpr = ((1 << 8) - 1) << 7
-            x_bf16 = tl.where(
-                x & non_finite_mask == non_finite_mask,
-                (x_bf16.to(tl.uint16, bitcast=True) | non_finite_mask_bf16).to(tl.bfloat16, bitcast=True),
-                x_bf16,
-            )
         else:
             tl.static_assert(e_bits == 4 and m_bits == 3)
             x_f8 = x.to(tl.float8e4nv, bitcast=True)
@@ -246,8 +238,7 @@ def test_pipeline_matmul(scale, device):
             b = torch.randn((K, N), device=device, dtype=torch.bfloat16)
         else:
             b = torch.randint(256, (K, N), device=device, dtype=torch.uint8)
-            # e5m2 has too many non-finite values when sampled uniformly (1 / 32) and
-            # Fp8E5M2_to_Bf16 doesn't preserve NaNs (fixme)
+            # e5m2 has too many non-finite values when sampled uniformly (1 / 32).
             finite = torch.arange(K * N, device=device, dtype=torch.uint8).reshape(K, N) % 0x7C
             b = torch.where(b & 0x7C == 0x7C, finite | (0x80 & b), b)
         output = torch.empty((M, N), dtype=torch.bfloat16, device=device)

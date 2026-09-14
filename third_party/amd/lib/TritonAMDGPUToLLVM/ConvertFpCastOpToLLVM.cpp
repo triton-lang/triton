@@ -502,10 +502,27 @@ SmallVector<Value> OcpF8ToBf16SW(Location loc,
   out0 = b.bitcast(out0, bf16x2VecTy);
   out1 = b.bitcast(out1, bf16x2VecTy);
 
-  return {b.extract_element(bf16_ty, out0, b.i32_val(0)),
-          b.extract_element(bf16_ty, out0, b.i32_val(1)),
-          b.extract_element(bf16_ty, out1, b.i32_val(0)),
-          b.extract_element(bf16_ty, out1, b.i32_val(1))};
+  SmallVector<Value> results = {b.extract_element(bf16_ty, out0, b.i32_val(0)),
+                                b.extract_element(bf16_ty, out0, b.i32_val(1)),
+                                b.extract_element(bf16_ty, out1, b.i32_val(0)),
+                                b.extract_element(bf16_ty, out1, b.i32_val(1))};
+  // Exponent rebiasing above only covers finite inputs.
+  constexpr bool isE4M3 = std::is_same_v<SrcFPType, Float8E4M3FNType>;
+  for (size_t i = 0; i < results.size(); ++i) {
+    Value abs = b.and_(v[i], b.i8_val(0x7F));
+    Value isSpecial = b.icmp_uge(abs, b.i8_val(isE4M3 ? 0x7F : 0x7C));
+    Value special;
+    if constexpr (isE4M3)
+      special = b.i16_val(0x7FC0);
+    else
+      special = b.select(b.icmp_eq(abs, b.i8_val(0x7C)), b.i16_val(0x7F80),
+                         b.i16_val(0x7FC0));
+    Value sign =
+        b.shl(b.zext(i16_ty, b.and_(v[i], b.i8_val(0x80))), b.i16_val(8));
+    special = b.bitcast(b.or_(special, sign), bf16_ty);
+    results[i] = b.select(isSpecial, special, results[i]);
+  }
+  return results;
 }
 
 Value Fp32ToFp16rtneOneValue(Location loc, RewriterBase &rewriter,
