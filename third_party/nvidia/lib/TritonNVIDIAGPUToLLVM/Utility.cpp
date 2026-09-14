@@ -106,9 +106,9 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
       return b.udiv(ctaId, b.i32_val(numCTAs));
     }
     case ProgramIDDim::Y:
-      return NVVM::ClusterIdYOp::create(rewriter, loc, i32_ty);
+      return NVVM::BlockIdYOp::create(rewriter, loc, i32_ty);
     case ProgramIDDim::Z:
-      return NVVM::ClusterIdZOp::create(rewriter, loc, i32_ty);
+      return NVVM::BlockIdZOp::create(rewriter, loc, i32_ty);
     }
   }
   llvm_unreachable("invalid axis");
