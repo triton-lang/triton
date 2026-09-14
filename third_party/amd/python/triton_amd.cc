@@ -3,6 +3,7 @@
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "amd/include/hipblas_instance.h"
 #include "amd/include/hipblas_types.h"
+#include "dylib_utils.h"
 #include "lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "lld/Common/Driver.h"
 #include "mlir/Pass/PassManager.h"
@@ -44,8 +45,6 @@
 #include <stdexcept>
 
 namespace py = nanobind;
-
-void init_triton_amd_loader(py::module_ &m);
 
 namespace {
 llvm::Triple getAMDTargetTriple(const std::string &arch) {

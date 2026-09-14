@@ -2,10 +2,11 @@
 #define _GNU_SOURCE
 #endif
 
-#include <nanobind/nanobind.h>
-
+#include "dylib_utils.h"
 #include <cstddef>
 #include <cstring>
+#include <nanobind/nanobind.h>
+#include <optional>
 #include <stdexcept>
 
 #if defined(__linux__)
@@ -54,31 +55,36 @@ int findLoadedLibraryCallback(dl_phdr_info *info, size_t,
 
 } // namespace
 
+std::optional<std::string> findLoadedLibrary(const std::string &libraryName) {
+#if defined(__linux__)
+  FindLoadedLibraryData data{};
+  data.libraryName = libraryName.c_str();
+  dl_iterate_phdr(findLoadedLibraryCallback, &data);
+  if (data.pathTooLong)
+    throw std::runtime_error("loaded library path exceeds 4096 bytes");
+  if (!data.found)
+    return std::nullopt;
+  return std::string(data.path);
+#else
+  return std::nullopt;
+#endif
+}
+
 void init_triton_amd_loader(py::module_ &m) {
   m.def(
       "find_loaded_library",
       [](const char *libraryName) -> py::object {
-#if defined(__linux__)
-        FindLoadedLibraryData data{};
-        data.libraryName = libraryName;
-
+        std::optional<std::string> result;
         {
           py::gil_scoped_release release;
-          dl_iterate_phdr(findLoadedLibraryCallback, &data);
+          result = findLoadedLibrary(libraryName);
         }
-
-        if (data.pathTooLong)
-          throw std::runtime_error("loaded library path exceeds 4096 bytes");
-        if (!data.found)
+        if (!result)
           return py::none();
-        PyObject *path = PyUnicode_DecodeFSDefault(data.path);
+        PyObject *path = PyUnicode_DecodeFSDefault(result->c_str());
         if (path == nullptr)
           throw py::python_error();
         return py::steal<py::object>(path);
-#else
-        (void)libraryName;
-        return py::none();
-#endif
       },
       py::arg("library_name"),
       "Return the path of the first loaded library matching the name.");
