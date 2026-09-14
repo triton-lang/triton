@@ -197,9 +197,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // GFX950: rocdl.cvt.scalef32.pk.bf16.bf8 %[[VR5]][true]
     // GFX950: rocdl.cvt.scalef32.pk.bf16.bf8 %[[VR6:.*]][false]
     // GFX950: rocdl.cvt.scalef32.pk.bf16.bf8 %[[VR6]][true]
-    // The software conversion preserves E5M2 infinities and NaNs.
-    // SOFTWARE-COUNT-8: llvm.icmp "uge" {{.*}} : i8
-    // SOFTWARE: llvm.select {{.*}} : i1, bf16
+    // The software conversion widens exactly through FP16, then truncates FP32.
+    // SOFTWARE: llvm.fpext {{.*}} : f16 to f32
+    // SOFTWARE: llvm.lshr
+    // SOFTWARE: llvm.trunc {{.*}} : i32 to i16
+    // SOFTWARE: llvm.bitcast {{.*}} : i16 to bf16
     %2 = tt.fp_to_fp %arg0 : tensor<8x8xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
 
     // GFX950: rocdl.cvt.scalef32.pk.f32.fp8 %[[VR7:.*]][false]
