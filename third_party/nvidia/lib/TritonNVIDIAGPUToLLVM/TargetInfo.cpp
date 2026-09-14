@@ -386,7 +386,10 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
     SmallVector<Value> vals = unpackLLVector(
         loc, loadDShared(rewriter, loc, ptr, ctaId, newLoadTy, pred), rewriter);
     for (Value &v : vals) {
-      v = b.bitcast(v, elemTy);
+      if (isa<LLVM::LLVMPointerType>(elemTy))
+        v = b.inttoptr(elemTy, v);
+      else
+        v = b.bitcast(v, elemTy);
     }
     return packLLVector(loc, vals, rewriter);
   }

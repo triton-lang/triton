@@ -4024,6 +4024,46 @@ def test_shared_gather(N, M):
     torch.testing.assert_close(output, expected)
 
 
+@pytest.mark.skipif(is_hip(), reason="AMD lowering of pointer elements in shared memory is added separately")
+@pytest.mark.parametrize("write", ["local_alloc", "local_store", "local_scatter"])
+@pytest.mark.parametrize("read", ["local_load", "local_gather"])
+def test_shared_memory_pointers(write, read, device):
+
+    @gluon.jit
+    def kernel(src, reversed_idx, out, BLOCK: ttgl.constexpr, layout: ttgl.constexpr, WRITE: ttgl.constexpr,
+               READ: ttgl.constexpr):
+        offsets = ttgl.arange(0, BLOCK, layout=layout)
+        pointers = src + offsets
+        shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0])
+
+        if WRITE == "local_alloc":
+            smem = ttgl.allocate_shared_memory(pointers.dtype, [BLOCK], shared_layout, pointers)
+        elif WRITE == "local_store":
+            smem = ttgl.allocate_shared_memory(pointers.dtype, [BLOCK], shared_layout)
+            smem.store(pointers)
+        else:
+            smem = ttgl.allocate_shared_memory(pointers.dtype, [BLOCK], shared_layout)
+            smem.scatter(pointers, ttgl.load(reversed_idx + offsets), axis=0)
+
+        if READ == "local_load":
+            result = smem.load(layout)
+        else:
+            result = smem.gather(ttgl.load(reversed_idx + offsets), axis=0)
+
+        ttgl.store(out + offsets, ttgl.load(result))
+
+    block = 4 * THREADS_PER_WARP
+    layout = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4], order=[0])
+    values = torch.arange(block, dtype=torch.int32, device=device)
+    output = torch.empty_like(values)
+    reversed_idx = torch.arange(block - 1, -1, -1, dtype=torch.int32, device=device)
+    kernel[(1, )](values, reversed_idx, output, block, layout, write, read, num_warps=4)
+
+    # Only one of gather/scatter reverses the input. Both cancels out.
+    expected = values.flip(0) if (write == "local_scatter") != (read == "local_gather") else values
+    assert torch.equal(output, expected)
+
+
 @gluon.jit
 def shared_gather_scatter_two_ctas_kernel(
     inp,
