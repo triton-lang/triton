@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -split-input-file -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-pipeline -canonicalize | FileCheck --dump-input-context=50 %s
-// RUN: triton-opt %s -split-input-file -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-pipeline | FileCheck %s --check-prefix=CHECK-NOCANON
+// RUN: triton-opt %s -split-input-file -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-pipeline -canonicalize | FileCheck --check-prefixes=CHECK,COMPUTED --dump-input-context=50 %s
+// RUN: triton-opt %s -split-input-file -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-pipeline | FileCheck %s --check-prefixes=CHECK-NOCANON,COMPUTED
 
 // 4 warps
 // matmul: 128x32 @ 32x128 -> 128x128
@@ -665,7 +665,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %15 = tt.broadcast %13 : tensor<64x1xi32, #blocked> -> tensor<64x16xi32, #blocked>
     %16 = tt.addptr %14, %15 : tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<64x16xi32, #blocked>
     // CHECK: %[[C0:.*]] = arith.constant 0 : i32
-    // CHECK: scf.for %[[IND_VAR:.*]] = %[[C0]]
+    // CHECK: scf.for %[[IND_VAR:[^ ]+]] = %[[C0]]
     // CHECK-NOT: load
     // CHECK: %[[CND:.*]] = arith.cmpi slt, %[[IND_VAR]], %[[EXT]]
     // CHECK: scf.if %[[CND]]
@@ -739,7 +739,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %15 = tt.broadcast %13 : tensor<64x1xi32, #blocked> -> tensor<64x16xi32, #blocked>
     %16 = tt.addptr %14, %15 : tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<64x16xi32, #blocked>
     // CHECK-NOCANON: %[[C0:.*]] = arith.constant 0 : i32
-    // CHECK-NOCANON: scf.for %[[IND_VAR:.*]] = %[[C0]]
+    // CHECK-NOCANON: scf.for %[[IND_VAR:[^ ]+]] = %[[C0]]
     // CHECK-NOCANON-NOT load
     // CHECK-NOCANON: dot
     // CHECK-NOCANON: %[[CND:.*]] = arith.cmpi slt, %[[IND_VAR]], %[[EXT]]
@@ -1238,5 +1238,109 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       scf.yield %arg5, %1 : !ttg.memdesc<32x32xbf16, #shared1, #smem, mutable>, tensor<64x32xf32, #mma>
     }
     tt.return %0#1 : tensor<64x32xf32, #mma>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 64, 16]}>
+#dot = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#tma = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // COMPUTED-LABEL: @computed_tma_rhs
+  tt.func @computed_tma_rhs(%a: tensor<64x32xf16, #dot>, %b: !tt.tensordesc<32x64xf32, #tma>, %iterations: i32) -> tensor<64x64xf32, #mma> {
+    %zero = arith.constant 0 : i32
+    %step = arith.constant 32 : i32
+    %init = arith.constant dense<0.0> : tensor<64x64xf32, #mma>
+    // COMPUTED-DAG: ttng.async_tma_copy_global_to_local
+    // COMPUTED-DAG: ttg.local_alloc {alignment = 512 : i32} : () -> !ttg.memdesc<2x32x64xf16
+    // COMPUTED: scf.for
+    %result = scf.for %i = %zero to %iterations step %step iter_args(%acc = %init) -> tensor<64x64xf32, #mma> : i32 {
+      %loaded = tt.descriptor_load %b[%i, %zero] : !tt.tensordesc<32x64xf32, #tma> -> tensor<32x64xf32, #blocked>
+      %converted = arith.truncf %loaded : tensor<32x64xf32, #blocked> to tensor<32x64xf16, #blocked>
+      %operand = ttg.local_alloc %converted {alignment = 512 : i32} : (tensor<32x64xf16, #blocked>) -> !ttg.memdesc<32x64xf16, #shared, #smem>
+      // COMPUTED: ttg.memdesc_index
+      // COMPUTED: ttg.local_store
+      // COMPUTED: ttng.warp_group_dot
+      // COMPUTED: ttng.warp_group_dot_wait {{.*}} {pendings = {{[1-9][0-9]*}} : i32}
+      %next = ttng.warp_group_dot %a, %operand, %acc : tensor<64x32xf16, #dot> * !ttg.memdesc<32x64xf16, #shared, #smem> -> tensor<64x64xf32, #mma>
+      // COMPUTED: scf.yield
+      scf.yield %next : tensor<64x64xf32, #mma>
+    }
+    // COMPUTED: ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32}
+    // COMPUTED: ttg.local_dealloc
+    tt.return %result : tensor<64x64xf32, #mma>
+  }
+
+  // COMPUTED-LABEL: @computed_tma_rhs_one_stage
+  tt.func @computed_tma_rhs_one_stage(%a: tensor<64x32xf16, #dot>, %b: !tt.tensordesc<32x64xf32, #tma>, %iterations: i32) -> tensor<64x64xf32, #mma> {
+    %zero = arith.constant 0 : i32
+    %step = arith.constant 32 : i32
+    %init = arith.constant dense<0.0> : tensor<64x64xf32, #mma>
+    // COMPUTED-NOT: !ttg.memdesc<2x32x64xf16
+    // COMPUTED: scf.for
+    %result = scf.for %i = %zero to %iterations step %step iter_args(%acc = %init) -> tensor<64x64xf32, #mma> : i32 {
+      %loaded = tt.descriptor_load %b[%i, %zero] : !tt.tensordesc<32x64xf32, #tma> -> tensor<32x64xf32, #blocked>
+      %converted = arith.truncf %loaded : tensor<32x64xf32, #blocked> to tensor<32x64xf16, #blocked>
+      %operand = ttg.local_alloc %converted {alignment = 512 : i32} : (tensor<32x64xf16, #blocked>) -> !ttg.memdesc<32x64xf16, #shared, #smem>
+      // COMPUTED: ttg.local_alloc
+      // COMPUTED: ttng.warp_group_dot
+      // COMPUTED: ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32}
+      %next = ttng.warp_group_dot %a, %operand, %acc : tensor<64x32xf16, #dot> * !ttg.memdesc<32x64xf16, #shared, #smem> -> tensor<64x64xf32, #mma>
+      scf.yield %next : tensor<64x64xf32, #mma>
+    } {tt.num_stages = 1 : i32}
+    tt.return %result : tensor<64x64xf32, #mma>
+  }
+
+  // COMPUTED-LABEL: @computed_tma_rhs_arithmetic_under_cast
+  tt.func @computed_tma_rhs_arithmetic_under_cast(%a: tensor<64x32xf16, #dot>, %b: !tt.tensordesc<32x64xf32, #tma>, %iterations: i32) -> tensor<64x64xf32, #mma> {
+    %zero = arith.constant 0 : i32
+    %step = arith.constant 32 : i32
+    %scale = arith.constant dense<2.0> : tensor<32x64xf32, #blocked>
+    %init = arith.constant dense<0.0> : tensor<64x64xf32, #mma>
+    // COMPUTED-NOT: !ttg.memdesc<2x32x64xf16
+    // COMPUTED: scf.for
+    %result = scf.for %i = %zero to %iterations step %step iter_args(%acc = %init) -> tensor<64x64xf32, #mma> : i32 {
+      %loaded = tt.descriptor_load %b[%i, %zero] : !tt.tensordesc<32x64xf32, #tma> -> tensor<32x64xf32, #blocked>
+      // COMPUTED: arith.mulf
+      %scaled = arith.mulf %loaded, %scale : tensor<32x64xf32, #blocked>
+      // COMPUTED: arith.truncf
+      %converted = arith.truncf %scaled : tensor<32x64xf32, #blocked> to tensor<32x64xf16, #blocked>
+      // COMPUTED: ttg.local_alloc
+      %operand = ttg.local_alloc %converted : (tensor<32x64xf16, #blocked>) -> !ttg.memdesc<32x64xf16, #shared, #smem>
+      // COMPUTED: ttng.warp_group_dot
+      // COMPUTED-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32}
+      %next = ttng.warp_group_dot %a, %operand, %acc : tensor<64x32xf16, #dot> * !ttg.memdesc<32x64xf16, #shared, #smem> -> tensor<64x64xf32, #mma>
+      scf.yield %next : tensor<64x64xf32, #mma>
+    }
+    tt.return %result : tensor<64x64xf32, #mma>
+  }
+
+  // COMPUTED-LABEL: @computed_rhs_ordinary_load
+  tt.func @computed_rhs_ordinary_load(%a: tensor<64x32xf16, #dot>, %b: tensor<32x64x!tt.ptr<f32>, #blocked>, %iterations: i32) -> tensor<64x64xf32, #mma> {
+    %zero = arith.constant 0 : i32
+    %one = arith.constant 1 : i32
+    %init = arith.constant dense<0.0> : tensor<64x64xf32, #mma>
+    // COMPUTED-NOT: !ttg.memdesc<2x32x64xf16
+    // COMPUTED: scf.for
+    %result = scf.for %i = %zero to %iterations step %one iter_args(%acc = %init) -> tensor<64x64xf32, #mma> : i32 {
+      %offsets = tt.splat %i : i32 -> tensor<32x64xi32, #blocked>
+      %ptrs = tt.addptr %b, %offsets : tensor<32x64x!tt.ptr<f32>, #blocked>, tensor<32x64xi32, #blocked>
+      %loaded = tt.load %ptrs : tensor<32x64x!tt.ptr<f32>, #blocked>
+      %converted = arith.truncf %loaded : tensor<32x64xf32, #blocked> to tensor<32x64xf16, #blocked>
+      // COMPUTED: ttg.local_alloc
+      %operand = ttg.local_alloc %converted : (tensor<32x64xf16, #blocked>) -> !ttg.memdesc<32x64xf16, #shared, #smem>
+      // COMPUTED: ttng.warp_group_dot {{.*}} : tensor<64x32xf16
+      // COMPUTED-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32}
+      %next = ttng.warp_group_dot %a, %operand, %acc : tensor<64x32xf16, #dot> * !ttg.memdesc<32x64xf16, #shared, #smem> -> tensor<64x64xf32, #mma>
+      // COMPUTED-NOT: ttng.warp_group_dot
+      // COMPUTED: scf.yield
+      scf.yield %next : tensor<64x64xf32, #mma>
+    }
+    tt.return %result : tensor<64x64xf32, #mma>
   }
 }

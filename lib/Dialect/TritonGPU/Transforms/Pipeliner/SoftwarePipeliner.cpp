@@ -39,8 +39,9 @@ static void pipelineWgmma(ModuleOp moduleOp, unsigned numStages) {
   moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
 
   for (scf::ForOp forOp : loops) {
-    if (getNumStagesOrDefault(forOp, numStages) >= 1)
-      mlir::triton::asyncLaunchDots(forOp);
+    int loopNumStages = getNumStagesOrDefault(forOp, numStages);
+    if (loopNumStages >= 1)
+      mlir::triton::asyncLaunchDots(forOp, loopNumStages);
   }
 }
 

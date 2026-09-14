@@ -178,6 +178,7 @@ def compute_num_stages(
     device_props = torch.cuda.get_device_properties(0)
     smem_capacity = device_props.shared_memory_per_block_optin
     smem_capacity //= occupancy_target
+    additional_smem = 0
     if is_promoted:
         rhs_size = act_size if swap_xw else weight_size
         dot_size = compute_dtype.bitwidth / 8
@@ -192,6 +193,17 @@ def compute_num_stages(
             # The regular pipeline replaces one input slot with that widened tile.
             rhs_elements = block_k * (block_m if swap_xw else block_n)
             smem_capacity -= int(rhs_elements * (dot_size if is_persistent else dot_size - rhs_size))
+            if (is_persistent and target_info.cuda_capability_geq(9, 0)
+                    and (compute_dtype in (FP16, BF16) or compute_dtype == FP32 and precision_config.allow_tf32)):
+                # Async MMA keeps a second widened RHS tile live. Hopper's
+                # computed inputs replace a slot in their raw input rings.
+                additional_smem = rhs_elements * dot_size
+                if not has_native_mxfp:
+                    lhs_size = weight_size if swap_xw else act_size
+                    lhs_elements = block_k * (block_n if swap_xw else block_m)
+                    if lhs_size < dot_size:
+                        additional_smem -= lhs_elements * lhs_size
+                    additional_smem -= rhs_elements * rhs_size
     if has_native_mxfp:
         # 4-bit e2m1 operands are padded 2x
         # https://docs.nvidia.com/cuda/parallel-thread-execution/#packing-format-used-for-matrix-a-and-b-by-kind-mxf8f6f4-in-shared-memory
@@ -261,6 +273,14 @@ def compute_num_stages(
         smem_capacity -= epilogue_smem
         if x_transpose:
             smem_capacity -= int(block_m * block_k * act_size)
+        if (not has_native_mxfp and compute_dtype is not None and compute_dtype.bitwidth == 8 and not w_transpose):
+            # Native FP8 also needs a K-contiguous copy of row-major weights.
+            # Two computed slots replace one slot in the raw input ring.
+            additional_smem += block_k * block_n * weight_size
+        if (has_native_mxfp and compute_dtype == FP32 and precision_config.allow_tf32
+                and (lhs_dtype if swap_xw else rhs_dtype) == FP32 and (x_transpose if swap_xw else not w_transpose)):
+            # A computed FP32 RHS keeps both layout copies beside its raw ring.
+            additional_smem += block_k * (block_m if swap_xw else block_n) * 4
         if rhs_dtype == FP32 and (not w_transpose
                                   or has_native_mxfp and compute_dtype == FP32 and not precision_config.allow_tf32):
             # FP32 B can need a separate layout-conversion tile after its TMA load.
@@ -282,4 +302,9 @@ def compute_num_stages(
         max_stages = 4
     if precision_config.max_num_imprecise_acc is not None:
         max_stages = min(max_stages, 3)
-    return min(smem_capacity // int(stage_size), max_stages)
+    num_stages = min(smem_capacity // int(stage_size), max_stages)
+    if num_stages > 1 and additional_smem > 0:
+        # One stage retains a single converted tile, which the original budget
+        # already proved fits; do not shrink the output tile unnecessarily.
+        num_stages = max(1, min((smem_capacity - int(additional_smem)) // int(stage_size), max_stages))
+    return num_stages

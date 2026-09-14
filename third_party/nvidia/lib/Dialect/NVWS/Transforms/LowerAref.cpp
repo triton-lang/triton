@@ -30,6 +30,7 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/Location.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
@@ -703,7 +704,133 @@ bool isProducerLoad(ArefCreateOp arefOp) {
   return false;
 }
 
-void multiBufferAref(const SmallVector<ArefCreateOp> &arefOps, int numStages) {
+ArefCreateOp getAref(Value value) {
+  while (Operation *op = value.getDefiningOp()) {
+    if (op->hasTrait<OpTrait::MemDescViewTrait>()) {
+      value = op->getOperand(0);
+      continue;
+    }
+    if (auto get = dyn_cast<ArefGetEnterOp>(op))
+      return get.getAref().getDefiningOp<ArefCreateOp>();
+    if (auto put = dyn_cast<ArefPutEnterOp>(op))
+      return put.getAref().getDefiningOp<ArefCreateOp>();
+    if (auto buffer = dyn_cast<ArefBufferOp>(op))
+      return buffer.getAref().getDefiningOp<ArefCreateOp>();
+    break;
+  }
+  return {};
+}
+
+bool isPerIterationStoreAref(ArefCreateOp aref, scf::ForOp loop) {
+  for (auto [index, buffer] : llvm::enumerate(aref.getBuffers())) {
+    auto type = cast<MemDescType>(buffer.getType());
+    auto *alloc = buffer.getDefiningOp();
+    if (!isa_and_nonnull<LocalAllocOp, TMEMAllocOp>(alloc) ||
+        alloc->getNumResults() != 1 ||
+        isa<TensorMemoryScalesEncodingAttr>(type.getEncoding()) ||
+        getArefDepth(type) != 1)
+      return false;
+    // Resizing an allocation must not change another aref's storage.
+    for (OpOperand &use : buffer.getUses()) {
+      if (!isa<LocalDeallocOp>(use.getOwner()) &&
+          (use.getOwner() != aref.getOperation() ||
+           use.getOperandNumber() != index))
+        return false;
+    }
+  }
+
+  ArefPutEnterOp put;
+  for (Operation *user : aref->getUsers()) {
+    if (auto enter = dyn_cast<ArefPutEnterOp>(user)) {
+      if (put || enter->getBlock() != loop.getBody())
+        return false;
+      put = enter;
+    }
+  }
+  if (!put)
+    return false;
+
+  SmallVector<unsigned> stores(put.getBuffers().size(), 0);
+  auto recordStores = [&](ValueRange buffers) {
+    for (auto [index, buffer] : llvm::enumerate(buffers)) {
+      for (Operation *user : buffer.getUsers()) {
+        if (user->getBlock() != loop.getBody())
+          return false;
+        if (auto store = dyn_cast<TMEMStoreOp>(user)) {
+          if (!matchPattern(store.getPred(), m_One()))
+            return false;
+        } else if (!isa<LocalStoreOp>(user)) {
+          return false;
+        }
+        ++stores[index];
+      }
+    }
+    return true;
+  };
+  if (!recordStores(put.getBuffers()))
+    return false;
+  unsigned exits = 0;
+  for (Operation *user : put.getToken().getUsers()) {
+    if (auto buffer = dyn_cast<ArefBufferOp>(user)) {
+      if (buffer.getAref() != aref.getResult() ||
+          !recordStores(buffer.getBuffers()))
+        return false;
+    } else if (auto exit = dyn_cast<ArefPutExitOp>(user)) {
+      if (exit->getBlock() != loop.getBody() ||
+          exit.getAref() != aref.getResult() ||
+          llvm::any_of(castAsyncOpAttrs(exit.getAsyncOps()),
+                       [](AsyncOp op) { return op != AsyncOp::NONE; }))
+        return false;
+      ++exits;
+    } else {
+      return false;
+    }
+  }
+  return exits == 1 && llvm::all_of(stores, [](unsigned n) { return n == 1; });
+}
+
+SmallVector<ArefCreateOp> pipelineComputedMMAOperands(ModuleOp module,
+                                                      unsigned numStages) {
+  SetVector<ArefCreateOp> operands;
+  DenseSet<ArefCreateOp> accumulators;
+  module.walk([&](MMAv5OpInterface mma) {
+    if (auto aref = getAref(mma.getAccumulator()))
+      accumulators.insert(aref);
+  });
+  module.walk([&](MMAv5OpInterface mma) {
+    if (!hasPartition(mma) || getPartitionIds(mma).front() == 0)
+      return;
+    auto loop = mma->getParentOfType<scf::ForOp>();
+    if (!loop || getNumStagesOrDefault(loop, numStages) <= 1)
+      return;
+    auto dot = cast<DotOpInterface>(mma.getOperation());
+    if (!isOperandPipelineable(dot.getA(), loop) ||
+        !isOperandPipelineable(dot.getB(), loop))
+      return;
+
+    SmallVector<ArefCreateOp> computed;
+    for (Value operand : {dot.getA(), dot.getB()}) {
+      auto aref = getAref(operand);
+      if (aref && !isProducerLoad(aref)) {
+        if (accumulators.contains(aref) || !isPerIterationStoreAref(aref, loop))
+          return;
+        computed.push_back(aref);
+      }
+    }
+    if (computed.empty())
+      return;
+
+    // Each input slot is released by the consumer's tcgen05 commit, so the
+    // producer can fill the other slot while the current MMA remains in flight.
+    setIsAsync(mma, numStages);
+    if (mma.isAsync())
+      operands.insert(computed.begin(), computed.end());
+  });
+  return SmallVector<ArefCreateOp>(operands.begin(), operands.end());
+}
+
+void multiBufferAref(const SmallVector<ArefCreateOp> &arefOps, int numStages,
+                     bool allowTmem = false) {
   SmallVector<Operation *> allocsToErase;
   for (auto arefOp : arefOps) {
     SmallVector<Value> allocOps;
@@ -711,7 +838,8 @@ void multiBufferAref(const SmallVector<ArefCreateOp> &arefOps, int numStages) {
 
     bool eligible = true;
     for (auto opnd : arefOp.getOperands()) {
-      if (!opnd.getDefiningOp() || isa<TMEMAllocOp>(opnd.getDefiningOp())) {
+      if (!opnd.getDefiningOp() ||
+          (!allowTmem && isa<TMEMAllocOp>(opnd.getDefiningOp()))) {
         eligible = false;
       }
     }
@@ -726,8 +854,10 @@ void multiBufferAref(const SmallVector<ArefCreateOp> &arefOps, int numStages) {
       auto arefBufType = cast<MemDescType>(opnd.getType());
       arefBufType =
           getMultiBufferedType(getBufferViewType(arefBufType, true), numStages);
+      auto localAlloc = dyn_cast<LocalAllocOp>(oldAlloc);
+      auto alignment = localAlloc ? localAlloc.getAlignment() : std::nullopt;
       Operation *newAlloc = triton::nvws::createAlloc(
-          builder, oldAlloc->getLoc(), arefBufType, Value());
+          builder, oldAlloc->getLoc(), arefBufType, Value(), alignment);
       allocOps.push_back(newAlloc->getResult(0));
       arefTypes.push_back(arefBufType);
       oldAlloc->replaceAllUsesWith(newAlloc);
@@ -957,6 +1087,9 @@ public:
     for (scf::ForOp loop : loops) {
       combineArefs(loop);
     }
+
+    auto computedOperands = pipelineComputedMMAOperands(m, numStages);
+    multiBufferAref(computedOperands, 2, /*allowTmem=*/true);
 
     SmallVector<ArefCreateOp> arefOps;
     m.walk([&](ArefCreateOp arefOp) {

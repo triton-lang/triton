@@ -390,6 +390,27 @@ splitRSDots(const llvm::MapVector<Operation *, int> &dots) {
 
 } // namespace
 
+static ttg::LocalAllocOp getComputedOperandAlloc(Value operand,
+                                                 scf::ForOp forOp) {
+  auto alloc = operand.getDefiningOp<ttg::LocalAllocOp>();
+  if (!alloc || alloc->getParentOp() != forOp || !alloc.getSrc() ||
+      !alloc->hasOneUse() || forOp.isDefinedOutsideOfLoop(alloc.getSrc()))
+    return {};
+
+  // Only buffer loads and their layout or floating-point conversions.
+  // Unpacking and scaling can require much larger buffers.
+  Value source = alloc.getSrc();
+  while (Operation *op = source.getDefiningOp()) {
+    if (isa<tt::LoadOp, ttg::LocalLoadOp>(op))
+      return alloc;
+    if (!isa<ttg::ConvertLayoutOp, tt::TransOp, tt::ReshapeOp, tt::FpToFpOp,
+             arith::ExtFOp, arith::TruncFOp>(op))
+      return {};
+    source = op->getOperand(0);
+  }
+  return {};
+}
+
 // Determines whether a given MMAv3 dot op, represented as ttng.warp_group_dot,
 // needs a wait immediately after it.
 //
@@ -441,10 +462,13 @@ splitRSDots(const llvm::MapVector<Operation *, int> &dots) {
 // in the loop's iter_args.  (Rule (2) above ensures this is well-defined.)
 //
 static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
-                                                scf::ForOp forOp) {
+                                                scf::ForOp forOp,
+                                                bool bufferComputedOperands) {
   LDBG("Considering whether to make MMAv3 dot properly async: " << dotOp);
 
   auto checkOperand = [&](Value operand) {
+    if (bufferComputedOperands && getComputedOperandAlloc(operand, forOp))
+      return true;
     // We can always make RSGEMM async s long as the RHS can be multi-buffered
     if (isa<RankedTensorType>(operand.getType())) {
       return true;
@@ -592,6 +616,43 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
   return std::nullopt;
 }
 
+// A computed operand needs distinct storage while the preceding iteration's
+// WGMMA is still reading it. The existing WGMMA waits bound this lifetime to
+// two iterations and protect register operands separately.
+static scf::ForOp
+multibufferComputedOperands(scf::ForOp forOp,
+                            ArrayRef<ttg::LocalAllocOp> allocs) {
+  if (allocs.empty())
+    return forOp;
+
+  OpBuilder builder(forOp);
+  auto loc = forOp.getLoc();
+  Value zero = arith::ConstantIntOp::create(builder, loc, 0, 32);
+  Value one = arith::ConstantIntOp::create(builder, loc, 1, 32);
+  auto newForOp = replaceForOpWithNewSignature(builder, forOp, {zero});
+  forOp.erase();
+  forOp = newForOp;
+  Value bufferIdx = forOp.getRegionIterArgs().back();
+  auto yield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+  builder.setInsertionPoint(yield);
+  Value nextBufferIdx = arith::XOrIOp::create(builder, loc, bufferIdx, one);
+  yield.getResultsMutable().append(ValueRange{nextBufferIdx});
+
+  for (auto alloc : allocs) {
+    Value buffers = triton::createAlloc(
+        forOp, cast<RankedTensorType>(alloc.getSrc().getType()), alloc.getLoc(),
+        cast<ttg::SharedEncodingTrait>(alloc.getType().getEncoding()), 2);
+    if (auto alignment = alloc.getAlignmentAttr())
+      buffers.getDefiningOp()->setAttr("alignment", alignment);
+    builder.setInsertionPoint(alloc);
+    Value view = triton::createSingleBufferView(builder, buffers, bufferIdx);
+    ttg::LocalStoreOp::create(builder, alloc.getLoc(), alloc.getSrc(), view);
+    triton::replaceUsesAndPropagateType(builder, alloc, view);
+    alloc.erase();
+  }
+  return forOp;
+}
+
 // If necessary, insert a dot-wait inside the loop, waiting for the results of
 // the properly-async dots from iteration i-1 to complete.  (We pipeline to
 // depth 2, so there are at most 2 copies of each warp_group_dot in flight at a
@@ -719,7 +780,7 @@ static void insertAsyncWarpGroupDotWaitInLoop(
 // We assume we have space for each dot to be pipelined to depth 2, i.e. each
 // dot op in the loop can have at most 2 warp_group_dot ops in flight at once.
 // (Each warp_group_dot op usually corresponds to a series of wgmma.async ops.)
-void triton::asyncLaunchDots(scf::ForOp forOp) {
+void triton::asyncLaunchDots(scf::ForOp forOp, unsigned numStages) {
   LDBG("Original loop:\n" << *forOp);
 
   // First, change every MMAv3 ttng.warp_group_dot {isAsync=false}
@@ -734,12 +795,24 @@ void triton::asyncLaunchDots(scf::ForOp forOp) {
   // sync immediately after.  If it can be properly async, we know its only use
   // is in the loop's `yield` statement; asyncDots maps the op to its index in
   // the yield op.
+  // Extra computed-operand buffers can hurt ordinary-load pipelines.
+  // Limit them to TMA pipelines.
+  bool bufferComputedOperands =
+      numStages > 1 &&
+      !forOp.getBody()->getOps<ttng::TMALoadLikeOpInterface>().empty();
   IRRewriter builder(forOp.getContext());
   llvm::MapVector<Operation *, int /*iterArgIdx*/> properlyAsyncDots;
+  SmallVector<ttg::LocalAllocOp> computedOperands;
   for (auto WarpGroupDotOp : forOp.getBody()->getOps<ttng::WarpGroupDotOp>()) {
     WarpGroupDotOp.setIsAsync(true);
-    if (auto iterArgIdx = dotCanBeProperlyAsync(WarpGroupDotOp, forOp)) {
+    if (auto iterArgIdx = dotCanBeProperlyAsync(WarpGroupDotOp, forOp,
+                                                bufferComputedOperands)) {
       properlyAsyncDots[WarpGroupDotOp] = *iterArgIdx;
+      SmallVector<Value, 2> operands{WarpGroupDotOp.getA(),
+                                     WarpGroupDotOp.getB()};
+      for (Value operand : operands)
+        if (auto alloc = getComputedOperandAlloc(operand, forOp))
+          computedOperands.push_back(alloc);
     } else {
       builder.setInsertionPointAfter(WarpGroupDotOp);
       auto wait = ttng::WarpGroupDotWaitOp::create(
@@ -754,6 +827,8 @@ void triton::asyncLaunchDots(scf::ForOp forOp) {
     LDBG("No properly async dots.");
     return;
   }
+
+  forOp = multibufferComputedOperands(forOp, computedOperands);
 
   // Split RS dots into dots with K = 16 (the instruction size of MMAv3)
   // If we split them in nSplit dots, we will be able to keep nSplit-1 dots
