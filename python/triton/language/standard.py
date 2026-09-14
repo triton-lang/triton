@@ -142,8 +142,8 @@ def swizzle2d(i, j, size_i, size_j, size_g):
     return new_i, new_j
 
 
-@jit
-def zeros(shape, dtype):
+@core.builtin
+def zeros(shape, dtype, _semantic=None):
     """
     Returns a tensor filled with the scalar value 0 for the given :code:`shape` and :code:`dtype`.
 
@@ -152,18 +152,21 @@ def zeros(shape, dtype):
     :param dtype: Data-type of the new array, e.g., :code:`tl.float16`
     :type dtype: DType
     """
-    return core.full(shape, 0, dtype)
+    # builtin, not @jit: the interpreter only patches builtins, so a @jit
+    # helper called from a kernel dies with "Cannot call @triton.jit'd outside
+    # of the scope of a kernel" under TRITON_INTERPRET=1 (#11757)
+    return core.full(shape, 0, dtype, _semantic=_semantic)
 
 
-@jit
-def zeros_like(input):
+@core.builtin
+def zeros_like(input, _semantic=None):
     """
     Returns a tensor of zeros with the same shape and type as a given tensor.
 
     :param input: input tensor
     :type input: Tensor
     """
-    return zeros(input.shape, input.dtype)
+    return zeros(input.shape, input.dtype, _semantic=_semantic)
 
 
 # max and argmax

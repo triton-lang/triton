@@ -147,3 +147,23 @@ def test_dot_scaled_e8m0_boundaries(compute_type, signed_scale, rhs_scale):
     expected = np.repeat(np.array([minimum, 32.0, 64.0, np.nan], dtype=np.float32), 8)[:, None]
     expected = np.broadcast_to(expected, (32, 32))
     np.testing.assert_array_equal(result.data, expected.T if rhs_scale else expected)
+
+
+def test_zeros_and_zeros_like_run_in_interpreter_mode(monkeypatch) -> None:
+    # tl.zeros/tl.zeros_like used to be @jit helpers, which the interpreter
+    # never patches, so calling either inside a kernel died with "Cannot call
+    # @triton.jit'd outside of the scope of a kernel" (#11757).
+    torch = pytest.importorskip("torch")
+    import triton
+
+    monkeypatch.setenv("TRITON_INTERPRET", "1")
+
+    @triton.jit
+    def _kernel(out, N: tl.constexpr):
+        acc = tl.zeros((N, ), dtype=tl.float32)
+        other = tl.zeros_like(acc)
+        tl.store(out + tl.arange(0, N), acc + other)
+
+    out = torch.ones(4, dtype=torch.float32)
+    _kernel[(1, )](out, N=4)
+    assert torch.all(out == 0)
