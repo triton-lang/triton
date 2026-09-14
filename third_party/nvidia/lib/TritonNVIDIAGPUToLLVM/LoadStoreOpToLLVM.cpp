@@ -71,9 +71,10 @@ bool isDefaultCachePolicy(CachePolicy policy,
           policy.detailed.getL2Fraction().getValueAsDouble() == 1.0);
 }
 
-Value createCachePolicy(CachePolicy cachePolicy,
-                        ConversionPatternRewriter &rewriter, Location loc,
-                        int computeCapability) {
+FailureOr<Value> createCachePolicy(CachePolicy cachePolicy,
+                                   ConversionPatternRewriter &rewriter,
+                                   Location loc, int computeCapability,
+                                   Operation *op) {
   // Emit createpolicy.fractional.L2::policy.b64 xx 1.0
   PTXBuilder ptxBuilder;
   const bool hasLegacyL2EvictPolicy =
@@ -95,6 +96,12 @@ Value createCachePolicy(CachePolicy cachePolicy,
   Value policyRet;
 
   const bool hardwareSupport = computeCapability >= 80;
+  if (hasDetailedL2Policy && !hardwareSupport) {
+    op->emitOpError("fractional L2 cache policy requires compute capability "
+                    "80 or newer");
+    return failure();
+  }
+
   if ((hasLegacyL2EvictPolicy || hasDetailedL2Policy) && hardwareSupport) {
     if (!hasDetailedL2Policy) {
       primary = cachePolicy.legacy == triton::EvictionPolicy::EVICT_FIRST
@@ -180,11 +187,6 @@ LogicalResult verifyDetailedCachePolicySupport(Operation *op,
   if (l2PrefetchSize && computeCapability < 75)
     return op->emitOpError(
         "L2 prefetch size requires compute capability 75 or newer");
-  if (policy.detailed &&
-      policy.detailed.getL2Primary() != ttng::CacheEvictionPriority::NONE &&
-      computeCapability < 80)
-    return op->emitOpError(
-        "fractional L2 cache policy requires compute capability 80 or newer");
   return success();
 }
 
@@ -203,7 +205,7 @@ struct LoadStoreConversionBase {
     if (!tensorTy)
       return 1;
     auto contiguity = getContiguity(ptr);
-    auto pointeeBitWidth = std::max(8u, triton::getPointeeBitWidth(tensorTy));
+    auto pointeeBitWidth = triton::getPointeeBitWidth(tensorTy);
     LDBG("getVectorSize contiguity = " << contiguity << " pointeeBitWidth = "
                                        << pointeeBitWidth);
     // Blackwell (sm_100+) with PTX 8.8+ supports 256-bit global load/store.
@@ -213,13 +215,6 @@ struct LoadStoreConversionBase {
       maxVecBits = 256;
     }
     return std::min<unsigned>(maxVecBits / pointeeBitWidth, contiguity);
-  }
-
-  Type getMemoryElementType(Type type) const {
-    // Sub-byte integers occupy one byte per element in memory.
-    return type.getIntOrFloatBitWidth() < 8
-               ? IntegerType::get(type.getContext(), 8)
-               : type;
   }
 
   unsigned getMaskAlignment(Value mask) const {
@@ -284,7 +279,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     // Determine the vectorization size
     Type elemTy = getElementTypeOrSelf(op.getType());
     Type valueElemTy = typeConverter->convertType(elemTy);
-    Type memoryElemTy = getMemoryElementType(valueElemTy);
     unsigned vec = getVectorSize(ptr);
     unsigned numElems = getUniqueElemsPerThread(ptr.getType());
     unsigned vecOrig = vec;
@@ -325,13 +319,10 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         if (auto *otherInfo = axisAnalysisPass.getAxisInfo(other))
           otherConstInt = otherInfo->getConstantValue();
       otherElems = unpackUniqueTensorElements(loc, llOther, rewriter);
-      if (memoryElemTy != valueElemTy)
-        for (Value &value : otherElems)
-          value = b.zext(memoryElemTy, value);
     }
 
     // vectorized iteration through all the pointer/mask/other elements
-    const int valueElemNBits = memoryElemTy.getIntOrFloatBitWidth();
+    const int valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     const int numVecs = numElems / vec;
 
     const size_t scalarizedContiguousRun =
@@ -345,10 +336,11 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         !mask && isDefaultCachePolicy(*cachePolicy, triton::CacheModifier::CA);
     // The L2 cache policy register is loop-invariant; create it once instead of
     // re-emitting an identical createpolicy per vectorized load.
-    Value l2PolicyReg;
-    if (!useNativeLoad)
-      l2PolicyReg =
-          createCachePolicy(*cachePolicy, rewriter, loc, computeCapability);
+    FailureOr<Value> l2Policy =
+        createCachePolicy(*cachePolicy, rewriter, loc, computeCapability, op);
+    if (failed(l2Policy))
+      return failure();
+    Value l2PolicyReg = *l2Policy;
     StringRef l1Policy = getL1EvictionPriority(*cachePolicy);
     auto l2PrefetchSizeAttr = cachePolicy->detailed
                                   ? cachePolicy->detailed.getL2PrefetchSize()
@@ -356,16 +348,10 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     int64_t l2PrefetchSize =
         l2PrefetchSizeAttr ? l2PrefetchSizeAttr.getInt() : 0;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
-      Value pred = mask ? maskElems[vecStart] : Value{};
       if (useNativeLoad) {
-        Type loadTy = vec == 1 ? memoryElemTy : vec_ty(memoryElemTy, vec);
+        Type loadTy = vec == 1 ? valueElemTy : vec_ty(valueElemTy, vec);
         Value loaded = b.load(loadTy, ptrElems[vecStart],
                               vec * valueElemNBits / 8, op.getIsVolatile());
-        if (memoryElemTy != valueElemTy) {
-          // Scalar truncations let LLVM form non-byte-sized memory accesses.
-          Type valueTy = vec == 1 ? valueElemTy : vec_ty(valueElemTy, vec);
-          loaded = b.trunc(valueTy, loaded);
-        }
         auto values = unpackLLVector(loc, loaded, rewriter);
         loadedVals.append(values.begin(), values.end());
         continue;
@@ -384,6 +370,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       assert(wordNElems * nWords * numVecs == numElems);
 
       PTXBuilder ptxBuilder;
+
+      Value pred = mask ? maskElems[vecStart] : Value{};
 
       const std::string readConstraint =
           (width == 64) ? "l" : ((width == 32) ? "r" : "c");
@@ -487,16 +475,14 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
           curr = ret;
         }
         curr = b.bitcast(
-            curr, LLVM::getVectorType(memoryElemTy, width / valueElemNBits));
+            curr, LLVM::getVectorType(valueElemTy, width / valueElemNBits));
         rets.push_back(curr);
       }
       int tmp = width / valueElemNBits;
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, typeConverter->getIndexType(), ii % tmp);
-        Value loaded = b.extract_element(memoryElemTy, rets[ii / tmp], vecIdx);
-        if (memoryElemTy != valueElemTy)
-          loaded = b.trunc(valueElemTy, loaded);
+        Value loaded = b.extract_element(valueElemTy, rets[ii / tmp], vecIdx);
         loadedVals.push_back(loaded);
       }
     } // end vec
@@ -544,7 +530,6 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     auto valueTy = value.getType();
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
-    Type memoryElemTy = getMemoryElementType(valueElemTy);
 
     unsigned vec = getVectorSize(ptr);
     unsigned elemsPerThread = getUniqueElemsPerThread(ptr.getType());
@@ -552,9 +537,6 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     auto ptrElems = unpackUniqueTensorElements(loc, llPtr, rewriter);
     auto valueElems = unpackUniqueTensorElements(loc, llValue, rewriter);
     assert(ptrElems.size() == valueElems.size());
-    if (memoryElemTy != valueElemTy)
-      for (Value &value : valueElems)
-        value = b.zext(memoryElemTy, value);
 
     // Determine the vectorization size
     unsigned vecOrig = vec;
@@ -577,7 +559,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
                        << mask << "\n";
     }
 
-    const size_t dtsize = memoryElemTy.getIntOrFloatBitWidth() / 8;
+    const size_t dtsize = valueElemTy.getIntOrFloatBitWidth() / 8;
     const size_t valueElemNBits = dtsize * 8;
 
     const size_t scalarizedContiguousRun =
@@ -594,15 +576,13 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
         isDefaultCachePolicy(*cachePolicy, triton::CacheModifier::WB);
     // The L2 cache policy register is loop-invariant; create it once instead of
     // re-emitting an identical createpolicy per vectorized store.
-    Value l2PolicyReg;
-    if (!useNativeStore)
-      l2PolicyReg =
-          createCachePolicy(*cachePolicy, rewriter, loc, computeCapability);
+    FailureOr<Value> l2Policy =
+        createCachePolicy(*cachePolicy, rewriter, loc, computeCapability, op);
+    if (failed(l2Policy))
+      return failure();
+    Value l2PolicyReg = *l2Policy;
     StringRef l1Policy = getL1EvictionPriority(*cachePolicy);
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
-      Value pred = threadPred;
-      if (llMask)
-        pred = ttg::maybeAnd(rewriter, loc, pred, maskElems[vecStart]);
       if (useNativeStore) {
         Value storeVal =
             vec == 1
@@ -624,7 +604,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       assert(wordNElems * nWords * numVecs == elemsPerThread);
 
       Type valArgTy = IntegerType::get(ctx, width);
-      auto wordTy = vec_ty(memoryElemTy, wordNElems);
+      auto wordTy = vec_ty(valueElemTy, wordNElems);
 
       SmallVector<std::pair<Value, std::string>> asmArgs;
       for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
@@ -635,6 +615,8 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
           const size_t elemOffset = vecStart + wordIdx * wordNElems + elemIdx;
           assert(elemOffset < valueElems.size());
           Value elem = valueElems[elemOffset];
+          elem = b.bitcast(elem, valueElemTy);
+
           llWord = b.insert_element(wordTy, llWord, elem, b.i32_val(elemIdx));
         }
         llWord = b.bitcast(llWord, valArgTy);
@@ -646,6 +628,12 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       // Prepare the PTX inline asm.
       PTXBuilder ptxBuilder;
       auto *asmArgList = ptxBuilder.newListOperand(asmArgs);
+
+      Value pred = threadPred;
+      if (llMask) {
+        auto mask = maskElems[vecStart];
+        pred = ttg::maybeAnd(rewriter, loc, pred, mask);
+      }
 
       auto *asmAddr =
           ptxBuilder.newAddrOperand(ptrElems[runStart], "l", in_off);

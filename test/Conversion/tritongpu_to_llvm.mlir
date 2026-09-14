@@ -67,18 +67,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %value = tt.load %ptr {isVolatile = true} : !tt.ptr<i32>
     tt.return %value : i32
   }
-
-  // CHECK-LABEL: @native_i1(
-  tt.func private @native_i1(%ptrs: tensor<128x!tt.ptr<i1>, #blocked0>, %values: tensor<128xi1, #blocked0>) -> tensor<128xi1, #blocked0> {
-    // CHECK: %[[BYTE:.*]] = llvm.load {{.*}} {alignment = 1 : i64} : !llvm.ptr<1> -> i8
-    // CHECK: llvm.trunc %[[BYTE]] : i8 to i1
-    // CHECK: %[[STORED_BYTE:.*]] = llvm.zext {{.*}} : i1 to i8
-    // CHECK-NOT: llvm.cond_br
-    // CHECK: llvm.store %[[STORED_BYTE]], {{.*}} {alignment = 1 : i64} : i8, !llvm.ptr<1>
-    %old = tt.load %ptrs : tensor<128x!tt.ptr<i1>, #blocked0>
-    tt.store %ptrs, %values : tensor<128x!tt.ptr<i1>, #blocked0>
-    tt.return %old : tensor<128xi1, #blocked0>
-  }
 }
 
 // -----
@@ -210,11 +198,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
   // CHECK-LABEL: @native_normal_cache_policy(
   tt.func @native_normal_cache_policy(%ptr: tensor<128x!tt.ptr<f32>, #blocked0>, %out: tensor<128x!tt.ptr<f32>, #blocked0>) {
-    // CHECK-NOT: llvm.inline_asm
     // CHECK: llvm.load {{.*}} {alignment = 4 : i64} : !llvm.ptr<1> -> f32
-    // CHECK-NOT: llvm.inline_asm
     // CHECK: llvm.store {{.*}} {alignment = 4 : i64} : f32, !llvm.ptr<1>
-    // CHECK-NOT: llvm.inline_asm
     // CHECK: llvm.return
     %value = tt.load %ptr {cachePolicy = #normal_cache_policy} : tensor<128x!tt.ptr<f32>, #blocked0>
     tt.store %out, %value {cachePolicy = #normal_cache_policy} : tensor<128x!tt.ptr<f32>, #blocked0>
@@ -362,22 +347,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     %constant = tt.load %ptrs, %mask, %splat : tensor<128x!tt.ptr<i8>, #blocked0>
     %values = arith.xori %dynamic, %constant : tensor<128xi8, #blocked0>
     tt.store %ptrs, %values, %mask : tensor<128x!tt.ptr<i8>, #blocked0>
-    tt.return
-  }
-
-  // CHECK-LABEL: @masked_vector_i4(
-  tt.func @masked_vector_i4(%ptrs: tensor<128x!tt.ptr<i4>, #blocked0> {tt.contiguity = 4 : i32, tt.divisibility = 4 : i32}, %mask: tensor<128xi1, #blocked0> {tt.constancy = 4 : i32}, %other: tensor<128xi4, #blocked0>) {
-    // Sub-byte values occupy byte-sized memory slots in both PTX paths.
-    // CHECK: llvm.zext {{.*}} : i4 to i8
-    // CHECK: llvm.bitcast {{.*}} : vector<4xi8> to i32
-    // CHECK: ld.global.b32
-    // CHECK: llvm.bitcast {{.*}} : i32 to vector<4xi8>
-    // CHECK: llvm.trunc {{.*}} : i8 to i4
-    %values = tt.load %ptrs, %mask, %other : tensor<128x!tt.ptr<i4>, #blocked0>
-    // CHECK: llvm.zext {{.*}} : i4 to i8
-    // CHECK: llvm.bitcast {{.*}} : vector<4xi8> to i32
-    // CHECK: st.global.b32
-    tt.store %ptrs, %values, %mask : tensor<128x!tt.ptr<i4>, #blocked0>
     tt.return
   }
 

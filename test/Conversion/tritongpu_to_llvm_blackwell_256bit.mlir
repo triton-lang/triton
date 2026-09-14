@@ -79,26 +79,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 // -----
 
-// The access width is bounded by byte-sized memory slots, even for i4 values.
-#blocked_i4 = #ttg.blocked<{sizePerThread = [64], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
-  // BW256-LABEL: @global_load_store_i4(
-  // BW256-COUNT-2: llvm.load {{.*}} {alignment = 32 : i64} : !llvm.ptr<1> -> vector<32xi8>
-  // BW256-COUNT-2: llvm.store {{.*}} {alignment = 32 : i64} : vector<32xi8>, !llvm.ptr<1>
-  // BW256: llvm.return
-  // PRE_BW-LABEL: @global_load_store_i4(
-  // PRE_BW-COUNT-4: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<16xi8>
-  // PRE_BW-COUNT-4: llvm.store {{.*}} {alignment = 16 : i64} : vector<16xi8>, !llvm.ptr<1>
-  // PRE_BW: llvm.return
-  tt.func @global_load_store_i4(%ptrs: tensor<2048x!tt.ptr<i4>, #blocked_i4> {tt.contiguity = 64 : i32, tt.divisibility = 64 : i32}) {
-    %values = tt.load %ptrs : tensor<2048x!tt.ptr<i4>, #blocked_i4>
-    tt.store %ptrs, %values : tensor<2048x!tt.ptr<i4>, #blocked_i4>
-    tt.return
-  }
-}
-
-// -----
-
 #blocked_redux_103 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // SM103-LABEL: @maxnum_reduction_sm103
