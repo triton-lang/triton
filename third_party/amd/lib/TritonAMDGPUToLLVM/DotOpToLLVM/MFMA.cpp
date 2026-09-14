@@ -27,7 +27,6 @@
 #include "mlir/Dialect/Utils/IndexingUtils.h"
 #include "mlir/IR/Matchers.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include <limits>
 
 using namespace mlir;
 using namespace mlir::triton;
