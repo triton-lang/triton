@@ -796,7 +796,8 @@ public:
     unsigned vec, vecOrig;
     int numElems, packed;
     if (tensorTy) {
-      vec = getVectorSize(ptr);
+      // Atomics support at most 128 bits, including on Blackwell.
+      vec = std::min<unsigned>(getVectorSize(ptr), 128 / valueElemNBits);
       if (llMask) {
         vec = std::min<unsigned>(vec, getMaskAlignment(op.getMask()));
       }
