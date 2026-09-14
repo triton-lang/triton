@@ -4685,10 +4685,12 @@ def test_dot_tf32_special_values(rhs, mma_nonk_size, device):
         b = tl.load(B + offsets)
         tl.store(C + offsets, tl.dot(a, b, input_precision="tf32"))
 
-    # Include signaling NaNs whose payload would disappear at TF32 precision.
+    # Include signaling NaNs whose payload would disappear at TF32 precision,
+    # and subnormals that must survive with the default denormal mode.
     bits = torch.tensor([
         0x7f800001, 0x7f801fff, 0x7fa00000, 0x7fc00000, 0xff800001, 0xff801fff, 0xffa00000, 0xffc00000, 0x7f800000,
-        0xff800000, 0x00000000, 0x80000000, 0x3f800000, 0xbf800000, 0x40600000, 0xc0600000
+        0xff800000, 0x00000000, 0x80000000, 0x00002000, 0x80002000, 0x007fe000, 0x807fe000, 0x00800000, 0x80800000,
+        0x3f800000, 0xbf800000, 0x40600000, 0xc0600000
     ], dtype=torch.uint32, device=device)
     values = bits.view(torch.float32)
     a = torch.zeros((32, 32), device=device)
