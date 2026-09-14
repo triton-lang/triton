@@ -1060,6 +1060,82 @@ def test_histogram(M, bins, src_layout, dst_layout, device):
     torch.testing.assert_close(z, z_torch, atol=0, rtol=0)
 
 
+@gluon.jit
+def _histogram_multi_cta_kernel(x_ptr, z_ptr, M: ttgl.constexpr, B: ttgl.constexpr, src_layout: ttgl.constexpr,
+                                dst_layout: ttgl.constexpr, masked: ttgl.constexpr):
+    offs = ttgl.arange(0, M, layout=src_layout)
+    x = ttgl.load(x_ptr + offs)
+    bins = ttgl.arange(0, B, layout=dst_layout)
+    # Reuse histogram scratch across iterations, with different counts each time.
+    for i in range(3):
+        mask = offs % 3 != i if masked else None
+        h = ttgl.histogram(x + i, B, mask=mask, layout=dst_layout)
+        ttgl.store(z_ptr + i * B + bins, h)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
+@pytest.mark.parametrize("src_cga, dst_cga", [
+    ([[1]], [[1]]),
+    ([[1], [2]], [[1], [2]]),
+    ([[1], [0]], [[1], [2]]),
+    ([[0], [1]], [[0], [0]]),
+    ([[0], [0]], [[1], [2]]),
+])
+@pytest.mark.parametrize("M, bins", [(2048, 512), (32, 16)])
+@pytest.mark.parametrize("masked", [False, True])
+def test_histogram_multi_cta_partitioned(src_cga, dst_cga, M, bins, masked, device):
+    src_layout = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=src_cga)
+    dst_layout = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=dst_cga)
+    generator = torch.Generator().manual_seed(2026)
+    x_cpu = torch.randint(-1, bins + 1, (M, ), generator=generator, dtype=torch.int32)
+    x = x_cpu.to(device)
+    z = torch.full((3, bins), -1, dtype=torch.int32, device=device)
+    compiled = _histogram_multi_cta_kernel[(1, )](x, z, M, bins, src_layout, dst_layout, masked, num_warps=4,
+                                                  num_ctas=1 << len(src_cga))
+    expected = []
+    for i in range(3):
+        values = x_cpu.long() + i
+        valid = (values >= 0) & (values < bins)
+        if masked:
+            valid &= torch.arange(M) % 3 != i
+        expected.append(torch.bincount(values[valid], minlength=bins).to(torch.int32))
+    torch.testing.assert_close(z.cpu(), torch.stack(expected), atol=0, rtol=0)
+    # Fully replicated inputs retain the CTA-local implementation.
+    assert ("ld.shared::cluster" in compiled.asm["ptx"]) == any(basis[0] for basis in src_cga)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires NVIDIA Hopper or newer")
+@pytest.mark.parametrize("use_worker_partition", [False, True])
+def test_histogram_multi_cta_warp_specialized(use_worker_partition, device):
+
+    @gluon.jit
+    def histogram_partition(x_ptr, z_ptr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1]])
+        _histogram_multi_cta_kernel(x_ptr, z_ptr, 2048, 512, layout, layout, False)
+
+    @gluon.jit
+    def empty_partition():
+        pass
+
+    @gluon.jit
+    def kernel(x_ptr, z_ptr, use_worker_partition: ttgl.constexpr):
+        if use_worker_partition:
+            ttgl.warp_specialize([(empty_partition, ()), (histogram_partition, (x_ptr, z_ptr))], [4])
+        else:
+            ttgl.warp_specialize([(histogram_partition, (x_ptr, z_ptr)), (empty_partition, ())], [4])
+
+    generator = torch.Generator().manual_seed(2026)
+    x_cpu = torch.randint(512, (2048, ), generator=generator, dtype=torch.int32)
+    x = x_cpu.to(device)
+    z = torch.full((3, 512), -1, dtype=torch.int32, device=device)
+    kernel[(1, )](x, z, use_worker_partition, num_warps=4, num_ctas=2)
+    expected = []
+    for i in range(3):
+        values = x_cpu.long() + i
+        expected.append(torch.bincount(values[values < 512], minlength=512).to(torch.int32))
+    torch.testing.assert_close(z.cpu(), torch.stack(expected), atol=0, rtol=0)
+
+
 @pytest.mark.parametrize("M", [64, 128, 256])
 @pytest.mark.parametrize("src_layout", _1d_layouts)
 @pytest.mark.parametrize("dst_layout", _1d_layouts)

@@ -1,3 +1,4 @@
+#include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
@@ -19,8 +20,8 @@ computeHistogram(Location loc, ConversionPatternRewriter &rewriter,
                  Value baseSharedMemPtr, const SmallVector<Value> &srcValues,
                  const SmallVector<Value> &maskValues, int numBins,
                  int numThreadPerWarp, const SmallVector<Value> &indices,
-                 Value threadId, Value threadPred, int numWarps,
-                 const TargetInfoBase &targetInfo) {
+                 Value threadId, Value threadPred, int numWarps, int numCTAs,
+                 Operation *sourceOp, const TargetInfoBase &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> histogramValues;
   // Initialize the shared memory with zeros.
@@ -55,13 +56,21 @@ computeHistogram(Location loc, ConversionPatternRewriter &rewriter,
     rewriter.setInsertionPointToStart(thenBlock);
   }
 
-  b.barrier(triton::gpu::AddrSpace::Local);
-  // load the histogram to register with the right layout.
+  if (numCTAs > 1)
+    targetInfo.clusterBarrier(loc, rewriter, sourceOp);
+  else
+    b.barrier(triton::gpu::AddrSpace::Local);
+  // Sum the CTA-local partial histograms in the requested result layout.
   for (Value index : indices) {
     Value sharedMemPtr =
         b.gep(baseSharedMemPtr.getType(), i32_ty, baseSharedMemPtr, index);
-    Value val = targetInfo.loadShared(rewriter, loc, sharedMemPtr, i32_ty,
-                                      b.true_val());
+    Value val = b.i32_val(0);
+    for (int cta = 0; cta < numCTAs; ++cta) {
+      Value ctaId = numCTAs > 1 ? b.i32_val(cta) : Value();
+      Value partial = targetInfo.loadDShared(rewriter, loc, sharedMemPtr, ctaId,
+                                             i32_ty, b.true_val());
+      val = b.add(val, partial);
+    }
     histogramValues.push_back(val);
   }
   return histogramValues;
@@ -105,8 +114,11 @@ public:
     Value threadId = getThreadId(rewriter, loc);
     auto srcType = op.getSrc().getType();
     auto freeVarMasks = getFreeVariableMasks(srcType);
-    // Each CTA computes its own histogram.
-    freeVarMasks[str_attr("block")] = 0;
+    bool crossCTA = hasCrossCTAScratch(op);
+    // When combining partial histograms, count replicated inputs only once
+    // across the cluster. Otherwise each CTA computes the complete histogram.
+    if (!crossCTA)
+      freeVarMasks[str_attr("block")] = 0;
     Value threadPred =
         emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
 
@@ -121,10 +133,10 @@ public:
     SmallVector<Value> innerDimIndices;
     for (int i = 0; i < indices.size(); ++i)
       innerDimIndices.push_back(indices[i][0]);
-    SmallVector<Value> histogramValue =
-        computeHistogram(loc, rewriter, baseSharedMemPtr, srcValues, maskValues,
-                         numBins, numThreadsPerWarp, innerDimIndices, threadId,
-                         threadPred, numWarps, targetInfo);
+    SmallVector<Value> histogramValue = computeHistogram(
+        loc, rewriter, baseSharedMemPtr, srcValues, maskValues, numBins,
+        numThreadsPerWarp, innerDimIndices, threadId, threadPred, numWarps,
+        crossCTA ? triton::gpu::lookupNumCTAs(op) : 1, op, targetInfo);
 
     Value results = packUniqueTensorElements(loc, typeConverter, histogramValue,
                                              rewriter, op.getType());
