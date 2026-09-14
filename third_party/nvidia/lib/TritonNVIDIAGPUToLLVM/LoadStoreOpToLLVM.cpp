@@ -105,6 +105,8 @@ FailureOr<Value> createCachePolicy(CachePolicy cachePolicy,
     else
       fractionBuffer = "1.0";
     std::string fractionStr = fractionBuffer.str().str();
+    if (fractionStr.find_first_of(".eE") == std::string::npos)
+      fractionStr += ".0";
     auto *fractionOpr = ptxBuilder.newConstantOperand(fractionStr);
     policy(dstOpr, fractionOpr);
 
