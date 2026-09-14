@@ -373,11 +373,8 @@ def test_typeconvert_fp8_rounding_edges(src_dtype, src_type, dst_dtype, dst_type
 def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
 
     if is_cuda():
-        if src_dtype != 'float32' and torch.cuda.get_device_capability(0) < (9, 0):
-            pytest.skip("non-float32 downcast tests only supported on NVGPU with compute capability 9.0+")
-
-        if dst_dtype in ('float8e5', 'float8e4nv') and rounding == 'rtne' and torch.cuda.get_device_capability(0) < (9, 0):
-            pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on NVGPU with compute capability 9.0+")
+        if dst_dtype == 'float8e4nv' and torch.cuda.get_device_capability(0) < (8, 9):
+            pytest.skip("E4M3 conversion requires CUDA capability 8.9 or newer")
 
         if dst_dtype in ('float8e5b16', 'float8e4b8') and rounding == 'rtne':
             pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on AMDGPU CDNA3")
@@ -407,13 +404,9 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
 ])
 @pytest.mark.parametrize("dst_dtype", ["float8e4nv", "float8e5"])
 @pytest.mark.parametrize("src_dtype", ["float32", "float16", "bfloat16"])
-def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device, rounding="rtne"):
-    if is_cuda():
-        if src_dtype != 'float32' and torch.cuda.get_device_capability(0) < (9, 0):
-            pytest.skip("non-float32 downcast tests only supported on NVGPU with compute capability 9.0+")
-
-        if dst_dtype in ('float8e5', 'float8e4nv') and rounding == 'rtne' and torch.cuda.get_device_capability(0) < (9, 0):
-            pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on NVGPU with compute capability 9.0+")
+def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device):
+    if is_cuda() and dst_dtype == 'float8e4nv' and torch.cuda.get_device_capability(0) < (8, 9):
+        pytest.skip("E4M3 conversion requires CUDA capability 8.9 or newer")
 
     if dst_dtype in FP8_DTYPES and is_hip_rdna3():
         pytest.skip(f"{dst_dtype} is not supported on AMDGPU RDNA3")
@@ -436,7 +429,7 @@ def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device, round
     torch_dst_dtype = converter[tl_dst_dtype]
 
     if mode in ('max', 'min'):
-        # Added to input to exceed the representation range to produce NaN
+        # Exceed the destination's finite range.
         exceed_value = 100.0
         test_value = torch.finfo(torch_dst_dtype).max + exceed_value
         expected_result = torch.finfo(torch_dst_dtype).max
@@ -460,7 +453,7 @@ def test_typeconvert_downcast_clamping(src_dtype, dst_dtype, mode, device, round
     type_convert_triton[(src.shape[0] // BLOCK_SIZE,)](
         triton.reinterpret(src, torch_src_dtype),
         triton.reinterpret(dst, torch_dst_dtype),
-        rounding,
+        "rtne",
         BLOCK_SIZE
     )
 
