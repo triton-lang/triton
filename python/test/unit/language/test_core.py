@@ -2320,6 +2320,8 @@ def test_tensor_atomic_use_result(dtype_str, size, op, device):
                              ('float32', 'int32', True, 1024),
                              ('float32', 'bool', False, 1024),
                              ('int8', 'bfloat16', False, 1024),
+                             ('int8', 'int32', False, 32),
+                             ('int16', 'int32', False, 32),
                          ] + [(f'uint{x}', f'int{x}', True, 1024)
                               for x in [8, 16, 32, 64]] + [(f'int{x}', f'uint{x}', True, 1024)
                                                            for x in [8, 16, 32, 64]] +
@@ -2401,8 +2403,10 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
         z_tri = to_triton(np.empty((size, ), dtype=getattr(np, dtype_z_np)), device=device)
 
     dtype_z_tri = str_to_triton_dtype(dtype_z)
-    kernel[(1, )](x_tri, z_tri, TO_TYPE=dtype_z_tri, BITCAST=bitcast, SIZE=size, ARG_HASH=arg_hash, num_warps=1,
-                  num_ctas=num_ctas)
+    h = kernel[(1, )](x_tri, z_tri, TO_TYPE=dtype_z_tri, BITCAST=bitcast, SIZE=size, ARG_HASH=arg_hash, num_warps=1,
+                      num_ctas=num_ctas)
+    if not is_interpreter() and is_cuda() and size == 32 and dtype_x in ("int8", "int16") and dtype_z == "int32":
+        assert f"ld.global.s{dtype_x[3:]}" in h.asm["ptx"]
     # torch result
     if dtype_z.startswith('bfloat') or dtype_x.startswith('bfloat') or dtype_z.startswith(
             'float8') or dtype_x.startswith('float8'):
@@ -3786,13 +3790,11 @@ def test_permute(dtype_str, shape, perm, num_ctas, device):
     if not is_cuda():
         return
 
-    # parse ptx to make sure ld/st are vectorized
-    ptx = pgm.asm['ptx']
-    assert 'ld.global.v4' in ptx
-    assert 'st.global.v4' in ptx
-    ptx = pgm_contiguous.asm['ptx']
-    assert 'ld.global.v4' in ptx
-    assert 'st.global.v4' in ptx
+    # Check 16-byte vector transfers independently of the PTX register width.
+    for compiled in (pgm, pgm_contiguous):
+        for opcode in ('ld', 'st'):
+            widths = re.findall(rf'\b{opcode}\.global\.v(\d+)\.[bfsu](\d+)\b', compiled.asm['ptx'])
+            assert any(int(lanes) * int(bits) == 128 for lanes, bits in widths), widths
 
 
 @pytest.mark.interpreter
@@ -5234,6 +5236,8 @@ def test_load_cache_modifier(cache, device):
         ptx = pgm.asm['ptx']
         all_modifiers = ['.ca', '.cg', '.cs', '.cv']
         for modifier in all_modifiers:
+            if modifier == '.ca' and cache in ('', '.ca'):
+                continue
             if modifier == cache:
                 assert f'ld.global{modifier}' in ptx
             else:
@@ -5409,6 +5413,8 @@ def test_store_cache_modifier(cache, device):
         ptx = pgm.asm['ptx']
         all_modifiers = ['.wb', '.cg', '.cs', '.wt']
         for modifier in all_modifiers:
+            if modifier == '.wb' and cache in ('', '.wb'):
+                continue
             if modifier == cache:
                 assert f'st.global{modifier}' in ptx
             else:

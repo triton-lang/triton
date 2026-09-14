@@ -1001,6 +1001,35 @@ def test_store_layouts(M, src_layout, device):
     torch.testing.assert_close(y, x)
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+@pytest.mark.parametrize("bits", [1, 4])
+def test_subbyte_memory_roundtrip(bits, tmp_path, device):
+    target = triton.runtime.driver.active.get_current_target()
+    ir = f"""
+#blocked = #ttg.blocked<{{sizePerThread = [32], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}}>
+module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:{target.arch}"}} {{
+  tt.func public @subbyte_roundtrip(%src: !tt.ptr<i{bits}> {{tt.divisibility = 32 : i32}}, %dst: !tt.ptr<i{bits}> {{tt.divisibility = 32 : i32}}) {{
+    %offsets = tt.make_range {{start = 0 : i32, end = 4096 : i32}} : tensor<4096xi32, #blocked>
+    %srcs = tt.splat %src : !tt.ptr<i{bits}> -> tensor<4096x!tt.ptr<i{bits}>, #blocked>
+    %dsts = tt.splat %dst : !tt.ptr<i{bits}> -> tensor<4096x!tt.ptr<i{bits}>, #blocked>
+    %src_ptrs = tt.addptr %srcs, %offsets : tensor<4096x!tt.ptr<i{bits}>, #blocked>, tensor<4096xi32, #blocked>
+    %dst_ptrs = tt.addptr %dsts, %offsets : tensor<4096x!tt.ptr<i{bits}>, #blocked>, tensor<4096xi32, #blocked>
+    %values = tt.load %src_ptrs : tensor<4096x!tt.ptr<i{bits}>, #blocked>
+    tt.store %dst_ptrs, %values : tensor<4096x!tt.ptr<i{bits}>, #blocked>
+    tt.return
+  }}
+}}
+"""
+    source = tmp_path / "subbyte_roundtrip.ttgir"
+    source.write_text(ir)
+    kernel = triton.compile(str(source))
+    x = torch.arange(4096, device=device, dtype=torch.int32).to(torch.uint8)
+    y = torch.full_like(x, 255)
+    assert x.data_ptr() % 32 == 0 and y.data_ptr() % 32 == 0
+    kernel[(1, 1, 1)](x, y)
+    torch.testing.assert_close(y, x & ((1 << bits) - 1))
+
+
 _1d_layouts = _filter_layouts([
     ttgl.BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0]),
     ttgl.BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0]),
