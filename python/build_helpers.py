@@ -738,7 +738,7 @@ def get_nvidia_toolchain_packages():
             dst_path="bin/ptxas",
             override_attr="ptxas_path",
         ),
-        # Blackwell needs a separate ptxas because this version has Hopper bugs.
+        # Hopper and newer use this toolchain; older targets retain CUDA 12 support.
         NvidiaToolchainPackage(
             name="nvcc-blackwell",
             component="cuda_nvcc",
