@@ -329,7 +329,8 @@ void insertAsyncCopy(
 
     // No need to create async copy for TMA load which will be handled in
     // insertAsyncComm.
-    if (isa<tt::DescriptorLoadOp>(srcOp)) {
+    if (isa<tt::DescriptorLoadOp>(srcOp) &&
+        canFillBufferWithTMA(domininatingChannel, bufferMap)) {
       producerConsumerOps = {srcOp, domininatingChannel->getDstOp()};
     } else if (isa<triton::LoadOp>(srcOp)) {
       SmallVector<AsyncTaskId> asyncTasksPC = getAsyncTaskIds(srcOp);
