@@ -1121,7 +1121,7 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
             assert "kind::mxf8f6f4" in ptx
 
 
-@pytest.mark.parametrize("BLOCK_K", [32, 64, 128])
+@pytest.mark.parametrize("BLOCK_K", [16, 32, 64, 128])
 @pytest.mark.parametrize(
     ("scale_type", "VEC_SIZE"),
     [("float8_e8m0fnu", 32), ("float8_e4m3fn", 16)],
@@ -1131,6 +1131,8 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
 def test_dot_scaled_fp4_small_k_sm120(BLOCK_K, scale_type, VEC_SIZE, num_warps, device):
     if not is_cuda() or torch.cuda.get_device_capability()[0] != 12:
         pytest.skip("Requires SM120 or SM121")
+    if BLOCK_K < VEC_SIZE:
+        pytest.skip("BLOCK_K must cover a full scale block")
     torch.manual_seed(42)
     M, N, K = 16, 32, 2 * BLOCK_K
     a_fp4 = MXFP4Tensor(size=(M, K), device=device).random()

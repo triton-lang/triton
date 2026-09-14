@@ -937,6 +937,26 @@ module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num
 #blocked_small_k = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 
 module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @sm120_nvfp4_k16_fallback
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK-COUNT-2: ttg.fp4_to_fp
+  // CHECK: tt.dot {{.*}}
+  // CHECK-NOT: tt.dot_scaled
+  // CHECK: tt.return
+  tt.func @sm120_nvfp4_k16_fallback(
+    %a: tensor<16x8xi8, #blocked_small_k>,
+    %scale_a: tensor<16x1xf8E4M3FN, #blocked_small_k>,
+    %b: tensor<8x16xi8, #blocked_small_k>,
+    %scale_b: tensor<16x1xf8E4M3FN, #blocked_small_k>
+  ) -> tensor<16x16xf32, #blocked_small_k> {
+    %cst = arith.constant dense<0.0> : tensor<16x16xf32, #blocked_small_k>
+    %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e2m1 rhs = e2m1 {fastMath = false}
+      : tensor<16x8xi8, #blocked_small_k>, tensor<16x1xf8E4M3FN, #blocked_small_k>
+        * tensor<8x16xi8, #blocked_small_k>, tensor<16x1xf8E4M3FN, #blocked_small_k>
+        -> tensor<16x16xf32, #blocked_small_k>
+    tt.return %d : tensor<16x16xf32, #blocked_small_k>
+  }
+
   // CHECK-LABEL: @sm120_mxfp4_k32_fallback
   // CHECK-NOT: tt.dot_scaled
   // CHECK-COUNT-2: ttg.fp4_to_fp

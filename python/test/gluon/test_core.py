@@ -2329,6 +2329,33 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, has_scale, device='cuda'):
     assert 'v_mfma_scale_f32_16x16x128_f8f6f4' in compiled.asm['amdgcn']
 
 
+@pytest.mark.parametrize("bytes_per_thread", [1, 2, 4, 8])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_fp4_to_fp_small_tiles(bytes_per_thread, dtype, device):
+
+    @gluon.jit
+    def kernel(src, dst, BLOCK_SIZE: ttgl.constexpr, layout: ttgl.constexpr):
+        offsets = ttgl.arange(0, BLOCK_SIZE, layout=layout)
+        packed = ttgl.load(src + ttgl.program_id(0) * BLOCK_SIZE + offsets)
+        values = ttgl.fp4_to_fp(packed, dst.dtype.element_ty, axis=0)
+        output_offsets = ttgl.arange(0, 2 * BLOCK_SIZE, layout=values.type.layout)
+        ttgl.store(dst + ttgl.program_id(0) * (2 * BLOCK_SIZE) + output_offsets, values)
+
+    block_size = THREADS_PER_WARP * 4 * bytes_per_thread
+    # Cover all 256 byte patterns, including positive and negative zero.
+    packed = torch.arange(2 * block_size, device=device).to(torch.uint8)
+    output = torch.empty(2 * packed.numel(), device=device, dtype=dtype)
+    layout = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0])
+    kernel[(2, )](packed, output, block_size, layout, num_warps=4)
+    if is_compile_warmup():
+        return
+    fp4 = MXFP4Tensor(size=output.shape, device=device)
+    fp4.data = fp4.unpack_packed_tensor(packed, dim=0, original_shape=output.shape)
+    reference = fp4.to(torch.float32).to(dtype)
+    # Compare bits to distinguish positive and negative zero.
+    torch.testing.assert_close(output.view(torch.int16), reference.view(torch.int16), atol=0, rtol=0)
+
+
 def test_math_fast_expf():
 
     @gluon.jit
