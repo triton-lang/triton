@@ -39,6 +39,35 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 // -----
 
+// CHECK-LABEL: @private_masked_store_barrier_workaround
+// CHECK: tt.store %{{[^,]+}}, %{{[^,]+}}, %{{[^ ]+}} : !tt.ptr<i32>
+// CHECK-NEXT: ttg.barrier global_write
+// CHECK-NEXT: tt.return
+// CHECK-LABEL: @masked_store_barrier_workaround
+// CHECK: cf.cond_br
+// CHECK: tt.store %{{[^,]+}}, %{{[^,]+}}, %{{[^ ]+}} : !tt.ptr<i32>
+// CHECK-NEXT: ttg.barrier global_write
+// CHECK-NEXT: cf.br
+// CHECK: tt.store %{{[^,]+}}, %{{[^ ]+}} : !tt.ptr<i32>
+// CHECK-NEXT: tt.return
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 0 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  tt.func private @private_masked_store_barrier_workaround(%ptr: !tt.ptr<i32>, %value: i32, %mask: i1) {
+    tt.store %ptr, %value, %mask : !tt.ptr<i32>
+    tt.return
+  }
+  tt.func public @masked_store_barrier_workaround(%masked: !tt.ptr<i32>, %unmasked: !tt.ptr<i32>, %value: i32, %mask: i1, %branch: i1) {
+    cf.cond_br %branch, ^masked_store, ^join
+  ^masked_store:
+    tt.store %masked, %value, %mask : !tt.ptr<i32>
+    cf.br ^join
+  ^join:
+    tt.store %unmasked, %value : !tt.ptr<i32>
+    tt.return
+  }
+}
+
+// -----
+
 #call_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [2, 2], order = [1, 0], CGALayout = [[1, 0]]}>
 #call_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
 #call_smem = #ttg.shared_memory
@@ -106,6 +135,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK-NEXT: %[[ACTIVE_CTAS:.*]] = tt.splat %[[ACTIVE_CTA]] : i32 -> tensor<2xi32
   // CHECK-NEXT: %[[ACTIVE_STORE_MASK:.*]] = arith.cmpi eq, {{.*}}, %[[ACTIVE_CTAS]] : tensor<2xi32
   // CHECK-NOT: tt.load
+  // ConSan-generated masked stores are created after the source-store snapshot
+  // and must not receive the PTXAS workaround barrier.
   // CHECK: tt.store %{{[^,]+}}, %[[ACTIVE_VALUES]], %[[ACTIVE_STORE_MASK]] {ignore_cta} : tensor<2x!tt.ptr<i32>
   // CHECK-NEXT: tt.return
 

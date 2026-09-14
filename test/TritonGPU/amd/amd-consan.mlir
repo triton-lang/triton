@@ -34,6 +34,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 // -----
 
+// CHECK-LABEL: @masked_store_barrier_workaround_is_nvidia_only
+// CHECK: tt.store %{{[^,]+}}, %{{[^,]+}}, %{{[^ ]+}} : !tt.ptr<i32>
+// CHECK-NEXT: tt.return
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 0 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  tt.func public @masked_store_barrier_workaround_is_nvidia_only(%ptr: !tt.ptr<i32>, %value: i32, %mask: i1) {
+    tt.store %ptr, %value, %mask : !tt.ptr<i32>
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 4, perPhase = 4, maxPhase = 4, order = [1, 0]}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory

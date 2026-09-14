@@ -1,6 +1,9 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm="ptx-version=88" -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --check-prefixes=CHECK,OLD-PTX --dump-input-context 20
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm="ptx-version=93" -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --check-prefixes=CHECK,OLD-PTX --dump-input-context 20
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm="ptx-version=94" -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --check-prefixes=CHECK,PTX94 --dump-input-context 20
+// RUN: split-file %s %t
+// RUN: triton-opt %t/masked-store-barrier.mlir --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83 enable-concurrency-sanitizer=true' -reconcile-unrealized-casts | FileCheck %t/masked-store-barrier.mlir --check-prefix=CONSAN
+// RUN: triton-opt %t/masked-store-barrier.mlir --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83 enable-concurrency-sanitizer=false' -reconcile-unrealized-casts | FileCheck %t/masked-store-barrier.mlir --check-prefix=NO-CONSAN
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i32, %arg1: !llvm.ptr<1> {tt.pointee_type = f16}, %arg2: !llvm.ptr<1>, %arg3: !llvm.ptr<1>)
@@ -3965,6 +3968,35 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     ttg.local_scatter %alloc[%indices], %gathered {axis = 0 : i32} : !ttg.memdesc<256x!tt.ptr<i32>, #shared, #smem, mutable>, tensor<256xi32, #blocked>, tensor<256x!tt.ptr<i32>, #blocked>
     %sum = arith.addi %values, %other : tensor<256xi32, #blocked>
     tt.store %out, %sum : tensor<256x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
+}
+
+//--- masked-store-barrier.mlir
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 0 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {
+  // CONSAN-LABEL: @consan_masked_store_barrier
+  // NO-CONSAN-LABEL: @consan_masked_store_barrier
+  tt.func public @consan_masked_store_barrier(%masked: !tt.ptr<i32>, %unmasked: !tt.ptr<i32>, %value: i32, %mask: i1, %branch: i1) {
+    cf.cond_br %branch, ^masked_store, ^join
+  ^masked_store:
+    // CONSAN: st.global.b32{{.*}}, %arg0,
+    // CONSAN-NEXT: nvvm.barrier
+    // CONSAN-NEXT: llvm.br
+    // NO-CONSAN-NOT: nvvm.barrier
+    // NO-CONSAN: st.global.b32{{.*}}, %arg0,
+    // NO-CONSAN-NEXT: llvm.br
+    tt.store %masked, %value, %mask : !tt.ptr<i32>
+    cf.br ^join
+  ^join:
+    // CONSAN: st.global.b32{{.*}}, %arg1,
+    // CONSAN-NOT: nvvm.barrier
+    // CONSAN: llvm.return
+    // NO-CONSAN-NOT: nvvm.barrier
+    // NO-CONSAN: st.global.b32{{.*}}, %arg1,
+    // NO-CONSAN-NOT: nvvm.barrier
+    // NO-CONSAN: llvm.return
+    tt.store %unmasked, %value : !tt.ptr<i32>
     tt.return
   }
 }
