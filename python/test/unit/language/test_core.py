@@ -2584,6 +2584,8 @@ def test_umulhi(dtype_str, device):
     np.testing.assert_equal(umulhi_ref(x, y), to_numpy(z_tri))
     if not is_interpreter() and is_cuda():
         assert f"mul.hi.u{np_dtype.itemsize * 8}" in compiled.asm["ptx"]
+    elif not is_interpreter() and is_hip():
+        assert "v_mul_hi_u32" in compiled.asm["amdgcn"]
 
 
 @pytest.mark.parametrize("masked", [False, True])
@@ -2612,6 +2614,8 @@ def test_umulhi_known_bits(masked, dtype_str, device):
     torch.testing.assert_close(output, expected)
     if is_cuda():
         assert "mul.hi." not in compiled.asm["ptx"]
+    elif is_hip():
+        assert "mul_hi" not in compiled.asm["amdgcn"]
 
 
 @pytest.mark.interpreter

@@ -590,12 +590,6 @@ unsigned TargetInfo::getReductionTreeArity(Operation *combinerOp) const {
   return 2;
 }
 
-std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
-  std::string funcName =
-      resultElementTy.isInteger(32) ? "__nv_umulhi" : "__nv_umul64hi";
-  return funcName;
-}
-
 void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
                         int /*formatStrByteCount*/, ValueRange args,
                         ArrayRef<bool> isSigned) const {
