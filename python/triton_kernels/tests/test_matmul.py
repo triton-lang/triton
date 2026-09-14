@@ -740,29 +740,76 @@ def test_matmul_mixed_fp8_matches_upcast(fp8_lhs, dtype, out_dtype, b_transpose,
         torch.testing.assert_close(actual.float(), expected.float(), rtol=torch.finfo(out_dtype).eps, atol=1e-4)
 
 
-@pytest.mark.parametrize("fp8_lhs", [False, True])
-@pytest.mark.parametrize("is_persistent", [False, True])
-def test_matmul_mixed_fp8_preserves_fp16_precision(fp8_lhs, is_persistent, device, opt_flags_scope):
-    if is_cuda() and torch.cuda.get_device_capability()[0] < 9:
-        pytest.skip("requires Hopper or newer")
-    if is_hip() and is_persistent:
-        pytest.skip("Persistent kernel not supported on AMD GPU")
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("fp32_lhs", [False, True])
+@pytest.mark.parametrize("b_transpose", [False, True])
+@pytest.mark.parametrize("allow_tf32", [False, True])
+@pytest.mark.parametrize("out_dtype", [None, torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("shape, step, constraints", [
+    ((16, 256, 1024), 1, {}),
+    ((4096, 4096, 128), 1, {}),
+    ((67, 80, 272), 1, dict(is_persistent=False, split_k=3)),
+    ((67, 80, 272), 1, dict(is_persistent=True, split_k=1)),
+    ((512, 256, 128), 2, {}),
+])
+@pytest.mark.enable_warmup(priority=2)
+def test_matmul_mixed_fp32_matches_cast(dtype, fp32_lhs, b_transpose, allow_tf32, out_dtype, shape, step,
+                                      constraints, device, opt_flags_scope):
+    if constraints.get("is_persistent") and (is_hip() or torch.cuda.get_device_capability()[0] < 9):
+        pytest.skip("persistent matmul requires Hopper or newer")
 
-    a = torch.zeros((128, 128), dtype=torch.float16, device=device)
+    torch.manual_seed(0)
+    m, n, k = shape
+    a_dtype, b_dtype = (torch.float32, dtype) if fp32_lhs else (dtype, torch.float32)
+    a_step, b_step = (1, step) if fp32_lhs else (step, 1)
+    a = torch.randn((m, k * a_step), dtype=a_dtype, device=device)[:, ::a_step]
+    if b_transpose:
+        b = torch.randn((n, k * b_step), dtype=b_dtype, device=device)[:, ::b_step].mT
+    else:
+        b = torch.randn((k, n * b_step), dtype=b_dtype, device=device)[:, ::b_step]
+
+    opt_flags.update_opt_flags_constraints(constraints)
+    config = PrecisionConfig(out_dtype=out_dtype, allow_tf32=allow_tf32)
+    expected = matmul(a.float(), b.float(), None, precision_config=config)
+    actual = matmul(a, b, None, precision_config=config)
+    assert actual.dtype == expected.dtype == (out_dtype or torch.float32)
+    if not is_compile_warmup():
+        torch.testing.assert_close(actual.contiguous().view(torch.uint8), expected.contiguous().view(torch.uint8),
+                                   rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("dtype, other_dtype, allow_tf32", [
+    (torch.float16, torch.float8_e4m3fn, True),
+    *[(torch.float32, dtype, allow_tf32)
+      for dtype in (torch.float16, torch.bfloat16)
+      for allow_tf32 in (False, True)],
+])
+@pytest.mark.parametrize("high_precision_lhs", [False, True])
+@pytest.mark.parametrize("is_persistent", [False, True])
+def test_matmul_mixed_preserves_precision(dtype, other_dtype, allow_tf32, high_precision_lhs, is_persistent,
+                                        device, opt_flags_scope):
+    if other_dtype == torch.float8_e4m3fn and is_cuda() and torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip("requires Hopper or newer")
+    if is_persistent and (is_hip() or torch.cuda.get_device_capability()[0] < 9):
+        pytest.skip("persistent matmul requires Hopper or newer")
+
+    # FP32 values exceed FP16's range; cancellation exposes lost mantissa bits.
+    scale = 2**16 if dtype == torch.float32 else 1
+    residual = scale * 2**(-10 if allow_tf32 else -20)
+    a = torch.zeros((128, 128), dtype=dtype, device=device)
     b = torch.zeros_like(a)
     a[:, 0] = 1
     a[:, 1] = -1
-    # Rounding the FP16 operand to BF16 would erase the residual.
-    b[0, :] = 1 + 2**-10
-    b[1, :] = 1
-    a = a.to(torch.float8_e4m3fn)
-    if not fp8_lhs:
+    b[0, :] = scale + residual
+    b[1, :] = scale
+    a = a.to(other_dtype)
+    if high_precision_lhs:
         a, b = b.mT.contiguous(), a.mT.contiguous()
 
     opt_flags.update_opt_flags_constraints(dict(is_persistent=is_persistent, split_k=1))
-    actual = matmul(a, b, None, precision_config=PrecisionConfig(out_dtype=torch.float16))
+    actual = matmul(a, b, None, precision_config=PrecisionConfig(out_dtype=dtype, allow_tf32=allow_tf32))
 
-    expected = torch.full((128, 128), 2**-10, dtype=torch.float16, device=device)
+    expected = torch.full((128, 128), residual, dtype=dtype, device=device)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
