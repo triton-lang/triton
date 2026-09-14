@@ -17,27 +17,6 @@ namespace mlir::triton {
 namespace gpu {
 namespace {
 
-struct MulhiUIOpConversion
-    : ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion> {
-  using Base = ElementwiseOpConversionBase<MulhiUIOp, MulhiUIOpConversion>;
-  using Base::Base;
-
-  SmallVector<Value> createDestOps(MulhiUIOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    if (!elemTy.isInteger(32) && !elemTy.isInteger(64))
-      return {};
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    unsigned bitWidth = elemTy.getIntOrFloatBitWidth();
-    Type wideTy = rewriter.getIntegerType(2 * bitWidth);
-    Value lhs = b.zext(wideTy, operands[0][0]);
-    Value rhs = b.zext(wideTy, operands[0][1]);
-    Value high = b.lshr(b.mul(lhs, rhs), b.int_val(2 * bitWidth, bitWidth));
-    return {b.trunc(elemTy, high)};
-  }
-};
-
 /* ----- FP8E5M2 ------ */
 // This data-type is the standard FP8E5M2 format
 
@@ -961,8 +940,6 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
 
 #undef POPULATE_OP
 
-  patterns.add<MulhiUIOpConversion>(typeConverter, axisInfoAnalysis,
-                                    benefit.getBenefit() + 1);
   patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis,

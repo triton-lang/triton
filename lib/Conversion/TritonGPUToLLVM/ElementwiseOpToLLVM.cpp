@@ -157,6 +157,16 @@ struct MulhiUIOpConversion
     Type resultElementTy = getElementTypeOrSelf(op.getResult().getType());
     assert(resultElementTy.isInteger(32) || resultElementTy.isInteger(64));
 
+    if (targetInfo.isCuda()) {
+      auto b = TritonLLVMOpBuilder(loc, rewriter);
+      unsigned bitWidth = elemTy.getIntOrFloatBitWidth();
+      Type wideTy = rewriter.getIntegerType(2 * bitWidth);
+      Value lhs = b.zext(wideTy, operands[0][0]);
+      Value rhs = b.zext(wideTy, operands[0][1]);
+      Value high = b.lshr(b.mul(lhs, rhs), b.int_val(2 * bitWidth, bitWidth));
+      return {b.trunc(elemTy, high)};
+    }
+
     auto funcName = targetInfo.getMulhiFuncName(resultElementTy);
     Type funcType = getFunctionType(elemTy, operands[0]);
     LLVM::LLVMFuncOp funcOp =
