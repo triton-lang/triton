@@ -3485,18 +3485,82 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
-#histSrc = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0], [1]]}>
-#histDst = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1], [2]]}>
+#histPartial = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0], [1]]}>
+#histSplit = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1], [2]]}>
+#histBroadcast = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0], [0]]}>
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // A split input requires all four partial counts even when result bins have
+  // distinct CTA owners. Atomic updates remain in CTA-local shared memory.
+  // CHECK-LABEL: @histogram_split_input_split_result
+  // CHECK: llvm.atomicrmw add {{.*}} : !llvm.ptr<3>, i32
+  // CHECK: nvvm.cluster.arrive
+  // CHECK-NEXT: nvvm.cluster.wait
+  // CHECK-COUNT-4: nvvm.mapa
+  // CHECK: llvm.add
+  // CHECK-NOT: nvvm.mapa
+  // CHECK: llvm.return
+  tt.func @histogram_split_input_split_result(%src: tensor<512xi32, #histSplit>, %out_ptr: tensor<512x!tt.ptr<i32>, #histSplit>) {
+    %hist = tt.histogram %src : tensor<512xi32, #histSplit> -> tensor<512xi32, #histSplit>
+    tt.store %out_ptr, %hist : tensor<512x!tt.ptr<i32>, #histSplit>
+    tt.return
+  }
+
+  // Replicating the result does not eliminate aggregation of a split input.
+  // CHECK-LABEL: @histogram_split_input_replicated_result
+  // CHECK: llvm.atomicrmw add {{.*}} : !llvm.ptr<3>, i32
+  // CHECK: nvvm.cluster.arrive
+  // CHECK-NEXT: nvvm.cluster.wait
+  // CHECK-COUNT-4: nvvm.mapa
+  // CHECK: llvm.add
+  // CHECK-NOT: nvvm.mapa
+  // CHECK: llvm.return
+  tt.func @histogram_split_input_replicated_result(%src: tensor<512xi32, #histSplit>, %out_ptr: tensor<128x!tt.ptr<i32>, #histBroadcast>) {
+    %hist = tt.histogram %src : tensor<512xi32, #histSplit> -> tensor<128xi32, #histBroadcast>
+    tt.store %out_ptr, %hist : tensor<128x!tt.ptr<i32>, #histBroadcast>
+    tt.return
+  }
+
+  // Each CTA sees the full input, so it can read its result bins locally.
+  // CHECK-LABEL: @histogram_replicated_input_split_result
+  // CHECK: llvm.atomicrmw add {{.*}} : !llvm.ptr<3>, i32
+  // CHECK-NOT: nvvm.cluster.arrive
+  // CHECK-NOT: nvvm.mapa
+  // CHECK: llvm.load {{.*}} : !llvm.ptr<3>
+  // CHECK-NOT: nvvm.mapa
+  // CHECK: llvm.return
+  tt.func @histogram_replicated_input_split_result(%src: tensor<512xi32, #histBroadcast>, %out_ptr: tensor<512x!tt.ptr<i32>, #histSplit>) {
+    %hist = tt.histogram %src : tensor<512xi32, #histBroadcast> -> tensor<512xi32, #histSplit>
+    tt.store %out_ptr, %hist : tensor<512x!tt.ptr<i32>, #histSplit>
+    tt.return
+  }
+
   // CTA bit 0 broadcasts the input. Only CTAs 0 and 2 accumulate counts;
   // loading the zero partial histograms from CTAs 1 and 3 is unnecessary.
   // CHECK-LABEL: @histogram_skips_replicated_ctas
-  // CHECK-COUNT-2: nvvm.mapa
+  // CHECK: %[[CTA:.*]] = nvg.cluster_id
+  // CHECK: %[[MASK:.*]] = llvm.mlir.constant(1 : i32)
+  // CHECK: %[[MASKED:.*]] = llvm.and %[[CTA]], %[[MASK]]
+  // CHECK: %[[PRED:.*]] = llvm.icmp "eq" %[[MASKED]], %{{.*}} : i32
+  // CHECK: %[[UPDATE:.*]] = llvm.and %{{.*}}, %[[PRED]] : i1
+  // CHECK: llvm.cond_br %[[UPDATE]]
+  // CHECK: llvm.atomicrmw add {{.*}} : !llvm.ptr<3>, i32
+  // CHECK: nvvm.cluster.arrive
+  // CHECK-NEXT: nvvm.cluster.wait
+  // CHECK-NEXT: llvm.getelementptr
+  // CHECK-NEXT: %[[INIT:.*]] = llvm.mlir.constant(0 : i32)
+  // CHECK-NEXT: %[[CTA0:.*]] = llvm.mlir.constant(0 : i32)
+  // CHECK: %[[PTR0:.*]] = nvvm.mapa %{{.*}}, %[[CTA0]]
+  // CHECK-NEXT: llvm.load %[[PTR0]]
+  // CHECK: llvm.add
+  // CHECK-NEXT: %[[CTA2:.*]] = llvm.mlir.constant(2 : i32)
+  // CHECK: %[[PTR2:.*]] = nvvm.mapa %{{.*}}, %[[CTA2]]
+  // CHECK-NEXT: llvm.load %[[PTR2]]
+  // CHECK: llvm.add
   // CHECK-NOT: nvvm.mapa
   // CHECK: llvm.return
-  tt.func @histogram_skips_replicated_ctas(%src: tensor<256xi32, #histSrc>, %out_ptr: tensor<512x!tt.ptr<i32>, #histDst>) {
-    %hist = tt.histogram %src : tensor<256xi32, #histSrc> -> tensor<512xi32, #histDst>
-    tt.store %out_ptr, %hist : tensor<512x!tt.ptr<i32>, #histDst>
+  tt.func @histogram_skips_replicated_ctas(%src: tensor<256xi32, #histPartial>, %out_ptr: tensor<512x!tt.ptr<i32>, #histSplit>) {
+    %hist = tt.histogram %src : tensor<256xi32, #histPartial> -> tensor<512xi32, #histSplit>
+    tt.store %out_ptr, %hist : tensor<512x!tt.ptr<i32>, #histSplit>
     tt.return
   }
 }
