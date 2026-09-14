@@ -1330,9 +1330,8 @@ LinearLayout
 PaddedSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   // A padded layout's interval padding is not expressible as a LinearLayout;
   // toLinearLayoutIgnoringPadding() routes it to paddedLinearLayout() instead.
-  assert(0 && "padded shared encoding has no linear layout; use "
-              "paddedLinearLayout instead");
-  return LinearLayout::empty();
+  llvm::report_fatal_error("padded shared encoding has no linear layout; use "
+                           "paddedLinearLayout instead");
 }
 
 LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding) {
