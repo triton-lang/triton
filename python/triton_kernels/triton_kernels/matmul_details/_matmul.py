@@ -9,7 +9,7 @@ from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_
 from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
 from triton_kernels.tensor_details.layout_details.cdna4_scale import unswizzle_mx_scale_cdna4
 from triton_kernels.tensor_details.layout_details.gfx1250_scale import unswizzle_mx_scale_gfx1250
-from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
+from triton_kernels.numerics_details.flexpoint import cast_output, float_to_flex, load_scale
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE, NVFP_BLOCK_SIZE
 from triton_kernels.numerics_details.mxfp_details._upcast_from_mxfp import upcast_mxfp4_tile, upcast_nvfp4_tile
 from triton_kernels.target_info import cuda_capability_geq
@@ -21,6 +21,7 @@ from ._common import (
     matmul_launch_metadata,
     compute_pids,
     output_mx_scale_store_ptr,
+    upcast_fp8,
 )
 
 
@@ -95,6 +96,7 @@ def _matmul(
              NUM_SMS: tl.constexpr,
              X_TMA_MODE: tl.constexpr,
              Y_TMA_MODE: tl.constexpr,
+             COMPUTE_DTYPE: tl.constexpr,
              Y_MX_SCALE_LAYOUT: tl.constexpr = None,
              OUT_N_TILE_ALIGNED: tl.constexpr = False,
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
@@ -382,7 +384,7 @@ def _matmul(
     else:
         WTensorScalePtrs = None
     # compute output
-    acc_dtype: tl.constexpr = tl.float64 if x_type == tl.float64 and w_type == tl.float64 else tl.float32
+    acc_dtype: tl.constexpr = tl.float64 if COMPUTE_DTYPE == tl.float64 else tl.float32
     acc = tl.zeros((BLOCK_N, BLOCK_M) if SWAP_XW else (BLOCK_M, BLOCK_N), dtype=acc_dtype)
     x_k_limit = K_X + BLOCK_K * SPLIT_K
     w_k_limit = K_W + PACKED_BLOCK_K_W * SPLIT_K
@@ -416,7 +418,7 @@ def _matmul(
 
         x = tl.load(XPtrs, mask=mask_k_x[None, :], other=0.0)
         w = tl.load(WPtrs, mask=mask_k_w[:, None], other=0.0, cache_modifier=W_CACHE_MODIFIER)
-        if cuda_capability_geq(8, 0):
+        if cuda_capability_geq(8, 0) and COMPUTE_DTYPE == tl.float32:
             if x.dtype == tl.float32 and ALLOW_TF32:
                 x = round_f32_to_tf32(x)
             if w.dtype == tl.float32 and ALLOW_TF32:
@@ -496,7 +498,7 @@ def _matmul(
             if is_x_microscaled:
                 XMxScalePtrs += (MX_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
         else:
-            acc = matmul_dot(x, w, acc, SWAP_XW, MAX_NUM_IMPRECISE_ACC, ALLOW_TF32)
+            acc = matmul_dot(x, w, acc, SWAP_XW, MAX_NUM_IMPRECISE_ACC, ALLOW_TF32, COMPUTE_DTYPE)
         if is_x_fp4:
             XPtrs += ((BLOCK_K // 2) * SPLIT_K) * stride_x_k
         else:
@@ -586,7 +588,10 @@ def _matmul(
             AccPtrs = YPtrs
         else:
             AccPtrs = OutAcc + start_z_out.to(index_type) * stride_acc_z + offs_y_m.to(index_type)[:, None] * stride_acc_m + offs_y_n.to(index_type)[None, :] * stride_acc_n
-        out += tl.load(AccPtrs, mask=mask, other=0.0) * load_scale(ScalePtr)
+        acc = tl.load(AccPtrs, mask=mask, other=0.0)
+        if out.dtype == tl.float64:
+            acc = upcast_fp8(acc)
+        out += acc * load_scale(ScalePtr)
 
     if is_out_microscaled:
         MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MX_BLOCK_SIZE
@@ -640,6 +645,7 @@ def _matmul(
         out = float_to_flex(out, YExpectedScale, YActualScale, YChecksumScale, mask, Y, FLEXPOINT_SATURATE_INF)
         if EPILOGUE_FN is not None and not IS_EPILOGUE_QUANT_MX:
             out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=YPtrs.dtype.element_ty)
+    out = cast_output(out, YPtrs.dtype.element_ty)
     if pYPtrs is None:
         tl.store(YPtrs, out, mask=mask_store)
     else:

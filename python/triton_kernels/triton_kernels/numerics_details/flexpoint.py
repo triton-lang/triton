@@ -152,6 +152,17 @@ def update_scale(x, scale_ptr, Out) -> None:
 
 
 @triton.jit
+def cast_output(x, dtype: tl.constexpr):
+    # Canonicalize arithmetic NaNs; preserve already-quantized FP8 encodings.
+    if x.dtype.is_floating() and not x.dtype.is_fp8():
+        x = tl.where(x == x, x, float("nan"))
+    # FP8 output conversion uses FP32 only after all epilogue arithmetic.
+    if x.dtype == tl.float64 and dtype.is_fp8():
+        x = x.to(tl.float32)
+    return x.to(dtype)
+
+
+@triton.jit
 def float_to_flex(
     x,
     expected_scale_ptr_or_val,
