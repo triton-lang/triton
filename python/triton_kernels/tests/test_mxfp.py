@@ -331,8 +331,8 @@ def test_mxfp_casting(
     microblock_size: int,
     device,
 ):
-    if ((quant_dtype == "float8_e4m3fn" or scale_dtype == torch.float8_e4m3fn)
-            and is_cuda() and torch.cuda.get_device_capability() < (8, 9)):
+    if ((quant_dtype == "float8_e4m3fn" or scale_dtype == torch.float8_e4m3fn) and is_cuda()
+            and torch.cuda.get_device_capability() < (8, 9)):
         pytest.skip("E4M3 conversion requires CUDA capability 8.9 or newer")
     torch.manual_seed(0)
     quant_torch_type = dtype_str_to_torch(quant_dtype)
