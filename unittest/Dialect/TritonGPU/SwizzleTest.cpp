@@ -18,6 +18,7 @@
 using namespace mlir;
 using namespace mlir::triton;
 
+using mlir::triton::actionAdditiveStrides;
 using mlir::triton::gpu::bankConflictsLdSt;
 using mlir::triton::gpu::getVecBitwidthLdSt;
 using mlir::triton::gpu::LocalMemOpTile;
@@ -198,8 +199,7 @@ protected:
   int bruteforceBankConflictsPerWavefront64(ArrayRef<int64_t> shape,
                                             Attribute regAttr,
                                             Attribute sharedAttr, int bitwidth,
-                                            int numBanks,
-                                            LocalMemOpTile laneTile) {
+                                            int numBanks) {
     // Compute the bank conflicts per wavefront
     // In other words, we compute how many extra memory accesses (bank
     // conflicts) are needed for a given wavefront.
@@ -239,7 +239,6 @@ protected:
             numPhases);
         for (int laneIdx = 0; laneIdx < numLanes; laneIdx++) {
           int phaseIdx;
-          int maskedLaneIdx;
           if (vectorisation == 4) {
             int t2 = (laneIdx >> 2) & 1;
             int t3 = (laneIdx >> 3) & 1;
@@ -273,17 +272,13 @@ protected:
               // phase[1] = t[2] ^ t[3] ^ t[4]
               phaseIdx = (t5 << 0) | ((t2 ^ t3 ^ t4) << 1);
             }
-            maskedLaneIdx = 0;
-            for (int shift : laneTile.laneAddr)
-              maskedLaneIdx |= laneIdx & (1 << shift);
           } else {
             phaseIdx = laneIdx / threadsPerPhase;
-            maskedLaneIdx = laneIdx % threadsPerPhase;
           }
           for (int vecIdx = 0; vecIdx < elemsPerVec; vecIdx++) {
             auto offset = regToShared
                               .apply({{kReg, regIdx + vecIdx},
-                                      {kLane, maskedLaneIdx},
+                                      {kLane, laneIdx},
                                       {kWarp, warpIdx}})[0]
                               .second;
             auto offsetB32 = offset * bitwidth / 32;
@@ -308,6 +303,58 @@ protected:
 };
 
 // ——— Tests ———
+
+TEST_F(SwizzleTest, AdditiveStridesRejectsTransitiveOverlap) {
+  auto kRegister = S("register");
+  auto kLane = S("lane");
+  auto kWarp = S("warp");
+  auto kBlock = S("block");
+  auto kOffset = S("offset");
+  SmallVector<std::pair<StringAttr, int32_t>> outDims = {{kOffset, 2048},
+                                                         {kBlock, 1}};
+
+  // The 0x510 basis overlaps the lane address at 0x10, so it must remain in
+  // the outer xor offset. The 0x100 basis must remain there too because it
+  // overlaps 0x510; moving it into the additive inner loop would incorrectly
+  // turn (base ^ 0x510) ^ 0x100 into (base ^ 0x510) + 0x100.
+  LinearLayout reps(
+      {{kRegister, {{1, 0}, {2, 0}, {4, 0}, {0x100, 0}, {0x510, 0}}},
+       {kLane, {{0x10, 0}}},
+       {kWarp, {}},
+       {kBlock, {}}},
+      outDims, /*requireSurjective=*/false);
+  LinearLayout addrLayout({{kLane, {{0x10, 0}}}, {kWarp, {}}, {kBlock, {}}},
+                          outDims, /*requireSurjective=*/false);
+
+  auto result = actionAdditiveStrides(reps, addrLayout, /*maskSpanOffsets=*/0,
+                                      /*maskSpanBlocks=*/0,
+                                      /*regsPerInst=*/8);
+  EXPECT_EQ(result.first, 8);
+}
+
+TEST_F(SwizzleTest, AdditiveStridesKeepsIndependentRegisterBases) {
+  auto kRegister = S("register");
+  auto kLane = S("lane");
+  auto kWarp = S("warp");
+  auto kBlock = S("block");
+  auto kOffset = S("offset");
+  SmallVector<std::pair<StringAttr, int32_t>> outDims = {{kOffset, 2048},
+                                                         {kBlock, 1}};
+
+  LinearLayout reps(
+      {{kRegister, {{1, 0}, {2, 0}, {4, 0}, {0x100, 0}, {0x500, 0}}},
+       {kLane, {{0x10, 0}}},
+       {kWarp, {}},
+       {kBlock, {}}},
+      outDims, /*requireSurjective=*/false);
+  LinearLayout addrLayout({{kLane, {{0x10, 0}}}, {kWarp, {}}, {kBlock, {}}},
+                          outDims, /*requireSurjective=*/false);
+
+  auto result = actionAdditiveStrides(reps, addrLayout, /*maskSpanOffsets=*/0,
+                                      /*maskSpanBlocks=*/0,
+                                      /*regsPerInst=*/8);
+  EXPECT_EQ(result.first, 32);
+}
 
 TEST_F(SwizzleTest, Test128x128Float8Transpose) {
   // 128x128 float8 matrix transpose
@@ -458,10 +505,10 @@ TEST_F(SwizzleTest, Test64x128F16BlockedLinear32Bank) {
       /*requireSurjective=*/true);
   auto smem = optimalSwizzlingLdSt(src, dst, /*bitwidth=*/16, /*numBanks*/ 32,
                                    /*srcTile*/ {},
-                                   /*dstTile*/ {{}, {0, 1, 4}});
+                                   /*dstTile*/ {{}, {}, {1, 2, 20}});
   auto [r, w] = bankConflictsLdSt(src, dst, smem, /*bitwidth=*/16,
                                   /*numBanks*/ 32, /*srcTile*/ {},
-                                  /*dstTile*/ {{}, {0, 1, 4}});
+                                  /*dstTile*/ {{}, {}, {1, 2, 20}});
   EXPECT_EQ(r, 0);
   EXPECT_EQ(w, 0);
 }
@@ -484,10 +531,56 @@ TEST_F(SwizzleTest, Test64x128F16BlockedMfma64Bank) {
       /*requireSurjective=*/true);
   auto smem = optimalSwizzlingLdSt(src, dst, /*bitwidth=*/16,
                                    /*numBanks*/ 64, /*srcTile*/ {},
-                                   /*dstTile*/ {{}, {0, 1, 3, 4}});
+                                   /*dstTile*/ {{}, {}, {1, 2, 12, 20}});
   auto [r, w] = bankConflictsLdSt(src, dst, smem, /*bitwidth=*/16,
                                   /*numBanks*/ 64, /*srcTile*/ {},
-                                  /*dstTile*/ {{}, {0, 1, 3, 4}});
+                                  /*dstTile*/ {{}, {}, {1, 2, 12, 20}});
+  EXPECT_EQ(r, 0);
+  EXPECT_EQ(w, 0);
+}
+
+TEST_F(SwizzleTest, Test1024F32WarpSwapped32Bank) {
+  LinearLayout src({{S("register"), {{1}, {2}}},
+                    {S("lane"), {{4}, {8}, {16}, {32}, {64}, {128}}},
+                    {S("warp"), {{256}, {512}}},
+                    {S("block"), {}}},
+                   {{S("dim0"), 1024}},
+                   /*requireSurjective=*/true);
+  LinearLayout dst({{S("register"), {{1}, {2}}},
+                    {S("lane"), {{4}, {8}, {16}, {32}, {64}, {128}}},
+                    {S("warp"), {{512}, {256}}},
+                    {S("block"), {}}},
+                   {{S("dim0"), 1024}},
+                   /*requireSurjective=*/true);
+  auto smem = optimalSwizzlingLdSt(src, dst, /*bitwidth=*/32,
+                                   /*numBanks*/ 32, /*srcTile*/ {},
+                                   /*dstTile*/ {{}, {}, {1, 2, 20}});
+  auto [r, w] = bankConflictsLdSt(src, dst, smem, /*bitwidth=*/32,
+                                  /*numBanks*/ 32, /*srcTile*/ {},
+                                  /*dstTile*/ {{}, {}, {1, 2, 20}});
+  EXPECT_EQ(r, 0);
+  EXPECT_EQ(w, 0);
+}
+
+TEST_F(SwizzleTest, Test1024F32WarpSwapped64Bank) {
+  LinearLayout src({{S("register"), {{1}, {2}}},
+                    {S("lane"), {{4}, {8}, {16}, {32}, {64}, {128}}},
+                    {S("warp"), {{256}, {512}}},
+                    {S("block"), {}}},
+                   {{S("dim0"), 1024}},
+                   /*requireSurjective=*/true);
+  LinearLayout dst({{S("register"), {{1}, {2}}},
+                    {S("lane"), {{4}, {8}, {16}, {32}, {64}, {128}}},
+                    {S("warp"), {{512}, {256}}},
+                    {S("block"), {}}},
+                   {{S("dim0"), 1024}},
+                   /*requireSurjective=*/true);
+  auto smem = optimalSwizzlingLdSt(src, dst, /*bitwidth=*/32,
+                                   /*numBanks*/ 64, /*srcTile*/ {},
+                                   /*dstTile*/ {{}, {}, {1, 2, 12, 20}});
+  auto [r, w] = bankConflictsLdSt(src, dst, smem, /*bitwidth=*/32,
+                                  /*numBanks*/ 64, /*srcTile*/ {},
+                                  /*dstTile*/ {{}, {}, {1, 2, 12, 20}});
   EXPECT_EQ(r, 0);
   EXPECT_EQ(w, 0);
 }
@@ -612,7 +705,7 @@ TEST_F(BankConflictTest, bankConflictsWavefront64) {
        {128, 128},
        16,
        32,
-       /*vec=4*/ {{}, {0, 1, 4}}},
+       /*vec=4*/ {{}, {}, {1, 2, 20}}},
       {blocked({1, 8}, {4, 16}, {4, 1}, {1, 0}),
        mlir::triton::gpu::SwizzledSharedEncodingAttr::get(
            &ctx, 8, 1, 16, {1, 0},
@@ -620,7 +713,7 @@ TEST_F(BankConflictTest, bankConflictsWavefront64) {
        {128, 128},
        16,
        64,
-       /*vec=4*/ {{}, {0, 1, 3, 4}}},
+       /*vec=4*/ {{}, {}, {1, 2, 12, 20}}},
       {dotAV3,
        mlir::triton::gpu::SwizzledSharedEncodingAttr::get(
            &ctx, 4, 1, 16, {1, 0},
@@ -636,7 +729,7 @@ TEST_F(BankConflictTest, bankConflictsWavefront64) {
        {128, 128},
        16,
        64,
-       /*vec=4*/ {{}, {0, 1, 3, 4}}},
+       /*vec=4*/ {{}, {}, {1, 2, 12, 20}}},
       {dotBV3,
        AMDRotatingShared(/*vec=*/4, /*perPhase=*/1, /*maxPhase=*/16,
                          /*order=*/{0, 1}),
@@ -656,8 +749,8 @@ TEST_F(BankConflictTest, bankConflictsWavefront64) {
   for (const auto &c : cases) {
     EXPECT_EQ(computeConflicts(c.shape, c.reg, c.shared, c.bitwidth, c.numBanks,
                                c.laneTile),
-              bruteforceBankConflictsPerWavefront64(
-                  c.shape, c.reg, c.shared, c.bitwidth, c.numBanks, c.laneTile))
+              bruteforceBankConflictsPerWavefront64(c.shape, c.reg, c.shared,
+                                                    c.bitwidth, c.numBanks))
         << toLL(c.shape, c.reg).invertAndCompose(toLL(c.shape, c.shared))
         << "\nbitwidth=" << c.bitwidth << "\n"
         << "numBanks=" << c.numBanks << "\n"

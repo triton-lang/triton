@@ -211,6 +211,10 @@ struct ElementwiseInlineAsmOpConversion
     SmallVector<Value> packedOperands;
     unsigned numPackedElements = op.getPackedElement();
     for (int i = 0, e = op.getNumOperands(); i < e; i++) {
+      if (isa<MemDescType>(op.getOperand(i).getType())) {
+        packedOperands.push_back(operands[0][i]);
+        continue;
+      }
       Type elemTy = getElementTypeOrSelf(op.getOperand(i));
       unsigned bitWidth =
           elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : 64;
@@ -315,7 +319,15 @@ struct ElementwiseInlineAsmOpConversion
 
     // Layout is unpackedOperands[operand][elem].
     SmallVector<SmallVector<Value>> unpackedOperands;
-    for (auto operand : adaptor.getOperands()) {
+    for (auto [original, operand] :
+         llvm::zip(op.getOperands(), adaptor.getOperands())) {
+      if (auto desc = dyn_cast<MemDescType>(original.getType())) {
+        Value address =
+            getMemDescAddress(rewriter, loc, getTypeConverter(), desc, operand);
+        unpackedOperands.emplace_back(
+            getUniqueElemsPerThread(op->getResult(0).getType()), address);
+        continue;
+      }
       auto subOperands = unpackUniqueTensorElements(loc, operand, rewriter);
       unpackedOperands.push_back(subOperands);
     }
@@ -377,6 +389,60 @@ struct ElementwiseInlineAsmOpConversion
     }
 
     rewriter.replaceOp(op, outs);
+    return success();
+  }
+};
+
+struct InlineAsmOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::InlineAsmOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::InlineAsmOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto *ctx = op.getContext();
+    auto *converter = getTypeConverter();
+    SmallVector<Value> operands;
+    for (auto [original, lowered] :
+         llvm::zip(op.getOperands(), adaptor.getOperands())) {
+      if (auto desc = dyn_cast<MemDescType>(original.getType())) {
+        operands.push_back(
+            getMemDescAddress(rewriter, loc, converter, desc, lowered));
+      } else {
+        auto values =
+            unpackTensorElements(loc, lowered, rewriter, original.getType());
+        llvm::append_range(operands, values);
+      }
+    }
+
+    SmallVector<Type> resultTypes;
+    for (Type type : op.getResultTypes())
+      resultTypes.append(getTotalElemsPerThread(type),
+                         converter->convertType(getElementTypeOrSelf(type)));
+    Type returnType = LLVM::LLVMVoidType::get(ctx);
+    if (resultTypes.size() == 1)
+      returnType = resultTypes.front();
+    else if (!resultTypes.empty())
+      returnType = struct_ty(resultTypes);
+    auto call = LLVM::InlineAsmOp::create(
+        rewriter, loc, returnType, operands, op.getAsmString(),
+        op.getConstraints(), !op.getPure(), false, LLVM::TailCallKind::None,
+        LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT), ArrayAttr());
+
+    SmallVector<Value> elements;
+    if (!resultTypes.empty())
+      elements = unpackLLElements(loc, call.getResult(0), rewriter);
+    SmallVector<Value> results;
+    unsigned offset = 0;
+    for (Type type : op.getResultTypes()) {
+      unsigned count = getTotalElemsPerThread(type);
+      results.push_back(packTensorElements(
+          loc, converter, ArrayRef(elements).slice(offset, count), rewriter,
+          type));
+      offset += count;
+    }
+    rewriter.replaceOp(op, results);
     return success();
   }
 };
@@ -707,6 +773,7 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   patterns.add<ExternElementwiseOpConversion>(typeConverter, axisInfoAnalysis,
                                               benefit);
   patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter, benefit);
+  patterns.add<InlineAsmOpConversion>(typeConverter, benefit);
   patterns.add<AbsIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SelectOpConversion>(typeConverter, axisInfoAnalysis, benefit);

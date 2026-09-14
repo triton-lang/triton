@@ -16,6 +16,7 @@ from triton_kernels.target_info import cuda_capability_geq
 from ._common import (
     compute_offsets,
     get_scaled_dot_format_string,
+    matmul_dot,
     make_matmul_repr,
     matmul_launch_metadata,
     compute_pids,
@@ -495,10 +496,7 @@ def _matmul(
             if is_x_microscaled:
                 XMxScalePtrs += (MX_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
         else:
-            if SWAP_XW:
-                acc = tl.dot(w.T, x.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
-            else:
-                acc = tl.dot(x, w, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
+            acc = matmul_dot(x, w, acc, SWAP_XW, MAX_NUM_IMPRECISE_ACC, ALLOW_TF32)
         if is_x_fp4:
             XPtrs += ((BLOCK_K // 2) * SPLIT_K) * stride_x_k
         else:

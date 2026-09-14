@@ -27,6 +27,24 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @do_not_canonicalize_cross_operand_slice(
+    %arg0: tensor<64x64xf32, #blocked>,
+    %arg1: tensor<64x64xf32, #blocked>) -> tensor<64x64xf32, #blocked> {
+    // CHECK-LABEL: tt.func @do_not_canonicalize_cross_operand_slice
+    // CHECK: %[[CONCAT:.*]] = amdg.concat %arg0, %arg1
+    // CHECK: %[[SLICE:.*]] = amdg.extract_slice %[[CONCAT]] [32, 0]
+    // CHECK: tt.return %[[SLICE]] : tensor<64x64xf32, #blocked>
+
+    %concat = amdg.concat %arg0, %arg1 : tensor<64x64xf32, #blocked>, tensor<64x64xf32, #blocked> -> tensor<128x64xf32, #blocked>
+    %slice = amdg.extract_slice %concat [32, 0] : tensor<128x64xf32, #blocked> to tensor<64x64xf32, #blocked>
+    tt.return %slice : tensor<64x64xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @canonicalize_singleton_concat(%arg0: tensor<128x128xf32, #blocked>) -> tensor<128x128xf32, #blocked> {
     // CHECK-LABEL: tt.func @canonicalize_singleton_concat
 

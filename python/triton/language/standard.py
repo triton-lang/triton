@@ -50,17 +50,43 @@ def sigmoid(x):
     return 1 / (1 + math.exp(-x))
 
 
+@constexpr_function
+def _softmax_keep_dims_warning():
+    import warnings
+
+    warnings.warn(
+        "The keep_dims argument to tl.softmax is deprecated and ignored; softmax always preserves the input shape.",
+        stacklevel=2)
+
+
 @core._tensor_member_fn
 @jit
-@math._add_math_1arg_docstr("softmax")
-def softmax(x, dim=None, keep_dims=False, ieee_rounding=False):
+def softmax(x, dim=None, *, keep_dims=None, ieee_rounding=False):
+    """
+    Computes the softmax of :code:`x` along the given axis.
+
+    :param x: the input values
+    :type x: Block
+    :param dim: the axis along which to normalize. Defaults to 0 -- note that
+        this is *not* the last axis, unlike :code:`torch.softmax`.
+    :type dim: int | None
+    :param keep_dims: deprecated and ignored. Softmax always preserves the input shape.
+        Defaults to :code:`None`; any other value emits a warning.
+        Must be passed by keyword.
+    :type keep_dims: bool | None
+    :param ieee_rounding: whether the final division uses IEEE-compliant rounding.
+        Must be passed by keyword.
+    :type ieee_rounding: bool
+    """
+    if keep_dims is not None:
+        _softmax_keep_dims_warning()
     if dim is None:
         _dim: core.constexpr = 0
     else:
         _dim: core.constexpr = dim
-    z = x - max(x, _dim, keep_dims=keep_dims)
+    z = x - max(x, _dim, keep_dims=True)
     num = math.exp(z)
-    den = sum(num, _dim, keep_dims=keep_dims)
+    den = sum(num, _dim, keep_dims=True)
     return math.fdiv(num, den, ieee_rounding)
 
 
@@ -175,7 +201,6 @@ def _elementwise_max(a, b):
 @core._add_reduction_docstr("maximum", return_indices_arg="return_indices",
                             tie_break_arg="return_indices_tie_break_left")
 def max(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False):
-    input = core._promote_bfloat16_to_float32(input)
     if return_indices:
         if return_indices_tie_break_left:
             return core._reduce_with_indices(input, axis, _argmax_combine_tie_break_left, keep_dims=keep_dims)
@@ -234,7 +259,6 @@ def _elementwise_min(a, b):
 @core._add_reduction_docstr("minimum", return_indices_arg="return_indices",
                             tie_break_arg="return_indices_tie_break_left")
 def min(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False):
-    input = core._promote_bfloat16_to_float32(input)
     if return_indices:
         if return_indices_tie_break_left:
             return core._reduce_with_indices(input, axis, _argmin_combine_tie_break_left, keep_dims=keep_dims)
@@ -329,9 +353,6 @@ def reduce_or(input, axis, keep_dims=False):
 @jit
 @core._add_scan_docstr("cumsum", dtype_arg="dtype")
 def cumsum(input, axis=0, reverse=False, dtype: core.constexpr = None):
-    # todo rename this to a generic function name
-
-    input = core._promote_bfloat16_to_float32(input)
     out_dtype: core.constexpr = _pick_sum_dtype(input.dtype, dtype)
     input = input.to(out_dtype)
     return core.associative_scan(input, axis, _sum_combine, reverse)
@@ -347,10 +368,10 @@ def _prod_combine(a, b):
 
 @core._tensor_member_fn
 @jit
-@core._add_scan_docstr("cumprod")
-def cumprod(input, axis=0, reverse=False):
-    # todo rename this to a generic function name
-    input = core._promote_bfloat16_to_float32(input)
+@core._add_scan_docstr("cumprod", dtype_arg="dtype")
+def cumprod(input, axis=0, reverse=False, dtype: core.constexpr = None):
+    out_dtype: core.constexpr = _pick_sum_dtype(input.dtype, dtype)
+    input = input.to(out_dtype)
     return core.associative_scan(input, axis, _prod_combine, reverse)
 
 
@@ -379,7 +400,7 @@ def _compare_and_swap(x, flip, i: core.constexpr):
     is_right = _indicator(n_dims, i)
 
     # conditional swap:
-    ret = core.where((x > y) != (flip ^ is_right), y, x)
+    ret = core.where((x > y) != (flip ^ is_right).to(core.int1), y, x)
     return ret
 
 

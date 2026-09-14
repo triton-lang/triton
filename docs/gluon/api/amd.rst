@@ -14,6 +14,7 @@ Common APIs
 
     AMDMFMALayout
     AMDWMMALayout
+    slice
     warp_pipeline_stage
 
 GPU Generations

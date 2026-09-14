@@ -291,6 +291,28 @@ def test_convert_layout_cross_cta_in_warp_specialize(use_worker_partition, devic
     torch.testing.assert_close(y, x, rtol=0, atol=0)
 
 
+@pytest.mark.skipif(is_hip(), reason="Uses 32-thread NVIDIA layouts")
+@pytest.mark.parametrize("src_warp, dst_warp", [(64, 96), (96, 64)])
+def test_convert_layout_overlapping_identity_dims(src_warp, dst_warp, device):
+
+    @gluon.jit
+    def kernel(x_ptr, y_ptr, SRC_WARP: ttgl.constexpr, DST_WARP: ttgl.constexpr):
+        src: ttgl.constexpr = ttgl.DistributedLinearLayout([[32]], [[1], [2], [4], [8], [16]], [[SRC_WARP], [128]], [],
+                                                           [256])
+        dst: ttgl.constexpr = ttgl.DistributedLinearLayout([[32]], [[1], [2], [4], [8], [16]], [[DST_WARP], [128]], [],
+                                                           [256])
+        src_offsets = ttgl.arange(0, 256, layout=src)
+        x = ttgl.load(x_ptr + src_offsets)
+        y = ttgl.convert_layout(x, dst)
+        dst_offsets = ttgl.arange(0, 256, layout=dst)
+        ttgl.store(y_ptr + dst_offsets, y)
+
+    x = torch.arange(256, dtype=torch.int32, device=device)
+    y = torch.empty_like(x)
+    kernel[(1, )](x, y, src_warp, dst_warp, num_warps=4)
+    torch.testing.assert_close(y, x, rtol=0, atol=0)
+
+
 def _swizzled_warp_layouts_1d():
     """1D DistributedLinearLayout test layouts (non-injective, lowered as GenericLinearEncoding)."""
 
@@ -895,7 +917,7 @@ def _reduce_cases():
         yield (M, N, layout)
 
 
-@pytest.mark.parametrize("M, N, src_layout", _reduce_cases())
+@pytest.mark.parametrize("M, N, src_layout", list(_reduce_cases()))
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("epilogue_kind", ['reduce1d', 'reduce2d', 'expand_reduce2d'])
 @pytest.mark.parametrize("dtype_str, sanitize_overflow", [("int32", False), ("int32", True), ("float32", False),
@@ -1018,7 +1040,7 @@ def _histogram_cases():
         yield (linear_layout.shape[0], bins, linear_layout, ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0]))
 
 
-@pytest.mark.parametrize("M, bins, src_layout, dst_layout", _histogram_cases())
+@pytest.mark.parametrize("M, bins, src_layout, dst_layout", list(_histogram_cases()))
 def test_histogram(M, bins, src_layout, dst_layout, device):
 
     @gluon.jit
@@ -1133,6 +1155,9 @@ _multi_cta_convert2d_layout_cases = [(src_ctas_per_cga, dst_ctas_per_cga, None, 
                                      for src_ctas_per_cga, dst_ctas_per_cga in _multi_cta_cga_layout_pairs
                                      for src_layout, dst_layout in _multi_cta_2d_layout_pairs]
 _convert2d_layout_cases = _single_cta_convert2d_layout_cases + _multi_cta_convert2d_layout_cases
+# Warp-dependent broadcast with two f16 elements sharing a shuffle.
+_convert2d_layout_cases.append((None, None, None, ttgl.BlockedLayout([1, 16], [THREADS_PER_WARP, 1], [1, 4], [1, 0]),
+                                ttgl.BlockedLayout([1, 16], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0])))
 
 
 @pytest.mark.parametrize("M, N", [[64, 1], [64, 64], [64, 128], [1, 64]])
@@ -2003,7 +2028,7 @@ def _gather_cases():
         yield (axis, s_layout, i_layout, shape_t, shape_t)
 
 
-@pytest.mark.parametrize("axis, src_layout, index_layout, src_shape, idx_shape", _gather_cases())
+@pytest.mark.parametrize("axis, src_layout, index_layout, src_shape, idx_shape", list(_gather_cases()))
 def test_gather_layouts(axis, src_layout, index_layout, src_shape, idx_shape, device):
     src = torch.randn(src_shape, device=device)
     indices = torch.randint(0, src.shape[axis], idx_shape, device=device)
