@@ -34,10 +34,77 @@ def test_roundtrip(cache_root, manager_class):
         assert manager_class("other").get_file(name) is None
 
 
+def test_sqlite_missing_lookup_creates_nothing(cache_root, monkeypatch):
+    root = cache_root / "absent"
+    monkeypatch.setattr(knobs.cache, "dir", str(root))
+    manager = SQLiteCacheManager("key")
+    assert manager.get_file("missing") is None
+    assert manager.get_group("missing") is None
+    assert not root.exists()
+
+
+def test_sqlite_database_name_isolated_from_inductor(cache_root):
+    other = cache_root / "inductor-cache-v1.sqlite3"
+    with sqlite3.connect(other) as connection:
+        connection.execute("CREATE TABLE entries (namespace TEXT, key TEXT, data BLOB)")
+    before = other.read_bytes()
+    manager = SQLiteCacheManager("key")
+    assert Path(manager.put(b"value", "x.bin")).read_bytes() == b"value"
+    assert other.read_bytes() == before
+
+
+def test_sqlite_lookup_during_schema_initialization(cache_root):
+    manager = SQLiteCacheManager("key")
+    connection = sqlite3.connect(manager.database)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("CREATE TABLE entries (cache_key TEXT, filename TEXT, data BLOB)")
+        assert manager.get_file("x.bin") is None
+        assert manager.get_group("group") is None
+        connection.rollback()
+    finally:
+        connection.close()
+    assert Path(manager.put(b"value", "x.bin")).read_bytes() == b"value"
+
+
+def test_sqlite_readonly_lookup_and_connection_error(cache_root, monkeypatch):
+    manager = SQLiteCacheManager("key")
+    manager.put_group("group", {"x.bin": manager.put(b"value", "x.bin")})
+    database = Path(manager.database)
+    before = database.read_bytes()
+    original_connect = sqlite3.connect
+
+    def connect(database_uri, **kwargs):
+        assert database_uri.endswith("?mode=rw")
+        connection = original_connect(database_uri, **kwargs)
+        connection.set_authorizer(lambda action, *args: sqlite3.SQLITE_OK if action in (
+            sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_TRANSACTION) else sqlite3.SQLITE_DENY)
+        return connection
+
+    with monkeypatch.context() as patch:
+        patch.setattr(sqlite3, "connect", connect)
+        assert Path(manager.get_file("x.bin")).read_bytes() == b"value"
+        assert Path(manager.get_group("group")["x.bin"]).read_bytes() == b"value"
+    assert database.read_bytes() == before
+    database.chmod(0o444)
+    try:
+        assert manager.get_group("group") is not None
+    finally:
+        database.chmod(0o600)
+    assert list(cache_root.iterdir()) == [database]
+
+    def fail(*args, **kwargs):
+        raise sqlite3.OperationalError("cannot open")
+
+    monkeypatch.setattr(sqlite3, "connect", fail)
+    with pytest.raises(RuntimeError, match="SQLite cache failure"):
+        manager.get_file("x.bin")
+
+
 def test_selection_and_overrides(cache_root, monkeypatch):
     monkeypatch.setattr(knobs.cache, "backend", "file")
     assert isinstance(get_cache_manager("ab"), FileCacheManager)
-    assert not (cache_root / "cache-v1.sqlite3").exists()
+    assert not (cache_root / "triton-cache-v1.sqlite3").exists()
     monkeypatch.setattr(knobs.cache, "backend", "sqlite")
     assert isinstance(get_cache_manager("ab"), SQLiteCacheManager)
     monkeypatch.setattr(knobs.cache, "dump_dir", str(cache_root / "dump"))
@@ -74,10 +141,10 @@ def test_corrupt_group_is_miss(cache_root, data):
 
 
 def test_corrupt_database_reports_failure(cache_root):
-    (cache_root / "cache-v1.sqlite3").write_bytes(b"not a database")
+    (cache_root / "triton-cache-v1.sqlite3").write_bytes(b"not a database")
     with pytest.raises(RuntimeError, match="SQLite cache failure"):
         SQLiteCacheManager("key").get_file("x")
-    assert list(cache_root.iterdir()) == [cache_root / "cache-v1.sqlite3"]
+    assert list(cache_root.iterdir()) == [cache_root / "triton-cache-v1.sqlite3"]
 
 
 def test_materialization_recreated_and_old_path_unchanged(cache_root):
@@ -125,15 +192,17 @@ for i in range(30):
         group = SQLiteCacheManager(str(i)).get_group("group")
         data = Path(group["shared.bin"]).read_bytes()
         assert data in [bytes([n]) * 4096 for n in range(4)]
-    database = str(cache_root / "cache-v1.sqlite3")
+    database = str(cache_root / "triton-cache-v1.sqlite3")
     script = """
 import os, sqlite3, sys
 c = sqlite3.connect(sys.argv[1])
+c.execute('PRAGMA cache_size=5')
 c.execute('BEGIN IMMEDIATE')
 c.execute('DELETE FROM entries')
 os._exit(0)
 """
     subprocess.run([sys.executable, "-c", script, database], check=True, timeout=30)
+    assert SQLiteCacheManager("0").get_group("group") is not None
     with sqlite3.connect(database) as connection:
         assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok", )
         assert connection.execute("SELECT count(*) FROM entries").fetchone()[0] == 60

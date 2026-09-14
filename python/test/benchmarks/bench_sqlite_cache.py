@@ -47,13 +47,13 @@ def main():
             root = Path(temporary) / backend
             cache, runtime = root / "cache", root / "runtime"
             runtime.mkdir(parents=True)
-            env = dict(os.environ, TRITON_CACHE_BACKEND=backend,
-                       TRITON_CACHE_DIR=str(cache), TMPDIR=str(runtime))
+            env = dict(os.environ, TRITON_CACHE_BACKEND=backend, TRITON_CACHE_DIR=str(cache), TMPDIR=str(runtime))
             env.pop("TRITON_CACHE_MANAGER", None)
             phases = {}
             for phase in ("write", "read"):
-                output = subprocess.check_output([sys.executable, __file__, "--worker", phase,
-                                                  "--entries", str(args.entries)], env=env, text=True)
+                output = subprocess.check_output(
+                    [sys.executable, __file__, "--worker", phase, "--entries",
+                     str(args.entries)], env=env, text=True)
                 phases[phase] = json.loads(output)
             phases["persistent_objects"] = len(list(cache.rglob("*")))
             phases["runtime_objects_after_exit"] = len(list(runtime.rglob("*")))

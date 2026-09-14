@@ -11,7 +11,7 @@ artifacts in a single SQLite database instead of persistent per-artifact files::
 
 This experimental backend is intended for inode-constrained local caches.
 ``file`` remains the default backend; unknown names raise an error. The database
-is ``TRITON_CACHE_DIR/cache-v1.sqlite3``. The existing default directory and
+is ``TRITON_CACHE_DIR/triton-cache-v1.sqlite3``. The existing default directory and
 ``TRITON_HOME`` behavior apply when ``TRITON_CACHE_DIR`` is unset. No existing
 file entries are migrated. ``TRITON_CACHE_MANAGER`` explicitly selects a custom
 manager and takes precedence over the backend setting. Remote managers retain
@@ -49,14 +49,43 @@ Use local storage for the database and temporary files. Sharing a database acros
 hosts on NFS, Lustre, or another distributed filesystem is unsupported. SQLite's
 rollback journal, transactions, and 30-second busy timeout coordinate local
 processes. Connections close after each operation and are not shared across
-threads or inherited by forked workers. A ``cache-v1.sqlite3-journal`` file can
+threads or inherited by forked workers. A ``triton-cache-v1.sqlite3-journal`` file can
 exist while a transaction is active.
 
 Database errors are reported without an automatic fallback to per-artifact
 persistent files. To clear the cache, stop all users, then remove
-``cache-v1.sqlite3`` and any associated journal files in the configured directory.
+``triton-cache-v1.sqlite3`` and any associated journal files in the configured directory.
 Never delete a journal while a writer is active. Old filesystem caches and
 explicit dump files can be cleared separately after their users have stopped.
+
+Shared storage and read-only snapshots
+-------------------------------------
+
+Several processes on one node may share a locally stored database. A network
+filesystem does not acquire local locking/synchronization guarantees merely
+because only one node currently uses it. This backend does not detect filesystem
+types. See `SQLite's network-filesystem guidance <https://sqlite.org/useovernet.html>`_.
+
+Lookups do not create a missing database or initialize its schema. SQLite can
+still require writable access to recover a hot rollback journal after a writer
+is interrupted. Compilation calls ``put`` and ``put_group`` on misses, so a complete
+read-only compiler cache is not supported. Read-only permissions on one client
+do not stop writers on another client. The backend does not use ``immutable=1``:
+that SQLite option disables locking and change detection and is only safe when
+the file cannot change at all.
+
+For multi-node jobs, publish a consistent snapshot to shared storage and stage a
+writable copy into each node's local cache before launching workers. Create the
+snapshot with all writers stopped and connections closed, or use SQLite's backup
+API. Do not copy a live database without its transactional state. Keep runtime
+materializations local too. There is no automatic read-only base/local-write
+overlay, nor any merging of caches written independently on different nodes.
+
+``v1`` in the filename denotes the backend schema, not the Triton or SQLite
+release. The ``triton-`` prefix prevents collisions with Inductor's distinct
+schema if both cache directory variables point to the same directory. Earlier
+experimental ``cache-v1.sqlite3`` files are ignored; entries are rebuilt. Remove
+old databases only after their users have stopped.
 
 Measuring storage overhead
 -------------------------
@@ -72,16 +101,16 @@ One local run measured:
      - Persistent objects
      - Write seconds
      - Restart-read seconds
-     - Peak temporary objects
+     - Live temporary objects
    * - File
      - 12,000
-     - 0.75
-     - 0.20
+     - 0.70
+     - 0.21
      - 0
    * - SQLite
      - 1
      - 6.44
-     - 1.29
+     - 1.26
      - 16,003
 
 Temporary objects returned to zero after normal process exit. Counts exclude the

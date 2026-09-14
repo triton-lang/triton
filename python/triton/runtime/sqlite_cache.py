@@ -10,6 +10,7 @@ import shutil
 import sqlite3
 import tempfile
 import uuid
+from pathlib import Path
 
 from triton import knobs
 from .cache import CacheManager, FileCacheManager
@@ -38,24 +39,32 @@ class SQLiteCacheManager(CacheManager):
     def __init__(self, key, override=False, dump=False):
         self.key = key
         self._files = FileCacheManager(key, override=override, dump=dump) if override or dump else None
-        self.database = os.path.join(knobs.cache.dir, "cache-v1.sqlite3")
+        self.database = os.path.abspath(os.path.join(knobs.cache.dir, "triton-cache-v1.sqlite3"))
 
     @contextmanager
-    def _connect(self):
-        os.makedirs(os.path.dirname(self.database), exist_ok=True)
-        connection = sqlite3.connect(self.database, timeout=30)
+    def _connect(self, *, initialize=True):
+        connection = None
         try:
+            if not initialize:
+                # Open only an existing database, while allowing hot-journal recovery.
+                connection = sqlite3.connect(Path(self.database).as_uri() + "?mode=rw", uri=True, timeout=30)
+            else:
+                os.makedirs(os.path.dirname(self.database), exist_ok=True)
+                connection = sqlite3.connect(self.database, timeout=30)
             with connection:
-                connection.execute("CREATE TABLE IF NOT EXISTS entries ("
-                                   "cache_key TEXT NOT NULL, filename TEXT NOT NULL, data BLOB NOT NULL, "
-                                   "PRIMARY KEY (cache_key, filename)) WITHOUT ROWID")
+                if initialize:
+                    connection.execute("CREATE TABLE IF NOT EXISTS entries ("
+                                       "cache_key TEXT NOT NULL, filename TEXT NOT NULL, data BLOB NOT NULL, "
+                                       "PRIMARY KEY (cache_key, filename)) WITHOUT ROWID")
                 yield connection
         except sqlite3.Error as error:
             raise RuntimeError(
                 f"SQLite cache failure at {self.database}: {error}. "
-                "Use a local filesystem; clear the cache with all users stopped if it is corrupt.") from error
+                "Use writable local storage for compilation; stop all users before clearing a corrupt cache."
+            ) from error
         finally:
-            connection.close()
+            if connection is not None:
+                connection.close()
 
     def _materialize(self, filename, data):
         if not filename or os.path.basename(filename) != filename or filename in (".", ".."):
@@ -80,7 +89,12 @@ class SQLiteCacheManager(CacheManager):
     def get_file(self, filename):
         if self._files is not None:
             return self._files.get_file(filename)
-        with self._connect() as connection:
+        if not os.path.exists(self.database):
+            return None
+        with self._connect(initialize=False) as connection:
+            if connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'entries'").fetchone() is None:
+                return None
             row = connection.execute("SELECT data FROM entries WHERE cache_key = ? AND filename = ?",
                                      (self.key, filename)).fetchone()
         return None if row is None else self._materialize(filename, row[0])
@@ -113,8 +127,13 @@ class SQLiteCacheManager(CacheManager):
     def get_group(self, filename):
         if self._files is not None:
             return self._files.get_group(filename)
-        with self._connect() as connection:
+        if not os.path.exists(self.database):
+            return None
+        with self._connect(initialize=False) as connection:
             connection.execute("BEGIN")
+            if connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'entries'").fetchone() is None:
+                return None
             row = connection.execute("SELECT data FROM entries WHERE cache_key = ? AND filename = ?",
                                      (self.key, "__grp__" + filename)).fetchone()
             if row is None:
