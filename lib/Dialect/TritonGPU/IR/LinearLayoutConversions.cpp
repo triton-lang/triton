@@ -49,6 +49,108 @@ SmallVector<StringAttr> permuteDimNames(const SmallVector<StringAttr> &names,
 
 } // namespace
 
+LinearLayout
+SwizzledSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  auto shared = *this;
+  MLIRContext *ctx = shared.getContext();
+
+  auto shapePerCTA = getShapePerCTA(shared, shape);
+
+  int rank = shape.size();
+  if (rank == 1) {
+    return combineCtaCgaWithShape(
+        LinearLayout::identity1D(shapePerCTA[0], S("offset"), S("dim0")),
+        shared.getCGALayout(), shape);
+  }
+
+  auto outDimNames = standardOutDimNames(ctx, rank);
+
+  // Construct bases for the 2 most minor dimensions of the layout.  These are
+  // the dims that get swizzled.
+  assert(shape.size() >= 2);
+  int colDim = shared.getOrder()[0];
+  int rowDim = shared.getOrder()[1];
+  int numCols = shapePerCTA[colDim];
+  int numRows = shapePerCTA[rowDim];
+  StringAttr colDimName = outDimNames[colDim];
+  StringAttr rowDimName = outDimNames[rowDim];
+
+  std::vector<std::vector<int>> bases2D;
+  for (int col = 1; col < numCols; col *= 2) {
+    bases2D.push_back({0, col});
+  }
+  for (int row = 1; row < numRows; row *= 2) {
+    int vec = shared.getVec();
+    int perPhase = shared.getPerPhase();
+    int maxPhase = shared.getMaxPhase();
+    bases2D.push_back({row, (vec * ((row / perPhase) % maxPhase)) % numCols});
+  }
+  LinearLayout ctaLayout =
+      LinearLayout({{S("offset"), bases2D}}, {rowDimName, colDimName});
+
+  // Add the remaining dimensions.
+  for (int i = 2; i < rank; i++) {
+    int dim = shared.getOrder()[i];
+    ctaLayout *= LinearLayout::identity1D(shapePerCTA[dim], S("offset"),
+                                          outDimNames[dim]);
+  }
+
+  return combineCtaCgaWithShape(ctaLayout, shared.getCGALayout(), shape);
+}
+
+LinearLayout
+AMDRotatingSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  auto shared = *this;
+  MLIRContext *ctx = shared.getContext();
+
+  auto shapePerCTA = getShapePerCTA(shared, shape);
+
+  int rank = shape.size();
+  if (rank == 1) {
+    return combineCtaCgaWithShape(
+        LinearLayout::identity1D(shapePerCTA[0], S("offset"), S("dim0")),
+        shared.getCGALayout(), shape);
+  }
+
+  auto outDimNames = standardOutDimNames(ctx, rank);
+
+  // Construct bases for the 2 most minor dimensions of the layout.  These are
+  // the dims that get swizzled.
+  assert(shape.size() >= 2);
+  int colDim = shared.getOrder()[0];
+  int rowDim = shared.getOrder()[1];
+  int numCols = shape[colDim];
+  int numRows = shape[rowDim];
+  StringAttr colDimName = outDimNames[colDim];
+  StringAttr rowDimName = outDimNames[rowDim];
+
+  std::vector<std::vector<int>> bases2D;
+  for (int col = 1; col < numCols; col *= 2) {
+    bases2D.push_back({0, col});
+  }
+  for (int row = 1; row < numRows; row *= 2) {
+    int vec = shared.getVec();
+    int perPhase = shared.getPerPhase();
+    int maxPhase = shared.getMaxPhase();
+
+    int phase = (row / perPhase) % maxPhase;
+    int blockNo = row / maxPhase / perPhase % maxPhase;
+    int combinedPhase = phase ^ blockNo;
+    bases2D.push_back({row, (vec * combinedPhase) % numCols});
+  }
+  LinearLayout ctaLayout =
+      LinearLayout({{S("offset"), bases2D}}, {rowDimName, colDimName});
+
+  // Add the remaining dimensions.
+  for (int i = 2; i < rank; i++) {
+    int dim = shared.getOrder()[i];
+    ctaLayout *=
+        LinearLayout::identity1D(shape[dim], S("offset"), outDimNames[dim]);
+  }
+
+  return combineCtaCgaWithShape(ctaLayout, shared.getCGALayout(), shape);
+}
+
 // Returns the layout of a single core matrix which tiles the nvmma layout
 LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
                                        bool disableSwizzle) {
@@ -264,6 +366,12 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
   return combineCtaCgaWithShape(reshapedLayout, shared.getCGALayout(), shape);
 }
 
+LinearLayout
+NVMMASharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  // The shared memory layout is independent of TMA mode (Tiled vs Im2Col)
+  return nvmmaSharedToLinearLayout(shape, *this, TMAMode::Tiled);
+}
+
 LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
                                        NVMMASharedEncodingAttr shared,
                                        TMAMode mode, bool disableSwizzle) {
@@ -337,135 +445,6 @@ static LinearLayout broadcastedDotOperandLayout(MLIRContext *ctx,
     }
   }
   return layout;
-}
-
-// Defined below, next to the padded-layout helpers it shares its shape logic
-// with.
-LinearLayout
-partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
-                                PartitionedSharedEncodingAttr partitioned);
-
-LinearLayout
-SwizzledSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
-  MLIRContext *ctx = getContext();
-
-  auto shapePerCTA = getShapePerCTA(*this, shape);
-
-  int rank = shape.size();
-  if (rank == 1) {
-    return combineCtaCgaWithShape(
-        LinearLayout::identity1D(shapePerCTA[0], S("offset"), S("dim0")),
-        getCGALayout(), shape);
-  }
-
-  auto outDimNames = standardOutDimNames(ctx, rank);
-
-  // Construct bases for the 2 most minor dimensions of the layout.  These are
-  // the dims that get swizzled.
-  assert(shape.size() >= 2);
-  int colDim = getOrder()[0];
-  int rowDim = getOrder()[1];
-  int numCols = shapePerCTA[colDim];
-  int numRows = shapePerCTA[rowDim];
-  StringAttr colDimName = outDimNames[colDim];
-  StringAttr rowDimName = outDimNames[rowDim];
-
-  std::vector<std::vector<int>> bases2D;
-  for (int col = 1; col < numCols; col *= 2) {
-    bases2D.push_back({0, col});
-  }
-  for (int row = 1; row < numRows; row *= 2) {
-    int vec = getVec();
-    int perPhase = getPerPhase();
-    int maxPhase = getMaxPhase();
-    bases2D.push_back({row, (vec * ((row / perPhase) % maxPhase)) % numCols});
-  }
-  LinearLayout ctaLayout =
-      LinearLayout({{S("offset"), bases2D}}, {rowDimName, colDimName});
-
-  // Add the remaining dimensions.
-  for (int i = 2; i < rank; i++) {
-    int dim = getOrder()[i];
-    ctaLayout *= LinearLayout::identity1D(shapePerCTA[dim], S("offset"),
-                                          outDimNames[dim]);
-  }
-
-  return combineCtaCgaWithShape(ctaLayout, getCGALayout(), shape);
-}
-
-LinearLayout
-AMDRotatingSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
-  MLIRContext *ctx = getContext();
-
-  auto shapePerCTA = getShapePerCTA(*this, shape);
-
-  int rank = shape.size();
-  if (rank == 1) {
-    return combineCtaCgaWithShape(
-        LinearLayout::identity1D(shapePerCTA[0], S("offset"), S("dim0")),
-        getCGALayout(), shape);
-  }
-
-  auto outDimNames = standardOutDimNames(ctx, rank);
-
-  // Construct bases for the 2 most minor dimensions of the layout.  These are
-  // the dims that get swizzled.
-  assert(shape.size() >= 2);
-  int colDim = getOrder()[0];
-  int rowDim = getOrder()[1];
-  int numCols = shape[colDim];
-  int numRows = shape[rowDim];
-  StringAttr colDimName = outDimNames[colDim];
-  StringAttr rowDimName = outDimNames[rowDim];
-
-  std::vector<std::vector<int>> bases2D;
-  for (int col = 1; col < numCols; col *= 2) {
-    bases2D.push_back({0, col});
-  }
-  for (int row = 1; row < numRows; row *= 2) {
-    int vec = getVec();
-    int perPhase = getPerPhase();
-    int maxPhase = getMaxPhase();
-
-    int phase = (row / perPhase) % maxPhase;
-    int blockNo = row / maxPhase / perPhase % maxPhase;
-    int combinedPhase = phase ^ blockNo;
-    bases2D.push_back({row, (vec * combinedPhase) % numCols});
-  }
-  LinearLayout ctaLayout =
-      LinearLayout({{S("offset"), bases2D}}, {rowDimName, colDimName});
-
-  // Add the remaining dimensions.
-  for (int i = 2; i < rank; i++) {
-    int dim = getOrder()[i];
-    ctaLayout *=
-        LinearLayout::identity1D(shape[dim], S("offset"), outDimNames[dim]);
-  }
-
-  return combineCtaCgaWithShape(ctaLayout, getCGALayout(), shape);
-}
-
-LinearLayout
-NVMMASharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
-  // The shared memory layout is independent of TMA mode (Tiled vs Im2Col).
-  return nvmmaSharedToLinearLayout(shape, *this, TMAMode::Tiled);
-}
-
-LinearLayout
-PartitionedSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
-  assert(!isa<PaddedSharedEncodingAttr>(getPartitionLayout()) &&
-         "toLinearLayout does not support partitioned layouts wrapping "
-         "padded layouts; use paddedLinearLayout instead");
-  return partitionedSharedToLinearLayout(shape, *this);
-}
-
-LinearLayout
-PaddedSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
-  // A padded layout's interval padding is not expressible as a LinearLayout;
-  // toLinearLayoutIgnoringPadding() routes it to paddedLinearLayout() instead.
-  assert(0 && "padded shared encoding has no linear layout; use "
-              "paddedLinearLayout instead");
-  return LinearLayout::empty();
 }
 
 LinearLayout
@@ -1260,6 +1239,7 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
   }
 
   // Layouts are distributed or shared in triton core
+  // To add a new layout add an else-if clause
   LinearLayout result = LinearLayout::empty();
   if (auto distributed = dyn_cast<DistributedEncodingTrait>(layout)) {
     result = distributed.toLinearLayout(shape);
@@ -1336,6 +1316,23 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
   auto *ctx = layout.getContext();
   return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(shape,
                                                                    layout);
+}
+
+LinearLayout
+PartitionedSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  assert(!isa<PaddedSharedEncodingAttr>(getPartitionLayout()) &&
+         "toLinearLayout does not support partitioned layouts wrapping "
+         "padded layouts; use paddedLinearLayout instead");
+  return partitionedSharedToLinearLayout(shape, *this);
+}
+
+LinearLayout
+PaddedSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  // A padded layout's interval padding is not expressible as a LinearLayout;
+  // toLinearLayoutIgnoringPadding() routes it to paddedLinearLayout() instead.
+  assert(0 && "padded shared encoding has no linear layout; use "
+              "paddedLinearLayout instead");
+  return LinearLayout::empty();
 }
 
 LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding) {
