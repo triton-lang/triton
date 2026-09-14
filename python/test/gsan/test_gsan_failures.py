@@ -649,7 +649,7 @@ def _expected_file_line(source_function, marker: str) -> str:
     source_lines, starting_line = inspect.getsourcelines(source_function)
     for line_offset, line in enumerate(source_lines):
         if marker in line:
-            return f"{Path(__file__).name}:{starting_line + line_offset}"
+            return f"{Path(inspect.getsourcefile(source_function)).name}:{starting_line + line_offset}"
     raise AssertionError(f"Could not find marker {marker!r} for function {source_function!r}")
 
 
@@ -667,7 +667,7 @@ def _run_failure_case(case: str, *, runner, source_function, marker: str, error:
                                                   f"exc={result.exc!r}\n"
                                                   f"driver stderr:\n{result.driver_stderr_output}")
     assert "GSanLibrary.cu" not in result.driver_stderr_output
-    assert Path(__file__).name in result.driver_stderr_output
+    assert Path(inspect.getsourcefile(source_function)).name in result.driver_stderr_output
     assert _expected_file_line(source_function, marker) in result.driver_stderr_output
     assert error in result.driver_stderr_output
 
