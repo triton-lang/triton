@@ -227,9 +227,8 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
 }
 
 Value createBarriers(ImplicitLocOpBuilder &b1, ImplicitLocOpBuilder &b2,
-                     int numBarriers, int arrivalCount, bool twoCTAs = false) {
-  Value barrierAlloc =
-      createScalarAlloc(b1, b1.getI64Type(), numBarriers, twoCTAs);
+                     int numBarriers, int arrivalCount) {
+  Value barrierAlloc = createScalarAlloc(b1, b1.getI64Type(), numBarriers);
   for (unsigned i = 0; i < numBarriers; i++) {
     Value barrierView = createSingleBufferView(b1, barrierAlloc, i);
     InitBarrierOp::create(b1, barrierView, arrivalCount);
@@ -255,25 +254,7 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
   b2.setInsertionPoint(op->getBlock()->getTerminator());
 
   auto emptyMbars = createBarriers(b1, b2, depth, count.consumerPendingCount);
-  // Both CTAs must finish their TMA loads before the pair's MMA can start.
-  bool twoCTAMMAConsumer = false;
-  if (getModuleTwoCTAs(op)) {
-    for (Operation *user : op.getResult().getUsers()) {
-      auto exit = dyn_cast<ArefGetExitOp>(user);
-      if (!exit)
-        continue;
-      auto kinds = castAsyncOpAttrs(exit.getAsyncOps());
-      twoCTAMMAConsumer =
-          !kinds.empty() && llvm::all_of(kinds, [](AsyncOp kind) {
-            return kind == AsyncOp::TC5MMA;
-          });
-      // Other consumers need every CTA to wait, not just the pair's leader.
-      if (!twoCTAMMAConsumer)
-        break;
-    }
-  }
-  auto fullMbars = createBarriers(b1, b2, depth, count.producerPendingCount,
-                                  twoCTAMMAConsumer);
+  auto fullMbars = createBarriers(b1, b2, depth, count.producerPendingCount);
 
   return ArefValue{emptyMbars, fullMbars, static_cast<int>(depth),
                    op.getOperands()};

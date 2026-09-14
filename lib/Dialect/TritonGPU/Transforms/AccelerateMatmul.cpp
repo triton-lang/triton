@@ -18,6 +18,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/DecomposeScaledBlocked.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
@@ -588,55 +589,19 @@ public:
   }
 };
 
-static DistributedEncodingTrait
-replaceCGALayout(DistributedEncodingTrait layout,
-                 const triton::gpu::CGAEncodingAttr &newCGALayout) {
-  if (auto blockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(layout)) {
-    return BlockedEncodingAttr::get(
-        layout.getContext(), blockedLayout.getSizePerThread(),
-        blockedLayout.getThreadsPerWarp(), blockedLayout.getWarpsPerCTA(),
-        blockedLayout.getOrder(), newCGALayout);
-  } else if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
-    return SliceEncodingAttr::get(
-        layout.getContext(), sliceLayout.getDim(),
-        replaceCGALayout(sliceLayout.getParent(), newCGALayout));
-  } else {
-    llvm::report_fatal_error("not implemented");
-    return layout;
-  }
-}
-
 static CGAEncodingAttr getTwoCTARHSCGALayout(RankedTensorType retType) {
   if (retType.getRank() != 2)
     return {};
-
-  // MMAv5 two_ctas shares the RHS K range across CTAs and splits RHS along N.
-  // Start from an accumulator/LHS layout whose first CTA basis is the M split
-  // [1, 0], then map that basis to the RHS N split [0, 1]. Project the
-  // remaining bases onto RHS N: M bases become [0, 0] broadcasts, while N
-  // bases are doubled because [0, 1] is consumed by the two_ctas split.
   MLIRContext *ctx = retType.getContext();
-  auto retCGALayout = getCGALayout(retType.getEncoding());
-  auto kBlock = StringAttr::get(ctx, "block");
-  const auto &retBases =
-      retCGALayout.getLinearLayout().getBases().lookup(kBlock);
-  if (retBases.front()[0] != 1 || retBases.front()[1] != 0)
+  auto lhsCGA = CGAEncodingAttr::fromSplitParams(ctx, {2, 1}, {2, 1}, {1, 0});
+  if (getCGALayout(retType.getEncoding()) != lhsCGA)
     return {};
-
-  std::vector<std::vector<int32_t>> rhsBases;
-  rhsBases.reserve(retBases.size());
-  rhsBases.push_back({0, 1});
-  for (ArrayRef<int32_t> basis : llvm::drop_begin(retBases)) {
-    rhsBases.push_back({0, 2 * basis[1]});
-  }
-
-  auto dims = standardOutDimNames(ctx, 2);
-  return CGAEncodingAttr::get(
-      ctx, LinearLayout({{kBlock, std::move(rhsBases)}}, dims));
+  // The cooperating pair splits A along M and B along N.
+  return CGAEncodingAttr::fromSplitParams(ctx, {1, 2}, {1, 2}, {1, 0});
 }
 
-static bool canUseTwoCTAs(DotOp dotOp) {
-  if (lookupNumCTAs(dotOp) <= 1)
+static bool canUseTwoCTAs(DotOp dotOp, int numStages) {
+  if (lookupNumCTAs(dotOp) != 2)
     return false;
 
   RankedTensorType retType = dotOp.getType();
@@ -645,25 +610,28 @@ static bool canUseTwoCTAs(DotOp dotOp) {
   if (!loadOp)
     return false;
 
+  // Pair-shared TMA waits are implemented in the software pipeliner only.
+  auto loop = dyn_cast<scf::ForOp>(dotOp->getParentOp());
+  if (!loop || loadOp->getBlock() != loop.getBody() ||
+      getNumStagesOrDefault(loop, numStages) <= 1 || isOuterLoop(loop) ||
+      loopHasDistGreaterThanOne(loop))
+    return false;
+
   auto rhsCGALayout = getTwoCTARHSCGALayout(retType);
   if (!rhsCGALayout)
     return false;
 
-  auto outDims = standardOutDimNames(retType.getContext(), 2);
-  auto retCGALinearLayout =
-      getCGALayout(retType.getEncoding()).getLinearLayout();
-  unsigned nPerCTA =
-      retType.getDimSize(1) / retCGALinearLayout.getOutDimSize(outDims[1]);
-  // MMAv5 two_ctas currently cannot emit more than one MMA instruction along
-  // N; TCGen5MMAOp::verify enforces the same nPerCTA <= 256 rule.
-  if (nPerCTA > 256)
+  // One cooperating pair covers at most 128 rows per CTA and 256 columns.
+  if (retType.getDimSize(0) > 256 || retType.getDimSize(1) > 256)
     return false;
 
   return true;
 }
 
-static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability) {
+static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability,
+                                  int numStages) {
   bool sawMMAv5Dot = false;
+  DenseSet<Operation *> pipelinedLoads;
   WalkResult result = module.walk([&](Operation *op) -> WalkResult {
     if (auto dotOp = dyn_cast<DotOp>(op)) {
       RankedTensorType retType = dotOp.getType();
@@ -677,8 +645,17 @@ static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability) {
         return WalkResult::advance();
 
       sawMMAv5Dot = true;
-      return canUseTwoCTAs(dotOp) ? WalkResult::advance()
-                                  : WalkResult::interrupt();
+      if (!canUseTwoCTAs(dotOp, numStages))
+        return WalkResult::interrupt();
+      for (Value operand : {dotOp.getA(), dotOp.getB()}) {
+        if (auto load =
+                getDefiningOpSkippingConvertLayout<DescriptorLoadOp>(operand)) {
+          if (load->getBlock() != dotOp->getBlock())
+            return WalkResult::interrupt();
+          pipelinedLoads.insert(load);
+        }
+      }
+      return WalkResult::advance();
     }
 
     // Scaled MMAv5 does not set two_ctas in this pass yet. Keep the whole
@@ -687,7 +664,15 @@ static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability) {
       return WalkResult::interrupt();
     return WalkResult::advance();
   });
-  return sawMMAv5Dot && !result.wasInterrupted();
+  if (!sawMMAv5Dot || result.wasInterrupted())
+    return false;
+  // TMA loads left for the non-pipelined lowering still use per-CTA barriers.
+  return !module
+              .walk([&](DescriptorLoadLikeOpInterface load) {
+                return pipelinedLoads.contains(load) ? WalkResult::advance()
+                                                     : WalkResult::interrupt();
+              })
+              .wasInterrupted();
 }
 
 static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
@@ -697,19 +682,10 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
   assert(loadOp && "expected descriptor load");
   b = loadOp->getResult(0);
   RankedTensorType bType = cast<RankedTensorType>(b.getType());
-  auto currentLayout = cast<DistributedEncodingTrait>(bType.getEncoding());
-  Attribute newLayout = replaceCGALayout(currentLayout, newCGALayout);
+  auto newLayout = cloneWithCGALayout(bType, newCGALayout);
+  assert(succeeded(newLayout) && "expected a distributed RHS layout");
   rewriter.setInsertionPoint(loadOp.getOperation());
-  for (OpOperand &operand : loadOp->getOpOperands()) {
-    auto tensorType = dyn_cast<RankedTensorType>(operand.get().getType());
-    if (!tensorType)
-      continue;
-    Value newOperand = ConvertLayoutOp::create(
-        rewriter, operand.get().getLoc(),
-        tensorType.cloneWithEncoding(newLayout), operand.get());
-    loadOp->setOperand(operand.getOperandNumber(), newOperand);
-  }
-  loadOp->getResult(0).setType(bType.cloneWithEncoding(newLayout));
+  loadOp->getResult(0).setType(bType.cloneWithEncoding(*newLayout));
   Value newB = loadOp->getResult(0);
   rewriter.setInsertionPointAfter(loadOp.getOperation());
   auto cvt = ConvertLayoutOp::create(rewriter, b.getLoc(), bType, newB);
@@ -750,7 +726,7 @@ public:
     Value a = dotOp.getA();
     Value b = dotOp.getB();
     auto oldAType = dotOp.getA().getType();
-    bool useTwoCTAs = enableTwoCTAs && canUseTwoCTAs(dotOp);
+    bool useTwoCTAs = enableTwoCTAs;
     if (useTwoCTAs) {
       b = splitBOperand(b, rewriter, getTwoCTARHSCGALayout(oldRetType));
     }
@@ -1195,7 +1171,7 @@ public:
     // PTX 13+ requires all tcgen instructions in a kernel to have a consistent
     // CTA mode. TritonGPU modules map to one kernel here, so decide two_ctas
     // once before rewriting any dot.
-    bool enableTwoCTAs = canUseTwoCTAsInModule(m, computeCapability);
+    bool enableTwoCTAs = canUseTwoCTAsInModule(m, computeCapability, numStages);
     patterns.add<BlockedToMMAv5>(context, computeCapability, enableTwoCTAs,
                                  benefitMMAv5);
     patterns.add<ScaledBlockedToMMAv5>(context, computeCapability,
