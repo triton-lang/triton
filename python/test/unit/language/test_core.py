@@ -2584,6 +2584,29 @@ def test_umulhi(dtype_str, device):
     np.testing.assert_equal(umulhi_ref(x, y), to_numpy(z_tri))
 
 
+@pytest.mark.parametrize("masked", [False, True])
+def test_umulhi_known_bits(masked, device):
+
+    @triton.jit
+    def kernel(X, Z, MASKED: tl.constexpr):
+        offsets = tl.arange(0, 32)
+        x = tl.load(X + offsets).to(tl.uint32)
+        if MASKED:
+            y = x >> 16
+            x = x & 65535
+        else:
+            y = tl.full((), 256, tl.uint32)
+        tl.store(Z + offsets, tl.umulhi(x, y))
+
+    x = torch.tensor([0, 1, -1, -2**31, 2**31 - 1, 65535, 65536, -65536] * 4, dtype=torch.int32, device=device)
+    output = torch.empty_like(x)
+    compiled = kernel[(1, )](x, output, masked)
+    expected = torch.zeros_like(x) if masked else ((x.to(torch.int64) & 0xFFFFFFFF) >> 24).to(torch.int32)
+    torch.testing.assert_close(output, expected)
+    if is_cuda():
+        assert "mul.hi." not in compiled.asm["ptx"]
+
+
 @pytest.mark.interpreter
 def test_join(device):
 
