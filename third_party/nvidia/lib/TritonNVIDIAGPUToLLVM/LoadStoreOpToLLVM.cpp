@@ -1185,15 +1185,9 @@ struct AsyncCopyGlobalToLocalOpConversion
       auto *copySize = ptxBuilder.newConstantOperand(nBytes);
       auto *srcSize = copySize;
       if (hasMask) {
-        // We don't use predicate in this case, setting src-size to 0
-        // if there's any mask. cp.async will automatically fill the
-        // remaining slots with 0 if cp-size > src-size.
-        // XXX(Keren): Always assume other = 0 for now.
-        // When 'other != 0' is supported, we will need to fold the
-        // op.getMask() and redundantDataMask() into the same predicate, the
-        // way it is done for LoadOp.
-        auto selectOp = b.select(maskElem, b.i32_val(nBytes), b.i32_val(0));
-        srcSize = ptxBuilder.newOperand(selectOp, "r");
+        // A masked copy still writes zeros to its shared-memory destination.
+        auto ignoreSrc = b.xor_(maskElem, b.true_val());
+        srcSize = ptxBuilder.newOperand(ignoreSrc, "b");
       }
       copyAsyncOp(dstOperand, srcOperand, copySize, srcSize)
           .maybePredicate(threadPred);

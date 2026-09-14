@@ -882,8 +882,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: async_cp_evict_first_masked_8_bytes
   tt.func @async_cp_evict_first_masked_8_bytes(%src: tensor<256x!tt.ptr<f32>, #blocked>, %dst: !ttg.memdesc<256xf32, #shared, #smem, mutable>, %valid: i1) {
     // CHECK-NOT: createpolicy
-    // CHECK: llvm.select
+    // CHECK: llvm.xor
     // CHECK: cp.async.ca.shared.global {{.*}}, 0x8, ${{[0-9]+}};
+    // CHECK-SAME: "r,l,b
     %mask = tt.splat %valid : i1 -> tensor<256xi1, #blocked>
     %0 = ttg.async_copy_global_to_local %src, %dst mask %mask {cachePolicy = #evict_first, contiguity = 2 : i32} : tensor<256x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<256xf32, #shared, #smem, mutable>
     tt.return
