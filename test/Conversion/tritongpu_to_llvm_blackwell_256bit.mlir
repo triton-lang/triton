@@ -122,6 +122,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     %out = tt.fp_to_fp %in : tensor<64xf8E4M3FN, #blocked_fp8> -> tensor<64xbf16, #blocked_fp8>
     tt.return %out : tensor<64xbf16, #blocked_fp8>
   }
+
+  // FP8-LABEL: @fp8e5_to_bf16
+  // PACKED: cvt.rn.bf16x2.e5m2x2 $0, $1;", "=r,h"
+  // LEGACY: cvt.rn.f16x2.e5m2x2
+  // LEGACY-COUNT-2: cvt.bf16.f16
+  tt.func private @fp8e5_to_bf16(%in: tensor<64xf8E5M2, #blocked_fp8>) -> tensor<64xbf16, #blocked_fp8> {
+    %out = tt.fp_to_fp %in : tensor<64xf8E5M2, #blocked_fp8> -> tensor<64xbf16, #blocked_fp8>
+    tt.return %out : tensor<64xbf16, #blocked_fp8>
+  }
 }
 
 // -----
