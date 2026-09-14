@@ -1,5 +1,22 @@
 // RUN: triton-opt %s -split-input-file -canonicalize -allow-unregistered-dialect | FileCheck %s
 
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32} {
+// A false copy mask still fills shared memory with the other value.
+// CHECK-LABEL: @false_async_copy_keeps_fill
+// CHECK: %[[TOKEN:.*]] = ttg.async_copy_global_to_local
+// CHECK-NEXT: tt.return %[[TOKEN]] : !ttg.async.token
+tt.func @false_async_copy_keeps_fill(%ptr: tensor<128x!tt.ptr<f32>, #blocked>, %mem: !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>) -> !ttg.async.token {
+  %false = arith.constant dense<false> : tensor<128xi1, #blocked>
+  %zero = arith.constant dense<0.0> : tensor<128xf32, #blocked>
+  %token = ttg.async_copy_global_to_local %ptr, %mem mask %false other %zero : tensor<128x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>
+  tt.return %token : !ttg.async.token
+}
+}
+
+// -----
+
 
 // CHECK-LABEL: @test_canonicalize_convert_view
 // CHECK-SAME: (%[[ARG:.+]]: tensor<64x64xf32

@@ -1,6 +1,9 @@
 #include "mlir/IR/BuiltinOps.h"
+#include "triton/Analysis/CallGraph.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir::triton::gpu {
@@ -82,6 +85,38 @@ static void padToMaxWarpGroups(WarpSpecializeOp op, int numExtraWarpGroups) {
   partitions.erase();
 }
 
+static LogicalResult annotateWarpIdOffsets(ModuleOp mod) {
+  triton::CallGraph<int> callGraph(mod);
+  DenseMap<FunctionOpInterface, int> offsets;
+  for (auto root : callGraph.getRoots())
+    offsets[root] = 0;
+
+  LogicalResult result = success();
+  callGraph.walk(
+      [&](CallOpInterface call, FunctionOpInterface callee) {
+        auto caller = call->getParentOfType<FunctionOpInterface>();
+        int start = getWarpGroupStartWarpId(call->getBlock())
+                        .value_or(offsets.lookup(caller));
+        // Equal-sized partitions can share a helper when their starts have
+        // the same remainder modulo the helper's warp count.
+        int offset = start % lookupNumWarps(callee);
+        auto [it, inserted] = offsets.try_emplace(callee, offset);
+        if (!inserted && it->second != offset) {
+          call.emitError("callee is used with incompatible warp ID offsets");
+          result = failure();
+        }
+      },
+      [](FunctionOpInterface) {});
+  if (failed(result))
+    return failure();
+
+  Builder b(mod.getContext());
+  for (auto [func, offset] : offsets)
+    if (!isKernel(func))
+      func->setAttr(AttrWarpIdOffsetName, b.getI32IntegerAttr(offset));
+  return success();
+}
+
 namespace {
 struct AllocateWarpGroups
     : public mlir::triton::gpu::impl::TritonGPUAllocateWarpGroupsBase<
@@ -128,6 +163,9 @@ struct AllocateWarpGroups
       }
       op.setWarpGroupStartIds(startIds);
     });
+
+    if (failed(annotateWarpIdOffsets(mod)))
+      return signalPassFailure();
 
     Builder b(&getContext());
     mod->setAttr("ttg.total-num-warps",

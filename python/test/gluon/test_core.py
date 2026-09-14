@@ -1127,6 +1127,53 @@ def test_async_copy_mbarrier():
     torch.testing.assert_close(out[20:], torch.zeros((12, 32), **tensor_opts))
 
 
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_warp_specialize_noinline_ids():
+
+    @gluon.jit
+    def add(lhs, rhs):
+        return lhs + rhs
+
+    @gluon.jit(noinline=True)
+    def indices_and_scan(N: ttgl.constexpr, LAYOUT: ttgl.constexpr):
+        indices = ttgl.arange(0, N, layout=LAYOUT)
+        ones = ttgl.full((N, ), 1, ttgl.int32, layout=LAYOUT)
+        prefix = ttgl.associative_scan(ones, 0, add)
+        return indices, prefix
+
+    @gluon.jit(noinline=True)
+    def forward(N: ttgl.constexpr, LAYOUT: ttgl.constexpr):
+        return indices_and_scan(N, LAYOUT)
+
+    @gluon.jit
+    def worker(index_out, scan_out):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [8], [0])
+        indices = ttgl.arange(0, 256, layout=layout)
+        helper_indices, prefix = forward(256, layout)
+        ttgl.store(index_out + indices, indices + helper_indices)
+        ttgl.store(scan_out + indices, prefix)
+
+    @gluon.jit
+    def idle():
+        pass
+
+    @gluon.jit
+    def kernel(index_out, scan_out):
+        # Both workers share the helpers, starting at physical warps 4 and 12.
+        ttgl.warp_specialize([
+            (idle, ()),
+            (worker, (index_out, scan_out)),
+            (worker, (index_out + 256, scan_out + 256)),
+        ], [8, 8])
+
+    expected = torch.arange(256, dtype=torch.int32, device="cuda").repeat(2, 1)
+    index_out = torch.empty_like(expected)
+    scan_out = torch.empty_like(expected)
+    kernel[(1, )](index_out, scan_out, num_warps=4)
+    torch.testing.assert_close(index_out, 2 * expected, rtol=0, atol=0)
+    torch.testing.assert_close(scan_out, expected + 1, rtol=0, atol=0)
+
+
 # Equivalence-class multicast: multicast_cta selects which CTA-ID bits to multicast
 # along.  Two CTAs share a class when (id_a & ~mask) == (id_b & ~mask).
 #

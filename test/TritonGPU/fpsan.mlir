@@ -853,13 +853,12 @@ tt.func public @inline_asm_unary_different_asm(%a: tensor<4xf32>) -> tensor<4xf3
 
 // CHECK-LABEL: @inline_asm_ue8m0_to_bf16
 tt.func public @inline_asm_ue8m0_to_bf16(%scale: tensor<4xi8>) -> tensor<4xbf16> {
-  // CHECK-DAG: arith.constant dense<7> : tensor<4xi16>
-  // CHECK-DAG: arith.constant dense<64> : tensor<4xi16>
-  // CHECK: arith.extui
-  // CHECK: arith.shli
-  // CHECK: arith.maxui
-  // CHECK: tt.bitcast
+  // CHECK: %[[TAG:.*]] = arith.constant dense<-23530> : tensor<4xi16>
+  // CHECK: %[[SCALE:.*]] = arith.extsi %arg0 : tensor<4xi8> to tensor<4xi16>
+  // CHECK: %[[PAYLOAD:.*]] = arith.xori %[[SCALE]], %[[TAG]] : tensor<4xi16>
+  // CHECK: %[[RESULT:.*]] = tti.experimental_fpsan_unembed %[[PAYLOAD]]
   // CHECK-NOT: tt.elementwise_inline_asm
+  // CHECK: tt.return %[[RESULT]]
   %decoded = tt.elementwise_inline_asm "cvt.rn.bf16x2.ue8m0x2 $0, $1;" {constraints = "=r,h", packed_element = 2 : i32, pure = true} %scale : tensor<4xi8> -> tensor<4xbf16>
   tt.return %decoded : tensor<4xbf16>
 }

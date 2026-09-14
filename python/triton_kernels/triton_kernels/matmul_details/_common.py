@@ -304,6 +304,19 @@ def _matmul_flops_and_bytes_from_slices_kernel(
     tl.store(Bytes, total_bytes)
 
 
+def _matmul_output_bytes(args, output, n_rows=None):
+    if args.get("pYPtrs") is None:
+        n_elements = output.numel() if n_rows is None else n_rows * output.shape[-1]
+    else:
+        # Fused stores write to communication buffers; the local pointer may
+        # have no storage and does not describe the logical output shape.
+        n_cols = args["N"] // args["ACTIVATION_REDUCTION_N"] // args["Y_VALUE_PACK_FACTOR"]
+        if n_rows is None:
+            n_rows = args["M"] * args["batch_size"]
+        n_elements = n_rows * n_cols * args["n_reduce_shards"] * args["SPLIT_K"]
+    return n_elements * output.element_size()
+
+
 def _matmul_flops_and_bytes_from_slices(
     args,
     M,
@@ -345,12 +358,12 @@ def _matmul_flops_and_bytes_from_slices(
         if w_bytes_per_active_slice is None:
             w_bytes_per_active_slice = 0
         # Here, we're computing dW = X.T@dY, so "W" is actually dY and "Y" is actually dW.
-        static_bytes = Y.numel() * Y.element_size() * (2 if args["OutAcc"] is not None else 1)
+        static_bytes = _matmul_output_bytes(args, Y) * (2 if args["OutAcc"] is not None else 1)
         w_bytes_per_token = W.shape[-1] * W.element_size()
     else:
         if x_bytes_per_token is None:
             x_bytes_per_token = X.shape[-1] * X.element_size()
-        y_bytes_per_token = Y.shape[-1] * Y.element_size()
+        y_bytes_per_token = _matmul_output_bytes(args, Y, n_rows=1)
         if w_bytes_per_active_slice is None:
             w_bytes_per_active_slice = W.numel() * W.element_size() // slice_sizes.numel()
 
@@ -461,7 +474,6 @@ def matmul_launch_metadata(grid, kernel, args):
 
     # sindx = args.get("WriteBackIndx", None)
     n_x_bytes = X.numel() * X.element_size()
-    n_y_bytes = Y.numel() * Y.element_size()
     n_w_bytes = W.numel() * W.element_size()
     if x_bytes_per_token is not None and M is not None:
         # A 2-D X can be shared across batched W.
@@ -475,14 +487,16 @@ def matmul_launch_metadata(grid, kernel, args):
         if args["RAGGED_DIMENSION"] == "K":
             n_x_bytes = n_read_rows * X.shape[-2] * X.element_size()
             # Here, we're computing dW = X.T@dY, so "W" is actually dY and "Y" is actually dW.
-            n_y_bytes = Y.numel() * Y.element_size() * (2 if args["OutAcc"] is not None else 1)
+            n_y_bytes = _matmul_output_bytes(args, Y) * (2 if args["OutAcc"] is not None else 1)
             n_w_bytes = n_read_rows * W.shape[-1] * W.element_size()
         else:
             n_x_bytes = n_read_rows * (x_bytes_per_token if x_bytes_per_token is not None else X.shape[-1] *
                                        X.element_size())
-            n_y_bytes = n_tokens * Y.shape[-1] * Y.element_size()
+            n_y_bytes = _matmul_output_bytes(args, Y, n_rows=n_tokens)
             n_w_bytes = (slice_sizes > 0).sum() * (w_bytes_per_active_slice if w_bytes_per_active_slice is not None else
                                                    W.numel() * W.element_size() // slice_sizes.numel())
+    else:
+        n_y_bytes = _matmul_output_bytes(args, Y)
 
     ret["bytes"] = n_x_bytes + n_y_bytes + n_w_bytes
     return ret
