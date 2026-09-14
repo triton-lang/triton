@@ -60,22 +60,39 @@ void processProducerAcquireOp(OpBuilder &builder, ttnvws::ProducerAcquireOp op,
   setAsyncTaskIds(waitOp, getAsyncTaskIds(op.getOperation()));
 }
 
-void processProducerCommitOp(OpBuilder &builder, ttnvws::ProducerCommitOp op,
-                             Value bufferFull, ttnvws::TokenLoadType loadType,
-                             unsigned fullCnt) {
+LogicalResult processProducerCommitOp(OpBuilder &builder,
+                                      ttnvws::ProducerCommitOp op,
+                                      Value bufferFull,
+                                      ttnvws::TokenLoadType loadType,
+                                      unsigned fullCnt) {
   auto loc = op.getLoc();
   ttng::ArriveBarrierOp arriveOp;
 
-  if (loadType == ttnvws::TokenLoadType::TMALoadOp) {
-    // Get the count from the barriers: trace the local_alloc for the barrier
-    // then find the count from init_barrier
+  if (loadType == ttnvws::TokenLoadType::TMALoadOp ||
+      loadType == ttnvws::TokenLoadType::LocalStoreOp) {
+    // A TMA producer is counted once, a register-staged one writes the buffer
+    // from every thread of the task and is counted THREADS_PER_TASK times;
+    // either way the count already sits in the full barrier's init_barrier and
+    // reaches us as `fullCnt`. ArriveBarrierOp lowers to a block-level barrier
+    // followed by a single elected thread arriving with that count, so the
+    // stores are ordered before the arrival and the barrier completes once.
     arriveOp = ttng::ArriveBarrierOp::create(builder, loc, bufferFull, fullCnt);
   } else {
-    llvm::report_fatal_error("unsupported load type for producer commit");
+    return op.emitError() << "warp specialization cannot commit a producer "
+                             "whose load type is '"
+                          << ttnvws::stringifyTokenLoadType(loadType)
+                          << "'; only '"
+                          << ttnvws::stringifyTokenLoadType(
+                                 ttnvws::TokenLoadType::TMALoadOp)
+                          << "' and '"
+                          << ttnvws::stringifyTokenLoadType(
+                                 ttnvws::TokenLoadType::LocalStoreOp)
+                          << "' producers are implemented";
   }
 
   assert(op.getOperation()->hasAttr("async_task_id"));
   setAsyncTaskIds(arriveOp, getAsyncTaskIds(op.getOperation()));
+  return success();
 }
 
 void processConsumerWaitOp(OpBuilder &builder, ttnvws::ConsumerWaitOp op,
@@ -99,8 +116,9 @@ void processConsumerReleaseOp(OpBuilder &builder, ttnvws::ConsumerReleaseOp op,
   setAsyncTaskIds(arriveOp, getAsyncTaskIds(op.getOperation()));
 }
 
-void lowerTokenOperations(Operation *parentOp, int numCTAs,
-                          int numConsumerGroups) {
+LogicalResult lowerTokenOperations(Operation *parentOp, int numCTAs,
+                                   int numConsumerGroups) {
+  bool loweringFailed = false;
   SmallVector<Operation *> deprecatedOps;
   SmallVector<Operation *> deprecatedTokenOps;
   DenseSet<Operation *> warpSpecOps;
@@ -184,8 +202,9 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
         Value bufferFull = extractBufferFull(loc, op.getIdx());
         assert(user->hasAttr("async_task_id"));
         setAsyncTaskIds(bufferFull.getDefiningOp(), getAsyncTaskIds(user));
-        processProducerCommitOp(builder, op, bufferFull, loadType,
-                                bufferFullCount);
+        if (mlir::failed(processProducerCommitOp(builder, op, bufferFull,
+                                                 loadType, bufferFullCount)))
+          loweringFailed = true;
         deprecatedOps.push_back(user);
         return true;
       } else if (auto op = dyn_cast<ttnvws::ConsumerWaitOp>(user)) {
@@ -300,16 +319,18 @@ void lowerTokenOperations(Operation *parentOp, int numCTAs,
     LDBG("after lowering");
     parentOp->dump();
   });
+  return success(!loweringFailed);
 }
 
 } // namespace
 
-void doTokenLowering(triton::FuncOp &funcOp, unsigned numConsumerGroups) {
+LogicalResult doTokenLowering(triton::FuncOp &funcOp,
+                              unsigned numConsumerGroups) {
   ModuleOp mod = funcOp.getOperation()->getParentOfType<ModuleOp>();
   int numCTAs = ttg::TritonGPUDialect::getNumCTAs(mod);
 
   // lowerGetAsyncTaskIdOp(mod, numConsumerGroups);
-  lowerTokenOperations(mod, numCTAs, numConsumerGroups);
+  return lowerTokenOperations(mod, numCTAs, numConsumerGroups);
 }
 
 } // namespace mlir

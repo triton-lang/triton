@@ -19,7 +19,8 @@ void doTaskPartition(triton::FuncOp &funcOp, unsigned numWarpGroups);
 int doTaskIdPropagate(triton::FuncOp &funcOp);
 bool doDataPartition(triton::FuncOp &funcOp, unsigned numConsumerGroups);
 void doCodePartition(triton::FuncOp &funcOp, unsigned numBuffers);
-void doTokenLowering(triton::FuncOp &funcOp, unsigned numConsumerGroups);
+LogicalResult doTokenLowering(triton::FuncOp &funcOp,
+                              unsigned numConsumerGroups);
 
 #define GEN_PASS_DEF_NVGPUWARPSPECIALIZATION
 #include "nvidia/hopper/include/Transforms/Passes.h.inc"
@@ -103,7 +104,8 @@ public:
           << "// -----// WarpSpec internal IR Dump After: doCodePartition\n"
           << moduleOp << "\n\n\n";
     }
-    doTokenLowering(funcOp, numWarpGroups - 1);
+    if (failed(doTokenLowering(funcOp, numWarpGroups - 1)))
+      return signalPassFailure();
     invalidateWarpSpecializeBarriers(funcOp);
     // Clear num_stages to disable SWP.
     funcOp->walk([&](scf::ForOp forOp) {

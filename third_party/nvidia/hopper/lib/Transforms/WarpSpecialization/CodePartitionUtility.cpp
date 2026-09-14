@@ -4,6 +4,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
 #include "nvidia/hopper/include/Transforms/Passes.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include <list>
 #include <unordered_set>
 
@@ -15,6 +16,22 @@ namespace mlir {
 #define DEBUG_TYPE "nvgpu-ws-utility"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
+
+bool canFillBufferWithTMA(Channel *channel,
+                          const DenseMap<Channel *, Value> &bufferMap) {
+  auto tmaLoad = dyn_cast_or_null<tt::DescriptorLoadOp>(channel->getSrcOp());
+  if (!tmaLoad)
+    return false;
+  auto it = bufferMap.find(channel);
+  if (it == bufferMap.end())
+    return true;
+  auto memDescType = dyn_cast<ttg::MemDescType>(it->second.getType());
+  if (!memDescType)
+    return true;
+  auto descEncoding = ttng::getEncodingFromDescriptor(
+      tmaLoad, tmaLoad.getType(), tmaLoad.getDesc());
+  return descEncoding && memDescType.getEncoding() == descEncoding;
+}
 
 // Check to see if op is enclosed under ifOp.
 bool enclosing(scf::IfOp ifOp, Operation *op) {
