@@ -750,7 +750,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // Two-CTA commit broadcasts to each pair even with a per-CTA barrier.
+  // Hoist per-CTA barrier init/invalidation and carry its phase across two-CTA commits.
   // CHECK-LABEL: tt.func @hoist_two_cta_commit_lifecycle
   // CHECK: %[[BAR:.*]] = ttg.local_alloc : () -> !ttg.memdesc<4xi64,
   // CHECK-NEXT: ttng.init_barrier %[[BAR]], 1
