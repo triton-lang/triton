@@ -33,6 +33,91 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
+// ==== Subgroup barriers cannot synchronize a pipeline boundary ====
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @bad_subgroup_barrier(%n: index, %ptr: !tt.ptr<f32>) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %v0 = arith.constant 0.0 : f32
+
+    scf.for %i = %c0 to %n step %c1 {
+      scf.execute_region {
+        tt.store %ptr, %v0 : !tt.ptr<f32>
+        scf.yield
+      } {triton.warp_pipeline.stage = "stage0"}
+
+      // expected-error @+1 {{unexpected op inside pipelined_for body}}
+      gpu.barrier scope <subgroup>
+
+      scf.execute_region {
+        tt.store %ptr, %v0 : !tt.ptr<f32>
+        scf.yield
+      } {triton.warp_pipeline.stage = "stage1"}
+      scf.yield
+    } {triton.warp_pipeline.pipelined_for}
+
+    tt.return
+  }
+}
+// -----
+
+// ==== Unsupported phase gap ====
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @bad_phase_gap(%n: index, %ptr: !tt.ptr<f32>) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %v0 = arith.constant 0.0 : f32
+
+    // expected-error @+1 {{warp-pipeline phase_gap must be 1 or 2}}
+    scf.for %i = %c0 to %n step %c1 {
+      scf.execute_region {
+        tt.store %ptr, %v0 : !tt.ptr<f32>
+        scf.yield
+      } {triton.warp_pipeline.stage = "stage0"}
+      scf.execute_region {
+        tt.store %ptr, %v0 : !tt.ptr<f32>
+        scf.yield
+      } {triton.warp_pipeline.stage = "stage1"}
+      scf.yield
+    } {triton.warp_pipeline.pipelined_for,
+       triton.warp_pipeline.phase_gap = 3 : i32}
+
+    tt.return
+  }
+}
+
+// -----
+
+// ==== phase_gap must be an i32 integer ====
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @bad_phase_gap_type(%n: index, %ptr: !tt.ptr<f32>) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %v0 = arith.constant 0.0 : f32
+
+    // expected-error @+1 {{warp-pipeline phase_gap must be an i32 integer}}
+    scf.for %i = %c0 to %n step %c1 {
+      scf.execute_region {
+        tt.store %ptr, %v0 : !tt.ptr<f32>
+        scf.yield
+      } {triton.warp_pipeline.stage = "stage0"}
+      scf.execute_region {
+        tt.store %ptr, %v0 : !tt.ptr<f32>
+        scf.yield
+      } {triton.warp_pipeline.stage = "stage1"}
+      scf.yield
+    } {triton.warp_pipeline.pipelined_for,
+       triton.warp_pipeline.phase_gap = 1 : i64}
+
+    tt.return
+  }
+}
+
+// -----
+
 // ==== Multiple pre-existing barriers between two stages ====
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
@@ -63,7 +148,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     tt.return
   }
 }
-
 // -----
 
 // ==== Both top-of-loop and bottom-of-loop pre-existing barriers ====
@@ -126,6 +210,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
         scf.yield
       } {triton.warp_pipeline.stage = "stage1"}
 
+      scf.yield
+    } {triton.warp_pipeline.pipelined_for}
+
+    tt.return
+  }
+}
+
+// -----
+
+// ==== One stage is not a pipeline ====
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @bad_single_stage(%n: index, %ptr: !tt.ptr<f32>) {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %v0 = arith.constant 0.0 : f32
+
+    // expected-error @+1 {{pipelined_for body must contain at least two pipeline stages}}
+    scf.for %i = %c0 to %n step %c1 {
+      scf.execute_region {
+        tt.store %ptr, %v0 : !tt.ptr<f32>
+        scf.yield
+      } {triton.warp_pipeline.stage = "stage0"}
       scf.yield
     } {triton.warp_pipeline.pipelined_for}
 

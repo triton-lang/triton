@@ -4798,7 +4798,7 @@ def test_amd_warp_pipeline(target):
 
         # Simple loop with an explicit split point
         for i in range(c0, 10, one):
-            with ttgl.amd.warp_pipeline_stage("stage0"):
+            with ttgl.amd.warp_pipeline_stage("stage0", phase_gap=2):
                 x = i + one
             with ttgl.amd.warp_pipeline_stage("stage1"):
                 y = x * one
@@ -4822,7 +4822,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
       %c1_i32_0 = arith.constant 1 : i32
       %c1_i32_1 = arith.constant 1 : i32
       %4 = arith.addi %arg0, %c1_i32_1 : i32
-      rocdl.sched.barrier none {triton.warp_pipeline.border = "stage0"}
+      rocdl.sched.barrier none {triton.warp_pipeline.border = "stage0", triton.warp_pipeline.phase_gap = 2 : i32}
       %c1_i32_2 = arith.constant 1 : i32
       %c1_i32_3 = arith.constant 1 : i32
       %5 = arith.muli %4, %c1_i32_3 : i32
