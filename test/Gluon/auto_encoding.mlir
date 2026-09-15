@@ -365,3 +365,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %result : tensor<4x128x8xbf16, #part>
   }
 }
+
+// -----
+
+// Broadcast source and result layouts can be fixed independently when every
+// thread already holds the values it needs.
+// CHECK-DAG: [[$SOURCE:#.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+// CHECK-DAG: [[$RESULT:#.*]] = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+// CHECK-LABEL: @preserve_broadcast_layouts
+// CHECK: %[[INPUT:.*]] = tt.splat {{.*}} -> tensor<1x32xf32, [[$SOURCE]]>
+// CHECK: %[[BROADCAST:.*]] = tt.broadcast %[[INPUT]] : tensor<1x32xf32, [[$SOURCE]]> -> tensor<8x32xf32, [[$RESULT]]>
+// CHECK-NEXT: tt.return %[[INPUT]], %[[BROADCAST]]
+#source = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#result = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#auto = #gluon.auto_encoding
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:103", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @preserve_broadcast_layouts(%arg: f32) -> (tensor<1x32xf32, #source>, tensor<8x32xf32, #result>) {
+    %input = tt.splat %arg : f32 -> tensor<1x32xf32, #auto>
+    %broadcast = tt.broadcast %input : tensor<1x32xf32, #auto> -> tensor<8x32xf32, #auto>
+    %fixed_input = gluon.set_auto_layout %input : tensor<1x32xf32, #auto> -> tensor<1x32xf32, #source>
+    %fixed_result = gluon.set_auto_layout %broadcast : tensor<8x32xf32, #auto> -> tensor<8x32xf32, #result>
+    tt.return %fixed_input, %fixed_result : tensor<1x32xf32, #source>, tensor<8x32xf32, #result>
+  }
+}
