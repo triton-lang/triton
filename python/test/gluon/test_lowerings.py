@@ -1023,7 +1023,7 @@ def _histogram_cases():
                                    [0]), ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0]))]
     for m, bins in m_bins:
         for src_layout, dst_layout in layouts:
-            yield (m, bins, src_layout, dst_layout)
+            yield (m, bins, src_layout, dst_layout, 1)
     import math
 
     linear_layouts = [(
@@ -1037,11 +1037,22 @@ def _histogram_cases():
         bins,
     ) for (m, bins) in m_bins if m >= 32]
     for linear_layout, bins in linear_layouts:
-        yield (linear_layout.shape[0], bins, linear_layout, ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0]))
+        yield (linear_layout.shape[0], bins, linear_layout, ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0]), 1)
+
+    for src_cga, dst_cga in [
+        ([[1]], [[1]]),
+        ([[0], [1]], [[0], [0]]),
+        ([[0], [0]], [[1], [2]]),
+    ]:
+        src = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0], cga_layout=src_cga)
+        dst = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0], cga_layout=dst_cga)
+        yield (2048, 512, src, dst, 1 << len(src_cga))
 
 
-@pytest.mark.parametrize("M, bins, src_layout, dst_layout", list(_histogram_cases()))
-def test_histogram(M, bins, src_layout, dst_layout, device):
+@pytest.mark.parametrize("M, bins, src_layout, dst_layout, num_ctas", list(_histogram_cases()))
+def test_histogram(M, bins, src_layout, dst_layout, num_ctas, device):
+    if num_ctas > 1 and not is_hopper_or_newer():
+        pytest.skip("Requires NVIDIA Hopper or newer")
 
     @gluon.jit
     def kernel(x_ptr, z_ptr, M: ttgl.constexpr, B: ttgl.constexpr, src_layout: ttgl.constexpr,
@@ -1056,7 +1067,7 @@ def test_histogram(M, bins, src_layout, dst_layout, device):
     x = torch.randint(0, bins, (M, ), dtype=torch.int32, device=device)
     z = torch.zeros((bins, ), dtype=torch.int32, device=device)
     z_torch = torch.histc(x.float(), bins=bins, min=0, max=bins - 1).to(torch.int32)
-    kernel[(1, )](x, z, M, bins, src_layout, dst_layout, num_warps=4)
+    kernel[(1, )](x, z, M, bins, src_layout, dst_layout, num_warps=4, num_ctas=num_ctas)
     torch.testing.assert_close(z, z_torch, atol=0, rtol=0)
 
 
