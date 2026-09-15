@@ -3389,6 +3389,36 @@ struct TritonGPUInferLayoutInterface
                                              Attribute srcEnc,
                                              ArrayRef<int64_t> dstShape,
                                              Attribute &dstEnc) const {
+    if (isa<LinearEncodingTrait>(srcEnc))
+      return failure();
+
+    // If this reshape just introduces a new size 1 dimension, and the source is
+    // a slice along that dimension, use the slice parent as the result
+    // encoding.
+    if (auto sliceEnc = dyn_cast<SliceEncodingAttr>(srcEnc)) {
+      if (sliceEnc.paddedShape(srcShape) == dstShape &&
+          !isExpensiveView(srcShape, srcEnc, dstShape, sliceEnc.getParent())) {
+        dstEnc = sliceEnc.getParent();
+        return success();
+      }
+    }
+    // Inverse of the above. If the reshape removes a size 1 dimension, the
+    // destination can just be a slice of the source.
+    // TODO: Consider extending this and the case above to support chained
+    // slices for cases where multiple size 1 dimensions are removed or added.
+    if (isa<DistributedEncodingTrait>(srcEnc) &&
+        srcShape.size() == dstShape.size() + 1) {
+      for (unsigned dim = 0; dim < srcShape.size(); ++dim) {
+        if (srcShape[dim] == 1 &&
+            srcShape.take_front(dim) == dstShape.take_front(dim) &&
+            srcShape.drop_front(dim + 1) == dstShape.drop_front(dim)) {
+          dstEnc = SliceEncodingAttr::get(
+              srcEnc.getContext(), dim, cast<DistributedEncodingTrait>(srcEnc));
+          if (!isExpensiveView(srcShape, srcEnc, dstShape, dstEnc))
+            return success();
+        }
+      }
+    }
     auto src = mlir::dyn_cast<BlockedEncodingAttr>(srcEnc);
     if (!src) {
       return failure();
