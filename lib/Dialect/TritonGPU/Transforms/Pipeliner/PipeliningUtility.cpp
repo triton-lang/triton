@@ -376,7 +376,6 @@ Value mlir::triton::createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
                                       unsigned numBuffers, bool twoCTAs) {
   unsigned numCTAs =
       triton::gpu::lookupNumCTAs(rewriter.getBlock()->getParentOp());
-  assert(!twoCTAs || numCTAs % 2 == 0);
   MLIRContext *ctx = rewriter.getContext();
   Attribute sharedMemorySpace = ttg::SharedMemorySpaceAttr::get(ctx);
   auto kBlock = StringAttr::get(ctx, "block");

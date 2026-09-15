@@ -471,8 +471,8 @@ void rewriteGetEnterOp(ArefGetEnterOp op, PatternRewriter &rewriter,
       getFullBarrier(rewriter, loc, arefVal, op.getStage(),
                      getPartitionWsTagIds(op), getStageCluster(op));
   insertWaitOp(rewriter, op, fullBarrier, op.getPhase(), op.getStage());
-  // TMA loads complete independently in each CTA. Publish both completions
-  // before a consumer can issue an MMA that reads the peer CTA's shared tile.
+  // Conservatively synchronize shared-memory consumers across CTAs for now,
+  // since aref completion barriers are per-CTA.
   if (getModuleTwoCTAs(op) && llvm::any_of(op.getBuffers(), [](Value buffer) {
         return isa<SharedMemorySpaceAttr>(
             cast<MemDescType>(buffer.getType()).getMemorySpace());
@@ -863,8 +863,9 @@ void combineArefs(scf::ForOp loop) {
   llvm::DenseMap<std::pair<Operation *, int>, SmallVector<ArefGetEnterOp>>
       liveBeforeGroups;
   for (auto getEnterOp : getEnterOps) {
-    // Combining replaces the whole aref. Keep it separate if another
-    // consumer has a get-enter that would be left referring to the old aref.
+    // Combining erases the original arefs, so require a single get-enter.
+    // For example, if A feeds both MMA and an auxiliary reader while B feeds
+    // MMA, combining A and B for MMA would leave A's other get-enter dangling.
     if (llvm::any_of(getEnterOp.getAref().getUsers(), [&](Operation *user) {
           return isa<ArefGetEnterOp>(user) && user != getEnterOp;
         }))

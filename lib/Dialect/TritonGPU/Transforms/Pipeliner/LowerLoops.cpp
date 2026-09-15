@@ -502,9 +502,8 @@ void createTMABarrierAndWait(
     builder.setStageCluster(schedule[firstUse]);
     Value barrierViewWait = triton::createSingleBufferView(
         builder, barrierAlloc, loadGroup.extractIdx);
-    auto wait =
+    Operation *waitOp =
         ttng::WaitBarrierOp::create(builder, barrierViewWait, loadGroup.phase);
-    Operation *waitOp = wait;
     if (waitRequirements.needsPairWait && waitRequirements.needsAllCTAWait) {
       waitOp = ttng::ClusterBarrierOp::create(builder);
     }
