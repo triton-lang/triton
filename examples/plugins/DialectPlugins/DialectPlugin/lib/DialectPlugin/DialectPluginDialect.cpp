@@ -31,7 +31,7 @@ void DialectPluginDialect::initialize() {
 #include "triton/Tools/PluginUtils.h"
 #include "llvm/Config/llvm-config.h"
 
-static const char *PLUGIN_NAME = "DialectPlugin";
+static const char *PLUGIN_NAME = "dialect-plugin";
 static const char *DIALECT_NAME = "DialectPlugin";
 static const char *PASS_NAME = "plugingpu_conversion";
 static const char *VERSION = "0.1.0";
