@@ -21,13 +21,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32, "ttng.two-ctas" = true} {
-  // CHECK-LABEL: tma_load_two_cta
+  // CHECK-LABEL: @tma_load_two_cta(
   // CHECK: ttng.async_tma_copy_global_to_local
   // CHECK: ttng.wait_barrier
   // CHECK-NEXT: ttng.cluster_barrier
   // CHECK-NEXT: ttng.inval_barrier
   // CHECK-NEXT: {{.*}}ttg.local_load
   tt.func public @tma_load_two_cta(%desc: !tt.tensordesc<256x64xf16, #shared>, %offset: i32) -> tensor<256x64xf16, #blocked> {
+    %value = tt.descriptor_load %desc[%offset, %offset] : !tt.tensordesc<256x64xf16, #shared> -> tensor<256x64xf16, #blocked>
+    tt.return %value : tensor<256x64xf16, #blocked>
+  }
+}
+
+// -----
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[1, 0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @tma_load_independent_ctas(
+  // CHECK: ttng.async_tma_copy_global_to_local
+  // CHECK: ttng.wait_barrier
+  // CHECK-NEXT: ttng.inval_barrier
+  // CHECK-NEXT: {{.*}}ttg.local_load
+  tt.func public @tma_load_independent_ctas(%desc: !tt.tensordesc<256x64xf16, #shared>, %offset: i32) -> tensor<256x64xf16, #blocked> {
     %value = tt.descriptor_load %desc[%offset, %offset] : !tt.tensordesc<256x64xf16, #shared> -> tensor<256x64xf16, #blocked>
     tt.return %value : tensor<256x64xf16, #blocked>
   }
