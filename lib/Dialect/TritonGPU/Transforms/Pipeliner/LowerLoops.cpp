@@ -879,11 +879,21 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
 
   int numStages = mainWaitStage - schedule[mma].first + 1;
   if (mma.getTwoCtas()) {
-    // Both CTAs must consume a completion before its barrier slot is reused.
-    // Cover the full pipeline, as prefetched TMA tiles can let the MMA leader
-    // run ahead of its peer by more than the MMA-to-wait distance. For example,
-    // four load slots with only two completion slots let MMA 2 reuse MMA 0's
-    // barrier before the peer has waited for MMA 0.
+    // With four prefetched operand tiles, two completion slots are
+    // insufficient. Schematic expanded IR (types and TMA operations omitted):
+    //   %bar0 = ttg.memdesc_index %mma_bars[%c0] : ...
+    //   %bar1 = ttg.memdesc_index %mma_bars[%c1] : ...
+    //   ttng.tc_gen5_mma %a0, %b0, %acc, %false, %true,
+    //       %bar0[%true] {is_async, two_ctas} : ...
+    //   ttng.tc_gen5_mma %a1, %b1, %acc, %true, %true,
+    //       %bar1[%true] {is_async, two_ctas} : ...
+    //   ttng.wait_barrier %bar0, %c0 deps %a0, %b0 : ...
+    //   ttng.tc_gen5_mma %a2, %b2, %acc, %true, %true,
+    //       %bar0[%true] {is_async, two_ctas} : ...
+    // The leader can issue MMA 2 while the peer has not yet observed MMA 0's
+    // completion. Both completions flip %bar0's phase, so the peer can miss
+    // MMA 0's completion and deadlock. Size the completion-barrier ring for
+    // the full pipeline depth so the leader cannot reuse a slot that early.
     numStages = std::max(schedule.getNumStages(), mainWaitStage + 1);
   }
 
