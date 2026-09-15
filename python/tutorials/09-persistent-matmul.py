@@ -77,7 +77,7 @@ def _matmul_launch_metadata(grid, kernel, args):
     ret = {}
     M, N, K, WS = args["M"], args["N"], args["K"], args.get("WARP_SPECIALIZE", False)
     ws_str = "_ws" if WS else ""
-    cta_str = "_2cta" if args.get("NUM_CTAS", 1) == 2 else ""
+    cta_str = "_2cta" if kernel.num_ctas == 2 else ""
     ret["name"] = f"{kernel.name}{cta_str}{ws_str} [M={M}, N={N}, K={K}]"
     if "c_ptr" in args:
         bytes_per_elem = args["c_ptr"].element_size()
@@ -99,11 +99,11 @@ def matmul_get_configs(pre_hook=None, num_ctas=1):
     return [
         triton.Config({'BLOCK_SIZE_M': BM, 'BLOCK_SIZE_N': BN, "BLOCK_SIZE_K": BK, "GROUP_SIZE_M": 8}, num_stages=s,
                       num_warps=w, num_ctas=num_ctas, pre_hook=pre_hook)
-        for BM in ([128] if num_ctas == 1 else [256])
+        for BM in [128 * num_ctas]
         for BN in [128, 256]
-        for BK in ([64, 128] if num_ctas == 1 else [64])
+        for BK in [64, 128]
         for s in [2, 3, 4]
-        for w in ([4, 8] if num_ctas == 1 else [4])
+        for w in [4, 8]
     ]
 
 
@@ -201,9 +201,6 @@ def matmul_tma_set_block_size_hook(nargs):
         nargs["c_desc"].block_shape = [BLOCK_M, BLOCK_N]
 
 
-# On Blackwell, num_ctas=2 lets two CTAs cooperate on one matmul tile.
-# Use a larger M tile; each program still computes one output tile.
-# Keep separate autotuners to compare one and two CTAs in the same benchmark.
 @triton.autotune(
     configs=matmul_get_configs(pre_hook=matmul_tma_set_block_size_hook),
     key=["M", "N", "K", "WARP_SPECIALIZE"],
@@ -217,7 +214,6 @@ def matmul_kernel_tma(a_desc, b_desc, c_desc,  #
                       GROUP_SIZE_M: tl.constexpr,  #
                       FP8_OUTPUT: tl.constexpr,  #
                       WARP_SPECIALIZE: tl.constexpr,  #
-                      NUM_CTAS: tl.constexpr,  #
                       ):
     dtype = tl.float8e4nv if FP8_OUTPUT else tl.float16
 
@@ -258,7 +254,6 @@ matmul_kernel_tma_2cta = triton.autotune(
 
 
 def matmul_tma(a, b, warp_specialize: bool, num_ctas=1):
-    """B is contiguous [N, K] for both one and two CTAs."""
     assert num_ctas in (1, 2)
     assert num_ctas == 1 or HAS_TWO_CTA, "Two-CTA TMA requires Blackwell"
     # Check constraints.
@@ -288,7 +283,6 @@ def matmul_tma(a, b, warp_specialize: bool, num_ctas=1):
         M, N, K,  #
         FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
         WARP_SPECIALIZE=warp_specialize,  #
-        NUM_CTAS=num_ctas,  #
     )
     return c
 
@@ -815,6 +809,7 @@ def validate(M, N, K, dtype):
     run_test(naive_result, matmul_persistent, a, b.T, "Persistent")
     kernels = [
         (matmul_tma, "TMA", HAS_HOST_TENSOR_DESC),
+        (lambda a, b, ws: matmul_tma(a, b, ws, num_ctas=2), "TMA two-CTA", HAS_TWO_CTA),
         (matmul_tma_clc, "CLC TMA", HAS_TMA_CLC),
         (matmul_tma_persistent, "TMA Persistent", HAS_HOST_TENSOR_DESC),
         (matmul_descriptor_persistent, "Tensor Descriptor Persistent", HAS_TENSOR_DESC),
@@ -827,9 +822,6 @@ def validate(M, N, K, dtype):
         skipped = is_hopper() and warp_specialize and kernel != matmul_descriptor_persistent
         enabled = enabled and (not warp_specialize or HAS_TENSOR_DESC) and (not skipped)
         run_test(naive_result, lambda a, b: kernel(a, b, warp_specialize), a, b, label, enabled)
-    for ws in ([False, True] if HAS_WARP_SPECIALIZE else [False]):
-        run_test(naive_result, lambda a, b: matmul_tma(a, b, ws, num_ctas=2), a, b,
-                 f"TMA two-CTA (warp_specialize={ws})", enabled=HAS_TWO_CTA)
     print()
 
 
