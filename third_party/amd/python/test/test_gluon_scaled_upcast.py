@@ -20,7 +20,12 @@ def _compact_scaled_upcast_fp4_kernel(x_ptr, scale_ptr, out_ptr, M: ttgl.constex
     x = ttgl.load(x_ptr + x_offsets)
 
     scale_factor: ttgl.constexpr = OUT_K // SCALE_K
-    scale_layout: ttgl.constexpr = ttgl.amd.get_scaled_upcast_fp4_scale_layout(x, scale_factor, ttgl.bfloat16, axis=1)
+    if USE_CDNA4:
+        scale_layout: ttgl.constexpr = ttgl.amd.cdna4.get_scaled_upcast_fp4_scale_layout(
+            x, scale_factor, ttgl.bfloat16, axis=1)
+    else:
+        scale_layout: ttgl.constexpr = ttgl.amd.cdna3.get_scaled_upcast_fp4_scale_layout(
+            x, scale_factor, ttgl.bfloat16, axis=1)
     offs_scale_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, scale_layout))
     offs_scale_k = ttgl.arange(0, SCALE_K, layout=ttgl.SliceLayout(0, scale_layout))
     scale_offsets = offs_scale_m[:, None] * SCALE_K + offs_scale_k[None, :]

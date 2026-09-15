@@ -154,7 +154,7 @@ def test_runtime_scaled_upcast_fp4(compact_scale, BLOCK_K):
         x = ttgl.load(x_ptr + x_offsets)
 
         if COMPACT_SCALE:
-            scale_layout: ttgl.constexpr = ttgl.amd.get_scaled_upcast_fp4_scale_layout(
+            scale_layout: ttgl.constexpr = ttgl.amd.cdna5.get_scaled_upcast_fp4_scale_layout(
                 x, SCALE_FACTOR, ttgl.bfloat16, axis=1)
             scale_k: ttgl.constexpr = BLOCK_K // SCALE_FACTOR
         else:
