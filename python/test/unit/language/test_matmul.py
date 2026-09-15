@@ -278,6 +278,47 @@ def test_tma_matmul_mixed_consumers(num_ctas, num_stages, K, warp_specialize, de
     torch.testing.assert_close(aux, expected_aux, atol=0.001, rtol=0.001)
 
 
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("use_loop, num_stages", [(False, 3), (True, 1)])
+def test_tma_matmul_non_pipelined(use_loop, num_stages, device):
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    @triton.jit
+    def kernel(A, B, C, K: tl.constexpr, USE_LOOP: tl.constexpr):
+        if USE_LOOP:
+            acc = tl.full((256, 128), 0, tl.float32)
+            for k in range(K // 64):
+                a = A.load([0, k * 64])
+                b = B.load([k * 64, 0])
+                acc = tl.dot(a, b, acc)
+        else:
+            a = A.load([0, 0])
+            b = B.load([0, 0])
+            acc = tl.dot(a, b)
+        C.store([0, 0], acc.to(tl.float16))
+
+    K = 256 if use_loop else 64
+    torch.manual_seed(0)
+    a = torch.randn((256, K), device=device, dtype=torch.float16) * 0.1
+    b = torch.randn((K, 128), device=device, dtype=torch.float16) * 0.1
+    c = torch.empty((256, 128), device=device, dtype=torch.float16)
+    a_desc = TensorDescriptor(a, a.shape, a.stride(), [256, 64])
+    b_desc = TensorDescriptor(b, b.shape, b.stride(), [64, 128])
+    c_desc = TensorDescriptor(c, c.shape, c.stride(), [256, 128])
+    compiled = kernel[(1, )](a_desc, b_desc, c_desc, K, use_loop, num_ctas=2, num_stages=num_stages, num_warps=4)
+    if is_compile_warmup():
+        return
+
+    torch.testing.assert_close(c, a @ b, atol=0.01, rtol=0.01)
+    ttgir = compiled.asm["ttgir"]
+    mma_lines = [line for line in ttgir.splitlines() if "ttng.tc_gen5_mma" in line]
+    assert len(mma_lines) == 1
+    assert "two_ctas" in mma_lines[0]
+    assert "tcgen05.mma.cta_group::2" in compiled.asm["ptx"]
+    assert "ttng.async_tma_copy_global_to_local" in ttgir
+    assert ("scf.for" in ttgir) == use_loop
+
+
 def test_i4_m_minor_join_bk16_matmul(device):
     if not is_cuda():
         pytest.skip("i4 M-minor join regression is CUDA-specific")
