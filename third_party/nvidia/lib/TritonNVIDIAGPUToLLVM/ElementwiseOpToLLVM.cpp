@@ -584,13 +584,21 @@ private:
   int ptxVersion;
 };
 
+// PTX has no approximate fp64 divide, so the default and the IEEE lowering
+// both go through div.rn.f64; only the fp32 intrinsic differs.
+template <typename SourceOp>
 struct FDivOpConversion
-    : ElementwiseOpConversionBase<arith::DivFOp, FDivOpConversion> {
-  using Base = ElementwiseOpConversionBase<arith::DivFOp, FDivOpConversion>;
-  using Base::Base;
+    : ElementwiseOpConversionBase<SourceOp, FDivOpConversion<SourceOp>> {
+  using Base = ElementwiseOpConversionBase<SourceOp, FDivOpConversion>;
   using Adaptor = typename Base::OpAdaptor;
 
-  SmallVector<Value> createDestOps(arith::DivFOp op, OpAdaptor adaptor,
+  FDivOpConversion(LLVMTypeConverter &typeConverter,
+                   ModuleAxisInfoAnalysis &axisAnalysisPass,
+                   StringRef f32Intrinsic, PatternBenefit benefit)
+      : Base(typeConverter, axisAnalysisPass, benefit),
+        f32Intrinsic(f32Intrinsic) {}
+
+  SmallVector<Value> createDestOps(SourceOp op, Adaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
@@ -598,7 +606,7 @@ struct FDivOpConversion
     StringRef name;
     Type resultTy;
     if (32 == bitwidth) {
-      name = "llvm.nvvm.div.full";
+      name = f32Intrinsic;
       resultTy = f32_ty;
     } else if (64 == bitwidth) {
       name = "llvm.nvvm.div.rn.d";
@@ -611,6 +619,9 @@ struct FDivOpConversion
         LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, resultTy, args);
     return {callOp.getResult(0)};
   }
+
+private:
+  StringRef f32Intrinsic;
 };
 
 // Uses inline ptx to convert s8/u8 to bf16, since the
@@ -921,7 +932,7 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
 
   patterns.add<ElementwiseToIntrinsicOpConversion<triton::PreciseSqrtOp>>(
       typeConverter, axisInfoAnalysis, "llvm.nvvm.sqrt.rn.f", benefit);
-  patterns.add<ElementwiseToIntrinsicOpConversion<triton::PreciseDivFOp>>(
+  patterns.add<FDivOpConversion<triton::PreciseDivFOp>>(
       typeConverter, axisInfoAnalysis, "llvm.nvvm.div.rn.f", benefit);
 
   mlir::triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
@@ -940,7 +951,8 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
 
 #undef POPULATE_OP
 
-  patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<FDivOpConversion<arith::DivFOp>>(typeConverter, axisInfoAnalysis,
+                                                "llvm.nvvm.div.full", benefit);
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, benefit);
