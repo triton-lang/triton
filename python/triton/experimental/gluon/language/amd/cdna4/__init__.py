@@ -8,7 +8,7 @@ from ..._core import builtin, int8, uint8, _unwrap_if_constexpr
 from ..._layouts import DotOperandLayout
 from .._layouts import AMDMFMALayout
 from .._ops import _load_shared_fp4_repacked, _mma_scaled, _scaled_upcast, scaled_downcast
-from ..cdna3 import _buffer_atomic_rmw_impl, _set_cd_regclass
+from ..cdna3 import _buffer_atomic_rmw_impl, _check_cd_regclass, _set_cd_regclass
 from ..cdna3 import *  # NOQA: F403
 from ..cdna3 import __all__ as __cdna3_all
 from . import async_copy
@@ -50,8 +50,9 @@ def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, cd_regclass=Non
             ``e4m3``, ``e5m2``.
         acc (tensor): Accumulator tensor.
         cd_regclass (str, optional): Experimental. Register class for the accumulator input (C)
-            and result (D) of every scaled MFMA instruction, as for ``mfma``: ``"a"`` for AGPRs
-            or ``"v"`` for VGPRs. ``None`` (default) leaves the choice to the compiler.
+            and result (D) of the scaled MFMA instructions, as for ``mfma``: ``"a"`` for AGPRs or
+            ``"v"`` for VGPRs. With two-step (ping-pong) lowering each step is pinned.
+            ``None`` (default) leaves the choice to the compiler.
     """
     layout = acc.type.layout
     assert isinstance(layout, AMDMFMALayout), "Expected layout to be an instance of AMDMFMALayout"
@@ -67,6 +68,7 @@ def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, cd_regclass=Non
     assert a_format in {"e2m1", "e4m3", "e5m2"}, f"Unsupported lhs_format: {a_format}"
     assert b_format in {"e2m1", "e4m3", "e5m2"}, f"Unsupported rhs_format: {b_format}"
 
+    cd_regclass = _check_cd_regclass(cd_regclass, acc)
     ret = _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, get_mfma_scale_layout, _semantic)
     _set_cd_regclass(ret.handle, cd_regclass, _semantic)
     return ret
