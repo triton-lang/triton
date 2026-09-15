@@ -25,6 +25,7 @@
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/Utils/IndexingUtils.h"
+#include "mlir/IR/Matchers.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
@@ -109,11 +110,43 @@ struct DotOpMFMAConversionHelper {
     return rewriter.create(loweredOp)->getResult(0);
   }
 
+  // Name of the attribute set by the `cd_regclass` argument of Gluon's AMD
+  // `mfma` / `mfma_scaled`.
+  static constexpr llvm::StringLiteral kCDRegClassAttrName = "amdg.cd_regclass";
+
+  // Register classes to pin an MFMA tile's accumulator input (C) and result
+  // (D) to: "a" = AGPRs, "v" = VGPRs, empty = no pin.
+  struct CDPins {
+    StringRef c;
+    StringRef d;
+  };
+
+  // The pins requested by `kCDRegClassAttrName` on `op`, whose accumulator
+  // input is `c`. A constant accumulator (e.g. zeros) is not pinned on C:
+  // LLVM folds it into the MFMA as an immediate, which a pin would prevent.
+  static FailureOr<CDPins> getCDPins(Operation *op, Value c) {
+    Attribute attr = op->getAttr(kCDRegClassAttrName);
+    if (!attr)
+      return CDPins{};
+    auto regClass = dyn_cast<StringAttr>(attr);
+    if (!regClass ||
+        (regClass.getValue() != "a" && regClass.getValue() != "v")) {
+      op->emitError() << kCDRegClassAttrName << " must be \"a\" or \"v\", got "
+                      << attr;
+      return failure();
+    }
+    StringRef cls = regClass.getValue();
+    return CDPins{matchPattern(c, m_Constant()) ? StringRef() : cls, cls};
+  }
+
   // Wraps `acc` in an empty inline asm whose output is tied to its input
   // (constraint "=<regClass>,0"). No instruction is emitted, but the value has
   // to sit in the given register class ("a" = AGPRs, "v" = VGPRs) at this
-  // point, which steers the MFMA accumulator into that register file.
+  // point, which steers the MFMA accumulator into that register file. Returns
+  // `acc` unchanged when `regClass` is empty.
   Value pinRegClass(Value acc, StringRef regClass) const {
+    if (regClass.empty())
+      return acc;
     std::string constraints = ("=" + regClass + ",0").str();
     return LLVM::InlineAsmOp::create(
                rewriter, loc, acc.getType(), ValueRange{acc},
@@ -122,22 +155,6 @@ struct DotOpMFMAConversionHelper {
                LLVM::AsmDialectAttr::get(ctx, LLVM::AsmDialect::AD_ATT),
                /*operand_attrs=*/ArrayAttr())
         ->getResult(0);
-  }
-
-  // The register class requested for the MFMA accumulators (C and D) by the
-  // `cd_regclass` argument of Gluon's AMD `mfma` / `mfma_scaled`: "a", "v", or
-  // empty when not requested.
-  static FailureOr<StringRef> getCDRegClass(Operation *op) {
-    auto attr = op->getAttrOfType<StringAttr>("amdg.cd_regclass");
-    if (!attr)
-      return StringRef();
-    StringRef regClass = attr.getValue();
-    if (regClass != "a" && regClass != "v") {
-      op->emitError("amdg.cd_regclass must be \"a\" or \"v\", got \"")
-          << regClass << "\"";
-      return failure();
-    }
-    return regClass;
   }
 
   int getNumSubmatrices(Type elementType, int mDim, int nDim) const {
@@ -289,10 +306,8 @@ struct DotOpMFMAConversionHelper {
     auto kDim = mnkDim[2];
     auto mfmaVersion = mfmaLayout.getVersion();
 
-    // Optional register class for the accumulator (C and D) of every MFMA
-    // tile, set by the `cd_regclass` argument of Gluon's AMD `mfma`.
-    FailureOr<StringRef> cdRegClass = getCDRegClass(op.getOperation());
-    if (failed(cdRegClass))
+    FailureOr<CDPins> cdPins = getCDPins(op.getOperation(), op.getC());
+    if (failed(cdPins))
       return failure();
 
     Value a = op.getA();
@@ -398,8 +413,7 @@ struct DotOpMFMAConversionHelper {
             acc = tb.insert_element(vecTy, acc, c, tb.i32_val(v));
           }
           // Pin C right before the tile's first MFMA.
-          if (!cdRegClass->empty())
-            acc = pinRegClass(acc, *cdRegClass);
+          acc = pinRegClass(acc, cdPins->c);
 
           for (int k = 0; k < numVecInKBase; ++k) {
             Value op1 = operandA[{b, m, k}];
@@ -431,8 +445,7 @@ struct DotOpMFMAConversionHelper {
               firstMfma = acc;
           }
           // Pin D right after the tile's last MFMA.
-          if (!cdRegClass->empty())
-            acc = pinRegClass(acc, *cdRegClass);
+          acc = pinRegClass(acc, cdPins->d);
 
           adjustAccForSmallKDim(fc, acc, dstElemTy, b, m, n, numRepM, numRepN,
                                 kDimInstrSize, kDimOperandSize, elemsPerVec);
@@ -648,10 +661,8 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     Value b = op.getB();
     Value aScale = op.getAScale();
     Value bScale = op.getBScale();
-    // Optional register class for the accumulator (C and D) of every MFMA
-    // tile, set by the `cd_regclass` argument of Gluon's AMD `mfma_scaled`.
-    FailureOr<StringRef> cdRegClass = getCDRegClass(op.getOperation());
-    if (failed(cdRegClass))
+    FailureOr<CDPins> cdPins = getCDPins(op.getOperation(), op.getC());
+    if (failed(cdPins))
       return failure();
     if ((aScale && !bScale) || (!aScale && bScale)) {
       llvm::report_fatal_error("Single scale is not supported\n");
@@ -833,9 +844,10 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
                   tb.i32_val(v));
             }
             acc = zeroAuxiliarBlocks(subBlocks, acc);
-            // Pin C right before the tile's first MFMA.
-            if (!cdRegClass->empty())
-              acc = pinRegClass(acc, *cdRegClass);
+            // Pin C right before this pass's MFMAs (all K steps, or one K step
+            // with pingpong_2step). Only the first pass reads the op's C; later
+            // passes read the previous pass's result.
+            acc = pinRegClass(acc, outerK == 0 ? cdPins->c : cdPins->d);
             for (innerK = 0; innerK < innerKBound; innerK++) {
               int k = is2Step ? outerK : innerK;
               if (existBothScales) {
@@ -879,9 +891,8 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
               if (!firstMfma)
                 firstMfma = acc;
             }
-            // Pin D right after the tile's last MFMA.
-            if (!cdRegClass->empty())
-              acc = pinRegClass(acc, *cdRegClass);
+            // Pin D right after this pass's MFMAs.
+            acc = pinRegClass(acc, cdPins->d);
             acc = reduceSubBlocks(subBlocks, acc);
             adjustAccForSmallKDim(fc, acc, dstElemTy, b, m, n, numRepM, numRepN,
                                   kDimInstrSize, kDimOperandSize, elemsPerVec);

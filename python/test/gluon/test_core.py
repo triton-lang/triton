@@ -2224,13 +2224,30 @@ def test_amd_wmma(M, N, K, in_dtype):
     torch.testing.assert_close(ref, triton_output)
 
 
+def _check_cd_regclass_pins(llir, cd_regclass):
+    """Check that the LLVM IR pins MFMA accumulators to `cd_regclass`, or has no pins when it is None."""
+    if cd_regclass is None:
+        assert '"=a,0"' not in llir and '"=v,0"' not in llir
+    else:
+        assert f'"={cd_regclass},0"' in llir
+
+
 @pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 @pytest.mark.parametrize("M, N, K", [(32, 32, 16), (16, 16, 32)])
 @pytest.mark.parametrize("in_dtype", ['float16', 'bfloat16'])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("cdna_version", [3, 4])
-@pytest.mark.parametrize("cd_regclass", [None, "a", "v"])
-def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version, cd_regclass):
+def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version):
+    _run_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version, cd_regclass=None)
+
+
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
+@pytest.mark.parametrize("cd_regclass", ["a", "v"])
+def test_amd_mfma_cd_regclass(cd_regclass):
+    _run_amd_mfma(32, 32, 16, 'float16', 4, 3 if is_hip_cdna3() else 4, cd_regclass)
+
+
+def _run_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version, cd_regclass):
     if is_hip_cdna3() and cdna_version != 3:
         pytest.skip("On CDNA3 target, skip if mfma version is not 3")
 
@@ -2282,7 +2299,7 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version, cd_regclass):
     mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=cdna_version, instr_shape=[nonkdim, nonkdim, kdim],
                                                          transposed=True, warps_per_cta=[num_warps, 1])
 
-    kernel[1, 1](
+    compiled = kernel[1, 1](
         a, b, c,  #
         a.stride(0), a.stride(1),  #
         b.stride(0), b.stride(1),  #
@@ -2294,6 +2311,7 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version, cd_regclass):
     ref = torch.matmul(a, b)
     triton_output = c
     torch.testing.assert_close(ref, triton_output)
+    _check_cd_regclass_pins(compiled.asm["llir"], cd_regclass)
 
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
@@ -2400,6 +2418,7 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, cd_regclass, has_scale, device
         torch.testing.assert_close(out, out_ref)
 
     assert 'v_mfma_scale_f32_16x16x128_f8f6f4' in compiled.asm['amdgcn']
+    _check_cd_regclass_pins(compiled.asm['llir'], cd_regclass)
 
 
 def test_math_fast_expf():

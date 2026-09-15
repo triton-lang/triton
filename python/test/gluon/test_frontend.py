@@ -4123,6 +4123,26 @@ def test_amd_mfma_cd_regclass_invalid():
         run_parser(kernel, target=HIP_TARGET_CDNA3)
 
 
+def test_amd_mfma_cd_regclass_requires_mfma_layout():
+
+    @gluon.jit
+    def kernel():
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=3, warps_per_cta=[4, 1], instr_shape=[32, 32, 8],
+                                                             transposed=True)
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [8, 8], [4, 1], [1, 0])
+
+        a = ttgl.full([64, 32], 1.0, ttgl.float32, layout=ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout,
+                                                                                k_width=8))
+        b = ttgl.full([32, 64], 2.0, ttgl.float32, layout=ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout,
+                                                                                k_width=8))
+
+        acc = ttgl.full([64, 64], 0.0, ttgl.float32, layout=blocked)
+        ttgl.amd.cdna3.mfma(a, b, acc, cd_regclass="a")
+
+    with pytest.raises(CompilationError, match="cd_regclass requires an accumulator with AMDMFMALayout"):
+        run_parser(kernel, target=HIP_TARGET_CDNA3)
+
+
 @gluon.jit
 def slice_kernel():
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 64], [4, 1], [1, 0])
