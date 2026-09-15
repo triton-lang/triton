@@ -3,7 +3,7 @@ Persistent Matmul
 =====================
 This script demonstrates persistent kernel implementations of matrix multiplication using Triton.
 Various matmul methods are included, such as naive, persistent, TMA (Tensor Memory Accelerator), and CLC TMA based
-approaches. The CLC variant requires an NVIDIA GPU with compute capability >= 10.0.
+approaches, including a two-CTA TMA variant on Blackwell. The CLC variant requires an NVIDIA GPU with compute capability >= 10.0.
 The kernels support both FP16 and FP8 data types but the FP8 implementation is only available on CUDA devices with compute capability >= 9.0.
 
 Triton and cuBLAS implementations are benchmarked under different configurations and evaluated using the proton profiler.
@@ -77,7 +77,8 @@ def _matmul_launch_metadata(grid, kernel, args):
     ret = {}
     M, N, K, WS = args["M"], args["N"], args["K"], args.get("WARP_SPECIALIZE", False)
     ws_str = "_ws" if WS else ""
-    ret["name"] = f"{kernel.name}{ws_str} [M={M}, N={N}, K={K}]"
+    cta_str = "_2cta" if args.get("NUM_CTAS", 1) == 2 else ""
+    ret["name"] = f"{kernel.name}{cta_str}{ws_str} [M={M}, N={N}, K={K}]"
     if "c_ptr" in args:
         bytes_per_elem = args["c_ptr"].element_size()
     else:
@@ -91,17 +92,18 @@ HAS_TENSOR_DESC = supports_tma() and hasattr(tl, "make_tensor_descriptor")
 HAS_HOST_TENSOR_DESC = supports_tma() and hasattr(triton.tools.tensor_descriptor, "TensorDescriptor")
 HAS_WARP_SPECIALIZE = supports_ws() and HAS_TENSOR_DESC
 HAS_TMA_CLC = supports_clc() and HAS_HOST_TENSOR_DESC
+HAS_TWO_CTA = HAS_HOST_TENSOR_DESC and torch.cuda.get_device_capability()[0] == 10
 
 
-def matmul_get_configs(pre_hook=None):
+def matmul_get_configs(pre_hook=None, num_ctas=1):
     return [
         triton.Config({'BLOCK_SIZE_M': BM, 'BLOCK_SIZE_N': BN, "BLOCK_SIZE_K": BK, "GROUP_SIZE_M": 8}, num_stages=s,
-                      num_warps=w, pre_hook=pre_hook)
-        for BM in [128]
+                      num_warps=w, num_ctas=num_ctas, pre_hook=pre_hook)
+        for BM in ([128] if num_ctas == 1 else [256])
         for BN in [128, 256]
-        for BK in [64, 128]
-        for s in ([2, 3, 4])
-        for w in [4, 8]
+        for BK in ([64, 128] if num_ctas == 1 else [64])
+        for s in [2, 3, 4]
+        for w in ([4, 8] if num_ctas == 1 else [4])
     ]
 
 
@@ -199,6 +201,9 @@ def matmul_tma_set_block_size_hook(nargs):
         nargs["c_desc"].block_shape = [BLOCK_M, BLOCK_N]
 
 
+# On Blackwell, num_ctas=2 lets two CTAs cooperate on one matmul tile.
+# Use a larger M tile; each program still computes one output tile.
+# Keep separate autotuners to compare one and two CTAs in the same benchmark.
 @triton.autotune(
     configs=matmul_get_configs(pre_hook=matmul_tma_set_block_size_hook),
     key=["M", "N", "K", "WARP_SPECIALIZE"],
@@ -212,6 +217,7 @@ def matmul_kernel_tma(a_desc, b_desc, c_desc,  #
                       GROUP_SIZE_M: tl.constexpr,  #
                       FP8_OUTPUT: tl.constexpr,  #
                       WARP_SPECIALIZE: tl.constexpr,  #
+                      NUM_CTAS: tl.constexpr,  #
                       ):
     dtype = tl.float8e4nv if FP8_OUTPUT else tl.float16
 
@@ -245,7 +251,16 @@ def matmul_kernel_tma(a_desc, b_desc, c_desc,  #
     c_desc.store([offs_cm, offs_cn], c)
 
 
-def matmul_tma(a, b, warp_specialize: bool):
+matmul_kernel_tma_2cta = triton.autotune(
+    configs=matmul_get_configs(pre_hook=matmul_tma_set_block_size_hook, num_ctas=2),
+    key=["M", "N", "K", "WARP_SPECIALIZE"],
+)(matmul_kernel_tma.fn)
+
+
+def matmul_tma(a, b, warp_specialize: bool, num_ctas=1):
+    """B is contiguous [N, K] for both one and two CTAs."""
+    assert num_ctas in (1, 2)
+    assert num_ctas == 1 or HAS_TWO_CTA, "Two-CTA TMA requires Blackwell"
     # Check constraints.
     assert a.shape[1] == b.shape[1], "Incompatible dimensions"  # b is transposed
     assert a.dtype == b.dtype, "Incompatible dtypes"
@@ -267,11 +282,13 @@ def matmul_tma(a, b, warp_specialize: bool):
         BLOCK_N = META["BLOCK_SIZE_N"]
         return (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), )
 
-    matmul_kernel_tma[grid](
+    kernel = matmul_kernel_tma_2cta if num_ctas == 2 else matmul_kernel_tma
+    kernel[grid](
         a_desc, b_desc, c_desc,  #
         M, N, K,  #
         FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
         WARP_SPECIALIZE=warp_specialize,  #
+        NUM_CTAS=num_ctas,  #
     )
     return c
 
@@ -768,6 +785,8 @@ def bench(K, dtype, reps=10000, warmup_reps=10000):
                 bench_fn(f"clc_tma{ws_str}", reps, warmup_reps, lambda a, b: matmul_tma_clc(a, b, ws), a, b)
             bench_fn(f"tma_persistent{ws_str}", reps, warmup_reps, lambda a, b: matmul_tma_persistent(a, b, ws), a, b)
             bench_fn(f"tma{ws_str}", reps, warmup_reps, lambda a, b: matmul_tma(a, b, ws), a, b)
+        if HAS_TWO_CTA and not ws:
+            bench_fn("tma_2cta", reps, warmup_reps, lambda a, b: matmul_tma(a, b, False, num_ctas=2), a, b)
         if HAS_TENSOR_DESC:
             bench_fn(f"descriptor_persistent{ws_str}", reps, warmup_reps,
                      lambda a, b: matmul_descriptor_persistent(a, b, ws), a, b)
@@ -808,6 +827,9 @@ def validate(M, N, K, dtype):
         skipped = is_hopper() and warp_specialize and kernel != matmul_descriptor_persistent
         enabled = enabled and (not warp_specialize or HAS_TENSOR_DESC) and (not skipped)
         run_test(naive_result, lambda a, b: kernel(a, b, warp_specialize), a, b, label, enabled)
+    for ws in ([False, True] if HAS_WARP_SPECIALIZE else [False]):
+        run_test(naive_result, lambda a, b: matmul_tma(a, b, ws, num_ctas=2), a, b,
+                 f"TMA two-CTA (warp_specialize={ws})", enabled=HAS_TWO_CTA)
     print()
 
 

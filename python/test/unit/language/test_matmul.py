@@ -115,20 +115,16 @@ def get_src_element_ty_size(dtype_str):
     raise ValueError(f"Unknown dtype {dtype_str}")
 
 
-def assert_mmav5_asm(k, expect_two_ctas):
+def assert_mmav5_asm(k, expect_two_ctas, num_mma):
     ttgir = k.asm["ttgir"]
-    count = ttgir.count("ttng.tc_gen5_mma")
-    assert count == 2, "The TTGIR does not match the expected MMAv5 pipeline pattern."
     mma_lines = [line for line in ttgir.splitlines() if "ttng.tc_gen5_mma" in line]
-    if expect_two_ctas:
-        assert any("two_ctas" in line for line in mma_lines), "TTGIR does not contain a two_ctas MMAv5 op."
-    else:
-        assert all("two_ctas" not in line for line in mma_lines), "TTGIR unexpectedly contains a two_ctas MMAv5 op."
+    assert len(mma_lines) == num_mma, f"Expected {num_mma} MMAv5 ops, got {len(mma_lines)}"
+    assert all(("two_ctas" in line) == expect_two_ctas for line in mma_lines), "Unexpected MMAv5 CTA mode"
 
     ptx = k.asm["ptx"]
     assert ("32x32b" in ptx) or ("16x32b" in ptx), "PTX does not contain 32x32b or 16x32b"
-    cta_group = "cta_group::2" if expect_two_ctas else "cta_group::1"
-    assert cta_group in ptx, f"PTX does not contain {cta_group}"
+    mma_instruction = f"tcgen05.mma.cta_group::{2 if expect_two_ctas else 1}"
+    assert mma_instruction in ptx, f"PTX does not contain {mma_instruction}"
 
 
 @pytest.mark.parametrize("dtype_src_str", ["float32", "tensorfloat32", "float16", "float8e5", "float64"])
@@ -206,27 +202,7 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
     if (device == "cuda" and torch.cuda.get_device_capability()[0] == 10 and NUM_STAGES > 1 and BLOCK_M % 64 == 0
             and BLOCK_N % 8 == 0 and BLOCK_N > 16
             and not (precision == "ieee" and (dtype_src_str == "float32" or dtype_src_str == "float64"))):
-        assert_mmav5_asm(k, expect_two_ctas=False)
-
-
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] != 10,
-                    reason="Requires compute capability == 10")
-def test_simple_matmul_mmav5_asm(device):
-    M, N, K = 1024, 512, 256
-    BLOCK_M, BLOCK_N, BLOCK_K = 256, 128, 32
-    torch.manual_seed(42)
-    a = torch.randn(M, K, dtype=torch.float16, device=device)
-    b = torch.randn(K, N, dtype=torch.float16, device=device)
-    output = torch.empty((M, N), dtype=torch.float16, device=device)
-    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
-    k = matmul_kernel[grid](a, b, output, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), output.stride(0),
-                            output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES=4, PRECISION="ieee", num_warps=4,
-                            num_ctas=2)
-    if is_compile_warmup():
-        return
-
-    torch.testing.assert_close(torch.matmul(a, b).to(torch.float32), output.to(torch.float32), atol=0.06, rtol=0.06)
-    assert_mmav5_asm(k, expect_two_ctas=False)
+        assert_mmav5_asm(k, expect_two_ctas=False, num_mma=2)
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
@@ -279,21 +255,27 @@ def test_tma_matmul_mixed_consumers(num_ctas, num_stages, K, warp_specialize, de
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize("use_loop, num_stages", [(False, 3), (True, 1)])
-def test_tma_matmul_non_pipelined(use_loop, num_stages, device):
+@pytest.mark.parametrize("use_loop, num_stages", [(False, 3), (True, 1), (True, 3)])
+@pytest.mark.parametrize("transpose_b", [False, True])
+def test_tma_matmul_two_ctas(use_loop, num_stages, transpose_b, device):
     from triton.tools.tensor_descriptor import TensorDescriptor
 
     @triton.jit
-    def kernel(A, B, C, K: tl.constexpr, USE_LOOP: tl.constexpr):
+    def kernel(A, B, C, K: tl.constexpr, USE_LOOP: tl.constexpr, TRANSPOSE_B: tl.constexpr):
         if USE_LOOP:
             acc = tl.full((256, 128), 0, tl.float32)
             for k in range(K // 64):
                 a = A.load([0, k * 64])
-                b = B.load([k * 64, 0])
+                if TRANSPOSE_B:
+                    b = B.load([0, k * 64]).T
+                else:
+                    b = B.load([k * 64, 0])
                 acc = tl.dot(a, b, acc)
         else:
             a = A.load([0, 0])
             b = B.load([0, 0])
+            if TRANSPOSE_B:
+                b = b.T
             acc = tl.dot(a, b)
         C.store([0, 0], acc.to(tl.float16))
 
@@ -303,18 +285,18 @@ def test_tma_matmul_non_pipelined(use_loop, num_stages, device):
     b = torch.randn((K, 128), device=device, dtype=torch.float16) * 0.1
     c = torch.empty((256, 128), device=device, dtype=torch.float16)
     a_desc = TensorDescriptor(a, a.shape, a.stride(), [256, 64])
-    b_desc = TensorDescriptor(b, b.shape, b.stride(), [64, 128])
+    b_input = b.T.contiguous() if transpose_b else b
+    b_desc = TensorDescriptor(b_input, b_input.shape, b_input.stride(), [128, 64] if transpose_b else [64, 128])
     c_desc = TensorDescriptor(c, c.shape, c.stride(), [256, 128])
-    compiled = kernel[(1, )](a_desc, b_desc, c_desc, K, use_loop, num_ctas=2, num_stages=num_stages, num_warps=4)
+    compiled = kernel[(1, )](a_desc, b_desc, c_desc, K, use_loop, transpose_b, num_ctas=2, num_stages=num_stages,
+                             num_warps=4)
     if is_compile_warmup():
         return
 
     torch.testing.assert_close(c, a @ b, atol=0.01, rtol=0.01)
+    num_mma = 2 if use_loop and num_stages > 1 else 1
+    assert_mmav5_asm(compiled, expect_two_ctas=True, num_mma=num_mma)
     ttgir = compiled.asm["ttgir"]
-    mma_lines = [line for line in ttgir.splitlines() if "ttng.tc_gen5_mma" in line]
-    assert len(mma_lines) == 1
-    assert "two_ctas" in mma_lines[0]
-    assert "tcgen05.mma.cta_group::2" in compiled.asm["ptx"]
     assert "ttng.async_tma_copy_global_to_local" in ttgir
     assert ("scf.for" in ttgir) == use_loop
 
