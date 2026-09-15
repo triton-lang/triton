@@ -3689,3 +3689,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return %rn, %rz : bf16, bf16
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 2, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @shared_memory_pointers
+  tt.func @shared_memory_pointers(%ptrs: tensor<256x!tt.ptr<i32>, #blocked>, %out: tensor<256x!tt.ptr<i32>, #blocked>) {
+    %offsets = tt.make_range {start = 0 : i32, end = 256 : i32} : tensor<256xi32, #blocked>
+    %half = arith.constant dense<128> : tensor<256xi32, #blocked>
+    %indices = arith.xori %offsets, %half : tensor<256xi32, #blocked>
+    // CHECK: llvm.ptrtoint
+    %alloc = ttg.local_alloc %ptrs : (tensor<256x!tt.ptr<i32>, #blocked>) -> !ttg.memdesc<256x!tt.ptr<i32>, #shared, #smem, mutable>
+    // CHECK: llvm.store {{.*}} : vector<2xi64>, !llvm.ptr<3>
+    // CHECK: llvm.load {{.*}} : !llvm.ptr<3> -> vector<2xi64>
+    // CHECK: llvm.inttoptr {{.*}} : i64 to !llvm.ptr<1>
+    %loaded = ttg.local_load %alloc : !ttg.memdesc<256x!tt.ptr<i32>, #shared, #smem, mutable> -> tensor<256x!tt.ptr<i32>, #blocked>
+    %values = tt.load %loaded : tensor<256x!tt.ptr<i32>, #blocked>
+    ttg.local_store %loaded, %alloc : tensor<256x!tt.ptr<i32>, #blocked> -> !ttg.memdesc<256x!tt.ptr<i32>, #shared, #smem, mutable>
+    // CHECK: llvm.store {{.*}} : vector<2xi64>, !llvm.ptr<3>
+    // CHECK: llvm.load {{.*}} : !llvm.ptr<3> -> i64
+    // CHECK: llvm.inttoptr {{.*}} : i64 to !llvm.ptr<1>
+    %gathered = ttg.local_gather %alloc[%indices] {axis = 0 : i32} : !ttg.memdesc<256x!tt.ptr<i32>, #shared, #smem, mutable>, tensor<256xi32, #blocked> -> tensor<256x!tt.ptr<i32>, #blocked>
+    %other = tt.load %gathered : tensor<256x!tt.ptr<i32>, #blocked>
+    // CHECK: llvm.ptrtoint {{.*}} : !llvm.ptr<1> to i64
+    // CHECK: llvm.store {{.*}} : vector<1xi64>, !llvm.ptr<3>
+    ttg.local_scatter %alloc[%indices], %gathered {axis = 0 : i32} : !ttg.memdesc<256x!tt.ptr<i32>, #shared, #smem, mutable>, tensor<256xi32, #blocked>, tensor<256x!tt.ptr<i32>, #blocked>
+    %sum = arith.addi %values, %other : tensor<256xi32, #blocked>
+    tt.store %out, %sum : tensor<256x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
+}
