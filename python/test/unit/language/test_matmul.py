@@ -231,11 +231,13 @@ def test_simple_matmul_mmav5_asm(device):
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("num_ctas, num_stages, K, warp_specialize", [
+    (1, 3, 1024, True),
     (2, 3, 1024, False),
     (2, 3, 1024, True),
     (2, 1, 1024, False),
     (2, 3, 64, False),
     (4, 3, 1024, False),
+    (4, 3, 1024, True),
 ])
 def test_tma_matmul_mixed_consumers(num_ctas, num_stages, K, warp_specialize, device):
     from triton.tools.tensor_descriptor import TensorDescriptor
@@ -267,9 +269,10 @@ def test_tma_matmul_mixed_consumers(num_ctas, num_stages, K, warp_specialize, de
                              num_stages=num_stages, num_warps=4, WARP_SPECIALIZE=warp_specialize)
     if is_compile_warmup():
         return
-    expect_two_ctas = num_ctas == 2 and num_stages > 1 and K > BLOCK_K
+    expect_two_ctas = num_ctas == 2
     assert ("two_ctas" in compiled.asm["ttgir"]) == expect_two_ctas
-    assert "ttg.warp_specialize" not in compiled.asm["ttgir"]
+    assert ("ttg.warp_specialize" in compiled.asm["ttgir"]) == warp_specialize
+    assert "multicast" not in compiled.asm["ttgir"]
     torch.testing.assert_close(c, a @ b, atol=0.01, rtol=0.01)
     expected_aux = a.float().reshape(M, K // BLOCK_K, BLOCK_K).sum(1)
     torch.testing.assert_close(aux, expected_aux, atol=0.001, rtol=0.001)

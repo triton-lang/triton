@@ -325,19 +325,15 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   //   CHECK-DAG:   #ttng.tensor_memory_encoding<{{.*}}twoCTAs = true>
   //   CHECK-DAG:   #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = {{\[\[1, 0\]\]}}}>
   //   CHECK-DAG:   #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = {{\[\[0, 1\]\]}}}>
-  // CHECK-LABEL: mmav5_two_cta_pipeline
+  // CHECK-LABEL: mmav5_two_cta
   //       CHECK:   ttng.tc_gen5_mma {{.*}} {two_ctas}
-  tt.func public @mmav5_two_cta_pipeline(%a: tensor<128x64xf16, #blocked>, %b_desc: !tt.tensordesc<64x256xf16>, %c: tensor<128x256xf32, #blocked>, %iters: i32) -> tensor<128x256xf32, #blocked> {
+  tt.func public @mmav5_two_cta(%a: tensor<128x64xf16, #blocked>, %b_desc: !tt.tensordesc<64x256xf16>, %c: tensor<128x256xf32, #blocked>) -> tensor<128x256xf32, #blocked> {
     %zero = arith.constant 0 : i32
-    %one = arith.constant 1 : i32
-    %result = scf.for %i = %zero to %iters step %one iter_args(%acc = %c) -> tensor<128x256xf32, #blocked> : i32 {
-      %ad = ttg.convert_layout %a : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
-      %b = tt.descriptor_load %b_desc[%zero, %zero] : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #blocked>
-      %bd = ttg.convert_layout %b : tensor<64x256xf16, #blocked> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
-      %d = tt.dot %ad, %bd, %acc, inputPrecision = tf32 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x256xf32, #blocked>
-      scf.yield %d : tensor<128x256xf32, #blocked>
-    }
-    tt.return %result : tensor<128x256xf32, #blocked>
+    %ad = ttg.convert_layout %a : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %b = tt.descriptor_load %b_desc[%zero, %zero] : !tt.tensordesc<64x256xf16> -> tensor<64x256xf16, #blocked>
+    %bd = ttg.convert_layout %b : tensor<64x256xf16, #blocked> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+    %d = tt.dot %ad, %bd, %c, inputPrecision = tf32 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x256xf32, #blocked>
+    tt.return %d : tensor<128x256xf32, #blocked>
   }
 }
 

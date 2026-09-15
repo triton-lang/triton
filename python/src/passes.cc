@@ -72,12 +72,7 @@ void init_triton_passes_ttgpuir(py::module_ &m) {
   ADD_PASS_OPTION_WRAPPER_1("add_warp_specialize",
                             createTritonGPUAutomaticWarpSpecialization, int);
   ADD_PASS_WRAPPER_0("add_prefetch", createTritonGPUPrefetch);
-  m.def(
-      "add_accelerate_matmul",
-      [](mlir::PassManager &pm, int numStages) {
-        pm.addPass(createTritonGPUAccelerateMatmul({numStages}));
-      },
-      py::arg("pm"), py::arg("num_stages") = 3);
+  ADD_PASS_WRAPPER_0("add_accelerate_matmul", createTritonGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_reorder_instructions",
                      createTritonGPUReorderInstructions);
   ADD_PASS_OPTION_WRAPPER_1("add_f32_dot_tc", createTritonGPUF32DotTC, bool);
