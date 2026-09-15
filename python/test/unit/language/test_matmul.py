@@ -115,6 +115,18 @@ def get_src_element_ty_size(dtype_str):
     raise ValueError(f"Unknown dtype {dtype_str}")
 
 
+def assert_mmav5_asm(k, expect_two_ctas, num_mma):
+    ttgir = k.asm["ttgir"]
+    mma_lines = [line for line in ttgir.splitlines() if "ttng.tc_gen5_mma" in line]
+    assert len(mma_lines) == num_mma, f"Expected {num_mma} MMAv5 ops, got {len(mma_lines)}"
+    assert all(("two_ctas" in line) == expect_two_ctas for line in mma_lines), "Unexpected MMAv5 CTA mode"
+
+    ptx = k.asm["ptx"]
+    assert ("32x32b" in ptx) or ("16x32b" in ptx), "PTX does not contain 32x32b or 16x32b"
+    mma_instruction = f"tcgen05.mma.cta_group::{2 if expect_two_ctas else 1}"
+    assert mma_instruction in ptx, f"PTX does not contain {mma_instruction}"
+
+
 @pytest.mark.parametrize("dtype_src_str", ["float32", "tensorfloat32", "float16", "float8e5", "float64"])
 @pytest.mark.parametrize("dtype_dst_str", ["float32", "float16", "float64"])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES",
@@ -190,13 +202,101 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
     if (device == "cuda" and torch.cuda.get_device_capability()[0] == 10 and NUM_STAGES > 1 and BLOCK_M % 64 == 0
             and BLOCK_N % 8 == 0 and BLOCK_N > 16
             and not (precision == "ieee" and (dtype_src_str == "float32" or dtype_src_str == "float64"))):
-        ttgir = k.asm["ttgir"]
-        count = ttgir.count("ttng.tc_gen5_mma")
-        assert count == 2, "The TTGIR does not match the expected pattern."
-        ptx = k.asm["ptx"]
-        if "32x32b" not in ptx and "16x32b" not in ptx:
-            print(ptx)
-        assert ("32x32b" in ptx) or ("16x32b" in ptx), "PTX does not contain 32x32b or 16x32b"
+        assert_mmav5_asm(k, expect_two_ctas=False, num_mma=2)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("num_ctas, num_stages, K, warp_specialize", [
+    (1, 3, 1024, True),
+    (2, 3, 1024, False),
+    (2, 3, 1024, True),
+    (2, 1, 1024, False),
+    (2, 3, 64, False),
+])
+def test_tma_matmul_mixed_consumers(num_ctas, num_stages, K, warp_specialize, device):
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    @triton.jit
+    def kernel(A, B, C, X, K: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr,
+               WARP_SPECIALIZE: tl.constexpr):
+        acc = tl.full((BM, BN), 0, tl.float32)
+        aux = tl.full((BM, BK), 0, tl.float32)
+        for k in tl.range(K // BK, warp_specialize=WARP_SPECIALIZE):
+            a = A.load([0, k * BK])
+            b = B.load([k * BK, 0])
+            aux += a.to(tl.float32)
+            acc = tl.dot(a, b, acc)
+        C.store([0, 0], acc.to(tl.float16))
+        X.store([0, 0], aux)
+
+    M, N, BLOCK_K = 128 * num_ctas, 128, 64
+    torch.manual_seed(0)
+    a = torch.randn((M, K), device=device, dtype=torch.float16) * 0.1
+    b = torch.randn((K, N), device=device, dtype=torch.float16) * 0.1
+    c = torch.empty((M, N), device=device, dtype=torch.float16)
+    aux = torch.empty((M, BLOCK_K), device=device, dtype=torch.float32)
+    a_desc = TensorDescriptor(a, a.shape, a.stride(), [M, BLOCK_K])
+    b_desc = TensorDescriptor(b, b.shape, b.stride(), [BLOCK_K, N])
+    c_desc = TensorDescriptor(c, c.shape, c.stride(), [M, N])
+    aux_desc = TensorDescriptor(aux, aux.shape, aux.stride(), [M, BLOCK_K])
+    compiled = kernel[(1, )](a_desc, b_desc, c_desc, aux_desc, K, M, N, BLOCK_K, num_ctas=num_ctas,
+                             num_stages=num_stages, num_warps=4, WARP_SPECIALIZE=warp_specialize)
+    if is_compile_warmup():
+        return
+    expect_two_ctas = num_ctas == 2
+    assert ("two_ctas" in compiled.asm["ttgir"]) == expect_two_ctas
+    assert ("ttg.warp_specialize" in compiled.asm["ttgir"]) == warp_specialize
+    assert "multicast" not in compiled.asm["ttgir"]
+    torch.testing.assert_close(c, a @ b, atol=0.01, rtol=0.01)
+    expected_aux = a.float().reshape(M, K // BLOCK_K, BLOCK_K).sum(1)
+    torch.testing.assert_close(aux, expected_aux, atol=0.001, rtol=0.001)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("use_loop, num_stages", [(False, 3), (True, 1), (True, 3)])
+@pytest.mark.parametrize("transpose_b", [False, True])
+def test_tma_matmul_two_ctas(use_loop, num_stages, transpose_b, device):
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    @triton.jit
+    def kernel(A, B, C, K: tl.constexpr, USE_LOOP: tl.constexpr, TRANSPOSE_B: tl.constexpr):
+        if USE_LOOP:
+            acc = tl.full((256, 128), 0, tl.float32)
+            for k in range(K // 64):
+                a = A.load([0, k * 64])
+                if TRANSPOSE_B:
+                    b = B.load([0, k * 64]).T
+                else:
+                    b = B.load([k * 64, 0])
+                acc = tl.dot(a, b, acc)
+        else:
+            a = A.load([0, 0])
+            b = B.load([0, 0])
+            if TRANSPOSE_B:
+                b = b.T
+            acc = tl.dot(a, b)
+        C.store([0, 0], acc.to(tl.float16))
+
+    K = 256 if use_loop else 64
+    torch.manual_seed(0)
+    a = torch.randn((256, K), device=device, dtype=torch.float16) * 0.1
+    b = torch.randn((K, 128), device=device, dtype=torch.float16) * 0.1
+    c = torch.empty((256, 128), device=device, dtype=torch.float16)
+    a_desc = TensorDescriptor(a, a.shape, a.stride(), [256, 64])
+    b_input = b.T.contiguous() if transpose_b else b
+    b_desc = TensorDescriptor(b_input, b_input.shape, b_input.stride(), [128, 64] if transpose_b else [64, 128])
+    c_desc = TensorDescriptor(c, c.shape, c.stride(), [256, 128])
+    compiled = kernel[(1, )](a_desc, b_desc, c_desc, K, use_loop, transpose_b, num_ctas=2, num_stages=num_stages,
+                             num_warps=4)
+    if is_compile_warmup():
+        return
+
+    torch.testing.assert_close(c, a @ b, atol=0.01, rtol=0.01)
+    num_mma = 2 if use_loop and num_stages > 1 else 1
+    assert_mmav5_asm(compiled, expect_two_ctas=True, num_mma=num_mma)
+    ttgir = compiled.asm["ttgir"]
+    assert "ttng.async_tma_copy_global_to_local" in ttgir
+    assert ("scf.for" in ttgir) == use_loop
 
 
 def test_i4_m_minor_join_bk16_matmul(device):
