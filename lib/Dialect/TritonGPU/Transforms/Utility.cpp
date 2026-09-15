@@ -659,28 +659,32 @@ bool isExpensiveLoadOrStore(Operation *op) {
   return true;
 }
 
-bool canUseResultEncoding(Operation *op, Attribute targetEncoding) {
+std::optional<SmallVector<OpOperand *>>
+canUseResultEncoding(Operation *op, Attribute targetEncoding) {
   if (auto convert = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
     if (mlir::isa<triton::gpu::NvidiaMmaEncodingAttr>(targetEncoding)) {
       auto srcEncoding = convert.getSrc().getType().getEncoding();
       if (targetEncoding != srcEncoding)
-        return false;
+        return std::nullopt;
+      return SmallVector<OpOperand *>{&convert.getSrcMutable()};
     }
-    return true;
+    return SmallVector<OpOperand *>{};
   }
 
   if (auto reshape = dyn_cast<triton::ReshapeOp>(op)) {
     auto reshapeDstType = reshape.getType();
     RankedTensorType newDstType =
         reshapeDstType.cloneWithEncoding(targetEncoding);
-    return reshape.getAllowReorder() && !reshape.getEfficientLayout() &&
-           !triton::gpu::isExpensiveView(reshape.getSrc().getType(),
-                                         newDstType);
+    if (!reshape.getAllowReorder() || reshape.getEfficientLayout() ||
+        triton::gpu::isExpensiveView(reshape.getSrc().getType(), newDstType))
+      return std::nullopt;
+    return SmallVector<OpOperand *>{&reshape.getSrcMutable()};
   }
-  return isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
-             triton::MakeRangeOp, triton::SplatOp, triton::HistogramOp,
-             triton::gpu::LocalAllocOp, triton::gpu::LocalLoadOp,
-             triton::gpu::LocalStoreOp>(op);
+  if (isa<arith::ConstantOp, triton::MakeRangeOp, triton::SplatOp,
+          triton::HistogramOp, triton::gpu::LocalAllocOp,
+          triton::gpu::LocalLoadOp, triton::gpu::LocalStoreOp>(op))
+    return SmallVector<OpOperand *>{};
+  return std::nullopt;
 }
 
 bool canBeRematerialized(Operation *op) {
@@ -980,8 +984,17 @@ LogicalResult getConvertBackwardSlice(
         enqueue(definingOp->getOpOperand(0), encoding);
         continue;
       }
-      if (canUseResultEncoding(definingOp, encoding))
+      if (auto fixedOperands = canUseResultEncoding(definingOp, encoding)) {
+        // Another path through the slice must preserve these operand layouts.
+        for (OpOperand *operand : *fixedOperands) {
+          Value src = operand->get();
+          auto srcEncoding =
+              cast<RankedTensorType>(src.getType()).getEncoding();
+          if (failed(updateLayout(src, srcEncoding)))
+            return failure();
+        }
         continue;
+      }
       if (stopPropagation && stopPropagation(definingOp))
         continue;
       if (auto gather = dyn_cast<GatherOp>(definingOp)) {
