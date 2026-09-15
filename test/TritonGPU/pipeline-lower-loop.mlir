@@ -1846,8 +1846,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-DAG: #[[$MMA_BAR_LAYOUT:.*]] = #ttg.swizzled_shared<{{.*}}CGALayout = {{\[\[1\]\]}}{{.*}}>
   // CHECK-DAG: #[[$TMA_BAR_LAYOUT:.*]] = #ttg.swizzled_shared<{{.*}}CGALayout = {{\[\[0\]\]}}{{.*}}>
   // CHECK-LABEL: @two_cta_wait_forwarded_descriptor
-  // Completion slots cover the full pipeline so that the leader cannot lap the peer.
-  // CHECK: ttg.local_alloc : () -> !ttg.memdesc<4x2xi64, #[[$MMA_BAR_LAYOUT]]
+  // Three stages need three completion slots, even when the wait adds stage 3.
+  // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x2xi64, #[[$MMA_BAR_LAYOUT]]
   // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x1xi64, #[[$TMA_BAR_LAYOUT]]
   // CHECK: ttng.async_tma_copy_global_to_local {{.*}}!ttg.memdesc<1xi64, #[[$TMA_BAR_LAYOUT]]
   // CHECK: ttng.wait_barrier {{.*}}!ttg.memdesc<1xi64, #[[$TMA_BAR_LAYOUT]]
@@ -1878,7 +1878,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       } {loop.cluster = 0 : i32, loop.stage = 2 : i32}
       %mma_tok = ttng.tc_gen5_mma %forwarded, %8, %1[%tok], %true, %true {loop.cluster = 0 : i32, loop.stage = 2 : i32, tt.self_latency = 1 : i32, two_ctas} : !ttg.memdesc<256x64xf16, #sharedA, #smem, mutable>, !ttg.memdesc<64x128xf16, #sharedB, #smem, mutable>, !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
       scf.yield %mma_tok : !ttg.async.token
-    } {tt.scheduled_max_stage = 3 : i32}
+    } {tt.scheduled_max_stage = 2 : i32}
     %2, %res_tok = ttng.tmem_load %1[%last_tok] : !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<256x128xf32, #blockedC>
     %3 = arith.truncf %2 : tensor<256x128xf32, #blockedC> to tensor<256x128xf16, #blockedC>
     tt.return %3 : tensor<256x128xf16, #blockedC>
@@ -1918,5 +1918,28 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %2, %res_tok = ttng.tmem_load %1[%last_tok] : !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<256x128xf32, #blockedC>
     %3 = arith.truncf %2 : tensor<256x128xf32, #blockedC> to tensor<256x128xf16, #blockedC>
     tt.return %3 : tensor<256x128xf16, #blockedC>
+  }
+
+  // The MMA-to-wait distance still requires two slots in a one-stage schedule.
+  // CHECK-LABEL: @two_cta_single_stage_mma_overlap
+  // CHECK: ttg.local_alloc : () -> !ttg.memdesc<2x2xi64, #[[$MMA_BAR_LAYOUT]]
+  // CHECK: ttng.tc_gen5_mma {{.*}} {is_async, loop.cluster = 0 : i32, loop.stage = 0 : i32, two_ctas}
+  // CHECK: ttng.wait_barrier {{.*}} {loop.cluster = 0 : i32, loop.stage = 1 : i32}
+  tt.func public @two_cta_single_stage_mma_overlap(%a: tensor<256x64xf16, #blockedA>, %b: tensor<64x128xf16, #blockedB>) -> tensor<256x128xf32, #blockedC> {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c2 = arith.constant 2 : i32
+    %true = arith.constant true
+    %zero = arith.constant dense<0.0> : tensor<256x128xf32, #blockedC>
+    %a_sh = ttg.local_alloc %a : (tensor<256x64xf16, #blockedA>) -> !ttg.memdesc<256x64xf16, #sharedA, #smem, mutable>
+    %b_sh = ttg.local_alloc %b : (tensor<64x128xf16, #blockedB>) -> !ttg.memdesc<64x128xf16, #sharedB, #smem, mutable>
+    ttng.cluster_barrier
+    %acc, %init = ttng.tmem_alloc %zero : (tensor<256x128xf32, #blockedC>) -> (!ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %last = scf.for %i = %c0 to %c2 step %c1 iter_args(%tok = %init) -> !ttg.async.token : i32 {
+      %next = ttng.tc_gen5_mma %a_sh, %b_sh, %acc[%tok], %true, %true {loop.cluster = 0 : i32, loop.stage = 0 : i32, tt.self_latency = 1 : i32, two_ctas} : !ttg.memdesc<256x64xf16, #sharedA, #smem, mutable>, !ttg.memdesc<64x128xf16, #sharedB, #smem, mutable>, !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      scf.yield %next : !ttg.async.token
+    } {tt.scheduled_max_stage = 0 : i32}
+    %result, %done = ttng.tmem_load %acc[%last] : !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<256x128xf32, #blockedC>
+    tt.return %result : tensor<256x128xf32, #blockedC>
   }
 }

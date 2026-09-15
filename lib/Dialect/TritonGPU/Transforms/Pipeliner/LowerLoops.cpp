@@ -892,7 +892,7 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
     // completion. Both completions flip %bar0's phase, so the peer can miss
     // MMA 0's completion and deadlock. Size the completion-barrier ring for
     // the full pipeline depth so the leader cannot reuse a slot that early.
-    numStages = std::max(schedule.getNumStages(), mainWaitStage + 1);
+    numStages = std::max(numStages, schedule.getNumStages());
   }
 
   OpBuilderForStage builder(mma.getLoc(), mma, schedule);
