@@ -194,30 +194,16 @@ static bool isConstantTruePred(Value pred) {
   return false;
 }
 
-static Value mapa(RewriterBase &rewriter, Location loc, Value ptr, Value ctaid,
-                  Value pred) {
-  auto *ctx = rewriter.getContext();
-  auto clusterPtrTy = ptr_ty(ctx, /*addrspace=*/7);
-  if (isConstantTruePred(pred)) {
-    return NVVM::MapaOp::create(rewriter, loc, clusterPtrTy, ptr, ctaid);
-  }
-
-  PTXBuilder builder;
-  auto ptrTy = cast<LLVM::LLVMPointerType>(ptr.getType());
-  assert(ptrTy.getAddressSpace() == 3);
-
-  auto &mapaInstr = *builder.create("mapa");
-  mapaInstr.o("shared::cluster.u32");
-  auto *dstOpr = builder.newOperand("=r");
-  auto *ptrOpr = builder.newOperand(ptr, "r");
-  auto *ctaidOpr = builder.newOperand(ctaid, "r");
-  mapaInstr(dstOpr, ptrOpr, ctaidOpr).predicate(pred, "b");
-  return builder.launch(rewriter, loc, clusterPtrTy, /*hasSideEffect=*/false);
+static Value mapa(RewriterBase &rewriter, Location loc, Value ptr,
+                  Value ctaid) {
+  auto clusterPtrTy = ptr_ty(rewriter.getContext(), /*addrspace=*/7);
+  // Address translation is speculatable; the memory access keeps its predicate.
+  return NVVM::MapaOp::create(rewriter, loc, clusterPtrTy, ptr, ctaid);
 }
 
 Value TargetInfo::mapDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                             Value ctaId, Value pred) const {
-  return ctaId ? mapa(rewriter, loc, ptr, ctaId, pred) : ptr;
+                             Value ctaId, Value /*pred*/) const {
+  return ctaId ? mapa(rewriter, loc, ptr, ctaId) : ptr;
 }
 
 static std::string getConstraintForBitwidth(unsigned bitwidth) {
@@ -325,7 +311,7 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
 
   // Get pointer to remote shared memory if needed.
   if (ctaId) {
-    ptr = mapa(rewriter, loc, ptr, ctaId, pred);
+    ptr = mapa(rewriter, loc, ptr, ctaId);
   }
 
   PTXBuilder builder;
@@ -445,7 +431,7 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
 
   // Get pointer to remote shared memory if needed.
   if (ctaId) {
-    ptr = mapa(rewriter, loc, ptr, ctaId, pred);
+    ptr = mapa(rewriter, loc, ptr, ctaId);
   }
 
   PTXBuilder builder;
