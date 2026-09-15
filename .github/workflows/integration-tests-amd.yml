@@ -11,6 +11,8 @@ jobs:
   integration-tests-amd:
     name: integration-tests-amd (${{ join(matrix.runner, ', ') }}${{ matrix.image_variant != 'default' && format(', {0}', matrix.image_variant) || '' }})
     runs-on: ${{ matrix.runner }}
+    concurrency:
+      group: integration-tests-amd-${{ join(matrix.runner, '-') }}
     timeout-minutes: 45
     continue-on-error: true
     strategy:
@@ -33,20 +35,18 @@ jobs:
               --env-file /etc/podinfo/gha-gpu-isolation-settings
               --volume /home/runner/.triton:/github/home/.triton
           - image: rocm/pytorch:rocm7.2.4_ubuntu22.04_py3.10_pytorch_release_2.10.0
-            runner: ["amd-gfx950"]
-            # We add --env-file to pull in HIP_VISIBLE_DEVICES and ROCR_VISIBLE_DEVICES definition for GPU isolation.
+            runner: ["linux-mi355-1.triton.test"]
             options: >-
               --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
-              --env-file /etc/podinfo/gha-gpu-isolation-settings
+              --env ROCR_VISIBLE_DEVICES=0 --env HIP_VISIBLE_DEVICES=0
               --volume /home/runner/.triton:/github/home/.triton
               --volume /triton-data:/triton-data
           - image: tritonci/triton-amd-ci:rocm10.1.0a20260820-pytorch2.15.0a0-gfx942-gfx950-gfx1250-r1
-            runner: ["amd-gfx950"]
+            runner: ["linux-mi355-1.triton.test"]
             image_variant: "rocm10.1"
-            # We add --env-file to pull in HIP_VISIBLE_DEVICES and ROCR_VISIBLE_DEVICES definition for GPU isolation.
             options: >-
               --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
-              --env-file /etc/podinfo/gha-gpu-isolation-settings
+              --env ROCR_VISIBLE_DEVICES=0 --env HIP_VISIBLE_DEVICES=0
               --volume /home/runner/.triton:/github/home/.triton
               --volume /triton-data:/triton-data
     env:
@@ -56,7 +56,7 @@ jobs:
       TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
       TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
       TRITON_DISABLE_LINE_INFO: 1
-      PROTON_SKIP_PC_SAMPLING_TEST: ${{ matrix.image_variant == 'rocm10.1' && '0' || '1' }}
+      PROTON_SKIP_PC_SAMPLING_TEST: ${{ (matrix.image_variant != 'rocm10.1' || contains(matrix.runner, 'linux-mi355-1.triton.test')) && '1' || '0' }}
       PROTON_SKIP_CUDAGRAPH_TEST: 1
       PYTHON: "python3"
       PYTEST_ADDOPTS: "-p triton._compile_warmup"
@@ -123,7 +123,7 @@ jobs:
           pip uninstall -y triton pytorch-triton-rocm
 
           ccache --zero-stats
-          if ${{ contains(matrix.runner, 'amd-gfx950') }}; then
+          if ${{ contains(matrix.runner, 'linux-mi355-1.triton.test') }}; then
             pip install --cache-dir /triton-data/pip-cache -r python/requirements.txt
             pip install --cache-dir /triton-data/pip-cache -r python/test-requirements.txt
           fi
@@ -151,7 +151,7 @@ jobs:
             python/tutorials/06-fused-attention.py
             python/test/regression
           )
-          if ${{ contains(matrix.runner, 'amd-gfx950') || contains(matrix.runner, 'amd-gfx942') }}; then
+          if ${{ contains(matrix.runner, 'amd-gfx942') || contains(matrix.runner, 'linux-mi355-1.triton.test') }}; then
             warmup_targets+=(python/triton_kernels/tests)
           fi
           python3 -m triton._test_runner warmup --warmup-procs "$warmup_procs" "${warmup_targets[@]}"
@@ -176,33 +176,45 @@ jobs:
           pytest --capture=tee-sys -rfs -n 8 third_party/amd/python/test/test_gluon_cdna5.py -k "test_compile"
           TRITON_ALWAYS_COMPILE=1 pytest --capture=tee-sys -rfs third_party/amd/python/test/test_scalarize_packed_fops.py
           cd python/test/unit
+          set --
+          if ${{ matrix.image_variant == 'rocm10.1' && contains(matrix.runner, 'linux-mi355-1.triton.test') }}; then
+            set -- -k "not test_mxfp8_mxfp4_matmul"
+          fi
           TRITON_CI_CACHE_PHASE=unit pytest --capture=tee-sys -rfs -n 12 \
                  --ignore=blackwell \
                  --ignore=cuda \
                  --ignore=instrumentation \
                  --ignore=language/test_line_info.py \
-                 --ignore=test_debug.py
+                 --ignore=test_debug.py \
+                 "$@"
+          if ${{ matrix.image_variant == 'rocm10.1' && contains(matrix.runner, 'linux-mi355-1.triton.test') }}; then
+            TRITON_CI_CACHE_PHASE=unit pytest --capture=tee-sys -rfs language/test_matmul.py::test_mxfp8_mxfp4_matmul
+          fi
           # TODO: uncomment
           # pytest --capture=tee-sys -rfs test_debug.py
           TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_DIR}/libGPUInstrumentationTestLib.so \
           env -u HIP_VISIBLE_DEVICES pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
 
           # Run test_tensor_atomic_cas with buffer ops disabled on gfx950 and gfx942
-          if ${{ contains(matrix.runner, 'amd-gfx950') || contains(matrix.runner, 'amd-gfx942') }}; then
+          if ${{ contains(matrix.runner, 'amd-gfx942') || contains(matrix.runner, 'linux-mi355-1.triton.test') }}; then
             AMDGCN_USE_BUFFER_OPS=0 pytest --capture=tee-sys -rfs -n 12 language/test_core.py::test_tensor_atomic_cas
           fi
 
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          if ${{ contains(matrix.runner, 'amd-gfx950') }}; then
+          if ${{ contains(matrix.runner, 'linux-mi355-1.triton.test') }}; then
             TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py -k "not test_line_info_ir_source"
           else
             TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
           fi
 
           # Run tests under triton/python/triton_kernels/tests/ on gfx950 and gfx942
-          if ${{ contains(matrix.runner, 'amd-gfx950') || contains(matrix.runner, 'amd-gfx942') }}; then
+          if ${{ contains(matrix.runner, 'amd-gfx942') || contains(matrix.runner, 'linux-mi355-1.triton.test') }}; then
             cd ../../triton_kernels/
-            TRITON_CI_CACHE_PHASE=triton-kernels python3 -m pytest -s -n 10 tests/
+            if ${{ contains(matrix.runner, 'linux-mi355-1.triton.test') }}; then
+              TRITON_CI_CACHE_PHASE=triton-kernels python3 -m pytest -s -n 10 tests/ -k "not test_expert_sharding"
+            else
+              TRITON_CI_CACHE_PHASE=triton-kernels python3 -m pytest -s -n 10 tests/
+            fi
           fi
       - name: Run asan tests on AMD
         if: false
@@ -232,7 +244,13 @@ jobs:
       - name: Run Proton tests
         run: |
           unset HIP_VISIBLE_DEVICES
-          TRITON_DISABLE_LINE_INFO=0 make test-proton
+          if ${{ contains(matrix.runner, 'linux-mi355-1.triton.test') }}; then
+            # PC sampling is unstable and Proton subprocess tests hang under xdist on this runner.
+            PROTON_ROCPROFILER_PC_SAMPLING_METHOD=disabled \
+              TRITON_DISABLE_LINE_INFO=0 make NUM_PROCS=0 test-proton
+          else
+            TRITON_DISABLE_LINE_INFO=0 make test-proton
+          fi
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton

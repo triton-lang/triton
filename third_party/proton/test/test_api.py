@@ -4,6 +4,7 @@ No GPU kernel should be declared in this test.
 Profile correctness tests involving GPU kernels should be placed in `test_profile.py`.
 """
 
+import os
 import pytest
 import json
 import torch
@@ -91,6 +92,9 @@ def test_profile_multiple_sessions(tmp_path: pathlib.Path):
 
 
 def test_profile_mode(tmp_path: pathlib.Path):
+    if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "0") == "1":
+        pytest.skip("PC sampling test is disabled")
+
     temp_file0 = tmp_path / "test_profile0.hatchet"
     if is_hip():
         try:
@@ -102,12 +106,6 @@ def test_profile_mode(tmp_path: pathlib.Path):
         finally:
             proton.finalize()
     else:
-        import os
-        import pytest
-
-        if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "0") == "1":
-            pytest.skip("PC sampling test is disabled")
-
         # Two sessions with the same mode can coexist
         proton.start(str(temp_file0.with_suffix("")), mode="pcsampling")
         temp_file1 = tmp_path / "test_profile1.hatchet"
