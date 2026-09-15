@@ -1,15 +1,17 @@
-#include "third_party/amd/include/Analysis/RangeAnalysis.h"
+#include "Analysis/RangeAnalysis.h"
+#include "ControlFlowRangeAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Analysis/DataFlow/IntegerRangeAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Iterators.h"
 #include "mlir/Interfaces/Utils/InferIntRangeCommon.h"
-#include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 
@@ -78,26 +80,16 @@ void getEnclosingLoops(Operation &op, SmallVector<LoopLikeOpInterface> &ops) {
   }
 }
 
-tt::FuncOp getEnclosingFunction(Value v) {
-  tt::FuncOp funcOp = nullptr;
-
-  auto definingOp = v.getDefiningOp();
-  if (!definingOp)
-    if (auto blk = v.getParentBlock())
-      definingOp = blk->getParentOp();
-
-  if (definingOp) {
-    if (auto selfIsFunc = dyn_cast<tt::FuncOp>(definingOp))
-      funcOp = selfIsFunc;
-    else
-      funcOp = definingOp->getParentOfType<tt::FuncOp>();
-  }
-
-  assert(funcOp && "No enclosing tt::FuncOp");
-  return funcOp;
+FunctionOpInterface getEnclosingFunction(Value v) {
+  Region *region = v.getParentRegion();
+  return region ? region->getParentOfType<FunctionOpInterface>() : nullptr;
 }
 
-Block *getFuncEntryBlock(tt::FuncOp func) { return &func.getRegion().front(); }
+Block *getFuncEntryBlock(FunctionOpInterface func) {
+  if (!func || func.isExternal())
+    return nullptr;
+  return &func.getFunctionBody().front();
+}
 
 void inferResultRangesPID(Operation *op, uint64_t max,
                           SetIntRangeFn setResultRange) {
@@ -200,7 +192,8 @@ std::optional<ConstantIntRanges>
 maybeGetAssumedRangeHelper(Operation *assumption, Value anchor, Block *useBlock,
                            DominanceInfo *domInfo) {
 
-  arith::CmpIOp cmpOp = llvm::dyn_cast<arith::CmpIOp>(assumption);
+  auto assumeOp = cast<LLVM::AssumeOp>(assumption);
+  auto cmpOp = assumeOp.getCond().getDefiningOp<arith::CmpIOp>();
   if (!cmpOp) {
     emitRemark(assumption->getLoc(), "unsupported assumption operation");
     return {};
@@ -208,7 +201,7 @@ maybeGetAssumedRangeHelper(Operation *assumption, Value anchor, Block *useBlock,
 
   // The block where tl.assume resides must dominate the block where the value
   // is referenced!
-  if (!useBlock || !domInfo->dominates(cmpOp->getBlock(), useBlock))
+  if (!useBlock || !domInfo->dominates(assumeOp->getBlock(), useBlock))
     return {};
 
   return triton::getBoundFromCmpOp(cmpOp, anchor);
@@ -327,7 +320,7 @@ bool isEmptyInitializedRange(ConstantIntRanges rv) {
   if (!rv.umin().getBitWidth() || !rv.umax().getBitWidth() ||
       !rv.smin().getBitWidth() || !rv.smax().getBitWidth())
     return true;
-  return false;
+  return rv.umin().ugt(rv.umax()) || rv.smin().sgt(rv.smax());
 }
 
 std::optional<SmallVector<std::optional<ConstantIntRanges>>>
@@ -367,7 +360,256 @@ std::optional<bool> evaluateCmpI(const DataFlowSolver &solver,
 
 LogicalResult TritonIntegerRangeAnalysis::initialize(Operation *top) {
   signedIntValues.clear();
-  return Base::initialize(top);
+  controlFlow.reset();
+  branchConstraints.clear();
+  blockConstraints.clear();
+  activeRangeQueries.clear();
+  rangeQueryCache.clear();
+  bool hasControlFlow = false;
+  top->walk([&](Operation *op) {
+    for (Region &region : op->getRegions())
+      hasControlFlow |= !region.empty() && !llvm::hasSingleElement(region);
+  });
+  if (!hasControlFlow)
+    return Base::initialize(top);
+
+  if (!domInfo) {
+    ownedDomInfo = std::make_unique<DominanceInfo>(top);
+    domInfo = ownedDomInfo.get();
+  }
+  controlFlow =
+      std::make_shared<detail::ControlFlowRangeAnalysis>(top, *domInfo);
+  top->walk([&](cf::CondBranchOp branch) {
+    if (branch.getTrueDest() == branch.getFalseDest())
+      return;
+    for (auto [index, successor] : llvm::enumerate(branch->getSuccessors())) {
+      // A unique incoming edge makes successor dominance edge dominance.
+      if (successor->getSinglePredecessor() == branch->getBlock())
+        branchConstraints.try_emplace(
+            successor, BranchConstraint{branch.getCondition(), index == 0});
+    }
+  });
+
+  // The base initializer calls its non-virtual CFG transfer directly. Keep its
+  // traversal and subscriptions, routing block starts through our transfer.
+  for (Region &region : top->getRegions())
+    if (!region.empty())
+      for (BlockArgument arg : region.front().getArguments())
+        setToEntryState(getLatticeElement(arg));
+  WalkResult result = top->walk<WalkOrder::PreOrder>([&](Operation *op) {
+    if (failed(Base::visit(getProgramPointAfter(op))))
+      return WalkResult::interrupt();
+    for (Region &region : op->getRegions()) {
+      for (Block &block : region) {
+        auto *point = getProgramPointBefore(&block);
+        getOrCreate<dataflow::Executable>(point)->blockContentSubscribe(this);
+        if (failed(visit(point)))
+          return WalkResult::interrupt();
+      }
+    }
+    return WalkResult::advance();
+  });
+  return failure(result.wasInterrupted());
+}
+
+LogicalResult TritonIntegerRangeAnalysis::visit(ProgramPoint *point) {
+  if (!point->isBlockStart() || point->getBlock()->isEntryBlock())
+    return Base::visit(point);
+  visitControlFlowBlock(point->getBlock());
+  return success();
+}
+
+static IntegerValueRange intersectRanges(const ConstantIntRanges &lhs,
+                                         const ConstantIntRanges &rhs) {
+  ConstantIntRanges range = lhs.intersection(rhs);
+  if (isEmptyInitializedRange(range))
+    return IntegerValueRange();
+  // Reflect a newly established sign in both interval representations.
+  range = ConstantIntRanges::fromSigned(range.smin(), range.smax())
+              .intersection(
+                  ConstantIntRanges::fromUnsigned(range.umin(), range.umax()));
+  return isEmptyInitializedRange(range) ? IntegerValueRange()
+                                        : IntegerValueRange(range);
+}
+
+IntegerValueRange TritonIntegerRangeAnalysis::refineWithCondition(
+    Value value, IntegerValueRange range, Value condition, bool isTrue,
+    ProgramPoint *point) {
+  if (range.isUninitialized())
+    return range;
+  SmallVector<Value> worklist{condition};
+  DenseSet<Value> visited;
+  while (!worklist.empty()) {
+    Value current = worklist.pop_back_val();
+    if (!visited.insert(current).second)
+      continue;
+    if (auto andOp = current.getDefiningOp<arith::AndIOp>(); andOp && isTrue) {
+      llvm::append_range(worklist, andOp->getOperands());
+      continue;
+    }
+    if (auto orOp = current.getDefiningOp<arith::OrIOp>(); orOp && !isTrue) {
+      llvm::append_range(worklist, orOp->getOperands());
+      continue;
+    }
+    auto cmp = current.getDefiningOp<arith::CmpIOp>();
+    if (!cmp || (value != cmp.getLhs() && value != cmp.getRhs()))
+      continue;
+    bool isLhs = value == cmp.getLhs();
+    Value other = isLhs ? cmp.getRhs() : cmp.getLhs();
+    // The comparison's block includes enclosing guards, but not its own branch.
+    auto otherRange = getRangeAt(other, cmp->getBlock(), point);
+    if (otherRange.isUninitialized())
+      return IntegerValueRange();
+    auto predicate = isTrue ? cmp.getPredicate()
+                            : arith::invertPredicate(cmp.getPredicate());
+    auto bound =
+        getBoundFromCmpPredicate(predicate, otherRange.getValue(), isLhs);
+    if (!bound)
+      return IntegerValueRange();
+    range = intersectRanges(range.getValue(), *bound);
+    if (range.isUninitialized())
+      return range;
+  }
+  return range;
+}
+
+IntegerValueRange TritonIntegerRangeAnalysis::getRangeAt(Value value,
+                                                         Operation *use) {
+  return getRangeAt(value, use->getBlock(), nullptr);
+}
+
+TritonIntegerRangeAnalysis::BranchConstraint *
+TritonIntegerRangeAnalysis::getConstraintScope(Block *block) {
+  // Cache the nearest dominating branch. Following each block's immediate
+  // dominator once avoids scanning every branch for every queried block.
+  SmallVector<Block *> path;
+  while (block && !blockConstraints.contains(block)) {
+    path.push_back(block);
+    Region *region = block->getParent();
+    auto *node = !region->hasOneBlock() && domInfo->hasSSADominance(region)
+                     ? domInfo->getNode(block)
+                     : nullptr;
+    block = node && node->getIDom() ? node->getIDom()->getBlock()
+                                    : region->getParentOp()->getBlock();
+  }
+  BranchConstraint *scope = blockConstraints.lookup(block);
+  for (Block *entry : llvm::reverse(path)) {
+    if (auto it = branchConstraints.find(entry);
+        it != branchConstraints.end()) {
+      it->second.parent = scope;
+      scope = &it->second;
+    }
+    blockConstraints.try_emplace(entry, scope);
+  }
+  return scope;
+}
+
+IntegerValueRange TritonIntegerRangeAnalysis::getRangeAt(Value value,
+                                                         Block *block,
+                                                         ProgramPoint *point) {
+  const auto *lattice =
+      point ? getLatticeElementFor(point, value) : getLatticeElement(value);
+  if (activeRangeQueries.empty())
+    rangeQueryCache.clear();
+  RangeQuery query{value, block};
+  if (auto it = rangeQueryCache.find(query); it != rangeQueryCache.end())
+    return it->second;
+  // A nested loop bound can depend on a guard involving this same recurrence.
+  // Break that optional refinement cycle without publishing a temporary top.
+  if (activeRangeQueries.size() >= 64 ||
+      !activeRangeQueries.insert(query).second)
+    return lattice->getValue().isUninitialized()
+               ? IntegerValueRange::getMaxRange(value)
+               : lattice->getValue();
+  llvm::scope_exit cleanup([&] { activeRangeQueries.erase(query); });
+  auto finish = [&](IntegerValueRange range) {
+    rangeQueryCache.try_emplace(query, range);
+    return range;
+  };
+  IntegerValueRange range = lattice->getValue();
+  if (controlFlow) {
+    if (auto arg = dyn_cast<BlockArgument>(value)) {
+      auto summary =
+          controlFlow->getRange(arg, block, [&](Value bound, Block *useBlock) {
+            return getRangeAt(bound, useBlock, point);
+          });
+      if (summary)
+        range = *summary;
+    }
+  }
+  if (auto assumed = maybeGetAssumedRange(value, block))
+    range = controlFlow && !range.isUninitialized()
+                ? intersectRanges(range.getValue(), *assumed)
+                : IntegerValueRange(*assumed);
+  if (!block || range.isUninitialized() || !controlFlow)
+    return finish(range);
+
+  for (auto *scope = getConstraintScope(block); scope; scope = scope->parent)
+    range = refineWithCondition(value, range, scope->condition, scope->isTrue,
+                                point);
+  return finish(range);
+}
+
+void TritonIntegerRangeAnalysis::visitControlFlowBlock(Block *block) {
+  auto *point = getProgramPointBefore(block);
+  if (!getOrCreate<dataflow::Executable>(point)->isLive())
+    return;
+  for (BlockArgument arg : block->getArguments()) {
+    auto *lattice = getLatticeElement(arg);
+    if (controlFlow) {
+      auto summary = controlFlow->getRange(
+          arg, nullptr, [&](Value bound, Block *useBlock) {
+            return getRangeAt(bound, useBlock, point);
+          });
+      if (summary) {
+        propagateIfChanged(lattice, lattice->join(*summary));
+        continue;
+      }
+    }
+
+    for (auto it = block->pred_begin(), end = block->pred_end(); it != end;
+         ++it) {
+      Block *predecessor = *it;
+      auto *edge = getOrCreateFor<dataflow::Executable>(
+          point, getLatticeAnchor<dataflow::CFGEdge>(predecessor, block));
+      if (!edge->isLive())
+        continue;
+      auto branch = dyn_cast<BranchOpInterface>(predecessor->getTerminator());
+      if (!branch) {
+        setToEntryState(lattice);
+        continue;
+      }
+      unsigned successor = it.getSuccessorIndex();
+      Value operand =
+          branch.getSuccessorOperands(successor)[arg.getArgNumber()];
+      if (!operand) {
+        setToEntryState(lattice);
+        continue;
+      }
+      IntegerValueRange incoming = getRangeAt(operand, predecessor, point);
+      if (auto condBranch = dyn_cast<cf::CondBranchOp>(branch.getOperation())) {
+        if (auto sourceArg = dyn_cast<BlockArgument>(operand);
+            sourceArg && sourceArg.getOwner() == predecessor)
+          incoming = getRangeAt(operand, block, point);
+        auto condition =
+            getRangeAt(condBranch.getCondition(), predecessor, point);
+        if (!condition.isUninitialized()) {
+          auto constant = condition.getValue().getConstantValue();
+          if (constant && (!constant->isZero() != (successor == 0)))
+            continue;
+        }
+        incoming =
+            refineWithCondition(operand, incoming, condBranch.getCondition(),
+                                successor == 0, point);
+      }
+      if (incoming.isUninitialized())
+        continue;
+      // Keep MLIR's merge-site widening for unsupported and irreducible loops.
+      dataflow::IntegerValueRangeLattice source(operand);
+      (void)source.join(incoming);
+      propagateIfChanged(lattice, lattice->join(source));
+    }
+  }
 }
 
 std::optional<ConstantIntRanges>
@@ -414,10 +656,10 @@ void TritonIntegerRangeAnalysis::setToEntryState(
       !llvm::isa<IntegerType>(getElementTypeOrSelf(anchor)))
     return;
 
-  Block *entryBlock = getFuncEntryBlock(getEnclosingFunction(anchor));
   IntegerValueRange range = IntegerValueRange::getMaxRange(anchor);
-  if (auto maybeRange = maybeGetAssumedRange(anchor, entryBlock))
-    range = *maybeRange;
+  if (Block *entryBlock = getFuncEntryBlock(getEnclosingFunction(anchor)))
+    if (auto maybeRange = maybeGetAssumedRange(anchor, entryBlock))
+      range = *maybeRange;
   auto changed = lattice->join(range);
   LLVM_DEBUG({
     if (changed == ChangeResult::Change) {
@@ -431,7 +673,6 @@ void TritonIntegerRangeAnalysis::setToEntryState(
 
 void TritonIntegerRangeAnalysis::defaultTransferFunc(
     Operation *op, Value resultVal,
-    ArrayRef<const dataflow::IntegerValueRangeLattice *> srcLattices,
     ArrayRef<dataflow::IntegerValueRangeLattice *> resultsLattices,
     const IntegerValueRange &incomingRange) {
 
@@ -492,32 +733,27 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperation(
       opResultAssumption.insert(std::pair(result, *assumedRange));
   }
 
-  llvm::SmallVector<const dataflow::IntegerValueRangeLattice *, 4>
-      opndValueRanges;
-
-  llvm::SmallVector<std::unique_ptr<dataflow::IntegerValueRangeLattice>, 4>
-      newSrcLattices;
-
+  SmallVector<IntegerValueRange> operandRanges;
   for (auto [index, opnd] : llvm::enumerate(op->getOperands())) {
-    auto assumedRange = maybeGetAssumedRange(opnd, op->getBlock());
-    if (!assumedRange.has_value()) {
-      opndValueRanges.push_back(operands[index]);
-      continue;
+    auto range = operands[index]->getValue();
+    if (controlFlow) {
+      range = getRangeAt(opnd, op->getBlock(), getProgramPointAfter(op));
+      // A guard or loop bound may not have arrived yet. Publishing top here
+      // would permanently lose the precision from that pending dependency.
+      if (range.isUninitialized() &&
+          ConstantIntRanges::getStorageBitwidth(opnd.getType()))
+        return success();
+    } else if (auto assumed = maybeGetAssumedRange(opnd, op->getBlock())) {
+      range = IntegerValueRange(*assumed);
     }
-
-    auto newLattice =
-        std::make_unique<dataflow::IntegerValueRangeLattice>(opnd);
-    (void)newLattice->join(IntegerValueRange(*assumedRange));
-    opndValueRanges.push_back(newLattice.get());
-    newSrcLattices.push_back(std::move(newLattice));
+    operandRanges.push_back(range);
   }
-  assert(opndValueRanges.size() == operands.size() && "size disagree");
 
   // step 2: call helper function inferring the value range. If assumed value-
   // range is present, the transfer-function will intersect the assumed value-
   // value with the inferred value range.
   LogicalResult visitResult =
-      visitOperationHelper(op, opndValueRanges, resultsLattices);
+      visitOperationHelper(op, operandRanges, resultsLattices);
 
   // step 3: If previous step failed to infer value-range, apply assumed
   //  value-range is present.
@@ -528,7 +764,7 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperation(
       continue;
 
     const mlir::IntegerValueRange &vr = lattice->getValue();
-    if (!vr.isUninitialized() && !AMD::isEmptyInitializedRange(vr.getValue()))
+    if (!vr.isUninitialized() && !isEmptyInitializedRange(vr.getValue()))
       continue;
 
     const ConstantIntRanges &assumedVr = assumedIter->second;
@@ -549,8 +785,7 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperation(
 }
 
 LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
-    Operation *op,
-    ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
+    Operation *op, ArrayRef<IntegerValueRange> operands,
     ArrayRef<dataflow::IntegerValueRangeLattice *> resultsLattices) {
   LDBG("Inferring ranges for " << *op);
 
@@ -558,9 +793,8 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
   // IntegerRangeAnalysis::visitOperation except we do not "short-cicruit" the
   // analysis by inferring a maximum range for loop results (instead we
   // perform a check based on visit counts in visitRegionSuccessors).
-  auto joinCallback = [&op, &operands, &resultsLattices,
-                       this](Value v, const IntegerValueRange &incomingRange) {
-    this->defaultTransferFunc(op, v, operands, resultsLattices, incomingRange);
+  auto joinCallback = [&](Value v, const IntegerValueRange &incomingRange) {
+    defaultTransferFunc(op, v, resultsLattices, incomingRange);
   };
 
   // Ops with fixed/constant ranges.
@@ -587,21 +821,11 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
     return success();
   }
 
-  SmallVector<IntegerValueRange> argIntValueRanges = llvm::map_to_vector(
-      operands, [](const dataflow::IntegerValueRangeLattice *lattice) {
-        return lattice->getValue();
-      });
-
-  if (auto sliceOp = dyn_cast<triton::amdgpu::ExtractSliceOp>(op)) {
-    joinCallback(sliceOp->getResult(0), argIntValueRanges[0]);
-    return success();
-  }
-
   // Ops with actually changing/variable input/output ranges.
   if (llvm::isa<TransOp, SplitOp, BroadcastOp, ReshapeOp, gpu::ConvertLayoutOp,
                 SplatOp, ExpandDimsOp, JoinOp, GatherOp>(op)) {
     SmallVector<ConstantIntRanges> argConstIntRanges;
-    for (const auto &r : argIntValueRanges) {
+    for (const auto &r : operands) {
       if (r.isUninitialized()) {
         setAllToEntryStates(resultsLattices);
         return success();
@@ -630,7 +854,7 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperationHelper(
   //   - arith.shrui, e.g. arith.shrui %arg3, %c5_i32
   //
   if (auto inferrable = dyn_cast<InferIntRangeInterface>(op)) {
-    inferrable.inferResultRangesFromOptional(argIntValueRanges, joinCallback);
+    inferrable.inferResultRangesFromOptional(operands, joinCallback);
     return success();
   }
 
@@ -826,11 +1050,13 @@ TritonIntegerRangeAnalysis::collectAssumptions(Operation *rootOp,
                                                bool filterConstants) {
   DenseMap<Value, SetVector<Operation *>> assumptions;
   rootOp->walk([&](LLVM::AssumeOp op) {
-    auto assump = op.getCond().getDefiningOp();
-    for (auto operand : assump->getOperands()) {
+    auto cmp = op.getCond().getDefiningOp<arith::CmpIOp>();
+    if (!cmp)
+      return;
+    for (auto operand : cmp->getOperands()) {
       if (filterConstants && getConstantIntValue(operand))
         continue;
-      assumptions[operand].insert(assump);
+      assumptions[operand].insert(op);
     }
   });
   return assumptions;
@@ -863,7 +1089,7 @@ void populateFoldTrueCmpIOpPatterns(RewritePatternSet &patterns,
 }
 
 void initializeFuncOps(Operation *op,
-                       AMD::TritonIntegerRangeAnalysis *rangeAnalysis) {
+                       TritonIntegerRangeAnalysis *rangeAnalysis) {
   op->walk<WalkOrder::PreOrder>([&rangeAnalysis](FuncOp funcOp) {
     rangeAnalysis->initializeFuncOp(funcOp);
   });

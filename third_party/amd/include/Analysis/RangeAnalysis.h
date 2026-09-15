@@ -6,16 +6,20 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
+#include <memory>
 
 namespace mlir::triton {
 class FuncOp;
+namespace AMD::detail {
+class ControlFlowRangeAnalysis;
 }
+} // namespace mlir::triton
 
 namespace mlir::triton::AMD {
 
 /// This struct (analysis) adapt's upstream's IntegerRangeAnalysis (inferring
 /// lower/upperbounds on integer constants) to our needs.
-/// Specifically there are 2 points of extension:
+/// Specifically there are 3 points of extension:
 ///
 /// 1. Support for GetProgramIdOp, MakeRangeOp, SplatOp, ExpandDimsOp. *Note*,
 /// upstream already supports range inference for shaped types such as tensors
@@ -31,6 +35,11 @@ namespace mlir::triton::AMD {
 /// body values). Here we attempt to do better by analysis the loop bounds and
 /// "abstractly interpreting" the loop when loop bounds are statically known.
 /// See visitRegionSuccessors.
+///
+/// 3. Natural loops in CF graphs use affine recurrence summaries, with
+/// arithmetic overflow checked through the final failed condition. Branch
+/// conditions and loop body/exit bounds refine ranges at each use. Unsupported
+/// recurrences retain MLIR's bounded merge-site widening.
 struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   using dataflow::IntegerRangeAnalysis::IntegerRangeAnalysis;
   using Base = dataflow::IntegerRangeAnalysis;
@@ -50,6 +59,13 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   void initializeFuncOp(triton::FuncOp funcOp);
 
   LogicalResult initialize(Operation *top) override;
+
+  LogicalResult visit(ProgramPoint *point) override;
+
+  /// Range at a use, including dominating branch conditions and the body or
+  /// exit range of a natural loop. The global lattice also includes values at
+  /// the loop header's final, failing condition.
+  IntegerValueRange getRangeAt(Value value, Operation *use);
 
   LogicalResult visitOperation(
       Operation *op,
@@ -139,8 +155,8 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   ///   llvm.intr.assume %assumesltlhs : i1
   ///   %assumesltlhs = arith.cmpi slt, %K, %c128 : i32
   ///   llvm.intr.assume %assumesltlhs : i1
-  /// If one uses collectAssumptions below then `assumptions` will look like
-  /// %K -> {arith.cmpi slt..., arith.cmpi sge}.
+  /// Entries retain the llvm.intr.assume operations so their blocks determine
+  /// where the comparison bounds are valid.
   llvm::DenseMap<Value, SetVector<Operation *>> assumptions;
 
   /// The defaultTransferFunc is the default transfer function for this dataflow
@@ -148,19 +164,36 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   /// @param[in] op: the Operation in question
   /// @param[in] result: a particular value defined by this op. Note that op
   ///            may define multiple values.
-  /// @param[in] srcLattices: lattices of all source operands
   /// @param[in] destLattices: lattices all all result values
   /// @param[in] incomingRange: the value-range inffered for result
   void defaultTransferFunc(
       Operation *op, Value result,
-      ArrayRef<const dataflow::IntegerValueRangeLattice *> srcLattices,
       ArrayRef<dataflow::IntegerValueRangeLattice *> destLattices,
       const IntegerValueRange &incomingRange);
 
 private:
+  void visitControlFlowBlock(Block *block);
+  IntegerValueRange getRangeAt(Value value, Block *block, ProgramPoint *point);
+  IntegerValueRange refineWithCondition(Value value, IntegerValueRange range,
+                                        Value condition, bool isTrue,
+                                        ProgramPoint *point);
+
+  struct BranchConstraint {
+    Value condition;
+    bool isTrue;
+    BranchConstraint *parent = nullptr;
+  };
+  BranchConstraint *getConstraintScope(Block *block);
+  DenseMap<Block *, BranchConstraint> branchConstraints;
+  DenseMap<Block *, BranchConstraint *> blockConstraints;
+  using RangeQuery = std::pair<Value, Block *>;
+  DenseSet<RangeQuery> activeRangeQueries;
+  DenseMap<RangeQuery, IntegerValueRange> rangeQueryCache;
+  std::shared_ptr<detail::ControlFlowRangeAnalysis> controlFlow;
+  std::unique_ptr<DominanceInfo> ownedDomInfo;
+
   LogicalResult visitOperationHelper(
-      Operation *op,
-      ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
+      Operation *op, ArrayRef<IntegerValueRange> operands,
       ArrayRef<dataflow::IntegerValueRangeLattice *> resultsLattices);
 
   DenseSet<Value> signedIntValues;
