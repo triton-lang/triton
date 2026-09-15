@@ -568,6 +568,83 @@ Value createBarrierAlloc(triton::FuncOp funcOp, unsigned distance) {
   return barrierAlloc;
 }
 
+// How a channel's buffer actually gets filled, which is what decides the
+// channel's completion protocol. `copyOpMap` records the operation that fills
+// the buffer; the channel's source op does not decide this, because a
+// descriptor load whose buffer the descriptor cannot fill is staged through
+// registers instead. `Other` covers the consumer-driven cases (TMEM), which
+// have no copy op of their own.
+enum class ChannelFillKind { TMA, AsyncCopy, LocalStore, Other };
+
+static ChannelFillKind getChannelFillKind(
+    Channel *channel,
+    const DenseMap<Channel *, std::pair<Operation *, Operation *>> &copyOpMap) {
+  auto it = copyOpMap.find(channel);
+  if (it == copyOpMap.end() || !it->second.first)
+    return ChannelFillKind::Other;
+  Operation *copyOp = it->second.first;
+  if (isa<tt::DescriptorLoadOp>(copyOp))
+    return ChannelFillKind::TMA;
+  if (isa<ttg::AsyncCopyGlobalToLocalOp>(copyOp))
+    return ChannelFillKind::AsyncCopy;
+  if (isa<ttg::LocalStoreOp>(copyOp))
+    return ChannelFillKind::LocalStore;
+  return ChannelFillKind::Other;
+}
+
+// An MMA reads its shared operands through the async proxy; a plain local_load
+// goes through the generic proxy. Only the former needs the producer's stores
+// published with a fence.
+static bool isReadThroughAsyncProxy(Channel *channel) {
+  return llvm::any_of(
+      getActualConsumers(channel->getDstOp()),
+      [](Operation *op) { return isa<mlir::triton::DotOpInterface>(op); });
+}
+
+// Only a TMA copy completes its own barrier through the transaction count;
+// every other kind has to be arrived on explicitly by the producer.
+static bool isChannelFilledByTMA(
+    Channel *channel,
+    const DenseMap<Channel *, std::pair<Operation *, Operation *>> &copyOpMap) {
+  return getChannelFillKind(channel, copyOpMap) == ChannelFillKind::TMA;
+}
+
+// A communication group is classified by its first channel and the whole group
+// inherits both that classification and the resulting token type, so a group
+// must not mix fill kinds: the others would inherit a completion protocol that
+// does not signal their buffers. Split the consumer groups once `copyOpMap`
+// says how each buffer is really filled. Kinds keep their first-appearance
+// order, so the groups still follow program order of the producers.
+static void splitConsumerGroupsByFill(
+    DenseMap<Channel *, SmallVector<Channel *>> &channelsGroupedByConsumers,
+    SmallVector<Channel *> &orderedChannels,
+    const DenseMap<Channel *, std::pair<Operation *, Operation *>> &copyOpMap) {
+  DenseMap<Channel *, SmallVector<Channel *>> regrouped;
+  SmallVector<Channel *> newOrder;
+  for (Channel *key : orderedChannels) {
+    auto it = channelsGroupedByConsumers.find(key);
+    if (it == channelsGroupedByConsumers.end())
+      continue;
+    SmallVector<std::pair<ChannelFillKind, SmallVector<Channel *>>> parts;
+    for (Channel *c : it->second) {
+      ChannelFillKind kind = getChannelFillKind(c, copyOpMap);
+      auto *part = llvm::find_if(
+          parts, [&](const auto &entry) { return entry.first == kind; });
+      if (part == parts.end()) {
+        parts.push_back({kind, {c}});
+      } else {
+        part->second.push_back(c);
+      }
+    }
+    for (auto &part : parts) {
+      newOrder.push_back(part.second.front());
+      regrouped[part.second.front()] = part.second;
+    }
+  }
+  channelsGroupedByConsumers = std::move(regrouped);
+  orderedChannels = std::move(newOrder);
+}
+
 // channelsGroupedByConsumers: channels are grouped together.
 // Go through each group, check the first channel in the group, create a token
 // for each consumer taskId. Return a map that maps each channel + consumer
@@ -602,10 +679,19 @@ void createToken(
     auto producerOp = it->second.front()->getSrcOp();
     auto dstOp = it->second.front()->getDstOp();
 
-    if (isa<tt::DescriptorLoadOp>(producerOp)) {
+    // Only a TMA-filled channel gets a producer barrier; for it the copy
+    // signals completion itself and no ProducerCommit is emitted below. A
+    // register-staged channel must go through the generic token protocol.
+    if (isChannelFilledByTMA(channel, copyOpMap)) {
       commChannel.producerBarrier =
           createBarrierAlloc(funcOp, channel->numBuffers);
     }
+    assert(llvm::all_of(it->second,
+                        [&](Channel *c) {
+                          return getChannelFillKind(c, copyOpMap) ==
+                                 getChannelFillKind(channel, copyOpMap);
+                        }) &&
+           "channels in one group must share a fill kind");
 
     for (auto consumerAsyncTaskId : channel->relation.second) {
       // It is possible that this channel has two consumer taskIds.
@@ -631,23 +717,29 @@ void createToken(
       }
 
       // No token is needed for a TMA <-> TCGen5MMAOp channel
-      if (!isa<tt::DescriptorLoadOp>(producerOp) ||
+      // A channel only skips its token when TMA completion covers it, which is
+      // decided by how the buffer is filled rather than by the source op: a
+      // descriptor load that had to be staged through registers still needs
+      // one.
+      if (!isChannelFilledByTMA(channel, copyOpMap) ||
           !useGen5Barrier) { // isa<nvidia_gpu::TCGen5MMAOp>(consumerOp)) {
         ttnvws::TokenLoadType tokenLoadType;
-        auto copyOp = copyOpMap.find(channel)->second.first;
-        if (isa<ttg::AsyncCopyGlobalToLocalOp>(copyOp)) {
+        switch (getChannelFillKind(channel, copyOpMap)) {
+        case ChannelFillKind::AsyncCopy:
           tokenLoadType = ttnvws::TokenLoadType::AsyncLoadOp;
-        } else if (isa<tt::DescriptorLoadOp>(copyOp)) {
+          break;
+        case ChannelFillKind::TMA:
           tokenLoadType = ttnvws::TokenLoadType::TMALoadOp;
-        } else if (isa<ttg::LocalStoreOp>(copyOp)) {
+          break;
+        case ChannelFillKind::LocalStore:
           tokenLoadType = ttnvws::TokenLoadType::LocalStoreOp;
-        } else if (isa<ttng::TMEMLoadOp>(consumerOp)) {
-          tokenLoadType = ttnvws::TokenLoadType::TmemLoadOp;
-        } else if (isa<ttng::TCGen5MMAOp>(consumerOp)) {
+          break;
+        case ChannelFillKind::Other:
           // For operand A of gen5, we have tmem_store + gen5.
+          if (!isa<ttng::TMEMLoadOp, ttng::TCGen5MMAOp>(consumerOp))
+            llvm_unreachable("Unexpected load type");
           tokenLoadType = ttnvws::TokenLoadType::TmemLoadOp;
-        } else {
-          llvm_unreachable("Unexpected load type");
+          break;
         }
         Value v;
         if (it->second.front()->getSrcOp()->getParentOfType<scf::ForOp>())
@@ -779,9 +871,22 @@ DenseMap<Channel *, Value> createBuffer(
 
       Attribute sharedLayout;
       if (requireMMASharedEncoding) {
-        sharedLayout = ttg::NVMMASharedEncodingAttr::get(
-            context, sliceShape, order, CGALayout, elemType,
-            /*fp4Padded*/ false);
+        // The shared encoding an MMA op needs depends on which dot operand the
+        // value feeds: AccelerateMatmul already picked one that accounts for
+        // the operand index, and for MMA variants that cannot transpose an
+        // operand (s8, tf32, fp8) only that choice is lowerable. Re-deriving it
+        // here from the producer's register order drops the operand role and
+        // can produce an encoding no WGMMA instruction accepts, so reuse the
+        // encoding of the allocation this buffer replaces when there is one.
+        if (auto localAlloc = dyn_cast<ttg::LocalAllocOp>(dstOp)) {
+          auto allocEncoding = localAlloc.getType().getEncoding();
+          if (isa_and_nonnull<ttg::NVMMASharedEncodingAttr>(allocEncoding))
+            sharedLayout = allocEncoding;
+        }
+        if (!sharedLayout)
+          sharedLayout = ttg::NVMMASharedEncodingAttr::get(
+              context, sliceShape, order, CGALayout, elemType,
+              /*fp4Padded*/ false);
       } else if (auto tmaLoad = dyn_cast<tt::DescriptorLoadOp>(srcOp)) {
         sharedLayout = ttng::getEncodingFromDescriptor(
             tmaLoad, tmaLoad.getType(), tmaLoad.getDesc());
@@ -1094,6 +1199,10 @@ void insertAsyncComm(
     // Go through all channels in this channel group.
     for (auto &c : kv.second) {
       if (auto tmaLoad = dyn_cast<tt::DescriptorLoadOp>(c->getSrcOp())) {
+        // Skip loads whose buffer the descriptor cannot fill directly; those
+        // are staged through registers by createLocalCopy instead.
+        if (!isChannelFilledByTMA(c, copyOpMap))
+          continue;
         tmaLoads.push_back(tmaLoad);
         buffers.push_back(bufferMap.find(c)->second);
       }
@@ -1142,6 +1251,7 @@ void insertAsyncComm(
       }
     }
 
+    Operation *stagedProducerFence = nullptr;
     for (const auto &token : commChannel.tokens) {
       if (commChannel.consumerBarriers.empty()) {
         // Insert ProducerAcquireOp before the producer.
@@ -1164,6 +1274,24 @@ void insertAsyncComm(
         } else {
           producerCommitPoint = getSameLevelOp(headConsumer, tailProducer);
         }
+        // A register-staged producer writes the buffer with local_store, which
+        // goes through the generic shared-memory proxy. When a consumer reads
+        // it with an MMA, that read goes through the async proxy and only sees
+        // the stores after a fence, which has to precede the arrival that
+        // publishes the buffer -- placing it after the arrival is already too
+        // late. Consumers that only local_load stay on the generic proxy and
+        // need no fence. One fence covers every token of the group.
+        if (!stagedProducerFence &&
+            getChannelFillKind(masterChannel, copyOpMap) ==
+                ChannelFillKind::LocalStore &&
+            llvm::any_of(kv.second, isReadThroughAsyncProxy)) {
+          builder.setInsertionPointAfter(producerCommitPoint);
+          stagedProducerFence =
+              builder.createWithAsyncTaskIds<ttng::FenceAsyncSharedOp>(
+                  tailProducer->getLoc(), /*bCluster=*/false);
+        }
+        if (stagedProducerFence)
+          producerCommitPoint = stagedProducerFence;
         builder.setInsertionPointAfter(producerCommitPoint);
         builder.createWithAsyncTaskIds<ttnvws::ProducerCommitOp>(
             tailProducer->getLoc(), token.second, bufferIdx);
@@ -1286,6 +1414,11 @@ void doCodePartition(triton::FuncOp &funcOp, unsigned numBuffers) {
     LDBG("\n\nwith async copy");
     funcOp.dump();
   });
+
+  // Step 6.5: now that copyOpMap says which operation fills each buffer, make
+  // sure no communication group mixes TMA-filled and register-staged channels.
+  splitConsumerGroupsByFill(channelsGroupedByConsumers, orderedChannels,
+                            copyOpMap);
 
   // Step 7: Create tokens. A set of tokens for each group of channels for
   // each channel.
