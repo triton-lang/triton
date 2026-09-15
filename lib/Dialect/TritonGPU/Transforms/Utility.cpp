@@ -661,6 +661,17 @@ bool isExpensiveLoadOrStore(Operation *op) {
 
 std::optional<SmallVector<OpOperand *>>
 canUseResultEncoding(Operation *op, Attribute targetEncoding) {
+  if (auto broadcast = dyn_cast<triton::BroadcastOp>(op)) {
+    auto dstType = broadcast.getType().cloneWithEncoding(targetEncoding);
+    auto srcType = broadcast.getSrc().getType();
+    if (failed(srcType.getEncoding()
+                   .getDialect()
+                   .getRegisteredInterface<DialectInferLayoutInterface>()
+                   ->verifyBroadcastOpEncoding(srcType, dstType)))
+      return std::nullopt;
+    return SmallVector<OpOperand *>{&broadcast.getSrcMutable()};
+  }
+
   if (auto convert = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
     if (mlir::isa<triton::gpu::NvidiaMmaEncodingAttr>(targetEncoding)) {
       auto srcEncoding = convert.getSrc().getType().getEncoding();
