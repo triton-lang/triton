@@ -615,13 +615,18 @@ static CGAEncodingAttr getTwoCTARHSCGALayout(RankedTensorType retType) {
   return CGAEncodingAttr::fromSplitParams(ctx, {1, 2}, {1, 2}, {1, 0});
 }
 
+static DescriptorLoadOp getTwoCTARHSLoad(Value value) {
+  if (auto trans = getDefiningOpSkippingConvertLayout<TransOp>(value))
+    value = trans.getSrc();
+  return getDefiningOpSkippingConvertLayout<DescriptorLoadOp>(value);
+}
+
 static bool canUseTwoCTAs(DotOp dotOp) {
   if (lookupNumCTAs(dotOp) != 2)
     return false;
 
   RankedTensorType retType = dotOp.getType();
-  auto loadOp =
-      getDefiningOpSkippingConvertLayout<DescriptorLoadOp>(dotOp.getB());
+  auto loadOp = getTwoCTARHSLoad(dotOp.getB());
   if (!loadOp)
     return false;
 
@@ -667,11 +672,20 @@ static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability) {
 static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
                            const CGAEncodingAttr &newCGALayout) {
   OpBuilder::InsertionGuard g(rewriter);
-  auto loadOp = getDefiningOpSkippingConvertLayout<DescriptorLoadOp>(b);
-  assert(loadOp && "expected descriptor load");
+  auto trans = getDefiningOpSkippingConvertLayout<TransOp>(b);
+  auto loadOp = getTwoCTARHSLoad(b);
+  assert(loadOp && "expected descriptor load, optionally transposed");
+  auto loadCGALayout = newCGALayout;
+  if (trans) {
+    // Split the descriptor load along N in its original dimension order.
+    loadCGALayout = CGAEncodingAttr::get(
+        b.getContext(),
+        transposeLinearLayout(newCGALayout.getLinearLayout(),
+                              inversePermutation(trans.getOrder())));
+  }
   b = loadOp->getResult(0);
   RankedTensorType bType = cast<RankedTensorType>(b.getType());
-  auto newLayout = cloneWithCGALayout(bType, newCGALayout);
+  auto newLayout = cloneWithCGALayout(bType, loadCGALayout);
   assert(succeeded(newLayout) && "expected a distributed RHS layout");
   rewriter.setInsertionPoint(loadOp.getOperation());
   loadOp->getResult(0).setType(bType.cloneWithEncoding(*newLayout));
@@ -679,6 +693,8 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
   rewriter.setInsertionPointAfter(loadOp.getOperation());
   auto cvt = ConvertLayoutOp::create(rewriter, b.getLoc(), bType, newB);
   rewriter.replaceAllUsesExcept(newB, cvt.getResult(), cvt);
+  if (trans)
+    return TransOp::create(rewriter, trans.getLoc(), newB, trans.getOrder());
   return newB;
 }
 
