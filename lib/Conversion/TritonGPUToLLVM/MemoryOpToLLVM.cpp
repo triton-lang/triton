@@ -399,9 +399,12 @@ struct AtomicPollOpConversion
       results.push_back(emitPoll(op, ptr, value, start, adaptor.getTimeout(),
                                  threadPred, rewriter));
 
+    // Only the polling threads run the acquire fence in emitPoll; the
+    // rendezvous carries that ordering for the rest of the CTA.
     auto rendezvous = [&] {
       if (numCTAs == 1)
-        targetInfo.barrier(loc, rewriter, AddrSpace::Local);
+        targetInfo.barrier(loc, rewriter,
+                           atomicOrderingBarrierAddrSpace(op.getSem()));
       else
         targetInfo.clusterBarrier(loc, rewriter, op);
     };
