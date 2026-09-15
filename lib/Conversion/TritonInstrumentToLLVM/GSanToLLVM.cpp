@@ -305,9 +305,6 @@ unsigned getTensorAccessVecSize(OpT op,
     return contiguity;
 
   auto maskAlign = axisInfoAnalysis.getMaskAlignment(op.getMask());
-  if (bytesPerElem < kGSanShadowGranularityBytes) {
-    maskAlign = std::max(maskAlign, kGSanShadowGranularityBytes / bytesPerElem);
-  }
   return std::min(contiguity, maskAlign);
 }
 
