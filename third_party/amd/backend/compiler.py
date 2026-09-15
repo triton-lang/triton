@@ -657,8 +657,12 @@ class HIPBackend(BaseBackend):
                 if not fn.is_declaration():
                     fn.add_fn_attr("amdgpu-expert-scheduling-mode", "true")
 
+        # InstCombine folds an extractelement/insertelement chain into a single
+        # shufflevector only if SimplifyDemandedVectorElts can walk the whole
+        # chain, and its depth limit defaults to 10. 32 covers the chain without
+        # deepening the recursion further than needed.
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', get_llvm_flags(options.arch),
-                             options.enable_fp_fusion, disable_vector_combine=True)
+                             options.enable_fp_fusion, disable_vector_combine=True, simplify_vector_elts_depth=32)
 
         # Architectures with architected SGPRs store the workgroup id in ttmp9 (X) and ttmp7 (Y[15:0], Z[31:16]).
         # These attributes are used to determine if Z should be masked out when loading Y. They are inferred during
