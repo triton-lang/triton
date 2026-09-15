@@ -38,11 +38,9 @@ def test_async_wait_emits_barrier(kernel, wait_instruction):
         gluon._runtime.GluonASTSource(kernel, {}, {}),
         target=GPUTarget("hip", "gfx1250", 32),
     )
-    pattern = (
-        rf"{wait_instruction} 0x0\s+"
-        r"s_barrier_signal -1\s+"
-        r"s_barrier_wait -1"
-    )
+    pattern = (rf"{wait_instruction} 0x0\s+"
+               r"s_barrier_signal -1\s+"
+               r"s_barrier_wait -1")
     assert re.search(pattern, compiled.asm["amdgcn"])
 
 

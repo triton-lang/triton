@@ -200,8 +200,7 @@ static bool warpPipelineMembarFilter(Operation *op1, Operation *op2,
   if (mlir::triton::AMD::membarFilter(op1, op2, op1IsRead, op2IsRead,
                                       allocation))
     return true;
-  return !op1IsRead &&
-         op1->hasTrait<mlir::OpTrait::GlobalToLocalCopyTrait>();
+  return !op1IsRead && op1->hasTrait<mlir::OpTrait::GlobalToLocalCopyTrait>();
 }
 
 static void analyzePipelineDependencies(ArrayRef<BlockInfo> clusterInfo,
@@ -252,8 +251,8 @@ static void analyzePipelineDependencies(ArrayRef<BlockInfo> clusterInfo,
         continue;
       const BlockInfo &sourceInfo =
           src + dist >= N ? previousIterationInfo[src] : clusterInfo[src];
-      if (!sourceInfo.isIntersected(clusterInfo[dst],
-                                    warpPipelineMembarFilter, allocation))
+      if (!sourceInfo.isIntersected(clusterInfo[dst], warpPipelineMembarFilter,
+                                    allocation))
         continue;
       bars[barrierLoc] = true;
       LDBG("cluster " << src << " need fence to " << dst
@@ -285,8 +284,7 @@ static void emitClusterPriority(OpBuilder &r, Location loc,
 // GFX1250 async waits expand to the wait instruction followed by an
 // s_barrier. Do not add a second synchronization barrier at the same boundary.
 static bool waitIncludesBarrier(Operation *op) {
-  return isa<triton::amdgpu::AsyncWaitOp,
-             triton::amdgpu::AsyncTDMWait,
+  return isa<triton::amdgpu::AsyncWaitOp, triton::amdgpu::AsyncTDMWait,
              triton::amdgpu::AsyncTDMIntrinsicWait>(op);
 }
 
