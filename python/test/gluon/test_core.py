@@ -2229,7 +2229,8 @@ def test_amd_wmma(M, N, K, in_dtype):
 @pytest.mark.parametrize("in_dtype", ['float16', 'bfloat16'])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("cdna_version", [3, 4])
-def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version):
+@pytest.mark.parametrize("cd_regclass", [None, "a", "v"])
+def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version, cd_regclass):
     if is_hip_cdna3() and cdna_version != 3:
         pytest.skip("On CDNA3 target, skip if mfma version is not 3")
 
@@ -2242,7 +2243,8 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version):
                stride_bk, stride_bn,  #
                stride_cm, stride_cn,  #
                BLOCK_SIZE_M: ttgl.constexpr, BLOCK_SIZE_N: ttgl.constexpr, BLOCK_SIZE_K: ttgl.constexpr,
-               blocked: ttgl.constexpr, k_width: ttgl.constexpr, mfma_layout: ttgl.constexpr):
+               blocked: ttgl.constexpr, k_width: ttgl.constexpr, mfma_layout: ttgl.constexpr,
+               cd_regclass: ttgl.constexpr):
         dot_a_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=k_width)
         dot_b_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=k_width)
 
@@ -2259,7 +2261,7 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version):
         a1 = ttgl.convert_layout(a, layout=dot_a_layout)
         b1 = ttgl.convert_layout(b, layout=dot_b_layout)
         acc = ttgl.zeros([BLOCK_SIZE_M, BLOCK_SIZE_N], ttgl.float32, mfma_layout)
-        c = ttgl.amd.cdna3.mfma(a1, b1, acc)
+        c = ttgl.amd.cdna3.mfma(a1, b1, acc, cd_regclass=cd_regclass)
         c = ttgl.convert_layout(c, layout=blocked)
         c = c.to(a_ptr.dtype.element_ty)
 
@@ -2286,7 +2288,7 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version):
         b.stride(0), b.stride(1),  #
         c.stride(0), c.stride(1),  #
         BLOCK_SIZE_M=M, BLOCK_SIZE_N=N, BLOCK_SIZE_K=K,  #
-        blocked=blocked, k_width=k_width, mfma_layout=mfma_layout,  #
+        blocked=blocked, k_width=k_width, mfma_layout=mfma_layout, cd_regclass=cd_regclass,  #
         num_warps=num_warps)
 
     ref = torch.matmul(a, b)
@@ -2296,16 +2298,17 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version):
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 @pytest.mark.parametrize("M, N, K", [(32, 32, 128)])
-@pytest.mark.parametrize("a_type, b_type", [(a_type, b_type)
-                                            for a_type in ["e2m1", "e4m3", "e5m2"]
-                                            for b_type in ["e2m1", "e4m3", "e5m2"]])
+@pytest.mark.parametrize("a_type, b_type, cd_regclass",
+                         [(a_type, b_type, None)
+                          for a_type in ["e2m1", "e4m3", "e5m2"]
+                          for b_type in ["e2m1", "e4m3", "e5m2"]] + [("e2m1", "e2m1", "a"), ("e2m1", "e2m1", "v")])
 @pytest.mark.parametrize("has_scale", [True, False])
-def test_amd_mfma_scaled(M, N, K, a_type, b_type, has_scale, device='cuda'):
+def test_amd_mfma_scaled(M, N, K, a_type, b_type, cd_regclass, has_scale, device='cuda'):
 
     @gluon.jit
     def kernel(out_ptr, a_ptr, b_ptr, a_scale_ptr, b_scale_ptr,  #
                M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr,  #
-               a_type: tl.constexpr, b_type: tl.constexpr):
+               a_type: tl.constexpr, b_type: tl.constexpr, cd_regclass: tl.constexpr):
         DIV_FACTOR_A: tl.constexpr = 2 if a_type == "e2m1" else 1
         DIV_FACTOR_B: tl.constexpr = 2 if b_type == "e2m1" else 1
         K_A: tl.constexpr = K // DIV_FACTOR_A
@@ -2349,7 +2352,7 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, has_scale, device='cuda'):
             b_scale = ttgl.amd.cdna4.buffer_load(b_scale_ptr, b_scale_offs_n * (K // 32) + b_scale_offs_k)
 
         zero = ttgl.zeros([M, N], dtype=ttgl.float32, layout=mfma_layout)
-        c = ttgl.amd.cdna4.mfma_scaled(a, a_scale, a_type, b, b_scale, b_type, zero)
+        c = ttgl.amd.cdna4.mfma_scaled(a, a_scale, a_type, b, b_scale, b_type, zero, cd_regclass=cd_regclass)
         c = c.to(out_ptr.dtype.element_ty)
 
         out_offs_m = ttgl.arange(0, M)[:, None]
@@ -2387,12 +2390,12 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, has_scale, device='cuda'):
         a_scale, a_scale_ref = _create_mxfp_scale(0, M, K)
         b_scale, b_scale_ref = _create_mxfp_scale(1, N, K)
         out = torch.empty((M, N), dtype=torch.float32, device=device)
-        compiled = kernel[(1, )](out, a, b, a_scale, b_scale, M, N, K, a_type, b_type, num_warps=4)
+        compiled = kernel[(1, )](out, a, b, a_scale, b_scale, M, N, K, a_type, b_type, cd_regclass, num_warps=4)
         out_ref = torch.matmul(a_ref * a_scale_ref, b_ref * b_scale_ref)
         torch.testing.assert_close(out, out_ref)
     else:
         out = torch.empty((M, N), dtype=torch.float32, device=device)
-        compiled = kernel[(1, )](out, a, b, None, None, M, N, K, a_type, b_type, num_warps=4)
+        compiled = kernel[(1, )](out, a, b, None, None, M, N, K, a_type, b_type, cd_regclass, num_warps=4)
         out_ref = torch.matmul(a_ref, b_ref)
         torch.testing.assert_close(out, out_ref)
 

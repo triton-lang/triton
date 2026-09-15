@@ -163,8 +163,18 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: G
     _semantic.builder.create_buffer_store(stored_value.handle, ptr.handle, offsets.handle, mask, cache_modifier)
 
 
+def _set_cd_regclass(handle, cd_regclass, semantic):
+    """Record `cd_regclass` ("a" = AGPRs, "v" = VGPRs) on the dot op that defines `handle`."""
+    cd_regclass = ttgl._unwrap_if_constexpr(cd_regclass)
+    if cd_regclass is None:
+        return
+    if cd_regclass not in ("a", "v"):
+        raise ValueError(f"cd_regclass must be None, 'a' or 'v', got {cd_regclass!r}")
+    handle.set_attr("amdg.cd_regclass", semantic.builder.get_string_attr(cd_regclass))
+
+
 @builtin
-def mfma(a, b, acc, _semantic: GluonSemantic = None):
+def mfma(a, b, acc, cd_regclass=None, _semantic: GluonSemantic = None):
     """
     Computes matrix multiplication ``a * b + acc`` using AMD native matrix core units.
 
@@ -172,6 +182,10 @@ def mfma(a, b, acc, _semantic: GluonSemantic = None):
         a (tensor): The first operand of mfma.
         b (tensor): The second operand of mfma.
         acc (tensor): The accumulator tensor.
+        cd_regclass (str, optional): Experimental. Register class for the accumulator input (C)
+            and result (D) of every MFMA instruction: ``"a"`` for AGPRs or ``"v"`` for VGPRs.
+            The lowering wraps each MFMA tile's C and D in an empty inline asm with that
+            register-class constraint. ``None`` (default) leaves the choice to the compiler.
     """
     assert acc is not None, "acc is required"
     ret_type = acc.type
@@ -179,6 +193,7 @@ def mfma(a, b, acc, _semantic: GluonSemantic = None):
 
     handle = _semantic.dot(a, b, acc, input_precision=knobs.language.fp32_default, max_num_imprecise_acc=None,
                            out_dtype=acc.dtype).handle
+    _set_cd_regclass(handle, cd_regclass, _semantic)
     return ttgl.tensor(handle, ret_type)
 
 
