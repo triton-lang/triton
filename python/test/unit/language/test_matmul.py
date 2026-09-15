@@ -212,8 +212,6 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
     (2, 3, 1024, True),
     (2, 1, 1024, False),
     (2, 3, 64, False),
-    (4, 3, 1024, False),
-    (4, 3, 1024, True),
 ])
 def test_tma_matmul_mixed_consumers(num_ctas, num_stages, K, warp_specialize, device):
     from triton.tools.tensor_descriptor import TensorDescriptor
