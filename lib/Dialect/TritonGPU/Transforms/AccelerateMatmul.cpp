@@ -18,7 +18,6 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/DecomposeScaledBlocked.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
-#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
@@ -600,7 +599,7 @@ static CGAEncodingAttr getTwoCTARHSCGALayout(RankedTensorType retType) {
   return CGAEncodingAttr::fromSplitParams(ctx, {1, 2}, {1, 2}, {1, 0});
 }
 
-static bool canUseTwoCTAs(DotOp dotOp, int numStages) {
+static bool canUseTwoCTAs(DotOp dotOp) {
   if (lookupNumCTAs(dotOp) != 2)
     return false;
 
@@ -608,13 +607,6 @@ static bool canUseTwoCTAs(DotOp dotOp, int numStages) {
   auto loadOp =
       getDefiningOpSkippingConvertLayout<DescriptorLoadOp>(dotOp.getB());
   if (!loadOp)
-    return false;
-
-  // Pair-shared TMA waits are implemented in the software pipeliner only.
-  auto loop = dyn_cast<scf::ForOp>(dotOp->getParentOp());
-  if (!loop || loadOp->getBlock() != loop.getBody() ||
-      getNumStagesOrDefault(loop, numStages) <= 1 || isOuterLoop(loop) ||
-      loopHasDistGreaterThanOne(loop))
     return false;
 
   auto rhsCGALayout = getTwoCTARHSCGALayout(retType);
@@ -628,10 +620,8 @@ static bool canUseTwoCTAs(DotOp dotOp, int numStages) {
   return true;
 }
 
-static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability,
-                                  int numStages) {
+static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability) {
   bool sawMMAv5Dot = false;
-  DenseSet<Operation *> pipelinedLoads;
   WalkResult result = module.walk([&](Operation *op) -> WalkResult {
     if (auto dotOp = dyn_cast<DotOp>(op)) {
       RankedTensorType retType = dotOp.getType();
@@ -645,17 +635,8 @@ static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability,
         return WalkResult::advance();
 
       sawMMAv5Dot = true;
-      if (!canUseTwoCTAs(dotOp, numStages))
-        return WalkResult::interrupt();
-      for (Value operand : {dotOp.getA(), dotOp.getB()}) {
-        if (auto load =
-                getDefiningOpSkippingConvertLayout<DescriptorLoadOp>(operand)) {
-          if (load->getBlock() != dotOp->getBlock())
-            return WalkResult::interrupt();
-          pipelinedLoads.insert(load);
-        }
-      }
-      return WalkResult::advance();
+      return canUseTwoCTAs(dotOp) ? WalkResult::advance()
+                                  : WalkResult::interrupt();
     }
 
     // Scaled MMAv5 does not set two_ctas in this pass yet. Keep the whole
@@ -664,15 +645,7 @@ static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability,
       return WalkResult::interrupt();
     return WalkResult::advance();
   });
-  if (!sawMMAv5Dot || result.wasInterrupted())
-    return false;
-  // TMA loads left for the non-pipelined lowering still use per-CTA barriers.
-  return !module
-              .walk([&](DescriptorLoadLikeOpInterface load) {
-                return pipelinedLoads.contains(load) ? WalkResult::advance()
-                                                     : WalkResult::interrupt();
-              })
-              .wasInterrupted();
+  return sawMMAv5Dot && !result.wasInterrupted();
 }
 
 static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
@@ -1171,7 +1144,7 @@ public:
     // PTX 13+ requires all tcgen instructions in a kernel to have a consistent
     // CTA mode. TritonGPU modules map to one kernel here, so decide two_ctas
     // once before rewriting any dot.
-    bool enableTwoCTAs = canUseTwoCTAsInModule(m, computeCapability, numStages);
+    bool enableTwoCTAs = canUseTwoCTAsInModule(m, computeCapability);
     patterns.add<BlockedToMMAv5>(context, computeCapability, enableTwoCTAs,
                                  benefitMMAv5);
     patterns.add<ScaledBlockedToMMAv5>(context, computeCapability,

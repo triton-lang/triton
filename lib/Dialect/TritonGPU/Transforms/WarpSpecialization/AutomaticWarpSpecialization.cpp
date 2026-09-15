@@ -93,12 +93,6 @@ std::unique_ptr<Pass> createVerifyWarpSpecializationPartitionsPass() {
 } // namespace
 
 void AutomaticWarpSpecialization::runOnOperation() {
-  // Automatic warp specialization does not yet support multi-CTA kernels.
-  if (lookupNumCTAs(getOperation()) > 1) {
-    getOperation().walk(
-        [](Operation *op) { op->removeAttr(kWarpSpecializeAttrName); });
-    return;
-  }
   OpPassManager pm;
   auto addPassWithPartitionVerifier = [&](std::unique_ptr<Pass> pass) {
     pm.addPass(std::move(pass));
