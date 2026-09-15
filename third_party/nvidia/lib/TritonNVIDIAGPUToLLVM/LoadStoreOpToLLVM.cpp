@@ -1185,6 +1185,7 @@ struct AsyncCopyGlobalToLocalOpConversion
       auto *copySize = ptxBuilder.newConstantOperand(nBytes);
       auto *srcSize = copySize;
       if (hasMask) {
+        // We avoid predicating on the copy mask because it pessimizes ptxas.
         // A masked copy still writes zeros to its shared-memory destination.
         // XXX(Keren): Always assume other = 0 for now.
         // When 'other != 0' is supported, we will need to fold the
