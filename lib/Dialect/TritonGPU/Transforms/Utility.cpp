@@ -1356,19 +1356,24 @@ void runDeadIterArgElimination(Operation *top) {
   // The op we are running on must not have any results, because the liveness
   // analysis will not consider their users.
   assert(top->hasTrait<OpTrait::ZeroResults>() && "op cannot have results");
+  SmallVector<LoopLikeOpInterface> loops;
+  top->walk([&](LoopLikeOpInterface loop) {
+    if (!loop.getRegionIterArgs().empty())
+      loops.push_back(loop);
+  });
+  if (loops.empty())
+    return;
   dataflow::RunLivenessAnalysis la{top};
 
   // We just replace users of the block arg with their corresponding init value.
   // Dead code elimination can then do the actual removal.
-  top->walk([&](Operation *op) {
-    if (auto loopLike = dyn_cast<LoopLikeOpInterface>(op)) {
-      for (auto [idx, arg] : llvm::enumerate(loopLike.getRegionIterArgs())) {
-        const auto *liveness = la.getLiveness(arg);
-        if (liveness && !liveness->isLive)
-          arg.replaceAllUsesWith(loopLike.getInits()[idx]);
-      }
+  for (auto loop : loops) {
+    for (auto [idx, arg] : llvm::enumerate(loop.getRegionIterArgs())) {
+      const auto *liveness = la.getLiveness(arg);
+      if (liveness && !liveness->isLive)
+        arg.replaceAllUsesWith(loop.getInits()[idx]);
     }
-  });
+  }
 }
 
 ttg::LocalAllocOp findShmemAlloc(Value operand) {

@@ -59,6 +59,10 @@ public:
     return addresses == other.addresses;
   }
   bool operator<(const AddressSet &other) const {
+    // Equal dense footprints are common map keys. Compare their words before
+    // falling back to lexicographic iteration over individual addresses.
+    if (addresses == other.addresses)
+      return false;
     auto lhs = begin();
     auto rhs = other.begin();
     while (lhs != end() && rhs != other.end()) {

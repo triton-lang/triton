@@ -270,11 +270,14 @@ struct TritonNvidiaGPUInterleaveTMemPass
       else if (auto alloc = dyn_cast<TMEMAllocOp>(op))
         opsToSink.emplace_back(alloc, alloc.getResult());
     });
+    bool changed = false;
     for (auto [op, buffer] : opsToSink) {
       while (trySinkOp(op, buffer)) {
-        // Keep trying to sink loads and their users.
+        changed = true;
       }
     }
+    if (!changed)
+      markAllAnalysesPreserved();
   }
 };
 

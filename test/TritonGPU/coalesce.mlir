@@ -312,3 +312,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// A loop-carried source and a captured destination must stay in the same
+// coalescing slice, including memory operations nested inside an if.
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+// CHECK: #[[$LOOP_LAYOUT:.*]] = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @coalesce_loop_carried_nested_if
+  tt.func @coalesce_loop_carried_nested_if(%src: !tt.ptr<f32>, %dst: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %n: i32, %cond: i1) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %offsets = tt.make_range {start = 0 : i32, end = 1024 : i32} : tensor<1024xi32, #blocked>
+    %srcs = tt.splat %src : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %dsts = tt.splat %dst : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %inputs = tt.addptr %srcs, %offsets : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    %outputs = tt.addptr %dsts, %offsets : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    %unused = scf.for %i = %c0 to %n step %c1 iter_args(%current = %inputs) -> (tensor<1024x!tt.ptr<f32>, #blocked>) : i32 {
+      scf.if %cond {
+        %shifted = tt.addptr %current, %offsets : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+        // CHECK: tt.load {{.*}} : tensor<1024x!tt.ptr<f32>, #[[$LOOP_LAYOUT]]>
+        %values = tt.load %shifted : tensor<1024x!tt.ptr<f32>, #blocked>
+        // CHECK: tt.store {{.*}} : tensor<1024x!tt.ptr<f32>, #[[$LOOP_LAYOUT]]>
+        tt.store %outputs, %values : tensor<1024x!tt.ptr<f32>, #blocked>
+      }
+      scf.yield %current : tensor<1024x!tt.ptr<f32>, #blocked>
+    }
+    tt.return
+  }
+}

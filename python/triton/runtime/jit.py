@@ -493,6 +493,7 @@ class JITCallable:
         src = src[re.search(r"^def\s+\w+\s*\(", src, re.MULTILINE).start():]
         self._src = src
         self.hash = None
+        self._cached_ast = None
 
         # Map of global variables used by the function and any functions it
         # transitively calls, plus their values.  The values are collected when
@@ -528,10 +529,13 @@ class JITCallable:
             # Set a placeholder hash to break recursion in case the function
             # transitively calls itself. The full hash is set after.
             self.hash = f"recursion:{self._fn_name}"
-            nonlocals = inspect.getclosurevars(self.fn).nonlocals
+            nonlocals = {
+                name: cell.cell_contents
+                for name, cell in zip(self.fn.__code__.co_freevars, self.fn.__closure__ or ())
+            }
             dependencies_finder = DependenciesFinder(name=self._fn_name, globals=self.__globals__, nonlocals=nonlocals,
                                                      src=self.src)
-            dependencies_finder.visit(self.parse())
+            dependencies_finder.visit(self._get_ast())
             self.hash = dependencies_finder.ret + str(self.starting_line_number)
             self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
 
@@ -556,6 +560,14 @@ class JITCallable:
         assert isinstance(tree.body[0], ast.FunctionDef)
         return tree
 
+    def _get_ast(self):
+        # Compiler visitors treat the shared tree as immutable. Keep parse()
+        # available to callers that need their own mutable AST.
+        with self._hash_lock:
+            if self._cached_ast is None:
+                self._cached_ast = self.parse()
+            return self._cached_ast
+
     @property
     def type(self):
         from triton.language.core import constexpr_type
@@ -572,6 +584,7 @@ class JITCallable:
         Note that it is the callers responsibility to make sure any triton functions that call this function have the `.hash` value reset to None.
         """
         self.hash = None
+        self._cached_ast = None
         self._src = new_src
 
     def _set_src(self):

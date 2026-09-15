@@ -347,6 +347,7 @@ class CodeGenerator(ast.NodeVisitor):
         self.function_name = function_name
         self.is_kernel = is_kernel
         self.cur_node = None
+        self.unused_result_node = None
         self.noinline = noinline
         self.caller_context = caller_context
         self.scf_stack = []
@@ -1459,7 +1460,7 @@ class CodeGenerator(ast.NodeVisitor):
                                       codegen_fns=self.builder.codegen_fns, module_map=self.builder.module_map,
                                       caller_context=caller_context, is_gluon=self.is_gluon)
             try:
-                generator.visit(fn.parse())
+                generator.visit(fn._get_ast())
             except Exception as e:
                 # Wrap the error in the callee with the location of the call.
                 if knobs.compilation.front_end_debugging:
@@ -1482,7 +1483,7 @@ class CodeGenerator(ast.NodeVisitor):
             fn = fn.__func__
 
         mur = getattr(fn, '_must_use_result', False)
-        if mur and getattr(node, '_is_unused', False):
+        if mur and node is self.unused_result_node:
             error_message = ["The result of %s is not being used." % ast.unparse(node.func)]
             if isinstance(mur, str):
                 error_message.append(mur)
@@ -1631,8 +1632,12 @@ class CodeGenerator(ast.NodeVisitor):
         return self.get_Attribute(lhs, node.attr)
 
     def visit_Expr(self, node):
-        node.value._is_unused = True
-        ast.NodeVisitor.generic_visit(self, node)
+        previous = self.unused_result_node
+        self.unused_result_node = node.value
+        try:
+            self.visit(node.value)
+        finally:
+            self.unused_result_node = previous
 
     def visit_NoneType(self, node):
         return None
@@ -1773,7 +1778,7 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
                               jit_fn=fn, is_kernel=True, file_name=fn.file_name, begin_line=fn.def_file_line_number,
                               begin_col=fn.def_file_col_number, options=options, codegen_fns=codegen_fns,
                               module_map=module_map, module=module, is_gluon=fn.is_gluon())
-    generator.visit(fn.parse())
+    generator.visit(fn._get_ast())
     module = generator.module
     # module takes ownership of the context
     module.context = context

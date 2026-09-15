@@ -975,7 +975,10 @@ std::optional<LinearLayout> lstsq(const LinearLayout &A,
     if (B.getOutDimSize(outDim) > A.getOutDimSize(outDim))
       return std::nullopt;
 
-  auto orderedB = B.transposeOuts(llvm::to_vector(A.getOutDimNames()));
+  std::optional<LinearLayout> transposedB;
+  if (!llvm::equal(A.getOutDimNames(), B.getOutDimNames()))
+    transposedB = B.transposeOuts(llvm::to_vector(A.getOutDimNames()));
+  const auto &orderedB = transposedB ? *transposedB : B;
   int numRows = A.getTotalOutDimSizeLog2();
   int numColsA = A.getTotalInDimSizeLog2();
   int numColsB = orderedB.getTotalInDimSizeLog2();
@@ -1051,7 +1054,10 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   auto outDims = llvm::to_vector(getOutDimNames());
   assertDimsEqualIgnoringOrder(outDims, outer.getOutDimNames());
   const auto &B = *this;
-  const auto A = outer.transposeOuts(outDims);
+  std::optional<LinearLayout> transposedA;
+  if (!llvm::equal(outer.getOutDimNames(), outDims))
+    transposedA = outer.transposeOuts(outDims);
+  const auto &A = transposedA ? *transposedA : outer;
   for (auto dim : outDims) {
     assert(A.getOutDimSize(dim) >= B.getOutDimSize(dim) &&
            ("A.invertAndCompose(B) called with incompatible output shapes in " +
@@ -1086,12 +1092,15 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   SmallVector<StringAttr> identityDims;
   for (auto dim : A.getInDimNames()) {
     if (B.hasInDim(dim)) {
-      auto aSub = A.sublayout(dim, outDims);
-      auto bSub = B.sublayout(dim, outDims);
-      if (aSub.equalIgnoringOutDimSizes(bSub) && isIndependent(A, dim) &&
-          isIndependent(B, dim))
+      if (A.bases.find(dim)->second == B.bases.find(dim)->second &&
+          isIndependent(A, dim) && isIndependent(B, dim))
         identityDims.push_back(dim);
     }
+  }
+  if (identityDims.empty()) {
+    auto result = lstsq(A, B);
+    assert(result && "outer layout does not cover this layout's image");
+    return std::move(*result);
   }
   SmallVector<StringAttr> ANonIdentityInDims;
   SmallVector<StringAttr> BNonIdentityInDims;
@@ -1416,19 +1425,24 @@ std::unique_ptr<uint64_t[]> getMatrix(const LinearLayout &layout) {
   //
   // Note `new uint64_t[n]()` is zero-initialized, but `new uint64_t[n]` is not.
   std::unique_ptr<uint64_t[]> m(new uint64_t[numRows]());
-  int r = 0;
-  for (StringAttr outDim : layout.getOutDimNames()) {
-    int c = 0;
-    for (StringAttr inDim : layout.getInDimNames()) {
-      for (int i = 0; i < layout.getInDimSizeLog2(inDim); i++) {
-        uint64_t basis = layout.getBasis(inDim, i, outDim);
-        for (int j = 0; j < layout.getOutDimSizeLog2(outDim); j++) {
-          m[r + j] |= ((basis >> j) & 1) << c;
+  SmallVector<unsigned> rowOffsets;
+  unsigned offset = 0;
+  for (auto [name, size] : layout.getOutDims()) {
+    rowOffsets.push_back(offset);
+    offset += llvm::Log2_32(size);
+  }
+  unsigned column = 0;
+  for (const auto &[name, inDimBases] : layout.getBases()) {
+    for (const auto &basis : inDimBases) {
+      for (auto [dim, value] : llvm::enumerate(basis)) {
+        auto bits = static_cast<uint32_t>(value);
+        while (bits) {
+          m[rowOffsets[dim] + llvm::countr_zero(bits)] |= uint64_t{1} << column;
+          bits &= bits - 1;
         }
-        c++;
       }
+      ++column;
     }
-    r += layout.getOutDimSizeLog2(outDim);
   }
 
   return m;

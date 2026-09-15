@@ -1643,6 +1643,8 @@ def test_loop_carry_invariant_identity():
     acc = 0
     # CHECK: scf.for {{.*}} iter_args({{.*}}) -> (i32)
     for i in range(3):
+        if False:
+            alias = seed + 1
         tl.static_assert(alias is seed)
         acc = acc + alias
     anchor(acc)

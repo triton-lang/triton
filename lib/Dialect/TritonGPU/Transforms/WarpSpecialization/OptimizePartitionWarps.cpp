@@ -299,6 +299,7 @@ void OptimizePartitionWarps::runOnOperation() {
   getOperation().walk([&](WarpSpecializeOp wsOp) { wsOps.push_back(wsOp); });
 
   if (wsOps.empty()) {
+    markAllAnalysesPreserved();
     return;
   }
 
