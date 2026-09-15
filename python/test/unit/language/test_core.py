@@ -1287,45 +1287,32 @@ def test_precise_math(expr_prec, expr_ref, num_ctas, device):
 
 
 @pytest.mark.interpreter
-def test_fdiv_ieee_rounding(device):
+@pytest.mark.parametrize("dtype_str", ["float32", "float64"])
+def test_fdiv_ieee_rounding(dtype_str, device):
 
     @triton.jit
-    def kernel(X, Y, OUT_IEEE, OUT_RN, BLOCK: tl.constexpr):
+    def kernel(X, Y, OUT_ACTUAL, OUT_EXPECTED, BLOCK: tl.constexpr):
         offs = tl.arange(0, BLOCK)
         x = tl.load(X + offs)
         y = tl.load(Y + offs)
-        ieee = tl.math.fdiv(x, y, ieee_rounding=True)
-        rn = tl.math.div_rn(x, y)
-        tl.store(OUT_IEEE + offs, ieee)
-        tl.store(OUT_RN + offs, rn)
+        actual = tl.math.fdiv(x, y, ieee_rounding=True)
+        # div_rn only accepts fp32; fp64 division is precise either way.
+        if x.dtype == tl.float32:
+            expected = tl.math.div_rn(x, y)
+        else:
+            expected = x / y
+        tl.store(OUT_ACTUAL + offs, actual)
+        tl.store(OUT_EXPECTED + offs, expected)
 
     shape = (128, )
-    x = torch.randn(shape, dtype=torch.float32, device=device)
-    y = torch.randn(shape, dtype=torch.float32, device=device) + 1e-6
-    out_ieee = torch.zeros(shape, dtype=torch.float32, device=device)
-    out_rn = torch.zeros(shape, dtype=torch.float32, device=device)
+    dtype = getattr(torch, dtype_str)
+    x = torch.randn(shape, dtype=dtype, device=device)
+    y = torch.randn(shape, dtype=dtype, device=device) + 1e-6
+    out_actual = torch.zeros(shape, dtype=dtype, device=device)
+    out_expected = torch.zeros(shape, dtype=dtype, device=device)
 
-    kernel[(1, )](x, y, out_ieee, out_rn, BLOCK=shape[0], num_ctas=1)
-    assert torch.all(out_ieee == out_rn)  # bitwise exact
-
-
-@pytest.mark.interpreter
-def test_fdiv_ieee_rounding_fp64(device):
-
-    @triton.jit
-    def kernel(X, Y, OUT, BLOCK: tl.constexpr):
-        offs = tl.arange(0, BLOCK)
-        x = tl.load(X + offs)
-        y = tl.load(Y + offs)
-        tl.store(OUT + offs, tl.math.fdiv(x, y, ieee_rounding=True))
-
-    shape = (128, )
-    x = torch.randn(shape, dtype=torch.float64, device=device)
-    y = torch.randn(shape, dtype=torch.float64, device=device) + 1e-6
-    out = torch.zeros(shape, dtype=torch.float64, device=device)
-
-    kernel[(1, )](x, y, out, BLOCK=shape[0], num_ctas=1)
-    assert torch.all(out == x / y)  # bitwise exact
+    kernel[(1, )](x, y, out_actual, out_expected, BLOCK=shape[0], num_ctas=1)
+    assert torch.all(out_actual == out_expected)
 
 
 # ----------------
