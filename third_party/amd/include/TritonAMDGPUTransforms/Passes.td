@@ -3,6 +3,16 @@
 
 include "mlir/Pass/PassBase.td"
 
+def TritonAMDGPULowerFence
+    : Pass<"tritonamdgpu-lower-fence", "mlir::ModuleOp"> {
+  let summary = "Lower Triton fences for AMD GPUs";
+
+  let dependentDialects = [
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect"
+  ];
+}
+
 def TritonAMDGPUScheduleLoops : Pass<"tritonamdgpu-schedule-loops", "mlir::ModuleOp"> {
   let summary = "Generate schedule for loops";
 
