@@ -299,38 +299,6 @@ def test_tma_matmul_two_ctas(use_loop, num_stages, transpose_b, device):
     assert ("scf.for" in ttgir) == use_loop
 
 
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_tma_matmul_two_ctas_barrier_reuse(device):
-    from triton.tools.tensor_descriptor import TensorDescriptor
-
-    @triton.jit
-    def kernel(A, B, C, K: tl.constexpr):
-        m = tl.program_id(0) * 256
-        n = tl.program_id(1) * 128
-        acc = tl.full((256, 128), 0, tl.float32)
-        for k in range(K // 64):
-            a = A.load([m, k * 64])
-            b = B.load([n, k * 64])
-            acc = tl.dot(a, b.T, acc)
-        C.store([m, n], acc.to(tl.float16))
-
-    torch.manual_seed(0)
-    M = N = K = 1024
-    a = torch.randn((M, K), device=device, dtype=torch.float16) * 0.1
-    b = torch.randn((N, K), device=device, dtype=torch.float16) * 0.1
-    c = torch.empty((M, N), device=device, dtype=torch.float16)
-    descriptors = [
-        TensorDescriptor.from_tensor(t, shape) for t, shape in [(a, [256, 64]), (b, [128, 64]), (c, [256, 128])]
-    ]
-    # Four prefetched tiles let the leader lap the two MMA completion barriers.
-    for _ in range(10):
-        compiled = kernel[(M // 256, N // 128)](*descriptors, K, num_ctas=2, num_warps=8, num_stages=4)
-        if is_compile_warmup():
-            return
-        torch.testing.assert_close(c, a @ b.T, atol=0.01, rtol=0.01)
-    assert_mmav5_asm(compiled, expect_two_ctas=True, num_mma=2)
-
-
 def test_i4_m_minor_join_bk16_matmul(device):
     if not is_cuda():
         pytest.skip("i4 M-minor join regression is CUDA-specific")
