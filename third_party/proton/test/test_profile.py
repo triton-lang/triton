@@ -6,6 +6,8 @@ Each test should invoke one or more GPU kernels and check the validity of their 
 import inspect
 import os
 import pathlib
+import subprocess
+import sys
 
 import triton
 import triton.profiler as proton
@@ -39,6 +41,43 @@ _skip_cudagraph_test = pytest.mark.skipif(
     os.environ.get("PROTON_SKIP_CUDAGRAPH_TEST", "0") == "1",
     reason="CUDAGraph test skipped due to environment constraints",
 )
+
+
+@pytest.mark.skipif(not is_hip(), reason="ROCprofiler is only available on HIP")
+def test_rocprofiler_process_exit_without_finalize(tmp_path: pathlib.Path):
+    # Run in a subprocess so normal process teardown exercises the ordering
+    # between Proton static destruction and rocprofiler-sdk's atexit handler.
+    script = tmp_path / "unfinalized_rocprofiler.py"
+    output = tmp_path / "unfinalized_rocprofiler"
+    script.write_text(f"""
+import triton.profiler as proton
+import triton
+import triton.language as tl
+import torch
+
+
+@triton.jit
+def copy(x, y, n: tl.constexpr):
+    offsets = tl.arange(0, n)
+    tl.store(y + offsets, tl.load(x + offsets))
+
+
+x = torch.ones((1024,), device="cuda")
+y = torch.zeros_like(x)
+proton.start({str(output)!r}, hook="triton", backend="rocprofiler")
+for _ in range(100):
+    copy[(1,)](x, y, x.numel())
+# Intentionally omit synchronization and proton.finalize(). The SDK must
+# finish queued work and drain its pending callbacks before Proton destroys
+# the callback targets.
+""")
+
+    # Poison freed heap allocations so stale Proton state is not likely to
+    # remain accidentally usable until rocprofiler-sdk's atexit handler runs.
+    env = os.environ.copy()
+    env["MALLOC_PERTURB_"] = "165"
+    result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=20, env=env)
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])

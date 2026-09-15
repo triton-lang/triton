@@ -1669,3 +1669,33 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.tot
     tt.return
   }
 }
+
+// -----
+
+#histSplit = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1]]}>
+#histBroadcast = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // The first histogram's remote reads must finish before the second one
+  // initializes the same scratch, even though that histogram is CTA-local.
+  // CHECK-LABEL: @cross_cta_histogram_scratch_reuse
+  // CHECK: tt.histogram {{.*}}allocation.offset = [[HIST_SCRATCH:[0-9]+]]
+  // CHECK-NEXT: ttng.cluster_barrier
+  // CHECK-NEXT: tt.histogram {{.*}}allocation.offset = [[HIST_SCRATCH]]
+  tt.func @cross_cta_histogram_scratch_reuse(%input: tensor<2048xi32, #histSplit>, %local: tensor<2048xi32, #histBroadcast>) -> (tensor<512xi32, #histSplit>, tensor<512xi32, #histBroadcast>) {
+    %hist = tt.histogram %input : tensor<2048xi32, #histSplit> -> tensor<512xi32, #histSplit>
+    %next = tt.histogram %local : tensor<2048xi32, #histBroadcast> -> tensor<512xi32, #histBroadcast>
+    tt.return %hist, %next : tensor<512xi32, #histSplit>, tensor<512xi32, #histBroadcast>
+  }
+
+  // Fully replicated inputs do not need cross-CTA histogram communication.
+  // CHECK-LABEL: @local_histogram_scratch_reuse
+  // CHECK: tt.histogram
+  // CHECK-NOT: ttng.cluster_barrier
+  // CHECK: tt.histogram
+  tt.func @local_histogram_scratch_reuse(%input: tensor<2048xi32, #histBroadcast>, %local: tensor<2048xi32, #histBroadcast>) -> (tensor<512xi32, #histSplit>, tensor<512xi32, #histBroadcast>) {
+    %hist = tt.histogram %input : tensor<2048xi32, #histBroadcast> -> tensor<512xi32, #histSplit>
+    %next = tt.histogram %local : tensor<2048xi32, #histBroadcast> -> tensor<512xi32, #histBroadcast>
+    tt.return %hist, %next : tensor<512xi32, #histSplit>, tensor<512xi32, #histBroadcast>
+  }
+}

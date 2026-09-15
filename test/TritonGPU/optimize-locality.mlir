@@ -884,3 +884,35 @@ tt.func @skip_optimize_on_1d_tensor(%arg0: tensor<256xf32, #blocked>, %arg1: ten
 }
 
 }
+
+// -----
+
+// CHECK-LABEL: tt.func @loop_result_multiple_uses(
+// CHECK: %[[FINAL_RESULT:.+]] = arith.addf {{.*}} : tensor<1xf32,
+// CHECK: arith.addf %[[FINAL_RESULT]], %[[FINAL_RESULT]]
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+module attributes {"ttg.num-warps" = 1 : i32} {
+  tt.func @loop_result_multiple_uses(
+      %input: tensor<1x64x!tt.ptr<f32>, #blocked>,
+      %output: tensor<1x!tt.ptr<f32>, #slice>, %count: i32) {
+    %zero = arith.constant dense<0.0> : tensor<1xf32, #slice>
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %result = scf.for %i = %c0 to %count step %c1
+        iter_args(%acc = %zero) -> (tensor<1xf32, #slice>) : i32 {
+      %values = tt.load %input : tensor<1x64x!tt.ptr<f32>, #blocked>
+      %sum = "tt.reduce"(%values) <{axis = 1 : i32}> ({
+      ^bb0(%lhs: f32, %rhs: f32):
+        %add = arith.addf %lhs, %rhs : f32
+        tt.reduce.return %add : f32
+      }) : (tensor<1x64xf32, #blocked>) -> tensor<1xf32, #slice>
+      %next = arith.addf %acc, %sum : tensor<1xf32, #slice>
+      scf.yield %next : tensor<1xf32, #slice>
+    }
+    %twice = arith.addf %result, %result : tensor<1xf32, #slice>
+    tt.store %output, %twice : tensor<1x!tt.ptr<f32>, #slice>
+    tt.return
+  }
+}

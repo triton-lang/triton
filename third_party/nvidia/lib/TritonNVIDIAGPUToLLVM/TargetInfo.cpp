@@ -106,7 +106,12 @@ matchReduxKind(triton::ReduceOp op, int computeCapability,
       return NVVM::ReductionKind::FMIN;
   }
   auto intType = dyn_cast<IntegerType>(reduceOp->getResultTypes()[0]);
-  if (!intType || intType.getWidth() > 32)
+  if (!intType)
+    return std::nullopt;
+  if (intType.getWidth() > 32 &&
+      !(intType.getWidth() == 64 &&
+        isa<arith::MinSIOp, arith::MinUIOp, arith::MaxSIOp, arith::MaxUIOp>(
+            reduceOp)))
     return std::nullopt;
   if (isa<arith::AddIOp>(reduceOp))
     return NVVM::ReductionKind::ADD;
@@ -531,6 +536,24 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
       mask = b.shl(b.i32_val(reduceLaneIdMask),
                    b.and_(laneId, b.i32_val(~reduceLaneIdMask)));
     }
+    if (acc[0].getType().isInteger(64)) {
+      bool isMin = *kind == NVVM::ReductionKind::MIN ||
+                   *kind == NVVM::ReductionKind::UMIN;
+      auto lowKind =
+          isMin ? NVVM::ReductionKind::UMIN : NVVM::ReductionKind::UMAX;
+      // Only matching high words can win; compare their low words unsigned.
+      Value high = b.trunc(i32_ty, b.lshr(acc[0], b.i64_val(32)));
+      Value highResult = NVVM::ReduxOp::create(rewriter, loc, i32_ty, high,
+                                               *kind, mask, false, false);
+      Value low = b.trunc(i32_ty, acc[0]);
+      low = b.select(b.icmp_eq(high, highResult), low,
+                     b.i32_val(isMin ? 0xFFFFFFFF : 0));
+      Value lowResult = NVVM::ReduxOp::create(rewriter, loc, i32_ty, low,
+                                              lowKind, mask, false, false);
+      acc[0] = b.or_(b.shl(b.zext(i64_ty, highResult), b.i64_val(32)),
+                     b.zext(i64_ty, lowResult));
+      return true;
+    }
     for (unsigned i = 0; i < acc.size(); ++i) {
       unsigned bitwidth = acc[i].getType().getIntOrFloatBitWidth();
       if (acc[i].getType().isInteger()) {
@@ -588,12 +611,6 @@ unsigned TargetInfo::getReductionTreeArity(Operation *combinerOp) const {
     return 3;
 
   return 2;
-}
-
-std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
-  std::string funcName =
-      resultElementTy.isInteger(32) ? "__nv_umulhi" : "__nv_umul64hi";
-  return funcName;
 }
 
 void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
