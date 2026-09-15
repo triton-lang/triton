@@ -642,7 +642,7 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps,
                     int num_ctas, int launch_cooperative_grid,
                     int shared_memory, int warp_size, hipStream_t stream,
                     hipFunction_t function, void **params) {
-  if (gridX * gridY * gridZ == 0)
+  if (gridX == 0 || gridY == 0 || gridZ == 0)
     return;
   if (num_ctas > 1) {
     if (!hipSymbolTable.hipDrvLaunchKernelEx) {

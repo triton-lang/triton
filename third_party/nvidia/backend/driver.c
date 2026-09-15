@@ -983,7 +983,7 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps,
                     int num_ctas, int launch_cooperative_grid, int launch_pdl,
                     int shared_memory, CUstream stream, CUfunction function,
                     void **params) {
-  if (gridX * gridY * gridZ > 0) {
+  if (gridX != 0 && gridY != 0 && gridZ != 0) {
     // 4 attributes that we can currently pass maximum
     CUlaunchAttribute launchAttr[4];
     static cuLaunchKernelEx_t cuLaunchKernelExHandle = NULL;

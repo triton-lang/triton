@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import triton
 import triton.language as tl
-from triton._internal_testing import is_cuda, is_hip
+from triton._internal_testing import is_cuda, is_hip, run_in_process
 
 
 def test_metadata() -> None:
@@ -37,6 +37,47 @@ def test_metadata() -> None:
     kernel[(1, 3, 2)](6)
     triton.knobs.runtime.launch_enter_hook.remove(hook)
     assert used_hook
+
+
+def _large_nonzero_grid_probe() -> None:
+
+    @triton.jit
+    def kernel():
+        pass
+
+    compiled_kernel = kernel.warmup(grid=(1, ))
+    launch = compiled_kernel.run
+    driver = triton.runtime.driver.active
+    stream = driver.get_current_stream(driver.get_current_device())
+
+    def run(grid, metadata):
+        launch(*grid, stream, compiled_kernel.function, metadata, None, None, None)
+
+    try:
+        run((1, 1, 1), compiled_kernel.packed_metadata)
+        torch.cuda.synchronize()
+    except RuntimeError as exc:
+        raise AssertionError("control launch failed") from exc
+
+    invalid_metadata = (0, *compiled_kernel.packed_metadata[1:])
+    # An empty grid should not reach the driver.
+    try:
+        for grid in ((0, 1, 1), (1, 0, 1), (1, 1, 0)):
+            run(grid, invalid_metadata)
+    except RuntimeError as exc:
+        raise AssertionError("empty grid reached the driver") from exc
+
+    # The product is 2**32, which overflows to zero with 32-bit arithmetic.
+    # A zero block size makes the driver reject the launch immediately.
+    run((1 << 14, 1 << 14, 1 << 4), invalid_metadata)
+
+
+@pytest.mark.skipif(not (is_cuda() or is_hip()), reason="Requires CUDA or HIP")
+def test_large_nonzero_grid_is_not_skipped(monkeypatch) -> None:
+    monkeypatch.setenv("TRITON_TEST_PROCESS_TIMEOUT", "120")
+    result = run_in_process(_large_nonzero_grid_probe)
+    assert isinstance(result.exc, RuntimeError), result.exc
+    assert str(result.exc).startswith(("Triton Error [CUDA]:", "Triton Error [HIP]:"))
 
 
 def test_memory_leak(device) -> None:
