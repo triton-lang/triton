@@ -218,7 +218,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 }
 
 // -- Triple buffered 2-stage pipeline dependency check ----
-// Currently little conservative, there could be more chance to optimize local_wait
+// Dependencies produced by async global-to-local copies are covered by their
+// explicit async waits and do not require an additional LOCAL barrier.
 //
 // CHECK-LABEL: tt.func public @triple_buf_2stage
 // CHECK-NOT: no_inline
@@ -234,7 +235,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: rocdl.sched.barrier
 
 // CHECK: async_copy_global_to_local
-// CHECK: ttg.barrier local
+// CHECK-NOT: ttg.barrier local
 // CHECK: scf.yield
 // CHECK: amdg.cond_barrier
 

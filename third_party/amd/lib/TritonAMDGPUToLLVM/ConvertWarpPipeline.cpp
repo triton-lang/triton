@@ -191,6 +191,19 @@ static LogicalResult validatePipelinedForBody(scf::ForOp forOp) {
 // Circular analysis includes distance N to model dependencies across the next
 // loop iteration. Iteration-varying descriptor origins are invalidated only
 // for pairs that cross that boundary.
+// Async global-to-local producers require an explicit completion wait before
+// their destination is read or overwritten. That wait provides the necessary
+// synchronization; an additional warp-pipeline barrier is redundant.
+static bool warpPipelineMembarFilter(Operation *op1, Operation *op2,
+                                     bool op1IsRead, bool op2IsRead,
+                                     Allocation *allocation) {
+  if (mlir::triton::AMD::membarFilter(op1, op2, op1IsRead, op2IsRead,
+                                      allocation))
+    return true;
+  return !op1IsRead &&
+         op1->hasTrait<mlir::OpTrait::GlobalToLocalCopyTrait>();
+}
+
 static void analyzePipelineDependencies(ArrayRef<BlockInfo> clusterInfo,
                                         SmallVectorImpl<bool> &bars,
                                         Allocation *allocation, bool circular,
@@ -239,8 +252,8 @@ static void analyzePipelineDependencies(ArrayRef<BlockInfo> clusterInfo,
         continue;
       const BlockInfo &sourceInfo =
           src + dist >= N ? previousIterationInfo[src] : clusterInfo[src];
-      if (!sourceInfo.isIntersected(
-              clusterInfo[dst], mlir::triton::AMD::membarFilter, allocation))
+      if (!sourceInfo.isIntersected(clusterInfo[dst],
+                                    warpPipelineMembarFilter, allocation))
         continue;
       bars[barrierLoc] = true;
       LDBG("cluster " << src << " need fence to " << dst
@@ -910,8 +923,8 @@ static bool isCrossPipelineSafe(ArrayRef<Block *> loopBlocks,
       int barrierLoc = (dist == 1) ? dst : dst - 1;
       if (isCovered(src, barrierLoc))
         continue;
-      if (!mergedInfo[src].isIntersected(
-              mergedInfo[dst], mlir::triton::AMD::membarFilter, allocation))
+      if (!mergedInfo[src].isIntersected(mergedInfo[dst],
+                                         warpPipelineMembarFilter, allocation))
         continue;
       LDBG("cross-pipeline LDS dep (a_"
            << i << ", b_" << j << ") uncovered at slot " << barrierLoc);
