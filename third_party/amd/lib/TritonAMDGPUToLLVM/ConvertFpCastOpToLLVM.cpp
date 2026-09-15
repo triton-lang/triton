@@ -2428,7 +2428,7 @@ struct FpToFpOpConversion
     if (!layoutTy)
       return std::nullopt;
     auto order = triton::gpu::getThreadOrder(layoutTy, tensorTy.getShape());
-    auto elemsPerThread = layoutTy.getElemsPerThread(tensorTy.getShape());
+    auto elemsPerThread = triton::gpu::getElemsPerThread(tensorTy);
     return elemsPerThread[order.back()];
   }
 
