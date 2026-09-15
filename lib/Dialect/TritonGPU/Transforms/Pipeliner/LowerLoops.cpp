@@ -913,6 +913,12 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   builder.setInsertionPointAfter(mma);
   builder.setStageCluster({mainWaitStage, mainWaitCluster});
   ttng::WaitBarrierOp::create(builder, barrierSlice, phase, waitBuffers);
+  if (mma.getTwoCtas()) {
+    // The leader can complete later MMAs while the peer is still waiting on an
+    // earlier phase of the same barrier. Both CTAs must finish the wait before
+    // advancing, so that reusing the barrier cannot make the peer miss a phase.
+    ttng::ClusterBarrierOp::create(builder);
+  }
 
   // Add waits before loads in conditional blocks
   for (auto user : alloc.getUsers()) {
