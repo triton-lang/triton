@@ -35,6 +35,25 @@ def TritonReorderBroadcast : Pass</*cli-arg*/"triton-reorder-broadcast", /*Op*/"
   let dependentDialects = ["mlir::triton::TritonDialect"];
 }
 
+def TritonNarrowRedundantLoads : Pass</*cli-arg*/"triton-narrow-redundant-loads", /*Op*/"mlir::ModuleOp"> {
+  let summary = "Narrow loads that read the same value along a dimension";
+  let description = [{
+    The purpose of this pass is to transform:
+      - `load(ptrs) => broadcast(load(ptrs[0:1]))`
+    along every dimension the axis info analysis proves the loaded values
+    constant across, which leaves fewer redundant copies for layout assignment
+    and the pipeliner to route through shared memory.
+
+    The address computation is re-materialized at the narrower shape, so a load
+    whose address the pass cannot re-materialize is left unchanged. This pass
+    expects to run after `triton-combine`.
+  }];
+
+  let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::arith::ArithDialect",
+                           "mlir::math::MathDialect"];
+}
+
 def TritonRewriteTensorDescriptorToPointer : Pass</*cli-arg*/"triton-rewrite-tensor-descriptor-to-pointer", /*Op*/"mlir::ModuleOp"> {
   let summary = "Rewrite load/stores of tensor descriptors into pointer load/stores";
   let description = [{

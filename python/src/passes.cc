@@ -46,6 +46,8 @@ void init_triton_passes_ttir(py::module_ &m) {
   using namespace mlir::triton;
   ADD_PASS_WRAPPER_0("add_combine", createTritonCombineOps);
   ADD_PASS_WRAPPER_0("add_reorder_broadcast", createTritonReorderBroadcast);
+  ADD_PASS_WRAPPER_0("add_narrow_redundant_loads",
+                     createTritonNarrowRedundantLoads);
   ADD_PASS_WRAPPER_0("add_rewrite_tensor_descriptor_to_pointer",
                      createTritonRewriteTensorDescriptorToPointer);
   ADD_PASS_WRAPPER_0("add_loop_unroll", createTritonLoopUnroll);
