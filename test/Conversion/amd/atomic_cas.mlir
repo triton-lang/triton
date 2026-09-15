@@ -72,13 +72,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK-LABEL: @atomic_poll
     // CHECK: %[[WARP_ELECTED:.*]] = llvm.and %{{.*}}, %{{.*}} : i1
     // CHECK: %[[ELECTED:.*]] = llvm.and %[[WARP_ELECTED]], %{{.*}} : i1
-    // CHECK: %[[FALSE:.*]] = llvm.mlir.constant(false) : i1
-    // CHECK: llvm.cond_br %[[ELECTED]], ^[[INIT:bb[0-9]+]], ^[[DONE:bb[0-9]+]](%[[FALSE]] : i1)
-    // CHECK: ^[[INIT]]:
     // CHECK: %[[START_RAW:.*]] = llvm.call_intrinsic "llvm.amdgcn.s.memrealtime"() : () -> i64
     // CHECK: %[[TEN:.*]] = llvm.mlir.constant(10 : i64) : i64
     // CHECK: %[[START:.*]] = llvm.mul %[[START_RAW]], %[[TEN]] : i64
-    // CHECK: llvm.br ^[[LOOP:bb[0-9]+]]
+    // CHECK: %[[FALSE:.*]] = llvm.mlir.constant(false) : i1
+    // CHECK: llvm.cond_br %[[ELECTED]], ^[[LOOP:bb[0-9]+]], ^[[DONE:bb[0-9]+]](%[[FALSE]] : i1)
     // CHECK: ^[[LOOP]]:
     // CHECK: %[[LOADED:.*]] = llvm.load %{{.*}} atomic syncscope("agent") monotonic
     // CHECK: %[[MATCHED:.*]] = llvm.icmp "eq" %[[LOADED]], %{{.*}} : i32
@@ -107,6 +105,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK-LABEL: @atomic_poll_relaxed
     // CHECK: llvm.load %{{.*}} atomic syncscope("workgroup") monotonic
     %matched = tt.atomic_poll relaxed, cta, %ptr, %expected : !tt.ptr<i32>, i32 -> i1
+    tt.return
+  }
+}
+
+// -----
+
+#poll = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: @atomic_poll_tensor
+  // CHECK: llvm.load %{{.*}} atomic syncscope("agent") monotonic
+  // CHECK: llvm.fence syncscope("agent") acquire
+  // CHECK: llvm.load %{{.*}} atomic syncscope("agent") monotonic
+  // CHECK: llvm.fence syncscope("agent") acquire
+  // CHECK: rocdl.s.barrier
+  // CHECK: llvm.return
+  tt.func public @atomic_poll_tensor(%ptr: tensor<512x!tt.ptr<i32>, #poll>, %expected: tensor<512xi32, #poll>) {
+    %matched = tt.atomic_poll acquire, gpu, %ptr, %expected : tensor<512x!tt.ptr<i32>, #poll>, tensor<512xi32, #poll> -> tensor<512xi1, #poll>
     tt.return
   }
 }

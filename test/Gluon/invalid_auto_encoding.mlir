@@ -47,3 +47,36 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     tt.return %0 : tensor<32xi32, #gluon.auto_encoding>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#auto = #gluon.auto_encoding
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @infer_join_operand_conflict(%arg: f32) {
+    // expected-error @+1 {{found conflicting encodings for value:}}
+    %lhs = tt.splat %arg : f32 -> tensor<128xf32, #auto>
+    %rhs = tt.splat %arg : f32 -> tensor<128xf32, #auto>
+    %joined = tt.join %lhs, %rhs : tensor<128xf32, #auto> -> tensor<128x2xf32, #auto>
+    %fixed_lhs = gluon.set_auto_layout %lhs : tensor<128xf32, #auto> -> tensor<128xf32, #blocked>
+    %fixed_rhs = gluon.set_auto_layout %rhs : tensor<128xf32, #auto> -> tensor<128xf32, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#auto = #gluon.auto_encoding
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @infer_split_result_conflict(%arg: f32) {
+    %input = tt.splat %arg : f32 -> tensor<128x2xf32, #auto>
+    // expected-error @+1 {{found conflicting encodings for value:}}
+    %parts:2 = tt.split %input : tensor<128x2xf32, #auto> -> tensor<128xf32, #auto>
+    %fixed_lhs = gluon.set_auto_layout %parts#0 : tensor<128xf32, #auto> -> tensor<128xf32, #blocked>
+    %fixed_rhs = gluon.set_auto_layout %parts#1 : tensor<128xf32, #auto> -> tensor<128xf32, #blocked1>
+    tt.return
+  }
+}

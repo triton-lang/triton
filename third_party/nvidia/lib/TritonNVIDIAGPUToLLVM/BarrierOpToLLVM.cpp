@@ -148,11 +148,9 @@ struct FenceMBarrierInitReleaseClusterOpConversion
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    // Only one thread needs to issue the fence, just like mbarrier.init.
-    Value tid = getThreadId(rewriter, loc);
-    Value pred = b.icmp_eq(tid, b.i32_val(0));
+    // The fence only orders initializations issued by the same thread.
+    Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
 
     NVIDIA::createFenceMBarrierInitReleaseCluster(rewriter, loc, pred);
 

@@ -134,11 +134,19 @@ void init_triton_nvidia_passes_ttgpuir(py::module_ &m) {
           pm.addPass(mlir::triton::createAllocateSharedMemoryNvPass(
               capability, ptxVersion));
         });
+  m.def("add_set_minimum_shared_memory",
+        [](mlir::PassManager &pm, int32_t minimumSize) {
+          mlir::triton::SetMinimumSharedMemoryOptions options;
+          options.minimumSize = minimumSize;
+          pm.addPass(mlir::triton::createSetMinimumSharedMemory(options));
+        });
+  ADD_PASS_OPTION_WRAPPER_2("add_membar",
+                            mlir::triton::createTritonNvidiaGPUMembar, int32_t,
+                            int32_t);
   m.def("add_to_llvmir",
-        [](mlir::PassManager &pm, int32_t capability, int32_t ptxVersion,
-           bool enableConcurrencySanitizer) {
+        [](mlir::PassManager &pm, int32_t capability, int32_t ptxVersion) {
           pm.addPass(mlir::triton::createConvertTritonGPUToLLVMPass(
-              capability, ptxVersion, enableConcurrencySanitizer));
+              capability, ptxVersion));
         });
 }
 
@@ -157,6 +165,13 @@ createTritonGPUProxyFenceInsertionWrapper(int32_t capability) {
 }
 
 std::unique_ptr<mlir::Pass>
+createTritonNvidiaGPUHoistMBarrierLifecycleWrapper(int32_t capability) {
+  ttng::TritonNvidiaGPUHoistMBarrierLifecyclePassOptions options;
+  options.computeCapability = capability;
+  return ttng::createTritonNvidiaGPUHoistMBarrierLifecyclePass(options);
+}
+
+std::unique_ptr<mlir::Pass>
 createInitializeWSClusterBarriersWrapper(int32_t capability,
                                          int32_t ptxVersion) {
   mlir::triton::InitializeWSClusterBarriersOptions options;
@@ -166,15 +181,26 @@ createInitializeWSClusterBarriersWrapper(int32_t capability,
 }
 
 void init_triton_nvidia_passes_ttnvgpuir(py::module_ &m) {
-  ADD_PASS_WRAPPER_0("add_plan_cta", ttng::createTritonNvidiaGPUPlanCTAPass);
+  ADD_PASS_WRAPPER_0("add_assign_cga_layouts",
+                     ttng::createTritonNvidiaGPUAssignCGALayoutsPass);
+  ADD_PASS_WRAPPER_0("add_optimize_cta_locality",
+                     ttng::createTritonNvidiaGPUOptimizeCTALocalityPass);
   ADD_PASS_WRAPPER_0("add_to_clc", ttng::createTritonNvidiaGPUToCLCPass);
   ADD_PASS_WRAPPER_0("add_lower_clc", ttng::createTritonNvidiaGPULowerCLCPass);
   ADD_PASS_WRAPPER_1("add_fence_insertion",
                      createTritonGPUFenceInsertionWrapper, int32_t);
   ADD_PASS_WRAPPER_1("add_proxy_fence_insertion",
                      createTritonGPUProxyFenceInsertionWrapper, int32_t);
+  ADD_PASS_WRAPPER_1("add_hoist_mbarrier_lifecycle",
+                     createTritonNvidiaGPUHoistMBarrierLifecycleWrapper,
+                     int32_t);
   ADD_PASS_WRAPPER_0("add_tmem_barrier_insertion",
                      ttng::createTritonNvidiaGPUTMemBarrierInsertionPass);
+  ADD_PASS_WRAPPER_0("add_tmem_wait_insertion",
+                     ttng::createTritonNvidiaGPUTMemWaitInsertionPass);
+  ADD_PASS_WRAPPER_0(
+      "add_cluster_barrier_mbar_allocator",
+      ttng::createTritonNvidiaGPUClusterBarrierMbarAllocatorPass);
   ADD_PASS_WRAPPER_0("add_tmem_load_reduce",
                      ttng::createTritonNvidiaGPUFuseTMEMLoadReducePass);
   ADD_PASS_WRAPPER_0("add_tma_lowering",
@@ -291,16 +317,6 @@ void init_triton_nvidia(py::module_ &m) {
     mlir::registerNVVMDialectTranslation(registry);
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
-  });
-
-  // Set short point option, this needs to be set before setting the data
-  // layout.
-  m.def("set_short_ptr", []() {
-    auto options = llvm::cl::getRegisteredOptions();
-    const char *flag = "nvptx-short-ptr";
-    auto *shortPtr = static_cast<llvm::cl::opt<bool> *>(options[flag]);
-    assert(shortPtr);
-    shortPtr->setValue(true);
   });
 
   // TODO: could be done in python if we had a generic interface to set metadata

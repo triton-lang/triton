@@ -751,7 +751,8 @@ void populateTypeConversions(LLVMTypeConverter &typeConverter,
   typeConverter.addConversion(
       [&](triton::PointerType type) -> std::optional<Type> {
         auto ctx = type.getContext();
-        return LLVM::LLVMPointerType::get(ctx, type.getAddressSpace());
+        return LLVM::LLVMPointerType::get(
+            ctx, targetInfo.getPtrAddressSpace(type.getAddressSpace()));
       });
 }
 

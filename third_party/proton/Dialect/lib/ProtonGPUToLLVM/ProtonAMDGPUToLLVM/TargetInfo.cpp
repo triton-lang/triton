@@ -4,6 +4,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "third_party/amd/include/TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "llvm/Support/AMDGPUAddrSpace.h"
 #include "llvm/Support/MathExtras.h"
 
 namespace mlir::triton::proton::gpu::AMD {
@@ -213,6 +214,18 @@ int TargetInfo::getAddressSpace(Attribute addressSpace) const {
                              "and GlobalMemorySpace for now");
   }
   return spaceId;
+}
+
+unsigned TargetInfo::getPtrAddressSpace(triton::PtrAddrSpace space) const {
+  switch (space) {
+  case triton::PtrAddrSpace::Global:
+    return llvm::AMDGPUAS::GLOBAL_ADDRESS;
+  case triton::PtrAddrSpace::Descriptor:
+    return llvm::AMDGPUAS::FLAT_ADDRESS;
+  case triton::PtrAddrSpace::Constant:
+    return llvm::AMDGPUAS::CONSTANT_ADDRESS;
+  }
+  llvm_unreachable("unknown PtrAddrSpace");
 }
 
 int TargetInfo::getIndexPtrAddrSpace() const {

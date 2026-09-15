@@ -85,10 +85,7 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis) {
   assert(moduleOp);
 
-  // It is not easy to get the compute capability here, so we use numCTAs to
-  // decide the semantic of GetProgramIdOp. If numCTAs = 1, then
-  // GetProgramIdOp is converted to "%ctaid", otherwise it is converted to
-  // "%clusterid".
+  // A program spans one CTA when numCTAs == 1 and one cluster otherwise.
   int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
 
   if (numCTAs == 1) {
@@ -102,12 +99,16 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
     }
   } else {
     switch (axis) {
-    case ProgramIDDim::X:
-      return NVVM::ClusterIdXOp::create(rewriter, loc, i32_ty);
+    case ProgramIDDim::X: {
+      // Clusters are launched with dimensions (numCTAs, 1, 1).
+      auto b = TritonLLVMOpBuilder(loc, rewriter);
+      Value ctaId = NVVM::BlockIdXOp::create(rewriter, loc, i32_ty);
+      return b.udiv(ctaId, b.i32_val(numCTAs));
+    }
     case ProgramIDDim::Y:
-      return NVVM::ClusterIdYOp::create(rewriter, loc, i32_ty);
+      return NVVM::BlockIdYOp::create(rewriter, loc, i32_ty);
     case ProgramIDDim::Z:
-      return NVVM::ClusterIdZOp::create(rewriter, loc, i32_ty);
+      return NVVM::BlockIdZOp::create(rewriter, loc, i32_ty);
     }
   }
   llvm_unreachable("invalid axis");

@@ -73,8 +73,7 @@ public:
   bool warpReduce(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
                   triton::ReduceOp op,
                   unsigned reduceLaneIdMask) const override;
-
-  std::string getMulhiFuncName(Type resultElementTy) const override;
+  unsigned getReductionTreeArity(Operation *combinerOp) const override;
 
   void printf(RewriterBase &rewriter, Value formatStrStart,
               int formatStrByteCount, ValueRange args,

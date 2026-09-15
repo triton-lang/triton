@@ -90,15 +90,18 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::gpu::registerCanonicalizeLLVMIR();
   mlir::triton::registerConvertWarpSpecializeToLLVM();
   mlir::triton::registerInitializeWSClusterBarriers();
+  mlir::triton::registerTritonNvidiaGPUMembar();
   mlir::triton::registerConvertTritonGPUToLLVMPass();
   mlir::triton::registerConvertNVGPUToLLVMPass();
   mlir::triton::registerAllocateSharedMemoryNvPass();
+  mlir::triton::registerSetMinimumSharedMemoryPass();
   mlir::registerLLVMDIScope();
   mlir::LLVM::registerInlinerInterface(registry);
   mlir::registerLLVMDILocalVariable();
 
   // TritonAMDGPUToLLVM passes
   mlir::triton::registerAllocateAMDGPUSharedMemory();
+  mlir::triton::registerTritonAMDGPUMembar();
   mlir::triton::registerTritonAMDGPUConvertWarpSpecializeToLLVM();
   mlir::triton::registerConvertTritonAMDGPUToLLVM();
   mlir::triton::registerConvertBuiltinFuncToLLVM();

@@ -48,6 +48,8 @@ class Epilogue:
     specs: FnSpecs = FnSpecs.default()
     fn_arg_values_matmul: tuple[object, ...] = tuple()
     fn_arg_values_finalize: tuple[object, ...] = tuple()
+    # Shared-memory bytes per output element after the activation's N reduction.
+    # A pairwise FP32 reduction needs 8 bytes even when its output is packed FP4.
     effective_itemsize: float | None = None
 
 class FnName(Enum):
@@ -145,6 +147,8 @@ class PrecisionConfig:
 def get_swap_xw(precision_config, opt_flags, lhs_dtype, rhs_dtype):
     if triton.runtime.driver.active.get_current_target().backend != "cuda":
         return False
+    if opt_flags.swap_xw is not None:
+        return opt_flags.swap_xw
     return opt_flags_nvidia.compute_swap_xw(precision_config, opt_flags.block_m, opt_flags.is_persistent, lhs_dtype, rhs_dtype)
 
 # ---------------------
@@ -265,6 +269,10 @@ def matmul(a, b, bias,
     When scatter_shard_indx is specified, the caller should ensure that the indices of different shards do not conflict.
 
     The output buffer for fused comm should be pre-allocated and passed in via fused_comm.out_handles, which contains ipc handles to the output tensors, each with shape (n_rows * n_reduce_shards, n_cols).
+    When fused_comm is provided and c is None or a meta tensor, no local output
+    storage is allocated. The returned tensor contains only shape, stride, and
+    dtype metadata; values must be read from the communication outputs. This
+    requires split_k=1, no output TMA, no c_acc_in, and no output MX scales.
     """
     is_input_batched = a.ndim == 3
     if is_input_batched:
@@ -286,6 +294,9 @@ def matmul(a, b, bias,
         epilogue = Epilogue(FnSpecs.default(), tuple(), tuple(), False)
     if fused_comm is not None and precision_config.c_mx_scale is not None:
         raise NotImplementedError("fused comm with output MX scales is not supported")
+    omit_local_output = fused_comm is not None and (c is None or c.is_meta)
+    if omit_local_output and c_acc_in is not None:
+        raise ValueError("Fused communication without local output does not support accumulation")
     n_slices = max(1, b.shape[0]) if a_ragged_metadata is None else a_ragged_metadata.n_slices
     # unpack b scale
     b_scale = precision_config.b_mx_scale
@@ -303,8 +314,6 @@ def matmul(a, b, bias,
             or isinstance(b_scale_layout, HopperMXScaleLayout)):
         if not b_is_shuffled:
             assert b.stride(-2) == 1, "`w` must be column-major with Hopper-swizzled MX scales or non-strided MX value layouts"
-    is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
-    if is_hopper_fp8: assert b.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     # unpack a scale
     a_scale = precision_config.a_mx_scale
     a_has_mx = a_scale is not None
@@ -315,6 +324,10 @@ def matmul(a, b, bias,
     if not isinstance(a, Tensor):
         dtype = FP4 if a_has_mx and a.dtype == torch.uint8 else None
         a = wrap_torch_tensor(a, dtype=dtype)
+    # Mixed FP8/16-bit dots widen FP8 tiles and support either weight layout.
+    if (is_cuda() and not target_info.cuda_capability_geq(10, 0) and b.dtype.bitwidth == 8
+            and not opt_flags_nvidia.is_unscaled_mixed_fp8(precision_config, a.dtype, b.dtype)):
+        assert b.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     intermediate_out_dtype = precision_config.intermediate_out_dtype
     if intermediate_out_dtype is None:
         intermediate_out_dtype = torch.float64 if a.dtype == b.dtype == FP64 else torch.float32
@@ -479,6 +492,11 @@ def matmul(a, b, bias,
                                  gather_indx, scatter_indx, batch_size,
                                  fused_comm.n_reduce_shards if fused_comm is not None else 1,
                                  opt_flags, intermediate_out_dtype)
+    if omit_local_output:
+        if opt_flags.split_k != 1 or opt_flags.use_output_tma:
+            raise ValueError("Fused communication without local output requires split_k=1 and no output TMA")
+        if c is None:
+            c = torch.empty(allocation.output[0], dtype=dtype_to_torch_dtype(allocation.output[1]), device="meta")
     memory = apply_allocation(allocation, c)
     # early exit
     if batch_size * M * N == 0:
@@ -557,12 +575,19 @@ def matmul(a, b, bias,
             or matmul_fused_activation.specs.reduction_n == 1
         )
     )
+    if opt_flags.use_output_tma is not None:
+        c_has_tma = opt_flags.use_output_tma
     c_logical_block_n = opt_flags.block_n // opt_flags.epilogue_subtile // matmul_fused_activation.specs.reduction_n
     c_tma_block_n = c_logical_block_n // precision_config.c_value_pack_factor
     out_tile_n = opt_flags.block_n // matmul_fused_activation.specs.reduction_n
     c_tma_block_size = [1, c_tma_block_n] if has_scatter_tma else [1, opt_flags.block_m, c_tma_block_n]
     c_tma_mode = None if not c_has_tma else "ragged" if is_c_ragged and not has_scatter_tma else "dense"
-    c_tensor_or_tma = make_tma(c, c_tma_block_size, c_tma_mode) if c_has_tma else c.storage.data
+    c_data = c.storage.data
+    if omit_local_output:
+        # Fused stores only dereference out_handles. Supply the output pointer
+        # type without allocating device storage or passing a meta tensor.
+        c_data = out_matmul_flex.reinterpret(torch.empty(0, dtype=out_matmul.dtype, device=a.device))
+    c_tensor_or_tma = make_tma(c, c_tma_block_size, c_tma_mode) if c_has_tma else c_data
     # create tma descriptor for w
     b_has_tma = opt_flags.is_persistent
     b_tensor_or_tma = make_tma(b, [1, opt_flags.block_k, opt_flags.block_n], "dense") if b_has_tma else b.storage.data
@@ -653,7 +678,7 @@ def matmul(a, b, bias,
         extra_kernel_kwargs.update(CLC=True, clc=True)
     n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
     (kernels._p_matmul if opt_flags.is_persistent else kernels._matmul)[(grid,)](
-                   c_tensor_or_tma, c.storage.data, *out_matmul.stride(),
+                   c_tensor_or_tma, c_data, *out_matmul.stride(),
                    *((out_matmul_flex.expected_scale, out_matmul_scale.storage.data, None) if out_matmul_has_mx else out_matmul_flex),
                    *out_matmul_scale_strides[-4:],
                    a_tensor_or_tma, a.storage.data, *a_strides, a_transpose,

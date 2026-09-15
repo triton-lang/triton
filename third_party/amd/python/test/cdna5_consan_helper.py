@@ -1,8 +1,4 @@
 # ruff: noqa: E402
-import hip
-
-hip.hip.hipInit(0)
-
 import sys
 import os
 
@@ -22,6 +18,72 @@ def alloc_fn(size, alignment, stream):
 
 
 set_profile_allocator(alloc_fn)
+
+
+def barrier_storage_lifetime():
+    mode = sys.argv[2]
+
+    @gluon.jit
+    def kernel(MODE: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0])
+        barrier_layout: ttgl.constexpr = ttgl.amd.cdna5.mbarrier.MBarrierLayout()
+        storage = ttgl.allocate_shared_memory(ttgl.int32, [2], shared_layout)
+        barrier = storage.reinterpret(ttgl.int64, [1], barrier_layout)
+        ttgl.amd.cdna5.mbarrier.init(barrier, count=128)
+
+        if MODE == "read":
+            storage.load(layout)
+        elif MODE == "atomic":
+            indices = ttgl.full([2], 0, ttgl.int32, layout)
+            values = ttgl.full([2], 1, ttgl.int32, layout)
+            storage.atomic_scatter_add(values, indices, axis=0)
+        elif MODE == "reinitialize":
+            ttgl.amd.cdna5.mbarrier.init(barrier, count=128)
+            ttgl.amd.cdna5.mbarrier.arrive(barrier, count=1)
+            ttgl.amd.cdna5.mbarrier.wait(barrier, phase=0)
+        else:
+            values = ttgl.full([2], 7, ttgl.int32, layout)
+            if MODE == "partial":
+                storage.slice(1, 1).store(ttgl.full([1], 7, ttgl.int32, layout))
+            else:
+                storage.store(values)
+            if MODE == "use-after-store" or MODE == "partial":
+                ttgl.amd.cdna5.mbarrier.arrive(barrier, count=1)
+            else:
+                storage.load(layout)
+
+    kernel[(1, )](MODE=mode, num_warps=4)
+
+
+def barrier_storage_pending_completion():
+    wait = sys.argv[2] == "True"
+
+    @gluon.jit
+    def kernel(input_ptr, WAIT: ttgl.constexpr):
+        num_warps: ttgl.constexpr = 4
+        block: ttgl.constexpr = 32
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+        barrier_layout: ttgl.constexpr = ttgl.amd.cdna5.mbarrier.MBarrierLayout()
+        desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(
+            base=input_ptr,
+            shape=(block, block),
+            strides=(block, 1),
+            block_shape=(block, block),
+            layout=shared_layout,
+        )
+        payload = ttgl.allocate_shared_memory(ttgl.float16, [block, block], shared_layout)
+        storage = ttgl.allocate_shared_memory(ttgl.int32, [2], barrier_layout)
+        barrier = storage.reinterpret(ttgl.int64, [1], barrier_layout)
+        ttgl.amd.cdna5.mbarrier.init(barrier, count=num_warps)
+        ttgl.amd.cdna5.tdm.async_load(desc, [0, 0], payload, mbarrier=barrier)
+        if WAIT:
+            ttgl.amd.cdna5.mbarrier.wait(barrier, phase=0)
+        storage.store(ttgl.full([2], 7, ttgl.int32, layout))
+
+    data = torch.randn((32, 32), dtype=torch.float16, device="cuda")
+    kernel[(1, )](data, WAIT=wait, num_warps=4)
 
 
 def deadlock_two_partitions():
@@ -906,4 +968,6 @@ if __name__ == "__main__":
         "tdm_two_bufs_one_wait_kernel": tdm_two_bufs_one_wait_kernel, "tdm_cross_partition_kernel":
         tdm_cross_partition_kernel, "tdm_cross_partition_load_store_kernel": tdm_cross_partition_load_store_kernel
     }
+    tests["barrier_storage_lifetime"] = barrier_storage_lifetime
+    tests["barrier_storage_pending_completion"] = barrier_storage_pending_completion
     tests[sys.argv[1]]()

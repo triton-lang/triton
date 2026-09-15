@@ -1,6 +1,9 @@
 #ifndef TRITON_ANALYSIS_FUNCTION_H
 #define TRITON_ANALYSIS_FUNCTION_H
 
+#include "triton/Analysis/CallGraph.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+
 #include "mlir/IR/Builders.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
@@ -11,9 +14,30 @@
 
 #include <deque>
 #include <iterator>
+#include <optional>
 #include <utility>
 
 namespace mlir::triton {
+
+/// Distinguishes an uninitialized join destination from an initialized state.
+template <typename StateT> class DataflowState {
+public:
+  StateT &get() {
+    if (!state)
+      state.emplace();
+    return *state;
+  }
+
+  void join(const StateT &other) {
+    if (state)
+      state->join(other);
+    else
+      state = other;
+  }
+
+private:
+  std::optional<StateT> state;
+};
 
 /// A forward dataflow analysis over the CFG and nested region control flow of
 /// one function. StateT must be default constructible and provide join() and
@@ -32,7 +56,33 @@ public:
     resolve(function, &funcMap, &builder);
   }
 
+  template <typename Factory>
+  static void runModule(ModuleOp module, Factory makeAnalysis) {
+    CallGraph<StateT> callGraph(module);
+    FuncMapT summaries;
+    callGraph.template walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
+        [](CallOpInterface, FunctionOpInterface) {},
+        [&](FunctionOpInterface function) {
+          if (summaries.try_emplace(function).second)
+            makeAnalysis(function).run(function, summaries);
+        });
+  }
+
 protected:
+  /// Copy the callee summary before mapping its accesses into the caller.
+  static std::optional<StateT> getCallSummary(
+      CallOpInterface call, const FuncMapT &summaries,
+      llvm::function_ref<void(StateT &, FunctionOpInterface)> translate = {}) {
+    auto callee = dyn_cast_or_null<FunctionOpInterface>(call.resolveCallable());
+    auto it = summaries.find(callee);
+    if (it == summaries.end())
+      return std::nullopt;
+    StateT summary = it->second;
+    if (translate)
+      translate(summary, callee);
+    return summary;
+  }
+
   virtual void update(Operation *operation, StateT *state, FuncMapT *funcMap,
                       OpBuilder *builder) = 0;
 
@@ -62,7 +112,7 @@ private:
     // Entry virtual blocks are represented by a null iterator. Populate the
     // blockList with the entry virtual blocks in the function. Then, each
     // iteration scans until a terminator or region branch operation is found.
-    DenseMap<VirtualBlock, StateT> inputs;
+    DenseMap<VirtualBlock, DataflowState<StateT>> inputs;
     DenseMap<VirtualBlock, StateT> outputs;
     std::deque<VirtualBlock> worklist;
     // Start the analysis from the entry block of the function.
@@ -73,7 +123,7 @@ private:
       VirtualBlock block = worklist.front();
       worklist.pop_front();
       // Make a copy of the inputblockInfo but not update
-      StateT state = inputs[block];
+      StateT state = inputs[block].get();
       SmallVector<VirtualBlock> successors;
       Operation *terminator = nullptr;
       Block::iterator begin = block.second.isValid() ? std::next(block.second)
@@ -102,13 +152,13 @@ private:
       outputs[block] = state;
       for (VirtualBlock successor : successors) {
         inputs[successor].join(state);
-        updateSuccessor(terminator, successor.first, &inputs[successor]);
+        updateSuccessor(terminator, successor.first, &inputs[successor].get());
         worklist.push_back(successor);
       }
     }
 
     // Update the final dangling buffers that haven't been synced
-    StateT &summary = (*funcMap)[function];
+    DataflowState<StateT> summary;
     for (Block &exit : function.getBlocks()) {
       if (!exit.getTerminator()->hasTrait<OpTrait::ReturnLike>())
         continue;
@@ -130,10 +180,19 @@ private:
       updateExitState(&exitState);
       summary.join(exitState);
     }
+    (*funcMap)[function] = std::move(summary.get());
   }
 
   static void visitTerminator(Operation *operation,
                               SmallVector<VirtualBlock> &successors) {
+    // The parent continuation must retain worker memory effects even though
+    // the region value-flow interface has no successor for worker returns.
+    if (isa<gpu::WarpReturnOp>(operation)) {
+      auto ws = operation->getParentOfType<gpu::WarpSpecializeOp>();
+      successors.emplace_back(ws->getBlock(), ws->getIterator());
+      return;
+    }
+
     if (isa<BranchOpInterface>(operation)) {
       // Collect the block successors of the branch.
       for (Block *successor : operation->getSuccessors())
