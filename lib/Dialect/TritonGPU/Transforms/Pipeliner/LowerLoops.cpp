@@ -878,6 +878,14 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   }
 
   int numStages = mainWaitStage - schedule[mma].first + 1;
+  if (mma.getTwoCtas()) {
+    // Both CTAs must consume a completion before its barrier slot is reused.
+    // Cover the full pipeline, as prefetched TMA tiles can let the MMA leader
+    // run ahead of its peer by more than the MMA-to-wait distance. For example,
+    // four load slots with only two completion slots let MMA 2 reuse MMA 0's
+    // barrier before the peer has waited for MMA 0.
+    numStages = std::max(schedule.getNumStages(), mainWaitStage + 1);
+  }
 
   OpBuilderForStage builder(mma.getLoc(), mma, schedule);
   Value barrierAlloc =
@@ -915,12 +923,6 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   builder.setInsertionPointAfter(mma);
   builder.setStageCluster({mainWaitStage, mainWaitCluster});
   ttng::WaitBarrierOp::create(builder, barrierSlice, phase, waitBuffers);
-  if (mma.getTwoCtas()) {
-    // The leader can complete later MMAs while the peer is still waiting on an
-    // earlier phase of the same barrier. Both CTAs must finish the wait before
-    // advancing, so that reusing the barrier cannot make the peer miss a phase.
-    ttng::ClusterBarrierOp::create(builder);
-  }
 
   // Add waits before loads in conditional blocks
   for (auto user : alloc.getUsers()) {
