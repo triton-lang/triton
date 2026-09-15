@@ -1121,6 +1121,52 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
             assert "kind::mxf8f6f4" in ptx
 
 
+@pytest.mark.parametrize("BLOCK_K", [16, 32, 64, 128])
+@pytest.mark.parametrize(
+    ("scale_type", "VEC_SIZE"),
+    [("float8_e8m0fnu", 32), ("float8_e4m3fn", 16)],
+    ids=["mxfp4", "nvfp4"],
+)
+@pytest.mark.parametrize("num_warps", [4, 8])
+def test_dot_scaled_fp4_small_k_sm120(BLOCK_K, scale_type, VEC_SIZE, num_warps, device):
+    if not is_cuda() or torch.cuda.get_device_capability()[0] != 12:
+        pytest.skip("Requires SM120 or SM121")
+    if BLOCK_K < VEC_SIZE:
+        pytest.skip("BLOCK_K must cover a full scale block")
+    torch.manual_seed(42)
+    M, N, K = 16, 32, 2 * BLOCK_K
+    a_fp4 = MXFP4Tensor(size=(M, K), device=device).random()
+    b_fp4 = MXFP4Tensor(size=(N, K), device=device).random()
+    a = a_fp4.to_packed_tensor(dim=1)
+    b = b_fp4.to_packed_tensor(dim=1).T.contiguous()
+    a_scale = torch.rand((M, K // VEC_SIZE), device=device)
+    b_scale = torch.rand((N, K // VEC_SIZE), device=device)
+    if scale_type == "float8_e8m0fnu":
+        a_scale_ref = MXScaleTensor(a_scale)
+        b_scale_ref = MXScaleTensor(b_scale)
+        a_scale = a_scale_ref.data
+        b_scale = b_scale_ref.data
+    elif scale_type == "float8_e4m3fn":
+        a_scale = a_scale.to(torch.float8_e4m3fn)
+        b_scale = b_scale.to(torch.float8_e4m3fn)
+        a_scale_ref = a_scale
+        b_scale_ref = b_scale
+    a_scale_ref = a_scale_ref.to(torch.float32).repeat_interleave(VEC_SIZE, dim=1)
+    b_scale_ref = b_scale_ref.to(torch.float32).repeat_interleave(VEC_SIZE, dim=1)
+    a_ref = a_fp4.to(torch.float32) * a_scale_ref
+    b_ref = b_fp4.to(torch.float32) * b_scale_ref
+    output = torch.empty((M, N), device=device, dtype=torch.float32)
+    kernel = block_scale_fp4_matmul[(1, )](a, b, output, a_scale, b_scale, M, N, K, a_scale.stride(0), a.stride(0),
+                                           a.stride(1), b.stride(0), b.stride(1), output.stride(0), output.stride(1),
+                                           VEC_SIZE, M, N, BLOCK_K, NUM_STAGES=1, PACK_ALONG_K=True,
+                                           num_warps=num_warps)
+    if is_compile_warmup():
+        return
+    ref_out = torch.matmul(a_ref, b_ref.T)
+    torch.testing.assert_close(output, ref_out, atol=1e-3, rtol=1e-3)
+    assert ("kind::mxf4" in kernel.asm["ptx"]) == (BLOCK_K >= 64)
+
+
 @triton.jit
 def rhs_scaled_n_packed_fp4_matmul(A, B, BS, C):
     a = tl.load(A + tl.arange(0, 128)[:, None] * 32 + tl.arange(0, 32)[None, :])
