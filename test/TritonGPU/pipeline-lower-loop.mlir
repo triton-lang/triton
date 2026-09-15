@@ -1846,14 +1846,16 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-DAG: #[[$MMA_BAR_LAYOUT:.*]] = #ttg.swizzled_shared<{{.*}}CGALayout = {{\[\[1\]\]}}{{.*}}>
   // CHECK-DAG: #[[$TMA_BAR_LAYOUT:.*]] = #ttg.swizzled_shared<{{.*}}CGALayout = {{\[\[0\]\]}}{{.*}}>
   // CHECK-LABEL: @two_cta_wait_forwarded_descriptor
-  // CHECK: ttg.local_alloc : () -> !ttg.memdesc<2x2xi64, #[[$MMA_BAR_LAYOUT]]
+  // Completion slots cover the full pipeline so that the leader cannot lap the peer.
+  // CHECK: ttg.local_alloc : () -> !ttg.memdesc<4x2xi64, #[[$MMA_BAR_LAYOUT]]
   // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x1xi64, #[[$TMA_BAR_LAYOUT]]
   // CHECK: ttng.async_tma_copy_global_to_local {{.*}}!ttg.memdesc<1xi64, #[[$TMA_BAR_LAYOUT]]
   // CHECK: ttng.wait_barrier {{.*}}!ttg.memdesc<1xi64, #[[$TMA_BAR_LAYOUT]]
   // CHECK-NOT: ttng.cluster_barrier
   // CHECK: ttng.tc_gen5_mma {{.*}} {is_async, {{.*}}two_ctas} : {{.*}}!ttg.memdesc<2xi64, #[[$MMA_BAR_LAYOUT]]
-  // CHECK: ttng.wait_barrier {{.*}} deps {{.*}}loop.cluster = [[WAIT_CLUSTER:[0-9]+]] : i32, loop.stage = [[WAIT_STAGE:[0-9]+]] : i32
-  // CHECK-NEXT: ttng.cluster_barrier {{.*}}loop.cluster = [[WAIT_CLUSTER]] : i32, loop.stage = [[WAIT_STAGE]] : i32
+  // CHECK: ttng.wait_barrier {{.*}} deps
+  // CHECK-NOT: ttng.cluster_barrier
+  // CHECK: tt.return
   tt.func public @two_cta_wait_forwarded_descriptor(%arg0: !tt.tensordesc<256x64xf16, #sharedA>, %arg1: !tt.tensordesc<64x128xf16, #sharedB>, %arg2: !tt.tensordesc<256x64xf16, #sharedA>, %arg3: i32, %choose: i1) -> tensor<256x128xf16, #blockedC> {
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<256x128xf32, #blockedC>
