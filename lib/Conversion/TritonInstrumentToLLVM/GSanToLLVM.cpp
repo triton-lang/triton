@@ -973,10 +973,14 @@ public:
     Value llPtr = adaptor.getPtr();
     Value llCmp = adaptor.getCmp();
     Value llVal = adaptor.getVal();
+    Value llMask = adaptor.getMask();
 
     auto ptrElements = unpackUniqueTensorElements(loc, llPtr, rewriter);
     auto cmpElements = unpackUniqueTensorElements(loc, llCmp, rewriter);
     auto valElements = unpackUniqueTensorElements(loc, llVal, rewriter);
+    SmallVector<Value> maskElements;
+    if (llMask)
+      maskElements = unpackUniqueTensorElements(loc, llMask, rewriter);
 
     Type valueElemTy = valElements[0].getType();
     unsigned valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
@@ -994,7 +998,9 @@ public:
     SmallVector<Value> resultVals(elemsPerThread);
 
     for (size_t i = 0; i < elemsPerThread; ++i) {
-      Value pred = threadPred;
+      Value pred =
+          llMask ? ttg::maybeAnd(rewriter, loc, threadPred, maskElements[i])
+                 : threadPred;
       Value casPtr = ptrElements[i];
       Value casCmp = cmpElements[i];
       Value casVal = valElements[i];
