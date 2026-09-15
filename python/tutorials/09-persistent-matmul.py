@@ -95,11 +95,11 @@ HAS_TMA_CLC = supports_clc() and HAS_HOST_TENSOR_DESC
 HAS_TWO_CTA = HAS_HOST_TENSOR_DESC and torch.cuda.get_device_capability()[0] == 10
 
 
-def matmul_get_configs(pre_hook=None, num_ctas=1):
+def matmul_get_configs(pre_hook=None):
     return [
         triton.Config({'BLOCK_SIZE_M': BM, 'BLOCK_SIZE_N': BN, "BLOCK_SIZE_K": BK, "GROUP_SIZE_M": 8}, num_stages=s,
-                      num_warps=w, num_ctas=num_ctas, pre_hook=pre_hook)
-        for BM in [128 * num_ctas]
+                      num_warps=w, pre_hook=pre_hook)
+        for BM in [128]
         for BN in [128, 256]
         for BK in [64, 128]
         for s in [2, 3, 4]
@@ -247,15 +247,7 @@ def matmul_kernel_tma(a_desc, b_desc, c_desc,  #
     c_desc.store([offs_cm, offs_cn], c)
 
 
-matmul_kernel_tma_2cta = triton.autotune(
-    configs=matmul_get_configs(pre_hook=matmul_tma_set_block_size_hook, num_ctas=2),
-    key=["M", "N", "K", "WARP_SPECIALIZE"],
-)(matmul_kernel_tma.fn)
-
-
-def matmul_tma(a, b, warp_specialize: bool, num_ctas=1):
-    assert num_ctas in (1, 2)
-    assert num_ctas == 1 or HAS_TWO_CTA, "Two-CTA TMA requires Blackwell"
+def matmul_tma(a, b, warp_specialize: bool):
     # Check constraints.
     assert a.shape[1] == b.shape[1], "Incompatible dimensions"  # b is transposed
     assert a.dtype == b.dtype, "Incompatible dtypes"
@@ -277,8 +269,7 @@ def matmul_tma(a, b, warp_specialize: bool, num_ctas=1):
         BLOCK_N = META["BLOCK_SIZE_N"]
         return (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), )
 
-    kernel = matmul_kernel_tma_2cta if num_ctas == 2 else matmul_kernel_tma
-    kernel[grid](
+    matmul_kernel_tma[grid](
         a_desc, b_desc, c_desc,  #
         M, N, K,  #
         FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
@@ -383,14 +374,14 @@ def matmul_persistent(a, b):
     return c
 
 
-def matmul_tma_persistent_get_configs(pre_hook=None):
+def matmul_tma_persistent_get_configs(pre_hook=None, num_ctas=1):
     return [
         triton.Config(
             {
                 'BLOCK_SIZE_M': BM, 'BLOCK_SIZE_N': BN, "BLOCK_SIZE_K": BK, "GROUP_SIZE_M": 8, "EPILOGUE_SUBTILE":
                 SUBTILE
-            }, num_stages=s, num_warps=w, pre_hook=pre_hook)  #
-        for BM in [128]  #
+            }, num_stages=s, num_warps=w, num_ctas=num_ctas, pre_hook=pre_hook)  #
+        for BM in [128 * num_ctas]  #
         for BN in [128, 256]  #
         for BK in [64, 128]  #
         for s in ([2, 3, 4])  #
@@ -460,6 +451,12 @@ def matmul_kernel_tma_persistent(a_desc, b_desc, c_desc,  #
         else:
             accumulator = accumulator.to(dtype)
             c_desc.store([offs_am_c, offs_bn_c], accumulator)
+
+
+matmul_kernel_tma_persistent_2cta = triton.autotune(
+    configs=matmul_tma_persistent_get_configs(pre_hook=matmul_tma_set_block_size_hook, num_ctas=2),
+    key=["M", "N", "K", "WARP_SPECIALIZE"],
+)(matmul_kernel_tma_persistent.fn)
 
 
 # Blackwell-only CLC scheduling keeps the full logical grid. The clc=True
@@ -549,7 +546,9 @@ def matmul_tma_clc(a, b, warp_specialize: bool):
     return c
 
 
-def matmul_tma_persistent(a, b, warp_specialize: bool):
+def matmul_tma_persistent(a, b, warp_specialize: bool, num_ctas=1):
+    assert num_ctas in (1, 2)
+    assert num_ctas == 1 or HAS_TWO_CTA, "Two-CTA TMA requires Blackwell"
     # Check constraints.
     assert a.shape[1] == b.shape[1], "Incompatible dimensions"  # b is transposed
     assert a.dtype == b.dtype, "Incompatible dtypes"
@@ -560,7 +559,7 @@ def matmul_tma_persistent(a, b, warp_specialize: bool):
 
     c = torch.empty((M, N), device=a.device, dtype=dtype)
 
-    NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
+    NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count // num_ctas
 
     # A dummy block value that will be overwritten when we have the real block size
     dummy_block = [1, 1]
@@ -569,7 +568,6 @@ def matmul_tma_persistent(a, b, warp_specialize: bool):
     c_desc = TensorDescriptor.from_tensor(c, dummy_block)
 
     def grid(META):
-        nonlocal a_desc, b_desc, c_desc
         BLOCK_M = META["BLOCK_SIZE_M"]
         BLOCK_N = META["BLOCK_SIZE_N"]
         return (min(
@@ -577,7 +575,8 @@ def matmul_tma_persistent(a, b, warp_specialize: bool):
             triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N),
         ), )
 
-    matmul_kernel_tma_persistent[grid](
+    kernel = matmul_kernel_tma_persistent_2cta if num_ctas == 2 else matmul_kernel_tma_persistent
+    kernel[grid](
         a_desc, b_desc, c_desc,  #
         M, N, K,  #
         FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
@@ -780,7 +779,8 @@ def bench(K, dtype, reps=10000, warmup_reps=10000):
             bench_fn(f"tma_persistent{ws_str}", reps, warmup_reps, lambda a, b: matmul_tma_persistent(a, b, ws), a, b)
             bench_fn(f"tma{ws_str}", reps, warmup_reps, lambda a, b: matmul_tma(a, b, ws), a, b)
         if HAS_TWO_CTA and not ws:
-            bench_fn("tma_2cta", reps, warmup_reps, lambda a, b: matmul_tma(a, b, False, num_ctas=2), a, b)
+            bench_fn("tma_persistent_2cta", reps, warmup_reps,
+                     lambda a, b: matmul_tma_persistent(a, b, False, num_ctas=2), a, b)
         if HAS_TENSOR_DESC:
             bench_fn(f"descriptor_persistent{ws_str}", reps, warmup_reps,
                      lambda a, b: matmul_descriptor_persistent(a, b, ws), a, b)
@@ -809,9 +809,9 @@ def validate(M, N, K, dtype):
     run_test(naive_result, matmul_persistent, a, b.T, "Persistent")
     kernels = [
         (matmul_tma, "TMA", HAS_HOST_TENSOR_DESC),
-        (lambda a, b, ws: matmul_tma(a, b, ws, num_ctas=2), "TMA two-CTA", HAS_TWO_CTA),
         (matmul_tma_clc, "CLC TMA", HAS_TMA_CLC),
         (matmul_tma_persistent, "TMA Persistent", HAS_HOST_TENSOR_DESC),
+        (lambda a, b, ws: matmul_tma_persistent(a, b, ws, num_ctas=2), "TMA Persistent two-CTA", HAS_TWO_CTA),
         (matmul_descriptor_persistent, "Tensor Descriptor Persistent", HAS_TENSOR_DESC),
     ]
     warp_specialize = [False, True] if HAS_WARP_SPECIALIZE else [False]
