@@ -172,6 +172,35 @@ def test_compute_num_warps_uses_two_warp_floor():
     assert opt_flags_nvidia.compute_num_warps(16, 256, False, precision_config, {"num_warps": 1}) == 1
 
 
+@pytest.mark.parametrize("plain_scalar_epilogue,expected_stages", [(False, 2), (True, 3)])
+def test_nvfp4_scalar_epilogue_stage_budget(monkeypatch, plain_scalar_epilogue, expected_stages):
+    monkeypatch.setattr(torch.cuda, "get_device_properties",
+                        lambda _: SimpleNamespace(shared_memory_per_block_optin=232448))
+    monkeypatch.setattr(opt_flags_nvidia.target_info, "cuda_capability_geq", lambda *_: True)
+    scale = torch.empty((1, ), dtype=torch.float8_e4m3fn)
+    stages = opt_flags_nvidia.compute_num_stages(
+        PrecisionConfig(a_mx_scale=scale, b_mx_scale=scale),
+        True,
+        128,
+        256,
+        256,
+        BF16,
+        FP4,
+        FP4,
+        False,
+        None,
+        False,
+        mx_block_size=16,
+        epilogue_subtile=1,
+        num_warps=8,
+        occupancy_target=1,
+        swap_xw=True,
+        w_transpose=True,
+        plain_scalar_epilogue=plain_scalar_epilogue,
+    )
+    assert stages == expected_stages
+
+
 @pytest.mark.parametrize("block_m,num_warps,epilogue_subtile,expected_stages", [
     (32, 4, 1, 4),
     (128, 8, 2, 1),

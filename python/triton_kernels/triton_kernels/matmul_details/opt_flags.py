@@ -221,6 +221,7 @@ def make_default_opt_flags_nvidia(
     w_transpose=False,
     mx_block_size=None,
     epilogue_reduction_n=1,
+    plain_scalar_epilogue=False,
 ):
     constraints_supported = {"block_m", "block_n", "block_k", "split_k", "is_persistent", "clc", "epilogue_subtile", "num_stages", "idle_sms", "max_allowable_mn", "num_warps", "disable_mx4_block_swap", "swap_xw", "group_m", "use_output_tma"}
     unsupported = set(constraints.keys()) - constraints_supported
@@ -438,7 +439,8 @@ def make_default_opt_flags_nvidia(
         ns = opt_flags_nvidia.compute_num_stages(*compute_num_stages_args, epilogue_subtile=ep,
                                                  occupancy_target=occupancy_target,
                                                  swap_xw=swap_xw,
-                                                 w_transpose=w_transpose, num_warps=num_warps)
+                                                 w_transpose=w_transpose, num_warps=num_warps,
+                                                 plain_scalar_epilogue=plain_scalar_epilogue and not clc)
         if ns > num_stages:
             epilogue_subtile, num_stages = ep, ns
 
@@ -567,6 +569,7 @@ def make_opt_flags(
     w_transpose=False,
     rhs_layout=None,
     epilogue_reduction_n=1,
+    plain_scalar_epilogue=False,
 ):
     # Empty outputs do not launch a kernel, so persistent TMA constraints are vacuous.
     can_use_persistent_tma = can_use_persistent_tma or batch_size * m * n == 0
@@ -613,5 +616,6 @@ def make_opt_flags(
             w_transpose=w_transpose,
             mx_block_size=mx_block_size,
             epilogue_reduction_n=epilogue_reduction_n,
+            plain_scalar_epilogue=plain_scalar_epilogue,
         )
     assert False

@@ -124,6 +124,7 @@ def _p_matmul(
              CLC: tl.constexpr = False,
              FLATTEN_LOOPS: tl.constexpr = True,
              W_SHUFFLED: tl.constexpr = False,
+             SCALAR_TENSOR_SCALES: tl.constexpr = False,
              pYPtrs=None,
              map_dst_coord=None,
              all_writes_issued=None,
@@ -509,16 +510,22 @@ def _p_matmul(
             x_tensor_scales = tl.full((BLOCK_M,), 1.0, tl.float32)
             w_tensor_scales = tl.full((BLOCK_N,), 1.0, tl.float32)
             if XTensorScale is not None:
-                x_tensor_scales = tl.load(XTensorScalePtrs, mask=mask_m, other=0.0)
+                if SCALAR_TENSOR_SCALES:
+                    x_tensor_scales = tl.where(mask_m, tl.load(XTensorScale), 0.0)
+                else:
+                    x_tensor_scales = tl.load(XTensorScalePtrs, mask=mask_m, other=0.0)
             if WTensorScale is not None:
                 offs_w_tensor_scale_n = off_n + tl.arange(0, BLOCK_N)
-                w_tensor_scales = tl.load(
-                    WTensorScale
-                    + off_w_z.to(index_type) * stride_w_tensor_scale_e
-                    + offs_w_tensor_scale_n.to(index_type) * stride_w_tensor_scale_n,
-                    mask=offs_w_tensor_scale_n < N,
-                    other=0.0,
-                )
+                if SCALAR_TENSOR_SCALES:
+                    w_tensor_scales = tl.where(offs_w_tensor_scale_n < N, tl.load(WTensorScale), 0.0)
+                else:
+                    w_tensor_scales = tl.load(
+                        WTensorScale
+                        + off_w_z.to(index_type) * stride_w_tensor_scale_e
+                        + offs_w_tensor_scale_n.to(index_type) * stride_w_tensor_scale_n,
+                        mask=offs_w_tensor_scale_n < N,
+                        other=0.0,
+                    )
             if SWAP_XW:
                 acc *= w_tensor_scales[:, None] * x_tensor_scales[None, :]
             else:

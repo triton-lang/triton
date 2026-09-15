@@ -157,6 +157,7 @@ def compute_num_stages(
     occupancy_target,
     swap_xw=None,
     w_transpose=False,
+    plain_scalar_epilogue=False,
 ):
     if precision_config.max_num_imprecise_acc is not None:
         return 3
@@ -223,6 +224,17 @@ def compute_num_stages(
         # pipelined layout conversion before store of the accumulator
         # note: layout conversion has some padding
         epilogue_smem = int((block_m + 4) * acc_block_n * acc_size)
+        if (plain_scalar_epilogue and target_info.cuda_capability_geq(10, 3) and lhs_dtype == rhs_dtype == FP4
+                and out_dtype == BF16 and (block_m, block_n, block_k, num_warps) == (128, 256, 256, 8) and swap_xw
+                and not x_transpose and w_transpose and epilogue_subtile == 1 and epilogue_reduction_n == 1
+                and not epilogue_effective_itemsize and not has_y_acc_in and occupancy_target == 1):
+            # Scalar tensor scales need no conversion scratch. The unpadded
+            # output tile bounds both TMA and pointer stores for this layout.
+            epilogue_smem = int(block_m * acc_block_n * acc_size)
+            # Two barrier rings use 16 bytes per stage; reserve their alignment
+            # and the accumulator barriers separately.
+            stage_size += 8
+            smem_capacity -= 48
         if has_native_mxfp and not swap_xw and block_m == 64 and epilogue_subtile > 1 and is_mixed_fp8:
             # The first accumulator split needs FP32 redistribution scratch
             # alongside the output tile, before any activation reduction.
