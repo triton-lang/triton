@@ -60,7 +60,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
 
   // CHECK-COMMON-LABEL: @atomic_load_i8
-  // CHECK-COMMON: %[[BYTE:.*]] = llvm.inline_asm has_side_effects {{.*}}mov.u16 $0, 0x0;{{.*}}@$2 ld.relaxed.gpu.global.b8 $0, [$1];{{.*}}"=h,l,b" {{.*}} -> i16
+  // CHECK-COMMON: %[[BYTE:.*]] = llvm.inline_asm has_side_effects {{.*}}mov.u16 $0, 0x0;{{.*}}@$2 ld.relaxed.gpu.global.b8 $0, [ $1 + 0 ];{{.*}}"=h,l,b" {{.*}} -> i16
   // CHECK-COMMON: llvm.trunc %[[BYTE]] : i16 to i8
   tt.func public @atomic_load_i8(%ptr: !tt.ptr<i8>, %out: !tt.ptr<i8>, %mask: i1) {
     %loaded = tt.atomic_load relaxed, gpu, %ptr, %mask : (!tt.ptr<i8>, i1) -> i8
@@ -69,7 +69,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
 
   // CHECK-COMMON-LABEL: @atomic_load_f16
-  // CHECK-COMMON: %[[HALF:.*]] = llvm.inline_asm has_side_effects {{.*}}@$2 ld.relaxed.cta.global.b16 $0, [$1];{{.*}}"=h,l,b" {{.*}} -> i16
+  // CHECK-COMMON: %[[HALF:.*]] = llvm.inline_asm has_side_effects {{.*}}@$2 ld.relaxed.cta.global.b16 $0, [ $1 + 0 ];{{.*}}"=h,l,b" {{.*}} -> i16
   // CHECK-COMMON: llvm.bitcast %[[HALF]] : i16 to f16
   tt.func public @atomic_load_f16(%ptr: !tt.ptr<f16>, %out: !tt.ptr<f16>, %mask: i1) {
     %loaded = tt.atomic_load relaxed, cta, %ptr, %mask : (!tt.ptr<f16>, i1) -> f16
@@ -78,7 +78,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
 
   // CHECK-COMMON-LABEL: @atomic_load_f64
-  // CHECK-COMMON: %[[DOUBLE:.*]] = llvm.inline_asm has_side_effects {{.*}}@$2 ld.relaxed.sys.global.b64 $0, [$1];{{.*}}"=l,l,b" {{.*}} -> i64
+  // CHECK-COMMON: %[[DOUBLE:.*]] = llvm.inline_asm has_side_effects {{.*}}@$2 ld.relaxed.sys.global.b64 $0, [ $1 + 0 ];{{.*}}"=l,l,b" {{.*}} -> i64
   // CHECK-COMMON: llvm.bitcast %[[DOUBLE]] : i64 to f64
   tt.func public @atomic_load_f64(%ptr: !tt.ptr<f64>, %out: !tt.ptr<f64>, %mask: i1) {
     %loaded = tt.atomic_load relaxed, sys, %ptr, %mask : (!tt.ptr<f64>, i1) -> f64
@@ -179,7 +179,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-COMMON: %[[START:.*]] = llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"() : () -> i64
   // CHECK-COMMON: llvm.br ^[[LOOP:bb[0-9]+]]
   // CHECK-COMMON: ^[[LOOP]]:
-  // CHECK-COMMON: %[[LOADED:.*]] = llvm.inline_asm has_side_effects {{.*}}@$2 ld.relaxed.sys.global.b32 $0, [$1];{{.*}}"=r,l,b" %{{.*}}, %[[ELECTED:.*]] : (!llvm.ptr<1>, i1) -> i32
+  // CHECK-COMMON: %[[LOADED:.*]] = llvm.inline_asm has_side_effects {{.*}}@$2 ld.relaxed.sys.global.b32 $0, [ $1 + 0 ];{{.*}}"=r,l,b" %{{.*}}, %[[ELECTED:.*]] : (!llvm.ptr<1>, i1) -> i32
   // CHECK-COMMON: %[[MATCHED:.*]] = llvm.icmp "eq" %[[LOADED]], %{{.*}} : i32
   // CHECK-COMMON: %[[COMPLETE:.*]] = llvm.select %[[ELECTED]], %[[MATCHED]], %{{.*}} : i1, i1
   // CHECK-COMMON: llvm.cond_br %[[COMPLETE]], ^[[SUCCESS:bb[0-9]+]], ^[[TIMEOUT:bb[0-9]+]]
