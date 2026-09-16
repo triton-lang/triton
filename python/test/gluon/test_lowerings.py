@@ -1011,6 +1011,190 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, saniti
     torch.testing.assert_close(z, z_ref.to(torch_dtype))
 
 
+@pytest.mark.skipif(not is_cuda(), reason="NVIDIA redux instructions")
+@pytest.mark.parametrize("size, group_bit, broadcast_bits",
+                         [(16, i, ()) for i in range(5)] + [(8, 0, ()),
+                                                            (32, 0, ())] + [(16, i, (i, ))
+                                                                            for i in range(5)] + [(8, 0, (0, 1)),
+                                                                                                  (4, 0, (0, 1, 2)),
+                                                                                                  (2, 0, (0, 1, 2, 3)),
+                                                                                                  (8, 0, (0, )),
+                                                                                                  (8, 3, (4, )),
+                                                                                                  (4, 0, (0, ))])
+@pytest.mark.parametrize("dtype_str, op, propagate_nan", [(dtype, op, propagate)
+                                                          for dtype in ["float16", "bfloat16", "float32"]
+                                                          for op in ["min", "max"]
+                                                          for propagate in [False, True]] +
+                         [(dtype, op, False)
+                          for dtype in ["int16", "int32", "uint32", "int64", "uint64"]
+                          for op in ["min", "max", "add", "and", "or", "xor"]])
+def test_reduce_partitioned(size, group_bit, broadcast_bits, op, dtype_str, propagate_nan, device):
+    import numpy as np
+    import triton.language as tl
+
+    if torch.cuda.get_device_capability()[0] < 8:
+        pytest.skip("Requires SM80 or newer")
+
+    @gluon.jit
+    def nan_min(a, b):
+        return ttgl.minimum(a, b, propagate_nan=tl.PropagateNan.ALL)
+
+    @gluon.jit
+    def nan_max(a, b):
+        return ttgl.maximum(a, b, propagate_nan=tl.PropagateNan.ALL)
+
+    @gluon.jit
+    def bitwise_and(a, b):
+        return a & b
+
+    @gluon.jit
+    def kernel(X, Y, SIZE: ttgl.constexpr, ROWS: ttgl.constexpr, LAYOUT: ttgl.constexpr, OP: ttgl.constexpr,
+               PROPAGATE: ttgl.constexpr):
+        row = ttgl.arange(0, ROWS, layout=ttgl.SliceLayout(1, LAYOUT)) + ttgl.program_id(0) * ROWS
+        col = ttgl.arange(0, SIZE, layout=ttgl.SliceLayout(0, LAYOUT))
+        x = ttgl.load(X + row[:, None] * SIZE + col[None, :])
+        if PROPAGATE:
+            x = x.to(ttgl.float32)
+            y = ttgl.reduce(x, 1, nan_min if OP == "min" else nan_max)
+        elif OP == "min":
+            y = ttgl.min(x, 1)
+        elif OP == "max":
+            y = ttgl.max(x, 1)
+        elif OP == "add":
+            y = ttgl.sum(x, 1, dtype=x.dtype)
+        elif OP == "and":
+            y = ttgl.reduce(x, 1, bitwise_and)
+        elif OP == "or":
+            y = ttgl.reduce_or(x, 1)
+        elif OP == "xor":
+            y = ttgl.xor_sum(x, 1)
+        ttgl.store(Y + row, y)
+
+    group_bits = [(group_bit + i) % 5 for i in range((32 // size).bit_length() - 1)]
+    assert all(bit in group_bits for bit in broadcast_bits)
+    lane_bases = []
+    group_stride, reduce_stride = 1, 1
+    for bit in range(5):
+        if bit in broadcast_bits:
+            lane_bases.append([0, 0])
+        elif bit in group_bits:
+            lane_bases.append([group_stride, 0])
+            group_stride *= 2
+        else:
+            lane_bases.append([0, reduce_stride])
+            reduce_stride *= 2
+    rows_per_block = 4 * group_stride
+    layout = ttgl.DistributedLinearLayout(reg_bases=[], lane_bases=lane_bases, warp_bases=[[group_stride, 0],
+                                                                                           [2 * group_stride, 0]],
+                                          block_bases=[], shape=[rows_per_block, size])
+
+    is_float = "float" in dtype_str
+    numpy_dtype = "float32" if dtype_str == "bfloat16" else dtype_str
+    rng = np.random.default_rng(0)
+    x = rng.integers(0, 1000, (32, size)).astype(numpy_dtype)
+    if is_float:
+        x -= 500
+        x[0], x[1] = np.nan, -np.nan
+        x[2], x[3] = np.inf, -np.inf
+        x[4], x[5] = -0.0, 0.0
+        x[6] = 0.0
+        x[6, ::2] = -0.0
+        x[7, ::2] = np.nan
+        x[8, ::2] = -np.nan
+        x[9, 0], x[10, 0] = np.inf, -np.inf
+        # Smallest subnormals of the input format, including both signs.
+        tiny = 2.0**-133 if dtype_str == "bfloat16" else np.nextafter(x.dtype.type(0), x.dtype.type(1))
+        x[11], x[12] = tiny, -tiny
+        reduce_fn = np.minimum if op == "min" else np.maximum
+        if not propagate_nan:
+            reduce_fn = np.fmin if op == "min" else np.fmax
+    else:
+        limits = np.iinfo(numpy_dtype)
+        if op in ("and", "or", "xor"):
+            # Exercise every bit, including the sign bit, in both groups.
+            x[:] = np.frombuffer(rng.bytes(x.nbytes), dtype=x.dtype).reshape(x.shape)
+        x[0], x[1] = limits.min, limits.max
+        x[2, 0], x[3, -1] = limits.min, limits.max
+        if limits.bits == 64:
+            # Equal high words and unsigned low-word comparisons.
+            x[4, :4] = [0x100000000, 0x1FFFFFFFF, 0x180000000, 0x17FFFFFFF][:size]
+        reduce_fn = {
+            "min": np.minimum, "max": np.maximum, "add": np.add, "and": np.bitwise_and, "or": np.bitwise_or, "xor":
+            np.bitwise_xor
+        }[op]
+    expected = reduce_fn.reduce(x, axis=1, dtype=x.dtype)
+    if is_float:
+        expected[6] = -0.0 if op == "min" else 0.0
+    x_device = torch.tensor(x, device=device, dtype=getattr(torch, dtype_str))
+    y = torch.empty((32, ), device=device, dtype=x_device.dtype)
+    compiled = kernel[(32 // rows_per_block, )](x_device, y, size, rows_per_block, layout, op, propagate_nan,
+                                                num_warps=4, enable_fp_fusion=False)
+    actual = y.float().cpu().numpy() if dtype_str == "bfloat16" else y.cpu().numpy()
+    # Reference values must be rounded to the input format before reduction.
+    if dtype_str == "bfloat16":
+        expected = torch.tensor(expected).to(torch.bfloat16).float().numpy()
+    np.testing.assert_array_equal(actual, expected)
+    if is_float:
+        zero = expected == 0
+        np.testing.assert_array_equal(np.signbit(actual[zero]), np.signbit(expected[zero]))
+
+    ptx = compiled.asm["ptx"]
+    sm100 = torch.cuda.get_device_capability()[0] == 10
+    use_redux = size == 32 or (group_stride <= 2 and sm100 and "64" not in dtype_str)
+    if is_float and not sm100:
+        use_redux = False
+    if op == "add" and "64" in dtype_str:
+        use_redux = False
+    if use_redux:
+        expected_count = group_stride if size < 32 else 2 if "64" in dtype_str else 1
+        assert ptx.count("redux.sync.") == expected_count
+        assert "shfl.sync.bfly" not in ptx
+        for line in ptx.splitlines():
+            if "redux.sync." in line:
+                assert line.strip().startswith("redux.sync.")
+        # LLVM may materialize the constant member mask in a PTX register.
+        redux_calls = [
+            line for line in compiled.asm["llir"].splitlines() if "call" in line and "@llvm.nvvm.redux.sync." in line
+        ]
+        assert len(redux_calls) == expected_count
+        assert all("i32 -1)" in line for line in redux_calls)
+    else:
+        assert "redux.sync." not in ptx
+        assert "shfl.sync.bfly" in ptx
+
+
+@pytest.mark.skipif(not is_cuda(), reason="NVIDIA redux instructions")
+@pytest.mark.parametrize("op", ["add", "xor", "max"])
+def test_reduce_broadcast_across_warps(op, device):
+    import numpy as np
+
+    if torch.cuda.get_device_capability()[0] != 10:
+        pytest.skip("Broadcast redux lowering requires SM100")
+
+    @gluon.jit
+    def kernel(X, Y, OP: ttgl.constexpr):
+        offsets = ttgl.arange(0, 128, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+        x = ttgl.load(X + offsets)
+        if OP == "add":
+            y = ttgl.sum(x, 0)
+        elif OP == "xor":
+            y = ttgl.xor_sum(x, 0)
+        else:
+            y = ttgl.max(x, 0)
+        ttgl.store(Y, y)
+
+    values = np.arange(128, dtype=np.int32)
+    values[0] = 257  # Make both the sum and XOR nonzero.
+    x = torch.tensor(values, device=device)
+    y = torch.empty((), dtype=torch.int32, device=device)
+    compiled = kernel[(1, )](x, y, op, num_warps=4)
+    reduce_fn = {"add": np.add, "xor": np.bitwise_xor, "max": np.maximum}[op]
+    assert y.item() == reduce_fn.reduce(values)
+    # One full-warp redux, then one redux over four broadcast warp results.
+    assert compiled.asm["ptx"].count("redux.sync.") == 2
+    assert "shfl.sync.bfly" not in compiled.asm["ptx"]
+
+
 @pytest.mark.parametrize("M", [32, 64, 128, 256])
 @pytest.mark.parametrize(
     "src_layout",

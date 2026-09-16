@@ -73,9 +73,12 @@ public:
   virtual Value programId(RewriterBase &rewriter, Location loc,
                           ModuleOp moduleOp, ProgramIDDim axis) const = 0;
 
+  // reduceLaneIdMask identifies lane-ID bits reduced by this step.
+  // broadcastLaneIdMask identifies zero lane bases in this step's layout.
   virtual bool warpReduce(RewriterBase &rewriter, Location loc,
                           SmallVector<Value> &acc, triton::ReduceOp op,
-                          unsigned reduceLaneIdMask) const = 0;
+                          unsigned reduceLaneIdMask,
+                          unsigned broadcastLaneIdMask) const = 0;
 
   // Emits LLVM code with |rewriter| to print a message following the given
   // format from the device. |formatStrStart| is the pointer to the start of

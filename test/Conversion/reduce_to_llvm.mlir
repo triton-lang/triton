@@ -1,10 +1,14 @@
 // RUN: triton-opt %s --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s
 // RUN: triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=88' -cse | FileCheck %s --check-prefix=TERNARY
+// RUN: triton-opt %s --convert-triton-gpu-to-llvm='compute-capability=80 ptx-version=80' -cse | FileCheck %s --check-prefix=SM80
 
 #linear = #ttg.linear<{register = [[0, 2], [2, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>
 #blocked_reduce = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked_packed_reduce = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked_warp_reduce = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+#even_odd = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [0, 1]}>
+#halves = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
 
@@ -255,6 +259,221 @@ tt.func @reduce_wide_bitwise(
   tt.store %or_ptr, %or : tensor<4x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
   tt.store %xor_ptr, %xor : tensor<4x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
   tt.return
+}
+
+// SM80-LABEL: @reduce_even_odd_minnum
+// SM80-NOT: nvvm.redux
+// SM80: llvm.return
+// TERNARY-LABEL: @reduce_even_odd_minnum
+// TERNARY-DAG: %[[MASK:.*]] = llvm.mlir.constant(-1 : i32)
+// TERNARY-DAG: %[[NAN:.*]] = llvm.mlir.constant(0x7FC00000 : f32)
+// TERNARY-DAG: %[[BIT:.*]] = llvm.mlir.constant(1 : i32)
+// TERNARY: llvm.and %{{.*}}, %[[BIT]]
+// TERNARY: %[[GROUP:.*]] = llvm.icmp "eq"
+// TERNARY: %[[FIRST:.*]] = llvm.select %[[GROUP]], %[[INPUT:.*]], %[[NAN]]
+// TERNARY: %[[R0:.*]] = nvvm.redux.sync fmin %[[FIRST]], %[[MASK]]
+// TERNARY: %[[SECOND:.*]] = llvm.select %[[GROUP]], %[[NAN]], %[[INPUT]]
+// TERNARY: %[[R1:.*]] = nvvm.redux.sync fmin %[[SECOND]], %[[MASK]]
+// TERNARY: llvm.select %[[GROUP]], %[[R0]], %[[R1]]
+// TERNARY-NOT: nvvm.shfl
+// TERNARY: llvm.return
+tt.func private @reduce_even_odd_minnum(%arg0: tensor<8x16xf32, #even_odd>) -> tensor<8xf32, #ttg.slice<{dim = 1, parent = #even_odd}>> {
+  %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: f32, %b: f32):
+    %c = arith.minnumf %a, %b : f32
+    tt.reduce.return %c : f32
+  }) : (tensor<8x16xf32, #even_odd>) -> tensor<8xf32, #ttg.slice<{dim = 1, parent = #even_odd}>>
+  tt.return %0 : tensor<8xf32, #ttg.slice<{dim = 1, parent = #even_odd}>>
+}
+
+// SM80-LABEL: @reduce_halves_maximum
+// SM80-NOT: nvvm.redux
+// SM80: llvm.return
+// TERNARY-LABEL: @reduce_halves_maximum
+// TERNARY-DAG: %[[MASK:.*]] = llvm.mlir.constant(-1 : i32)
+// TERNARY-DAG: %[[INF:.*]] = llvm.mlir.constant(0xFF800000 : f32)
+// TERNARY-DAG: %[[BIT:.*]] = llvm.mlir.constant(16 : i32)
+// TERNARY: llvm.and %{{.*}}, %[[BIT]]
+// TERNARY: %[[GROUP:.*]] = llvm.icmp "eq"
+// TERNARY: %[[FIRST:.*]] = llvm.select %[[GROUP]], %[[INPUT:.*]], %[[INF]]
+// TERNARY: %[[R0:.*]] = nvvm.redux.sync fmax %[[FIRST]], %[[MASK]] {{.*}}nan
+// TERNARY: %[[SECOND:.*]] = llvm.select %[[GROUP]], %[[INF]], %[[INPUT]]
+// TERNARY: %[[R1:.*]] = nvvm.redux.sync fmax %[[SECOND]], %[[MASK]] {{.*}}nan
+// TERNARY: llvm.select %[[GROUP]], %[[R0]], %[[R1]]
+// TERNARY-NOT: nvvm.shfl
+// TERNARY: llvm.return
+tt.func private @reduce_halves_maximum(%arg0: tensor<8x16xf32, #halves>) -> tensor<8xf32, #ttg.slice<{dim = 1, parent = #halves}>> {
+  %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: f32, %b: f32):
+    %c = arith.maximumf %a, %b : f32
+    tt.reduce.return %c : f32
+  }) : (tensor<8x16xf32, #halves>) -> tensor<8xf32, #ttg.slice<{dim = 1, parent = #halves}>>
+  tt.return %0 : tensor<8xf32, #ttg.slice<{dim = 1, parent = #halves}>>
+}
+
+// SM80-LABEL: @reduce_even_odd_sum
+// SM80-NOT: nvvm.redux
+// SM80: llvm.return
+// TERNARY-LABEL: @reduce_even_odd_sum
+// TERNARY-DAG: %[[MASK:.*]] = llvm.mlir.constant(-1 : i32)
+// TERNARY-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
+// TERNARY: %[[GROUP:.*]] = llvm.icmp "eq"
+// TERNARY: %[[FIRST:.*]] = llvm.select %[[GROUP]], %[[INPUT:.*]], %[[ZERO]]
+// TERNARY: %[[R0:.*]] = nvvm.redux.sync add %[[FIRST]], %[[MASK]]
+// TERNARY: %[[SECOND:.*]] = llvm.select %[[GROUP]], %[[ZERO]], %[[INPUT]]
+// TERNARY: %[[R1:.*]] = nvvm.redux.sync add %[[SECOND]], %[[MASK]]
+// TERNARY: llvm.select %[[GROUP]], %[[R0]], %[[R1]]
+// TERNARY-NOT: nvvm.shfl
+// TERNARY: llvm.return
+tt.func private @reduce_even_odd_sum(%arg0: tensor<8x16xi32, #even_odd>) -> tensor<8xi32, #ttg.slice<{dim = 1, parent = #even_odd}>> {
+  %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: i32, %b: i32):
+    %c = arith.addi %a, %b : i32
+    tt.reduce.return %c : i32
+  }) : (tensor<8x16xi32, #even_odd>) -> tensor<8xi32, #ttg.slice<{dim = 1, parent = #even_odd}>>
+  tt.return %0 : tensor<8xi32, #ttg.slice<{dim = 1, parent = #even_odd}>>
+}
+
+// SM80-LABEL: @reduce_halves_and
+// SM80-NOT: nvvm.redux
+// SM80: llvm.return
+// TERNARY-LABEL: @reduce_halves_and
+// TERNARY-DAG: %[[MASK:.*]] = llvm.mlir.constant(-1 : i32)
+// TERNARY: %[[GROUP:.*]] = llvm.icmp "eq"
+// TERNARY: %[[FIRST:.*]] = llvm.select %[[GROUP]], %[[INPUT:.*]], %[[MASK]]
+// TERNARY: %[[R0:.*]] = nvvm.redux.sync and %[[FIRST]], %[[MASK]]
+// TERNARY: %[[SECOND:.*]] = llvm.select %[[GROUP]], %[[MASK]], %[[INPUT]]
+// TERNARY: %[[R1:.*]] = nvvm.redux.sync and %[[SECOND]], %[[MASK]]
+// TERNARY: llvm.select %[[GROUP]], %[[R0]], %[[R1]]
+// TERNARY-NOT: nvvm.shfl
+// TERNARY: llvm.return
+tt.func private @reduce_halves_and(%arg0: tensor<8x16xi32, #halves>) -> tensor<8xi32, #ttg.slice<{dim = 1, parent = #halves}>> {
+  %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: i32, %b: i32):
+    %c = arith.andi %a, %b : i32
+    tt.reduce.return %c : i32
+  }) : (tensor<8x16xi32, #halves>) -> tensor<8xi32, #ttg.slice<{dim = 1, parent = #halves}>>
+  tt.return %0 : tensor<8xi32, #ttg.slice<{dim = 1, parent = #halves}>>
+}
+
+// SM80-LABEL: @reduce_halves_or
+// SM80-NOT: nvvm.redux
+// SM80: llvm.return
+// TERNARY-LABEL: @reduce_halves_or
+// TERNARY-DAG: %[[MASK:.*]] = llvm.mlir.constant(-1 : i32)
+// TERNARY-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
+// TERNARY: %[[GROUP:.*]] = llvm.icmp "eq"
+// TERNARY: %[[FIRST:.*]] = llvm.select %[[GROUP]], %[[INPUT:.*]], %[[ZERO]]
+// TERNARY: %[[R0:.*]] = nvvm.redux.sync or %[[FIRST]], %[[MASK]]
+// TERNARY: %[[SECOND:.*]] = llvm.select %[[GROUP]], %[[ZERO]], %[[INPUT]]
+// TERNARY: %[[R1:.*]] = nvvm.redux.sync or %[[SECOND]], %[[MASK]]
+// TERNARY: llvm.select %[[GROUP]], %[[R0]], %[[R1]]
+// TERNARY-NOT: nvvm.shfl
+// TERNARY: llvm.return
+tt.func private @reduce_halves_or(%arg0: tensor<8x16xi32, #halves>) -> tensor<8xi32, #ttg.slice<{dim = 1, parent = #halves}>> {
+  %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: i32, %b: i32):
+    %c = arith.ori %a, %b : i32
+    tt.reduce.return %c : i32
+  }) : (tensor<8x16xi32, #halves>) -> tensor<8xi32, #ttg.slice<{dim = 1, parent = #halves}>>
+  tt.return %0 : tensor<8xi32, #ttg.slice<{dim = 1, parent = #halves}>>
+}
+
+// SM80-LABEL: @reduce_halves_xor
+// SM80-NOT: nvvm.redux
+// SM80: llvm.return
+// TERNARY-LABEL: @reduce_halves_xor
+// TERNARY-DAG: %[[MASK:.*]] = llvm.mlir.constant(-1 : i32)
+// TERNARY-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
+// TERNARY: %[[GROUP:.*]] = llvm.icmp "eq"
+// TERNARY: %[[FIRST:.*]] = llvm.select %[[GROUP]], %[[INPUT:.*]], %[[ZERO]]
+// TERNARY: %[[R0:.*]] = nvvm.redux.sync xor %[[FIRST]], %[[MASK]]
+// TERNARY: %[[SECOND:.*]] = llvm.select %[[GROUP]], %[[ZERO]], %[[INPUT]]
+// TERNARY: %[[R1:.*]] = nvvm.redux.sync xor %[[SECOND]], %[[MASK]]
+// TERNARY: llvm.select %[[GROUP]], %[[R0]], %[[R1]]
+// TERNARY-NOT: nvvm.shfl
+// TERNARY: llvm.return
+tt.func private @reduce_halves_xor(%arg0: tensor<8x16xi32, #halves>) -> tensor<8xi32, #ttg.slice<{dim = 1, parent = #halves}>> {
+  %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: i32, %b: i32):
+    %c = arith.xori %a, %b : i32
+    tt.reduce.return %c : i32
+  }) : (tensor<8x16xi32, #halves>) -> tensor<8xi32, #ttg.slice<{dim = 1, parent = #halves}>>
+  tt.return %0 : tensor<8xi32, #ttg.slice<{dim = 1, parent = #halves}>>
+}
+
+// SM80-LABEL: @reduce_broadcast_maximum
+// SM80-NOT: nvvm.redux
+// SM80: llvm.return
+// TERNARY-LABEL: @reduce_broadcast_maximum
+// TERNARY: %[[MASK:.*]] = llvm.mlir.constant(-1 : i32)
+// TERNARY-NOT: llvm.select
+// TERNARY: nvvm.redux.sync fmax %{{.*}}, %[[MASK]] {{.*}}nan
+// TERNARY-NOT: nvvm.redux
+// TERNARY-NOT: nvvm.shfl
+// TERNARY-NOT: llvm.select
+// TERNARY: llvm.return
+tt.func private @reduce_broadcast_maximum(%arg0: tensor<4x16xf32, #blocked_warp_reduce>) -> tensor<4xf32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>> {
+  %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: f32, %b: f32):
+    %c = arith.maximumf %a, %b : f32
+    tt.reduce.return %c : f32
+  }) : (tensor<4x16xf32, #blocked_warp_reduce>) -> tensor<4xf32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  tt.return %0 : tensor<4xf32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+}
+
+// SM80-LABEL: @reduce_broadcast_sum
+// SM80-NOT: nvvm.redux
+// SM80: llvm.return
+// TERNARY-LABEL: @reduce_broadcast_sum
+// TERNARY-DAG: %[[MASK:.*]] = llvm.mlir.constant(-1 : i32)
+// TERNARY-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
+// TERNARY-DAG: %[[BROADCAST:.*]] = llvm.mlir.constant(24 : i32)
+// TERNARY: %[[BITS:.*]] = llvm.and %{{.*}}, %[[BROADCAST]]
+// TERNARY: %[[UNIQUE:.*]] = llvm.icmp "eq" %[[BITS]], %[[ZERO]]
+// TERNARY: %[[VALUE:.*]] = llvm.select %[[UNIQUE]], %{{.*}}, %[[ZERO]]
+// TERNARY: nvvm.redux.sync add %[[VALUE]], %[[MASK]]
+// TERNARY-NOT: nvvm.redux
+// TERNARY-NOT: nvvm.shfl
+// TERNARY-NOT: llvm.select
+// TERNARY: llvm.return
+tt.func private @reduce_broadcast_sum(%arg0: tensor<4x8xi32, #blocked_warp_reduce>) -> tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>> {
+  %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: i32, %b: i32):
+    %c = arith.addi %a, %b : i32
+    tt.reduce.return %c : i32
+  }) : (tensor<4x8xi32, #blocked_warp_reduce>) -> tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  tt.return %0 : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+}
+
+// SM80-LABEL: @reduce_broadcast_halves_xor
+// SM80-NOT: nvvm.redux
+// SM80: llvm.return
+// TERNARY-LABEL: @reduce_broadcast_halves_xor
+// TERNARY-DAG: %[[MASK:.*]] = llvm.mlir.constant(-1 : i32)
+// TERNARY-DAG: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
+// TERNARY-DAG: %[[GROUP_MASK:.*]] = llvm.mlir.constant(16 : i32)
+// TERNARY-DAG: %[[BROADCAST_MASK:.*]] = llvm.mlir.constant(8 : i32)
+// TERNARY: %[[GROUP_BITS:.*]] = llvm.and %[[LANE:.*]], %[[GROUP_MASK]]
+// TERNARY: %[[GROUP:.*]] = llvm.icmp "eq" %[[GROUP_BITS]], %[[ZERO]]
+// TERNARY: %[[BROADCAST_BITS:.*]] = llvm.and %[[LANE]], %[[BROADCAST_MASK]]
+// TERNARY: %[[UNIQUE:.*]] = llvm.icmp "eq" %[[BROADCAST_BITS]], %[[ZERO]]
+// TERNARY: %[[VALUE:.*]] = llvm.select %[[UNIQUE]], %{{.*}}, %[[ZERO]]
+// TERNARY: %[[FIRST:.*]] = llvm.select %[[GROUP]], %[[VALUE]], %[[ZERO]]
+// TERNARY: %[[R0:.*]] = nvvm.redux.sync xor %[[FIRST]], %[[MASK]]
+// TERNARY: %[[SECOND:.*]] = llvm.select %[[GROUP]], %[[ZERO]], %[[VALUE]]
+// TERNARY: %[[R1:.*]] = nvvm.redux.sync xor %[[SECOND]], %[[MASK]]
+// TERNARY: llvm.select %[[GROUP]], %[[R0]], %[[R1]]
+// TERNARY-NOT: nvvm.redux
+// TERNARY-NOT: nvvm.shfl
+// TERNARY: llvm.return
+tt.func private @reduce_broadcast_halves_xor(%arg0: tensor<8x8xi32, #halves>) -> tensor<8xi32, #ttg.slice<{dim = 1, parent = #halves}>> {
+  %0 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: i32, %b: i32):
+    %c = arith.xori %a, %b : i32
+    tt.reduce.return %c : i32
+  }) : (tensor<8x8xi32, #halves>) -> tensor<8xi32, #ttg.slice<{dim = 1, parent = #halves}>>
+  tt.return %0 : tensor<8xi32, #ttg.slice<{dim = 1, parent = #halves}>>
 }
 
 }
