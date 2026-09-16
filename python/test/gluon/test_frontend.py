@@ -196,7 +196,7 @@ def test_layout_nested_constexpr_containers(num_ctas, container):
     @gluon.jit
     def kernel(Out, NUM_CTAS: ttgl.constexpr, EXPECTED: ttgl.constexpr):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [16], [0],
-                                                  cga_layout=[[0]] * (NUM_CTAS.bit_length() - 1))
+                                                    cga_layout=[[0]] * (NUM_CTAS.bit_length() - 1))
         ttgl.static_assert(layout == EXPECTED)
         ttgl.static_assert(EXPECTED == layout)
         x = ttgl.arange(0, 16, layout=layout)
