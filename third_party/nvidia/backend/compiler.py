@@ -241,8 +241,7 @@ class CUDABackend(BaseBackend):
             if capability >= 90:
                 args["deprecated_fp8_dot_operand_dtypes"] = ("fp8e4b15", )
 
-        if "enable_fp_fusion" not in args:
-            args["enable_fp_fusion"] = knobs.language.default_fp_fusion
+        args["enable_fp_fusion"] = False
 
         if is_enabled(args, "gsan"):
             from triton.runtime.driver import driver

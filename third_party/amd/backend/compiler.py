@@ -193,9 +193,8 @@ class HIPBackend(BaseBackend):
             deprecated_fp8_dot_operand_dtypes.update({"fp8e5b16", "fp8e4b8"})
             args["deprecated_fp8_dot_operand_dtypes"] = tuple(sorted(deprecated_fp8_dot_operand_dtypes))
 
-        if "enable_fp_fusion" not in opts:
-            args["enable_fp_fusion"] = knobs.language.default_fp_fusion
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts and opts[k] is not None})
+        args["enable_fp_fusion"] = False
         return HIPOptions(**args)
 
     def pack_metadata(self, metadata):
