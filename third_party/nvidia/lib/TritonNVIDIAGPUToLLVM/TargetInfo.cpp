@@ -110,8 +110,9 @@ matchReduxKind(triton::ReduceOp op, int computeCapability,
     return std::nullopt;
   if (intType.getWidth() > 32 &&
       !(intType.getWidth() == 64 &&
-        isa<arith::MinSIOp, arith::MinUIOp, arith::MaxSIOp, arith::MaxUIOp,
-            arith::AndIOp, arith::OrIOp, arith::XOrIOp>(reduceOp)))
+        isa<arith::AddIOp, arith::MinSIOp, arith::MinUIOp, arith::MaxSIOp,
+            arith::MaxUIOp, arith::AndIOp, arith::OrIOp, arith::XOrIOp>(
+            reduceOp)))
     return std::nullopt;
   if (isa<arith::AddIOp>(reduceOp))
     return NVVM::ReductionKind::ADD;
@@ -530,6 +531,20 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
       Value highResult = NVVM::ReduxOp::create(rewriter, loc, i32_ty, high,
                                                *kind, mask, false, false);
       Value low = b.trunc(i32_ty, acc[0]);
+      if (*kind == NVVM::ReductionKind::ADD) {
+        // Each 16-bit sum fits in 21 bits; i64 adds propagate their carries.
+        Value lowResult = NVVM::ReduxOp::create(rewriter, loc, i32_ty,
+                                                b.and_(low, b.i32_val(0xFFFF)),
+                                                *kind, mask, false, false);
+        Value middleResult = NVVM::ReduxOp::create(rewriter, loc, i32_ty,
+                                                   b.lshr(low, b.i32_val(16)),
+                                                   *kind, mask, false, false);
+        acc[0] =
+            b.add(b.add(b.zext(i64_ty, lowResult),
+                        b.shl(b.zext(i64_ty, middleResult), b.i64_val(16))),
+                  b.shl(b.zext(i64_ty, highResult), b.i64_val(32)));
+        return true;
+      }
       auto lowKind = *kind;
       if (*kind == NVVM::ReductionKind::MIN ||
           *kind == NVVM::ReductionKind::UMIN ||
