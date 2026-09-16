@@ -380,6 +380,23 @@ private:
       }
       accumulate(op.getLoc(), rewriter, op.getCombineOp(), acc, shfl);
     }
+    // The butterfly above folds each group of lanes into a single value held
+    // by the group's base lane (e.g. lane 0 for a full-warp reduction).
+    // For a combine that is not bitwise-commutative (e.g. the Welford combine
+    // emitted for var/var_mean) the other lanes still hold values that differ
+    // in the low bits. The layout codegen treats the reduced lanes as
+    // redundant (the result is broadcast across them) and, when the result is
+    // staged through shared memory, emits a store where every lane of the
+    // group writes the same address. Divergent lane values would make that a
+    // data race with an undefined winner in the PTX memory model. Broadcast
+    // the group base lane's value to the whole group so every lane genuinely
+    // holds the same result and the layout's broadcast assertion holds.
+    auto b = TritonLLVMOpBuilder(op.getLoc(), rewriter);
+    Value laneId = getLaneId(rewriter, op.getLoc());
+    Value groupBase = b.and_(laneId, b.i32_val(~reduceLaneIdMask));
+    for (unsigned i = 0; i < op.getNumOperands(); ++i) {
+      acc[i] = targetInfo.shuffleIdx(rewriter, op.getLoc(), acc[i], groupBase);
+    }
   }
 
   // Pack the accumulator values and replace the reduce op with the result.

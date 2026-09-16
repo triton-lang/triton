@@ -47,10 +47,18 @@ tt.func private @reduce_linear_layout(%arg0: tensor<32x2xi32, #linear>) -> tenso
   // CHECK-DAG: [[reg1:%.*]] = llvm.extractvalue %arg0[1]
   // CHECK: [[permlane0:%.*]] = rocdl.permlanex16 [[reg0]], [[reg0]], [[select_lo]], [[select_hi]], true, false
   // CHECK: [[sum0:%.*]] = llvm.add [[reg0]], [[permlane0]]
+  // The 16-lane butterfly folds each lane pair into the group's base lane.
+  // Broadcast the base lane's value back to the whole group so all lanes of
+  // the group hold the same reduced result (needed when the result is staged
+  // through shared memory by redundant threads).
+  // CHECK: rocdl.workitem.id.x
+  // CHECK: [[brd0:%.*]] = rocdl.ds_bpermute {{.*}}, [[sum0]]
   // CHECK: [[permlane1:%.*]] = rocdl.permlanex16 [[reg1]], [[reg1]], [[select_lo]], [[select_hi]], true, false
   // CHECK: [[sum1:%.*]] = llvm.add [[reg1]], [[permlane1]]
-  // CHECK: [[result1:%.*]] = llvm.insertvalue [[sum0]], [[result0]][0]
-  // CHECK: [[result2:%.*]] = llvm.insertvalue [[sum1]], [[result1]][1]
+  // CHECK: rocdl.workitem.id.x
+  // CHECK: [[brd1:%.*]] = rocdl.ds_bpermute {{.*}}, [[sum1]]
+  // CHECK: [[result1:%.*]] = llvm.insertvalue [[brd0]], [[result0]][0]
+  // CHECK: [[result2:%.*]] = llvm.insertvalue [[brd1]], [[result1]][1]
 
   %0 = "tt.reduce"(%arg0) ({
   ^bb0(%arg1: i32, %arg2: i32):
