@@ -49,31 +49,33 @@ def _large_nonzero_grid_probe() -> None:
     launch = compiled_kernel.run
     driver = triton.runtime.driver.active
     stream = driver.get_current_stream(driver.get_current_device())
+    driver_error_sentinel = 0
 
-    def run(grid, metadata):
-        launch(*grid, stream, compiled_kernel.function, metadata, None, None, None)
+    def run(grid):
+        # A null function handle is a reachability sentinel: the driver rejects
+        # it synchronously, before dispatching any programs.
+        launch(*grid, stream, driver_error_sentinel, compiled_kernel.packed_metadata, None, None, None)
 
-    invalid_metadata = (0, *compiled_kernel.packed_metadata[1:])
     # An empty grid should not reach the driver.
     try:
         for grid in ((0, 1, 1), (1, 0, 1), (1, 1, 0)):
-            run(grid, invalid_metadata)
+            run(grid)
     except RuntimeError as exc:
         raise AssertionError("empty grid reached the driver") from exc
 
     # The product is 2**32, which overflows to zero with 32-bit arithmetic.
-    # A zero block size makes the driver reject the launch immediately.
-    run((1 << 14, 1 << 14, 1 << 4), invalid_metadata)
+    # The null function handle proves that this nonempty grid reaches the driver.
+    run((1 << 14, 1 << 14, 1 << 4))
 
 
 @pytest.mark.skipif(not (is_cuda() or is_hip()), reason="Requires CUDA or HIP")
 def test_large_nonzero_grid_is_not_skipped(monkeypatch) -> None:
     monkeypatch.setenv("TRITON_TEST_PROCESS_TIMEOUT", "120")
     result = run_in_process(_large_nonzero_grid_probe)
-    assert isinstance(result.exc, RuntimeError), result.exc
+    assert isinstance(result.exc, RuntimeError), f"large nonzero grid did not reach the driver: {result.exc!r}"
     error = str(result.exc)
     assert error.startswith(("Triton Error [CUDA]:", "Triton Error [HIP]:"))
-    assert "invalid argument" in error.lower()
+    assert "invalid" in error.lower() and "handle" in error.lower()
 
 
 def test_memory_leak(device) -> None:
