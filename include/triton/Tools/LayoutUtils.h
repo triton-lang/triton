@@ -169,6 +169,11 @@ std::pair<int, ColumnAction>
 largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
                      std::optional<int> maybeMaxVecElems = std::nullopt);
 
+// Match tile over cvt's input domain and return the repetition offsets in cvt's
+// coordinates, with the matched input bases set to zero. The full tile's output
+// extents must fit in cvt, and its bases outside the view still reserve output
+// bits that repetitions cannot use.
+//
 // Close cousin of doing zerosLike(tile) * divideLeft(cvt, tile)
 // This one is a tad more general in the sense that it allows to divide
 //  cvt:

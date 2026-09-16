@@ -615,11 +615,14 @@ largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
 std::optional<LinearLayout> getReps(const LinearLayout &cvt,
                                     const LinearLayout &tile) {
 
-  // Ensure tile out-dims are subset of cvt out-dims.
-  for (auto od : tile.getOutDimNames())
+  // The full tile must fit even when cvt is a view of it.
+  for (auto od : tile.getOutDimNames()) {
     assert(cvt.hasOutDim(od) && "tile out-dims must be contained in cvt");
+    if (tile.getOutDimSize(od) > cvt.getOutDimSize(od))
+      return std::nullopt;
+  }
 
-  // Build a per-out-dimension mask by OR-ing all tile bases that touch it.
+  // Include bases outside the view so repetitions cannot overlap the full tile.
   llvm::SmallDenseMap<StringAttr, int32_t> tileMaskPerOutDim;
   auto tileInDims = llvm::to_vector(tile.getInDimNames());
   for (StringAttr od : cvt.getOutDimNames())
@@ -631,13 +634,7 @@ std::optional<LinearLayout> getReps(const LinearLayout &cvt,
   LinearLayout::BasesT repsBases;
   for (StringAttr id : cvt.getInDimNames()) {
     int inA = cvt.getInDimSizeLog2(id);
-    int inB = tile.hasInDim(id) ? tile.getInDimSizeLog2(id) : 0;
-    if (inB > inA) {
-      return std::nullopt;
-    }
-
-    std::vector<std::vector<int32_t>> basesForDim;
-    basesForDim.reserve(inA);
+    int inB = tile.hasInDim(id) ? std::min(inA, tile.getInDimSizeLog2(id)) : 0;
 
     // 1) Validate the starting bases match exactly.
     for (int i = 0; i < inB; ++i) {
@@ -666,17 +663,9 @@ std::optional<LinearLayout> getReps(const LinearLayout &cvt,
     }
 
     // 3) Emit reps bases: first inB as all-zeros; remainder copied from cvt.
-    for (int i = 0; i < inB; ++i) {
-      std::vector<int32_t> zero(cvt.getNumOutDims(), 0);
-      basesForDim.push_back(std::move(zero));
-    }
-    for (int i = inB; i < inA; ++i) {
-      std::vector<int32_t> keep;
-      keep.reserve(cvt.getNumOutDims());
-      for (StringAttr od : cvt.getOutDimNames())
-        keep.push_back(cvt.getBasis(id, i, od));
-      basesForDim.push_back(std::move(keep));
-    }
+    auto basesForDim = cvt.getBases().lookup(id);
+    for (int i = 0; i < inB; ++i)
+      std::fill(basesForDim[i].begin(), basesForDim[i].end(), 0);
 
     repsBases[id] = std::move(basesForDim);
   }

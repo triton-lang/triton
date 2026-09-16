@@ -130,6 +130,29 @@ TEST_F(NvmmaSmemAttrsTest, InferNvmmaSmemAttrsSharedLinear) {
   }
 }
 
+TEST_F(NvmmaSmemAttrsTest, InferNvmmaSmemAttrsPaddedN) {
+  auto fp8Ty = Float8E4M3FNType::get(&ctx);
+  auto smem = SharedMemorySpaceAttr::get(&ctx);
+  auto infer = [&](const LinearLayout &layout) {
+    auto encoding = SharedLinearEncodingAttr::get(&ctx, layout,
+                                                  /*layoutAlignment=*/16);
+    return getNvmmaSmemAttrs(MemDescType::get({128, 1}, fp8Ty, encoding, smem));
+  };
+  auto padded = LinearLayout::identity1D(16, S("offset"), S("dim0")) *
+                LinearLayout::zeros1D(8, S("offset"), S("dim1")) *
+                LinearLayout::identity1D(8, S("offset"), S("dim0")) *
+                LinearLayout::identity1D(1, S("block"), S("dim0"));
+  auto inferred = infer(padded);
+  ASSERT_TRUE(inferred);
+  EXPECT_EQ(inferred->swizzlingByteWidth, 0u);
+  EXPECT_TRUE(inferred->transposed);
+  EXPECT_FALSE(inferred->fp4Padded);
+
+  // A compact vector does not reserve the other seven physical columns.
+  auto compact = padded.removeZeroBasesAlongDim(S("offset"));
+  EXPECT_FALSE(infer(compact));
+}
+
 TEST_F(NvmmaSmemAttrsTest, Fp4PaddedRequiresI8Storage) {
   auto checkLayout = [&](const LinearLayout &ll) {
     bool sawFp4Padded = false;
@@ -225,6 +248,12 @@ TEST_F(NvmmaSmemAttrsTest, InferNvmmaSmemAttrsRejectsNearMisses) {
                                          {{S("dim0"), 32}, {S("dim1"), 64}},
                                          /*requireSurjective=*/true);
   EXPECT_FALSE(inferSharedLinearInfo(std::move(earlyRowInterleave)));
+
+  // Dropping the high column bit moves row 4 to offset 128, while the
+  // hardware's swizzle still reads it at offset 144.
+  auto swizzled = toLinearLayout(
+      {8, 32}, nvmmaShared(32, false, 8, {1, 1}, {1, 1}, {1, 0}, {1, 0}));
+  EXPECT_FALSE(inferSharedLinearInfo(swizzled.resizeOutDim(S("dim1"), 16)));
 }
 
 } // namespace
