@@ -2731,6 +2731,93 @@ def test_tmem_subslice_block_m_64():
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("K,N,mn_major", [(128, 1, False), (256, 4, False), (256, 1, True)])
+@pytest.mark.parametrize("scaled", [False, True])
+@pytest.mark.parametrize("two_ctas", [False, True])
+def test_tcgen05_mma_zero_n_bases(K, N, mn_major, scaled, two_ctas):
+    M = 256 if two_ctas else 128
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, out_ptr, a_scale_ptr, b_scale_ptr, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr,
+               SCALED: ttgl.constexpr, TWO_CTAS: ttgl.constexpr, B_LAYOUT: ttgl.constexpr, BLOCK_N: ttgl.constexpr):
+        cga_a: ttgl.constexpr = ((1, 0), ) if TWO_CTAS else ()
+        cga_b: ttgl.constexpr = ((0, 0), ) if TWO_CTAS else ()
+        a = allocate_tensor_memory(ttgl.float8e4nv, [M, K],
+                                   TensorMemoryLayout((128, K), 1, cga_layout=cga_a, two_ctas=TWO_CTAS))
+        a_offsets = ttgl.arange(0, M)[:, None] * K + ttgl.arange(0, K)[None, :]
+        a_offsets = ttgl.set_auto_layout(a_offsets, a.get_reg_layout())
+        a.store(ttgl.load(a_ptr + a_offsets))
+
+        b_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [4, 8], [4, 1], [0, 1], cga_layout=cga_b)
+        b_offsets = ttgl.arange(0, K)[:, None] * N + ttgl.arange(0, N)[None, :]
+        b_values = ttgl.load(ttgl.set_auto_layout(b_ptr + b_offsets, b_layout))
+        b = ttgl.allocate_shared_memory(ttgl.float8e4nv, [K, N], B_LAYOUT, b_values)
+
+        acc = allocate_tensor_memory(ttgl.float32, [M, N],
+                                     TensorMemoryLayout((128, BLOCK_N), 1, cga_layout=cga_a, two_ctas=TWO_CTAS))
+
+        if SCALED:
+            a_scale = allocate_tensor_memory(ttgl.uint8, [M, K // 32], TensorMemoryScalesLayout(cga_layout=cga_a))
+            b_scale = allocate_tensor_memory(ttgl.uint8, [64, K // 32], TensorMemoryScalesLayout(cga_layout=cga_b))
+            a_scale_offsets = ttgl.arange(0, M)[:, None] * (K // 32) + ttgl.arange(0, K // 32)[None, :]
+            b_scale_offsets = (ttgl.arange(0, 64)[:, None] % N) * (K // 32) + ttgl.arange(0, K // 32)[None, :]
+            a_scale_offsets = ttgl.set_auto_layout(a_scale_offsets, a_scale.get_reg_layout())
+            b_scale_offsets = ttgl.set_auto_layout(b_scale_offsets, b_scale.get_reg_layout())
+            a_scale.store(ttgl.load(a_scale_ptr + a_scale_offsets))
+            b_scale.store(ttgl.load(b_scale_ptr + b_scale_offsets))
+
+        bar = mbarrier.allocate_mbarrier()
+        mbarrier.init(bar, count=1)
+        fence_async_shared(cluster=TWO_CTAS)
+        if TWO_CTAS:
+            ttgl.barrier(cluster=True)
+        if SCALED:
+            tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, "e4m3", "e4m3", use_acc=False)
+        else:
+            tcgen05_mma(a, b, acc, use_acc=False)
+        tcgen05_commit(bar)
+        mbarrier.wait(bar, phase=0, deps=[b])
+        mbarrier.invalidate(bar)
+        out_offsets = ttgl.arange(0, M)[:, None] * N + ttgl.arange(0, N)[None, :]
+        ttgl.store(out_ptr + out_offsets, acc.load())
+
+    # Reserve a full physical atom and replicate B across the CTA pair.
+    b_bases = [
+        [1, 0],
+        [2, 0],
+        [4, 0],
+        [8, 0],
+        [0, 1],
+        [0, 2],
+        [0, 4],
+        [16, 0],
+        [32, 0],
+        [64, 0],
+        [128, 0],
+    ]
+    if mn_major:
+        b_bases = [[0, n] for n in (1, 2, 4, 8)] + [[k, 0] for k in (1, 2, 4, 8, 16, 32, 64, 128)]
+    b_layout = ttgl.SharedLinearLayout([[k, n if n < N else 0] for k, n in b_bases if k < K],
+                                       block_bases=[[0, 0]] if two_ctas else [])
+    block_n = (16 if mn_major else 8) * (2 if two_ctas else 1)
+    torch.manual_seed(0)
+    # Products and sums of these dyadic inputs are exactly representable in FP32.
+    a = (torch.randint(-8, 9, (M, K), device="cuda").float() / 4).to(torch.float8_e4m3fn)
+    b = (torch.randint(-8, 9, (K, N), device="cuda").float() / 4).to(torch.float8_e4m3fn)
+    out = torch.empty((M, N), device="cuda", dtype=torch.float32)
+    a_scale = torch.randint(126, 129, (M, K // 32), device="cuda", dtype=torch.uint8)
+    b_scale = torch.randint(126, 129, (N, K // 32), device="cuda", dtype=torch.uint8)
+    a_ref, b_ref = a.float(), b.float()
+    if scaled:
+        a_ref *= fp8e8m0_to_float32(a_scale).repeat_interleave(32, dim=1)
+        b_ref *= fp8e8m0_to_float32(b_scale).repeat_interleave(32, dim=1).T
+    expected = a_ref @ b_ref
+    kernel[(1, )](a, b, out, a_scale, b_scale, M, N, K, scaled, two_ctas, b_layout, block_n, num_warps=4,
+                  num_ctas=2 if two_ctas else 1)
+    torch.testing.assert_close(out, expected, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("block_m", [64, 128])
 def test_tcgen05_mma_projected_tmem_layout(block_m):
     M, N, K = 2 * block_m, 16, 128

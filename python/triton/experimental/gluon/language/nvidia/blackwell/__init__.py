@@ -583,7 +583,7 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
-        mbarriers (Sequence[shared_memory_descriptor], optional): Barriers to signal when the operation is complete. If None, mma is synchronous. Defaults to None.
+        mbarriers (Sequence[shared_memory_descriptor], optional): Barriers to signal when the operation is complete. If empty or None, use ``tcgen05_commit`` to signal completion. Defaults to None.
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
     """
     use_acc = _semantic.to_tensor(use_acc)
@@ -624,7 +624,7 @@ def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=T
         use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         multicast (bool): Whether tcgen05 commit should multicast across a CTA cluster. Defaults to False.
-        mbarriers (Sequence[mbarrier], optional): Barriers to signal when the operation is complete. If None, mma is synchronous. Defaults to None.
+        mbarriers (Sequence[mbarrier], optional): Barriers to signal when the operation is complete. If empty or None, use ``tcgen05_commit`` to signal completion. Defaults to None.
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
     """
     use_acc = _semantic.to_tensor(use_acc)
