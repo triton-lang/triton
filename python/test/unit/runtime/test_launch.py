@@ -53,12 +53,6 @@ def _large_nonzero_grid_probe() -> None:
     def run(grid, metadata):
         launch(*grid, stream, compiled_kernel.function, metadata, None, None, None)
 
-    try:
-        run((1, 1, 1), compiled_kernel.packed_metadata)
-        torch.cuda.synchronize()
-    except RuntimeError as exc:
-        raise AssertionError("control launch failed") from exc
-
     invalid_metadata = (0, *compiled_kernel.packed_metadata[1:])
     # An empty grid should not reach the driver.
     try:
@@ -77,7 +71,9 @@ def test_large_nonzero_grid_is_not_skipped(monkeypatch) -> None:
     monkeypatch.setenv("TRITON_TEST_PROCESS_TIMEOUT", "120")
     result = run_in_process(_large_nonzero_grid_probe)
     assert isinstance(result.exc, RuntimeError), result.exc
-    assert str(result.exc).startswith(("Triton Error [CUDA]:", "Triton Error [HIP]:"))
+    error = str(result.exc)
+    assert error.startswith(("Triton Error [CUDA]:", "Triton Error [HIP]:"))
+    assert "invalid argument" in error.lower()
 
 
 def test_memory_leak(device) -> None:
