@@ -3,6 +3,7 @@ import pytest
 import re
 from dataclasses import replace
 
+import triton
 from triton.backends.compiler import GPUTarget
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
@@ -135,8 +136,6 @@ def test_inline_asm_frontend_unresolved_layout(layout):
 
 @pytest.mark.parametrize("elementwise", [False, True])
 def test_inline_asm_shared_amd_compilation(elementwise):
-    import triton
-    from triton.experimental.gluon._runtime import GluonASTSource
 
     @gluon.jit
     def kernel(Out, ELEMENTWISE: ttgl.constexpr):
@@ -150,9 +149,33 @@ def test_inline_asm_shared_amd_compilation(elementwise):
             y = ttgl.inline_asm(asm, "=&v,v,v", [smem, x * 4], x.type)
         ttgl.store(Out + x, y)
 
-    source = GluonASTSource(kernel, {"Out": "*i32", "ELEMENTWISE": "constexpr"}, {"ELEMENTWISE": elementwise})
+    source = gluon.GluonASTSource(kernel, {"Out": "*i32", "ELEMENTWISE": "constexpr"}, {"ELEMENTWISE": elementwise})
     compiled = triton.compile(source, target=HIP_TARGET_CDNA3)
     assert "ds_read_b32" in compiled.asm["amdgcn"]
+
+
+@pytest.mark.parametrize("target, binary", [(AMPERE_TARGET, "cubin"), (HIP_TARGET_CDNA3, "hsaco")])
+def test_gluon_ast_source_without_driver(target, binary, monkeypatch, fresh_triton_cache):
+
+    def fail_driver_access(self):
+        raise AssertionError("Offline compilation must not access the GPU driver")
+
+    monkeypatch.setattr(type(triton.runtime.driver), "active", property(fail_driver_access))
+
+    @gluon.jit
+    def kernel(X, Y, BLOCK: ttgl.constexpr, LAYOUT: ttgl.constexpr):
+        offsets = ttgl.arange(0, BLOCK, layout=LAYOUT)
+        ttgl.store(Y + offsets, ttgl.load(X + offsets))
+
+    source = gluon.GluonASTSource(
+        kernel,
+        signature={"X": "*fp32", "Y": "*fp32", "BLOCK": "constexpr", "LAYOUT": "constexpr"},
+        constexprs={"BLOCK": 128, "LAYOUT": ttgl.BlockedLayout([1], [target.warp_size], [4], [0])},
+        attrs={(0, ): [["tt.divisibility", 16]], (1, ): [["tt.divisibility", 16]]},
+    )
+    compiled = triton.compile(source, target=target)
+    assert "tt.divisibility = 16" in compiled.asm[source.ext]
+    assert compiled.asm[binary]
 
 
 @gluon.jit
