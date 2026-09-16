@@ -2618,7 +2618,7 @@ def test_tcgen05_mma_two_ctas(device, use_acc, fresh_knobs):
         smem_layout_a: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float32,
                                                                            cga_layout=((1, 0), ))
         smem_layout_b: gl.constexpr = gl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], gl.float32,
-                                                                           cga_layout=((0, 1), ))
+                                                                           transposed=True, cga_layout=((0, 1), ))
         smem_a = gl.allocate_shared_memory(gl.float32, [BLOCK_M, BLOCK_K], smem_layout_a, a_tile)
         smem_b = gl.allocate_shared_memory(gl.float32, [BLOCK_K, BLOCK_N], smem_layout_b, b_tile)
 
@@ -3113,7 +3113,7 @@ def test_tmem_copy_scales_in_warp_specialize_partition(device, scale_shape, two_
         if TWO_CTAS:
             mma_a_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([256, 64], gl.float32,
                                                                               cga_layout=((1, 0), ))
-            mma_b_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([64, 128], gl.float32,
+            mma_b_layout: gl.constexpr = gl.NVMMASharedLayout.get_default_for([64, 128], gl.float32, transposed=True,
                                                                               cga_layout=((0, 1), ))
             mma_a = gl.allocate_shared_memory(gl.float32, [256, 64], mma_a_layout)
             mma_b = gl.allocate_shared_memory(gl.float32, [64, 128], mma_b_layout)

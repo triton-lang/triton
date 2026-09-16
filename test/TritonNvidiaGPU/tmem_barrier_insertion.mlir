@@ -6,13 +6,17 @@
 #shared_copy = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #shared_fp8 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+#shared_padded_b = #ttg.shared_linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 0], [0, 0], [0, 0], [16, 0], [32, 0]]}, alignment = 16>
+#shared_padded_b32 = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 0], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0], [128, 0]]}, alignment = 16>
 #shared_scales = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 8}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #blocked_scales = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
 #linear64 = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 64]], warp = [[16, 0], [32, 0]], block = []}>
 #tmem128 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 #tmem64 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 128, colStride = 1>
 #tmem8 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 8, colStride = 1>
+#tmem32 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 32, colStride = 1>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
@@ -145,6 +149,83 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %old = ttng.tmem_subslice %parent {offset = 7 : i32} : !ttg.memdesc<128x8xf32, #tmem8, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x1xf32, #tmem8, #ttng.tensor_memory, mutable, 128x8>
     ttng.tmem_store %data, %d, %true : tensor<128x1xf32, #blocked> -> !ttg.memdesc<128x1xf32, #tmem8, #ttng.tensor_memory, mutable>
     %loaded = ttng.tmem_load %old : !ttg.memdesc<128x1xf32, #tmem8, #ttng.tensor_memory, mutable, 128x8> -> tensor<128x1xf32, #blocked>
+    tt.return
+  }
+
+  // MMA overwrites column 7 even though D has only one logical column.
+  // WAIT-LABEL: @padded_tmem_load_then_mma
+  // WAIT: ttng.tmem_load
+  // WAIT: ttng.tmem_wait load
+  // WAIT-NEXT: ttg.barrier local
+  // WAIT-NEXT: ttng.tc_gen5_mma
+  tt.func @padded_tmem_load_then_mma(
+      %a: !ttg.memdesc<128x64xf8E4M3FN, #shared_fp8, #ttg.shared_memory>,
+      %b: !ttg.memdesc<64x1xf8E4M3FN, #shared_padded_b, #ttg.shared_memory>) {
+    %false = arith.constant false
+    %true = arith.constant true
+    %parent = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x8xf32, #tmem8, #ttng.tensor_memory, mutable>
+    %old = ttng.tmem_subslice %parent {offset = 7 : i32} : !ttg.memdesc<128x8xf32, #tmem8, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x1xf32, #tmem8, #ttng.tensor_memory, mutable, 128x8>
+    %loaded = ttng.tmem_load %old : !ttg.memdesc<128x1xf32, #tmem8, #ttng.tensor_memory, mutable, 128x8> -> tensor<128x1xf32, #blocked>
+    %d = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x1xf32, #tmem8, #ttng.tensor_memory, mutable>
+    ttng.tc_gen5_mma %a, %b, %d, %false, %true {is_async} :
+      !ttg.memdesc<128x64xf8E4M3FN, #shared_fp8, #ttg.shared_memory>,
+      !ttg.memdesc<64x1xf8E4M3FN, #shared_padded_b, #ttg.shared_memory>,
+      !ttg.memdesc<128x1xf32, #tmem8, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  // Byte 16 belongs to B's reserved N columns; K is packed two FP4 values per byte.
+  // CHECK-LABEL: @padded_fp4_shared_store_then_mma
+  // CHECK: ttg.local_store
+  // CHECK: ttg.barrier local
+  // CHECK-NEXT: ttng.tc_gen5_mma_scaled
+  tt.func @padded_fp4_shared_store_then_mma(
+      %data: tensor<1xi32, #blocked0>,
+      %sa: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+      %sb: !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>) {
+    %false = arith.constant false
+    %true = arith.constant true
+    %a = ttg.local_alloc {allocation.offset = 2048 : i32} : () -> !ttg.memdesc<128x64xi8, #shared_fp8, #ttg.shared_memory, mutable>
+    %d = ttng.tmem_alloc {tensor_memory_col_offset = 64 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x1xf32, #tmem8, #ttng.tensor_memory, mutable>
+    %old = ttg.local_alloc {allocation.offset = 16 : i32} : () -> !ttg.memdesc<1xi32, #barrier, #ttg.shared_memory, mutable>
+    ttg.local_store %data, %old : tensor<1xi32, #blocked0> -> !ttg.memdesc<1xi32, #barrier, #ttg.shared_memory, mutable>
+    %b = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<64x1xi8, #shared_padded_b, #ttg.shared_memory, mutable>
+    ttng.tc_gen5_mma_scaled %a, %b, %d, %sa, %sb, %false, %true lhs = e2m1 rhs = e2m1 {is_async} :
+      !ttg.memdesc<128x64xi8, #shared_fp8, #ttg.shared_memory, mutable>,
+      !ttg.memdesc<64x1xi8, #shared_padded_b, #ttg.shared_memory, mutable>,
+      !ttg.memdesc<128x1xf32, #tmem8, #ttng.tensor_memory, mutable>,
+      !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>,
+      !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>
+    tt.return
+  }
+
+  // Scale column 1 holds rows 32-63, outside the scale subview.
+  // WAIT-LABEL: @padded_scale_store_outside_subview
+  // WAIT: ttng.tmem_store
+  // WAIT-NEXT: {{.*}}ttng.tmem_alloc
+  // WAIT-NEXT: {{.*}}ttng.tmem_subslice
+  // WAIT-NEXT: ttng.tc_gen5_mma_scaled
+  // WAIT-NEXT: ttng.tmem_wait store
+  // WAIT-NEXT: tt.return
+  tt.func @padded_scale_store_outside_subview(
+      %data: tensor<128x1xf32, #blocked>,
+      %a: !ttg.memdesc<128x128xi8, #shared_fp8, #ttg.shared_memory>,
+      %b: !ttg.memdesc<256x8xi8, #shared_padded_b32, #ttg.shared_memory>) {
+    %false = arith.constant false
+    %true = arith.constant true
+    %sa = ttng.tmem_alloc {tensor_memory_col_offset = 256 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x8xi8, #tmem_scales, #ttng.tensor_memory, mutable>
+    %d = ttng.tmem_alloc {tensor_memory_col_offset = 384 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x16xf32, #tmem32, #ttng.tensor_memory, mutable>
+    %old_parent = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x8xf32, #tmem8, #ttng.tensor_memory, mutable>
+    %old = ttng.tmem_subslice %old_parent {offset = 1 : i32} : !ttg.memdesc<128x8xf32, #tmem8, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x1xf32, #tmem8, #ttng.tensor_memory, mutable, 128x8>
+    ttng.tmem_store %data, %old, %true : tensor<128x1xf32, #blocked> -> !ttg.memdesc<128x1xf32, #tmem8, #ttng.tensor_memory, mutable, 128x8>
+    %parent = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<64x8xi8, #tmem_scales, #ttng.tensor_memory, mutable>
+    %sb = ttng.tmem_subslice %parent {offset = 0 : i32, dim = 0 : i32} : !ttg.memdesc<64x8xi8, #tmem_scales, #ttng.tensor_memory, mutable> -> !ttg.memdesc<32x8xi8, #tmem_scales, #ttng.tensor_memory, mutable, 64x8>
+    ttng.tc_gen5_mma_scaled %a, %b, %d, %sa, %sb, %false, %true lhs = e2m1 rhs = e2m1 {is_async} :
+      !ttg.memdesc<128x128xi8, #shared_fp8, #ttg.shared_memory>,
+      !ttg.memdesc<256x8xi8, #shared_padded_b32, #ttg.shared_memory>,
+      !ttg.memdesc<128x16xf32, #tmem32, #ttng.tensor_memory, mutable>,
+      !ttg.memdesc<128x8xi8, #tmem_scales, #ttng.tensor_memory, mutable>,
+      !ttg.memdesc<32x8xi8, #tmem_scales, #ttng.tensor_memory, mutable, 64x8>
     tt.return
   }
 

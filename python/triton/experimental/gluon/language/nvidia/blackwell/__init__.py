@@ -132,6 +132,9 @@ class TensorMemoryLayout:
 
     Args:
         block (Tuple[int, int]): Number of contiguous elements per row / column in a CTA.
+            A full allocation narrower than ``block[1]`` retains the unused columns as padding.
+            For an MMA accumulator, ``block[1]`` selects the instruction N.
+            An N subslice can use a smaller instruction to fit its visible width.
         col_stride (int): Number of 32-bit columns to advance between logically
             adjacent columns. Packed layouts use a stride of 1. Unpacked
             layouts use ``32 / bitwidth``.
@@ -569,6 +572,9 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, multicast=False, mbarrier
     """
     Emit a 5th generation TensorCore MMA instruction.
     acc = a * b + (acc if use_acc else 0)
+
+    For N smaller than the instruction width, the layouts must reserve the full
+    instruction tile.
 
     Args:
         a (shared_memory_descriptor or tensor_memory_descriptor): Left hand side operand in shared or tensor memory.
