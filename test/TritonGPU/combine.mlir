@@ -2509,12 +2509,15 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-LABEL: assertop
-// CHECK: %[[L:.+]] = tt.load %{{.*}} : tensor<1024x!tt.ptr<i1>, #blocked>
-// CHECK: tt.assert %[[L]]
+// CHECK: %[[L:.+]] = tt.load %{{.*}} : tensor<1024x!tt.ptr<i8>, #blocked>
+// CHECK: %[[COND:.+]] = arith.cmpi ne, %[[L]], %{{.*}} : tensor<1024xi8, #blocked>
+// CHECK: tt.assert %[[COND]]
 
-tt.func @assertop(%ptr: tensor<1024x!tt.ptr<i1>, #blocked>) {
-  %0 = tt.load %ptr : tensor<1024x!tt.ptr<i1>, #blocked>
-  %1 = ttg.convert_layout %0 : tensor<1024xi1, #blocked> -> tensor<1024xi1, #blocked1>
+tt.func @assertop(%ptr: tensor<1024x!tt.ptr<i8>, #blocked>) {
+  %zero = arith.constant dense<0> : tensor<1024xi8, #blocked>
+  %0 = tt.load %ptr : tensor<1024x!tt.ptr<i8>, #blocked>
+  %cond = arith.cmpi ne, %0, %zero : tensor<1024xi8, #blocked>
+  %1 = ttg.convert_layout %cond : tensor<1024xi1, #blocked> -> tensor<1024xi1, #blocked1>
   tt.assert %1, "cond must be true " : tensor<1024xi1, #blocked1>
   tt.return
 }
@@ -4592,5 +4595,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       scf.yield %late : tensor<8x8xf32, #blocked>
     }
     tt.return
+  }
+}
+
+// -----
+
+#src = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
+#transposed = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
+#dst = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 1], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // Absorbing the reshape's result layout must keep its source layout, which
+  // conflicts with rematerializing that source through the transpose branch.
+  // CHECK-LABEL: @reshape_absorption_source_layout_conflict
+  // CHECK: %[[SRC:.*]] = tt.broadcast
+  // CHECK-NEXT: %[[R:.*]] = tt.reshape %[[SRC]] allow_reorder
+  // CHECK-NEXT: %[[T:.*]] = tt.trans %[[SRC]]
+  // CHECK-NEXT: %[[A:.*]] = arith.addi %[[T]], %[[R]]
+  // CHECK-NEXT: %[[C:.*]] = ttg.convert_layout %[[A]]
+  // CHECK-NEXT: tt.return %[[C]]
+  tt.func @reshape_absorption_source_layout_conflict() -> tensor<4x2xi32, #dst> {
+    %r = tt.make_range {start = 0 : i32, end = 4 : i32} : tensor<4xi32, #ttg.slice<{dim = 0, parent = #src}>>
+    %e = tt.expand_dims %r {axis = 0 : i32} : tensor<4xi32, #ttg.slice<{dim = 0, parent = #src}>> -> tensor<1x4xi32, #src>
+    %v = tt.broadcast %e : tensor<1x4xi32, #src> -> tensor<2x4xi32, #src>
+    %s = tt.reshape %v allow_reorder : tensor<2x4xi32, #src> -> tensor<4x2xi32, #transposed>
+    %t = tt.trans %v {order = array<i32: 1, 0>} : tensor<2x4xi32, #src> -> tensor<4x2xi32, #transposed>
+    %a = arith.addi %t, %s : tensor<4x2xi32, #transposed>
+    %c = ttg.convert_layout %a : tensor<4x2xi32, #transposed> -> tensor<4x2xi32, #dst>
+    tt.return %c : tensor<4x2xi32, #dst>
   }
 }

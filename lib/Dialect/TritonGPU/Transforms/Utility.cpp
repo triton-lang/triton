@@ -102,9 +102,7 @@ getOrderFromContiguity(const SmallVector<int64_t> &arr) {
 Value getMemAccessPtr(Operation *op) {
   if (auto ld = dyn_cast<triton::LoadOp>(op))
     return ld.getPtr();
-  if (auto atomic = dyn_cast<triton::AtomicRMWOp>(op))
-    return atomic.getPtr();
-  if (auto atomic = dyn_cast<triton::AtomicCASOp>(op))
+  if (auto atomic = dyn_cast<triton::AtomicOpInterface>(op))
     return atomic.getPtr();
   if (auto copy = dyn_cast<triton::gpu::AsyncCopyGlobalToLocalOp>(op))
     return copy.getSrc();
@@ -123,6 +121,8 @@ unsigned getElementBitWidth(RankedTensorType type) {
 
 static std::optional<unsigned>
 getAtomicWriteElementsPerThreadCap(Operation *op) {
+  if (isa<triton::AtomicLoadOp, triton::AtomicStoreOp>(op))
+    return 1;
   if (isa<triton::AtomicCASOp>(op))
     return 1;
 
@@ -585,7 +585,7 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
-      isa<scf::WhileOp, scf::YieldOp, scf::ConditionOp,
+      isa<triton::BroadcastOp, scf::WhileOp, scf::YieldOp, scf::ConditionOp,
           nvidia_gpu::WarpGroupDotWaitOp>(op)) {
     return encoding;
   }
@@ -621,8 +621,8 @@ Attribute inferDstEncoding(Operation *op, Attribute encoding) {
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
-      isa<scf::WhileOp, scf::ForOp, scf::YieldOp, scf::ConditionOp,
-          nvidia_gpu::WarpGroupDotWaitOp>(op))
+      isa<triton::BroadcastOp, scf::WhileOp, scf::ForOp, scf::YieldOp,
+          scf::ConditionOp, nvidia_gpu::WarpGroupDotWaitOp>(op))
     return encoding;
   if (auto reduceOp = dyn_cast<triton::ReduceOp>(op))
     return inferDstEncoding(reduceOp, encoding);
@@ -659,34 +659,38 @@ bool isExpensiveLoadOrStore(Operation *op) {
   return true;
 }
 
-bool canUseResultEncoding(Operation *op, Attribute targetEncoding) {
+std::optional<SmallVector<OpOperand *>>
+canUseResultEncoding(Operation *op, Attribute targetEncoding) {
   if (auto convert = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
     if (mlir::isa<triton::gpu::NvidiaMmaEncodingAttr>(targetEncoding)) {
       auto srcEncoding = convert.getSrc().getType().getEncoding();
       if (targetEncoding != srcEncoding)
-        return false;
+        return std::nullopt;
+      return SmallVector<OpOperand *>{&convert.getSrcMutable()};
     }
-    return true;
+    return SmallVector<OpOperand *>{};
   }
 
   if (auto reshape = dyn_cast<triton::ReshapeOp>(op)) {
     auto reshapeDstType = reshape.getType();
     RankedTensorType newDstType =
         reshapeDstType.cloneWithEncoding(targetEncoding);
-    return reshape.getAllowReorder() && !reshape.getEfficientLayout() &&
-           !triton::gpu::isExpensiveView(reshape.getSrc().getType(),
-                                         newDstType);
+    if (!reshape.getAllowReorder() || reshape.getEfficientLayout() ||
+        triton::gpu::isExpensiveView(reshape.getSrc().getType(), newDstType))
+      return std::nullopt;
+    return SmallVector<OpOperand *>{&reshape.getSrcMutable()};
   }
-  return isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
-             triton::MakeRangeOp, triton::SplatOp, triton::HistogramOp,
-             triton::gpu::LocalAllocOp, triton::gpu::LocalLoadOp,
-             triton::gpu::LocalStoreOp>(op);
+  if (isa<arith::ConstantOp, triton::MakeRangeOp, triton::SplatOp,
+          triton::HistogramOp, triton::gpu::LocalAllocOp,
+          triton::gpu::LocalLoadOp, triton::gpu::LocalStoreOp>(op))
+    return SmallVector<OpOperand *>{};
+  return std::nullopt;
 }
 
 bool canBeRematerialized(Operation *op) {
   if (isa<LoadOp, StoreOp>(op))
     return !isExpensiveLoadOrStore(op);
-  if (isa<AtomicRMWOp, AtomicCASOp, DotOpInterface>(op))
+  if (isa<AtomicOpInterface, DotOpInterface>(op))
     return false;
   if (auto gather = dyn_cast<GatherOp>(op))
     return !gather.getEfficientLayout();
@@ -980,8 +984,17 @@ LogicalResult getConvertBackwardSlice(
         enqueue(definingOp->getOpOperand(0), encoding);
         continue;
       }
-      if (canUseResultEncoding(definingOp, encoding))
+      if (auto fixedOperands = canUseResultEncoding(definingOp, encoding)) {
+        // Another path through the slice must preserve these operand layouts.
+        for (OpOperand *operand : *fixedOperands) {
+          Value src = operand->get();
+          auto srcEncoding =
+              cast<RankedTensorType>(src.getType()).getEncoding();
+          if (failed(updateLayout(src, srcEncoding)))
+            return failure();
+        }
         continue;
+      }
       if (stopPropagation && stopPropagation(definingOp))
         continue;
       if (auto gather = dyn_cast<GatherOp>(definingOp)) {

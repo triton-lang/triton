@@ -29,6 +29,33 @@ class TTG_Op<string mnemonic, list<Trait> traits = []> :
        !listconcat(traits, [VerifyTensorLayoutsTrait, VerifyMemDescLayoutsTrait])> {
 }
 
+def TTG_InlineAsmOp : TTG_Op<"inline_asm", [
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+  DeclareOpInterfaceMethods<ConditionallySpeculatable>
+]> {
+  let summary = "Run inline assembly once per thread with explicit tensor layouts";
+  let description = [{
+    Each tensor operand is unpacked into all of its per-thread elements in
+    register order, including replicated register positions. Scalars and memory
+    descriptors contribute one operand; descriptors are passed as i32 addresses.
+    Results are packed according to their explicit types and layouts. There is
+    no elementwise broadcasting, chunking, or subword packing.
+
+    Assembly with memory descriptor operands must be impure. Descriptor accesses
+    are not modeled by the compiler. The caller must provide all synchronization
+    for them, including barriers, fences, and asynchronous completion before
+    storage reuse. Accesses must remain within the descriptor views.
+    Scalar results must be uniform and replicated tensor elements must agree.
+  }];
+  let arguments = (ins StrAttr:$asm_string, StrAttr:$constraints, BoolAttr:$pure,
+                       Variadic<AnyTypeOf<[TT_Type, TTG_MemDescType]>>:$args);
+  let results = (outs Variadic<TT_Type>:$result);
+  let assemblyFormat = [{
+    $asm_string attr-dict ($args^)? `:` functional-type($args, $result)
+  }];
+  let hasVerifier = 1;
+}
+
 def TTG_ConvertLayoutOp : TTG_Op<"convert_layout",
                                  [SameOperandsAndResultShape,
                                   SameOperandsAndResultElementType,
@@ -119,8 +146,7 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
     Arg<TTG_MemDescType, "", GenericSharedWrite>:$result,
     Optional<I1Tensor>:$mask,
     Optional<TT_Type>:$other,
-    DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
-    DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
+    OptionalAttr<AnyAttr>:$cachePolicy,
     DefaultValuedAttr<BoolAttr, "false">:$isVolatile,
     DefaultValuedAttr<I32Attr, "1">:$contiguity
   );
@@ -137,15 +163,8 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
     }
   }];
 
-  // Specify cacheModifier and evictionPolicy explicitly, instead of leaving
-  // them in attr-dict, because this way their values get printed as strings,
-  // rather than as opaque integers.
-  //
-  // Note there are no commas between other, cacheModifier, and evictionPolicy,
-  // due to limitations in MLIR's asm parser.
   let assemblyFormat = [{
     $src `,` $result (`mask` $mask^)? (`other` $other^)?
-    oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
     attr-dict `:` type($src) `->` type($result)
   }];
 }

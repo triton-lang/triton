@@ -47,8 +47,11 @@ SmallVector<StringAttr> permuteDimNames(const SmallVector<StringAttr> &names,
   return ret;
 }
 
-LinearLayout swizzledSharedToLinearLayout(ArrayRef<int64_t> shape,
-                                          SwizzledSharedEncodingAttr shared) {
+} // namespace
+
+LinearLayout
+SwizzledSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  auto shared = *this;
   MLIRContext *ctx = shared.getContext();
 
   auto shapePerCTA = getShapePerCTA(shared, shape);
@@ -96,8 +99,8 @@ LinearLayout swizzledSharedToLinearLayout(ArrayRef<int64_t> shape,
 }
 
 LinearLayout
-sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
-                                AMDRotatingSharedEncodingAttr shared) {
+AMDRotatingSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  auto shared = *this;
   MLIRContext *ctx = shared.getContext();
 
   auto shapePerCTA = getShapePerCTA(shared, shape);
@@ -147,8 +150,6 @@ sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
 
   return combineCtaCgaWithShape(ctaLayout, shared.getCGALayout(), shape);
 }
-
-} // namespace
 
 // Returns the layout of a single core matrix which tiles the nvmma layout
 LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
@@ -363,6 +364,12 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
       reshapedLayout, standardOutDimNames(ctx, shapePerCTA.size()),
       shapePerCTA);
   return combineCtaCgaWithShape(reshapedLayout, shared.getCGALayout(), shape);
+}
+
+LinearLayout
+NVMMASharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  // The shared memory layout is independent of TMA mode (Tiled vs Im2Col)
+  return nvmmaSharedToLinearLayout(shape, *this, TMAMode::Tiled);
 }
 
 LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
@@ -591,9 +598,13 @@ LinearLayout chooseWmmaCTALinearLayout(MLIRContext *ctx, unsigned rank,
   return ret.transposeOuts(dims);
 }
 
-LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
-                                   ArrayRef<int64_t> shape) {
-  auto mfmaLayout = llvm::cast<AMDMfmaEncodingAttr>(dotMfmaLayout.getParent());
+LinearLayout
+AMDMfmaEncodingAttr::dotOperandToLinearLayout(Attribute dotOp,
+                                              ArrayRef<int64_t> shape) const {
+  auto dotMfmaLayout = cast<DotOperandEncodingAttr>(dotOp);
+  auto mfmaLayout = *this;
+  assert(mfmaLayout == dotMfmaLayout.getParent() &&
+         "dot operand parent must be this layout");
 
   auto rank = shape.size();
   bool hasBatchDim = rank == 3;
@@ -779,9 +790,13 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return combineCtaCgaWithShape(wmmaLayout, getCGALayout(), shape);
 }
 
-LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
-                                          ArrayRef<int64_t> shape) {
-  auto wmmaLayout = llvm::cast<AMDWmmaEncodingAttr>(dotWmmaLayout.getParent());
+LinearLayout
+AMDWmmaEncodingAttr::dotOperandToLinearLayout(Attribute dotOp,
+                                              ArrayRef<int64_t> shape) const {
+  auto dotWmmaLayout = cast<DotOperandEncodingAttr>(dotOp);
+  auto wmmaLayout = *this;
+  assert(wmmaLayout == dotWmmaLayout.getParent() &&
+         "dot operand parent must be this layout");
   unsigned version = wmmaLayout.getVersion();
   assert(version >= 1 && version <= 3 && "unexpected wmma version");
 
@@ -983,10 +998,13 @@ NvidiaMmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return combineCtaCgaWithShape(ctaLayout, getCGALayout(), shape);
 }
 
-LinearLayout nvidiaDotToLinearLayout(ArrayRef<int64_t> shape,
-                                     DotOperandEncodingAttr dot) {
+LinearLayout
+NvidiaMmaEncodingAttr::dotOperandToLinearLayout(Attribute dotOp,
+                                                ArrayRef<int64_t> shape) const {
+  auto dot = cast<DotOperandEncodingAttr>(dotOp);
+  auto mma = *this;
+  assert(mma == dot.getParent() && "dot operand parent must be this layout");
   int rank = shape.size();
-  auto mma = cast<NvidiaMmaEncodingAttr>(dot.getParent());
   int kWidth = dot.getKWidth();
   bool isA = dot.getOpIdx() == 0;
   MLIRContext *ctx = mma.getContext();
@@ -1013,21 +1031,18 @@ LinearLayout nvidiaDotToLinearLayout(ArrayRef<int64_t> shape,
                                            kDim, S("warp"))
                    .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
 
-  return combineCtaCgaWithShape(ctaLayout, getCGALayout(dot), shape);
+  return combineCtaCgaWithShape(ctaLayout, dot.getCGALayout(), shape);
 }
 
 LinearLayout
 DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   auto parent = getParent();
-  if (auto blockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(parent)) {
+  if (mlir::isa<BlockedEncodingAttr>(parent))
     return fmaDotToLinearLayout(*this, shape);
-  } else if (auto mfmaLayout = mlir::dyn_cast<AMDMfmaEncodingAttr>(parent)) {
-    return mfmaDotToLinearLayout(*this, shape);
-  } else if (auto wmmaLayout = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
-    return wmmaDotOperandToLinearLayout(*this, shape);
-  } else {
-    return nvidiaDotToLinearLayout(shape, *this);
-  }
+  if (auto mma = mlir::dyn_cast<MmaEncodingTrait>(parent))
+    return mma.dotOperandToLinearLayout(*this, shape);
+  llvm::report_fatal_error(
+      "unexpected parent layout in DotOperandEncodingAttr::toLinearLayout");
 }
 
 LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
@@ -1234,21 +1249,8 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
                           return llvm::isPowerOf2_32(dim) && dim >= 1;
                         }) &&
            "shape must be a postive power of 2");
-    if (auto shared = dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
-      result = swizzledSharedToLinearLayout(shape, shared);
-    } else if (auto shared = dyn_cast<SharedLinearEncodingAttr>(layout)) {
+    if (auto shared = dyn_cast<SharedEncodingTrait>(layout)) {
       result = shared.toLinearLayout(shape);
-    } else if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-      // The shared memory layout is independent of TMA mode (Tiled vs Im2Col)
-      result = nvmmaSharedToLinearLayout(shape, shared, TMAMode::Tiled);
-    } else if (auto sbl = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
-      result = sharedToLinearLayoutAMDRotating(shape, sbl);
-    } else if (auto partitioned =
-                   dyn_cast<PartitionedSharedEncodingAttr>(layout)) {
-      assert(!isa<PaddedSharedEncodingAttr>(partitioned.getPartitionLayout()) &&
-             "toLinearLayout does not support partitioned layouts wrapping "
-             "padded layouts; use paddedLinearLayout instead");
-      result = partitionedSharedToLinearLayout(shape, partitioned);
     } else if (auto tensorMemoryEncoding =
                    dyn_cast<TensorMemoryEncodingAttr>(layout)) {
       result = tensorMemoryToLinearLayout(shape, tensorMemoryEncoding);
@@ -1314,6 +1316,24 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
   auto *ctx = layout.getContext();
   return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(shape,
                                                                    layout);
+}
+
+LinearLayout
+PartitionedSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  if (isa<PaddedSharedEncodingAttr>(getPartitionLayout())) {
+    llvm::report_fatal_error(
+        "toLinearLayout does not support partitioned layouts wrapping padded "
+        "layouts; use paddedLinearLayout instead");
+  }
+  return partitionedSharedToLinearLayout(shape, *this);
+}
+
+LinearLayout
+PaddedSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  // A padded layout's interval padding is not expressible as a LinearLayout;
+  // toLinearLayoutIgnoringPadding() routes it to paddedLinearLayout() instead.
+  llvm::report_fatal_error("padded shared encoding has no linear layout; use "
+                           "paddedLinearLayout instead");
 }
 
 LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding) {

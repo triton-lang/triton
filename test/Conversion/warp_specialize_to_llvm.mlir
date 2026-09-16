@@ -14,16 +14,16 @@ llvm.func @rewrite_barriers() attributes {allocation.offset = 32 : i32} {
   // CHECK-DAG: [[C64:%.*]] = llvm.mlir.constant(64 : i32)
   // CHECK-DAG: [[C128:%.*]] = llvm.mlir.constant(128 : i32)
 
-  // CHECK: nvvm.barrier id = [[C2]] number_of_threads = [[C128]]
-  // CHECK: nvvm.barrier id = [[C3]] number_of_threads = [[C64]]
+  // CHECK: nvvm.barrier id = [[C2]] number_of_threads = [[C128]] {aligned = false}
+  // CHECK: nvvm.barrier id = [[C3]] number_of_threads = [[C64]] {aligned = false}
   // CHECK: bar.warp.sync
 
   // CHECK: bb{{[0-9]+}}:
-  // CHECK-NEXT: nvvm.barrier id = [[C0]] number_of_threads = [[C128]]
+  // CHECK-NEXT: nvvm.barrier id = [[C0]] number_of_threads = [[C128]] {aligned = false}
   nvvm.barrier
   ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4, 8, 10>}
   default {
-    // CHECK: nvvm.barrier id = [[C0]] number_of_threads = [[C128]]
+    // CHECK: nvvm.barrier id = [[C0]] number_of_threads = [[C128]] {aligned = false}
     nvvm.barrier
     ttg.warp_yield
   }
@@ -39,7 +39,7 @@ llvm.func @rewrite_barriers() attributes {allocation.offset = 32 : i32} {
     nvvm.barrier
     ttg.warp_return
   } : () -> ()
-  // CHECK: nvvm.barrier id = [[C0]] number_of_threads = [[C128]]
+  // CHECK: nvvm.barrier id = [[C0]] number_of_threads = [[C128]] {aligned = false}
   nvvm.barrier
   llvm.return
 }
@@ -105,7 +105,7 @@ llvm.func internal @inner_func_nw4() attributes {"ws_num_warps" = 4 : i32} {
   // CHECK: "use.barrier_id"(%arg0) : (i32) -> ()
   %barrier_id = nvg.warp_group_barrier_id
   "use.barrier_id"(%barrier_id) : (i32) -> ()
-  // CHECK: nvvm.barrier id = %arg0 number_of_threads = [[C128]]
+  // CHECK: nvvm.barrier id = %arg0 number_of_threads = [[C128]] {aligned = false}
   // CHECK: llvm.call @inner_func_nw4_ws(%arg0) : (i32) -> ()
   nvvm.barrier
   llvm.call @inner_func_nw4() : () -> ()
@@ -115,7 +115,7 @@ llvm.func internal @inner_func_nw4() attributes {"ws_num_warps" = 4 : i32} {
 // CHECK: llvm.func internal @inner_func_nw2_ws(%arg0: f32 {some.attr = "some_value"}, %arg1: i32)
 llvm.func internal @inner_func_nw2(%arg0: f32 {some.attr = "some_value"}) attributes {"ws_num_warps" = 2 : i32} {
   // CHECK: [[C64:%.*]] = llvm.mlir.constant(64 : i32)
-  // CHECK: nvvm.barrier id = %arg1 number_of_threads = [[C64]]
+  // CHECK: nvvm.barrier id = %arg1 number_of_threads = [[C64]] {aligned = false}
   nvvm.barrier
   llvm.return
 }

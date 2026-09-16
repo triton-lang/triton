@@ -106,7 +106,13 @@ matchReduxKind(triton::ReduceOp op, int computeCapability,
       return NVVM::ReductionKind::FMIN;
   }
   auto intType = dyn_cast<IntegerType>(reduceOp->getResultTypes()[0]);
-  if (!intType || intType.getWidth() > 32)
+  if (!intType)
+    return std::nullopt;
+  if (intType.getWidth() > 32 &&
+      !(intType.getWidth() == 64 &&
+        isa<arith::AddIOp, arith::MinSIOp, arith::MinUIOp, arith::MaxSIOp,
+            arith::MaxUIOp, arith::AndIOp, arith::OrIOp, arith::XOrIOp>(
+            reduceOp)))
     return std::nullopt;
   if (isa<arith::AddIOp>(reduceOp))
     return NVVM::ReductionKind::ADD;
@@ -189,30 +195,16 @@ static bool isConstantTruePred(Value pred) {
   return false;
 }
 
-static Value mapa(RewriterBase &rewriter, Location loc, Value ptr, Value ctaid,
-                  Value pred) {
-  auto *ctx = rewriter.getContext();
-  auto clusterPtrTy = ptr_ty(ctx, /*addrspace=*/7);
-  if (isConstantTruePred(pred)) {
-    return NVVM::MapaOp::create(rewriter, loc, clusterPtrTy, ptr, ctaid);
-  }
-
-  PTXBuilder builder;
-  auto ptrTy = cast<LLVM::LLVMPointerType>(ptr.getType());
-  assert(ptrTy.getAddressSpace() == 3);
-
-  auto &mapaInstr = *builder.create("mapa");
-  mapaInstr.o("shared::cluster.u32");
-  auto *dstOpr = builder.newOperand("=r");
-  auto *ptrOpr = builder.newOperand(ptr, "r");
-  auto *ctaidOpr = builder.newOperand(ctaid, "r");
-  mapaInstr(dstOpr, ptrOpr, ctaidOpr).predicate(pred, "b");
-  return builder.launch(rewriter, loc, clusterPtrTy, /*hasSideEffect=*/false);
+static Value mapa(RewriterBase &rewriter, Location loc, Value ptr,
+                  Value ctaid) {
+  auto clusterPtrTy = ptr_ty(rewriter.getContext(), /*addrspace=*/7);
+  // Address translation is speculatable; the memory access keeps its predicate.
+  return NVVM::MapaOp::create(rewriter, loc, clusterPtrTy, ptr, ctaid);
 }
 
 Value TargetInfo::mapDShared(RewriterBase &rewriter, Location loc, Value ptr,
-                             Value ctaId, Value pred) const {
-  return ctaId ? mapa(rewriter, loc, ptr, ctaId, pred) : ptr;
+                             Value ctaId, Value /*pred*/) const {
+  return ctaId ? mapa(rewriter, loc, ptr, ctaId) : ptr;
 }
 
 static std::string getConstraintForBitwidth(unsigned bitwidth) {
@@ -320,7 +312,7 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
 
   // Get pointer to remote shared memory if needed.
   if (ctaId) {
-    ptr = mapa(rewriter, loc, ptr, ctaId, pred);
+    ptr = mapa(rewriter, loc, ptr, ctaId);
   }
 
   PTXBuilder builder;
@@ -386,7 +378,10 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
     SmallVector<Value> vals = unpackLLVector(
         loc, loadDShared(rewriter, loc, ptr, ctaId, newLoadTy, pred), rewriter);
     for (Value &v : vals) {
-      v = b.bitcast(v, elemTy);
+      if (isa<LLVM::LLVMPointerType>(elemTy))
+        v = b.inttoptr(elemTy, v);
+      else
+        v = b.bitcast(v, elemTy);
     }
     return packLLVector(loc, vals, rewriter);
   }
@@ -437,7 +432,7 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
 
   // Get pointer to remote shared memory if needed.
   if (ctaId) {
-    ptr = mapa(rewriter, loc, ptr, ctaId, pred);
+    ptr = mapa(rewriter, loc, ptr, ctaId);
   }
 
   PTXBuilder builder;
@@ -531,6 +526,43 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
       mask = b.shl(b.i32_val(reduceLaneIdMask),
                    b.and_(laneId, b.i32_val(~reduceLaneIdMask)));
     }
+    if (acc[0].getType().isInteger(64)) {
+      Value high = b.trunc(i32_ty, b.lshr(acc[0], b.i64_val(32)));
+      Value highResult = NVVM::ReduxOp::create(rewriter, loc, i32_ty, high,
+                                               *kind, mask, false, false);
+      Value low = b.trunc(i32_ty, acc[0]);
+      if (*kind == NVVM::ReductionKind::ADD) {
+        // Each 16-bit sum fits in 21 bits; i64 adds propagate their carries.
+        Value lowResult = NVVM::ReduxOp::create(rewriter, loc, i32_ty,
+                                                b.and_(low, b.i32_val(0xFFFF)),
+                                                *kind, mask, false, false);
+        Value middleResult = NVVM::ReduxOp::create(rewriter, loc, i32_ty,
+                                                   b.lshr(low, b.i32_val(16)),
+                                                   *kind, mask, false, false);
+        acc[0] =
+            b.add(b.add(b.zext(i64_ty, lowResult),
+                        b.shl(b.zext(i64_ty, middleResult), b.i64_val(16))),
+                  b.shl(b.zext(i64_ty, highResult), b.i64_val(32)));
+        return true;
+      }
+      auto lowKind = *kind;
+      if (*kind == NVVM::ReductionKind::MIN ||
+          *kind == NVVM::ReductionKind::UMIN ||
+          *kind == NVVM::ReductionKind::MAX ||
+          *kind == NVVM::ReductionKind::UMAX) {
+        bool isMin = *kind == NVVM::ReductionKind::MIN ||
+                     *kind == NVVM::ReductionKind::UMIN;
+        lowKind = isMin ? NVVM::ReductionKind::UMIN : NVVM::ReductionKind::UMAX;
+        // Only matching high words can win; compare their low words unsigned.
+        low = b.select(b.icmp_eq(high, highResult), low,
+                       b.i32_val(isMin ? 0xFFFFFFFF : 0));
+      }
+      Value lowResult = NVVM::ReduxOp::create(rewriter, loc, i32_ty, low,
+                                              lowKind, mask, false, false);
+      acc[0] = b.or_(b.shl(b.zext(i64_ty, highResult), b.i64_val(32)),
+                     b.zext(i64_ty, lowResult));
+      return true;
+    }
     for (unsigned i = 0; i < acc.size(); ++i) {
       unsigned bitwidth = acc[i].getType().getIntOrFloatBitWidth();
       if (acc[i].getType().isInteger()) {
@@ -588,12 +620,6 @@ unsigned TargetInfo::getReductionTreeArity(Operation *combinerOp) const {
     return 3;
 
   return 2;
-}
-
-std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
-  std::string funcName =
-      resultElementTy.isInteger(32) ? "__nv_umulhi" : "__nv_umul64hi";
-  return funcName;
 }
 
 void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,

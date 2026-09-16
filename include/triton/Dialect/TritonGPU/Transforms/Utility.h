@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <functional>
 #include <numeric>
+#include <optional>
 
 namespace mlir {
 class DominanceInfo;
@@ -136,8 +137,10 @@ bool isExpensiveLoadOrStore(Operation *op);
 // Return true if an operation may be cloned by layout rematerialization.
 bool canBeRematerialized(Operation *op);
 
-// Return true if the op can use the target encoding for its result.
-bool canUseResultEncoding(Operation *op, Attribute targetEncoding);
+// Return the operands whose layouts must remain fixed for the op to use the
+// target result encoding, or nullopt if the encoding is incompatible.
+std::optional<SmallVector<OpOperand *>>
+canUseResultEncoding(Operation *op, Attribute targetEncoding);
 
 // Replace ForOp with a new ForOp with extra operands. The YieldOp is not
 // updated and needs to be updated separately for the loop to be correct.

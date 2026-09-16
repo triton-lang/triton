@@ -226,8 +226,8 @@ bool isLayoutAnchor(Operation *op) {
     return true;
   if (isa<LoadOp, StoreOp>(op))
     return isExpensiveLoadOrStore(op);
-  if (isa<DotOpInterface, AtomicRMWOp, AtomicCASOp,
-          triton::nvidia_gpu::TMEMLoadOp>(op))
+  if (isa<DotOpInterface, AtomicOpInterface, triton::nvidia_gpu::TMEMLoadOp>(
+          op))
     return true;
   if (auto gatherOp = dyn_cast<GatherOp>(op))
     return gatherOp.getEfficientLayout();
@@ -344,8 +344,8 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       continue;
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
-        isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
-            ConvertLayoutOp>(user)) {
+        isa<BroadcastOp, ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp,
+            SplitOp, ConvertLayoutOp>(user)) {
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
@@ -385,8 +385,7 @@ void LayoutPropagation::resolveConflicts() {
     // Hacky resolve, prefer block encoding.
     // TODO: add a proper heuristic.
     Attribute encoding = *info.encodings.begin();
-    bool isLoadOrStore =
-        op && isa<LoadOp, StoreOp, AtomicRMWOp, AtomicCASOp>(op);
+    bool isLoadOrStore = op && isa<LoadOp, StoreOp, AtomicOpInterface>(op);
     for (Attribute e : info.encodings) {
       if ((isLoadOrStore && isa<BlockedEncodingAttr>(e)) ||
           (!isLoadOrStore && isa<MmaEncodingTrait>(e))) {
@@ -661,9 +660,9 @@ void LayoutPropagation::rewriteOp(Operation *op) {
       setEncodingInPlace(op->getResult(0), encoding);
     } else if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
                op->hasTrait<OpTrait::Elementwise>() ||
-               isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
-                   GatherOp, ConvertLayoutOp, nvidia_gpu::WarpGroupDotWaitOp>(
-                   op)) {
+               isa<BroadcastOp, ReduceOp, ExpandDimsOp, ReshapeOp, TransOp,
+                   JoinOp, SplitOp, GatherOp, ConvertLayoutOp,
+                   nvidia_gpu::WarpGroupDotWaitOp>(op)) {
       rewriteGenericOpInPlace(op, encoding);
     } else {
       llvm::report_fatal_error("unexpected op in rewrite");

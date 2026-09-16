@@ -1,17 +1,19 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=88' -cse | FileCheck --check-prefixes=BW256,FP8,LEGACY %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=103 ptx-version=88' -cse | FileCheck --check-prefix=SM103 %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' -cse | FileCheck --check-prefixes=PRE_BW,FP8,LEGACY %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=91' -cse | FileCheck --check-prefixes=FP8,LEGACY %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=92' -cse | FileCheck --check-prefixes=FP8,PACKED %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=86' -cse | FileCheck --check-prefixes=FP8,FP4,LEGACY,FP16-NATIVE %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=88' -cse | FileCheck --check-prefixes=BW256,FP8,FP4,LEGACY,FP16-NATIVE,ATOMIC %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=103 ptx-version=88' -cse | FileCheck --check-prefixes=SM103,FP8,FP4,LEGACY,FP16-NATIVE %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=92' -cse | FileCheck --check-prefixes=PRE_BW,FP8,FP4,LEGACY,FP16-LEGACY %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=91' -cse | FileCheck --check-prefixes=FP8,FP4,LEGACY,FP16-NATIVE %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=92' -cse | FileCheck --check-prefixes=FP8,FP4,PACKED,FP16-NATIVE %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=103 ptx-version=92' -cse | FileCheck --check-prefixes=SM103,FP8,FP4,PACKED,FP16-NATIVE %s
 
 // Test 256-bit global load with 8x f32 (v8.b32) on Blackwell
 #blocked_8xf32 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // BW256-LABEL: global_load_v8_b32
-  // BW256: ld.global.v8.b32
+  // BW256: llvm.load {{.*}} {alignment = 32 : i64} : !llvm.ptr<1> -> vector<8xf32>
   // PRE_BW-LABEL: global_load_v8_b32
-  // PRE_BW-NOT: ld.global.v8.b32
-  // PRE_BW: ld.global.v4.b32
+  // PRE_BW-NOT: vector<8xf32>
+  // PRE_BW-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xf32>
   tt.func @global_load_v8_b32(%arg0: !tt.ptr<f32> {tt.divisibility = 32 : i32}) {
     %c256_i32 = arith.constant 256 : i32
     %0 = tt.get_program_id x : i32
@@ -32,10 +34,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 #blocked_8xf32 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // BW256-LABEL: global_store_v8_b32
-  // BW256: st.global.v8.b32
+  // BW256: llvm.store {{.*}} {alignment = 32 : i64} : vector<8xf32>, !llvm.ptr<1>
   // PRE_BW-LABEL: global_store_v8_b32
-  // PRE_BW-NOT: st.global.v8.b32
-  // PRE_BW: st.global.v4.b32
+  // PRE_BW-NOT: vector<8xf32>
+  // PRE_BW-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xf32>, !llvm.ptr<1>
   tt.func @global_store_v8_b32(%arg0: !tt.ptr<f32> {tt.divisibility = 32 : i32}) {
     %c256_i32 = arith.constant 256 : i32
     %cst = arith.constant dense<1.0> : tensor<256xf32, #blocked_8xf32>
@@ -57,10 +59,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 #blocked_4xf64 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // BW256-LABEL: global_load_v4_b64
-  // BW256: ld.global.v4.b64
+  // BW256: llvm.load {{.*}} {alignment = 32 : i64} : !llvm.ptr<1> -> vector<4xf64>
   // PRE_BW-LABEL: global_load_v4_b64
-  // PRE_BW-NOT: ld.global.v4.b64
-  // PRE_BW: ld.global.v2.b64
+  // PRE_BW-NOT: vector<4xf64>
+  // PRE_BW-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<2xf64>
   tt.func @global_load_v4_b64(%arg0: !tt.ptr<f64> {tt.divisibility = 32 : i32}) {
     %c128_i32 = arith.constant 128 : i32
     %0 = tt.get_program_id x : i32
@@ -119,5 +121,80 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   tt.func private @fp8e4_to_bf16(%in: tensor<64xf8E4M3FN, #blocked_fp8>) -> tensor<64xbf16, #blocked_fp8> {
     %out = tt.fp_to_fp %in : tensor<64xf8E4M3FN, #blocked_fp8> -> tensor<64xbf16, #blocked_fp8>
     tt.return %out : tensor<64xbf16, #blocked_fp8>
+  }
+}
+
+// -----
+
+#packed_fp4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#unpacked_fp4 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // FP4-LABEL: @fp4_to_bf16
+  // PACKED: .reg .b8 b<4>;
+  // PACKED-SAME: mov.b32 {b0, b1, b2, b3}, $4;
+  // PACKED-SAME: cvt.rn.bf16x2.e2m1x2 $0, b0;
+  // PACKED-SAME: cvt.rn.bf16x2.e2m1x2 $1, b1;
+  // PACKED-SAME: cvt.rn.bf16x2.e2m1x2 $2, b2;
+  // PACKED-SAME: cvt.rn.bf16x2.e2m1x2 $3, b3;
+  // LEGACY-NOT: cvt.rn.bf16x2.e2m1x2
+  // LEGACY: prmt.b32
+  // LEGACY-NOT: cvt.rn.bf16x2.e2m1x2
+  tt.func private @fp4_to_bf16(%in: tensor<128xi8, #packed_fp4>) -> tensor<256xbf16, #unpacked_fp4> {
+    %out = ttg.fp4_to_fp %in {axis = 0 : i32} : tensor<128xi8, #packed_fp4> -> tensor<256xbf16, #unpacked_fp4>
+    tt.return %out : tensor<256xbf16, #unpacked_fp4>
+  }
+
+  // FP4-LABEL: @fp4_to_fp16
+  // FP4-NOT: cvt.rn.bf16x2.e2m1x2
+  // FP16-NATIVE: .reg .b8 b<4>;
+  // FP16-NATIVE-SAME: mov.b32 {b0, b1, b2, b3}, $4;
+  // FP16-NATIVE-SAME: cvt.rn.f16x2.e2m1x2 $0, b0;
+  // FP16-NATIVE-SAME: cvt.rn.f16x2.e2m1x2 $1, b1;
+  // FP16-NATIVE-SAME: cvt.rn.f16x2.e2m1x2 $2, b2;
+  // FP16-NATIVE-SAME: cvt.rn.f16x2.e2m1x2 $3, b3;
+  // FP16-LEGACY-NOT: cvt.rn.f16x2.e2m1x2
+  // FP16-LEGACY: cvt.rn.f16x2.e4m3x2
+  // FP16-LEGACY-NOT: cvt.rn.f16x2.e2m1x2
+  // FP4-NOT: cvt.rn.bf16x2.e2m1x2
+  tt.func private @fp4_to_fp16(%in: tensor<128xi8, #packed_fp4>) -> tensor<256xf16, #unpacked_fp4> {
+    %out = ttg.fp4_to_fp %in {axis = 0 : i32} : tensor<128xi8, #packed_fp4> -> tensor<256xf16, #unpacked_fp4>
+    tt.return %out : tensor<256xf16, #unpacked_fp4>
+  }
+}
+
+// -----
+
+// Global atomic vectors remain limited to 128 bits on Blackwell.
+#atomic_f32 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#atomic_f16 = #ttg.blocked<{sizePerThread = [16], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "cuda:100"} {
+  // ATOMIC-LABEL: @atomic_add_f32_128bit
+  // ATOMIC-COUNT-2: atom.global.gpu.relaxed.add.v4.f32
+  // ATOMIC-COUNT-2: red.global.gpu.relaxed.add.v4.f32
+  // ATOMIC: llvm.return
+  tt.func @atomic_add_f32_128bit(%ptrs: tensor<256x!tt.ptr<f32>, #atomic_f32> {tt.divisibility = 32 : i32, tt.contiguity = 8 : i32}, %values: tensor<256xf32, #atomic_f32>) {
+    %old = tt.atomic_rmw fadd, relaxed, gpu, %ptrs, %values : (tensor<256x!tt.ptr<f32>, #atomic_f32>, tensor<256xf32, #atomic_f32>) -> tensor<256xf32, #atomic_f32>
+    %unused = tt.atomic_rmw fadd, relaxed, gpu, %ptrs, %old : (tensor<256x!tt.ptr<f32>, #atomic_f32>, tensor<256xf32, #atomic_f32>) -> tensor<256xf32, #atomic_f32>
+    tt.return
+  }
+
+  // ATOMIC-LABEL: @atomic_add_f16_128bit
+  // ATOMIC-COUNT-2: atom.global.gpu.relaxed.add.noftz.v8.f16
+  // ATOMIC-COUNT-2: red.global.gpu.relaxed.add.noftz.v8.f16
+  // ATOMIC: llvm.return
+  tt.func @atomic_add_f16_128bit(%ptrs: tensor<512x!tt.ptr<f16>, #atomic_f16> {tt.divisibility = 32 : i32, tt.contiguity = 16 : i32}, %values: tensor<512xf16, #atomic_f16>) {
+    %old = tt.atomic_rmw fadd, relaxed, gpu, %ptrs, %values : (tensor<512x!tt.ptr<f16>, #atomic_f16>, tensor<512xf16, #atomic_f16>) -> tensor<512xf16, #atomic_f16>
+    %unused = tt.atomic_rmw fadd, relaxed, gpu, %ptrs, %old : (tensor<512x!tt.ptr<f16>, #atomic_f16>, tensor<512xf16, #atomic_f16>) -> tensor<512xf16, #atomic_f16>
+    tt.return
+  }
+
+  // ATOMIC-LABEL: @atomic_add_bf16_128bit
+  // ATOMIC-COUNT-2: atom.global.gpu.relaxed.add.noftz.v8.bf16
+  // ATOMIC-COUNT-2: red.global.gpu.relaxed.add.noftz.v8.bf16
+  // ATOMIC: llvm.return
+  tt.func @atomic_add_bf16_128bit(%ptrs: tensor<512x!tt.ptr<bf16>, #atomic_f16> {tt.divisibility = 32 : i32, tt.contiguity = 16 : i32}, %values: tensor<512xbf16, #atomic_f16>) {
+    %old = tt.atomic_rmw fadd, relaxed, gpu, %ptrs, %values : (tensor<512x!tt.ptr<bf16>, #atomic_f16>, tensor<512xbf16, #atomic_f16>) -> tensor<512xbf16, #atomic_f16>
+    %unused = tt.atomic_rmw fadd, relaxed, gpu, %ptrs, %old : (tensor<512x!tt.ptr<bf16>, #atomic_f16>, tensor<512xbf16, #atomic_f16>) -> tensor<512xbf16, #atomic_f16>
+    tt.return
   }
 }
