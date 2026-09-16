@@ -1095,10 +1095,12 @@ def test_tcgen05_mma_scaled_direct_multicast_barrier():
 
 
 @gluon.jit
-def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr):
+def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr,
+                               COPY_VEC: ttgl.constexpr = 4):
+    block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, COPY_VEC], [1, 32], [4, 1], [1, 0])
+    initial = ttgl.full([XBLOCK, YBLOCK], 7, inp.dtype.element_ty, block_layout)
     smem = ttgl.allocate_shared_memory(inp.dtype.element_ty, [XBLOCK, YBLOCK],
-                                       ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0]))
-    block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0])
+                                       ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0]), initial)
     xindex = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(1, block_layout))[:, None]
     yindex = ttgl.arange(0, YBLOCK, ttgl.SliceLayout(0, block_layout))[None, :]
     mask = xindex < xnumel
@@ -1117,12 +1119,13 @@ def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK:
     ttgl.store(out + xindex * YBLOCK + yindex, val)
 
 
+@pytest.mark.parametrize("copy_vec", [1, 2, 4])
 @pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere")
-def test_async_copy_mbarrier():
+def test_async_copy_mbarrier(copy_vec):
     tensor_opts = dict(dtype=torch.float, device="cuda")
     out = torch.empty((32, 32), **tensor_opts)
     inp = torch.randn((20, 32), **tensor_opts)
-    async_copy_mbarrier_kernel[(1, )](out, inp, inp.shape[0], XBLOCK=32, YBLOCK=32)
+    async_copy_mbarrier_kernel[(1, )](out, inp, inp.shape[0], XBLOCK=32, YBLOCK=32, COPY_VEC=copy_vec)
     torch.testing.assert_close(out[:20], inp)
     torch.testing.assert_close(out[20:], torch.zeros((12, 32), **tensor_opts))
 
@@ -4022,6 +4025,46 @@ def test_shared_gather(N, M):
     )
 
     torch.testing.assert_close(output, expected)
+
+
+@pytest.mark.skipif(is_hip(), reason="AMD lowering of pointer elements in shared memory is added separately")
+@pytest.mark.parametrize("write", ["local_alloc", "local_store", "local_scatter"])
+@pytest.mark.parametrize("read", ["local_load", "local_gather"])
+def test_shared_memory_pointers(write, read, device):
+
+    @gluon.jit
+    def kernel(src, reversed_idx, out, BLOCK: ttgl.constexpr, layout: ttgl.constexpr, WRITE: ttgl.constexpr,
+               READ: ttgl.constexpr):
+        offsets = ttgl.arange(0, BLOCK, layout=layout)
+        pointers = src + offsets
+        shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0])
+
+        if WRITE == "local_alloc":
+            smem = ttgl.allocate_shared_memory(pointers.dtype, [BLOCK], shared_layout, pointers)
+        elif WRITE == "local_store":
+            smem = ttgl.allocate_shared_memory(pointers.dtype, [BLOCK], shared_layout)
+            smem.store(pointers)
+        else:
+            smem = ttgl.allocate_shared_memory(pointers.dtype, [BLOCK], shared_layout)
+            smem.scatter(pointers, ttgl.load(reversed_idx + offsets), axis=0)
+
+        if READ == "local_load":
+            result = smem.load(layout)
+        else:
+            result = smem.gather(ttgl.load(reversed_idx + offsets), axis=0)
+
+        ttgl.store(out + offsets, ttgl.load(result))
+
+    block = 4 * THREADS_PER_WARP
+    layout = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4], order=[0])
+    values = torch.arange(block, dtype=torch.int32, device=device)
+    output = torch.empty_like(values)
+    reversed_idx = torch.arange(block - 1, -1, -1, dtype=torch.int32, device=device)
+    kernel[(1, )](values, reversed_idx, output, block, layout, write, read, num_warps=4)
+
+    # Only one of gather/scatter reverses the input. Both cancels out.
+    expected = values.flip(0) if (write == "local_scatter") != (read == "local_gather") else values
+    assert torch.equal(output, expected)
 
 
 @gluon.jit

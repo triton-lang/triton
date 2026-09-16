@@ -47,8 +47,11 @@ SmallVector<StringAttr> permuteDimNames(const SmallVector<StringAttr> &names,
   return ret;
 }
 
-LinearLayout swizzledSharedToLinearLayout(ArrayRef<int64_t> shape,
-                                          SwizzledSharedEncodingAttr shared) {
+} // namespace
+
+LinearLayout
+SwizzledSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  auto shared = *this;
   MLIRContext *ctx = shared.getContext();
 
   auto shapePerCTA = getShapePerCTA(shared, shape);
@@ -96,8 +99,8 @@ LinearLayout swizzledSharedToLinearLayout(ArrayRef<int64_t> shape,
 }
 
 LinearLayout
-sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
-                                AMDRotatingSharedEncodingAttr shared) {
+AMDRotatingSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  auto shared = *this;
   MLIRContext *ctx = shared.getContext();
 
   auto shapePerCTA = getShapePerCTA(shared, shape);
@@ -147,8 +150,6 @@ sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
 
   return combineCtaCgaWithShape(ctaLayout, shared.getCGALayout(), shape);
 }
-
-} // namespace
 
 // Returns the layout of a single core matrix which tiles the nvmma layout
 LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
@@ -363,6 +364,12 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
       reshapedLayout, standardOutDimNames(ctx, shapePerCTA.size()),
       shapePerCTA);
   return combineCtaCgaWithShape(reshapedLayout, shared.getCGALayout(), shape);
+}
+
+LinearLayout
+NVMMASharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  // The shared memory layout is independent of TMA mode (Tiled vs Im2Col)
+  return nvmmaSharedToLinearLayout(shape, *this, TMAMode::Tiled);
 }
 
 LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
@@ -1242,21 +1249,8 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
                           return llvm::isPowerOf2_32(dim) && dim >= 1;
                         }) &&
            "shape must be a postive power of 2");
-    if (auto shared = dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
-      result = swizzledSharedToLinearLayout(shape, shared);
-    } else if (auto shared = dyn_cast<SharedLinearEncodingAttr>(layout)) {
+    if (auto shared = dyn_cast<SharedEncodingTrait>(layout)) {
       result = shared.toLinearLayout(shape);
-    } else if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-      // The shared memory layout is independent of TMA mode (Tiled vs Im2Col)
-      result = nvmmaSharedToLinearLayout(shape, shared, TMAMode::Tiled);
-    } else if (auto sbl = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
-      result = sharedToLinearLayoutAMDRotating(shape, sbl);
-    } else if (auto partitioned =
-                   dyn_cast<PartitionedSharedEncodingAttr>(layout)) {
-      assert(!isa<PaddedSharedEncodingAttr>(partitioned.getPartitionLayout()) &&
-             "toLinearLayout does not support partitioned layouts wrapping "
-             "padded layouts; use paddedLinearLayout instead");
-      result = partitionedSharedToLinearLayout(shape, partitioned);
     } else if (auto tensorMemoryEncoding =
                    dyn_cast<TensorMemoryEncodingAttr>(layout)) {
       result = tensorMemoryToLinearLayout(shape, tensorMemoryEncoding);
@@ -1322,6 +1316,24 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
   auto *ctx = layout.getContext();
   return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(shape,
                                                                    layout);
+}
+
+LinearLayout
+PartitionedSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  if (isa<PaddedSharedEncodingAttr>(getPartitionLayout())) {
+    llvm::report_fatal_error(
+        "toLinearLayout does not support partitioned layouts wrapping padded "
+        "layouts; use paddedLinearLayout instead");
+  }
+  return partitionedSharedToLinearLayout(shape, *this);
+}
+
+LinearLayout
+PaddedSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  // A padded layout's interval padding is not expressible as a LinearLayout;
+  // toLinearLayoutIgnoringPadding() routes it to paddedLinearLayout() instead.
+  llvm::report_fatal_error("padded shared encoding has no linear layout; use "
+                           "paddedLinearLayout instead");
 }
 
 LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding) {
