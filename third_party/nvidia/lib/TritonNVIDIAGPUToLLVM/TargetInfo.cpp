@@ -110,8 +110,8 @@ matchReduxKind(triton::ReduceOp op, int computeCapability,
     return std::nullopt;
   if (intType.getWidth() > 32 &&
       !(intType.getWidth() == 64 &&
-        isa<arith::MinSIOp, arith::MinUIOp, arith::MaxSIOp, arith::MaxUIOp>(
-            reduceOp)))
+        isa<arith::MinSIOp, arith::MinUIOp, arith::MaxSIOp, arith::MaxUIOp,
+            arith::AndIOp, arith::OrIOp, arith::XOrIOp>(reduceOp)))
     return std::nullopt;
   if (isa<arith::AddIOp>(reduceOp))
     return NVVM::ReductionKind::ADD;
@@ -526,17 +526,22 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                    b.and_(laneId, b.i32_val(~reduceLaneIdMask)));
     }
     if (acc[0].getType().isInteger(64)) {
-      bool isMin = *kind == NVVM::ReductionKind::MIN ||
-                   *kind == NVVM::ReductionKind::UMIN;
-      auto lowKind =
-          isMin ? NVVM::ReductionKind::UMIN : NVVM::ReductionKind::UMAX;
-      // Only matching high words can win; compare their low words unsigned.
       Value high = b.trunc(i32_ty, b.lshr(acc[0], b.i64_val(32)));
       Value highResult = NVVM::ReduxOp::create(rewriter, loc, i32_ty, high,
                                                *kind, mask, false, false);
       Value low = b.trunc(i32_ty, acc[0]);
-      low = b.select(b.icmp_eq(high, highResult), low,
-                     b.i32_val(isMin ? 0xFFFFFFFF : 0));
+      auto lowKind = *kind;
+      if (*kind == NVVM::ReductionKind::MIN ||
+          *kind == NVVM::ReductionKind::UMIN ||
+          *kind == NVVM::ReductionKind::MAX ||
+          *kind == NVVM::ReductionKind::UMAX) {
+        bool isMin = *kind == NVVM::ReductionKind::MIN ||
+                     *kind == NVVM::ReductionKind::UMIN;
+        lowKind = isMin ? NVVM::ReductionKind::UMIN : NVVM::ReductionKind::UMAX;
+        // Only matching high words can win; compare their low words unsigned.
+        low = b.select(b.icmp_eq(high, highResult), low,
+                       b.i32_val(isMin ? 0xFFFFFFFF : 0));
+      }
       Value lowResult = NVVM::ReduxOp::create(rewriter, loc, i32_ty, low,
                                               lowKind, mask, false, false);
       acc[0] = b.or_(b.shl(b.zext(i64_ty, highResult), b.i64_val(32)),
