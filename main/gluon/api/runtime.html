@@ -28,7 +28,7 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="triton.experimental.gluon.GluonJITFunction" href="generated/triton.experimental.gluon.GluonJITFunction.html" />
+    <link rel="next" title="triton.experimental.gluon.GluonASTSource" href="generated/triton.experimental.gluon.GluonASTSource.html" />
     <link rel="prev" title="API Reference" href="index.html" /> 
 </head>
 
@@ -72,6 +72,7 @@
 <li class="toctree-l1 current"><a class="reference internal" href="index.html">API Reference</a><ul class="current">
 <li class="toctree-l2 current"><a class="current reference internal" href="#">Runtime API</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="#runtime">Runtime</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.GluonASTSource.html">triton.experimental.gluon.GluonASTSource</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.GluonJITFunction.html">triton.experimental.gluon.GluonJITFunction</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.jit.html">triton.experimental.gluon.jit</a></li>
 <li class="toctree-l4"><a class="reference internal" href="generated/triton.experimental.gluon.constexpr_function.html">triton.experimental.gluon.constexpr_function</a></li>
@@ -136,16 +137,19 @@
 <h2>Runtime<a class="headerlink" href="#runtime" title="Link to this heading"></a></h2>
 <table class="autosummary longtable docutils align-default">
 <tbody>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.GluonJITFunction.html#triton.experimental.gluon.GluonJITFunction" title="triton.experimental.gluon.GluonJITFunction"><code class="xref py py-obj docutils literal notranslate"><span class="pre">GluonJITFunction</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.GluonASTSource.html#triton.experimental.gluon.GluonASTSource" title="triton.experimental.gluon.GluonASTSource"><code class="xref py py-obj docutils literal notranslate"><span class="pre">GluonASTSource</span></code></a></p></td>
+<td><p>An AST source for compiling a Gluon kernel with <code class="docutils literal notranslate"><span class="pre">triton.compile</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.GluonJITFunction.html#triton.experimental.gluon.GluonJITFunction" title="triton.experimental.gluon.GluonJITFunction"><code class="xref py py-obj docutils literal notranslate"><span class="pre">GluonJITFunction</span></code></a></p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.jit.html#triton.experimental.gluon.jit" title="triton.experimental.gluon.jit"><code class="xref py py-obj docutils literal notranslate"><span class="pre">jit</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.jit.html#triton.experimental.gluon.jit" title="triton.experimental.gluon.jit"><code class="xref py py-obj docutils literal notranslate"><span class="pre">jit</span></code></a></p></td>
 <td><p>Decorator for JIT-compiling a function using the Triton compiler.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.constexpr_function.html#triton.experimental.gluon.constexpr_function" title="triton.experimental.gluon.constexpr_function"><code class="xref py py-obj docutils literal notranslate"><span class="pre">constexpr_function</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.constexpr_function.html#triton.experimental.gluon.constexpr_function" title="triton.experimental.gluon.constexpr_function"><code class="xref py py-obj docutils literal notranslate"><span class="pre">constexpr_function</span></code></a></p></td>
 <td><p>Wraps an arbitrary Python function so that it can be called at compile-time on constexpr arguments in a Triton function and returns a constexpr result.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.must_use_result.html#triton.experimental.gluon.must_use_result" title="triton.experimental.gluon.must_use_result"><code class="xref py py-obj docutils literal notranslate"><span class="pre">must_use_result</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/triton.experimental.gluon.must_use_result.html#triton.experimental.gluon.must_use_result" title="triton.experimental.gluon.must_use_result"><code class="xref py py-obj docutils literal notranslate"><span class="pre">must_use_result</span></code></a></p></td>
 <td><p>If the result of this function is unused, throw an error.</p></td>
 </tr>
 </tbody>
@@ -177,7 +181,7 @@
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="index.html" class="btn btn-neutral float-left" title="API Reference" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="generated/triton.experimental.gluon.GluonJITFunction.html" class="btn btn-neutral float-right" title="triton.experimental.gluon.GluonJITFunction" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="generated/triton.experimental.gluon.GluonASTSource.html" class="btn btn-neutral float-right" title="triton.experimental.gluon.GluonASTSource" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

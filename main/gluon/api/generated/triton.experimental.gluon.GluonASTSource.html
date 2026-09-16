@@ -6,7 +6,7 @@
   <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>triton.experimental.gluon.GluonJITFunction &mdash; Triton  documentation</title>
+  <title>triton.experimental.gluon.GluonASTSource &mdash; Triton  documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=03e43079" />
       <link rel="stylesheet" type="text/css" href="../../../_static/css/theme.css?v=9edc463e" />
       <link rel="stylesheet" type="text/css" href="../../../_static/sg_gallery.css?v=fd6457a4" />
@@ -28,8 +28,8 @@
     <script src="../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
-    <link rel="next" title="triton.experimental.gluon.jit" href="triton.experimental.gluon.jit.html" />
-    <link rel="prev" title="triton.experimental.gluon.GluonASTSource" href="triton.experimental.gluon.GluonASTSource.html" /> 
+    <link rel="next" title="triton.experimental.gluon.GluonJITFunction" href="triton.experimental.gluon.GluonJITFunction.html" />
+    <link rel="prev" title="Runtime API" href="../runtime.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -72,8 +72,8 @@
 <li class="toctree-l1 current"><a class="reference internal" href="../index.html">API Reference</a><ul class="current">
 <li class="toctree-l2 current"><a class="reference internal" href="../runtime.html">Runtime API</a><ul class="current">
 <li class="toctree-l3 current"><a class="reference internal" href="../runtime.html#runtime">Runtime</a><ul class="current">
-<li class="toctree-l4"><a class="reference internal" href="triton.experimental.gluon.GluonASTSource.html">triton.experimental.gluon.GluonASTSource</a></li>
-<li class="toctree-l4 current"><a class="current reference internal" href="#">triton.experimental.gluon.GluonJITFunction</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">triton.experimental.gluon.GluonASTSource</a></li>
+<li class="toctree-l4"><a class="reference internal" href="triton.experimental.gluon.GluonJITFunction.html">triton.experimental.gluon.GluonJITFunction</a></li>
 <li class="toctree-l4"><a class="reference internal" href="triton.experimental.gluon.jit.html">triton.experimental.gluon.jit</a></li>
 <li class="toctree-l4"><a class="reference internal" href="triton.experimental.gluon.constexpr_function.html">triton.experimental.gluon.constexpr_function</a></li>
 <li class="toctree-l4"><a class="reference internal" href="triton.experimental.gluon.must_use_result.html">triton.experimental.gluon.must_use_result</a></li>
@@ -116,9 +116,9 @@
       <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../index.html">API Reference</a></li>
           <li class="breadcrumb-item"><a href="../runtime.html">Runtime API</a></li>
-      <li class="breadcrumb-item active">triton.experimental.gluon.GluonJITFunction</li>
+      <li class="breadcrumb-item active">triton.experimental.gluon.GluonASTSource</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../../_sources/gluon/api/generated/triton.experimental.gluon.GluonJITFunction.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../../_sources/gluon/api/generated/triton.experimental.gluon.GluonASTSource.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -126,61 +126,33 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="triton-experimental-gluon-gluonjitfunction">
-<h1>triton.experimental.gluon.GluonJITFunction<a class="headerlink" href="#triton-experimental-gluon-gluonjitfunction" title="Link to this heading"></a></h1>
+  <section id="triton-experimental-gluon-gluonastsource">
+<h1>triton.experimental.gluon.GluonASTSource<a class="headerlink" href="#triton-experimental-gluon-gluonastsource" title="Link to this heading"></a></h1>
 <dl class="py class">
-<dt class="sig sig-object py" id="triton.experimental.gluon.GluonJITFunction">
-<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.</span></span><span class="sig-name descname"><span class="pre">GluonJITFunction</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fn</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">version</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">do_not_specialize</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">do_not_specialize_on_alignment</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">debug</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">noinline</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">repr</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">launch_metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.GluonJITFunction" title="Link to this definition"></a></dt>
-<dd><dl class="py method">
-<dt class="sig sig-object py" id="triton.experimental.gluon.GluonJITFunction.__init__">
-<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fn</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">version</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">do_not_specialize</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">do_not_specialize_on_alignment</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">debug</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">noinline</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">repr</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">launch_metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.GluonJITFunction.__init__" title="Link to this definition"></a></dt>
+<dt class="sig sig-object py" id="triton.experimental.gluon.GluonASTSource">
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.</span></span><span class="sig-name descname"><span class="pre">GluonASTSource</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fn</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">signature</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">constexprs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">attrs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.GluonASTSource" title="Link to this definition"></a></dt>
+<dd><p>An AST source for compiling a Gluon kernel with <code class="docutils literal notranslate"><span class="pre">triton.compile</span></code>.</p>
+<p>Pass an explicit target to <code class="docutils literal notranslate"><span class="pre">triton.compile</span></code> to compile without an active
+GPU driver. As with <code class="docutils literal notranslate"><span class="pre">triton.compiler.ASTSource</span></code>, callers supply the
+signature, constexpr values, and specialization attributes.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="triton.experimental.gluon.GluonASTSource.__init__">
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fn</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">signature</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">constexprs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">attrs</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#triton.experimental.gluon.GluonASTSource.__init__" title="Link to this definition"></a></dt>
 <dd></dd></dl>
 
 <p class="rubric">Methods</p>
 <table class="autosummary longtable docutils align-default">
 <tbody>
-<tr class="row-odd"><td><p><a class="reference internal" href="#triton.experimental.gluon.GluonJITFunction.__init__" title="triton.experimental.gluon.GluonJITFunction.__init__"><code class="xref py py-obj docutils literal notranslate"><span class="pre">__init__</span></code></a>(self, fn[, version, ...])</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="#triton.experimental.gluon.GluonASTSource.__init__" title="triton.experimental.gluon.GluonASTSource.__init__"><code class="xref py py-obj docutils literal notranslate"><span class="pre">__init__</span></code></a>(self, fn, signature[, constexprs, ...])</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">add_pre_run_hook</span></code>(self, hook)</p></td>
-<td><p>Add a hook that will be executed prior to the execution of run function with args and kwargs passed into the kernel</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">create_binder</span></code>(self)</p></td>
-<td><p>Precompute as much as possible.</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">get_capture_scope</span></code>(self)</p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">hash</span></code>(self)</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">is_gluon</span></code>(self)</p></td>
+<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">make_ir</span></code>(self, target, options, codegen_fns, ...)</p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">parse</span></code>(self)</p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">preload</span></code>(self, specialization_data)</p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">repr</span></code>(self, _)</p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">run</span></code>(self, *args, grid, warmup, **kwargs)</p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">warmup</span></code>(self, *args, grid, **kwargs)</p></td>
-<td><p></p></td>
-</tr>
-</tbody>
-</table>
-<p class="rubric">Attributes</p>
-<table class="autosummary longtable docutils align-default">
-<tbody>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">cache_key</span></code></p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">src</span></code></p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">type</span></code></p></td>
+<tr class="row-even"><td><p><code class="xref py py-obj docutils literal notranslate"><span class="pre">parse_options</span></code>(self)</p></td>
 <td><p></p></td>
 </tr>
 </tbody>
@@ -193,8 +165,8 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="triton.experimental.gluon.GluonASTSource.html" class="btn btn-neutral float-left" title="triton.experimental.gluon.GluonASTSource" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="triton.experimental.gluon.jit.html" class="btn btn-neutral float-right" title="triton.experimental.gluon.jit" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="../runtime.html" class="btn btn-neutral float-left" title="Runtime API" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="triton.experimental.gluon.GluonJITFunction.html" class="btn btn-neutral float-right" title="triton.experimental.gluon.GluonJITFunction" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

@@ -1,0 +1,25 @@
+﻿triton.experimental.gluon.GluonASTSource
+========================================
+
+.. currentmodule:: triton.experimental.gluon
+
+.. autoclass:: GluonASTSource
+
+   
+   .. automethod:: __init__
+
+   
+   .. rubric:: Methods
+
+   .. autosummary::
+   
+      ~GluonASTSource.__init__
+      ~GluonASTSource.hash
+      ~GluonASTSource.make_ir
+      ~GluonASTSource.parse_options
+   
+   
+
+   
+   
+   
