@@ -96,13 +96,13 @@ def _single_cta_no_atomic_sync_kernel(payload_ptr, peer_payload_ptr, seen_peer_p
 @gluon.jit
 def _store_cell_kernel(peer_buf, byte_offset, value, WIDTH: gl.constexpr):
     offsets = gl.arange(0, WIDTH, layout=gl.BlockedLayout([16], [32], [1], [0]))
-    gl.store(peer_buf + gl.multiple_of(byte_offset, WIDTH) + offsets, value)
+    gl.store(gl.multiple_of(peer_buf + byte_offset, WIDTH) + offsets, value)
 
 
 @gluon.jit
 def _load_cell_kernel(buf, byte_offset, out, WIDTH: gl.constexpr):
     offsets = gl.arange(0, WIDTH, layout=gl.BlockedLayout([16], [32], [1], [0]))
-    value = gl.load(buf + gl.multiple_of(byte_offset, WIDTH) + offsets)
+    value = gl.load(gl.multiple_of(buf + byte_offset, WIDTH) + offsets)
     gl.store(out + offsets, value)
 
 
