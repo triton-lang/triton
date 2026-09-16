@@ -265,7 +265,10 @@ Value TargetInfo::loadRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
   // PTX has no 8-bit register constraint. Load into 16-bit registers and keep
   // the low bytes, then reinterpret floating-point values without conversion.
   Type regTy = int_ty(std::max(16u, bitWidth));
-  Type retTy = vec == 1 ? regTy : struct_ty(SmallVector<Type>(vec, regTy));
+  Type retTy = vec == 1
+                   ? regTy
+                   : LLVM::LLVMStructType::getLiteral(
+                         rewriter.getContext(), SmallVector<Type>(vec, regTy));
   Value loaded = builder.launch(rewriter, loc, retTy, /*hasSideEffect=*/true);
   auto results = unpackLLElements(loc, loaded, rewriter);
   for (Value &result : results) {
