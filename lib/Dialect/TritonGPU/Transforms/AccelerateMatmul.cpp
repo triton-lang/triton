@@ -592,11 +592,20 @@ static CGAEncodingAttr getTwoCTARHSCGALayout(RankedTensorType retType) {
   if (retType.getRank() != 2)
     return {};
   MLIRContext *ctx = retType.getContext();
-  auto lhsCGA = CGAEncodingAttr::fromSplitParams(ctx, {2, 1}, {2, 1}, {1, 0});
-  if (getCGALayout(retType.getEncoding()) != lhsCGA)
+  auto layout = getCGALayout(retType.getEncoding()).getLinearLayout();
+  auto kBlock = StringAttr::get(ctx, "block");
+  if (layout.getInDimSize(kBlock) < 2 ||
+      layout.getBasis(kBlock, 0) != ArrayRef{1, 0})
     return {};
-  // The cooperating pair splits A along M and B along N.
-  return CGAEncodingAttr::fromSplitParams(ctx, {1, 2}, {1, 2}, {1, 0});
+  // Split B along N within each pair. Pairs computing different M tiles load
+  // the same B tile; pairs computing different N tiles retain their offsets.
+  // For example, C: [[1, 0], [2, 0], [0, 1]] -> B: [[0, 1], [0, 0], [0, 2]].
+  auto bases = layout.getBases();
+  for (auto &basis : bases[kBlock])
+    basis = {0, 2 * basis[1]};
+  bases[kBlock][0] = {0, 1};
+  return CGAEncodingAttr::get(
+      ctx, LinearLayout(std::move(bases), standardOutDimNames(ctx, 2)));
 }
 
 static DescriptorLoadOp getTwoCTARHSLoad(Value value) {
@@ -606,7 +615,7 @@ static DescriptorLoadOp getTwoCTARHSLoad(Value value) {
 }
 
 static bool canUseTwoCTAs(DotOp dotOp) {
-  if (lookupNumCTAs(dotOp) != 2)
+  if (lookupNumCTAs(dotOp) < 2)
     return false;
 
   RankedTensorType retType = dotOp.getType();
@@ -619,7 +628,8 @@ static bool canUseTwoCTAs(DotOp dotOp) {
     return false;
 
   // One cooperating pair covers at most 128 rows per CTA and 256 columns.
-  if (retType.getDimSize(0) > 256 || retType.getDimSize(1) > 256)
+  auto shapePerCTA = getShapePerCTA(retType);
+  if (shapePerCTA[0] > 128 || shapePerCTA[1] > 256)
     return false;
 
   return true;
