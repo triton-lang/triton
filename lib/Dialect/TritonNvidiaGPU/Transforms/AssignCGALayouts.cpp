@@ -336,8 +336,8 @@ void assignDotCGALayout(triton::DotOp dot) {
   int threadsPerWarp = ttg::lookupThreadsPerWarp(builder);
   int numWarps = ttg::lookupNumWarps(dot);
 
-  auto newCGALayout = ttg::CGAEncodingAttr::fromSplitParams(
-      ctx, ctaSplit, ctaSplit, ctaOrder);
+  auto newCGALayout =
+      ttg::CGAEncodingAttr::fromSplitParams(ctx, ctaSplit, ctaSplit, ctaOrder);
   auto newDLayout = ttg::BlockedEncodingAttr::get(
       ctx, dTy.getShape(), dLayout.getSizePerThread(), dLayout.getOrder(),
       numWarps, threadsPerWarp, newCGALayout);
