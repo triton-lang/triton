@@ -2251,13 +2251,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0], [0]]}>
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func @test_get_num_program(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
+  // CHECK-LABEL: @test_get_num_program_cluster(
+  tt.func @test_get_num_program_cluster(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
     %blockdimx = tt.get_num_programs x : i32
     %blockdimy = tt.get_num_programs y : i32
     %blockdimz = tt.get_num_programs z : i32
-    // CHECK: nclusterid.x
-    // CHECK: nclusterid.y
-    // CHECK: nclusterid.z
+    // CHECK-DAG: [[NUM_CTAS:%.*]] = llvm.mlir.constant(4 : i32) : i32
+    // CHECK-DAG: [[GRID_X:%.*]] = nvvm.read.ptx.sreg.nctaid.x : i32
+    // CHECK: llvm.udiv [[GRID_X]], [[NUM_CTAS]] : i32
+    // CHECK: nvvm.read.ptx.sreg.nctaid.y : i32
+    // CHECK: nvvm.read.ptx.sreg.nctaid.z : i32
     %v0 = arith.addi %blockdimx, %blockdimy : i32
     %v1 = arith.addi %v0, %blockdimz : i32
     %0 = tt.splat %v1 : i32 -> tensor<32xi32, #blocked0>
@@ -3573,7 +3576,7 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.profile_scratch_memory_alignment = 128 : i32, ttg.profile_scratch_memory_size = 2304 : i32} {
   // CHECK-LABEL: @profile_scratch_ptr_uses_i64
   // CHECK: %[[CLUSTER_Z:.*]] = nvvm.read.ptx.sreg.ctaid.z : i32
-  // CHECK: %[[NCLUSTER_Y:.*]] = nvvm.read.ptx.sreg.nclusterid.y : i32
+  // CHECK: %[[NCLUSTER_Y:.*]] = nvvm.read.ptx.sreg.nctaid.y : i32
   // CHECK: %[[CLUSTER_Z_I64:.*]] = llvm.zext %[[CLUSTER_Z]] : i32 to i64
   // CHECK: %[[NCLUSTER_Y_I64:.*]] = llvm.zext %[[NCLUSTER_Y]] : i32 to i64
   // CHECK: %[[LINEAR_Z:.*]] = llvm.mul %[[CLUSTER_Z_I64]], %[[NCLUSTER_Y_I64]] : i64
