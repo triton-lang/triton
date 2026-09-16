@@ -551,8 +551,23 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   if (auto kind = matchReduxKind(op, targetFeatures.getComputeCapability(),
                                  useNanQualifier)) {
     assert(acc.size() == 1);
-    if (partialWarp && acc[0].getType().getIntOrFloatBitWidth() > 32)
-      return false;
+    if (partialWarp) {
+      if (acc[0].getType().getIntOrFloatBitWidth() > 32)
+        return false;
+      // Min/max use the faster CREDUX instructions on SM100. The minimum
+      // group size also depends on whether we need one redux or two.
+      bool isMinMax = *kind == NVVM::ReductionKind::MIN ||
+                      *kind == NVVM::ReductionKind::MAX ||
+                      *kind == NVVM::ReductionKind::UMIN ||
+                      *kind == NVVM::ReductionKind::UMAX ||
+                      *kind == NVVM::ReductionKind::FMIN ||
+                      *kind == NVVM::ReductionKind::FMAX;
+      unsigned minLanes =
+          isMinMax ? (partitioned ? 8 : 2) : (partitioned ? 16 : 4);
+      unsigned numLanes = 1u << llvm::popcount(reduceLaneIdMask);
+      if (numLanes < minLanes)
+        return false;
+    }
     Value mask = b.i32_val(0xFFFFFFFF);
     bool maskBroadcast =
         broadcastLaneIdMask && (*kind == NVVM::ReductionKind::ADD ||

@@ -1140,13 +1140,17 @@ def test_reduce_partitioned(size, group_bit, broadcast_bits, op, dtype_str, prop
 
     ptx = compiled.asm["ptx"]
     sm100 = torch.cuda.get_device_capability()[0] == 10
-    use_redux = size == 32 or (group_stride <= 2 and sm100 and "64" not in dtype_str)
+    if op in ("min", "max"):
+        profitable = group_stride == 1 or (group_stride == 2 and size >= 8)
+    else:
+        profitable = (group_stride == 1 and size >= 4) or (group_stride == 2 and size == 16)
+    use_redux = size == 32 or (profitable and sm100 and "64" not in dtype_str)
     if is_float and not sm100:
         use_redux = False
-    if op == "add" and "64" in dtype_str:
-        use_redux = False
     if use_redux:
-        expected_count = group_stride if size < 32 else 2 if "64" in dtype_str else 1
+        expected_count = group_stride
+        if "64" in dtype_str:
+            expected_count = 3 if op == "add" else 2
         assert ptx.count("redux.sync.") == expected_count
         assert "shfl.sync.bfly" not in ptx
         for line in ptx.splitlines():
