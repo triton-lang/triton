@@ -1065,14 +1065,10 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
   auto kCol = S("col");
   auto dims = standardOutDimNames(ctx, 2);
   auto cgaLayout = encoding.getCGALayout();
-  auto cgaLL = cgaLayout.getLinearLayout();
   bool isM64TwoCTA = encoding.getBlockM() == 64 && encoding.getTwoCTAs();
 
-  auto shapePerCTA = getShapePerCTA(cgaLayout.getCTASplitNum(), shape);
-  assert(shapePerCTA.size() == 2);
-
   auto blockM = encoding.getBlockM();
-  auto blockN = std::min<int32_t>(encoding.getBlockN(), shapePerCTA[1]);
+  int32_t blockN = encoding.getBlockN();
   assert(blockM == 64 || blockM == 128);
   LinearLayout tile =
       LinearLayout::zeros1D(encoding.getColStride(), kCol, dims[1]);
@@ -1083,18 +1079,17 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
     // column bits start one bit later than they do for dense TMEM layouts.
     colLayout *= LinearLayout::zeros1D(2, kCol, dims[1]);
   }
-  colLayout *= LinearLayout::identity1D(blockN, kCol, dims[1]);
+  colLayout *= LinearLayout::identity1D(
+      llvm::divideCeil(blockN, isM64TwoCTA ? 2 : 1), kCol, dims[1]);
 
   if (blockM == 64 && !encoding.getTwoCTAs()) {
     tile *= LinearLayout::identity1D(16, kRow, dims[0]) * colLayout;
     auto bases = tile.getBases();
+    auto shapePerCTA = getShapePerCTA(cgaLayout.getCTASplitNum(), shape);
     if (shapePerCTA[0] > blockM) {
       bases[kRow].push_back({64, 0});
-    } else if (shapePerCTA[1] > blockN) {
-      bases[kRow].push_back({0, blockN});
     } else {
-      // Empty, meaning the element is not defined
-      bases[kRow].push_back({0, 0});
+      bases[kRow].push_back({0, blockN});
     }
     bases[kRow].push_back({16, 0});
     bases[kRow].push_back({32, 0});
@@ -1103,20 +1098,11 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
     tile *= LinearLayout::identity1D(blockM, kRow, dims[0]) * colLayout;
     if (isM64TwoCTA) {
       auto bases = tile.getBases();
-      bases[kRow].push_back(bases[kCol].back());
-      bases[kCol].pop_back();
-      tile = LinearLayout(std::move(bases), tile.getOutDims(),
-                          tile.isSurjective());
+      bases[kRow].push_back({0, blockN / 2});
+      tile = LinearLayout(std::move(bases), dims);
     }
   }
-  auto repsM = shapePerCTA[0] / tile.getOutDimSize(dims[0]);
-  auto repsN = shapePerCTA[1] / tile.getOutDimSize(dims[1]);
-  assert(repsM >= 1 && repsN >= 1);
-  // Broadcast the remaining dimensions in order [0, 1]
-  tile = tile * LinearLayout::identity1D(repsM, kCol, dims[0]) *
-         LinearLayout::identity1D(repsN, kCol, dims[1]);
-  tile *= cgaLL;
-  return tile;
+  return combineCtaCgaWithShape(tile, cgaLayout, shape);
 }
 
 LinearLayout
@@ -1126,11 +1112,9 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
   auto *ctx = encoding.getContext();
   auto kRow = S("row");
   auto kCol = S("col");
-  auto kBlock = S("block");
   auto dims = standardOutDimNames(ctx, 2);
   auto cgaLayout = encoding.getCGALayout();
   auto shapePerCTA = getShapePerCTA(cgaLayout.getCTASplitNum(), shape);
-  assert(shapePerCTA.size() == 2);
 
   // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-mma-scale-factor-a-layout-1x
   auto tile = LinearLayout::identity1D(32, kRow, dims[0]) *
@@ -1138,33 +1122,14 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
               LinearLayout::zeros1D(4, kRow, dims[0]) *
               LinearLayout::identity1D(4, kCol, dims[1]) *
               LinearLayout::identity1D(2, kCol, dims[0]);
-  auto repsMn = llvm::divideCeil(shapePerCTA[0], tile.getOutDimSize(dims[0]));
-  auto repsK = llvm::divideCeil(shapePerCTA[1], tile.getOutDimSize(dims[1]));
-
-  if (repsMn > 1) {
-    // blockRepOrder applies after this normalization step. First merge the two
-    // MN-adjacent 64x4 pieces into the repeated scale block, then order the
-    // remaining block repetitions along MN and K.
+  if (shapePerCTA[0] > tile.getOutDimSize(dims[0])) {
+    // Pair adjacent 64x4 pieces before applying blockRepOrder.
     tile *= LinearLayout::identity1D(2, kCol, dims[0]);
-    repsMn /= 2;
   }
 
-  if (encoding.getBlockRepOrder() ==
-      TensorMemoryScalesBlockRepOrder::K_THEN_MN) {
-    // kThenMn uses repOrder = [1, 0] at the repeated block level.
-    tile *= LinearLayout::identity1D(repsK, kCol, dims[1]) *
-            LinearLayout::identity1D(repsMn, kCol, dims[0]);
-  } else {
-    // mnThenK uses repOrder = [0, 1] at the repeated block level.
-    tile *= LinearLayout::identity1D(repsMn, kCol, dims[0]) *
-            LinearLayout::identity1D(repsK, kCol, dims[1]);
-  }
-  // Add a trivial block dimension
-  tile *= LinearLayout::identity1D(1, kBlock, dims[0]);
-  // See [Zeros in TMEM LinearLayouts]
-  // Set some rows/cols to 0 if shape is smaller than 64 x 4
-  tile = ensureLayoutNotLargerThan(tile, dims, shapePerCTA);
-  return tile * cgaLayout.getLinearLayout();
+  if (encoding.getBlockRepOrder() == TensorMemoryScalesBlockRepOrder::K_THEN_MN)
+    tile = tile.transposeOuts({dims[1], dims[0]});
+  return combineCtaCgaWithShape(tile, cgaLayout, shape);
 }
 
 // Convert a PartitionedSharedEncodingAttr to a LinearLayout.
@@ -1265,17 +1230,16 @@ LinearLayout toLinearLayout(MemDescType type) {
         dropPipeliningDim(type.getAllocShape(), type.getEncoding());
     auto ll = toLinearLayout(allocShape, type.getEncoding());
     auto outDims = llvm::to_vector(ll.getOutDimNames());
-    // Trim the shape
-    for (auto [dim, size] : llvm::zip_equal(outDims, shape))
-      ll = ll.resizeOutDim(dim, size);
+    ll = ensureLayoutNotLargerThan(ll, outDims, shape);
 
     auto kCol = StringAttr::get(type.getContext(), "col");
-    int bitwidth = type.getElementType().getIntOrFloatBitWidth();
-    int minColBases = llvm::Log2_32(32 / bitwidth);
-    uint64_t nonZeroColBases = getInputBasisMask(ll, kCol, outDims);
-    int nColBases =
-        std::max(minColBases, int(llvm::bit_width(nonZeroColBases)));
-    return ll.resizeInDim(kCol, 1u << nColBases);
+    unsigned minCols = 32 / type.getElementTypeBitWidth();
+    // Keep padding declared by a complete allocation.
+    unsigned nCols =
+        shape == allocShape
+            ? ll.getInDimSize(kCol)
+            : 1u << llvm::bit_width(getInputBasisMask(ll, kCol, outDims));
+    return ll.resizeInDim(kCol, std::max(minCols, nCols));
   }
   // Shared memory needs the allocation shape so that invertAndCompose can trim
   // subviews. We also remove the first dimension of the allocation shape if

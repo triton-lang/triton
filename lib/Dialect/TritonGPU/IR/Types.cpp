@@ -161,9 +161,6 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
              << "bitwidth * colStride must be less than or equal to 32. Got "
              << bitwidth << " and " << enc.getColStride();
     }
-    // Takes subslices into account and figures out whether we can construct
-    // the linear layout at all
-    allocShape = dropPipeliningDim(allocShape, enc);
     auto ctaSplit = enc.getCGALayout().getCTASplitNum();
     auto blockN = std::min<int32_t>(enc.getBlockN(), shape.back());
     if (shape[shape.size() - 2] < enc.getBlockM() * ctaSplit[0] ||
@@ -171,16 +168,6 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
       return emitError() << "the tensor shape must be at least "
                          << enc.getBlockM() * ctaSplit[0] << "x"
                          << blockN * ctaSplit[1] << ". Got " << shape;
-    }
-    // Checks the layout of the allocation
-    auto ll = toLinearLayout(allocShape, enc);
-    // Sanity check that the layout is of the right shape
-    auto dims = standardOutDimNames(ctx, 2);
-    if (ll.getOutDimSize(dims[0]) != allocShape[0] ||
-        ll.getOutDimSize(dims[1]) != allocShape[1]) {
-      return emitError() << "allocation shape must be equal to "
-                         << ll.getOutDimSize(dims[0]) << "x"
-                         << ll.getOutDimSize(dims[1]);
     }
   } else if (isa<SharedEncodingTrait>(encoding)) {
     if (memorySpace != SharedMemorySpaceAttr::get(ctx)) {
@@ -205,6 +192,12 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     if (bitwidth != 8) {
       return emitError() << "bitwidth must be 8";
     }
+    // TMEM stores require 16 independently addressable rows per CTA.
+    auto shapePerCTA = getShapePerCTA(enc, allocShape);
+    if (shapePerCTA[0] < 16)
+      return emitError() << "tensor-memory scale allocations require at least "
+                            "16 rows per CTA; got "
+                         << shapePerCTA[0];
   }
 
   // PaddedSharedEncodingAttr is also a SharedEncodingTrait but we have some
