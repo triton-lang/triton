@@ -72,6 +72,24 @@ def test_compile_only_sm100() -> None:
     assert k.asm["cubin"] != b""
 
 
+def test_compile_only_aligned_barrier_noduplicate() -> None:
+
+    @triton.jit
+    def kernel(out, count):
+        for i in range(count):
+            tl.debug_barrier()
+            tl.store(out + i, i)
+
+    compiled = triton.compile(ASTSource(fn=kernel, signature={"out": "*i32", "count": "i32"}),
+                              target=GPUTarget("cuda", 100, 32))
+    llir = compiled.asm["llir"]
+    declaration = re.search(r"declare void @llvm\.nvvm\.barrier\.cta\.sync\.aligned\.all\(i32\) #(\d+)", llir)
+    assert declaration is not None
+    attributes = re.search(rf"attributes #{declaration[1]} = \{{([^}}]+)\}}", llir)[1]
+    assert "noduplicate" in attributes.split()
+    assert "bar.sync" in compiled.asm["ptx"]
+
+
 @pytest.mark.parametrize("element_type", ["f32", "f16", "bf16"])
 def test_compile_only_packed_arith_chains(element_type, tmp_path) -> None:
     packed_type = f"{element_type}x2"

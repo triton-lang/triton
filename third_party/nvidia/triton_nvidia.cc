@@ -319,6 +319,14 @@ void init_triton_nvidia(py::module_ &m) {
     context.loadAllAvailableDialects();
   });
 
+  m.def("set_nvvm_barrier_noduplicate", [](llvm::Module *mod) {
+    for (auto name : {"llvm.nvvm.barrier.cta.sync.aligned.all",
+                      "llvm.nvvm.barrier.cta.sync.aligned.count"}) {
+      if (auto *fn = mod->getFunction(name))
+        fn->addFnAttr(llvm::Attribute::NoDuplicate);
+    }
+  });
+
   // TODO: could be done in python if we had a generic interface to set metadata
   m.def("set_nvvm_reflect_ftz", [](llvm::Module *mod) {
     // please check https://llvm.org/docs/NVPTXUsage.html#reflection-parameters
