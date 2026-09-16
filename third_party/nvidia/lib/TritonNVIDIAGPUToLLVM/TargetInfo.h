@@ -24,11 +24,14 @@ public:
 
   StringRef getAtomicSyncScope(MemSyncScope scope) const override;
 
-  unsigned getMaxAtomicLoadVectorSize(unsigned bitWidth) const override;
+  unsigned getMaxAtomicLoadStoreVectorSize(unsigned bitWidth) const override;
 
   Value loadRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
                     Type valueTy, Value pred,
                     MemSyncScope scope) const override;
+
+  void storeRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                    Value value, Value pred, MemSyncScope scope) const override;
 
   void barrier(Location loc, RewriterBase &rewriter,
                triton::gpu::AddrSpace targets) const override;

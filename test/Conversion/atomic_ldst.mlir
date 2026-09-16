@@ -35,7 +35,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-TTG2NVGPU: nvvm.barrier
   // CHECK-TTG2NVGPU: llvm.load %{{.*}} : !llvm.ptr<3> -> i32
   // CHECK-TTG2NVGPU: llvm.fence release
-  // CHECK-TTG2NVGPU: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-TTG2NVGPU: llvm.inline_asm has_side_effects {{.*}}st.relaxed.sys.global.b32
   // CHECK-NVGPU2LLVM-LABEL: @atomic_load_store
   // CHECK-NVGPU2LLVM: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.b32
   // CHECK-NVGPU2LLVM-NOT: nvvm.barrier
@@ -43,7 +43,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-NVGPU2LLVM: nvvm.barrier
   // CHECK-NVGPU2LLVM: llvm.load %{{.*}} : !llvm.ptr<3> -> i32
   // CHECK-NVGPU2LLVM: llvm.fence release
-  // CHECK-NVGPU2LLVM: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-NVGPU2LLVM: llvm.inline_asm has_side_effects {{.*}}st.relaxed.sys.global.b32
   tt.func public @atomic_load_store(%ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>, %mask: i1) {
     %loaded = tt.atomic_load acquire, gpu, %ptr, %mask : (!tt.ptr<i32>, i1) -> i32
     tt.atomic_store release, sys, %out, %loaded, %mask : !tt.ptr<i32>
@@ -52,7 +52,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
   // CHECK-TTG2NVGPU-LABEL: @atomic_load_store_relaxed
   // CHECK-TTG2NVGPU: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.cta.global.b64
-  // CHECK-TTG2NVGPU: llvm.store %{{.*}}, %{{.*}} atomic syncscope("device") monotonic
+  // CHECK-TTG2NVGPU: llvm.inline_asm has_side_effects {{.*}}st.relaxed.gpu.global.b64
   tt.func public @atomic_load_store_relaxed(%ptr: !tt.ptr<i64>, %value: i64) {
     %loaded = tt.atomic_load relaxed, cta, %ptr : (!tt.ptr<i64>) -> i64
     tt.atomic_store relaxed, gpu, %ptr, %value : !tt.ptr<i64>
@@ -102,20 +102,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-TTG2NVGPU: %{{.*}} = llvm.inline_asm has_side_effects {{.*}}ld.relaxed.sys.global.b32
   // CHECK-TTG2NVGPU: %{{.*}} = llvm.inline_asm has_side_effects {{.*}}ld.relaxed.sys.global.b32
   // CHECK-TTG2NVGPU: %{{.*}} = llvm.inline_asm has_side_effects {{.*}}ld.relaxed.sys.global.b32
-  // CHECK-TTG2NVGPU: llvm.store %{{.*}}, %{{.*}} atomic monotonic
-  // CHECK-TTG2NVGPU-NEXT: llvm.store %{{.*}}, %{{.*}} atomic monotonic
-  // CHECK-TTG2NVGPU-NEXT: llvm.store %{{.*}}, %{{.*}} atomic monotonic
-  // CHECK-TTG2NVGPU-NEXT: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-TTG2NVGPU: llvm.inline_asm has_side_effects {{.*}}st.relaxed.sys.global.b32
+  // CHECK-TTG2NVGPU-NEXT: llvm.inline_asm has_side_effects {{.*}}st.relaxed.sys.global.b32
+  // CHECK-TTG2NVGPU-NEXT: llvm.inline_asm has_side_effects {{.*}}st.relaxed.sys.global.b32
+  // CHECK-TTG2NVGPU-NEXT: llvm.inline_asm has_side_effects {{.*}}st.relaxed.sys.global.b32
   // CHECK-TTG2NVGPU-NEXT: llvm.return
   // CHECK-NVGPU2LLVM-LABEL: @unpredicated_tensor_atomic_load_store
   // CHECK-NVGPU2LLVM: %{{.*}} = llvm.inline_asm has_side_effects {{.*}}ld.relaxed.sys.global.b32
   // CHECK-NVGPU2LLVM-NEXT: %{{.*}} = llvm.inline_asm has_side_effects {{.*}}ld.relaxed.sys.global.b32
   // CHECK-NVGPU2LLVM-NEXT: %{{.*}} = llvm.inline_asm has_side_effects {{.*}}ld.relaxed.sys.global.b32
   // CHECK-NVGPU2LLVM-NEXT: %{{.*}} = llvm.inline_asm has_side_effects {{.*}}ld.relaxed.sys.global.b32
-  // CHECK-NVGPU2LLVM: llvm.store %{{.*}}, %{{.*}} atomic monotonic
-  // CHECK-NVGPU2LLVM-NEXT: llvm.store %{{.*}}, %{{.*}} atomic monotonic
-  // CHECK-NVGPU2LLVM-NEXT: llvm.store %{{.*}}, %{{.*}} atomic monotonic
-  // CHECK-NVGPU2LLVM-NEXT: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-NVGPU2LLVM: llvm.inline_asm has_side_effects {{.*}}st.relaxed.sys.global.b32
+  // CHECK-NVGPU2LLVM-NEXT: llvm.inline_asm has_side_effects {{.*}}st.relaxed.sys.global.b32
+  // CHECK-NVGPU2LLVM-NEXT: llvm.inline_asm has_side_effects {{.*}}st.relaxed.sys.global.b32
+  // CHECK-NVGPU2LLVM-NEXT: llvm.inline_asm has_side_effects {{.*}}st.relaxed.sys.global.b32
   // CHECK-NVGPU2LLVM-NEXT: llvm.return
   tt.func public @unpredicated_tensor_atomic_load_store(
       %ptrs: tensor<512x!tt.ptr<i32>, #blocked4>) {
@@ -162,10 +162,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-TTG2NVGPU-LABEL: @sharded_atomic_store_release
   // CHECK-TTG2NVGPU: nvvm.barrier
   // CHECK-TTG2NVGPU: llvm.fence release
-  // CHECK-TTG2NVGPU-COUNT-4: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-TTG2NVGPU-COUNT-4: llvm.inline_asm has_side_effects {{.*}}st.relaxed.sys.global.b32
   // CHECK-NVGPU2LLVM-LABEL: @sharded_atomic_store_release
   // CHECK-NVGPU2LLVM: llvm.fence release
-  // CHECK-NVGPU2LLVM-COUNT-4: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-NVGPU2LLVM-COUNT-4: llvm.inline_asm has_side_effects {{.*}}st.relaxed.sys.global.b32
   tt.func public @sharded_atomic_store_release(
       %ptrs: tensor<512x!tt.ptr<i32>, #blocked4>,
       %values: tensor<512xi32, #blocked4>,
@@ -316,88 +316,112 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 #vec = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-COMMON-LABEL: @atomic_load_vector_aligned
+  // CHECK-COMMON-LABEL: @atomic_load_store_vector_aligned
   // CHECK-COMMON: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.v4.b32
   // CHECK-COMMON: llvm.fence syncscope("device") acquire
   // CHECK-COMMON: nvvm.barrier
-  tt.func public @atomic_load_vector_aligned(
+  // CHECK-COMMON: llvm.fence syncscope("device") release
+  // CHECK-COMMON: llvm.inline_asm has_side_effects {{.*}}st.relaxed.gpu.global.v4.b32
+  tt.func public @atomic_load_store_vector_aligned(
       %ptrs: tensor<512x!tt.ptr<i32>, #vec> {tt.contiguity = 4 : i32, tt.divisibility = 16 : i32}) {
     %loaded = tt.atomic_load acquire, gpu, %ptrs : (tensor<512x!tt.ptr<i32>, #vec>) -> tensor<512xi32, #vec>
+    tt.atomic_store release, gpu, %ptrs, %loaded : tensor<512x!tt.ptr<i32>, #vec>
     tt.return
   }
 
-  // CHECK-COMMON-LABEL: @atomic_load_vector_mask_pairs
+  // CHECK-COMMON-LABEL: @atomic_load_store_vector_mask_pairs
   // CHECK-COMMON-COUNT-2: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.v2.b32
   // CHECK-COMMON: llvm.fence syncscope("device") acquire
   // CHECK-COMMON: nvvm.barrier
-  tt.func public @atomic_load_vector_mask_pairs(
+  // CHECK-COMMON: llvm.fence syncscope("device") release
+  // CHECK-COMMON-COUNT-2: llvm.inline_asm has_side_effects {{.*}}st.relaxed.gpu.global.v2.b32
+  tt.func public @atomic_load_store_vector_mask_pairs(
       %ptrs: tensor<512x!tt.ptr<i32>, #vec> {tt.contiguity = 4 : i32, tt.divisibility = 16 : i32},
       %mask: tensor<512xi1, #vec> {tt.constancy = 2 : i32}) {
     %loaded = tt.atomic_load acquire, gpu, %ptrs, %mask : (tensor<512x!tt.ptr<i32>, #vec>, tensor<512xi1, #vec>) -> tensor<512xi32, #vec>
+    tt.atomic_store release, gpu, %ptrs, %loaded, %mask : tensor<512x!tt.ptr<i32>, #vec>
     tt.return
   }
 
-  // CHECK-COMMON-LABEL: @atomic_load_vector_unaligned
+  // CHECK-COMMON-LABEL: @atomic_load_store_vector_unaligned
   // CHECK-COMMON-COUNT-2: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.v2.b32
   // CHECK-COMMON: llvm.fence syncscope("device") acquire
   // CHECK-COMMON: nvvm.barrier
-  tt.func public @atomic_load_vector_unaligned(
+  // CHECK-COMMON: llvm.fence syncscope("device") release
+  // CHECK-COMMON-COUNT-2: llvm.inline_asm has_side_effects {{.*}}st.relaxed.gpu.global.v2.b32
+  tt.func public @atomic_load_store_vector_unaligned(
       %ptrs: tensor<512x!tt.ptr<i32>, #vec> {tt.contiguity = 4 : i32, tt.divisibility = 8 : i32}) {
     %loaded = tt.atomic_load acquire, gpu, %ptrs : (tensor<512x!tt.ptr<i32>, #vec>) -> tensor<512xi32, #vec>
+    tt.atomic_store release, gpu, %ptrs, %loaded : tensor<512x!tt.ptr<i32>, #vec>
     tt.return
   }
 
-  // CHECK-COMMON-LABEL: @atomic_load_vector_noncontiguous
+  // CHECK-COMMON-LABEL: @atomic_load_store_vector_noncontiguous
   // CHECK-COMMON-COUNT-4: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.b32
   // CHECK-COMMON: llvm.fence syncscope("device") acquire
   // CHECK-COMMON: nvvm.barrier
-  tt.func public @atomic_load_vector_noncontiguous(
+  // CHECK-COMMON: llvm.fence syncscope("device") release
+  // CHECK-COMMON-COUNT-4: llvm.inline_asm has_side_effects {{.*}}st.relaxed.gpu.global.b32
+  tt.func public @atomic_load_store_vector_noncontiguous(
       %ptrs: tensor<512x!tt.ptr<i32>, #vec> {tt.contiguity = 1 : i32, tt.divisibility = 16 : i32}) {
     %loaded = tt.atomic_load acquire, gpu, %ptrs : (tensor<512x!tt.ptr<i32>, #vec>) -> tensor<512xi32, #vec>
+    tt.atomic_store release, gpu, %ptrs, %loaded : tensor<512x!tt.ptr<i32>, #vec>
     tt.return
   }
 
-  // CHECK-COMMON-LABEL: @atomic_load_vector_varying_mask
+  // CHECK-COMMON-LABEL: @atomic_load_store_vector_varying_mask
   // CHECK-COMMON-COUNT-4: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.b32
   // CHECK-COMMON: llvm.fence syncscope("device") acquire
   // CHECK-COMMON: nvvm.barrier
-  tt.func public @atomic_load_vector_varying_mask(
+  // CHECK-COMMON: llvm.fence syncscope("device") release
+  // CHECK-COMMON-COUNT-4: llvm.inline_asm has_side_effects {{.*}}st.relaxed.gpu.global.b32
+  tt.func public @atomic_load_store_vector_varying_mask(
       %ptrs: tensor<512x!tt.ptr<i32>, #vec> {tt.contiguity = 4 : i32, tt.divisibility = 16 : i32},
       %mask: tensor<512xi1, #vec> {tt.constancy = 1 : i32}) {
     %loaded = tt.atomic_load acquire, gpu, %ptrs, %mask : (tensor<512x!tt.ptr<i32>, #vec>, tensor<512xi1, #vec>) -> tensor<512xi32, #vec>
+    tt.atomic_store release, gpu, %ptrs, %loaded, %mask : tensor<512x!tt.ptr<i32>, #vec>
     tt.return
   }
 
-  // CHECK-COMMON-LABEL: @atomic_load_vector_bytes
+  // CHECK-COMMON-LABEL: @atomic_load_store_vector_bytes
   // CHECK-COMMON: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.b32
   // CHECK-COMMON: llvm.fence syncscope("device") acquire
   // CHECK-COMMON: nvvm.barrier
-  tt.func public @atomic_load_vector_bytes(
+  // CHECK-COMMON: llvm.fence syncscope("device") release
+  // CHECK-COMMON: llvm.inline_asm has_side_effects {{.*}}st.relaxed.gpu.global.b32
+  tt.func public @atomic_load_store_vector_bytes(
       %ptrs: tensor<512x!tt.ptr<i8>, #vec> {tt.contiguity = 4 : i32, tt.divisibility = 4 : i32},
       %mask: tensor<512xi1, #vec> {tt.constancy = 4 : i32}) {
     %loaded = tt.atomic_load acquire, gpu, %ptrs, %mask : (tensor<512x!tt.ptr<i8>, #vec>, tensor<512xi1, #vec>) -> tensor<512xi8, #vec>
+    tt.atomic_store release, gpu, %ptrs, %loaded, %mask : tensor<512x!tt.ptr<i8>, #vec>
     tt.return
   }
 
-  // CHECK-COMMON-LABEL: @atomic_load_vector_half
+  // CHECK-COMMON-LABEL: @atomic_load_store_vector_half
   // CHECK-COMMON: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.v2.b32
   // CHECK-COMMON: llvm.fence syncscope("device") acquire
   // CHECK-COMMON: nvvm.barrier
-  tt.func public @atomic_load_vector_half(
+  // CHECK-COMMON: llvm.fence syncscope("device") release
+  // CHECK-COMMON: llvm.inline_asm has_side_effects {{.*}}st.relaxed.gpu.global.v2.b32
+  tt.func public @atomic_load_store_vector_half(
       %ptrs: tensor<512x!tt.ptr<f16>, #vec> {tt.contiguity = 4 : i32, tt.divisibility = 8 : i32},
       %mask: tensor<512xi1, #vec> {tt.constancy = 4 : i32}) {
     %loaded = tt.atomic_load acquire, gpu, %ptrs, %mask : (tensor<512x!tt.ptr<f16>, #vec>, tensor<512xi1, #vec>) -> tensor<512xf16, #vec>
+    tt.atomic_store release, gpu, %ptrs, %loaded, %mask : tensor<512x!tt.ptr<f16>, #vec>
     tt.return
   }
 
-  // CHECK-COMMON-LABEL: @atomic_load_vector_double
+  // CHECK-COMMON-LABEL: @atomic_load_store_vector_double
   // CHECK-COMMON-COUNT-2: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.v2.b64
   // CHECK-COMMON: llvm.fence syncscope("device") acquire
   // CHECK-COMMON: nvvm.barrier
-  tt.func public @atomic_load_vector_double(
+  // CHECK-COMMON: llvm.fence syncscope("device") release
+  // CHECK-COMMON-COUNT-2: llvm.inline_asm has_side_effects {{.*}}st.relaxed.gpu.global.v2.b64
+  tt.func public @atomic_load_store_vector_double(
       %ptrs: tensor<512x!tt.ptr<f64>, #vec> {tt.contiguity = 4 : i32, tt.divisibility = 32 : i32},
       %mask: tensor<512xi1, #vec> {tt.constancy = 4 : i32}) {
     %loaded = tt.atomic_load acquire, gpu, %ptrs, %mask : (tensor<512x!tt.ptr<f64>, #vec>, tensor<512xi1, #vec>) -> tensor<512xf64, #vec>
+    tt.atomic_store release, gpu, %ptrs, %loaded, %mask : tensor<512x!tt.ptr<f64>, #vec>
     tt.return
   }
 
@@ -407,28 +431,37 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 #packed = #ttg.blocked<{sizePerThread = [16], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-COMMON-LABEL: @atomic_load_packed_bytes
+  // CHECK-COMMON-LABEL: @atomic_load_store_packed_bytes
   // CHECK-COMMON: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.v4.b32
-  tt.func public @atomic_load_packed_bytes(
+  // CHECK-COMMON: llvm.fence syncscope("device") release
+  // CHECK-COMMON: llvm.inline_asm has_side_effects {{.*}}st.relaxed.gpu.global.v4.b32
+  tt.func public @atomic_load_store_packed_bytes(
       %ptrs: tensor<2048x!tt.ptr<i8>, #packed> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32}) {
     %loaded = tt.atomic_load relaxed, gpu, %ptrs : (tensor<2048x!tt.ptr<i8>, #packed>) -> tensor<2048xi8, #packed>
+    tt.atomic_store release, gpu, %ptrs, %loaded : tensor<2048x!tt.ptr<i8>, #packed>
     tt.return
   }
 
-  // CHECK-COMMON-LABEL: @atomic_load_packed_half
+  // CHECK-COMMON-LABEL: @atomic_load_store_packed_half
   // CHECK-COMMON-COUNT-2: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.v4.b32
-  tt.func public @atomic_load_packed_half(
+  // CHECK-COMMON: llvm.fence syncscope("device") release
+  // CHECK-COMMON-COUNT-2: llvm.inline_asm has_side_effects {{.*}}st.relaxed.gpu.global.v4.b32
+  tt.func public @atomic_load_store_packed_half(
       %ptrs: tensor<2048x!tt.ptr<f16>, #packed> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32}) {
     %loaded = tt.atomic_load relaxed, gpu, %ptrs : (tensor<2048x!tt.ptr<f16>, #packed>) -> tensor<2048xf16, #packed>
+    tt.atomic_store release, gpu, %ptrs, %loaded : tensor<2048x!tt.ptr<f16>, #packed>
     tt.return
   }
 
-  // CHECK-COMMON-LABEL: @atomic_load_packed_byte_pairs
+  // CHECK-COMMON-LABEL: @atomic_load_store_packed_byte_pairs
   // CHECK-COMMON-COUNT-8: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.b16
-  tt.func public @atomic_load_packed_byte_pairs(
+  // CHECK-COMMON: llvm.fence syncscope("device") release
+  // CHECK-COMMON-COUNT-8: llvm.inline_asm has_side_effects {{.*}}st.relaxed.gpu.global.b16
+  tt.func public @atomic_load_store_packed_byte_pairs(
       %ptrs: tensor<2048x!tt.ptr<i8>, #packed> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32},
       %mask: tensor<2048xi1, #packed> {tt.constancy = 2 : i32}) {
     %loaded = tt.atomic_load relaxed, gpu, %ptrs, %mask : (tensor<2048x!tt.ptr<i8>, #packed>, tensor<2048xi1, #packed>) -> tensor<2048xi8, #packed>
+    tt.atomic_store release, gpu, %ptrs, %loaded, %mask : tensor<2048x!tt.ptr<i8>, #packed>
     tt.return
   }
 }

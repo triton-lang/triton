@@ -58,7 +58,7 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
   // CHECK: llvm.load %{{.*}} : !llvm.ptr<3> -> i32
   // CHECK: llvm.fence release
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
-  // CHECK: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK: llvm.inline_asm has_side_effects {{.*}}st.relaxed.sys.global.b32
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
   tt.func @atomic_load_store(%ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>, %mask: i1) {
     %loaded = tt.atomic_load acquire, gpu, %ptr, %mask : (!tt.ptr<i32>, i1) -> i32
@@ -76,7 +76,7 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
   // CHECK: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.b32
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
-  // CHECK: llvm.store %{{.*}}, %{{.*}} atomic syncscope("device") monotonic
+  // CHECK: llvm.inline_asm has_side_effects {{.*}}st.relaxed.gpu.global.b32
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
   tt.func @tensor_atomic_load_store(%ptrs: tensor<256x!tt.ptr<i32>, #blocked>,
                                     %mask: tensor<256xi1, #blocked>) {
@@ -100,13 +100,13 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
   // CHECK-NEXT: %{{.*}} = llvm.inline_asm has_side_effects {{.*}}ld.relaxed.sys.global.b32
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
-  // CHECK-NEXT: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-NEXT: llvm.inline_asm has_side_effects {{.*}}st.relaxed.sys.global.b32
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
-  // CHECK-NEXT: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-NEXT: llvm.inline_asm has_side_effects {{.*}}st.relaxed.sys.global.b32
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
-  // CHECK-NEXT: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-NEXT: llvm.inline_asm has_side_effects {{.*}}st.relaxed.sys.global.b32
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
-  // CHECK-NEXT: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-NEXT: llvm.inline_asm has_side_effects {{.*}}st.relaxed.sys.global.b32
   // CHECK: llvm.return
   tt.func @unpredicated_tensor_atomic_load_store(
       %ptrs: tensor<512x!tt.ptr<i32>, #blocked4>) {
@@ -142,7 +142,7 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
   // CHECK-LABEL: llvm.func @sharded_atomic_store_release
   // CHECK: nvvm.barrier
   // CHECK: llvm.fence release
-  // CHECK-COUNT-4: llvm.store %{{.*}}, %{{.*}} atomic monotonic
+  // CHECK-COUNT-4: llvm.inline_asm has_side_effects {{.*}}st.relaxed.sys.global.b32
   tt.func @sharded_atomic_store_release(
       %ptrs: tensor<512x!tt.ptr<i32>, #blocked4>,
       %values: tensor<512xi32, #blocked4>,
@@ -634,7 +634,7 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32
 
 #vec = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK-LABEL: llvm.func @vector_atomic_load
+  // CHECK-LABEL: llvm.func @vector_atomic_load_store
   // CHECK: %[[BYTES:.*]] = llvm.mlir.constant(8 : i32) : i32
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar({{.*}}, %[[BYTES]],
   // CHECK: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.v2.b32
@@ -644,10 +644,18 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
   // CHECK: llvm.fence syncscope("device") acquire
   // CHECK: nvvm.barrier
-  tt.func @vector_atomic_load(
+  // CHECK: llvm.fence syncscope("device") release
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK: llvm.inline_asm has_side_effects {{.*}}st.relaxed.gpu.global.v2.b32
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK: llvm.inline_asm has_side_effects {{.*}}st.relaxed.gpu.global.v2.b32
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  tt.func @vector_atomic_load_store(
       %ptrs: tensor<512x!tt.ptr<i32>, #vec> {tt.contiguity = 4 : i32, tt.divisibility = 16 : i32},
       %mask: tensor<512xi1, #vec> {tt.constancy = 4 : i32}) {
     %loaded = tt.atomic_load acquire, gpu, %ptrs, %mask : (tensor<512x!tt.ptr<i32>, #vec>, tensor<512xi1, #vec>) -> tensor<512xi32, #vec>
+    tt.atomic_store release, gpu, %ptrs, %loaded, %mask : tensor<512x!tt.ptr<i32>, #vec>
     tt.return
   }
 }
@@ -656,17 +664,25 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
 
 #packed = #ttg.blocked<{sizePerThread = [16], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // CHECK-LABEL: llvm.func @packed_atomic_load
+  // CHECK-LABEL: llvm.func @packed_atomic_load_store
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
   // CHECK: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.v2.b32
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
   // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
   // CHECK: llvm.inline_asm has_side_effects {{.*}}ld.relaxed.gpu.global.v2.b32
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
-  tt.func @packed_atomic_load(
+  // CHECK: llvm.fence syncscope("device") release
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK: llvm.inline_asm has_side_effects {{.*}}st.relaxed.gpu.global.v2.b32
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  // CHECK: llvm.call @__triton_gsan_atomic_begin_scalar
+  // CHECK: llvm.inline_asm has_side_effects {{.*}}st.relaxed.gpu.global.v2.b32
+  // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
+  tt.func @packed_atomic_load_store(
       %ptrs: tensor<2048x!tt.ptr<i8>, #packed> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32},
       %mask: tensor<2048xi1, #packed> {tt.constancy = 16 : i32}) {
     %loaded = tt.atomic_load relaxed, gpu, %ptrs, %mask : (tensor<2048x!tt.ptr<i8>, #packed>, tensor<2048xi1, #packed>) -> tensor<2048xi8, #packed>
+    tt.atomic_store release, gpu, %ptrs, %loaded, %mask : tensor<2048x!tt.ptr<i8>, #packed>
     tt.return
   }
 }

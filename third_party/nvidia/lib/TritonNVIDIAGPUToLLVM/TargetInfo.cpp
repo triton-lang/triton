@@ -221,7 +221,7 @@ static std::string getConstraintForBitwidth(unsigned bitwidth) {
   }
 }
 
-unsigned TargetInfo::getMaxAtomicLoadVectorSize(unsigned bitWidth) const {
+unsigned TargetInfo::getMaxAtomicLoadStoreVectorSize(unsigned bitWidth) const {
   return 128 / bitWidth;
 }
 
@@ -233,7 +233,7 @@ Value TargetInfo::loadRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
   Type elemTy = vectorTy ? vectorTy.getElementType() : valueTy;
   unsigned vec = vectorTy ? vectorTy.getNumElements() : 1;
   unsigned bitWidth = elemTy.getIntOrFloatBitWidth();
-  assert(vec <= getMaxAtomicLoadVectorSize(bitWidth));
+  assert(vec <= getMaxAtomicLoadStoreVectorSize(bitWidth));
   unsigned packedBitWidth = std::min(32u, bitWidth * vec);
   if (packedBitWidth > bitWidth) {
     unsigned packedVec = bitWidth * vec / packedBitWidth;
@@ -269,6 +269,45 @@ Value TargetInfo::loadRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
       result = b.bitcast(result, elemTy);
   }
   return vectorTy ? packLLVector(loc, results, rewriter) : results.front();
+}
+
+void TargetInfo::storeRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                              Value value, Value pred,
+                              MemSyncScope scope) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto vectorTy = dyn_cast<VectorType>(value.getType());
+  Type elemTy = vectorTy ? vectorTy.getElementType() : value.getType();
+  unsigned vec = vectorTy ? vectorTy.getNumElements() : 1;
+  unsigned bitWidth = elemTy.getIntOrFloatBitWidth();
+  assert(vec <= getMaxAtomicLoadStoreVectorSize(bitWidth));
+  unsigned packedBitWidth = std::min(32u, bitWidth * vec);
+  if (packedBitWidth > bitWidth) {
+    unsigned packedVec = bitWidth * vec / packedBitWidth;
+    Type wordTy = int_ty(packedBitWidth);
+    Type packedTy = packedVec == 1 ? wordTy : vec_ty(wordTy, packedVec);
+    storeRelaxed(rewriter, loc, ptr, b.bitcast(value, packedTy), pred, scope);
+    return;
+  }
+  PTXBuilder builder;
+  auto *addr = builder.newAddrOperand(ptr, "l");
+  auto *inputs = builder.newListOperand();
+  for (Value element : unpackLLVector(loc, value, rewriter)) {
+    if (!elemTy.isInteger())
+      element = b.bitcast(element, int_ty(bitWidth));
+    if (bitWidth == 8)
+      element = b.zext(i16_ty, element);
+    inputs->listAppend(
+        builder.newOperand(element, getConstraintForBitwidth(bitWidth)));
+  }
+  auto &store = builder.create("st")
+                    ->o("relaxed")
+                    .o(stringifyMemSyncScope(scope).str())
+                    .o("global")
+                    .v(vec)
+                    .b(bitWidth);
+  store(addr, vec == 1 ? inputs->listGet(0) : inputs).maybePredicate(pred);
+  builder.launch(rewriter, loc, void_ty(rewriter.getContext()),
+                 /*hasSideEffect=*/true);
 }
 
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,

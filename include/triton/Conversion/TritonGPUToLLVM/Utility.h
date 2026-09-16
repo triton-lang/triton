@@ -734,11 +734,11 @@ std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp);
 
 std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering);
 
-/// Choose a legal atomic load width using pointer alignment/contiguity and
-/// mask constancy.
-unsigned getAtomicLoadVectorSize(Value ptr, Value mask,
-                                 ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                 const TargetInfoBase &targetInfo);
+/// Choose a legal atomic load/store width using pointer alignment/contiguity
+/// and mask constancy.
+unsigned getAtomicLoadStoreVectorSize(Value ptr, Value mask,
+                                      ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                      const TargetInfoBase &targetInfo);
 
 /// Emit `bodyBuilder` inline when `pred` is null. Otherwise, emit it only when
 /// `pred` is true and merge its results with `falseValues` in a continuation

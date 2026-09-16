@@ -504,19 +504,6 @@ private:
   const TargetInfoBase &targetInfo;
 };
 
-static void emitPredicatedAtomicStore(ConversionPatternRewriter &rewriter,
-                                      Location loc, Value ptr, Value value,
-                                      Value pred, LLVM::AtomicOrdering ordering,
-                                      StringRef syncScope) {
-  emitPredicated(rewriter, loc, pred, ValueRange{}, [&] {
-    unsigned alignment = value.getType().getIntOrFloatBitWidth() / 8;
-    LLVM::StoreOp::create(rewriter, loc, value, ptr, alignment,
-                          /*isVolatile=*/false, /*isNonTemporal=*/false,
-                          /*isInvariantGroup=*/false, ordering, syncScope);
-    return SmallVector<Value>{};
-  });
-}
-
 struct AtomicLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::AtomicLoadOp> {
   AtomicLoadOpConversion(LLVMTypeConverter &converter,
@@ -551,8 +538,8 @@ struct AtomicLoadOpConversion
     SmallVector<Value> resultVals;
     resultVals.reserve(ptrElements.size());
 
-    unsigned vec = getAtomicLoadVectorSize(op.getPtr(), op.getMask(),
-                                           axisInfoAnalysis, targetInfo);
+    unsigned vec = getAtomicLoadStoreVectorSize(op.getPtr(), op.getMask(),
+                                                axisInfoAnalysis, targetInfo);
     Type loadTy = vec == 1 ? valueElemTy : vec_ty(valueElemTy, vec);
     for (size_t i = 0; i < ptrElements.size(); i += vec) {
       Value pred =
@@ -582,9 +569,10 @@ struct AtomicStoreOpConversion
     : public ConvertOpToLLVMPattern<triton::AtomicStoreOp> {
   AtomicStoreOpConversion(LLVMTypeConverter &converter,
                           const TargetInfoBase &targetInfo,
+                          ModuleAxisInfoAnalysis &axisInfoAnalysis,
                           PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::AtomicStoreOp>(converter, benefit),
-        targetInfo(targetInfo) {}
+        targetInfo(targetInfo), axisInfoAnalysis(axisInfoAnalysis) {}
 
   LogicalResult
   matchAndRewrite(triton::AtomicStoreOp op, OpAdaptor adaptor,
@@ -609,14 +597,19 @@ struct AtomicStoreOpConversion
       LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::release,
                             syncScope);
 
-    for (size_t i = 0; i < ptrElements.size(); ++i) {
+    unsigned vec = getAtomicLoadStoreVectorSize(op.getPtr(), op.getMask(),
+                                                axisInfoAnalysis, targetInfo);
+    for (size_t i = 0; i < ptrElements.size(); i += vec) {
       Value pred =
           maskElements.empty()
               ? threadPred
               : ttg::maybeAnd(rewriter, loc, threadPred, maskElements[i]);
-      emitPredicatedAtomicStore(rewriter, loc, ptrElements[i], valueElements[i],
-                                pred, LLVM::AtomicOrdering::monotonic,
-                                syncScope);
+      Value value =
+          vec == 1 ? valueElements[i]
+                   : packLLVector(loc, ArrayRef(valueElements).slice(i, vec),
+                                  rewriter);
+      targetInfo.storeRelaxed(rewriter, loc, ptrElements[i], value, pred,
+                              op.getScope());
     }
     rewriter.eraseOp(op);
     return success();
@@ -624,6 +617,7 @@ struct AtomicStoreOpConversion
 
 private:
   const TargetInfoBase &targetInfo;
+  ModuleAxisInfoAnalysis &axisInfoAnalysis;
 };
 
 } // namespace
@@ -644,5 +638,6 @@ void mlir::triton::populateMemoryOpToLLVMPatterns(
   patterns.add<AtomicLoadOpConversion>(typeConverter, targetInfo,
                                        axisInfoAnalysis, benefit);
   patterns.add<AtomicPollOpConversion>(typeConverter, targetInfo, benefit);
-  patterns.add<AtomicStoreOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<AtomicStoreOpConversion>(typeConverter, targetInfo,
+                                        axisInfoAnalysis, benefit);
 }

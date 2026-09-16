@@ -1205,12 +1205,12 @@ std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering) {
   }
 }
 
-unsigned getAtomicLoadVectorSize(Value ptr, Value mask,
-                                 ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                 const TargetInfoBase &targetInfo) {
-  unsigned vec = std::min(
-      axisInfoAnalysis.getContiguity(ptr),
-      targetInfo.getMaxAtomicLoadVectorSize(getPointeeBitWidth(ptr.getType())));
+unsigned getAtomicLoadStoreVectorSize(Value ptr, Value mask,
+                                      ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                      const TargetInfoBase &targetInfo) {
+  unsigned vec = std::min(axisInfoAnalysis.getContiguity(ptr),
+                          targetInfo.getMaxAtomicLoadStoreVectorSize(
+                              getPointeeBitWidth(ptr.getType())));
   if (mask)
     vec = std::min(vec, axisInfoAnalysis.getMaskAlignment(mask));
   return vec;
