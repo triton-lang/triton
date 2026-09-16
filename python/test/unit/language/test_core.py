@@ -3092,6 +3092,38 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, device):
             np.testing.assert_equal(z_ref, z_tri)
 
 
+@pytest.mark.parametrize("op", ["and", "or", "xor"])
+@pytest.mark.parametrize("dtype_str", ["int64", "uint64"])
+@pytest.mark.parametrize("num_warps", [4, 32])
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+def test_reduce64_bitwise(op, dtype_str, num_warps, device):
+
+    @triton.jit
+    def combine(a, b):
+        return a & b
+
+    operator = {"and": "&", "or": "|", "xor": "^"}[op]
+    combine = patch_kernel(combine, {"a & b": f"a {operator} b"})
+
+    @triton.jit
+    def kernel(X, Z):
+        x = tl.load(X + tl.arange(0, 1024))
+        tl.store(Z, tl.reduce(x, 0, combine))
+
+    x = numpy_random((1024, ), "uint64")
+    # Keep both words nontrivial, including their sign bits, after AND/OR.
+    if op == "and":
+        x |= np.uint64(0x87654321FEDCBA98)
+    elif op == "or":
+        x &= np.uint64(0x87654321FEDCBA98)
+    x = x.view(dtype_str)
+    output = to_triton(np.zeros(1, dtype=dtype_str), device=device)
+    compiled = kernel[(1, )](to_triton(x, device=device), output, num_warps=num_warps)
+    np.testing.assert_equal(to_numpy(output)[0], getattr(np, f"bitwise_{op}").reduce(x))
+    if torch.cuda.get_device_capability()[0] >= 8:
+        assert compiled.asm["ptx"].count(f"redux.sync.{op}.b32") == (4 if num_warps == 32 else 2)
+
+
 # TODO: [Qingyi] Fix argmin / argmax
 reduce_configs1 = [(op, dtype, (1, 1024), axis, False)
                    for dtype in dtypes_with_bfloat16

@@ -211,4 +211,50 @@ tt.func private @reduce_wide_minmax(%arg0: tensor<4x32xi64, #blocked_warp_reduce
   tt.return %minimum, %maximum : tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>, tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
 }
 
+// CHECK-LABEL: @reduce_wide_bitwise
+// CHECK-COUNT-2: call i32 @llvm.nvvm.redux.sync.and
+// CHECK-COUNT-2: call i32 @llvm.nvvm.redux.sync.or
+// CHECK-COUNT-2: call i32 @llvm.nvvm.redux.sync.xor
+// TERNARY-LABEL: @reduce_wide_bitwise
+// TERNARY-DAG: %[[SHIFT:.*]] = llvm.mlir.constant(32 : i64)
+// TERNARY-DAG: %[[MASK:.*]] = llvm.mlir.constant(-1 : i32)
+// TERNARY: %[[SHIFTED:.*]] = llvm.lshr %[[INPUT:.*]], %[[SHIFT]] : i64
+// TERNARY: %[[HI:.*]] = llvm.trunc %[[SHIFTED]] : i64 to i32
+// TERNARY: nvvm.redux.sync and %[[HI]], %[[MASK]]
+// TERNARY: %[[LO:.*]] = llvm.trunc %[[INPUT]] : i64 to i32
+// TERNARY: nvvm.redux.sync and %[[LO]], %[[MASK]]
+// TERNARY: nvvm.redux.sync or %[[HI]], %[[MASK]]
+// TERNARY: nvvm.redux.sync or %[[LO]], %[[MASK]]
+// TERNARY: %[[XOR_HI:.*]] = nvvm.redux.sync xor %[[HI]], %[[MASK]]
+// TERNARY: %[[XOR_LO:.*]] = nvvm.redux.sync xor %[[LO]], %[[MASK]]
+// TERNARY-DAG: %[[HI64:.*]] = llvm.zext %[[XOR_HI]] : i32 to i64
+// TERNARY-DAG: %[[LO64:.*]] = llvm.zext %[[XOR_LO]] : i32 to i64
+// TERNARY-DAG: %[[RESULT_HI:.*]] = llvm.shl %[[HI64]], %[[SHIFT]] : i64
+// TERNARY: llvm.or %[[RESULT_HI]], %[[LO64]] : i64
+tt.func @reduce_wide_bitwise(
+    %arg0: tensor<4x32xi64, #blocked_warp_reduce>,
+    %and_ptr: tensor<4x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>,
+    %or_ptr: tensor<4x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>,
+    %xor_ptr: tensor<4x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>) {
+  %and = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: i64, %b: i64):
+    %c = arith.andi %a, %b : i64
+    tt.reduce.return %c : i64
+  }) : (tensor<4x32xi64, #blocked_warp_reduce>) -> tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  %or = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: i64, %b: i64):
+    %c = arith.ori %a, %b : i64
+    tt.reduce.return %c : i64
+  }) : (tensor<4x32xi64, #blocked_warp_reduce>) -> tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  %xor = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
+  ^bb0(%a: i64, %b: i64):
+    %c = arith.xori %a, %b : i64
+    tt.reduce.return %c : i64
+  }) : (tensor<4x32xi64, #blocked_warp_reduce>) -> tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  tt.store %and_ptr, %and : tensor<4x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  tt.store %or_ptr, %or : tensor<4x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  tt.store %xor_ptr, %xor : tensor<4x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  tt.return
+}
+
 }
