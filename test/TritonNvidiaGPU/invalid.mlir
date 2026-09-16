@@ -37,6 +37,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#tmem_scales = #ttng.tensor_memory_scales_encoding<CGALayout = [[1, 0]]>
+// expected-error @below {{tensor-memory scale allocations require at least 16 rows per CTA; got 8}}
+!small_scales = !ttg.memdesc<16x8xi8, #tmem_scales, #ttng.tensor_memory>
+
+// -----
+
 // expected-error @below {{cache modifier cannot be combined with an L1 eviction priority}}
 #invalid_cache_policy = #ttng.cache_policy<cache_modifier = cg, l1 = no_allocate>
 
