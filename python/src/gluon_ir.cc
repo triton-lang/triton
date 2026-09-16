@@ -943,6 +943,17 @@ void init_gluon_ir(py::module_ &m) {
            [](GluonOpBuilder &self, Type resultType, Value src) -> Value {
              return self.create<ttg::MemDescReinterpretOp>(resultType, src);
            })
+      .def("get_total_elems_per_thread",
+           [](GluonOpBuilder &, Type type) {
+             return ttg::getTotalElemsPerThread(type);
+           })
+      .def("create_threadwise_inline_asm",
+           [](GluonOpBuilder &self, const std::string &assembly,
+              const std::string &constraints, const std::vector<Value> &args,
+              const std::vector<Type> &resultTypes, bool isPure) -> OpState {
+             return self.create<ttg::InlineAsmOp>(resultTypes, assembly,
+                                                  constraints, isPure, args);
+           })
       .def("create_set_auto_layout",
            [](GluonOpBuilder &self, Attribute layout, Value value) -> Value {
              return self.create<gluon::SetAutoLayoutOp>(layout, value);

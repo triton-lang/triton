@@ -61,13 +61,14 @@ class TensorHandle:
 class TensorDescHandle:
 
     def __init__(self, base: TensorHandle, shape: List[TensorHandle], strides: List[TensorHandle],
-                 block_shape: List[int], padding):
+                 block_shape: List[int], padding, round_f32_to_tf32: bool = False):
         self.base = base
         self.ndim = len(shape)
         self.shape = shape
         self.strides = strides
         self.block_shape = block_shape
         self.padding = padding
+        self.round_f32_to_tf32 = round_f32_to_tf32
 
     def validate(self):
         assert self.base.data.item() % 16 == 0, "base must be 16-byte aligned"
@@ -141,6 +142,16 @@ def _get_signed_np_dtype(dtype):
     if dtype == np.uint64:
         return np.int64
     return dtype
+
+
+def _round_f32_to_tf32(data):
+    # TMA loads through a TFLOAT32 tensor map round to nearest even at 10 mantissa bits, with
+    # Inf and NaN left as they are; RewriteTensorDescriptorToPointer emits the same arithmetic.
+    bits = np.asarray(data, dtype=np.float32).view(np.uint32)
+    special = (bits & np.uint32(0x7F800000)) == np.uint32(0x7F800000)
+    round_bias = ((bits >> np.uint32(13)) & np.uint32(1)) + np.uint32(0x00000FFF)
+    rounded = (bits + round_bias) & np.uint32(0xFFFFE000)
+    return np.where(special, bits, rounded).view(np.float32)
 
 
 def _get_np_dtype(tt_dtype):
@@ -257,12 +268,17 @@ def _umulhi_64(a, b):
     return ((int(a) & mask) * (int(b) & mask)) >> 64
 
 
-def _e8m0_to_f32(scale):
+def _dot_scaled_scale_to_f32(scale_handle, compute_type):
+    scale = scale_handle.data
     assert scale.dtype in (np.uint8, np.int8)
-    scale = scale.astype(np.uint8)
-    scale = scale.astype(np.int32)
-    scale = scale << 23
-    scale = scale.view(np.float32)
+    bits = scale.view(np.uint8).astype(np.int32) << 23
+    if compute_type == tl.bfloat16 and scale_handle.dtype.is_int():
+        # E8M0 byte zero is 2^-127, which rounds to zero in FP16.
+        bits = np.maximum(bits, 0x00400000)
+    scale = bits.view(np.float32)
+    if scale_handle.dtype.is_int():
+        # FMA turns byte 255's infinity into NaN while preserving finite scales.
+        scale = _interpreter.fma_fp32(scale, np.zeros_like(scale), scale)
     return scale
 
 
@@ -324,7 +340,7 @@ def _unpack_e2m1(data, axis):
     return np.moveaxis(unpacked, -1, axis)
 
 
-def _prepare_dot_scaled_operand(value_handle, scale_handle, format_enum, k_pack, is_rhs):
+def _prepare_dot_scaled_operand(value_handle, scale_handle, format_enum, k_pack, compute_type, is_rhs):
     if format_enum == _ir.ScaleDotElemTypeTY.E2M1:
         if is_rhs:
             unpack_axis = -2 if k_pack else -1
@@ -337,14 +353,13 @@ def _prepare_dot_scaled_operand(value_handle, scale_handle, format_enum, k_pack,
     if scale_handle is None:
         return value
 
-    scale = _e8m0_to_f32(scale_handle.data)
+    scale_factor = value.shape[-2 if is_rhs else -1] // scale_handle.data.shape[-1]
+    scale = _dot_scaled_scale_to_f32(scale_handle, compute_type)
+    scale = np.repeat(scale, scale_factor, axis=-1)
 
     if is_rhs:
         # rhs is in [K, N] layout, but rhs_scale is supplied as [N, K / group].
-        scale = np.repeat(scale, value.shape[-2] // scale.shape[-1], axis=-1)
         scale = np.swapaxes(scale, -1, -2)
-    else:
-        scale = np.repeat(scale, value.shape[-1] // scale.shape[-1], axis=-1)
 
     return value * scale
 
@@ -560,6 +575,9 @@ class InterpreterBuilder:
     def create_fp_to_fp(self, src, dst_type, rounding_mode):
         src_element_type = src.dtype.scalar
         dst_element_type = dst_type.scalar
+        if (src_element_type == tl.bfloat16 and dst_element_type == tl.float16) or \
+           (src_element_type == tl.float16 and dst_element_type == tl.bfloat16):
+            return self.cast_impl(self.cast_impl(src, tl.float32), dst_type)
         data = _convert_float(src.data, src_element_type, dst_element_type, rounding_mode).view(_get_np_dtype(dst_type))
         return TensorHandle(data, dst_type.scalar)
 
@@ -818,10 +836,10 @@ class InterpreterBuilder:
         return TensorHandle(_interpreter.atomic_cas(ptr.data, cmp.data, val.data, sem), cmp.dtype.scalar)
 
     def create_atomic_load(self, ptr, mask, sem, scope):
-        return self.create_masked_load(ptr, mask, None, None, None, True)
+        return self.create_masked_load(ptr, mask, None, None, True)
 
     def create_atomic_store(self, ptr, val, mask, sem, scope):
-        return self.create_masked_store(ptr, val, mask, None, None)
+        return self.create_masked_store(ptr, val, mask, None)
 
     def create_atomic_poll(self, ptr, expected, timeout_ns, sem, scope):
         matched = np.zeros(ptr.data.shape, dtype=np.bool_)
@@ -902,7 +920,10 @@ class InterpreterBuilder:
             other = TensorHandle(np.full_like(ptrs.data, float('nan'), dtype=dtype_np), dtype_tt)
         else:
             raise ValueError(f"unsupported padding {padding}")
-        return self.create_masked_load(ptrs, mask, other, cache_policy=cache_policy, is_volatile=False)
+        result = self.create_masked_load(ptrs, mask, other, cache_policy=cache_policy, is_volatile=False)
+        if desc.round_f32_to_tf32 and dtype_tt == tl.float32:
+            result = TensorHandle(_round_f32_to_tf32(result.data), dtype_tt)
+        return result
 
     def create_descriptor_store(self, desc: TensorDescHandle, value: TensorHandle, indices: List[TensorHandle]):
         ptrs, mask = desc.materialize_pointers(indices)
@@ -941,8 +962,11 @@ class InterpreterBuilder:
                           rhs_scale_handle: Optional[TensorHandle], rhs_format_enum: _ir.ScaleDotElemTypeTY,
                           fast_math: bool, lhs_k_pack: bool, rhs_k_pack: bool,
                           acc_handle: TensorHandle) -> TensorHandle:
-        lhs_data = _prepare_dot_scaled_operand(lhs, lhs_scale_handle, lhs_format_enum, lhs_k_pack, is_rhs=False)
-        rhs_data = _prepare_dot_scaled_operand(rhs, rhs_scale_handle, rhs_format_enum, rhs_k_pack, is_rhs=True)
+        compute_type = tl.float16 if _ir.ScaleDotElemTypeTY.FP16 in (lhs_format_enum, rhs_format_enum) else tl.bfloat16
+        lhs_data = _prepare_dot_scaled_operand(lhs, lhs_scale_handle, lhs_format_enum, lhs_k_pack, compute_type,
+                                               is_rhs=False)
+        rhs_data = _prepare_dot_scaled_operand(rhs, rhs_scale_handle, rhs_format_enum, rhs_k_pack, compute_type,
+                                               is_rhs=True)
 
         result = np.matmul(lhs_data, rhs_data) + acc_handle.data
         return TensorHandle(result, tl.float32)
@@ -1357,10 +1381,12 @@ def _implicit_cvt(arg):
         strides = [_implicit_cvt(s) for s in arg.strides]
         assert arg.strides[-1] == 1
         strides[-1] = tl.constexpr(1)
-        return interpreter_semantic.make_tensor_descriptor(base=_implicit_cvt(arg.base),
+        desc = interpreter_semantic.make_tensor_descriptor(base=_implicit_cvt(arg.base),
                                                            shape=[_implicit_cvt(s) for s in arg.shape], strides=strides,
                                                            block_shape=[tl.constexpr(b) for b in arg.block_shape],
                                                            padding_option=arg.padding)
+        desc.handle.round_f32_to_tf32 = arg.round_f32_to_tf32
+        return desc
     return arg
 
 

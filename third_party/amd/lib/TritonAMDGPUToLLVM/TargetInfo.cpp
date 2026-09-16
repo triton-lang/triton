@@ -214,8 +214,17 @@ void TargetInfo::clusterBarrier(Location loc, RewriterBase &rewriter,
 }
 
 void TargetInfo::warpSync(Location loc, RewriterBase &rewriter) const {
-  LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.wave.barrier", {},
-                                  {});
+  Attribute localMMRA =
+      rewriter.getAttr<LLVM::MMRATagAttr>("amdgpu-synchronize-as", "local");
+  auto emitFence = [&](LLVM::AtomicOrdering ordering) {
+    auto fence = LLVM::FenceOp::create(rewriter, loc, ordering,
+                                       /*syncscope=*/"wavefront");
+    fence->setDiscardableAttr(LLVM::LLVMDialect::getMmraAttrName(), localMMRA);
+  };
+
+  emitFence(LLVM::AtomicOrdering::release);
+  ROCDL::WaveBarrierOp::create(rewriter, loc);
+  emitFence(LLVM::AtomicOrdering::acquire);
 }
 
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
@@ -629,12 +638,6 @@ void TargetInfo::printfImpl(Value formatStrStart, int formatStrByteCount,
     arguments.push_back(isLast);
     message = b.call(printArgsFn, arguments).getResult();
   }
-}
-
-std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
-  std::string funcName =
-      resultElementTy.isInteger(32) ? "__ockl_mul_hi_u32" : "__ockl_mul_hi_u64";
-  return funcName;
 }
 
 void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,

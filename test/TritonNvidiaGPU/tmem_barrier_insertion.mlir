@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -triton-nvidia-gpu-tmem-barrier-insertion -test-print-membar -triton-nvidia-gpu-tmem-wait-insertion | FileCheck %s --check-prefixes=CHECK,WAIT
+// RUN: triton-opt %s -triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-membar='compute-capability=100 ptx-version=87' -triton-nvidia-gpu-tmem-wait-insertion | FileCheck %s --check-prefixes=CHECK,WAIT
 // RUN: triton-opt %s -triton-nvidia-gpu-tmem-wait-insertion | FileCheck %s --check-prefix=WAIT
 
 #shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
@@ -804,5 +804,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %loaded = ttng.tmem_load %alloc : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
     tt.call @tmem_entry_b() : () -> ()
     tt.return
+  }
+
+  // WAIT-LABEL: @elementwise_inline_asm_tmem_effects
+  // CHECK: ttng.tmem_alloc
+  // WAIT: ttng.tmem_wait store
+  // WAIT-NEXT: {{.*}}tt.elementwise_inline_asm
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: {{.*}}ttng.tmem_load
+  tt.func @elementwise_inline_asm_tmem_effects(%data: tensor<128x128xf32, #blocked>) -> tensor<128x128xf32, #blocked> {
+    %mem = ttng.tmem_alloc %data {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    %unused = tt.elementwise_inline_asm "mov.u32 $0, 0;" {constraints = "=r,r", pure = false, packed_element = 1 : i32} %mem : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> i32
+    %result = ttng.tmem_load %mem : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    tt.return %result : tensor<128x128xf32, #blocked>
+  }
+
+  // WAIT-LABEL: @inline_asm_no_tmem_effects
+  // WAIT: ttg.inline_asm
+  // WAIT-NEXT: {{.*}}ttng.tmem_load
+  // WAIT-NEXT: ttng.tmem_wait load
+  // WAIT-NEXT: tt.return
+  tt.func @inline_asm_no_tmem_effects(%mem: !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>) -> tensor<128x128xf32, #blocked> {
+    ttg.inline_asm "// opaque descriptor" {constraints = "r", pure = false} %mem : (!ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>) -> ()
+    %result = ttng.tmem_load %mem : !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
+    tt.return %result : tensor<128x128xf32, #blocked>
   }
 }

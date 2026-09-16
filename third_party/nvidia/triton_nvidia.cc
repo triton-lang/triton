@@ -140,11 +140,13 @@ void init_triton_nvidia_passes_ttgpuir(py::module_ &m) {
           options.minimumSize = minimumSize;
           pm.addPass(mlir::triton::createSetMinimumSharedMemory(options));
         });
+  ADD_PASS_OPTION_WRAPPER_2("add_membar",
+                            mlir::triton::createTritonNvidiaGPUMembar, int32_t,
+                            int32_t);
   m.def("add_to_llvmir",
-        [](mlir::PassManager &pm, int32_t capability, int32_t ptxVersion,
-           bool enableConcurrencySanitizer) {
+        [](mlir::PassManager &pm, int32_t capability, int32_t ptxVersion) {
           pm.addPass(mlir::triton::createConvertTritonGPUToLLVMPass(
-              capability, ptxVersion, enableConcurrencySanitizer));
+              capability, ptxVersion));
         });
 }
 
@@ -194,6 +196,11 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module_ &m) {
                      int32_t);
   ADD_PASS_WRAPPER_0("add_tmem_barrier_insertion",
                      ttng::createTritonNvidiaGPUTMemBarrierInsertionPass);
+  ADD_PASS_WRAPPER_0("add_tmem_wait_insertion",
+                     ttng::createTritonNvidiaGPUTMemWaitInsertionPass);
+  ADD_PASS_WRAPPER_0(
+      "add_cluster_barrier_mbar_allocator",
+      ttng::createTritonNvidiaGPUClusterBarrierMbarAllocatorPass);
   ADD_PASS_WRAPPER_0("add_tmem_load_reduce",
                      ttng::createTritonNvidiaGPUFuseTMEMLoadReducePass);
   ADD_PASS_WRAPPER_0("add_tma_lowering",

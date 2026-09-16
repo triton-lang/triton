@@ -1782,7 +1782,7 @@ def test_compile_tensor_copy(BLOCK_M, BLOCK_N, NUM_BUFFERS, ASYNC_LOAD_TYPE, NUM
     if ASYNC_LOAD_TYPE in {"DEVICE_TDM", "HOST_TDM"}:
         pattern = {"tensor_load_to_lds", "s_wait_tensorcnt 0x0"}
     else:
-        ASYNC_LOAD_TYPE == "ASYNC_COPY"
+        assert ASYNC_LOAD_TYPE == "ASYNC_COPY"
         pattern = {"global_load_async_to_lds", "s_wait_asynccnt 0x0"}
     for p in pattern:
         assert re.search(p, amdgcn), f"Can't find {p} in amdgcn"

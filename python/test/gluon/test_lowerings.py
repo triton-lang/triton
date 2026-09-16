@@ -5,7 +5,15 @@ import pytest
 import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
-from triton._internal_testing import is_blackwell, is_compile_warmup, is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
+from triton._internal_testing import (
+    get_hip_lds_size,
+    is_blackwell,
+    is_compile_warmup,
+    is_cuda,
+    is_hip,
+    is_hip_gfx1250,
+    is_hopper_or_newer,
+)
 from triton._C.libtriton.gluon_ir import make_cga_layout
 from triton.experimental.gluon.language.amd.cdna5 import PartitionedSharedLayout
 from triton.experimental.gluon.language.nvidia.blackwell import TensorMemoryLayout, allocate_tensor_memory
@@ -659,6 +667,33 @@ def test_local_load_store_generic_linear(src_layout, shared_kind, device):
     torch.testing.assert_close(y, x)
 
 
+@pytest.mark.skipif(not is_hip_gfx1250(), reason="Requires GFX1250 FP8 conversion")
+def test_generic_linear_fp8_cast(device):
+    shape = (128, 256)
+    src_layout = ttgl.DistributedLinearLayout(
+        reg_bases=[[0, 1], [0, 2], [0, 8], [0, 16], [0, 32], [16, 0], [0, 128]],
+        lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 4]],
+        warp_bases=[[64, 64], [32, 0], [64, 0]],
+        block_bases=[],
+        shape=list(shape),
+    )
+
+    @gluon.jit
+    def kernel(x_ptr, y_ptr, shape: ttgl.constexpr, src_layout: ttgl.constexpr):
+        src_m = ttgl.arange(0, shape[0], layout=ttgl.SliceLayout(1, src_layout))[:, None]
+        src_n = ttgl.arange(0, shape[1], layout=ttgl.SliceLayout(0, src_layout))[None, :]
+        value = ttgl.load(x_ptr + src_m * shape[1] + src_n).to(ttgl.float8e4nv)
+        ttgl.store(y_ptr + src_m * shape[1] + src_n, value)
+
+    torch.manual_seed(0)
+    x = torch.randn(shape, dtype=torch.float32, device=device)
+    expected = x.to(torch.float8_e4m3fn)
+    actual = torch.zeros_like(expected)
+    kernel[(1, )](x, actual, shape, src_layout, num_warps=8)
+
+    torch.testing.assert_close(actual.float(), expected.float(), rtol=0, atol=0)
+
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 def test_local_store_tmem_32x32b_2cta_splitm_to_splitk(device):
     shape = (256, 128)
@@ -1023,7 +1058,7 @@ def _histogram_cases():
                                    [0]), ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0]))]
     for m, bins in m_bins:
         for src_layout, dst_layout in layouts:
-            yield (m, bins, src_layout, dst_layout)
+            yield (m, bins, src_layout, dst_layout, 1)
     import math
 
     linear_layouts = [(
@@ -1037,11 +1072,22 @@ def _histogram_cases():
         bins,
     ) for (m, bins) in m_bins if m >= 32]
     for linear_layout, bins in linear_layouts:
-        yield (linear_layout.shape[0], bins, linear_layout, ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0]))
+        yield (linear_layout.shape[0], bins, linear_layout, ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0]), 1)
+
+    for src_cga, dst_cga in [
+        ([[1]], [[1]]),
+        ([[0], [1]], [[0], [0]]),
+        ([[0], [0]], [[1], [2]]),
+    ]:
+        src = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0], cga_layout=src_cga)
+        dst = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0], cga_layout=dst_cga)
+        yield (2048, 512, src, dst, 1 << len(src_cga))
 
 
-@pytest.mark.parametrize("M, bins, src_layout, dst_layout", list(_histogram_cases()))
-def test_histogram(M, bins, src_layout, dst_layout, device):
+@pytest.mark.parametrize("M, bins, src_layout, dst_layout, num_ctas", list(_histogram_cases()))
+def test_histogram(M, bins, src_layout, dst_layout, num_ctas, device):
+    if num_ctas > 1 and not is_hopper_or_newer():
+        pytest.skip("Requires NVIDIA Hopper or newer")
 
     @gluon.jit
     def kernel(x_ptr, z_ptr, M: ttgl.constexpr, B: ttgl.constexpr, src_layout: ttgl.constexpr,
@@ -1056,7 +1102,7 @@ def test_histogram(M, bins, src_layout, dst_layout, device):
     x = torch.randint(0, bins, (M, ), dtype=torch.int32, device=device)
     z = torch.zeros((bins, ), dtype=torch.int32, device=device)
     z_torch = torch.histc(x.float(), bins=bins, min=0, max=bins - 1).to(torch.int32)
-    kernel[(1, )](x, z, M, bins, src_layout, dst_layout, num_warps=4)
+    kernel[(1, )](x, z, M, bins, src_layout, dst_layout, num_warps=4, num_ctas=num_ctas)
     torch.testing.assert_close(z, z_torch, atol=0, rtol=0)
 
 
