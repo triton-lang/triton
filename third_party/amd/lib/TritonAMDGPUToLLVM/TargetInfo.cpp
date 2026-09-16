@@ -6,10 +6,17 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using mlir::LLVM::AMD::DppCtrl;
 using mlir::triton::amdgpu::ISAFamily;
 namespace mlir::triton::AMD {
+
+void registerTargetInfo() {
+  TargetInfoBase::registerFactory("hip", [](ModuleOp moduleOp) {
+    return std::make_unique<TargetInfo>(getAMDArch(moduleOp));
+  });
+}
 
 namespace {
 template <typename T>

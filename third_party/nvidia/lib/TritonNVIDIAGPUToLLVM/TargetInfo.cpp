@@ -87,6 +87,12 @@ LLVM::LLVMFuncOp getAssertfailDeclaration(RewriterBase &rewriter) {
 
 namespace mlir::triton::NVIDIA {
 
+void registerTargetInfo() {
+  TargetInfoBase::registerFactory("cuda", [](ModuleOp moduleOp) {
+    return std::make_unique<TargetInfo>(getNVIDIAComputeCapability(moduleOp));
+  });
+}
+
 // Check if the reduction can use a redux op and return the kind.
 static std::optional<NVVM::ReductionKind>
 matchReduxKind(triton::ReduceOp op, int computeCapability,

@@ -6,6 +6,8 @@
 
 namespace mlir::triton::NVIDIA {
 
+void registerTargetInfo();
+
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
   explicit TargetInfo(int computeCapability)

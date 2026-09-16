@@ -4,12 +4,22 @@
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Tools/GenericSwizzling.h"
 #include "llvm/ADT/ArrayRef.h"
+#include <functional>
+#include <memory>
 
 namespace mlir::triton {
 enum class ProgramIDDim : uint32_t;
 
 class TargetInfoBase {
 public:
+  using Factory = std::function<std::unique_ptr<TargetInfoBase>(ModuleOp)>;
+
+  // Register during backend initialization, before running compiler passes.
+  static void registerFactory(StringRef target, Factory factory);
+
+  // Returns null when the module has no registered target.
+  static std::unique_ptr<TargetInfoBase> fromModuleOp(ModuleOp moduleOp);
+
   virtual bool supportMaximumMinimum() const = 0;
 
   virtual Value getClusterCTAId(RewriterBase &rewriter, Location loc) const = 0;
