@@ -29,6 +29,14 @@ SmallVector<Value> lowerLocalScGt(Location loc, MemDescType memDescTy,
                                   const TargetInfoBase &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   bool isScatter = !storeVals.empty();
+  // Unmasked gathers and scatters index within the descriptor's view.
+  unsigned indexBits = idxValues.front().getType().getIntOrFloatBitWidth();
+  uint64_t axisSize = memDescTy.getShape()[axis];
+  if (indexBits >= 64 || axisSize < (uint64_t{1} << indexBits)) {
+    Value bound = b.int_val(indexBits, axisSize);
+    for (Value index : idxValues)
+      LLVM::AssumeOp::create(rewriter, loc, b.icmp_ult(index, bound));
+  }
   auto offsetAndBlock = computeBlockLocalOffsets(
       loc, memDescTy, regLayout, idxValues, axis, rewriter, targetInfo);
   SmallVector<LocalSharedMemoryAddress> addrs = materializeLocalAddrs(

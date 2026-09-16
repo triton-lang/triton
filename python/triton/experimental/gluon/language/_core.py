@@ -443,6 +443,7 @@ class shared_memory_descriptor(base_value):
 
         Args:
             indices (tensor): Tensor specifying which indices to gather along the axis.
+                Each index must be non-negative and less than ``self.shape[axis]``.
             axis (int): The axis along which to gather values.
 
         Returns:
@@ -470,6 +471,7 @@ class shared_memory_descriptor(base_value):
         Args:
             values (tensor): Tensor with values to scatter (broadcast-compatible with indices).
             indices (tensor): Tensor specifying which indices to scatter to along the axis.
+                Each index must be non-negative and less than ``self.shape[axis]``.
             axis (int): The axis along which to scatter values.
         """
         values = _unwrap_if_constexpr(values)

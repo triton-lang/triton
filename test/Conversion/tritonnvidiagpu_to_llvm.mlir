@@ -846,6 +846,43 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // The bound uses the 32-element view and the original index width.
+  // CHECK-LABEL: @local_gather_scatter_bounds_i64
+  // CHECK: [[INDEX:%.*]] = llvm.extractvalue %{{.*}}[0] : !llvm.struct<(i64)>
+  // CHECK: [[LIMIT:%.*]] = llvm.mlir.constant(32 : i64) : i64
+  // CHECK: [[SCATTER_BOUND:%.*]] = llvm.icmp "ult" [[INDEX]], [[LIMIT]] : i64
+  // CHECK-NEXT: llvm.intr.assume [[SCATTER_BOUND]] : i1
+  // CHECK: llvm.trunc [[INDEX]] : i64 to i32
+  // CHECK: llvm.store {{.*}} : vector<1xi32>, !llvm.ptr<3>
+  // CHECK: [[GATHER_LIMIT:%.*]] = llvm.mlir.constant(32 : i64) : i64
+  // CHECK: [[GATHER_BOUND:%.*]] = llvm.icmp "ult" %{{.*}}, [[GATHER_LIMIT]] : i64
+  // CHECK-NEXT: llvm.intr.assume [[GATHER_BOUND]] : i1
+  // CHECK: llvm.load {{.*}} : !llvm.ptr<3> -> i32
+  tt.func private @local_gather_scatter_bounds_i64(%src: !ttg.memdesc<64xi32, #shared, #smem, mutable>, %idx: tensor<32xi64, #blocked>, %vals: tensor<32xi32, #blocked>) -> tensor<32xi32, #blocked> {
+    %view = ttg.memdesc_subslice %src [32] : !ttg.memdesc<64xi32, #shared, #smem, mutable> -> !ttg.memdesc<32xi32, #shared, #smem, mutable, 64>
+    ttg.local_scatter %view[%idx], %vals {axis = 0 : i32} : !ttg.memdesc<32xi32, #shared, #smem, mutable, 64>, tensor<32xi64, #blocked>, tensor<32xi32, #blocked>
+    %g = ttg.local_gather %view[%idx] {axis = 0 : i32} : !ttg.memdesc<32xi32, #shared, #smem, mutable, 64>, tensor<32xi64, #blocked> -> tensor<32xi32, #blocked>
+    tt.return %g : tensor<32xi32, #blocked>
+  }
+
+  // Every unsigned i8 value fits the view; 256 must not wrap to zero.
+  // CHECK-LABEL: @local_gather_scatter_bounds_i8
+  // CHECK-NOT: llvm.intr.assume
+  // CHECK: llvm.return
+  tt.func private @local_gather_scatter_bounds_i8(%src: !ttg.memdesc<256xi32, #shared, #smem, mutable>, %idx: tensor<32xi8, #blocked>, %vals: tensor<32xi32, #blocked>) -> tensor<32xi32, #blocked> {
+    ttg.local_scatter %src[%idx], %vals {axis = 0 : i32} : !ttg.memdesc<256xi32, #shared, #smem, mutable>, tensor<32xi8, #blocked>, tensor<32xi32, #blocked>
+    %g = ttg.local_gather %src[%idx] {axis = 0 : i32} : !ttg.memdesc<256xi32, #shared, #smem, mutable>, tensor<32xi8, #blocked> -> tensor<32xi32, #blocked>
+    tt.return %g : tensor<32xi32, #blocked>
+  }
+}
+
+// -----
+
 #local_gather_cga16_blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CGALayout = [[0, 1], [1, 0], [0, 2], [2, 0]]}>
 #local_gather_cga16_sharded = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [1, 0], CGALayout = [[0, 1], [1, 0], [0, 2], [2, 0]]}>
 #local_gather_cga16_partial = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [1, 0], CGALayout = [[0, 1], [0, 0], [1, 0], [0, 0]]}>

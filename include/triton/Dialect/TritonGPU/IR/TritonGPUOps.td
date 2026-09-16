@@ -428,6 +428,9 @@ def TTG_LocalGatherOp : TTG_Op<"local_gather", [LocalLoadTrait]> {
       result[I] = src[I[0], ..., indices[I], ..., I[n]]
     where the axis dimension is replaced by the index value.
 
+    Indices must be non-negative and less than the size of the source view
+    along the gather axis.
+
     This matches the behavior of tt.gather but operates on shared memory descriptors.
   }];
   let arguments = (ins
@@ -460,6 +463,9 @@ def TTG_LocalScatterOp : TTG_Op<"local_scatter"> {
     the scatter axis is replaced by indices[I]:
       dst[I[0], ..., indices[I], ..., I[n]] = values[I]
     where the axis dimension is replaced by the index value.
+
+    Indices must be non-negative and less than the size of the destination
+    view along the scatter axis.
 
     This is the inverse of local_gather and writes to shared memory at runtime-computed indices.
   }];
