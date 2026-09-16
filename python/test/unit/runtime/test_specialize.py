@@ -3,14 +3,16 @@ import pytest
 import torch
 from collections import namedtuple
 from triton._C.libtriton import native_specialize_impl
-from triton.runtime.jit import MockTensor, JITCallable
+from triton.runtime.jit import MockTensor, JITCallable, compute_cache_key
 from triton._utils import canonicalize_dtype
+from triton.backends.compiler import BaseBackend
 from triton.backends.nvidia.compiler import CUDABackend
 from triton.backends.amd.compiler import HIPBackend
 from triton.language import constexpr
 from triton.language import target_info
 from triton.tools.tensor_descriptor import TensorDescriptor
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
+from triton.experimental.gluon.nvidia.hopper import TensorDescriptorIm2Col as GluonTensorDescriptorIm2Col
 from triton.experimental.gluon.language._layouts import NVMMASharedLayout
 
 
@@ -37,6 +39,14 @@ class MockInt(int):
 
     def __new__(cls, value):
         return super().__new__(cls, value)
+
+
+def reference_tensordesc_key(backend, arg, specialize_value, align):
+    if not specialize_value:
+        return None
+    if getattr(backend, "supports_native_tensordesc_specialization", True):
+        return None
+    return backend.get_tensordesc_specialization(arg, align=align)
 
 
 def reference_specialize_impl(backend, arg, is_const, specialize_value, align):
@@ -74,7 +84,8 @@ def reference_specialize_impl(backend, arg, is_const, specialize_value, align):
     elif isinstance(arg, TensorDescriptor):
         assert hasattr(arg.base, "data_ptr")
         inner = canonicalize_dtype(arg.base.dtype)
-        return (f"tensordesc<{inner}{list(arg.block_shape)}>", None)
+        key = reference_tensordesc_key(backend, arg, specialize_value, align)
+        return (f"tensordesc<{inner}{list(arg.block_shape)}>", key)
     elif isinstance(arg, GluonTensorDescriptor):
         assert hasattr(arg.base, "data_ptr")
         inner = canonicalize_dtype(arg.base.dtype)
@@ -82,7 +93,8 @@ def reference_specialize_impl(backend, arg, is_const, specialize_value, align):
         type_name = "tensordesc_im2col" if is_im2col else "tensordesc"
         # For im2col mode, include the original tensor rank in the signature
         rank_suffix = f",input_rank={len(arg.shape)}" if is_im2col else ""
-        return (f"{type_name}<{inner}{list(arg.block_shape)}{rank_suffix},{arg.layout!r}>", None)
+        key = reference_tensordesc_key(backend, arg, specialize_value, align)
+        return (f"{type_name}<{inner}{list(arg.block_shape)}{rank_suffix},{arg.layout!r}>", key)
     else:
         raise TypeError("Unsupported type: %s" % type(arg))
 
@@ -187,3 +199,163 @@ def test_specialize_impl(input_generator, backend, is_const, specialize_value, a
         result = native_specialize_impl(backend, arg, is_const, specialize_value, align)
         expected = reference_specialize_impl(backend, arg, is_const, specialize_value, align)
         assert result == expected
+
+
+class TensordescSpecializingBackend(CUDABackend):
+    """A backend that supplies its own descriptor specialization key."""
+    supports_native_tensordesc_specialization = False
+
+    @staticmethod
+    def get_tensordesc_specialization(arg, **kwargs):
+        key = ""
+        if all(dim % block == 0 for dim, block in zip(arg.shape, arg.block_shape)):
+            key += "B"
+        if kwargs.get("align", False):
+            key += "A"
+        return key
+
+
+def im2col_tensordescriptor():
+    tensor = torch.empty((2, 4, 4, 32), dtype=torch.float32)
+    layout = NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=32, rank=2)
+    return GluonTensorDescriptorIm2Col.from_tensor(
+        tensor,
+        block_shape=[8, 32],
+        layout=layout,
+        element_strides=[1, 1, 1, 1],
+        pixel_box_lower_corner=[0, 0],
+        pixel_box_upper_corner=[0, 0],
+    )
+
+
+descriptor_generators = [
+    tensordescriptors_to_specialize,
+    gluon_tensordescriptors_to_specialize,
+]
+
+
+@pytest.mark.parametrize("input_generator", descriptor_generators)
+@pytest.mark.parametrize("specialize_value", [True, False])
+@pytest.mark.parametrize("align", [True, False])
+def test_specialize_tensordesc_backend_key(input_generator, specialize_value, align):
+    """The backend's key must reach the specialization tuple. `specialize_value` False, which is what
+    do_not_specialize lowers to, suppresses the key entirely; `align` False, from
+    do_not_specialize_on_alignment, only withholds alignment from the backend."""
+    backend = TensordescSpecializingBackend
+    saw_key = False
+    for arg in input_generator():
+        result = native_specialize_impl(backend, arg, False, specialize_value, align)
+        expected = reference_specialize_impl(backend, arg, False, specialize_value, align)
+        assert result == expected
+        if not specialize_value:
+            assert result[1] is None
+            continue
+        if align:
+            assert "A" in result[1]
+        else:
+            assert "A" not in result[1]
+        saw_key = saw_key or bool(result[1])
+    if specialize_value:
+        assert saw_key, "expected at least one descriptor to produce a non-empty key"
+
+
+def test_specialize_tensordesc_key_reaches_the_cache_key():
+    """Two descriptors with the same signature but differing in what the backend keys on must get
+    different cache keys, which is the point of the key: the signature alone cannot tell them
+    apart."""
+    block_shape = [64, 32]
+    divisible = TensorDescriptor.from_tensor(torch.empty((128, 64), dtype=torch.float32), block_shape)
+    indivisible = TensorDescriptor.from_tensor(torch.empty((128, 48), dtype=torch.float32), block_shape)
+
+    backend = TensordescSpecializingBackend
+    first = native_specialize_impl(backend, divisible, False, True, True)
+    second = native_specialize_impl(backend, indivisible, False, True, True)
+
+    assert first[0] == second[0], "the signature carries the block shape, not the tensor shape"
+    assert first[1] == "BA" and second[1] == "A"
+    cache = {}
+    assert compute_cache_key(cache, [first], "options") != compute_cache_key(cache, [second], "options")
+
+    # A backend on the native path gets no key, so for it the two are indistinguishable.
+    native = [native_specialize_impl(CUDABackend, d, False, True, True) for d in (divisible, indivisible)]
+    assert [k for _, k in native] == [None, None]
+    assert compute_cache_key(cache, [native[0]], "options") == compute_cache_key(cache, [native[1]], "options")
+
+
+def test_specialize_tensordesc_inside_a_tuple():
+    """A descriptor nested in a tuple reaches the hook as well. Tuple elements are specialized with
+    the default flags, the same as every other argument kind."""
+    arg = (TensorDescriptor.from_tensor(torch.empty((128, 64), dtype=torch.float32), [64, 32]), 7)
+    types, keys = native_specialize_impl(TensordescSpecializingBackend, arg, False, True, True)
+    assert types[0] == "tensordesc<fp32[64, 32]>"
+    assert keys[0] == "BA"
+
+
+def test_specialize_tensordesc_im2col_reaches_backend():
+    """An im2col descriptor is a distinct class and must reach the hook as well."""
+    arg = im2col_tensordescriptor()
+    assert native_specialize_impl(TensordescSpecializingBackend, arg, False, True, True)[1] == "A"
+    assert native_specialize_impl(CUDABackend, arg, False, True, True)[1] is None
+
+
+@pytest.mark.parametrize("input_generator", descriptor_generators)
+def test_specialize_tensordesc_native_flag_skips_backend(input_generator):
+    """With the flag left set, the backend's descriptor hook must not be called."""
+
+    class Exploding(CUDABackend):
+
+        @staticmethod
+        def get_tensordesc_specialization(arg, **kwargs):
+            raise AssertionError("must not be called while the native flag is set")
+
+    assert Exploding.supports_native_tensordesc_specialization
+    for arg in input_generator():
+        assert native_specialize_impl(Exploding, arg, False, True, True)[1] is None
+
+
+def test_specialize_tensordesc_base_defaults():
+    """A backend that opts out without overriding the method gets the base implementation."""
+
+    class InheritedDefault(CUDABackend):
+        supports_native_tensordesc_specialization = False
+
+    assert BaseBackend.supports_native_tensordesc_specialization
+    for arg in tensordescriptors_to_specialize():
+        assert native_specialize_impl(InheritedDefault, arg, False, True, True)[1] == ""
+
+
+def test_specialize_tensordesc_flag_errors_are_not_swallowed():
+    """Only a missing flag means "native path"; a flag that raises is a real error."""
+
+    class RaisingLookup(type):
+
+        def __getattribute__(cls, name):
+            if name == "supports_native_tensordesc_specialization":
+                raise RuntimeError("flag lookup failed")
+            return super().__getattribute__(name)
+
+    class RaisingFlag(metaclass=RaisingLookup):
+        pass
+
+    class RaisesOnBool:
+
+        def __bool__(self):
+            raise RuntimeError("flag is not a bool")
+
+    class RaisingTruthTest(CUDABackend):
+        supports_native_tensordesc_specialization = RaisesOnBool()
+
+    arg = tensordescriptors_to_specialize()[0]
+    for backend in (RaisingFlag, RaisingTruthTest):
+        with pytest.raises(RuntimeError):
+            native_specialize_impl(backend, arg, False, True, True)
+
+
+def test_specialize_tensordesc_missing_flag_stays_native():
+    """Without the flag the native path is kept, so the key is unchanged."""
+
+    class NoFlag:
+        pass
+
+    for arg in tensordescriptors_to_specialize():
+        assert native_specialize_impl(NoFlag, arg, False, True, True)[1] is None
