@@ -772,6 +772,11 @@ void makeAllWarpGroupsIsolatedFromAbove(Operation *op);
 // Set the correct loop annotation on LLVM branch ops.
 void fixUpLoopAnnotation(ModuleOp mod);
 
+// Every tensor value must carry a distributed layout by the time it reaches
+// LLVM lowering. Emit an error on the first op that violates this rather than
+// letting the type converter or a pattern crash on a missing encoding.
+LogicalResult verifyTensorLayouts(ModuleOp mod);
+
 void transferSwizzlingLocalMem(triton::gpu::ConvertLayoutOp op, Value src,
                                const TargetInfoBase &targetInfo,
                                const LLVMTypeConverter *typeConverter,

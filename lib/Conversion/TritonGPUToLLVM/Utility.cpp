@@ -2090,6 +2090,30 @@ void fixUpLoopAnnotation(ModuleOp mod) {
   });
 }
 
+LogicalResult verifyTensorLayouts(ModuleOp mod) {
+  auto checkType = [](Operation *op, Type type) -> LogicalResult {
+    auto tensorTy = dyn_cast<RankedTensorType>(type);
+    if (!tensorTy || isa_and_present<triton::gpu::DistributedEncodingTrait>(
+                         tensorTy.getEncoding()))
+      return success();
+    return op->emitOpError("requires a distributed layout on tensor type ")
+           << tensorTy;
+  };
+  auto result = mod.walk<WalkOrder::PreOrder>([&](Operation *op) {
+    for (Type type :
+         llvm::concat<Type>(op->getOperandTypes(), op->getResultTypes()))
+      if (failed(checkType(op, type)))
+        return WalkResult::interrupt();
+    for (Region &region : op->getRegions())
+      for (Block &block : region)
+        for (BlockArgument arg : block.getArguments())
+          if (failed(checkType(op, arg.getType())))
+            return WalkResult::interrupt();
+    return WalkResult::advance();
+  });
+  return failure(result.wasInterrupted());
+}
+
 SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
                                     ArrayRef<Value> args,
                                     mlir::TypeID terminatorTypeId,

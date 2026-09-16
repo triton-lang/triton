@@ -92,6 +92,9 @@ struct ConvertTritonAMDGPUToLLVM
       return signalPassFailure();
     }
 
+    if (failed(verifyTensorLayouts(mod)))
+      return signalPassFailure();
+
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
 

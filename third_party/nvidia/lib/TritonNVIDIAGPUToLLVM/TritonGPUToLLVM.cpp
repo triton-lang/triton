@@ -109,6 +109,11 @@ void ConvertTritonGPUToLLVM::runOnOperation() {
   ModuleOp mod = getOperation();
   TargetInfo targetInfo(computeCapability, ptxVersion);
 
+  if (failed(verifyTensorLayouts(mod))) {
+    signalPassFailure();
+    return;
+  }
+
   mlir::LowerToLLVMOptions option(context);
   option.overrideIndexBitwidth(32);
   TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
