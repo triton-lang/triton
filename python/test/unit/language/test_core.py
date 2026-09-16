@@ -3097,6 +3097,7 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, device):
 @pytest.mark.parametrize("num_warps", [4, 32])
 @pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_reduce64_bitwise(op, dtype_str, num_warps, device):
+
     @triton.jit
     def combine(a, b):
         return a & b
