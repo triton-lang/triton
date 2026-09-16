@@ -3038,10 +3038,12 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, device):
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': patch})
     # input
     x = get_reduce_input(dtype_str, (shape, ))
-    if dtype_str in ("int64", "uint64") and op in ("min", "max"):
-        # The winning high words tie, so low words must compare unsigned.
-        x[:8] = np.array([
+    if dtype_str in ("int64", "uint64") and op in ("min", "max", "sum"):
+        # Exercise carries in sums and unsigned low-word comparisons in min/max.
+        x[:10] = np.array([
             0,
+            0xFFFF,
+            0xFFFF0000,
             0xFFFFFFFF,
             0x7FFFFFFF00000000,
             0x7FFFFFFFFFFFFFFF,
@@ -3092,17 +3094,17 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, device):
             np.testing.assert_equal(z_ref, z_tri)
 
 
-@pytest.mark.parametrize("op", ["and", "or", "xor"])
+@pytest.mark.parametrize("op", ["add", "and", "or", "xor"])
 @pytest.mark.parametrize("dtype_str", ["int64", "uint64"])
 @pytest.mark.parametrize("num_warps", [4, 32])
 @pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
-def test_reduce64_bitwise(op, dtype_str, num_warps, device):
+def test_reduce64_integer(op, dtype_str, num_warps, device):
 
     @triton.jit
     def combine(a, b):
         return a & b
 
-    operator = {"and": "&", "or": "|", "xor": "^"}[op]
+    operator = {"add": "+", "and": "&", "or": "|", "xor": "^"}[op]
     combine = patch_kernel(combine, {"a & b": f"a {operator} b"})
 
     @triton.jit
@@ -3112,16 +3114,22 @@ def test_reduce64_bitwise(op, dtype_str, num_warps, device):
 
     x = numpy_random((1024, ), "uint64")
     # Keep both words nontrivial, including their sign bits, after AND/OR.
-    if op == "and":
+    if op == "add":
+        x[:32] = np.uint64(0xFFFFFFFFFFFFFFFF)
+    elif op == "and":
         x |= np.uint64(0x87654321FEDCBA98)
     elif op == "or":
         x &= np.uint64(0x87654321FEDCBA98)
     x = x.view(dtype_str)
     output = to_triton(np.zeros(1, dtype=dtype_str), device=device)
     compiled = kernel[(1, )](to_triton(x, device=device), output, num_warps=num_warps)
-    np.testing.assert_equal(to_numpy(output)[0], getattr(np, f"bitwise_{op}").reduce(x))
+    expected = np.sum(x, dtype=x.dtype) if op == "add" else getattr(np, f"bitwise_{op}").reduce(x)
+    np.testing.assert_equal(to_numpy(output)[0], expected)
     if torch.cuda.get_device_capability()[0] >= 8:
-        assert compiled.asm["ptx"].count(f"redux.sync.{op}.b32") == (4 if num_warps == 32 else 2)
+        if op == "add":
+            assert "redux.sync.add.s32" in compiled.asm["ptx"]
+        else:
+            assert compiled.asm["ptx"].count(f"redux.sync.{op}.b32") == (4 if num_warps == 32 else 2)
 
 
 # TODO: [Qingyi] Fix argmin / argmax
