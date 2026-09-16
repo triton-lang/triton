@@ -508,3 +508,108 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %dot : tensor<128x64xf32, #generic_default>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4, 4], threadsPerWarp = [1, 4, 8], warpsPerCTA = [1, 4, 1], order = [2, 1, 0], CGALayout = [[0, 0, 1]]}>
+#a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+
+// CHECK-DAG: #[[$BATCH:.*]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[1, 0, 0\]\]}}}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @dot_batch_only_two_ctas
+  // CHECK: %[[DOT:.*]] = tt.dot %{{.*}}, %{{.*}}, %{{.*}} : tensor<4x32x16xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$BATCH]]}>> * tensor<4x16x32xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$BATCH]]}>> -> tensor<4x32x32xf32, #[[$BATCH]]>
+  // CHECK: ttg.convert_layout %[[DOT]] : tensor<4x32x32xf32, #[[$BATCH]]> -> tensor<4x32x32xf32, #{{.*}}>
+  // E2E-LABEL: tt.func @dot_batch_only_two_ctas
+  // E2E: tt.dot
+  // PIPELINE-LABEL: tt.func @dot_batch_only_two_ctas
+  // PIPELINE: tt.dot
+  tt.func @dot_batch_only_two_ctas(%a: tensor<4x32x16xf16, #a>, %b: tensor<4x16x32xf16, #b>, %c: tensor<4x32x32xf32, #blocked>) -> tensor<4x32x32xf32, #blocked> {
+    %dot = tt.dot %a, %b, %c : tensor<4x32x16xf16, #a> * tensor<4x16x32xf16, #b> -> tensor<4x32x32xf32, #blocked>
+    tt.return %dot : tensor<4x32x32xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4, 4], threadsPerWarp = [1, 4, 8], warpsPerCTA = [1, 4, 1], order = [2, 1, 0], CGALayout = [[0, 0, 1], [0, 0, 2]]}>
+#a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+
+// CHECK-DAG: #[[$BATCH:.*]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[1, 0, 0\], \[2, 0, 0\]\]}}}>
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @dot_batch_only_four_ctas
+  // CHECK: %[[DOT:.*]] = tt.dot %{{.*}}, %{{.*}}, %{{.*}} : tensor<4x32x16xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$BATCH]]}>> * tensor<4x16x32xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$BATCH]]}>> -> tensor<4x32x32xf32, #[[$BATCH]]>
+  // CHECK: ttg.convert_layout %[[DOT]] : tensor<4x32x32xf32, #[[$BATCH]]> -> tensor<4x32x32xf32, #{{.*}}>
+  // E2E-LABEL: tt.func @dot_batch_only_four_ctas
+  // E2E: tt.dot
+  // PIPELINE-LABEL: tt.func @dot_batch_only_four_ctas
+  // PIPELINE: tt.dot
+  tt.func @dot_batch_only_four_ctas(%a: tensor<4x32x16xf16, #a>, %b: tensor<4x16x32xf16, #b>, %c: tensor<4x32x32xf32, #blocked>) -> tensor<4x32x32xf32, #blocked> {
+    %dot = tt.dot %a, %b, %c : tensor<4x32x16xf16, #a> * tensor<4x16x32xf16, #b> -> tensor<4x32x32xf32, #blocked>
+    tt.return %dot : tensor<4x32x32xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4, 4], threadsPerWarp = [1, 4, 8], warpsPerCTA = [1, 4, 1], order = [2, 1, 0], CGALayout = [[0, 0, 1], [0, 0, 2]]}>
+#a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+
+// CHECK-DAG: #[[$BATCH:.*]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[0, 1, 0\], \[1, 0, 0\]\]}}}>
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @dot_batch_then_m
+  // CHECK: %[[DOT:.*]] = tt.dot %{{.*}}, %{{.*}}, %{{.*}} : tensor<2x256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$BATCH]]}>> * tensor<2x32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$BATCH]]}>> -> tensor<2x256x64xf32, #[[$BATCH]]>
+  // CHECK: ttg.convert_layout %[[DOT]] : tensor<2x256x64xf32, #[[$BATCH]]> -> tensor<2x256x64xf32, #{{.*}}>
+  // E2E-LABEL: tt.func @dot_batch_then_m
+  // E2E: tt.dot
+  // PIPELINE-LABEL: tt.func @dot_batch_then_m
+  // PIPELINE: tt.dot
+  tt.func @dot_batch_then_m(%a: tensor<2x256x32xf16, #a>, %b: tensor<2x32x64xf16, #b>, %c: tensor<2x256x64xf32, #blocked>) -> tensor<2x256x64xf32, #blocked> {
+    %dot = tt.dot %a, %b, %c : tensor<2x256x32xf16, #a> * tensor<2x32x64xf16, #b> -> tensor<2x256x64xf32, #blocked>
+    tt.return %dot : tensor<2x256x64xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4, 4], threadsPerWarp = [1, 4, 8], warpsPerCTA = [1, 4, 1], order = [2, 1, 0], CGALayout = [[0, 0, 1], [0, 0, 2]]}>
+#a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+
+// CHECK-DAG: #[[$BATCH:.*]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[0, 0, 1\], \[1, 0, 0\]\]}}}>
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @dot_batch_then_n
+  // CHECK: %[[DOT:.*]] = tt.dot %{{.*}}, %{{.*}}, %{{.*}} : tensor<2x64x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$BATCH]]}>> * tensor<2x32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$BATCH]]}>> -> tensor<2x64x128xf32, #[[$BATCH]]>
+  // CHECK: ttg.convert_layout %[[DOT]] : tensor<2x64x128xf32, #[[$BATCH]]> -> tensor<2x64x128xf32, #{{.*}}>
+  // E2E-LABEL: tt.func @dot_batch_then_n
+  // E2E: tt.dot
+  // PIPELINE-LABEL: tt.func @dot_batch_then_n
+  // PIPELINE: tt.dot
+  tt.func @dot_batch_then_n(%a: tensor<2x64x32xf16, #a>, %b: tensor<2x32x128xf16, #b>, %c: tensor<2x64x128xf32, #blocked>) -> tensor<2x64x128xf32, #blocked> {
+    %dot = tt.dot %a, %b, %c : tensor<2x64x32xf16, #a> * tensor<2x32x128xf16, #b> -> tensor<2x64x128xf32, #blocked>
+    tt.return %dot : tensor<2x64x128xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4, 4], threadsPerWarp = [1, 4, 8], warpsPerCTA = [1, 4, 1], order = [2, 1, 0], CGALayout = [[0, 0, 1], [0, 0, 2]]}>
+#a = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#b = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+
+// CHECK-DAG: #[[$BATCH:.*]] = #ttg.blocked<{{.*}}CGALayout = {{\[\[0, 0, 1\], \[0, 1, 0\]\]}}}>
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tt.func @dot_singleton_batch
+  // CHECK: %[[DOT:.*]] = tt.dot %{{.*}}, %{{.*}}, %{{.*}} : tensor<1x128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #[[$BATCH]]}>> * tensor<1x32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$BATCH]]}>> -> tensor<1x128x128xf32, #[[$BATCH]]>
+  // CHECK: ttg.convert_layout %[[DOT]] : tensor<1x128x128xf32, #[[$BATCH]]> -> tensor<1x128x128xf32, #{{.*}}>
+  // E2E-LABEL: tt.func @dot_singleton_batch
+  // E2E: tt.dot
+  // PIPELINE-LABEL: tt.func @dot_singleton_batch
+  // PIPELINE: tt.dot
+  tt.func @dot_singleton_batch(%a: tensor<1x128x32xf16, #a>, %b: tensor<1x32x128xf16, #b>, %c: tensor<1x128x128xf32, #blocked>) -> tensor<1x128x128xf32, #blocked> {
+    %dot = tt.dot %a, %b, %c : tensor<1x128x32xf16, #a> * tensor<1x32x128xf16, #b> -> tensor<1x128x128xf32, #blocked>
+    tt.return %dot : tensor<1x128x128xf32, #blocked>
+  }
+}

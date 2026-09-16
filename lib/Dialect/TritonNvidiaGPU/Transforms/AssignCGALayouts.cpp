@@ -315,15 +315,29 @@ void assignDotCGALayout(triton::DotOp dot) {
   auto bLayout = cast<ttg::DotOperandEncodingAttr>(bTy.getEncoding());
   auto dLayout = cast<ttg::BlockedEncodingAttr>(dTy.getEncoding());
 
-  DotCGASplit split = getDotCGASplit(dTy.getShape()[0], dTy.getShape()[1],
-                                     ttg::getNumCTAs(dLayout));
+  auto shape = dTy.getShape();
+  int rank = dTy.getRank();
+  unsigned remainingCTAs = ttg::getNumCTAs(dLayout);
+  SmallVector<unsigned> ctaSplit(rank, 1);
+  // Split independent batches first
+  for (int dim = rank - 3; dim >= 0; --dim) {
+    ctaSplit[dim] = std::min<unsigned>(shape[dim], remainingCTAs);
+    remainingCTAs /= ctaSplit[dim];
+  }
+  DotCGASplit split =
+      getDotCGASplit(shape[rank - 2], shape[rank - 1], remainingCTAs);
+  ctaSplit[rank - 2] = split.m;
+  ctaSplit[rank - 1] = split.n;
+  SmallVector<unsigned> ctaOrder;
+  for (unsigned dim = rank; dim > 0; --dim)
+    ctaOrder.push_back(dim - 1);
 
   OpBuilder builder(dot);
   int threadsPerWarp = ttg::lookupThreadsPerWarp(builder);
   int numWarps = ttg::lookupNumWarps(dot);
 
   auto newCGALayout = ttg::CGAEncodingAttr::fromSplitParams(
-      ctx, {split.m, split.n}, {split.m, split.n}, {1, 0});
+      ctx, ctaSplit, ctaSplit, ctaOrder);
   auto newDLayout = ttg::BlockedEncodingAttr::get(
       ctx, dTy.getShape(), dLayout.getSizePerThread(), dLayout.getOrder(),
       numWarps, threadsPerWarp, newCGALayout);
