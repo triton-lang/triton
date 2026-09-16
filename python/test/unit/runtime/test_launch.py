@@ -102,6 +102,27 @@ def test_load_hook() -> None:
     triton.knobs.runtime.kernel_load_end_hook.remove(hook_end)
 
 
+def test_launch_rejects_mismatched_argument_shape(device) -> None:
+
+    @triton.jit
+    def flat_kernel(first, second):
+        pass
+
+    @triton.jit
+    def tuple_kernel(values):
+        pass
+
+    flat_compiled = flat_kernel.warmup(1, 2, grid=(1, ))
+    tuple_compiled = tuple_kernel.warmup((1, 2), grid=(1, ))
+
+    for compiled, args in ((flat_compiled, (1, )), (tuple_compiled, ((1, ), ))):
+        with pytest.raises(ValueError, match="Kernel launch argument mismatch") as exc_info:
+            compiled[(1, 1, 1)](*args)
+        message = str(exc_info.value)
+        assert "received 1 argument(s)" in message
+        assert "expects 2" in message
+
+
 def test_multiple_hooks() -> None:
 
     start0 = False
