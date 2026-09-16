@@ -629,23 +629,6 @@ public:
   }
 };
 
-static Value emitPredicatedAtomicLoad(ConversionPatternRewriter &rewriter,
-                                      Location loc, Type valueTy, Value ptr,
-                                      Value pred, LLVM::AtomicOrdering ordering,
-                                      StringRef syncScope) {
-  TritonLLVMOpBuilder b(loc, rewriter);
-  auto results =
-      emitPredicated(rewriter, loc, pred, ValueRange{b.undef(valueTy)}, [&] {
-        unsigned alignment = valueTy.getIntOrFloatBitWidth() / 8;
-        Value loaded = LLVM::LoadOp::create(
-            rewriter, loc, valueTy, ptr, alignment, /*isVolatile=*/false,
-            /*isNonTemporal=*/false, /*isInvariant=*/false,
-            /*isInvariantGroup=*/false, ordering, syncScope);
-        return SmallVector<Value>{loaded};
-      });
-  return results.front();
-}
-
 static void emitPredicatedAtomicStore(ConversionPatternRewriter &rewriter,
                                       Location loc, Value ptr, Value value,
                                       Value pred, LLVM::AtomicOrdering ordering,
@@ -665,12 +648,14 @@ public:
   using ConvertOpToLLVMPattern<
       tti::ExperimentalGSanAtomicLoadOp>::ConvertOpToLLVMPattern;
   const TargetInfoBase *targetInfo;
+  ModuleAxisInfoAnalysis &axisInfoAnalysis;
 
   GSanAtomicLoadOpConversion(LLVMTypeConverter &typeConverter,
                              const TargetInfoBase &targetInfo,
+                             ModuleAxisInfoAnalysis &axisInfoAnalysis,
                              PatternBenefit benefit = 1)
-      : ConvertOpToLLVMPattern(typeConverter, benefit),
-        targetInfo(&targetInfo) {}
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(&targetInfo),
+        axisInfoAnalysis(axisInfoAnalysis) {}
 
   LogicalResult
   matchAndRewrite(tti::ExperimentalGSanAtomicLoadOp op, OpAdaptor adaptor,
@@ -708,18 +693,25 @@ public:
     SmallVector<Value> resultVals;
     resultVals.reserve(ptrElements.size());
 
-    for (size_t i = 0; i < ptrElements.size(); ++i) {
+    unsigned vec = getAtomicLoadVectorSize(op.getPtr(), op.getMask(),
+                                           axisInfoAnalysis, *targetInfo);
+    // AtomicEventState holds at most three 4-byte shadow cells. Keep each
+    // vector within the existing 8-byte atomic-access bound.
+    vec = std::min(vec, 8u / bytesPerElem);
+    Type loadTy = vec == 1 ? valueElemTy : vec_ty(valueElemTy, vec);
+    for (size_t i = 0; i < ptrElements.size(); i += vec) {
       Value pred =
           maskElements.empty()
               ? threadPred
               : ttg::maybeAnd(rewriter, loc, threadPred, maskElements[i]);
       emitGSanAtomicBeginCall(rewriter, loc, *gsanGlobalStatePtr, eventState,
-                              pred, ptrElements[i], bytesPerElem,
+                              pred, ptrElements[i], bytesPerElem * vec,
                               /*doesRead=*/true, static_cast<int32_t>(sem),
                               static_cast<int32_t>(scope), sourceLoc);
-      resultVals.push_back(emitPredicatedAtomicLoad(
-          rewriter, loc, valueElemTy, ptrElements[i], pred,
-          LLVM::AtomicOrdering::monotonic, syncScope));
+      Value loaded = targetInfo->loadRelaxed(rewriter, loc, ptrElements[i],
+                                             loadTy, pred, op.getScope());
+      auto values = unpackLLVector(loc, loaded, rewriter);
+      resultVals.append(values.begin(), values.end());
       emitGSanAtomicEndCall(rewriter, loc, eventState, pred, b.false_val(),
                             /*isRmw=*/false, static_cast<int32_t>(sem),
                             static_cast<int32_t>(scope), sourceLoc);
@@ -1376,7 +1368,8 @@ void mlir::triton::populateGSanToLLVMPatterns(
                                                           targetInfo);
   patterns.add<GSanIndexedTensorDescAccessOpConversion>(typeConverter,
                                                         targetInfo);
-  patterns.add<GSanAtomicLoadOpConversion>(typeConverter, targetInfo);
+  patterns.add<GSanAtomicLoadOpConversion>(typeConverter, targetInfo,
+                                           axisInfoAnalysis);
   patterns.add<GSanAtomicPollOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanAtomicStoreOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanAtomicCASOpConversion>(typeConverter, targetInfo);

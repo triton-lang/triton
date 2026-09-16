@@ -201,6 +201,23 @@ StringRef TargetInfo::getAtomicSyncScope(MemSyncScope scope) const {
   llvm_unreachable("unknown memory synchronization scope");
 }
 
+Value TargetInfo::loadRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                              Type valueTy, Value pred,
+                              MemSyncScope scope) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto results =
+      emitPredicated(rewriter, loc, pred, ValueRange{b.undef(valueTy)}, [&] {
+        unsigned alignment = valueTy.getIntOrFloatBitWidth() / 8;
+        Value loaded = LLVM::LoadOp::create(
+            rewriter, loc, valueTy, ptr, alignment, /*isVolatile=*/false,
+            /*isNonTemporal=*/false, /*isInvariant=*/false,
+            /*isInvariantGroup=*/false, LLVM::AtomicOrdering::monotonic,
+            getAtomicSyncScope(scope));
+        return SmallVector<Value>{loaded};
+      });
+  return results.front();
+}
+
 void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
                          triton::gpu::AddrSpace targets) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);

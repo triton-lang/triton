@@ -928,6 +928,33 @@ def test_atomic_load_only_records_read(with_gsan, dtype, sem, scope, expected_sc
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("dtype", [torch.int8, torch.float16, torch.int32, torch.float64])
+def test_atomic_load_vectorized_shadow(with_gsan, dtype):
+
+    @gluon.jit
+    def kernel(Src, Out):
+        x = gl.arange(0, 256, layout=gl.BlockedLayout([8], [32], [1], [0]))
+        mask = x // 8 % 2 == 0
+        values = gl.atomic_load(Src + x, mask=mask, sem="acquire")
+        gl.store(Out + x, values, mask=mask)
+
+    src = (torch.arange(256, device="cuda") - 64).to(dtype)
+    out = torch.full_like(src, -1)
+    compiled = kernel[(1, )](src, out, num_warps=1)
+
+    mask = torch.arange(256, device="cuda") // 8 % 2 == 0
+    assert torch.equal(out, torch.where(mask, src, -1))
+    opcode = "b64" if dtype == torch.float64 else "v2.b32"
+    assert f"ld.relaxed.gpu.global.{opcode}" in compiled.asm["ptx"]
+    for byte_offset in range(0, src.numel() * dtype.itemsize, SHADOW_GRANULARITY_BYTES):
+        address = src.data_ptr() + byte_offset
+        if byte_offset // dtype.itemsize // 8 % 2 == 0:
+            _assert_atomic_read_only_shadow(address, AtomicScope.GPU)
+        else:
+            assert shadow_cell_from_address(address).num_reads == 0
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 @pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES)
 @pytest.mark.parametrize("sem, is_release", [("relaxed", False), ("release", True)])
 @pytest.mark.parametrize("dtype", ATOMIC_LOAD_STORE_TYPES)

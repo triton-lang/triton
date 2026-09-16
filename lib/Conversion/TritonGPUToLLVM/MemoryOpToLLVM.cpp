@@ -454,7 +454,6 @@ private:
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     StringRef syncScope = targetInfo.getAtomicSyncScope(op.getScope());
-    unsigned bitWidth = expected.getType().getIntOrFloatBitWidth();
 
     Block *currentBlock = rewriter.getInsertionBlock();
     Block *doneBlock = currentBlock->splitBlock(rewriter.getInsertionPoint());
@@ -469,16 +468,15 @@ private:
     BlockArgument matched = doneBlock->addArgument(i1_ty, loc);
 
     rewriter.setInsertionPointToEnd(currentBlock);
-    LLVM::CondBrOp::create(rewriter, loc, threadPred, pollLoopBlock,
-                           ValueRange{}, doneBlock, ValueRange{b.false_val()});
+    LLVM::BrOp::create(rewriter, loc, ValueRange{}, pollLoopBlock);
 
     rewriter.setInsertionPointToEnd(pollLoopBlock);
-    Value loaded = LLVM::LoadOp::create(
-        rewriter, loc, expected.getType(), ptr, bitWidth / 8,
-        /*isVolatile=*/false, /*isNonTemporal=*/false,
-        /*isInvariant=*/false, /*isInvariantGroup=*/false,
-        LLVM::AtomicOrdering::monotonic, syncScope);
+    Value loaded = targetInfo.loadRelaxed(
+        rewriter, loc, ptr, expected.getType(), threadPred, op.getScope());
+    // Inactive replicas leave the loop without accessing memory. Use select
+    // so their unspecified load result cannot affect the loop condition.
     Value pollMatched = b.icmp_eq(loaded, expected);
+    pollMatched = b.select(threadPred, pollMatched, b.true_val());
     if (timeout) {
       LLVM::CondBrOp::create(rewriter, loc, pollMatched, pollSuccessBlock,
                              timeoutCheckBlock);
@@ -498,30 +496,13 @@ private:
     if (op.getSem() == triton::MemSemantic::ACQUIRE)
       LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::acquire,
                             syncScope);
-    LLVM::BrOp::create(rewriter, loc, ValueRange{b.true_val()}, doneBlock);
+    LLVM::BrOp::create(rewriter, loc, ValueRange{threadPred}, doneBlock);
     rewriter.setInsertionPointToStart(doneBlock);
     return matched;
   }
 
   const TargetInfoBase &targetInfo;
 };
-
-static Value emitPredicatedAtomicLoad(ConversionPatternRewriter &rewriter,
-                                      Location loc, Type valueTy, Value ptr,
-                                      Value pred, LLVM::AtomicOrdering ordering,
-                                      StringRef syncScope) {
-  TritonLLVMOpBuilder b(loc, rewriter);
-  auto results =
-      emitPredicated(rewriter, loc, pred, ValueRange{b.undef(valueTy)}, [&] {
-        unsigned alignment = valueTy.getIntOrFloatBitWidth() / 8;
-        Value loaded = LLVM::LoadOp::create(
-            rewriter, loc, valueTy, ptr, alignment, /*isVolatile=*/false,
-            /*isNonTemporal=*/false, /*isInvariant=*/false,
-            /*isInvariantGroup=*/false, ordering, syncScope);
-        return SmallVector<Value>{loaded};
-      });
-  return results.front();
-}
 
 static void emitPredicatedAtomicStore(ConversionPatternRewriter &rewriter,
                                       Location loc, Value ptr, Value value,
@@ -540,9 +521,10 @@ struct AtomicLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::AtomicLoadOp> {
   AtomicLoadOpConversion(LLVMTypeConverter &converter,
                          const TargetInfoBase &targetInfo,
+                         ModuleAxisInfoAnalysis &axisInfoAnalysis,
                          PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::AtomicLoadOp>(converter, benefit),
-        targetInfo(targetInfo) {}
+        targetInfo(targetInfo), axisInfoAnalysis(axisInfoAnalysis) {}
 
   LogicalResult
   matchAndRewrite(triton::AtomicLoadOp op, OpAdaptor adaptor,
@@ -569,14 +551,18 @@ struct AtomicLoadOpConversion
     SmallVector<Value> resultVals;
     resultVals.reserve(ptrElements.size());
 
-    for (size_t i = 0; i < ptrElements.size(); ++i) {
+    unsigned vec = getAtomicLoadVectorSize(op.getPtr(), op.getMask(),
+                                           axisInfoAnalysis, targetInfo);
+    Type loadTy = vec == 1 ? valueElemTy : vec_ty(valueElemTy, vec);
+    for (size_t i = 0; i < ptrElements.size(); i += vec) {
       Value pred =
           maskElements.empty()
               ? threadPred
               : ttg::maybeAnd(rewriter, loc, threadPred, maskElements[i]);
-      resultVals.push_back(emitPredicatedAtomicLoad(
-          rewriter, loc, valueElemTy, ptrElements[i], pred,
-          LLVM::AtomicOrdering::monotonic, syncScope));
+      Value loaded = targetInfo.loadRelaxed(rewriter, loc, ptrElements[i],
+                                            loadTy, pred, op.getScope());
+      auto values = unpackLLVector(loc, loaded, rewriter);
+      resultVals.append(values.begin(), values.end());
     }
 
     if (sem == MemSemantic::ACQUIRE)
@@ -589,6 +575,7 @@ struct AtomicLoadOpConversion
 
 private:
   const TargetInfoBase &targetInfo;
+  ModuleAxisInfoAnalysis &axisInfoAnalysis;
 };
 
 struct AtomicStoreOpConversion
@@ -643,7 +630,8 @@ private:
 
 void mlir::triton::populateMemoryOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
-    RewritePatternSet &patterns, PatternBenefit benefit) {
+    RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    PatternBenefit benefit) {
   patterns.add<GlobalScratchAllocOpConversion>(typeConverter, targetInfo,
                                                benefit);
   patterns.add<LocalAllocOpConversion>(typeConverter, targetInfo, benefit);
@@ -653,7 +641,8 @@ void mlir::triton::populateMemoryOpToLLVMPatterns(
   patterns.add<LocalScatterOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<BarrierOpConversion>(typeConverter, benefit);
-  patterns.add<AtomicLoadOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<AtomicLoadOpConversion>(typeConverter, targetInfo,
+                                       axisInfoAnalysis, benefit);
   patterns.add<AtomicPollOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<AtomicStoreOpConversion>(typeConverter, targetInfo, benefit);
 }

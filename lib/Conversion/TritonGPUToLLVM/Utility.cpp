@@ -3,6 +3,7 @@
 #include "mlir/IR/Attributes.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "triton/Analysis/Allocation.h"
+#include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -1202,6 +1203,17 @@ std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering) {
   default:
     return {};
   }
+}
+
+unsigned getAtomicLoadVectorSize(Value ptr, Value mask,
+                                 ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                 const TargetInfoBase &targetInfo) {
+  unsigned vec = std::min(
+      axisInfoAnalysis.getContiguity(ptr),
+      targetInfo.getMaxAtomicLoadVectorSize(getPointeeBitWidth(ptr.getType())));
+  if (mask)
+    vec = std::min(vec, axisInfoAnalysis.getMaskAlignment(mask));
+  return vec;
 }
 
 SmallVector<Value>

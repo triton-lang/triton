@@ -221,6 +221,56 @@ static std::string getConstraintForBitwidth(unsigned bitwidth) {
   }
 }
 
+unsigned TargetInfo::getMaxAtomicLoadVectorSize(unsigned bitWidth) const {
+  return 128 / bitWidth;
+}
+
+Value TargetInfo::loadRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                              Type valueTy, Value pred,
+                              MemSyncScope scope) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto vectorTy = dyn_cast<VectorType>(valueTy);
+  Type elemTy = vectorTy ? vectorTy.getElementType() : valueTy;
+  unsigned vec = vectorTy ? vectorTy.getNumElements() : 1;
+  unsigned bitWidth = elemTy.getIntOrFloatBitWidth();
+  assert(vec <= getMaxAtomicLoadVectorSize(bitWidth));
+  unsigned packedBitWidth = std::min(32u, bitWidth * vec);
+  if (packedBitWidth > bitWidth) {
+    unsigned packedVec = bitWidth * vec / packedBitWidth;
+    Type wordTy = int_ty(packedBitWidth);
+    Type packedTy = packedVec == 1 ? wordTy : vec_ty(wordTy, packedVec);
+    Value loaded = loadRelaxed(rewriter, loc, ptr, packedTy, pred, scope);
+    return b.bitcast(loaded, valueTy);
+  }
+  PTXBuilder builder;
+  auto *outputs = builder.newListOperand();
+  for (unsigned i = 0; i < vec; ++i)
+    outputs->listAppend(builder.newOperand(
+        "=" + getConstraintForBitwidth(bitWidth), /*init=*/bool(pred)));
+  auto &load = builder.create("ld")
+                   ->o("relaxed")
+                   .o(stringifyMemSyncScope(scope).str())
+                   .o("global")
+                   .v(vec)
+                   .b(bitWidth);
+  load(vec == 1 ? outputs->listGet(0) : outputs,
+       builder.newAddrOperand(ptr, "l"))
+      .maybePredicate(pred);
+  // PTX has no 8-bit register constraint. Load into 16-bit registers and keep
+  // the low bytes, then reinterpret floating-point values without conversion.
+  Type regTy = int_ty(std::max(16u, bitWidth));
+  Type retTy = vec == 1 ? regTy : struct_ty(SmallVector<Type>(vec, regTy));
+  Value loaded = builder.launch(rewriter, loc, retTy, /*hasSideEffect=*/true);
+  auto results = unpackLLElements(loc, loaded, rewriter);
+  for (Value &result : results) {
+    if (bitWidth == 8)
+      result = b.trunc(i8_ty, result);
+    if (result.getType() != elemTy)
+      result = b.bitcast(result, elemTy);
+  }
+  return vectorTy ? packLLVector(loc, results, rewriter) : results.front();
+}
+
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               Value ctaId, Value val, Value pred) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);

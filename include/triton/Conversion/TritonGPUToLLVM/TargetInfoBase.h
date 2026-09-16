@@ -23,6 +23,17 @@ public:
   // Return the LLVM synchronization scope for an atomic operation.
   virtual StringRef getAtomicSyncScope(MemSyncScope scope) const = 0;
 
+  virtual unsigned getMaxAtomicLoadVectorSize(unsigned bitWidth) const {
+    return 1;
+  }
+
+  // Emit a relaxed atomic load of a scalar or vector, aligned to its full size.
+  // A null predicate enables all threads; a false predicate suppresses the
+  // memory access and leaves the result unspecified.
+  virtual Value loadRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                            Type valueTy, Value pred,
+                            MemSyncScope scope) const = 0;
+
   // Emit a block/CTA level barrier that guarantees visibility for the
   // target address space
   virtual void barrier(Location loc, RewriterBase &rewriter,
