@@ -1508,11 +1508,13 @@ def test_implicit_stream_ordering(with_gsan):
 
 
 @gluon.jit
-def _gluon_async_copy_masked_kernel(out_ptr, in_ptr, n_elements, start_idx, BLOCK: gl.constexpr):
+def _gluon_async_copy_masked_kernel(out_ptr, in_ptr, n_elements: gl.constexpr, start_idx: gl.constexpr,
+                                    BLOCK: gl.constexpr):
     smem_layout: gl.constexpr = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0])
     block_layout: gl.constexpr = gl.BlockedLayout([4], [32], [2], [0])
     smem = gl.allocate_shared_memory(in_ptr.dtype.element_ty, [BLOCK], smem_layout)
 
+    # Specialize the bounds so coarse pools can use complete 16-byte accesses.
     offsets = start_idx + gl.arange(0, BLOCK, block_layout)
     mask = offsets < n_elements
     async_copy.async_load(smem, in_ptr + offsets, mask=mask)
