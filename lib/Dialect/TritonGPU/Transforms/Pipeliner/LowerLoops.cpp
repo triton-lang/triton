@@ -106,12 +106,8 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
   for (Operation *topLevelUser : topLevelUsers) {
     int _useStage = schedule[topLevelUser].first;
     CoarseSchedule::Cluster _useCluster = schedule[topLevelUser].second;
-    // Only applies to a load that is already pipelined: this adds an *extra*
-    // buffer, it must not create a pipeline for a load whose use is in the
-    // same stage. Bumping such a load from stageDiff 0 to 1 would give it a
-    // single buffer, which cannot hold a value across an iteration, so it is
-    // never prefetched -- yet retiring it still forces an
-    // `async_wait {num = 0}` that drains every other copy in flight.
+    // This adds an *extra* buffer, so only bump already-pipelined loads:
+    // stageDiff 0 -> 1 would create a never-prefetched single-buffered copy.
     if (*_useCluster > *defCluster && _useStage > defStage) {
       // Check if we need extra buffer due to unusual execution order
       // The issue occurs when users of the load are scheduled in a later
