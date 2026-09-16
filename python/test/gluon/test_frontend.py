@@ -2510,8 +2510,29 @@ def test_reshape_linear_layout():
     # CHECK: [[LINEAR:#.*]] = #ttg.linear
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1])
     x = ttgl.full([128, 1], 1, ttgl.int32, layout=layout)
-    # CHECK: tt.reshape %{{.*}} : tensor<128x1xi32, [[BLOCKED]]> -> tensor<128xi32, [[LINEAR]]>
-    x.reshape([128])
+    # CHECK: tt.reshape %{{.*}} : tensor<128x1xi32, [[BLOCKED]]> -> tensor<64x2xi32, [[LINEAR]]>
+    x.reshape([64, 2])
+
+
+@pytest.mark.parametrize("axis", [0, 1, 2])
+def test_reshape_linear_layout_round_trip(axis):
+
+    @gluon.jit
+    def kernel(axis: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
+            reg_bases=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32]],
+            lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]],
+            warp_bases=[[32, 0], [64, 0]],
+            block_bases=[],
+            shape=[128, 64],
+        )
+        x = ttgl.full([128, 64], 1, ttgl.float32, layout)
+        shape: ttgl.constexpr = x.shape[:axis] + [1] + x.shape[axis:]
+        round_trip = x.reshape(shape).reshape(x.shape)
+        ttgl.static_assert(round_trip.type.layout == layout)
+        ttgl.maximum(ttgl.max(x, 1), ttgl.max(round_trip, 1))
+
+    run_parser(kernel, args=(axis, ), target=AMPERE_TARGET)
 
 
 @filecheck_test
