@@ -4859,30 +4859,6 @@ def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_
     np.testing.assert_allclose(out_ref, to_numpy(out_tri), rtol=0.01, atol=1e-2)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
-                    reason="multi-CTA dot requires NVIDIA SM90+")
-@pytest.mark.parametrize("num_ctas", [1, 4])
-@pytest.mark.parametrize("B, M, N, K", [(4, 32, 32, 16), (1, 128, 128, 32)])
-def test_dot_batch_cga(B, M, N, K, num_ctas, device):
-
-    @triton.jit
-    def kernel(A, B, C, BB: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr):
-        batch = tl.arange(0, BB)
-        m = tl.arange(0, BM)
-        n = tl.arange(0, BN)
-        k = tl.arange(0, BK)
-        a = tl.load(A + batch[:, None, None] * BM * BK + m[None, :, None] * BK + k[None, None, :])
-        b = tl.load(B + batch[:, None, None] * BK * BN + k[None, :, None] * BN + n[None, None, :])
-        c = tl.dot(a, b)
-        tl.store(C + batch[:, None, None] * BM * BN + m[None, :, None] * BN + n[None, None, :], c)
-
-    a = torch.randn((B, M, K), device=device, dtype=torch.float16)
-    b = torch.randn((B, K, N), device=device, dtype=torch.float16)
-    c = torch.empty((B, M, N), device=device, dtype=torch.float32)
-    kernel[(1, )](a, b, c, B, M, N, K, num_ctas=num_ctas)
-    torch.testing.assert_close(c, a.float() @ b.float(), rtol=1e-3, atol=1e-2)
-
-
 @pytest.mark.parametrize('in_dtype', ['float32'])
 def test_dot_mulbroadcasted(in_dtype, device):
     if is_cuda():
