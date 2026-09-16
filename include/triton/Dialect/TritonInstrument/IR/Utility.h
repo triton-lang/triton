@@ -227,9 +227,10 @@ struct AuxDataMap {
 
   // scratch, <Cbuf x B x Cthr x P x Cmask x i64>
   // Generic-proxy shared-memory accesses visible to each base thread. The low
-  // 16 bits contain source base-thread ids that have accessed the buffer; bits
-  // [16..31] contain the subset covered by fence.proxy.async on the path to
-  // that consumer. CTA dimensions distinguish source and consumer CTAs.
+  // 16 bits contain source base-thread ids that have written the buffer; bits
+  // [16..31] track readers. The high 32 bits contain the respective subsets
+  // covered by fence.proxy.async on the path to that consumer. CTA dimensions
+  // distinguish source and consumer CTAs.
   RegionToValueMap proxyAccessVisibility;
 
   // scratch, <Cbuf x B x Cbar x K x Cmask x F x i64>
