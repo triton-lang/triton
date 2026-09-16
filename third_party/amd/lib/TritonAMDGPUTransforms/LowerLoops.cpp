@@ -61,21 +61,24 @@ using LoadToStreamOpMap = llvm::MapVector<Operation *, StreamOpVariant>;
 //   <waitOp>      = amdgpu::AsyncTDMWait(tdmOp)
 //   replace uses of original load with a local_load after waitOp
 TDMChainOps createTDMAsync(
-    Operation *origLoad, Value alloc, Value extractIdx,
+    Operation *origLoad, Value alloc, Value insertIdx, Value extractIdx,
     function_ref<Operation *(OpBuilder &, Location, Value, Value)> buildTDMOp) {
   OpBuilder builder(origLoad);
   Location loc = origLoad->getLoc();
 
   Value pred = arith::ConstantIntOp::create(builder, loc, 1, 32);
 
-  auto viewLoad = triton::createSingleBufferView(builder, alloc, extractIdx)
-                      .getDefiningOp<ttg::MemDescIndexOp>();
+  auto viewStore = triton::createSingleBufferView(builder, alloc, insertIdx);
 
-  Operation *tdmOp = buildTDMOp(builder, loc, viewLoad, pred);
+  Operation *tdmOp = buildTDMOp(builder, loc, viewStore, pred);
 
   auto waitOp = triton::amdgpu::AsyncTDMWait::create(builder, loc,
                                                      tdmOp->getResult(0), 0);
 
+  auto viewLoad =
+      insertIdx == extractIdx
+          ? viewStore
+          : triton::createSingleBufferView(builder, alloc, extractIdx);
   auto maybeSharedLoad = tt::replaceUsesWithLocalLoad(
       builder, origLoad->getResult(0), viewLoad, waitOp);
 
@@ -83,9 +86,9 @@ TDMChainOps createTDMAsync(
 }
 
 TDMChainOps createTDMAsyncCopy(tt::DescriptorLoadOp loadOp, Value alloc,
-                               Value extractIdx) {
+                               Value insertIdx, Value extractIdx) {
   return createTDMAsync(
-      loadOp, alloc, extractIdx,
+      loadOp, alloc, insertIdx, extractIdx,
       [&](OpBuilder &builder, Location loc, Value view, Value pred) {
         Value desc = createUpdateTDMDescriptorOp(builder, loc, loadOp.getDesc(),
                                                  loadOp.getIndices(),
@@ -96,9 +99,9 @@ TDMChainOps createTDMAsyncCopy(tt::DescriptorLoadOp loadOp, Value alloc,
 }
 
 TDMChainOps createTDMAsyncGather(tt::DescriptorGatherOp gatherOp, Value alloc,
-                                 Value extractIdx) {
+                                 Value insertIdx, Value extractIdx) {
   return createTDMAsync(
-      gatherOp, alloc, extractIdx,
+      gatherOp, alloc, insertIdx, extractIdx,
       [&](OpBuilder &builder, Location loc, Value view, Value pred) {
         // Convert to the TDM index layout for better gather performance;
         // insert a layout convert if the indices don't already have it.
@@ -128,16 +131,15 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
                                const tt::AMD::TargetInfo &targetInfo);
 
 AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
-                                  Value extractIdx, int contiguity) {
+                                  Value insertIdx, Value extractIdx,
+                                  int contiguity) {
   OpBuilder builder(loadOp);
   Location loc = loadOp.getLoc();
 
-  // Extract local subview from shared allocation
-  auto viewLoad = triton::createSingleBufferView(builder, alloc, extractIdx)
-                      .getDefiningOp<ttg::MemDescIndexOp>();
+  auto viewStore = triton::createSingleBufferView(builder, alloc, insertIdx);
 
   auto copyOp = ttg::AsyncCopyGlobalToLocalOp::create(
-      builder, loc, loadOp.getPtr(), viewLoad, loadOp.getMask(),
+      builder, loc, loadOp.getPtr(), viewStore, loadOp.getMask(),
       loadOp.getOther(), loadOp.getCachePolicyAttr(), loadOp.getIsVolatile(),
       contiguity);
   auto commitOp =
@@ -145,6 +147,10 @@ AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   ttg::AsyncWaitOp waitOp =
       ttg::AsyncWaitOp::create(builder, loc, commitOp->getResult(0), 0);
 
+  auto viewLoad =
+      insertIdx == extractIdx
+          ? viewStore
+          : triton::createSingleBufferView(builder, alloc, extractIdx);
   auto maybeSharedLoad = tt::replaceUsesWithLocalLoad(
       builder, loadOp->getResult(0), viewLoad, waitOp);
 
@@ -166,20 +172,23 @@ void scheduleLocalLoad(ttg::LocalLoadOp localLoadOp,
 }
 
 StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
-                                    Value extractIdx) {
+                                    Value insertIdx, Value extractIdx) {
   OpBuilder builder(loadOp);
   Location loc = loadOp.getLoc();
 
-  // Extract local subview from shared allocation
-  auto viewLoad = triton::createSingleBufferView(builder, alloc, extractIdx)
-                      .getDefiningOp<ttg::MemDescIndexOp>();
+  auto viewStore = triton::createSingleBufferView(builder, alloc, insertIdx);
 
   tt::LoadOp newLoadOp = cast<tt::LoadOp>(builder.clone(*loadOp));
-  auto storeOp = ttg::LocalStoreOp::create(builder, loc, newLoadOp, viewLoad);
+  auto storeOp = ttg::LocalStoreOp::create(builder, loc, newLoadOp, viewStore);
+  auto viewLoad =
+      insertIdx == extractIdx
+          ? viewStore
+          : triton::createSingleBufferView(builder, alloc, extractIdx);
   auto maybeLocalLoad =
       tt::replaceUsesWithLocalLoad(builder, loadOp->getResult(0), viewLoad);
 
-  return {newLoadOp, viewLoad, storeOp, maybeLocalLoad};
+  return {newLoadOp, viewStore.getDefiningOp<ttg::MemDescIndexOp>(), storeOp,
+          maybeLocalLoad};
 }
 
 // Adapted from
@@ -442,29 +451,44 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
                 tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   IRRewriter builder(forOp);
   Location loc = forOp.getLoc();
-  Value minusOne = arith::ConstantIntOp::create(builder, loc, -1, 32);
   Value zero = arith::ConstantIntOp::create(builder, loc, 0, 32);
   Value one = arith::ConstantIntOp::create(builder, loc, 1, 32);
-  Value extractIdx = minusOne;
   Value numBuffersVal =
       arith::ConstantIntOp::create(builder, loc, numBuffers, 32);
 
   unsigned newOperandIndex = forOp.getBody()->getNumArguments();
-  // Patch the loop to add the new loop carried dependency.
-  forOp = addIterArgsToLoop(builder, forOp, {extractIdx});
-
-  // Create one counter for the extract indices to avoid creating long
-  // live range.
-  extractIdx = forOp.getBody()->getArgument(newOperandIndex);
+  // Carry the slot used by the unpipelined iteration. Pipeline expansion maps
+  // the store to the next phase and the load to the current phase.
+  Value initPhase = zero;
+  if (numBuffers == 1)
+    initPhase = arith::ConstantIntOp::create(builder, loc, -1, 32);
+  forOp = addIterArgsToLoop(builder, forOp, {initPhase});
+  Value phase = forOp.getBody()->getArgument(newOperandIndex);
 
   builder.setInsertionPoint(forOp.getBody(), forOp.getBody()->begin());
-  extractIdx = arith::AddIOp::create(builder, loc, extractIdx, one);
-  Value cndExt = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::slt,
-                                       extractIdx, numBuffersVal);
-  extractIdx = arith::SelectOp::create(builder, loc, cndExt, extractIdx, zero);
-
-  // Patch the yield with the updated counter.
-  appendToForOpYield(forOp, {extractIdx});
+  Value insertIdx;
+  Value extractIdx;
+  Value nextPhase;
+  if (numBuffers == 1) {
+    // There are no disjoint slots to expose. Keep one shared view so the
+    // single-buffer pipeline retains its existing cross-stage dependency.
+    Value incremented = arith::AddIOp::create(builder, loc, phase, one);
+    Value inRange = arith::CmpIOp::create(
+        builder, loc, arith::CmpIPredicate::slt, incremented, numBuffersVal);
+    nextPhase =
+        arith::SelectOp::create(builder, loc, inRange, incremented, zero);
+    insertIdx = nextPhase;
+    extractIdx = nextPhase;
+  } else {
+    insertIdx = phase;
+    // Rematerialize the load index in its own stage. This gives membar
+    // matching modulo expressions after expansion instead of two unrelated
+    // loop carries.
+    extractIdx = arith::RemSIOp::create(builder, loc, phase, numBuffersVal);
+    nextPhase = triton::createIncrementModulo(builder, loc, phase,
+                                              numBuffersVal, zero, one);
+  }
+  appendToForOpYield(forOp, {nextPhase});
 
   LoadToStreamOpMap loadToStreamOp;
   for (auto &[op, info] : loadToInfo) {
@@ -487,11 +511,13 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
 
     // Replace the old load with multi-buffered loads
     if (descLoadOp) {
-      loadToStreamOp[op] = createTDMAsyncCopy(descLoadOp, alloc, extractIdx);
+      loadToStreamOp[op] =
+          createTDMAsyncCopy(descLoadOp, alloc, insertIdx, extractIdx);
       continue;
     }
     if (gatherOp) {
-      loadToStreamOp[op] = createTDMAsyncGather(gatherOp, alloc, extractIdx);
+      loadToStreamOp[op] =
+          createTDMAsyncGather(gatherOp, alloc, insertIdx, extractIdx);
       continue;
     }
 
@@ -501,11 +527,13 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
       unsigned vec = axisInfoAnalysis.getContiguity(loadOp.getPtr());
       if (auto mask = loadOp.getMask())
         vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
-      loadToStreamOp[loadOp] = createAsyncCopy(loadOp, alloc, extractIdx, vec);
+      loadToStreamOp[loadOp] =
+          createAsyncCopy(loadOp, alloc, insertIdx, extractIdx, vec);
       continue;
     }
 
-    loadToStreamOp[loadOp] = createStreamCopy(loadOp, alloc, extractIdx);
+    loadToStreamOp[loadOp] =
+        createStreamCopy(loadOp, alloc, insertIdx, extractIdx);
   }
 
   return loadToStreamOp;

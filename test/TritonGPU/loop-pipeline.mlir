@@ -1,6 +1,7 @@
 // RUN: triton-opt %s -split-input-file -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-pipeline=num-stages=3 -canonicalize | FileCheck %s --check-prefixes=COMMON,CHECK
 // RUN: triton-opt %s -split-input-file -tritonamdgpu-schedule-loops=num_stages=2 -tritonamdgpu-pipeline -canonicalize | FileCheck %s --check-prefixes=COMMON,AMD
 // RUN: triton-opt %s -split-input-file -tritonamdgpu-schedule-loops="num_stages=3" -tritonamdgpu-pipeline -canonicalize | FileCheck %s --check-prefixes=COMMON,AMD_3_STAGES
+// RUN: triton-opt %s -split-input-file -tritonamdgpu-schedule-loops=num_stages=2 -tritonamdgpu-pipeline=use_async_copy=true -canonicalize -convert-scf-to-cf --allocate-shared-memory -test-print-membar | FileCheck %s --check-prefix=AMD-ASYNC-MEMBAR
 
 // 4 warps
 // matmul: 128x32 @ 32x128 -> 128x128
@@ -98,6 +99,22 @@
 //       AMD:   %[[SELECT_32:.*]] = arith.select %[[CMPI_27]], %[[IF_31]], %{{.*}}#2
 //       AMD:   ttg.local_dealloc %{{.*}}
 //       AMD:   ttg.local_dealloc %{{.*}}
+
+// AMD-ASYNC-MEMBAR-LABEL: tt.func @matmul_loop
+// AMD-ASYNC-MEMBAR: %[[NEXT_ADD:.*]] = arith.addi %[[PHASE:.*]], %[[C1:.*]] : i32
+// AMD-ASYNC-MEMBAR: %[[NEXT_CMP:.*]] = arith.cmpi sge, %[[NEXT_ADD]], %[[C2:.*]] : i32
+// AMD-ASYNC-MEMBAR: %[[NEXT:.*]] = arith.select %[[NEXT_CMP]], %{{.*}}, %[[NEXT_ADD]] : i32
+// AMD-ASYNC-MEMBAR: %[[READ:.*]] = arith.remsi %[[PHASE]], %[[C2]] : i32
+// AMD-ASYNC-MEMBAR: %[[A_WRITE_VIEW:.*]] = ttg.memdesc_index %[[A_ALLOC:.*]]{{\[}}%[[NEXT]]{{\]}}
+// AMD-ASYNC-MEMBAR: ttg.async_copy_global_to_local {{.*}}, %[[A_WRITE_VIEW]]
+// AMD-ASYNC-MEMBAR-NOT: ttg.barrier local
+// AMD-ASYNC-MEMBAR: %[[A_READ_VIEW:.*]] = ttg.memdesc_index %[[A_ALLOC]]{{\[}}%[[READ]]{{\]}}
+// AMD-ASYNC-MEMBAR: ttg.local_load %[[A_READ_VIEW]]
+// AMD-ASYNC-MEMBAR: %[[B_WRITE_VIEW:.*]] = ttg.memdesc_index %[[B_ALLOC:.*]]{{\[}}%[[NEXT]]{{\]}}
+// AMD-ASYNC-MEMBAR: ttg.async_copy_global_to_local {{.*}}, %[[B_WRITE_VIEW]]
+// AMD-ASYNC-MEMBAR-NOT: ttg.barrier local
+// AMD-ASYNC-MEMBAR: %[[B_READ_VIEW:.*]] = ttg.memdesc_index %[[B_ALLOC]]{{\[}}%[[READ]]{{\]}}
+// AMD-ASYNC-MEMBAR: ttg.local_load %[[B_READ_VIEW]]
 
 // AMD_3_STAGES-LABEL: tt.func @matmul_loop
 //       AMD_3_STAGES:   ttg.local_alloc
