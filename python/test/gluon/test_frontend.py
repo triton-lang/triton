@@ -208,6 +208,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@pytest.mark.parametrize("num_ctas", [1, 2, 4])
+@pytest.mark.parametrize("container", [list, tuple])
+def test_layout_nested_constexpr_containers(num_ctas, container):
+
+    @gluon.jit
+    def add(a, b):
+        return a + b
+
+    @gluon.jit
+    def kernel(Out, NUM_CTAS: ttgl.constexpr, EXPECTED: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [16], [0],
+                                                    cga_layout=[[0]] * (NUM_CTAS.bit_length() - 1))
+        ttgl.static_assert(layout == EXPECTED)
+        ttgl.static_assert(EXPECTED == layout)
+        x = ttgl.arange(0, 16, layout=layout)
+        prefix = ttgl.associative_scan(x, 0, add)
+        # The scan's inferred layout contains Python lists instead of JIT tuples.
+        ttgl.static_assert(prefix.type.layout == layout)
+        ttgl.store(Out + x, prefix - x)
+
+    cga_layout = container(container([0]) for _ in range(num_ctas.bit_length() - 1))
+    expected = ttgl.BlockedLayout([1], [32], [16], [0], cga_layout=cga_layout)
+    run_parser(kernel, *make_args(MockTensor(ttgl.int32), num_ctas, expected, num_warps=16, num_ctas=num_ctas),
+               target=BLACKWELL_TARGET)
+
+
 @gluon.jit
 def simple_ops_kernel(arg: tl.int32):
     ttgl.assume(arg > 1)
