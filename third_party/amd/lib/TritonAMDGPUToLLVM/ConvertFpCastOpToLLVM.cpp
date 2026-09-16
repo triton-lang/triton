@@ -6,7 +6,7 @@
 // It provides:
 //  - software fallback conversion paths for FP32/FP16/BF16/FP8 variants,
 //  - hardware-accelerated packed conversion paths selected by ISA family
-//    (CDNA3, CDNA4, GFX1250+),
+//    (CDNA3, CDNA4, RDNA4, GFX1250+),
 //  - round-mode aware handling (RTNE/RTZ), saturation, NaN/Inf and subnormal
 //    semantics.
 //
@@ -44,6 +44,10 @@ bool isCDNA4OrHigher(ISAFamily family) {
 // those architectures we will use the HW instructions to do the conversion
 // instead of the software fallback.
 bool hasFnuzFp8HW(ISAFamily family) { return family == ISAFamily::CDNA3; }
+
+// On RDNA4, v_cvt_pk_f32_fp8 interprets its input using the OCP E4M3
+// encoding. The same opcode uses the FNUZ encoding on CDNA3.
+bool hasOcpFp8UpcastHW(ISAFamily family) { return family == ISAFamily::RDNA4; }
 Value checkIsNan(TritonLLVMOpBuilder &builder, Value v);
 Value Fp16ToFp32OneValue(Location loc, ConversionPatternRewriter &rewriter,
                          const Value &v);
@@ -399,8 +403,8 @@ SmallVector<Value> scalePk8UpcastFromFp8(Location loc,
   return ret;
 }
 
-// Convert Bf8/Fp8 to Fp32 on CDNA3
-template <typename ConvertOp>
+// Convert four packed Bf8/Fp8 values to Fp32.
+template <typename ConvertOp, bool ForceE64 = false>
 SmallVector<Value> PkF4ToFp32(Location loc, ConversionPatternRewriter &rewriter,
                               const SmallVector<Value> &v) {
   assert(v.size() == 4);
@@ -417,10 +421,25 @@ SmallVector<Value> PkF4ToFp32(Location loc, ConversionPatternRewriter &rewriter,
   auto resType = i64_ty;
   auto dstType = f32_ty;
 
-  auto resultLo =
-      ConvertOp::create(rewriter, loc, resType, i32v, /*wordSel=*/false);
-  auto resultHi =
-      ConvertOp::create(rewriter, loc, resType, i32v, /*wordSel=*/true);
+  Value resultLo;
+  Value resultHi;
+  if constexpr (ForceE64) {
+    static_assert(std::is_same_v<ConvertOp, ROCDL::CvtPkF32Fp8Op>);
+    // LLVM's instruction selector uses the e32 form when wordSel is false,
+    // but Triton's pinned AMD assembler rejects that form for gfx1200/gfx1201.
+    // Move the low word into the high word and select word 1 for both calls so
+    // that LLVM uses the e64 form until the selector and assembler agree.
+    Value lowWordInHigh = b.shl(i32_ty, i32v, b.i32_val(16));
+    resultLo = ConvertOp::create(rewriter, loc, resType, lowWordInHigh,
+                                 /*wordSel=*/true);
+    resultHi =
+        ConvertOp::create(rewriter, loc, resType, i32v, /*wordSel=*/true);
+  } else {
+    resultLo =
+        ConvertOp::create(rewriter, loc, resType, i32v, /*wordSel=*/false);
+    resultHi =
+        ConvertOp::create(rewriter, loc, resType, i32v, /*wordSel=*/true);
+  }
   auto f32x2VecTy = vec_ty(dstType, 2);
   SmallVector<Value> ret(4);
   auto retVec = b.bitcast(resultLo, f32x2VecTy);
@@ -881,7 +900,7 @@ public:
 
     if (isa<Float8E4M3FNUZType>(srcTy)) {
       if (hasFnuzFp8HW(isaFamily))
-        return Fp8E4M3fnuzToFp16HW(loc, rewriter, v);
+        return Fp8E4M3ToFp16HW<false>(loc, rewriter, v);
       else
         return Fp8E4M3fnuzToFp16SW(loc, rewriter, v);
     } else if (isa<Float8E4M3FNType>(srcTy)) {
@@ -891,18 +910,22 @@ public:
       } else if (isaFamily == ISAFamily::CDNA4) {
         return scalePk4UpcastFromFp8<ROCDL::CvtScaleF32PkF16Fp8Op>(loc,
                                                                    rewriter, v);
+      } else if (hasOcpFp8UpcastHW(isaFamily)) {
+        return Fp8E4M3ToFp16HW<true>(loc, rewriter, v);
       } else
         return Fp8E4M3fnToFp16SW(loc, rewriter, v);
     }
     return std::nullopt;
   }
 
-  SmallVector<Value> Fp8E4M3fnuzToFp16HW(Location loc,
-                                         ConversionPatternRewriter &rewriter,
-                                         const SmallVector<Value> &v) {
+  template <bool ForceE64>
+  SmallVector<Value> Fp8E4M3ToFp16HW(Location loc,
+                                     ConversionPatternRewriter &rewriter,
+                                     const SmallVector<Value> &v) {
     assert(v.size() == 4);
     // Convert fp8 to fp32
-    SmallVector<Value> ret = PkF4ToFp32<ROCDL::CvtPkF32Fp8Op>(loc, rewriter, v);
+    SmallVector<Value> ret =
+        PkF4ToFp32<ROCDL::CvtPkF32Fp8Op, ForceE64>(loc, rewriter, v);
 
     // Convert fp32 to fp16
     for (size_t i = 0; i < 4; i++)
@@ -1194,7 +1217,7 @@ public:
 
     if (isa<Float8E4M3FNUZType>(srcTy)) {
       if (hasFnuzFp8HW(isaFamily))
-        return Fp8E4M3fnuzToBf16HW(loc, rewriter, v);
+        return Fp8E4M3ToBf16HW<false>(loc, rewriter, v);
       else
         return Fp8E4M3fnuzToBf16SW(loc, rewriter, v);
     } else if (isa<Float8E4M3FNType>(srcTy)) {
@@ -1204,18 +1227,20 @@ public:
       } else if (isaFamily == ISAFamily::CDNA4) {
         return scalePk4UpcastFromFp8<ROCDL::CvtScaleF32PkBf16Fp8Op>(
             loc, rewriter, v);
+      } else if (hasOcpFp8UpcastHW(isaFamily)) {
+        return Fp8E4M3ToBf16HW<true>(loc, rewriter, v);
       } else
         return OcpF8ToBf16SW<Float8E4M3FNType>(loc, rewriter, v);
     }
     return std::nullopt;
   }
 
-  // fp8e4m3fnuz to bf16
-  SmallVector<Value> Fp8E4M3fnuzToBf16HW(Location loc,
-                                         ConversionPatternRewriter &rewriter,
-                                         const SmallVector<Value> &v) {
+  template <bool ForceE64>
+  SmallVector<Value> Fp8E4M3ToBf16HW(Location loc,
+                                     ConversionPatternRewriter &rewriter,
+                                     const SmallVector<Value> &v) {
     assert(v.size() == 4);
-    auto ret = PkF4ToFp32<ROCDL::CvtPkF32Fp8Op>(loc, rewriter, v);
+    auto ret = PkF4ToFp32<ROCDL::CvtPkF32Fp8Op, ForceE64>(loc, rewriter, v);
     for (size_t i = 0; i < 4; i++)
       ret[i] = AMD::convertFp32ToBf16(loc, rewriter, ret[i], RoundingMode::RTZ);
     return ret;
@@ -1386,6 +1411,8 @@ public:
       else if (isaFamily == ISAFamily::CDNA4)
         return scalePk4UpcastFromFp8<ROCDL::CvtScaleF32PkF32Fp8Op>(loc,
                                                                    rewriter, v);
+      else if (hasOcpFp8UpcastHW(isaFamily))
+        return PkF4ToFp32<ROCDL::CvtPkF32Fp8Op, true>(loc, rewriter, v);
       else
         useTwoStepConversion = true;
     }
