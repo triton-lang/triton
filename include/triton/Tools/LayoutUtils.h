@@ -65,32 +65,18 @@ invertAndComposeLocal(const LinearLayout &A, const LinearLayout &B,
 //   L(register=2) = 1
 //   L(lane=1) = 2
 //   L(lane=2) = 0
-LinearLayout
-ensureLayoutNotLargerThan(const LinearLayout &layout,
-                          const llvm::SmallDenseMap<StringAttr, int64_t> &shape,
-                          bool broadcastRegisters = true);
+LinearLayout ensureLayoutNotLargerThan(const LinearLayout &layout,
+                                       llvm::ArrayRef<StringAttr> dimNames,
+                                       llvm::ArrayRef<int64_t> shape,
+                                       bool broadcastRegisters = true);
 
-// For each out-dim d, ensure the layout's out-size (i.e. its codomain) is no
-// smaller than shape[d].  Do this by increasing the size of the layout's inputs
-// along its most-minor dimension ("register" for register layouts, "offset" for
-// shared layouts).
-//
-// This function is invariant to the order of the layout's input dimensions, but
-// it cares about the order of the output dims, which should be minor-to-major.
-LinearLayout ensureLayoutNotSmallerThan(
-    const LinearLayout &layout,
-    const llvm::SmallDenseMap<StringAttr, int64_t> &shape);
-
-inline LinearLayout
-ensureLayoutNotSmallerThan(const LinearLayout &layout,
-                           const llvm::ArrayRef<StringAttr> dimNames,
-                           const llvm::ArrayRef<int64_t> shape) {
-  llvm::SmallDenseMap<StringAttr, int64_t> namedDims;
-  for (auto [dimName, length] : llvm::zip_equal(dimNames, shape))
-    namedDims[dimName] = length;
-  assert(namedDims.size() == shape.size() && "duplicate dimension names given");
-  return ensureLayoutNotSmallerThan(layout, namedDims);
-}
+// For each output dimension d, ensure the layout's output size is at least
+// shape[d] by growing inDim. Repetitions follow the layout's output dimension
+// order, from minor to major.
+LinearLayout ensureLayoutNotSmallerThan(const LinearLayout &layout,
+                                        llvm::ArrayRef<StringAttr> dimNames,
+                                        llvm::ArrayRef<int64_t> shape,
+                                        StringAttr inDim);
 
 // Return a vector of the standard out dimension names for tensor layouts. These
 // are "dim0", "dim1", etc.

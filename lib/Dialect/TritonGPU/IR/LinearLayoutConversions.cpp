@@ -26,7 +26,8 @@ namespace {
 //
 //  - ctaLayout: A layout for one CTA (one block), i.e. input dims
 //    [register, lane, warp]
-//    for register layouts, and input dims [offset] for shared layouts.
+//    for register layouts, [offset] for shared layouts, and [row, col] for
+//    TMEM.
 //  - cgaLayout: Arrangement of multiple blocks, i.e. input dims [block].
 
 #define S(v) StringAttr::get(ctx, (v))
@@ -273,16 +274,18 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
     return failure();
   MLIRContext *ctx = shared.getContext();
   int rank = shape.size();
-  auto shapePerCTA = getShapePerCTA(shared, shape);
   auto kOffset = S("offset");
+  SmallVector<int64_t> maybeTransposedTmaShape(tmaShape.begin(),
+                                               tmaShape.end());
+  if (shared.getTransposed()) {
+    // Move the outer dim to the inner position.
+    // TODO: we should move back to using `order` instead of transposed to make
+    // the order more explicit.
+    std::rotate(maybeTransposedTmaShape.begin(),
+                maybeTransposedTmaShape.begin() + 1,
+                maybeTransposedTmaShape.end());
+  }
   if (shared.getSwizzlingByteWidth() == 0) {
-    SmallVector<int64_t> maybeTransposedTmaShape(tmaShape.begin(),
-                                                 tmaShape.end());
-    if (shared.getTransposed()) {
-      std::rotate(maybeTransposedTmaShape.begin(),
-                  maybeTransposedTmaShape.begin() + 1,
-                  maybeTransposedTmaShape.end());
-    }
     auto outDimNames = standardOutDimNames(ctx, rank);
     LinearLayout layout = LinearLayout::identity1D(
         maybeTransposedTmaShape[rank - 1], kOffset, outDimNames[rank - 1]);
@@ -297,7 +300,6 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
       }
       layout = transposeLinearLayout(layout, order);
     }
-    layout = ensureLayoutNotSmallerThan(layout, outDimNames, shapePerCTA);
     return combineCtaCgaWithShape(layout, shared.getCGALayout(), shape);
   }
   assert(rank >= 2);
@@ -332,20 +334,10 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
   }
 
   // Distribute the remaining rows and cols.
-  auto layout =
-      ensureLayoutNotSmallerThan(tileLayout, outDimNames, collapsedTmaShape);
+  auto layout = ensureLayoutNotSmallerThan(tileLayout, outDimNames,
+                                           collapsedTmaShape, kOffset);
 
   // Reshape the layout to the N-D pre-transposed shape per CTA.
-  SmallVector<int64_t> maybeTransposedTmaShape(tmaShape.begin(),
-                                               tmaShape.end());
-  if (shared.getTransposed()) {
-    // Move the outer dim to the inner position.
-    // TODO: we should move back to using `order` instead of transposed to make
-    // the order more explicit.
-    std::rotate(maybeTransposedTmaShape.begin(),
-                maybeTransposedTmaShape.begin() + 1,
-                maybeTransposedTmaShape.end());
-  }
   // This condition can fail if a layout is speculatively constructed for
   // equivalence checking.
   if (layout.getTotalOutDimSize() != product(maybeTransposedTmaShape))
@@ -360,9 +352,6 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
     reshapedLayout = transposeLinearLayout(reshapedLayout, order);
   }
 
-  reshapedLayout = ensureLayoutNotSmallerThan(
-      reshapedLayout, standardOutDimNames(ctx, shapePerCTA.size()),
-      shapePerCTA);
   return combineCtaCgaWithShape(reshapedLayout, shared.getCGALayout(), shape);
 }
 
@@ -1174,11 +1163,7 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
   tile *= LinearLayout::identity1D(1, kBlock, dims[0]);
   // See [Zeros in TMEM LinearLayouts]
   // Set some rows/cols to 0 if shape is smaller than 64 x 4
-  llvm::SmallDenseMap<StringAttr, int64_t> shapeMap;
-  for (auto [dim, size] : llvm::zip(dims, shapePerCTA)) {
-    shapeMap[dim] = size;
-  }
-  tile = ensureLayoutNotLargerThan(tile, shapeMap);
+  tile = ensureLayoutNotLargerThan(tile, dims, shapePerCTA);
   return tile * cgaLayout.getLinearLayout();
 }
 
@@ -1379,37 +1364,28 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
                                     ArrayRef<int64_t> shape) {
   int rank = shape.size();
   assert(ctaLayout.getNumOutDims() == rank);
-  assert(cgaLayoutAttr.getCTAOrder().size() == rank);
+  assert(cgaLayoutAttr.getRank() == rank);
   MLIRContext *ctx = cgaLayoutAttr.getContext();
 
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
-
-  llvm::SmallDenseMap<StringAttr, int64_t> labeledShape;
-  for (auto [dim, size] : llvm::zip(outDimNames, shape)) {
-    labeledShape[dim] = size;
-  }
-
+  auto shapePerCTA = getShapePerCTA(cgaLayoutAttr.getCTASplitNum(), shape);
   LinearLayout cgaLayout =
-      ensureLayoutNotLargerThan(cgaLayoutAttr.getLinearLayout(), labeledShape)
+      ensureLayoutNotLargerThan(cgaLayoutAttr.getLinearLayout(), outDimNames,
+                                shape)
           .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
 
-  // Calculate the shape of the ctaLayout, which is `shape` divided by the
-  // cgaLayout's size.
-  llvm::SmallDenseMap<StringAttr, int64_t> ctaShape;
-  assert(llvm::to_vector(ctaLayout.getOutDimNames()) ==
-         llvm::to_vector(cgaLayout.getOutDimNames()));
-  for (auto dim : ctaLayout.getOutDimNames()) {
-    ctaShape[dim] =
-        std::max(int64_t{1}, labeledShape[dim] / cgaLayout.getOutDimSize(dim));
-  }
-
-  ctaLayout = ensureLayoutNotSmallerThan(ctaLayout, ctaShape);
-  ctaLayout = ensureLayoutNotLargerThan(ctaLayout, ctaShape);
+  auto kCol = S("col");
+  auto kOffset = S("offset");
+  auto kReg = S("register");
+  auto inDim = ctaLayout.hasInDim(kCol)      ? kCol
+               : ctaLayout.hasInDim(kOffset) ? kOffset
+                                             : kReg;
+  ctaLayout =
+      ensureLayoutNotSmallerThan(ctaLayout, outDimNames, shapePerCTA, inDim);
+  ctaLayout = ensureLayoutNotLargerThan(ctaLayout, outDimNames, shapePerCTA);
 
   LinearLayout ret = (ctaLayout * cgaLayout).transposeOuts(outDimNames);
-  for (auto dim : ret.getOutDimNames()) {
-    assert(ret.getOutDimSize(dim) == labeledShape[dim]);
-  }
+  assert(llvm::equal(ret.getOutDimSizes(), shape));
   return ret;
 }
 

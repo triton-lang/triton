@@ -27,7 +27,8 @@ LinearLayout getSwizzle0CoreMatrixLinearLayout(MLIRContext *ctx,
       fp4Padded, CGAEncodingAttr::get1CTALayout(ctx, /*rank=*/2));
   auto layout = ensureLayoutNotSmallerThan(
       getCoreMatrixLinearLayout(enc, /*disableSwizzle=*/false),
-      standardOutDimNames(ctx, shape.size()), tiledShape);
+      standardOutDimNames(ctx, shape.size()), tiledShape,
+      StringAttr::get(ctx, "offset"));
   if (transposed)
     layout = transposeLinearLayout(layout, {1, 0});
   return layout;

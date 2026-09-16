@@ -58,21 +58,25 @@ LinearLayout invertAndComposeLocal(const LinearLayout &A, const LinearLayout &B,
                       /*requireSurjective=*/false);
 }
 
-LinearLayout
-ensureLayoutNotLargerThan(const LinearLayout &layout,
-                          const llvm::SmallDenseMap<StringAttr, int64_t> &shape,
-                          bool broadcastRegisters) {
+LinearLayout ensureLayoutNotLargerThan(const LinearLayout &layout,
+                                       ArrayRef<StringAttr> dimNames,
+                                       ArrayRef<int64_t> shape,
+                                       bool broadcastRegisters) {
   assert(shape.size() == layout.getNumOutDims());
+  assert(dimNames.size() == shape.size());
+  assert(llvm::SmallDenseSet<StringAttr>(dimNames.begin(), dimNames.end())
+                 .size() == dimNames.size() &&
+         "duplicate dimension names given");
   if (shape.empty()) {
     return layout;
   }
-  MLIRContext *ctx = shape.begin()->first.getContext();
+  MLIRContext *ctx = dimNames.front().getContext();
   auto bases = layout.getBases();
   auto kRegister = StringAttr::get(ctx, "register");
 
   auto outDims = layout.getOutDims();
-  for (auto &[outDim, outDimSize] : outDims) {
-    auto newOutDim = shape.lookup(outDim);
+  for (auto [outDim, newOutDim] : llvm::zip_equal(dimNames, shape)) {
+    auto &outDimSize = outDims[layout.getOutDimIndex(outDim)].second;
     // Shape should be a non-zero power of 2
     assert(llvm::isPowerOf2_32(newOutDim) && newOutDim != 0);
     outDimSize = std::min<int32_t>(outDimSize, newOutDim);
@@ -116,30 +120,28 @@ ensureLayoutNotLargerThan(const LinearLayout &layout,
                       /*requireSurjective=*/false);
 }
 
-// For each out-dim d, ensure the layout's out-size (i.e. its codomain) is no
-// smaller than shape[d].  Do this by increasing the size of the layout's inputs
-// along its most-minor dimension ("register" for register layouts, "offset" for
-// shared layouts).
-//
-// This function is invariant to the order of the layout's input dimensions, but
-// it cares about the order of the output dims, which should be minor-to-major.
-LinearLayout ensureLayoutNotSmallerThan(
-    const LinearLayout &layout,
-    const llvm::SmallDenseMap<StringAttr, int64_t> &shape) {
+LinearLayout ensureLayoutNotSmallerThan(const LinearLayout &layout,
+                                        ArrayRef<StringAttr> dimNames,
+                                        ArrayRef<int64_t> shape,
+                                        StringAttr inDim) {
   assert(shape.size() == layout.getNumOutDims());
+  llvm::SmallDenseMap<StringAttr, int64_t> namedDims;
+  for (auto [dimName, length] : llvm::zip_equal(dimNames, shape))
+    namedDims[dimName] = length;
+  assert(namedDims.size() == shape.size() && "duplicate dimension names given");
   if (shape.empty()) {
     return layout;
   }
 
-  StringAttr kDim = *layout.getInDimNames().begin();
-  assert(kDim == "register" || kDim == "offset");
+  assert(layout.hasInDim(inDim));
 
   LinearLayout ret = layout;
   for (StringAttr outDimName : layout.getOutDimNames()) {
     int32_t actualSize = layout.getOutDimSize(outDimName);
-    int32_t desiredSize = shape.lookup(outDimName);
+    int32_t desiredSize = namedDims.lookup(outDimName);
     assert(actualSize > desiredSize || desiredSize % actualSize == 0);
-    ret *= LinearLayout::identity1D(desiredSize / actualSize, kDim, outDimName);
+    ret *=
+        LinearLayout::identity1D(desiredSize / actualSize, inDim, outDimName);
     assert(ret.getOutDimSize(outDimName) >= desiredSize);
   }
   return ret;
