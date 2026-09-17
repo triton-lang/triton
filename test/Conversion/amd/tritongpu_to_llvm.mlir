@@ -136,6 +136,77 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: @atomic_rmw_scalar_single_wave
+  tt.func private @atomic_rmw_scalar_single_wave(%ptr: !tt.ptr<f32>, %val: f32, %mask: i1) -> f32 {
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON: llvm.atomicrmw fadd
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON: rocdl.ds_bpermute
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON: llvm.return
+    %old = tt.atomic_rmw fadd, relaxed, gpu, %ptr, %val, %mask : (!tt.ptr<f32>, f32, i1) -> f32
+    tt.return %old : f32
+  }
+
+  // COMMON-LABEL: @atomic_cas_i64_single_wave
+  tt.func private @atomic_cas_i64_single_wave(%ptr: !tt.ptr<i64>, %cmp: i64, %val: i64) -> i64 {
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON: llvm.cmpxchg
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON-COUNT-2: rocdl.ds_bpermute
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON: llvm.return
+    %old = tt.atomic_cas relaxed, gpu, %ptr, %cmp, %val : (!tt.ptr<i64>, i64, i64) -> i64
+    tt.return %old : i64
+  }
+
+  // COMMON-LABEL: @atomic_acquire_scalar_single_wave
+  tt.func private @atomic_acquire_scalar_single_wave(%ptr: !tt.ptr<i32>, %val: i32) -> i32 {
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON: llvm.atomicrmw add {{.*}} acquire
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON: rocdl.ds_bpermute
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON: rocdl.s.barrier
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON: llvm.return
+    %old = tt.atomic_rmw add, acquire, gpu, %ptr, %val : (!tt.ptr<i32>, i32) -> i32
+    tt.return %old : i32
+  }
+}
+
+// -----
+
+#laneBroadcast = #ttg.linear<{register = [], lane = [[1], [2], [4], [0], [0], [0]], warp = [[8], [16]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: @atomic_rmw_lane_broadcast
+  tt.func private @atomic_rmw_lane_broadcast(%ptr: tensor<32x!tt.ptr<i32>, #laneBroadcast>, %val: tensor<32xi32, #laneBroadcast>) -> tensor<32xi32, #laneBroadcast> {
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON: llvm.atomicrmw add
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON: rocdl.ds_bpermute
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON: llvm.return
+    %old = tt.atomic_rmw add, relaxed, gpu, %ptr, %val : (tensor<32x!tt.ptr<i32>, #laneBroadcast>, tensor<32xi32, #laneBroadcast>) -> tensor<32xi32, #laneBroadcast>
+    tt.return %old : tensor<32xi32, #laneBroadcast>
+  }
+}
+
+// -----
+
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: atomic_add_f32

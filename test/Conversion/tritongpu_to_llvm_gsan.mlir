@@ -545,13 +545,14 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 2 : i32
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.target" = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: llvm.func @gsan_atomic_broadcast_one_cta
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
-  // CHECK: st.shared
-  // CHECK: nvvm.barrier
-  // CHECK: llvm.load {{.*}} : !llvm.ptr<3>
+  // CHECK-NOT: {{st.shared|nvvm.barrier}}
+  // CHECK: nvvm.shfl.sync idx
+  // CHECK-NOT: {{st.shared|nvvm.barrier}}
   // CHECK: llvm.call @__triton_gsan_atomic_end_scalar
-  // CHECK: st.shared
-  // CHECK: nvvm.barrier
-  // CHECK: llvm.load {{.*}} : !llvm.ptr<3>
+  // CHECK-NOT: {{st.shared|nvvm.barrier}}
+  // CHECK: nvvm.shfl.sync idx
+  // CHECK-NOT: {{st.shared|nvvm.barrier}}
+  // CHECK: llvm.return
   tt.func @gsan_atomic_broadcast_one_cta(%ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>, %val: i32, %mask: i1) {
     %c0 = arith.constant 0 : i32
     %rmw = tt.atomic_rmw add, relaxed, gpu, %ptr, %val, %mask : (!tt.ptr<i32>, i32, i1) -> i32
