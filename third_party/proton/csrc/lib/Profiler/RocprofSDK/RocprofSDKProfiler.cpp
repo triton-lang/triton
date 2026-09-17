@@ -646,17 +646,22 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
     : public GPUProfiler<RocprofSDKProfiler>::GPUProfilerPimplInterface {
   RocprofSDKProfilerPimpl(RocprofSDKProfiler &profiler)
       : GPUProfiler<RocprofSDKProfiler>::GPUProfilerPimplInterface(profiler) {
+    resetMetricBuffers();
+  }
+  ~RocprofSDKProfilerPimpl() override {
+    auto &state = getRuntimeState();
+    auto *expected = this;
+    state.pimpl.compare_exchange_strong(expected, nullptr);
+  }
+
+  void resetMetricBuffers() {
+    profiler.pendingGraphPool.reset();
     auto runtime = &HipRuntime::instance();
     profiler.metricBuffer = std::make_unique<MetricBuffer>(
         getIntEnv("TRITON_PROFILE_METRIC_BUFFER_SIZE", 64 * 1024 * 1024),
         runtime);
     profiler.pendingGraphPool =
         std::make_unique<PendingGraphPool>(profiler.metricBuffer.get());
-  }
-  ~RocprofSDKProfilerPimpl() override {
-    auto &state = getRuntimeState();
-    auto *expected = this;
-    state.pimpl.compare_exchange_strong(expected, nullptr);
   }
 
   void doStart() override;
@@ -1474,6 +1479,11 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStop() {
   profiler.periodicFlushingEnabled = false;
   profiler.periodicFlushingFormat.clear();
   profiler.correlation.clear();
+
+  // This singleton is constructed before HIP initializes, so its destructor
+  // can run after HIP teardown. Release HIP allocations while HIP is alive,
+  // keeping empty buffers available for later flushes and profiling sessions.
+  resetMetricBuffers();
 
   // Keep the profiling context running. rocprofiler-sdk does not reliably
   // re-intercept HIP runtime API calls after a stopContext→startContext

@@ -24,6 +24,7 @@ from triton.profiler.state import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.viewer as viewer
 from triton._internal_testing import is_hip, is_cuda, is_blackwell
 from triton.testing import cuda_graph_without_gc
+from subprocess_utils import clean_rocprofiler_env
 
 
 def _find_frame_by_name(frame, name):
@@ -78,6 +79,63 @@ for _ in range(100):
     env["MALLOC_PERTURB_"] = "165"
     result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=20, env=env)
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(not is_hip(), reason="ROCprofiler is only available on HIP")
+@_skip_cudagraph_test
+def test_rocprofiler_graph_metrics_repeated_sessions_exit(tmp_path: pathlib.Path):
+    script = tmp_path / "rocprofiler_graph_sessions.py"
+    script.write_text(f"""
+import triton.profiler as proton
+import triton
+import triton.language as tl
+import torch
+
+
+@triton.jit
+def copy(x, y, n: tl.constexpr):
+    offsets = tl.arange(0, n)
+    tl.store(y + offsets, tl.load(x + offsets))
+
+
+x = torch.ones((1024,), device="cuda")
+y = torch.zeros_like(x)
+copy[(1,)](x, y, x.numel())
+torch.cuda.synchronize()
+
+for iteration in range(2):
+    # Two simultaneous sessions also exercise flushes after the first stop.
+    for session in range(2):
+        proton.start(f"{str(tmp_path)}/profile_{{iteration}}_{{session}}",
+                     hook="triton", backend="rocprofiler")
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        with proton.scope("copy_scope", metrics={{"elements": x.numel()}}):
+            copy[(1,)](x, y, x.numel())
+    with proton.scope("replay"):
+        graph.replay()
+        graph.replay()
+    proton.deactivate()
+    proton.finalize()
+    del graph
+    torch.testing.assert_close(x, y)
+""")
+    # The subprocess must exit normally after freeing graph metric buffers.
+    result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=60,
+                            env=clean_rocprofiler_env())
+    assert result.returncode == 0, result.stderr
+    for iteration in range(2):
+        for session in range(2):
+            data = json.loads((tmp_path / f"profile_{iteration}_{session}.hatchet").read_text())
+            replay = _find_frame_by_name(data[0], "replay")
+            assert replay is not None
+            scope = _find_frame_by_name(replay, "copy_scope")
+            assert scope is not None
+            assert scope["metrics"]["elements"] == 2048
+            kernel = _find_frame_by_name(scope, "copy")
+            assert kernel is not None
+            assert kernel["metrics"]["count"] == 2
+            assert kernel["metrics"]["time (ns)"] > 0
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
