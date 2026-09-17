@@ -1222,12 +1222,12 @@ localPartitionPieceToLinearLayout(ArrayRef<int64_t> pieceShape,
     auto localEncoding = SwizzledSharedEncodingAttr::get(
         ctx, swizzled.getVec(), swizzled.getPerPhase(), swizzled.getMaxPhase(),
         swizzled.getOrder(), oneCTA);
-    localPiece = swizzledSharedToLinearLayout(pieceShape, localEncoding);
+    localPiece = localEncoding.toLinearLayout(pieceShape);
   } else if (auto rotating = dyn_cast<AMDRotatingSharedEncodingAttr>(inner)) {
     auto localEncoding = AMDRotatingSharedEncodingAttr::get(
         ctx, rotating.getVec(), rotating.getPerPhase(), rotating.getMaxPhase(),
         rotating.getOrder(), oneCTA);
-    localPiece = sharedToLinearLayoutAMDRotating(pieceShape, localEncoding);
+    localPiece = localEncoding.toLinearLayout(pieceShape);
   } else if (auto linear = dyn_cast<SharedLinearEncodingAttr>(inner)) {
     localPiece = removeCGAFromLinearLayout(linear.getLinearLayout());
   } else {
