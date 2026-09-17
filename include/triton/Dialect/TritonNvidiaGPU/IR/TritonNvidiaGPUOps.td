@@ -513,8 +513,9 @@ def TTNG_AsyncBulkCopyGlobalToLocalOp : TTNG_Op<"async_bulk_copy_global_to_local
     DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
   let summary = "copy a linear global-memory range to shared memory asynchronously";
   let description = [{
-    Issues one cp.async.bulk.shared::cta.global.mbarrier::complete_tx::bytes
-    per logical block, guarded by the scalar predicate. Source and destination
+    Gluon-only operation. Issues one
+    cp.async.bulk.shared::cta.global.mbarrier::complete_tx::bytes per logical
+    block, guarded by the scalar predicate. Source and destination
     addresses must be 16-byte aligned. numBytes is a positive multiple of 16
     within the contiguous, unswizzled, one-dimensional destination view.
     The destination effect conservatively covers the entire view. Completion
