@@ -305,6 +305,19 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttng.barrier_expect %barrier, 16384 {fromCTA = 5 : i32}, %pred : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
     tt.return
   }
+
+  // CHECK-LABEL: @expect_barrier_fromCTA0145_distributed_multicast
+  tt.func @expect_barrier_fromCTA0145_distributed_multicast(%barrier: !ttg.memdesc<8xi64, #barrier, #smem, mutable>, %pred: i1) {
+    // CHECK-NOT: nvvm.read.ptx.sreg.tid.x
+    // CHECK: %[[EXPECT_LANE:.*]] = nvvm.read.ptx.sreg.laneid
+    // CHECK: llvm.icmp "eq" %[[EXPECT_LANE]],
+    // CHECK-NOT: llvm.icmp "ult"
+    // CHECK: nvvm.read.ptx.sreg.cluster.ctarank
+    // CHECK: llvm.shl
+    // CHECK: @$0 mbarrier.arrive.expect_tx.shared::cluster.multicast::cluster::32b.b64 _, [$1], 4096, $2;
+    ttng.barrier_expect %barrier, 16384 {fromCTA = 5 : i32, per_warp}, %pred : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
+    tt.return
+  }
 }
 
 // -----

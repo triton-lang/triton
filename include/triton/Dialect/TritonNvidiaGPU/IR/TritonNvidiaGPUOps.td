@@ -331,11 +331,11 @@ def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
     basis-selection mask: set bits are preserved and unset bits are zeroed
     when selecting the CTA that routes the arrival to each per-CTA barrier.
 
-    The compiler-owned `per_warp` flag distributes the expectation
-    across the execution region's warps in a one-CTA kernel. Each warp publishes
-    its prior effects and contributes one arrival and an equal share of the
+    The compiler-owned `per_warp` flag distributes each contributing CTA's
+    expectation across its execution region's warps. Each warp publishes its
+    prior effects and contributes one arrival and an equal share of the
     expected bytes. The barrier's initialization count must be scaled to match;
-    `size` remains the total byte count.
+    `size` remains the byte count per contributing CTA and target barrier.
   }];
 
   let hasVerifier = 1;
