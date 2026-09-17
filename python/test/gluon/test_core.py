@@ -237,6 +237,56 @@ def test_inline_asm_once_per_thread(warp_specialized, device):
     torch.testing.assert_close(out, torch.full_like(out, 3 * 128), atol=0, rtol=0)
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA PTX")
+@pytest.mark.parametrize("op", ["load", "store"])
+@pytest.mark.parametrize(
+    "dtype",
+    [torch.bool, torch.int8, torch.int16, torch.int32, torch.int64, torch.float16, torch.float32, torch.float64])
+@pytest.mark.parametrize("stride, offset, mask_group, vec", [(1, 0, 0, 16), (1, 0, 16, 16), (1, 0, 8, 8), (1, 0, 4, 4),
+                                                             (1, 0, 2, 2), (1, 0, 1, 1), (1, 1, 16, 1), (2, 0, 16, 1)])
+def test_atomic_load_store_vectorization(op, dtype, stride, offset, mask_group, vec, device):
+
+    @gluon.jit
+    def kernel(Src, Out, STRIDE: ttgl.constexpr, OFFSET: ttgl.constexpr, MASK_GROUP: ttgl.constexpr,
+               STORE: ttgl.constexpr):
+        x = ttgl.arange(0, 512, layout=ttgl.BlockedLayout([16], [32], [1], [0]))
+        if MASK_GROUP:
+            mask = x // MASK_GROUP % 2 == 0
+        else:
+            mask = None
+        if STORE:
+            values = ttgl.load(Src + x)
+            ttgl.atomic_store(Out + x * STRIDE + OFFSET, values, mask=mask, sem="release")
+        else:
+            values = ttgl.atomic_load(Src + x * STRIDE + OFFSET, mask=mask, sem="acquire")
+            ttgl.store(Out + x, values, mask=mask)
+
+    src = torch.arange(1026, device=device)
+    src = (src % 2 if dtype == torch.bool else (src % 127 - 63) + 0.25).to(dtype)
+    out = torch.full((1026 if op == "store" else 512, ), True if dtype == torch.bool else -1, dtype=dtype,
+                     device=device)
+    x = torch.arange(512, device=device)
+    mask = x // mask_group % 2 == 0 if mask_group else torch.ones_like(x, dtype=torch.bool)
+    if op == "store":
+        expected = out.clone()
+        expected[x[mask] * stride + offset] = src[x[mask]]
+    else:
+        expected = torch.where(mask, src[x * stride + offset], out)
+
+    compiled = kernel[(1, )](src, out, stride, offset, mask_group, op == "store", num_warps=1)
+
+    assert torch.equal(out, expected)
+    if dtype == torch.bool:
+        assert torch.all(out.view(torch.uint8) <= 1)
+    bit_width = dtype.itemsize * 8
+    vec = min(vec, 128 // bit_width)
+    word_bits = max(bit_width, min(32, vec * bit_width))
+    words = vec * bit_width // word_bits
+    suffix = f".v{words}" if words > 1 else ""
+    opcode = "st" if op == "store" else "ld"
+    assert f"{opcode}.relaxed.gpu.global{suffix}.b{word_bits}" in compiled.asm["ptx"]
+
+
 @pytest.mark.parametrize("block_size", [1, 16, 128, 512])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("timeout", [None, 0])

@@ -7,6 +7,8 @@
 #include <optional>
 
 namespace mlir::triton::AMD {
+void registerTargetInfo();
+
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
   explicit TargetInfo(std::optional<StringRef> arch) : targetFeatures(arch) {}
@@ -40,6 +42,13 @@ public:
   Value getGlobalTimer(RewriterBase &rewriter, Location loc) const override;
 
   StringRef getAtomicSyncScope(MemSyncScope scope) const override;
+
+  Value loadRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                    Type valueTy, Value pred,
+                    MemSyncScope scope) const override;
+
+  void storeRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                    Value value, Value pred, MemSyncScope scope) const override;
 
   void barrier(Location loc, RewriterBase &rewriter,
                triton::gpu::AddrSpace targets) const override;

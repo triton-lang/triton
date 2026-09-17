@@ -1654,6 +1654,41 @@ def test_atomic_load_store(dtype, scalar, ordered, device):
             assert ptx.count("fence.acq_rel.gpu;") == 2 * ordered
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA PTX")
+@pytest.mark.parametrize("dtype", [torch.int8, torch.float16, torch.int32, torch.int64])
+@pytest.mark.parametrize("mask_group", [0, 2, 16])
+def test_atomic_load_store_coalesced(dtype, mask_group, device):
+
+    @triton.jit
+    def kernel(src, dst, MASK_GROUP: tl.constexpr):
+        offsets = tl.arange(0, 2048)
+        if MASK_GROUP:
+            mask = offsets // MASK_GROUP % 2 == 0
+        else:
+            mask = None
+        value = tl.atomic_load(src + offsets, mask=mask, sem="acquire")
+        tl.atomic_store(dst + offsets, value, mask=mask, sem="release")
+
+    src = (torch.arange(2048, device=device) % 127 - 63).to(dtype)
+    dst = torch.full_like(src, -1)
+    offsets = torch.arange(2048, device=device)
+    mask = offsets // mask_group % 2 == 0 if mask_group else torch.ones_like(offsets, dtype=torch.bool)
+    expected = torch.where(mask, src, dst)
+
+    compiled = kernel[(1, )](src, dst, mask_group)
+
+    assert torch.equal(dst, expected)
+    bit_width = dtype.itemsize * 8
+    vec = 128 // bit_width
+    if mask_group:
+        vec = min(vec, mask_group)
+    word_bits = max(bit_width, min(32, vec * bit_width))
+    words = vec * bit_width // word_bits
+    suffix = f".v{words}" if words > 1 else ""
+    assert f"ld.relaxed.gpu.global{suffix}.b{word_bits}" in compiled.asm["ptx"]
+    assert f"st.relaxed.gpu.global{suffix}.b{word_bits}" in compiled.asm["ptx"]
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("sem", ["relaxed", "acquire"])
 @pytest.mark.parametrize("scope", ["cta", "gpu", "sys"])
@@ -1672,7 +1707,8 @@ def test_atomic_poll(dtype, bit_width, sem, scope, device):
     assert out.item() == 1
     if is_cuda():
         ptx = compiled.asm["ptx"]
-        assert ptx.count(f"ld.relaxed.{scope}.global.b{bit_width}") == 1
+        # Loop unswitching can duplicate the load with a false predicate.
+        assert f"ld.relaxed.{scope}.global.b{bit_width}" in ptx
         fence_sem = "acq_rel" if torch.cuda.get_device_capability()[0] < 9 else "acquire"
         assert ptx.count(f"fence.{fence_sem}.{scope};") == (sem == "acquire")
         assert "%globaltimer" not in ptx
@@ -1729,7 +1765,7 @@ def test_atomic_poll_timeout(initial_value, expected, device):
     assert out.item() == expected
     if is_cuda():
         ptx = compiled.asm["ptx"]
-        assert ptx.count("ld.relaxed.gpu.global.b32") == 1
+        assert "ld.relaxed.gpu.global.b32" in ptx
         fence_sem = "acq_rel" if torch.cuda.get_device_capability()[0] < 9 else "acquire"
         assert ptx.count(f"fence.{fence_sem}.gpu;") == 1
         assert ptx.count("%globaltimer") == 2
