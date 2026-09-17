@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv=compute-capability=103 --triton-nvidia-gpu-tmem-barrier-insertion --test-print-membar --triton-nvidia-gpu-tmem-wait-insertion --convert-triton-gpu-to-llvm=compute-capability=103 --convert-warp-specialize-to-llvm --convert-nv-gpu-to-llvm -allow-unregistered-dialect | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv=compute-capability=103 --test-print-buffer-region -allow-unregistered-dialect -verify-diagnostics=only-expected -o /dev/null
 
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1, CGALayout = [[0, 0]]>
 
@@ -79,6 +80,8 @@ module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num
 
 module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // %a and %b may alias, so wait before the second store.
+  // Check that live unknown arguments, rather than uninitialized dataflow
+  // states from an unreachable helper, exercise the conservative wait path.
   // CHECK-LABEL: @tmem_store_wait_unknown
   // CHECK: tcgen05.st.sync.aligned
   // CHECK-NEXT: nvvm.tcgen05.wait <store>
@@ -87,8 +90,15 @@ module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num
   tt.func private @tmem_store_wait_unknown(%a: !ttg.memdesc<128x16xf32, #tmem, #ttng.tensor_memory, mutable>, %b: !ttg.memdesc<128x16xf32, #tmem, #ttng.tensor_memory, mutable>, %value: f32) {
     %true = arith.constant true
     %data = tt.splat %value : f32 -> tensor<128x16xf32, #blocked>
+    // expected-remark @+1 {{Buffers: unknown}}
     ttng.tmem_store %data, %a, %true : tensor<128x16xf32, #blocked> -> !ttg.memdesc<128x16xf32, #tmem, #ttng.tensor_memory, mutable>
+    // expected-remark @+1 {{Buffers: unknown}}
     ttng.tmem_store %data, %b, %true : tensor<128x16xf32, #blocked> -> !ttg.memdesc<128x16xf32, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+
+  tt.func public @call_tmem_store_wait_unknown(%a: !ttg.memdesc<128x16xf32, #tmem, #ttng.tensor_memory, mutable>, %b: !ttg.memdesc<128x16xf32, #tmem, #ttng.tensor_memory, mutable>, %value: f32) {
+    tt.call @tmem_store_wait_unknown(%a, %b, %value) : (!ttg.memdesc<128x16xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x16xf32, #tmem, #ttng.tensor_memory, mutable>, f32) -> ()
     tt.return
   }
 }

@@ -188,6 +188,16 @@ tt.func public @reduce_maximum_f64(%arg0: tensor<128x4xf64, #blocked_reduce>) {
   tt.return
 }
 
+// CHECK-LABEL: @reduce_wide_minmax(
+// CHECK: [[MIN_HI:%.*]] = {{.*}}call i32 @llvm.nvvm.redux.sync.min(i32 [[HI:%.*]], i32 -1)
+// CHECK: [[MIN_EQ:%.*]] = icmp eq i32 [[MIN_HI]], [[HI]]
+// CHECK: [[MIN_LO:%.*]] = select i1 [[MIN_EQ]], i32 [[LO:%.*]], i32 -1
+// CHECK: [[MIN_REDUCED_LO:%.*]] = {{.*}}call i32 @llvm.nvvm.redux.sync.umin(i32 [[MIN_LO]], i32 -1)
+// CHECK: [[MAX_HI:%.*]] = {{.*}}call i32 @llvm.nvvm.redux.sync.umax(i32 [[HI]], i32 -1)
+// CHECK: [[MAX_EQ:%.*]] = icmp eq i32 [[MAX_HI]], [[HI]]
+// CHECK: [[MAX_LO:%.*]] = select i1 [[MAX_EQ]], i32 [[LO]], i32 0
+// CHECK: [[MAX_REDUCED_LO:%.*]] = {{.*}}call i32 @llvm.nvvm.redux.sync.umax(i32 [[MAX_LO]], i32 -1)
+// CHECK: ret { { i64 }, { i64 } }
 // TERNARY-LABEL: @reduce_wide_minmax
 // TERNARY: %[[MIN_HI:.*]] = nvvm.redux.sync min %{{.*}}, %{{.*}}
 // TERNARY: %[[MIN_EQ:.*]] = llvm.icmp "eq" %{{.*}}, %[[MIN_HI]] : i32
@@ -209,6 +219,17 @@ tt.func private @reduce_wide_minmax(%arg0: tensor<4x32xi64, #blocked_warp_reduce
     tt.reduce.return %c : i64
   }) : (tensor<4x32xi64, #blocked_warp_reduce>) -> tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
   tt.return %minimum, %maximum : tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>, tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+}
+
+// Keep both reductions live through LLVM optimization.
+tt.func public @anchor_wide_minmax(
+    %input: tensor<4x32xi64, #blocked_warp_reduce>,
+    %min_out: tensor<4x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>,
+    %max_out: tensor<4x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>) {
+  %minimum, %maximum = tt.call @reduce_wide_minmax(%input) : (tensor<4x32xi64, #blocked_warp_reduce>) -> (tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>, tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>)
+  tt.store %min_out, %minimum : tensor<4x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  tt.store %max_out, %maximum : tensor<4x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
+  tt.return
 }
 
 // CHECK-LABEL: @reduce_wide_bitwise
