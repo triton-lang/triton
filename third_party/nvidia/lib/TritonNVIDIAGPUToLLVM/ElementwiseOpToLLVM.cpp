@@ -627,24 +627,6 @@ struct FDivOpConversion
   }
 };
 
-struct PreciseFDivOpConversion
-    : ElementwiseOpConversionBase<PreciseDivFOp, PreciseFDivOpConversion> {
-  using Base =
-      ElementwiseOpConversionBase<PreciseDivFOp, PreciseFDivOpConversion>;
-  using Base::Base;
-
-  SmallVector<Value> createDestOps(PreciseDivFOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    // Preserve this rounding step when LLVM simplifies surrounding arithmetic.
-    return {LLVM::ConstrainedFDivIntr::create(
-        rewriter, loc, elemTy, operands[0][0], operands[0][1],
-        LLVM::RoundingMode::NearestTiesToEven,
-        LLVM::FPExceptionBehavior::Ignore)};
-  }
-};
-
 struct SIToFPOpConversion
     : ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion> {
   using Base = ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion>;
@@ -953,8 +935,6 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
 
   patterns.add<ElementwiseToIntrinsicOpConversion<triton::PreciseSqrtOp>>(
       typeConverter, axisInfoAnalysis, "llvm.nvvm.sqrt.rn.f", benefit);
-  patterns.add<PreciseFDivOpConversion>(typeConverter, axisInfoAnalysis,
-                                        benefit);
 
   mlir::triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
                                                     axisInfoAnalysis, benefit);
@@ -966,6 +946,7 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   POPULATE_OP(arith::SubFOp, LLVM::FSubOp);
   POPULATE_OP(arith::AddFOp, LLVM::FAddOp);
   POPULATE_OP(arith::MulFOp, LLVM::FMulOp);
+  POPULATE_OP(triton::PreciseDivFOp, LLVM::FDivOp);
 
   POPULATE_OP(arith::ExtFOp, LLVM::FPExtOp);
   POPULATE_OP(arith::TruncFOp, LLVM::FPTruncOp);
