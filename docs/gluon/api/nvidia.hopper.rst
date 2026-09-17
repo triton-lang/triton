@@ -9,6 +9,7 @@ NVIDIA Hopper
     :template: autosummary/gluon-module.rst
 
     async_copy
+    bulk
     cluster
     mbarrier
     tma

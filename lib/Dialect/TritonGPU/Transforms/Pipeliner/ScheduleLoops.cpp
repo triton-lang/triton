@@ -272,6 +272,7 @@ CoarseSchedule getInitialSchedule(scf::ForOp forOp,
              isa<LoadOp, DescriptorLoadLikeOpInterface, LocalStoreOp,
                  LocalLoadOp, ttng::TMEMLoadOp, ttng::TMEMStoreOp,
                  AsyncCopyGlobalToLocalOp, ttng::TMAOpInterface,
+                 ttng::AsyncBulkCopyGlobalToLocalOp,
                  ttng::MMAv5OpInterface, ttng::WaitBarrierOp,
                  ttng::ArriveBarrierOp>(op);
     };

@@ -2142,3 +2142,37 @@ def test_explicit_graph_storage_survives_executable_close(with_gsan):
     graph._collect_pending()
     assert reference() is None
     assert completion.clock.numel() > 0
+
+
+@gluon.jit
+def _bulk_shadow_kernel(src, out, take_copy, WORDS: gl.constexpr, OFFSET: gl.constexpr):
+    layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
+    shared: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0])
+    smem = gl.allocate_shared_memory(gl.int32, [32], shared, gl.full((32,), -1, gl.int32, layout))
+    bar = hopper.mbarrier.allocate_mbarrier()
+    hopper.mbarrier.init(bar, count=1)
+    hopper.mbarrier.expect(bar, WORDS * 4, pred=take_copy)
+    hopper.bulk.async_load(smem, src + OFFSET, WORDS * 4, bar, pred=take_copy)
+    hopper.mbarrier.wait(bar, phase=0, pred=take_copy)
+    gl.store(out + gl.arange(0, 32, layout), smem.load(layout))
+    hopper.mbarrier.invalidate(bar)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("take_copy", [False, True])
+@pytest.mark.parametrize("words,offset", [(4, 0), (12, 4), (28, 4)])
+def test_bulk_async_load_source_range(with_gsan, words, offset, take_copy):
+    src = torch.arange(40, device="cuda", dtype=torch.int32)
+    out = torch.empty(32, device="cuda", dtype=torch.int32)
+    before = _shadow_cells_for_tensor(src)
+    _bulk_shadow_kernel[(1,)](src, out, take_copy, words, offset)
+    torch.cuda.synchronize()
+    after = _shadow_cells_for_tensor(src)
+    changed = torch.zeros(40, dtype=torch.bool)
+    if take_copy:
+        changed[offset:offset + words] = True
+    _assert_shadow_mask([before], [after], changed[None, :], access_kind="read")
+    expected = torch.full_like(out, -1)
+    if take_copy:
+        expected[:words] = src[offset:offset + words]
+    torch.testing.assert_close(out, expected)
