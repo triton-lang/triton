@@ -1032,7 +1032,8 @@ def test_reduce_partitioned(size, group_bit, broadcast_bits, op, dtype_str, prop
     import numpy as np
     import triton.language as tl
 
-    if torch.cuda.get_device_capability()[0] < 8:
+    major = torch.cuda.get_device_capability()[0]
+    if major < 8:
         pytest.skip("Requires SM80 or newer")
 
     @gluon.jit
@@ -1139,13 +1140,12 @@ def test_reduce_partitioned(size, group_bit, broadcast_bits, op, dtype_str, prop
         np.testing.assert_array_equal(np.signbit(actual[zero]), np.signbit(expected[zero]))
 
     ptx = compiled.asm["ptx"]
-    sm100 = torch.cuda.get_device_capability()[0] == 10
-    if op in ("min", "max"):
+    if major >= 10 and op in ("min", "max"):
         profitable = group_stride == 1 or (group_stride == 2 and size >= 8)
     else:
         profitable = (group_stride == 1 and size >= 4) or (group_stride == 2 and size == 16)
-    use_redux = size == 32 or (profitable and sm100 and "64" not in dtype_str)
-    if is_float and not sm100:
+    use_redux = size == 32 or (profitable and "64" not in dtype_str)
+    if is_float and major != 10:
         use_redux = False
     if use_redux:
         expected_count = group_stride
@@ -1172,8 +1172,8 @@ def test_reduce_partitioned(size, group_bit, broadcast_bits, op, dtype_str, prop
 def test_reduce_broadcast_across_warps(op, device):
     import numpy as np
 
-    if torch.cuda.get_device_capability()[0] != 10:
-        pytest.skip("Broadcast redux lowering requires SM100")
+    if torch.cuda.get_device_capability()[0] < 8:
+        pytest.skip("Requires SM80 or newer")
 
     @gluon.jit
     def kernel(X, Y, OP: ttgl.constexpr):
