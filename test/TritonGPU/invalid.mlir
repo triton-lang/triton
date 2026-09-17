@@ -43,6 +43,27 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#inner = #ttg.padded_shared<[128:+4] {order = [1, 0], shape = [16, 16]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+// expected-error @+1 {{partitionLayout does not match the per-CTA logical piece shape}}
+tt.func public @partitioned_padded_inner_shape_mismatch(%arg0: !ttg.memdesc<16x16xi32, #partitioned, #smem, mutable>) {
+  tt.return
+}
+
+// -----
+
+#inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #inner}>
+#nested = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #partitioned}>
+#smem = #ttg.shared_memory
+// expected-error @+1 {{nested PartitionedSharedEncodingAttr is not supported}}
+tt.func public @nested_partitioned_layout(%arg0: !ttg.memdesc<16x16xi32, #nested, #smem, mutable>) {
+  tt.return
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 // expected-error @+1 {{shape has 0 dimension}}

@@ -1190,7 +1190,7 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
 // Return the layout encoded by `layout` after removing its CGA mapping. Unlike
 // resizeInDim("block", 1), rebuilding from the remaining bases also infers the
 // smaller per-CTA output shape.
-LinearLayout removeCGAFromLinearLayout(const LinearLayout &layout) {
+static LinearLayout removeCGAFromLinearLayout(const LinearLayout &layout) {
   assert(!layout.getInDimNames().empty());
   auto *ctx = layout.getInDimNames().begin()->getContext();
   auto bases = layout.getBases();
@@ -1199,8 +1199,9 @@ LinearLayout removeCGAFromLinearLayout(const LinearLayout &layout) {
                       llvm::to_vector(layout.getOutDimNames()));
 }
 
-LinearLayout localPartitionPieceToLinearLayout(ArrayRef<int64_t> pieceShape,
-                                               SharedEncodingTrait inner) {
+static LinearLayout
+localPartitionPieceToLinearLayout(ArrayRef<int64_t> pieceShape,
+                                  SharedEncodingTrait inner) {
   auto *ctx = inner.getContext();
   auto oneCTA = CGAEncodingAttr::get1CTALayout(ctx, pieceShape.size());
   LinearLayout localPiece = LinearLayout::empty();

@@ -209,6 +209,12 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
 
   // These encodings are also SharedEncodingTraits but have additional rules.
   if (auto enc = dyn_cast<PartitionedSharedEncodingAttr>(encoding)) {
+    auto inner = enc.getPartitionLayout();
+    if (isa<PartitionedSharedEncodingAttr>(inner)) {
+      return emitError()
+             << "nested PartitionedSharedEncodingAttr is not supported";
+    }
+
     auto blockShape = getShapePerCTA(enc, layoutAllocShape);
     unsigned partitionDim = enc.getPartitionDim();
     unsigned numLogicalPieces = enc.getNumLogicalPieces();
@@ -217,6 +223,39 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
              << "per-CTA allocation extent along partitionDim must be "
                 "divisible by numPartitions * numGroups; got "
              << blockShape[partitionDim] << " and " << numLogicalPieces;
+    }
+
+    SmallVector<int64_t> pieceShape(blockShape);
+    pieceShape[partitionDim] /= numLogicalPieces;
+    auto verifyFixedShape = [&](const LinearLayout &layout) -> LogicalResult {
+      auto bases = layout.getBases();
+      auto kBlock = StringAttr::get(ctx, "block");
+      if (layout.hasInDim(kBlock))
+        bases[kBlock] = {};
+      LinearLayout localPiece(std::move(bases),
+                              llvm::to_vector(layout.getOutDimNames()));
+      if (!llvm::equal(localPiece.getOutDimSizes(), pieceShape)) {
+        return emitError() << "partitionLayout does not match the per-CTA "
+                              "logical piece shape; expected "
+                           << pieceShape << ", got "
+                           << localPiece.getOutDimSizes();
+      }
+      return success();
+    };
+
+    if (auto padded = dyn_cast<PaddedSharedEncodingAttr>(inner)) {
+      if (failed(verifyFixedShape(padded.getLinearComponent())))
+        return failure();
+    } else if (auto linear = dyn_cast<SharedLinearEncodingAttr>(inner)) {
+      if (failed(verifyFixedShape(linear.getLinearLayout())))
+        return failure();
+    } else if (auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(inner)) {
+      if (failed(getTMABlockShape(pieceShape, nvmma.getElementBitWidth(),
+                                  nvmma.getSwizzlingByteWidth(),
+                                  nvmma.getFp4Padded(), nvmma.getTransposed(),
+                                  /*packedSize=*/false, emitError,
+                                  TMAMode::Tiled)))
+        return failure();
     }
   } else if (auto enc = dyn_cast<PaddedSharedEncodingAttr>(encoding)) {
     auto rank = enc.getRank();
