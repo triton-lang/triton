@@ -3039,6 +3039,19 @@ public:
   }
 };
 
+// The layout to compare two encodings by, or nullopt when the encoding's
+// placement is not a single linear layout. A padded encoding composes its
+// linear component with a padding rule, so toLinearLayout is fatal for it, and
+// for a partitioned layout wrapping it; two padded encodings can also share a
+// linear component and still place elements differently, so attribute equality
+// is the comparison left.
+static std::optional<LinearLayout> placementLayout(ArrayRef<int64_t> shape,
+                                                   Attribute encoding) {
+  if (isPaddedEncoding(encoding))
+    return std::nullopt;
+  return toLinearLayout(shape, cast<LayoutEncodingTrait>(encoding));
+}
+
 struct TritonGPUInferLayoutInterface
     : public triton::DialectInferLayoutInterface {
   using DialectInferLayoutInterface::DialectInferLayoutInterface;
@@ -3665,9 +3678,13 @@ struct TritonGPUInferLayoutInterface
     if (!expected || !got)
       return failure();
 
-    auto expectedLL =
-        toLinearLayout(shape, cast<LayoutEncodingTrait>(expected));
-    auto gotLL = toLinearLayout(shape, cast<LayoutEncodingTrait>(got));
+    auto maybeExpectedLL = placementLayout(shape, expected);
+    auto maybeGotLL = placementLayout(shape, got);
+    if (!maybeExpectedLL || !maybeGotLL)
+      return emitOptionalError(loc, "Expected result encoding ", expected,
+                               " but was ", got);
+    auto expectedLL = *maybeExpectedLL;
+    auto gotLL = *maybeGotLL;
     if (ignoreRegBroadcast) {
       auto kReg = StringAttr::get(getContext(), "register");
       expectedLL = expectedLL.removeZeroBasesAlongDim(kReg);
@@ -4582,9 +4599,11 @@ int triton::gpu::lookupNumCTAs(OpBuilder &rewriter) {
 bool triton::gpu::areLayoutsEquivalent(ArrayRef<int64_t> shape,
                                        LayoutEncodingTrait lhs,
                                        LayoutEncodingTrait rhs) {
-  auto lhsLL = triton::gpu::toLinearLayout(shape, lhs);
-  auto rhsLL = triton::gpu::toLinearLayout(shape, rhs);
-  return lhsLL == rhsLL;
+  auto lhsLL = placementLayout(shape, lhs);
+  auto rhsLL = placementLayout(shape, rhs);
+  if (!lhsLL || !rhsLL)
+    return lhs == rhs;
+  return *lhsLL == *rhsLL;
 }
 
 bool triton::gpu::isInnermostContiguous(MemDescType type, unsigned numElems) {

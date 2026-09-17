@@ -1009,3 +1009,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+// Comparing the inferred and the declared encoding of a view must not request a
+// placement map from an encoding that does not have one. The declared result here keeps
+// the operand's order, which the transposed encoding does not, so the mismatch has to be
+// reported rather than fail fatally.
+#shared = #ttg.padded_shared<[32:+16] {order = [1, 0], shape = [64, 64]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @memdesc_trans_of_padded_encoding() {
+    %a = ttg.local_alloc : () -> !ttg.memdesc<64x64xf16, #shared, #ttg.shared_memory, mutable>
+    // expected-error @+2 {{are incompatible with return type(s)}}
+    // expected-error @+1 {{failed to infer returned types}}
+    %t = ttg.memdesc_trans %a {order = array<i32: 1, 0>} : !ttg.memdesc<64x64xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<64x64xf16, #shared, #ttg.shared_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// Same for a partitioned layout wrapping a padded one, whose placement is not a single
+// linear layout either.
+#padded = #ttg.padded_shared<[256:+8] {order = [1, 0], shape = [16, 32]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #padded}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @memdesc_trans_of_partitioned_padded_encoding() {
+    %a = ttg.local_alloc : () -> !ttg.memdesc<64x32xf16, #partitioned, #ttg.shared_memory, mutable>
+    // expected-error @+2 {{are incompatible with return type(s)}}
+    // expected-error @+1 {{failed to infer returned types}}
+    %t = ttg.memdesc_trans %a {order = array<i32: 1, 0>} : !ttg.memdesc<64x32xf16, #partitioned, #ttg.shared_memory, mutable> -> !ttg.memdesc<32x64xf16, #partitioned, #ttg.shared_memory, mutable>
+    tt.return
+  }
+}
