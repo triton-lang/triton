@@ -2146,10 +2146,19 @@ void init_triton_env_vars(py::module_ &m) {
             if (strVal.empty())
               continue;
             auto boolV = triton::tools::isEnvValueBool(strVal);
-            if (boolV.has_value())
+            auto defaultIt =
+                CACHE_INVALIDATING_BOOLEAN_ENV_VAR_DEFAULTS.find(envVar);
+            if (defaultIt != CACHE_INVALIDATING_BOOLEAN_ENV_VAR_DEFAULTS.end())
+              boolV = triton::tools::isExtendedEnvValueBool(strVal);
+            if (boolV.has_value()) {
+              if (defaultIt !=
+                      CACHE_INVALIDATING_BOOLEAN_ENV_VAR_DEFAULTS.end() &&
+                  boolV.value() == defaultIt->second)
+                continue;
               ret[envVar] = boolV.value() ? "true" : "false";
-            else
+            } else {
               ret[envVar] = strVal;
+            }
           }
           return ret;
         });
