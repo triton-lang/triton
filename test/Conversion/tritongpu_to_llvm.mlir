@@ -839,10 +839,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
   // CHECK-LABEL: async_cp_detailed_cache_policy
   tt.func @async_cp_detailed_cache_policy(%v: tensor<256x!tt.ptr<f16>, #blocked>, %smem: !ttg.memdesc<256xf16, #shared1D, #smem, mutable>) {
-    // Fractional L2 policies are disabled in cp.async codegen due to a ptxas bug.
-    // CHECK-NOT: createpolicy
+    // CHECK: createpolicy.fractional.L2::evict_last.b64 $0, {{0\.8.*}};
     // CHECK-NOT: L1::evict_last
-    // CHECK: cp.async.ca.shared.global.L2::256B {{.*}}, 0x8, 0x8;
+    // CHECK: cp.async.ca.shared.global.L2::256B.L2::cache_hint {{.*}}, 0x8, 0x8, ${{[0-9]+}};
     %0 = ttg.async_copy_global_to_local %v, %smem {cachePolicy = #async_l2_policy, contiguity = 4 : i32} : tensor<256x!tt.ptr<f16>, #blocked> -> !ttg.memdesc<256xf16, #shared1D, #smem, mutable>
     tt.return
   }
@@ -869,18 +868,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
   // CHECK-LABEL: async_cp_detailed_ca_16_bytes
   tt.func @async_cp_detailed_ca_16_bytes(%src: tensor<256x!tt.ptr<f32>, #blocked>, %dst: !ttg.memdesc<256xf32, #shared, #smem, mutable>) {
-    // CHECK-NOT: createpolicy
-    // CHECK: cp.async.ca.shared.global.L2::128B {{.*}}, 0x10, 0x10;
+    // CHECK: createpolicy.fractional.L2::evict_last.b64 $0, 0.5;
+    // CHECK: cp.async.ca.shared.global.L2::128B.L2::cache_hint {{.*}}, 0x10, 0x10, ${{[0-9]+}};
     %0 = ttg.async_copy_global_to_local %src, %dst {cachePolicy = #detailed_ca, contiguity = 4 : i32} : tensor<256x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<256xf32, #shared, #smem, mutable>
     tt.return
   }
 
-  // Legacy eviction policies also use fractional L2 policies and must be ignored.
+  // Legacy eviction policies use fractional L2 policies with a fraction of 1.0.
   // CHECK-LABEL: async_cp_evict_first_masked_8_bytes
   tt.func @async_cp_evict_first_masked_8_bytes(%src: tensor<256x!tt.ptr<f32>, #blocked>, %dst: !ttg.memdesc<256xf32, #shared, #smem, mutable>, %valid: i1) {
-    // CHECK-NOT: createpolicy
+    // CHECK: createpolicy.fractional.L2::evict_first.b64 $0, 1.0;
     // CHECK: llvm.select
-    // CHECK: cp.async.ca.shared.global {{.*}}, 0x8, ${{[0-9]+}};
+    // CHECK: cp.async.ca.shared.global.L2::cache_hint {{.*}}, 0x8, ${{[0-9]+}}, ${{[0-9]+}};
+    // CHECK-SAME: "r,l,r,l
     %mask = tt.splat %valid : i1 -> tensor<256xi1, #blocked>
     %0 = ttg.async_copy_global_to_local %src, %dst mask %mask {cachePolicy = #evict_first, contiguity = 2 : i32} : tensor<256x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<256xf32, #shared, #smem, mutable>
     tt.return
@@ -888,8 +888,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
   // CHECK-LABEL: async_cp_evict_last_16_bytes
   tt.func @async_cp_evict_last_16_bytes(%src: tensor<256x!tt.ptr<f32>, #blocked>, %dst: !ttg.memdesc<256xf32, #shared, #smem, mutable>) {
-    // CHECK-NOT: createpolicy
-    // CHECK: cp.async.cg.shared.global {{.*}}, 0x10, 0x10;
+    // CHECK: createpolicy.fractional.L2::evict_last.b64 $0, 1.0;
+    // CHECK: cp.async.cg.shared.global.L2::cache_hint {{.*}}, 0x10, 0x10, ${{[0-9]+}};
     %0 = ttg.async_copy_global_to_local %src, %dst {cachePolicy = #evict_last, contiguity = 4 : i32} : tensor<256x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<256xf32, #shared, #smem, mutable>
     tt.return
   }

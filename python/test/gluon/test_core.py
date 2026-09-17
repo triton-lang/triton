@@ -1095,10 +1095,11 @@ def test_tcgen05_mma_scaled_direct_multicast_barrier():
 
 
 @gluon.jit
-def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr):
+def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr,
+                               COPY_VEC: ttgl.constexpr = 4, CACHE_POLICY: ttgl.constexpr = None):
     smem = ttgl.allocate_shared_memory(inp.dtype.element_ty, [XBLOCK, YBLOCK],
                                        ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0]))
-    block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0])
+    block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, COPY_VEC], [1, 32], [4, 1], [1, 0])
     xindex = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(1, block_layout))[:, None]
     yindex = ttgl.arange(0, YBLOCK, ttgl.SliceLayout(0, block_layout))[None, :]
     mask = xindex < xnumel
@@ -1106,6 +1107,7 @@ def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK:
         smem,
         inp + xindex * YBLOCK + yindex,
         mask,
+        cache_policy=CACHE_POLICY,
     )
     mbar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(mbar, count=1)
@@ -1117,14 +1119,29 @@ def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK:
     ttgl.store(out + xindex * YBLOCK + yindex, val)
 
 
+@pytest.mark.parametrize("copy_vec", [1, 2, 4])
+@pytest.mark.parametrize("cache_policy", [
+    None,
+    ttgl.CachePolicy(eviction_policy="evict_first"),
+    ttgl.CachePolicy(eviction_policy="evict_last"),
+    ttgl.nvidia.ampere.CachePolicy(
+        cache_modifier=".ca",
+        l2=ttgl.nvidia.ampere.FractionalEvictionPolicy("evict_last", 0.5, "evict_first"),
+        l2_prefetch_size=128,
+    ),
+], ids=["default", "evict_first", "evict_last", "fractional"])
 @pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere")
-def test_async_copy_mbarrier():
+def test_async_copy_mbarrier(copy_vec, cache_policy):
     tensor_opts = dict(dtype=torch.float, device="cuda")
     out = torch.empty((32, 32), **tensor_opts)
     inp = torch.randn((20, 32), **tensor_opts)
-    async_copy_mbarrier_kernel[(1, )](out, inp, inp.shape[0], XBLOCK=32, YBLOCK=32)
+    kernel = async_copy_mbarrier_kernel[(1, )](out, inp, inp.shape[0], XBLOCK=32, YBLOCK=32, COPY_VEC=copy_vec,
+                                               CACHE_POLICY=cache_policy)
     torch.testing.assert_close(out[:20], inp)
     torch.testing.assert_close(out[20:], torch.zeros((12, 32), **tensor_opts))
+    if cache_policy is not None:
+        assert "createpolicy.fractional" in kernel.asm["ptx"]
+        assert "L2::cache_hint" in kernel.asm["ptx"]
 
 
 # Equivalence-class multicast: multicast_cta selects which CTA-ID bits to multicast
