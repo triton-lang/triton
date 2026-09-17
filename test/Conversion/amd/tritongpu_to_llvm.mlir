@@ -1040,11 +1040,45 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK: llvm.call @callee_zero_scratch
   // CHECK: llvm.func internal @callee_zero_scratch
   // CHECK-SAME: passthrough = ["noinline", "convergent"]
+  // CHECK-SAME: ws_num_warps = 4 : i32
   tt.func public @test_call_zero_scratch_no_grid_ops() attributes {noinline = false} {
     tt.call @callee_zero_scratch() : () -> ()
     tt.return
   }
   tt.func private @callee_zero_scratch() attributes {noinline = true} {
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 2, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: @shared_memory_pointers
+  tt.func @shared_memory_pointers(%ptrs: tensor<512x!tt.ptr<i32>, #blocked>, %out: tensor<512x!tt.ptr<i32>, #blocked>) {
+    %offsets = tt.make_range {start = 0 : i32, end = 512 : i32} : tensor<512xi32, #blocked>
+    %half = arith.constant dense<256> : tensor<512xi32, #blocked>
+    %indices = arith.xori %offsets, %half : tensor<512xi32, #blocked>
+    // COMMON: llvm.ptrtoint
+    %alloc = ttg.local_alloc %ptrs : (tensor<512x!tt.ptr<i32>, #blocked>) -> !ttg.memdesc<512x!tt.ptr<i32>, #shared, #smem, mutable>
+    // COMMON: llvm.store {{.*}} : vector<2xi64>, !llvm.ptr<3>
+    // COMMON: llvm.load {{.*}} : !llvm.ptr<3> -> vector<2xi64>
+    // COMMON: llvm.inttoptr {{.*}} : vector<2xi64> to vector<2x!llvm.ptr<1>>
+    %loaded = ttg.local_load %alloc : !ttg.memdesc<512x!tt.ptr<i32>, #shared, #smem, mutable> -> tensor<512x!tt.ptr<i32>, #blocked>
+    %values = tt.load %loaded : tensor<512x!tt.ptr<i32>, #blocked>
+    ttg.local_store %loaded, %alloc : tensor<512x!tt.ptr<i32>, #blocked> -> !ttg.memdesc<512x!tt.ptr<i32>, #shared, #smem, mutable>
+    // COMMON: llvm.store {{.*}} : vector<2xi64>, !llvm.ptr<3>
+    // COMMON: llvm.load {{.*}} : !llvm.ptr<3> -> i64
+    // COMMON: llvm.inttoptr {{.*}} : i64 to !llvm.ptr<1>
+    %gathered = ttg.local_gather %alloc[%indices] {axis = 0 : i32} : !ttg.memdesc<512x!tt.ptr<i32>, #shared, #smem, mutable>, tensor<512xi32, #blocked> -> tensor<512x!tt.ptr<i32>, #blocked>
+    %other = tt.load %gathered : tensor<512x!tt.ptr<i32>, #blocked>
+    // COMMON: llvm.ptrtoint {{.*}} : !llvm.ptr<1> to i64
+    // COMMON: llvm.store {{.*}} : i64, !llvm.ptr<3>
+    ttg.local_scatter %alloc[%indices], %gathered {axis = 0 : i32} : !ttg.memdesc<512x!tt.ptr<i32>, #shared, #smem, mutable>, tensor<512xi32, #blocked>, tensor<512x!tt.ptr<i32>, #blocked>
+    %sum = arith.addi %values, %other : tensor<512xi32, #blocked>
+    tt.store %out, %sum : tensor<512x!tt.ptr<i32>, #blocked>
     tt.return
   }
 }

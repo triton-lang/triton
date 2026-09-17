@@ -333,15 +333,13 @@ class TritonGPUOptimizeThreadLocalityPass
       auto blockArg = dyn_cast<BlockArgument>(accumOperand);
       auto blockArgNum = blockArg.getArgNumber();
       auto forOp = dyn_cast<scf::ForOp>(blockArg.getOwner()->getParentOp());
+      auto *initOperand = forOp.getTiedLoopInit(blockArg);
+      if (!initOperand)
+        continue;
+      auto loopResult = forOp.getTiedLoopResult(initOperand);
+      auto resultIndex = loopResult.getResultNumber();
       // get oldAccum
-      auto oldAccum =
-          forOp.getInitArgs()[blockArgNum - forOp.getNumInductionVars()];
-      // get old loop user
-      Value loopResult =
-          forOp.getResult(blockArgNum - forOp.getNumInductionVars());
-      assert(loopResult.hasOneUse());
-      OpOperand &loopUse = *(loopResult.getUses().begin());
-      Operation *loopUser = loopUse.getOwner();
+      auto oldAccum = initOperand->get();
       // get old loop yield
       auto oldYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
       // create newAccum initialization
@@ -368,8 +366,8 @@ class TritonGPUOptimizeThreadLocalityPass
       // incorporate the original accumulator value into the final result
       auto finalOp = incorporateOriginalAccumulatorValue(builder, oldUpdate,
                                                          cvtLayout, oldAccum);
-      // Replace the old loop user with the final result
-      loopUser->setOperand(loopUse.getOperandNumber(), finalOp->getResult(0));
+      // Replace all uses of the old loop result with the final result.
+      newLoop.getResult(resultIndex).replaceAllUsesWith(finalOp->getResult(0));
 
       // cleanup
       oldYield.erase();

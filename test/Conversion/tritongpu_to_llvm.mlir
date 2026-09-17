@@ -879,8 +879,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: async_cp_evict_first_masked_8_bytes
   tt.func @async_cp_evict_first_masked_8_bytes(%src: tensor<256x!tt.ptr<f32>, #blocked>, %dst: !ttg.memdesc<256xf32, #shared, #smem, mutable>, %valid: i1) {
     // CHECK-NOT: createpolicy
-    // CHECK: llvm.select
+    // CHECK: llvm.xor
     // CHECK: cp.async.ca.shared.global {{.*}}, 0x8, ${{[0-9]+}};
+    // CHECK-SAME: "r,l,b
     %mask = tt.splat %valid : i1 -> tensor<256xi1, #blocked>
     %0 = ttg.async_copy_global_to_local %src, %dst mask %mask {cachePolicy = #evict_first, contiguity = 2 : i32} : tensor<256x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<256xf32, #shared, #smem, mutable>
     tt.return
@@ -2210,9 +2211,11 @@ tt.func @test_get_program_id(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
   %blockidx = tt.get_program_id x: i32
   %blockidy = tt.get_program_id y: i32
   %blockidz = tt.get_program_id z : i32
-  // CHECK: clusterid.x
-  // CHECK: clusterid.y
-  // CHECK: clusterid.z
+  // CHECK-DAG: [[CLUSTER_WIDTH:%.*]] = llvm.mlir.constant(4 : i32) : i32
+  // CHECK-DAG: [[CTA_X:%.*]] = nvvm.read.ptx.sreg.ctaid.x : i32
+  // CHECK: llvm.udiv [[CTA_X]], [[CLUSTER_WIDTH]] : i32
+  // CHECK: ctaid.y
+  // CHECK: ctaid.z
   %v0 = arith.addi %blockidx, %blockidy : i32
   %v1 = arith.addi %v0, %blockidz : i32
   %0 = tt.splat %v1 : i32 -> tensor<32xi32, #blocked0>
@@ -2248,13 +2251,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0], [0]]}>
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func @test_get_num_program(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
+  // CHECK-LABEL: @test_get_num_program_cluster(
+  tt.func @test_get_num_program_cluster(%a: tensor<32x!tt.ptr<i32>, #blocked0>) {
     %blockdimx = tt.get_num_programs x : i32
     %blockdimy = tt.get_num_programs y : i32
     %blockdimz = tt.get_num_programs z : i32
-    // CHECK: nclusterid.x
-    // CHECK: nclusterid.y
-    // CHECK: nclusterid.z
+    // CHECK-DAG: [[NUM_CTAS:%.*]] = llvm.mlir.constant(4 : i32) : i32
+    // CHECK-DAG: [[GRID_X:%.*]] = nvvm.read.ptx.sreg.nctaid.x : i32
+    // CHECK: llvm.udiv [[GRID_X]], [[NUM_CTAS]] : i32
+    // CHECK: nvvm.read.ptx.sreg.nctaid.y : i32
+    // CHECK: nvvm.read.ptx.sreg.nctaid.z : i32
     %v0 = arith.addi %blockdimx, %blockdimy : i32
     %v1 = arith.addi %v0, %blockdimz : i32
     %0 = tt.splat %v1 : i32 -> tensor<32xi32, #blocked0>
@@ -3324,6 +3330,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: llvm.func internal @call_smem_leaf(
+  // CHECK-SAME: ws_num_warps = 4 : i32
   tt.func private @call_smem_leaf() attributes {noinline = true} {
     %inner = ttg.local_alloc : () -> !ttg.memdesc<16xi32, #shared, #smem, mutable>
     ttg.local_dealloc %inner : !ttg.memdesc<16xi32, #shared, #smem, mutable>
@@ -3484,10 +3491,92 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#histPartial = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0], [1]]}>
+#histSplit = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[1], [2]]}>
+#histBroadcast = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0], [0]]}>
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // A split input requires all four partial counts even when result bins have
+  // distinct CTA owners. Atomic updates remain in CTA-local shared memory.
+  // CHECK-LABEL: @histogram_split_input_split_result
+  // CHECK: llvm.atomicrmw add {{.*}} : !llvm.ptr<3>, i32
+  // CHECK: nvvm.cluster.arrive
+  // CHECK-NEXT: nvvm.cluster.wait
+  // CHECK-COUNT-4: nvvm.mapa
+  // CHECK: llvm.add
+  // CHECK-NOT: nvvm.mapa
+  // CHECK: llvm.return
+  tt.func @histogram_split_input_split_result(%src: tensor<512xi32, #histSplit>, %out_ptr: tensor<512x!tt.ptr<i32>, #histSplit>) {
+    %hist = tt.histogram %src : tensor<512xi32, #histSplit> -> tensor<512xi32, #histSplit>
+    tt.store %out_ptr, %hist : tensor<512x!tt.ptr<i32>, #histSplit>
+    tt.return
+  }
+
+  // Replicating the result does not eliminate aggregation of a split input.
+  // CHECK-LABEL: @histogram_split_input_replicated_result
+  // CHECK: llvm.atomicrmw add {{.*}} : !llvm.ptr<3>, i32
+  // CHECK: nvvm.cluster.arrive
+  // CHECK-NEXT: nvvm.cluster.wait
+  // CHECK-COUNT-4: nvvm.mapa
+  // CHECK: llvm.add
+  // CHECK-NOT: nvvm.mapa
+  // CHECK: llvm.return
+  tt.func @histogram_split_input_replicated_result(%src: tensor<512xi32, #histSplit>, %out_ptr: tensor<128x!tt.ptr<i32>, #histBroadcast>) {
+    %hist = tt.histogram %src : tensor<512xi32, #histSplit> -> tensor<128xi32, #histBroadcast>
+    tt.store %out_ptr, %hist : tensor<128x!tt.ptr<i32>, #histBroadcast>
+    tt.return
+  }
+
+  // Each CTA sees the full input, so it can read its result bins locally.
+  // CHECK-LABEL: @histogram_replicated_input_split_result
+  // CHECK: llvm.atomicrmw add {{.*}} : !llvm.ptr<3>, i32
+  // CHECK-NOT: nvvm.cluster.arrive
+  // CHECK-NOT: nvvm.mapa
+  // CHECK: llvm.load {{.*}} : !llvm.ptr<3>
+  // CHECK-NOT: nvvm.mapa
+  // CHECK: llvm.return
+  tt.func @histogram_replicated_input_split_result(%src: tensor<512xi32, #histBroadcast>, %out_ptr: tensor<512x!tt.ptr<i32>, #histSplit>) {
+    %hist = tt.histogram %src : tensor<512xi32, #histBroadcast> -> tensor<512xi32, #histSplit>
+    tt.store %out_ptr, %hist : tensor<512x!tt.ptr<i32>, #histSplit>
+    tt.return
+  }
+
+  // CTA bit 0 broadcasts the input. Only CTAs 0 and 2 accumulate counts;
+  // loading the zero partial histograms from CTAs 1 and 3 is unnecessary.
+  // CHECK-LABEL: @histogram_skips_replicated_ctas
+  // CHECK: %[[CTA:.*]] = nvg.cluster_id
+  // CHECK: %[[MASK:.*]] = llvm.mlir.constant(1 : i32)
+  // CHECK: %[[MASKED:.*]] = llvm.and %[[CTA]], %[[MASK]]
+  // CHECK: %[[PRED:.*]] = llvm.icmp "eq" %[[MASKED]], %{{.*}} : i32
+  // CHECK: %[[UPDATE:.*]] = llvm.and %{{.*}}, %[[PRED]] : i1
+  // CHECK: llvm.cond_br %[[UPDATE]]
+  // CHECK: llvm.atomicrmw add {{.*}} : !llvm.ptr<3>, i32
+  // CHECK: nvvm.cluster.arrive
+  // CHECK-NEXT: nvvm.cluster.wait
+  // CHECK-NEXT: llvm.getelementptr
+  // CHECK-NEXT: %[[INIT:.*]] = llvm.mlir.constant(0 : i32)
+  // CHECK-NEXT: %[[CTA0:.*]] = llvm.mlir.constant(0 : i32)
+  // CHECK: %[[PTR0:.*]] = nvvm.mapa %{{.*}}, %[[CTA0]]
+  // CHECK-NEXT: llvm.load %[[PTR0]]
+  // CHECK: llvm.add
+  // CHECK-NEXT: %[[CTA2:.*]] = llvm.mlir.constant(2 : i32)
+  // CHECK: %[[PTR2:.*]] = nvvm.mapa %{{.*}}, %[[CTA2]]
+  // CHECK-NEXT: llvm.load %[[PTR2]]
+  // CHECK: llvm.add
+  // CHECK-NOT: nvvm.mapa
+  // CHECK: llvm.return
+  tt.func @histogram_skips_replicated_ctas(%src: tensor<256xi32, #histPartial>, %out_ptr: tensor<512x!tt.ptr<i32>, #histSplit>) {
+    %hist = tt.histogram %src : tensor<256xi32, #histPartial> -> tensor<512xi32, #histSplit>
+    tt.store %out_ptr, %hist : tensor<512x!tt.ptr<i32>, #histSplit>
+    tt.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.profile_scratch_memory_alignment = 128 : i32, ttg.profile_scratch_memory_size = 2304 : i32} {
   // CHECK-LABEL: @profile_scratch_ptr_uses_i64
-  // CHECK: %[[CLUSTER_Z:.*]] = nvvm.read.ptx.sreg.clusterid.z : i32
-  // CHECK: %[[NCLUSTER_Y:.*]] = nvvm.read.ptx.sreg.nclusterid.y : i32
+  // CHECK: %[[CLUSTER_Z:.*]] = nvvm.read.ptx.sreg.ctaid.z : i32
+  // CHECK: %[[NCLUSTER_Y:.*]] = nvvm.read.ptx.sreg.nctaid.y : i32
   // CHECK: %[[CLUSTER_Z_I64:.*]] = llvm.zext %[[CLUSTER_Z]] : i32 to i64
   // CHECK: %[[NCLUSTER_Y_I64:.*]] = llvm.zext %[[NCLUSTER_Y]] : i32 to i64
   // CHECK: %[[LINEAR_Z:.*]] = llvm.mul %[[CLUSTER_Z_I64]], %[[NCLUSTER_Y_I64]] : i64
@@ -3556,6 +3645,83 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttg.inline_asm "bar.sync 0;" {constraints = "", pure = false} : () -> ()
     // CHECK-NOT: llvm.inline_asm
     // CHECK: llvm.return
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+  // A one-warp caller must issue both 16x64 messages from its outlined helper.
+  // CHECK-LABEL: llvm.func internal @outlined_single_warp_tma
+  // CHECK-SAME: ws_num_warps = 1 : i32
+  // CHECK-COUNT-2: cp.async.bulk.tensor.2d.shared::cta.global.mbarrier::complete_tx::bytes
+  // CHECK-NOT: cp.async.bulk.tensor
+  // CHECK: llvm.return
+  tt.func private @outlined_single_warp_tma(%desc: !tt.tensordesc<16x128xf16, #shared>, %dst: !ttg.memdesc<16x128xf16, #shared, #smem, mutable>, %bar: !ttg.memdesc<1xi64, #barrier, #smem, mutable>, %x: i32, %pred: i1) attributes {noinline = true, "ttg.num-warps" = 1 : i32} {
+    ttng.async_tma_copy_global_to_local %desc[%x, %x] %dst, %bar, %pred : !tt.tensordesc<16x128xf16, #shared>, !ttg.memdesc<1xi64, #barrier, #smem, mutable> -> !ttg.memdesc<16x128xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @bf16_to_fp16_fallback
+  // CHECK: llvm.fpext {{.*}} : bf16 to f32
+  // CHECK: llvm.inline_asm {{.*}} "cvt.rn.f16.f32 $0, $1;", "=h,r"
+  // CHECK: llvm.fpext {{.*}} : bf16 to f32
+  // CHECK: llvm.inline_asm {{.*}} "cvt.rz.f16.f32 $0, $1;", "=h,r"
+  tt.func private @bf16_to_fp16_fallback(%arg: bf16) -> (f16, f16) {
+    %rn = tt.fp_to_fp %arg : bf16 -> f16
+    %rz = tt.fp_to_fp %arg, rounding = rtz : bf16 -> f16
+    tt.return %rn, %rz : f16, f16
+  }
+
+  // CHECK-LABEL: @fp16_to_bf16_fallback
+  // CHECK: llvm.fpext {{.*}} : f16 to f32
+  // CHECK: llvm.call_intrinsic "llvm.nvvm.f2bf16.rn"
+  // CHECK: llvm.fpext {{.*}} : f16 to f32
+  // CHECK: llvm.call_intrinsic "llvm.nvvm.f2bf16.rz"
+  tt.func private @fp16_to_bf16_fallback(%arg: f16) -> (bf16, bf16) {
+    %rn = tt.fp_to_fp %arg : f16 -> bf16
+    %rz = tt.fp_to_fp %arg, rounding = rtz : f16 -> bf16
+    tt.return %rn, %rz : bf16, bf16
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 2, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @shared_memory_pointers
+  tt.func @shared_memory_pointers(%ptrs: tensor<256x!tt.ptr<i32>, #blocked>, %out: tensor<256x!tt.ptr<i32>, #blocked>) {
+    %offsets = tt.make_range {start = 0 : i32, end = 256 : i32} : tensor<256xi32, #blocked>
+    %half = arith.constant dense<128> : tensor<256xi32, #blocked>
+    %indices = arith.xori %offsets, %half : tensor<256xi32, #blocked>
+    // CHECK: llvm.ptrtoint
+    %alloc = ttg.local_alloc %ptrs : (tensor<256x!tt.ptr<i32>, #blocked>) -> !ttg.memdesc<256x!tt.ptr<i32>, #shared, #smem, mutable>
+    // CHECK: llvm.store {{.*}} : vector<2xi64>, !llvm.ptr<3>
+    // CHECK: llvm.load {{.*}} : !llvm.ptr<3> -> vector<2xi64>
+    // CHECK: llvm.inttoptr {{.*}} : i64 to !llvm.ptr<1>
+    %loaded = ttg.local_load %alloc : !ttg.memdesc<256x!tt.ptr<i32>, #shared, #smem, mutable> -> tensor<256x!tt.ptr<i32>, #blocked>
+    %values = tt.load %loaded : tensor<256x!tt.ptr<i32>, #blocked>
+    ttg.local_store %loaded, %alloc : tensor<256x!tt.ptr<i32>, #blocked> -> !ttg.memdesc<256x!tt.ptr<i32>, #shared, #smem, mutable>
+    // CHECK: llvm.store {{.*}} : vector<2xi64>, !llvm.ptr<3>
+    // CHECK: llvm.load {{.*}} : !llvm.ptr<3> -> i64
+    // CHECK: llvm.inttoptr {{.*}} : i64 to !llvm.ptr<1>
+    %gathered = ttg.local_gather %alloc[%indices] {axis = 0 : i32} : !ttg.memdesc<256x!tt.ptr<i32>, #shared, #smem, mutable>, tensor<256xi32, #blocked> -> tensor<256x!tt.ptr<i32>, #blocked>
+    %other = tt.load %gathered : tensor<256x!tt.ptr<i32>, #blocked>
+    // CHECK: llvm.ptrtoint {{.*}} : !llvm.ptr<1> to i64
+    // CHECK: llvm.store {{.*}} : vector<1xi64>, !llvm.ptr<3>
+    ttg.local_scatter %alloc[%indices], %gathered {axis = 0 : i32} : !ttg.memdesc<256x!tt.ptr<i32>, #shared, #smem, mutable>, tensor<256xi32, #blocked>, tensor<256x!tt.ptr<i32>, #blocked>
+    %sum = arith.addi %values, %other : tensor<256xi32, #blocked>
+    tt.store %out, %sum : tensor<256x!tt.ptr<i32>, #blocked>
     tt.return
   }
 }

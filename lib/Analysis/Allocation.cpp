@@ -168,6 +168,15 @@ bool hasCrossCTAScratch(Operation *op) {
   }
   if (auto reduce = dyn_cast<ReduceOp>(op))
     return !ReduceOpHelper(reduce).isReduceWithinCTA();
+  if (auto histogram = dyn_cast<HistogramOp>(op)) {
+    auto block = StringAttr::get(op->getContext(), "block");
+    auto layout = gpu::toLinearLayout(histogram.getSrc().getType());
+    // Each CTA accumulates its inputs into a full set of local bins.
+    // Splitted CTAs in the input make these local bins partial, and thus the
+    // final results need to be aggregated across CTAs
+    return layout.getFreeVariableMasks().lookup(block) !=
+           layout.getInDimSize(block) - 1;
+  }
   if (auto poll = dyn_cast<AtomicPollOp>(op))
     return poll.getTimeout() && !poll.getResult().use_empty() &&
            getAtomicScratchBroadcastMask(op).value_or(0) != 0;

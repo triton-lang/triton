@@ -200,8 +200,7 @@ std::pair<Block *, Block *> emitBranch(RewriterBase &rewriter, Location loc,
 
 bool isRedundantThreadPredWarpUniform(
     const llvm::MapVector<StringAttr, int32_t> &masks, MLIRContext *ctx) {
-  return masks.lookup(StringAttr::get(ctx, "lane")) == 0 &&
-         masks.lookup(StringAttr::get(ctx, "reg")) == 0;
+  return masks.lookup(StringAttr::get(ctx, "lane")) == 0;
 }
 
 Value selectLdsAddressForPredicate(TritonLLVMOpBuilder &b, Value pred,
@@ -864,7 +863,8 @@ struct BufferLoadToLocalOpConversion
       // Optimization: for warp-uniform thread predicates and no other values we
       // can avoid the branch by selecting an out-of-range *shared* address. The
       // HW will drop the load before fetching the data from global memory so we
-      // will not overwrite values.
+      // will not overwrite values. This LDS address is scalar for the whole
+      // instruction, so it can only mask threads uniformly across the warp.
       if (isThreadPredWarpUniform && !hasOther) {
         Value predicatedAddress =
             selectLdsAddressForPredicate(b, threadPred, shmemAddr);
@@ -1752,7 +1752,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value threadPred = emitRedundantThreadPredicateNonNull(
         freeVarMasks, rewriter, loc, targetInfo);
-    uint32_t regMask = freeVarMasks[str_attr("reg")];
+    uint32_t regMask = freeVarMasks[str_attr("register")];
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
       if (!isCanonicalIndex(vecStart, regMask)) {
         // Don't emit store ops for redundant elements within a thread
@@ -2090,7 +2090,7 @@ struct BufferStoreOpConversion
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value threadPred = emitRedundantThreadPredicateNonNull(
         freeVarMasks, rewriter, loc, targetInfo);
-    uint32_t regMask = freeVarMasks[str_attr("reg")];
+    uint32_t regMask = freeVarMasks[str_attr("register")];
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       if (!isCanonicalIndex(vecStart, regMask)) {
         // Don't emit store ops for redundant elements within a thread

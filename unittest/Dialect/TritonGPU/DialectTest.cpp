@@ -120,7 +120,6 @@ protected:
 /*static*/ MLIRContext InferLayoutTest::ctx;
 
 void testReshape(RankedTensorType srcTy, RankedTensorType dstTy,
-                 std::optional<BlockedEncodingAttr> expectedDstEnc,
                  DialectInferLayoutInterface *inferLayout,
                  bool longErrors = true) {
 
@@ -210,13 +209,8 @@ TEST_P(InferReshapeOpEncodingTest, DoIt) {
   if (!dst)
     FAIL() << "Could not parse destination type: " << dstTyStr;
 
-  std::optional<BlockedEncodingAttr> expectedDstEnc;
-  if (auto dstEnc = cast<RankedTensorType>(dst).getEncoding()) {
-    expectedDstEnc = cast<BlockedEncodingAttr>(dstEnc);
-  }
-
   testReshape(cast<RankedTensorType>(src), cast<RankedTensorType>(dst),
-              expectedDstEnc, inferLayout, /*longErrors=*/true);
+              inferLayout, /*longErrors=*/true);
 }
 
 // A testcase of {a, b, c} means:
@@ -290,7 +284,7 @@ INSTANTIATE_TEST_SUITE_P(
          R"(T<16x2xf32, #B<{spt=[1,2], tpw=[32,1], wpc=[2,1], ord=[1,0]}>>)"},
 
         {R"(T<2x1x2xf32, #B<{spt=[2,1,1], tpw=[2,1,2], wpc=[4,1,8], ord=[2,1,0]}>>)",
-         R"(T<2x2xf32,   #B<{spt=[2,1],   tpw=[2,2],   wpc=[4,8],   ord=[1,0]}>>)"},
+         R"(T<2x2xf32, #ttg.slice<{dim = 1, parent = #B<{spt=[2,1,1], tpw=[2,1,2], wpc=[4,1,8], ord=[2,1,0]}>}>>)"},
     })));
 
 class Fp4ToFpOpTest : public ::testing::Test {

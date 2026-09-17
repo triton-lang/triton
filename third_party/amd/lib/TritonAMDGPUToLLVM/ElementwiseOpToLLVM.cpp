@@ -524,8 +524,8 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<SqrtOpConversion>(typeConverter, axisInfoAnalysis, ftz, benefit);
   patterns.add<ClampFOpConversion>(typeConverter, axisInfoAnalysis,
                                    benefit.getBenefit() + 1);
-  triton::populateElementwiseOpToLLVMPatterns(
-      typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
+  triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
+                                              axisInfoAnalysis, benefit);
   triton::populateClampFOpToLLVMPattern(typeConverter, patterns,
                                         axisInfoAnalysis, targetInfo, benefit);
 }

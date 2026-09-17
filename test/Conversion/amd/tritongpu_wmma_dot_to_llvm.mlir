@@ -1,6 +1,6 @@
 // RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1100 --convert-builtin-func-to-llvm | FileCheck %s
-// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1170 --convert-builtin-func-to-llvm | FileCheck %s
-// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1200 --convert-builtin-func-to-llvm | FileCheck %s
+// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1170 --convert-builtin-func-to-llvm | FileCheck %s --check-prefixes=CHECK,WMMA2FP8
+// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1200 --convert-builtin-func-to-llvm | FileCheck %s --check-prefixes=CHECK,WMMA2FP8
 // RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --convert-builtin-func-to-llvm | FileCheck %s --check-prefixes=GFX1250
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
@@ -203,16 +203,65 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
   // Regression test: non-scaled WMMA v2 dot with fp8 operands (kBase=8).
   // Operands must be bitcast to i32, not i64 (i64 is only for scale operands).
-  //  CHECK-LABEL: wmma2_dot_fp8
+  // WMMA2FP8-LABEL: wmma2_dot_fp8
   tt.func @wmma2_dot_fp8(%arg0: tensor<16x16xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma2, kWidth = 8}>>, %arg1: tensor<16x16xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma2, kWidth = 8}>>, %arg2: tensor<16x16xf32, #mma2>, %arg3: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
-    // CHECK-COUNT-8: llvm.extractvalue %{{.*}} : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
-    // CHECK-COUNT-8: llvm.insertelement {{.*}} : vector<8xi8>
-    // CHECK: llvm.bitcast %{{.*}} : vector<8xi8> to vector<2xi32>
-    // CHECK-COUNT-8: llvm.insertelement {{.*}} : vector<8xi8>
-    // CHECK: llvm.bitcast %{{.*}} : vector<8xi8> to vector<2xi32>
-    // CHECK: wmma.f32.16x16x16.fp8.fp8{{.*}} : (vector<2xi32>, vector<2xi32>, vector<8xf32>) -> vector<8xf32>
+    // WMMA2FP8-COUNT-8: llvm.extractvalue %{{.*}} : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // WMMA2FP8-COUNT-8: llvm.insertelement {{.*}} : vector<8xf32>
+    // WMMA2FP8-COUNT-8: llvm.insertelement {{.*}} : vector<8xi8>
+    // WMMA2FP8: llvm.bitcast %{{.*}} : vector<8xi8> to vector<2xi32>
+    // WMMA2FP8-COUNT-8: llvm.insertelement {{.*}} : vector<8xi8>
+    // WMMA2FP8: llvm.bitcast %{{.*}} : vector<8xi8> to vector<2xi32>
+    // WMMA2FP8: wmma.f32.16x16x16.fp8.fp8{{.*}} : (vector<2xi32>, vector<2xi32>, vector<8xf32>) -> vector<8xf32>
     %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x16xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma2, kWidth = 8}>> * tensor<16x16xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma2, kWidth = 8}>> -> tensor<16x16xf32, #mma2>
-    // CHECK-COUNT-8: llvm.insertelement {{.*}} : vector<1xf32>
+    // WMMA2FP8-COUNT-8: llvm.insertelement {{.*}} : vector<1xf32>
+    %ptr0 = tt.splat %arg3 : !tt.ptr<f32> -> tensor<16x16x!tt.ptr<f32>, #mma2>
+    tt.store %ptr0, %0 : tensor<16x16x!tt.ptr<f32>, #mma2>
+    tt.return
+  }
+
+  // WMMA2FP8-LABEL: wmma2_dot_fp8_bf8
+  tt.func @wmma2_dot_fp8_bf8(%arg0: tensor<16x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma2, kWidth = 8}>>, %arg1: tensor<64x16xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma2, kWidth = 8}>>, %arg2: tensor<16x16xf32, #mma2>, %arg3: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    // WMMA2FP8-COUNT-8: llvm.extractvalue %{{.*}} : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // WMMA2FP8-COUNT-8: llvm.insertelement {{.*}} : vector<8xf32>
+    // WMMA2FP8-COUNT-8: llvm.insertelement {{.*}} : vector<8xi8>
+    // WMMA2FP8: llvm.bitcast %{{.*}} : vector<8xi8> to vector<2xi32>
+    // WMMA2FP8-COUNT-8: llvm.insertelement {{.*}} : vector<8xi8>
+    // WMMA2FP8: llvm.bitcast %{{.*}} : vector<8xi8> to vector<2xi32>
+    // WMMA2FP8-COUNT-4: wmma.f32.16x16x16.fp8.bf8{{.*}} : (vector<2xi32>, vector<2xi32>, vector<8xf32>) -> vector<8xf32>
+    %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma2, kWidth = 8}>> * tensor<64x16xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma2, kWidth = 8}>> -> tensor<16x16xf32, #mma2>
+    // WMMA2FP8-COUNT-8: llvm.insertelement {{.*}} : vector<1xf32>
+    %ptr0 = tt.splat %arg3 : !tt.ptr<f32> -> tensor<16x16x!tt.ptr<f32>, #mma2>
+    tt.store %ptr0, %0 : tensor<16x16x!tt.ptr<f32>, #mma2>
+    tt.return
+  }
+
+  // WMMA2FP8-LABEL: wmma2_dot_bf8_fp8
+  tt.func @wmma2_dot_bf8_fp8(%arg0: tensor<16x64xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma2, kWidth = 8}>>, %arg1: tensor<64x16xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma2, kWidth = 8}>>, %arg2: tensor<16x16xf32, #mma2>, %arg3: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    // WMMA2FP8-COUNT-8: llvm.extractvalue %{{.*}} : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // WMMA2FP8-COUNT-8: llvm.insertelement {{.*}} : vector<8xf32>
+    // WMMA2FP8-COUNT-8: llvm.insertelement {{.*}} : vector<8xi8>
+    // WMMA2FP8: llvm.bitcast %{{.*}} : vector<8xi8> to vector<2xi32>
+    // WMMA2FP8-COUNT-8: llvm.insertelement {{.*}} : vector<8xi8>
+    // WMMA2FP8: llvm.bitcast %{{.*}} : vector<8xi8> to vector<2xi32>
+    // WMMA2FP8-COUNT-4: wmma.f32.16x16x16.bf8.fp8{{.*}} : (vector<2xi32>, vector<2xi32>, vector<8xf32>) -> vector<8xf32>
+    %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x64xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma2, kWidth = 8}>> * tensor<64x16xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma2, kWidth = 8}>> -> tensor<16x16xf32, #mma2>
+    // WMMA2FP8-COUNT-8: llvm.insertelement {{.*}} : vector<1xf32>
+    %ptr0 = tt.splat %arg3 : !tt.ptr<f32> -> tensor<16x16x!tt.ptr<f32>, #mma2>
+    tt.store %ptr0, %0 : tensor<16x16x!tt.ptr<f32>, #mma2>
+    tt.return
+  }
+
+  // WMMA2FP8-LABEL: wmma2_dot_bf8
+  tt.func @wmma2_dot_bf8(%arg0: tensor<16x64xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma2, kWidth = 8}>>, %arg1: tensor<64x16xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma2, kWidth = 8}>>, %arg2: tensor<16x16xf32, #mma2>, %arg3: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    // WMMA2FP8-COUNT-8: llvm.extractvalue %{{.*}} : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // WMMA2FP8-COUNT-8: llvm.insertelement {{.*}} : vector<8xf32>
+    // WMMA2FP8-COUNT-8: llvm.insertelement {{.*}} : vector<8xi8>
+    // WMMA2FP8: llvm.bitcast %{{.*}} : vector<8xi8> to vector<2xi32>
+    // WMMA2FP8-COUNT-8: llvm.insertelement {{.*}} : vector<8xi8>
+    // WMMA2FP8: llvm.bitcast %{{.*}} : vector<8xi8> to vector<2xi32>
+    // WMMA2FP8-COUNT-4: wmma.f32.16x16x16.bf8.bf8{{.*}} : (vector<2xi32>, vector<2xi32>, vector<8xf32>) -> vector<8xf32>
+    %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x64xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma2, kWidth = 8}>> * tensor<64x16xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma2, kWidth = 8}>> -> tensor<16x16xf32, #mma2>
+    // WMMA2FP8-COUNT-8: llvm.insertelement {{.*}} : vector<1xf32>
     %ptr0 = tt.splat %arg3 : !tt.ptr<f32> -> tensor<16x16x!tt.ptr<f32>, #mma2>
     tt.store %ptr0, %0 : tensor<16x16x!tt.ptr<f32>, #mma2>
     tt.return
@@ -267,14 +316,73 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 
+  // GFX1250-LABEL: wmma3_dot_fp8
+  tt.func @wmma3_dot_fp8(%arg0: tensor<16x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma3_f8, kWidth = 8}>>, %arg1: tensor<64x16xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma3_f8, kWidth = 8}>>, %arg2: tensor<16x16xf32, #mma3_f8>, %arg3: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    // GFX1250-COUNT-8: llvm.extractvalue %{{.*}} : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GFX1250-COUNT-8: llvm.insertelement {{.*}} : vector<8xf32>
+    // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<32xi8>
+    // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<32xi8>
+    // GFX1250: llvm.bitcast %{{.*}} : vector<32xi8> to vector<8xi32>
+    // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<32xi8>
+    // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<32xi8>
+    // GFX1250: llvm.bitcast %{{.*}} : vector<32xi8> to vector<8xi32>
+    // GFX1250: wmma.f32.16x16x64.fp8.fp8{{.*}} : (vector<8xi32>, vector<8xi32>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
+    %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma3_f8, kWidth = 8}>> * tensor<64x16xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma3_f8, kWidth = 8}>> -> tensor<16x16xf32, #mma3_f8>
+    // GFX1250-COUNT-8: llvm.insertelement {{.*}} : vector<1xf32>
+    %ptr0 = tt.splat %arg3 : !tt.ptr<f32> -> tensor<16x16x!tt.ptr<f32>, #mma3_f8>
+    tt.store %ptr0, %0 : tensor<16x16x!tt.ptr<f32>, #mma3_f8>
+    tt.return
+  }
+
+  // GFX1250-LABEL: wmma3_dot_fp8_bf8
+  tt.func @wmma3_dot_fp8_bf8(%arg0: tensor<16x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma3_f8, kWidth = 8}>>, %arg1: tensor<64x16xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma3_f8, kWidth = 8}>>, %arg2: tensor<16x16xf32, #mma3_f8>, %arg3: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    // GFX1250-COUNT-8: llvm.extractvalue %{{.*}} : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GFX1250-COUNT-8: llvm.insertelement {{.*}} : vector<8xf32>
+    // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<32xi8>
+    // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<32xi8>
+    // GFX1250: llvm.bitcast %{{.*}} : vector<32xi8> to vector<8xi32>
+    // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<32xi8>
+    // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<32xi8>
+    // GFX1250: llvm.bitcast %{{.*}} : vector<32xi8> to vector<8xi32>
+    // GFX1250: wmma.f32.16x16x64.fp8.bf8{{.*}} : (vector<8xi32>, vector<8xi32>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
+    %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x64xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #mma3_f8, kWidth = 8}>> * tensor<64x16xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma3_f8, kWidth = 8}>> -> tensor<16x16xf32, #mma3_f8>
+    // GFX1250-COUNT-8: llvm.insertelement {{.*}} : vector<1xf32>
+    %ptr0 = tt.splat %arg3 : !tt.ptr<f32> -> tensor<16x16x!tt.ptr<f32>, #mma3_f8>
+    tt.store %ptr0, %0 : tensor<16x16x!tt.ptr<f32>, #mma3_f8>
+    tt.return
+  }
+
+  // GFX1250-LABEL: wmma3_dot_bf8_fp8
+  tt.func @wmma3_dot_bf8_fp8(%arg0: tensor<16x64xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma3_f8, kWidth = 8}>>, %arg1: tensor<64x16xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma3_f8, kWidth = 8}>>, %arg2: tensor<16x16xf32, #mma3_f8>, %arg3: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    // GFX1250-COUNT-8: llvm.extractvalue %{{.*}} : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
+    // GFX1250-COUNT-8: llvm.insertelement {{.*}} : vector<8xf32>
+    // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<32xi8>
+    // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<32xi8>
+    // GFX1250: llvm.bitcast %{{.*}} : vector<32xi8> to vector<8xi32>
+    // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<32xi8>
+    // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<32xi8>
+    // GFX1250: llvm.bitcast %{{.*}} : vector<32xi8> to vector<8xi32>
+    // GFX1250: wmma.f32.16x16x64.bf8.fp8{{.*}} : (vector<8xi32>, vector<8xi32>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
+    %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x64xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma3_f8, kWidth = 8}>> * tensor<64x16xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma3_f8, kWidth = 8}>> -> tensor<16x16xf32, #mma3_f8>
+    // GFX1250-COUNT-8: llvm.insertelement {{.*}} : vector<1xf32>
+    %ptr0 = tt.splat %arg3 : !tt.ptr<f32> -> tensor<16x16x!tt.ptr<f32>, #mma3_f8>
+    tt.store %ptr0, %0 : tensor<16x16x!tt.ptr<f32>, #mma3_f8>
+    tt.return
+  }
+
   // GFX1250-LABEL: wmma3_dot_bf8
   tt.func @wmma3_dot_bf8(%arg0: tensor<16x64xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma3_f8, kWidth = 8}>>, %arg1: tensor<64x16xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma3_f8, kWidth = 8}>>, %arg2: tensor<16x16xf32, #mma3_f8>, %arg3: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
     // GFX1250-COUNT-8: llvm.extractvalue %{{.*}} : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
     // GFX1250-COUNT-8: llvm.insertelement {{.*}} : vector<8xf32>
     // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<32xi8>
     // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<32xi8>
+    // GFX1250: llvm.bitcast %{{.*}} : vector<32xi8> to vector<8xi32>
+    // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<32xi8>
+    // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<32xi8>
+    // GFX1250: llvm.bitcast %{{.*}} : vector<32xi8> to vector<8xi32>
     // GFX1250: wmma.f32.16x16x64.bf8.bf8{{.*}} : (vector<8xi32>, vector<8xi32>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
     %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x64xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma3_f8, kWidth = 8}>> * tensor<64x16xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma3_f8, kWidth = 8}>> -> tensor<16x16xf32, #mma3_f8>
+    // GFX1250-COUNT-8: llvm.insertelement {{.*}} : vector<1xf32>
 
     %ptr0 = tt.splat %arg3 : !tt.ptr<f32> -> tensor<16x16x!tt.ptr<f32>, #mma3_f8>
     tt.store %ptr0, %0 : tensor<16x16x!tt.ptr<f32>, #mma3_f8>

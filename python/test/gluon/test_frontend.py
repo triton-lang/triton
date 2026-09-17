@@ -3,6 +3,7 @@ import pytest
 import re
 from dataclasses import replace
 
+import triton
 from triton.backends.compiler import GPUTarget
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
@@ -135,8 +136,6 @@ def test_inline_asm_frontend_unresolved_layout(layout):
 
 @pytest.mark.parametrize("elementwise", [False, True])
 def test_inline_asm_shared_amd_compilation(elementwise):
-    import triton
-    from triton.experimental.gluon._runtime import GluonASTSource
 
     @gluon.jit
     def kernel(Out, ELEMENTWISE: ttgl.constexpr):
@@ -150,9 +149,33 @@ def test_inline_asm_shared_amd_compilation(elementwise):
             y = ttgl.inline_asm(asm, "=&v,v,v", [smem, x * 4], x.type)
         ttgl.store(Out + x, y)
 
-    source = GluonASTSource(kernel, {"Out": "*i32", "ELEMENTWISE": "constexpr"}, {"ELEMENTWISE": elementwise})
+    source = gluon.GluonASTSource(kernel, {"Out": "*i32", "ELEMENTWISE": "constexpr"}, {"ELEMENTWISE": elementwise})
     compiled = triton.compile(source, target=HIP_TARGET_CDNA3)
     assert "ds_read_b32" in compiled.asm["amdgcn"]
+
+
+@pytest.mark.parametrize("target, binary", [(AMPERE_TARGET, "cubin"), (HIP_TARGET_CDNA3, "hsaco")])
+def test_gluon_ast_source_without_driver(target, binary, monkeypatch, fresh_triton_cache):
+
+    def fail_driver_access(self):
+        raise AssertionError("Offline compilation must not access the GPU driver")
+
+    monkeypatch.setattr(type(triton.runtime.driver), "active", property(fail_driver_access))
+
+    @gluon.jit
+    def kernel(X, Y, BLOCK: ttgl.constexpr, LAYOUT: ttgl.constexpr):
+        offsets = ttgl.arange(0, BLOCK, layout=LAYOUT)
+        ttgl.store(Y + offsets, ttgl.load(X + offsets))
+
+    source = gluon.GluonASTSource(
+        kernel,
+        signature={"X": "*fp32", "Y": "*fp32", "BLOCK": "constexpr", "LAYOUT": "constexpr"},
+        constexprs={"BLOCK": 128, "LAYOUT": ttgl.BlockedLayout([1], [target.warp_size], [4], [0])},
+        attrs={(0, ): [["tt.divisibility", 16]], (1, ): [["tt.divisibility", 16]]},
+    )
+    compiled = triton.compile(source, target=target)
+    assert "tt.divisibility = 16" in compiled.asm[source.ext]
+    assert compiled.asm[binary]
 
 
 @gluon.jit
@@ -183,6 +206,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 """)
+
+
+@pytest.mark.parametrize("num_ctas", [1, 2, 4])
+@pytest.mark.parametrize("container", [list, tuple])
+def test_layout_nested_constexpr_containers(num_ctas, container):
+
+    @gluon.jit
+    def add(a, b):
+        return a + b
+
+    @gluon.jit
+    def kernel(Out, NUM_CTAS: ttgl.constexpr, EXPECTED: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [16], [0],
+                                                    cga_layout=[[0]] * (NUM_CTAS.bit_length() - 1))
+        ttgl.static_assert(layout == EXPECTED)
+        ttgl.static_assert(EXPECTED == layout)
+        x = ttgl.arange(0, 16, layout=layout)
+        prefix = ttgl.associative_scan(x, 0, add)
+        # The scan's inferred layout contains Python lists instead of JIT tuples.
+        ttgl.static_assert(prefix.type.layout == layout)
+        ttgl.store(Out + x, prefix - x)
+
+    cga_layout = container(container([0]) for _ in range(num_ctas.bit_length() - 1))
+    expected = ttgl.BlockedLayout([1], [32], [16], [0], cga_layout=cga_layout)
+    run_parser(kernel, *make_args(MockTensor(ttgl.int32), num_ctas, expected, num_warps=16, num_ctas=num_ctas),
+               target=BLACKWELL_TARGET)
 
 
 @gluon.jit
@@ -2461,8 +2510,29 @@ def test_reshape_linear_layout():
     # CHECK: [[LINEAR:#.*]] = #ttg.linear
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1])
     x = ttgl.full([128, 1], 1, ttgl.int32, layout=layout)
-    # CHECK: tt.reshape %{{.*}} : tensor<128x1xi32, [[BLOCKED]]> -> tensor<128xi32, [[LINEAR]]>
-    x.reshape([128])
+    # CHECK: tt.reshape %{{.*}} : tensor<128x1xi32, [[BLOCKED]]> -> tensor<64x2xi32, [[LINEAR]]>
+    x.reshape([64, 2])
+
+
+@pytest.mark.parametrize("axis", [0, 1, 2])
+def test_reshape_linear_layout_round_trip(axis):
+
+    @gluon.jit
+    def kernel(axis: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
+            reg_bases=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32]],
+            lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]],
+            warp_bases=[[32, 0], [64, 0]],
+            block_bases=[],
+            shape=[128, 64],
+        )
+        x = ttgl.full([128, 64], 1, ttgl.float32, layout)
+        shape: ttgl.constexpr = x.shape[:axis] + [1] + x.shape[axis:]
+        round_trip = x.reshape(shape).reshape(x.shape)
+        ttgl.static_assert(round_trip.type.layout == layout)
+        ttgl.maximum(ttgl.max(x, 1), ttgl.max(round_trip, 1))
+
+    run_parser(kernel, args=(axis, ), target=AMPERE_TARGET)
 
 
 @filecheck_test
