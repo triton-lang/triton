@@ -65,7 +65,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 
   tt.func public @precise_reciprocal_f32(%ptr: !tt.ptr<f32>, %arg: f32) {
     // CHECK-LABEL: precise_reciprocal_f32(
-    // CHECK: div.rn.f32
+    // CHECK: rcp.rn.f32
     %one = arith.constant 1.0 : f32
     %result = tt.precise_divf %one, %arg : f32
     tt.store %ptr, %result : !tt.ptr<f32>

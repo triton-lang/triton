@@ -1337,13 +1337,11 @@ def test_fdiv_constant_in_range(denominator, ieee_rounding, device):
     expected = x / np.float32(denominator)
     maxulp = 0 if ieee_rounding else 2
     np.testing.assert_array_max_ulp(to_numpy(y_tri), expected, maxulp=maxulp)
-    if not is_interpreter():
+    if not is_interpreter() and not ieee_rounding:
         if is_cuda():
-            assert ("div.rn.f32" if ieee_rounding else "div.approx.f32") in compiled.asm["ptx"]
-            if not ieee_rounding:
-                assert re.search(r"tt\.approx_divf [^\n]* : f32", compiled.asm["ttgir"])
-                assert compiled.asm["ptx"].count("div.approx.f32") == 1
-        elif not ieee_rounding:
+            assert re.search(r"tt\.approx_divf [^\n]* : f32", compiled.asm["ttgir"])
+            assert compiled.asm["ptx"].count("div.approx.f32") == 1
+        else:
             assert "arith.divf" in compiled.asm["ttgir"]
 
 
