@@ -45,7 +45,8 @@ _skip_cudagraph_test = pytest.mark.skipif(
 
 
 @pytest.mark.skipif(not is_hip(), reason="ROCprofiler is only available on HIP")
-def test_rocprofiler_process_exit_without_finalize(tmp_path: pathlib.Path):
+@pytest.mark.parametrize("capture_graph", [False, pytest.param(True, marks=_skip_cudagraph_test)])
+def test_rocprofiler_process_exit_without_finalize(tmp_path: pathlib.Path, capture_graph: bool):
     # Run in a subprocess so normal process teardown exercises the ordering
     # between Proton static destruction and rocprofiler-sdk's atexit handler.
     script = tmp_path / "unfinalized_rocprofiler.py"
@@ -66,8 +67,18 @@ def copy(x, y, n: tl.constexpr):
 x = torch.ones((1024,), device="cuda")
 y = torch.zeros_like(x)
 proton.start({str(output)!r}, hook="triton", backend="rocprofiler")
-for _ in range(100):
+if {capture_graph!r}:
     copy[(1,)](x, y, x.numel())
+    torch.cuda.synchronize()
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        with proton.scope("copy_scope", metrics={{"elements": x.numel()}}):
+            copy[(1,)](x, y, x.numel())
+for _ in range(100):
+    if {capture_graph!r}:
+        graph.replay()
+    else:
+        copy[(1,)](x, y, x.numel())
 # Intentionally omit synchronization and proton.finalize(). The SDK must
 # finish queued work and drain its pending callbacks before Proton destroys
 # the callback targets.
@@ -117,8 +128,10 @@ for iteration in range(2):
         graph.replay()
     proton.deactivate()
     proton.finalize()
-    del graph
     torch.testing.assert_close(x, y)
+# Captured metric kernels must remain safe after profiling stops.
+graph.replay()
+torch.cuda.synchronize()
 """)
     # The subprocess must exit normally after freeing graph metric buffers.
     result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=60,
