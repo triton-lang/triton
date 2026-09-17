@@ -500,11 +500,12 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %value : i32
   }
 
-  // The CTA barrier covers the pure call, so the arrival keeps its full count.
+  // The pure call clears warp coverage without adding pending memory effects.
   // CLEANUP-LABEL: @outlined_arrival_uses_full_count
   // CLEANUP: ttng.init_barrier {{.*}}, 1 :
   // CLEANUP: ttg.barrier local
   // CLEANUP-NEXT: %[[VALUE:.*]] = tt.call @pure_before_arrival
+  // CLEANUP-NEXT: ttg.barrier warp local
   // CLEANUP-NEXT: ttng.arrive_barrier {{.*}}, 1 :
   // CLEANUP: tt.return %[[VALUE]]
   tt.func private @outlined_arrival_uses_full_count(%value: i32) -> i32 attributes {noinline = true, "ttg.num-warps" = 2 : i32} {
