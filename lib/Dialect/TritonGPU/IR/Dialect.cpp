@@ -562,8 +562,14 @@ int64_t getAllocationElems(Attribute encoding, ArrayRef<int64_t> shape,
 
 SmallVector<unsigned> getMmaV2WarpsPerCTA(ArrayRef<int64_t> shape,
                                           int numWarps) {
-  if (shape.size() == 3)
-    return {static_cast<unsigned>(numWarps), 1, 1};
+  if (shape.size() == 3) {
+    // Avoid replicating batches across warps when the per-CTA batch extent is
+    // small. Distribute the remaining warps across M/N using the 2D heuristic.
+    unsigned batchWarps = std::min<int64_t>(shape[0], numWarps);
+    auto warps = getMmaV2WarpsPerCTA(shape.drop_front(), numWarps / batchWarps);
+    warps.insert(warps.begin(), batchWarps);
+    return warps;
+  }
 
   assert(shape.size() == 2);
   SmallVector<int64_t> reps = {ceil(shape[0], int64_t{16}),
