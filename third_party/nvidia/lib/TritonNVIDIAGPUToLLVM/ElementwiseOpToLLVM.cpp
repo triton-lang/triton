@@ -607,9 +607,9 @@ struct PreciseFDivOpConversion
   using Base::Base;
 
   SmallVector<Value> createDestOps(PreciseDivFOp op, OpAdaptor adaptor,
-                                 ConversionPatternRewriter &rewriter,
-                                 Type elemTy, MultipleOperandsRange operands,
-                                 Location loc) const {
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
     if (!elemTy.isF32())
       return {};
     // Preserve this rounding step when LLVM simplifies surrounding arithmetic.
@@ -950,7 +950,8 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
 
   patterns.add<ElementwiseToIntrinsicOpConversion<triton::PreciseSqrtOp>>(
       typeConverter, axisInfoAnalysis, "llvm.nvvm.sqrt.rn.f", benefit);
-  patterns.add<PreciseFDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<PreciseFDivOpConversion>(typeConverter, axisInfoAnalysis,
+                                        benefit);
   patterns.add<ElementwiseToIntrinsicOpConversion<triton::ApproxDivFOp>>(
       typeConverter, axisInfoAnalysis, "llvm.nvvm.div.approx.f", benefit);
 
