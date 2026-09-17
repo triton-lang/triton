@@ -9,7 +9,7 @@
   <title>Libdevice (tl.extra.libdevice) function &mdash; Triton  documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
       <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=9edc463e" />
-      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=fd6457a4" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=c83e6b79" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
@@ -140,54 +140,52 @@ For example, both <cite>__nv_asin</cite> and <cite>__nv_asinf</cite> calculate t
 Triton automatically selects the correct underlying device function to invoke based on input and output types.</p>
 <section id="asin-kernel">
 <h2>asin Kernel<a class="headerlink" href="#asin-kernel" title="Link to this heading"></a></h2>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
-
-<span class="kn">import</span><span class="w"> </span><span class="nn">triton</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">triton.language</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tl</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">inspect</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">triton.language.extra</span><span class="w"> </span><span class="kn">import</span> <span class="n">libdevice</span>
-
-<span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
-
-<span class="n">DEVICE</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_active_torch_device</span><span class="p">()</span>
-
-
-<span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">asin_kernel</span><span class="p">(</span>
-    <span class="n">x_ptr</span><span class="p">,</span>
-    <span class="n">y_ptr</span><span class="p">,</span>
-    <span class="n">n_elements</span><span class="p">,</span>
-    <span class="n">BLOCK_SIZE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-<span class="p">):</span>
-    <span class="n">pid</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-    <span class="n">block_start</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">*</span> <span class="n">BLOCK_SIZE</span>
-    <span class="n">offsets</span> <span class="o">=</span> <span class="n">block_start</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="p">)</span>
-    <span class="n">mask</span> <span class="o">=</span> <span class="n">offsets</span> <span class="o">&lt;</span> <span class="n">n_elements</span>
-    <span class="n">x</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">x_ptr</span> <span class="o">+</span> <span class="n">offsets</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
-    <span class="n">x</span> <span class="o">=</span> <span class="n">libdevice</span><span class="o">.</span><span class="n">asin</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
-    <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">y_ptr</span> <span class="o">+</span> <span class="n">offsets</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
-</pre></div>
-</div>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span><span class="w">
+</span><span class="w">
+</span><span class="kn">import</span><span class="w"> </span><span class="nn">triton</span><span class="w">
+</span><span class="kn">import</span><span class="w"> </span><span class="nn">triton</span><span class="nn">.</span><span class="nn">language</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tl</span><span class="w">
+</span><span class="kn">import</span><span class="w"> </span><span class="nn">inspect</span><span class="w">
+</span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span><span class="w">
+</span><span class="kn">from</span><span class="w"> </span><span class="nn">triton</span><span class="nn">.</span><span class="nn">language</span><span class="nn">.</span><span class="nn">extra</span><span class="w"> </span><span class="kn">import</span> <span class="n">libdevice</span><span class="w">
+</span><span class="w">
+</span><span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span><span class="w">
+</span><span class="w">
+</span><span class="n">DEVICE</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_active_torch_device</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span><span class="w">
+</span><span class="w">
+</span><span class="nd">&#64;triton</span><span class="o">.</span><span class="n">jit</span><span class="w">
+</span><span class="k">def</span><span class="w"> </span><span class="nf">asin_kernel</span><span class="p">(</span><span class="w">
+</span>    <span class="n">x_ptr</span><span class="p">,</span><span class="w">
+</span>    <span class="n">y_ptr</span><span class="p">,</span><span class="w">
+</span>    <span class="n">n_elements</span><span class="p">,</span><span class="w">
+</span>    <span class="n">BLOCK_SIZE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span><span class="w">
+</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>    <span class="n">pid</span> <span class="o">=</span> <a class="sphx-glr-backref-module-triton-language sphx-glr-backref-type-py-function reference internal" href="../../python-api/generated/triton.language.program_id.html#triton.language.program_id" title="triton.language.program_id"><span class="n">tl</span><span class="o">.</span><span class="n">program_id</span></a><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="w">
+</span>    <span class="n">block_start</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">*</span> <span class="n">BLOCK_SIZE</span><span class="w">
+</span>    <span class="n">offsets</span> <span class="o">=</span> <span class="n">block_start</span> <span class="o">+</span> <a class="sphx-glr-backref-module-triton-language sphx-glr-backref-type-py-function reference internal" href="../../python-api/generated/triton.language.arange.html#triton.language.arange" title="triton.language.arange"><span class="n">tl</span><span class="o">.</span><span class="n">arange</span></a><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="p">)</span><span class="w">
+</span>    <span class="n">mask</span> <span class="o">=</span> <span class="n">offsets</span> <span class="o">&lt;</span> <span class="n">n_elements</span><span class="w">
+</span>    <span class="n">x</span> <span class="o">=</span> <a class="sphx-glr-backref-module-triton-language sphx-glr-backref-type-py-function reference internal" href="../../python-api/generated/triton.language.load.html#triton.language.load" title="triton.language.load"><span class="n">tl</span><span class="o">.</span><span class="n">load</span></a><span class="p">(</span><span class="n">x_ptr</span> <span class="o">+</span> <span class="n">offsets</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span><span class="w">
+</span>    <span class="n">x</span> <span class="o">=</span> <span class="n">libdevice</span><span class="o">.</span><span class="n">asin</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="w">
+</span>    <a class="sphx-glr-backref-module-triton-language sphx-glr-backref-type-py-function reference internal" href="../../python-api/generated/triton.language.store.html#triton.language.store" title="triton.language.store"><span class="n">tl</span><span class="o">.</span><span class="n">store</span></a><span class="p">(</span><span class="n">y_ptr</span> <span class="o">+</span> <span class="n">offsets</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span><span class="w">
+</span></pre></div></div>
 </section>
 <section id="using-the-default-libdevice-library-path">
 <h2>Using the default libdevice library path<a class="headerlink" href="#using-the-default-libdevice-library-path" title="Link to this heading"></a></h2>
 <p>We can use the default libdevice library path encoded in <cite>triton/language/math.py</cite></p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-<span class="n">size</span> <span class="o">=</span> <span class="mi">98432</span>
-<span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">size</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
-<span class="n">output_triton</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">size</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
-<span class="n">output_torch</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">asin</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
-<span class="k">assert</span> <span class="n">x</span><span class="o">.</span><span class="n">is_cuda</span> <span class="ow">and</span> <span class="n">output_triton</span><span class="o">.</span><span class="n">is_cuda</span>
-<span class="n">n_elements</span> <span class="o">=</span> <span class="n">output_torch</span><span class="o">.</span><span class="n">numel</span><span class="p">()</span>
-<span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">meta</span><span class="p">:</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">n_elements</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s1">'BLOCK_SIZE'</span><span class="p">]),</span> <span class="p">)</span>
-<span class="n">asin_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span><span class="n">x</span><span class="p">,</span> <span class="n">output_triton</span><span class="p">,</span> <span class="n">n_elements</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="o">=</span><span class="mi">1024</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="n">output_torch</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="n">output_triton</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s1">'The maximum difference between torch and triton is '</span>
-      <span class="sa">f</span><span class="s1">'</span><span class="si">{</span><span class="n">torch</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">output_torch</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">output_triton</span><span class="p">))</span><span class="si">}</span><span class="s1">'</span><span class="p">)</span>
-</pre></div>
-</div>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="w">
+</span><span class="n">size</span> <span class="o">=</span> <span class="mi">98432</span><span class="w">
+</span><span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">size</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span><span class="w">
+</span><span class="n">output_triton</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">size</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span><span class="w">
+</span><span class="n">output_torch</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">asin</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="w">
+</span><span class="k">assert</span> <span class="n">x</span><span class="o">.</span><span class="n">is_cuda</span> <span class="ow">and</span> <span class="n">output_triton</span><span class="o">.</span><span class="n">is_cuda</span><span class="w">
+</span><span class="n">n_elements</span> <span class="o">=</span> <span class="n">output_torch</span><span class="o">.</span><span class="n">numel</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span><span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">meta</span><span class="p">:</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">n_elements</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s1">'</span><span class="s1">BLOCK_SIZE</span><span class="s1">'</span><span class="p">]</span><span class="p">)</span><span class="p">,</span> <span class="p">)</span><span class="w">
+</span><span class="n">asin_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">]</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">output_triton</span><span class="p">,</span> <span class="n">n_elements</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="o">=</span><span class="mi">1024</span><span class="p">)</span><span class="w">
+</span><span class="nb">print</span><span class="p">(</span><span class="n">output_torch</span><span class="p">)</span><span class="w">
+</span><span class="nb">print</span><span class="p">(</span><span class="n">output_triton</span><span class="p">)</span><span class="w">
+</span><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s1">'</span><span class="s1">The maximum difference between torch and triton is </span><span class="s1">'</span><span class="w">
+</span>      <span class="sa">f</span><span class="s1">'</span><span class="si">{</span><span class="n">torch</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">output_torch</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">output_triton</span><span class="p">)</span><span class="p">)</span><span class="si">}</span><span class="s1">'</span><span class="p">)</span><span class="w">
+</span></pre></div></div>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>tensor([0.4105, 0.5430, 0.0249,  ..., 0.0424, 0.5351, 0.8149], device='cuda:0')
 tensor([0.4105, 0.5430, 0.0249,  ..., 0.0424, 0.5351, 0.8149], device='cuda:0')
 The maximum difference between torch and triton is 0.0
@@ -197,43 +195,42 @@ The maximum difference between torch and triton is 0.0
 <section id="customize-the-libdevice-library-path">
 <h2>Customize the libdevice library path<a class="headerlink" href="#customize-the-libdevice-library-path" title="Link to this heading"></a></h2>
 <p>We can also customize the libdevice library path by passing the path to the <cite>libdevice</cite> library to the <cite>asin</cite> kernel.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">is_cuda</span><span class="p">():</span>
-    <span class="k">return</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_current_target</span><span class="p">()</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">"cuda"</span>
-
-
-<span class="k">def</span><span class="w"> </span><span class="nf">is_hip</span><span class="p">():</span>
-    <span class="k">return</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_current_target</span><span class="p">()</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">"hip"</span>
-
-
-<span class="n">current_file</span> <span class="o">=</span> <span class="n">inspect</span><span class="o">.</span><span class="n">getfile</span><span class="p">(</span><span class="n">inspect</span><span class="o">.</span><span class="n">currentframe</span><span class="p">())</span>
-<span class="n">current_dir</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span><span class="n">current_file</span><span class="p">)))</span>
-
-<span class="k">if</span> <span class="n">is_cuda</span><span class="p">():</span>
-    <span class="n">libdir</span> <span class="o">=</span> <span class="n">current_dir</span><span class="o">.</span><span class="n">parent</span><span class="o">.</span><span class="n">parent</span> <span class="o">/</span> <span class="s1">'third_party/nvidia/backend/lib'</span>
-    <span class="n">extern_libs</span> <span class="o">=</span> <span class="p">{</span><span class="s1">'libdevice'</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">libdir</span> <span class="o">/</span> <span class="s1">'libdevice.10.bc'</span><span class="p">)}</span>
-<span class="k">elif</span> <span class="n">is_hip</span><span class="p">():</span>
-    <span class="n">libdir</span> <span class="o">=</span> <span class="n">current_dir</span><span class="o">.</span><span class="n">parent</span><span class="o">.</span><span class="n">parent</span> <span class="o">/</span> <span class="s1">'third_party/amd/backend/lib'</span>
-    <span class="n">extern_libs</span> <span class="o">=</span> <span class="p">{}</span>
-    <span class="n">libs</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"ocml"</span><span class="p">,</span> <span class="s2">"ockl"</span><span class="p">]</span>
-    <span class="k">for</span> <span class="n">lib</span> <span class="ow">in</span> <span class="n">libs</span><span class="p">:</span>
-        <span class="n">extern_libs</span><span class="p">[</span><span class="n">lib</span><span class="p">]</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">libdir</span> <span class="o">/</span> <span class="sa">f</span><span class="s1">'</span><span class="si">{</span><span class="n">lib</span><span class="si">}</span><span class="s1">.bc'</span><span class="p">)</span>
-<span class="k">else</span><span class="p">:</span>
-    <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s1">'unknown backend'</span><span class="p">)</span>
-
-<span class="n">output_triton</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
-<span class="n">asin_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span><span class="n">x</span><span class="p">,</span> <span class="n">output_triton</span><span class="p">,</span> <span class="n">n_elements</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="o">=</span><span class="mi">1024</span><span class="p">,</span> <span class="n">extern_libs</span><span class="o">=</span><span class="n">extern_libs</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="n">output_torch</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="n">output_triton</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s1">'The maximum difference between torch and triton is '</span>
-      <span class="sa">f</span><span class="s1">'</span><span class="si">{</span><span class="n">torch</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">output_torch</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">output_triton</span><span class="p">))</span><span class="si">}</span><span class="s1">'</span><span class="p">)</span>
-</pre></div>
-</div>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span class="k">def</span><span class="w"> </span><span class="nf">is_cuda</span><span class="p">(</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>    <span class="k">return</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_current_target</span><span class="p">(</span><span class="p">)</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">&quot;</span><span class="s2">cuda</span><span class="s2">&quot;</span><span class="w">
+</span><span class="w">
+</span><span class="w">
+</span><span class="k">def</span><span class="w"> </span><span class="nf">is_hip</span><span class="p">(</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>    <span class="k">return</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_current_target</span><span class="p">(</span><span class="p">)</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">&quot;</span><span class="s2">hip</span><span class="s2">&quot;</span><span class="w">
+</span><span class="w">
+</span><span class="w">
+</span><span class="n">current_file</span> <span class="o">=</span> <span class="n">inspect</span><span class="o">.</span><span class="n">getfile</span><span class="p">(</span><span class="n">inspect</span><span class="o">.</span><span class="n">currentframe</span><span class="p">(</span><span class="p">)</span><span class="p">)</span><span class="w">
+</span><span class="n">current_dir</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span><span class="n">current_file</span><span class="p">)</span><span class="p">)</span><span class="p">)</span><span class="w">
+</span><span class="w">
+</span><span class="k">if</span> <span class="n">is_cuda</span><span class="p">(</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>    <span class="n">libdir</span> <span class="o">=</span> <span class="n">current_dir</span><span class="o">.</span><span class="n">parent</span><span class="o">.</span><span class="n">parent</span> <span class="o">/</span> <span class="s1">'</span><span class="s1">third_party/nvidia/backend/lib</span><span class="s1">'</span><span class="w">
+</span>    <span class="n">extern_libs</span> <span class="o">=</span> <span class="p">{</span><span class="s1">'</span><span class="s1">libdevice</span><span class="s1">'</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">libdir</span> <span class="o">/</span> <span class="s1">'</span><span class="s1">libdevice.10.bc</span><span class="s1">'</span><span class="p">)</span><span class="p">}</span><span class="w">
+</span><span class="k">elif</span> <span class="n">is_hip</span><span class="p">(</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>    <span class="n">libdir</span> <span class="o">=</span> <span class="n">current_dir</span><span class="o">.</span><span class="n">parent</span><span class="o">.</span><span class="n">parent</span> <span class="o">/</span> <span class="s1">'</span><span class="s1">third_party/amd/backend/lib</span><span class="s1">'</span><span class="w">
+</span>    <span class="n">extern_libs</span> <span class="o">=</span> <span class="p">{</span><span class="p">}</span><span class="w">
+</span>    <span class="n">libs</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;</span><span class="s2">ocml</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">ockl</span><span class="s2">&quot;</span><span class="p">]</span><span class="w">
+</span>    <span class="k">for</span> <span class="n">lib</span> <span class="ow">in</span> <span class="n">libs</span><span class="p">:</span><span class="w">
+</span>        <span class="n">extern_libs</span><span class="p">[</span><span class="n">lib</span><span class="p">]</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">libdir</span> <span class="o">/</span> <span class="sa">f</span><span class="s1">'</span><span class="si">{</span><span class="n">lib</span><span class="si">}</span><span class="s1">.bc</span><span class="s1">'</span><span class="p">)</span><span class="w">
+</span><span class="k">else</span><span class="p">:</span><span class="w">
+</span>    <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s1">'</span><span class="s1">unknown backend</span><span class="s1">'</span><span class="p">)</span><span class="w">
+</span><span class="w">
+</span><span class="n">output_triton</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="w">
+</span><span class="n">asin_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">]</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">output_triton</span><span class="p">,</span> <span class="n">n_elements</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="o">=</span><span class="mi">1024</span><span class="p">,</span> <span class="n">extern_libs</span><span class="o">=</span><span class="n">extern_libs</span><span class="p">)</span><span class="w">
+</span><span class="nb">print</span><span class="p">(</span><span class="n">output_torch</span><span class="p">)</span><span class="w">
+</span><span class="nb">print</span><span class="p">(</span><span class="n">output_triton</span><span class="p">)</span><span class="w">
+</span><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s1">'</span><span class="s1">The maximum difference between torch and triton is </span><span class="s1">'</span><span class="w">
+</span>      <span class="sa">f</span><span class="s1">'</span><span class="si">{</span><span class="n">torch</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">output_torch</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">output_triton</span><span class="p">)</span><span class="p">)</span><span class="si">}</span><span class="s1">'</span><span class="p">)</span><span class="w">
+</span></pre></div></div>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>tensor([0.4105, 0.5430, 0.0249,  ..., 0.0424, 0.5351, 0.8149], device='cuda:0')
 tensor([0.4105, 0.5430, 0.0249,  ..., 0.0424, 0.5351, 0.8149], device='cuda:0')
 The maximum difference between torch and triton is 0.0
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.168 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.165 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-07-extern-functions-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/859d98d69fb02c33053d474c27761677/07-extern-functions.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">07-extern-functions.ipynb</span></code></a></p>

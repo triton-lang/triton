@@ -9,7 +9,7 @@
   <title>Low-Memory Dropout &mdash; Triton  documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
       <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=9edc463e" />
-      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=fd6457a4" />
+      <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=c83e6b79" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
@@ -154,60 +154,59 @@ increase the norm of the output (which can be a bad thing, e.g. it can lead to a
 in the output softmax temperature). To prevent this we multiply the output by <span class="math notranslate nohighlight">\(\frac{1}{1 - p}\)</span>, which
 keeps the norm consistent regardless of the dropout probability.</p>
 <p>Let’s first take a look at the baseline implementation.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">tabulate</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
-
-<span class="kn">import</span><span class="w"> </span><span class="nn">triton</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">triton.language</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tl</span>
-
-<span class="n">DEVICE</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_active_torch_device</span><span class="p">()</span>
-
-
-<span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">_dropout</span><span class="p">(</span>
-    <span class="n">x_ptr</span><span class="p">,</span>  <span class="c1"># pointer to the input</span>
-    <span class="n">x_keep_ptr</span><span class="p">,</span>  <span class="c1"># pointer to a mask of 0s and 1s</span>
-    <span class="n">output_ptr</span><span class="p">,</span>  <span class="c1"># pointer to the output</span>
-    <span class="n">n_elements</span><span class="p">,</span>  <span class="c1"># number of elements in the `x` tensor</span>
-    <span class="n">p</span><span class="p">,</span>  <span class="c1"># probability that an element of `x` is changed to zero</span>
-    <span class="n">BLOCK_SIZE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-<span class="p">):</span>
-    <span class="n">pid</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-    <span class="n">block_start</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">*</span> <span class="n">BLOCK_SIZE</span>
-    <span class="n">offsets</span> <span class="o">=</span> <span class="n">block_start</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="p">)</span>
-    <span class="n">mask</span> <span class="o">=</span> <span class="n">offsets</span> <span class="o">&lt;</span> <span class="n">n_elements</span>
-    <span class="c1"># Load data</span>
-    <span class="n">x</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">x_ptr</span> <span class="o">+</span> <span class="n">offsets</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
-    <span class="n">x_keep</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">x_keep_ptr</span> <span class="o">+</span> <span class="n">offsets</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
-    <span class="c1"># The line below is the crucial part, described in the paragraph above!</span>
-    <span class="n">output</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">x_keep</span><span class="p">,</span> <span class="n">x</span> <span class="o">/</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">p</span><span class="p">),</span> <span class="mf">0.0</span><span class="p">)</span>
-    <span class="c1"># Write-back output</span>
-    <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">output_ptr</span> <span class="o">+</span> <span class="n">offsets</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
-
-
-<span class="k">def</span><span class="w"> </span><span class="nf">dropout</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">x_keep</span><span class="p">,</span> <span class="n">p</span><span class="p">):</span>
-    <span class="n">output</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
-    <span class="k">assert</span> <span class="n">x</span><span class="o">.</span><span class="n">is_contiguous</span><span class="p">()</span>
-    <span class="n">n_elements</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">numel</span><span class="p">()</span>
-    <span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">meta</span><span class="p">:</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">n_elements</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s1">'BLOCK_SIZE'</span><span class="p">]),</span> <span class="p">)</span>
-    <span class="n">_dropout</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span><span class="n">x</span><span class="p">,</span> <span class="n">x_keep</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">n_elements</span><span class="p">,</span> <span class="n">p</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="o">=</span><span class="mi">1024</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">output</span>
-
-
-<span class="c1"># Input tensor</span>
-<span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
-<span class="c1"># Dropout mask</span>
-<span class="n">p</span> <span class="o">=</span> <span class="mf">0.5</span>
-<span class="n">x_keep</span> <span class="o">=</span> <span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span> <span class="o">&gt;</span> <span class="n">p</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
-<span class="c1">#</span>
-<span class="n">output</span> <span class="o">=</span> <span class="n">dropout</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">x_keep</span><span class="o">=</span><span class="n">x_keep</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="n">p</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="n">tabulate</span><span class="o">.</span><span class="n">tabulate</span><span class="p">([</span>
-    <span class="p">[</span><span class="s2">"input"</span><span class="p">]</span> <span class="o">+</span> <span class="n">x</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
-    <span class="p">[</span><span class="s2">"keep mask"</span><span class="p">]</span> <span class="o">+</span> <span class="n">x_keep</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
-    <span class="p">[</span><span class="s2">"output"</span><span class="p">]</span> <span class="o">+</span> <span class="n">output</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
-<span class="p">]))</span>
-</pre></div>
-</div>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span class="kn">import</span><span class="w"> </span><span class="nn">tabulate</span><span class="w">
+</span><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span><span class="w">
+</span><span class="w">
+</span><span class="kn">import</span><span class="w"> </span><span class="nn">triton</span><span class="w">
+</span><span class="kn">import</span><span class="w"> </span><span class="nn">triton</span><span class="nn">.</span><span class="nn">language</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tl</span><span class="w">
+</span><span class="w">
+</span><span class="n">DEVICE</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_active_torch_device</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span><span class="w">
+</span><span class="w">
+</span><span class="nd">&#64;triton</span><span class="o">.</span><span class="n">jit</span><span class="w">
+</span><span class="k">def</span><span class="w"> </span><span class="nf">_dropout</span><span class="p">(</span><span class="w">
+</span>    <span class="n">x_ptr</span><span class="p">,</span>  <span class="c1"># pointer to the input</span><span class="w">
+</span>    <span class="n">x_keep_ptr</span><span class="p">,</span>  <span class="c1"># pointer to a mask of 0s and 1s</span><span class="w">
+</span>    <span class="n">output_ptr</span><span class="p">,</span>  <span class="c1"># pointer to the output</span><span class="w">
+</span>    <span class="n">n_elements</span><span class="p">,</span>  <span class="c1"># number of elements in the `x` tensor</span><span class="w">
+</span>    <span class="n">p</span><span class="p">,</span>  <span class="c1"># probability that an element of `x` is changed to zero</span><span class="w">
+</span>    <span class="n">BLOCK_SIZE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span><span class="w">
+</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>    <span class="n">pid</span> <span class="o">=</span> <a class="sphx-glr-backref-module-triton-language sphx-glr-backref-type-py-function reference internal" href="../../python-api/generated/triton.language.program_id.html#triton.language.program_id" title="triton.language.program_id"><span class="n">tl</span><span class="o">.</span><span class="n">program_id</span></a><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="w">
+</span>    <span class="n">block_start</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">*</span> <span class="n">BLOCK_SIZE</span><span class="w">
+</span>    <span class="n">offsets</span> <span class="o">=</span> <span class="n">block_start</span> <span class="o">+</span> <a class="sphx-glr-backref-module-triton-language sphx-glr-backref-type-py-function reference internal" href="../../python-api/generated/triton.language.arange.html#triton.language.arange" title="triton.language.arange"><span class="n">tl</span><span class="o">.</span><span class="n">arange</span></a><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="p">)</span><span class="w">
+</span>    <span class="n">mask</span> <span class="o">=</span> <span class="n">offsets</span> <span class="o">&lt;</span> <span class="n">n_elements</span><span class="w">
+</span>    <span class="c1"># Load data</span><span class="w">
+</span>    <span class="n">x</span> <span class="o">=</span> <a class="sphx-glr-backref-module-triton-language sphx-glr-backref-type-py-function reference internal" href="../../python-api/generated/triton.language.load.html#triton.language.load" title="triton.language.load"><span class="n">tl</span><span class="o">.</span><span class="n">load</span></a><span class="p">(</span><span class="n">x_ptr</span> <span class="o">+</span> <span class="n">offsets</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span><span class="w">
+</span>    <span class="n">x_keep</span> <span class="o">=</span> <a class="sphx-glr-backref-module-triton-language sphx-glr-backref-type-py-function reference internal" href="../../python-api/generated/triton.language.load.html#triton.language.load" title="triton.language.load"><span class="n">tl</span><span class="o">.</span><span class="n">load</span></a><span class="p">(</span><span class="n">x_keep_ptr</span> <span class="o">+</span> <span class="n">offsets</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span><span class="w">
+</span>    <span class="c1"># The line below is the crucial part, described in the paragraph above!</span><span class="w">
+</span>    <span class="n">output</span> <span class="o">=</span> <a class="sphx-glr-backref-module-triton-language sphx-glr-backref-type-py-function reference internal" href="../../python-api/generated/triton.language.where.html#triton.language.where" title="triton.language.where"><span class="n">tl</span><span class="o">.</span><span class="n">where</span></a><span class="p">(</span><span class="n">x_keep</span><span class="p">,</span> <span class="n">x</span> <span class="o">/</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">p</span><span class="p">)</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span><span class="w">
+</span>    <span class="c1"># Write-back output</span><span class="w">
+</span>    <a class="sphx-glr-backref-module-triton-language sphx-glr-backref-type-py-function reference internal" href="../../python-api/generated/triton.language.store.html#triton.language.store" title="triton.language.store"><span class="n">tl</span><span class="o">.</span><span class="n">store</span></a><span class="p">(</span><span class="n">output_ptr</span> <span class="o">+</span> <span class="n">offsets</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span><span class="w">
+</span><span class="w">
+</span><span class="w">
+</span><span class="k">def</span><span class="w"> </span><span class="nf">dropout</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">x_keep</span><span class="p">,</span> <span class="n">p</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>    <span class="n">output</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="w">
+</span>    <span class="k">assert</span> <span class="n">x</span><span class="o">.</span><span class="n">is_contiguous</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span>    <span class="n">n_elements</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">numel</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span>    <span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">meta</span><span class="p">:</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">n_elements</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s1">'</span><span class="s1">BLOCK_SIZE</span><span class="s1">'</span><span class="p">]</span><span class="p">)</span><span class="p">,</span> <span class="p">)</span><span class="w">
+</span>    <span class="n">_dropout</span><span class="p">[</span><span class="n">grid</span><span class="p">]</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">x_keep</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">n_elements</span><span class="p">,</span> <span class="n">p</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="o">=</span><span class="mi">1024</span><span class="p">)</span><span class="w">
+</span>    <span class="k">return</span> <span class="n">output</span><span class="w">
+</span><span class="w">
+</span><span class="w">
+</span><span class="c1"># Input tensor</span><span class="w">
+</span><span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="p">)</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span><span class="w">
+</span><span class="c1"># Dropout mask</span><span class="w">
+</span><span class="n">p</span> <span class="o">=</span> <span class="mf">0.5</span><span class="w">
+</span><span class="n">x_keep</span> <span class="o">=</span> <span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="p">)</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span> <span class="o">&gt;</span> <span class="n">p</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span><span class="w">
+</span><span class="c1">#</span><span class="w">
+</span><span class="n">output</span> <span class="o">=</span> <span class="n">dropout</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">x_keep</span><span class="o">=</span><span class="n">x_keep</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="n">p</span><span class="p">)</span><span class="w">
+</span><span class="nb">print</span><span class="p">(</span><span class="n">tabulate</span><span class="o">.</span><span class="n">tabulate</span><span class="p">(</span><span class="p">[</span><span class="w">
+</span>    <span class="p">[</span><span class="s2">&quot;</span><span class="s2">input</span><span class="s2">&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="n">x</span><span class="o">.</span><span class="n">tolist</span><span class="p">(</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>    <span class="p">[</span><span class="s2">&quot;</span><span class="s2">keep mask</span><span class="s2">&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="n">x_keep</span><span class="o">.</span><span class="n">tolist</span><span class="p">(</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>    <span class="p">[</span><span class="s2">&quot;</span><span class="s2">output</span><span class="s2">&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="n">output</span><span class="o">.</span><span class="n">tolist</span><span class="p">(</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span><span class="p">]</span><span class="p">)</span><span class="p">)</span><span class="w">
+</span></pre></div></div>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>/home/runner/_work/triton/triton/python/triton/language/semantic.py:1710: UserWarning: tl.where with a non-boolean condition is deprecated and will error out in a future triton release. Got int32
   warnings.warn(
 ---------  ---------  -------  --------  -------  --------  -------  ---------  --------  --------  -------
@@ -235,54 +234,53 @@ other <a class="reference internal" href="../../python-api/triton.language.html#
 <p>Triton’s implementation of PRNG is based on the Philox algorithm (described on <a class="reference internal" href="#salmon2011" id="id2"><span>[SALMON2011]</span></a>).</p>
 </div>
 <p>Let’s put it all together.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">_seeded_dropout</span><span class="p">(</span>
-    <span class="n">x_ptr</span><span class="p">,</span>
-    <span class="n">output_ptr</span><span class="p">,</span>
-    <span class="n">n_elements</span><span class="p">,</span>
-    <span class="n">p</span><span class="p">,</span>
-    <span class="n">seed</span><span class="p">,</span>
-    <span class="n">BLOCK_SIZE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
-<span class="p">):</span>
-    <span class="c1"># compute memory offsets of elements handled by this instance</span>
-    <span class="n">pid</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-    <span class="n">block_start</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">*</span> <span class="n">BLOCK_SIZE</span>
-    <span class="n">offsets</span> <span class="o">=</span> <span class="n">block_start</span> <span class="o">+</span> <span class="n">tl</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="p">)</span>
-    <span class="c1"># load data from x</span>
-    <span class="n">mask</span> <span class="o">=</span> <span class="n">offsets</span> <span class="o">&lt;</span> <span class="n">n_elements</span>
-    <span class="n">x</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">x_ptr</span> <span class="o">+</span> <span class="n">offsets</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
-    <span class="c1"># randomly prune it</span>
-    <span class="n">random</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">seed</span><span class="p">,</span> <span class="n">offsets</span><span class="p">)</span>
-    <span class="n">x_keep</span> <span class="o">=</span> <span class="n">random</span> <span class="o">&gt;</span> <span class="n">p</span>
-    <span class="c1"># write-back</span>
-    <span class="n">output</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">x_keep</span><span class="p">,</span> <span class="n">x</span> <span class="o">/</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">p</span><span class="p">),</span> <span class="mf">0.0</span><span class="p">)</span>
-    <span class="n">tl</span><span class="o">.</span><span class="n">store</span><span class="p">(</span><span class="n">output_ptr</span> <span class="o">+</span> <span class="n">offsets</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span>
-
-
-<span class="k">def</span><span class="w"> </span><span class="nf">seeded_dropout</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">p</span><span class="p">,</span> <span class="n">seed</span><span class="p">):</span>
-    <span class="n">output</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
-    <span class="k">assert</span> <span class="n">x</span><span class="o">.</span><span class="n">is_contiguous</span><span class="p">()</span>
-    <span class="n">n_elements</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">numel</span><span class="p">()</span>
-    <span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">meta</span><span class="p">:</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">n_elements</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s1">'BLOCK_SIZE'</span><span class="p">]),</span> <span class="p">)</span>
-    <span class="n">_seeded_dropout</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span><span class="n">x</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">n_elements</span><span class="p">,</span> <span class="n">p</span><span class="p">,</span> <span class="n">seed</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="o">=</span><span class="mi">1024</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">output</span>
-
-
-<span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
-<span class="c1"># Compare this to the baseline - dropout mask is never instantiated!</span>
-<span class="n">output</span> <span class="o">=</span> <span class="n">seeded_dropout</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">123</span><span class="p">)</span>
-<span class="n">output2</span> <span class="o">=</span> <span class="n">seeded_dropout</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">123</span><span class="p">)</span>
-<span class="n">output3</span> <span class="o">=</span> <span class="n">seeded_dropout</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">512</span><span class="p">)</span>
-
-<span class="nb">print</span><span class="p">(</span>
-    <span class="n">tabulate</span><span class="o">.</span><span class="n">tabulate</span><span class="p">([</span>
-        <span class="p">[</span><span class="s2">"input"</span><span class="p">]</span> <span class="o">+</span> <span class="n">x</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
-        <span class="p">[</span><span class="s2">"output (seed = 123)"</span><span class="p">]</span> <span class="o">+</span> <span class="n">output</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
-        <span class="p">[</span><span class="s2">"output (seed = 123)"</span><span class="p">]</span> <span class="o">+</span> <span class="n">output2</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
-        <span class="p">[</span><span class="s2">"output (seed = 512)"</span><span class="p">]</span> <span class="o">+</span> <span class="n">output3</span><span class="o">.</span><span class="n">tolist</span><span class="p">(),</span>
-    <span class="p">]))</span>
-</pre></div>
-</div>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span class="nd">&#64;triton</span><span class="o">.</span><span class="n">jit</span><span class="w">
+</span><span class="k">def</span><span class="w"> </span><span class="nf">_seeded_dropout</span><span class="p">(</span><span class="w">
+</span>    <span class="n">x_ptr</span><span class="p">,</span><span class="w">
+</span>    <span class="n">output_ptr</span><span class="p">,</span><span class="w">
+</span>    <span class="n">n_elements</span><span class="p">,</span><span class="w">
+</span>    <span class="n">p</span><span class="p">,</span><span class="w">
+</span>    <span class="n">seed</span><span class="p">,</span><span class="w">
+</span>    <span class="n">BLOCK_SIZE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span><span class="w">
+</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>    <span class="c1"># compute memory offsets of elements handled by this instance</span><span class="w">
+</span>    <span class="n">pid</span> <span class="o">=</span> <a class="sphx-glr-backref-module-triton-language sphx-glr-backref-type-py-function reference internal" href="../../python-api/generated/triton.language.program_id.html#triton.language.program_id" title="triton.language.program_id"><span class="n">tl</span><span class="o">.</span><span class="n">program_id</span></a><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="w">
+</span>    <span class="n">block_start</span> <span class="o">=</span> <span class="n">pid</span> <span class="o">*</span> <span class="n">BLOCK_SIZE</span><span class="w">
+</span>    <span class="n">offsets</span> <span class="o">=</span> <span class="n">block_start</span> <span class="o">+</span> <a class="sphx-glr-backref-module-triton-language sphx-glr-backref-type-py-function reference internal" href="../../python-api/generated/triton.language.arange.html#triton.language.arange" title="triton.language.arange"><span class="n">tl</span><span class="o">.</span><span class="n">arange</span></a><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="p">)</span><span class="w">
+</span>    <span class="c1"># load data from x</span><span class="w">
+</span>    <span class="n">mask</span> <span class="o">=</span> <span class="n">offsets</span> <span class="o">&lt;</span> <span class="n">n_elements</span><span class="w">
+</span>    <span class="n">x</span> <span class="o">=</span> <a class="sphx-glr-backref-module-triton-language sphx-glr-backref-type-py-function reference internal" href="../../python-api/generated/triton.language.load.html#triton.language.load" title="triton.language.load"><span class="n">tl</span><span class="o">.</span><span class="n">load</span></a><span class="p">(</span><span class="n">x_ptr</span> <span class="o">+</span> <span class="n">offsets</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span><span class="w">
+</span>    <span class="c1"># randomly prune it</span><span class="w">
+</span>    <span class="n">random</span> <span class="o">=</span> <a class="sphx-glr-backref-module-triton-language sphx-glr-backref-type-py-function reference internal" href="../../python-api/generated/triton.language.rand.html#triton.language.rand" title="triton.language.rand"><span class="n">tl</span><span class="o">.</span><span class="n">rand</span></a><span class="p">(</span><span class="n">seed</span><span class="p">,</span> <span class="n">offsets</span><span class="p">)</span><span class="w">
+</span>    <span class="n">x_keep</span> <span class="o">=</span> <span class="n">random</span> <span class="o">&gt;</span> <span class="n">p</span><span class="w">
+</span>    <span class="c1"># write-back</span><span class="w">
+</span>    <span class="n">output</span> <span class="o">=</span> <a class="sphx-glr-backref-module-triton-language sphx-glr-backref-type-py-function reference internal" href="../../python-api/generated/triton.language.where.html#triton.language.where" title="triton.language.where"><span class="n">tl</span><span class="o">.</span><span class="n">where</span></a><span class="p">(</span><span class="n">x_keep</span><span class="p">,</span> <span class="n">x</span> <span class="o">/</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">p</span><span class="p">)</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span><span class="w">
+</span>    <a class="sphx-glr-backref-module-triton-language sphx-glr-backref-type-py-function reference internal" href="../../python-api/generated/triton.language.store.html#triton.language.store" title="triton.language.store"><span class="n">tl</span><span class="o">.</span><span class="n">store</span></a><span class="p">(</span><span class="n">output_ptr</span> <span class="o">+</span> <span class="n">offsets</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="n">mask</span><span class="p">)</span><span class="w">
+</span><span class="w">
+</span><span class="w">
+</span><span class="k">def</span><span class="w"> </span><span class="nf">seeded_dropout</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">p</span><span class="p">,</span> <span class="n">seed</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>    <span class="n">output</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="w">
+</span>    <span class="k">assert</span> <span class="n">x</span><span class="o">.</span><span class="n">is_contiguous</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span>    <span class="n">n_elements</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">numel</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span>    <span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">meta</span><span class="p">:</span> <span class="p">(</span><span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">n_elements</span><span class="p">,</span> <span class="n">meta</span><span class="p">[</span><span class="s1">'</span><span class="s1">BLOCK_SIZE</span><span class="s1">'</span><span class="p">]</span><span class="p">)</span><span class="p">,</span> <span class="p">)</span><span class="w">
+</span>    <span class="n">_seeded_dropout</span><span class="p">[</span><span class="n">grid</span><span class="p">]</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">n_elements</span><span class="p">,</span> <span class="n">p</span><span class="p">,</span> <span class="n">seed</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="o">=</span><span class="mi">1024</span><span class="p">)</span><span class="w">
+</span>    <span class="k">return</span> <span class="n">output</span><span class="w">
+</span><span class="w">
+</span><span class="w">
+</span><span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="p">)</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span><span class="w">
+</span><span class="c1"># Compare this to the baseline - dropout mask is never instantiated!</span><span class="w">
+</span><span class="n">output</span> <span class="o">=</span> <span class="n">seeded_dropout</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">123</span><span class="p">)</span><span class="w">
+</span><span class="n">output2</span> <span class="o">=</span> <span class="n">seeded_dropout</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">123</span><span class="p">)</span><span class="w">
+</span><span class="n">output3</span> <span class="o">=</span> <span class="n">seeded_dropout</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">512</span><span class="p">)</span><span class="w">
+</span><span class="w">
+</span><span class="nb">print</span><span class="p">(</span><span class="w">
+</span>    <span class="n">tabulate</span><span class="o">.</span><span class="n">tabulate</span><span class="p">(</span><span class="p">[</span><span class="w">
+</span>        <span class="p">[</span><span class="s2">&quot;</span><span class="s2">input</span><span class="s2">&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="n">x</span><span class="o">.</span><span class="n">tolist</span><span class="p">(</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>        <span class="p">[</span><span class="s2">&quot;</span><span class="s2">output (seed = 123)</span><span class="s2">&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="n">output</span><span class="o">.</span><span class="n">tolist</span><span class="p">(</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>        <span class="p">[</span><span class="s2">&quot;</span><span class="s2">output (seed = 123)</span><span class="s2">&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="n">output2</span><span class="o">.</span><span class="n">tolist</span><span class="p">(</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>        <span class="p">[</span><span class="s2">&quot;</span><span class="s2">output (seed = 512)</span><span class="s2">&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="n">output3</span><span class="o">.</span><span class="n">tolist</span><span class="p">(</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>    <span class="p">]</span><span class="p">)</span><span class="p">)</span><span class="w">
+</span></pre></div></div>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>-------------------  -------  ---------  ---------  -------  --------  --------  -------  --------  -------  ---------
 input                1.48333  -0.239537  -0.640795  1.62631  0.263036  -0.71516  1.99474  -1.09546  1.81107  -0.170083
 output (seed = 123)  0        -0.479074   0         0        0         -1.43032  0         0        3.62215  -0.340165
@@ -315,7 +313,7 @@ to explore the <cite>python/triton/language/random.py</cite>!</p>
 <p>Nitish Srivastava and Geoffrey Hinton and Alex Krizhevsky and Ilya Sutskever and Ruslan Salakhutdinov, “Dropout: A Simple Way to Prevent Neural Networks from Overfitting”, JMLR 2014</p>
 </div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.484 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.476 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-04-low-memory-dropout-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/bc847dec325798bdc436c4ef5ac8b78a/04-low-memory-dropout.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">04-low-memory-dropout.ipynb</span></code></a></p>
