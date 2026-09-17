@@ -169,9 +169,11 @@ public:
 
     RewritePatternSet patterns(context);
     patterns.add<FuseTMemLoadReducePattern>(context);
-    if (applyPatternsGreedily(m, std::move(patterns)).failed()) {
-      signalPassFailure();
-    }
+    bool changed = false;
+    if (failed(applyPatternsGreedily(m, std::move(patterns), {}, &changed)))
+      return signalPassFailure();
+    if (!changed)
+      markAllAnalysesPreserved();
   }
 };
 

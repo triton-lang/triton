@@ -424,8 +424,11 @@ public:
     patterns
         .add<TMemSplitLoadPattern, TMemStoreJoinPattern, TMemLoadReducePattern,
              TMemFromSharedMemPattern, TMemToSharedMemPattern>(context);
-    if (failed(applyPatternsGreedily(m, std::move(patterns))))
-      signalPassFailure();
+    bool changed = false;
+    if (failed(applyPatternsGreedily(m, std::move(patterns), {}, &changed)))
+      return signalPassFailure();
+    if (!changed)
+      markAllAnalysesPreserved();
   }
 };
 

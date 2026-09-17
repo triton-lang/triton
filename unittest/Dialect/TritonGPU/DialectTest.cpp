@@ -1,6 +1,8 @@
 #include <algorithm>
+#include <atomic>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <thread>
 
 #include "mlir/AsmParser/AsmParser.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -25,6 +27,31 @@ static void PrintTo(const Attribute &attr, std::ostream *os) {
 
 namespace mlir::triton::gpu {
 namespace {
+
+TEST(LayoutCache, ReferencesSurviveConcurrentInsertions) {
+  Cache<int, int> cache;
+  const int &original = cache.set(0, 42);
+  std::atomic<bool> valid{true};
+  std::vector<std::thread> workers;
+  for (int worker = 0; worker < 4; ++worker) {
+    workers.emplace_back([&, worker] {
+      for (int i = 1; i <= 2048; ++i) {
+        int key = worker * 2048 + i;
+        cache.set(key, key);
+        const int *value = cache.get(0);
+        if (value != &original || *value != 42)
+          valid = false;
+      }
+      // Inserting a duplicate must not mutate a value already being read.
+      cache.set(0, worker);
+    });
+  }
+  for (auto &worker : workers)
+    worker.join();
+  EXPECT_TRUE(valid);
+  EXPECT_EQ(&original, cache.get(0));
+  EXPECT_EQ(original, 42);
+}
 
 std::vector<DistributedEncodingTrait>
 createDistributedEncodings(MLIRContext &ctx) {

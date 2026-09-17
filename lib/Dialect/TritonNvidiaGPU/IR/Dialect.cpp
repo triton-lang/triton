@@ -463,11 +463,32 @@ getTmemCompatibleLayouts(Operation *op, RankedTensorType tensorType,
 }
 
 // Verify if the distributed layout can be mapped onto tensor memory.
+bool TritonNvidiaGPUDialect::isTMemLayoutCompatible(RankedTensorType tensorType,
+                                                    gpu::MemDescType memType,
+                                                    int maxnreg) {
+  auto key = std::make_tuple(tensorType, memType, maxnreg);
+  {
+    std::shared_lock lock(tmemLayoutCacheMutex);
+    auto it = tmemLayoutCache.find(key);
+    if (it != tmemLayoutCache.end())
+      return it->second;
+  }
+  // Types are immutable. Include the contextual register limit, which may
+  // change as warp specialization assigns registers to partitions.
+  bool compatible =
+      succeeded(computeTMemLdStEncodingInfo(tensorType, memType, maxnreg));
+  std::scoped_lock lock(tmemLayoutCacheMutex);
+  tmemLayoutCache.try_emplace(key, compatible);
+  return compatible;
+}
+
 bool isDistributedLayoutTMemCompatible(Operation *op,
                                        RankedTensorType tensorType,
                                        gpu::MemDescType memType) {
   auto maxnreg = getContextualMaxNReg(op);
-  return succeeded(computeTMemLdStEncodingInfo(tensorType, memType, maxnreg));
+  return op->getContext()
+      ->getLoadedDialect<TritonNvidiaGPUDialect>()
+      ->isTMemLayoutCompatible(tensorType, memType, maxnreg);
 }
 
 LogicalResult TensorMemoryEncodingAttr::verify(

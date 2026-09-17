@@ -6,6 +6,7 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Signals.h"
@@ -3203,6 +3204,31 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_blockM_128) {
   EXPECT_EQ(toLinearLayout({256, 256}, enc),
             tile * LinearLayout::identity1D(2, kCol, d0) *
                 LinearLayout::identity1D(2, kCol, d1));
+}
+
+TEST_F(LinearLayoutConversionsTest, TensorMemoryCompatibilityCache) {
+  auto *dialect = ctx.getLoadedDialect<TritonNvidiaGPUDialect>();
+  auto f32 = Float32Type::get(&ctx);
+  auto space = TensorMemorySpaceAttr::get(&ctx);
+  auto mem = MemDescType::get({128, 128}, f32, tmem(128, 128), space);
+  auto ll = getDistributedLayoutForTmemLdSt(mem, TMemAccessAtom::I16x256b, 4);
+  ASSERT_TRUE(ll);
+  auto reg = RankedTensorType::get({128, 128}, f32,
+                                   LinearEncodingAttr::get(&ctx, *ll));
+  auto incompatible = RankedTensorType::get(
+      {128, 128}, f32,
+      blocked({1, 4}, {4, 8}, {4, 1}, {1, 1}, {1, 1}, {1, 0}, {1, 0}));
+
+  EXPECT_TRUE(dialect->isTMemLayoutCompatible(reg, mem, 256));
+  EXPECT_FALSE(dialect->isTMemLayoutCompatible(incompatible, mem, 256));
+  for (int repeat = 0; repeat < 2; ++repeat) {
+    for (auto regType : {reg, incompatible}) {
+      for (int limit : {2, 24, 64, 128, 256}) {
+        EXPECT_EQ(dialect->isTMemLayoutCompatible(regType, mem, limit),
+                  succeeded(computeTMemLdStEncodingInfo(regType, mem, limit)));
+      }
+    }
+  }
 }
 
 TEST_F(LinearLayoutConversionsTest, TensorMemory_subview) {

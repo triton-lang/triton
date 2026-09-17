@@ -4043,7 +4043,10 @@ struct TritonGPUVerifyTensorLayoutInterface
                        << rankedTy.getShape()
                        << " which is not a power of two.";
     }
-    auto ll = toLinearLayout(rankedTy);
+    const auto &ll = getDialect()
+                         ->getContext()
+                         ->getLoadedDialect<TritonGPUDialect>()
+                         ->toLinearLayout(rankedTy.getShape(), layout);
     ModuleOp module = op->getParentOfType<ModuleOp>();
 
     // Number of threads per warp.
