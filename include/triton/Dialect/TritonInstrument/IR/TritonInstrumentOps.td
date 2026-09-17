@@ -285,6 +285,19 @@ def TTI_ExperimentalGSanAtomicTensorDescAccessOp
   }];
 }
 
+def TTI_ExperimentalGSanTensorMapAccessOp
+    : TTI_Op<"experimental_gsan_tensor_map_access"> {
+  let summary = "Instrument a 128-byte tensor-map metadata access for GSan";
+  let arguments = (ins
+    Arg<AnyTypeOf<[TT_Ptr, TT_TensorDescType]>, "",
+        [MemWrite<GlobalMemory>, MemRead<GlobalMemory>]>:$ptr,
+    BoolAttr:$isStore, BoolAttr:$firstCTAOnly, Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $ptr `,` $isStore `,` $firstCTAOnly (`,` $pred^)? attr-dict `:` qualified(type($ptr))
+  }];
+}
+
 def TTI_ExperimentalGSanTensorAccessOp
     : TTI_Op<"experimental_gsan_tensor_access",
              [TypesMatchWith<"mask type matches ptr type", "ptr", "mask",

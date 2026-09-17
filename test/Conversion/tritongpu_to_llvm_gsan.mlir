@@ -199,7 +199,7 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
   // CHECK-LABEL: llvm.func @atomic_tensor_desc
   // CHECK: llvm.alloca %{{.*}} x !llvm.array<2 x i32>
   // CHECK: llvm.alloca %{{.*}} x !llvm.array<2 x i16>
-  // CHECK: llvm.call @__triton_gsan_atomic_tensor_desc(%{{.*}}) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i32, !llvm.ptr, i32, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
+  // CHECK: llvm.call @__triton_gsan_atomic_tensor_desc(%{{.*}}) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i32, !llvm.ptr, i32, i32, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
   tt.func @atomic_tensor_desc(%desc: !tt.tensordesc<8x32xi32, #shared_i32>) {
     %c0_i32 = arith.constant 0 : i32
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<8x32xi32, #shared_i32, #smem, mutable>
@@ -215,7 +215,7 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: llvm.func @tma_i64_atomic_shadow_cells
   // CHECK: %[[ATOMIC_ELEMENT_BYTES:.*]] = llvm.mlir.constant(8 : i32)
-  // CHECK: llvm.call @__triton_gsan_atomic_tensor_desc(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[ATOMIC_ELEMENT_BYTES]], %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}})
+  // CHECK: llvm.call @__triton_gsan_atomic_tensor_desc(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[ATOMIC_ELEMENT_BYTES]], %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}})
   tt.func @tma_i64_atomic_shadow_cells(%desc: !tt.tensordesc<8x16xi64, #shared_i64>) {
     %c0_i32 = arith.constant 0 : i32
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<8x16xi64, #shared_i64, #smem, mutable>
@@ -240,10 +240,10 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     %barrier = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
     // CHECK: llvm.alloca %{{.*}} x !llvm.array<{{[0-9]+}} x i32>
-    // CHECK: llvm.call @__triton_gsan_load_indexed_tensor_desc(%{{.*}}) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i32, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
+    // CHECK: llvm.call @__triton_gsan_load_indexed_tensor_desc(%{{.*}}) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i32, i32, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
     ttng.async_tma_gather %desc[%x_offsets, %y_offset] %buf, %barrier, %pred : !tt.tensordesc<1x32xf32, #shared>, tensor<32xi32, #blocked_rows>, i32, !ttg.memdesc<1xi64, #bar, #smem, mutable>, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, i1
     // CHECK: llvm.alloca %{{.*}} x !llvm.array<{{[0-9]+}} x i32>
-    // CHECK: llvm.call @__triton_gsan_store_indexed_tensor_desc(%{{.*}}) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i32, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
+    // CHECK: llvm.call @__triton_gsan_store_indexed_tensor_desc(%{{.*}}) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i32, i32, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
     ttng.async_tma_scatter %desc[%x_offsets, %y_offset] %buf : !tt.tensordesc<1x32xf32, #shared>, tensor<32xi32, #blocked_rows>, i32, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     tt.return
   }
@@ -290,7 +290,7 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
     %barrier = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
     // CHECK: llvm.alloca %{{.*}} x !llvm.array<2 x i32>
     // CHECK: llvm.alloca %{{.*}} x !llvm.array<2 x i16>
-    // CHECK: llvm.call @__triton_gsan_load_tensor_desc(%{{.*}}) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i32, !llvm.ptr, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
+    // CHECK: llvm.call @__triton_gsan_load_tensor_desc(%{{.*}}) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i32, !llvm.ptr, i32, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
     ttng.async_tma_copy_global_to_local %desc[%c0_i32, %c0_i32] %buf, %barrier, %true : !tt.tensordesc<32x64xf16, #shared_f16>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<32x64xf16, #shared_f16, #smem, mutable>
     tt.return
   }
@@ -302,7 +302,7 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
 #smem = #ttg.shared_memory
 module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: llvm.func @tma_f16_atomic_shadow_cell
-  // CHECK: llvm.call @__triton_gsan_atomic_tensor_desc(%{{.*}}) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i32, !llvm.ptr, i32, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
+  // CHECK: llvm.call @__triton_gsan_atomic_tensor_desc(%{{.*}}) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i32, !llvm.ptr, i32, i32, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
   tt.func @tma_f16_atomic_shadow_cell(%desc: !tt.tensordesc<32x64xf16, #shared_f16>) {
     %c0_i32 = arith.constant 0 : i32
     %buf = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x64xf16, #shared_f16, #smem, mutable>
@@ -326,7 +326,7 @@ module attributes {"ttg.instrumentation_mode" = "gsan", "ttg.num-ctas" = 1 : i32
     %barrier = ttg.local_alloc {allocation.offset = 16384 : i32} : () -> !ttg.memdesc<1xi64, #bar, #smem, mutable>
     // CHECK: llvm.alloca %{{.*}} x !llvm.array<2 x i32>
     // CHECK: llvm.alloca %{{.*}} x !llvm.array<2 x i16>
-    // CHECK: llvm.call @__triton_gsan_load_tensor_desc(%{{.*}}) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i32, !llvm.ptr, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
+    // CHECK: llvm.call @__triton_gsan_load_tensor_desc(%{{.*}}) : (!llvm.ptr, !llvm.ptr, !llvm.ptr, i32, !llvm.ptr, i32, i32, i32, i32, i32, !llvm.ptr, i32) -> ()
     ttng.async_tma_copy_global_to_local %desc[%c0_i32, %c0_i32] %buf, %barrier, %true : !tt.tensordesc<128x64xf16, #shared_f16>, !ttg.memdesc<1xi64, #bar, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared_f16, #smem, mutable>
     tt.return
   }

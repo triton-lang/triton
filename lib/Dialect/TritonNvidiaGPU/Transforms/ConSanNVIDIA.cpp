@@ -125,6 +125,8 @@ public:
     }
     if (auto storeOp = dyn_cast<ttng::TMAStoreLikeOpInterface>(op))
       mask = getBlockBroadcastMask(storeOp.getSrc().getType());
+    if (isa<ttng::TensormapPublishOp>(op))
+      mask = ttg::lookupNumCTAs(op) - 1;
     if (op->hasAttr("allocation.size"))
       if (auto scratchMask = getAtomicScratchBroadcastMask(op))
         mask = *scratchMask;
@@ -161,6 +163,19 @@ public:
   getMemEffectsOpInfo(Operation *op) const override {
     std::optional<MemEffectsOpInfo> info =
         ConSanTargetHooks::getMemEffectsOpInfo(op);
+    if (isa<ttng::TensormapPublishOp>(op)) {
+      if (auto size = op->getAttrOfType<IntegerAttr>("allocation.size")) {
+        info.emplace();
+        info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
+        uint32_t offset =
+            op->getAttrOfType<IntegerAttr>("allocation.offset").getInt();
+        info->operandEffects.emplace_back(
+            RW::Write,
+            MemEffectsOpInfo::Effects::StaticSharedBuffer{
+                offset, static_cast<uint32_t>(size.getInt())},
+            "Tensor map staging");
+      }
+    }
     if (!info) {
       if (!isa<ttng::BarrierExpectOp, ttng::TCGen5CommitOp,
                ttng::ArriveBarrierOp, ttng::AsyncCopyMbarrierArriveOp>(op))

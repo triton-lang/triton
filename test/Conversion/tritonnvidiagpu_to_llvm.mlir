@@ -1205,3 +1205,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return %r : f32
   }
 }
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, fp4Padded = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @publish_tensor_map
+  tt.func @publish_tensor_map(%storage: !tt.ptr<i8>, %template: !tt.tensordesc<16x64xi8, #shared>, %base: !tt.ptr<i8>, %rows: i32, %cols: i32, %stride: i64) {
+    %one = arith.constant 1 : i64
+    // The full driver template is copied before any fields are replaced.
+    // CHECK: llvm.load
+    // CHECK: llvm.store {{.*}} !llvm.ptr<3>
+    // CHECK: nvvm.bar.warp.sync
+    // CHECK: tensormap.replace.tile.global_address
+    // Packed-byte extents are converted to FP4 extents.
+    // CHECK: llvm.mul
+    // CHECK: tensormap.replace.tile.global_dim
+    // CHECK: tensormap.replace.tile.global_dim
+    // CHECK: tensormap.replace.tile.global_stride
+    // Static format, tile and swizzle are retained from the template.
+    // CHECK-NOT: tensormap.replace.tile.elemtype
+    // CHECK-NOT: tensormap.replace.tile.box_dim
+    // CHECK: nvvm.bar.warp.sync
+    // CHECK: tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned
+    ttng.tensormap_publish %storage, %template, %base, [%rows, %cols], [%stride, %one] {allocation.offset = 0 : i32} : (!tt.ptr<i8>, !tt.tensordesc<16x64xi8, #shared>, !tt.ptr<i8>, i32, i32, i64, i64) -> ()
+    tt.return
+  }
+}

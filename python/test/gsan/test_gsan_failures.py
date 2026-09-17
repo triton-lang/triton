@@ -855,3 +855,64 @@ def test_transitive_cta_scope_read_after_write(release_sem, relay_sem):
                       runner_args=(release_sem, relay_sem, "cta"), source_function=_transitive_atomic_sync_kernel.fn,
                       marker="ready = tl.atomic_add(flag0_ptr, 0, sem=relay_sem, scope=scope)",
                       error="Read after write race detected")
+
+
+@gluon.jit
+def _published_map_race(storage, template, data, counter, output, KIND: gl.constexpr):
+    if gl.program_id(0) == 0:
+        if KIND == "payload":
+            gl.store(data + 64, 1)
+        else:
+            # An access to the last word must conflict with the whole map.
+            word = gl.load(storage + 124)
+            gl.store(output, word)
+        gl.atomic_add(counter, 1, sem="relaxed")
+    else:
+        gl.atomic_poll(counter, 1, sem="relaxed")
+        if KIND == "publication":
+            hopper.tma.publish_tensor_descriptor(storage, template, data, [16, 128], [128, 1])
+        else:
+            layout: gl.constexpr = gl.NVMMASharedLayout(128, 8, rank=2, fp4_padded=True)
+            desc = hopper.tma.load_tensor_descriptor(storage, [16, 128], [128, 1], [16, 64], gl.uint8, layout)
+            shared = gl.allocate_shared_memory(gl.uint8, [16, 64], layout)
+            bar = hopper.mbarrier.allocate_mbarrier()
+            hopper.mbarrier.init(bar, count=1)
+            hopper.mbarrier.expect(bar, desc.nbytes_per_cta)
+            hopper.tma.async_load(desc, [0, 64], bar, shared)
+            hopper.mbarrier.wait(bar, 0)
+            hopper.mbarrier.invalidate(bar)
+            regs: gl.constexpr = gl.BlockedLayout([1, 4], [4, 8], [4, 1], [1, 0])
+            values = shared.load(regs).to(gl.int32)
+            gl.store(output, gl.sum(gl.sum(values, 0), 0))
+
+
+@gluon.jit
+def _initialize_published_map(storage, template, data):
+    hopper.tma.publish_tensor_descriptor(storage, template, data, [16, 128], [128, 1])
+
+
+def _run_published_map_race(kind):
+    from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
+
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    pool = create_mem_pool()
+    with torch.cuda.use_mem_pool(pool):
+        data = torch.zeros((16, 128), device="cuda", dtype=torch.uint8)
+        storage = torch.empty(128, device="cuda", dtype=torch.uint8)
+        counter = torch.zeros((), device="cuda", dtype=torch.int32)
+        output = torch.empty(1, device="cuda", dtype=torch.uint8)
+        layout = gl.NVMMASharedLayout(128, 8, rank=2, fp4_padded=True)
+        template = GluonTensorDescriptor.from_tensor(data, [16, 64], layout)
+        _initialize_published_map[(1, )](storage, template, data)
+        _published_map_race[(2, )](storage, template, data, counter, output, kind)
+        torch.cuda.synchronize()
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("kind", ["publication", "payload"])
+def test_published_tensor_map_race(kind):
+    _run_failure_case(
+        kind, runner=_run_published_map_race, runner_args=(kind,), source_function=_published_map_race.fn,
+        marker="hopper.tma.publish_tensor_descriptor" if kind == "publication" else "hopper.tma.async_load",
+        error="Write after read race detected" if kind == "publication" else "Read after write race detected",
+    )

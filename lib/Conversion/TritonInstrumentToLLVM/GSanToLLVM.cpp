@@ -108,15 +108,16 @@ getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
              funcName == kGSanStoreTensorDescRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), ptr_ty(ctx), i32_ty,
               ptr_ty(ctx), i32_ty,      i32_ty,      i32_ty,
-              i32_ty,      ptr_ty(ctx), i32_ty};
+              i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanLoadIndexedTensorDescRuntimeFn ||
              funcName == kGSanStoreIndexedTensorDescRuntimeFn) {
-    argTys = {ptr_ty(ctx), ptr_ty(ctx), ptr_ty(ctx), i32_ty,      i32_ty,
-              i32_ty,      i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), ptr_ty(ctx), i32_ty,
+              i32_ty,      i32_ty,      i32_ty,      i32_ty,
+              i32_ty,      ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanAtomicTensorDescRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), ptr_ty(ctx), i32_ty,
               ptr_ty(ctx), i32_ty,      i32_ty,      i32_ty,
-              i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
+              i32_ty,      i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanAtomicBeginRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i64_ty,      i32_ty,
               i32_ty,      i32_ty,      i32_ty, ptr_ty(ctx), i32_ty};
@@ -401,6 +402,14 @@ FailureOr<Value> getGSanKernelIdArg(Operation *op,
 // Patterns
 ////////////////////////////////////////////
 
+// The hardware descriptor counts FP4 elements while Gluon's coordinates and
+// payload shapes count packed bytes.
+static int getContiguousDimScale(tt::TensorDescType type) {
+  auto layout = dyn_cast_if_present<ttg::NVMMASharedEncodingAttr>(
+      type.getSharedLayout());
+  return layout && layout.getFp4Padded() ? 2 : 1;
+}
+
 struct GSanTensorAccessOpConversion
     : public ConvertOpToLLVMPattern<tti::ExperimentalGSanTensorAccessOp> {
 public:
@@ -453,6 +462,41 @@ public:
                                 maskElems, freeVarMasks.lookup(kReg),
                                 threadPred, bytesPerElem, op.getIsStore(),
                                 mergeVec);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct GSanTensorMapAccessOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGSanTensorMapAccessOp> {
+  const TargetInfoBase &targetInfo;
+
+  GSanTensorMapAccessOpConversion(LLVMTypeConverter &converter,
+                                  const TargetInfoBase &targetInfo,
+                                  PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGSanTensorMapAccessOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto state = getGSanGlobalStateArg(op, rewriter, loc);
+    if (failed(state))
+      return failure();
+    TritonLLVMOpBuilder b(loc, rewriter);
+    Value thread = getThreadId(rewriter, loc);
+    Value pred = b.icmp_ult(thread, b.i32_val(32));
+    if (op.getFirstCTAOnly())
+      pred = b.and_(pred, b.icmp_eq(targetInfo.getClusterCTAId(rewriter, loc),
+                                   b.i32_val(0)));
+    if (adaptor.getPred())
+      pred = b.and_(pred, adaptor.getPred());
+    // One four-byte word per lane covers the complete opaque map, including
+    // metadata outside the payload's base/shape/stride fields.
+    Value ptr = b.gep(adaptor.getPtr().getType(), i32_ty, adaptor.getPtr(),
+                       thread);
+    emitTensorAccessRuntimeCall(rewriter, loc, *state, {ptr}, {}, 0, pred, 4,
+                                op.getIsStore());
     rewriter.eraseOp(op);
     return success();
   }
@@ -543,7 +587,8 @@ public:
         coords,
         b.i32_val(rank),
         shape,
-        b.i32_val(elemTy.getIntOrFloatBitWidth() / 8)};
+        b.i32_val(elemTy.getIntOrFloatBitWidth() / 8),
+        b.i32_val(getContiguousDimScale(descTy))};
     if constexpr (std::is_same_v<
                       AccessOp,
                       tti::ExperimentalGSanAtomicTensorDescAccessOp>) {
@@ -622,6 +667,7 @@ public:
                       indices, b.i32_val(indexElems.size()),
                       adaptor.getOffset(), b.i32_val(blockShape.back()),
                       b.i32_val(elemTy.getIntOrFloatBitWidth() / 8),
+                      b.i32_val(getContiguousDimScale(descTy)),
                       materializeI32Bool(rewriter, b, pred), sourceLoc.file,
                       sourceLoc.line});
     rewriter.eraseOp(op);
@@ -1369,6 +1415,7 @@ void mlir::triton::populateGSanToLLVMPatterns(
   patterns.add<GSanMBarrierInitOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanMBarrierArriveOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanMBarrierWaitOpConversion>(typeConverter, targetInfo);
+  patterns.add<GSanTensorMapAccessOpConversion>(typeConverter, targetInfo);
   patterns.add<
       GSanTensorDescAccessOpConversion<tti::ExperimentalGSanTensorDescAccessOp>,
       GSanTensorDescAccessOpConversion<

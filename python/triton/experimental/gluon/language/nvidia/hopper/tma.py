@@ -28,6 +28,8 @@ __all__ = [
     "tensor_descriptor_type",
     "tensor_descriptor_im2col_type",
     "make_tensor_descriptor",
+    "publish_tensor_descriptor",
+    "load_tensor_descriptor",
 ]
 
 
@@ -408,6 +410,107 @@ def store_wait(pendings, read_only=True, _semantic=None):
     pendings = _unwrap_if_constexpr(pendings)
     read_only = _unwrap_if_constexpr(read_only)
     _semantic.builder.create_async_tma_store_wait(pendings, read_only)
+
+
+def _descriptor_metadata(shape, strides, rank, _semantic):
+    if not 1 <= rank <= 5 or len(shape) != rank or len(strides) != rank:
+        raise ValueError("Expected one shape and stride per descriptor dimension (rank 1-5)")
+    last_stride = _unwrap_if_constexpr(strides[-1])
+    if isinstance(last_stride, int) and last_stride != 1:
+        raise ValueError("Tensor descriptor last stride must be 1")
+    if isinstance(last_stride, ttgl.tensor) and _semantic.builder.options.enable_iisan:
+        is_one = last_stride.__eq__(1, _semantic=_semantic)
+        ttgl.device_assert(is_one, "Tensor descriptor last stride must be 1", _semantic=_semantic)
+    return ([_semantic.make_scalar(x, ttgl.int32) for x in shape],
+            [_semantic.make_scalar(_unwrap_if_constexpr(x), ttgl.int64) for x in strides])
+
+
+def _descriptor_storage(storage, _semantic):
+    storage = _semantic.to_tensor(storage)
+    if not isinstance(storage.type, ttgl.pointer_type) or storage.type.element_ty != ttgl.uint8:
+        raise ValueError("Tensor descriptor storage must be a scalar uint8 pointer")
+    if _semantic.builder.options.enable_iisan:
+        address = storage.to(ttgl.uint64, _semantic=_semantic)
+        aligned = address.__mod__(128, _semantic=_semantic).__eq__(0, _semantic=_semantic)
+        ttgl.device_assert(aligned, "Tensor descriptor storage must be 128-byte aligned", _semantic=_semantic)
+    return storage
+
+
+@builtin
+def publish_tensor_descriptor(storage, template, base, shape, strides, _semantic=None):
+    """Publish a tensor map for use by later kernels on the same device.
+
+    Copies a valid ``template`` descriptor and replaces its backing pointer,
+    shape and strides. The tile shape, element format, shared-memory layout,
+    padding and other encoding fields are preserved. Use a host-created
+    :class:`~triton.experimental.gluon.nvidia.hopper.TensorDescriptor` as the
+    template for a driver-encoded representation on all supported devices.
+
+    ``storage`` is a scalar uint8 pointer to at least 128 bytes aligned to 128
+    bytes. One program owns each destination; in a multi-CTA program only CTA
+    zero publishes. Shape and strides are in elements of ``base`` (packed
+    bytes for FP4). The innermost stride must be one. The base and outer byte
+    strides must be 16-byte aligned, or 32-byte aligned for padded FP4.
+    Padded FP4 additionally requires an innermost extent divisible by 64
+    packed bytes.
+
+    This performs a GPU-scope tensor-map proxy release. Order the producer
+    before its consumers using the same stream or an event dependency. Every
+    consumer program must call :func:`load_tensor_descriptor`. Keep storage
+    and every selected backing allocation alive until all consumers finish;
+    do not overwrite the map while any consumer can still use it. This call
+    neither retains allocations nor synchronizes separate programs.
+    """
+    storage = _descriptor_storage(storage, _semantic)
+    if not isinstance(template, tensor_descriptor):
+        raise ValueError("Expected a tiled tensor descriptor template")
+    base = _semantic.to_tensor(base)
+    if not isinstance(base.type, ttgl.pointer_type) or base.type.element_ty != template.dtype:
+        raise ValueError("Base must be a scalar pointer with the template's element type")
+    shape, strides = _descriptor_metadata(shape, strides, len(template.block_shape), _semantic)
+    if template.layout.fp4_padded and _semantic.builder.options.enable_iisan:
+        aligned = shape[-1].__mod__(64, _semantic=_semantic).__eq__(0, _semantic=_semantic)
+        ttgl.device_assert(aligned, "Padded FP4 innermost extent must be a multiple of 64 packed bytes",
+                           _semantic=_semantic)
+    _semantic.builder.create_tensormap_publish(storage.handle, template.handle, base.handle,
+                                               [x.handle for x in shape], [x.handle for x in strides])
+
+
+@builtin
+def load_tensor_descriptor(storage, shape, strides, block_shape, dtype, layout, _semantic=None):
+    """Acquire a GPU-published tensor map and return a typed descriptor view.
+
+    ``storage`` has the size, alignment and lifetime requirements of
+    :func:`publish_tensor_descriptor`. This acquires the tensor-map proxy in
+    every CTA and synchronizes the CTA before returning. Reuse the returned
+    descriptor for any number of TMA operations without acquiring it again,
+    provided the published map has not changed.
+
+    ``shape`` and ``strides`` describe the published backing tensor in logical
+    elements; they are caller-supplied metadata, not decoded from storage.
+    ``dtype``, ``block_shape`` and ``layout`` must describe the encoded element
+    format and per-CTA tile. For padded FP4, use uint8 and packed-byte shapes,
+    strides and coordinates. A consumer may use a different cluster layout
+    only if its per-CTA TMA tile still matches the published map.
+
+    Stream ordering is required in addition to this acquire. Importing a map
+    does not transfer ownership of either its storage or its backing tensor.
+    """
+    storage = _descriptor_storage(storage, _semantic)
+    block_shape = ttgl._unwrap_shape(block_shape)
+    dtype = _unwrap_if_constexpr(dtype)
+    layout = _unwrap_if_constexpr(layout)
+    if not isinstance(layout, NVMMASharedLayout) or layout.rank != len(block_shape):
+        raise ValueError("Expected an NVMMASharedLayout with the descriptor's rank")
+    if dtype.primitive_bitwidth != layout.element_bitwidth:
+        raise ValueError("Descriptor dtype must match the shared layout's element bitwidth")
+    if layout.fp4_padded and (dtype != ttgl.uint8 or layout.swizzle_byte_width != 128):
+        raise ValueError("Padded FP4 descriptors require uint8 and 128-byte swizzling")
+    shape, strides = _descriptor_metadata(shape, strides, len(block_shape), _semantic)
+    block_type = ttgl.block_type(dtype, block_shape)
+    ty = tensor_descriptor_type(block_type, ttgl.tuple(shape).type, ttgl.tuple(strides).type, layout)
+    handle = _semantic.builder.create_load_tensor_descriptor(ty._to_ir(_semantic.builder), storage.handle)
+    return tensor_descriptor(handle, shape, strides, block_type, layout)
 
 
 @builtin

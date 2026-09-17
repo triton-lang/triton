@@ -1145,12 +1145,42 @@ def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
   let hasVerifier = 1;
 }
 
+def TTNG_TensormapPublishOp : TTNG_Op<"tensormap_publish", [AttrSizedOperandSegments]> {
+  let summary = "Publish a copy of a tiled tensor map with a new backing tensor";
+  let description = [{
+    Copies a valid tensor map template through shared memory, replaces its base
+    address, dimensions and strides, then publishes all 128 bytes to desc_ptr
+    with a GPU-scope tensor-map proxy release. The template's tile, element
+    format, swizzle and padding are preserved. Dimensions and strides are in
+    elements of the template's logical element type (bytes for packed FP4).
+
+    desc_ptr must be 128-byte aligned. Exactly one program may own the destination
+    while publishing, and no consumer may still be using the previous version.
+    For a multi-CTA program only CTA zero publishes. Every consumer CTA must
+    acquire the tensor-map proxy after publication and before using the map.
+    This operation does not synchronize different programs or kernel launches.
+  }];
+  let arguments = (ins
+    Arg<TT_Ptr, "", [MemWrite<GlobalMemory>]>:$desc_ptr,
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$source,
+    TT_Ptr:$base,
+    Variadic<I32>:$shape,
+    Variadic<I64>:$strides
+  );
+  let assemblyFormat = [{
+    $desc_ptr `,` $source `,` $base `,` `[` $shape `]` `,` `[` $strides `]`
+    attr-dict `:` functional-type(operands, results)
+  }];
+  let hasVerifier = 1;
+}
+
 def TTNG_ReinterpretTensorDescOp : TTNG_Op<"reinterpret_tensor_descriptor", [Pure]> {
   let summary = "Reinterpret a pointer as a tensor descriptor";
 
   let description = [{
-     This op exists to help the transition from untyped raw TMA objects to typed tensor descriptor objects.
-     Ideally, we can remove this once the APIs are fully fleshed out.
+     Associates the static tile and layout type with tensor-map storage. Does
+     not read, copy, or acquire the tensor map. Users must separately establish
+     the required tensor-map proxy ordering before accessing the descriptor.
   }];
 
   let arguments = (ins TT_Ptr:$rawDesc);
@@ -1204,7 +1234,7 @@ def TTNG_TensormapFenceproxyAcquireOp: TTNG_Op<
   [MemoryEffects<[MemWrite<GlobalMemory>]>]
 > {
   let summary = "Acquire fence on a tensormap object";
-  let arguments = (ins TT_PtrType:$desc_ptr);
+  let arguments = (ins Arg<TT_PtrType, "", [MemRead<GlobalMemory>]>:$desc_ptr);
   let assemblyFormat = [{
     $desc_ptr attr-dict `:` qualified(type($desc_ptr))
   }];

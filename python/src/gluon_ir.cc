@@ -1293,6 +1293,17 @@ void init_gluon_ir(py::module_ &m) {
              return self.create<tt::MakeTensorDescOp>(resultTy, base, shape,
                                                       strides, paddingOption);
            })
+      .def("create_tensormap_publish",
+           [](GluonOpBuilder &self, Value storage, Value descriptor, Value base,
+              std::vector<Value> &shape, std::vector<Value> &strides) {
+             self.create<ttng::TensormapPublishOp>(storage, descriptor, base,
+                                                  shape, strides);
+           })
+      .def("create_load_tensor_descriptor",
+           [](GluonOpBuilder &self, Type type, Value storage) -> Value {
+             self.create<ttng::TensormapFenceproxyAcquireOp>(storage);
+             return self.create<ttng::ReinterpretTensorDescOp>(type, storage);
+           })
       .def(
           "create_async_tdm_copy_global_to_local",
           [](GluonOpBuilder &self, Value descPtr, Value result, Value barrier,
