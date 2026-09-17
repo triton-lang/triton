@@ -55,12 +55,10 @@ struct TritonNvidiaGPUMembar
   }
 };
 
-} // namespace
-
 // Preserve aliases introduced by allocator reuse. Multiple possible origins
 // are safe when every physical overlap has the same allocation origin.
-static bool hasOnlySourceAliases(const AllocationSlice &lhs,
-                                 const AllocationSlice &rhs) {
+bool hasOnlySourceAliases(const AllocationSlice &lhs,
+                          const AllocationSlice &rhs) {
   auto *before = lhs.physicalFootprint;
   auto *after = rhs.physicalFootprint;
   if (!before || !after)
@@ -77,6 +75,8 @@ static bool hasOnlySourceAliases(const AllocationSlice &lhs,
   }
   return true;
 }
+
+} // namespace
 
 bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
                             bool /*beforeIsRead*/, bool /*afterIsRead*/,
