@@ -91,7 +91,8 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
 
   auto completesTransactions = [](Operation *op) {
     return isa<ttng::TMALoadLikeOpInterface, ttng::CLCTryCancelOp,
-               ttng::AsyncSharedStoreOp>(op);
+               ttng::AsyncSharedStoreOp,
+               ttng::AsyncBulkCopyGlobalToLocalOp>(op);
   };
   // Accessing these live destinations requires completion, which makes their
   // writes visible to the generic proxy.
