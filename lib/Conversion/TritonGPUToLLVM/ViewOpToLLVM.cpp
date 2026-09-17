@@ -485,16 +485,16 @@ struct MemDescSubsliceOpConversion
     // time. Let
     //   o     = this op's static subslice offsets (one per dim),
     //   c     = logical base indices for the current subslice op,
-    //   L     = the shared LL (inputs: offset, partition, block;
-    //                          outputs: dim0, dim1, ...).
+    //   L_cta = the shared LL within one CTA (inputs: offset, partition;
+    //                                            outputs: dim0, dim1, ...).
     //
     //   (1) c_src = c + o
     //   (2) verifier makes o's bits disjoint from c's bits per dim, so:
     //         c + o = c ^ o                                   (bit-disjoint)
-    //   (3) L^-1 is linear, so projecting (2) onto the partition component:
-    //         partition(L^-1(c_src)) = partition(L^-1(c)) ^ S
-    //       where  S = partition(L^-1(o))
-    //   (4) the existing lowering already computes i = partition(L^-1(c))
+    //   (3) L_cta^-1 is linear, so projecting (2) onto the partition component:
+    //         partition(L_cta^-1(c_src)) = partition(L_cta^-1(c)) ^ S
+    //       where  S = partition(L_cta^-1(o))
+    //   (4) the existing lowering already computes i = partition(L_cta^-1(c))
     //       and indexes bases[i]; from (3) the correct base is:
     //         bases[i ^ S]
     //   (5) precompute that rotation once here
@@ -508,24 +508,34 @@ struct MemDescSubsliceOpConversion
       assert(ll.hasInDim(kPartition) &&
              "multiple bases require a partition input dim");
       auto dimNames = standardOutDimNames(ctx, layoutOffsets.size());
+
+      // Partition selection repeats independently in every CTA. Remove the
+      // block input and trim the logical outputs to one CTA before inversion,
+      // so block broadcasting is not part of the inverse at all.
+      auto kBlock = StringAttr::get(ctx, "block");
+      assert(ll.hasInDim(kBlock));
+      LinearLayout localLayout = ll.resizeInDim(kBlock, 1);
+      auto layoutShape = dropPipeliningDim(srcTy.getAllocShape(), encoding);
+      auto shapePerCTA = getShapePerCTA(encoding, layoutShape);
+      assert(shapePerCTA.size() == dimNames.size());
+      for (auto [dim, size] : llvm::zip(dimNames, shapePerCTA))
+        localLayout = localLayout.resizeOutDim(dim, size);
+      assert(localLayout.isInvertible() &&
+             "partitioned layout within one CTA must be invertible");
+
       SmallVector<std::pair<StringAttr, int32_t>> namedOffsets;
-      for (auto [dim, off] : llvm::zip(dimNames, layoutOffsets))
-        namedOffsets.push_back({dim, off});
+      for (auto [dim, off, size] :
+           llvm::zip(dimNames, layoutOffsets, shapePerCTA)) {
+        // Only the partition-base selection is CTA-local. Keep the original
+        // logical offsets in offsetVals so the subslice itself is unchanged.
+        namedOffsets.push_back({dim, off % size});
+      }
       // This is a logical tensor subslice; it neither slices the "block" input
       // nor changes which CTAs share the descriptor. This case is required,
       // for example, when a multi-CTA dot operand is broadcast along one CGA
       // axis but subdivided into logical K/M/N tiles.
-      //
-      // A broadcast block basis is zero, making the full layout surjective but
-      // not square. Partition/group bases are composed within each CTA before
-      // the CGA mapping, so every free input introduced by block broadcasting
-      // has a zero partition component. Consequently all right inverses agree
-      // on the partition projection even though their block projections may
-      // differ, and one pseudoinverse is sufficient here. A layout that aliases
-      // a partition basis with a block basis would violate this invariant and
-      // must not be accepted.
       auto partitionLayout =
-          ll.pseudoinvert().sublayout(dimNames, {kPartition});
+          localLayout.invert().sublayout(dimNames, {kPartition});
       int32_t partitionShift = partitionLayout.apply(namedOffsets)[0].second;
       SmallVector<Value> rotated(newBases.size());
       for (size_t i = 0; i < newBases.size(); ++i)
