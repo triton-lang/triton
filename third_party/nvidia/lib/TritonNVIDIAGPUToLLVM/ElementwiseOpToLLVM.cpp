@@ -637,8 +637,6 @@ struct PreciseFDivOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    if (!elemTy.isF32())
-      return {};
     // Preserve this rounding step when LLVM simplifies surrounding arithmetic.
     return {LLVM::ConstrainedFDivIntr::create(
         rewriter, loc, elemTy, operands[0][0], operands[0][1],

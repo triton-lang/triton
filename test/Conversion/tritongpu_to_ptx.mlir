@@ -121,6 +121,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
     tt.return
   }
 
+  // CHECK-LABEL: .entry precise_divf_f64(
+  // CHECK-DAG: div.rn.f64
+  // CHECK-DAG: rcp.rn.f64
+  tt.func public @precise_divf_f64(%out: !tt.ptr<f64>, %rcp_out: !tt.ptr<f64>, %x: f64, %y: f64) {
+    %one = arith.constant 1.0 : f64
+    %div = tt.precise_divf %x, %y : f64
+    %rcp = tt.precise_divf %one, %y : f64
+    tt.store %out, %div : !tt.ptr<f64>
+    tt.store %rcp_out, %rcp : !tt.ptr<f64>
+    tt.return
+  }
+
   // CHECK-LABEL: atomic_poll_relaxed_gpu
   // CHECK: ld.relaxed.gpu.global.b32
   // CHECK-NOT: fence.acquire
