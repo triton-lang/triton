@@ -1712,7 +1712,8 @@ def test_atomic_poll(dtype, bit_width, sem, scope, device):
     assert out.item() == 1
     if is_cuda():
         ptx = compiled.asm["ptx"]
-        assert ptx.count(f"ld.relaxed.{scope}.global.b{bit_width}") == 1
+        # Loop unswitching can duplicate the load with a false predicate.
+        assert f"ld.relaxed.{scope}.global.b{bit_width}" in ptx
         fence_sem = "acq_rel" if torch.cuda.get_device_capability()[0] < 9 else "acquire"
         assert ptx.count(f"fence.{fence_sem}.{scope};") == (sem == "acquire")
         assert "%globaltimer" not in ptx
@@ -1769,7 +1770,7 @@ def test_atomic_poll_timeout(initial_value, expected, device):
     assert out.item() == expected
     if is_cuda():
         ptx = compiled.asm["ptx"]
-        assert ptx.count("ld.relaxed.gpu.global.b32") == 1
+        assert "ld.relaxed.gpu.global.b32" in ptx
         fence_sem = "acq_rel" if torch.cuda.get_device_capability()[0] < 9 else "acquire"
         assert ptx.count(f"fence.{fence_sem}.gpu;") == 1
         assert ptx.count("%globaltimer") == 2
