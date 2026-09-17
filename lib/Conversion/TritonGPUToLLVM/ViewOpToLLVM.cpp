@@ -484,7 +484,7 @@ struct MemDescSubsliceOpConversion
     // For PartitionedSharedEncoding we need to pick the right base at load
     // time. Let
     //   o     = this op's static subslice offsets (one per dim),
-    //   c     = a logical base indices to the current subslice op,
+    //   c     = logical base indices for the current subslice op,
     //   L     = the shared LL (inputs: offset, partition, block;
     //                          outputs: dim0, dim1, ...).
     //
@@ -511,9 +511,19 @@ struct MemDescSubsliceOpConversion
       SmallVector<std::pair<StringAttr, int32_t>> namedOffsets;
       for (auto [dim, off] : llvm::zip(dimNames, layoutOffsets))
         namedOffsets.push_back({dim, off});
-      // A clustered layout can broadcast along a block dimension, so the full
-      // layout is surjective but not square.  The partition projection only
-      // needs one valid inverse.
+      // This is a logical tensor subslice; it neither slices the "block" input
+      // nor changes which CTAs share the descriptor. This case is required,
+      // for example, when a multi-CTA dot operand is broadcast along one CGA
+      // axis but subdivided into logical K/M/N tiles.
+      //
+      // A broadcast block basis is zero, making the full layout surjective but
+      // not square. Partition/group bases are composed within each CTA before
+      // the CGA mapping, so every free input introduced by block broadcasting
+      // has a zero partition component. Consequently all right inverses agree
+      // on the partition projection even though their block projections may
+      // differ, and one pseudoinverse is sufficient here. A layout that aliases
+      // a partition basis with a block basis would violate this invariant and
+      // must not be accepted.
       auto partitionLayout =
           ll.pseudoinvert().sublayout(dimNames, {kPartition});
       int32_t partitionShift = partitionLayout.apply(namedOffsets)[0].second;

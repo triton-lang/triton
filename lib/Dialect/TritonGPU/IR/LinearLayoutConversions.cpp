@@ -1187,42 +1187,74 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
 //
 // LinearLayout inputs: "offset", "partition"
 // LinearLayout outputs: dim0, dim1, ... (tensor coordinates)
+// Return the layout encoded by `layout` after removing its CGA mapping. Unlike
+// resizeInDim("block", 1), rebuilding from the remaining bases also infers the
+// smaller per-CTA output shape.
+LinearLayout removeCGAFromLinearLayout(const LinearLayout &layout) {
+  assert(!layout.getInDimNames().empty());
+  auto *ctx = layout.getInDimNames().begin()->getContext();
+  auto bases = layout.getBases();
+  bases[S("block")] = {};
+  return LinearLayout(std::move(bases),
+                      llvm::to_vector(layout.getOutDimNames()));
+}
+
+LinearLayout localPartitionPieceToLinearLayout(ArrayRef<int64_t> pieceShape,
+                                               SharedEncodingTrait inner) {
+  auto *ctx = inner.getContext();
+  auto oneCTA = CGAEncodingAttr::get1CTALayout(ctx, pieceShape.size());
+  LinearLayout localPiece = LinearLayout::empty();
+
+  if (auto padded = dyn_cast<PaddedSharedEncodingAttr>(inner)) {
+    // Padded layouts carry their linear component directly. It was built for
+    // one logical piece across the CGA, so removing block bases recovers the
+    // layout of that piece within one CTA.
+    localPiece = removeCGAFromLinearLayout(padded.getLinearComponent());
+  } else if (auto swizzled = dyn_cast<SwizzledSharedEncodingAttr>(inner)) {
+    auto localEncoding = SwizzledSharedEncodingAttr::get(
+        ctx, swizzled.getVec(), swizzled.getPerPhase(), swizzled.getMaxPhase(),
+        swizzled.getOrder(), oneCTA);
+    localPiece = swizzledSharedToLinearLayout(pieceShape, localEncoding);
+  } else if (auto rotating = dyn_cast<AMDRotatingSharedEncodingAttr>(inner)) {
+    auto localEncoding = AMDRotatingSharedEncodingAttr::get(
+        ctx, rotating.getVec(), rotating.getPerPhase(), rotating.getMaxPhase(),
+        rotating.getOrder(), oneCTA);
+    localPiece = sharedToLinearLayoutAMDRotating(pieceShape, localEncoding);
+  } else if (auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(inner)) {
+    auto localEncoding = NVMMASharedEncodingAttr::get(
+        ctx, nvmma.getSwizzlingByteWidth(), nvmma.getTransposed(),
+        nvmma.getElementBitWidth(), nvmma.getFp4Padded(), oneCTA);
+    localPiece =
+        nvmmaSharedToLinearLayout(pieceShape, localEncoding, TMAMode::Tiled);
+  } else if (auto linear = dyn_cast<SharedLinearEncodingAttr>(inner)) {
+    localPiece = removeCGAFromLinearLayout(linear.getLinearLayout());
+  } else {
+    llvm_unreachable("unsupported partitioned shared inner layout");
+  }
+
+  assert(llvm::equal(localPiece.getOutDimSizes(), pieceShape) &&
+         "partition layout does not match the per-CTA piece shape");
+  return localPiece;
+}
+
 LinearLayout
 partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
                                 PartitionedSharedEncodingAttr partitioned) {
+  auto cgaLayout = partitioned.getCGALayout();
+  SmallVector<int64_t> ctaShape =
+      getShapePerCTA(cgaLayout.getCTASplitNum(), shape);
   unsigned numLogicalPieces = partitioned.getNumLogicalPieces();
   unsigned partitionDim = partitioned.getPartitionDim();
+  assert(ctaShape[partitionDim] % numLogicalPieces == 0 &&
+         "CTA tile is not divisible into partitioned pieces");
 
-  // Each logical piece has this size along the partition dimension
-  int64_t pieceSize = shape[partitionDim] / numLogicalPieces;
-
-  // Shape of a single piece (full shape except partitionDim = pieceSize)
-  SmallVector<int64_t> partitionShape(shape.begin(), shape.end());
-  partitionShape[partitionDim] = pieceSize;
-
-  // baseLayout maps (offset, block) -> coordinates within ONE piece.
-  // For padded partition layouts, use the linear component (without padding).
-  auto partitionLayout = partitioned.getPartitionLayout();
-  LinearLayout baseLayout =
-      isa<PaddedSharedEncodingAttr>(partitionLayout)
-          ? cast<PaddedSharedEncodingAttr>(partitionLayout).getLinearComponent()
-          : toLinearLayout(partitionShape, partitionLayout);
+  SmallVector<int64_t> pieceShape(ctaShape);
+  pieceShape[partitionDim] /= numLogicalPieces;
+  LinearLayout localLayout = localPartitionPieceToLinearLayout(
+      pieceShape, partitioned.getPartitionLayout());
 
   auto *ctx = partitioned.getContext();
-  auto outDimNames = standardOutDimNames(ctx, baseLayout.getNumOutDims());
-
-  // Partitioning is local to each CTA.  The wrapped layout may carry a CGA
-  // block mapping, but that mapping must remain outside the partition/group
-  // bits.  Otherwise those bits are appended after the block basis and make
-  // each CTA own interleaved fragments of the clustered tile instead of one
-  // contiguous per-CTA tile.
-  LinearLayout localLayout = getLayoutWithinBlock(baseLayout);
-  auto localPieceShape = getShapePerCTA(
-      partitioned.getCGALayout().getCTASplitNum(), partitionShape);
-  llvm::SmallDenseMap<StringAttr, int64_t> localPieceShapeMap;
-  for (auto [dim, size] : llvm::zip(outDimNames, localPieceShape))
-    localPieceShapeMap[dim] = size;
-  localLayout = ensureLayoutNotLargerThan(localLayout, localPieceShapeMap);
+  auto outDimNames = standardOutDimNames(ctx, localLayout.getNumOutDims());
 
   // partLayout maps "partition" -> piece selection along partitionDim.
   auto kPartition = StringAttr::get(ctx, "partition");
@@ -1235,7 +1267,7 @@ partitionedSharedToLinearLayout(ArrayRef<int64_t> shape,
       partitioned.getNumGroups(), kOffset, outDimNames[partitionDim]);
 
   localLayout = localLayout * partLayout * extension;
-  return combineCtaCgaWithShape(localLayout, partitioned.getCGALayout(), shape);
+  return combineCtaCgaWithShape(localLayout, cgaLayout, shape);
 }
 
 LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,

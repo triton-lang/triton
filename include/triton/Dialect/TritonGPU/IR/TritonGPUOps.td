@@ -274,6 +274,13 @@ def TTG_MemDescSubsliceOp : TTG_Op<"memdesc_subslice", [Pure, MemDescViewTrait]>
     Then in Python syntax, the subview covers input[2:8+2, 1:16+1] where input is
     the logical tensor.
 
+    Offsets apply only to logical tensor dimensions; they never index the
+    layout's `block` input or select a CTA. If the source descriptor is
+    broadcast by its CGA layout, every CTA in the broadcast group takes the
+    same logical subview and retains the original CGA mapping. This permits
+    multi-CTA dot operands that are broadcast along one CGA axis to be
+    subdivided into logical K/M/N tiles without changing CTA participation.
+
     The offsets must be larger or equal to the tile of the tensor (or zero).
   }];
   let arguments = (ins TTG_MemDescType:$src, DenseI32ArrayAttr:$offsets);

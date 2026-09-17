@@ -32,10 +32,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // Test lowering of operations with PartitionedSharedEncodingAttr using padded_shared layout
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [2, 1], order = [1, 0]}>
-#inner_padded = #ttg.padded_shared<[128:+4] {order = [1, 0], shape = [16, 16]}>
+#inner_padded = #ttg.padded_shared<[128:+4] {order = [1, 0], shape = [4, 16]}>
 #partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner_padded}>
-#inner_padded_piece = #ttg.padded_shared<[128:+4] {order = [1, 0], shape = [4, 16]}>
-#partitioned_piece = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner_padded_piece}>
+#partitioned_piece = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner_padded}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // GFX1250-LABEL: partitioned_shared_padded_local_alloc
@@ -83,8 +82,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 #partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner_shared}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // A broadcast block dimension makes the shared layout non-square. Lowering
-  // the subslice still needs to recover its physical partition.
+  // The second block basis broadcasts the descriptor. Every CTA in that
+  // broadcast group takes the same logical subslice; the subslice does not
+  // select a CTA or alter the CGA mapping. The resulting non-square layout
+  // still needs to recover and rotate its physical partition.
   // GFX1250-LABEL: partitioned_shared_clustered_subslice
   // GFX1250: [[PART0:%.*]] = llvm.extractvalue {{.*}}[0]
   // GFX1250: [[PART1:%.*]] = llvm.extractvalue {{.*}}[1]
@@ -100,7 +101,7 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [2, 1], order = [1, 0]}>
-#inner_padded = #ttg.padded_shared<[128:+4] {order = [1, 0], shape = [16, 16]}>
+#inner_padded = #ttg.padded_shared<[128:+4] {order = [1, 0], shape = [4, 16]}>
 #partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner_padded}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32} {
@@ -118,7 +119,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 4], warpsPerCTA = [2, 1], order = [1, 0]}>
-#inner_padded = #ttg.padded_shared<[128:+4] {order = [1, 0], shape = [16, 16]}>
+#inner_padded = #ttg.padded_shared<[128:+4] {order = [1, 0], shape = [4, 16]}>
 #partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner_padded}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32} {
