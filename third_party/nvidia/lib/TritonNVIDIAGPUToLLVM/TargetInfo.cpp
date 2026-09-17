@@ -540,11 +540,9 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   bool partialWarp = reduceLaneIdMask != fullMask;
   unsigned groupMask = fullMask & ~(reduceLaneIdMask | broadcastLaneIdMask);
   bool partitioned = groupMask != 0;
-  // Use at most two converged full-warp reductions on SM100. Broadcast lanes
+  // Use at most two converged full-warp reductions. Broadcast lanes
   // share a result, so only lane bits identifying distinct groups count.
-  // Keep the existing full-warp heuristic for other targets and 64-bit values.
-  if (partialWarp &&
-      (getComputeCapability() / 10 != 10 || llvm::popcount(groupMask) > 1))
+  if (llvm::popcount(groupMask) > 1)
     return false;
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   bool useNanQualifier = false;
@@ -554,7 +552,7 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     if (partialWarp) {
       if (acc[0].getType().getIntOrFloatBitWidth() > 32)
         return false;
-      // Min/max use the faster CREDUX instructions on SM100. The minimum
+      // Min/max use the faster CREDUX instructions on SM100+. The minimum
       // group size also depends on whether we need one redux or two.
       bool isMinMax = *kind == NVVM::ReductionKind::MIN ||
                       *kind == NVVM::ReductionKind::MAX ||
@@ -562,8 +560,11 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                       *kind == NVVM::ReductionKind::UMAX ||
                       *kind == NVVM::ReductionKind::FMIN ||
                       *kind == NVVM::ReductionKind::FMAX;
+      bool useFastMinMax = isMinMax && getComputeCapability() >= 100;
+      // Heuristic thresholds based on latency/throughput benchmarks:
+      // https://github.com/triton-lang/triton/pull/11823
       unsigned minLanes =
-          isMinMax ? (partitioned ? 8 : 2) : (partitioned ? 16 : 4);
+          useFastMinMax ? (partitioned ? 8 : 2) : (partitioned ? 16 : 4);
       unsigned numLanes = 1u << llvm::popcount(reduceLaneIdMask);
       if (numLanes < minLanes)
         return false;
