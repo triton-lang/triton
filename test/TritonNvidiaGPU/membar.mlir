@@ -501,6 +501,10 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 
   // The pure call clears warp coverage without adding pending memory effects.
+  // PREP-LABEL: @outlined_arrival_uses_full_count
+  // PREP: tt.call @pure_before_arrival
+  // PREP-NEXT: ttg.barrier warp local
+  // PREP-NEXT: ttng.arrive_barrier {{.*}}, 1 {per_warp}
   // CLEANUP-LABEL: @outlined_arrival_uses_full_count
   // CLEANUP: ttng.init_barrier {{.*}}, 1 :
   // CLEANUP: ttg.barrier local
@@ -517,6 +521,12 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttng.arrive_barrier %bar, 1 : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
     ttng.wait_barrier %bar, %phase : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
     ttng.inval_barrier %bar : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    tt.return %result : i32
+  }
+
+  // Keep the outlined functions reachable by the dataflow analysis.
+  tt.func @call_outlined_arrival(%value: i32) -> i32 attributes {"ttg.num-warps" = 2 : i32} {
+    %result = tt.call @outlined_arrival_uses_full_count(%value) : (i32) -> i32
     tt.return %result : i32
   }
 }
