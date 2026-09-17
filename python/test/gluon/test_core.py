@@ -2375,6 +2375,33 @@ def test_math_fast_dividef():
     torch.testing.assert_close(z, torch.div(x, y), atol=1e-5, rtol=1e-4)
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
+@pytest.mark.parametrize("enable_fp_fusion", [False, True])
+def test_precise_division_rounding(enable_fp_fusion, device):
+
+    @gluon.jit
+    def kernel(X, Addend, Out):
+        offs = ttgl.arange(0, 8, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+        x = ttgl.load(X + offs)
+        addend = ttgl.load(Addend + offs)
+        ttgl.store(Out + offs, ttgl.div_rn(x, 2.0) + addend)
+        ttgl.store(Out + 8 + offs, ttgl.div_rn(x, 0.5) + addend)
+        ttgl.store(Out + 16 + offs, ttgl.div_rn(1.0, x))
+
+    small, large = 2.0**-149, 2.0**127
+    x = torch.tensor([3, -3, small, -small, large, -large, 0.0, -0.0], dtype=torch.float32, device=device)
+    addend = torch.tensor([-1, -1, small, -small, -large, large, 0.0, -0.0], dtype=torch.float32, device=device)
+    expected = torch.tensor([
+        [0.5, -2.5, small, -small, -large / 2, large / 2, 0.0, -0.0],
+        [5, -7, 3 * small, -3 * small, torch.inf, -torch.inf, 0.0, -0.0],
+        [1 / 3, -1 / 3, torch.inf, -torch.inf, 2.0**-127, -2.0**-127, torch.inf, -torch.inf],
+    ], dtype=torch.float32, device=device)
+    out = torch.empty_like(expected)
+    compiled = kernel[(1, )](x, addend, out, enable_fp_fusion=enable_fp_fusion)
+    assert torch.equal(out.view(torch.int32), expected.view(torch.int32))
+    assert "rcp.rn.f32" in compiled.asm["ptx"]
+
+
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_copy_2d():
     device = "cuda"
