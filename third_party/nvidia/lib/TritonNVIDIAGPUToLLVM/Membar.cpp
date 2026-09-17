@@ -55,8 +55,26 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
           after))
     return true;
 
+  // Keep these exemptions local to an ordered pair on the same barrier;
+  // do not suppress synchronization across execution regions or a backedge.
+  if (auto expect = dyn_cast<ttng::BarrierExpectOp>(before)) {
+    if (before->getBlock() == after->getBlock() &&
+        before->isBeforeInBlock(after)) {
+      // Both operations use partition-relative thread zero.
+      if (auto copy = dyn_cast<ttng::AsyncBulkCopyGlobalToLocalOp>(after))
+        if (expect.getAlloc() == copy.getBarrier())
+          return true;
+      // The expectation's leading rendezvous publishes initialization; the
+      // wait itself observes completion of the expected phase/transactions.
+      if (auto wait = dyn_cast<ttng::WaitBarrierOp>(after))
+        if (expect.getAlloc() == wait.getAlloc())
+          return true;
+    }
+  }
+
   // wait_barrier will never run ahead of the load it's waiting on
-  if (isa<ttng::TMALoadLikeOpInterface>(before) &&
+  if (isa<ttng::TMALoadLikeOpInterface,
+          ttng::AsyncBulkCopyGlobalToLocalOp>(before) &&
       isa<ttng::WaitBarrierOp>(after))
     return true;
 

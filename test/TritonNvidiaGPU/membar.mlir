@@ -207,3 +207,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return %value : tensor<128xi32, #blocked>
   }
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+!bar = !ttg.memdesc<1xi64, #shared, #ttg.shared_memory, mutable>
+!dst = !ttg.memdesc<4096xf32, #shared, #ttg.shared_memory, mutable>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: @bulk_wait
+  tt.func @bulk_wait(%src: !tt.ptr<f32>) {
+    %true = arith.constant true
+    %phase = arith.constant 0 : i32
+    %dst = ttg.local_alloc : () -> !dst
+    %bar = ttg.local_alloc : () -> !bar
+    ttng.init_barrier %bar, 1 : !bar
+    // CHECK: ttng.barrier_expect
+    // CHECK-NEXT: ttng.async_bulk_copy_global_to_local
+    // CHECK-NEXT: ttng.wait_barrier
+    ttng.barrier_expect %bar, 10240, %true : !bar
+    ttng.async_bulk_copy_global_to_local %src, %dst, 10240, %bar, %true : !tt.ptr<f32>, !dst, !bar
+    ttng.wait_barrier %bar, %phase : !bar
+    ttng.inval_barrier %bar : !bar
+    tt.return
+  }
+}

@@ -9,6 +9,7 @@ NVIDIA Blackwell
     :template: autosummary/gluon-module.rst
 
     async_copy
+    bulk
     clc
     mbarrier
     tma

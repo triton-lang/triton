@@ -842,6 +842,42 @@ bool AsyncTMAReduceOp::isSupportedReduceKind(DescriptorReduceKind kind,
   llvm_unreachable("unknown descriptor reduce kind");
 }
 
+// -- AsyncBulkCopyGlobalToLocalOp --
+LogicalResult AsyncBulkCopyGlobalToLocalOp::verify() {
+  if (gpu::lookupNumCTAs(*this) != 1)
+    return emitOpError("requires a single-CTA kernel");
+  auto dstTy = getDst().getType();
+  if (!dstTy.getMutableMemory())
+    return emitOpError("cannot copy into immutable memory");
+  auto layout = dyn_cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
+  if (dstTy.getRank() != 1 || !layout || layout.getMaxPhase() != 1)
+    return emitOpError("requires a one-dimensional unswizzled shared destination");
+  if (getSrc().getType().getAddressSpace() != PtrAddrSpace::Global)
+    return emitOpError("requires a global-memory source pointer");
+  unsigned bits = getIntOrFloatOrPtrBitWidth(dstTy.getElementType());
+  if (bits < 8)
+    return emitOpError("requires byte-addressable destination elements");
+  int64_t capacity = dstTy.getNumElements() * bits / 8;
+  if (getNumBytes() <= 0 || getNumBytes() % 16 || getNumBytes() > capacity)
+    return emitOpError("byte count must be a positive multiple of 16 within the destination view");
+  return success();
+}
+
+LogicalResult AsyncBulkCopyGlobalToLocalOp::canonicalize(
+    AsyncBulkCopyGlobalToLocalOp op, PatternRewriter &rewriter) {
+  return eraseIfPredicateIsFalse(op, rewriter);
+}
+
+Value AsyncBulkCopyGlobalToLocalOp::getPredicateOperand() { return getPred(); }
+
+void AsyncBulkCopyGlobalToLocalOp::setPredicateOperand(Value pred) {
+  getPredMutable().assign(pred);
+}
+
+Type AsyncBulkCopyGlobalToLocalOp::getPredicateOperandTypeLike() {
+  return getPred().getType();
+}
+
 // -- AsyncTMACopyGlobalToLocalOp --
 LogicalResult
 AsyncTMACopyGlobalToLocalOp::canonicalize(AsyncTMACopyGlobalToLocalOp op,
