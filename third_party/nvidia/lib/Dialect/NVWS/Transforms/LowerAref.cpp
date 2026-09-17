@@ -471,6 +471,16 @@ void rewriteGetEnterOp(ArefGetEnterOp op, PatternRewriter &rewriter,
       getFullBarrier(rewriter, loc, arefVal, op.getStage(),
                      getPartitionWsTagIds(op), getStageCluster(op));
   insertWaitOp(rewriter, op, fullBarrier, op.getPhase(), op.getStage());
+  // Conservatively synchronize shared-memory consumers across CTAs for now,
+  // since aref completion barriers are per-CTA.
+  if (getModuleTwoCTAs(op) && llvm::any_of(op.getBuffers(), [](Value buffer) {
+        return isa<SharedMemorySpaceAttr>(
+            cast<MemDescType>(buffer.getType()).getMemorySpace());
+      })) {
+    auto barrier = ClusterBarrierOp::create(rewriter, loc);
+    assignStageCluster(barrier, getPartitionWsTagIds(op), getStageCluster(op),
+                       rewriter);
+  }
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter,
                            getPartitionWsTagIds(op), getStageCluster(op));
   assert(views.size() == op.getBuffers().size());
@@ -853,6 +863,23 @@ void combineArefs(scf::ForOp loop) {
   llvm::DenseMap<std::pair<Operation *, int>, SmallVector<ArefGetEnterOp>>
       liveBeforeGroups;
   for (auto getEnterOp : getEnterOps) {
+    // Combining erases the original arefs, so require a single get-enter.
+    // Schematic IR from test_tma_matmul_mixed_consumers:
+    //   %a_ref = nvws.aref.create %a_buffer ...
+    //   %b_ref = nvws.aref.create %b_buffer ...
+    //   scf.for ... {
+    //     %a_aux, %t0 = nvws.aref.get.enter %a_ref[%stage, %phase] ...
+    //     %aux = ttg.local_load %a_aux ...
+    //     %a_mma, %t1 = nvws.aref.get.enter %a_ref[%stage, %phase] ...
+    //     %b_mma, %t2 = nvws.aref.get.enter %b_ref[%stage, %phase] ...
+    //     ttng.tc_gen5_mma %a_mma, %b_mma, ...
+    //   }
+    // Combining the MMA get-enters erases %a_ref and %b_ref, but the get-enter
+    // producing %a_aux still uses %a_ref.
+    if (llvm::any_of(getEnterOp.getAref().getUsers(), [&](Operation *user) {
+          return isa<ArefGetEnterOp>(user) && user != getEnterOp;
+        }))
+      continue;
     if (auto liveBeforeOp =
             getDominantConsumer(getEnterOp, *loop.getBody(), domInfo)) {
       assert(hasPartition(getEnterOp));

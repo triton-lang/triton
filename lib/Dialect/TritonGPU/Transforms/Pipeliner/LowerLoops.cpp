@@ -1,5 +1,6 @@
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -14,6 +15,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/StrUtil.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -275,6 +277,108 @@ struct LoadGroupInfo {
   bool hasTMALoad = false;
 };
 
+struct TMALoadWaitRequirements {
+  // The load is used by a MMAv5 op with two CTAs
+  bool needsPairWait = false;
+  // The load will be used by multiple CTAs not in the two-cta mode, we need to
+  // wait for all to finish
+  bool needsAllCTAWait = false;
+};
+
+static bool followControlFlowOperand(OpOperand &use,
+                                     SetVector<Value> &worklist) {
+  Operation *op = use.getOwner();
+  if (auto branch = dyn_cast<BranchOpInterface>(op)) {
+    if (auto argument =
+            branch.getSuccessorBlockArgument(use.getOperandNumber())) {
+      worklist.insert(*argument);
+      return true;
+    }
+    return false;
+  }
+
+  auto followSuccessor = [&](OperandRange operands, ValueRange inputs) {
+    unsigned index = use.getOperandNumber();
+    if (operands.empty() || index < operands.getBeginOperandIndex() ||
+        index >= operands.getBeginOperandIndex() + operands.size())
+      return false;
+    worklist.insert(inputs[index - operands.getBeginOperandIndex()]);
+    return true;
+  };
+  SmallVector<RegionSuccessor> successors;
+  bool forwarded = false;
+  if (auto branch = dyn_cast<RegionBranchOpInterface>(op)) {
+    branch.getSuccessorRegions(RegionBranchPoint::parent(), successors);
+    for (RegionSuccessor successor : successors)
+      forwarded |= followSuccessor(branch.getEntrySuccessorOperands(successor),
+                                   branch.getSuccessorInputs(successor));
+  } else if (auto terminator =
+                 dyn_cast<RegionBranchTerminatorOpInterface>(op)) {
+    // ReturnLike can provide this interface even without a region-branch
+    // parent.
+    auto parent = dyn_cast<RegionBranchOpInterface>(op->getParentOp());
+    if (!parent)
+      return false;
+    parent.getSuccessorRegions(RegionBranchPoint(terminator), successors);
+    for (RegionSuccessor successor : successors)
+      forwarded |= followSuccessor(terminator.getSuccessorOperands(successor),
+                                   parent.getSuccessorInputs(successor));
+  }
+  return forwarded;
+}
+
+static TMALoadWaitRequirements getTMALoadWaitRequirements(Operation *loadOp) {
+  TMALoadWaitRequirements requirements;
+  requirements.needsAllCTAWait = mustLoadToRegisters(loadOp);
+  SetVector<Value> worklist;
+  worklist.insert(loadOp->result_begin(), loadOp->result_end());
+  for (unsigned i = 0; i < worklist.size(); ++i) {
+    for (OpOperand &use : worklist[i].getUses()) {
+      Operation *op = use.getOwner();
+      if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
+        requirements.needsPairWait |= mma.getTwoCtas();
+        requirements.needsAllCTAWait |= !mma.getTwoCtas();
+        continue;
+      }
+      if (followControlFlowOperand(use, worklist))
+        continue;
+      auto select = dyn_cast<arith::SelectOp>(op);
+      bool selectsDescriptor =
+          select && isa<ttg::MemDescType>(select.getType());
+      if (!isa<ttg::LocalAllocOp, ttng::WaitBarrierOp>(op) &&
+          !op->hasTrait<OpTrait::MemDescViewTrait>() && !selectsDescriptor)
+        requirements.needsAllCTAWait = true;
+      worklist.insert(op->result_begin(), op->result_end());
+    }
+  }
+  return requirements;
+}
+
+static int getMMAv5CompletionBarrierCount(ttng::MMAv5OpInterface mma) {
+  SmallVector<Value> descs = mma.getCompletionDescs();
+
+  SmallVector<uint16_t> broadcastMasks =
+      ttng::getCTABroadcastMasks(mma.getTwoCtas(), descs);
+  if (broadcastMasks.empty())
+    return 1;
+
+  int numCTAs = lookupNumCTAs(mma.getOperation());
+  uint16_t ctaMask = numCTAs - 1;
+  int count = 0;
+  for (int cta = 0; cta < numCTAs; ++cta) {
+    if (mma.getTwoCtas() && (cta & 1))
+      continue;
+    for (uint16_t broadcastMask : broadcastMasks) {
+      // Count CTAs that issue the multicast commit
+      if ((cta & (~broadcastMask & ctaMask)) == 0) {
+        ++count;
+        break;
+      }
+    }
+  }
+  return count;
+}
+
 // Convert a scalar load to a load of a tensor of shape <1>.
 void convertScalarToTensorLoad(Operation *op, CoarseSchedule &schedule,
                                scf::ForOp forOp) {
@@ -375,13 +479,18 @@ void createTMABarrierAndWait(
     int sizeInBytes = 0;
     int numBuffers = asyncLoads[group[0]].stageDiff;
     const LoadGroupInfo loadGroup = loadGroups.find(numBuffers)->second;
+    TMALoadWaitRequirements waitRequirements;
     for (Operation *op : group) {
       auto tensorTy = cast<RankedTensorType>(op->getResultTypes()[0]);
       int loadSize = product(getShapePerCTA(tensorTy));
       sizeInBytes += loadSize * tensorTy.getElementTypeBitWidth() / 8;
+      auto loadRequirements = getTMALoadWaitRequirements(op);
+      waitRequirements.needsPairWait |= loadRequirements.needsPairWait;
+      waitRequirements.needsAllCTAWait |= loadRequirements.needsAllCTAWait;
     }
 
-    Value barrierAlloc = triton::createBarrierAlloc(forOp, numBuffers);
+    Value barrierAlloc = triton::createBarrierAlloc(
+        forOp, numBuffers, /*arriveCount=*/1, waitRequirements.needsPairWait);
     OpBuilderForStage builder(forOp.getLoc(), group[0], schedule);
     Value barrier = triton::createSingleBufferView(builder, barrierAlloc,
                                                    loadGroup.insertIdx);
@@ -393,13 +502,16 @@ void createTMABarrierAndWait(
     builder.setStageCluster(schedule[firstUse]);
     Value barrierViewWait = triton::createSingleBufferView(
         builder, barrierAlloc, loadGroup.extractIdx);
-    auto wait =
+    Operation *waitOp =
         ttng::WaitBarrierOp::create(builder, barrierViewWait, loadGroup.phase);
+    if (waitRequirements.needsPairWait && waitRequirements.needsAllCTAWait) {
+      waitOp = ttng::ClusterBarrierOp::create(builder);
+    }
 
-    // Update the async loads info.
+    // Update the async loads requirements.
     for (Operation *op : group) {
       asyncLoads[op].barrier = barrier;
-      asyncLoads[op].waitOp = wait;
+      asyncLoads[op].waitOp = waitOp;
     }
   }
 }
@@ -462,6 +574,8 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
         sharedEncoding = getSharedEncoding(&op);
         // Do not create async loads for small loads (cp.async requires at least
         // 4 bytes)
+        // TODO: Support 2CTA MMA for regular tt.load/cp.async paths. For now,
+        // automatic 2CTA MMA is limited to descriptor/TMA loads.
         canUseAsyncCp =
             isa<tt::LoadOp>(op) &&
             canBeConvertedToAsyncLoad(cast<tt::LoadOp>(op), axisInfoAnalysis);
@@ -762,9 +876,29 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   }
 
   int numStages = mainWaitStage - schedule[mma].first + 1;
+  if (mma.getTwoCtas()) {
+    // With four prefetched operand tiles, two completion slots are
+    // insufficient. Schematic expanded IR (types and TMA operations omitted):
+    //   %bar0 = ttg.memdesc_index %mma_bars[%c0] : ...
+    //   %bar1 = ttg.memdesc_index %mma_bars[%c1] : ...
+    //   ttng.tc_gen5_mma %a0, %b0, %acc, %false, %true,
+    //       %bar0[%true] {is_async, two_ctas} : ...
+    //   ttng.tc_gen5_mma %a1, %b1, %acc, %true, %true,
+    //       %bar1[%true] {is_async, two_ctas} : ...
+    //   ttng.wait_barrier %bar0, %c0 deps %a0, %b0 : ...
+    //   ttng.tc_gen5_mma %a2, %b2, %acc, %true, %true,
+    //       %bar0[%true] {is_async, two_ctas} : ...
+    // The leader can issue MMA 2 while the peer has not yet observed MMA 0's
+    // completion. Both completions flip %bar0's phase, so the peer can miss
+    // MMA 0's completion and deadlock. Size the completion-barrier ring for
+    // the full pipeline depth so the leader cannot reuse a slot that early.
+    numStages = std::max(numStages, schedule.getNumStages());
+  }
 
   OpBuilderForStage builder(mma.getLoc(), mma, schedule);
-  Value barrierAlloc = createBarrierAlloc(forOp, numStages);
+  Value barrierAlloc =
+      createBarrierAlloc(forOp, numStages, getMMAv5CompletionBarrierCount(mma),
+                         /*twoCTAs=*/false);
   Value vTrue = arith::ConstantIntOp::create(builder, 1, 1);
   Value phase = forOp.getRegionIterArg(phaseArgIdx);
   Value zero = arith::ConstantIntOp::create(builder, forOp.getLoc(), 0, 32);
