@@ -126,15 +126,19 @@ getDistributionScale(const BarrierUses &uses,
                              !llvm::any_of(uses.expects, usePerWarp)))
     return 0;
   constexpr uint64_t maxCount = (1 << 20) - 1;
+  uint64_t maxInitCount = 0;
+  for (InitBarrierOp init : uses.inits) {
+    // Lowering counts all CTAs that contribute to the same physical barrier.
+    uint64_t ctasPerBarrier =
+        gpu::lookupNumCTAs(init) / init.getAlloc().getType().getNumElements();
+    maxInitCount =
+        std::max(maxInitCount, uint64_t(init.getCount()) * ctasPerBarrier);
+  }
   uint64_t scale = 1;
   if (!uses.expects.empty()) {
     scale = gpu::lookupNumWarps(uses.expects.front());
-    if (!uses.arrivals.empty() || scale == 1 ||
-        gpu::lookupNumCTAs(uses.expects.front()) != 1)
+    if (!uses.arrivals.empty() || scale == 1)
       return 0;
-    uint64_t maxInitCount = 0;
-    for (InitBarrierOp init : uses.inits)
-      maxInitCount = std::max(maxInitCount, uint64_t(init.getCount()));
     for (BarrierExpectOp expect : uses.expects) {
       // A phase has at most maxInitCount expectations. Bound the transaction
       // balance even when copies complete before other warps add their shares.
@@ -158,15 +162,8 @@ getDistributionScale(const BarrierUses &uses,
       if (arrive.getCount() > maxCount / scale)
         return 0;
   }
-  for (InitBarrierOp init : uses.inits) {
-    // Lowering counts all CTAs that contribute to the same physical barrier.
-    uint64_t ctasPerBarrier =
-        uses.expects.empty() ? gpu::lookupNumCTAs(init) /
-                                   init.getAlloc().getType().getNumElements()
-                             : 1;
-    if (init.getCount() > maxCount / scale / ctasPerBarrier)
-      return 0;
-  }
+  if (maxInitCount > maxCount / scale)
+    return 0;
   return scale;
 }
 

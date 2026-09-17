@@ -596,6 +596,48 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 
+  // Routed scalar and per-warp expectations each contribute once per CTA.
+  // FOLD-LABEL: @distributed_expect_cta_routes
+  // FOLD: ttng.init_barrier %[[BAR:.*]], 8 :
+  // FOLD: ttng.barrier_expect %[[BAR]], 0 {fromCTA = 0 : i32, per_warp}, %[[PRED:.*]] :
+  // FOLD-NEXT: ttg.barrier local
+  // FOLD-NEXT: ttng.barrier_expect %[[BAR]], 0 {fromCTA = 0 : i32}, %[[PRED]] :
+  // FOLD-NEXT: ttng.arrive_barrier %[[BAR]], 3, %[[PRED]] {fromCTA = 0 : i32} :
+  // FOLD-NEXT: ttng.wait_barrier
+  tt.func @distributed_expect_cta_routes(%out: !tt.ptr<i32>, %value: i32) {
+    %phase = arith.constant 0 : i32
+    %true = arith.constant true
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.init_barrier %bar, 2 : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttg.barrier local
+    tt.store %out, %value : !tt.ptr<i32>
+    ttng.barrier_expect %bar, 0 {fromCTA = 0 : i32}, %true : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttg.barrier local
+    ttng.barrier_expect %bar, 0 {fromCTA = 0 : i32}, %true : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.wait_barrier %bar, %phase : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<2xi64, #per_cta, #smem, mutable>
+    tt.return
+  }
+
+  // The shared barrier's physical arrival count would be 131072 * 4 * 2.
+  // PREP-LABEL: @distributed_expect_physical_count_overflow
+  // PREP: ttng.init_barrier %[[BAR:.*]], 131072 :
+  // PREP: ttng.barrier_expect %[[BAR]], 0,
+  tt.func @distributed_expect_physical_count_overflow() {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %count = arith.constant 131072 : i32
+    %true = arith.constant true
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.init_barrier %bar, 131072 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    scf.for %i = %c0 to %count step %c1 : i32 {
+      ttng.barrier_expect %bar, 0, %true : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    }
+    ttng.wait_barrier %bar, %c0 : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #broadcast, #smem, mutable>
+    tt.return
+  }
+
   tt.func private @pure_before_arrival(%value: i32) -> i32 attributes {noinline = true, "ttg.num-warps" = 2 : i32} {
     tt.return %value : i32
   }

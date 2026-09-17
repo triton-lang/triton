@@ -430,8 +430,6 @@ LogicalResult BarrierExpectOp::verify() {
     if (numWarps <= 1 || getSize() % numWarps != 0)
       return emitOpError("per_warp requires multiple warps and size divisible "
                          "by the warp count");
-    if (gpu::lookupNumCTAs(*this) != 1)
-      return emitOpError("distributed expectation requires one CTA");
   }
   return success();
 }
