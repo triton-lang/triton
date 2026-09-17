@@ -64,6 +64,16 @@ tt.func public @nested_partitioned_layout(%arg0: !ttg.memdesc<16x16xi32, #nested
 
 // -----
 
+#inner = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 32}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+// expected-error @+1 {{NVMMASharedEncodingAttr is not supported as a partitionLayout}}
+tt.func public @partitioned_nvmma_inner_layout(%arg0: !ttg.memdesc<16x16xi32, #partitioned, #smem, mutable>) {
+  tt.return
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 // expected-error @+1 {{shape has 0 dimension}}

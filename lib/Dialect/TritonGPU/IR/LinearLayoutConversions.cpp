@@ -1221,12 +1221,6 @@ localPartitionPieceToLinearLayout(ArrayRef<int64_t> pieceShape,
         ctx, rotating.getVec(), rotating.getPerPhase(), rotating.getMaxPhase(),
         rotating.getOrder(), oneCTA);
     localPiece = sharedToLinearLayoutAMDRotating(pieceShape, localEncoding);
-  } else if (auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(inner)) {
-    auto localEncoding = NVMMASharedEncodingAttr::get(
-        ctx, nvmma.getSwizzlingByteWidth(), nvmma.getTransposed(),
-        nvmma.getElementBitWidth(), nvmma.getFp4Padded(), oneCTA);
-    localPiece =
-        nvmmaSharedToLinearLayout(pieceShape, localEncoding, TMAMode::Tiled);
   } else if (auto linear = dyn_cast<SharedLinearEncodingAttr>(inner)) {
     localPiece = removeCGAFromLinearLayout(linear.getLinearLayout());
   } else {

@@ -214,6 +214,10 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
       return emitError()
              << "nested PartitionedSharedEncodingAttr is not supported";
     }
+    if (isa<NVMMASharedEncodingAttr>(inner)) {
+      return emitError() << "NVMMASharedEncodingAttr is not supported as a "
+                            "partitionLayout";
+    }
 
     auto blockShape = getShapePerCTA(enc, layoutAllocShape);
     unsigned partitionDim = enc.getPartitionDim();
@@ -248,13 +252,6 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
         return failure();
     } else if (auto linear = dyn_cast<SharedLinearEncodingAttr>(inner)) {
       if (failed(verifyFixedShape(linear.getLinearLayout())))
-        return failure();
-    } else if (auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(inner)) {
-      if (failed(getTMABlockShape(pieceShape, nvmma.getElementBitWidth(),
-                                  nvmma.getSwizzlingByteWidth(),
-                                  nvmma.getFp4Padded(), nvmma.getTransposed(),
-                                  /*packedSize=*/false, emitError,
-                                  TMAMode::Tiled)))
         return failure();
     }
   } else if (auto enc = dyn_cast<PaddedSharedEncodingAttr>(encoding)) {
