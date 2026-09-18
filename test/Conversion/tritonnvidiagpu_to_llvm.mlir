@@ -258,6 +258,18 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32} {
     ttng.barrier_expect %barrier, 16384 {fromCTA = 5 : i32}, %pred : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
     tt.return
   }
+
+  // CHECK-LABEL: expect_barrier_fromCTA0145_distributed
+  tt.func @expect_barrier_fromCTA0145_distributed(%barrier: !ttg.memdesc<8xi64, #barrier, #smem, mutable>, %pred: i1) {
+    // CHECK-NOT: nvvm.read.ptx.sreg.tid.x
+    // CHECK: %[[EXPECT_LANE:.*]] = nvvm.read.ptx.sreg.laneid
+    // CHECK: llvm.icmp "ult" %[[EXPECT_LANE]],
+    // CHECK: nvvm.read.ptx.sreg.cluster.ctarank
+    // CHECK: llvm.xor
+    // CHECK: @$0 mbarrier.arrive.expect_tx.shared::cluster.b64 _, [$1], 4096;
+    ttng.barrier_expect %barrier, 16384 {fromCTA = 5 : i32, per_warp}, %pred : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
+    tt.return
+  }
 }
 
 // -----
@@ -546,6 +558,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 
+  // The helper's two warps split the bytes through explicit identity routing.
+  // CHECK-LABEL: expect_barrier_distributed
+  // CHECK-NOT: nvvm.read.ptx.sreg.tid.x
+  // CHECK: nvvm.read.ptx.sreg.laneid
+  // CHECK: @$0 mbarrier.arrive.expect_tx.shared::cluster.b64 _, [$1], 8192;
+  tt.func private @expect_barrier_distributed(%barrier: !ttg.memdesc<1xi64, #shared0, #smem, mutable>, %pred: i1) attributes {noinline = true, "ttg.num-warps" = 2 : i32} {
+    ttng.barrier_expect %barrier, 16384 {fromCTA = 0 : i32, per_warp}, %pred : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
+    tt.return
+  }
 }
 
 // -----
@@ -563,6 +584,19 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-NOT: mbarrier.arrive.shared::cluster.b64
   tt.func @expect_barrier_cluster_broadcast(%barrier: !ttg.memdesc<1xi64, #shared0, #smem, mutable>, %pred: i1) {
     ttng.barrier_expect %barrier, 16384, %pred : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: expect_barrier_cluster_broadcast_distributed
+  tt.func @expect_barrier_cluster_broadcast_distributed(%barrier: !ttg.memdesc<1xi64, #shared0, #smem, mutable>, %pred: i1) {
+    // CHECK: llvm.ptrtoint
+    // CHECK: llvm.and
+    // CHECK: %[[BROADCAST_PTR:.*]] = llvm.inttoptr
+    // CHECK: %[[BROADCAST_LANE:.*]] = nvvm.read.ptx.sreg.laneid
+    // CHECK: llvm.icmp "eq" %[[BROADCAST_LANE]],
+    // CHECK: @$0 mbarrier.arrive.expect_tx.shared::cluster.b64 _, [$1], 4096;
+    // CHECK-SAME: "b,r" %{{[^,]+}}, %[[BROADCAST_PTR]]
+    ttng.barrier_expect %barrier, 16384 {per_warp}, %pred : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
     tt.return
   }
 }

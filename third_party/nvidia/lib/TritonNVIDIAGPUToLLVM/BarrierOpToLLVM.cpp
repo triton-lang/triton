@@ -266,15 +266,20 @@ struct BarrierExpectConversion
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getAlloc(),
         typeConverter->convertType(barrierTy.getElementType()), rewriter);
-    // The partition-relative thread ID lowers the same or marginally better
-    // than an elect: LOP3.LUT vs. ELECT + ISETP.EQ.U32.AND.
-    Value id = getThreadId(rewriter, loc);
-    Value pred = b.icmp_eq(id, b.i32_val(0));
+    unsigned size = op.getSize();
+    if (op.getPerWarp())
+      size /= ttg::lookupNumWarps(op);
     bool isCrossClusterBarrier =
         LLVM::NVIDIA::getCGABroadcastMask(barrierTy) != 0;
     Value barrierPtr = LLVM::NVIDIA::getLeaderAddress(
         loc, rewriter, smemObj.getBase(), barrierTy);
     Value multicastMask;
+    // Each expectation registers its bytes before consuming its arrival, so
+    // pending arrivals keep the phase open even when TMA copies complete first.
+    Value id = op.getPerWarp() ? NVVM::LaneIdOp::create(rewriter, loc,
+                                                        rewriter.getI32Type())
+                               : getThreadId(rewriter, loc);
+    Value pred = b.icmp_eq(id, b.i32_val(0));
     if (std::optional<uint32_t> fromCTA = op.getFromCTA()) {
       FromCTALowering lowering =
           getFromCTALowering(loc, rewriter, smemObj.getBase(), id, *fromCTA,
@@ -291,7 +296,7 @@ struct BarrierExpectConversion
         "@$0 mbarrier.arrive.expect_tx." +
         std::string(isCrossClusterBarrier ? "shared::cluster" : "shared::cta") +
         std::string(multicastMask ? ".multicast::cluster::32b" : "") +
-        ".b64 _, [$1], " + std::to_string(op.getSize()) +
+        ".b64 _, [$1], " + std::to_string(size) +
         std::string(multicastMask ? ", $2" : "") + ";";
     auto &expectOp = *expectPtxBuilder.create(expectPtx);
     SmallVector<PTXBuilder::Operand *, 3> operands = {

@@ -425,6 +425,12 @@ static LogicalResult canonicalizeBarrierFromCTA(BarrierOp op,
 LogicalResult BarrierExpectOp::verify() {
   if (failed(verifyBarrierFromCTA(*this, getAlloc(), getFromCTA())))
     return failure();
+  if (getPerWarp()) {
+    int numWarps = gpu::lookupNumWarps(*this);
+    if (numWarps <= 1 || getSize() % numWarps != 0)
+      return emitOpError("per_warp requires multiple warps and size divisible "
+                         "by the warp count");
+  }
   return success();
 }
 
@@ -436,6 +442,8 @@ LogicalResult BarrierExpectOp::canonicalize(BarrierExpectOp op,
 }
 
 TypedValue<MemDescType> BarrierExpectOp::getBarrier() { return getAlloc(); }
+
+bool BarrierExpectOp::isPerWarp() { return getPerWarp(); }
 
 Value BarrierExpectOp::getPredicateOperand() { return getPred(); }
 
