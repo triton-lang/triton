@@ -1294,6 +1294,33 @@ def test_histogram(M, bins, src_layout, dst_layout, num_ctas, device):
     torch.testing.assert_close(z, z_torch, atol=0, rtol=0)
 
 
+@pytest.mark.parametrize("bins, num_warps", [(1, 1), (1, 4), (2, 1), (2, 2)])
+def test_histogram_small_masked_input(bins, num_warps, device):
+
+    @gluon.jit
+    def kernel(x_ptr, z_ptr, B: ttgl.constexpr, layout: ttgl.constexpr):
+        offsets = ttgl.arange(0, 128, layout=layout)
+        x = ttgl.load(x_ptr + offsets)
+        counts = ttgl.histogram(x, B, mask=offsets % 3 != 0, layout=layout)
+        ttgl.store(z_ptr + ttgl.arange(0, B, layout=layout), counts)
+
+    offsets = torch.arange(128, device=device)
+    x = (offsets % (bins + 2) - 1).to(torch.int32)
+    selected = x[(offsets % 3 != 0) & (x >= 0) & (x < bins)]
+    expected = torch.bincount(selected.to(torch.int64), minlength=bins).to(torch.int32)
+    result = torch.empty((bins, ), dtype=torch.int32, device=device)
+    layout = ttgl.BlockedLayout([1], [THREADS_PER_WARP], [num_warps], [0])
+    compiled = kernel[(1, )](x, result, bins, layout, num_warps=num_warps)
+    torch.testing.assert_close(result, expected, atol=0, rtol=0)
+    assert "atomicrmw" not in compiled.asm["llir"]
+    if num_warps == 1:
+        assert compiled.metadata.shared == 0
+        if is_cuda():
+            assert "bar.sync" not in compiled.asm["ptx"]
+        elif is_hip():
+            assert "s_barrier" not in compiled.asm["amdgcn"]
+
+
 @pytest.mark.parametrize("M", [64, 128, 256])
 @pytest.mark.parametrize("src_layout", _1d_layouts)
 @pytest.mark.parametrize("dst_layout", _1d_layouts)
