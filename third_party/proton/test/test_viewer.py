@@ -3,6 +3,7 @@ import subprocess
 from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, read, format_frames, derive_metrics, filter_frames, parse, apply_diff_profile
 from triton.profiler.state import COMPUTE_METADATA_SCOPE_NAME
 import numpy as np
+from subprocess_utils import clean_rocprofiler_env
 
 file_path = __file__
 triton_example_file = file_path.replace("test_viewer.py", "examples/triton.json")
@@ -14,7 +15,7 @@ leaf_example_file = file_path.replace("test_viewer.py", "examples/leaf_nodes.jso
 
 def test_help():
     # Only check if the viewer can be invoked
-    subprocess.check_call(["proton-viewer", "-h"], stdout=subprocess.DEVNULL)
+    subprocess.check_call(["proton-viewer", "-h"], env=clean_rocprofiler_env(), stdout=subprocess.DEVNULL)
 
 
 def test_exclusive_metrics():

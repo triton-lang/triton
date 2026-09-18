@@ -44,20 +44,26 @@ same buffer.
 
 ## Thread Model
 
-ConSan uses logical thread ids rather than hardware lane ids:
+ConSan uses logical thread ids rather than hardware lane ids. The number of base
+threads, `N`, is one plus the largest warp-specialize partition count in the
+entry point: one without warp specialization, and at most 16.
 
-- Base threads: 16 logical warp-specialization slots. The default region is
-  thread 0; warp-specialize partition regions use `partition_index + 1`.
-- TMA peer threads: 16 additional slots at offset 16.
-- Tensor Core peer threads: 16 additional slots at offset 32.
-- CLC peer threads: 16 additional slots at offset 48.
-- Total logical slots in use: 64. Visibility masks are 64 bits.
+- Base threads occupy `[0, N)`. The default region is thread 0;
+  warp-specialize partition regions use `partition_index + 1`.
+- TMA, Tensor Core (`tcgen05`), and CLC peer classes are enabled only if used
+  by the entry point. Each gets `N` consecutive ids, appended after the base
+  threads in that order; absent classes reserve no ids.
+- There are at most 64 logical threads per CTA. Base-thread and all-thread
+  tensor axes are padded to powers of two.
 
-For a base thread, `getThreadPeersMask` returns the base thread plus its TMA,
-Tensor Core, and CLC peers. For a TMA, Tensor Core, or CLC thread, it returns
-only that helper thread. Commit-count tracking uses only the 16 base-thread
-columns, so helper threads are folded back with `thread % 16` where commit
-counters are involved.
+Read/write visibility and barrier read-tracking masks use 32 bits when at most
+32 logical threads are allocated, otherwise 64 bits. Packed barrier-state words
+and proxy-access visibility/tracking masks remain 64 bits.
+
+For a base thread, `getThreadPeersMask` returns that thread plus its enabled
+peers. For a peer thread, it returns only that thread. Commit-count tracking
+uses the padded base-thread columns; peer ids are folded back with `thread % N`
+where commit counters are involved.
 
 At a `ttg.warp_specialize`, the pass copies the default thread's read and write
 visibility to the destination partition peer masks so partition-local execution
@@ -345,12 +351,10 @@ The common hook implementation covers these TritonGPU operations:
   `ttg.local_atomic_scatter_rmw`: barrier-tracked shared-memory writes. Scatter
   and atomic scatter RMW conservatively cover their full destination
   descriptors because their indices are runtime values.
+- Non-atomic `ttg.local_scatter` additionally rejects conflicting values for the
+  same destination. Equal-value duplicates and atomic scatter collisions remain
+  valid.
 - `ttg.local_alloc` with a source: barrier-tracked shared-memory write.
-- Any operation with allocator-provided operation-local shared scratch: a
-  synchronous generic-proxy write over its allocated byte interval in its owning
-  CTA. Cross-CTA scratch reads follow intrinsic synchronization, and atomic
-  writes are issued only by producer CTAs. Forced warp-shuffle conversions
-  publish no scratch metadata because allocation reserves no scratch for them.
 - Function calls with allocator-provided virtual shared-memory frames: a
   synchronous generic-proxy write over the whole callee frame in the current
   CTA. This includes nested callees because each virtual frame is sized from
@@ -359,6 +363,11 @@ The common hook implementation covers these TritonGPU operations:
 
 These shared-memory effects are generic-proxy accesses for the proxy-ordering
 model.
+
+Operation-local compiler scratch is not instrumented. Races involving that
+scratch, including reuse while asynchronous accesses are pending, may therefore
+go undetected. Call-frame summaries and explicit shared-memory accesses remain
+instrumented.
 
 NVIDIA hooks additionally cover:
 

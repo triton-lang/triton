@@ -49,6 +49,7 @@ namespace mlir::triton::gpu {
 
 constexpr static char AttrMaxRegistersName[] = "ttg.maxnreg";
 constexpr static char AttrNumWarpsName[] = "ttg.num-warps";
+constexpr static char AttrWarpIdOffsetName[] = "ttg.warp-id-offset";
 constexpr static char AttrNumCTAsName[] = "ttg.num-ctas";
 constexpr static char AttrTargetName[] = "ttg.target";
 constexpr static char AttrNumThreadsPerWarp[] = "ttg.threads-per-warp";
@@ -287,7 +288,22 @@ std::optional<CGAEncodingAttr> parseCGAAttr(AsmParser &parser, Attribute attr,
 
 void printCGAAttr(AsmPrinter &printer, CGAEncodingAttr layout);
 
+// Return the CGA factor if layout = CTA * CGA, preserving broadcast block bits.
+// Pass a shape-instantiated layout when querying a tensor's CTA distribution.
+FailureOr<CGAEncodingAttr>
+maybeLinearToCGAEncodingAttr(const LinearLayout &layout);
+
 CGAEncodingAttr getCGALayout(Attribute layout);
+
+// Projects the CGA layout of a dot accumulator onto operand `opIdx`.
+CGAEncodingAttr inferDotOperandCGALayout(CGAEncodingAttr accCGALayout,
+                                         int opIdx);
+
+// Derives the CGA layout of the scale for dot operand `opIdx`. For operand A,
+// the scale shares the same CGA layout. For operand B, the last two dimensions
+// are swapped.
+CGAEncodingAttr
+inferDotScaleCGALayoutFromOperand(CGAEncodingAttr operandCGALayout, int opIdx);
 
 SmallVector<unsigned> getCTAsPerCGA(Attribute layout);
 
@@ -387,6 +403,9 @@ bool areLayoutsEquivalent(ArrayRef<int64_t> shape, LayoutEncodingTrait lhs,
 
 // Return true if the innermost numElems are contiguous.
 bool isInnermostContiguous(MemDescType type, unsigned numElems);
+
+// Return true for a full buffer with rank-one swizzled_shared(1, 1, 1).
+bool isContiguousSharedMemoryLayout(MemDescType type);
 
 LinearLayout inferReshapeLinearLayout(TensorOrMemDesc srcTy,
                                       ArrayRef<int64_t> dstShape);

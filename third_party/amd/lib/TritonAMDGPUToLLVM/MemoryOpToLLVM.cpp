@@ -445,7 +445,7 @@ public:
 
     auto typeConverter = this->getTypeConverter();
     auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
-    unsigned bitWidth = llvmElemTy.getIntOrFloatBitWidth();
+    unsigned bitWidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
 
     unsigned logicalBitWidth = bitWidth;
     if constexpr (isPackedTransposed) {
@@ -598,7 +598,6 @@ struct LocalAtomicScatterRMWOpConversion
         rmwMask = b.true_val();
 
       Value old = emitter.emitAtomicRMW(rewriter, addr.ptr, value, rmwMask,
-                                        /*sharedMemBase=*/std::nullopt,
                                         /*enableIntraWaveReduce=*/false);
       if (returnOld)
         results.push_back(old);
@@ -609,9 +608,8 @@ struct LocalAtomicScatterRMWOpConversion
       return success();
     }
 
-    finalizeTensorAtomicResults(op, info.valuesTy, rewriter, results,
-                                info.llvmElemTy, b, info.threadPred, targetInfo,
-                                getTypeConverter());
+    finalizeAtomicResults(op, rewriter, results, info.llvmElemTy, b,
+                          info.threadPred, targetInfo, getTypeConverter());
     return success();
   }
 

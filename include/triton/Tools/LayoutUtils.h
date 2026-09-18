@@ -10,11 +10,11 @@ namespace mlir::triton {
 bool squareSublayoutIsIdentity(const LinearLayout &ll,
                                ArrayRef<StringAttr> dimNames);
 
-// Compute B.invertAndCompose(A), mapping block bits broadcast by A to the
-// corresponding input block bits instead of block zero. This keeps replicated
-// memory accesses local without changing the composition.
-[[nodiscard]] LinearLayout invertAndComposeBlockLocal(const LinearLayout &A,
-                                                      const LinearLayout &B);
+// Compute B.invertAndCompose(A), mapping bits broadcast by A in localDims to
+// the corresponding input bits without changing the composition.
+[[nodiscard]] LinearLayout
+invertAndComposeLocal(const LinearLayout &A, const LinearLayout &B,
+                      ArrayRef<StringAttr> localDims);
 
 // For each output dimension d, ensure that the layout's output size (i.e., its
 // codomain) does not exceed shape[d]. Do this without changing the size of the

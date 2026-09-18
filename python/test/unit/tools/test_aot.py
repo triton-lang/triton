@@ -26,7 +26,7 @@ elif is_hip():
         return [os.path.dirname(hip_runtime_dylib)]
 
     def library_names():
-        return ["amdhip64"]
+        return [_get_path_to_hip_runtime_dylib()]
 
 
 kernel_utils_src = """
@@ -286,8 +286,13 @@ int main(int argc, char **argv) {{
         command.extend(["-I", inc_dir])
     for lib_dir in library_dirs():
         command.extend(["-L", lib_dir])
+        if is_hip():
+            command.append(f"-Wl,-rpath,{lib_dir}")
     for lib_name in library_names():
-        command.extend(["-l", lib_name])
+        if os.path.isabs(lib_name):
+            command.append(lib_name)
+        else:
+            command.extend(["-l", lib_name])
     command.extend(["-L", dir, "-l", "kernel", "-o", exe])
     subprocess.run(command, check=True, cwd=dir)
 
@@ -562,7 +567,8 @@ module attributes {{"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = {warp_si
             assert ".address_size 64" in ptx
         elif is_hip():
             amdgcn = k.asm["amdgcn"]
-            assert re.search(r'\.amdgcn_target "amdgcn-amd-amdhsa-[^-]*-gfx942"', amdgcn)
+            assert 'target triple = "amdgpu9.42-amd-amdhsa"' in k.asm["llir"]
+            assert re.search(r'\.amdgcn_target "amdgpu9\.42-amd-amdhsa-[^-]*-gfx942"', amdgcn)
             assert '.wavefront_size: 64' in amdgcn
 
 

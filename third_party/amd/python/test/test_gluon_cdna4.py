@@ -51,6 +51,7 @@ def scaled_downcast_fp4_kernel(
 
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.parametrize("scale_byte", [0, 1, 127])
 @pytest.mark.parametrize(
     "dtype,instruction_suffix",
     [
@@ -59,15 +60,14 @@ def scaled_downcast_fp4_kernel(
         (torch.float32, "f32"),
     ],
 )
-def test_runtime_scaled_downcast_fp4(dtype, instruction_suffix):
+def test_runtime_scaled_downcast_fp4(dtype, instruction_suffix, scale_byte):
     block_m, block_k = 16, 32
-    # Interleave 1.0 (low nibble) and 2.0 (high nibble) so every packed byte is
-    # e2m1(1.0) | (e2m1(2.0) << 4) == 0x42.
+    # Interleave scaled 1.0 and 2.0 so dividing by the scale packs 0x42.
     input = torch.empty((block_m, 2 * block_k), dtype=dtype)
-    input[:, 0::2] = 1.0
-    input[:, 1::2] = 2.0
+    input[:, 0::2] = 2.0**(scale_byte - 127)
+    input[:, 1::2] = 2.0**(scale_byte - 126)
     input = input.cuda()
-    scale = torch.full((block_m, block_k // 16), 127, dtype=torch.uint8).cuda()
+    scale = torch.full((block_m, block_k // 16), scale_byte, dtype=torch.uint8).cuda()
     output = torch.empty((block_m, block_k), dtype=torch.uint8, device="cuda")
 
     program = scaled_downcast_fp4_kernel[(1, )](
@@ -77,8 +77,11 @@ def test_runtime_scaled_downcast_fp4(dtype, instruction_suffix):
         block_m,
         block_k,
         num_warps=1,
+        allow_flush_denorm=False,
     )
 
-    expected = torch.full((block_m, block_k), 0x42, dtype=torch.uint8)
+    # The smallest scaled inputs already underflow in FP16.
+    expected_byte = 0 if dtype == torch.float16 and scale_byte < 127 else 0x42
+    expected = torch.full((block_m, block_k), expected_byte, dtype=torch.uint8)
     torch.testing.assert_close(output.cpu(), expected)
     assert (f"v_cvt_scalef32_pk_fp4_{instruction_suffix}" in program.asm["amdgcn"])

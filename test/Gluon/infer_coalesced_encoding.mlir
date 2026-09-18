@@ -32,3 +32,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 // -----
+
+
+// CHECK: [[$ATOMIC:#.*]] = #ttg.blocked<{sizePerThread = [16], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @atomic_load_store_coalesced
+  tt.func @atomic_load_store_coalesced(%ptr: !tt.ptr<i8> {tt.divisibility = 16 : i32}) {
+    %offsets = tt.make_range {end = 2048 : i32, start = 0 : i32} : tensor<2048xi32, #gluon.coalesced_encoding>
+    %base = tt.splat %ptr : !tt.ptr<i8> -> tensor<2048x!tt.ptr<i8>, #gluon.coalesced_encoding>
+    %ptrs = tt.addptr %base, %offsets : tensor<2048x!tt.ptr<i8>, #gluon.coalesced_encoding>, tensor<2048xi32, #gluon.coalesced_encoding>
+    // CHECK: %[[LOADED:.*]] = tt.atomic_load acquire, gpu, %{{.*}} : (tensor<2048x!tt.ptr<i8>, [[$ATOMIC]]>) -> tensor<2048xi8, [[$ATOMIC]]>
+    %loaded = tt.atomic_load acquire, gpu, %ptrs : (tensor<2048x!tt.ptr<i8>, #gluon.coalesced_encoding>) -> tensor<2048xi8, #gluon.coalesced_encoding>
+    // CHECK: tt.atomic_store release, gpu, %{{.*}}, %[[LOADED]] : tensor<2048x!tt.ptr<i8>, [[$ATOMIC]]>
+    tt.atomic_store release, gpu, %ptrs, %loaded : tensor<2048x!tt.ptr<i8>, #gluon.coalesced_encoding>
+    tt.return
+  }
+}

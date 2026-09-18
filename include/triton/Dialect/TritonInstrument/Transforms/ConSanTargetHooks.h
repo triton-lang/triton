@@ -31,6 +31,7 @@ struct MemEffectsOpInfo {
   enum class BarrierTrackingMode {
     Frontier,
     EffectWrites,
+    AsyncCopies,
   };
   struct Effects {
     struct StaticSharedBuffer {
@@ -216,7 +217,9 @@ inline std::optional<MemEffectsOpInfo>
 getConSanMemEffectsOpInfo(const ConSanTargetHooks &hooks, Operation *op) {
   std::optional<MemEffectsOpInfo> info = hooks.getMemEffectsOpInfo(op);
   auto sizeAttr = op->getAttrOfType<IntegerAttr>("allocation.size");
-  if (!sizeAttr)
+  // Keep frame summaries for retained callees, whose bodies are not
+  // instrumented, but omit operation-local compiler scratch.
+  if (!sizeAttr || !isa<CallOpInterface>(op))
     return info;
 
   uint32_t offset =
@@ -233,15 +236,11 @@ getConSanMemEffectsOpInfo(const ConSanTargetHooks &hooks, Operation *op) {
          "effect tracking");
   // A ConSan write performs both read- and write-conflict checks, so it is the
   // conservative read/write summary for compiler-owned scratch.
-  StringRef name = isa<CallOpInterface>(op) ? "Callee scratch" : "Scratch";
   info->operandEffects.emplace_back(
       RW::Write, MemEffectsOpInfo::Effects::StaticSharedBuffer{offset, size},
-      name.str());
+      "Callee scratch");
   return info;
 }
-
-LogicalResult runConcurrencySanitizer(ModuleOp module,
-                                      const ConSanTargetHooks &hooks);
 
 using ConSanHooksFactory = std::function<std::unique_ptr<ConSanTargetHooks>()>;
 void registerConSanHooks(llvm::StringRef key, ConSanHooksFactory factory);
