@@ -134,6 +134,8 @@ enum class ThreadSyncKind {
   CompletionNeedsSync,
   // These completions do not publish writes to global memory.
   SharedCompletionNeedsSync,
+  // Finish waits before a notification can let a peer advance their phase.
+  MBarrierWait,
 };
 
 struct ThreadSyncInfo {
@@ -151,14 +153,17 @@ struct ThreadSyncInfo {
   bool isCompletionOnly() const {
     return kind == ThreadSyncKind::Completion ||
            kind == ThreadSyncKind::CompletionNeedsSync ||
-           kind == ThreadSyncKind::SharedCompletionNeedsSync;
+           kind == ThreadSyncKind::SharedCompletionNeedsSync ||
+           kind == ThreadSyncKind::MBarrierWait;
   }
 };
 
 ThreadSyncInfo getThreadSyncInfo(Operation *op) {
   // Acquires and proxy fences do not consume payload. Wait deps only keep
   // allocations live; each thread fences its own completed accesses.
-  if (isa<ttng::WaitBarrierOp, ttng::FenceAsyncSharedOp>(op))
+  if (isa<ttng::WaitBarrierOp>(op))
+    return {ThreadSyncKind::MBarrierWait};
+  if (isa<ttng::FenceAsyncSharedOp>(op))
     return {ThreadSyncKind::Completion};
   if (isa<triton::gpu::AsyncWaitOp>(op))
     return {ThreadSyncKind::SharedCompletionNeedsSync};
@@ -484,9 +489,9 @@ BlockInfo MembarAnalysis::getThreadEffects(Operation *op) {
     effects.threadSync.completion = CompletionSync::All;
   else if (sync.kind == ThreadSyncKind::SharedCompletionNeedsSync)
     effects.threadSync.completion = CompletionSync::Shared;
-  auto wait = dyn_cast<ttng::WaitBarrierOp>(op);
   effects.threadSync.peerWaitNeedsSync =
-      wait && !isRegionLocal(wait.getAlloc());
+      sync.kind == ThreadSyncKind::MBarrierWait &&
+      !isRegionLocal(cast<ttng::WaitBarrierOp>(op).getAlloc());
   return effects;
 }
 
