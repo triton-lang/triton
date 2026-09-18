@@ -304,6 +304,10 @@ struct BarrierStages {
 BarrierStages getAtomicBarrierStages(MemSemantic semantic,
                                      bool hasResultBarrier);
 
+// Lane bits to clear when shuffling an atomic result from its issuing lane.
+// Returns nullopt when broadcasting the result requires shared memory.
+std::optional<int32_t> getAtomicResultShuffleMask(Value result);
+
 // Whether distributing an atomic result requires communication between CTAs.
 bool atomicResultHasCTABroadcast(Operation *op);
 

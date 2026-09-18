@@ -237,6 +237,56 @@ def test_inline_asm_once_per_thread(warp_specialized, device):
     torch.testing.assert_close(out, torch.full_like(out, 3 * 128), atol=0, rtol=0)
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA PTX")
+@pytest.mark.parametrize("op", ["load", "store"])
+@pytest.mark.parametrize(
+    "dtype",
+    [torch.bool, torch.int8, torch.int16, torch.int32, torch.int64, torch.float16, torch.float32, torch.float64])
+@pytest.mark.parametrize("stride, offset, mask_group, vec", [(1, 0, 0, 16), (1, 0, 16, 16), (1, 0, 8, 8), (1, 0, 4, 4),
+                                                             (1, 0, 2, 2), (1, 0, 1, 1), (1, 1, 16, 1), (2, 0, 16, 1)])
+def test_atomic_load_store_vectorization(op, dtype, stride, offset, mask_group, vec, device):
+
+    @gluon.jit
+    def kernel(Src, Out, STRIDE: ttgl.constexpr, OFFSET: ttgl.constexpr, MASK_GROUP: ttgl.constexpr,
+               STORE: ttgl.constexpr):
+        x = ttgl.arange(0, 512, layout=ttgl.BlockedLayout([16], [32], [1], [0]))
+        if MASK_GROUP:
+            mask = x // MASK_GROUP % 2 == 0
+        else:
+            mask = None
+        if STORE:
+            values = ttgl.load(Src + x)
+            ttgl.atomic_store(Out + x * STRIDE + OFFSET, values, mask=mask, sem="release")
+        else:
+            values = ttgl.atomic_load(Src + x * STRIDE + OFFSET, mask=mask, sem="acquire")
+            ttgl.store(Out + x, values, mask=mask)
+
+    src = torch.arange(1026, device=device)
+    src = (src % 2 if dtype == torch.bool else (src % 127 - 63) + 0.25).to(dtype)
+    out = torch.full((1026 if op == "store" else 512, ), True if dtype == torch.bool else -1, dtype=dtype,
+                     device=device)
+    x = torch.arange(512, device=device)
+    mask = x // mask_group % 2 == 0 if mask_group else torch.ones_like(x, dtype=torch.bool)
+    if op == "store":
+        expected = out.clone()
+        expected[x[mask] * stride + offset] = src[x[mask]]
+    else:
+        expected = torch.where(mask, src[x * stride + offset], out)
+
+    compiled = kernel[(1, )](src, out, stride, offset, mask_group, op == "store", num_warps=1)
+
+    assert torch.equal(out, expected)
+    if dtype == torch.bool:
+        assert torch.all(out.view(torch.uint8) <= 1)
+    bit_width = dtype.itemsize * 8
+    vec = min(vec, 128 // bit_width)
+    word_bits = max(bit_width, min(32, vec * bit_width))
+    words = vec * bit_width // word_bits
+    suffix = f".v{words}" if words > 1 else ""
+    opcode = "st" if op == "store" else "ld"
+    assert f"{opcode}.relaxed.gpu.global{suffix}.b{word_bits}" in compiled.asm["ptx"]
+
+
 @pytest.mark.parametrize("block_size", [1, 16, 128, 512])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("timeout", [None, 0])
@@ -1095,10 +1145,12 @@ def test_tcgen05_mma_scaled_direct_multicast_barrier():
 
 
 @gluon.jit
-def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr):
+def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr,
+                               COPY_VEC: ttgl.constexpr = 4, CACHE_POLICY: ttgl.constexpr = None):
+    block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, COPY_VEC], [1, 32], [4, 1], [1, 0])
+    initial = ttgl.full([XBLOCK, YBLOCK], 7, inp.dtype.element_ty, block_layout)
     smem = ttgl.allocate_shared_memory(inp.dtype.element_ty, [XBLOCK, YBLOCK],
-                                       ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0]))
-    block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [1, 32], [4, 1], [1, 0])
+                                       ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0]), initial)
     xindex = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(1, block_layout))[:, None]
     yindex = ttgl.arange(0, YBLOCK, ttgl.SliceLayout(0, block_layout))[None, :]
     mask = xindex < xnumel
@@ -1106,6 +1158,7 @@ def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK:
         smem,
         inp + xindex * YBLOCK + yindex,
         mask,
+        cache_policy=CACHE_POLICY,
     )
     mbar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(mbar, count=1)
@@ -1117,14 +1170,31 @@ def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK:
     ttgl.store(out + xindex * YBLOCK + yindex, val)
 
 
+@pytest.mark.parametrize("copy_vec", [1, 2, 4])
+@pytest.mark.parametrize("cache_policy", [
+    None,
+    ttgl.CachePolicy(eviction_policy="evict_first"),
+    ttgl.CachePolicy(eviction_policy="evict_last"),
+    ttgl.nvidia.ampere.CachePolicy(
+        cache_modifier=".ca",
+        l2=ttgl.nvidia.ampere.FractionalEvictionPolicy("evict_last", 0.5, "evict_first"),
+        l2_prefetch_size=128,
+    ),
+], ids=["default", "evict_first", "evict_last", "fractional"])
 @pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere")
-def test_async_copy_mbarrier():
+def test_async_copy_mbarrier(copy_vec, cache_policy):
     tensor_opts = dict(dtype=torch.float, device="cuda")
     out = torch.empty((32, 32), **tensor_opts)
     inp = torch.randn((20, 32), **tensor_opts)
-    async_copy_mbarrier_kernel[(1, )](out, inp, inp.shape[0], XBLOCK=32, YBLOCK=32)
+    kernel = async_copy_mbarrier_kernel[(1, )](out, inp, inp.shape[0], XBLOCK=32, YBLOCK=32, COPY_VEC=copy_vec,
+                                               CACHE_POLICY=cache_policy)
     torch.testing.assert_close(out[:20], inp)
     torch.testing.assert_close(out[20:], torch.zeros((12, 32), **tensor_opts))
+    ptx = kernel.asm["ptx"]
+    version = tuple(map(int, re.search(r"\.version (\d+)\.(\d+)", ptx).groups()))
+    expect_policy = cache_policy is not None and version >= (9, 4)
+    assert ("createpolicy.fractional" in ptx) == expect_policy
+    assert ("L2::cache_hint" in ptx) == expect_policy
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
@@ -4022,6 +4092,45 @@ def test_shared_gather(N, M):
     )
 
     torch.testing.assert_close(output, expected)
+
+
+@pytest.mark.parametrize("write", ["local_alloc", "local_store", "local_scatter"])
+@pytest.mark.parametrize("read", ["local_load", "local_gather"])
+def test_shared_memory_pointers(write, read, device):
+
+    @gluon.jit
+    def kernel(src, reversed_idx, out, BLOCK: ttgl.constexpr, layout: ttgl.constexpr, WRITE: ttgl.constexpr,
+               READ: ttgl.constexpr):
+        offsets = ttgl.arange(0, BLOCK, layout=layout)
+        pointers = src + offsets
+        shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0])
+
+        if WRITE == "local_alloc":
+            smem = ttgl.allocate_shared_memory(pointers.dtype, [BLOCK], shared_layout, pointers)
+        elif WRITE == "local_store":
+            smem = ttgl.allocate_shared_memory(pointers.dtype, [BLOCK], shared_layout)
+            smem.store(pointers)
+        else:
+            smem = ttgl.allocate_shared_memory(pointers.dtype, [BLOCK], shared_layout)
+            smem.scatter(pointers, ttgl.load(reversed_idx + offsets), axis=0)
+
+        if READ == "local_load":
+            result = smem.load(layout)
+        else:
+            result = smem.gather(ttgl.load(reversed_idx + offsets), axis=0)
+
+        ttgl.store(out + offsets, ttgl.load(result))
+
+    block = 4 * THREADS_PER_WARP
+    layout = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4], order=[0])
+    values = torch.arange(block, dtype=torch.int32, device=device)
+    output = torch.empty_like(values)
+    reversed_idx = torch.arange(block - 1, -1, -1, dtype=torch.int32, device=device)
+    kernel[(1, )](values, reversed_idx, output, block, layout, write, read, num_warps=4)
+
+    # Only one of gather/scatter reverses the input. Both cancels out.
+    expected = values.flip(0) if (write == "local_scatter") != (read == "local_gather") else values
+    assert torch.equal(output, expected)
 
 
 @gluon.jit
