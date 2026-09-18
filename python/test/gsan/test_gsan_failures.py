@@ -855,3 +855,84 @@ def test_transitive_cta_scope_read_after_write(release_sem, relay_sem):
                       runner_args=(release_sem, relay_sem, "cta"), source_function=_transitive_atomic_sync_kernel.fn,
                       marker="ready = tl.atomic_add(flag0_ptr, 0, sem=relay_sem, scope=scope)",
                       error="Read after write race detected")
+
+
+@gluon.jit
+def _bulk_raw_kernel(src, out, ready, ACQUIRE: gl.constexpr):
+    if gl.program_id(0) == 0:
+        gl.store(src + 11, 123)
+        gl.inline_asm("fence.proxy.async.global;")
+        gl.atomic_xchg(ready, 1, sem="release", scope="gpu")
+    else:
+        while gl.atomic_add(ready, 0, sem="acquire" if ACQUIRE else "relaxed", scope="gpu") == 0:
+            pass
+        gl.inline_asm("fence.proxy.async.global;")
+        layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
+        smem = gl.allocate_shared_memory(gl.int32, [16], gl.SwizzledSharedLayout(1, 1, 1, [0]))
+        bar = hopper.mbarrier.allocate_mbarrier()
+        hopper.mbarrier.init(bar, count=1)
+        hopper.mbarrier.expect(bar, 48)
+        hopper.bulk.async_load(smem, src, 48, bar)
+        hopper.mbarrier.wait(bar, phase=0)
+        values = smem.load(layout)
+        offsets = gl.arange(0, 16, layout)
+        gl.store(out + offsets, values, offsets < 12)
+        hopper.mbarrier.invalidate(bar)
+
+
+@run_with_gsan
+def _run_bulk_raw_case(acquire=False):
+    src = torch.zeros(12, device="cuda", dtype=torch.int32)
+    out = torch.empty_like(src)
+    ready = torch.zeros(1, device="cuda", dtype=torch.int32)
+    _bulk_raw_kernel[(2, )](src, out, ready, acquire)
+    torch.cuda.synchronize()
+    torch.testing.assert_close(src, out)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_bulk_async_load_read_after_write():
+    _run_failure_case("bulk_raw", runner=_run_bulk_raw_case, source_function=_bulk_raw_kernel.fn,
+                      marker="hopper.bulk.async_load", error="Read after write race detected")
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_bulk_async_load_acquire_orders_source():
+    result = run_in_process(_run_bulk_raw_case, (True, ))
+    assert result.exc is None
+    assert result.driver_stderr_output == ""
+
+
+@gluon.jit
+def _bulk_war_kernel(src, out, ready):
+    if gl.program_id(0) == 0:
+        layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
+        smem = gl.allocate_shared_memory(gl.int32, [16], gl.SwizzledSharedLayout(1, 1, 1, [0]))
+        bar = hopper.mbarrier.allocate_mbarrier()
+        hopper.mbarrier.init(bar, count=1)
+        hopper.mbarrier.expect(bar, 48)
+        hopper.bulk.async_load(smem, src, 48, bar)
+        hopper.mbarrier.wait(bar, phase=0)
+        offsets = gl.arange(0, 16, layout)
+        gl.store(out + offsets, smem.load(layout), offsets < 12)
+        hopper.mbarrier.invalidate(bar)
+        gl.atomic_xchg(ready, 1, sem="relaxed")
+    else:
+        while gl.atomic_add(ready, 0, sem="relaxed") == 0:
+            pass
+        gl.store(src + 11, 123)
+
+
+@run_with_gsan
+def _run_bulk_war_case():
+    src = torch.zeros(12, device="cuda", dtype=torch.int32)
+    out = torch.empty_like(src)
+    ready = torch.zeros(1, device="cuda", dtype=torch.int32)
+    _bulk_war_kernel[(2, )](src, out, ready)
+    torch.cuda.synchronize()
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_bulk_async_load_write_after_read():
+    _run_failure_case("bulk_war", runner=_run_bulk_war_case, source_function=_bulk_war_kernel.fn,
+                      marker="gl.store(src + 11", error="Write after read race detected")

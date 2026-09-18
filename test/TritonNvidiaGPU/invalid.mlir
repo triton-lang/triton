@@ -1796,3 +1796,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+!bar = !ttg.memdesc<1xi64, #shared, #ttg.shared_memory, mutable>
+!dst = !ttg.memdesc<16xi32, #shared, #ttg.shared_memory, mutable>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  tt.func @bulk_unaligned_count(%src: !tt.ptr<i32>, %dst: !dst, %bar: !bar, %pred: i1) {
+    // expected-error @below {{byte count must be a positive multiple of 16 within the destination view}}
+    ttng.async_bulk_copy_global_to_local %src, %dst, 17, %bar, %pred : !tt.ptr<i32>, !dst, !bar
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+!bar = !ttg.memdesc<1xi64, #shared, #ttg.shared_memory, mutable>
+!dst = !ttg.memdesc<16xi32, #shared, #ttg.shared_memory, mutable>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  tt.func @bulk_oversized_count(%src: !tt.ptr<i32>, %dst: !dst, %bar: !bar, %pred: i1) {
+    // expected-error @below {{byte count must be a positive multiple of 16 within the destination view}}
+    ttng.async_bulk_copy_global_to_local %src, %dst, 80, %bar, %pred : !tt.ptr<i32>, !dst, !bar
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+!bar = !ttg.memdesc<1xi64, #shared, #ttg.shared_memory, mutable>
+!dst = !ttg.memdesc<16xi32, #shared, #ttg.shared_memory, mutable>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  tt.func @bulk_zero_count(%src: !tt.ptr<i32>, %dst: !dst, %bar: !bar, %pred: i1) {
+    // expected-error @below {{byte count must be a positive multiple of 16 within the destination view}}
+    ttng.async_bulk_copy_global_to_local %src, %dst, 0, %bar, %pred : !tt.ptr<i32>, !dst, !bar
+    tt.return
+  }
+}

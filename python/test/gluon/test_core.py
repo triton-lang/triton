@@ -6444,3 +6444,122 @@ def test_tmem288k_simple(Ncol1: int, Ncol2: int):
     num_warps = 4
     tmem288k_simple_kernel[(1, )](input, output, M, Ncol1, Ncol2, num_warps=num_warps)
     torch.testing.assert_close(input.cpu(), output.cpu(), atol=0, rtol=0)
+
+
+@gluon.jit
+def _bulk_copy_kernel(src, out, take_copy, NUM_BYTES: ttgl.constexpr, BLOCK: ttgl.constexpr, SRC_OFFSET: ttgl.constexpr,
+                      DST_OFFSET: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0])
+    shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
+    initial = ttgl.full((2 * BLOCK, ), -7, src.dtype.element_ty, layout)
+    allocation = ttgl.allocate_shared_memory(src.dtype.element_ty, [2 * BLOCK], shared, initial)
+    dst = allocation.slice(DST_OFFSET, BLOCK)
+    bar = hopper.mbarrier.allocate_mbarrier()
+    hopper.mbarrier.init(bar, count=1)
+    hopper.mbarrier.expect(bar, NUM_BYTES, pred=take_copy)
+    hopper.bulk.async_load(dst, src + SRC_OFFSET, NUM_BYTES, bar, pred=take_copy)
+    hopper.mbarrier.wait(bar, phase=0, pred=take_copy)
+    hopper.mbarrier.invalidate(bar)
+    values = allocation.load(layout)
+    ttgl.store(out + ttgl.arange(0, 2 * BLOCK, layout), values)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("num_bytes", [16, 48, 4096, 10240])
+@pytest.mark.parametrize("dtype", [torch.int8, torch.float16, torch.float32])
+@pytest.mark.parametrize("offset", [False, True])
+@pytest.mark.parametrize("take_copy", [False, True])
+def test_bulk_async_load_copy(num_bytes, dtype, offset, take_copy, device):
+    element_bytes = torch.empty((), dtype=dtype).element_size()
+    count = num_bytes // element_bytes
+    block = triton.next_power_of_2(count)
+    src_offset = 16 // element_bytes if offset else 0
+    dst_offset = block if offset else 0
+    src = (torch.arange(count + src_offset, device=device) % 113).to(dtype)
+    out = torch.empty(2 * block, device=device, dtype=dtype)
+    compiled = _bulk_copy_kernel[(1, )](src, out, take_copy, num_bytes, block, src_offset, dst_offset)
+    expected = torch.full_like(out, -7)
+    if take_copy:
+        expected[dst_offset:dst_offset + count] = src[src_offset:]
+    torch.testing.assert_close(out, expected, atol=0, rtol=0)
+    if not is_compile_warmup():
+        assert compiled.asm["ptx"].count("cp.async.bulk.shared::cta.global.mbarrier::complete_tx::bytes") == 1
+
+
+@gluon.jit
+def _bulk_rms_kernel(x, gains, out, N: ttgl.constexpr, BLOCK: ttgl.constexpr):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
+    smem = ttgl.allocate_shared_memory(ttgl.float32, [BLOCK], shared)
+    bar = hopper.mbarrier.allocate_mbarrier()
+    hopper.mbarrier.init(bar, count=1)
+    hopper.mbarrier.expect(bar, N * 4)
+    hopper.bulk.async_load(smem, gains, N * 4, bar)
+    offsets = ttgl.arange(0, BLOCK, layout)
+    values = ttgl.load(x + ttgl.program_id(0) * N + offsets, offsets < N, other=0)
+    inv_rms = ttgl.rsqrt(ttgl.sum(values * values, 0) / N + 1.e-6)
+    hopper.mbarrier.wait(bar, phase=0)
+    scale = smem.load(layout)
+    hopper.mbarrier.invalidate(bar)
+    ttgl.store(out + ttgl.program_id(0) * N + offsets, values * inv_rms * scale, offsets < N)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("instrumentation", ["", "consan"])
+def test_bulk_async_load_compute_overlap(device, instrumentation, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = instrumentation
+    torch.manual_seed(7)
+    x = torch.randn((73, 2560), device=device)
+    gains = torch.randn((2560, ), device=device)
+    out = torch.empty_like(x)
+    _bulk_rms_kernel[(x.shape[0], )](x, gains, out, 2560, 4096)
+    expected = x * torch.rsqrt((x * x).mean(-1, keepdim=True) + 1.e-6) * gains
+    torch.testing.assert_close(out, expected, atol=1.e-5, rtol=1.e-5)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("instrumentation", ["", "consan"])
+def test_bulk_async_load_buffer_reuse(device, instrumentation, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = instrumentation
+
+    @gluon.jit
+    def kernel(src, out, iterations):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
+        buffers = ttgl.allocate_shared_memory(ttgl.int32, [2, 128], shared)
+        bar = hopper.mbarrier.allocate_mbarrier()
+        hopper.mbarrier.init(bar, count=1)
+        offsets = ttgl.arange(0, 128, layout)
+        for iteration in range(iterations):
+            dst = buffers.index(iteration % 2)
+            hopper.mbarrier.expect(bar, 512)
+            hopper.bulk.async_load(dst, src + iteration * 128, 512, bar)
+            hopper.mbarrier.wait(bar, phase=iteration % 2)
+            ttgl.store(out + iteration * 128 + offsets, dst.load(layout))
+        hopper.mbarrier.invalidate(bar)
+
+    src = torch.arange(5 * 128, device=device, dtype=torch.int32)
+    out = torch.empty_like(src)
+    kernel[(1, )](src, out, 5)
+    torch.testing.assert_close(src, out)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("instrumentation", ["", "consan"])
+def test_bulk_async_load_warp_specialized(device, instrumentation, fresh_knobs):
+    fresh_knobs.compilation.instrumentation_mode = instrumentation
+
+    @gluon.jit
+    def kernel(src, out):
+        # The worker partition must issue with its own thread zero.
+        ttgl.warp_specialize([
+            (_bulk_copy_kernel, (src, out, True, 512, 128, 0, 0)),
+            (_bulk_copy_kernel, (src + 128, out + 256, True, 512, 128, 0, 0)),
+        ], [4])
+
+    src = torch.arange(256, device=device, dtype=torch.int32)
+    out = torch.empty((2, 256), device=device, dtype=torch.int32)
+    kernel[(1, )](src, out)
+    expected = torch.full_like(out, -7)
+    expected[:, :128] = src.reshape(2, 128)
+    torch.testing.assert_close(out, expected)
