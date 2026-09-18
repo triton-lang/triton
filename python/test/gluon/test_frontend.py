@@ -3,6 +3,7 @@ import pytest
 import re
 from dataclasses import replace
 
+import triton
 from triton.backends.compiler import GPUTarget
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
@@ -75,6 +76,108 @@ def make_args(*args, **kwargs):
     return args, kwargs
 
 
+@gluon.constexpr_function
+def _inline_asm_frontend_generator(outputs, inputs):
+    values, scalar = outputs
+    x, bias = inputs
+    return ("\n".join(f"add.u32 {dst}, {src}, {bias[0]};" for dst, src in zip(values, x)) +
+            f"\nmov.u32 {scalar[0]}, {bias[0]};")
+
+
+@gluon.jit
+def _inline_asm_frontend_kernel(ASM: ttgl.constexpr, CONSTRAINTS: ttgl.constexpr):
+    x = ttgl.arange(0, 512, layout=ttgl.BlockedLayout([4], [32], [4], [0]))
+    y, scalar = ttgl.inline_asm(ASM, CONSTRAINTS, [x, 17], (x.type, ttgl.uint32), is_pure=True)
+    return y, scalar
+
+
+@pytest.mark.parametrize("generated", [False, True])
+def test_inline_asm_frontend_operands(generated):
+    expected = "\n".join(f"add.u32 ${i}, ${5 + i}, $9;" for i in range(4)) + "\nmov.u32 $4, $9;"
+    asm = _inline_asm_frontend_generator if generated else expected
+    constraints = ("=&r", "=r", "r", "r") if generated else ",".join(["=&r"] * 4 + ["=r"] + ["r"] * 5)
+    mod = run_parser(_inline_asm_frontend_kernel, *make_args(asm, constraints), target=BLACKWELL_TARGET)
+    text = mod.str_nodebug()
+    assert 'ttg.inline_asm "add.u32 $0, $5, $9;' in text
+    assert "mov.u32 $4, $9;" in text
+    assert 'constraints = "=&r,=&r,=&r,=&r,=r,r,r,r,r,r"' in text
+    assert 'pure = true' in text
+    assert '-> (tensor<512xi32, #blocked>, i32)' in text
+
+
+@gluon.constexpr_function
+def _inline_asm_bad_generator(outputs, inputs):
+    return 17
+
+
+def test_inline_asm_frontend_invalid_generator():
+    with pytest.raises(CompilationError, match="returning a string"):
+        run_parser(_inline_asm_frontend_kernel, *make_args(_inline_asm_bad_generator, ("=&r", "=r", "r", "r")),
+                   target=BLACKWELL_TARGET)
+
+
+def test_inline_asm_frontend_invalid_constraints():
+    with pytest.raises(CompilationError, match="one constraint per output and input group"):
+        run_parser(_inline_asm_frontend_kernel, *make_args(_inline_asm_frontend_generator, ("=r", )),
+                   target=BLACKWELL_TARGET)
+
+
+@pytest.mark.parametrize("layout", [ttgl.AutoLayout(), ttgl.CoalescedLayout()])
+def test_inline_asm_frontend_unresolved_layout(layout):
+
+    @gluon.jit
+    def kernel(LAYOUT: ttgl.constexpr):
+        x = ttgl.full([128], 0, ttgl.int32, LAYOUT)
+        return ttgl.inline_asm("mov.u32 $0, $1;", "=r,r", [x], x.type, is_pure=True)
+
+    with pytest.raises(CompilationError, match="explicit distributed tensor layouts"):
+        run_parser(kernel, *make_args(layout), target=BLACKWELL_TARGET)
+
+
+@pytest.mark.parametrize("elementwise", [False, True])
+def test_inline_asm_shared_amd_compilation(elementwise):
+
+    @gluon.jit
+    def kernel(Out, ELEMENTWISE: ttgl.constexpr):
+        x = ttgl.arange(0, 256, layout=ttgl.BlockedLayout([1], [64], [4], [0]))
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [256], ttgl.SwizzledSharedLayout(1, 1, 1, [0]), x)
+        asm: ttgl.constexpr = "v_add_u32 $0, $1, $2\nds_read_b32 $0, $0\ns_waitcnt lgkmcnt(0)"
+        if ELEMENTWISE:
+            y = ttgl.inline_asm_elementwise(asm, "=&v,v,v", [smem, x * 4], ttgl.int32, False, 1)
+        else:
+            ttgl.barrier()
+            y = ttgl.inline_asm(asm, "=&v,v,v", [smem, x * 4], x.type)
+        ttgl.store(Out + x, y)
+
+    source = gluon.GluonASTSource(kernel, {"Out": "*i32", "ELEMENTWISE": "constexpr"}, {"ELEMENTWISE": elementwise})
+    compiled = triton.compile(source, target=HIP_TARGET_CDNA3)
+    assert "ds_read_b32" in compiled.asm["amdgcn"]
+
+
+@pytest.mark.parametrize("target, binary", [(AMPERE_TARGET, "cubin"), (HIP_TARGET_CDNA3, "hsaco")])
+def test_gluon_ast_source_without_driver(target, binary, monkeypatch, fresh_triton_cache):
+
+    def fail_driver_access(self):
+        raise AssertionError("Offline compilation must not access the GPU driver")
+
+    monkeypatch.setattr(type(triton.runtime.driver), "active", property(fail_driver_access))
+
+    @gluon.jit
+    def kernel(X, Y, BLOCK: ttgl.constexpr, LAYOUT: ttgl.constexpr):
+        offsets = ttgl.arange(0, BLOCK, layout=LAYOUT)
+        ttgl.store(Y + offsets, ttgl.load(X + offsets))
+
+    source = gluon.GluonASTSource(
+        kernel,
+        signature={"X": "*fp32", "Y": "*fp32", "BLOCK": "constexpr", "LAYOUT": "constexpr"},
+        constexprs={"BLOCK": 128, "LAYOUT": ttgl.BlockedLayout([1], [target.warp_size], [4], [0])},
+        attrs={(0, ): [["tt.divisibility", 16]], (1, ): [["tt.divisibility", 16]]},
+    )
+    compiled = triton.compile(source, target=target)
+    assert "tt.divisibility = 16" in compiled.asm[source.ext]
+    assert compiled.asm[binary]
+
+
 @gluon.jit
 def convert_layout_kernel(XBLOCK: ttgl.constexpr, layout_a: ttgl.constexpr, layout_b: ttgl.constexpr):
     x = ttgl.arange(0, XBLOCK, layout=layout_a)
@@ -103,6 +206,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 """)
+
+
+@pytest.mark.parametrize("num_ctas", [1, 2, 4])
+@pytest.mark.parametrize("container", [list, tuple])
+def test_layout_nested_constexpr_containers(num_ctas, container):
+
+    @gluon.jit
+    def add(a, b):
+        return a + b
+
+    @gluon.jit
+    def kernel(Out, NUM_CTAS: ttgl.constexpr, EXPECTED: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [16], [0],
+                                                    cga_layout=[[0]] * (NUM_CTAS.bit_length() - 1))
+        ttgl.static_assert(layout == EXPECTED)
+        ttgl.static_assert(EXPECTED == layout)
+        x = ttgl.arange(0, 16, layout=layout)
+        prefix = ttgl.associative_scan(x, 0, add)
+        # The scan's inferred layout contains Python lists instead of JIT tuples.
+        ttgl.static_assert(prefix.type.layout == layout)
+        ttgl.store(Out + x, prefix - x)
+
+    cga_layout = container(container([0]) for _ in range(num_ctas.bit_length() - 1))
+    expected = ttgl.BlockedLayout([1], [32], [16], [0], cga_layout=cga_layout)
+    run_parser(kernel, *make_args(MockTensor(ttgl.int32), num_ctas, expected, num_warps=16, num_ctas=num_ctas),
+               target=BLACKWELL_TARGET)
 
 
 @gluon.jit
@@ -2381,8 +2510,29 @@ def test_reshape_linear_layout():
     # CHECK: [[LINEAR:#.*]] = #ttg.linear
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1])
     x = ttgl.full([128, 1], 1, ttgl.int32, layout=layout)
-    # CHECK: tt.reshape %{{.*}} : tensor<128x1xi32, [[BLOCKED]]> -> tensor<128xi32, [[LINEAR]]>
-    x.reshape([128])
+    # CHECK: tt.reshape %{{.*}} : tensor<128x1xi32, [[BLOCKED]]> -> tensor<64x2xi32, [[LINEAR]]>
+    x.reshape([64, 2])
+
+
+@pytest.mark.parametrize("axis", [0, 1, 2])
+def test_reshape_linear_layout_round_trip(axis):
+
+    @gluon.jit
+    def kernel(axis: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
+            reg_bases=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32]],
+            lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]],
+            warp_bases=[[32, 0], [64, 0]],
+            block_bases=[],
+            shape=[128, 64],
+        )
+        x = ttgl.full([128, 64], 1, ttgl.float32, layout)
+        shape: ttgl.constexpr = x.shape[:axis] + [1] + x.shape[axis:]
+        round_trip = x.reshape(shape).reshape(x.shape)
+        ttgl.static_assert(round_trip.type.layout == layout)
+        ttgl.maximum(ttgl.max(x, 1), ttgl.max(round_trip, 1))
+
+    run_parser(kernel, args=(axis, ), target=AMPERE_TARGET)
 
 
 @filecheck_test
@@ -4168,12 +4318,13 @@ def test_amd_scaled_downcast_fp8_cdna(target, fp8_format, ir_dtype):
 ], ids=["cdna3", "cdna4", "cdna5"])
 def test_amd_scaled_upcast_fp4_compact_scale_cdna(target, threads_per_warp, expect_layout):
     scaled_upcast = _get_amd_scaled_upcast(target)
+    get_scaled_upcast_fp4_scale_layout = _get_amd_scaled_upcast_fp4_scale_layout(target)
 
     @gluon.jit
     def kernel(THREADS_PER_WARP: ttgl.constexpr, EXPECT_LAYOUT: ttgl.constexpr):
         packed_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 4], THREADS_PER_WARP, [1, 1], [1, 0])
         src = ttgl.full([16, 32], 0x11, ttgl.uint8, packed_layout)
-        scale_layout: ttgl.constexpr = ttgl.amd.get_scaled_upcast_fp4_scale_layout(src, 32, ttgl.bfloat16, axis=1)
+        scale_layout: ttgl.constexpr = get_scaled_upcast_fp4_scale_layout(src, 32, ttgl.bfloat16, axis=1)
         ttgl.static_assert(scale_layout == EXPECT_LAYOUT)
         scale = ttgl.full([16, 2], 0x02, ttgl.uint8, scale_layout)
         scaled_upcast(src, scale, ttgl.bfloat16, axis=1)
@@ -4215,12 +4366,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 """)
 
 
-def _get_amd_scaled_upcast(target):
+def _get_amd_arch(target):
     if target == HIP_TARGET_CDNA3:
-        return ttgl.amd.cdna3.scaled_upcast
+        return ttgl.amd.cdna3
     if target == HIP_TARGET_CDNA4:
-        return ttgl.amd.cdna4.scaled_upcast
-    return ttgl.amd.cdna5.scaled_upcast
+        return ttgl.amd.cdna4
+    if target == HIP_TARGET_CDNA5:
+        return ttgl.amd.cdna5
+    raise ValueError(f"Unsupported AMD target: {target}")
+
+
+def _get_amd_scaled_upcast(target):
+    return _get_amd_arch(target).scaled_upcast
+
+
+def _get_amd_scaled_upcast_fp4_scale_layout(target):
+    return _get_amd_arch(target).get_scaled_upcast_fp4_scale_layout
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4, HIP_TARGET_CDNA5])

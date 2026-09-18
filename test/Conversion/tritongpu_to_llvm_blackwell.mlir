@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-tmem-barrier-insertion --convert-triton-gpu-to-llvm=compute-capability=100 -cse | FileCheck %s --check-prefixes=CHECK,SM100
-// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-tmem-barrier-insertion --convert-triton-gpu-to-llvm=compute-capability=103 -cse | FileCheck %s --check-prefixes=CHECK,SM103
+// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-membar='compute-capability=100' --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm=compute-capability=100 -cse | FileCheck %s --check-prefixes=CHECK,SM100
+// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-membar='compute-capability=103' --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm=compute-capability=103 -cse | FileCheck %s --check-prefixes=CHECK,SM103
 
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 256, 32]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
@@ -1008,8 +1008,9 @@ tt.func @load_store_x1_unpacked(%arg0: !ttg.memdesc<128x2xf16, #tmem_x1_unpacked
 //       CHECK:  %[[M:.+]] = llvm.mlir.constant(-1 : i32) : i32
 //       CHECK:   nvvm.redux.sync  fmax %{{.*}}, %[[M]] {nan = true} : f32 -> f32
 //       CHECK:   nvvm.barrier
-//       CHECK:   nvvm.shfl.sync bfly
-//       CHECK:   nvvm.shfl.sync bfly
+//   CHECK-NOT:   nvvm.shfl.sync
+//       CHECK:   nvvm.redux.sync  fmax %{{.*}}, %[[M]] {nan = true} : f32 -> f32
+//  CHECK-NEXT:   llvm.return
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 module attributes {"ttg.target" = "cuda:100", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @max_reduction(%arg0: tensor<1x1024xf32, #blocked>) {
@@ -1028,8 +1029,9 @@ module attributes {"ttg.target" = "cuda:100", "ttg.num-ctas" = 1 : i32, "ttg.num
 //       CHECK:  %[[M:.+]] = llvm.mlir.constant(-1 : i32) : i32
 //       CHECK:   nvvm.redux.sync  fmax %{{.*}}, %[[M]] : f32 -> f32
 //       CHECK:   nvvm.barrier
-//       CHECK:   nvvm.shfl.sync bfly
-//       CHECK:   nvvm.shfl.sync bfly
+//   CHECK-NOT:   nvvm.shfl.sync
+//       CHECK:   nvvm.redux.sync  fmax %{{.*}}, %[[M]] : f32 -> f32
+//  CHECK-NEXT:   llvm.return
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 module attributes {"ttg.target" = "cuda:100", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @maxnum_reduction(%arg0: tensor<1x1024xf32, #blocked>) {

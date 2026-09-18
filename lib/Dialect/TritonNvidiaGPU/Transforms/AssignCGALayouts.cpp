@@ -32,11 +32,6 @@ namespace {
 // pass only gives Dot/Reduce ops their preferred CGA layout and materializes
 // the boundary with ttg.convert_layout; RemoveLayoutConversions cleans up
 // later.
-struct DotCGASplit {
-  unsigned m;
-  unsigned n;
-};
-
 FailureOr<ttg::CGAEncodingAttr> maybeGetCGA(RankedTensorType type) {
   // NYI: CGA rematerialization for generic linear encodings.
   // This function is a bit misleading, it tells you whether the encoding is a
@@ -283,7 +278,18 @@ void convertOpResultsFromLayouts(Operation *op,
   }
 }
 
-DotCGASplit getDotCGASplit(int64_t m, int64_t n, unsigned numCTAs) {
+SmallVector<unsigned> getDotCGASplit(ArrayRef<int64_t> shape,
+                                     unsigned numCTAs) {
+  int rank = shape.size();
+  SmallVector<unsigned> ctaSplit(rank, 1);
+  // Split independent batches first.
+  for (int dim = rank - 3; dim >= 0; --dim) {
+    ctaSplit[dim] = std::min<unsigned>(shape[dim], numCTAs);
+    numCTAs /= ctaSplit[dim];
+  }
+
+  int64_t m = shape[rank - 2];
+  int64_t n = shape[rank - 1];
   constexpr unsigned kPreferredChunkSize = 128;
   constexpr unsigned kMinChunkSize = 64;
   auto isLegalChunkSize = [](unsigned chunk) { return chunk >= kMinChunkSize; };
@@ -301,7 +307,9 @@ DotCGASplit getDotCGASplit(int64_t m, int64_t n, unsigned numCTAs) {
       break;
   }
 
-  return {splitM, splitN};
+  ctaSplit[rank - 2] = splitM;
+  ctaSplit[rank - 1] = splitN;
+  return ctaSplit;
 }
 
 void assignDotCGALayout(triton::DotOp dot) {
@@ -315,15 +323,17 @@ void assignDotCGALayout(triton::DotOp dot) {
   auto bLayout = cast<ttg::DotOperandEncodingAttr>(bTy.getEncoding());
   auto dLayout = cast<ttg::BlockedEncodingAttr>(dTy.getEncoding());
 
-  DotCGASplit split = getDotCGASplit(dTy.getShape()[0], dTy.getShape()[1],
-                                     ttg::getNumCTAs(dLayout));
+  auto ctaSplit = getDotCGASplit(dTy.getShape(), ttg::getNumCTAs(dLayout));
+  SmallVector<unsigned> ctaOrder;
+  for (unsigned dim = dTy.getRank(); dim > 0; --dim)
+    ctaOrder.push_back(dim - 1);
 
   OpBuilder builder(dot);
   int threadsPerWarp = ttg::lookupThreadsPerWarp(builder);
   int numWarps = ttg::lookupNumWarps(dot);
 
-  auto newCGALayout = ttg::CGAEncodingAttr::fromSplitParams(
-      ctx, {split.m, split.n}, {split.m, split.n}, {1, 0});
+  auto newCGALayout =
+      ttg::CGAEncodingAttr::fromSplitParams(ctx, ctaSplit, ctaSplit, ctaOrder);
   auto newDLayout = ttg::BlockedEncodingAttr::get(
       ctx, dTy.getShape(), dLayout.getSizePerThread(), dLayout.getOrder(),
       numWarps, threadsPerWarp, newCGALayout);

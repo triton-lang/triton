@@ -436,12 +436,22 @@ class CUDABackend(BaseBackend):
         instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
         nvidia.passes.ttnvgpuir.add_proxy_fence_insertion(pm, capability)
         nvidia.passes.ttnvgpuir.add_tmem_barrier_insertion(pm)
-        nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version, is_enabled(options, "consan"))
+        nvidia.passes.ttgpuir.add_membar(pm, capability, ptx_version)
+        nvidia.passes.ttnvgpuir.add_tmem_wait_insertion(pm)
+        if is_enabled(options, "consan"):
+            passes.ttgpuir.add_concurrency_sanitizer(pm)
+            passes.gluon.add_canonicalizer(pm)
+            passes.common.add_cse(pm)
+        nvidia.passes.ttnvgpuir.add_cluster_barrier_mbar_allocator(pm)
+        passes.ttgpuir.add_allocate_global_scratch_memory(pm)
+        nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_initialize_ws_cluster_barriers(pm, capability, ptx_version)
         if options.min_shared_mem is not None:
             nvidia.passes.ttgpuir.add_set_minimum_shared_memory(pm, options.min_shared_mem)
         passes.ttgpuir.add_canonicalize_llvm_ir(pm)
         passes.common.add_cse(pm)
+        # Lower Proton segment values before warp specialization captures partition operands.
+        instrument(pm, point="llvmir-to-llvm", context=mod.context)
         nvidia.passes.ttnvgpuir.add_warp_specialize_to_llvm(pm)
         nvidia.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
         passes.common.add_canonicalizer(pm)
@@ -451,8 +461,6 @@ class CUDABackend(BaseBackend):
 
         if not knobs.compilation.disable_line_info and not knobs.compilation.dump_ir_extract_di_local_variables:
             passes.llvmir.add_di_scope(pm)
-
-        instrument(pm, point="llvmir-to-llvm", context=mod.context)
 
         pm.run(mod, 'make_llir')
 

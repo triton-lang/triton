@@ -94,6 +94,12 @@ static unsigned getResultBroadcastScratchSize(Value result) {
   return elems * std::max(8u, bitWidth) / 8;
 }
 
+unsigned getAtomicResultScratchSize(Value result) {
+  if (getAtomicResultShuffleMask(result))
+    return 0;
+  return getResultBroadcastScratchSize(result);
+}
+
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
     return ReduceOpHelper(reduceOp).getScratchSizeInBytes();
@@ -132,7 +138,7 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
   if (isa<gpu::LocalAtomicScatterRMWOp>(op) || isa<AtomicOpInterface>(op)) {
     if (op->getNumResults() == 0)
       return 0;
-    return getResultBroadcastScratchSize(op->getResult(0));
+    return getAtomicResultScratchSize(op->getResult(0));
   }
   if (isa<ttng::TensormapCreateOp>(op)) {
     constexpr int32_t kTMASize = 128;
@@ -168,6 +174,15 @@ bool hasCrossCTAScratch(Operation *op) {
   }
   if (auto reduce = dyn_cast<ReduceOp>(op))
     return !ReduceOpHelper(reduce).isReduceWithinCTA();
+  if (auto histogram = dyn_cast<HistogramOp>(op)) {
+    auto block = StringAttr::get(op->getContext(), "block");
+    auto layout = gpu::toLinearLayout(histogram.getSrc().getType());
+    // Each CTA accumulates its inputs into a full set of local bins.
+    // Splitted CTAs in the input make these local bins partial, and thus the
+    // final results need to be aggregated across CTAs
+    return layout.getFreeVariableMasks().lookup(block) !=
+           layout.getInDimSize(block) - 1;
+  }
   if (auto poll = dyn_cast<AtomicPollOp>(op))
     return poll.getTimeout() && !poll.getResult().use_empty() &&
            getAtomicScratchBroadcastMask(op).value_or(0) != 0;
@@ -324,6 +339,9 @@ private:
         for (auto alloc : info.getAllocs()) {
           if (allocation->valueBuffer.count(alloc))
             allocation->addAlias(value, alloc);
+          else if (auto argument = dyn_cast<BlockArgument>(alloc);
+                   argument && argument.getOwner()->getParentOp() == operation)
+            allocation->argumentAliases[value].insert(argument.getArgNumber());
         }
       }
     }

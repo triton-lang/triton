@@ -300,10 +300,6 @@ struct DotOpMFMAConversionHelper {
 
     intrinsicName = maybeMfmaIntrinsic->name;
 
-    // If we are using XF32, the kWidth (and kBase) is double that of F32.
-    if (aTensorTy.getElementType().isF32() && allowXF32)
-      kWidth *= 2;
-
     const auto kDimInstrSize = mfmaLayout.getInstrShapeForOperand(kWidth, 0)[1];
 
     auto repA = mfmaLayout.getRepForOperand(aTensorTy.getShape(), kWidth, 0);
@@ -481,6 +477,13 @@ struct DotOpMFMAConversionHelper {
       bool preserveBF16, bool isConstantScale = false) const {
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     auto elems = unpackTensorElements(loc, value, rewriter, tensorType);
+    if (type.isF32() && allowXF32) {
+      // Quiet NaNs before XF32 discards their low 13 mantissa bits.
+      for (Value &elem : elems)
+        elem = LLVM::createLLVMIntrinsicCallOp(
+                   rewriter, loc, "llvm.canonicalize", elem.getType(), elem)
+                   ->getResult(0);
+    }
     // number of kBase-element vectors
     int numVecInKBase = kRepInKWidth * kWidth / kBase;
     if (numVecInKBase == 0) {

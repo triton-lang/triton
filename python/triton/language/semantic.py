@@ -32,6 +32,9 @@ class TritonSemantic(Generic[TensorTy]):
     def __init__(self, builder):
         self.builder = builder
 
+    def to_inline_asm_operand(self, arg):
+        return self.to_tensor(arg)
+
 # ===----------------------------------------------------------------------===##
 # Programming Model
 # ===----------------------------------------------------------------------===##
@@ -358,7 +361,7 @@ class TritonSemantic(Generic[TensorTy]):
 # other arithmetic ops
 ##############
 
-    def minimum(self, x: TensorTy, y: TensorTy, propagate_nan: tl.PropagateNan):
+    def minimum(self, x: TensorTy | numbers.Number, y: TensorTy | numbers.Number, propagate_nan: tl.PropagateNan):
         x, y = self.binary_op_type_checking_impl(x, y)
         dtype = x.dtype
         if dtype.is_floating():
@@ -375,7 +378,7 @@ class TritonSemantic(Generic[TensorTy]):
         else:
             raise TypeError(f"Unexpected dtype {dtype}")
 
-    def maximum(self, x: TensorTy, y: TensorTy, propagate_nan: tl.PropagateNan):
+    def maximum(self, x: TensorTy | numbers.Number, y: TensorTy | numbers.Number, propagate_nan: tl.PropagateNan):
         x, y = self.binary_op_type_checking_impl(x, y)
         dtype = x.dtype
         if dtype.is_floating():
@@ -826,6 +829,11 @@ class TritonSemantic(Generic[TensorTy]):
                 raise ValueError("fp_downcast_rounding should be set only for truncating fp conversions. "
                                  "Source scalar type is " + str(src_sca_ty) + " and destination type is " +
                                  str(dst_sca_ty))
+
+        # Keep FP16 <-> BF16 intact so backends can select a native conversion.
+        if (src_sca_ty.is_bf16() and dst_sca_ty.is_fp16()) or (src_sca_ty.is_fp16() and dst_sca_ty.is_bf16()):
+            return self.tensor(
+                self.builder.create_fp_to_fp(input.handle, dst_ty.to_ir(self.builder), ir.ROUNDING_MODE.RTNE), dst_ty)
 
         if (src_sca_ty.is_fp8e4b15() or dst_sca_ty.is_fp8e4b15()):
             assert self.builder.codegen_fns.get(

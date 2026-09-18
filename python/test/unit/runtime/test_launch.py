@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import triton
 import triton.language as tl
-from triton._internal_testing import is_cuda, is_hip
+from triton._internal_testing import is_cuda, is_hip, run_in_process
 
 
 def test_metadata() -> None:
@@ -39,7 +39,7 @@ def test_metadata() -> None:
     assert used_hook
 
 
-def test_memory_leak(device) -> None:
+def _check_memory_leak(device) -> None:
 
     @triton.jit
     def kernel(in_ptr0, out_ptr0, xnumel, XBLOCK: tl.constexpr):
@@ -62,9 +62,17 @@ def test_memory_leak(device) -> None:
             kernel[(10, )](inp, out, 10, XBLOCK=16)
         gc.collect()
         end, _ = tracemalloc.get_traced_memory()
-        assert end - begin < 30000
+        assert end - begin < 1000
     finally:
         tracemalloc.stop()
+
+
+def test_memory_leak(device) -> None:
+    # tracemalloc counts allocations from every thread, including xdist's
+    # concurrent work-stealing requests. Measure launches in a separate process.
+    result = run_in_process(_check_memory_leak, (device, ))
+    if result is not None:
+        assert result.exc is None, result.exc
 
 
 def test_load_hook() -> None:

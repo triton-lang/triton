@@ -258,21 +258,35 @@ static const std::string S8_to_Bf16 =
     "prmt.b32 $0, f0, f1, 0x7632;                \n" // f32->bf16 + pack
     "prmt.b32 $1, f2, f3, 0x7632;                \n" //
     "}";
-// Conversions have low throughput, rely on bit tricks instead of cvt
-// instruction on Hopper and later GPUs.
-static const std::string S8_to_Bf16_sm90 =
-    "{                               \n"
-    ".reg .b32 l<3>;                 \n"
-    ".reg .b32 h<3>;                 \n"
-    "prmt.b32 l0, $2, 0x43, 0x4140;  \n" // Unpack to shifted bf16.
-    "prmt.b32 h0, $2, 0x43, 0x4342;  \n"
-    "and.b32 l1, l0, 0xff7fff7f;     \n" // Zero the least exp bit.
-    "and.b32 h1, h0, 0xff7fff7f;     \n"
-    "and.b32 l2, l0, 0xff80ff80;     \n" // Zero the mantissa.
-    "and.b32 h2, h0, 0xff80ff80;     \n"
-    "sub.bf16x2 $0, l1, l2;          \n" // Subtract the offset.
-    "sub.bf16x2 $1, h1, h2;          \n"
-    "}";
+// Keep the bit-trick conversion on SM90+, where cvt has low throughput, while
+// exposing its arithmetic to LLVM's known-bits optimizations.
+static SmallVector<Value> convertS8ToBf16(Location loc,
+                                          ConversionPatternRewriter &rewriter,
+                                          ArrayRef<Value> values) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  // Unpack to shifted bf16.
+  Value input = packLLVector(loc, values, rewriter);
+  Value exponent = b.i8_val(0x43);
+  Value exponents =
+      packLLVector(loc, {exponent, exponent, exponent, exponent}, rewriter);
+  Value bytes =
+      LLVM::ShuffleVectorOp::create(rewriter, loc, input, exponents,
+                                    ArrayRef<int32_t>{0, 4, 1, 4, 2, 4, 3, 4});
+  Value bits = b.bitcast(bytes, vec_ty(i16_ty, 4));
+  // Zero the least exp bit.
+  Value mantissaMask = b.i16_val(0xff7f);
+  Value lhsMask = packLLVector(
+      loc, {mantissaMask, mantissaMask, mantissaMask, mantissaMask}, rewriter);
+  Value lhs = b.bitcast(b.and_(bits, lhsMask), vec_ty(bf16_ty, 4));
+  // Zero the mantissa.
+  Value exponentMask = b.i16_val(0xff80);
+  Value rhsMask = packLLVector(
+      loc, {exponentMask, exponentMask, exponentMask, exponentMask}, rewriter);
+  Value rhs = b.bitcast(b.and_(bits, rhsMask), vec_ty(bf16_ty, 4));
+  // Subtract the offset.
+  Value converted = LLVM::FSubOp::create(rewriter, loc, lhs, rhs);
+  return unpackLLVector(loc, converted, rewriter);
+}
 
 typedef std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
                                          const SmallVector<Value> &)>
@@ -509,6 +523,26 @@ struct FpToFpOpConversion
       }));
     }
 
+    if ((srcElementType.isBF16() && dstElementType.isF16()) ||
+        (srcElementType.isF16() && dstElementType.isBF16())) {
+      Value v = operands[0][0];
+      if (computeCapability < 90) {
+        v = LLVM::FPExtOp::create(rewriter, loc, f32_ty, v);
+        auto rounding = roundingMode.value_or(RoundingMode::RTNE);
+        return {dstElementType.isBF16()
+                    ? convertFp32ToBf16(loc, rewriter, v, rounding)
+                    : convertFp32ToFp16(loc, rewriter, v, rounding)};
+      }
+      PTXBuilder builder;
+      auto *result = builder.newOperand("=h");
+      auto *input = builder.newOperand(v, "h");
+      auto &cvt = *builder.create("cvt");
+      cvt.o(roundingMode == RoundingMode::RTZ ? "rz" : "rn")
+          .o(dstElementType.isBF16() ? "bf16" : "f16")
+          .o(srcElementType.isBF16() ? "bf16" : "f16")(result, input);
+      return {builder.launch(rewriter, loc, dstElementType, false)};
+    }
+
     if (srcElementType.isF32() && dstElementType.isF16()) {
       assert(roundingMode.has_value() &&
              "rounding mode must be specified for fp32->fp16 conversion");
@@ -593,7 +627,6 @@ struct FDivOpConversion
   }
 };
 
-// Uses inline ptx to convert s8/u8 to bf16, since the
 struct SIToFPOpConversion
     : ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion> {
   using Base = ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion>;
@@ -613,12 +646,13 @@ struct SIToFPOpConversion
     Type inElemTy = getElementTypeOrSelf(op.getIn());
     Type outElemTy = getElementTypeOrSelf(op.getOut());
     if (outElemTy.isBF16() && inElemTy.isInteger(8) && operands.size() >= 4) {
-      auto cvtFunc = makeConverterFromPtx(
-          computeCapability >= 90 ? S8_to_Bf16_sm90 : S8_to_Bf16,
-          getTypeConverter()->convertType(inElemTy),
-          getTypeConverter()->convertType(outElemTy));
       SmallVector<Value> inVals = {operands[0][0], operands[1][0],
                                    operands[2][0], operands[3][0]};
+      if (computeCapability >= 90)
+        return convertS8ToBf16(loc, rewriter, inVals);
+      auto cvtFunc = makeConverterFromPtx(
+          S8_to_Bf16, getTypeConverter()->convertType(inElemTy),
+          getTypeConverter()->convertType(outElemTy));
       auto outVals = cvtFunc(loc, rewriter, inVals);
       assert(outVals.size() == 4);
       return outVals;
@@ -832,6 +866,8 @@ struct ClampFOpConversion
       name += ".f";
     } else if (elemTy.isF16()) {
       name += ".f16";
+    } else if (elemTy.isBF16()) {
+      name += ".bf16";
     }
 
     Type resultTy = operands[0][0].getType();
@@ -902,8 +938,8 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   patterns.add<ElementwiseToIntrinsicOpConversion<triton::PreciseDivFOp>>(
       typeConverter, axisInfoAnalysis, "llvm.nvvm.div.rn.f", benefit);
 
-  mlir::triton::populateElementwiseOpToLLVMPatterns(
-      typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
+  mlir::triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
+                                                    axisInfoAnalysis, benefit);
 
 #define POPULATE_OP(SRC_OP, DST_OP)                                            \
   patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \

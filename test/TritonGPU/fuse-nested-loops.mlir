@@ -492,13 +492,12 @@ tt.func @preserve_explicit_stage_one(%lb: i32, %ub: i32) {
 tt.func @fuse_attr_speculate(%lb: i32, %ub: i32) {
   %c1_i32 = arith.constant 1 : i32
 
-  // CHECK: [[LEN:%.*]] = arith.subi [[UB]], [[LB]]
-  // CHECK: [[IS_ZERO:%.*]] = arith.cmpi eq, [[LEN]], %c0_i32
+  // CHECK: [[IS_EMPTY:%.*]] = arith.cmpi sge, [[LB]], [[UB]]
 
-  // CHECK: scf.if [[IS_ZERO]]
+  // CHECK: scf.if [[IS_EMPTY]]
   // CHECK-NEXT: scf.for %{{.*}} = [[LB]] to [[UB]] step %c1_i32
   // CHECK-NEXT:   "prologue"
-  // CHECK-NXET: } {tt.flatten}
+  // CHECK-NEXT: } {tt.flatten}
 
   // CHECK: else
   // CHECK-COUNT-1: scf.for
@@ -525,9 +524,10 @@ tt.func @fuse_attr_speculate(%lb: i32, %ub: i32) {
 tt.func @speculate_hoist(%lb: i32, %ub: i32) {
   %c1_i32 = arith.constant 1 : i32
 
-  // CHECK: [[IS_ZERO:%.*]] = arith.cmpi eq, [[UB]], %c0_i32
+  // CHECK: [[INNER_UB:%.*]] = arith.addi [[LB]], [[UB]]
+  // CHECK: [[IS_EMPTY:%.*]] = arith.cmpi sge, [[LB]], [[INNER_UB]]
 
-  // CHECK: scf.if [[IS_ZERO]]
+  // CHECK: scf.if [[IS_EMPTY]]
   scf.for %i = %lb to %ub step %c1_i32 : i32 {
     "prologue"(%i) : (i32) -> ()
     %ubj = arith.addi %lb, %ub : i32
@@ -535,6 +535,31 @@ tt.func @speculate_hoist(%lb: i32, %ub: i32) {
       "body"(%i, %j) : (i32, i32) -> ()
       scf.yield
     }
+  } {tt.flatten}
+  tt.return
+}
+
+// The empty-loop check must use the inner loop's comparison signedness.
+// CHECK-LABEL: @speculate_unsigned_inner_bounds
+// CHECK-SAME: [[M:%.*]]: i32, [[LB:%.*]]: i32, [[UB:%.*]]: i32
+tt.func @speculate_unsigned_inner_bounds(%m: i32, %lb: i32, %ub: i32) {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  // CHECK: [[EMPTY:%.*]] = arith.cmpi uge, [[LB]], [[UB]]
+  // CHECK-NEXT: scf.if [[EMPTY]] {
+  // CHECK-NEXT: scf.for
+  // CHECK-NEXT: "prologue"
+  // CHECK-NEXT: "epilogue"
+  // CHECK-NEXT: }
+  // CHECK-NEXT: } else {
+  // CHECK: scf.for
+  // CHECK: "body"
+  scf.for %i = %c0 to %m step %c1 : i32 {
+    "prologue"(%i) : (i32) -> ()
+    scf.for unsigned %j = %lb to %ub step %c1 : i32 {
+      "body"(%j) : (i32) -> ()
+    }
+    "epilogue"(%i) : (i32) -> ()
   } {tt.flatten}
   tt.return
 }
@@ -609,12 +634,10 @@ tt.func @assume_not_dominating_loop(%lb: i32, %ub: i32, %flag: i1) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32
 
-  // The inner loop goes from 0 to %ub, so its zero-trip test is %ub == 0, and
-  // it must still be emitted (the assume on the other branch is not in force
-  // here). The buggy pass instead replaced this guard with `arith.constant
-  // true` because it matched the assume without a dominance check.
-  // CHECK: [[IS_ZERO:%.*]] = arith.cmpi eq, [[UB]], %c0_i32
-  // CHECK: scf.if [[IS_ZERO]]
+  // The inner loop is empty when %ub <= 0. Keep its runtime guard because
+  // the assume on the other branch does not dominate the loop.
+  // CHECK: [[IS_EMPTY:%.*]] = arith.cmpi sle, [[UB]], %c0_i32
+  // CHECK-NEXT: scf.if [[IS_EMPTY]]
   // CHECK-NEXT: scf.for %{{.*}} = %c0_i32 to [[UB]] step %c1_i32
   // CHECK-NEXT:   "prologue"
   // CHECK-NOT: arith.constant true
