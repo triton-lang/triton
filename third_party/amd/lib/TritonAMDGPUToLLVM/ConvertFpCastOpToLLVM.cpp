@@ -432,13 +432,10 @@ SmallVector<Value> PkF4ToFp32(Location loc, ConversionPatternRewriter &rewriter,
   return ret;
 }
 
-// OCP Bf8/Fp8 -> Bf16
-template <typename SrcFPType>
-SmallVector<Value> OcpF8ToBf16SW(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const SmallVector<Value> &v) {
-  static_assert(std::is_same_v<SrcFPType, Float8E4M3FNType> ||
-                std::is_same_v<SrcFPType, Float8E5M2Type>);
+// OCP E4M3 -> Bf16
+SmallVector<Value> Fp8E4M3ToBf16SW(Location loc,
+                                   ConversionPatternRewriter &rewriter,
+                                   const SmallVector<Value> &v) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto fp8x4VecTy = vec_ty(i8_ty, 4);
   Value a0 = b.undef(fp8x4VecTy);
@@ -457,15 +454,8 @@ SmallVector<Value> OcpF8ToBf16SW(Location loc,
 
   Value b0 = b.and_(i32_ty, a0, b.i32_val(0x7fff7fff));
   Value b1 = b.and_(i32_ty, a1, b.i32_val(0x7fff7fff));
-  uint32_t reducedMantissaBits;
-  float upcastBias;
-  if constexpr (std::is_same_v<SrcFPType, Float8E4M3FNType>) {
-    reducedMantissaBits = 4; // 3 + 8 - 7
-    upcastBias = 0x1p+120;   // 2^(127-7)
-  } else {
-    reducedMantissaBits = 3; // 2 + 8 - 7
-    upcastBias = 0x1p+112;   // 2^(127-15)
-  }
+  constexpr uint32_t reducedMantissaBits = 4; // 3 + 8 - 7
+  constexpr float upcastBias = 0x1p+120;      // 2^(127-7)
   b0 = b.lshr(i32_ty, b0, b.i32_val(reducedMantissaBits));
   b1 = b.lshr(i32_ty, b1, b.i32_val(reducedMantissaBits));
 
@@ -502,10 +492,21 @@ SmallVector<Value> OcpF8ToBf16SW(Location loc,
   out0 = b.bitcast(out0, bf16x2VecTy);
   out1 = b.bitcast(out1, bf16x2VecTy);
 
-  return {b.extract_element(bf16_ty, out0, b.i32_val(0)),
-          b.extract_element(bf16_ty, out0, b.i32_val(1)),
-          b.extract_element(bf16_ty, out1, b.i32_val(0)),
-          b.extract_element(bf16_ty, out1, b.i32_val(1))};
+  SmallVector<Value> results = {b.extract_element(bf16_ty, out0, b.i32_val(0)),
+                                b.extract_element(bf16_ty, out0, b.i32_val(1)),
+                                b.extract_element(bf16_ty, out1, b.i32_val(0)),
+                                b.extract_element(bf16_ty, out1, b.i32_val(1))};
+  // Exponent rebiasing above only covers finite inputs.
+  for (size_t i = 0; i < results.size(); ++i) {
+    Value abs = b.and_(v[i], b.i8_val(0x7F));
+    Value isSpecial = b.icmp_uge(abs, b.i8_val(0x7F));
+    Value special = b.i16_val(0x7FC0);
+    Value sign =
+        b.shl(b.zext(i16_ty, b.and_(v[i], b.i8_val(0x80))), b.i16_val(8));
+    special = b.bitcast(b.or_(special, sign), bf16_ty);
+    results[i] = b.select(isSpecial, special, results[i]);
+  }
+  return results;
 }
 
 Value Fp32ToFp16rtneOneValue(Location loc, RewriterBase &rewriter,
@@ -1205,7 +1206,7 @@ public:
         return scalePk4UpcastFromFp8<ROCDL::CvtScaleF32PkBf16Fp8Op>(
             loc, rewriter, v);
       } else
-        return OcpF8ToBf16SW<Float8E4M3FNType>(loc, rewriter, v);
+        return Fp8E4M3ToBf16SW(loc, rewriter, v);
     }
     return std::nullopt;
   }
@@ -1308,7 +1309,7 @@ public:
       if (hasFnuzFp8HW(isaFamily))
         return Fp8E5M2fnuzToBf16HW(loc, rewriter, v);
       else
-        return Fp8E5M2fnuzToBf16SW(loc, rewriter, v);
+        return Fp8E5M2ToBf16SW(loc, rewriter, v);
     } else if (isa<Float8E5M2Type>(srcTy)) {
       if (isaFamily == ISAFamily::GFX1250) {
         return scalePk8UpcastFromFp8<ROCDL::CvtPkScalePk8Bf16Bf8Op>(
@@ -1317,7 +1318,7 @@ public:
         return scalePk4UpcastFromFp8<ROCDL::CvtScaleF32PkBf16Bf8Op>(
             loc, rewriter, v);
       } else
-        return OcpF8ToBf16SW<Float8E5M2Type>(loc, rewriter, v);
+        return Fp8E5M2ToBf16SW(loc, rewriter, v);
     }
     return std::nullopt;
   }
@@ -1332,13 +1333,16 @@ public:
     return ret;
   }
 
-  SmallVector<Value> Fp8E5M2fnuzToBf16SW(Location loc,
-                                         ConversionPatternRewriter &rewriter,
-                                         const SmallVector<Value> &v) {
+  SmallVector<Value> Fp8E5M2ToBf16SW(Location loc,
+                                     ConversionPatternRewriter &rewriter,
+                                     const SmallVector<Value> &v) {
     assert(v.size() == 4);
     auto cvt =
         CvtFp8E5M2ToFp16(srcTy, isaFamily, maxElementsPerThread, roundingMode);
-    SmallVector<Value> fp16Vec = cvt.Fp8E5M2fnuzToFp16SW(loc, rewriter, v);
+    // Both E5M2 formats widen exactly through FP16, including special values.
+    SmallVector<Value> fp16Vec =
+        isa<Float8E5M2Type>(srcTy) ? cvt.Fp8E5M2ToFp16SW(loc, rewriter, v)
+                                   : cvt.Fp8E5M2fnuzToFp16SW(loc, rewriter, v);
     SmallVector<Value> result(4);
     for (size_t i = 0; i < 4; i++) {
       Value fp32 = Fp16ToFp32OneValue(loc, rewriter, fp16Vec[i]);

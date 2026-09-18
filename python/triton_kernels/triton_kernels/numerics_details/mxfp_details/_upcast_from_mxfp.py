@@ -195,21 +195,6 @@ def _upcast_from_mxfp(
     intermediate_dtype: tl.constexpr = tl.bfloat16 if dst_dtype == tl.float32 else dst_dtype
     if is_fp8:
         dst_tensor = tensor.to(intermediate_dtype)
-        if tensor.dtype == tl.float8e5:
-            from_e_bits: tl.constexpr = 5
-            from_m_bits: tl.constexpr = 2
-            to_e_bits: tl.constexpr = 8 if intermediate_dtype == tl.bfloat16 else 5
-            to_m_bits: tl.constexpr = 7 if intermediate_dtype == tl.bfloat16 else 10
-
-            # Preserve infs and nans. FIXME Fp8E5M2_to_Bf16 doesn't preserve them!
-            non_finite_mask_src: tl.constexpr = ((1 << from_e_bits) - 1) << from_m_bits
-            non_finite_mask_dst: tl.constexpr = ((1 << to_e_bits) - 1) << to_m_bits
-            dst_tensor = tl.where(
-                (tensor.to(tl.uint8, bitcast=True) & non_finite_mask_src) == non_finite_mask_src,
-                (dst_tensor.to(tl.uint16, bitcast=True) | non_finite_mask_dst).to(intermediate_dtype, bitcast=True),
-                dst_tensor,
-            )
-
     else:
         assert is_fp4
         dst_tensor = _upcast_mxfp4_values(tensor, dst_dtype)
@@ -227,8 +212,7 @@ def _upcast_from_mxfp(
     else:
         tl.static_assert(dst_dtype == tl.float16)
         max_fin = 65504
-    # TODO: handle infinity same as upcast_from_mxfp_torch together with the
-    # above FIXME
+    # TODO: Preserve input infinities through clamping, as upcast_from_mxfp_torch does.
     out_tensor = tl.clamp(out_tensor, min=-max_fin, max=max_fin)
     # Correct any NaNs encoded via OCP E8M0 scales.
     if scale_is_ocp:
