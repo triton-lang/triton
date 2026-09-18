@@ -994,6 +994,15 @@ bool extractArgs(PyObject **final_list, int *list_idx, PyObject *kernel_args,
   if (!fast_args) {
     goto cleanup;
   }
+  Py_ssize_t num_args = PySequence_Fast_GET_SIZE(fast_args);
+  if (num_args != num_annotations) {
+    PyErr_Format(PyExc_ValueError,
+                 "Kernel launch argument mismatch: received %zd argument(s) "
+                 "at the current nesting level, but the compiled kernel "
+                 "expects %zd",
+                 num_args, num_annotations);
+    goto cleanup;
+  }
   PyObject **args = PySequence_Fast_ITEMS(fast_args);
 
   int arg_idx = 0;
