@@ -6,6 +6,9 @@
 #blocked2d_4 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [2, 2], order = [0, 1]}>
 #blocked2d_8 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>
 #blocked2d_16 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 4], order = [0, 1]}>
+#blocked2d_a = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>
+#blocked2d_b = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [8, 1], order = [0, 1]}>
+#blocked2d_bt = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 8], order = [1, 0]}>
 #blocked_tmem = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 2], warpsPerCTA = [4, 2], order = [0, 1]}>
 #shared_1d = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
@@ -198,6 +201,28 @@ tt.func @tmem_min_4_warps(%tensor_desc: !ttg.memdesc<64x64xf32, #tmem, #ttng.ten
     "use"(%result) : (!ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory>) -> ()
     ttg.warp_return
   } : (!ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>) -> ()
+  tt.return
+}
+
+// A `convert_layout` already in the partition loses its encodings when the
+// partition is relaid out and must not survive without them.
+// CHECK-LABEL: @convert_layout_in_partition
+tt.func @convert_layout_in_partition(%arg0: i32) {
+  ttg.warp_specialize(%arg0)
+  default {
+    ttg.warp_yield
+  }
+  // CHECK: partition0({{.*}}) num_warps(1)
+  partition0(%arg1: i32) num_warps(8) {
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: tt.trans
+    // CHECK-NOT: ttg.convert_layout
+    %0 = tt.splat %arg1 : i32 -> tensor<128x2xi32, #blocked2d_a>
+    %1 = ttg.convert_layout %0 : tensor<128x2xi32, #blocked2d_a> -> tensor<128x2xi32, #blocked2d_b>
+    %2 = tt.trans %1 {order = array<i32: 1, 0>} : tensor<128x2xi32, #blocked2d_b> -> tensor<2x128xi32, #blocked2d_bt>
+    "use"(%2) : (tensor<2x128xi32, #blocked2d_bt>) -> ()
+    ttg.warp_return
+  } : (i32) -> ()
   tt.return
 }
 
