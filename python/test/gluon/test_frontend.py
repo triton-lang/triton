@@ -156,6 +156,13 @@ def test_inline_asm_shared_amd_compilation(elementwise):
 
 @pytest.mark.parametrize("target, binary", [(AMPERE_TARGET, "cubin"), (HIP_TARGET_CDNA3, "hsaco")])
 def test_gluon_ast_source_without_driver(target, binary, monkeypatch, fresh_triton_cache):
+    if target.backend == "cuda":
+        import subprocess
+        from triton.backends.nvidia.compiler import get_ptxas
+        try:
+            subprocess.check_output([get_ptxas(target.arch).path, "--version"], stderr=subprocess.STDOUT)
+        except (OSError, subprocess.SubprocessError):
+            pytest.skip("ptxas is not available on this platform")
 
     def fail_driver_access(self):
         raise AssertionError("Offline compilation must not access the GPU driver")
