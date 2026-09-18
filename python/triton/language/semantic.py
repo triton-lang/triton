@@ -1221,14 +1221,15 @@ class TritonSemantic(Generic[TensorTy]):
         ptr_ty = ptr.type.scalar
         elt_ty = ptr_ty.element_ty
 
+        # Cast to target data type
+        val = self.cast(val, elt_ty)
+
         # Treat `pointer_type<tl.int1>` as `pointer_type<tl.int8>`
         if elt_ty == tl.int1:
             elt_ty = tl.int8
             ptr_ty = tl.pointer_type(elt_ty, ptr_ty.address_space)
             ptr = self.cast(ptr, ptr_ty)
-
-        # Cast to target data type
-        val = self.cast(val, elt_ty)
+            val = self.cast(val, elt_ty)
 
         # Build IR
         if mask is None:
