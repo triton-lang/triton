@@ -1,4 +1,5 @@
 import expecttest
+import errno
 import importlib.util
 import itertools
 import multiprocessing
@@ -16,6 +17,53 @@ import triton
 import triton.language as tl
 from triton._internal_testing import is_hip
 from triton.runtime.cache import FileCacheManager, RemoteCacheManager
+
+
+def test_file_cache_manager_put_removes_only_temp_dir(fresh_knobs, monkeypatch, tmp_path):
+    fresh_knobs.cache.dir = str(tmp_path)
+    manager = FileCacheManager("key")
+    real_rmdir = os.rmdir
+    removed_paths = []
+
+    def recording_rmdir(path, *args, **kwargs):
+        removed_paths.append(os.fspath(path))
+        return real_rmdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "rmdir", recording_rmdir)
+    path = manager.put("published", "kernel.json", binary=False)
+
+    assert pathlib.Path(path).read_text() == "published"
+    assert len(removed_paths) == 1
+    removed_path = pathlib.Path(removed_paths[0])
+    assert removed_path.parent == pathlib.Path(manager.cache_dir)
+    assert removed_path.name.startswith(f"tmp.pid_{os.getpid()}_")
+
+
+@pytest.mark.parametrize(
+    ("cleanup_errno", "should_raise"),
+    [
+        (errno.EBUSY, False),
+        (errno.EACCES, True),
+        (errno.ENOTEMPTY, True),
+        (errno.ENOENT, True),
+    ],
+)
+def test_file_cache_manager_put_handles_only_busy_temp_dir_cleanup(fresh_knobs, monkeypatch, tmp_path, cleanup_errno,
+                                                                   should_raise):
+    fresh_knobs.cache.dir = str(tmp_path)
+    manager = FileCacheManager("key")
+
+    def failing_rmdir(path):
+        raise OSError(cleanup_errno, os.strerror(cleanup_errno), path)
+
+    monkeypatch.setattr(os, "rmdir", failing_rmdir)
+    if not should_raise:
+        manager.put("published", "kernel.json", binary=False)
+    else:
+        with pytest.raises(OSError) as exc_info:
+            manager.put("published", "kernel.json", binary=False)
+        assert exc_info.value.errno == cleanup_errno
+    assert (pathlib.Path(manager.cache_dir) / "kernel.json").read_text() == "published"
 
 
 def test_file_cache_manager_get_group_rejects_missing_child(fresh_knobs, tmp_path):
