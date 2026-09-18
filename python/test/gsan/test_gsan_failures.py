@@ -885,7 +885,7 @@ def _run_bulk_raw_case(acquire=False):
     src = torch.zeros(12, device="cuda", dtype=torch.int32)
     out = torch.empty_like(src)
     ready = torch.zeros(1, device="cuda", dtype=torch.int32)
-    _bulk_raw_kernel[(2,)](src, out, ready, acquire)
+    _bulk_raw_kernel[(2, )](src, out, ready, acquire)
     torch.cuda.synchronize()
     torch.testing.assert_close(src, out)
 
@@ -898,7 +898,7 @@ def test_bulk_async_load_read_after_write():
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 def test_bulk_async_load_acquire_orders_source():
-    result = run_in_process(_run_bulk_raw_case, (True,))
+    result = run_in_process(_run_bulk_raw_case, (True, ))
     assert result.exc is None
     assert result.driver_stderr_output == ""
 
@@ -928,7 +928,7 @@ def _run_bulk_war_case():
     src = torch.zeros(12, device="cuda", dtype=torch.int32)
     out = torch.empty_like(src)
     ready = torch.zeros(1, device="cuda", dtype=torch.int32)
-    _bulk_war_kernel[(2,)](src, out, ready)
+    _bulk_war_kernel[(2, )](src, out, ready)
     torch.cuda.synchronize()
 
 

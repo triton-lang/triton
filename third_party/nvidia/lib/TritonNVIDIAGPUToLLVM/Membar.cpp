@@ -64,17 +64,25 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after,
       if (auto copy = dyn_cast<ttng::AsyncBulkCopyGlobalToLocalOp>(after))
         if (expect.getAlloc() == copy.getBarrier())
           return true;
-      // The expectation's leading rendezvous publishes initialization; the
-      // wait itself observes completion of the expected phase/transactions.
-      if (auto wait = dyn_cast<ttng::WaitBarrierOp>(after))
-        if (expect.getAlloc() == wait.getAlloc())
-          return true;
+      // A matching linear bulk copy already orders the expectation and wait.
+      // Keep the exemption scoped to that path so other asynchronous producers
+      // retain their synchronization.
+      if (auto wait = dyn_cast<ttng::WaitBarrierOp>(after)) {
+        if (expect.getAlloc() == wait.getAlloc()) {
+          for (Operation *op = before->getNextNode(); op != after;
+               op = op->getNextNode()) {
+            if (auto copy = dyn_cast<ttng::AsyncBulkCopyGlobalToLocalOp>(op))
+              if (copy.getBarrier() == wait.getAlloc())
+                return true;
+          }
+        }
+      }
     }
   }
 
   // wait_barrier will never run ahead of the load it's waiting on
-  if (isa<ttng::TMALoadLikeOpInterface,
-          ttng::AsyncBulkCopyGlobalToLocalOp>(before) &&
+  if (isa<ttng::TMALoadLikeOpInterface, ttng::AsyncBulkCopyGlobalToLocalOp>(
+          before) &&
       isa<ttng::WaitBarrierOp>(after))
     return true;
 

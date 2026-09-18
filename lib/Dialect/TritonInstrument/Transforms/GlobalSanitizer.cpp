@@ -67,7 +67,8 @@ static void instrumentAsyncBulkLoad(ttng::AsyncBulkCopyGlobalToLocalOp op) {
   Value offsets = tt::MakeRangeOp::create(b, offsetsTy, 0, extent);
   Value limit = arith::ConstantOp::create(
       b, DenseElementsAttr::get(offsetsTy, b.getI32IntegerAttr(words)));
-  Value mask = arith::CmpIOp::create(b, arith::CmpIPredicate::ult, offsets, limit);
+  Value mask =
+      arith::CmpIOp::create(b, arith::CmpIPredicate::ult, offsets, limit);
   Value pred = tt::SplatOp::create(b, mask.getType(), op.getPred());
   mask = arith::AndIOp::create(b, mask, pred);
   auto ptrTy = tt::PointerType::get(b.getI32Type());

@@ -6380,11 +6380,11 @@ def test_tmem288k_simple(Ncol1: int, Ncol2: int):
 
 
 @gluon.jit
-def _bulk_copy_kernel(src, out, take_copy, NUM_BYTES: ttgl.constexpr, BLOCK: ttgl.constexpr,
-                      SRC_OFFSET: ttgl.constexpr, DST_OFFSET: ttgl.constexpr):
+def _bulk_copy_kernel(src, out, take_copy, NUM_BYTES: ttgl.constexpr, BLOCK: ttgl.constexpr, SRC_OFFSET: ttgl.constexpr,
+                      DST_OFFSET: ttgl.constexpr):
     layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0])
     shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
-    initial = ttgl.full((2 * BLOCK,), -7, src.dtype.element_ty, layout)
+    initial = ttgl.full((2 * BLOCK, ), -7, src.dtype.element_ty, layout)
     allocation = ttgl.allocate_shared_memory(src.dtype.element_ty, [2 * BLOCK], shared, initial)
     dst = allocation.slice(DST_OFFSET, BLOCK)
     bar = hopper.mbarrier.allocate_mbarrier()
@@ -6410,7 +6410,7 @@ def test_bulk_async_load_copy(num_bytes, dtype, offset, take_copy, device):
     dst_offset = block if offset else 0
     src = (torch.arange(count + src_offset, device=device) % 113).to(dtype)
     out = torch.empty(2 * block, device=device, dtype=dtype)
-    compiled = _bulk_copy_kernel[(1,)](src, out, take_copy, num_bytes, block, src_offset, dst_offset)
+    compiled = _bulk_copy_kernel[(1, )](src, out, take_copy, num_bytes, block, src_offset, dst_offset)
     expected = torch.full_like(out, -7)
     if take_copy:
         expected[dst_offset:dst_offset + count] = src[src_offset:]
@@ -6443,9 +6443,9 @@ def test_bulk_async_load_compute_overlap(device, instrumentation, fresh_knobs):
     fresh_knobs.compilation.instrumentation_mode = instrumentation
     torch.manual_seed(7)
     x = torch.randn((73, 2560), device=device)
-    gains = torch.randn((2560,), device=device)
+    gains = torch.randn((2560, ), device=device)
     out = torch.empty_like(x)
-    _bulk_rms_kernel[(x.shape[0],)](x, gains, out, 2560, 4096)
+    _bulk_rms_kernel[(x.shape[0], )](x, gains, out, 2560, 4096)
     expected = x * torch.rsqrt((x * x).mean(-1, keepdim=True) + 1.e-6) * gains
     torch.testing.assert_close(out, expected, atol=1.e-5, rtol=1.e-5)
 
@@ -6473,7 +6473,7 @@ def test_bulk_async_load_buffer_reuse(device, instrumentation, fresh_knobs):
 
     src = torch.arange(5 * 128, device=device, dtype=torch.int32)
     out = torch.empty_like(src)
-    kernel[(1,)](src, out, 5)
+    kernel[(1, )](src, out, 5)
     torch.testing.assert_close(src, out)
 
 
@@ -6492,7 +6492,7 @@ def test_bulk_async_load_warp_specialized(device, instrumentation, fresh_knobs):
 
     src = torch.arange(256, device=device, dtype=torch.int32)
     out = torch.empty((2, 256), device=device, dtype=torch.int32)
-    kernel[(1,)](src, out)
+    kernel[(1, )](src, out)
     expected = torch.full_like(out, -7)
     expected[:, :128] = src.reshape(2, 128)
     torch.testing.assert_close(out, expected)

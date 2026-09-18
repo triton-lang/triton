@@ -4831,7 +4831,7 @@ def test_bulk_async_load_synchronization(failure, device, run_wrapper, monkeypat
         hopper.mbarrier.expect(bar, 16 if FAILURE == "bytes" else 512)
         hopper.bulk.async_load(smem, src, 512, bar)
         if FAILURE == "write":
-            smem.store(ttgl.full((128,), 0, ttgl.int32, layout))
+            smem.store(ttgl.full((128, ), 0, ttgl.int32, layout))
         elif FAILURE == "copy":
             hopper.bulk.async_load(smem, src, 512, bar)
         elif FAILURE == "invalidate":
@@ -4845,5 +4845,5 @@ def test_bulk_async_load_synchronization(failure, device, run_wrapper, monkeypat
 
     src = torch.arange(128, device=device, dtype=torch.int32)
     out = torch.empty_like(src)
-    kernel[(1,)](src, out, failure)
+    kernel[(1, )](src, out, failure)
     torch.testing.assert_close(src, out)
