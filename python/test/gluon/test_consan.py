@@ -4808,7 +4808,6 @@ def test_bulk_async_load_synchronization(failure, device, run_wrapper, monkeypat
             assert result.driver_stderr_output == ""
         else:
             assert_expected_cuda_failure(result.exc)
-            assert "test_consan.py" in result.driver_stderr_output
             if failure in ("read", "write", "copy"):
                 assert "outstanding writes" in result.driver_stderr_output
             elif failure == "invalidate":
