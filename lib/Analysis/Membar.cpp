@@ -337,14 +337,16 @@ Operation *MembarAnalysis::syncIfNeeded(Operation *op, const BlockInfo &effects,
     return nullptr;
   auto &pending = membarInfo->pending;
   auto canSkip = [&](Operation *before, Operation *after, bool beforeIsRead,
-                     bool afterIsRead, Allocation *allocation) {
+                     bool afterIsRead, Allocation *allocation,
+                     const AllocationSlice &beforeSlice,
+                     const AllocationSlice &afterSlice) {
     // Effects issued by the same thread are ordered with respect to each other.
     // A fixed thread-zero issuer and an elected warp-zero leader may differ.
     return (pending.threadEffects.count(before) &&
             effects.threadEffects.count(after) &&
             haveSameThreadSyncIssuer(before, after)) ||
-           (filter &&
-            filter(before, after, beforeIsRead, afterIsRead, allocation));
+           (filter && filter(before, after, beforeIsRead, afterIsRead,
+                             allocation, beforeSlice, afterSlice));
   };
   if (!requiresThreadSync(pending, effects) &&
       !pending.isIntersected(effects, canSkip, &allocation, sliceFilter))
@@ -513,7 +515,8 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
                       std::move(effects));
 }
 
-SmallVector<AllocationSlice> MembarAnalysis::getAllocationSlices(Value value) {
+SmallVector<AllocationSlice> MembarAnalysis::getAllocationSlices(
+    Value value, std::optional<triton::gpu::SharedKind> sharedKind) {
   auto function = cast<FunctionOpInterface>(allocation.getOperation());
   // Device-function views use their own frame until imported at a call;
   // foreign or mixed frames, including returned descriptors, stay unknown.
@@ -523,6 +526,7 @@ SmallVector<AllocationSlice> MembarAnalysis::getAllocationSlices(Value value) {
                       Allocation::BufferId bufferId) {
     auto slice = bufferIndexAnalysis.makeSlice(value, interval, bufferId);
     slice.physicalFootprint = footprint;
+    slice.sharedKind = sharedKind;
     slices.push_back(std::move(slice));
   };
   Allocation::BufferIdSetT bufferIds;
@@ -533,6 +537,7 @@ SmallVector<AllocationSlice> MembarAnalysis::getAllocationSlices(Value value) {
     for (unsigned argument : allocation.getAliasedArgumentIndices(value)) {
       AllocationSlice slice(Interval<size_t>{});
       slice.argumentIndex = argument;
+      slice.sharedKind = sharedKind;
       slices.push_back(std::move(slice));
     }
   } else if (footprint) {
@@ -575,7 +580,7 @@ void MembarAnalysis::updateMemoryEffects(Operation *op, MembarInfo *membarInfo,
               return SmallVector<AllocationSlice>{
                   slice.translateToCallsite(call, callee, regions)};
             Value actual = call.getArgOperands()[*slice.argumentIndex];
-            auto slices = getAllocationSlices(actual);
+            auto slices = getAllocationSlices(actual, slice.sharedKind);
             // A callee can reinterpret the argument's view. Retain the caller's
             // allocation IDs, but cover each whole allocation without shifting.
             for (AllocationSlice &bound : slices) {
@@ -600,7 +605,8 @@ void MembarAnalysis::updateMemoryEffects(Operation *op, MembarInfo *membarInfo,
       continue;
     // Shared effects cover only descriptor elements, including gather/scatter
     // and async copies. Footprints retain padding, partitions and CTA identity.
-    for (const AllocationSlice &slice : getAllocationSlices(value)) {
+    for (const AllocationSlice &slice :
+         getAllocationSlices(value, access.sharedKind)) {
       if (access.isWrite)
         curBlockInfo.syncWriteSlices[slice].insert(op);
       if (access.isRead)
