@@ -34,13 +34,14 @@ namespace gpu {
 #define GEN_PASS_DEF_TRITONGPUPIPELINE
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-static void pipelineWgmma(ModuleOp moduleOp, unsigned numStages) {
+static void pipelineWgmma(ModuleOp moduleOp, unsigned numStages,
+                          bool disableWgmmaRegisterPipelining) {
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
 
   for (scf::ForOp forOp : loops) {
     if (getNumStagesOrDefault(forOp, numStages) >= 1)
-      mlir::triton::asyncLaunchDots(forOp);
+      mlir::triton::asyncLaunchDots(forOp, disableWgmmaRegisterPipelining);
   }
 }
 
@@ -195,7 +196,7 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     // Cleanup the IR from the pipeline attributes.
     removePipeliningAttributes(moduleOp);
 
-    pipelineWgmma(moduleOp, numStages);
+    pipelineWgmma(moduleOp, numStages, disableWgmmaRegisterPipelining);
 
     // schedule the waits
     mlir::triton::updateWaits(getOperation());

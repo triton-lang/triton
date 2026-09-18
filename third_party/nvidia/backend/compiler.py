@@ -295,8 +295,7 @@ class CUDABackend(BaseBackend):
         pm.run(mod, 'make_ttir')
         return mod
 
-    @staticmethod
-    def make_ttgir(mod, metadata, opt, capability):
+    def make_ttgir(self, mod, metadata, opt, capability):
         # Set maxnreg on all kernels, if it was provided.
         if opt.maxnreg is not None:
             mod.set_attr("ttg.maxnreg", ir.builder(mod.context).get_int32_attr(opt.maxnreg))
@@ -330,7 +329,10 @@ class CUDABackend(BaseBackend):
             nvidia.passes.hopper.add_hopper_warpspec(pm, opt.num_stages, dump_enabled)
             passes.ttgpuir.add_assign_latencies(pm, opt.num_stages)
             passes.ttgpuir.add_schedule_loops(pm)
-            passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
+            # ptxas before 13.3 can remove the copies that protect WGMMA input registers.
+            ptxas_version = tuple(map(int, get_ptxas(self.target.arch).version.split(".")))
+            disable_wgmma_register_pipelining = capability // 10 == 9 and ptxas_version < (13, 3)
+            passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled, disable_wgmma_register_pipelining)
         elif capability // 10 >= 10:
             passes.ttgpuir.add_fuse_nested_loops(pm)
             passes.common.add_canonicalizer(pm)

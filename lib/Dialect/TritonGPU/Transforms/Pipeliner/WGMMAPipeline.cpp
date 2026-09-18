@@ -597,7 +597,7 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
 // depth 2, so there are at most 2 copies of each warp_group_dot in flight at a
 // time.)
 //
-// We can skip inserting the wait if we have a `warp_group_dot_wait
+// Normally, we can skip inserting the wait if we have a `warp_group_dot_wait
 // {pendings=0}` somewhere in the loop.  To see why, consider:
 //
 //   warp_group_dot
@@ -613,11 +613,19 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
 // `wait 0` appears.
 static void insertAsyncWarpGroupDotWaitInLoop(
     scf::ForOp forOp,
-    const llvm::MapVector<Operation *, int /*iterArgIdx*/> &properlyAsyncDots) {
+    const llvm::MapVector<Operation *, int /*iterArgIdx*/> &properlyAsyncDots,
+    bool disableWgmmaRegisterPipelining) {
   if (properlyAsyncDots.empty())
     return;
 
-  if (llvm::any_of(forOp.getBody()->getOps<ttng::WarpGroupDotWaitOp>(),
+  // ptxas before 13.3 can eliminate copies that protect WGMMA input registers.
+  // Complete all groups before the next iteration reloads these registers.
+  bool waitAll =
+      disableWgmmaRegisterPipelining &&
+      llvm::any_of(llvm::make_first_range(properlyAsyncDots),
+                   [&](Operation *dot) { return rsDotNeedsWait(dot, forOp); });
+  if (!waitAll &&
+      llvm::any_of(forOp.getBody()->getOps<ttng::WarpGroupDotWaitOp>(),
                    [](auto wait) { return wait.getPendings() == 0; })) {
     return;
   }
@@ -672,7 +680,7 @@ static void insertAsyncWarpGroupDotWaitInLoop(
     // of properly async dots in the loop minus one.
     // This makes sure that the dot will wait until itself from the previous
     // iteration has completed, as to avoid rewriting the registers.
-    if (!rsDotNeedsWait(asyncDot, forOp))
+    if (waitAll || !rsDotNeedsWait(asyncDot, forOp))
       continue;
 
     OpBuilder builder(asyncDot);
@@ -684,9 +692,9 @@ static void insertAsyncWarpGroupDotWaitInLoop(
     threadValuesThroughWait(newWait, waitOperands);
   }
 
-  // Add the wait right after the last properly-async dot.  This only needs to
-  // wait for all properly-async dots from the i-1'th iteration to complete, IOW
-  // we wait until there are most `asyncDots.size()` dots in flight.
+  // Add the wait right after the last properly-async dot. Unless waitAll is
+  // needed, only wait for dots from iteration i-1, leaving at most
+  // `properlyAsyncDots.size()` dots in flight.
   //
   // (You might want to put the wait at the end of the loop instead of right
   // after the last dot, but there could be a load into shmem between the last
@@ -694,15 +702,14 @@ static void insertAsyncWarpGroupDotWaitInLoop(
   // by a dot.)
   IRRewriter builder(forOp.getContext());
   auto lastAsyncDot = properlyAsyncDots.back().first;
-  // If the last dot is an RS dot, we don't need to insert a wait
-  // as we have already inserted a wait(properlyAsyncDots.size() - 1)
-  if (rsDotNeedsWait(lastAsyncDot, forOp)) {
+  // An RS dot already has its partial wait unless all groups must complete.
+  if (!waitAll && rsDotNeedsWait(lastAsyncDot, forOp)) {
     return;
   }
   builder.setInsertionPointAfter(lastAsyncDot);
-  auto wait = ttng::WarpGroupDotWaitOp::create(builder, lastAsyncDot->getLoc(),
-                                               /*inputs=*/ArrayRef<Value>{},
-                                               properlyAsyncDots.size());
+  auto wait = ttng::WarpGroupDotWaitOp::create(
+      builder, lastAsyncDot->getLoc(),
+      /*inputs=*/ArrayRef<Value>{}, waitAll ? 0 : properlyAsyncDots.size());
 
   // Thread the results of the async dots through the wait.
   SmallVector<Value> addlWaitOperands;
@@ -719,7 +726,8 @@ static void insertAsyncWarpGroupDotWaitInLoop(
 // We assume we have space for each dot to be pipelined to depth 2, i.e. each
 // dot op in the loop can have at most 2 warp_group_dot ops in flight at once.
 // (Each warp_group_dot op usually corresponds to a series of wgmma.async ops.)
-void triton::asyncLaunchDots(scf::ForOp forOp) {
+void triton::asyncLaunchDots(scf::ForOp forOp,
+                             bool disableWgmmaRegisterPipelining) {
   LDBG("Original loop:\n" << *forOp);
 
   // First, change every MMAv3 ttng.warp_group_dot {isAsync=false}
@@ -769,7 +777,8 @@ void triton::asyncLaunchDots(scf::ForOp forOp) {
   // iteration's set of asynchronous dots (and their corresponding async copies
   // from global to shmem) can't start until the first iteration's set has
   // completed.
-  insertAsyncWarpGroupDotWaitInLoop(forOp, properlyAsyncDots);
+  insertAsyncWarpGroupDotWaitInLoop(forOp, properlyAsyncDots,
+                                    disableWgmmaRegisterPipelining);
 
   // Finally, insert a wait after the loop, waiting for dots from the final
   // iteration of the loop.
