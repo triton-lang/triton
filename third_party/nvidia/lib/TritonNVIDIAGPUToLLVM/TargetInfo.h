@@ -82,8 +82,8 @@ public:
                   ProgramIDDim axis) const override;
 
   bool warpReduce(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
-                  triton::ReduceOp op,
-                  unsigned reduceLaneIdMask) const override;
+                  triton::ReduceOp op, unsigned reduceLaneIdMask,
+                  unsigned broadcastLaneIdMask) const override;
   unsigned getReductionTreeArity(Operation *combinerOp) const override;
 
   void printf(RewriterBase &rewriter, Value formatStrStart,

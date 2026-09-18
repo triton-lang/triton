@@ -2522,8 +2522,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 //       CHECK:  %[[M:.+]] = llvm.mlir.constant(-1 : i32) : i32
 //       CHECK:   nvvm.redux.sync  add %{{.*}}, %[[M]]
 //       CHECK:   nvvm.barrier
-//       CHECK:   nvvm.shfl.sync bfly
-//       CHECK:   nvvm.shfl.sync bfly
+//       CHECK:  %[[M2:.+]] = llvm.mlir.constant(-1 : i32) : i32
+//       CHECK:   nvvm.redux.sync  add %{{.*}}, %[[M2]]
+//       CHECK:   llvm.return
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @sum_reduction(%arg0: tensor<1x1024xi32, #blocked>) {
@@ -2542,8 +2543,9 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 //       CHECK:  %[[M:.+]] = llvm.mlir.constant(-1 : i32) : i32
 //       CHECK:   nvvm.redux.sync  add %{{.*}}, %[[M]]
 //       CHECK:   nvvm.barrier
-//       CHECK:   nvvm.shfl.sync bfly
-//       CHECK:   nvvm.shfl.sync bfly
+//       CHECK:  %[[M2:.+]] = llvm.mlir.constant(-1 : i32) : i32
+//       CHECK:   nvvm.redux.sync  add %{{.*}}, %[[M2]]
+//       CHECK:   llvm.return
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @sum_reduction_commuted(%arg0: tensor<1x1024xi32, #blocked>) {
