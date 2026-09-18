@@ -16,6 +16,8 @@ from triton.experimental.gluon.language.nvidia.hopper.tma import (
     tensor_descriptor,
     tensor_descriptor_type,
     make_tensor_descriptor,
+    publish_tensor_descriptor,
+    load_tensor_descriptor,
     _emit_alignment_check,
 )
 
@@ -37,6 +39,8 @@ __all__ = [
     "tensor_descriptor",
     "tensor_descriptor_type",
     "make_tensor_descriptor",
+    "publish_tensor_descriptor",
+    "load_tensor_descriptor",
 ]
 
 

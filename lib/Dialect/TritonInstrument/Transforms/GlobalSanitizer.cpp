@@ -46,6 +46,8 @@ static void instrumentAsyncTMALoad(ttng::AsyncTMACopyGlobalToLocalOp op) {
     return;
 
   OpBuilder builder(op);
+  ExperimentalGSanTensorMapAccessOp::create(builder, op.getLoc(), op.getDesc(),
+                                            false, false, op.getPred());
   ExperimentalGSanTensorDescAccessOp::create(builder, op.getLoc(), op.getDesc(),
                                              op.getCoord(), op.getPred(),
                                              /*isStore=*/false);
@@ -54,6 +56,8 @@ static void instrumentAsyncTMALoad(ttng::AsyncTMACopyGlobalToLocalOp op) {
 static void instrumentAsyncTMAStore(Operation *op, Value descValue,
                                     ValueRange coords) {
   OpBuilder builder(op);
+  ExperimentalGSanTensorMapAccessOp::create(builder, op->getLoc(), descValue,
+                                            false, false, Value{});
   ExperimentalGSanTensorDescAccessOp::create(builder, op->getLoc(), descValue,
                                              coords, /*pred=*/Value{},
                                              /*isStore=*/true);
@@ -61,6 +65,8 @@ static void instrumentAsyncTMAStore(Operation *op, Value descValue,
 
 static void instrumentAsyncTMAReduce(ttng::AsyncTMAReduceOp op) {
   OpBuilder builder(op);
+  ExperimentalGSanTensorMapAccessOp::create(builder, op.getLoc(), op.getDesc(),
+                                            false, false, Value{});
   ExperimentalGSanAtomicTensorDescAccessOp::create(
       builder, op.getLoc(), op.getDesc(), op.getCoord(), MemSemantic::RELAXED,
       MemSyncScope::GPU);
@@ -80,6 +86,8 @@ static void instrumentAtomicPoll(tt::AtomicPollOp op) {
 
 static void instrumentAsyncTMAGather(ttng::AsyncTMAGatherOp op) {
   OpBuilder builder(op);
+  ExperimentalGSanTensorMapAccessOp::create(builder, op.getLoc(), op.getDesc(),
+                                            false, false, op.getPred());
   ExperimentalGSanIndexedTensorDescAccessOp::create(
       builder, op.getLoc(), op.getDesc(), op.getXOffsets(), op.getYOffset(),
       op.getPred(), /*isStore=*/false);
@@ -87,6 +95,8 @@ static void instrumentAsyncTMAGather(ttng::AsyncTMAGatherOp op) {
 
 static void instrumentAsyncTMAScatter(ttng::AsyncTMAScatterOp op) {
   OpBuilder builder(op);
+  ExperimentalGSanTensorMapAccessOp::create(builder, op.getLoc(), op.getDesc(),
+                                            false, false, Value{});
   ExperimentalGSanIndexedTensorDescAccessOp::create(
       builder, op.getLoc(), op.getDesc(), op.getXOffsets(), op.getYOffset(),
       /*pred=*/Value{}, /*isStore=*/true);
@@ -484,6 +494,20 @@ public:
     module.walk([&](Operation *op) {
       IRRewriter b(op);
       mlir::TypeSwitch<Operation *>(op)
+          .Case([&](ttng::TensormapPublishOp op) {
+            ExperimentalGSanTensorMapAccessOp::create(
+                b, op.getLoc(), op.getSource(), false, true, Value{});
+            ExperimentalGSanTensorMapAccessOp::create(
+                b, op.getLoc(), op.getDescPtr(), true, true, Value{});
+          })
+          .Case([&](ttng::TensormapCreateOp op) {
+            ExperimentalGSanTensorMapAccessOp::create(
+                b, op.getLoc(), op.getDescPtr(), true, false, Value{});
+          })
+          .Case([&](ttng::TensormapFenceproxyAcquireOp op) {
+            ExperimentalGSanTensorMapAccessOp::create(
+                b, op.getLoc(), op.getDescPtr(), false, false, Value{});
+          })
           .Case([&](tt::LoadOp op) {
             ExperimentalGSanTensorAccessOp::create(
                 b, op.getLoc(), op.getPtr(), op.getMask(), /*isStore=*/false);

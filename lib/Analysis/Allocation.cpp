@@ -142,7 +142,7 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
       return 0;
     return getAtomicResultScratchSize(op->getResult(0));
   }
-  if (isa<ttng::TensormapCreateOp>(op)) {
+  if (isa<ttng::TensormapCreateOp, ttng::TensormapPublishOp>(op)) {
     constexpr int32_t kTMASize = 128;
     return kTMASize;
   }

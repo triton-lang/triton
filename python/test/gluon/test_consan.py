@@ -264,9 +264,10 @@ def test_mbarrier_arrive_multicast_completion(device, monkeypatch):
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
-def test_async_tma_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
+@pytest.mark.parametrize("PUBLISHED", [False, True])
+def test_async_tma_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ctas, PUBLISHED):
     if run_wrapper:
-        result = run_in_process(test_async_tma_kernel, (FAILURE, device, False, monkeypatch, num_ctas))
+        result = run_in_process(test_async_tma_kernel, (FAILURE, device, False, monkeypatch, num_ctas, PUBLISHED))
         if FAILURE:
             assert_expected_cuda_failure(result.exc)
             assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
@@ -280,7 +281,10 @@ def test_async_tma_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     knobs.refresh_knobs()
 
     @gluon.jit
-    def kernel(input_desc, out, FAILURE: ttgl.constexpr):
+    def kernel(input_desc, storage, out, FAILURE: ttgl.constexpr, PUBLISHED: ttgl.constexpr):
+        if PUBLISHED:
+            input_desc = tma.load_tensor_descriptor(storage, input_desc.shape, input_desc.strides,
+                                                    input_desc.block_shape, input_desc.dtype, input_desc.layout)
         block_m: ttgl.constexpr = XBLOCK * ttgl.num_ctas()
         cga_layout: ttgl.constexpr = default_cga_layout(ttgl.num_ctas(), 2)
         blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[32, 1],
@@ -306,7 +310,15 @@ def test_async_tma_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ctas):
     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2,
                                            cga_layout=default_cga_layout(num_ctas, 2))
     input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [block_m, XBLOCK.value], shared_layout)
-    kernel[(1, )](input_desc, output, FAILURE=FAILURE, num_warps=4, num_ctas=num_ctas)
+    storage = torch.empty(128, device=device, dtype=torch.uint8)
+    if PUBLISHED:
+
+        @gluon.jit
+        def publish(storage, template, base):
+            tma.publish_tensor_descriptor(storage, template, base, template.shape, template.strides)
+
+        publish[(1, )](storage, input_desc, input, num_ctas=num_ctas)
+    kernel[(1, )](input_desc, storage, output, FAILURE=FAILURE, PUBLISHED=PUBLISHED, num_warps=4, num_ctas=num_ctas)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")

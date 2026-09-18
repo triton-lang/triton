@@ -910,9 +910,12 @@ struct TensorDescInfo {
   const uint32_t *words;
   int rank;
   int bytesPerElem;
+  int contiguousDimScale;
 
   GSAN_DEVICE int64_t shape(int dim) const {
-    return static_cast<int64_t>(words[kShapeWordBase + rank - 1 - dim]) + 1;
+    int64_t extent =
+        static_cast<int64_t>(words[kShapeWordBase + rank - 1 - dim]) + 1;
+    return dim + 1 == rank ? extent / contiguousDimScale : extent;
   }
 
   GSAN_DEVICE uintptr_t byteStride(int dim) const {
@@ -924,9 +927,11 @@ struct TensorDescInfo {
 };
 
 GSAN_DEVICE TensorDescInfo decodeTensorDesc(const void *descriptor, int rank,
-                                            int bytesPerElem) {
+                                            int bytesPerElem,
+                                            int contiguousDimScale) {
   return {*reinterpret_cast<const uintptr_t *>(descriptor),
-          reinterpret_cast<const uint32_t *>(descriptor), rank, bytesPerElem};
+          reinterpret_cast<const uint32_t *>(descriptor), rank, bytesPerElem,
+          contiguousDimScale};
 }
 
 template <typename ElementHandler>
@@ -947,10 +952,11 @@ GSAN_DEVICE void tensorAccessRow(uintptr_t rowPtr, int rowBytes,
 template <typename ElementHandler>
 GSAN_DEVICE void tensorAccessDesc(const void *descriptor, const int *coords,
                                   int rank, const int16_t *blockShape,
-                                  int bytesPerElem, int elementGranularity,
-                                  int warpId, int numWarps,
-                                  ElementHandler &handleElement) {
-  TensorDescInfo desc = decodeTensorDesc(descriptor, rank, bytesPerElem);
+                                  int bytesPerElem, int contiguousDimScale,
+                                  int elementGranularity, int warpId,
+                                  int numWarps, ElementHandler &handleElement) {
+  TensorDescInfo desc =
+      decodeTensorDesc(descriptor, rank, bytesPerElem, contiguousDimScale);
   int lastDim = rank - 1;
   int lastExtent = blockShape[lastDim];
   int64_t lastShape = desc.shape(lastDim);
@@ -1006,15 +1012,16 @@ GSAN_DEVICE void tensorAccessDesc(const void *descriptor, const int *coords,
 }
 
 template <typename ElementHandler>
-GSAN_DEVICE void tensorAccessIndexedDesc(const void *descriptor,
-                                         const int *indices, int numIndices,
-                                         int yOffset, int numCols,
-                                         int bytesPerElem, int pred,
-                                         ElementHandler &handleElement) {
+GSAN_DEVICE void
+tensorAccessIndexedDesc(const void *descriptor, const int *indices,
+                        int numIndices, int yOffset, int numCols,
+                        int bytesPerElem, int contiguousDimScale, int pred,
+                        ElementHandler &handleElement) {
   if (!pred)
     return;
 
-  TensorDescInfo desc = decodeTensorDesc(descriptor, 2, bytesPerElem);
+  TensorDescInfo desc =
+      decodeTensorDesc(descriptor, 2, bytesPerElem, contiguousDimScale);
   int64_t rowShape = desc.shape(0);
   int64_t colShape = desc.shape(1);
   int64_t firstCol = yOffset > 0 ? yOffset : 0;
@@ -1071,15 +1078,17 @@ template <typename ShadowCellHandler> struct NonAtomicElementHandler {
 };
 
 template <typename ShadowCellHandler>
-GSAN_DEVICE void
-tensorNonAtomicDesc(ThreadState *state, const void *descriptor,
-                    const int *coords, int rank, const int16_t *blockShape,
-                    int bytesPerElem, int warpId, int numWarps, Location loc,
-                    ShadowCellHandler handleShadowCell) {
+GSAN_DEVICE void tensorNonAtomicDesc(ThreadState *state, const void *descriptor,
+                                     const int *coords, int rank,
+                                     const int16_t *blockShape,
+                                     int bytesPerElem, int contiguousDimScale,
+                                     int warpId, int numWarps, Location loc,
+                                     ShadowCellHandler handleShadowCell) {
   NonAtomicElementHandler<ShadowCellHandler> handleElement{
       state, state->reserveBase, loc, handleShadowCell};
   tensorAccessDesc(descriptor, coords, rank, blockShape, bytesPerElem,
-                   kShadowMemGranularityBytes, warpId, numWarps, handleElement);
+                   contiguousDimScale, kShadowMemGranularityBytes, warpId,
+                   numWarps, handleElement);
   if (handleElement.acquired)
     rwLockReleaseRead(state->lock);
 }
@@ -1088,12 +1097,14 @@ template <typename ShadowCellHandler>
 GSAN_DEVICE void
 tensorNonAtomicIndexedDesc(ThreadState *state, const void *descriptor,
                            const int *indices, int numIndices, int yOffset,
-                           int numCols, int bytesPerElem, int pred,
-                           Location loc, ShadowCellHandler handleShadowCell) {
+                           int numCols, int bytesPerElem,
+                           int contiguousDimScale, int pred, Location loc,
+                           ShadowCellHandler handleShadowCell) {
   NonAtomicElementHandler<ShadowCellHandler> handleElement{
       state, state->reserveBase, loc, handleShadowCell};
   tensorAccessIndexedDesc(descriptor, indices, numIndices, yOffset, numCols,
-                          bytesPerElem, pred, handleElement);
+                          bytesPerElem, contiguousDimScale, pred,
+                          handleElement);
   if (handleElement.acquired)
     rwLockReleaseRead(state->lock);
 }
@@ -1256,14 +1267,15 @@ struct AtomicElementHandler {
 GSAN_DEVICE void tensorAtomicDesc(GlobalState *globals, const void *descriptor,
                                   const int *coords, int rank,
                                   const int16_t *blockShape, int bytesPerElem,
-                                  int sem, int scope, int warpId, int numWarps,
-                                  Location loc) {
+                                  int contiguousDimScale, int sem, int scope,
+                                  int warpId, int numWarps, Location loc) {
   int granularity =
       roundUp(bytesPerElem, static_cast<uintptr_t>(kShadowMemGranularityBytes));
   AtomicElementHandler handleElement{
       globals, globals->reserveBase, granularity, sem, scope, loc};
   tensorAccessDesc(descriptor, coords, rank, blockShape, bytesPerElem,
-                   granularity, warpId, numWarps, handleElement);
+                   contiguousDimScale, granularity, warpId, numWarps,
+                   handleElement);
 }
 
 } // namespace
@@ -1280,27 +1292,28 @@ __triton_gsan_load_tensor(void *globalState, const char *stackPtr, int numElems,
 
 extern "C" GSAN_DEVICE void __triton_gsan_load_tensor_desc(
     void *globalState, const void *descriptor, const int *coords, int rank,
-    const gsan::int16_t *blockShape, int bytesPerElem, int pred, int warpId,
-    int numWarps, const char *file, unsigned line) {
+    const gsan::int16_t *blockShape, int bytesPerElem, int contiguousDimScale,
+    int pred, int warpId, int numWarps, const char *file, unsigned line) {
   if (!pred)
     return;
   auto loc = gsan::Location{file, line};
   auto *threadState =
       gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
   gsan::tensorNonAtomicDesc(threadState, descriptor, coords, rank, blockShape,
-                            bytesPerElem, warpId, numWarps, loc,
-                            gsan::ReadShadowCellHandler{});
+                            bytesPerElem, contiguousDimScale, warpId, numWarps,
+                            loc, gsan::ReadShadowCellHandler{});
 }
 
 extern "C" GSAN_DEVICE void __triton_gsan_load_indexed_tensor_desc(
     void *globalState, const void *descriptor, const int *indices,
-    int numIndices, int yOffset, int numCols, int bytesPerElem, int pred,
-    const char *file, unsigned line) {
+    int numIndices, int yOffset, int numCols, int bytesPerElem,
+    int contiguousDimScale, int pred, const char *file, unsigned line) {
   auto loc = gsan::Location{file, line};
   auto *threadState =
       gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
   gsan::tensorNonAtomicIndexedDesc(threadState, descriptor, indices, numIndices,
-                                   yOffset, numCols, bytesPerElem, pred, loc,
+                                   yOffset, numCols, bytesPerElem,
+                                   contiguousDimScale, pred, loc,
                                    gsan::ReadShadowCellHandler{});
 }
 
@@ -1408,38 +1421,41 @@ __triton_gsan_store_tensor(void *globalState, const char *stackPtr,
 
 extern "C" GSAN_DEVICE void __triton_gsan_store_tensor_desc(
     void *globalState, const void *descriptor, const int *coords, int rank,
-    const gsan::int16_t *blockShape, int bytesPerElem, int pred, int warpId,
-    int numWarps, const char *file, unsigned line) {
+    const gsan::int16_t *blockShape, int bytesPerElem, int contiguousDimScale,
+    int pred, int warpId, int numWarps, const char *file, unsigned line) {
   if (!pred)
     return;
   auto loc = gsan::Location{file, line};
   auto *threadState =
       gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
   gsan::tensorNonAtomicDesc(threadState, descriptor, coords, rank, blockShape,
-                            bytesPerElem, warpId, numWarps, loc,
-                            gsan::WriteShadowCellHandler{});
+                            bytesPerElem, contiguousDimScale, warpId, numWarps,
+                            loc, gsan::WriteShadowCellHandler{});
 }
 
 extern "C" GSAN_DEVICE void __triton_gsan_store_indexed_tensor_desc(
     void *globalState, const void *descriptor, const int *indices,
-    int numIndices, int yOffset, int numCols, int bytesPerElem, int pred,
-    const char *file, unsigned line) {
+    int numIndices, int yOffset, int numCols, int bytesPerElem,
+    int contiguousDimScale, int pred, const char *file, unsigned line) {
   auto loc = gsan::Location{file, line};
   auto *threadState =
       gsan::getThreadState(reinterpret_cast<gsan::GlobalState *>(globalState));
   gsan::tensorNonAtomicIndexedDesc(threadState, descriptor, indices, numIndices,
-                                   yOffset, numCols, bytesPerElem, pred, loc,
+                                   yOffset, numCols, bytesPerElem,
+                                   contiguousDimScale, pred, loc,
                                    gsan::WriteShadowCellHandler{});
 }
 
 extern "C" GSAN_DEVICE void __triton_gsan_atomic_tensor_desc(
     void *globalState, const void *descriptor, const int *coords, int rank,
-    const gsan::int16_t *blockShape, int bytesPerElem, int sem, int scope,
-    int warpId, int numWarps, const char *file, unsigned line) {
+    const gsan::int16_t *blockShape, int bytesPerElem, int contiguousDimScale,
+    int sem, int scope, int warpId, int numWarps, const char *file,
+    unsigned line) {
   auto loc = gsan::Location{file, line};
   auto *globals = reinterpret_cast<gsan::GlobalState *>(globalState);
   gsan::tensorAtomicDesc(globals, descriptor, coords, rank, blockShape,
-                         bytesPerElem, sem, scope, warpId, numWarps, loc);
+                         bytesPerElem, contiguousDimScale, sem, scope, warpId,
+                         numWarps, loc);
 }
 
 extern "C" GSAN_DEVICE void

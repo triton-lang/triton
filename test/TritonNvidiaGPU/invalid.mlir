@@ -1796,3 +1796,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+module {
+  tt.func @publish_rank_mismatch(%storage: !tt.ptr<i8>, %template: !tt.tensordesc<16x64xf16, #shared>, %base: !tt.ptr<f16>, %n: i32, %s: i64) {
+    // expected-error @below {{requires one shape and stride per template dimension}}
+    ttng.tensormap_publish %storage, %template, %base, [%n], [%s] : (!tt.ptr<i8>, !tt.tensordesc<16x64xf16, #shared>, !tt.ptr<f16>, i32, i64) -> ()
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+module {
+  tt.func @publish_element_mismatch(%storage: !tt.ptr<i8>, %template: !tt.tensordesc<16x64xf16, #shared>, %base: !tt.ptr<i8>, %n: i32, %s: i64) {
+    // expected-error @below {{base element type must match the template}}
+    ttng.tensormap_publish %storage, %template, %base, [%n, %n], [%s, %s] : (!tt.ptr<i8>, !tt.tensordesc<16x64xf16, #shared>, !tt.ptr<i8>, i32, i32, i64, i64) -> ()
+    tt.return
+  }
+}
