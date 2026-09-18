@@ -562,6 +562,22 @@ public:
     } else {
       int minBitwidth =
           std::min(computeOrigBitWidth(a), computeOrigBitWidth(b));
+      // Let K = getShapePerCTA(oldAType).back() and computeBitwidth be the
+      // dot operand bitwidth. Since kWidth = max(32 / minBitwidth, 1),
+      // MMAv2's four K lanes require 4 * max(32 / minBitwidth, 1) <= K.
+      // We have:
+      //   (a) K >= 4;
+      //   (b) minBitwidth >= 128 / K.
+      //
+      // Native operand packing is preserved by the invariant:
+      //   (c) minBitwidth <= computeBitwidth.
+      // Raising it for (b) could violate (c) only if 128 / K > computeBitwidth,
+      // hence K < 128 / computeBitwidth. This contradicts the CUDA frontend's
+      // requirement K >= 256 / computeBitwidth, which also implies (a).
+      minBitwidth = std::max<int64_t>(minBitwidth,
+                                      4 * 32 / getShapePerCTA(oldAType).back());
+      assert(minBitwidth <= oldAType.getElementTypeBitWidth() &&
+             "minBitwidth must not exceed the dot operand bitwidth");
       a = convertDotOperandForMMA(a, 0, minBitwidth, mmaResult.newRetType,
                                   rewriter);
       b = convertDotOperandForMMA(b, 1, minBitwidth, mmaResult.newRetType,

@@ -287,6 +287,8 @@ bool isCvtDimSync(const triton::LinearLayout &srcLayout,
 
 namespace triton {
 
+bool canUseWarpBallotHistogram(HistogramOp op);
+
 struct BarrierStages {
   // Stages are independent: for example, a release atomic with scratch has
   // both a leading ordering barrier and a scratch rendezvous.
@@ -303,6 +305,10 @@ struct BarrierStages {
 // broadcast barrier at that scope supplies the post-atomic rendezvous itself.
 BarrierStages getAtomicBarrierStages(MemSemantic semantic,
                                      bool hasResultBarrier);
+
+// Lane bits to clear when shuffling an atomic result from its issuing lane.
+// Returns nullopt when broadcasting the result requires shared memory.
+std::optional<int32_t> getAtomicResultShuffleMask(Value result);
 
 // Whether distributing an atomic result requires communication between CTAs.
 bool atomicResultHasCTABroadcast(Operation *op);

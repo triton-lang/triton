@@ -45,6 +45,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
     tt.return
   }
 
+  tt.func public @sitofp_s8_to_bf16(%ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg0: tensor<256xi8, #blocked>) {
+    // CHECK-LABEL: sitofp_s8_to_bf16
+    // SM80: cvt.rn.f32.s8
+    // CHECK: prmt.b32
+    // SM90: sub.rn.bf16x2
+    // SM100: sub.rn.bf16x2
+    // VEC80-LABEL: llvm.func @sitofp_s8_to_bf16
+    // VEC80-NOT: llvm.fsub {{.*}} : vector<4xbf16>
+    // VEC90-LABEL: llvm.func @sitofp_s8_to_bf16
+    // VEC90: llvm.fsub {{.*}} : vector<4xbf16>
+    // VEC100-LABEL: llvm.func @sitofp_s8_to_bf16
+    // VEC100: llvm.fsub {{.*}} : vector<4xbf16>
+    %0 = arith.sitofp %arg0 : tensor<256xi8, #blocked> to tensor<256xbf16, #blocked>
+    %1 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked>
+    %2 = tt.splat %ptr : !tt.ptr<bf16> -> tensor<256x!tt.ptr<bf16>, #blocked>
+    %3 = tt.addptr %2, %1 : tensor<256x!tt.ptr<bf16>, #blocked>, tensor<256xi32, #blocked>
+    tt.store %3, %0 : tensor<256x!tt.ptr<bf16>, #blocked>
+    tt.return
+  }
+
   tt.func public @extf_bf16(%ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg0: tensor<256xbf16, #blocked>) {
     // CHECK-LABEL: extf_bf16
     // CHECK-COUNT-8: cvt.f32.bf16

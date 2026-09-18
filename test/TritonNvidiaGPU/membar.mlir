@@ -33,6 +33,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#writer = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#reader = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:80"} {
+  // A register-only histogram leaves the shared write pending.
+  // CHECK-LABEL: single_warp_histogram_before_shared_load
+  tt.func @single_warp_histogram_before_shared_load(%input: tensor<64xi32, #writer>) -> (tensor<2xi32, #writer>, tensor<64xi32, #reader>) {
+    // CHECK: ttg.local_alloc
+    // CHECK-NEXT: {{.*}} = tt.histogram
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: {{.*}} = ttg.local_load
+    %mem = ttg.local_alloc %input : (tensor<64xi32, #writer>) -> !ttg.memdesc<64xi32, #shared, #smem>
+    %hist = tt.histogram %input : tensor<64xi32, #writer> -> tensor<2xi32, #writer>
+    %loaded = ttg.local_load %mem : !ttg.memdesc<64xi32, #shared, #smem> -> tensor<64xi32, #reader>
+    tt.return %hist, %loaded : tensor<2xi32, #writer>, tensor<64xi32, #reader>
+  }
+}
+
+// -----
+
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #smem = #ttg.shared_memory

@@ -14,6 +14,27 @@ def _element_ptrs(array: np.ndarray) -> np.ndarray:
     return (base + offsets).reshape(array.shape)
 
 
+def test_bf16_to_fp16_rounding_and_overflow():
+    # Signed zeros, finite values, overflow, subnormal rounding, and infinities.
+    bits = np.array([0x0000, 0x8000, 0x3F80, 0xBF80, 0x4781, 0xC781, 0x3300, 0x3301, 0x33C0, 0xB3C0, 0x7F80, 0xFF80],
+                    dtype=np.uint16)
+    expected = np.array(
+        [0x0000, 0x8000, 0x3C00, 0xBC00, 0x7C00, 0xFC00, 0x0000, 0x0001, 0x0002, 0x8002, 0x7C00, 0xFC00],
+        dtype=np.uint16)
+    src = interpreter.TensorHandle(bits, tl.bfloat16)
+    with np.errstate(over="ignore"):
+        result = interpreter.InterpreterBuilder().create_fp_to_fp(src, tl.float16, ir.ROUNDING_MODE.RTNE)
+    np.testing.assert_array_equal(result.data.view(np.uint16), expected)
+
+
+def test_fp16_to_bf16_exact_values():
+    bits = np.array([0x0000, 0x8000, 0x3C00, 0xBC00, 0x3C08, 0x0001, 0x7C00, 0xFC00, 0x7E00], dtype=np.uint16)
+    expected = np.array([0x0000, 0x8000, 0x3F80, 0xBF80, 0x3F81, 0x3380, 0x7F80, 0xFF80, 0x7FC0], dtype=np.uint16)
+    src = interpreter.TensorHandle(bits.view(np.float16), tl.float16)
+    result = interpreter.InterpreterBuilder().create_fp_to_fp(src, tl.bfloat16, ir.ROUNDING_MODE.RTNE)
+    np.testing.assert_array_equal(result.data, expected)
+
+
 def test_atomic_poll_tensor_shares_timeout(monkeypatch) -> None:
     builder = interpreter.InterpreterBuilder()
     data = np.array([0, 0, 1], dtype=np.int32)

@@ -42,6 +42,13 @@ public:
 
     if (targetInfo.supportsWaveId()) {
       warpId = ROCDL::WaveId::create(rewriter, loc, i32_ty);
+      auto func = op->getParentOfType<FunctionOpInterface>();
+      if (auto offset =
+              func->getAttrOfType<IntegerAttr>(AttrWarpIdOffsetName)) {
+        int numWarps = triton::gpu::lookupNumWarps(op);
+        warpId = b.sub(warpId, b.i32_val(offset.getInt()));
+        warpId = b.and_(warpId, b.i32_val(numWarps - 1));
+      }
     } else {
       int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
       Value warpSizeVal = b.i32_val(threadsPerWarp);

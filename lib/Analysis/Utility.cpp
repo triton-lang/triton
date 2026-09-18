@@ -26,6 +26,13 @@ namespace mlir {
 using namespace triton;
 using namespace triton::gpu;
 
+bool triton::canUseWarpBallotHistogram(HistogramOp op) {
+  int numBins = op.getType().getNumElements();
+  // Limit ballot and reduction overhead relative to shared-memory atomics.
+  return !hasCrossCTAScratch(op) && numBins <= 2 &&
+         numBins * gpu::lookupNumWarps(op) <= 4;
+}
+
 // Cases where distributed shared memory is not required in ConvertLayout:
 // (1) numCTAs == 1
 // (2) numCTAs > 1 but srcCGALayout == dstCGALayout
@@ -1299,6 +1306,30 @@ BarrierStages getAtomicBarrierStages(MemSemantic semantic,
   return stages;
 }
 
+std::optional<int32_t> getAtomicResultShuffleMask(Value result) {
+  if (result.use_empty())
+    return 0;
+
+  int32_t laneMask, warpMask, blockMask;
+  if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
+    auto masks = gpu::toLinearLayout(tensorTy).getFreeVariableMasks();
+    auto *ctx = result.getContext();
+    laneMask = masks.lookup(StringAttr::get(ctx, "lane"));
+    warpMask = masks.lookup(StringAttr::get(ctx, "warp"));
+    blockMask = masks.lookup(StringAttr::get(ctx, "block"));
+  } else {
+    auto *op = result.getDefiningOp();
+    laneMask = gpu::TritonGPUDialect::getThreadsPerWarp(
+                   op->getParentOfType<ModuleOp>()) -
+               1;
+    warpMask = gpu::lookupNumWarps(op) - 1;
+    blockMask = gpu::lookupNumCTAs(op) - 1;
+  }
+  if (warpMask || blockMask)
+    return std::nullopt;
+  return laneMask;
+}
+
 bool atomicResultHasCTABroadcast(Operation *op) {
   if (op->getNumResults() != 1 || op->getResult(0).use_empty())
     return false;
@@ -1335,6 +1366,8 @@ bool needsClusterBarrier(Operation *op) {
   }
   if (auto reduce = dyn_cast<ReduceOp>(op))
     return !ReduceOpHelper(reduce).isReduceWithinCTA();
+  if (isa<HistogramOp>(op))
+    return hasCrossCTAScratch(op);
   return atomicNeedsClusterBarrier(op);
 }
 
