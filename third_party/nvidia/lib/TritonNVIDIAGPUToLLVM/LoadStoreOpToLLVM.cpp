@@ -1043,15 +1043,23 @@ struct AsyncCopyGlobalToLocalOpConversion
     Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
                                                          loc, targetInfo);
 
-    // Disable fractional L2 policies for cp.async: ptxas 13.3.33 can
-    // miscompile them into illegal instructions on Blackwell.
+    Value l2PolicyReg;
+    // Older ptxas versions miscompile cp.async with a fractional L2 policy.
+    // PTX 9.4 is a proxy for the fixed CUDA 13.4 toolchain.
+    if (targetInfo.getPtxVersion() >= 94) {
+      FailureOr<Value> l2Policy =
+          createCachePolicy(*cachePolicy, rewriter, loc, computeCapability, op);
+      if (failed(l2Policy))
+        return failure();
+      l2PolicyReg = *l2Policy;
+    }
     auto l2PrefetchSizeAttr = cachePolicy->detailed
                                   ? cachePolicy->detailed.getL2PrefetchSize()
                                   : IntegerAttr();
     int64_t l2PrefetchSize =
         l2PrefetchSizeAttr ? l2PrefetchSizeAttr.getInt() : 0;
 
-    auto emitCpAsync = [&b, threadPred, ptrTy, l2PrefetchSize,
+    auto emitCpAsync = [&b, threadPred, ptrTy, l2PolicyReg, l2PrefetchSize,
                         cacheModifier = cachePolicy->modifier,
                         hasMask =
                             bool(llMask)](RewriterBase &rewriter, Location loc,
@@ -1080,7 +1088,8 @@ struct AsyncCopyGlobalToLocalOpConversion
           *ptxBuilder.create<PTXCpAsyncLoadInstr>(srcCacheModifier);
       copyAsyncOp.o("L2::64B", l2PrefetchSize == 64)
           .o("L2::128B", l2PrefetchSize == 128)
-          .o("L2::256B", l2PrefetchSize == 256);
+          .o("L2::256B", l2PrefetchSize == 256)
+          .o("L2::cache_hint", l2PolicyReg != Value());
       auto *dstOperand = ptxBuilder.newAddrOperand(shmemAddr, "r");
       auto *srcOperand = ptxBuilder.newAddrOperand(srcElem, "l");
       auto *copySize = ptxBuilder.newConstantOperand(nBytes);
@@ -1095,8 +1104,14 @@ struct AsyncCopyGlobalToLocalOpConversion
         auto ignoreSrc = b.xor_(maskElem, b.true_val());
         srcSize = ptxBuilder.newOperand(ignoreSrc, "b");
       }
-      copyAsyncOp(dstOperand, srcOperand, copySize, srcSize)
-          .maybePredicate(threadPred);
+      if (l2PolicyReg) {
+        auto *policyOperand = ptxBuilder.newOperand(l2PolicyReg, "l");
+        copyAsyncOp(dstOperand, srcOperand, copySize, srcSize, policyOperand)
+            .maybePredicate(threadPred);
+      } else {
+        copyAsyncOp(dstOperand, srcOperand, copySize, srcSize)
+            .maybePredicate(threadPred);
+      }
       ptxBuilder.launch(rewriter, loc, void_ty(ctx));
       return {};
     };
