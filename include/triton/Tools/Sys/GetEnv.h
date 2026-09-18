@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <assert.h>
 #include <cstdlib>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -56,6 +57,12 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     // clang-format on
 };
 
+// Defaults are recorded only where unset has an unambiguous boolean meaning.
+inline const std::map<std::string, bool>
+    CACHE_INVALIDATING_BOOLEAN_ENV_VAR_DEFAULTS = {
+        {"TRITON_DISABLE_LINE_INFO", false},
+};
+
 inline const std::set<std::string> CACHE_NEUTRAL_ENV_VARS = {
     // clang-format off
     "TRITON_REPRODUCER_PATH",
@@ -87,17 +94,6 @@ inline std::string getStrEnv(const std::string &env) {
   return result;
 }
 
-// return value of a cache-invalidating boolean environment variable
-inline bool getBoolEnv(const std::string &env) {
-  std::lock_guard<std::mutex> lock(getenv_mutex);
-  assertIsRecognized(env);
-  const char *s = std::getenv(env.c_str());
-  std::string str(s ? s : "");
-  std::transform(str.begin(), str.end(), str.begin(),
-                 [](unsigned char c) { return std::tolower(c); });
-  return str == "on" || str == "true" || str == "1";
-}
-
 inline std::optional<bool> isEnvValueBool(std::string str) {
   std::transform(str.begin(), str.end(), str.begin(),
                  [](unsigned char c) { return std::tolower(c); });
@@ -106,6 +102,28 @@ inline std::optional<bool> isEnvValueBool(std::string str) {
   if (str == "off" || str == "false" || str == "0")
     return false;
   return std::nullopt;
+}
+
+inline std::optional<bool> isExtendedEnvValueBool(std::string str) {
+  std::transform(str.begin(), str.end(), str.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+  if (str == "y" || str == "yes")
+    return true;
+  if (str == "n" || str == "no")
+    return false;
+  return isEnvValueBool(str);
+}
+
+// return value of a cache-invalidating boolean environment variable
+inline bool getBoolEnv(const std::string &env) {
+  std::lock_guard<std::mutex> lock(getenv_mutex);
+  assertIsRecognized(env);
+  const char *s = std::getenv(env.c_str());
+  std::string value(s ? s : "");
+  if (CACHE_INVALIDATING_BOOLEAN_ENV_VAR_DEFAULTS.find(env) !=
+      CACHE_INVALIDATING_BOOLEAN_ENV_VAR_DEFAULTS.end())
+    return isExtendedEnvValueBool(value).value_or(false);
+  return isEnvValueBool(value).value_or(false);
 }
 } // namespace tools
 } // namespace mlir::triton

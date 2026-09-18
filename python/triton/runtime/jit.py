@@ -493,6 +493,7 @@ class JITCallable:
         src = src[re.search(r"^def\s+\w+\s*\(", src, re.MULTILINE).start():]
         self._src = src
         self.hash = None
+        self._hash_line_info_enabled = None
 
         # Map of global variables used by the function and any functions it
         # transitively calls, plus their values.  The values are collected when
@@ -523,8 +524,10 @@ class JITCallable:
     def cache_key(self) -> str:
         # TODO : hash should be attribute of `self`
         with self._hash_lock:
-            if self.hash is not None:
+            line_info_enabled = not knobs.compilation.disable_line_info
+            if self.hash is not None and self._hash_line_info_enabled == line_info_enabled:
                 return self.hash
+            self._hash_line_info_enabled = line_info_enabled
             # Set a placeholder hash to break recursion in case the function
             # transitively calls itself. The full hash is set after.
             self.hash = f"recursion:{self._fn_name}"
@@ -532,7 +535,14 @@ class JITCallable:
             dependencies_finder = DependenciesFinder(name=self._fn_name, globals=self.__globals__, nonlocals=nonlocals,
                                                      src=self.src)
             dependencies_finder.visit(self.parse())
-            self.hash = dependencies_finder.ret + str(self.starting_line_number)
+            self.hash = dependencies_finder.ret
+            if line_info_enabled:
+                self.hash += str((
+                    self.file_name,
+                    self.starting_line_number,
+                    self.def_file_line_number,
+                    self.def_file_col_number,
+                ))
             self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
 
             from triton.language.core import constexpr
