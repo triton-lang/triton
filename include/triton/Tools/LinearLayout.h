@@ -396,6 +396,12 @@ public:
                         ArrayRef<std::pair<StringAttr, int32_t>> outDims,
                         bool requireSurjective);
 
+  // Factory function that gracefully fails rather than asserts if the layout is
+  // not well-formed.
+  static std::optional<LinearLayout>
+  tryCreate(BasesT bases, ArrayRef<std::pair<StringAttr, int32_t>> outDims,
+            bool requireSurjective);
+
   // Construct a LinearLayout from an explicit list of bases.  (This constructor
   // is needed because llvm::MapVector does not have a constructor that accepts
   // an initializer_list.)
@@ -534,6 +540,10 @@ public:
   //
   // TODO(jlebar): Replace with divideLeft.
   int32_t getNumConsecutiveInOut() const;
+
+  // Returns the largest contiguous prefix of an output dimension contained in
+  // the image of this layout projected onto that dimension.
+  [[nodiscard]] int32_t contiguousElemsAlongOutputDim(StringAttr outDim) const;
 
   // Reorders the in/out dimensions of the layout.  This is mostly cosmetic
   // (affecting e.g. the order of getIn/OutDimNames), but it also affects the
@@ -795,12 +805,6 @@ public:
   friend size_t hash_value(const LinearLayout &layout);
 
 private:
-  // Factory function that gracefully fails rather than asserts if the layout is
-  // not well-formed.
-  static std::optional<LinearLayout>
-  tryCreate(BasesT bases, ArrayRef<std::pair<StringAttr, int32_t>> outDims,
-            bool requireSurjective);
-
   // Constructor that does not check invariants.  Used by tryCreate.
   struct NoCheckInvariants {};
   LinearLayout(BasesT bases, ArrayRef<std::pair<StringAttr, int32_t>> outDims,

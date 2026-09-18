@@ -160,9 +160,8 @@ public:
     auto mod = op->getParentOfType<ModuleOp>();
     int numThreadsPerWarp =
         triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    assert(numThreadsPerWarp == 32 ||
-           numThreadsPerWarp == 64 &&
-               "Only supports 32 or 64 threads per warp");
+    assert((numThreadsPerWarp == 32 || numThreadsPerWarp == 64) &&
+           "Only supports 32 or 64 threads per warp");
     int numWarps = triton::gpu::lookupNumWarps(op);
     // Pad out the bins so that we have at least one bin per thread within a
     // warp.

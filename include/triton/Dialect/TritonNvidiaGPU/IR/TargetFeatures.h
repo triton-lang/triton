@@ -67,8 +67,13 @@ public:
     return computeCapability == 100 || computeCapability == 103 ||
            computeCapability == 110;
   }
+  bool supportsK96Tcgen05MMA() const { return computeCapability == 103; }
   bool supports4xFp4Tcgen05MMA() const { return computeCapability == 107; }
   bool supports2xFp8Tcgen05MMA() const { return computeCapability == 107; }
+  bool supportsReuseA() const {
+    // A collectors are part of the baseline tcgen05 ISA (PTX 8.6).
+    return computeCapability >= 100 && computeCapability < 120;
+  }
   bool supportsReuseB() const { return computeCapability == 107; }
   bool supportsMbarMulticast() const { return computeCapability == 107; }
 

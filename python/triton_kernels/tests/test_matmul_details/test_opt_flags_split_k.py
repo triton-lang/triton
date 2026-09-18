@@ -133,6 +133,47 @@ def test_make_default_opt_flags_nvidia_split_k_constraint(monkeypatch):
     assert flags.split_k == 3
 
 
+@pytest.mark.parametrize(("constraint", "values"), [
+    ("swap_xw", [None, False, True]),
+    ("group_m", [None, 2, 4, 8, 16, 32, 64]),
+    ("use_output_tma", [None, False, True]),
+])
+def test_make_default_opt_flags_nvidia_tuning_constraints(monkeypatch, constraint, values):
+    setup_nvidia(monkeypatch)
+    seen = {}
+
+    def capture_num_stages(*args, **kwargs):
+        seen["swap_xw"] = kwargs["swap_xw"]
+        return 2
+
+    monkeypatch.setattr(opt_flags.opt_flags_nvidia, "compute_num_stages", capture_num_stages)
+    for value in values:
+        flags = opt_flags.make_default_opt_flags_nvidia(
+            torch.float16,
+            torch.float16,
+            torch.float16,
+            _DummyPrecisionConfig(),
+            4,
+            256,
+            128,
+            64,
+            None,
+            False,
+            False,
+            False,
+            0,
+            False,
+            False,
+            {constraint: value},
+            torch.float32,
+        )
+
+        expected = 8 if constraint == "group_m" and value is None else value
+        expected_swap_xw = value if constraint == "swap_xw" else None
+        assert getattr(flags, constraint) == expected
+        assert seen["swap_xw"] is expected_swap_xw
+
+
 def test_split_k_uses_intermediate_out_dtype(monkeypatch):
     setup_nvidia(monkeypatch)
 
@@ -175,32 +216,27 @@ def test_max_allowable_mn_and_split_k_constraints(monkeypatch):
 
     opt_flags.reset_opt_flags()
     opt_flags.reset_opt_flags_constraints()
-    opt_flags.update_opt_flags_constraints(
-        {
-            "max_allowable_mn": 256,
-            # Without split_k, this should raise an error
-        }
-    )
-
-    with pytest.raises(opt_flags.InapplicableConstraint):
-        opt_flags.make_opt_flags(
-                    torch.float16,
-                    torch.float16,
-                    torch.float16,
-                    _DummyPrecisionConfig(),
-                    1,
-                    256,
-                    256,
-                    256,
-                    None,
-                    False,
-                    False,
-                    False,
-                    0,
-                    False,
-                    None,
-                    torch.float32,
-                )
+    with opt_flags.scoped_opt_flags_constraints({"max_allowable_mn": 256}):
+        # Without split_k, this should raise an error.
+        with pytest.raises(opt_flags.InapplicableConstraint):
+            opt_flags.make_opt_flags(
+                        torch.float16,
+                        torch.float16,
+                        torch.float16,
+                        _DummyPrecisionConfig(),
+                        1,
+                        256,
+                        256,
+                        256,
+                        None,
+                        False,
+                        False,
+                        False,
+                        0,
+                        False,
+                        None,
+                        torch.float32,
+                    )
 
 def test_max_allowable_mn(monkeypatch):
     setup_nvidia(monkeypatch)
@@ -210,30 +246,30 @@ def test_max_allowable_mn(monkeypatch):
     def get_flags(split_k, max_mn):
         opt_flags.reset_opt_flags()
         opt_flags.reset_opt_flags_constraints()
-        opt_flags.update_opt_flags_constraints(
+        with opt_flags.scoped_opt_flags_constraints(
             {
                 "split_k": split_k,
                 "max_allowable_mn": max_mn,
             }
-        )
-        return opt_flags.make_opt_flags(
-            torch.float16,
-            torch.float16,
-            torch.float16,
-            _DummyPrecisionConfig(),
-            batch_size,
-            m,
-            n,
-            k,
-            None,
-            False,
-            True,
-            False,
-            0,
-            False,
-            None,
-            torch.float32,
-        )
+        ):
+            return opt_flags.make_opt_flags(
+                torch.float16,
+                torch.float16,
+                torch.float16,
+                _DummyPrecisionConfig(),
+                batch_size,
+                m,
+                n,
+                k,
+                None,
+                False,
+                True,
+                False,
+                0,
+                False,
+                None,
+                torch.float32,
+            )
 
     split_k = 6
     # Allowable mn is less than actual mn, so split_k should be set to 1

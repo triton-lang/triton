@@ -3,6 +3,22 @@
 
 include "mlir/Pass/PassBase.td"
 
+def TritonNvidiaGPUMembar : Pass<"triton-nvidia-gpu-membar", "mlir::ModuleOp"> {
+    let summary = "Insert NVIDIA shared-memory synchronization before lowering";
+
+    let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                             "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"];
+
+    let options = [
+        Option<"computeCapability", "compute-capability",
+               "int32_t", /*default*/"80",
+               "device compute capability">,
+        Option<"ptxVersion", "ptx-version",
+               "int32_t", /*default*/"80",
+               "PTX version">,
+    ];
+}
+
 def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"> {
     let summary = "Convert TritonGPU to LLVM";
     let description = [{
@@ -28,9 +44,6 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
         Option<"ptxVersion", "ptx-version",
                "int32_t", /*default*/"80",
                "PTX version">,
-        Option<"enableConcurrencySanitizer", "enable-concurrency-sanitizer",
-               "bool", /*default*/"false",
-               "run ConSan after fence and membar preparation">,
     ];
 }
 
@@ -65,6 +78,16 @@ def AllocateSharedMemoryNv : Pass<"allocate-shared-memory-nv", "mlir::ModuleOp">
       Option<"ptxVersion", "ptx-version",
              "int32_t", /*default*/"80",
              "PTX version">,
+  ];
+}
+
+def SetMinimumSharedMemory : Pass<"set-minimum-shared-memory", "mlir::ModuleOp"> {
+  let summary = "Set a lower bound on the module shared memory size";
+
+  let options = [
+      Option<"minimumSize", "minimum-size",
+             "int32_t", /*default*/"0",
+             "minimum shared memory size in bytes">,
   ];
 }
 

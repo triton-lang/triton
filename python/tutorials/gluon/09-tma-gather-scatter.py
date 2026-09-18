@@ -33,7 +33,7 @@ Where `src.shape` must be `(x_offsets.shape[0], BLOCK_Y)`. In other words,
 scatter writes `src` to the tensor descriptor starting at `y_offset` but to
 separately-indexed rows of size `BLOCK_Y`.
 
-Like `async_copy_global_to_shared` and `async_copy_shared_to_global`,
+Like `async_load` and `async_store`,
 `async_gather` and `async_scatter` access shared memory through the async
 proxy, so fences need to be inserted as appropriate.
 """
@@ -440,8 +440,8 @@ def test_async_scatter(BLOCK_X, BLOCK_Y, y_offset, dtype, X_MAX, Y_MAX, fresh_kn
 
 
 # %%
-# `async_gather` and `async_scatter` can be pipelined just like `async_copy_global_to_shared`
-# and `async_copy_shared_to_global`. To demonstrate this, we will write a matmul kernel
+# `async_gather` and `async_scatter` can be pipelined just like `async_load`
+# and `async_store`. To demonstrate this, we will write a matmul kernel
 # that has a fused gather and fused scatter along the M dimension:
 # `out[out_scatter_indx, :] = X[X_gather_indx, :] @ W`.
 #
@@ -468,7 +468,7 @@ def issue_loads(producer, X_desc, W_desc, X_gather_indx_ptr, off_m, off_n, k, ba
     producer += 1
     bar = bars.index(index)
 
-    # The W tensor tile is loaded using a regular `async_copy_global_to_shared`.
+    # The W tensor tile is loaded using a regular `async_load`.
     mbarrier.expect(bar, W_desc.block_type.nbytes + BLOCK_M * X_desc.block_type.nbytes)
     tma.async_gather(X_desc, offs_x_m, k, bar, x_bufs.index(index), pred)
     tma.async_load(W_desc, [k, off_n], bar, w_bufs.index(index), pred)
@@ -646,7 +646,7 @@ def test_matmul_fused_gather_scatter(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_buf
 # %%
 # The main takeaway from this tutorial is understanding how to use `async_gather`
 # and `async_scatter`. These instructions provide a middle-ground between
-# block DMAs like `async_copy_global_to_shared` and `async_copy_shared_to_global`
+# block DMAs like `async_load` and `async_store`
 # and regular global loads and stores (`gl.load` and `gl.store`) by allowing
 # separately-indexed columns while maintaining the performance of TMAs.
 #
@@ -655,7 +655,7 @@ def test_matmul_fused_gather_scatter(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, num_buf
 #   `gl.store` when they can be used, but this is not always the case. Plus, TMA
 #   instructions use shared memory.
 # - Sometimes using `async_gather` or `async_scatter` instead of block DMA
-#   instructions like `async_copy_global_to_shared` and `async_copy_shared_to_global`
+#   instructions like `async_load` and `async_store`
 #   is actually faster, but these situations are rare.
 #
 # In general, you should consider these instructions when writing kernels and

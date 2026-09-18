@@ -14,6 +14,21 @@ module {
 
 // -----
 
+module {
+  // CHECK-LABEL: event
+  tt.func @event() {
+    // CHECK: %[[EVENT:.*]] = proton.allocate_event "async" : i32
+    // CHECK: proton.event start %[[EVENT]] : i32
+    // CHECK: proton.event end %[[EVENT]] : i32
+    %event = proton.allocate_event "async" : i32
+    proton.event start %event : i32
+    proton.event end %event : i32
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 8 : i32} {

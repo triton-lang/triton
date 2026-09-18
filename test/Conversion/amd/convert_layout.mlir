@@ -111,7 +111,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: v_perm_small_convert_layout_with_broadcasting_4in_4out
   tt.func @v_perm_small_convert_layout_with_broadcasting_4in_4out(%arg0: tensor<16x8xi8, #linear1>, %arg1: tensor<16x8x!tt.ptr<i8>, #linear2>) {
-    // CHECK: llvm.amdgcn.perm
     // CHECK-NOT: llvm.amdgcn.perm
     %0 = ttg.convert_layout %arg0 : tensor<16x8xi8, #linear1> -> tensor<16x8xi8, #linear2>
     tt.store %arg1, %0 : tensor<16x8x!tt.ptr<i8>, #linear2>
@@ -175,7 +174,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: v_perm_fully_broadcasted_out_reg
   tt.func @v_perm_fully_broadcasted_out_reg(%arg0: tensor<32x32xi8, #linear1>, %arg1: tensor<32x32x!tt.ptr<i8>, #linear2>) {
-    // CHECK-COUNT-16: llvm.amdgcn.perm
+    // CHECK-COUNT-8: llvm.amdgcn.perm
     // CHECK-NOT: llvm.amdgcn.perm
     %0 = ttg.convert_layout %arg0 : tensor<32x32xi8, #linear1> -> tensor<32x32xi8, #linear2>
     tt.store %arg1, %0 : tensor<32x32x!tt.ptr<i8>, #linear2>
@@ -205,7 +204,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: v_perm_partial_broadcasting_out_reg
   tt.func @v_perm_partial_broadcasting_out_reg(%arg0: tensor<32x32xi8, #linear1>, %arg1: tensor<32x32x!tt.ptr<i8>, #linear2>) {
-    // CHECK-COUNT-16: llvm.amdgcn.perm
+    // CHECK-COUNT-8: llvm.amdgcn.perm
     // CHECK-NOT: llvm.amdgcn.perm
     %0 = ttg.convert_layout %arg0 : tensor<32x32xi8, #linear1> -> tensor<32x32xi8, #linear2>
     tt.store %arg1, %0 : tensor<32x32x!tt.ptr<i8>, #linear2>
@@ -222,6 +221,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
   // CHECK-LABEL: convert_layout_pointer_element_no_crash
   tt.func @convert_layout_pointer_element_no_crash(%arg0: tensor<32x32x!tt.ptr<i8>, #blocked4x4>) {
     %0 = ttg.convert_layout %arg0 : tensor<32x32x!tt.ptr<i8>, #blocked4x4> -> tensor<32x32x!tt.ptr<i8>, #linear4x4>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [64, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [4, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+// CHECK-DAG: [[$LOCAL_MMRA_TAG:#[A-Za-z0-9_]+]] = #llvm.mmra_tag<"amdgpu-synchronize-as":"local">
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: convert_layout_warp_sync
+  tt.func @convert_layout_warp_sync(%arg0: tensor<64x32xf32, #blocked0>) {
+    // CHECK: llvm.store
+    // CHECK: llvm.fence syncscope("wavefront") release {llvm.mmra = [[$LOCAL_MMRA_TAG]]}
+    // CHECK-NEXT: rocdl.wave.barrier
+    // CHECK-NEXT: llvm.fence syncscope("wavefront") acquire {llvm.mmra = [[$LOCAL_MMRA_TAG]]}
+    // CHECK: llvm.load
+    // CHECK-NOT: rocdl.s.barrier
+    %0 = ttg.convert_layout %arg0 : tensor<64x32xf32, #blocked0> -> tensor<64x32xf32, #blocked1>
     tt.return
   }
 }

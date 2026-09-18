@@ -242,7 +242,7 @@ def matmul_pipelined_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.constexpr, num_b
     c, mma = mma.take_result()
     c_smem.store(c.to(dtype))
     fence_async_shared()
-    tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
+    tma.async_store(c_desc, [off_m, off_n], c_smem)
     tma.store_wait(pendings=0)
 
 
@@ -405,7 +405,7 @@ def persistent_matmul_kernel(a_desc, b_desc, c_desc, MMAImpl: gl.constexpr, Sche
         c, mma = mma.take_result()
         c_smem.store(c.to(dtype))
         fence_async_shared()
-        tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_smem)
+        tma.async_store(c_desc, [off_m, off_n], c_smem)
         tma.store_wait(pendings=0)
 
 
@@ -701,25 +701,25 @@ def persistent_matmul_pipelined_kernel(a_desc, b_desc, c_desc, c_half_desc, MMAI
             tma.store_wait(pendings=0)
             c_buf.store(c)
             fence_async_shared()
-            tma.async_copy_shared_to_global(c_desc, [epilogue_off_m, epilogue_off_n], c_buf)
+            tma.async_store(c_desc, [epilogue_off_m, epilogue_off_n], c_buf)
         elif BLOCK_M == BLOCK_K:
             c_buf = b_bufs.index(producer % (num_buffers + STEALB))
             c_buf.store(c)
             fence_async_shared()
-            tma.async_copy_shared_to_global(c_desc, [epilogue_off_m, epilogue_off_n], c_buf)
+            tma.async_store(c_desc, [epilogue_off_m, epilogue_off_n], c_buf)
         else:
             # Steal the next 2 B buffers for the epilogue.
             c0, c1 = c.reshape((BLOCK_M, 2, BLOCK_N // 2)).permute(0, 2, 1).split()
-            c0_buf = b_bufs.index(producer % (num_buffers + STEALB))._reinterpret(shape=c_half_desc.block_type.shape,
-                                                                                  layout=c_half_desc.layout)
+            c0_buf = b_bufs.index(producer % (num_buffers + STEALB)).reinterpret(shape=c_half_desc.block_type.shape,
+                                                                                 layout=c_half_desc.layout)
             c1_buf = b_bufs.index(
-                (producer + 1) % (num_buffers + STEALB))._reinterpret(shape=c_half_desc.block_type.shape,
-                                                                      layout=c_half_desc.layout)
+                (producer + 1) % (num_buffers + STEALB)).reinterpret(shape=c_half_desc.block_type.shape,
+                                                                     layout=c_half_desc.layout)
             c0_buf.store(c0)
             c1_buf.store(c1)
             fence_async_shared()
-            tma.async_copy_shared_to_global(c_half_desc, [epilogue_off_m, epilogue_off_n], c0_buf)
-            tma.async_copy_shared_to_global(c_half_desc, [epilogue_off_m, epilogue_off_n + BLOCK_N // 2], c1_buf)
+            tma.async_store(c_half_desc, [epilogue_off_m, epilogue_off_n], c0_buf)
+            tma.async_store(c_half_desc, [epilogue_off_m, epilogue_off_n + BLOCK_N // 2], c1_buf)
     tma.store_wait(pendings=0)
 
 

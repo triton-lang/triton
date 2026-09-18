@@ -16,9 +16,13 @@ endif()
 if(NOT JSON_INCLUDE_DIR)
   message(FATAL_ERROR "JSON include directory not defined")
 endif()
+if(NOT ROCPROFILER_SDK_INCLUDE_DIR)
+  set(ROCPROFILER_SDK_INCLUDE_DIR "${ROCM_INCLUDE_DIR}")
+endif()
 
 unset(PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH CACHE)
-set(CMAKE_REQUIRED_INCLUDES "${ROCPROFILER_SDK_INCLUDE_DIR}")
+set(_proton_saved_cmake_required_includes "${CMAKE_REQUIRED_INCLUDES}")
+set(CMAKE_REQUIRED_INCLUDES "${ROCPROFILER_SDK_INCLUDE_DIR};${ROCM_INCLUDE_DIR}")
 check_cxx_source_compiles([=[
   #include <rocprofiler-sdk/fwd.h>
   int main() {
@@ -26,11 +30,54 @@ check_cxx_source_compiles([=[
     return static_cast<int>(op);
   }
 ]=] PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH)
+set(CMAKE_REQUIRED_INCLUDES "${_proton_saved_cmake_required_includes}")
 
 if(PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH)
   message(STATUS "Proton ROCProfiler-SDK HIP graph tracing: enabled")
 else()
   message(STATUS "Proton ROCProfiler-SDK HIP graph tracing: disabled")
+endif()
+
+unset(PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING CACHE)
+set(PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING OFF)
+if(EXISTS "${ROCPROFILER_SDK_INCLUDE_DIR}/rocprofiler-sdk/pc_sampling.h")
+  set(PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING ON)
+endif()
+
+if(PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING)
+  message(STATUS "Proton ROCProfiler-SDK PC sampling: enabled")
+else()
+  message(STATUS "Proton ROCProfiler-SDK PC sampling: disabled")
+endif()
+
+get_filename_component(_PROTON_ROCM_ROOT "${ROCM_INCLUDE_DIR}" DIRECTORY)
+
+find_library(PROTON_AMD_COMGR_LIBRARY
+  NAMES amd_comgr
+  HINTS "${_PROTON_ROCM_ROOT}/lib"
+  NO_DEFAULT_PATH)
+find_library(PROTON_DW_LIBRARY
+  NAMES dw
+  HINTS "${_PROTON_ROCM_ROOT}/lib/rocm_sysdeps/lib")
+find_path(PROTON_DWARF_INCLUDE_DIR
+  NAMES dwarf.h
+  HINTS "${_PROTON_ROCM_ROOT}/lib/rocm_sysdeps/include")
+
+unset(PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE CACHE)
+set(PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE OFF)
+if(PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING AND
+   EXISTS
+     "${ROCPROFILER_SDK_INCLUDE_DIR}/rocprofiler-sdk/cxx/codeobj/code_printing.hpp"
+   AND
+   PROTON_AMD_COMGR_LIBRARY AND PROTON_DW_LIBRARY AND
+   PROTON_DWARF_INCLUDE_DIR)
+  set(PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE ON)
+endif()
+
+if(PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE)
+  message(STATUS "Proton ROCProfiler-SDK code object source locations: enabled")
+else()
+  message(STATUS "Proton ROCProfiler-SDK code object source locations: disabled")
 endif()
 
 # ============ Dependencies =============
@@ -73,6 +120,10 @@ function(add_proton_library name)
       "${PROTON_COMMON_DIR}/include"
       "${PROTON_SRC_DIR}/include"
   )
+  if(PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE)
+    target_include_directories(${name} SYSTEM PRIVATE
+      "${PROTON_DWARF_INCLUDE_DIR}")
+  endif()
 
   # If HIP is AMD-based
   target_compile_definitions(${name} PRIVATE __HIP_PLATFORM_AMD__)
@@ -82,6 +133,20 @@ function(add_proton_library name)
   else()
     target_compile_definitions(${name} PRIVATE
       PROTON_ROCPROFILER_SDK_HAS_HIP_GRAPH=0)
+  endif()
+  if(PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING)
+    target_compile_definitions(${name} PRIVATE
+      PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING=1)
+  else()
+    target_compile_definitions(${name} PRIVATE
+      PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING=0)
+  endif()
+  if(PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE)
+    target_compile_definitions(${name} PRIVATE
+      PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE=1)
+  else()
+    target_compile_definitions(${name} PRIVATE
+      PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE=0)
   endif()
 
   # Append this library name to the GLOBAL property "PROTON_LIBS"
@@ -124,6 +189,11 @@ endforeach()
 add_library(proton SHARED ${_proton_obj_sources})
 
 target_link_libraries(proton PRIVATE Python3::Module nanobind-static)
+if(PROTON_ROCPROFILER_SDK_HAS_CODEOBJ_ADDRESS_TRANSLATE)
+  target_link_libraries(proton PRIVATE
+    "${PROTON_AMD_COMGR_LIBRARY}"
+    "${PROTON_DW_LIBRARY}")
+endif()
 # Apply any macOS linker flags or extra link options
 if(PROTON_PYTHON_LDFLAGS)
   target_link_options(proton PRIVATE ${PROTON_PYTHON_LDFLAGS})

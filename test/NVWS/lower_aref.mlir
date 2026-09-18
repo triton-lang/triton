@@ -636,3 +636,74 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
     tt.return
   }
 }
+
+// -----
+
+#shared_clc_lower = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem_clc_lower = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: @clc_one_cta_double_buffer
+  tt.func @clc_one_cta_double_buffer(%initial_work: i1, %initial_pid: i32) {
+    // CHECK: [[CLC_RING:%.*]] = ttg.local_alloc {alignment = 16 : i32} : () -> !ttg.memdesc<2x2xi64,
+    %ring = ttg.local_alloc {alignment = 16 : i32} : () -> !ttg.memdesc<2x2xi64, #shared_clc_lower, #smem_clc_lower, mutable>
+    // CHECK-NEXT: [[CLC_EMPTY:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64,
+    // CHECK-COUNT-2: ttng.init_barrier {{%.*}}, 4
+    // CHECK: [[CLC_FULL:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64,
+    // CHECK-COUNT-2: ttng.init_barrier {{%.*}}, 1
+    %aref = nvws.aref.create %ring : <[!ttg.memdesc<2x2xi64, #shared_clc_lower, #smem_clc_lower, mutable>]>
+    %c1 = arith.constant 1 : i32
+    %c0 = arith.constant 0 : i32
+    // CHECK: scf.while
+    %loop:6 = scf.while (%has_work = %initial_work, %pid = %initial_pid, %put_stage = %c1, %put_phase = %c0, %get_stage = %c1, %get_phase = %c1) : (i1, i32, i32, i32, i32, i32) -> (i1, i32, i32, i32, i32, i32) {
+      scf.condition(%has_work) {ttg.partition = array<i32: 0, 1, 2, 3>} %has_work, %pid, %put_stage, %put_phase, %get_stage, %get_phase : i1, i32, i32, i32, i32, i32
+    } do {
+    ^bb0(%has_work: i1, %pid: i32, %put_stage: i32, %put_phase: i32, %get_stage: i32, %get_phase: i32):
+      %put_one = arith.constant {ttg.partition = array<i32: 3>} 1 : i32
+      %put_inc = arith.addi %put_stage, %put_one {ttg.partition = array<i32: 3>} : i32
+      %put_two = arith.constant {ttg.partition = array<i32: 3>} 2 : i32
+      %put_wrap = arith.cmpi eq, %put_inc, %put_two {ttg.partition = array<i32: 3>} : i32
+      %put_zero = arith.constant {ttg.partition = array<i32: 3>} 0 : i32
+      %put_slot = arith.select %put_wrap, %put_zero, %put_inc {ttg.partition = array<i32: 3>} : i32
+      %put_toggled = arith.xori %put_phase, %put_one {ttg.partition = array<i32: 3>} : i32
+      %put_next_phase = arith.select %put_wrap, %put_toggled, %put_phase {ttg.partition = array<i32: 3>} : i32
+      // CHECK: [[CLC_EMPTY_SLOT:%.*]] = ttg.memdesc_index [[CLC_EMPTY]][[[CLC_PUT_SLOT:%.*]]] {ttg.partition = array<i32: 3>}
+      // CHECK-NEXT: ttng.wait_barrier [[CLC_EMPTY_SLOT]], [[CLC_PUT_PHASE:%.*]] {ttg.partition = array<i32: 3>}
+      // CHECK-NEXT: [[CLC_RESPONSE:%.*]] = ttg.memdesc_index [[CLC_RING]][[[CLC_PUT_SLOT]]] {ttg.partition = array<i32: 3>} : {{.*}} -> !ttg.memdesc<2xi64,
+      %write, %put_token = nvws.aref.put.enter %aref[%put_slot, %put_next_phase] {ttg.partition = array<i32: 3>} : <[!ttg.memdesc<2x2xi64, #shared_clc_lower, #smem_clc_lower, mutable>]> -> !ttg.memdesc<2xi64, #shared_clc_lower, #smem_clc_lower, mutable, 2x2>, !ttg.async.token
+      // CHECK-NEXT: [[CLC_FULL_SLOT:%.*]] = ttg.memdesc_index [[CLC_FULL]][[[CLC_PUT_SLOT]]] {ttg.partition = array<i32: 3>}
+      // CHECK-NEXT: [[CLC_TRUE:%.*]] = arith.constant {ttg.partition = array<i32: 3>} true
+      // CHECK-NEXT: ttng.barrier_expect [[CLC_FULL_SLOT]], 16 {ttg.partition = array<i32: 3>}, [[CLC_TRUE]]
+      // CHECK-NEXT: ttng.clc_try_cancel [[CLC_RESPONSE]], [[CLC_FULL_SLOT]] {ttg.partition = array<i32: 3>}
+      // CHECK-NOT: ttng.arrive_barrier [[CLC_FULL_SLOT]]
+      nvws.clc_try_cancel %write {ttg.partition = array<i32: 3>} : !ttg.memdesc<2xi64, #shared_clc_lower, #smem_clc_lower, mutable, 2x2>
+      nvws.aref.put.exit %aref[%put_slot], %put_token [#nvws.async_op<clc>] {ttg.partition = array<i32: 3>} : <[!ttg.memdesc<2x2xi64, #shared_clc_lower, #smem_clc_lower, mutable>]>, !ttg.async.token
+      %get_one = arith.constant {ttg.partition = array<i32: 0, 1, 2, 3>} 1 : i32
+      %get_inc = arith.addi %get_stage, %get_one {ttg.partition = array<i32: 0, 1, 2, 3>} : i32
+      %get_two = arith.constant {ttg.partition = array<i32: 0, 1, 2, 3>} 2 : i32
+      %get_wrap = arith.cmpi eq, %get_inc, %get_two {ttg.partition = array<i32: 0, 1, 2, 3>} : i32
+      %get_zero = arith.constant {ttg.partition = array<i32: 0, 1, 2, 3>} 0 : i32
+      %get_slot = arith.select %get_wrap, %get_zero, %get_inc {ttg.partition = array<i32: 0, 1, 2, 3>} : i32
+      %get_toggled = arith.xori %get_phase, %get_one {ttg.partition = array<i32: 0, 1, 2, 3>} : i32
+      %get_next_phase = arith.select %get_wrap, %get_toggled, %get_phase {ttg.partition = array<i32: 0, 1, 2, 3>} : i32
+      // CHECK: [[CLC_GET_FULL:%.*]] = ttg.memdesc_index [[CLC_FULL]][[[CLC_GET_SLOT:%.*]]] {ttg.partition = array<i32: 0, 1, 2, 3>}
+      // CHECK-NEXT: ttng.wait_barrier [[CLC_GET_FULL]], [[CLC_GET_PHASE:%.*]] {ttg.partition = array<i32: 0, 1, 2, 3>}
+      // CHECK-NEXT: [[CLC_READ:%.*]] = ttg.memdesc_index [[CLC_RING]][[[CLC_GET_SLOT]]] {ttg.partition = array<i32: 0, 1, 2, 3>} : {{.*}} -> !ttg.memdesc<2xi64,
+      %read, %get_token = nvws.aref.get.enter %aref[%get_slot, %get_next_phase] {ttg.partition = array<i32: 0, 1, 2, 3>} : <[!ttg.memdesc<2x2xi64, #shared_clc_lower, #smem_clc_lower, mutable>]> -> !ttg.memdesc<2xi64, #shared_clc_lower, #smem_clc_lower, mutable, 2x2>, !ttg.async.token
+      // CHECK-NEXT: [[CLC_RAW:%.*]] = ttng.clc_load_result [[CLC_READ]] {ttg.partition = array<i32: 0, 1, 2, 3>}
+      %raw = ttng.clc_load_result %read {ttg.partition = array<i32: 0, 1, 2, 3>} : !ttg.memdesc<2xi64, #shared_clc_lower, #smem_clc_lower, mutable, 2x2> -> i128
+      // CHECK-NEXT: [[CLC_GET_EMPTY:%.*]] = ttg.memdesc_index [[CLC_EMPTY]][[[CLC_GET_SLOT]]] {ttg.partition = array<i32: 0, 1, 2, 3>}
+      // CHECK-NEXT: ttng.arrive_barrier [[CLC_GET_EMPTY]], 1 {ttg.partition = array<i32: 0, 1, 2, 3>}
+      nvws.aref.get.exit %aref[%get_slot], %get_token [#nvws.async_op<none>] {ttg.partition = array<i32: 0, 1, 2, 3>} : <[!ttg.memdesc<2x2xi64, #shared_clc_lower, #smem_clc_lower, mutable>]>, !ttg.async.token
+      // CHECK: ttng.clc_is_canceled [[CLC_RAW]] {ttg.partition = array<i32: 0, 1, 2, 3>}
+      %next_work = ttng.clc_is_canceled %raw {ttg.partition = array<i32: 0, 1, 2, 3>} : i128 -> i1
+      // CHECK: ttng.clc_get_program_id [[CLC_RAW]], x {ttg.partition = array<i32: 0, 1, 2, 3>}
+      %next_pid = ttng.clc_get_program_id %raw, x {ttg.partition = array<i32: 0, 1, 2, 3>} : i128 -> i32
+      scf.yield {ttg.partition = array<i32: 0, 1, 2, 3>} %next_work, %next_pid, %put_slot, %put_next_phase, %get_slot, %get_next_phase : i1, i32, i32, i32, i32, i32
+    // CHECK: } attributes
+    } attributes {tt.warp_specialize, ttg.partition = array<i32: 0, 1, 2, 3>, ttg.partition.outputs = [array<i32: 0, 1, 2, 3>, array<i32: 0, 1, 2, 3>, array<i32: 3>, array<i32: 3>, array<i32: 0, 1, 2, 3>, array<i32: 0, 1, 2, 3>], ttg.partition.stages = [0 : i32, 1 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 0 : i32}
+    // CHECK-COUNT-4: ttng.inval_barrier
+    // CHECK-NOT: nvws.
+    ttg.local_dealloc %ring : !ttg.memdesc<2x2xi64, #shared_clc_lower, #smem_clc_lower, mutable>
+    tt.return
+  }
+}

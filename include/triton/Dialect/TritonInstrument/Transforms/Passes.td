@@ -36,13 +36,23 @@ def TritonInstrumentPrepareConSanCaptures: Pass<"tritoninstrument-prepare-consan
 def TritonInstrumentFpSanitizer: Pass<"tritoninstrument-fp-sanitizer", "mlir::ModuleOp"> {
   let summary = "Replace floating-point ops with integer-payload equivalents";
 
-  let description = "Rewrite selected floating-point operations to use integer payload semantics for fpsan.";
+  let description = [{
+    Diagnose calls that must be inlined to expose tensor memory allocations or
+    required kernel context. Then rewrite selected floating-point operations to
+    use integer payload semantics. Run symbol DCE before this pass to remove
+    unreachable private functions.
+  }];
 
   let dependentDialects = ["mlir::arith::ArithDialect",
                            "mlir::math::MathDialect",
                            "mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect",
                            "mlir::triton::instrument::TritonInstrumentDialect"];
+
+  let options = [
+    Option<"homomorphicCasts", "homomorphic-casts", "bool", /*default*/"false",
+           "Use truncating FPSan payload downcasts">
+  ];
 }
 
 def TritonInstrumentGlobalSanitizer: Pass<"tritoninstrument-global-sanitizer", "mlir::ModuleOp"> {
