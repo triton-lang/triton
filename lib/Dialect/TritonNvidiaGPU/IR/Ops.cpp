@@ -1982,7 +1982,8 @@ LogicalResult TensormapPublishOp::verify() {
   auto rank = type.getShape().size();
   if (rank < 1 || rank > 5 || getShape().size() != rank ||
       getStrides().size() != rank)
-    return emitOpError("requires one shape and stride per template dimension (rank 1-5)");
+    return emitOpError(
+        "requires one shape and stride per template dimension (rank 1-5)");
   if (getBase().getType().getPointeeType() !=
       type.getSignlessBlockType().getElementType())
     return emitOpError("base element type must match the template");

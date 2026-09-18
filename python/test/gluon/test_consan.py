@@ -312,6 +312,7 @@ def test_async_tma_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ctas, P
     input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [block_m, XBLOCK.value], shared_layout)
     storage = torch.empty(128, device=device, dtype=torch.uint8)
     if PUBLISHED:
+
         @gluon.jit
         def publish(storage, template, base):
             tma.publish_tensor_descriptor(storage, template, base, template.shape, template.strides)

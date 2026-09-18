@@ -1297,7 +1297,7 @@ void init_gluon_ir(py::module_ &m) {
            [](GluonOpBuilder &self, Value storage, Value descriptor, Value base,
               std::vector<Value> &shape, std::vector<Value> &strides) {
              self.create<ttng::TensormapPublishOp>(storage, descriptor, base,
-                                                  shape, strides);
+                                                   shape, strides);
            })
       .def("create_load_tensor_descriptor",
            [](GluonOpBuilder &self, Type type, Value storage) -> Value {

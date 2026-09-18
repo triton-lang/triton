@@ -421,8 +421,8 @@ def _descriptor_metadata(shape, strides, rank, _semantic):
     if isinstance(last_stride, ttgl.tensor) and _semantic.builder.options.enable_iisan:
         is_one = last_stride.__eq__(1, _semantic=_semantic)
         ttgl.device_assert(is_one, "Tensor descriptor last stride must be 1", _semantic=_semantic)
-    return ([_semantic.make_scalar(x, ttgl.int32) for x in shape],
-            [_semantic.make_scalar(_unwrap_if_constexpr(x), ttgl.int64) for x in strides])
+    return ([_semantic.make_scalar(x, ttgl.int32)
+             for x in shape], [_semantic.make_scalar(_unwrap_if_constexpr(x), ttgl.int64) for x in strides])
 
 
 def _descriptor_storage(storage, _semantic):
@@ -472,8 +472,8 @@ def publish_tensor_descriptor(storage, template, base, shape, strides, _semantic
         aligned = shape[-1].__mod__(64, _semantic=_semantic).__eq__(0, _semantic=_semantic)
         ttgl.device_assert(aligned, "Padded FP4 innermost extent must be a multiple of 64 packed bytes",
                            _semantic=_semantic)
-    _semantic.builder.create_tensormap_publish(storage.handle, template.handle, base.handle,
-                                               [x.handle for x in shape], [x.handle for x in strides])
+    _semantic.builder.create_tensormap_publish(storage.handle, template.handle, base.handle, [x.handle for x in shape],
+                                               [x.handle for x in strides])
 
 
 @builtin

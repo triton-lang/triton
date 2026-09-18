@@ -1647,8 +1647,7 @@ def _publish_map(storage, template, base, rows, cols, stride):
 @gluon.jit
 def _load_published_map(storage, out, rows, cols, stride, FP4: gl.constexpr, OFFSET: gl.constexpr):
     layout: gl.constexpr = gl.NVMMASharedLayout(128, 8 if FP4 else 16, rank=2, fp4_padded=FP4)
-    desc = hopper.tma.load_tensor_descriptor(storage, [rows, cols], [stride, 1], [16, 64],
-                                             out.dtype.element_ty, layout)
+    desc = hopper.tma.load_tensor_descriptor(storage, [rows, cols], [stride, 1], [16, 64], out.dtype.element_ty, layout)
     shared = gl.allocate_shared_memory(desc.dtype, desc.block_shape, layout)
     bar = hopper.mbarrier.allocate_mbarrier()
     hopper.mbarrier.init(bar, count=1)

@@ -1305,15 +1305,15 @@ def _publish_tensor_maps(storage, template, pointers, metadata, generation):
 
 
 @gluon.jit
-def _consume_tensor_maps(storage, metadata, generation, output, BLOCK_M: ttgl.constexpr,
-                         SMEM: ttgl.constexpr, REGS: ttgl.constexpr):
+def _consume_tensor_maps(storage, metadata, generation, output, BLOCK_M: ttgl.constexpr, SMEM: ttgl.constexpr,
+                         REGS: ttgl.constexpr):
     index = ttgl.program_id(0)
     selected = ttgl.load(generation) * 20 + index
     rows = ttgl.load(metadata + selected * 3)
     cols = ttgl.load(metadata + selected * 3 + 1)
     stride = ttgl.load(metadata + selected * 3 + 2)
-    desc = tma.load_tensor_descriptor(storage + index * 128, [rows, cols], [stride, 1],
-                                      [BLOCK_M, 64], output.dtype.element_ty, SMEM)
+    desc = tma.load_tensor_descriptor(storage + index * 128, [rows, cols], [stride, 1], [BLOCK_M, 64],
+                                      output.dtype.element_ty, SMEM)
     smem = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
     bar = mbarrier.allocate_mbarrier()
     mbarrier.init(bar, count=1)
@@ -1364,8 +1364,8 @@ def test_tensor_map_publication(fp4, num_ctas):
         # The template describes one CTA's tile; the consumers distribute
         # a larger logical block across their cluster.
         _publish_tensor_maps[(20, )](storage, template, pointers, metadata, generation)
-        return _consume_tensor_maps[(20, 4 // num_ctas)](
-            storage, metadata, generation, output, 16 * num_ctas, smem_layout, regs, num_ctas=num_ctas)
+        return _consume_tensor_maps[(20, 4 // num_ctas)](storage, metadata, generation, output, 16 * num_ctas,
+                                                         smem_layout, regs, num_ctas=num_ctas)
 
     kernel = run()
     torch.testing.assert_close(output, expected[0], rtol=0, atol=0)
@@ -1373,8 +1373,8 @@ def test_tensor_map_publication(fp4, num_ctas):
     graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph):
         run()
-        _consume_tensor_maps[(20, 4 // num_ctas)](
-            storage, metadata, generation, output, 16 * num_ctas, smem_layout, regs, num_ctas=num_ctas)
+        _consume_tensor_maps[(20, 4 // num_ctas)](storage, metadata, generation, output, 16 * num_ctas, smem_layout,
+                                                  regs, num_ctas=num_ctas)
     # Republish at identical descriptor addresses with different allocations,
     # dimensions and strides, exercising tensor-map cache invalidation.
     for version in [1, 0, 1]:

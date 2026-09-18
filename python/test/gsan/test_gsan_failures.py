@@ -912,7 +912,10 @@ def _run_published_map_race(kind):
 @pytest.mark.parametrize("kind", ["publication", "payload"])
 def test_published_tensor_map_race(kind):
     _run_failure_case(
-        kind, runner=_run_published_map_race, runner_args=(kind,), source_function=_published_map_race.fn,
+        kind,
+        runner=_run_published_map_race,
+        runner_args=(kind, ),
+        source_function=_published_map_race.fn,
         marker="hopper.tma.publish_tensor_descriptor" if kind == "publication" else "hopper.tma.async_load",
         error="Write after read race detected" if kind == "publication" else "Read after write race detected",
     )

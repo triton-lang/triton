@@ -319,8 +319,8 @@ struct TensormapPublishOpConversion
     auto smem = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
     Value thread = getThreadId(rewriter, loc);
     Value firstWarp = b.icmp_slt(thread, b.i32_val(32));
-    Value firstCTA = b.icmp_eq(targetInfo.getClusterCTAId(rewriter, loc),
-                              b.i32_val(0));
+    Value firstCTA =
+        b.icmp_eq(targetInfo.getClusterCTAId(rewriter, loc), b.i32_val(0));
     auto [before, copyBlock, after] =
         createIfBlock(rewriter, loc, b.and_(firstCTA, firstWarp));
     rewriter.setInsertionPointToStart(copyBlock);
@@ -350,8 +350,8 @@ struct TensormapPublishOpConversion
       tensormap_replace_global_dim(loc, ctx, rewriter, smem, i, dim);
     }
     for (int i = 0; i < rank - 1; ++i) {
-      Value stride = b.mul(adaptor.getStrides()[rank - 2 - i],
-                            b.i64_val(elemBytes));
+      Value stride =
+          b.mul(adaptor.getStrides()[rank - 2 - i], b.i64_val(elemBytes));
       if (targetInfo.getPtxVersion() <= 85)
         stride = b.ashr(stride, b.i64_val(4));
       tensormap_replace_global_stride(loc, ctx, rewriter, smem, i, stride);
@@ -388,7 +388,8 @@ void mlir::triton::NVIDIA::populateTMAToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
   patterns.add<TensormapCreateOpConversion>(typeConverter, targetInfo, benefit);
-  patterns.add<TensormapPublishOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<TensormapPublishOpConversion>(typeConverter, targetInfo,
+                                             benefit);
   patterns.add<TensormapFenceproxyAcquireOpConversion,
                ReinterpretTensorDescOpConversion>(typeConverter, benefit);
 }

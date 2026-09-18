@@ -115,9 +115,9 @@ getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
               i32_ty,      i32_ty,      i32_ty,      i32_ty,
               i32_ty,      ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanAtomicTensorDescRuntimeFn) {
-    argTys = {ptr_ty(ctx), ptr_ty(ctx), ptr_ty(ctx), i32_ty,
-              ptr_ty(ctx), i32_ty,      i32_ty,      i32_ty,
-              i32_ty,      i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
+    argTys = {ptr_ty(ctx), ptr_ty(ctx), ptr_ty(ctx), i32_ty, ptr_ty(ctx),
+              i32_ty,      i32_ty,      i32_ty,      i32_ty, i32_ty,
+              i32_ty,      ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanAtomicBeginRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i64_ty,      i32_ty,
               i32_ty,      i32_ty,      i32_ty, ptr_ty(ctx), i32_ty};
@@ -405,8 +405,8 @@ FailureOr<Value> getGSanKernelIdArg(Operation *op,
 // The hardware descriptor counts FP4 elements while Gluon's coordinates and
 // payload shapes count packed bytes.
 static int getContiguousDimScale(tt::TensorDescType type) {
-  auto layout = dyn_cast_if_present<ttg::NVMMASharedEncodingAttr>(
-      type.getSharedLayout());
+  auto layout =
+      dyn_cast_if_present<ttg::NVMMASharedEncodingAttr>(type.getSharedLayout());
   return layout && layout.getFp4Padded() ? 2 : 1;
 }
 
@@ -488,13 +488,13 @@ struct GSanTensorMapAccessOpConversion
     Value pred = b.icmp_ult(thread, b.i32_val(32));
     if (op.getFirstCTAOnly())
       pred = b.and_(pred, b.icmp_eq(targetInfo.getClusterCTAId(rewriter, loc),
-                                   b.i32_val(0)));
+                                    b.i32_val(0)));
     if (adaptor.getPred())
       pred = b.and_(pred, adaptor.getPred());
     // One four-byte word per lane covers the complete opaque map, including
     // metadata outside the payload's base/shape/stride fields.
-    Value ptr = b.gep(adaptor.getPtr().getType(), i32_ty, adaptor.getPtr(),
-                       thread);
+    Value ptr =
+        b.gep(adaptor.getPtr().getType(), i32_ty, adaptor.getPtr(), thread);
     emitTensorAccessRuntimeCall(rewriter, loc, *state, {ptr}, {}, 0, pred, 4,
                                 op.getIsStore());
     rewriter.eraseOp(op);
