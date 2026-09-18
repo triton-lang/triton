@@ -213,9 +213,10 @@ assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
         args={'M': 4096},  # values for function arguments not in `x_names` and `y_name`
     ))
 def benchmark(M, N, provider):
+    # N grows monotonically, so blocks cached by the previous case are too small to be reused
+    # by this one; release them so reserved memory does not accumulate across the sweep.
+    getattr(torch, DEVICE.type).empty_cache()
     x = torch.randn(M, N, device=DEVICE, dtype=torch.float32)
-    stream = getattr(torch, DEVICE.type).Stream()
-    getattr(torch, DEVICE.type).set_stream(stream)
     if provider == 'torch':
         ms = triton.testing.do_bench(lambda: torch.softmax(x, axis=-1))
     if provider == 'triton':
