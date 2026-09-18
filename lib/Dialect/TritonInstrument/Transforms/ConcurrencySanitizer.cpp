@@ -1418,13 +1418,13 @@ private:
 
       if (memType == MemType::SHARED_MEM) {
         if (effect.sharedKind == ttg::SharedKind::Async) {
-          funcBuilder.createVerifyProxyAccessCall(b, bufferMask, baseThread,
-                                                  effect.operandName, pred, op,
-                                                  effectCTAs);
+          funcBuilder.createVerifyProxyAccessCall(
+              b, bufferMask, baseThread, effect.rw == RW::Write,
+              effect.operandName, pred, op, effectCTAs);
         } else {
-          funcBuilder.createSetProxyAccessCall(b, bufferMask, baseThread, pred,
-                                               op, readCTAs,
-                                               materialized.bufferIndex);
+          funcBuilder.createSetProxyAccessCall(
+              b, bufferMask, baseThread, effect.rw == RW::Write, pred, op,
+              readCTAs, materialized.bufferIndex);
         }
       }
       if (effect.rw == RW::Read) {
