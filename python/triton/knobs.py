@@ -383,6 +383,10 @@ class AutotuneListener(Protocol):
 class autotuning_knobs(base_knobs):
     cache: env_bool = env_bool("TRITON_CACHE_AUTOTUNING")
     print: env_bool = env_bool("TRITON_PRINT_AUTOTUNING")
+    # Zero selects an affinity-aware worker count; one preserves serial tuning.
+    compile_workers: env_int = env_int("TRITON_AUTOTUNING_COMPILE_WORKERS", 1)
+    # Benchmarking stays serial. Enable it to overlap it with remaining compiles.
+    overlap_bench: env_bool = env_bool("TRITON_AUTOTUNING_OVERLAP_BENCH", True)
     listener: Union[AutotuneListener, None] = None
 
 
