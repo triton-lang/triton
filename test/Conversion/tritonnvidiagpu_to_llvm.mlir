@@ -4,6 +4,7 @@
 // RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-membar='compute-capability=107 ptx-version=94' --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=94' --initialize-ws-cluster-barriers='compute-capability=107 ptx-version=94' -reconcile-unrealized-casts | FileCheck --check-prefix=RUBIN %s
 // RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-membar='compute-capability=90' --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm=compute-capability=90 --initialize-ws-cluster-barriers=compute-capability=90 --canonicalize-llvm-ir -reconcile-unrealized-casts | FileCheck --check-prefix=CLUSTER-MASK %s
 // RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-membar='compute-capability=100 ptx-version=86' --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=86' --initialize-ws-cluster-barriers='compute-capability=100 ptx-version=86' --canonicalize-llvm-ir -reconcile-unrealized-casts | FileCheck --check-prefix=CANONICALIZE-SM100 %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv=compute-capability=90 --test-print-buffer-region -verify-diagnostics=only-expected -o /dev/null
 
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -858,11 +859,13 @@ module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 1 : i32, "ttg.th
   // CHECK: nvvm.mapa
   // CHECK: llvm.load {{.*}} : !llvm.ptr<7> -> i32
   // CHECK: llvm.return
-  tt.func private @local_gather_sharded_16_ctas() -> tensor<32x32xi32, #local_gather_cga16_blocked> {
+  tt.func @local_gather_sharded_16_ctas(%out: tensor<32x32x!tt.ptr<i32>, #local_gather_cga16_blocked>) {
     %src = ttg.local_alloc {allocation.offset = [0 : i32]} : () -> !ttg.memdesc<32x32xi32, #local_gather_cga16_sharded, #ttg.shared_memory, mutable>
     %idx = arith.constant dense<0> : tensor<32x32xi32, #local_gather_cga16_blocked>
+    // expected-remark @+1 {{Buffers: [0, 256]}}
     %g = ttg.local_gather %src[%idx] {axis = 1 : i32} : !ttg.memdesc<32x32xi32, #local_gather_cga16_sharded, #ttg.shared_memory, mutable>, tensor<32x32xi32, #local_gather_cga16_blocked> -> tensor<32x32xi32, #local_gather_cga16_blocked>
-    tt.return %g : tensor<32x32xi32, #local_gather_cga16_blocked>
+    tt.store %out, %g : tensor<32x32x!tt.ptr<i32>, #local_gather_cga16_blocked>
+    tt.return
   }
 
   // CHECK-LABEL: @local_gather_partial_broadcast_16_ctas
@@ -880,11 +883,13 @@ module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 1 : i32, "ttg.th
   // CHECK: nvvm.mapa
   // CHECK: llvm.load {{.*}} : !llvm.ptr<7> -> i32
   // CHECK: llvm.return
-  tt.func private @local_gather_partial_broadcast_16_ctas() -> tensor<32x32xi32, #local_gather_cga16_blocked> {
+  tt.func @local_gather_partial_broadcast_16_ctas(%out: tensor<32x32x!tt.ptr<i32>, #local_gather_cga16_blocked>) {
     %src = ttg.local_alloc {allocation.offset = [0 : i32]} : () -> !ttg.memdesc<32x32xi32, #local_gather_cga16_partial, #ttg.shared_memory, mutable>
     %idx = arith.constant dense<0> : tensor<32x32xi32, #local_gather_cga16_blocked>
+    // expected-remark @+1 {{Buffers: [0, 1024]}}
     %g = ttg.local_gather %src[%idx] {axis = 1 : i32} : !ttg.memdesc<32x32xi32, #local_gather_cga16_partial, #ttg.shared_memory, mutable>, tensor<32x32xi32, #local_gather_cga16_blocked> -> tensor<32x32xi32, #local_gather_cga16_blocked>
-    tt.return %g : tensor<32x32xi32, #local_gather_cga16_blocked>
+    tt.store %out, %g : tensor<32x32x!tt.ptr<i32>, #local_gather_cga16_blocked>
+    tt.return
   }
 
   // CHECK-LABEL: @local_gather_full_broadcast_16_ctas
@@ -892,11 +897,13 @@ module attributes {"ttg.num-ctas" = 16 : i32, "ttg.num-warps" = 1 : i32, "ttg.th
   // CHECK: llvm.load {{.*}} : !llvm.ptr<3> -> i32
   // CHECK-NOT: nvvm.mapa
   // CHECK: llvm.return
-  tt.func private @local_gather_full_broadcast_16_ctas() -> tensor<32x32xi32, #local_gather_cga16_blocked> {
+  tt.func @local_gather_full_broadcast_16_ctas(%out: tensor<32x32x!tt.ptr<i32>, #local_gather_cga16_blocked>) {
     %src = ttg.local_alloc {allocation.offset = [0 : i32]} : () -> !ttg.memdesc<32x32xi32, #local_gather_cga16_broadcast, #ttg.shared_memory, mutable>
     %idx = arith.constant dense<0> : tensor<32x32xi32, #local_gather_cga16_blocked>
+    // expected-remark @+1 {{Buffers: [0, 4096]}}
     %g = ttg.local_gather %src[%idx] {axis = 1 : i32} : !ttg.memdesc<32x32xi32, #local_gather_cga16_broadcast, #ttg.shared_memory, mutable>, tensor<32x32xi32, #local_gather_cga16_blocked> -> tensor<32x32xi32, #local_gather_cga16_blocked>
-    tt.return %g : tensor<32x32xi32, #local_gather_cga16_blocked>
+    tt.store %out, %g : tensor<32x32x!tt.ptr<i32>, #local_gather_cga16_blocked>
+    tt.return
   }
 }
 
