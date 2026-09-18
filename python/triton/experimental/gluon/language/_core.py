@@ -113,10 +113,12 @@ assume = builtin(tl_core.assume)
 atomic_add = builtin(tl_core.atomic_add)
 atomic_and = builtin(tl_core.atomic_and)
 atomic_cas = builtin(tl_core.atomic_cas)
+atomic_load = builtin(tl_core.atomic_load)
 atomic_max = builtin(tl_core.atomic_max)
 atomic_min = builtin(tl_core.atomic_min)
 atomic_or = builtin(tl_core.atomic_or)
 atomic_poll = builtin(tl_core.atomic_poll)
+atomic_store = builtin(tl_core.atomic_store)
 atomic_xchg = builtin(tl_core.atomic_xchg)
 atomic_xor = builtin(tl_core.atomic_xor)
 broadcast = builtin(tl_core.broadcast)
@@ -147,6 +149,55 @@ sub = builtin(tl_core.sub)
 to_tensor = builtin(tl_core.to_tensor)
 expect_zero = builtin(tl_core.expect_zero)
 where = builtin(tl_core.where)
+
+
+@builtin
+def inline_asm(asm, constraints="", args=(), result_types=(), is_pure=False, _semantic=None):
+    """Execute one inline assembly block per participating thread.
+
+    Tensor inputs are unpacked in their layout's register order, including
+    replicated register positions. Scalar inputs are uniform and memory
+    descriptors become one uniform ``i32`` address of their logical origin.
+    Inputs are not broadcast, and elements smaller than 32 bits are not packed.
+
+    ``result_types`` is a scalar dtype, a :class:`distributed_type`, or a
+    sequence of these types. A single type returns one tensor; a sequence
+    returns a tuple. The default empty sequence produces no results. Tensor
+    inputs and outputs require explicit distributed layouts. Scalar outputs
+    must be uniform, and replicated tensor elements must agree with the layout.
+
+    ``asm`` may be a string or a ``@gluon.constexpr_function`` returning a
+    string. The function receives ``(outputs, inputs)``, each a tuple of
+    operand-reference tuples. References are numbered outputs first, then
+    inputs, e.g. ``(("$0", "$1"),)``. Only these strings, not runtime values,
+    are passed to the function. Normal Python iteration and slicing can be
+    used to generate assembly for large groups of per-thread elements.
+
+    ``constraints`` is an LLVM constraint string, or a tuple with one constraint
+    per logical output followed by each input. Tuple entries are repeated for
+    every element in their group. Use a string for explicitly numbered ties or
+    clobbers.
+
+    Descriptor operands require ``is_pure=False``. The compiler does not model
+    their memory accesses or insert synchronization for them. Callers must
+    provide barriers, fences, and asynchronous completion before storage reuse.
+    All accesses must stay within the descriptor views.
+
+    Example::
+
+        @gluon.constexpr_function
+        def add_bias(outputs, inputs):
+            out, = outputs
+            x, bias = inputs
+            return "\\n".join(
+                f"add.f32 {dst}, {src}, {bias[0]};"
+                for dst, src in zip(out, x)
+            )
+
+        y = gl.inline_asm(add_bias, ("=&f", "f", "f"), [x, bias],
+                          x.type, is_pure=True)
+    """
+    return _semantic.inline_asm(asm, constraints, args, result_types, is_pure)
 
 
 @builtin

@@ -1644,6 +1644,35 @@ def test_tensor_descriptor_reduce(kind, descriptor, dtype_str, num_ctas, M_BLOCK
 
 
 @pytest.mark.interpreter()
+def test_host_tensor_descriptor_round_f32_to_tf32(device):
+
+    @triton.jit
+    def kernel(out_ptr, desc):
+        block = desc.load([0, 0])
+        idx = tl.arange(0, 16)[None, :]
+        tl.store(out_ptr + idx, block)
+
+    def round_to_tf32(x: torch.Tensor) -> torch.Tensor:
+        bits = x.view(torch.int32).to(torch.int64) & 0xFFFFFFFF
+        exp_mask = 0x7F800000
+        is_special = (bits & exp_mask) == exp_mask
+        round_bias = ((bits >> 13) & 1) + 0x00000FFF
+        rounded = (bits + round_bias) & 0xFFFFE000
+        return (torch.where(is_special, bits, rounded) & 0xFFFFFFFF).to(torch.int32).view(torch.float32)
+
+    torch.manual_seed(17)
+    inp = torch.randn((1, 16), device=device, dtype=torch.float32)
+    # a tie that rounds to even, one that rounds up, a mantissa that carries out, and the specials
+    inp[0, :6] = torch.tensor(
+        [1.0 + 2.0**-11, 1.0 + 2.0**-10 + 2.0**-11, 2.0 - 2.0**-23,
+         float("nan"), float("inf"), -3.0])
+    out = torch.empty_like(inp)
+    desc = TensorDescriptor.from_tensor(inp, [1, 16], round_f32_to_tf32=True)
+    kernel[(1, )](out, desc)
+    torch.testing.assert_close(out, round_to_tf32(inp), rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.interpreter()
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 @pytest.mark.parametrize("num_ctas", [1, 2])
 @pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32), (8, 128)])

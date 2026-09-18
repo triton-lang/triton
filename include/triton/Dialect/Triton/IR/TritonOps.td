@@ -312,6 +312,69 @@ def TT_GridDependencyLaunchDependentsOp
     let assemblyFormat = "attr-dict";
 }
 
+def TT_AtomicLoadOp : TT_Op<"atomic_load", [
+  AtomicOpInterface,
+  SameLoadStoreOperandsAndResultShape,
+  SameLoadStoreOperandsAndResultEncoding,
+  DeclareOpInterfaceMethods<PredicatedOpInterface>,
+  TypesMatchWith<"result matches ptr type", "ptr", "result",
+                 "getPointeeType($_self)">,
+  TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
+                 "getI1SameShape(getPointeeType($_self))",
+                 "($_op.getOperands().size() <= 1) || std::equal_to<>()">
+]> {
+    let summary = "Atomically load from a pointer or tensor of pointers";
+
+    let arguments = (ins
+      // Atomic loads are observable synchronization operations even when the
+      // loaded value is unused. Model that side effect so canonicalization and
+      // LICM cannot remove or coalesce polling loads.
+      Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+      Optional<TT_BoolLike>:$mask,
+      TT_MemSemanticAttr:$sem,
+      TT_MemSyncScopeAttr:$scope
+    );
+
+    let results = (outs TT_Type:$result);
+
+    let assemblyFormat = [{
+      $sem `,` $scope `,` $ptr (`,` $mask^)? attr-dict `:`
+      functional-type(operands, $result)
+    }];
+
+    let hasVerifier = 1;
+}
+
+def TT_AtomicStoreOp : TT_Op<"atomic_store", [
+  AtomicOpInterface,
+  SameLoadStoreOperandsShape,
+  SameLoadStoreOperandsEncoding,
+  DeclareOpInterfaceMethods<PredicatedOpInterface>,
+  TypesMatchWith<"value type matches ptr type", "ptr", "value",
+                 "getPointeeType($_self)">,
+  TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
+                 "getI1SameShape(getPointeeType($_self))",
+                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">
+]> {
+    let summary = "Atomically store through a pointer or tensor of pointers";
+
+    let arguments = (ins
+      Arg<TT_PtrLike, "", [MemWrite<GlobalMemory>]>:$ptr,
+      TT_Type:$value,
+      Optional<TT_BoolLike>:$mask,
+      TT_MemSemanticAttr:$sem,
+      TT_MemSyncScopeAttr:$scope
+    );
+
+    let assemblyFormat = [{
+      $sem `,` $scope `,` $ptr `,` $value (`,` $mask^)? attr-dict `:`
+      type($ptr)
+    }];
+
+    let hasVerifier = 1;
+    let hasCanonicalizeMethod = 1;
+}
+
 def TT_AtomicPollOp : TT_Op<"atomic_poll", [
   SameOperandsAndResultEncoding,
   TypesMatchWith<"ptr type matches expected type", "expected", "ptr",
@@ -498,14 +561,16 @@ def TT_ReshapeOp : TT_Op<"reshape", [Pure,
 }
 
 def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
-                                         SameOperandsAndResultElementType,
-                                         SameOperandsAndResultEncoding]> {
+                                         SameOperandsAndResultElementType]> {
     let summary = "broadcast a tensor";
 
     let description = [{
       For a given tensor, broadcast changes one or more dimensions with size 1
       to a new size, e.g. tensor<1x32x1xf32> -> tensor<2x32x4xf32>.  You cannot
       change the size of a non-1 dimension.
+      After projecting the result layout onto the source shape, the layouts
+      must match up to repeated registers. Broadcasting cannot permute registers
+      or move data between threads.
     }];
 
     let arguments = (ins TT_Tensor:$src);
@@ -542,6 +607,7 @@ def TT_JoinOp : TT_Op<"join", [
 
 def TT_SplitOp : TT_Op<"split", [
   Pure,
+  SameResultsType,
   InferTypeOpAdaptorWithIsCompatible,
   TypesMatchWith<"outLHS and outRHS types match",
                   "outLHS", "outRHS", "$_self">,
@@ -899,7 +965,7 @@ def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [
     elems it receives is unspecified.
   }];
 
-  let arguments = (ins StrAttr:$asm_string, StrAttr:$constraints, BoolAttr:$pure, I32Attr:$packed_element, Variadic<AnyTypeOf<[TT_Type]>>:$args);
+  let arguments = (ins StrAttr:$asm_string, StrAttr:$constraints, BoolAttr:$pure, I32Attr:$packed_element, Variadic<AnyType>:$args);
   let results = (outs Variadic<TT_Type>:$result);
 
   let assemblyFormat = [{

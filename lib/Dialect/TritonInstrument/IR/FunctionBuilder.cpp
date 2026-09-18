@@ -1,7 +1,10 @@
 #include "triton/Dialect/TritonInstrument/IR/FunctionBuilder.h"
 
+#include <algorithm>
 #include <cassert>
 #include <optional>
+
+#include "llvm/ADT/DenseSet.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -99,6 +102,29 @@ Value createCmpIntTensorScalar(
   auto tensorTy = cast<RankedTensorType>(tensor.getType());
   Value splat = triton::SplatOp::create(b, tensorTy, scalar);
   return arith::CmpIOp::create(b, predicate, tensor, splat);
+}
+
+bool hasUniqueBarrierDescriptors(Value barriers, uint32_t mbarLength) {
+  auto descriptors =
+      barriers.getDefiningOp<tti::ExperimentalBufferDescriptorsOp>();
+  if (!descriptors)
+    return false;
+  llvm::SmallDenseSet<uint64_t> keys;
+  // Match BufferDescriptorsOpConversion's address trimming and length
+  // packing. Adding its common base preserves equality modulo this mask.
+  uint64_t addressMask = descriptors.getMemType() == MemType::SHARED_MEM
+                             ? (1ULL << 24) - 1
+                             : 0xffffffffULL;
+  for (auto [offset, length] :
+       llvm::zip_equal(descriptors.getOffsets(), descriptors.getLengths())) {
+    if (static_cast<uint32_t>(length) != mbarLength)
+      continue;
+    uint64_t key = (static_cast<uint64_t>(mbarLength) << 32) |
+                   (static_cast<uint32_t>(offset) & addressMask);
+    if (!keys.insert(key).second)
+      return false;
+  }
+  return true;
 }
 
 template <typename OpTy>
@@ -359,7 +385,8 @@ Value createDimIndices(ImplicitLocOpBuilder &b, RankedTensorType tensorType,
 }
 
 Value createLoadTrackingPhase(ImplicitLocOpBuilder &b, Value trackingPtr,
-                              RankedTensorType trackingType, Value phase) {
+                              RankedTensorType trackingType, Value phase,
+                              Value barrierIndex = {}) {
   int phaseDim = trackingType.getRank() - 1;
   assert(phaseDim >= 0 && trackingType.getShape()[phaseDim] == 2 &&
          "expected a trailing barrier phase dimension");
@@ -379,7 +406,27 @@ Value createLoadTrackingPhase(ImplicitLocOpBuilder &b, Value trackingPtr,
   Value offset = arith::MulIOp::create(b, phaseIndex, bankElements);
   Value bankPtr =
       triton::AddPtrOp::create(b, trackingPtr.getType(), trackingPtr, offset);
-  return tti::createLoadScratchMemory(b, b.getLoc(), bankPtr, bankType);
+  SmallVector<int64_t> strides;
+  if (barrierIndex) {
+    assert(phaseDim > 3 && "expected a barrier axis before the phase");
+    SmallVector<int64_t> shape(bankType.getShape());
+    int64_t stride = 1;
+    for (int64_t extent : shape) {
+      strides.push_back(stride);
+      stride *= extent;
+    }
+    Value barrierOffset = arith::MulIOp::create(
+        b, barrierIndex, arith::ConstantIntOp::create(b, strides[3], 32));
+    bankPtr =
+        triton::AddPtrOp::create(b, bankPtr.getType(), bankPtr, barrierOffset);
+    // Keep the K axis while preserving the full origin and phase-bank spacing.
+    shape[3] = 1;
+    bankType = tti::getIntTensorType(
+        b.getInsertionBlock()->getParent(), shape,
+        bankType.getElementType().getIntOrFloatBitWidth());
+  }
+  return tti::createLoadScratchMemory(b, b.getLoc(), bankPtr, bankType,
+                                      strides);
 }
 
 Value createCurrentCTAMask(ImplicitLocOpBuilder &b) {
@@ -506,17 +553,12 @@ Value createLeadCTAEffectMask(ImplicitLocOpBuilder &b,
 Operation *createMaskedStoreScratchMemory(ImplicitLocOpBuilder &b, Location loc,
                                           Value alloc, Value tensor,
                                           RankedTensorType tensorType,
-                                          Value mask) {
+                                          Value mask,
+                                          ArrayRef<int64_t> strides = {}) {
   int64_t numCTAs = ttg::lookupNumCTAs(b);
-  if (numCTAs > 1) {
-    // This should hopefully be folded with the previous load in the caller
-    // function
-    Value oldTensor = tti::createLoadScratchMemory(b, loc, alloc, tensorType);
-    // and this with the previous selectOp, if there is any
-    tensor = arith::SelectOp::create(b, loc, mask, tensor, oldTensor);
-  }
   return tti::createStoreScratchMemory(b, loc, alloc, tensor, tensorType,
-                                       /*currentCTAOnly=*/false);
+                                       /*currentCTAOnly=*/false,
+                                       numCTAs > 1 ? mask : Value{}, strides);
 }
 
 Operation *createCTAScopedStoreScratchMemory(ImplicitLocOpBuilder &b,
@@ -1627,21 +1669,70 @@ void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
               arith::TruncIOp::create(fb, phaseStateType, newPhase);
           for (auto [index, trackingType] : llvm::enumerate(trackingTypes)) {
             Value trackingPtr = entryBlock->getArgument(8 + index);
+            SmallVector<int64_t> shape(trackingType.getShape());
+            SmallVector<int64_t> strides(shape.size(), 1);
+            for (unsigned dim = 1; dim < shape.size(); ++dim)
+              strides[dim] = strides[dim - 1] * shape[dim - 1];
+            int64_t extent = shape[1];
+            // Stream buffer rows with a warp-sized contiguous prefix. The
+            // completion and phase masks depend only on [barrier CTA, K].
+            int64_t chunk = std::min<int64_t>(
+                extent, std::max<int64_t>(1, ttg::lookupThreadsPerWarp(fb) /
+                                                 strides[1]));
+            RankedTensorType storeType = trackingType;
+            if (chunk < extent) {
+              shape[1] = chunk;
+              storeType = tti::getIntTensorType(
+                  fb.getInsertionBlock()->getParent(), shape,
+                  trackingType.getElementType().getIntOrFloatBitWidth());
+            }
             Value completedMask =
-                convertAndBroadcast(fb, completed, {2, 3}, trackingType);
+                convertAndBroadcast(fb, completed, {2, 3}, storeType);
             Value nextPhase =
-                convertAndBroadcast(fb, nextPhases, {2, 3}, trackingType);
+                convertAndBroadcast(fb, nextPhases, {2, 3}, storeType);
             Value phaseIndices =
-                createDimIndices(fb, trackingType, trackingType.getRank() - 1);
+                createDimIndices(fb, storeType, storeType.getRank() - 1);
             Value phaseMask = arith::CmpIOp::create(
                 fb, arith::CmpIPredicate::eq, phaseIndices, nextPhase);
             Value clearMask =
                 arith::AndIOp::create(fb, completedMask, phaseMask);
             Value zero =
-                tti::createConstIntTensor(fb, fb.getLoc(), 0, trackingType);
-            tti::createStoreScratchMemory(fb, fb.getLoc(), trackingPtr, zero,
-                                          trackingType,
-                                          /*currentCTAOnly=*/false, clearMask);
+                tti::createConstIntTensor(fb, fb.getLoc(), 0, storeType);
+            if (chunk == extent) {
+              tti::createStoreScratchMemory(
+                  fb, fb.getLoc(), trackingPtr, zero, trackingType,
+                  /*currentCTAOnly=*/false, clearMask);
+              continue;
+            }
+
+            Value first = arith::ConstantIntOp::create(fb, 0, 32);
+            Value step = arith::ConstantIntOp::create(fb, chunk, 32);
+            Value limit = arith::ConstantIntOp::create(fb, extent, 32);
+            Value stride = arith::ConstantIntOp::create(fb, strides[1], 32);
+            Block *preheader = fb.getInsertionBlock();
+            Block *continueBlock =
+                preheader->splitBlock(fb.getInsertionPoint());
+            Block *loopBlock = fb.createBlock(continueBlock);
+            loopBlock->addArgument(fb.getI32Type(), fb.getLoc());
+            fb.setInsertionPointToEnd(preheader);
+            cf::BranchOp::create(fb, loopBlock, ValueRange{first});
+
+            fb.setInsertionPointToStart(loopBlock);
+            Value row = loopBlock->getArgument(0);
+            Value offset = arith::MulIOp::create(fb, row, stride);
+            Value viewPtr = triton::AddPtrOp::create(fb, trackingPtr.getType(),
+                                                     trackingPtr, offset);
+            // Keep full backing strides for every CTA, barrier, origin and
+            // phase. Only the B coordinate advances between iterations.
+            tti::createStoreScratchMemory(
+                fb, fb.getLoc(), viewPtr, zero, storeType,
+                /*currentCTAOnly=*/false, clearMask, strides);
+            Value next = arith::AddIOp::create(fb, row, step);
+            Value more = arith::CmpIOp::create(fb, arith::CmpIPredicate::ult,
+                                               next, limit);
+            cf::CondBranchOp::create(fb, more, loopBlock, ValueRange{next},
+                                     continueBlock, ValueRange{});
+            fb.setInsertionPointToStart(continueBlock);
           }
         }
 
@@ -1669,6 +1760,10 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
   const bool clearWrites = !auxData.writeTracking[(int)memType].empty();
   const bool clearReads = !auxData.readVisibility[(int)memType].empty();
   const bool clearReadTracking = !auxData.readTracking[(int)memType].empty();
+  const bool clearCopies = memType == MemType::SHARED_MEM &&
+                           auxData.hasAsyncCopyMbarriers &&
+                           !auxData.commits[CommitKind::AsyncCp].empty();
+  const bool unpublishedWrite = threadMask == 0;
   if (!publishWrite && !clearWrites && !clearReads && !clearReadTracking)
     return;
 
@@ -1681,6 +1776,8 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
   specializationArgs.append(static_cast<uint64_t>(clearWrites));
   specializationArgs.append(static_cast<uint64_t>(clearReads));
   specializationArgs.append(static_cast<uint64_t>(clearReadTracking));
+  specializationArgs.append(static_cast<uint64_t>(clearCopies));
+  specializationArgs.append(static_cast<uint64_t>(unpublishedWrite));
 
   RankedTensorType writeVisibilityType;
   if (publishWrite) {
@@ -1715,11 +1812,20 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
     specializationArgs.append(readTrackingType);
   }
 
+  RankedTensorType copiesType;
+  if (clearCopies) {
+    ValueType copies = auxData.commits[CommitKind::AsyncCp].at(insertPoint);
+    copiesType = cast<RankedTensorType>(copies.type);
+    args.push_back(copies.value);
+    specializationArgs.append(copiesType);
+  }
+
   createCallToCachedFunction(
       b, "publish_write_visibility", args, /*assertInfo=*/std::nullopt,
       specializationArgs,
-      [publishWrite, clearWrites, clearReads, clearReadTracking,
-       writeVisibilityType, writeTrackingType, readVisibilityType,
+      [publishWrite, clearWrites, clearReads, clearReadTracking, clearCopies,
+       unpublishedWrite, copiesType, writeVisibilityType, writeTrackingType,
+       readVisibilityType,
        readTrackingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value bufferMask = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
@@ -1732,12 +1838,13 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
 
         if (publishWrite) {
           Value visibilityPtr = entryBlock->getArgument(nextArg++);
-          Value visibility = tti::createLoadScratchMemory(
-              fb, fb.getLoc(), visibilityPtr, writeVisibilityType);
           Value visibilityMask =
               convertAndBroadcast(fb, bufferMask, {1}, writeVisibilityType);
           Value relationMask =
-              createLeadCTAEffectMask(fb, writeVisibilityType, effectCTAs);
+              unpublishedWrite
+                  ? createCTASetMask(fb, writeVisibilityType, 0, effectCTAs)
+                  : createLeadCTAEffectMask(fb, writeVisibilityType,
+                                            effectCTAs);
           visibilityMask =
               arith::AndIOp::create(fb, visibilityMask, relationMask);
           auto elemType =
@@ -1746,25 +1853,75 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
               adjustIntegerWidth(fb, threadMaskVal, elemType);
           Value threadMaskTensor =
               triton::SplatOp::create(fb, writeVisibilityType, threadMaskElem);
-          Value updated = arith::SelectOp::create(fb, visibilityMask,
-                                                  threadMaskTensor, visibility);
-          tti::createStoreScratchMemory(fb, fb.getLoc(), visibilityPtr, updated,
-                                        writeVisibilityType,
-                                        /*currentCTAOnly=*/false);
+          tti::createStoreScratchMemory(fb, fb.getLoc(), visibilityPtr,
+                                        threadMaskTensor, writeVisibilityType,
+                                        /*currentCTAOnly=*/false,
+                                        visibilityMask);
         }
 
         auto clearTable = [&](RankedTensorType tableType) {
           Value tablePtr = entryBlock->getArgument(nextArg++);
-          Value table = tti::createLoadScratchMemory(fb, fb.getLoc(), tablePtr,
-                                                     tableType);
-          Value tableMask = convertAndBroadcast(fb, bufferMask, {1}, tableType);
+          SmallVector<int64_t> shape(tableType.getShape());
+          assert(shape.size() >= 3 && "Expected a tracking or commit table");
+          unsigned streamDim = std::min<unsigned>(3, shape.size() - 1);
+          SmallVector<int64_t> strides(shape.size(), 1);
+          for (unsigned dim = 1; dim < shape.size(); ++dim)
+            strides[dim] = strides[dim - 1] * shape[dim - 1];
+          int64_t extent = shape[streamDim];
+          unsigned bitWidth =
+              tableType.getElementType().getIntOrFloatBitWidth();
+          int64_t threadsPerWarp = ttg::lookupThreadsPerWarp(fb);
+          // Stream K/T (or the issuer axis of a commit table), preserving
+          // the complete CTA and buffer dimensions used by the clear mask.
+          int64_t chunk = std::min<int64_t>(
+              extent, std::max<int64_t>(1, threadsPerWarp * (128 / bitWidth) /
+                                               strides[streamDim]));
+          RankedTensorType storeType = tableType;
+          if (chunk < extent) {
+            shape[streamDim] = chunk;
+            storeType = tti::getIntTensorType(
+                fb.getInsertionBlock()->getParent(), shape, bitWidth);
+          }
+          Value tableMask = convertAndBroadcast(fb, bufferMask, {1}, storeType);
           Value ctaMask =
-              createCTASetMask(fb, tableType, /*dim=*/0, effectCTAs);
+              createCTASetMask(fb, storeType, /*dim=*/0, effectCTAs);
           tableMask = arith::AndIOp::create(fb, tableMask, ctaMask);
-          Value zero = tti::createConstIntTensor(fb, fb.getLoc(), 0, tableType);
-          Value updated = arith::SelectOp::create(fb, tableMask, zero, table);
-          tti::createStoreScratchMemory(fb, fb.getLoc(), tablePtr, updated,
-                                        tableType, /*currentCTAOnly=*/false);
+          Value zero = tti::createConstIntTensor(fb, fb.getLoc(), 0, storeType);
+          if (chunk == extent) {
+            tti::createStoreScratchMemory(fb, fb.getLoc(), tablePtr, zero,
+                                          tableType, /*currentCTAOnly=*/false,
+                                          tableMask);
+            return;
+          }
+
+          Value first = arith::ConstantIntOp::create(fb, 0, 32);
+          Value step = arith::ConstantIntOp::create(fb, chunk, 32);
+          Value limit = arith::ConstantIntOp::create(fb, extent, 32);
+          Value stride =
+              arith::ConstantIntOp::create(fb, strides[streamDim], 32);
+          Block *preheader = fb.getInsertionBlock();
+          Block *continueBlock = preheader->splitBlock(fb.getInsertionPoint());
+          Block *loopBlock = fb.createBlock(continueBlock);
+          loopBlock->addArgument(fb.getI32Type(), fb.getLoc());
+          fb.setInsertionPointToEnd(preheader);
+          cf::BranchOp::create(fb, loopBlock, ValueRange{first});
+
+          fb.setInsertionPointToStart(loopBlock);
+          Value index = loopBlock->getArgument(0);
+          Value offset = arith::MulIOp::create(fb, index, stride);
+          Value viewPtr = triton::AddPtrOp::create(fb, tablePtr.getType(),
+                                                   tablePtr, offset);
+          // K/T is chunked, but every CTA, origin and phase retains its
+          // original physical stride in the backing table.
+          tti::createStoreScratchMemory(
+              fb, fb.getLoc(), viewPtr, zero, storeType,
+              /*currentCTAOnly=*/false, tableMask, strides);
+          Value next = arith::AddIOp::create(fb, index, step);
+          Value more =
+              arith::CmpIOp::create(fb, arith::CmpIPredicate::ult, next, limit);
+          cf::CondBranchOp::create(fb, more, loopBlock, ValueRange{next},
+                                   continueBlock, ValueRange{});
+          fb.setInsertionPointToStart(continueBlock);
         };
 
         if (clearWrites)
@@ -1773,18 +1930,30 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
           clearTable(readVisibilityType);
         if (clearReadTracking)
           clearTable(readTrackingType);
+        if (clearCopies) {
+          // Copy counters have no K/T axis to stream.
+          Value copiesPtr = entryBlock->getArgument(nextArg++);
+          Value copiesMask =
+              convertAndBroadcast(fb, bufferMask, {1}, copiesType);
+          Value ctaMask =
+              createCTASetMask(fb, copiesType, /*dim=*/0, effectCTAs);
+          copiesMask = arith::AndIOp::create(fb, copiesMask, ctaMask);
+          Value zero =
+              tti::createConstIntTensor(fb, fb.getLoc(), 0, copiesType);
+          tti::createStoreScratchMemory(fb, fb.getLoc(), copiesPtr, zero,
+                                        copiesType, /*currentCTAOnly=*/false,
+                                        copiesMask);
+        }
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
       });
 }
 
-void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
-                                                  Value bufferMask, int reader,
-                                                  uint64_t observerMask,
-                                                  Value pred, MemType memType,
-                                                  Operation *insertPoint,
-                                                  Value effectCTAs) {
+void FunctionBuilder::createSetReadVisibilityCall(
+    ImplicitLocOpBuilder &b, Value bufferMask, int reader,
+    uint64_t observerMask, Value pred, MemType memType, Operation *insertPoint,
+    Value effectCTAs, Value bufferIndex) {
 
   if (auxData.readVisibility[(int)memType].empty()) {
     return;
@@ -1798,12 +1967,18 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
   auto readVisibilityType = cast<RankedTensorType>(
       auxData.readVisibility[(int)memType].at(insertPoint).type);
   bool hasReadTracking = !auxData.readTracking[(int)memType].empty();
-  SmallVector<Value> args = {bufferMask,        pred,
-                             readerMaskVal,     observerMaskVal,
-                             readVisibilityVal, effectCTAs};
+  bool singleBuffer = static_cast<bool>(bufferIndex);
+  SmallVector<Value> args = {singleBuffer ? bufferIndex : bufferMask,
+                             pred,
+                             readerMaskVal,
+                             observerMaskVal,
+                             readVisibilityVal,
+                             effectCTAs};
   RankedTensorType readTrackingType;
-  ManglingArgs specializationArgs{readVisibilityType,
-                                  (uint64_t)hasReadTracking};
+  // Keep the full backing types in the cache key: equal one-buffer view shapes
+  // can have different physical strides and origin/phase bank offsets.
+  ManglingArgs specializationArgs{readVisibilityType, (uint64_t)hasReadTracking,
+                                  (uint64_t)singleBuffer};
   if (hasReadTracking) {
     ValueType tracking = auxData.readTracking[(int)memType].at(insertPoint);
     readTrackingType = cast<RankedTensorType>(tracking.type);
@@ -1813,9 +1988,9 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
   createCallToCachedFunction(
       b, "set_read_visibility", args,
       /*assertInfo=*/std::nullopt, specializationArgs,
-      [readVisibilityType, readTrackingType,
-       hasReadTracking](ImplicitLocOpBuilder &fb, Block *entryBlock) {
-        Value bufferMask = entryBlock->getArgument(0);
+      [readVisibilityType, readTrackingType, hasReadTracking,
+       singleBuffer](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+        Value bufferSelection = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value readerMaskVal = entryBlock->getArgument(2);
         Value observerMaskVal = entryBlock->getArgument(3);
@@ -1828,9 +2003,54 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
 
+        SmallVector<int64_t> visibilityStrides, trackingStrides;
+        auto createBufferView = [&](RankedTensorType type,
+                                    SmallVectorImpl<int64_t> &strides) {
+          if (!singleBuffer)
+            return type;
+          SmallVector<int64_t> shape(type.getShape());
+          strides.resize(shape.size(), 1);
+          for (unsigned dim = 1; dim < shape.size(); ++dim)
+            strides[dim] = strides[dim - 1] * shape[dim - 1];
+          shape[1] = 1;
+          // Distribute lanes over the narrowed shape to avoid redundant loads.
+          return tti::getIntTensorType(
+              fb.getInsertionBlock()->getParent(), shape,
+              type.getElementType().getIntOrFloatBitWidth());
+        };
+        RankedTensorType visibilityType =
+            createBufferView(readVisibilityType, visibilityStrides);
+        RankedTensorType trackingType;
+        if (hasReadTracking)
+          trackingType = createBufferView(readTrackingType, trackingStrides);
+
+        auto selectBufferPointer = [&](Value ptr,
+                                       RankedTensorType type) -> Value {
+          if (!singleBuffer)
+            return ptr;
+          Value stride =
+              arith::ConstantIntOp::create(fb, type.getShape()[0], 32);
+          Value offset = arith::MulIOp::create(fb, bufferSelection, stride);
+          return triton::AddPtrOp::create(fb, ptr.getType(), ptr, offset)
+              .getResult();
+        };
+        readVisibilityPtr =
+            selectBufferPointer(readVisibilityPtr, readVisibilityType);
+        if (hasReadTracking)
+          readTrackingPtr =
+              selectBufferPointer(readTrackingPtr, readTrackingType);
+
         Value currentCTA = createCurrentCTAMask(fb);
+        auto createBufferRows = [&](RankedTensorType tableType) -> Value {
+          if (singleBuffer) {
+            auto maskType =
+                cast<RankedTensorType>(tableType.clone(fb.getI1Type()));
+            return tti::createConstIntTensor(fb, fb.getLoc(), 1, maskType);
+          }
+          return convertAndBroadcast(fb, bufferSelection, {1}, tableType);
+        };
         auto createReaderRows = [&](RankedTensorType tableType) {
-          Value rows = convertAndBroadcast(fb, bufferMask, {1}, tableType);
+          Value rows = createBufferRows(tableType);
           Value ownerMask =
               createCTASetMask(fb, tableType, /*dim=*/0, effectCTAs);
           Value readerCTAMask =
@@ -1846,30 +2066,32 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
           Value readerBit =
               triton::SplatOp::create(fb, tableType, readerMaskElem);
           Value allOnes =
-              tti::createConstIntTensor(fb, fb.getLoc(), -1, tableType);
+              tti::createConstIntTensor(fb, fb.getLoc(), -1, tableType,
+                                        /*isSigned=*/true);
           Value notReaderBit = arith::XOrIOp::create(fb, readerBit, allOnes);
           Value withoutReader = arith::AndIOp::create(fb, table, notReaderBit);
           return arith::SelectOp::create(fb, rows, withoutReader, table)
               .getResult();
         };
 
-        Value readVisibility = tti::createLoadScratchMemory(
-            fb, fb.getLoc(), readVisibilityPtr, readVisibilityType);
-        Value visibilityRows = createReaderRows(readVisibilityType);
+        Value readVisibility =
+            tti::createLoadScratchMemory(fb, fb.getLoc(), readVisibilityPtr,
+                                         visibilityType, visibilityStrides);
+        Value visibilityRows = createReaderRows(visibilityType);
         // A logical reader reuses one bit for every read. Remove the previous
         // generation before publishing the current one so an old observer or
         // barrier snapshot cannot license a later unfinished read.
         Value newVisibility =
-            clearReader(readVisibility, readVisibilityType, visibilityRows);
-        auto elemType = cast<IntegerType>(readVisibilityType.getElementType());
+            clearReader(readVisibility, visibilityType, visibilityRows);
+        auto elemType = cast<IntegerType>(visibilityType.getElementType());
         Value readerMaskElem = adjustIntegerWidth(fb, readerMaskVal, elemType);
         Value readerBit =
-            triton::SplatOp::create(fb, readVisibilityType, readerMaskElem);
+            triton::SplatOp::create(fb, visibilityType, readerMaskElem);
         Value observerColumnMask =
-            createThreadColumnMask(fb, observerMaskVal, readVisibilityType,
+            createThreadColumnMask(fb, observerMaskVal, visibilityType,
                                    /*columnDim=*/3);
         Value observerCTAMask =
-            createCTASetMask(fb, readVisibilityType, /*dim=*/2, currentCTA);
+            createCTASetMask(fb, visibilityType, /*dim=*/2, currentCTA);
         Value observerRows =
             arith::AndIOp::create(fb, visibilityRows, observerCTAMask);
         observerRows =
@@ -1878,40 +2100,51 @@ void FunctionBuilder::createSetReadVisibilityCall(ImplicitLocOpBuilder &b,
         newVisibility = arith::SelectOp::create(fb, observerRows, withReader,
                                                 newVisibility);
         tti::createStoreScratchMemory(fb, fb.getLoc(), readVisibilityPtr,
-                                      newVisibility, readVisibilityType,
-                                      /*currentCTAOnly=*/false);
+                                      newVisibility, visibilityType,
+                                      /*currentCTAOnly=*/false,
+                                      /*storeMask=*/nullptr, visibilityStrides);
 
         if (hasReadTracking) {
           if (readTrackingType.getShape()[4] == 1) {
-            Value readTracking = tti::createLoadScratchMemory(
-                fb, fb.getLoc(), readTrackingPtr, readTrackingType);
-            Value trackingRows = createReaderRows(readTrackingType);
+            Value readTracking =
+                tti::createLoadScratchMemory(fb, fb.getLoc(), readTrackingPtr,
+                                             trackingType, trackingStrides);
+            Value trackingRows = createReaderRows(trackingType);
             Value newTracking =
-                clearReader(readTracking, readTrackingType, trackingRows);
-            tti::createStoreScratchMemory(fb, fb.getLoc(), readTrackingPtr,
-                                          newTracking, readTrackingType,
-                                          /*currentCTAOnly=*/false);
+                clearReader(readTracking, trackingType, trackingRows);
+            tti::createStoreScratchMemory(
+                fb, fb.getLoc(), readTrackingPtr, newTracking, trackingType,
+                /*currentCTAOnly=*/false,
+                /*storeMask=*/nullptr, trackingStrides);
           } else {
-            RankedTensorType bankType =
+            RankedTensorType fullBankType =
                 tti::getSlicedTensorType(readTrackingType, {0, 1, 2, 3},
                                          readTrackingType.getElementType());
-            Value trackingRows =
-                convertAndBroadcast(fb, bufferMask, {1}, bankType);
+            RankedTensorType bankType = tti::getSlicedTensorType(
+                trackingType, {0, 1, 2, 3}, trackingType.getElementType());
+            SmallVector<int64_t> bankStrides;
+            if (singleBuffer)
+              bankStrides.assign(trackingStrides.begin(),
+                                 trackingStrides.begin() + 4);
+            Value trackingRows = createBufferRows(bankType);
             Value ownerMask =
                 createCTASetMask(fb, bankType, /*dim=*/0, effectCTAs);
             trackingRows = arith::AndIOp::create(fb, trackingRows, ownerMask);
             Value originId =
                 tti::ExperimentalClusterCTAIdOp::create(fb, fb.getLoc());
             for (int phase = 0; phase < 2; ++phase) {
+              // The pointer is a B=1 view into the original allocation. Origin
+              // and phase banks are still separated by the full table stride.
               Value bankPtr = createTrackingOriginPhasePointer(
-                  fb, readTrackingPtr, readTrackingType, bankType, originId,
+                  fb, readTrackingPtr, readTrackingType, fullBankType, originId,
                   phase);
-              Value tracking = tti::createLoadScratchMemory(fb, fb.getLoc(),
-                                                            bankPtr, bankType);
+              Value tracking = tti::createLoadScratchMemory(
+                  fb, fb.getLoc(), bankPtr, bankType, bankStrides);
               Value updated = clearReader(tracking, bankType, trackingRows);
               tti::createStoreScratchMemory(fb, fb.getLoc(), bankPtr, updated,
                                             bankType,
-                                            /*currentCTAOnly=*/false);
+                                            /*currentCTAOnly=*/false,
+                                            /*storeMask=*/nullptr, bankStrides);
             }
           }
         }
@@ -1942,9 +2175,10 @@ void FunctionBuilder::createTrackVisibleAccessesCall(
   auto barriersType = cast<RankedTensorType>(barriers.type);
   ValueType barrierStates = auxData.barrierStates.at(insertPoint);
   auto barrierStatesType = cast<RankedTensorType>(barrierStates.type);
+  uint32_t mbarLength = getMemDescLength(mbar);
   SmallVector<Value> args = {
       tti::ExperimentalMemDescToI32Op::create(b, mbar),
-      arith::ConstantIntOp::create(b, getMemDescLength(mbar), 32),
+      arith::ConstantIntOp::create(b, mbarLength, 32),
       pred,
       arith::ConstantIntOp::create(b, thread, 32),
       barriers.value,
@@ -1984,6 +2218,10 @@ void FunctionBuilder::createTrackVisibleAccessesCall(
   if (readBufferMask)
     args.push_back(readBufferMask);
 
+  bool sliceBarrierTracking =
+      hasUniqueBarrierDescriptors(barriers.value, mbarLength);
+  specializationArgs.append(static_cast<uint64_t>(sliceBarrierTracking));
+
   createCallToCachedFunction(
       b,
       readBufferMask ? "track_barrier_read_for_buffer"
@@ -1991,8 +2229,8 @@ void FunctionBuilder::createTrackVisibleAccessesCall(
       args, /*assertInfo=*/std::nullopt, specializationArgs,
       [trackWrites, trackReads, writeVisibilityType, writeTrackingType,
        readVisibilityType, barrierStatesType,
-       filterBuffer = static_cast<bool>(readBufferMask),
-       readTrackingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+       filterBuffer = static_cast<bool>(readBufferMask), readTrackingType,
+       sliceBarrierTracking](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value lengthVal = entryBlock->getArgument(1);
         Value pred = entryBlock->getArgument(2);
@@ -2014,33 +2252,95 @@ void FunctionBuilder::createTrackVisibleAccessesCall(
             fb, barrierStates,
             tti::createConstIntTensor(fb, fb.getLoc(), 1, barrierStatesType));
 
-        if (trackWrites) {
-          Value visibilityPtr = entryBlock->getArgument(nextArg++);
-          Value trackingPtr = entryBlock->getArgument(nextArg++);
-          Value visibility = tti::createLoadScratchMemory(
-              fb, fb.getLoc(), visibilityPtr, writeVisibilityType);
-          Value tracking = tti::createLoadScratchMemory(
-              fb, fb.getLoc(), trackingPtr, writeTrackingType);
-          Value barrierMask =
-              convertAndBroadcast(fb, barriersEqBar, {3}, writeTrackingType);
-          Value barrierCTAMask =
-              createCTASetMask(fb, writeTrackingType, /*dim=*/2, barrierCTAs);
-          barrierMask = arith::AndIOp::create(fb, barrierMask, barrierCTAMask);
+        Value barrierIndex, anyMatch;
+        Value trackingPhases = currentPhases;
+        SmallVector<int> phaseDims{2, 3};
+        if (sliceBarrierTracking) {
+          auto indexType =
+              cast<RankedTensorType>(barriers.getType()).clone(fb.getI32Type());
+          Value indices = triton::MakeRangeOp::create(
+              fb, indexType, 0, indexType.getNumElements());
+          Value selectedIndices = arith::SelectOp::create(
+              fb, barriersEqBar, indices,
+              tti::createConstIntTensor(fb, fb.getLoc(), 0, indexType));
+          barrierIndex = reduceAll<arith::OrIOp>(fb, selectedIndices);
+          anyMatch = reduceAll<arith::OrIOp>(fb, barriersEqBar);
+
+          // Each recipient CTA keeps its own phase. Both phase banks remain
+          // in the viewport; remove only the uniquely selected barrier axis.
+          Value selectedPhases = arith::SelectOp::create(
+              fb,
+              convertAndBroadcast(fb, barriersEqBar, {1}, barrierStatesType),
+              currentPhases,
+              tti::createConstIntTensor(fb, fb.getLoc(), 0, barrierStatesType));
+          trackingPhases = reduceLastDim<arith::OrIOp>(fb, selectedPhases);
+          phaseDims = {2};
+        }
+
+        auto createTrackingView = [&](Value ptr, RankedTensorType type) {
+          SmallVector<int64_t> strides;
+          if (sliceBarrierTracking) {
+            ArrayRef<int64_t> shape = type.getShape();
+            int64_t barrierStride = shape[0] * shape[1] * shape[2];
+            Value offset = arith::MulIOp::create(
+                fb, barrierIndex,
+                arith::ConstantIntOp::create(fb, barrierStride, 32));
+            ptr = triton::AddPtrOp::create(fb, ptr.getType(), ptr, offset);
+            SmallVector<int64_t> compactShape;
+            int64_t stride = 1;
+            for (int dim = 0; dim < type.getRank(); ++dim) {
+              if (dim != 3) {
+                compactShape.push_back(shape[dim]);
+                strides.push_back(stride);
+              }
+              stride *= shape[dim];
+            }
+            type = tti::getIntTensorType(
+                entryBlock->getParent(), compactShape,
+                type.getElementType().getIntOrFloatBitWidth());
+          }
+          return std::make_tuple(ptr, type, std::move(strides));
+        };
+
+        auto createBarrierMask = [&](RankedTensorType type, Value ctaMask) {
+          Value mask;
+          if (sliceBarrierTracking) {
+            mask = triton::SplatOp::create(fb, type.clone(fb.getI1Type()),
+                                           anyMatch);
+          } else {
+            mask = convertAndBroadcast(fb, barriersEqBar, {3}, type);
+          }
+          mask = arith::AndIOp::create(fb, mask, ctaMask);
           Value currentPhase =
-              convertAndBroadcast(fb, currentPhases, {2, 3}, writeTrackingType);
-          Value phaseIndices = createDimIndices(
-              fb, writeTrackingType, /*dim=*/writeTrackingType.getRank() - 1);
+              convertAndBroadcast(fb, trackingPhases, phaseDims, type);
+          Value phaseIndices =
+              createDimIndices(fb, type, /*dim=*/type.getRank() - 1);
           auto phaseIndicesType =
               cast<RankedTensorType>(phaseIndices.getType());
           currentPhase =
               arith::TruncIOp::create(fb, phaseIndicesType, currentPhase);
           Value phaseMask = arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
                                                   phaseIndices, currentPhase);
-          barrierMask = arith::AndIOp::create(fb, barrierMask, phaseMask);
-          Value threadI64 =
-              arith::ExtUIOp::create(fb, fb.getI64Type(), threadVal);
-          Value one64 = arith::ConstantIntOp::create(fb, 1, 64);
-          Value threadBitScalar = arith::ShLIOp::create(fb, one64, threadI64);
+          return arith::AndIOp::create(fb, mask, phaseMask).getResult();
+        };
+
+        if (trackWrites) {
+          Value visibilityPtr = entryBlock->getArgument(nextArg++);
+          auto [trackingPtr, trackingType, trackingStrides] =
+              createTrackingView(entryBlock->getArgument(nextArg++),
+                                 writeTrackingType);
+          Value visibility = tti::createLoadScratchMemory(
+              fb, fb.getLoc(), visibilityPtr, writeVisibilityType);
+          Value barrierCTAMask =
+              createCTASetMask(fb, trackingType, /*dim=*/2, barrierCTAs);
+          Value barrierMask = createBarrierMask(trackingType, barrierCTAMask);
+          auto elemType =
+              cast<IntegerType>(writeVisibilityType.getElementType());
+          Value threadElem = adjustIntegerWidth(fb, threadVal, elemType);
+          Value oneScalar = arith::ConstantOp::create(
+              fb, elemType, fb.getIntegerAttr(elemType, 1));
+          Value threadBitScalar =
+              arith::ShLIOp::create(fb, oneScalar, threadElem);
           Value threadBit =
               triton::SplatOp::create(fb, writeVisibilityType, threadBitScalar);
           Value visibleWrites =
@@ -2053,78 +2353,95 @@ void FunctionBuilder::createTrackVisibleAccessesCall(
               arith::AndIOp::create(fb, visibleWrites, sourceCTAMask);
           visibleWrites = reduceLastDim<arith::OrIOp>(fb, visibleWrites);
           visibleWrites =
-              convertAndBroadcast(fb, visibleWrites, {0, 1}, writeTrackingType);
+              convertAndBroadcast(fb, visibleWrites, {0, 1}, trackingType);
           Value barAndVisible =
               arith::AndIOp::create(fb, barrierMask, visibleWrites);
           Value one =
-              tti::createConstIntTensor(fb, fb.getLoc(), 1, writeTrackingType);
-          Value updated =
-              arith::SelectOp::create(fb, barAndVisible, one, tracking);
-          createMaskedStoreScratchMemory(fb, fb.getLoc(), trackingPtr, updated,
-                                         writeTrackingType, barrierCTAMask);
+              tti::createConstIntTensor(fb, fb.getLoc(), 1, trackingType);
+          tti::createStoreScratchMemory(
+              fb, fb.getLoc(), trackingPtr, one, trackingType,
+              /*currentCTAOnly=*/false, barAndVisible, trackingStrides);
         }
 
         if (trackReads) {
           Value visibilityPtr = entryBlock->getArgument(nextArg++);
-          Value trackingPtr = entryBlock->getArgument(nextArg++);
-          Value visibility = tti::createLoadScratchMemory(
-              fb, fb.getLoc(), visibilityPtr, readVisibilityType);
+          auto [trackingPtr, trackingType, trackingStrides] =
+              createTrackingView(entryBlock->getArgument(nextArg++),
+                                 readTrackingType);
+          // Select the issuing observer before loading [Cbuf, B, Creader].
+          // The retained reader-CTA dimension keeps its full-table stride.
+          ArrayRef<int64_t> visibilityShape = readVisibilityType.getShape();
+          int64_t observerCTAStride = visibilityShape[0] * visibilityShape[1];
+          int64_t observerThreadStride = observerCTAStride * visibilityShape[2];
+          Value observerCTA =
+              tti::ExperimentalClusterCTAIdOp::create(fb, fb.getLoc());
+          Value observerCTAOffset = arith::MulIOp::create(
+              fb, observerCTA,
+              arith::ConstantIntOp::create(fb, observerCTAStride, 32));
+          Value observerThreadOffset = arith::MulIOp::create(
+              fb, threadVal,
+              arith::ConstantIntOp::create(fb, observerThreadStride, 32));
+          Value observerOffset = arith::AddIOp::create(fb, observerCTAOffset,
+                                                       observerThreadOffset);
+          Value observerPtr = triton::AddPtrOp::create(
+              fb, visibilityPtr.getType(), visibilityPtr, observerOffset);
+          RankedTensorType observerType = tti::getIntTensorType(
+              entryBlock->getParent(),
+              {visibilityShape[0], visibilityShape[1], visibilityShape[4]},
+              readVisibilityType.getElementType().getIntOrFloatBitWidth());
+          Value visibleReads = tti::createLoadScratchMemory(
+              fb, fb.getLoc(), observerPtr, observerType,
+              {1, visibilityShape[0],
+               observerThreadStride * visibilityShape[3]});
           Value tracking = tti::createLoadScratchMemory(
-              fb, fb.getLoc(), trackingPtr, readTrackingType);
-          Value barrierMask =
-              convertAndBroadcast(fb, barriersEqBar, {3}, readTrackingType);
+              fb, fb.getLoc(), trackingPtr, trackingType, trackingStrides);
           Value barrierCTAMask =
-              createCTASetMask(fb, readTrackingType, /*dim=*/2, barrierCTAs);
-          barrierMask = arith::AndIOp::create(fb, barrierMask, barrierCTAMask);
+              createCTASetMask(fb, trackingType, /*dim=*/2, barrierCTAs);
+          Value barrierMask = createBarrierMask(trackingType, barrierCTAMask);
           if (filterBuffer) {
             Value bufferMask = convertAndBroadcast(
-                fb, entryBlock->getArguments().back(), {1}, readTrackingType);
+                fb, entryBlock->getArguments().back(), {1}, trackingType);
             Value bufferCTAMask =
-                createCTASetMask(fb, readTrackingType, /*dim=*/0, barrierCTAs);
+                createCTASetMask(fb, trackingType, /*dim=*/0, barrierCTAs);
             barrierMask = arith::AndIOp::create(fb, barrierMask, bufferMask);
             barrierMask = arith::AndIOp::create(fb, barrierMask, bufferCTAMask);
           }
-          Value currentPhase =
-              convertAndBroadcast(fb, currentPhases, {2, 3}, readTrackingType);
-          Value phaseIndices = createDimIndices(
-              fb, readTrackingType, /*dim=*/readTrackingType.getRank() - 1);
-          auto phaseIndicesType =
-              cast<RankedTensorType>(phaseIndices.getType());
-          currentPhase =
-              arith::TruncIOp::create(fb, phaseIndicesType, currentPhase);
-          Value phaseMask = arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
-                                                  phaseIndices, currentPhase);
-          barrierMask = arith::AndIOp::create(fb, barrierMask, phaseMask);
-          Value threadColumnMask =
-              createDimMask(fb, threadVal, readVisibilityType, /*dim=*/3);
-          Value zero =
-              tti::createConstIntTensor(fb, fb.getLoc(), 0, readVisibilityType);
-          Value sourceCTAMask =
-              createCTASetMask(fb, readVisibilityType, /*dim=*/2, currentCTA);
-          Value observer =
-              arith::AndIOp::create(fb, threadColumnMask, sourceCTAMask);
-          Value visibleReads =
-              arith::SelectOp::create(fb, observer, visibility, zero);
-          visibleReads = reduce<arith::OrIOp>(fb, visibleReads, {2, 3});
-          visibleReads = convertAndBroadcast(fb, visibleReads, {0, 1, 4},
-                                             readTrackingType);
+          SmallVector<int> readerDims{0, 1, sliceBarrierTracking ? 3 : 4};
+          visibleReads =
+              convertAndBroadcast(fb, visibleReads, readerDims, trackingType);
           Value withVisible = arith::OrIOp::create(fb, tracking, visibleReads);
-          if (filterBuffer) {
-            Value updated =
-                arith::SelectOp::create(fb, barrierMask, withVisible, tracking);
-            createMaskedStoreScratchMemory(fb, fb.getLoc(), trackingPtr,
-                                           updated, readTrackingType,
-                                           barrierMask);
-          } else {
-            tti::createStoreScratchMemory(
-                fb, fb.getLoc(), trackingPtr, withVisible, readTrackingType,
-                /*currentCTAOnly=*/false, barrierMask);
-          }
+          tti::createStoreScratchMemory(
+              fb, fb.getLoc(), trackingPtr, withVisible, trackingType,
+              /*currentCTAOnly=*/false, barrierMask, trackingStrides);
         }
 
         fb.setInsertionPointToEnd(thenBlock);
         triton::ReturnOp::create(fb);
       });
+}
+
+void FunctionBuilder::createTrackAsyncCopiesForBarrierCall(
+    ImplicitLocOpBuilder &b, Value mbar, int thread, Value pred,
+    Operation *insertPoint, Value barrierCTAs) {
+  if (auxData.commits[CommitKind::AsyncCp].empty())
+    return;
+  ValueType copies = auxData.commits[CommitKind::AsyncCp].at(insertPoint);
+  auto copiesType = cast<RankedTensorType>(copies.type);
+  Value pending =
+      tti::createLoadScratchMemory(b, b.getLoc(), copies.value, copiesType);
+  Value mask = arith::CmpIOp::create(
+      b, arith::CmpIPredicate::ne, pending,
+      tti::createConstIntTensor(b, b.getLoc(), 0, copiesType));
+  Value issuer = createDimMask(b, arith::ConstantIntOp::create(b, thread, 32),
+                               copiesType, 2);
+  mask = arith::AndIOp::create(b, mask, issuer);
+  Value currentCTA = createCurrentCTAMask(b);
+  mask = arith::AndIOp::create(b, mask,
+                               createCTASetMask(b, copiesType, 0, currentCTA));
+  Value bufferMask = reduce<arith::OrIOp>(b, mask, {0, 2});
+  createTrackBarrierWriteForBufferCall(b, mbar, bufferMask, pred,
+                                       MemType::SHARED_MEM, insertPoint,
+                                       barrierCTAs, currentCTA);
 }
 
 void FunctionBuilder::createTrackBarrierWriteForBufferCall(
@@ -2153,10 +2470,13 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
   SmallVector<Value> args = {mbarOffset,       mbarLengthVal, pred,
                              bufferMask,       barriersVal,   writeTrackingVal,
                              barrierStatesVal, barrierCTAs,   effectCTAs};
+  auto maskEncoding =
+      cast<RankedTensorType>(bufferMask.getType()).getEncoding();
   createCallToCachedFunction(
       b, "track_barrier_write_for_buffer", args,
       /*assertInfo=*/std::nullopt,
-      {barriersType, writeTrackingType, barrierStatesType},
+      {barriersType, writeTrackingType, barrierStatesType,
+       llvm::xxh3_64bits(mlir::debugString(maskEncoding))},
       [writeTrackingType, barrierStatesType](ImplicitLocOpBuilder &fb,
                                              Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
@@ -2288,9 +2608,10 @@ void FunctionBuilder::createTransferVisibleAccessesCall(
   Value threadMaskVal = arith::ConstantIntOp::create(b, threadMask, 64);
   ValueType barriers = auxData.barriers.at(insertPoint);
   auto barriersType = cast<RankedTensorType>(barriers.type);
+  uint32_t mbarLength = getMemDescLength(mbar);
   SmallVector<Value> args = {
       tti::ExperimentalMemDescToI32Op::create(b, mbar),
-      arith::ConstantIntOp::create(b, getMemDescLength(mbar), 32),
+      arith::ConstantIntOp::create(b, mbarLength, 32),
       phase,
       pred,
       threadMaskVal,
@@ -2325,13 +2646,16 @@ void FunctionBuilder::createTransferVisibleAccessesCall(
     specializationArgs.append(readVisibilityType);
     specializationArgs.append(readTrackingType);
   }
+  bool sliceBarrierTracking =
+      hasUniqueBarrierDescriptors(barriers.value, mbarLength);
+  specializationArgs.append(static_cast<uint64_t>(sliceBarrierTracking));
 
   createCallToCachedFunction(
       b, "transfer_visible_accesses", args, /*assertInfo=*/std::nullopt,
       specializationArgs,
       [transferWrites, transferReads, writeVisibilityType, writeTrackingType,
-       readVisibilityType,
-       readTrackingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+       readVisibilityType, readTrackingType,
+       sliceBarrierTracking](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value lengthVal = entryBlock->getArgument(1);
         Value phase = entryBlock->getArgument(2);
@@ -2346,17 +2670,34 @@ void FunctionBuilder::createTransferVisibleAccessesCall(
         Value barriersEqBar =
             createCmpIntTensorScalar(fb, barriers, descriptor);
         Value currentCTA = createCurrentCTAMask(fb);
+        Value barrierIndex, anyMatch;
+        if (sliceBarrierTracking) {
+          auto indexType =
+              cast<RankedTensorType>(barriers.getType()).clone(fb.getI32Type());
+          Value indices = triton::MakeRangeOp::create(
+              fb, indexType, 0, indexType.getNumElements());
+          Value selectedIndices = arith::SelectOp::create(
+              fb, barriersEqBar, indices,
+              tti::createConstIntTensor(fb, fb.getLoc(), 0, indexType));
+          barrierIndex = reduceAll<arith::OrIOp>(fb, selectedIndices);
+          anyMatch = reduceAll<arith::OrIOp>(fb, barriersEqBar);
+        }
+        auto createBarrierMask = [&](RankedTensorType type) -> Value {
+          if (sliceBarrierTracking)
+            return triton::SplatOp::create(fb, type.clone(fb.getI1Type()),
+                                           anyMatch);
+          return convertAndBroadcast(fb, barriersEqBar, {3}, type);
+        };
 
         if (transferWrites) {
           Value visibilityPtr = entryBlock->getArgument(nextArg++);
           Value trackingPtr = entryBlock->getArgument(nextArg++);
           Value visibility = tti::createLoadScratchMemory(
               fb, fb.getLoc(), visibilityPtr, writeVisibilityType);
-          Value tracking = createLoadTrackingPhase(fb, trackingPtr,
-                                                   writeTrackingType, phase);
+          Value tracking = createLoadTrackingPhase(
+              fb, trackingPtr, writeTrackingType, phase, barrierIndex);
           auto phaseTrackingType = cast<RankedTensorType>(tracking.getType());
-          Value barrierMask =
-              convertAndBroadcast(fb, barriersEqBar, {3}, phaseTrackingType);
+          Value barrierMask = createBarrierMask(phaseTrackingType);
           Value barrierCTAMask =
               createCTASetMask(fb, phaseTrackingType, /*dim=*/2, currentCTA);
           barrierMask = arith::AndIOp::create(fb, barrierMask, barrierCTAMask);
@@ -2398,11 +2739,10 @@ void FunctionBuilder::createTransferVisibleAccessesCall(
           Value trackingPtr = entryBlock->getArgument(nextArg++);
           Value visibility = tti::createLoadScratchMemory(
               fb, fb.getLoc(), visibilityPtr, readVisibilityType);
-          Value tracking =
-              createLoadTrackingPhase(fb, trackingPtr, readTrackingType, phase);
+          Value tracking = createLoadTrackingPhase(
+              fb, trackingPtr, readTrackingType, phase, barrierIndex);
           auto phaseTrackingType = cast<RankedTensorType>(tracking.getType());
-          Value barrierMask =
-              convertAndBroadcast(fb, barriersEqBar, {3}, phaseTrackingType);
+          Value barrierMask = createBarrierMask(phaseTrackingType);
           Value barrierCTAMask =
               createCTASetMask(fb, phaseTrackingType, /*dim=*/2, currentCTA);
           barrierMask = arith::AndIOp::create(fb, barrierMask, barrierCTAMask);
@@ -2473,10 +2813,10 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
             tti::createConstIntTensor(fb, fb.getLoc(), 0, writeVisibilityType);
         Value noOneIsWriting = arith::CmpIOp::create(
             fb, arith::CmpIPredicate::eq, writeVisibility, writeVisibilityZero);
-        Value threadI64 =
-            arith::ExtUIOp::create(fb, fb.getI64Type(), threadVal);
+        auto elemType = cast<IntegerType>(writeVisibilityType.getElementType());
+        Value threadElem = adjustIntegerWidth(fb, threadVal, elemType);
         Value threadMask =
-            triton::SplatOp::create(fb, writeVisibilityType, threadI64);
+            triton::SplatOp::create(fb, writeVisibilityType, threadElem);
         Value bufferMaskExt =
             arith::ExtUIOp::create(fb, writeVisibilityType, bufferMask);
         Value bufferThreadBit =
@@ -2935,11 +3275,9 @@ void FunctionBuilder::createPublishClusterVisibilityCall(
       });
 }
 
-void FunctionBuilder::createSetProxyAccessCall(ImplicitLocOpBuilder &b,
-                                               Value bufferMask, int thread,
-                                               Value pred,
-                                               Operation *insertPoint,
-                                               Value effectCTAs) {
+void FunctionBuilder::createSetProxyAccessCall(
+    ImplicitLocOpBuilder &b, Value bufferMask, int thread, Value pred,
+    Operation *insertPoint, Value effectCTAs, Value bufferIndex) {
   if (auxData.proxyAccessVisibility.empty())
     return;
   if (!pred)
@@ -2948,11 +3286,14 @@ void FunctionBuilder::createSetProxyAccessCall(ImplicitLocOpBuilder &b,
   ValueType visibility = auxData.proxyAccessVisibility.at(insertPoint);
   auto visibilityType = cast<RankedTensorType>(visibility.type);
   bool hasTracking = !auxData.proxyAccessTracking.empty();
+  bool singleBuffer = static_cast<bool>(bufferIndex);
   RankedTensorType trackingType;
-  SmallVector<Value> args = {bufferMask, pred,
+  SmallVector<Value> args = {singleBuffer ? bufferIndex : bufferMask, pred,
                              arith::ConstantIntOp::create(b, thread, 32),
                              visibility.value, effectCTAs};
-  ManglingArgs specializationArgs{visibilityType, (uint64_t)hasTracking};
+  // Equal row-view shapes can have different backing strides and bank offsets.
+  ManglingArgs specializationArgs{visibilityType, (uint64_t)hasTracking,
+                                  (uint64_t)singleBuffer};
   if (hasTracking) {
     ValueType tracking = auxData.proxyAccessTracking.at(insertPoint);
     trackingType = cast<RankedTensorType>(tracking.type);
@@ -2963,9 +3304,10 @@ void FunctionBuilder::createSetProxyAccessCall(ImplicitLocOpBuilder &b,
   createCallToCachedFunction(
       b, "set_proxy_access", args, /*assertInfo=*/std::nullopt,
       specializationArgs,
-      [visibilityType, trackingType, hasTracking](ImplicitLocOpBuilder &fb,
-                                                  Block *entryBlock) {
-        Value bufferMask = entryBlock->getArgument(0);
+      [visibilityBackingType = visibilityType,
+       trackingBackingType = trackingType, hasTracking,
+       singleBuffer](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+        Value bufferSelection = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value threadVal = entryBlock->getArgument(2);
         Value visibilityPtr = entryBlock->getArgument(3);
@@ -2975,10 +3317,51 @@ void FunctionBuilder::createSetProxyAccessCall(ImplicitLocOpBuilder &b,
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
         fb.setInsertionPointToStart(ifBlock);
 
+        SmallVector<int64_t> visibilityStrides, trackingStrides;
+        auto createBufferView = [&](RankedTensorType type,
+                                    SmallVectorImpl<int64_t> &strides) {
+          if (!singleBuffer)
+            return type;
+          SmallVector<int64_t> shape(type.getShape());
+          strides.resize(shape.size(), 1);
+          for (unsigned dim = 1; dim < shape.size(); ++dim)
+            strides[dim] = strides[dim - 1] * shape[dim - 1];
+          shape[1] = 1;
+          return tti::getIntTensorType(
+              fb.getInsertionBlock()->getParent(), shape,
+              type.getElementType().getIntOrFloatBitWidth());
+        };
+        RankedTensorType visibilityType =
+            createBufferView(visibilityBackingType, visibilityStrides);
+        RankedTensorType trackingType;
+        if (hasTracking)
+          trackingType = createBufferView(trackingBackingType, trackingStrides);
+
+        auto selectBufferPointer = [&](Value ptr,
+                                       RankedTensorType type) -> Value {
+          if (!singleBuffer)
+            return ptr;
+          Value stride =
+              arith::ConstantIntOp::create(fb, type.getShape()[0], 32);
+          Value offset = arith::MulIOp::create(fb, bufferSelection, stride);
+          return triton::AddPtrOp::create(fb, ptr.getType(), ptr, offset)
+              .getResult();
+        };
+        visibilityPtr =
+            selectBufferPointer(visibilityPtr, visibilityBackingType);
+        if (hasTracking)
+          trackingPtr = selectBufferPointer(trackingPtr, trackingBackingType);
+
+        auto createBufferRows = [&](RankedTensorType type) -> Value {
+          if (singleBuffer) {
+            auto maskType = cast<RankedTensorType>(type.clone(fb.getI1Type()));
+            return tti::createConstIntTensor(fb, fb.getLoc(), 1, maskType);
+          }
+          return convertAndBroadcast(fb, bufferSelection, {1}, type);
+        };
         Value visibility = tti::createLoadScratchMemory(
-            fb, fb.getLoc(), visibilityPtr, visibilityType);
-        Value bufferVector = bufferMask;
-        bufferMask = convertAndBroadcast(fb, bufferMask, {1}, visibilityType);
+            fb, fb.getLoc(), visibilityPtr, visibilityType, visibilityStrides);
+        Value bufferMask = createBufferRows(visibilityType);
         Value bufferCTAMask =
             createCTASetMask(fb, visibilityType, /*dim=*/0, effectCTAs);
         Value currentCTA = createCurrentCTAMask(fb);
@@ -3022,7 +3405,8 @@ void FunctionBuilder::createSetProxyAccessCall(ImplicitLocOpBuilder &b,
             arith::SelectOp::create(fb, ownerMask, withSeen, clearedVisibility);
         tti::createStoreScratchMemory(fb, fb.getLoc(), visibilityPtr,
                                       updatedVisibility, visibilityType,
-                                      /*currentCTAOnly=*/false);
+                                      /*currentCTAOnly=*/false,
+                                      /*storeMask=*/nullptr, visibilityStrides);
 
         // A new generic access supersedes fence coverage for an older access
         // from the same source. Clear that source's fence bit in outstanding
@@ -3031,9 +3415,8 @@ void FunctionBuilder::createSetProxyAccessCall(ImplicitLocOpBuilder &b,
         if (hasTracking) {
           if (trackingType.getShape()[4] == 1) {
             Value tracking = tti::createLoadScratchMemory(
-                fb, fb.getLoc(), trackingPtr, trackingType);
-            Value trackingBuffers =
-                convertAndBroadcast(fb, bufferVector, {1}, trackingType);
+                fb, fb.getLoc(), trackingPtr, trackingType, trackingStrides);
+            Value trackingBuffers = createBufferRows(trackingType);
             Value trackingBufferCTAMask =
                 createCTASetMask(fb, trackingType, /*dim=*/0, effectCTAs);
             Value trackingOriginCTAMask =
@@ -3048,14 +3431,21 @@ void FunctionBuilder::createSetProxyAccessCall(ImplicitLocOpBuilder &b,
                 arith::AndIOp::create(fb, tracking, trackingClear);
             Value updatedTracking = arith::SelectOp::create(
                 fb, trackingMask, clearedTracking, tracking);
-            tti::createStoreScratchMemory(fb, fb.getLoc(), trackingPtr,
-                                          updatedTracking, trackingType,
-                                          /*currentCTAOnly=*/false);
+            tti::createStoreScratchMemory(
+                fb, fb.getLoc(), trackingPtr, updatedTracking, trackingType,
+                /*currentCTAOnly=*/false,
+                /*storeMask=*/nullptr, trackingStrides);
           } else {
+            RankedTensorType fullBankType =
+                tti::getSlicedTensorType(trackingBackingType, {0, 1, 2, 3},
+                                         trackingBackingType.getElementType());
             RankedTensorType bankType = tti::getSlicedTensorType(
                 trackingType, {0, 1, 2, 3}, trackingType.getElementType());
-            Value trackingBuffers =
-                convertAndBroadcast(fb, bufferVector, {1}, bankType);
+            SmallVector<int64_t> bankStrides;
+            if (singleBuffer)
+              bankStrides.assign(trackingStrides.begin(),
+                                 trackingStrides.begin() + 4);
+            Value trackingBuffers = createBufferRows(bankType);
             Value ownerMask =
                 createCTASetMask(fb, bankType, /*dim=*/0, effectCTAs);
             Value trackingMask =
@@ -3065,17 +3455,20 @@ void FunctionBuilder::createSetProxyAccessCall(ImplicitLocOpBuilder &b,
             Value originId =
                 tti::ExperimentalClusterCTAIdOp::create(fb, fb.getLoc());
             for (int phase = 0; phase < 2; ++phase) {
+              // Row pointers retain the full allocation's origin/phase spacing.
               Value bankPtr = createTrackingOriginPhasePointer(
-                  fb, trackingPtr, trackingType, bankType, originId, phase);
-              Value tracking = tti::createLoadScratchMemory(fb, fb.getLoc(),
-                                                            bankPtr, bankType);
+                  fb, trackingPtr, trackingBackingType, fullBankType, originId,
+                  phase);
+              Value tracking = tti::createLoadScratchMemory(
+                  fb, fb.getLoc(), bankPtr, bankType, bankStrides);
               Value clearedTracking =
                   arith::AndIOp::create(fb, tracking, trackingClear);
               Value updated = arith::SelectOp::create(
                   fb, trackingMask, clearedTracking, tracking);
               tti::createStoreScratchMemory(fb, fb.getLoc(), bankPtr, updated,
                                             bankType,
-                                            /*currentCTAOnly=*/false);
+                                            /*currentCTAOnly=*/false,
+                                            /*storeMask=*/nullptr, bankStrides);
             }
           }
         }
@@ -3170,18 +3563,21 @@ void FunctionBuilder::createTrackProxyAccessesCallImpl(
   auto barrierStatesType = cast<RankedTensorType>(barrierStates.type);
   auto visibilityType = cast<RankedTensorType>(visibility.type);
   auto trackingType = cast<RankedTensorType>(tracking.type);
-  SmallVector<Value> args = {
-      tti::ExperimentalMemDescToI32Op::create(b, mbar),
-      arith::ConstantIntOp::create(b, getMemDescLength(mbar), 32),
-      pred,
-      arith::ConstantIntOp::create(b, thread, 32),
-      barriers.value,
-      barrierStates.value,
-      visibility.value,
-      tracking.value,
-      barrierCTAs};
+  uint32_t mbarLength = getMemDescLength(mbar);
+  bool sliceBarrierTracking =
+      hasUniqueBarrierDescriptors(barriers.value, mbarLength);
+  SmallVector<Value> args = {tti::ExperimentalMemDescToI32Op::create(b, mbar),
+                             arith::ConstantIntOp::create(b, mbarLength, 32),
+                             pred,
+                             arith::ConstantIntOp::create(b, thread, 32),
+                             barriers.value,
+                             barrierStates.value,
+                             visibility.value,
+                             tracking.value,
+                             barrierCTAs};
   ManglingArgs specializationArgs{barriersType, barrierStatesType,
-                                  visibilityType, trackingType};
+                                  visibilityType, trackingType,
+                                  (uint64_t)sliceBarrierTracking};
   if (filterByBuffer) {
     args.append({bufferMask, effectCTAs});
   }
@@ -3190,8 +3586,9 @@ void FunctionBuilder::createTrackProxyAccessesCallImpl(
       filterByBuffer ? "track_proxy_accesses_for_buffer"
                      : "track_proxy_accesses",
       args, /*assertInfo=*/std::nullopt, specializationArgs,
-      [barrierStatesType, visibilityType, trackingType,
-       filterByBuffer](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+      [barrierStatesType, visibilityType, trackingBackingType = trackingType,
+       filterByBuffer,
+       sliceBarrierTracking](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value lengthVal = entryBlock->getArgument(1);
         Value pred = entryBlock->getArgument(2);
@@ -3210,10 +3607,60 @@ void FunctionBuilder::createTrackProxyAccessesCallImpl(
         fb.setInsertionPointToStart(ifBlock);
         Value barrierStates = tti::createLoadScratchMemory(
             fb, fb.getLoc(), barrierStatesPtr, barrierStatesType);
+        Value descriptor = createBufferDescriptor(fb, mbarOffset, lengthVal);
+        Value barriersEqBar =
+            createCmpIntTensorScalar(fb, barriers, descriptor);
+        Value currentPhases = arith::AndIOp::create(
+            fb, barrierStates,
+            tti::createConstIntTensor(fb, fb.getLoc(), 1, barrierStatesType));
+        RankedTensorType trackingType = trackingBackingType;
+        SmallVector<int64_t> trackingStrides;
+        SmallVector<int> phaseDims{2, 3};
+        Value anyMatch;
+        if (sliceBarrierTracking) {
+          auto indexType =
+              cast<RankedTensorType>(barriers.getType()).clone(fb.getI32Type());
+          Value indices = triton::MakeRangeOp::create(
+              fb, indexType, 0, indexType.getNumElements());
+          Value selectedIndices = arith::SelectOp::create(
+              fb, barriersEqBar, indices,
+              tti::createConstIntTensor(fb, fb.getLoc(), 0, indexType));
+          Value barrierIndex = reduceAll<arith::OrIOp>(fb, selectedIndices);
+          anyMatch = reduceAll<arith::OrIOp>(fb, barriersEqBar);
+
+          // Remove only K, retaining each recipient CTA's current phase.
+          Value selectedPhases = arith::SelectOp::create(
+              fb,
+              convertAndBroadcast(fb, barriersEqBar, {1}, barrierStatesType),
+              currentPhases,
+              tti::createConstIntTensor(fb, fb.getLoc(), 0, barrierStatesType));
+          currentPhases = reduceLastDim<arith::OrIOp>(fb, selectedPhases);
+          phaseDims = {2};
+
+          ArrayRef<int64_t> shape = trackingBackingType.getShape();
+          int64_t barrierStride = shape[0] * shape[1] * shape[2];
+          Value offset = arith::MulIOp::create(
+              fb, barrierIndex,
+              arith::ConstantIntOp::create(fb, barrierStride, 32));
+          trackingPtr = triton::AddPtrOp::create(fb, trackingPtr.getType(),
+                                                 trackingPtr, offset);
+          SmallVector<int64_t> compactShape;
+          int64_t stride = 1;
+          for (int dim = 0; dim < trackingBackingType.getRank(); ++dim) {
+            if (dim != 3) {
+              compactShape.push_back(shape[dim]);
+              trackingStrides.push_back(stride);
+            }
+            stride *= shape[dim];
+          }
+          trackingType = tti::getIntTensorType(
+              entryBlock->getParent(), compactShape,
+              trackingBackingType.getElementType().getIntOrFloatBitWidth());
+        }
         Value visibility = tti::createLoadScratchMemory(
             fb, fb.getLoc(), visibilityPtr, visibilityType);
         Value tracking = tti::createLoadScratchMemory(
-            fb, fb.getLoc(), trackingPtr, trackingType);
+            fb, fb.getLoc(), trackingPtr, trackingType, trackingStrides);
         Value currentCTA = createCurrentCTAMask(fb);
         Value sourceMask =
             createCTASetMask(fb, visibilityType, /*dim=*/2, currentCTA);
@@ -3235,22 +3682,22 @@ void FunctionBuilder::createTrackProxyAccessesCallImpl(
         Value source =
             arith::SelectOp::create(fb, sourceMask, visibility, zeroVisibility);
         source = reduce<arith::OrIOp>(fb, source, {2, 3});
-        source = convertAndBroadcast(fb, source, {0, 1, 4}, trackingType);
+        source = convertAndBroadcast(
+            fb, source, {0, 1, sliceBarrierTracking ? 3 : 4}, trackingType);
 
-        Value descriptor = createBufferDescriptor(fb, mbarOffset, lengthVal);
-        Value barriersEqBar =
-            createCmpIntTensorScalar(fb, barriers, descriptor);
-        barriersEqBar =
-            convertAndBroadcast(fb, barriersEqBar, {3}, trackingType);
+        Value barrierMask;
+        if (sliceBarrierTracking)
+          barrierMask = triton::SplatOp::create(
+              fb, trackingType.clone(fb.getI1Type()), anyMatch);
+        else
+          barrierMask =
+              convertAndBroadcast(fb, barriersEqBar, {3}, trackingType);
         Value barrierCTAMask =
             createCTASetMask(fb, trackingType, /*dim=*/2, barrierCTAs);
         Value trackMask =
-            arith::AndIOp::create(fb, barriersEqBar, barrierCTAMask);
-        Value currentPhases = arith::AndIOp::create(
-            fb, barrierStates,
-            tti::createConstIntTensor(fb, fb.getLoc(), 1, barrierStatesType));
+            arith::AndIOp::create(fb, barrierMask, barrierCTAMask);
         currentPhases =
-            convertAndBroadcast(fb, currentPhases, {2, 3}, trackingType);
+            convertAndBroadcast(fb, currentPhases, phaseDims, trackingType);
         Value phaseIndices =
             createDimIndices(fb, trackingType, trackingType.getRank() - 1);
         auto phaseIndicesType = cast<RankedTensorType>(phaseIndices.getType());
@@ -3272,11 +3719,12 @@ void FunctionBuilder::createTrackProxyAccessesCallImpl(
           Value updated =
               arith::SelectOp::create(fb, trackMask, withSource, tracking);
           createMaskedStoreScratchMemory(fb, fb.getLoc(), trackingPtr, updated,
-                                         trackingType, trackMask);
+                                         trackingType, trackMask,
+                                         trackingStrides);
         } else {
-          tti::createStoreScratchMemory(fb, fb.getLoc(), trackingPtr,
-                                        withSource, trackingType,
-                                        /*currentCTAOnly=*/false, trackMask);
+          tti::createStoreScratchMemory(
+              fb, fb.getLoc(), trackingPtr, withSource, trackingType,
+              /*currentCTAOnly=*/false, trackMask, trackingStrides);
         }
 
         fb.setInsertionPointToEnd(thenBlock);
@@ -3304,15 +3752,15 @@ void FunctionBuilder::createCompleteBarrierWaitCall(ImplicitLocOpBuilder &b,
   auto barriersType = cast<RankedTensorType>(barriers.type);
   auto visibilityType = cast<RankedTensorType>(visibility.type);
   auto trackingType = cast<RankedTensorType>(tracking.type);
-  SmallVector<Value> args = {
-      tti::ExperimentalMemDescToI32Op::create(b, mbar),
-      arith::ConstantIntOp::create(b, getMemDescLength(mbar), 32),
-      phase,
-      pred,
-      arith::ConstantIntOp::create(b, thread, 32),
-      barriers.value,
-      visibility.value,
-      tracking.value};
+  uint32_t mbarLength = getMemDescLength(mbar);
+  SmallVector<Value> args = {tti::ExperimentalMemDescToI32Op::create(b, mbar),
+                             arith::ConstantIntOp::create(b, mbarLength, 32),
+                             phase,
+                             pred,
+                             arith::ConstantIntOp::create(b, thread, 32),
+                             barriers.value,
+                             visibility.value,
+                             tracking.value};
   ManglingArgs specializationArgs;
   specializationArgs.append(barriersType);
   specializationArgs.append(visibilityType);
@@ -3326,12 +3774,15 @@ void FunctionBuilder::createCompleteBarrierWaitCall(ImplicitLocOpBuilder &b,
     args.push_back(waiting.value);
     specializationArgs.append(waitingType);
   }
+  bool sliceBarrierTracking =
+      hasUniqueBarrierDescriptors(barriers.value, mbarLength);
+  specializationArgs.append(static_cast<uint64_t>(sliceBarrierTracking));
 
   createCallToCachedFunction(
       b, "complete_barrier_wait", args, /*assertInfo=*/std::nullopt,
       specializationArgs,
-      [clearWaiting, visibilityType, trackingType,
-       waitingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+      [clearWaiting, visibilityType, trackingType, waitingType,
+       sliceBarrierTracking](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value lengthVal = entryBlock->getArgument(1);
         Value phase = entryBlock->getArgument(2);
@@ -3347,14 +3798,31 @@ void FunctionBuilder::createCompleteBarrierWaitCall(ImplicitLocOpBuilder &b,
         Value barriersEqBar =
             createCmpIntTensorScalar(fb, barriers, descriptor);
         Value currentCTA = createCurrentCTAMask(fb);
+        Value barrierIndex, anyMatch;
+        if (sliceBarrierTracking) {
+          auto indexType =
+              cast<RankedTensorType>(barriers.getType()).clone(fb.getI32Type());
+          Value indices = triton::MakeRangeOp::create(
+              fb, indexType, 0, indexType.getNumElements());
+          Value selectedIndices = arith::SelectOp::create(
+              fb, barriersEqBar, indices,
+              tti::createConstIntTensor(fb, fb.getLoc(), 0, indexType));
+          barrierIndex = reduceAll<arith::OrIOp>(fb, selectedIndices);
+          anyMatch = reduceAll<arith::OrIOp>(fb, barriersEqBar);
+        }
 
         Value visibility = tti::createLoadScratchMemory(
             fb, fb.getLoc(), visibilityPtr, visibilityType);
-        Value tracking =
-            createLoadTrackingPhase(fb, trackingPtr, trackingType, phase);
+        Value tracking = createLoadTrackingPhase(fb, trackingPtr, trackingType,
+                                                 phase, barrierIndex);
         auto trackingPhaseType = cast<RankedTensorType>(tracking.getType());
-        Value proxyBarrierMask =
-            convertAndBroadcast(fb, barriersEqBar, {3}, trackingPhaseType);
+        Value proxyBarrierMask;
+        if (sliceBarrierTracking)
+          proxyBarrierMask = triton::SplatOp::create(
+              fb, trackingPhaseType.clone(fb.getI1Type()), anyMatch);
+        else
+          proxyBarrierMask =
+              convertAndBroadcast(fb, barriersEqBar, {3}, trackingPhaseType);
         Value barrierCTAMask =
             createCTASetMask(fb, trackingPhaseType, /*dim=*/2, currentCTA);
         Value selected =
@@ -3646,11 +4114,13 @@ void FunctionBuilder::createCommitAccessesCall(ImplicitLocOpBuilder &b,
   ValueType outstandingCommits = auxData.commits[commitKind].at(insertPoint);
   auto commitsType = cast<RankedTensorType>(outstandingCommits.type);
   Value threadVal = arith::ConstantIntOp::create(b, thread, 32);
+  bool retainCopies =
+      auxData.hasAsyncCopyMbarriers && commitKind == CommitKind::AsyncCp;
   SmallVector<Value> args = {threadVal, pred, outstandingCommits.value};
   createCallToCachedFunction(
       b, "commit_accesses", args,
-      /*assertInfo=*/std::nullopt, {commitsType},
-      [commitsType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+      /*assertInfo=*/std::nullopt, {commitsType, uint64_t(retainCopies)},
+      [commitsType, retainCopies](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value threadVal = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value outstandingCommitsPtr = entryBlock->getArgument(2);
@@ -3675,6 +4145,14 @@ void FunctionBuilder::createCommitAccessesCall(ImplicitLocOpBuilder &b,
             fb, commits, zero, arith::CmpIPredicate::sgt);
         commitsGtZero = arith::AndIOp::create(fb, commitsGtZero, threadMask);
         Value commitsPlusOne = arith::AddIOp::create(fb, commits, ones);
+        if (retainCopies) {
+          Value maximum =
+              tti::createConstIntTensor(fb, fb.getLoc(), 127, commitsType);
+          Value saturated = arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
+                                                  commits, maximum);
+          commitsPlusOne =
+              arith::SelectOp::create(fb, saturated, commits, commitsPlusOne);
+        }
         commits =
             arith::SelectOp::create(fb, commitsGtZero, commitsPlusOne, commits);
 
@@ -3730,6 +4208,8 @@ void FunctionBuilder::createClearOutstandingCommitsTransferCall(
       transferWrites && !auxData.writeVisibility[(int)memType].empty();
   bool hasReadVisibility =
       transferReads && !auxData.readVisibility[(int)memType].empty();
+  bool retainCopies =
+      auxData.hasAsyncCopyMbarriers && commitKind == CommitKind::AsyncCp;
   if (!hasWriteVisibility && !hasReadVisibility)
     return;
   if (!pred)
@@ -3743,7 +4223,7 @@ void FunctionBuilder::createClearOutstandingCommitsTransferCall(
   Value outstandingNumVal = arith::ConstantIntOp::create(b, outstandingNum, 32);
   SmallVector<Value> args = {threadVal, transferMaskVal, outstandingNumVal,
                              pred, outstandingCommits.value};
-  ManglingArgs specializationArgs{commitsType};
+  ManglingArgs specializationArgs{commitsType, uint64_t(retainCopies)};
 
   RankedTensorType writeVisibilityType;
   if (hasWriteVisibility) {
@@ -3770,7 +4250,8 @@ void FunctionBuilder::createClearOutstandingCommitsTransferCall(
   createCallToCachedFunction(
       b, functionName, args, /*assertInfo=*/std::nullopt, specializationArgs,
       [commitsType, writeVisibilityType, readVisibilityType, hasWriteVisibility,
-       hasReadVisibility](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+       hasReadVisibility,
+       retainCopies](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value threadVal = entryBlock->getArgument(0);
         Value transferMaskVal = entryBlock->getArgument(1);
         Value outstandingNumVal = entryBlock->getArgument(2);
@@ -3851,9 +4332,12 @@ void FunctionBuilder::createClearOutstandingCommitsTransferCall(
                                          updated, readVisibilityType, readMask);
         }
 
-        Value zero = tti::createConstIntTensor(fb, fb.getLoc(), 0, commitsType);
-        outstandingCommits = arith::SelectOp::create(
-            fb, outstandingCommitsGtOutstandingNum, zero, outstandingCommits);
+        Value completed = tti::createConstIntTensor(
+            fb, fb.getLoc(), retainCopies ? -2 : 0, commitsType,
+            /*isSigned=*/true);
+        outstandingCommits =
+            arith::SelectOp::create(fb, outstandingCommitsGtOutstandingNum,
+                                    completed, outstandingCommits);
         createMaskedStoreScratchMemory(fb, fb.getLoc(), outstandingCommitsPtr,
                                        outstandingCommits, commitsType,
                                        commitCTAMask);
@@ -3884,11 +4368,24 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
   AssertInfo assertInfo{message, b.getI1Type()};
   SmallVector<Value> args = {bufferMask, pred, threadVal,
                              outstandingCommits.value, effectCTAs};
+  bool retainCopies =
+      auxData.hasAsyncCopyMbarriers && commitKind == CommitKind::AsyncCp;
+  RankedTensorType visibilityType;
+  ManglingArgs specializationArgs{commitsType, uint64_t(thread),
+                                  uint64_t(retainCopies)};
+  if (retainCopies) {
+    ValueType visibility =
+        auxData.writeVisibility[(int)MemType::SHARED_MEM].at(insertPoint);
+    visibilityType = cast<RankedTensorType>(visibility.type);
+    args.push_back(visibility.value);
+    specializationArgs.append(visibilityType);
+  }
   std::string funcName = excludeSelf ? "check_outstanding_commits_excl_self"
                                      : "check_outstanding_commits";
   createCallToCachedFunction(
-      b, funcName, args, assertInfo, {commitsType, (uint64_t)thread},
-      [commitsType, excludeSelf](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+      b, funcName, args, assertInfo, specializationArgs,
+      [commitsType, excludeSelf, retainCopies,
+       visibilityType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value checkMask = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value threadVal = entryBlock->getArgument(2);
@@ -3913,6 +4410,27 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
         }
         Value selectedEqZero = arith::CmpIOp::create(
             fb, arith::CmpIPredicate::eq, selectedRows, zeroTensor);
+        if (retainCopies) {
+          Value visibility = tti::createLoadScratchMemory(
+              fb, fb.getLoc(), entryBlock->getArgument(5), visibilityType);
+          Value threadBit = arith::ShLIOp::create(
+              fb, arith::ConstantIntOp::create(fb, 1, 64),
+              arith::ExtUIOp::create(fb, fb.getI64Type(), threadVal));
+          auto elemType = cast<IntegerType>(visibilityType.getElementType());
+          Value threadMask = triton::SplatOp::create(
+              fb, visibilityType, adjustIntegerWidth(fb, threadBit, elemType));
+          Value visible = arith::CmpIOp::create(
+              fb, arith::CmpIPredicate::ne,
+              arith::AndIOp::create(fb, visibility, threadMask),
+              tti::createConstIntTensor(fb, fb.getLoc(), 0, visibilityType));
+          visible =
+              arith::AndIOp::create(fb, visible,
+                                    createCTASetMask(fb, visibilityType, 2,
+                                                     createCurrentCTAMask(fb)));
+          Value completed = reduceLastDim<arith::OrIOp>(fb, visible);
+          completed = convertAndBroadcast(fb, completed, {0, 1}, commitsType);
+          selectedEqZero = arith::OrIOp::create(fb, selectedEqZero, completed);
+        }
         Value allSelectedEqZero = reduceAll<arith::AndIOp>(fb, selectedEqZero);
         Value vTrue =
             arith::ConstantOp::create(fb, allSelectedEqZero.getType(),

@@ -3604,6 +3604,33 @@ TEST_F(LinearLayoutConversionsTest, OutOfTreeMmaDotOperandExtensionPoint) {
   EXPECT_EQ(dotOperand.toLinearLayout({4}), testExtMmaSentinel(&ctx));
 }
 
+// A shared layout may be any SharedEncodingTrait, including out-of-tree layouts
+// unknown to core. No such layout exists in-tree, so attach the interface to a
+// placeholder attribute (a test-only stand-in) and check the dispatch reaches
+// it. testExtSharedSentinel is what the stand-in returns.
+static LinearLayout testExtSharedSentinel(MLIRContext *ctx) {
+  auto S = [&](StringRef s) { return StringAttr::get(ctx, s); };
+  return LinearLayout::identity1D(4, S("offset"), S("dim0"));
+}
+
+// Test-only stand-in: SharedEncodingTrait attached to a placeholder attribute.
+struct TestExtSharedModel
+    : public SharedEncodingTrait::ExternalModel<TestExtSharedModel,
+                                                StringAttr> {
+  LinearLayout toLinearLayout(Attribute attr, ArrayRef<int64_t> shape) const {
+    return testExtSharedSentinel(attr.getContext());
+  }
+};
+
+TEST_F(LinearLayoutConversionsTest, OutOfTreeSharedEncodingExtensionPoint) {
+  StringAttr::attachInterface<TestExtSharedModel>(ctx);
+  Attribute layout = S("test_out_of_tree_shared");
+  ASSERT_TRUE(isa<SharedEncodingTrait>(layout));
+
+  // toLinearLayout dispatches through the interface, not a hardcoded type.
+  EXPECT_EQ(toLinearLayout({4}, layout), testExtSharedSentinel(&ctx));
+}
+
 } // anonymous namespace
 } // namespace mlir::triton::gpu
 

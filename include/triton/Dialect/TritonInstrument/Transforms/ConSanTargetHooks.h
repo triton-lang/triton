@@ -31,6 +31,7 @@ struct MemEffectsOpInfo {
   enum class BarrierTrackingMode {
     Frontier,
     EffectWrites,
+    AsyncCopies,
   };
   struct Effects {
     struct StaticSharedBuffer {
@@ -240,9 +241,6 @@ getConSanMemEffectsOpInfo(const ConSanTargetHooks &hooks, Operation *op) {
       "Callee scratch");
   return info;
 }
-
-LogicalResult runConcurrencySanitizer(ModuleOp module,
-                                      const ConSanTargetHooks &hooks);
 
 using ConSanHooksFactory = std::function<std::unique_ptr<ConSanTargetHooks>()>;
 void registerConSanHooks(llvm::StringRef key, ConSanHooksFactory factory);
