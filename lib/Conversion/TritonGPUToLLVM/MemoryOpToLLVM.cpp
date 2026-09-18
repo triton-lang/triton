@@ -2,11 +2,14 @@
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/IR/PatternMatch.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
+
+namespace ttg = mlir::triton::gpu;
 
 namespace {
 
@@ -48,23 +51,25 @@ SmallVector<Value> lowerLocalScGt(Location loc, MemDescType memDescTy,
   return results;
 }
 
-LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
+LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx,
+                              const LinearLayout &regLayout,
                               MemDescType memDescTy, SharedMemoryObject smemObj,
                               ArrayRef<Value> inVals,
                               const LLVMTypeConverter *typeConverter,
                               ConversionPatternRewriter &rewriter,
                               const TargetInfoBase &targetInfo) {
-  auto regTy = cast<RankedTensorType>(regVal.getType());
+  assert(regLayout.getFreeVariableMasks().lookup(str_attr("register")) == 0 &&
+         "expected register broadcasting to be removed by the caller");
   auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  auto regLayout = toLinearLayout(regTy);
-  auto sharedLayout = isPaddedEncoding(memDescTy.getEncoding())
-                          ? paddedLinearLayout(memDescTy)
-                          : toLinearLayout(memDescTy);
-  auto cvt = invertAndComposeBlockLocal(sharedLayout, regLayout);
+  auto sharedLayout = toLinearLayoutIgnoringPadding(memDescTy);
+  auto kBlock = str_attr("block");
+  auto cvt = invertAndComposeLocal(sharedLayout, regLayout, {kBlock});
 
   lowerLocalLdSt(loc, ctx, cvt, inVals, llvmElemTy, memDescTy, smemObj,
-                 rewriter, targetInfo);
+                 rewriter, targetInfo,
+                 makeSharedStoreEmitter(targetInfo, b.true_val()));
 
   return success();
 }
@@ -132,8 +137,11 @@ struct LocalAllocOpConversion
     // If there is an initial tensor, store it into the shared memory.
     if (op.getSrc()) {
       auto *ctx = op.getContext();
-      auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-      if (failed(lowerLocalStore(loc, ctx, op.getSrc(), memDescTy, smemObj,
+      auto regTy = cast<RankedTensorType>(op.getSrc().getType());
+      auto regLayout =
+          toLinearLayout(regTy).removeZeroBasesAlongDim(str_attr("register"));
+      auto inVals = unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
+      if (failed(lowerLocalStore(loc, ctx, regLayout, memDescTy, smemObj,
                                  inVals, typeConverter, rewriter,
                                  targetInfo))) {
         return failure();
@@ -184,16 +192,18 @@ public:
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
 
-    auto regLayout = toLinearLayout(regTy);
-    auto sharedLayout = isPaddedEncoding(memDescTy.getEncoding())
-                            ? paddedLinearLayout(memDescTy)
-                            : toLinearLayout(memDescTy);
-    auto cvt = invertAndComposeBlockLocal(sharedLayout, regLayout);
+    auto regLayout =
+        toLinearLayout(regTy).removeZeroBasesAlongDim(str_attr("register"));
+    auto sharedLayout = toLinearLayoutIgnoringPadding(memDescTy);
+    auto kBlock = str_attr("block");
+    auto cvt = invertAndComposeLocal(sharedLayout, regLayout, {kBlock});
 
     auto outVals = lowerLocalLdSt(loc, ctx, cvt, {}, llvmElemTy, memDescTy,
-                                  smemObj, rewriter, targetInfo, op);
+                                  smemObj, rewriter, targetInfo,
+                                  makeSharedLoadEmitter(targetInfo, op));
 
-    Value result = packLLElements(loc, typeConverter, outVals, rewriter, regTy);
+    Value result =
+        packUniqueTensorElements(loc, typeConverter, outVals, rewriter, regTy);
     rewriter.replaceOp(op, result);
 
     return success();
@@ -220,15 +230,17 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto *ctx = op.getContext();
-    Value regVal = op.getSrc();
     Value memDescVal = op.getDst();
     auto typeConverter = getTypeConverter();
+    auto regTy = cast<RankedTensorType>(op.getSrc().getType());
     auto memDescTy = cast<MemDescType>(memDescVal.getType());
     auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getDst(),
                                                          llvmElemTy, rewriter);
-    auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    if (failed(lowerLocalStore(loc, ctx, regVal, memDescTy, smemObj, inVals,
+    auto regLayout =
+        toLinearLayout(regTy).removeZeroBasesAlongDim(str_attr("register"));
+    auto inVals = unpackUniqueTensorElements(loc, adaptor.getSrc(), rewriter);
+    if (failed(lowerLocalStore(loc, ctx, regLayout, memDescTy, smemObj, inVals,
                                typeConverter, rewriter, targetInfo))) {
       return failure();
     }
@@ -269,6 +281,7 @@ public:
   matchAndRewrite(LocalGatherOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
+    auto *ctx = op.getContext();
     auto memDescTy = cast<MemDescType>(op.getSrc().getType());
     // TODO: PartitionedSharedEncoding lowering will be enabled in subsequent
     // PRs.
@@ -285,14 +298,16 @@ public:
                                                          llvmElemTy, rewriter);
 
     SmallVector<Value> idxValues =
-        unpackLLElements(loc, adaptor.getIndices(), rewriter);
-    auto regLayout = toLinearLayout(regTy);
+        unpackUniqueTensorElements(loc, adaptor.getIndices(), rewriter);
+    auto regLayout =
+        toLinearLayout(regTy).removeZeroBasesAlongDim(str_attr("register"));
 
     auto results = lowerLocalScGt(loc, memDescTy, smemObj, llvmElemTy,
                                   regLayout, idxValues, op.getAxis(),
                                   /*storeVals=*/{}, rewriter, targetInfo);
 
-    Value result = packLLElements(loc, typeConverter, results, rewriter, regTy);
+    Value result =
+        packUniqueTensorElements(loc, typeConverter, results, rewriter, regTy);
     rewriter.replaceOp(op, result);
 
     return success();
@@ -315,6 +330,7 @@ public:
   matchAndRewrite(LocalScatterOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
+    auto *ctx = op.getContext();
     auto memDescTy = cast<MemDescType>(op.getDst().getType());
     // TODO: PartitionedSharedEncoding lowering will be enabled in subsequent
     // PRs.
@@ -331,10 +347,11 @@ public:
                                                          llvmElemTy, rewriter);
 
     SmallVector<Value> values =
-        unpackLLElements(loc, adaptor.getValues(), rewriter);
+        unpackUniqueTensorElements(loc, adaptor.getValues(), rewriter);
     SmallVector<Value> idxValues =
-        unpackLLElements(loc, adaptor.getIndices(), rewriter);
-    auto regLayout = toLinearLayout(valuesTy);
+        unpackUniqueTensorElements(loc, adaptor.getIndices(), rewriter);
+    auto regLayout =
+        toLinearLayout(valuesTy).removeZeroBasesAlongDim(str_attr("register"));
 
     lowerLocalScGt(loc, memDescTy, smemObj, llvmElemTy, regLayout, idxValues,
                    op.getAxis(), values, rewriter, targetInfo);
@@ -347,11 +364,268 @@ private:
   const TargetInfoBase &targetInfo;
 };
 
+struct AtomicPollOpConversion
+    : public ConvertOpToLLVMPattern<triton::AtomicPollOp> {
+  AtomicPollOpConversion(LLVMTypeConverter &converter,
+                         const TargetInfoBase &targetInfo,
+                         PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::AtomicPollOp>(converter, benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::AtomicPollOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    int numCTAs = lookupNumCTAs(op);
+    if (numCTAs != 1 && !targetInfo.isCuda())
+      return rewriter.notifyMatchFailure(
+          op, "multi-CTA atomic_poll requires cross-CTA shared memory");
+
+    auto ptrs = unpackUniqueTensorElements(loc, adaptor.getPtr(), rewriter);
+    auto expected =
+        unpackUniqueTensorElements(loc, adaptor.getExpected(), rewriter);
+    auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
+    Value threadPred =
+        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
+    if (!threadPred)
+      threadPred = b.true_val();
+
+    Value start;
+    if (adaptor.getTimeout())
+      start = targetInfo.getGlobalTimer(rewriter, loc);
+    SmallVector<Value> results;
+    for (auto [ptr, value] : llvm::zip_equal(ptrs, expected))
+      results.push_back(emitPoll(op, ptr, value, start, adaptor.getTimeout(),
+                                 threadPred, rewriter));
+
+    auto rendezvous = [&] {
+      if (numCTAs == 1)
+        targetInfo.barrier(loc, rewriter, AddrSpace::Local);
+      else
+        targetInfo.clusterBarrier(loc, rewriter, op);
+    };
+
+    // All elements have completed before the block continues, even when the
+    // result is unused. Without a timeout every element's result is known.
+    if (!adaptor.getTimeout() || op.getResult().use_empty()) {
+      rendezvous();
+      results.assign(ptrs.size(), b.true_val());
+    } else if (op->hasAttr("allocation.offset")) {
+      // Reuse the existing atomic result transport for physical replicas.
+      if (auto tensorTy = dyn_cast<RankedTensorType>(op.getType())) {
+        SmallVector<Value> bytes;
+        for (Value result : results)
+          bytes.push_back(b.zext(i8_ty, result));
+        bytes = broadcastTensorResult(op, tensorTy, rewriter, bytes, i8_ty, b,
+                                      threadPred, targetInfo);
+        for (auto [result, byte] : llvm::zip_equal(results, bytes))
+          result = b.trunc(i1_ty, byte);
+        if (numCTAs != 1 && !atomicResultHasCTABroadcast(op))
+          rendezvous();
+      } else {
+        Value scratch =
+            LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
+        targetInfo.storeShared(rewriter, loc, scratch, results.front(),
+                               threadPred);
+        rendezvous();
+        results.front() =
+            numCTAs == 1
+                ? b.load(i1_ty, scratch)
+                : targetInfo.loadDShared(rewriter, loc, scratch, b.i32_val(0),
+                                         i1_ty, b.true_val());
+      }
+    } else {
+      rendezvous();
+    }
+
+    rewriter.replaceOp(op, packUniqueTensorElements(loc, getTypeConverter(),
+                                                    results, rewriter,
+                                                    op.getType()));
+    return success();
+  }
+
+private:
+  // Emit the polling state machine for one logical element. Both successful
+  // and timed-out polls use this path regardless of the input's shape.
+  Value emitPoll(triton::AtomicPollOp op, Value ptr, Value expected,
+                 Value start, Value timeout, Value threadPred,
+                 ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    StringRef syncScope = targetInfo.getAtomicSyncScope(op.getScope());
+
+    Block *currentBlock = rewriter.getInsertionBlock();
+    Block *doneBlock = currentBlock->splitBlock(rewriter.getInsertionPoint());
+    Region *region = currentBlock->getParent();
+    Block *pollLoopBlock =
+        rewriter.createBlock(region, Region::iterator(doneBlock));
+    Block *pollSuccessBlock =
+        rewriter.createBlock(region, Region::iterator(doneBlock));
+    Block *timeoutCheckBlock =
+        timeout ? rewriter.createBlock(region, Region::iterator(doneBlock))
+                : nullptr;
+    BlockArgument matched = doneBlock->addArgument(i1_ty, loc);
+
+    rewriter.setInsertionPointToEnd(currentBlock);
+    LLVM::BrOp::create(rewriter, loc, ValueRange{}, pollLoopBlock);
+
+    rewriter.setInsertionPointToEnd(pollLoopBlock);
+    Value loaded = targetInfo.loadRelaxed(
+        rewriter, loc, ptr, expected.getType(), threadPred, op.getScope());
+    // Inactive replicas leave the loop without accessing memory. Use select
+    // so their unspecified load result cannot affect the loop condition.
+    Value pollMatched = b.icmp_eq(loaded, expected);
+    pollMatched = b.select(threadPred, pollMatched, b.true_val());
+    if (timeout) {
+      LLVM::CondBrOp::create(rewriter, loc, pollMatched, pollSuccessBlock,
+                             timeoutCheckBlock);
+
+      rewriter.setInsertionPointToEnd(timeoutCheckBlock);
+      Value elapsed = b.sub(targetInfo.getGlobalTimer(rewriter, loc), start);
+      Value timedOut = b.icmp_uge(elapsed, timeout);
+      LLVM::CondBrOp::create(rewriter, loc, timedOut, doneBlock,
+                             ValueRange{b.false_val()}, pollLoopBlock,
+                             ValueRange{});
+    } else {
+      LLVM::CondBrOp::create(rewriter, loc, pollMatched, pollSuccessBlock,
+                             pollLoopBlock);
+    }
+
+    rewriter.setInsertionPointToEnd(pollSuccessBlock);
+    if (op.getSem() == triton::MemSemantic::ACQUIRE)
+      LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::acquire,
+                            syncScope);
+    LLVM::BrOp::create(rewriter, loc, ValueRange{threadPred}, doneBlock);
+    rewriter.setInsertionPointToStart(doneBlock);
+    return matched;
+  }
+
+  const TargetInfoBase &targetInfo;
+};
+
+struct AtomicLoadOpConversion
+    : public ConvertOpToLLVMPattern<triton::AtomicLoadOp> {
+  AtomicLoadOpConversion(LLVMTypeConverter &converter,
+                         const TargetInfoBase &targetInfo,
+                         ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                         PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::AtomicLoadOp>(converter, benefit),
+        targetInfo(targetInfo), axisInfoAnalysis(axisInfoAnalysis) {}
+
+  LogicalResult
+  matchAndRewrite(triton::AtomicLoadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto sem = op.getSem();
+    insertAtomicOrderingBarriers(op, sem, !atomicResultHasOrderingBarrier(op),
+                                 rewriter, targetInfo);
+
+    StringRef syncScope = targetInfo.getAtomicSyncScope(op.getScope());
+    auto ptrElements =
+        unpackUniqueTensorElements(loc, adaptor.getPtr(), rewriter);
+    SmallVector<Value> maskElements;
+    if (adaptor.getMask())
+      maskElements =
+          unpackUniqueTensorElements(loc, adaptor.getMask(), rewriter);
+    auto resultTy = op.getResult().getType();
+    Type valueElemTy =
+        getTypeConverter()->convertType(getElementTypeOrSelf(resultTy));
+    auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
+    Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
+                                                         loc, targetInfo);
+    SmallVector<Value> resultVals;
+    resultVals.reserve(ptrElements.size());
+
+    unsigned vec = getAtomicLoadStoreVectorSize(op.getPtr(), op.getMask(),
+                                                axisInfoAnalysis, targetInfo);
+    Type loadTy = vec == 1 ? valueElemTy : vec_ty(valueElemTy, vec);
+    for (size_t i = 0; i < ptrElements.size(); i += vec) {
+      Value pred =
+          maskElements.empty()
+              ? threadPred
+              : ttg::maybeAnd(rewriter, loc, threadPred, maskElements[i]);
+      Value loaded = targetInfo.loadRelaxed(rewriter, loc, ptrElements[i],
+                                            loadTy, pred, op.getScope());
+      auto values = unpackLLVector(loc, loaded, rewriter);
+      resultVals.append(values.begin(), values.end());
+    }
+
+    if (sem == MemSemantic::ACQUIRE)
+      LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::acquire,
+                            syncScope);
+    finalizeAtomicResults(op, rewriter, resultVals, valueElemTy, b, threadPred,
+                          targetInfo, getTypeConverter());
+    return success();
+  }
+
+private:
+  const TargetInfoBase &targetInfo;
+  ModuleAxisInfoAnalysis &axisInfoAnalysis;
+};
+
+struct AtomicStoreOpConversion
+    : public ConvertOpToLLVMPattern<triton::AtomicStoreOp> {
+  AtomicStoreOpConversion(LLVMTypeConverter &converter,
+                          const TargetInfoBase &targetInfo,
+                          ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                          PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::AtomicStoreOp>(converter, benefit),
+        targetInfo(targetInfo), axisInfoAnalysis(axisInfoAnalysis) {}
+
+  LogicalResult
+  matchAndRewrite(triton::AtomicStoreOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    insertAtomicOrderingBarriers(op, op.getSem(),
+                                 /*emitBarrierAfter=*/true, rewriter,
+                                 targetInfo);
+    StringRef syncScope = targetInfo.getAtomicSyncScope(op.getScope());
+    auto ptrElements =
+        unpackUniqueTensorElements(loc, adaptor.getPtr(), rewriter);
+    auto valueElements =
+        unpackUniqueTensorElements(loc, adaptor.getValue(), rewriter);
+    SmallVector<Value> maskElements;
+    if (adaptor.getMask())
+      maskElements =
+          unpackUniqueTensorElements(loc, adaptor.getMask(), rewriter);
+    auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
+    Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
+                                                         loc, targetInfo);
+    if (op.getSem() == MemSemantic::RELEASE)
+      LLVM::FenceOp::create(rewriter, loc, LLVM::AtomicOrdering::release,
+                            syncScope);
+
+    unsigned vec = getAtomicLoadStoreVectorSize(op.getPtr(), op.getMask(),
+                                                axisInfoAnalysis, targetInfo);
+    for (size_t i = 0; i < ptrElements.size(); i += vec) {
+      Value pred =
+          maskElements.empty()
+              ? threadPred
+              : ttg::maybeAnd(rewriter, loc, threadPred, maskElements[i]);
+      Value value =
+          vec == 1 ? valueElements[i]
+                   : packLLVector(loc, ArrayRef(valueElements).slice(i, vec),
+                                  rewriter);
+      targetInfo.storeRelaxed(rewriter, loc, ptrElements[i], value, pred,
+                              op.getScope());
+    }
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+private:
+  const TargetInfoBase &targetInfo;
+  ModuleAxisInfoAnalysis &axisInfoAnalysis;
+};
+
 } // namespace
 
 void mlir::triton::populateMemoryOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
-    RewritePatternSet &patterns, PatternBenefit benefit) {
+    RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    PatternBenefit benefit) {
   patterns.add<GlobalScratchAllocOpConversion>(typeConverter, targetInfo,
                                                benefit);
   patterns.add<LocalAllocOpConversion>(typeConverter, targetInfo, benefit);
@@ -361,4 +635,9 @@ void mlir::triton::populateMemoryOpToLLVMPatterns(
   patterns.add<LocalScatterOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<BarrierOpConversion>(typeConverter, benefit);
+  patterns.add<AtomicLoadOpConversion>(typeConverter, targetInfo,
+                                       axisInfoAnalysis, benefit);
+  patterns.add<AtomicPollOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<AtomicStoreOpConversion>(typeConverter, targetInfo,
+                                        axisInfoAnalysis, benefit);
 }

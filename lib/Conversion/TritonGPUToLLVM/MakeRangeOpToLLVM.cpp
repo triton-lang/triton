@@ -22,12 +22,14 @@ struct MakeRangeOpConversion
   matchAndRewrite(triton::MakeRangeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
+    auto *ctx = op.getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     RankedTensorType ty = op.getType();
-    auto layout = ty.getEncoding();
     auto elemTy = ty.getElementType();
     assert(elemTy.isInteger(32));
     Value start = createIndexAttrConstant(rewriter, loc, elemTy, op.getStart());
+    auto layout =
+        ttg::toLinearLayout(ty).removeZeroBasesAlongDim(str_attr("register"));
     auto idxs = emitIndices(loc, rewriter, targetInfo, layout, ty, true);
     unsigned elems = idxs.size();
     SmallVector<Value> retVals(elems);
@@ -39,7 +41,8 @@ struct MakeRangeOpConversion
       retVals[multiDim.index()] = b.add(multiDim.value()[0], start);
     }
     auto typeConverter = getTypeConverter();
-    Value result = packLLElements(loc, typeConverter, retVals, rewriter, ty);
+    Value result =
+        packUniqueTensorElements(loc, typeConverter, retVals, rewriter, ty);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -84,7 +87,8 @@ public:
     LLVM::GlobalOp global = LLVM::getOrInsertGlobalConstant(
         b, module, type, b.getArrayAttr(attrs), "tensor_constant_");
 
-    LinearLayout ll = ttg::toLinearLayout(tensorTy);
+    LinearLayout ll =
+        ttg::toLinearLayout(tensorTy).removeZeroBasesAlongDim(kRegister);
     auto [laneId, warpId] = getLaneAndWarpId(b, loc);
     Value blockId = targetInfo.getClusterCTAId(b, loc);
     SmallVector<Value> llValues;
@@ -102,8 +106,8 @@ public:
       llValues.push_back(tb.load(tensorTy.getElementType(), addr));
     }
 
-    Value result =
-        packLLElements(loc, getTypeConverter(), llValues, b, tensorTy);
+    Value result = packUniqueTensorElements(loc, getTypeConverter(), llValues,
+                                            b, tensorTy);
     b.replaceOp(op, result);
     return success();
   }

@@ -270,13 +270,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.sha
 
     // CHECK: llvm.getelementptr
     // CHECK: rocdl.global.load.async.lds {{.*}}, {{.*}}, 4, 0, 0
-    %2 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = ca: tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
+    %2 = ttg.async_copy_global_to_local %1, %arg2 {cachePolicy = #tt.cache_policy<cache_modifier = ca, eviction_policy = evict_normal>}: tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     // CHECK: llvm.getelementptr
     // CHECK: rocdl.global.load.async.lds {{.*}}, {{.*}}, 4, 0, 3
-    %3 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = cg: tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
+    %3 = ttg.async_copy_global_to_local %1, %arg2 {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_normal>}: tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     // CHECK: llvm.getelementptr
     // CHECK: rocdl.global.load.async.lds {{.*}}, {{.*}}, 4, 0, 17
-    %4 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = cv: tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
+    %4 = ttg.async_copy_global_to_local %1, %arg2 {cachePolicy = #tt.cache_policy<cache_modifier = cv, eviction_policy = evict_normal>}: tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     tt.return
   }
 }
@@ -369,6 +369,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK-NEXT: ^[[LOAD_BLOCK]]:
     // CHECK-NEXT: rocdl.global.load.async.lds
     %0 = ttg.async_copy_global_to_local %src, %lds mask %mask other %other : tensor<64x!tt.ptr<f32>, #blocked> -> <64xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+// A zero register basis duplicates elements inside a thread and the broadcast
+// warp bases make the thread predicate non-trivial. The predicate is built from
+// the lane, warp and block masks only, so it stays warp-uniform and the
+// out-of-range address masking still applies. Blocked layouts drop their zero
+// register bases when converted to a linear layout, so spell the layout out as
+// a linear one to keep the broadcast register.
+#bcast = #ttg.linear<{register = [[0, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0]], warp = [[0, 0], [0, 0]], block = []}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: @async_copy_warp_uniform_thread_pred_broadcast_register
+  tt.func @async_copy_warp_uniform_thread_pred_broadcast_register(%ptr: !tt.ptr<f32>, %lds: !ttg.memdesc<64x1xf32, #shared, #smem, mutable>) {
+    %src = tt.splat %ptr : !tt.ptr<f32> -> tensor<64x1x!tt.ptr<f32>, #bcast>
+    // CHECK: %[[OOB_I32:.*]] = llvm.mlir.constant(2147483647 : i32) : i32
+    // CHECK: %[[OOB_PTR:.*]] = llvm.inttoptr %[[OOB_I32]] : i32 to !llvm.ptr<3>
+    // CHECK: %[[PRED_ADDR:.*]] = llvm.select {{.*}}, {{.*}}, %[[OOB_PTR]] : i1, !llvm.ptr<3>
+    // CHECK: rocdl.global.load.async.lds {{.*}}, %[[PRED_ADDR]], {{.*}}
+    %0 = ttg.async_copy_global_to_local %src, %lds : tensor<64x1x!tt.ptr<f32>, #bcast> -> <64x1xf32, #shared, #smem, mutable>
     tt.return
   }
 }

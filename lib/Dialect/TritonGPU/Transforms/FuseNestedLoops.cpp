@@ -1008,17 +1008,22 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   // Update the parent's loop to the fused loop. Set the new stage count to the
   // max stage count of the inner loops.
   int numStages = 1;
-  if (auto stageAttr = outer->getAttrOfType<IntegerAttr>(kNumStagesAttrName))
+  bool hasNumStages = false;
+  if (auto stageAttr = outer->getAttrOfType<IntegerAttr>(kNumStagesAttrName)) {
+    hasNumStages = true;
     numStages = stageAttr.getInt();
+  }
   for (InnerLoop &loop : innerLoops) {
     if (auto stageAttr =
-            loop.op->getAttrOfType<IntegerAttr>(kNumStagesAttrName))
+            loop.op->getAttrOfType<IntegerAttr>(kNumStagesAttrName)) {
+      hasNumStages = true;
       numStages = std::max<int>(numStages, stageAttr.getInt());
+    }
     loop.op.erase();
   }
   outer.erase();
   parent->loop = fused;
-  if (numStages > 1)
+  if (hasNumStages)
     fused->setAttr(kNumStagesAttrName, b.getI32IntegerAttr(numStages));
 }
 
@@ -1100,11 +1105,14 @@ static void optimizeEpilogueDependencies(scf::ForOp outerLoop,
 }
 
 // Crudely match llvm.assume(ub > lb) or llvm.assume(lb < ub).
-static LogicalResult matchPositiveTripCount(scf::ForOp loop) {
+static LogicalResult matchPositiveTripCount(scf::ForOp loop,
+                                            mlir::DominanceInfo &domInfo) {
   for (Operation *user : loop.getUpperBound().getUsers()) {
     if (auto cmp = dyn_cast<arith::CmpIOp>(user)) {
-      if (llvm::none_of(cmp->getUsers(),
-                        [](Operation *op) { return isa<LLVM::AssumeOp>(op); }))
+      if (llvm::none_of(cmp->getUsers(), [&](Operation *op) {
+            return isa<LLVM::AssumeOp>(op) &&
+                   domInfo.properlyDominates(op, loop);
+          }))
         continue;
       if (cmp.getPredicate() == (loop.getUnsignedCmp()
                                      ? arith::CmpIPredicate::ugt
@@ -1134,7 +1142,7 @@ static LogicalResult speculateInnerLoopLength(scf::ForOp outerLoop,
   ImplicitLocOpBuilder b(loc, outerLoop);
 
   // Check if the inner loop is known to execute at least once.
-  if (succeeded(matchPositiveTripCount(innerLoop))) {
+  if (succeeded(matchPositiveTripCount(innerLoop, domInfo))) {
     innerLoop->setAttr(kMustExecuteAttrName, b.getUnitAttr());
     return success();
   }
@@ -1154,12 +1162,11 @@ static LogicalResult speculateInnerLoopLength(scf::ForOp outerLoop,
   // Mark the inner loop.
   innerLoop->setAttr(kMustExecuteAttrName, b.getUnitAttr());
 
-  // Speculate on whether the length of the inner loop is zero.
-  Value lenInner = computeNumIters(b, innerLoop);
-  auto zeroAttr = IntegerAttr::get(lenInner.getType(), 0);
-  Value innerLoopEmpty =
-      arith::CmpIOp::create(b, arith::CmpIPredicate::eq, lenInner,
-                            arith::ConstantOp::create(b, zeroAttr));
+  // SCF for loops have positive steps, so inverted bounds are empty too.
+  auto predicate = innerLoop.getUnsignedCmp() ? arith::CmpIPredicate::uge
+                                              : arith::CmpIPredicate::sge;
+  Value innerLoopEmpty = arith::CmpIOp::create(
+      b, predicate, innerLoop.getLowerBound(), innerLoop.getUpperBound());
   auto ifOp = scf::IfOp::create(b, outerLoop.getResultTypes(), innerLoopEmpty);
 
   // In the `then` branch, the inner loop does not execute. Clone the loop nest

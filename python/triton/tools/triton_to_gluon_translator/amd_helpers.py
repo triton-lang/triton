@@ -5,8 +5,8 @@ import math
 import triton.language as tl
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
-from triton.experimental.gluon.language.amd.gfx1250 import wmma as amd_wmma
-from triton.experimental.gluon.language.amd.gfx1250 import tdm as amd_tdm
+from triton.experimental.gluon.language.amd.cdna5 import wmma as amd_wmma
+from triton.experimental.gluon.language.amd.cdna5 import tdm as amd_tdm
 from triton.experimental.gluon.language.amd.cdna3 import mfma as amd_mfma
 from triton.language.target_info import current_target
 
@@ -21,7 +21,7 @@ from triton.tools.triton_to_gluon_translator.common_helpers import (
 
 
 @gluon.constexpr_function
-def _is_gfx1250(target=None):
+def _is_cdna5(target=None):
     return target is not None and target.arch == "gfx1250"
 
 
@@ -36,7 +36,7 @@ def _cdna_version(target=None):
     return 4 if target is not None and target.arch == "gfx950" else 3
 
 
-# ---- AMD WMMA layout helpers (gfx1250) ----
+# ---- AMD WMMA layout helpers (CDNA5) ----
 
 
 @gluon.constexpr_function
@@ -96,7 +96,7 @@ def get_mfma_k_width(a_ty, b_ty, target=None):
 
 @gluon.jit
 def tl_dot_wmma(a, b, acc, out_dtype):
-    """gfx1250 WMMA path."""
+    """CDNA5 WMMA path."""
     M: ttgl.constexpr = a.type.shape[0]
     N: ttgl.constexpr = b.type.shape[1]
     num_warps: ttgl.constexpr = ttgl.num_warps()
@@ -168,7 +168,7 @@ def tl_dot(
     out_dtype=ttgl.float32,
 ):
     target: ttgl.constexpr = current_target()
-    if _is_gfx1250(target):
+    if _is_cdna5(target):
         return tl_dot_wmma(a, b, acc, out_dtype)
     elif _is_cdna(target):
         return tl_dot_mfma(a, b, acc, out_dtype)
@@ -205,7 +205,7 @@ def tl_dot_scaled(
     )
 
 
-# ---- AMD TDM tensor descriptors (gfx1250 only) ----
+# ---- AMD TDM tensor descriptors (CDNA5 only) ----
 
 
 @gluon.constexpr_function
@@ -232,7 +232,7 @@ class AMDTensorDescriptorArgs:
 
 @gluon.jit
 def tl_make_tensor_descriptor(base, shape, strides, block_shape, padding_option: ttgl.constexpr = "zero"):
-    ttgl.static_assert(_is_gfx1250(current_target()), "tl_make_tensor_descriptor requires gfx1250 target")
+    ttgl.static_assert(_is_cdna5(current_target()), "tl_make_tensor_descriptor requires CDNA5 target")
     layout: ttgl.constexpr = get_default_tdm_layout(*block_shape)
     desc = amd_tdm.make_tensor_descriptor(base, shape, strides, block_shape, layout)
     return AMDTensorDescriptorArgs(desc, base)
@@ -294,7 +294,8 @@ def tl_obj_gather_amd(desc_args, x_offsets, y_offset):
     x_offsets = ttgl.convert_layout(x_offsets, idx_layout)
     alloc = ttgl.allocate_shared_memory(desc_args.desc.dtype, list(gather_shape), smem_layout)
     y_off = ttgl.to_tensor(y_offset)
-    amd_tdm.async_gather(gather_desc, x_offsets, y_off, alloc)
+    gather_desc = amd_tdm.update_tensor_descriptor(gather_desc, add_offsets=[0, y_off], clamp_bounds=True)
+    amd_tdm.async_gather(gather_desc, x_offsets, alloc)
     amd_tdm.async_wait(0)
     ret_layout: ttgl.constexpr = default_blocked_layout(list(gather_shape), num_warps, current_target())
     out = alloc.load(ret_layout)
@@ -318,7 +319,8 @@ def tl_obj_scatter_amd(desc_args, value, x_offsets, y_offset):
     x_offsets = ttgl.convert_layout(x_offsets, idx_layout)
     alloc = ttgl.allocate_shared_memory(desc_args.desc.dtype, list(scatter_shape), smem_layout, value)
     y_off = ttgl.to_tensor(y_offset)
-    amd_tdm.async_scatter(scatter_desc, x_offsets, y_off, alloc)
+    scatter_desc = amd_tdm.update_tensor_descriptor(scatter_desc, add_offsets=[0, y_off], clamp_bounds=True)
+    amd_tdm.async_scatter(scatter_desc, x_offsets, alloc)
     amd_tdm.async_wait(0)
 
 
@@ -349,4 +351,4 @@ def convert_host_descriptor(desc):
     tensor = desc.base
 
     layout = get_default_tdm_layout(*block_shape)
-    return gluon.amd.gfx1250.TensorDescriptor(tensor, list(desc.shape), list(desc.strides), block_shape, layout)
+    return gluon.amd.cdna5.TensorDescriptor(tensor, list(desc.shape), list(desc.strides), block_shape, layout)

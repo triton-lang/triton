@@ -420,15 +420,11 @@ ScanOpConversion::getDelinearizedIds(ConversionPatternRewriter &rewriter,
 
 SmallVector<SmallVector<Value>>
 unpackInputs(Location loc, triton::ScanOp op, triton::ScanOpAdaptor adaptor,
-             ConversionPatternRewriter &rewriter, unsigned nElems,
-             const ColumnAction &removeBroadcastRegs) {
+             ConversionPatternRewriter &rewriter, unsigned nElems) {
   auto operands = adaptor.getOperands();
   SmallVector<SmallVector<Value>> srcValues(nElems);
   for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-    auto values = unpackLLElements(loc, operands[i], rewriter);
-    if (!removeBroadcastRegs.isIdentity()) {
-      values = removeBroadcastRegs.apply(values);
-    }
+    auto values = unpackUniqueTensorElements(loc, operands[i], rewriter);
 
     assert(values.size() == srcValues.size());
     for (unsigned j = 0; j < srcValues.size(); ++j) {
@@ -439,7 +435,8 @@ unpackInputs(Location loc, triton::ScanOp op, triton::ScanOpAdaptor adaptor,
 }
 
 // Flip the srcValues. Both reverses the chunks and reverses the lanes.
-// Lane reversal is done with a butterfly shuffle flip (divide and flip).
+// Lane reversal is done with a single butterfly shuffle: for power-of-two
+// warp sizes, `lane ^ (iWarpSize - 1)` equals `(iWarpSize - 1) - lane`.
 SmallVector<SmallVector<Value>>
 flipSrcValues(Location loc, triton::ScanOp op,
               ConversionPatternRewriter &rewriter,
@@ -449,10 +446,8 @@ flipSrcValues(Location loc, triton::ScanOp op,
   for (int i = 0; i < srcValues.size(); ++i) {
     int revIndex = srcValues.size() - i - 1;
     for (unsigned j = 0; j < op.getNumOperands(); ++j) {
-      for (unsigned k = iWarpSize / 2; k >= 1; k = k / 2) {
-        srcValues[revIndex][j] =
-            targetInfo.shuffleXor(rewriter, loc, srcValues[revIndex][j], k);
-      }
+      srcValues[revIndex][j] = targetInfo.shuffleXor(
+          rewriter, loc, srcValues[revIndex][j], iWarpSize - 1);
       values[i].push_back(srcValues[revIndex][j]);
     }
   }
@@ -465,9 +460,6 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
                                ConversionPatternRewriter &rewriter,
                                const TargetInfoBase &targetInfo) const {
   ScanLoweringHelper helper(op);
-  auto origLayout = triton::gpu::toLinearLayout(
-      cast<RankedTensorType>(op.getOperands()[0].getType()));
-  auto removeBroadcastRegs = actionRemoveBroadcastedRegs(origLayout);
   auto loc = helper.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   if (!helper.isSupported())
@@ -483,10 +475,9 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   auto [laneIdAxis, warpIdAxis, flatIdParallel, isRepresentative] =
       getDelinearizedIds(rewriter, helper, laneId, warpId);
   auto axisNumWarps = helper.getAxisNumWarpsWithUniqueData();
-  unsigned nElems =
-      helper.getEncoding().getTotalElemsPerThread(helper.getShape());
-  auto srcValues =
-      unpackInputs(loc, op, adaptor, rewriter, nElems, removeBroadcastRegs);
+  unsigned nElems = triton::gpu::getUniqueElemsPerThread(
+      cast<RankedTensorType>(op.getOperands()[0].getType()));
+  auto srcValues = unpackInputs(loc, op, adaptor, rewriter, nElems);
 
   // For the reverse option we apply flip(scan(flip()) in
   // order to avoid having a separate code path in the reverse direction.
@@ -562,15 +553,10 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   }
 
   auto valuesTransposed = transpose(srcValues);
-  if (!removeBroadcastRegs.isIdentity()) {
-    for (auto &values : valuesTransposed) {
-      values = broadcastAs(values, origLayout);
-    }
-  }
   for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-    auto resultTy = dyn_cast<RankedTensorType>(op.getResult()[i].getType());
-    results[i] = packLLElements(loc, getTypeConverter(), valuesTransposed[i],
-                                rewriter, resultTy);
+    results[i] =
+        packUniqueTensorElements(loc, getTypeConverter(), valuesTransposed[i],
+                                 rewriter, op.getResult()[i].getType());
   }
   rewriter.replaceOp(op, results);
   return success();

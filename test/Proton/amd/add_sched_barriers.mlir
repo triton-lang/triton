@@ -5,9 +5,26 @@
 module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: convert_read_counter
   llvm.func @convert_read_counter() -> i32 {
-    // CHECK: rocdl.sched.barrier 0
+    // CHECK: rocdl.sched.barrier none
     %1 = proton_gpu.read_counter : i32
     llvm.return %1 : i32
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 8 : i32} {
+  // CHECK-LABEL: async_end
+  llvm.func @async_end(%token: i32) {
+    %buffer = ttg.local_alloc : () -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
+    %segment = proton_gpu.segment_alloc %buffer : !ttg.memdesc<256xi32, #shared, #smem, mutable> -> !proton_gpu.segment<1024, #smem, warp>
+    %clock = proton_gpu.read_counter : i32
+    // CHECK: proton_gpu.circular_store
+    // CHECK-NEXT: rocdl.sched.barrier none
+    proton_gpu.circular_store end %segment, %clock, %token : !proton_gpu.segment<1024, #smem, warp>, i32
+    llvm.return
   }
 }
 
@@ -19,33 +36,33 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK-LABEL: nested_record
   llvm.func @nested_record(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
   // CHECK: proton_gpu.initialize
-  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.sched.barrier none
   // CHECK: proton_gpu.read_counter
   // CHECK: proton_gpu.circular_store
-  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.sched.barrier none
   // CHECK: scf.for
-  // CHECK:   rocdl.sched.barrier 0
+  // CHECK:   rocdl.sched.barrier none
   // CHECK:   proton_gpu.read_counter
   // CHECK:   proton_gpu.circular_store
-  // CHECK:   rocdl.sched.barrier 0
+  // CHECK:   rocdl.sched.barrier none
   // CHECK:   scf.for
-  // CHECK:     rocdl.sched.barrier 0
+  // CHECK:     rocdl.sched.barrier none
   // CHECK:     proton_gpu.read_counter
   // CHECK:     proton_gpu.circular_store
-  // CHECK:     rocdl.sched.barrier 0
+  // CHECK:     rocdl.sched.barrier none
   // CHECK:   }
-  // CHECK:   rocdl.sched.barrier 0
+  // CHECK:   rocdl.sched.barrier none
   // CHECK:   proton_gpu.read_counter
   // CHECK:   proton_gpu.circular_store
-  // CHECK:   rocdl.sched.barrier 0
+  // CHECK:   rocdl.sched.barrier none
   // CHECK: }
-  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.sched.barrier none
   // CHECK: proton_gpu.read_counter
   // CHECK: proton_gpu.circular_store
-  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.sched.barrier none
   // CHECK: proton_gpu.read_counter
   // CHECK: proton_gpu.circular_store
-  // CHECK: rocdl.sched.barrier 0
+  // CHECK: rocdl.sched.barrier none
   // CHECK: ttg.barrier local|global_read|global_write
   // CHECK: proton_gpu.finalize
   // CHECK: llvm.return

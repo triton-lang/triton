@@ -3,11 +3,12 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/Support/NVPTXAddrSpace.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::triton::gpu::getTotalElemsPerThread;
+using ::mlir::triton::gpu::getUniqueElemsPerThread;
 using ::mlir::triton::gpu::MemDescType;
 
 TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
@@ -21,7 +22,17 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
     const TargetInfoBase &targetInfo, const DataLayoutAnalysis *analysis)
     : LLVMTypeConverter(ctx, options, analysis) {
   addConversion([ctx](triton::PointerType type) -> std::optional<Type> {
-    return LLVM::LLVMPointerType::get(ctx, type.getAddressSpace());
+    switch (type.getAddressSpace()) {
+    case triton::PtrAddrSpace::Global:
+    // Constant is AMD-specific; map to global here.
+    case triton::PtrAddrSpace::Constant:
+      return LLVM::LLVMPointerType::get(ctx,
+                                        llvm::NVPTXAS::ADDRESS_SPACE_GLOBAL);
+    case triton::PtrAddrSpace::Descriptor:
+      return LLVM::LLVMPointerType::get(ctx,
+                                        llvm::NVPTXAS::ADDRESS_SPACE_GENERIC);
+    }
+    llvm_unreachable("unknown PtrAddrSpace");
   });
   addConversion([ctx](TensorDescType type) -> std::optional<Type> {
     return LLVM::LLVMPointerType::get(ctx, 0);
@@ -48,7 +59,7 @@ Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
     RankedTensorType type, const TargetInfoBase &targetInfo) {
   auto ctx = type.getContext();
   Type eltType = convertType(type.getElementType());
-  unsigned numElementsPerThread = getTotalElemsPerThread(type);
+  unsigned numElementsPerThread = getUniqueElemsPerThread(type);
   SmallVector<Type, 4> types(numElementsPerThread, eltType);
   return LLVM::LLVMStructType::getLiteral(ctx, types);
 }

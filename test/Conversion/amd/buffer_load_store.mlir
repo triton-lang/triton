@@ -1,5 +1,7 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 | FileCheck %s
-// RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 | FileCheck %s --check-prefixes=CHECK,ATOMIC,CDNA
+// RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck %s --check-prefixes=CHECK,ATOMIC,CDNA
+// RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1100 | FileCheck %s --check-prefixes=CHECK,ATOMIC,RDNA
+// RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1170 | FileCheck %s --check-prefixes=CHECK,ATOMIC,RDNA
 
 #blocked0 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
@@ -7,9 +9,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     tt.func @buffer_load(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %offset : tensor<128xi32, #blocked0>{tt.divisibility=16:i32}) {
         // CHECK: %[[c_mask:.*]] = llvm.mlir.constant(true) : i1
         // CHECK: %[[offset:.*]] = llvm.select %[[c_mask]]
-        // CHECK: %[[aux:.*]] = llvm.mlir.constant(3 : i32) : i32
-        // CHECK: rocdl.raw.ptr.buffer.load {{.*}}, %[[offset]], {{.*}}, %[[aux]]
-        %ret = amdg.buffer_load %arg0[%offset] cacheModifier = cs : tensor<128xf32, #blocked0>
+        // CHECK: rocdl.raw.ptr.buffer.load {{.*}}, %[[offset]], {{.*}}, {{.*}}
+        %ret = amdg.buffer_load %arg0[%offset] {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_normal>} : !tt.ptr<f32> -> tensor<128xf32, #blocked0>
         tt.return
   }
 }
@@ -31,54 +32,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         // CHECK: %[[mask:.*]] = llvm.extractvalue %{{.*}} : !llvm.struct<(i1, i1, i1, i1)>
         // CHECK: %[[offset:.*]] = llvm.select %[[mask]]
         // CHECK: rocdl.raw.ptr.buffer.load {{.*}}, %[[offset]]
-        %ret = amdg.buffer_load %arg0[%offset], %7 stride = %c256_i32 : tensor<128xf32, #blocked0>
-        tt.return
-  }
-}
-
-// -----
-
-#blocked0 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
-    // CHECK-LABEL: buffer_load_mask_soffset_oob
-    tt.func @buffer_load_mask_soffset_oob(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %base_offset : i32, %N : i32) {
-        %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked0>
-        %base = tt.splat %base_offset : i32 -> tensor<128xi32, #blocked0>
-        %offset = arith.addi %base, %range : tensor<128xi32, #blocked0>
-        %n = tt.splat %N: i32 -> tensor<128xi32, #blocked0>
-        %mask = arith.cmpi slt, %range, %n: tensor<128xi32, #blocked0>
-        // CHECK: %[[oob:.*]] = llvm.mlir.constant({{-?2147483648}} : i32) : i32
-        // CHECK: %[[split_soffset:.*]] = llvm.mul
-        // CHECK: %[[nonneg_soffset:.*]] = llvm.icmp "sge" %[[split_soffset]], {{.*}} : i32
-        // CHECK: %[[soffset:.*]] = llvm.select %[[nonneg_soffset]], %[[split_soffset]], {{.*}} : i1, i32
-        // CHECK: %[[high_oob:.*]] = llvm.mlir.constant(-1 : i32) : i32
-        // CHECK: %[[split_masked_oob:.*]] = llvm.sub %[[high_oob]], %[[split_soffset]] : i32
-        // CHECK: %[[masked_oob:.*]] = llvm.select %[[nonneg_soffset]], %[[split_masked_oob]], %[[oob]] : i1, i32
-        // CHECK: %[[masked_offset:.*]] = llvm.select {{.*}}, {{.*}}, %[[masked_oob]] : i1, i32
-        // CHECK: rocdl.raw.ptr.buffer.load {{.*}}, %[[masked_offset]], %[[soffset]]
-        %ret = amdg.buffer_load %arg0[%offset], %mask {amdgpu.split_soffset_safe} : tensor<128xf32, #blocked0>
-        tt.return
-  }
-}
-
-// -----
-
-#blocked0 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
-    // CHECK-LABEL: buffer_load_same_target_cond_br_mixed_offset
-    tt.func @buffer_load_same_target_cond_br_mixed_offset(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %base_offset : i32, %N : i32) {
-        %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked0>
-        %lane = rocdl.workitem.id.x : i32
-        %c0 = arith.constant 0 : i32
-        %cond = arith.cmpi sge, %N, %c0 : i32
-        cf.cond_br %cond, ^join(%base_offset : i32), ^join(%lane : i32)
-    ^join(%mixed_scalar: i32):
-        %mixed = tt.splat %mixed_scalar : i32 -> tensor<128xi32, #blocked0>
-        %offset = arith.addi %mixed, %range : tensor<128xi32, #blocked0>
-        // CHECK: llvm.cond_br {{.*}}, [[JOIN:\^bb[0-9]+]]({{.*}}), [[JOIN]]({{.*}})
-        // CHECK: %[[zero:.*]] = llvm.mlir.constant(0 : i32) : i32
-        // CHECK: rocdl.raw.ptr.buffer.load {{.*}}, {{.*}}, %[[zero]]
-        %ret = amdg.buffer_load %arg0[%offset] : tensor<128xf32, #blocked0>
+        %ret = amdg.buffer_load %arg0[%offset], %7 stride = %c256_i32 : !tt.ptr<f32> -> tensor<128xf32, #blocked0>
         tt.return
   }
 }
@@ -102,7 +56,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         // CHECK: %[[offset:.*]] = llvm.select %[[mask]]
         // CHECK: rocdl.raw.ptr.buffer.load {{.*}}, %[[offset]]
         // CHECK: llvm.select
-        %ret = amdg.buffer_load %arg0[%offset], %7, %other stride = %c256_i32: tensor<128xf32, #blocked0>
+        %ret = amdg.buffer_load %arg0[%offset], %7, %other stride = %c256_i32: !tt.ptr<f32> -> tensor<128xf32, #blocked0>
         tt.return
   }
 }
@@ -115,35 +69,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     tt.func @buffer_store(%value : tensor<128xf32, #blocked0>, %arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %offset : tensor<128xi32, #blocked0>{tt.divisibility=16:i32}) {
         // CHECK: %[[mask:.*]] = llvm.mlir.constant(true) : i1
         // CHECK: %[[offset:.*]] = llvm.select %[[mask]]
-        // CHECK: %[[aux:.*]] = llvm.mlir.constant(3 : i32) : i32
-        // CHECK: rocdl.raw.ptr.buffer.store {{.*}}, {{.*}}, %[[offset]], {{.*}}, %[[aux]]
+        // CHECK: rocdl.raw.ptr.buffer.store {{.*}}, {{.*}}, %[[offset]], {{.*}}, {{.*}}
         %c256_i32 = arith.constant 256 : i32
-        amdg.buffer_store %value, %arg0[%offset] cacheModifier = cs stride = %c256_i32 : tensor<128xf32, #blocked0>
-        tt.return
-  }
-}
-
-// -----
-
-#blocked0 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
-    // CHECK-LABEL: buffer_store_mask_soffset_oob
-    tt.func @buffer_store_mask_soffset_oob(%value : tensor<128xf32, #blocked0>, %arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %base_offset : i32, %N : i32) {
-        %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked0>
-        %base = tt.splat %base_offset : i32 -> tensor<128xi32, #blocked0>
-        %offset = arith.addi %base, %range : tensor<128xi32, #blocked0>
-        %n = tt.splat %N: i32 -> tensor<128xi32, #blocked0>
-        %mask = arith.cmpi slt, %range, %n: tensor<128xi32, #blocked0>
-        // CHECK: %[[oob:.*]] = llvm.mlir.constant({{-?2147483648}} : i32) : i32
-        // CHECK: %[[split_soffset:.*]] = llvm.mul
-        // CHECK: %[[nonneg_soffset:.*]] = llvm.icmp "sge" %[[split_soffset]], {{.*}} : i32
-        // CHECK: %[[soffset:.*]] = llvm.select %[[nonneg_soffset]], %[[split_soffset]], {{.*}} : i1, i32
-        // CHECK: %[[high_oob:.*]] = llvm.mlir.constant(-1 : i32) : i32
-        // CHECK: %[[split_masked_oob:.*]] = llvm.sub %[[high_oob]], %[[split_soffset]] : i32
-        // CHECK: %[[masked_oob:.*]] = llvm.select %[[nonneg_soffset]], %[[split_masked_oob]], %[[oob]] : i1, i32
-        // CHECK: %[[masked_offset:.*]] = llvm.select {{.*}}, {{.*}}, %[[masked_oob]] : i1, i32
-        // CHECK: rocdl.raw.ptr.buffer.store {{.*}}, {{.*}}, %[[masked_offset]], %[[soffset]]
-        amdg.buffer_store %value, %arg0[%offset], %mask {amdgpu.split_soffset_safe} : tensor<128xf32, #blocked0>
+        amdg.buffer_store %value, %arg0[%offset] stride = %c256_i32 {cachePolicy = #tt.cache_policy<cache_modifier = cs, eviction_policy = evict_normal>} : !tt.ptr<f32> -> tensor<128xf32, #blocked0>
         tt.return
   }
 }
@@ -167,7 +95,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         // CHECK: %[[mask2:.*]] = llvm.and %[[mask1]], %[[mask0]]
         // CHECK: %[[offset:.*]] = llvm.select %[[mask2]]
         // CHECK: rocdl.raw.ptr.buffer.store {{.*}}, {{.*}}, %[[offset]]
-        amdg.buffer_store %value, %arg0[%offset], %7 stride = %N : tensor<128xf32, #blocked0>
+        amdg.buffer_store %value, %arg0[%offset], %7 stride = %N : !tt.ptr<f32> -> tensor<128xf32, #blocked0>
         tt.return
   }
 }
@@ -186,14 +114,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %4 = arith.addi %3, %2 : tensor<256xi32, #blocked0>
         // Load 8 elements from A with two vectorized load instructions
         // CHECK-COUNT-2: rocdl.raw.ptr.buffer.load {{.*}} : vector<4xf32>
-        %9 = amdg.buffer_load %arg0[%4] stride = %arg3 : tensor<256xf32, #blocked0>
+        %9 = amdg.buffer_load %arg0[%4] stride = %arg3 : !tt.ptr<f32> -> tensor<256xf32, #blocked0>
         // Load 8 elements from B with two vectorized load instructions
         // CHECK-COUNT-2: rocdl.raw.ptr.buffer.load {{.*}} : vector<4xf32>
-        %10 = amdg.buffer_load %arg1[%4] stride = %arg3 : tensor<256xf32, #blocked0>
+        %10 = amdg.buffer_load %arg1[%4] stride = %arg3 : !tt.ptr<f32> -> tensor<256xf32, #blocked0>
         %11 = arith.addf %9, %10 : tensor<256xf32, #blocked0>
         // Store 8 elements into C with two vectorized store instructions
         // CHECK-COUNT-2: rocdl.raw.ptr.buffer.store {{.*}} : vector<4xf32>
-        amdg.buffer_store %11, %arg2[%4] stride = %arg3 : tensor<256xf32, #blocked0>
+        amdg.buffer_store %11, %arg2[%4] stride = %arg3 : !tt.ptr<f32> -> tensor<256xf32, #blocked0>
         tt.return
   }
 }
@@ -211,9 +139,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %4 = arith.addi %3, %1 : tensor<256x64xi32, #blocked>
     // Load 16 f16 elements check for correct vector size of instruction (4xi32 = 8xf16)
     // CHECK-COUNT-4: rocdl.raw.ptr.buffer.load {{.*}} : vector<4xi32>
-    %5 = amdg.buffer_load %arg0[%4] : tensor<256x64xf16, #blocked>
+    %5 = amdg.buffer_load %arg0[%4] : !tt.ptr<f16> -> tensor<256x64xf16, #blocked>
     // CHECK-COUNT-4: rocdl.raw.ptr.buffer.store {{.*}} : vector<4xi32>
-    amdg.buffer_store %5, %arg0[%4] : tensor<256x64xf16, #blocked>
+    amdg.buffer_store %5, %arg0[%4] : !tt.ptr<f16> -> tensor<256x64xf16, #blocked>
     tt.return
   }
 }
@@ -234,14 +162,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %7 = arith.cmpi slt, %4, %5: tensor<256xi32, #blocked0>
         // Load 8 elements from A with eight scalar load instructions
         // CHECK-COUNT-8: rocdl.raw.ptr.buffer.load {{.*}} : f32
-        %9 = amdg.buffer_load %arg0[%4], %7 stride = %arg3 : tensor<256xf32, #blocked0>
+        %9 = amdg.buffer_load %arg0[%4], %7 stride = %arg3 : !tt.ptr<f32> -> tensor<256xf32, #blocked0>
         // Load 8 elements from B with two scalar load instructions
         // CHECK-COUNT-8: rocdl.raw.ptr.buffer.load {{.*}} : f32
-        %10 = amdg.buffer_load %arg1[%4], %7 stride = %arg3 : tensor<256xf32, #blocked0>
+        %10 = amdg.buffer_load %arg1[%4], %7 stride = %arg3 : !tt.ptr<f32> -> tensor<256xf32, #blocked0>
         %11 = arith.addf %9, %10 : tensor<256xf32, #blocked0>
         // Store 8 elements into C with two scalar store instructions
         // CHECK-COUNT-8: rocdl.raw.ptr.buffer.store {{.*}} : f32
-        amdg.buffer_store %11, %arg2[%4], %7 stride = %arg3 : tensor<256xf32, #blocked0>
+        amdg.buffer_store %11, %arg2[%4], %7 stride = %arg3 : !tt.ptr<f32> -> tensor<256xf32, #blocked0>
         tt.return
   }
 }
@@ -262,14 +190,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %7 = arith.cmpi slt, %4, %5: tensor<256xi32, #blocked0>
         // Load 8 fp16 elements from A with four i32 scalar load instructions
         // CHECK-COUNT-4: rocdl.raw.ptr.buffer.load {{.*}} : i32
-        %9 = amdg.buffer_load %arg0[%4], %7 stride = %arg3 : tensor<256xf16, #blocked0>
+        %9 = amdg.buffer_load %arg0[%4], %7 stride = %arg3 : !tt.ptr<f16> -> tensor<256xf16, #blocked0>
         // Load 8 fp16 elements from B with four i32 scalar load instructions
         // CHECK-COUNT-4: rocdl.raw.ptr.buffer.load {{.*}} : i32
-        %10 = amdg.buffer_load %arg1[%4], %7 stride = %arg3 : tensor<256xf16, #blocked0>
+        %10 = amdg.buffer_load %arg1[%4], %7 stride = %arg3 : !tt.ptr<f16> -> tensor<256xf16, #blocked0>
         %11 = arith.addf %9, %10 : tensor<256xf16, #blocked0>
         // Store 8 fp16 elements into C with four i32 scalar store instructionss
         // CHECK-COUNT-4: rocdl.raw.ptr.buffer.store {{.*}} : i32
-        amdg.buffer_store %11, %arg2[%4], %7 stride = %arg3 : tensor<256xf16, #blocked0>
+        amdg.buffer_store %11, %arg2[%4], %7 stride = %arg3 : !tt.ptr<f16> -> tensor<256xf16, #blocked0>
         tt.return
   }
 }
@@ -289,20 +217,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %5 = tt.splat %N: i32 -> tensor<128xi32, #blocked0>
         %mask = arith.cmpi slt, %4, %5: tensor<128xi32, #blocked0>
         // CHECK: %[[mask0:.*]] = llvm.extractvalue %{{.*}} : !llvm.struct<(i1, i1, i1, i1)>
+        // CDNA: %[[FLAGS:.*]] = llvm.mlir.constant(159744 : i32) : i32
+        // CDNA: rocdl.make.buffer.rsrc {{.*}}, %[[FLAGS]]
+        // RDNA: %[[FLAGS:.*]] = llvm.mlir.constant(822243328 : i32) : i32
+        // RDNA: rocdl.make.buffer.rsrc {{.*}}, %[[FLAGS]]
         // There should be a single release fence before any atomics
         // CHECK: llvm.fence syncscope("agent") release
         // CHECK: %[[mask1:.*]] = llvm.mlir.constant(true) : i1
         // CHECK: %[[mask2:.*]] = llvm.and %[[mask1]], %[[mask0]]
         // CHECK: %[[offset:.*]] = llvm.select %[[mask2]]
+        // ATOMIC-NEXT: %[[SOFFSET:.*]] = llvm.mlir.constant(0 : i32) : i32
+        // ATOMIC-NEXT: %[[CPOL:.*]] = llvm.mlir.constant(0 : i32) : i32
+        // ATOMIC-NEXT: %[[result:.*]] = llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.fadd"({{.*}}, {{.*}}, %[[offset]], %[[SOFFSET]], %[[CPOL]]) : (f32, !llvm.ptr<8>, i32, i32, i32) -> f32
+        // ATOMIC-COUNT-3: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.fadd"
+        // ATOMIC-NOT: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.fadd"
 
         // We will have 4 calls to fadd, since the sizePerThread is 4. Scope/ordering instructions will be
         // generated by the lowering of llvm.fence
-        %ret = amdg.buffer_atomic_rmw fadd, acq_rel, gpu, %values, %arg0[%offset], %mask stride = %stride : tensor<128xf32, #blocked0>
-
-        // CHECK: %[[result:.*]] = llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.fadd"({{.*}}, {{.*}}, %[[mask1:.*]], {{.*}}, {{.*}}) : (f32, !llvm.ptr<8>, i32, i32, i32) -> f32
-        // CHECK: %[[result:.*]] = llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.fadd"({{.*}}, {{.*}}, %[[mask1:.*]], {{.*}}, {{.*}}) : (f32, !llvm.ptr<8>, i32, i32, i32) -> f32
-        // CHECK: %[[result:.*]] = llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.fadd"({{.*}}, {{.*}}, %[[mask1:.*]], {{.*}}, {{.*}}) : (f32, !llvm.ptr<8>, i32, i32, i32) -> f32
-        // CHECK: %[[result:.*]] = llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.fadd"({{.*}}, {{.*}}, %[[mask1:.*]], {{.*}}, {{.*}}) : (f32, !llvm.ptr<8>, i32, i32, i32) -> f32
+        %ret = amdg.buffer_atomic_rmw fadd, acq_rel, gpu, %values, %arg0[%offset], %mask stride = %stride : !tt.ptr<f32> -> tensor<128xf32, #blocked0>
 
         // There should be a single acquire fence after all of the atomics
         // CHECK: llvm.fence syncscope("agent") acquire
@@ -312,12 +244,69 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 // -----
 
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+    // CHECK-LABEL: buffer_atomic_rmw_fadd_used
+    tt.func @buffer_atomic_rmw_fadd_used(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %offsets : tensor<32xi32, #blocked0>{tt.divisibility=16:i32}, %values : tensor<32xf32, #blocked0>) -> tensor<32xf32, #blocked0> {
+        // CHECK: %[[CPOL:.*]] = llvm.mlir.constant(1 : i32) : i32
+        // CHECK-NEXT: %[[RESULT:.*]] = llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.fadd"({{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[CPOL]]) : (f32, !llvm.ptr<8>, i32, i32, i32) -> f32
+        // CHECK-NOT: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.fadd"
+        %ret = amdg.buffer_atomic_rmw fadd, relaxed, gpu, %values, %arg0[%offsets] : !tt.ptr<f32> -> tensor<32xf32, #blocked0>
+        %used = arith.addf %ret, %values : tensor<32xf32, #blocked0>
+        tt.return %used : tensor<32xf32, #blocked0>
+    }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+    // CHECK-LABEL: buffer_atomic_rmw_fadd_acquire
+    // No release fence before the atomic for acquire ordering
+    // CHECK-NOT: llvm.fence syncscope("agent") release
+    // CHECK: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.fadd"({{.*}}) : (f32, !llvm.ptr<8>, i32, i32, i32) -> f32
+    // CHECK: llvm.fence syncscope("agent") acquire
+    tt.func public @buffer_atomic_rmw_fadd_acquire(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %offsets : tensor<64xi32, #blocked0>{tt.divisibility=16:i32}, %values : tensor<64xf32, #blocked0>) {
+        %ret = amdg.buffer_atomic_rmw fadd, acquire, gpu, %values, %arg0[%offsets] : !tt.ptr<f32> -> tensor<64xf32, #blocked0>
+        tt.return
+    }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+    // CHECK-LABEL: buffer_atomic_rmw_fadd_release
+    // CHECK: llvm.fence syncscope("agent") release
+    // CHECK: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.fadd"({{.*}}) : (f32, !llvm.ptr<8>, i32, i32, i32) -> f32
+    // No acquire fence after the atomic for release ordering
+    // CHECK-NOT: llvm.fence syncscope("agent") acquire
+    tt.func public @buffer_atomic_rmw_fadd_release(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %offsets : tensor<64xi32, #blocked0>{tt.divisibility=16:i32}, %values : tensor<64xf32, #blocked0>) {
+        %ret = amdg.buffer_atomic_rmw fadd, release, gpu, %values, %arg0[%offsets] : !tt.ptr<f32> -> tensor<64xf32, #blocked0>
+        tt.return
+    }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+    // CHECK-LABEL: buffer_atomic_rmw_xchg_i32
+    // CHECK: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.swap"({{.*}}) : (i32, !llvm.ptr<8>, i32, i32, i32) -> i32
+    tt.func public @buffer_atomic_rmw_xchg_i32(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %offsets : tensor<256xi32, #blocked0>{tt.divisibility=16:i32}, %values : tensor<256xi32, #blocked0>) {
+        %ret = amdg.buffer_atomic_rmw exch, acq_rel, gpu, %values, %arg0[%offsets] : !tt.ptr<i32> -> tensor<256xi32, #blocked0>
+        tt.return
+    }
+}
+
+// -----
+
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
     // CHECK-LABEL: buffer_atomic_rmw_fmax_f32
     // CHECK: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.fmax"({{.*}}) : (f32, !llvm.ptr<8>, i32, i32, i32) -> f32
     tt.func public @buffer_atomic_rmw_fmax_f32(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %offsets : tensor<256xi32, #blocked0>{tt.divisibility=16:i32}, %values : tensor<256xf32, #blocked0>) {
-        %ret = amdg.buffer_atomic_rmw max, acq_rel, gpu, %values, %arg0[%offsets] : tensor<256xf32, #blocked0>
+        %ret = amdg.buffer_atomic_rmw max, acq_rel, gpu, %values, %arg0[%offsets] : !tt.ptr<f32> -> tensor<256xf32, #blocked0>
         tt.return
     }
 }
@@ -329,7 +318,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK-LABEL: buffer_atomic_rmw_fmin_f32
     // CHECK: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.fmin"({{.*}}) : (f32, !llvm.ptr<8>, i32, i32, i32) -> f32
     tt.func public @buffer_atomic_rmw_fmin_f32(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %offsets : tensor<256xi32, #blocked0>{tt.divisibility=16:i32}, %values : tensor<256xf32, #blocked0>) {
-        %ret = amdg.buffer_atomic_rmw min, acq_rel, gpu, %values, %arg0[%offsets] : tensor<256xf32, #blocked0>
+        %ret = amdg.buffer_atomic_rmw min, acq_rel, gpu, %values, %arg0[%offsets] : !tt.ptr<f32> -> tensor<256xf32, #blocked0>
         tt.return
     }
 }
@@ -341,7 +330,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK-LABEL: buffer_atomic_rmw_smax_i32
     // CHECK: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.smax"({{.*}}) : (i32, !llvm.ptr<8>, i32, i32, i32) -> i32
     tt.func public @buffer_atomic_rmw_smax_i32(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %offsets : tensor<256xi32, #blocked0>{tt.divisibility=16:i32}, %values : tensor<256xi32, #blocked0>) {
-        %ret = amdg.buffer_atomic_rmw max, acq_rel, gpu, %values, %arg0[%offsets] : tensor<256xi32, #blocked0>
+        %ret = amdg.buffer_atomic_rmw max, acq_rel, gpu, %values, %arg0[%offsets] : !tt.ptr<i32> -> tensor<256xi32, #blocked0>
         tt.return
     }
 }
@@ -353,7 +342,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK-LABEL: buffer_atomic_rmw_smin_i32
     // CHECK: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.smin"({{.*}}) : (i32, !llvm.ptr<8>, i32, i32, i32) -> i32
     tt.func public @buffer_atomic_rmw_smin_i32(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %offsets : tensor<256xi32, #blocked0>{tt.divisibility=16:i32}, %values : tensor<256xi32, #blocked0>) {
-        %ret = amdg.buffer_atomic_rmw min, acq_rel, gpu, %values, %arg0[%offsets] : tensor<256xi32, #blocked0>
+        %ret = amdg.buffer_atomic_rmw min, acq_rel, gpu, %values, %arg0[%offsets] : !tt.ptr<i32> -> tensor<256xi32, #blocked0>
         tt.return
     }
 }
@@ -365,7 +354,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK-LABEL: buffer_atomic_rmw_umax_i32
     // CHECK: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.umax"({{.*}}) : (i32, !llvm.ptr<8>, i32, i32, i32) -> i32
     tt.func public @buffer_atomic_rmw_umax_i32(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %offsets : tensor<256xi32, #blocked0>{tt.divisibility=16:i32}, %values : tensor<256xi32, #blocked0>) {
-        %ret = amdg.buffer_atomic_rmw umax, acq_rel, gpu, %values, %arg0[%offsets] : tensor<256xi32, #blocked0>
+        %ret = amdg.buffer_atomic_rmw umax, acq_rel, gpu, %values, %arg0[%offsets] : !tt.ptr<i32> -> tensor<256xi32, #blocked0>
         tt.return
     }
 }
@@ -377,7 +366,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK-LABEL: buffer_atomic_rmw_umin_i32
     // CHECK: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.umin"({{.*}}) : (i32, !llvm.ptr<8>, i32, i32, i32) -> i32
     tt.func public @buffer_atomic_rmw_umin_i32(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %offsets : tensor<256xi32, #blocked0>{tt.divisibility=16:i32}, %values : tensor<256xi32, #blocked0>) {
-        %ret = amdg.buffer_atomic_rmw umin, acq_rel, gpu, %values, %arg0[%offsets] : tensor<256xi32, #blocked0>
+        %ret = amdg.buffer_atomic_rmw umin, acq_rel, gpu, %values, %arg0[%offsets] : !tt.ptr<i32> -> tensor<256xi32, #blocked0>
         tt.return
     }
 }
@@ -396,7 +385,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
         // We expect vector size == 1 (i16) for the generated loads as sizePerThread = [1, 1]
         // CHECK-COUNT-8: rocdl.raw.ptr.buffer.load {{.*}}, {{.*}}, {{.*}}, {{.*}} : i16
         // CHECK-NOT: rocdl.raw.ptr.buffer.load
-        %24 = amdg.buffer_load %arg0[%23] : tensor<8x16xf16, #blocked>
+        %24 = amdg.buffer_load %arg0[%23] : !tt.ptr<f16> -> tensor<8x16xf16, #blocked>
         tt.return
   }
 }
@@ -412,10 +401,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %1 = arith.muli %0, %cst : tensor<1024xi32, #blocked>
     // CHECK-COUNT-4: rocdl.raw.ptr.buffer.load {{.*}}, {{.*}}, {{.*}}, {{.*}} : f32
     // CHECK-NOT: rocdl.raw.ptr.buffer.load
-    %2 = amdg.buffer_load %arg0[%1] : tensor<1024xf32, #blocked>
+    %2 = amdg.buffer_load %arg0[%1] : !tt.ptr<f32> -> tensor<1024xf32, #blocked>
     // CHECK-COUNT-4: rocdl.raw.ptr.buffer.store {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}} : f32
     // CHECK-NOT: rocdl.raw.ptr.buffer.store
-    amdg.buffer_store %2, %arg1[%1] : tensor<1024xf32, #blocked>
+    amdg.buffer_store %2, %arg1[%1] : !tt.ptr<f32> -> tensor<1024xf32, #blocked>
     tt.return
   }
 }

@@ -42,6 +42,13 @@ template <bool CheckSuccess> hipError_t streamSynchronize(hipStream_t stream);
 template <bool CheckSuccess> hipError_t streamDestroy(hipStream_t stream);
 
 template <bool CheckSuccess>
+hipError_t graphGetNodes(hipGraph_t graph, hipGraphNode_t *nodes,
+                         size_t *numNodes);
+
+template <bool CheckSuccess>
+hipError_t graphNodeGetType(hipGraphNode_t node, hipGraphNodeType *type);
+
+template <bool CheckSuccess>
 hipError_t memcpyDToHAsync(void *dst, hipDeviceptr_t src, size_t count,
                            hipStream_t stream);
 

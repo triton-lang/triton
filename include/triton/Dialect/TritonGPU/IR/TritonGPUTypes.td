@@ -25,6 +25,7 @@ def TTG_MemDescType : TTG_TypeDef<"MemDesc", "memdesc", [ShapedTypeInterface]> {
 
     let description = [{
         Memory descriptor contains a base pointer (scalar) and a descriptor of the memory.
+        Shared-memory element bit widths must be multiples of eight.
         If mutable memory is false that means the memory is constant and can only be allocated and stored once.
         A constant memory allocation is different than a tensor as it can have multiple views and the descriptor
         can be changed without changing the underlying memory.

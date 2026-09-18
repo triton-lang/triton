@@ -46,7 +46,7 @@ def vpopc(x):
 
 
 @triton.jit
-def _sum_bitmatrix_rows(B, shape_bm, stride_bm: tl.constexpr, stride_bn: tl.constexpr,  # input bitmatrix
+def _sum_bitmatrix_rows(B, shape_bm, stride_bm, stride_bn,  # input bitmatrix
                         Out, OutPartials, stride_pm: tl.constexpr, stride_pn, shape_pn,  # outputs
                         BLOCK_MM: tl.constexpr, BLOCK_M: tl.constexpr):
     tl.static_assert(BLOCK_MM % BLOCK_M == 0)

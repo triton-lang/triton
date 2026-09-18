@@ -2,6 +2,21 @@
 
 #shared = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [64, 64]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @tdm_load_nan_padding(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    %c_shape = arith.constant 128 : i32
+    %c_stride0 = arith.constant 128 : i64
+    %c_stride1 = arith.constant 1 : i64
+    // expected-error @+2 {{Padding with non-zero in TDM is not supported on GFX1250.}}
+    // expected-error @+1 {{failed to legalize operation}}
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride0, %c_stride1] {padding = 2 : i32} : <f16>, <64x64xf16, #shared>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [64, 64]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @tdm_load_runtime_strides(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %stride0: i64, %stride1: i64) {
     %c_shape = arith.constant 128 : i32
     // expected-error @+2 {{last dimension must have stride 1}}

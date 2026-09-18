@@ -65,15 +65,18 @@ Operation *streamPredication(RewriterBase &rewriter, Operation *op,
     copyOp.getDescMutable().assign(updated.getResult());
     return op;
   }
+  // Pure gather inherits pred from its descriptor; gate it the same way as the
+  // copy by chaining a pred-only update_tensor_descriptor onto its descriptor.
   if (auto gatherOp = dyn_cast<triton::amdgpu::AsyncTDMGatherOp>(op)) {
-    auto predicatedOp = cast<tt::PredicatedOpInterface>(op);
     rewriter.setInsertionPoint(op);
-    auto predI32 = arith::ExtUIOp::create(
-        rewriter, op->getLoc(), predicatedOp.getPredicateOperand().getType(),
-        pred);
-    Value mask = arith::AndIOp::create(
-        rewriter, op->getLoc(), predicatedOp.getPredicateOperand(), predI32);
-    predicatedOp.setPredicateOperand(mask);
+    auto predI32 = arith::ExtUIOp::create(rewriter, op->getLoc(),
+                                          rewriter.getI32Type(), pred);
+    auto updated = triton::amdgpu::UpdateTensorDescriptorOp::create(
+        rewriter, op->getLoc(), gatherOp.getDesc().getType(),
+        gatherOp.getDesc(),
+        /*add_offsets=*/ValueRange{}, /*set_bounds=*/ValueRange{},
+        /*pred=*/predI32);
+    gatherOp.getDescMutable().assign(updated.getResult());
     return op;
   }
   if (isa<triton::amdgpu::AsyncTDMWait>(op))
@@ -174,7 +177,12 @@ void combineWaitOps(ModuleOp moduleOp, bool useAsyncCopy) {
 
   tt::combineRedundantWaitOps(
       tdmWaitOps,
-      [](Operation *op) { return isa<triton::amdgpu::TDMOpInterface>(op); },
+      [](Operation *op) {
+        // TDMOpInterface is intentionally single-descriptor (`getDesc()`).
+        // The fused copy has multiple descriptors, so include it explicitly.
+        return isa<triton::amdgpu::TDMOpInterface,
+                   triton::amdgpu::AsyncTDMFusedCopyGlobalToLocalOp>(op);
+      },
       [](OpBuilder &b, Location loc, ValueRange operands,
          unsigned num) -> Operation * {
         return triton::amdgpu::AsyncTDMWait::create(b, loc, operands, num);
@@ -203,6 +211,17 @@ struct PipelinePass : impl::TritonAMDGPUPipelineBase<PipelinePass> {
       }
     }
     combineWaitOps(moduleOp, useAsyncCopy);
+
+    // Pipeline TDM stores / scatters that survive in loop bodies: lift the
+    // LDS allocation out of the loop and hoist the wait so the outgoing
+    // async store overlaps the next iteration's compute.  The transformation
+    // is correct regardless of the loop's pipeline-stage count, so we apply
+    // it to every loop unconditionally; it is a no-op when no descriptor
+    // stores or scatters are present.
+    SmallVector<scf::ForOp> loops;
+    moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
+    for (scf::ForOp forOp : loops)
+      pipelineTDMStores(forOp);
 
     tt::removePipeliningAttributes(moduleOp);
   }

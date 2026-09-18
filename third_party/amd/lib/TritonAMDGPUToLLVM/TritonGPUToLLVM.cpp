@@ -1,14 +1,8 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 
-#include "AsyncUtility.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
-#include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "TritonAMDGPUToLLVM/TypeConverter.h"
-#include "TritonAMDGPUToLLVM/UniformityAnalysis.h"
-#include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
-#include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
-#include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
@@ -25,7 +19,6 @@
 #include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Analysis/Allocation.h"
-#include "triton/Analysis/Membar.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -112,13 +105,6 @@ struct ConvertTritonAMDGPUToLLVM
     ModuleAllocation allocation(mod, allocationFn,
                                 targetInfo.getSharedMemoryPartitionSize());
 
-    if (targetInfo.requiresAliasInfoForAsyncOps())
-      AMD::annotateLocalLoadsSyncedViaAsyncWait(mod);
-
-    ModuleMembarAnalysis membarPass(&allocation,
-                                    mlir::triton::AMD::membarFilter);
-    membarPass.run();
-
     // Lower functions
     {
       TritonLLVMFunctionConversionTarget funcTarget(*context);
@@ -179,19 +165,8 @@ struct ConvertTritonAMDGPUToLLVM
     AMD::populateFpCastOpToLLVMPatterns(typeConverter, patterns, ftz,
                                         axisInfoAnalysis, allocation,
                                         targetInfo, AMDBenefit);
-    // Run a dataflow analysis that classifies every SSA value as
-    // wave-uniform or per-lane. The buffer-ops splitter queries this
-    // to decide which offset components can move to the SGPR soffset.
-    DataFlowSolver uniformitySolver;
-    uniformitySolver.load<dataflow::DeadCodeAnalysis>();
-    uniformitySolver.load<dataflow::SparseConstantPropagation>();
-    AMD::loadUniformityAnalysis(uniformitySolver);
-    if (failed(uniformitySolver.initializeAndRun(mod)))
-      return signalPassFailure();
-
     AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
-                                           axisInfoAnalysis, &uniformitySolver,
-                                           AMDBenefit);
+                                           axisInfoAnalysis, AMDBenefit);
     AMD::populateMaskedOpsToLLVMPatterns(patterns, targetInfo);
     AMD::populateBarrierOpToLLVMPatterns(typeConverter, patterns, AMDBenefit);
     AMD::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns,
@@ -212,8 +187,8 @@ struct ConvertTritonAMDGPUToLLVM
 
     AMD::populateMemoryOpToLLVMPatterns(typeConverter, patterns, targetInfo,
                                         AMDBenefit);
-    mlir::triton::populateMemoryOpToLLVMPatterns(typeConverter, targetInfo,
-                                                 patterns, commonBenefit);
+    mlir::triton::populateMemoryOpToLLVMPatterns(
+        typeConverter, targetInfo, patterns, axisInfoAnalysis, commonBenefit);
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                                    patterns, commonBenefit);
     mlir::triton::populateAssertOpToLLVMPattern(typeConverter, patterns,

@@ -46,6 +46,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// The CTA tile is large enough for one 32-bit write per lane even though the
+// initial layout broadcasts lanes along dim0. CoalesceAsyncCopy can rewrite the
+// source layout later, so the pipeliner should still select async copy.
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [64, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [1, 1], instrShape = [16, 16, 4], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: async_copy_large_cta_tile_with_lane_broadcast
+  tt.func @async_copy_large_cta_tile_with_lane_broadcast(
+              %arg0: tensor<32x16x!tt.ptr<f32>, #blocked> {tt.contiguity = dense<[1, 1]> : tensor<2xi32>, tt.divisibility = dense<16> : tensor<2xi32>},
+              %arg1: tensor<16x16xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>>,
+              %lb: i32, %ub: i32, %step: i32) -> tensor<32x16xf32, #mma> {
+    // CHECK: ttg.async_copy_global_to_local {{.*}} -> <32x16xf32
+    %cst_acc = arith.constant dense<0.000000e+00> : tensor<32x16xf32, #mma>
+    %result = scf.for %iv = %lb to %ub step %step iter_args(%acc = %cst_acc) -> (tensor<32x16xf32, #mma>) : i32 {
+      %a = tt.load %arg0 : tensor<32x16x!tt.ptr<f32>, #blocked>
+      %a_dot = ttg.convert_layout %a : tensor<32x16xf32, #blocked> -> tensor<32x16xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>>
+      %c = tt.dot %a_dot, %arg1, %acc : tensor<32x16xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>> * tensor<16x16xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>> -> tensor<32x16xf32, #mma>
+      scf.yield %c : tensor<32x16xf32, #mma>
+    }
+    tt.return %result : tensor<32x16xf32, #mma>
+  }
+}
+
+// -----
+
 // For sizePerThrad=[1, 1] threadsPerWarp=[1, 64] order=[1, 0] and dim1=64 the registers will be contigious along dim0 which is the *non* contig dimension.
 // Check that we correctly follow the memory order which will be the lane order instead of the register order.
 

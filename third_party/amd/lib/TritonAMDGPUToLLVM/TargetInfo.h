@@ -7,6 +7,8 @@
 #include <optional>
 
 namespace mlir::triton::AMD {
+void registerTargetInfo();
+
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
   explicit TargetInfo(std::optional<StringRef> arch) : targetFeatures(arch) {}
@@ -37,6 +39,17 @@ public:
   Value ballot(RewriterBase &rewriter, Location loc, Type type,
                Value cmp) const override;
 
+  Value getGlobalTimer(RewriterBase &rewriter, Location loc) const override;
+
+  StringRef getAtomicSyncScope(MemSyncScope scope) const override;
+
+  Value loadRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                    Type valueTy, Value pred,
+                    MemSyncScope scope) const override;
+
+  void storeRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                    Value value, Value pred, MemSyncScope scope) const override;
+
   void barrier(Location loc, RewriterBase &rewriter,
                triton::gpu::AddrSpace targets) const override;
   void clusterBarrier(Location loc, RewriterBase &rewriter,
@@ -51,7 +64,6 @@ public:
                     Operation *localLoadOp = nullptr) const override;
 
   // Describes the parameters of ds_read_tr for a particular data type.
-  using TileKind = amdgpu::TargetFeatures::TileKind;
   using LDSTransLoadParams = amdgpu::TargetFeatures::LDSTransLoadParams;
   // Get the ds_read_tr parameters for the instruction that operates on the
   // element granularity specified by bitWidth. Returns candidates ordered from
@@ -75,10 +87,8 @@ public:
                   ProgramIDDim axis) const override;
 
   bool warpReduce(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
-                  triton::ReduceOp op,
-                  unsigned reduceLaneIdMask) const override;
-
-  std::string getMulhiFuncName(Type resultElementTy) const override;
+                  triton::ReduceOp op, unsigned reduceLaneIdMask,
+                  unsigned broadcastLaneIdMask) const override;
 
   void printf(RewriterBase &rewriter, Value formatStrStart,
               int formatStrByteCount, ValueRange args,
@@ -120,6 +130,7 @@ public:
   bool useAsyncMarks() const;
 
   bool supportsMultiCTALaunch() const;
+  unsigned getMaxMulticastMaskPopcount() const;
   bool supportsTDM() const;
   bool supportsClusterLoadBitWidth(int biwWidth) const;
 
@@ -133,6 +144,7 @@ public:
   // type restrictions for BUFFER_ATOMIC_ADD_{F32,F64} and
   // BUFFER_ATOMIC_PK_ADD_{F16,BF16}:
   //   - CDNA3 (gfx942): no BUFFER_ATOMIC_PK_ADD_BF16
+  //   - RDNA3: BUFFER_ATOMIC_ADD_F32 only
   //   - RDNA4: no BUFFER_ATOMIC_ADD_F64
   //   - CDNA4, GFX1250: all float types supported (GFX1250 adds PK_ADD_BF16)
   bool supportsBufferAtomicFadd(mlir::Type elementType) const;
@@ -145,6 +157,7 @@ public:
   bool supportsPermlaneSwap() const;
   bool supportsCvtPkScalePk8() const;
   bool supportsHwScaledUpcast() const;
+  bool supportsHwScaledDowncast() const;
 
   void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                              Operation *llLoadOp) const override;

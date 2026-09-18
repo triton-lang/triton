@@ -71,7 +71,6 @@ class GlobalValue:
     def name(self) -> str:
         if isinstance(self.value, BuiltinFunctionType | FunctionType | type):
             return self.value.__name__
-        assert isinstance(self.value, GlobalVariable)
         return self.value.name
 
     @property
@@ -80,7 +79,6 @@ class GlobalValue:
             module = inspect.getmodule(self.value)
             assert module is not None, "value is missing module"
             return module
-        assert isinstance(self.value, GlobalVariable)
         return self.value.module
 
     @property
@@ -415,10 +413,9 @@ def sugar_rewrite(module: str, alias: str) -> RewriteFn:
 
 
 def add_sugar_rewrites(rewrites: list[RewriteFn], translate_to_gluon: bool) -> None:
-    if translate_to_gluon:
-        rewrites.append(sugar_rewrite("triton.experimental.gluon.language", "gl"))
-        rewrites.append(sugar_rewrite("triton.experimental.gluon", "gluon"))
-    else:
+    rewrites.append(sugar_rewrite("triton.experimental.gluon.language", "gl"))
+    rewrites.append(sugar_rewrite("triton.experimental.gluon", "gluon"))
+    if not translate_to_gluon:
         rewrites.append(sugar_rewrite("triton.language", "tl"))
         rewrites.append(sugar_rewrite("triton", "triton"))
 
@@ -735,7 +732,6 @@ def load_module_from_file(name: str, path: str | Path) -> ModuleType:
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
-    assert module is not None
     spec.loader.exec_module(module)
     return module
 

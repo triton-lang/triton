@@ -15,6 +15,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierMbarAllocator.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h"
 
 using namespace mlir;
@@ -43,13 +44,7 @@ public:
     // Remove block as we don't currently support it
     LinearLayout regLl = triton::gpu::toLinearLayout(helper.getSrcTy());
     // Remove broadcasting in registers as SliceLayout removes them
-    auto removeBroadcast = actionRemoveBroadcastedRegs(regLl);
-    if (!removeBroadcast.isIdentity()) {
-      regLl = removeBroadcast.apply(regLl);
-      for (auto &vals : accs) {
-        vals = removeBroadcast.apply(vals);
-      }
-    }
+    regLl = regLl.removeZeroBasesAlongDim(str_attr("register"));
 
     // First reduce all the values along axis within each thread.
     std::tie(regLl, accs) =
@@ -159,7 +154,7 @@ private:
     auto operands = adaptor.getOperands();
     SmallVector<SmallVector<Value>> srcValues(op.getNumOperands());
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-      srcValues[i] = unpackLLElements(loc, operands[i], rewriter);
+      srcValues[i] = unpackUniqueTensorElements(loc, operands[i], rewriter);
     }
     return srcValues;
   }
@@ -318,7 +313,7 @@ private:
 
     // Update layout killing the axis bases along registers
     layout = ReduceOpHelper::zeroBasesAlongDimAndReorder(layout, axis, kReg);
-    layout = actionRemoveBroadcastedRegs(layout).apply(layout);
+    layout = layout.removeZeroBasesAlongDim(kReg);
     return {std::move(layout), std::move(accs)};
   }
 
@@ -331,9 +326,13 @@ private:
     auto kLane = str_attr("lane");
     const auto &laneBases = layout.getBases().lookup(kLane);
     unsigned reduceLaneIdMask = 0;
+    unsigned broadcastLaneIdMask = 0;
     for (unsigned bit = 0; bit < laneBases.size(); ++bit) {
       if (laneBases[bit][op.getAxis()] != 0) {
         reduceLaneIdMask |= 1u << bit;
+      } else if (llvm::all_of(laneBases[bit],
+                              [](int32_t x) { return x == 0; })) {
+        broadcastLaneIdMask |= 1u << bit;
       }
     }
     if (reduceLaneIdMask == 0) {
@@ -346,7 +345,7 @@ private:
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         acc[i] = accs[i][reg];
       }
-      warpReduce(op, reduceLaneIdMask, acc, rewriter);
+      warpReduce(op, reduceLaneIdMask, broadcastLaneIdMask, acc, rewriter);
       for (unsigned i = 0; i < op.getNumOperands(); ++i) {
         accs[i][reg] = acc[i];
       }
@@ -358,7 +357,7 @@ private:
   }
 
   void warpReduce(triton::ReduceOp op, unsigned reduceLaneIdMask,
-                  SmallVector<Value> &acc,
+                  unsigned broadcastLaneIdMask, SmallVector<Value> &acc,
                   ConversionPatternRewriter &rewriter) const {
     // No reduction to do
     if (reduceLaneIdMask == 0)
@@ -369,8 +368,8 @@ private:
     assert(reduceLaneIdMask < warpSize &&
            "expected reduce lane ID mask to be strictly less than warp size");
     // Try to use the redux op if it is supported by the target
-    if (targetInfo.warpReduce(rewriter, op.getLoc(), acc, op,
-                              reduceLaneIdMask)) {
+    if (targetInfo.warpReduce(rewriter, op.getLoc(), acc, op, reduceLaneIdMask,
+                              broadcastLaneIdMask)) {
       return;
     }
     // Not that it matters a lot, but a more reasonble iteration order would be
@@ -394,13 +393,9 @@ private:
     Location loc = op.getLoc();
     SmallVector<Value> results(op.getNumOperands());
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-      if (auto resultTy =
-              dyn_cast<RankedTensorType>(op.getResult()[i].getType())) {
-        results[i] = packLLElements(loc, getTypeConverter(), accs[i], rewriter,
-                                    resultTy);
-      } else {
-        results[i] = accs[i].front();
-      }
+      results[i] =
+          packUniqueTensorElements(loc, getTypeConverter(), accs[i], rewriter,
+                                   op.getResult()[i].getType());
     }
     rewriter.replaceOp(op, results);
   }
@@ -427,8 +422,8 @@ private:
       auto elemTy = op.getElementTypes()[i];
       auto srcTy = RankedTensorType::get(shape, elemTy, srcEnc);
       auto dstTy = RankedTensorType::get(shape, elemTy, dstEnc);
-      Value packed =
-          packLLElements(loc, getTypeConverter(), inVals[i], rewriter, srcTy);
+      Value packed = packUniqueTensorElements(loc, getTypeConverter(),
+                                              inVals[i], rewriter, srcTy);
       auto srcTensor =
           UnrealizedConversionCastOp::create(rewriter, loc, srcTy, packed)
               .getResult(0);
@@ -441,7 +436,7 @@ private:
       auto packedDst = UnrealizedConversionCastOp::create(
                            rewriter, loc, packedDstTy, cvt.getResult())
                            .getResult(0);
-      outVals[i] = unpackLLElements(loc, packedDst, rewriter);
+      outVals[i] = unpackUniqueTensorElements(loc, packedDst, rewriter);
     }
     return outVals;
   }

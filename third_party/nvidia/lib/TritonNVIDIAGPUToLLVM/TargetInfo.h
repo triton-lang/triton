@@ -6,8 +6,12 @@
 
 namespace mlir::triton::NVIDIA {
 
+void registerTargetInfo();
+
 class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
+  explicit TargetInfo(int computeCapability)
+      : TargetInfo(computeCapability, /*ptxVersion=*/0) {}
   TargetInfo(int computeCapability, int ptxVersion)
       : targetFeatures(computeCapability), ptxVersion(ptxVersion) {}
 
@@ -17,6 +21,19 @@ public:
 
   Value ballot(RewriterBase &rewriter, Location loc, Type type,
                Value cmp) const override;
+
+  Value getGlobalTimer(RewriterBase &rewriter, Location loc) const override;
+
+  StringRef getAtomicSyncScope(MemSyncScope scope) const override;
+
+  unsigned getMaxAtomicLoadStoreVectorSize(unsigned bitWidth) const override;
+
+  Value loadRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                    Type valueTy, Value pred,
+                    MemSyncScope scope) const override;
+
+  void storeRelaxed(RewriterBase &rewriter, Location loc, Value ptr,
+                    Value value, Value pred, MemSyncScope scope) const override;
 
   void barrier(Location loc, RewriterBase &rewriter,
                triton::gpu::AddrSpace targets) const override;
@@ -30,6 +47,8 @@ public:
   Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                     Value ctaId, Type elemTy, Value pred,
                     Operation *localLoadOp = nullptr) const override;
+  Value mapDShared(RewriterBase &rewriter, Location loc, Value ptr, Value ctaId,
+                   Value pred) const;
 
   bool supportLdMatrix() const override {
     return targetFeatures.supportLdMatrix();
@@ -63,10 +82,9 @@ public:
                   ProgramIDDim axis) const override;
 
   bool warpReduce(RewriterBase &rewriter, Location loc, SmallVector<Value> &acc,
-                  triton::ReduceOp op,
-                  unsigned reduceLaneIdMask) const override;
-
-  std::string getMulhiFuncName(Type resultElementTy) const override;
+                  triton::ReduceOp op, unsigned reduceLaneIdMask,
+                  unsigned broadcastLaneIdMask) const override;
+  unsigned getReductionTreeArity(Operation *combinerOp) const override;
 
   void printf(RewriterBase &rewriter, Value formatStrStart,
               int formatStrByteCount, ValueRange args,
@@ -88,6 +106,9 @@ public:
   int getPtxVersion() const { return ptxVersion; }
   int getComputeCapability() const {
     return targetFeatures.getComputeCapability();
+  }
+  const triton::nvidia_gpu::TargetFeatures &getTargetFeatures() const {
+    return targetFeatures;
   }
 
   bool isCuda() const override { return true; }

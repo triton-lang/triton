@@ -106,16 +106,16 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
 
 // -----
 
-// Each input tensor broadcasts 4 registers along dimension 1, resulting in total 16 values per input.
-// Output tensor do not have redundancy in registers and holds 8 values.
+// Each input tensor broadcasts 4 registers along dimension 1, resulting in 4
+// unique values per input. The output tensor has 8 unique values.
 // Check that concat copies only 4 values from each input tensor, 8 in total.
 #src_layout = #ttg.linear<{register=[[0, 0], [0, 0], [1, 0], [2, 0]], lane=[[0, 0], [0, 0], [0, 0], [4, 0], [8, 0], [16, 0]], warp=[[0, 0], [32, 0], [64, 0]], block=[]}>
 #dst_layout = #ttg.linear<{register=[                [1, 0], [2, 0]], lane=[[0, 0], [0, 0], [0, 0], [4, 0], [8, 0], [16, 0]], warp=[[0, 0], [32, 0], [64, 0]], block=[]}>
 module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @concat_from_broadcasted_tensor(%arg0: tensor<128x1xi32, #src_layout>, %arg1: tensor<128x1xi32, #src_layout> {tt.divisibility = 16 : i32}) {
     // CHECK-LABEL: llvm.func @concat_from_broadcasted_tensor
-    // CHECK-COUNT-16: %{{.*}} = llvm.extractvalue %arg0[{{.*}}] : !llvm.struct
-    // CHECK-COUNT-16: %{{.*}} = llvm.extractvalue %arg1[{{.*}}] : !llvm.struct
+    // CHECK-COUNT-4: %{{.*}} = llvm.extractvalue %arg0[{{.*}}] : !llvm.struct
+    // CHECK-COUNT-4: %{{.*}} = llvm.extractvalue %arg1[{{.*}}] : !llvm.struct
     // CHECK-COUNT-8: %{{.*}} = llvm.insertvalue %{{.*}} : !llvm.struct
     %1 = amdg.concat %arg0, %arg1: tensor<128x1xi32, #src_layout>, tensor<128x1xi32, #src_layout> -> tensor<256x1xi32, #dst_layout>
     tt.return
@@ -125,8 +125,8 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
 // -----
 
 // Input tensors do not have redundancy in register and hold 4 values each.
-// Output tensor broadcasts 4 registers along dimension 1, resulting in total 32 values.
-// Check that concat duplicates 4 values from each input 4 times, resulting in total 32 values.
+// The output tensor broadcasts 4 registers along dimension 1 but keeps only 8
+// unique values in its LLVM struct.
 #src_layout = #ttg.linear<{register=[                [1, 0], [2, 0]], lane=[[0, 0], [0, 0], [0, 0], [4, 0], [8, 0], [16, 0]], warp=[[0, 0], [32, 0], [64, 0]], block=[]}>
 #dst_layout = #ttg.linear<{register=[[0, 0], [0, 0], [1, 0], [2, 0]], lane=[[0, 0], [0, 0], [0, 0], [4, 0], [8, 0], [16, 0]], warp=[[0, 0], [32, 0], [64, 0]], block=[]}>
 module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32} {
@@ -134,7 +134,7 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
     // CHECK-LABEL: llvm.func @concat_to_broadcasted_tensor
     // CHECK-COUNT-4: %{{.*}} = llvm.extractvalue %arg0[{{.*}}] : !llvm.struct
     // CHECK-COUNT-4: %{{.*}} = llvm.extractvalue %arg1[{{.*}}] : !llvm.struct
-    // CHECK-COUNT-32: %{{.*}} = llvm.insertvalue %{{.*}} : !llvm.struct
+    // CHECK-COUNT-8: %{{.*}} = llvm.insertvalue %{{.*}} : !llvm.struct
     %1 = amdg.concat %arg0, %arg1: tensor<128x1xi32, #src_layout>, tensor<128x1xi32, #src_layout> -> tensor<256x1xi32, #dst_layout>
     tt.return
   }

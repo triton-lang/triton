@@ -201,6 +201,10 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
     }]>,
   ];
 
+  let extraClassDeclaration = [{
+    LinearLayout toLinearLayout(ArrayRef<int64_t> shape) const;
+  }];
+
   let hasCustomAssemblyFormat = 1;
   let genVerifyDecl = 1;
 }
@@ -321,6 +325,8 @@ For identity mappings a short form based on order and shape is used to increase 
     // Returns the total number of elements including padding given the input
     // tensor shape.
     int64_t getPaddedSize(ArrayRef<int64_t> shape) const;
+
+    LinearLayout toLinearLayout(ArrayRef<int64_t> shape) const;
   }];
   let hasCustomAssemblyFormat = 1;
   let genVerifyDecl = 1;
@@ -386,6 +392,8 @@ def PartitionedSharedEncodingAttr
     unsigned getNumLogicalPieces() const {
       return getNumPartitions() * getNumGroups();
     }
+
+    LinearLayout toLinearLayout(ArrayRef<int64_t> shape) const;
   }];
 
   let hasCustomAssemblyFormat = 1;
@@ -511,7 +519,7 @@ current block number: 0, 1, 2.. maxPhase-1, 0, 1, 2 ...
 
 This layout is used to reduce bank conflicts in cases where shared memory writes
 and reads are performed on layouts with different order. It's meant for hardware
-without native shared memory tranpose support.
+without native shared memory transpose support.
 
 Swizzling pattern affects only 2 fastest dimensions of a tensor.
 In the following text these two dimensions are called row and column:
@@ -529,7 +537,7 @@ Swizzling pattern is following:
 
 Let's consider an element with logical coordinates = (inRowId, inColId).
 For simplicity, we do not vectorize memory in examples,
-i.e. vec == 1 and layout swizzles inidividual elements.
+i.e. vec == 1 and layout swizzles individual elements.
 For vec != 1 example, take a look at SwizzledSharedEncodingAttr documentation.
 
 Swizzled coordinates within memory object are (outRowId, outColId):
@@ -590,6 +598,9 @@ Swizzling examples (matrix is filled with numbers 0, 1, 2, .. columns*rows-1):
     "CGAEncodingAttr":$CGALayout
   );
 
+  let extraClassDeclaration = [{
+    LinearLayout toLinearLayout(ArrayRef<int64_t> shape) const;
+  }];
   let hasCustomAssemblyFormat = 1;
 }
 
@@ -1055,6 +1066,7 @@ w2 w2 w3 w3
     SmallVector<int64_t> getInstrShapeForOperand(int kWidth, int opIdx) const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int kWidth, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
+    LinearLayout dotOperandToLinearLayout(Attribute dotOp, ArrayRef<int64_t> shape) const;
 
     // Check if tilesPerWarp is 1 in every dimension.
     bool hasUnitTilesPerWarp() const;
@@ -1169,7 +1181,7 @@ Row |
 Example 2:
 This example illustrates the purpose of the ctaLayout parameter.
 ctaLayout is a linear layout describing how warps are arranged across WMMA tiles.
-Previously, this information was encoded using warpsPerCTA and tilesPerWarp parametes.
+Previously, this information was encoded using warpsPerCTA and tilesPerWarp parameters.
 For instance, a configuration with 4 warps, represented as:
 
 warpsPerCTA = [2, 2], tilesPerWarp = [1, 1]
@@ -1225,7 +1237,7 @@ w2 w3
 w0 w1 <- first tile computed by w1
 w2 w3
 
-Note that ctaLayout naturally composes with layout definied on a single WMMA tile
+Note that ctaLayout naturally composes with layout defined on a single WMMA tile
 to form final WMMA layout.
 
 wmmaLayout = tileLayout * ctaLayout
@@ -1247,6 +1259,7 @@ This simplifies both WMMA and dotOperand layouts lowering to linear layout.
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
+    LinearLayout dotOperandToLinearLayout(Attribute dotOp, ArrayRef<int64_t> shape) const;
     LinearLayout getTileLayout(unsigned rank) const;
     static SmallVector<unsigned, 3> getDefaultInstrShape() {
       return {16, 16, 16};
@@ -1373,6 +1386,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
                                           int bitwidth, int kWidth,
                                           int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
+    LinearLayout dotOperandToLinearLayout(Attribute dotOp, ArrayRef<int64_t> shape) const;
   }];
 
   let hasCustomAssemblyFormat = 1;

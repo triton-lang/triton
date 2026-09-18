@@ -15,6 +15,10 @@
 #include "triton/Dialect/Triton/IR/Dialect.h.inc"
 #include "triton/Dialect/Triton/IR/OpInterfaces.h"
 #include "triton/Dialect/Triton/IR/OpsEnums.h.inc"
+
+#define GET_ATTRDEF_CLASSES
+#include "triton/Dialect/Triton/IR/AttrDefs.h.inc"
+
 #include "triton/Dialect/Triton/IR/Traits.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 
@@ -28,6 +32,42 @@ struct GlobalMemory : public SideEffects::Resource::Base<GlobalMemory> {
   StringRef getName() const final { return "<GlobalMemory>"; }
   SideEffects::Resource *getParent() const override { return nullptr; }
 };
+
+enum class CachePolicyOperation { Load, Store };
+
+// Allows memory operations to validate cache policy attributes without
+// depending on the dialect that defines the policy.
+class DialectCachePolicyInterface
+    : public DialectInterface::Base<DialectCachePolicyInterface> {
+public:
+  DialectCachePolicyInterface(Dialect *dialect) : Base(dialect) {}
+
+  virtual LogicalResult
+  verifyCachePolicy(Attribute cachePolicy, CachePolicyOperation operation,
+                    function_ref<InFlightDiagnostic()> emitError) const = 0;
+};
+
+LogicalResult verifyCacheModifier(CacheModifier modifier,
+                                  CachePolicyOperation operation,
+                                  function_ref<InFlightDiagnostic()> emitError);
+LogicalResult verifyCachePolicy(Operation *op, Attribute cachePolicy,
+                                CachePolicyOperation operation);
+
+// Dialects define how their types behave as inline assembly operands without
+// exposing those types to the Triton dialect.
+class DialectInlineAsmInterface
+    : public DialectInterface::Base<DialectInlineAsmInterface> {
+public:
+  DialectInlineAsmInterface(Dialect *dialect) : Base(dialect) {}
+
+  virtual void getOperandEffects(
+      OpOperand &operand,
+      SmallVectorImpl<MemoryEffects::EffectInstance> &effects) const = 0;
+  virtual LogicalResult verifyOperand(OpOperand &operand,
+                                      bool isPure) const = 0;
+};
+
+LogicalResult verifyInlineAsmOperands(Operation *op, bool isPure);
 
 class DialectInferLayoutInterface
     : public DialectInterface::Base<DialectInferLayoutInterface> {
@@ -48,6 +88,10 @@ public:
   inferExpandDimsOpEncoding(Attribute operandEncoding, unsigned axis,
                             Attribute &resultEncoding,
                             std::optional<Location> loc) const = 0;
+
+  virtual LogicalResult
+  verifyBroadcastOpEncoding(RankedTensorType srcType,
+                            RankedTensorType dstType) const = 0;
 
   // Note: This function only verifies the operand encoding.  It doesn't infer
   // the result encoding.
@@ -70,10 +114,11 @@ public:
                          std::optional<Location> loc) const = 0;
 
   // Check if two layouts are structurally the same, even if their names are
-  // different
+  // different, optionally ignoring register broadcasting.
   virtual LogicalResult
   verifyLayoutsAreEqual(ArrayRef<int64_t> shape, Attribute expected,
-                        Attribute got, std::optional<Location> loc) const = 0;
+                        Attribute got, std::optional<Location> loc,
+                        bool ignoreRegBroadcast = false) const = 0;
 
   virtual LogicalResult
   inferDefaultJoinOpEncoding(Attribute srcEnc, Attribute &dstEnc,
@@ -91,10 +136,14 @@ public:
   verifyDotOpEncodingCompatibility(Operation *op, Attribute operandEncodingA,
                                    Attribute operandEncodingB) const = 0;
 
-  // Verify that the encodings are compatible to be used together in a cat
-  // operation.
-  virtual LogicalResult
-  verifyCatOpEncodingCompatibility(Operation *op) const = 0;
+  // Verify that the operand and scale encodings are compatible to be used
+  // together in a scaled dot operation. The scale encodings may be null, as
+  // scales are optional.
+  virtual LogicalResult verifyDotScaledOpEncodingCompatibility(
+      Operation *op, Attribute operandEncodingA, Attribute operandEncodingB,
+      Attribute scaleEncodingA, Attribute scaleEncodingB) const {
+    return success();
+  }
 
   virtual LogicalResult
   inferFp4ToFpOpEncoding(ArrayRef<int64_t> shape, int axis, Attribute inEnc,

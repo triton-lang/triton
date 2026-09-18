@@ -6,6 +6,9 @@ namespace rocprofiler {
 DEFINE_DISPATCH(ExternLibRocprofiler, isInitialized, rocprofiler_is_initialized,
                 int *)
 
+DEFINE_DISPATCH(ExternLibRocprofiler, getTimestamp, rocprofiler_get_timestamp,
+                rocprofiler_timestamp_t *)
+
 DEFINE_DISPATCH(ExternLibRocprofiler, forceConfigure,
                 rocprofiler_force_configure, rocprofiler_configure_func_t)
 
@@ -44,6 +47,14 @@ DEFINE_DISPATCH(ExternLibRocprofiler, configureCallbackTracingService,
                 const rocprofiler_tracing_operation_t *, size_t,
                 rocprofiler_callback_tracing_cb_t, void *)
 
+DEFINE_DISPATCH(ExternLibRocprofiler,
+                configureExternalCorrelationIdRequestService,
+                rocprofiler_configure_external_correlation_id_request_service,
+                rocprofiler_context_id_t,
+                const rocprofiler_external_correlation_id_request_kind_t *,
+                size_t, rocprofiler_external_correlation_id_request_cb_t,
+                void *)
+
 DEFINE_DISPATCH(ExternLibRocprofiler, createCallbackThread,
                 rocprofiler_create_callback_thread,
                 rocprofiler_callback_thread_t *)
@@ -55,6 +66,20 @@ DEFINE_DISPATCH(ExternLibRocprofiler, assignCallbackThread,
 DEFINE_DISPATCH(ExternLibRocprofiler, queryAvailableAgents,
                 rocprofiler_query_available_agents, rocprofiler_agent_version_t,
                 rocprofiler_query_available_agents_cb_t, size_t, void *)
+
+#if PROTON_ROCPROFILER_SDK_HAS_PC_SAMPLING
+DEFINE_DISPATCH(ExternLibRocprofiler, queryPCSamplingAgentConfigurations,
+                rocprofiler_query_pc_sampling_agent_configurations,
+                rocprofiler_agent_id_t,
+                rocprofiler_available_pc_sampling_configurations_cb_t, void *)
+
+DEFINE_DISPATCH(ExternLibRocprofiler, configurePCSamplingService,
+                rocprofiler_configure_pc_sampling_service,
+                rocprofiler_context_id_t, rocprofiler_agent_id_t,
+                rocprofiler_pc_sampling_method_t,
+                rocprofiler_pc_sampling_unit_t, uint64_t,
+                rocprofiler_buffer_id_t, int)
+#endif
 
 } // namespace rocprofiler
 } // namespace proton

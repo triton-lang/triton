@@ -51,7 +51,7 @@ public:
 
 private:
   void writeKernel(nlohmann::json &object, const KernelTrace &kernelTrace,
-                   const uint64_t minInitTime);
+                   const uint64_t minInitTime, uint64_t &nextFlowId);
 
   const std::vector<std::string> kChromeColor = {"cq_build_passed",
                                                  "cq_build_failed",

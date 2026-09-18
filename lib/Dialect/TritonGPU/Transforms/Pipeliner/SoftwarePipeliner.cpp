@@ -210,15 +210,20 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
       return signalPassFailure();
 
     {
-      SmallVector<scf::ForOp> loops;
+      SmallVector<LoopLikeOpInterface> loops;
       getOperation()->walk([&](scf::ForOp forOp) {
         // Bail out for loops with num_stage <= 1.
         if (getNumStagesOrDefault(forOp, numStages) > 1)
           loops.push_back(forOp);
       });
 
-      for (scf::ForOp forOp : loops) {
-        mlir::triton::pipelineTMAStores(forOp);
+      if (numStages > 1) {
+        getOperation()->walk(
+            [&](scf::WhileOp whileOp) { loops.push_back(whileOp); });
+      }
+
+      for (auto loopOp : loops) {
+        mlir::triton::pipelineTMAStores(loopOp);
       }
     }
   }

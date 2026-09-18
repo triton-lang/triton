@@ -71,6 +71,9 @@ def builtin_libdevice_unary_kernel(
 
     if OP == "exp":
         builtin = tl.exp(x)
+        external = libdevice.exp(x)
+    elif OP == "fast_exp":
+        builtin = tl.exp(x)
         external = libdevice.fast_expf(x)
     elif OP == "sqrt_rn":
         builtin = tl.sqrt_rn(x)
@@ -162,7 +165,7 @@ def _random_payloads(generator, n_elements):
 
 
 @pytest.mark.parametrize(
-    "op", ["exp", "exp2", "log", "log2", "sin", "cos", "sqrt_rn", "rsqrt", "erf", "floor", "ceil"]
+    "op", ["exp", "fast_exp", "exp2", "log", "log2", "sin", "cos", "sqrt_rn", "rsqrt", "erf", "floor", "ceil"]
 )
 def test_fpsan_libdevice_unary_equivalence(op, fresh_knobs):
     if not is_cuda() or not torch.cuda.is_available():

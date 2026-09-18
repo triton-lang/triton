@@ -129,21 +129,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // Matrix C
     // CHECK-COUNT-8:  llvm.insertelement {{.*}} : vector<8xf32>
     // Matrix A
-    // CHECK-COUNT-32: llvm.extractvalue {{.*}} : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8,  i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK-COUNT-32: llvm.extractvalue {{.*}} : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
     // CHECK-COUNT-32: llvm.insertelement {{.*}} : vector<64xi8>
     // CHECK-COUNT-32: llvm.insertelement %[[ZERO]], {{.*}} : vector<64xi8>
     // CHECK: llvm.bitcast {{.*}} : vector<64xi8> to vector<16xi32>
     // Matrix B
-    // CHECK-COUNT-32: llvm.extractvalue {{.*}} : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8,  i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
+    // CHECK-COUNT-32: llvm.extractvalue {{.*}} : !llvm.struct<(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8, i8)>
     // CHECK-COUNT-32: llvm.insertelement {{.*}} : vector<64xi8>
     // CHECK-COUNT-32: llvm.insertelement %[[ZERO]], {{.*}} : vector<64xi8>
     // CHECK: llvm.bitcast {{.*}} : vector<64xi8> to vector<16xi32>
     // Scale A
-    // CHECK-COUNT-4: llvm.extractvalue {{.*}} : !llvm.struct<(i8, i8, i8, i8)>
+    // CHECK-COUNT-2: llvm.extractvalue {{.*}} : !llvm.struct<(i8, i8)>
     // CHECK-COUNT-4: llvm.insertelement {{.*}} : vector<4xi8>
     // CHECK: llvm.bitcast {{.*}} : vector<4xi8> to i32
     // Scale B
-    // CHECK-COUNT-4: llvm.extractvalue {{.*}} : !llvm.struct<(i8, i8, i8, i8)>
+    // CHECK-COUNT-2: llvm.extractvalue {{.*}} : !llvm.struct<(i8, i8)>
     // CHECK-COUNT-4: llvm.insertelement {{.*}} : vector<4xi8>
     // CHECK: llvm.bitcast {{.*}} : vector<4xi8> to i32
     // CHECK: llvm.call_intrinsic "llvm.amdgcn.wmma.scale.f32.16x16x128.f8f6f4"{{.*}} : (i32, vector<16xi32>, i32, vector<16xi32>, i16, vector<8xf32>, i32, i32, i32, i32, i32, i32, i1, i1) -> vector<8xf32>

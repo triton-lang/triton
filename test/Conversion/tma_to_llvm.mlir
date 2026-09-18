@@ -166,4 +166,16 @@ tt.func @tma_scatter(%arg0: !tt.tensordesc<1x128xbf16, #shared1>, %arg1: tensor<
   tt.return
 }
 
+// CHECK-LABEL: @tma_gather_scatter_column_subslice
+tt.func @tma_gather_scatter_column_subslice(%desc: !tt.tensordesc<1x128xbf16, #shared1>, %indices: tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, %y: i32, %parent: !ttg.memdesc<32x256xbf16, #shared1, #smem, mutable>, %barrier: !ttg.memdesc<1xi64, #shared, #smem, mutable>, %pred: i1) {
+  // CHECK: add i32 {{.*}}, 4096
+  // CHECK: getelementptr
+  // CHECK: cp.async.bulk.tensor.2d.tile::gather4.shared::cta.global
+  // CHECK: cp.async.bulk.tensor.2d.tile::scatter4.global.shared::cta
+  %view = ttg.memdesc_subslice %parent [0, 128] : !ttg.memdesc<32x256xbf16, #shared1, #smem, mutable> -> !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable, 32x256>
+  ttng.async_tma_gather %desc[%indices, %y] %view, %barrier, %pred : !tt.tensordesc<1x128xbf16, #shared1>, tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<1xi64, #shared, #smem, mutable>, !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable, 32x256>, i1
+  ttng.async_tma_scatter %desc[%indices, %y] %view : !tt.tensordesc<1x128xbf16, #shared1>, tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable, 32x256>
+  tt.return
+}
+
 }

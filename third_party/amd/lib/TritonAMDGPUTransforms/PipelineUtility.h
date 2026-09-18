@@ -21,6 +21,9 @@ constexpr char AttrBypassLDS[] = "amdg.bypass_lds_load";
 // - serialize schedule to IR for the next expandLoops function.
 void lowerLoops(ModuleOp moduleOp, bool useAsyncCopy, bool usePingpong);
 
+// Pipeline the TDM stores and scatter in the loop.
+bool pipelineTDMStores(scf::ForOp forOp);
+
 // LoadInfo encapsulates a load's key aspects wrt scheduling. The `distToUse`
 // and `use` fields grab values from getIndirectLevel() which is a thin wrapper
 // of triton::gpu::loadOpsToIndirectionLevel(). Consider the DU chain,

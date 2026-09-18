@@ -85,10 +85,7 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis) {
   assert(moduleOp);
 
-  // It is not easy to get the compute capability here, so we use numCTAs to
-  // decide the semantic of GetProgramIdOp. If numCTAs = 1, then
-  // GetProgramIdOp is converted to "%ctaid", otherwise it is converted to
-  // "%clusterid".
+  // A program spans one CTA when numCTAs == 1 and one cluster otherwise.
   int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
 
   if (numCTAs == 1) {
@@ -102,12 +99,16 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
     }
   } else {
     switch (axis) {
-    case ProgramIDDim::X:
-      return NVVM::ClusterIdXOp::create(rewriter, loc, i32_ty);
+    case ProgramIDDim::X: {
+      // Clusters are launched with dimensions (numCTAs, 1, 1).
+      auto b = TritonLLVMOpBuilder(loc, rewriter);
+      Value ctaId = NVVM::BlockIdXOp::create(rewriter, loc, i32_ty);
+      return b.udiv(ctaId, b.i32_val(numCTAs));
+    }
     case ProgramIDDim::Y:
-      return NVVM::ClusterIdYOp::create(rewriter, loc, i32_ty);
+      return NVVM::BlockIdYOp::create(rewriter, loc, i32_ty);
     case ProgramIDDim::Z:
-      return NVVM::ClusterIdZOp::create(rewriter, loc, i32_ty);
+      return NVVM::BlockIdZOp::create(rewriter, loc, i32_ty);
     }
   }
   llvm_unreachable("invalid axis");
@@ -140,12 +141,13 @@ Value createElectPredicateWarp0(Location loc, OpBuilder &rewriter) {
 }
 
 Value createTMAMulticastMask(Location loc, ConversionPatternRewriter &rewriter,
-                             uint16_t broadcastBits) {
+                             uint16_t broadcastBits, Value ctaId) {
   int numCTAs = triton::gpu::lookupNumCTAs(rewriter);
   auto encoding =
       triton::nvidia_gpu::getTMAMulticastMaskEncoding(numCTAs, broadcastBits);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+  if (!ctaId)
+    ctaId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
   Value base = b.and_(ctaId, b.i32_val(encoding.fixedBits));
   return b.shl(b.i32_val(encoding.pattern), base);
 }
@@ -213,6 +215,7 @@ LogicalResult lowerLdStMatrix(
   auto kLane = S("lane");
   auto kWarp = S("warp");
   auto kOffset = S("offset");
+  auto kBlock = S("block");
   auto kAddr = S("addr");
   auto smemPtrTy = ptr_ty(ctx, 3);
   auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
@@ -358,10 +361,17 @@ LogicalResult lowerLdStMatrix(
       LinearLayout({{kLane, addrToOffset.getBases().lookup(kAddr)},
                     {kWarp, reps.getBases().lookup(kWarp)}},
                    {{kOffset, reps.getOutDimSize(kOffset)}}, false);
+
+  // Matrix accesses are CTA-local. Model that with a trivial block output so
+  // additive stride analysis always compares (offset, block) components.
+  reps =
+      reps.reshapeOuts({{kOffset, reps.getOutDimSize(kOffset)}, {kBlock, 1}});
+  addrLayout = addrLayout.reshapeOuts(reps.getOutDims());
   // Compute the bits that are moved by one instruction
   // Compute elements for which we can swap the xor by an add
   auto [nAdditive, permStrides] = actionAdditiveStrides(
-      reps, addrLayout, maskSpanAffineOffset, fullTileVec.getInDimSize(kReg));
+      reps, addrLayout, maskSpanAffineOffset, /*maskSpanBlocks=*/0,
+      fullTileVec.getInDimSize(kReg));
   reps = permStrides.apply(reps);
   if (isStore) {
     vals = permStrides.apply(vals);

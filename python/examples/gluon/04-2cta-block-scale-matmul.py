@@ -18,12 +18,11 @@ import triton.experimental.gluon as gluon
 import triton.experimental.gluon.language as gl
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 
-from triton._C.libtriton import nvidia
-
 from triton.experimental.gluon.nvidia.blackwell import TensorDescriptor
+from triton.experimental.gluon.language.nvidia import blackwell as blackwell_lang
+from triton.experimental.gluon.language.nvidia import rubin as rubin_lang
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
-    TensorMemoryScalesLayout,
     allocate_tensor_memory,
     tensor_memory_descriptor,
     clc,
@@ -73,11 +72,19 @@ def _planar_snake(lin_idx, m_tiles, n_tiles, minor_dim: gl.constexpr, tile_width
     return major, minor
 
 
+def is_cuda():
+    return torch.cuda.is_available() and triton.runtime.driver.active.get_current_target().backend == "cuda"
+
+
 def is_blackwell():
-    if not torch.cuda.is_available():
-        return False
-    target = triton.runtime.driver.active.get_current_target()
-    return target.backend == "cuda" and torch.cuda.get_device_capability()[0] == 10
+    return is_cuda() and torch.cuda.get_device_capability()[0] in (10, 11)
+
+
+def is_rubin():
+    return is_cuda() and torch.cuda.get_device_capability() == (10, 7)
+
+
+IS_RUBIN = gl.constexpr(is_rubin())
 
 
 @gluon.constexpr_function
@@ -204,10 +211,13 @@ def mma_scaled_tma_set_block_size_hook(nargs):
     nargs["c_desc"].block_shape = c_block
 
     cga = tuple(tuple(x) for x in cga_layout) if cga_layout else None
+    # Rubin supports packed FP4 layouts; Blackwell requires padding.
+    a_pad = False if is_rubin() else (mixed_prec and a_is_fp4)
+    b_pad = False if is_rubin() else (mixed_prec and b_is_fp4)
     nargs["a_desc"].layout = gl.NVMMASharedLayout.get_default_for(a_block, gl.uint8 if a_is_fp4 else gl.float8e4nv,
-                                                                  fp4_padded=(mixed_prec and a_is_fp4), cga_layout=cga)
+                                                                  fp4_padded=a_pad, cga_layout=cga)
     nargs["b_desc"].layout = gl.NVMMASharedLayout.get_default_for(b_block, gl.uint8 if b_is_fp4 else gl.float8e4nv,
-                                                                  fp4_padded=(mixed_prec and b_is_fp4), cga_layout=cga)
+                                                                  fp4_padded=b_pad, cga_layout=cga)
     c_dtype = getattr(gl, str(nargs["c_desc"].base.dtype).split('.')[1])
     nargs["c_desc"].layout = gl.NVMMASharedLayout.get_default_for(c_block, c_dtype, cga_layout=cga)
 
@@ -255,8 +265,17 @@ def async_mma_scaled_impl(a_smem, b_smem, a_scale_smem, b_scale_smem, acc_tmem, 
     # We don't need to hoist the scales tensor memory allocations outside of the loop,
     # so we can pull them into this helper function.
     two_ctas: gl.constexpr = acc_tmem.type.layout.two_ctas
-    a_scale_layout: gl.constexpr = TensorMemoryScalesLayout(cga_layout=[[1, 0]] if two_ctas else [])
-    b_scale_layout: gl.constexpr = TensorMemoryScalesLayout(cga_layout=[[0, 0]] if two_ctas else [])
+    a_scale_cga: gl.constexpr = [[1, 0]] if two_ctas else []
+    # Rubin requires kThenMn ordering for NVFP4 A scales when BLOCK_M_PER_CTA=256.
+    if IS_RUBIN:
+        BLOCK_M_PER_CTA: gl.constexpr = BLOCK_M // gl.num_ctas()
+        a_scale_order: gl.constexpr = "kThenMn" if VEC_SIZE == 16 and BLOCK_M_PER_CTA == 256 else "mnThenK"
+        a_scale_layout: gl.constexpr = rubin_lang.TensorMemoryScalesLayout(cga_layout=a_scale_cga,
+                                                                           block_rep_order=a_scale_order)
+        b_scale_layout: gl.constexpr = rubin_lang.TensorMemoryScalesLayout(cga_layout=[[0, 0]] if two_ctas else [])
+    else:
+        a_scale_layout: gl.constexpr = blackwell_lang.TensorMemoryScalesLayout(cga_layout=a_scale_cga)
+        b_scale_layout: gl.constexpr = blackwell_lang.TensorMemoryScalesLayout(cga_layout=[[0, 0]] if two_ctas else [])
     a_scale_tmem = allocate_tensor_memory(a_scale.dtype, a_scale.type.shape, a_scale_layout)
     b_scale_tmem = allocate_tensor_memory(b_scale.dtype, b_scale.type.shape, b_scale_layout)
     tcgen05_copy(a_scale, a_scale_tmem)
@@ -618,7 +637,7 @@ def mma_scaled_epilogue_partition(p):
             acc = acc_sub.load().to(p.c_desc.dtype)
             tma.store_wait(pendings=subtile_stages - 1)
             acc_smem.store(acc)
-            tma.async_copy_shared_to_global(p.c_desc, [off_m, off_n + EPILOGUE_BLOCK_N * s], acc_smem)
+            tma.async_store(p.c_desc, [off_m, off_n + EPILOGUE_BLOCK_N * s], acc_smem)
             sub_acc_state = sub_acc_state.next()
         mbarrier.arrive(p.acc_empty_bars.index(acc_state.index), count=1)
         acc_state = acc_state.next()
@@ -644,7 +663,7 @@ def mma_scaled_clc_partition(p):
         barrier = p.clc_barriers.index(state.index)
         result = p.clc_result_buffers.index(state.index)
         # 16: clc.try_cancel has a `.b128` modifier
-        mbarrier.expect(barrier, 16)
+        mbarrier.expect(barrier, 16, from_cta=0x0)
         clc.try_cancel(result, barrier)
         mbarrier.wait(barrier, state.phase)
         clc_res = clc.load_result(result)
@@ -680,7 +699,7 @@ def mma_scaled_warp_specialized_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_s
     NUM_CTAS: gl.constexpr = gl.num_ctas()
     TWO_CTAS: gl.constexpr = NUM_CTAS > 1
     BLOCK_M_PER_CTA: gl.constexpr = BLOCK_M // NUM_CTAS
-    gl.static_assert(BLOCK_M_PER_CTA == 64 or BLOCK_M_PER_CTA == 128)
+    gl.static_assert(BLOCK_M_PER_CTA == 64 or BLOCK_M_PER_CTA == 128 or (IS_RUBIN and BLOCK_M_PER_CTA == 256))
     N_PARTITIONS: gl.constexpr = 4 if scheduler == SCHEDULER_CLC else 3
 
     a_bufs = gl.allocate_shared_memory(a_desc.dtype, [num_buffers] + a_desc.block_shape, a_desc.layout)
@@ -690,7 +709,9 @@ def mma_scaled_warp_specialized_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_s
     b_scale_bufs = gl.allocate_shared_memory(b_scale_desc.dtype, [num_buffers] + b_scale_desc.block_shape,
                                              b_scale_desc.layout)
 
-    tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M_PER_CTA, BLOCK_N], col_stride=1, cga_layout=CGA_LAYOUT,
+    # Rubin supports B reuse with BLOCK_M_PER_CTA=256.
+    TMEM_BLOCK_M: gl.constexpr = min(BLOCK_M_PER_CTA, 128)
+    tmem_layout: gl.constexpr = TensorMemoryLayout([TMEM_BLOCK_M, BLOCK_N], col_stride=1, cga_layout=CGA_LAYOUT,
                                                    two_ctas=TWO_CTAS)
     acc_bufs = allocate_tensor_memory(gl.float32, [num_acc_buffers, BLOCK_M, BLOCK_N], tmem_layout)
 
@@ -712,15 +733,15 @@ def mma_scaled_warp_specialized_kernel(a_desc, b_desc, c_desc, a_scale_desc, b_s
 
     clc_barriers = mbarrier.allocate_mbarrier(batch=num_acc_buffers)
     clc_planar_ready_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers)
-    clc_consumed_bars = mbarrier.allocate_mbarrier(batch=num_acc_buffers, two_ctas=TWO_CTAS)
+    cga_layout_clc: gl.constexpr = [[0]] * (gl.num_ctas().bit_length() - 1)
+    clc_layout: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga_layout_clc)
+    clc_consumed_bars = gl.allocate_shared_memory(gl.int64, [num_acc_buffers, 1], clc_layout)
     if scheduler == SCHEDULER_CLC:
         for i in gl.static_range(num_acc_buffers):
             mbarrier.init(clc_barriers.index(i), count=1)
             mbarrier.init(clc_planar_ready_bars.index(i), count=1)
             mbarrier.init(clc_consumed_bars.index(i), count=N_PARTITIONS - 1)
 
-    cga_layout_clc: gl.constexpr = [[0]] * (gl.num_ctas().bit_length() - 1)
-    clc_layout: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga_layout_clc)
     clc_result_buffers = gl.allocate_shared_memory(gl.int64, [clc_barriers.shape[0], 2], clc_layout)
     clc_planar_pid_buffers = gl.allocate_shared_memory(gl.int64, [clc_barriers.shape[0], 1], clc_layout)
 
@@ -877,6 +898,51 @@ def mma_scaled_matmul(A, B, A_scale, B_scale, VEC_SIZE, out_dtype=torch.float16,
 
 
 # ---------------------------------------------------------------------------
+# Best configs
+# ---------------------------------------------------------------------------
+
+ALL_FORMATS = [("mxfp8", "mxfp8"), ("nvfp4", "nvfp4"), ("mxfp8", "mxfp4"), ("mxfp4", "mxfp4")]
+CONFIG_FIELDS = ("BLOCK_M", "BLOCK_N", "BLOCK_K", "EPILOGUE_BLOCK_N", "num_buffers", "acc_buffers", "GRID_MINOR_DIM",
+                 "GRID_TILE_WIDTH")
+
+if is_rubin():
+    # Rubin's larger SMEM supports deeper pipelines; pure FP4 uses BLOCK_K=256.
+    BEST_CONFIGS = {
+        ("mxfp8-mxfp8", 1): (256, 256, 128, 32, 4, 1, 1, 16),
+        ("mxfp8-mxfp8", 2): (512, 256, 128, 32, 5, 1, 1, 16),
+        ("nvfp4-nvfp4", 1): (256, 256, 256, 32, 4, 1, 1, 16),
+        ("nvfp4-nvfp4", 2): (512, 256, 256, 32, 5, 1, 1, 16),
+        ("mxfp8-mxfp4", 1): (256, 256, 128, 32, 5, 1, 1, 16),
+        ("mxfp8-mxfp4", 2): (512, 256, 128, 64, 6, 1, 1, 16),
+        ("mxfp4-mxfp4", 1): (256, 256, 256, 32, 4, 1, 1, 16),
+        ("mxfp4-mxfp4", 2): (512, 256, 256, 32, 5, 1, 1, 16),
+    }
+else:
+    BEST_CONFIGS = {
+        ("mxfp8-mxfp8", 1): (128, 256, 128, 64, 3, 1, 1, 8),
+        ("mxfp8-mxfp8", 2): (256, 256, 128, 64, 5, 1, 0, 8),
+        ("nvfp4-nvfp4", 1): (128, 256, 256, 64, 3, 1, 1, 8),
+        ("nvfp4-nvfp4", 2): (256, 256, 256, 64, 5, 1, 0, 8),
+        ("mxfp8-mxfp4", 1): (128, 256, 128, 64, 3, 1, 1, 8),
+        ("mxfp8-mxfp4", 2): (256, 256, 128, 64, 5, 1, 0, 8),
+        ("mxfp4-mxfp4", 1): (128, 256, 256, 64, 3, 1, 1, 8),
+        ("mxfp4-mxfp4", 2): (256, 256, 256, 64, 5, 1, 0, 8),
+    }
+
+
+def scheduler_for_k(K):
+    return SCHEDULER_SPS if K <= 8192 else SCHEDULER_CLC
+
+
+def get_best_config(a_format, b_format, num_ctas, K):
+    vals = BEST_CONFIGS[(f"{a_format}-{b_format}", num_ctas)]
+    config = dict(zip(CONFIG_FIELDS, vals))
+    config["num_ctas"] = num_ctas
+    config["scheduler"] = scheduler_for_k(K)
+    return config
+
+
+# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
@@ -895,6 +961,7 @@ def mma_scaled_matmul(A, B, A_scale, B_scale, VEC_SIZE, out_dtype=torch.float16,
 ])
 @pytest.mark.parametrize("scheduler", [SCHEDULER_CLC, SCHEDULER_SPS])
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.enable_warmup(min_capability=10)
 def test_mma_scaled_warp_specialized(M, N, K, a_format, b_format, num_ctas, BLOCK_N, EPILOGUE_BLOCK_N, num_buffers,
                                      scheduler):
     if a_format != b_format and K % 128 != 0:
@@ -913,15 +980,27 @@ def test_mma_scaled_warp_specialized(M, N, K, a_format, b_format, num_ctas, BLOC
     torch.testing.assert_close(C_ref, C.to(torch.float32), atol=1e-3, rtol=1e-3)
 
 
+@pytest.mark.parametrize("a_format, b_format", ALL_FORMATS)
+@pytest.mark.parametrize("num_ctas", [1, 2])
+@pytest.mark.skipif(not (is_blackwell() or is_rubin()), reason="Requires Blackwell or Rubin")
+@pytest.mark.enable_warmup(min_capability=10)
+def test_mma_scaled_best_config(a_format, b_format, num_ctas):
+    M = N = K = 8192
+    torch.manual_seed(0)
+    A, A_scale, A_ref = random_quantized_tensor(M, K, a_format)
+    B, B_scale, B_ref = random_quantized_tensor(N, K, b_format)
+    VEC_SIZE = 16 if a_format == "nvfp4" else 32
+    A_scale = swizzle_scales_packed_block(A_scale)
+    B_scale = swizzle_scales_packed_block(B_scale)
+    C_ref = A_ref @ B_ref.T
+    C = mma_scaled_warp_specialized(A, B, A_scale, B_scale, VEC_SIZE,
+                                    **get_best_config(a_format, b_format, num_ctas, K))
+    torch.testing.assert_close(C_ref, C.to(torch.float32), atol=2e-3, rtol=1e-3)
+
+
 # ---------------------------------------------------------------------------
 # Benchmark
 # ---------------------------------------------------------------------------
-
-if is_blackwell():
-    cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
-    cublas = nvidia.cublas.CublasLt(cublas_workspace)
-else:
-    cublas = None
 
 CUBLAS_FORMATS = {"mxfp8", "nvfp4"}
 
@@ -931,46 +1010,29 @@ def cublas_block_scaled_matmul(A, B, A_scale_flat, B_scale_flat, fmt):
     M, N = A.shape[0], B.shape[0]
     output = torch.empty((M, N), dtype=torch.float16, device="cuda")
     if fmt == "mxfp8":
-        cublas.block_scaled_matmul_mxfp8(A, B, output, A_scale_flat, B_scale_flat)
+        triton.testing.cublas().block_scaled_matmul_mxfp8(A, B, output, A_scale_flat, B_scale_flat)
     elif fmt == "nvfp4":
-        cublas.block_scaled_matmul_nvfp4(A, B, output, A_scale_flat, B_scale_flat)
+        triton.testing.cublas().block_scaled_matmul_nvfp4(A, B, output, A_scale_flat, B_scale_flat)
     else:
         raise ValueError(f"cuBLAS does not support format: {fmt}")
     return output
 
 
-ALL_FORMATS = [("mxfp8", "mxfp8"), ("nvfp4", "nvfp4"), ("mxfp8", "mxfp4"), ("mxfp4", "mxfp4")]
-
 MNK_VALS = [8192, 16384, 32768]
 
-BEST_1CTA_CONFIG = dict(BLOCK_M=128, BLOCK_N=256, EPILOGUE_BLOCK_N=64, num_buffers=3, num_ctas=1, GRID_MINOR_DIM=1,
-                        GRID_TILE_WIDTH=8)
-BEST_2CTA_CONFIG = dict(BLOCK_M=256, BLOCK_N=256, EPILOGUE_BLOCK_N=64, num_buffers=5, num_ctas=2, GRID_MINOR_DIM=0,
-                        GRID_TILE_WIDTH=8)
 
-
-def scheduler_for_k(K):
-    return SCHEDULER_SPS if K <= 8192 else SCHEDULER_CLC
-
-
-def fixed_config_for_mnk(config, MNK):
-    config = dict(config)
-    config["scheduler"] = scheduler_for_k(MNK)
-    return config
-
-
-def make_fn(variant, A, B, A_scale, B_scale, VEC_SIZE, a_format, MNK, use_autotuned=False):
+def make_fn(variant, A, B, A_scale, B_scale, VEC_SIZE, a_format, b_format, MNK, use_autotuned=False):
     """Build the callable for a given variant (1cta, 2cta, or cublas)."""
     if variant == "2cta":
         if use_autotuned:
             return lambda: mma_scaled_matmul(A, B, A_scale, B_scale, VEC_SIZE, num_ctas=2)
-        return lambda: mma_scaled_warp_specialized(A, B, A_scale, B_scale, VEC_SIZE,
-                                                   **fixed_config_for_mnk(BEST_2CTA_CONFIG, MNK))
+        config = get_best_config(a_format, b_format, num_ctas=2, K=MNK)
+        return lambda: mma_scaled_warp_specialized(A, B, A_scale, B_scale, VEC_SIZE, **config)
     elif variant == "1cta":
         if use_autotuned:
             return lambda: mma_scaled_matmul(A, B, A_scale, B_scale, VEC_SIZE, num_ctas=1)
-        return lambda: mma_scaled_warp_specialized(A, B, A_scale, B_scale, VEC_SIZE,
-                                                   **fixed_config_for_mnk(BEST_1CTA_CONFIG, MNK))
+        config = get_best_config(a_format, b_format, num_ctas=1, K=MNK)
+        return lambda: mma_scaled_warp_specialized(A, B, A_scale, B_scale, VEC_SIZE, **config)
     elif variant == "cublas":
         A_scale_flat = A_scale.contiguous().flatten()
         B_scale_flat = B_scale.contiguous().flatten()
@@ -1055,7 +1117,8 @@ def run_benchmark(use_autotuned=False):
             for variant in variants:
                 if use_autotuned:
                     print(f"  {label} {variant} MNK={MNK}: ...", end="", flush=True)
-                fn = make_fn(variant, A, B, A_scale, B_scale, VEC_SIZE, a_format, MNK, use_autotuned=use_autotuned)
+                fn = make_fn(variant, A, B, A_scale, B_scale, VEC_SIZE, a_format, b_format, MNK,
+                             use_autotuned=use_autotuned)
                 ms = triton.testing.do_bench(fn)
                 tflops = 2.0 * MNK**3 * 1e-12 / (ms * 1e-3)
                 results[(label, variant, MNK)] = tflops

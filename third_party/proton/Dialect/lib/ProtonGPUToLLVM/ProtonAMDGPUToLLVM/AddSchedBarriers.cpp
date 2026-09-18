@@ -32,14 +32,11 @@ struct AddSchedBarriers
     auto funcOps = triton::proton::gpu::getTritonFunctions(mod);
     assert(funcOps.size() == 1 && "Expected exactly one funcOp");
 
-    IntegerAttr zeroAttrValue =
-        builder.getI32IntegerAttr(static_cast<int32_t>(0));
-
     funcOps[0].walk([&](mlir::triton::proton::gpu::ReadCounterOp op) {
       auto loc = op.getLoc();
       if (!isa_and_nonnull<ROCDL::SchedBarrier>(op->getPrevNode())) {
         builder.setInsertionPoint(op);
-        ROCDL::SchedBarrier::create(builder, loc, zeroAttrValue);
+        ROCDL::SchedBarrier::create(builder, loc, ROCDL::SchedGroupMask::none);
       }
     });
 
@@ -47,7 +44,7 @@ struct AddSchedBarriers
       auto loc = op.getLoc();
       if (!isa_and_nonnull<ROCDL::SchedBarrier>(op->getNextNode())) {
         builder.setInsertionPointAfter(op);
-        ROCDL::SchedBarrier::create(builder, loc, zeroAttrValue);
+        ROCDL::SchedBarrier::create(builder, loc, ROCDL::SchedGroupMask::none);
       }
     });
   }

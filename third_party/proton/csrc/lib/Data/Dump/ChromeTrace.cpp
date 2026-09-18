@@ -98,14 +98,11 @@ void dumpKernelEvents(
     for (const auto &event : events) {
       auto *kernelMetric = event.kernelMetric;
       auto *flexibleMetrics = event.flexibleMetrics;
-      uint64_t startTimeNs =
-          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::StartTime));
-      uint64_t endTimeNs =
-          std::get<uint64_t>(kernelMetric->getValue(KernelMetric::EndTime));
       bool isMetricKernel = static_cast<bool>(std::get<uint64_t>(
           kernelMetric->getValue(KernelMetric::IsMetricKernel)));
-      double ts = static_cast<double>(startTimeNs - minTimeStamp) / 1000;
-      double dur = static_cast<double>(endTimeNs - startTimeNs) / 1000;
+      double ts = static_cast<double>(event.startTimeNs - minTimeStamp) / 1000;
+      double dur =
+          static_cast<double>(event.endTimeNs - event.startTimeNs) / 1000;
 
       const auto &contexts = event.contexts;
 
@@ -159,6 +156,7 @@ void dumpCpuScopeEvents(
       element["dur"] = dur;
       element["tid"] = details::getCpuLaneId(threadId);
       element["args"]["call_stack"] = buildCallStackJson(event.contexts);
+      element["args"]["scope_id"] = event.scopeId;
       object["traceEvents"].push_back(std::move(element));
     }
   }
@@ -225,9 +223,6 @@ void dumpCpuToGpuFlowEvents(
       }
 
       const auto *launchEvent = launchEventIt->second;
-      const auto kernelStartTimeNs = std::get<uint64_t>(
-          event.kernelMetric->getValue(KernelMetric::StartTime));
-
       json startElement;
       startElement["name"] = "launch->kernel";
       startElement["cat"] = "flow";
@@ -247,7 +242,7 @@ void dumpCpuToGpuFlowEvents(
       finishElement["pid"] = details::kTraceProcessId;
       finishElement["tid"] = details::getGpuLaneId(streamId);
       finishElement["ts"] =
-          static_cast<double>(kernelStartTimeNs - minTimeStamp) / 1000.0;
+          static_cast<double>(event.startTimeNs - minTimeStamp) / 1000.0;
       finishElement["id"] = event.launchEventId;
       finishElement["bp"] = "e";
       object["traceEvents"].push_back(std::move(finishElement));
@@ -264,7 +259,12 @@ void dumpKernelMetricTrace(
     const std::map<size_t, std::vector<CpuScopeEvent>> &cpuScopeEvents,
     const std::map<size_t, std::vector<GraphScopeEvent>> &graphScopeEvents,
     std::ostream &os) {
-  json object = {{"displayTimeUnit", "us"}, {"traceEvents", json::array()}};
+  // baseTimeNanoseconds records the absolute time that event ts=0 refers to,
+  // mirroring torch>=2.4 chrome traces, so external tools (e.g. viztracer's
+  // ReportBuilder) can align this trace with traces from other profilers.
+  json object = {{"displayTimeUnit", "us"},
+                 {"baseTimeNanoseconds", minTimeStamp},
+                 {"traceEvents", json::array()}};
 
   emitTraceLaneMetadata(object, cpuScopeEvents, graphScopeEvents, kernelEvents);
   dumpCpuScopeEvents(minTimeStamp, cpuScopeEvents, object);
@@ -279,7 +279,9 @@ void dumpCpuOnlyTrace(
     uint64_t minTimeStamp,
     const std::map<size_t, std::vector<CpuScopeEvent>> &cpuScopeEvents,
     std::ostream &os) {
-  json object = {{"displayTimeUnit", "us"}, {"traceEvents", json::array()}};
+  json object = {{"displayTimeUnit", "us"},
+                 {"baseTimeNanoseconds", minTimeStamp},
+                 {"traceEvents", json::array()}};
   dumpCpuScopeEvents(minTimeStamp, cpuScopeEvents, object);
   os << object.dump() << "\n";
 }

@@ -48,7 +48,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
   add_custom_target(TritonNVIDIAGSanRuntime ALL DEPENDS "${GSAN_RUNTIME_IR}")
 
   add_triton_plugin(TritonNVIDIA ${CMAKE_CURRENT_SOURCE_DIR}/triton_nvidia.cc LINK_LIBS TritonNVIDIAGPUToLLVM NVGPUToLLVM)
-  target_link_libraries(TritonNVIDIA PRIVATE Python3::Module pybind11::headers)
+  target_link_libraries(TritonNVIDIA PRIVATE Python3::Module nanobind-static)
   add_dependencies(TritonNVIDIA TritonNVIDIAGSanRuntime)
 endif()
 if(TRITON_BUILD_UT)

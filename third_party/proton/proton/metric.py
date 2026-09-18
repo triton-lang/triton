@@ -83,8 +83,10 @@ def set_metric_kernels():
 
 class _TensorMetric(libproton.TensorMetric):
 
+    def __new__(cls, value, metric_type_index):
+        return super().__new__(cls, value.data_ptr(), metric_type_index, value.numel())
+
     def __init__(self, value, metric_type_index):
-        super().__init__(value.data_ptr(), metric_type_index, value.numel())
         # Hold a reference to the backing tensor so its device memory stays alive.
         self._value = value
 

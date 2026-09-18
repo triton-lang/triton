@@ -35,7 +35,11 @@ enum Kind { None = -1, AsyncCp = 0, Wgmma, TmaStore, NumCommitKinds };
 // writeVisibility + readVisibility per active memory type.
 constexpr int kCapturesPerMemType = 2;
 
-// barrierStates + waiting + activeMasks (only when barriers exist).
+// proxyAccessVisibility, plus proxyAccessTracking when mbarriers are present.
+constexpr int kProxyFenceBaseCaptures = 1;
+constexpr int kProxyFenceBarrierCaptures = 1;
+
+// barrierStates + waiting + activeMasks (only when tracked rendezvous exist).
 constexpr int kBarrierBaseCaptures = 3;
 
 // writeTracking + readTracking per active memory type (only when barriers
@@ -51,29 +55,43 @@ constexpr int kCaptureSizeBytes = 8;
 /// Estimate the number of WarpSpecialize captures that the
 /// ConcurrencySanitizer pass will add via passToWarpSpecialize().
 /// \p numActiveMemTypes  Number of memory types with buffers.
-/// \p hasBarriers        Whether barriers exist in the module.
+/// \p hasMBarriers       Whether mbarriers exist in the module.
+/// \p hasClusterBarriers Whether cluster barriers exist in the module.
 /// \p numCommitKinds     Number of distinct commit kinds required.
-inline int estimateConSanCaptureCount(int numActiveMemTypes, bool hasBarriers,
-                                      int numCommitKinds) {
+inline int estimateConSanCaptureCount(int numActiveMemTypes, bool hasMBarriers,
+                                      bool hasClusterBarriers,
+                                      int numCommitKinds,
+                                      bool hasAsyncProxyFenceTracking) {
   int perMemType = kCapturesPerMemType * numActiveMemTypes;
   int barrierCaptures =
-      hasBarriers ? kBarrierBaseCaptures +
-                        kBarrierTrackingCapturesPerMemType * numActiveMemTypes
-                  : 0;
-  return perMemType + barrierCaptures + kFixedCaptures + numCommitKinds;
+      hasMBarriers || hasClusterBarriers ? kBarrierBaseCaptures : 0;
+  if (hasMBarriers)
+    barrierCaptures += kBarrierTrackingCapturesPerMemType * numActiveMemTypes;
+  int proxyFenceCaptures =
+      hasAsyncProxyFenceTracking
+          ? kProxyFenceBaseCaptures +
+                (hasMBarriers ? kProxyFenceBarrierCaptures : 0)
+          : 0;
+  return perMemType + barrierCaptures + proxyFenceCaptures + kFixedCaptures +
+         numCommitKinds;
 }
 
 void createAssertInThread(ImplicitLocOpBuilder &b, Value condition,
                           StringRef message);
+// Strides are in elements; an empty list uses contiguous column-major storage.
 Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
                                     Value tensor, RankedTensorType tensorType,
-                                    bool currentCTAOnly = false);
+                                    bool currentCTAOnly = false,
+                                    Value storeMask = nullptr,
+                                    ArrayRef<int64_t> strides = {});
 Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
-                              RankedTensorType tensorType);
+                              RankedTensorType tensorType,
+                              ArrayRef<int64_t> strides = {});
 gpu::GlobalScratchAllocOp
 createThirdPartyScratchAlloc(OpBuilder &b, Location loc, Type ptrType,
                              int64_t sizeInBytes, int64_t alignment,
                              bool sharedClusterState = false);
+Region *getClusterBarrierGroupRegion(Operation *op);
 RankedTensorType getSlicedTensorType(RankedTensorType tensorType,
                                      ArrayRef<int> keptDims, Type elementType);
 Value reshapeAndBroadcast(OpBuilder &b, Location loc, Value tensor,
@@ -103,6 +121,17 @@ struct ValueType {
   ValueType(Value value, Type type) : value(value), type(type) {}
   ValueType(std::pair<Value, Type> value)
       : value(value.first), type(value.second) {}
+};
+
+struct BufferStateCandidate {
+  uint32_t baseOffset = 0;
+  llvm::SmallBitVector mask;
+  uint32_t ctaMask = 0;
+};
+
+struct BufferStateCandidates {
+  SmallVector<BufferStateCandidate, 2> cases;
+  bool unknown = false;
 };
 
 // Map from IR region to ConSan auxiliary data.
@@ -152,19 +181,19 @@ struct AuxDataMap {
   //   Cbar, Cbuf, Cthr, Cmask = CTA dimensions qualifying barriers, buffers,
   //       threads, and thread masks respectively. Each has extent C.
   //   B = tracked buffers for one memory type, power-of-two padded.
-  //   K = tracked mbarriers, power-of-two padded.
+  //   K = tracked mbarriers and virtual cluster rendezvous slots,
+  //       power-of-two padded.
   //   T = logical ConSan thread bit slots used by this module, power-of-two
   //       padded for the distributed layout.
-  //   P = base-thread commit columns used by this module, power-of-two padded.
+  //   P = base-thread columns used by commit and proxy state, power-of-two
+  //       padded.
+  //   F = mbarrier phase parity slots, with extent 2.
+  //   V = visibility mask width: 32 bits for at most 32 logical threads,
+  //       otherwise 64 bits.
   //
   // Storage notation:
   //   tensor  = distributed tensor value.
   //   scratch = pointer to shared-cluster global scratch memory.
-
-  // tensor, <B x i64>
-  // Per-memory-type packed buffer descriptors. Each i64 stores the 32-bit base
-  // offset and 32-bit length of one shared-memory or tensor-memory region.
-  RegionToValueMap buffers[numMemTypes];
 
   // tensor, <K x i64>
   // Packed descriptors for tracked mbarrier allocations. Barriers are shared
@@ -177,47 +206,71 @@ struct AuxDataMap {
   // current arrival count, and bits [41..61] hold a signed tx-count.
   RegionToValueMap barrierStates;
 
-  // scratch, <Cbuf x B x Cmask x i64>
+  // scratch, <Cbuf x B x Cmask x iV>
   // Per-memory-type write frontier. Bit i means logical ConSan thread i can see
   // the latest write to the buffer row.
   RegionToValueMap writeVisibility[numMemTypes];
 
-  // scratch, <Cbuf x B x Cbar x K x i8>
-  // Per-memory-type buffer/barrier map for writes that a barrier tracks.
+  // scratch, <Cbuf x B x Cbar x K x F x i8>
+  // Per-memory-type buffer/barrier/phase map for writes that a barrier tracks.
   RegionToValueMap writeTracking[numMemTypes];
 
-  // scratch, <Cbuf x B x Cthr x T x Cmask x i64>
+  // scratch, <Cbuf x B x Cthr x T x Cmask x iV>
   // Per-memory-type read frontier. For each buffer and logical thread lane, the
-  // i64 value is a bitmask of reads visible to that lane's thread.
+  // value is a bitmask of reads visible to that lane's thread.
   RegionToValueMap readVisibility[numMemTypes];
 
-  // scratch, <Cbuf x B x Cbar x K x Cmask x i64>
-  // Per-memory-type buffer/barrier map for read visibility masks that a barrier
-  // tracks.
+  // scratch, <Cbuf x B x Cbar x K x Cmask x F x iV>
+  // Per-memory-type buffer/barrier/phase map for read visibility masks that a
+  // barrier tracks.
   RegionToValueMap readTracking[numMemTypes];
+
+  // scratch, <Cbuf x B x Cthr x P x Cmask x i64>
+  // Generic-proxy shared-memory accesses visible to each base thread. The low
+  // 16 bits contain source base-thread ids that have accessed the buffer; bits
+  // [16..31] contain the subset covered by fence.proxy.async on the path to
+  // that consumer. CTA dimensions distinguish source and consumer CTAs.
+  RegionToValueMap proxyAccessVisibility;
+
+  // scratch, <Cbuf x B x Cbar x K x Cmask x F x i64>
+  // Phase-specific barrier publication table for packed proxyAccessVisibility
+  // state.
+  RegionToValueMap proxyAccessTracking;
 
   // scratch, <C x B x P x i8>
   // Per-commit-kind outstanding commit counters for shared-memory buffers.
   // Entries are 0 for none, -1 for staged but uncommitted, and positive for a
   // committed access with an outstanding-group distance.
+  // With async-copy mbarriers, -2 retains a completed copy's issuer for later
+  // barrier arrivals. Visibility distinguishes completed from pending copies.
   // Just one C dimension as ampere async_copy, WGMMA and TMA store are
   // intra-CTA.
   RegionToValueMap commits[CommitKind::NumCommitKinds];
+  bool hasAsyncCopyMbarriers = false;
 
-  // tensor, <B x B x i1>
-  // Optional per-memory-type alias matrix. Created only when BufferRegion
-  // analysis finds cross-buffer aliasing; checks expand selected buffer rows
-  // through this matrix.
-  RegionToValueMap aliasMatrices[numMemTypes];
+  // State-lane plans and analysis-derived runtime-base, state-mask, and CTA
+  // cases for each memdesc. bufferRegions preserves the ordered region list
+  // used to build each plan so static scratch can select its mask directly.
+  triton::BufferStatePlan bufferStatePlans[numMemTypes];
+  SmallVector<triton::BufferRegion> bufferRegions[numMemTypes];
+  DenseMap<Value, BufferStateCandidates> bufferCandidates[numMemTypes];
+
+  // Shared-memory state lanes occupied by each physical mbarrier. Virtual
+  // cluster barriers have no storage and therefore do not appear here.
+  SmallVector<llvm::SmallBitVector> barrierBufferMasks;
 
   // scratch pointer, i32
   // Shared-cluster lock used to serialize ConSan instrumentation updates.
   RegionToValueMap lock;
 
-  // Consan inserts internal cluster barriers for its own protocols. They must
-  // keep their synchronization semantics, but they are not user-visible
-  // publication points.
-  SmallVector<Operation *> nonPublishingClusterBarriers;
+  // ConSan inserts a cluster barrier to publish lock initialization. It runs
+  // before the lock and rendezvous state are ready, so do not instrument it.
+  SmallVector<Operation *> internalClusterBarriers;
+
+  // Virtual barrier slot for each cluster-barrier lowering resource. Cluster
+  // barriers outside warp specialization share the entry-region slot; each
+  // warp-specialize region has its own slot.
+  DenseMap<Region *, int> clusterBarrierSlots;
 
   // scratch, <Cbar x K x Cthr x i32>
   // Deadlock-detection bitfield. Each base thread uses two bits: waiting flag
@@ -230,23 +283,25 @@ struct AuxDataMap {
   // terminator.
   RegionToValueMap activeMasks;
 
-  // True when a memory type has cross-buffer aliasing and therefore requires
-  // aliasMatrices to make visibility and commit checks conservative.
-  std::array<bool, numMemTypes> hasNonTrivialAliasing{};
-
   // Dense logical-thread numbering for this module. Base threads are always
   // present; TMA/TC/CLC peer ranges are added only when the module uses them.
   ThreadLayout threadLayout;
 
+  bool hasAsyncCopyReads = false;
+  bool hasAsyncProxyFenceTracking = false;
+
   LogicalResult populateAndPassToWarpSpecialize(ModuleOp module,
+                                                triton::FuncOp entryPoint,
                                                 FunctionBuilder &funcBuilder,
-                                                const ConSanTargetHooks *hooks);
+                                                const ConSanTargetHooks &hooks);
+
+  int getClusterBarrierSlot(Operation *op) const;
 
 private:
-  void getBuffersAndBarriers(
-      ModuleOp module,
-      SmallVector<SmallVector<triton::BufferRegion>, 2> &bufRegions,
-      SmallVector<triton::BufferRegion> &barrierRegions);
+  LogicalResult
+  getBuffersAndBarriers(ModuleOp module, triton::FuncOp entryPoint,
+                        SmallVector<triton::BufferRegion> &barrierRegions,
+                        const ConSanTargetHooks &hooks);
   void passToWarpSpecialize(triton::FuncOp func, ValueType value,
                             RegionToValueMap &map, int &captureCounter,
                             int64_t &captureBytes);

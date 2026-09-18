@@ -45,6 +45,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
     tt.return
   }
 
+  tt.func public @sitofp_s8_to_bf16(%ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg0: tensor<256xi8, #blocked>) {
+    // CHECK-LABEL: sitofp_s8_to_bf16
+    // SM80: cvt.rn.f32.s8
+    // CHECK: prmt.b32
+    // SM90: sub.rn.bf16x2
+    // SM100: sub.rn.bf16x2
+    // VEC80-LABEL: llvm.func @sitofp_s8_to_bf16
+    // VEC80-NOT: llvm.fsub {{.*}} : vector<4xbf16>
+    // VEC90-LABEL: llvm.func @sitofp_s8_to_bf16
+    // VEC90: llvm.fsub {{.*}} : vector<4xbf16>
+    // VEC100-LABEL: llvm.func @sitofp_s8_to_bf16
+    // VEC100: llvm.fsub {{.*}} : vector<4xbf16>
+    %0 = arith.sitofp %arg0 : tensor<256xi8, #blocked> to tensor<256xbf16, #blocked>
+    %1 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked>
+    %2 = tt.splat %ptr : !tt.ptr<bf16> -> tensor<256x!tt.ptr<bf16>, #blocked>
+    %3 = tt.addptr %2, %1 : tensor<256x!tt.ptr<bf16>, #blocked>, tensor<256xi32, #blocked>
+    tt.store %3, %0 : tensor<256x!tt.ptr<bf16>, #blocked>
+    tt.return
+  }
+
   tt.func public @extf_bf16(%ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg0: tensor<256xbf16, #blocked>) {
     // CHECK-LABEL: extf_bf16
     // CHECK-COUNT-8: cvt.f32.bf16
@@ -86,6 +106,52 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
     %2 = tt.splat %ptr : !tt.ptr<f16> -> tensor<256x!tt.ptr<f16>, #blocked>
     %3 = tt.addptr %2, %1 : tensor<256x!tt.ptr<f16>, #blocked>, tensor<256xi32, #blocked>
     tt.store %3, %0 : tensor<256x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+
+  // CHECK-LABEL: atomic_poll_relaxed_gpu
+  // CHECK: ld.relaxed.gpu.global.b32
+  // CHECK-NOT: fence.acquire
+  tt.func public @atomic_poll_relaxed_gpu(%ptr: !tt.ptr<i32>, %expected: i32, %out: !tt.ptr<i32>) {
+    %matched = tt.atomic_poll relaxed, gpu, %ptr, %expected {allocation.offset = 0 : i32} : !tt.ptr<i32>, i32 -> i1
+    %result = arith.extui %matched : i1 to i32
+    tt.store %out, %result : !tt.ptr<i32>
+    tt.return
+  }
+
+  // CHECK-LABEL: atomic_poll_acquire_cta
+  // CHECK: ld.relaxed.cta.global.b32
+  // SM80: fence.acq_rel.cta
+  // SM90: fence.acq_rel.cta
+  // SM100: fence.acquire.cta
+  tt.func public @atomic_poll_acquire_cta(%ptr: !tt.ptr<i32>, %expected: i32, %out: !tt.ptr<i32>) {
+    %matched = tt.atomic_poll acquire, cta, %ptr, %expected {allocation.offset = 0 : i32} : !tt.ptr<i32>, i32 -> i1
+    %result = arith.extui %matched : i1 to i32
+    tt.store %out, %result : !tt.ptr<i32>
+    tt.return
+  }
+
+  // CHECK-LABEL: atomic_poll_acquire_gpu
+  // CHECK: ld.relaxed.gpu.global.b32
+  // SM80: fence.acq_rel.gpu
+  // SM90: fence.acq_rel.gpu
+  // SM100: fence.acquire.gpu
+  tt.func public @atomic_poll_acquire_gpu(%ptr: !tt.ptr<i32>, %expected: i32, %out: !tt.ptr<i32>) {
+    %matched = tt.atomic_poll acquire, gpu, %ptr, %expected {allocation.offset = 0 : i32} : !tt.ptr<i32>, i32 -> i1
+    %result = arith.extui %matched : i1 to i32
+    tt.store %out, %result : !tt.ptr<i32>
+    tt.return
+  }
+
+  // CHECK-LABEL: atomic_poll_acquire_sys
+  // CHECK: ld.relaxed.sys.global.b32
+  // SM80: fence.acq_rel.sys
+  // SM90: fence.acq_rel.sys
+  // SM100: fence.acquire.sys
+  tt.func public @atomic_poll_acquire_sys(%ptr: !tt.ptr<i32>, %expected: i32, %out: !tt.ptr<i32>) {
+    %matched = tt.atomic_poll acquire, sys, %ptr, %expected {allocation.offset = 0 : i32} : !tt.ptr<i32>, i32 -> i1
+    %result = arith.extui %matched : i1 to i32
+    tt.store %out, %result : !tt.ptr<i32>
     tt.return
   }
 

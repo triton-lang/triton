@@ -19,7 +19,8 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto elems = unpackLLElements(loc, adaptor.getCondition(), rewriter);
+    auto elems =
+        unpackUniqueTensorElements(loc, adaptor.getCondition(), rewriter);
     auto elemTy = elems[0].getType();
     Value condition = b.int_val(elemTy.getIntOrFloatBitWidth(), 0);
     for (auto elem : elems) {

@@ -1,12 +1,63 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
+#blocked0 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [2, 2], order = [0, 1]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @force_warp_shuffle_cross_warp(%arg0: tensor<32x32xf32, #blocked0>) {
+    // expected-error@+1 {{force_warp_shuffle requires a conversion within one warp}}
+    %0 = ttg.convert_layout %arg0 {force_warp_shuffle} : tensor<32x32xf32, #blocked0> -> tensor<32x32xf32, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+// expected-error @+1 {{shape must have power-of-2 and non-zero dimensions; got 3, 4}}
+tt.func public @memdesc_non_power_of_two_layout_dimension(%arg0: !ttg.memdesc<3x4xi32, #shared, #smem, mutable, 4x4>) {
+  tt.return
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+// expected-error @+1 {{alloc shape must have power-of-2 and non-zero dimensions; got 3, 4}}
+tt.func public @memdesc_non_power_of_two_layout_allocation(%arg0: !ttg.memdesc<2x4xi32, #shared, #smem, mutable, 3x4>) {
+  tt.return
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+// expected-error @+1 {{shape has 0 dimension}}
+tt.func public @memdesc_zero_layout_dimension(%arg0: !ttg.memdesc<4x0xi32, #shared, #smem, mutable, 4x4>) {
+  tt.return
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+// expected-error @+1 {{alloc shape has 0 dimension}}
+tt.func public @memdesc_zero_allocation_dimension(%arg0: !ttg.memdesc<2x4xi32, #shared, #smem, mutable, 0x4>) {
+  tt.return
+}
+
+// -----
+
+// expected-error @below {{is not a valid encoding}}
+!invalid_memdesc_encoding = !ttg.memdesc<4xi32, #ttg.shared_memory, #ttg.shared_memory>
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
-tt.func public @local_alloc_i1() {
-    // expected-error @+1 {{element type bit width must be a multiple of 8}}
-    %0 = ttg.local_alloc : () -> !ttg.memdesc<8xi1, #shared, #smem, mutable>
-    tt.return
-}
+// expected-error @below {{shared-memory element type bit width must be a multiple of 8; got 1}}
+!i1_smem = !ttg.memdesc<8xi1, #shared, #smem>
 
 // -----
 
@@ -57,18 +108,6 @@ module {
   // expected-error @+1 {{tensor descriptors must not wrap tensor types; use !tt.tensordesc<shape x element-type[, layout]> instead}}
   tt.func public @nested_tensordesc(%arg0: !tt.tensordesc<tensor<8x16xf32, #shared>>) {
     tt.return
-  }
-}
-
-// -----
-
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 1]]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 2 : i32} {
-  tt.func public @subslice_non_broadcast_cga_dim(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
-      // expected-error @+1 {{CTA dimensions}}
-      %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<8x8xf32, #shared, #smem>
-      tt.return
   }
 }
 
@@ -143,10 +182,21 @@ tt.func public @result_rank_too_large(%arg0: !ttg.memdesc<3x8x16xf32, #shared, #
 #smem = #ttg.shared_memory
 tt.func public @memdesc_index_result_alloc_shape_mismatch(%arg0: !ttg.memdesc<3x8x16xf32, #shared, #smem>) {
     %zero = arith.constant 0 : i32
-    // expected-error @+1 {{alloc shape must match shape for both result and src}}
+    // expected-error @+1 {{alloc shape must match shape for the result}}
     %a = ttg.memdesc_index %arg0[%zero] : !ttg.memdesc<3x8x16xf32, #shared, #smem> -> !ttg.memdesc<8x16xf32, #shared, #smem, 3x8x16>
     tt.return
 }
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+tt.func public @memdesc_index_inner_subview(%arg0: !ttg.memdesc<3x8x8xf32, #shared, #smem, 3x8x16>) {
+    %zero = arith.constant 0 : i32
+    // expected-error @+1 {{We only support memdesc_index of a multibuffer-prefix subview}}
+    %a = ttg.memdesc_index %arg0[%zero] : !ttg.memdesc<3x8x8xf32, #shared, #smem, 3x8x16> -> !ttg.memdesc<8x8xf32, #shared, #smem>
+    tt.return
+}
+
 // -----
 
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0]}>
@@ -165,7 +215,7 @@ tt.func public @result_1d_to_1d(%arg0: !ttg.memdesc<8xf32, #shared, #smem>) {
 #smem = #ttg.shared_memory
 tt.func public @subview_along_swizzling_pattern(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
     // expected-error @+1 {{swizzling pattern}}
-    %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<8x4xf32, #shared, #smem>
+    %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<8x4xf32, #shared, #smem, 8x16>
     tt.return
 }
 
@@ -175,7 +225,37 @@ tt.func public @subview_along_swizzling_pattern(%arg0: !ttg.memdesc<8x16xf32, #s
 #smem = #ttg.shared_memory
 tt.func public @subview_along_swizzling(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>, %index: i32) {
     // expected-error @+1 {{tile}}
-    %a = ttg.memdesc_subslice %arg0 [2, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<4x16xf32, #shared, #smem>
+    %a = ttg.memdesc_subslice %arg0 [2, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<4x16xf32, #shared, #smem, 8x16>
+    tt.return
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+tt.func public @multibuffer_subview_exceeds_source(%arg0: !ttg.memdesc<8x8x32xf16, #shared, #smem>) {
+    // expected-error @+1 {{The split offset may not exceed the source shape}}
+    %a = ttg.memdesc_subslice %arg0 [6, 0, 0] : !ttg.memdesc<8x8x32xf16, #shared, #smem> -> !ttg.memdesc<3x8x32xf16, #shared, #smem, 8x8x32>
+    tt.return
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+tt.func public @multibuffer_subview_unaligned_non_pipeline_offset(%arg0: !ttg.memdesc<5x8x16xf32, #shared, #smem>) {
+    // expected-error @+1 {{The split offset may not touch the tile}}
+    %a = ttg.memdesc_subslice %arg0 [2, 2, 0] : !ttg.memdesc<5x8x16xf32, #shared, #smem> -> !ttg.memdesc<3x4x16xf32, #shared, #smem, 5x8x16>
+    tt.return
+}
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+tt.func public @multibuffer_subview_nonzero_identity_offset(%arg0: !ttg.memdesc<8x8x32xf16, #shared, #smem>) {
+    // expected-error @+1 {{A non zero offset found in a dimension that is not being split}}
+    %a = ttg.memdesc_subslice %arg0 [3, 0, 0] : !ttg.memdesc<8x8x32xf16, #shared, #smem> -> !ttg.memdesc<8x8x32xf16, #shared, #smem>
     tt.return
 }
 
@@ -222,7 +302,7 @@ tt.func public @result_dim_too_large(%arg0: !ttg.memdesc<8x16xf32, #shared1d, #s
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
 #smem = #ttg.shared_memory
 tt.func public @memdesc_reinterpret_changed_storage_size(%arg0: !ttg.memdesc<8x16xf16, #shared, #smem>) {
-    // expected-error @+1 {{source and result must have the same logical storage size}}
+    // expected-error @+1 {{result shared-memory footprint (512 bytes) exceeds the source view (256 bytes)}}
     %a = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<8x16xf16, #shared, #smem> -> !ttg.memdesc<8x16xf32, #shared, #smem>
     tt.return
 }
@@ -253,8 +333,148 @@ tt.func public @memdesc_reinterpret_changed_mutability(%arg0: !ttg.memdesc<8x16x
 #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
 #smem = #ttg.shared_memory
 tt.func public @memdesc_reinterpret_subview(%arg0: !ttg.memdesc<8x16xf16, #shared, #smem, 16x16>) {
-    // expected-error @+1 {{source and result must not be subviews}}
+    // expected-error @+1 {{result shared-memory footprint includes offsets not owned by the source subview}}
     %a = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<8x16xf16, #shared, #smem, 16x16> -> !ttg.memdesc<8x16xf16, #shared, #smem>
+    tt.return
+}
+
+// -----
+
+#shared_split = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[1, 0]]}>
+#shared_broadcast = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CGALayout = [[0, 0]]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @memdesc_reinterpret_shared_subview_slices_cta(%parent: !ttg.memdesc<8x16xf16, #shared_split, #smem, mutable>) {
+    %view = ttg.memdesc_subslice %parent [4, 0] : !ttg.memdesc<8x16xf16, #shared_split, #smem, mutable> -> !ttg.memdesc<4x16xf16, #shared_split, #smem, mutable, 8x16>
+    // expected-error @+1 {{cannot reinterpret a source subview sliced across CTAs}}
+    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<4x16xf16, #shared_split, #smem, mutable, 8x16> -> !ttg.memdesc<4x16xf16, #shared_broadcast, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#tmem_split = #ttng.tensor_memory_encoding<blockM = 128, blockN = 16, colStride = 1, CGALayout = [[0, 1]]>
+#tmem_broadcast = #ttng.tensor_memory_encoding<blockM = 128, blockN = 16, colStride = 1, CGALayout = [[0, 0]]>
+#tmem = #ttng.tensor_memory
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @memdesc_reinterpret_tmem_subview_slices_cta(%view: !ttg.memdesc<128x32xf32, #tmem_split, #tmem, mutable, 128x128>) {
+    // expected-error @+1 {{cannot reinterpret a source subview sliced across CTAs}}
+    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<128x32xf32, #tmem_split, #tmem, mutable, 128x128> -> !ttg.memdesc<128x32xf32, #tmem_broadcast, #tmem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+tt.func public @memdesc_subslice_alloc_shape_mismatch(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
+    // expected-error @+1 {{source and result must have the same allocation shape}}
+    %a = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<8x8xf32, #shared, #smem>
+    tt.return
+}
+
+tt.func public @memdesc_subslice_negative_offset(%arg0: !ttg.memdesc<8x16xf32, #shared, #smem>) {
+    // expected-error @+1 {{The split offset may not exceed the source shape}}
+    %negative = ttg.memdesc_subslice %arg0 [-4, 0] : !ttg.memdesc<8x16xf32, #shared, #smem> -> !ttg.memdesc<4x16xf32, #shared, #smem, 8x16>
+    tt.return
+}
+
+// -----
+
+#shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+tt.func public @memdesc_reinterpret_multibuffer_subview_expands(%arg0: !ttg.memdesc<3x8x32xf16, #shared_a, #smem, 8x8x32>) {
+    // expected-error @+1 {{result shared-memory footprint}}
+    %a = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<3x8x32xf16, #shared_a, #smem, 8x8x32> -> !ttg.memdesc<16x8x16xf16, #shared_b, #smem>
+    tt.return
+}
+
+// -----
+
+#shared_dense = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [1, 0], [2, 0]], block = []}, alignment = 16>
+#shared_tight = #ttg.shared_linear<{offset = [[0, 1], [1, 0], [2, 0]], block = []}, alignment = 16>
+#shared_holey = #ttg.shared_linear<{offset = [[0, 1], [0, 0], [1, 0], [2, 0]], block = []}, alignment = 16>
+#shared_swizzled = #ttg.shared_linear<{offset = [[0, 1], [1, 1], [2, 0]], block = []}, alignment = 16>
+#shared_pair = #ttg.shared_linear<{offset = [[0, 1]], block = []}, alignment = 16>
+#smem = #ttg.shared_memory
+tt.func public @memdesc_reinterpret_noncontiguous_subview_escapes(%arg0: !ttg.memdesc<4x4xi32, #shared_dense, #smem, mutable>) {
+    %view = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<4x4xi32, #shared_dense, #smem, mutable> -> !ttg.memdesc<4x2xi32, #shared_dense, #smem, mutable, 4x4>
+    // expected-error @+1 {{result shared-memory footprint includes offsets not owned by the source subview}}
+    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<4x2xi32, #shared_dense, #smem, mutable, 4x4> -> !ttg.memdesc<4x2xi32, #shared_tight, #smem, mutable>
+    tt.return
+}
+
+tt.func public @memdesc_reinterpret_noncontiguous_subview_claims_holes(%arg0: !ttg.memdesc<4x4xi32, #shared_dense, #smem, mutable>) {
+    %view = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<4x4xi32, #shared_dense, #smem, mutable> -> !ttg.memdesc<4x2xi32, #shared_dense, #smem, mutable, 4x4>
+    // expected-error @+1 {{result shared-memory footprint includes offsets not owned by the source subview}}
+    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<4x2xi32, #shared_dense, #smem, mutable, 4x4> -> !ttg.memdesc<4x2xi32, #shared_holey, #smem, mutable>
+    tt.return
+}
+
+tt.func public @memdesc_reinterpret_swizzled_subview_gap(%arg0: !ttg.memdesc<4x2xi32, #shared_swizzled, #smem, mutable>) {
+    %view = ttg.memdesc_subslice %arg0 [0, 0] : !ttg.memdesc<4x2xi32, #shared_swizzled, #smem, mutable> -> !ttg.memdesc<2x1xi32, #shared_swizzled, #smem, mutable, 4x2>
+    // expected-error @+1 {{result shared-memory footprint includes offsets not owned by the source subview}}
+    %result = ttg.memdesc_reinterpret %view : !ttg.memdesc<2x1xi32, #shared_swizzled, #smem, mutable, 4x2> -> !ttg.memdesc<1x2xi32, #shared_pair, #smem, mutable>
+    tt.return
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+tt.func public @memdesc_reinterpret_pipeline_subview_gap(%arg0: !ttg.memdesc<7x16x16xf16, #shared, #smem, mutable>) {
+    %gapped = ttg.memdesc_subslice %arg0 [3, 8, 0] : !ttg.memdesc<7x16x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<2x8x16xf16, #shared, #smem, mutable, 7x16x16>
+    // expected-error @+1 {{result shared-memory footprint includes offsets not owned by the source subview}}
+    %gap = ttg.memdesc_reinterpret %gapped : !ttg.memdesc<2x8x16xf16, #shared, #smem, mutable, 7x16x16> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
+    tt.return
+}
+
+tt.func public @memdesc_reinterpret_pipeline_stage_expansion(%arg0: !ttg.memdesc<7x16x16xf16, #shared, #smem, mutable>) {
+    %stages = ttg.memdesc_subslice %arg0 [3, 0, 0] : !ttg.memdesc<7x16x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<2x16x16xf16, #shared, #smem, mutable, 7x16x16>
+    // expected-error @+1 {{result shared-memory footprint}}
+    %expanded = ttg.memdesc_reinterpret %stages : !ttg.memdesc<2x16x16xf16, #shared, #smem, mutable, 7x16x16> -> !ttg.memdesc<4x16x16xf16, #shared, #smem, mutable>
+    tt.return
+}
+
+tt.func public @memdesc_reinterpret_result_layout_subview(%arg0: !ttg.memdesc<7x16x16xf16, #shared, #smem, mutable>) {
+    // expected-error @+1 {{result must not be a subview}}
+    %destination = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<7x16x16xf16, #shared, #smem, mutable> -> !ttg.memdesc<7x8x16xf16, #shared, #smem, mutable, 7x16x16>
+    tt.return
+}
+
+// -----
+
+#padded16 = #ttg.padded_shared<[128:+8] {order = [1, 0], shape = [16, 128]}>
+#padded8 = #ttg.padded_shared<[128:+8] {order = [1, 0], shape = [8, 128]}>
+#smem = #ttg.shared_memory
+tt.func public @memdesc_reinterpret_padded_subview(%arg0: !ttg.memdesc<8x128xf16, #padded16, #smem, mutable, 16x128>) {
+    // expected-error @+1 {{cannot reinterpret a padded source subview}}
+    %result = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<8x128xf16, #padded16, #smem, mutable, 16x128> -> !ttg.memdesc<8x128xf16, #padded8, #smem, mutable>
+    tt.return
+}
+
+// -----
+
+#shared_inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #shared_inner}>
+#smem = #ttg.shared_memory
+tt.func public @memdesc_reinterpret_partitioned(%arg0: !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable>) {
+    // expected-error @+1 {{cannot reinterpret partitioned shared layouts}}
+    %result = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable> -> !ttg.memdesc<128x16xi16, #partitioned, #smem, mutable>
+    tt.return
+}
+
+// -----
+
+#shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+tt.func public @memdesc_reinterpret_multibuffer_layout_subview(%arg0: !ttg.memdesc<3x4x32xf16, #shared_a, #smem, 8x8x32>) {
+    // expected-error @+1 {{result shared-memory footprint}}
+    %a = ttg.memdesc_reinterpret %arg0 : !ttg.memdesc<3x4x32xf16, #shared_a, #smem, 8x8x32> -> !ttg.memdesc<16x8x16xf16, #shared_b, #smem>
     tt.return
 }
 
@@ -646,6 +866,12 @@ tt.func @async_copy_invalid_other_type(%input: tensor<64x64x!tt.ptr<f16>, #block
 
 // -----
 
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+// expected-error @below {{element type bit width must be 1 or at least 8; got 4}}
+!subbyte_memdesc = !ttg.memdesc<8xi4, #shared, #ttg.shared_memory>
+
+// -----
+
 #shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
 // expected-error @below {{rank must be equal to or one less than the shape size. Got 2 and 4}}
 !rank_too_high = !ttg.memdesc<4x4x4x4xf32, #shared, #ttg.shared_memory>
@@ -688,3 +914,98 @@ tt.func public @padded_subview_unsupported_size(%arg0: !ttg.memdesc<2x32x32xf32,
 // expected-error @below {{alignment must be specified outside of the linear layout braces}}
 #shared = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [1, 0], [2, 0]], block = [], alignment = 16}>
 !alignment_in_layout = !ttg.memdesc<4x4xf32, #shared, #ttg.shared_memory>
+
+// -----
+
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 1], instrShape = [8, 8]}>
+#a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>
+#b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  tt.func @mma_fp64_large_k_replicated_lanes(%a: tensor<8x4xf64, #a>, %b: tensor<4x8xf64, #b>) {
+    %c = arith.constant dense<0.0> : tensor<8x8xf64, #mma>
+    // expected-error@+1 {{MMA operand layout requires K >= 4 * kWidth}}
+    %d = tt.dot %a, %b, %c : tensor<8x4xf64, #a> * tensor<4x8xf64, #b> -> tensor<8x8xf64, #mma>
+    tt.return
+  }
+}
+
+// -----
+
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 1], instrShape = [16, 8]}>
+#a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>
+#b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  tt.func @mma_fp32_large_k_replicated_lanes(%a: tensor<16x16xf32, #a>, %b: tensor<16x8xf32, #b>) {
+    %c = arith.constant dense<0.0> : tensor<16x8xf32, #mma>
+    // expected-error@+1 {{MMA operand layout requires K >= 4 * kWidth}}
+    %d = tt.dot %a, %b, %c, inputPrecision = tf32 : tensor<16x16xf32, #a> * tensor<16x8xf32, #b> -> tensor<16x8xf32, #mma>
+    tt.return
+  }
+}
+
+// -----
+
+#shared_inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #shared_inner}>
+#smem = #ttg.shared_memory
+tt.func @inline_asm_partitioned_descriptor(%mem: !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable>) {
+  // expected-error @+1 {{inline assembly requires memory descriptors with a single base}}
+  ttg.inline_asm "" {constraints = "r", pure = false} %mem : (!ttg.memdesc<128x16xf16, #partitioned, #smem, mutable>) -> ()
+  tt.return
+}
+
+// -----
+
+#shared_inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #shared_inner}>
+#smem = #ttg.shared_memory
+tt.func @elementwise_asm_partitioned_descriptor(%mem: !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable>) {
+  // expected-error @+1 {{inline assembly requires memory descriptors with a single base}}
+  %value = tt.elementwise_inline_asm "mov.u32 $0, 0;" {constraints = "=r,r", pure = false, packed_element = 1 : i32} %mem : !ttg.memdesc<128x16xf16, #partitioned, #smem, mutable> -> i32
+  tt.return
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+!desc = !ttg.memdesc<128xi32, #shared, #ttg.shared_memory, mutable>
+tt.func @pure_inline_asm_shared_descriptor(%offset: i32, %mem: !desc) {
+  // expected-error @+1 {{requires pure=false for memory descriptor operands}}
+  %value = ttg.inline_asm "add.u32 $0, $1, $2;" {constraints = "=r,r,r", pure = true} %offset, %mem : (i32, !desc) -> i32
+  tt.return
+}
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 32, colStride = 1>
+!desc = !ttg.memdesc<128x32xi32, #tmem, #ttng.tensor_memory, mutable>
+tt.func @pure_elementwise_asm_tensor_descriptor(%offset: i32, %mem: !desc) {
+  // expected-error @+1 {{requires pure=false for memory descriptor operands}}
+  %value = tt.elementwise_inline_asm "add.u32 $0, $1, $2;" {constraints = "=r,r,r", pure = true, packed_element = 1 : i32} %offset, %mem : i32, !desc -> i32
+  tt.return
+}
+
+// -----
+
+#src = #ttg.linear<{register = [], lane = [[1, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
+#dst = #ttg.linear<{register = [[1, 0], [0, 1]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @broadcast_requires_lane_movement(%arg: tensor<2x1xi32, #src>) {
+    // expected-error @+1 {{requires matching source and result layouts up to broadcasting}}
+    %result = tt.broadcast %arg : tensor<2x1xi32, #src> -> tensor<2x2xi32, #dst>
+    tt.return
+  }
+}
+
+// -----
+
+#src = #ttg.linear<{register = [[1, 0], [2, 0]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
+#dst = #ttg.linear<{register = [[2, 0], [0, 1], [1, 0]], lane = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], warp = [[0, 0], [0, 0]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // Register permutations require an explicit layout conversion.
+  tt.func @broadcast_requires_register_permutation(%arg: tensor<4x1xi32, #src>) {
+    // expected-error @+1 {{requires matching source and result layouts up to broadcasting}}
+    %result = tt.broadcast %arg : tensor<4x1xi32, #src> -> tensor<4x2xi32, #dst>
+    tt.return
+  }
+}

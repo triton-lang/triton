@@ -58,15 +58,15 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
 
 // -----
 
-// Input tensor broadcasts 4 registers along dimension 1, resulting in total 32 values in tensor and 16 values per [128x1] tile.
-// Output tensor do not have redundancy in register and holds 4 values.
+// Input tensor broadcasts 4 registers along dimension 1, resulting in 8 unique
+// values. The output tensor has 4 unique values.
 // Test checks that extract slice copies only 4 values from input to output.
 #blocked1 = #ttg.linear<{register=[[0, 0], [0, 0], [1, 0], [2, 0], [128, 0]], lane=[[0, 0], [0, 0], [0, 0], [4, 0], [8, 0], [16, 0]], warp=[[0, 0], [32, 0], [64, 0]], block=[]}>
 #blocked2 = #ttg.linear<{register=[                [1, 0], [2, 0]],           lane=[[0, 0], [0, 0], [0, 0], [4, 0], [8, 0], [16, 0]], warp=[[0, 0], [32, 0], [64, 0]], block=[]}>
 module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @extract_from_broadcasted_tensor(%arg0: tensor<256x1xi32, #blocked1> {tt.divisibility = 16 : i32}) {
     // CHECK-LABEL: llvm.func @extract_from_broadcasted_tensor
-    // CHECK-COUNT-32: %{{.*}} = llvm.extractvalue  %{{.*}} : !llvm.struct
+    // CHECK-COUNT-8: %{{.*}} = llvm.extractvalue  %{{.*}} : !llvm.struct
     // CHECK-COUNT-4:  %{{.*}} = llvm.insertvalue %{{.*}} : !llvm.struct
     %0 = amdg.extract_slice %arg0 [0,0] : tensor<256x1xi32, #blocked1> to tensor<128x1xi32, #blocked2>
     tt.return
@@ -75,16 +75,16 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
 
 // -----
 
-// Input tensor do not have broadcasted registers, resulting in total 8 values in tensor and 4 values per [128x1] tile.
-// Output tensor broadcasts 4 registers along dimension 1 and total 16 values.
-// Test checks that extract slice duplicates 4 values from input in 16 output values.
+// The input tensor does not have broadcasted registers and holds 8 values. The
+// output tensor broadcasts 4 registers along dimension 1 but keeps only 4
+// unique values in its LLVM struct.
 #blocked1 = #ttg.linear<{register=[                [1, 0], [2, 0], [128, 0]], lane=[[0, 0], [0, 0], [0, 0], [4, 0], [8, 0], [16, 0]], warp=[[0, 0], [32, 0], [64, 0]], block=[]}>
 #blocked2 = #ttg.linear<{register=[[0, 0], [0, 0], [1, 0], [2, 0]],           lane=[[0, 0], [0, 0], [0, 0], [4, 0], [8, 0], [16, 0]], warp=[[0, 0], [32, 0], [64, 0]], block=[]}>
 module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @extract_to_broadcasted_tensor(%arg0: tensor<256x1xi32, #blocked1> {tt.divisibility = 16 : i32}) {
     // CHECK-LABEL: llvm.func @extract_to_broadcasted_tensor
     // CHECK-COUNT-8: %{{.*}} = llvm.extractvalue  %{{.*}} : !llvm.struct
-    // CHECK-COUNT-16:  %{{.*}} = llvm.insertvalue %{{.*}} : !llvm.struct
+    // CHECK-COUNT-4:  %{{.*}} = llvm.insertvalue %{{.*}} : !llvm.struct
     %72 = amdg.extract_slice %arg0 [0,0] : tensor<256x1xi32, #blocked1> to tensor<128x1xi32, #blocked2>
     tt.return
   }

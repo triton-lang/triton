@@ -6,6 +6,7 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import triton
+from triton.testing import cuda_graph_without_gc
 from triton_kernels.distributed import (
     _convert_dp_to_ep,
     _convert_ep_to_dp,
@@ -75,7 +76,7 @@ def _distributed_worker(rank, fn, world_size, kwargs):
 
 
 @pytest.fixture
-def distributed_launcher(request):
+def distributed_launcher(request, monkeypatch):
     n_gpus = getattr(request, "param", None)
     if not torch.cuda.is_available():
         pytest.skip("CUDA required for distributed GPU test")
@@ -84,9 +85,11 @@ def distributed_launcher(request):
 
     master_port = _get_free_tcp_port()
 
-    os.environ["WORLD_SIZE"] = str(n_gpus)
-    os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
-    os.environ.setdefault("MASTER_PORT", str(master_port))
+    monkeypatch.setenv("WORLD_SIZE", str(n_gpus))
+    if "MASTER_ADDR" not in os.environ:
+        monkeypatch.setenv("MASTER_ADDR", "127.0.0.1")
+    if "MASTER_PORT" not in os.environ:
+        monkeypatch.setenv("MASTER_PORT", str(master_port))
 
     def launch(fn, **kwargs):
         mp.spawn(
@@ -311,7 +314,7 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
     g = torch.cuda.CUDAGraph()
     stream = torch.cuda.Stream()
     with torch.cuda.stream(stream):
-        with torch.cuda.graph(g):
+        with cuda_graph_without_gc(g):
             y_dp_local_tri_graph = run_moe()
 
     g.replay()

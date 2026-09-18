@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-test-pipeline-lower-loop -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-test-pipeline-lower-loop -triton-nvidia-tma-lowering -canonicalize | FileCheck %s --check-prefix=TMA-LOWERING
 #nvmma_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 
 #A = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -16,6 +17,39 @@ tt.func @unscheduled_loop(%lb : index, %ub : index, %step : index,
   }
   tt.return
 }
+}
+
+// -----
+
+#tiny_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#tiny_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 32, rank = 1}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+  // CHECK-LABEL: @unaligned_tma_stage_size
+  // CHECK-NOT: ttg.local_alloc
+  // CHECK: scf.for
+  // CHECK-NOT: ttng.async_tma_copy_global_to_local
+  // CHECK: tt.descriptor_load
+  // CHECK-NOT: ttng.async_tma_copy_global_to_local
+  // CHECK: "use"
+  // CHECK-NOT: ttng.async_tma_copy_global_to_local
+  // CHECK: tt.return
+  // TMA-LOWERING-LABEL: @unaligned_tma_stage_size
+  // TMA-LOWERING-NOT: ttg.local_alloc : () -> !ttg.memdesc<3x4xf32
+  // TMA-LOWERING: scf.for
+  // TMA-LOWERING: ttg.local_alloc : () -> !ttg.memdesc<4xf32
+  // TMA-LOWERING: ttng.async_tma_copy_global_to_local
+  // TMA-LOWERING: ttng.wait_barrier
+  // TMA-LOWERING: ttg.local_load
+  tt.func @unaligned_tma_stage_size(%desc: !tt.tensordesc<4xf32, #tiny_shared>,
+                                    %lb: index, %ub: index, %step: index) {
+    %c0 = arith.constant 0 : i32
+    scf.for %iv = %lb to %ub step %step {
+      %load = tt.descriptor_load %desc[%c0] {loop.cluster = 2 : i32, loop.stage = 0 : i32} : !tt.tensordesc<4xf32, #tiny_shared> -> tensor<4xf32, #tiny_blocked>
+      "use"(%load) {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<4xf32, #tiny_blocked>) -> ()
+    } {tt.scheduled_max_stage = 2 : i32}
+    tt.return
+  }
 }
 
 // -----
@@ -1796,4 +1830,29 @@ module attributes {ttg.max_reg_auto_ws = 152 : i32, ttg.min_reg_auto_ws = 24 : i
     } {tt.scheduled_max_stage = 2 : i32}
     tt.return
   }
+}
+// -----
+
+#A = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// A load whose user sits in a later cluster but in the *same* stage has a real
+// stage distance of zero, i.e. it is not pipelined. It must not become an async
+// copy: numBuffers == stageDiff would give it a single buffer, which cannot
+// hold a value across an iteration and so is never prefetched, while still
+// forcing an `async_wait {num = 0}` that drains every other copy in flight.
+// CHECK-LABEL: @no_async_copy_for_same_stage_later_cluster
+// CHECK-NOT: ttg.local_alloc
+// CHECK: scf.for
+// CHECK:   %[[A:.*]] = tt.load
+// CHECK-NOT: ttg.async_copy_global_to_local
+// CHECK:   "use"(%[[A]])
+tt.func @no_async_copy_for_same_stage_later_cluster(%lb : index, %ub : index, %step : index,
+                 %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>}) -> () {
+  scf.for %iv = %lb to %ub step %step : index {
+    %a = tt.load %a_ptr_init {loop.cluster = 0 : i32, loop.stage = 0 : i32} : tensor<128x32x!tt.ptr<f16>, #A>
+    "use"(%a) {loop.cluster = 1 : i32, loop.stage = 0 : i32} : (tensor<128x32xf16, #A>) -> ()
+  } {tt.scheduled_max_stage = 0 : i32}
+  tt.return
+}
 }

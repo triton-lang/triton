@@ -697,6 +697,7 @@ def _run_single(args: argparse.Namespace) -> int:
     import triton
     import triton.language as tl
     import triton.profiler as proton
+    from triton.testing import cuda_graph_without_gc
 
     torch.cuda.set_device(args.device)
     device = torch.device(f"cuda:{args.device}")
@@ -732,7 +733,7 @@ def _run_single(args: argparse.Namespace) -> int:
 
     g = torch.cuda.CUDAGraph()
     if args.capture_before_start:
-        with torch.cuda.graph(g, stream=stream):
+        with cuda_graph_without_gc(g, stream=stream):
             direct_iteration()
         torch.cuda.synchronize()
 
@@ -808,7 +809,7 @@ def _run_single(args: argparse.Namespace) -> int:
     run_metadata["loaded_libcupti_objects_after_start"] = _read_loaded_shared_objects("libcupti")
 
     if not args.capture_before_start:
-        with torch.cuda.graph(g, stream=stream):
+        with cuda_graph_without_gc(g, stream=stream):
             direct_iteration()
         torch.cuda.synchronize()
         samples.append(_collect_sample("post_graph_capture", 0.0, 0, profile_base))
