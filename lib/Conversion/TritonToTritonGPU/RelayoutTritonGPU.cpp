@@ -102,6 +102,19 @@ struct LocalLoadOpPattern : public OpConversionPattern<LocalLoadOp> {
   }
 };
 
+// A layout conversion whose encodings were cleared has nothing left to say:
+// the relayout picks both layouts again, so forward the source.
+struct ConvertLayoutOpPattern : public OpConversionPattern<ConvertLayoutOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ConvertLayoutOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOp(op, adaptor.getSrc());
+    return success();
+  }
+};
+
 class RelayoutTritonGPU
     : public triton::impl::RelayoutTritonGPUBase<RelayoutTritonGPU> {
 public:
@@ -139,9 +152,11 @@ public:
              (!op.getSrc() || isTMEMOperandDynamicallyLegal(
                                   op, op.getSrc().getType(), op.getType()));
     });
-    target.addDynamicallyLegalOp<LocalLoadOp>([&](Operation *op) {
-      return TritonGPUConversionTarget::isDynamicallyLegal(op, typeConverter);
-    });
+    target.addDynamicallyLegalOp<LocalLoadOp, ConvertLayoutOp>(
+        [&](Operation *op) {
+          return TritonGPUConversionTarget::isDynamicallyLegal(op,
+                                                               typeConverter);
+        });
     // rewrite patterns
     RewritePatternSet patterns(context);
     // add rules
@@ -150,6 +165,7 @@ public:
         GatherScatterOpPattern<ttng::AsyncTMAGatherOp>,
         GatherScatterOpPattern<ttng::AsyncTMAScatterOp>,
         LocalLoadOpPattern,
+        ConvertLayoutOpPattern,
         TMEMLoadOpPattern,
         TMEMStoreOpPattern,
         TMEMAllocOpPattern
