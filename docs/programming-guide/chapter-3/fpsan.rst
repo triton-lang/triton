@@ -456,7 +456,7 @@ Supported Gluon operations include:
 - ``tcgen05_copy`` and ``tcgen05_commit``
 - ``allocate_tensor_memory``
 - tensor-memory descriptor methods such as ``load``, ``load_min``,
-  ``load_max``, ``store``, ``slice``, ``index``, and ``_reinterpret``
+  ``load_max``, ``store``, ``slice``, ``index``, and ``reinterpret``
 - AMD ``mfma``, ``mfma_scaled``, ``wmma``, ``wmma_scaled``, and
   ``scaled_upcast``
 

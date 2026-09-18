@@ -52,7 +52,7 @@ class TranslatorTarget(str, Enum):
 
     @property
     def tensor_descriptor_import(self) -> str:
-        module = "amd.gfx1250.tdm" if self.is_amd else "nvidia.hopper.tma"
+        module = "amd.cdna5.tdm" if self.is_amd else "nvidia.hopper.tma"
         return f"from triton.experimental.gluon.language.{module} import tensor_descriptor"
 
     @property

@@ -1,0 +1,10 @@
+{
+  "cuda:sm100": {
+    "compile_seconds": 2.5,
+    "runtime_ms": 0.4
+  },
+  "cuda:sm103": {
+    "compile_seconds": 2.0,
+    "runtime_ms": 0.35
+  }
+}

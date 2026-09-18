@@ -14,6 +14,8 @@
 namespace gsan {
 
 using size_t = __SIZE_TYPE__;
+using int16_t = __INT16_TYPE__;
+using int64_t = __INT64_TYPE__;
 using uint8_t = __UINT8_TYPE__;
 using uint16_t = __UINT16_TYPE__;
 using uint32_t = __UINT32_TYPE__;
@@ -106,6 +108,57 @@ struct AtomicEventState {
   ShadowCell *cells[kMaxAtomicShadowCells];
   uint8_t numCells;
 };
+
+static constexpr int kMaxClusterCTAs = 16;
+static constexpr int kClusterBarrierScratchBytes = 128;
+
+struct alignas(16) ClusterBarrierState {
+  uint32_t lock;
+  uint32_t arrivalCount;
+  uint32_t publicationCount;
+  uint32_t generation;
+  uint32_t registrationGeneration;
+  thread_id_t threadIds[kMaxClusterCTAs];
+  epoch_t tokens[kMaxClusterCTAs];
+};
+static_assert(sizeof(ClusterBarrierState) <= kClusterBarrierScratchBytes);
+
+struct MBarrierPublishedClock {
+  // An immutable snapshot whose publisher has not advanced its epoch. A wait
+  // must exclude that thread's current epoch when acquiring the snapshot.
+  thread_id_t threadId;
+  epoch_t token;
+};
+static_assert(sizeof(MBarrierPublishedClock) == 4);
+
+struct MBarrierPhaseState {
+  // One-based generation tag. The initially completed phase 1 has tag zero.
+  uint32_t generation;
+  uint32_t complete;
+  MBarrierPublishedClock clocks[kMaxClusterCTAs];
+};
+static_assert(sizeof(MBarrierPhaseState) == 72);
+
+static constexpr uint32_t kEmptyMBarrierKey = 0xffffffffu;
+
+struct alignas(16) MBarrierState {
+  // Key uniquely identifying the barrier. kEmptyMBarrierKey represents empty.
+  uint32_t key;
+  uint32_t lock;
+  uint32_t expectedCount;
+  uint32_t pendingCount;
+  // Number of completed phases. The active phase has this zero-based index.
+  uint32_t generation;
+  MBarrierPhaseState phases[2];
+};
+static_assert(sizeof(MBarrierState) == 176);
+
+struct alignas(16) MBarrierTable {
+  uint32_t lock;
+  uint32_t capacity;
+  MBarrierState states[];
+};
+static_assert(sizeof(MBarrierTable) == 16);
 
 // Place the thread state for each device at a fixed stride for ease of
 // address calculation.

@@ -1,9 +1,59 @@
+import pytest
+import re
+from types import SimpleNamespace
+
 import triton
 import triton.language as tl
 from triton.backends.compiler import GPUTarget
-import pytest
-import re
 from triton.compiler import ASTSource
+from triton.compiler.errors import CompileTimeAssertionFailure
+from triton.runtime.driver import driver
+
+
+@triton.jit
+def topk_kernel(K: tl.constexpr):
+    x = tl.arange(0, 8)
+    tl.topk(x, K)
+
+
+@pytest.mark.parametrize(
+    "k, error",
+    [
+        (0, "topk: k must be greater than 0"),
+        (-1, "topk: k must be greater than 0"),
+        (3, "topk: k must be a power of two"),
+        (16, "topk: k must not exceed the size of the selected dimension"),
+    ],
+)
+def test_topk_invalid_k(k, error):
+    src = ASTSource(fn=topk_kernel, signature={"K": "constexpr"}, constexprs={"K": k})
+    with pytest.raises(triton.CompilationError) as exc_info:
+        triton.compile(src, target=GPUTarget("cuda", 90, 32))
+    cause = exc_info.value
+    while cause.__cause__ is not None:
+        cause = cause.__cause__
+    assert isinstance(cause, CompileTimeAssertionFailure)
+    assert cause.error_message == error
+
+
+@pytest.mark.parametrize("k", [1, 8])
+def test_topk_valid_k(k):
+    src = ASTSource(fn=topk_kernel, signature={"K": "constexpr"}, constexprs={"K": k})
+    triton.compile(src, target=GPUTarget("cuda", 90, 32))
+
+
+def test_compile_only_sort_keeps_comparisons_boolean() -> None:
+
+    @triton.jit
+    def sort_kernel(values, result):
+        offsets = tl.arange(0, 128)
+        loaded = tl.load(values + offsets)
+        sorted_values = tl.sort(loaded, descending=False)
+        tl.store(result + offsets, sorted_values)
+
+    source = ASTSource(fn=sort_kernel, signature={"values": "*i32", "result": "*i32"})
+    compiled = triton.compile(source, target=GPUTarget("cuda", 100, 32))
+    assert "arith.extui" not in compiled.asm["ttgir"]
 
 
 def test_compile_only_sm100() -> None:
@@ -105,6 +155,28 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     assert "mapa" not in ptx
     assert k.metadata.shared == 40
     assert k.asm["cubin"] != b""
+
+
+@pytest.mark.parametrize("instrumentation_mode", ["", "consan", "gsan", "iisan", "fpsan", "gsan,consan"])
+def test_maxnreg_instrumentation_mode(instrumentation_mode, monkeypatch):
+    if "gsan" in instrumentation_mode:
+        # GSan queries the shared memory limit even for compile-only tests.
+        utils = SimpleNamespace(get_device_properties=lambda _: {"max_shared_mem": 228 * 1024})
+        monkeypatch.setattr(driver, "_active", SimpleNamespace(get_current_device=lambda: 0, utils=utils))
+
+    @triton.jit
+    def kernel(out):
+        tl.store(out, 1)
+
+    src = ASTSource(fn=kernel, signature={"out": "*i32"})
+    compiled = triton.compile(src, target=GPUTarget("cuda", 90, 32),
+                              options={"maxnreg": 42, "instrumentation_mode": instrumentation_mode})
+    if instrumentation_mode:
+        assert compiled.metadata.maxnreg is None
+        assert ".maxnreg" not in compiled.asm["ptx"]
+    else:
+        assert compiled.metadata.maxnreg == 42
+        assert ".maxnreg 42" in compiled.asm["ptx"]
 
 
 def test_compile_only_expect_zero() -> None:

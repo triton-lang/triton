@@ -162,36 +162,34 @@ size_t TargetFeatures::getSharedMemoryPartitionSize() const {
 
 std::optional<TargetFeatures::LDSTransLoadParams>
 TargetFeatures::queryLDSTransLoadParams(int bitWidth) const {
-  auto isaFamily = getISAFamily();
-  // Determine LDSTrans version: V1 (CDNA4), V2 (GFX1250).
-  enum { V1, V2, NONE } version = NONE;
-  if (isaFamily == ISAFamily::CDNA4) {
-    version = V1;
-  } else if (isaFamily == ISAFamily::GFX1250) {
-    version = V2;
-  }
-
-  if (version == NONE || !llvm::is_contained({16, 8, 4, 6}, bitWidth))
-    return std::nullopt;
-
-  unsigned numLanesInShuffleGroup = getWarpSize() / 4;
-
-  auto ldsTransParams = [&](unsigned instBitWidth,
-                            TileKind kind) -> LDSTransLoadParams {
-    return {numLanesInShuffleGroup, instBitWidth, instBitWidth / bitWidth,
-            kind};
+  struct TransConfig {
+    ISAFamily isaFamily;
+    int bitWidth;
+    unsigned instBitWidth;
+    // addr basis order:
+    //   leading reg bases
+    //   leading lane bases
+    //   remaining reg bases
+    //   remaining lane bases
+    unsigned leadingRegBases;
+    unsigned leadingLaneBases;
   };
 
-  switch (version) {
-  case V1:
-    return ldsTransParams(64, TileKind::Standard);
-  case V2:
-    if (bitWidth == 8)
-      return ldsTransParams(64, TileKind::DoubleContiguity);
-    return ldsTransParams(128, TileKind::Standard);
-  default:
-    return std::nullopt;
+  static constexpr TransConfig configs[] = {
+      {ISAFamily::CDNA4, 16, 64, 0, 2},  {ISAFamily::CDNA4, 8, 64, 0, 1},
+      {ISAFamily::CDNA4, 4, 64, 0, 0},   {ISAFamily::GFX1250, 16, 128, 0, 0},
+      {ISAFamily::GFX1250, 8, 64, 2, 1}, {ISAFamily::GFX1250, 4, 64, 3, 1},
+  };
+
+  const auto isaFamily = getISAFamily();
+  for (const auto &config : configs) {
+    if (config.isaFamily == isaFamily && config.bitWidth == bitWidth) {
+      return LDSTransLoadParams{
+          config.instBitWidth, config.instBitWidth / config.bitWidth,
+          config.leadingRegBases, config.leadingLaneBases};
+    }
   }
+  return std::nullopt;
 }
 
 bool TargetFeatures::supportsDirectToLdsScatter() const { return isGFX1250(); }
@@ -254,6 +252,7 @@ bool TargetFeatures::supportsClusterLoadBitWidth(int bitWidth) const {
 
 bool TargetFeatures::supportsBufferAtomicRMW() const {
   return llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4,
+                             ISAFamily::RDNA3, ISAFamily::RDNA4m,
                              ISAFamily::RDNA4, ISAFamily::GFX1250},
                             getISAFamily());
 }
@@ -262,9 +261,30 @@ bool TargetFeatures::supportsBufferAtomicFadd(Type elementType) const {
   auto isaFamily = getISAFamily();
   if (isaFamily == ISAFamily::CDNA3 && elementType.isBF16())
     return false;
+  if (isaFamily == ISAFamily::RDNA3 && !elementType.isF32())
+    return false;
+  if (isaFamily == ISAFamily::RDNA4m)
+    return elementType.isF32();
   if (isaFamily == ISAFamily::RDNA4 && elementType.isF64())
     return false;
   return true;
+}
+
+bool TargetFeatures::supportsBufferAtomicFMinMax(Type elementType) const {
+  auto isaFamily = getISAFamily();
+  if (elementType.isF32()) {
+    return llvm::is_contained({ISAFamily::RDNA1, ISAFamily::RDNA2,
+                               ISAFamily::RDNA3, ISAFamily::RDNA4m,
+                               ISAFamily::RDNA4, ISAFamily::GFX1250},
+                              isaFamily);
+  }
+  if (elementType.isF64()) {
+    return llvm::is_contained({ISAFamily::CDNA2, ISAFamily::CDNA3,
+                               ISAFamily::CDNA4, ISAFamily::RDNA1,
+                               ISAFamily::RDNA2, ISAFamily::GFX1250},
+                              isaFamily);
+  }
+  return false;
 }
 
 int32_t TargetFeatures::getBufferAtomicCachePolicy(bool hasUsers) const {
@@ -280,6 +300,7 @@ int32_t TargetFeatures::getBufferAtomicCachePolicy(bool hasUsers) const {
 
 bool TargetFeatures::supportMaximumMinimum() const {
   return getISAFamily() == ISAFamily::CDNA4 ||
+         getISAFamily() == ISAFamily::RDNA4m ||
          getISAFamily() == ISAFamily::GFX1250;
 }
 
@@ -306,6 +327,11 @@ bool TargetFeatures::supportsPermlaneSwap() const {
 bool TargetFeatures::supportsCvtPkScalePk8() const { return isGFX1250(); }
 
 bool TargetFeatures::supportsHwScaledUpcast() const {
+  return getISAFamily() == ISAFamily::CDNA4 ||
+         getISAFamily() == ISAFamily::GFX1250;
+}
+
+bool TargetFeatures::supportsHwScaledDowncast() const {
   return getISAFamily() == ISAFamily::CDNA4 ||
          getISAFamily() == ISAFamily::GFX1250;
 }

@@ -9,10 +9,6 @@ using namespace mlir::triton;
 
 namespace {
 
-template <typename T> unsigned getNumElements(const ArrayRef<T> shape) {
-  return std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<>());
-}
-
 struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 

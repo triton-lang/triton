@@ -13,6 +13,7 @@
 #include "triton/Dialect/TritonGPU/IR/Traits.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 
+#include <type_traits>
 #include <unordered_map>
 
 namespace mlir {
@@ -48,6 +49,7 @@ namespace mlir::triton::gpu {
 
 constexpr static char AttrMaxRegistersName[] = "ttg.maxnreg";
 constexpr static char AttrNumWarpsName[] = "ttg.num-warps";
+constexpr static char AttrWarpIdOffsetName[] = "ttg.warp-id-offset";
 constexpr static char AttrNumCTAsName[] = "ttg.num-ctas";
 constexpr static char AttrTargetName[] = "ttg.target";
 constexpr static char AttrNumThreadsPerWarp[] = "ttg.threads-per-warp";
@@ -101,6 +103,39 @@ struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
   SideEffects::Resource *getParent() const override { return nullptr; }
 };
 
+class SharedMemoryEffect {
+public:
+  SharedMemoryEffect(std::nullptr_t) : effect(nullptr) {}
+  explicit SharedMemoryEffect(const MemoryEffects::EffectInstance *effect)
+      : effect(effect) {}
+
+  explicit operator bool() const { return effect != nullptr; }
+
+  static bool classof(const MemoryEffects::EffectInstance *effect) {
+    return isa<SharedMemory>(effect->getResource()) &&
+           isa_and_present<SharedKindAttr>(effect->getParameters());
+  }
+
+  SharedKind getKind() const {
+    return cast<SharedKindAttr>(effect->getParameters()).getValue();
+  }
+
+private:
+  const MemoryEffects::EffectInstance *effect;
+};
+
+template <typename Effect, typename ValueT>
+MemoryEffects::EffectInstance makeShared(ValueT value, SharedKind kind) {
+  Value effectValue;
+  if constexpr (std::is_same_v<ValueT, OpOperand *>)
+    effectValue = value->get();
+  else
+    effectValue = value;
+  return {Effect::get(), value,
+          SharedKindAttr::get(effectValue.getContext(), kind),
+          SharedMemory::get()};
+}
+
 // Returns true iff every non-broadcast basis of `ll`, after flattening in and
 // out dimensions, maps to a single power-of-2 in the flattened output.
 bool hasPowerOfTwoBases(const LinearLayout &ll);
@@ -142,6 +177,10 @@ SmallVector<unsigned> getElemsPerThread(Type type);
 
 FailureOr<RankedTensorType> inferFp4ToFpResultType(RankedTensorType srcType,
                                                    Type elemType, int32_t axis,
+                                                   std::optional<Location> loc);
+
+FailureOr<RankedTensorType> inferFpToFp4ResultType(RankedTensorType srcType,
+                                                   int32_t axis,
                                                    std::optional<Location> loc);
 
 // Returns the number of warps per CTA that have access to non-replicated
@@ -249,7 +288,22 @@ std::optional<CGAEncodingAttr> parseCGAAttr(AsmParser &parser, Attribute attr,
 
 void printCGAAttr(AsmPrinter &printer, CGAEncodingAttr layout);
 
+// Return the CGA factor if layout = CTA * CGA, preserving broadcast block bits.
+// Pass a shape-instantiated layout when querying a tensor's CTA distribution.
+FailureOr<CGAEncodingAttr>
+maybeLinearToCGAEncodingAttr(const LinearLayout &layout);
+
 CGAEncodingAttr getCGALayout(Attribute layout);
+
+// Projects the CGA layout of a dot accumulator onto operand `opIdx`.
+CGAEncodingAttr inferDotOperandCGALayout(CGAEncodingAttr accCGALayout,
+                                         int opIdx);
+
+// Derives the CGA layout of the scale for dot operand `opIdx`. For operand A,
+// the scale shares the same CGA layout. For operand B, the last two dimensions
+// are swapped.
+CGAEncodingAttr
+inferDotScaleCGALayoutFromOperand(CGAEncodingAttr operandCGALayout, int opIdx);
 
 SmallVector<unsigned> getCTAsPerCGA(Attribute layout);
 
@@ -304,9 +358,6 @@ SmallVector<unsigned> getMatrixOrder(unsigned rank, bool rowMajor);
 SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank,
                                             bool kContig);
 
-// Return true if \p cat would be valid with result encoding \p targetEncoding.
-bool isLegalCatEncoding(CatOp cat, Attribute targetEncoding);
-
 // Return true if a view between the two types cannot be implemented as a no-op.
 bool isExpensiveView(ArrayRef<int64_t> srcShape, Attribute srcEncoding,
                      ArrayRef<int64_t> dstShape, Attribute dstEncoding);
@@ -353,6 +404,9 @@ bool areLayoutsEquivalent(ArrayRef<int64_t> shape, LayoutEncodingTrait lhs,
 // Return true if the innermost numElems are contiguous.
 bool isInnermostContiguous(MemDescType type, unsigned numElems);
 
+// Return true for a full buffer with rank-one swizzled_shared(1, 1, 1).
+bool isContiguousSharedMemoryLayout(MemDescType type);
+
 LinearLayout inferReshapeLinearLayout(TensorOrMemDesc srcTy,
                                       ArrayRef<int64_t> dstShape);
 
@@ -394,5 +448,14 @@ bool isPaddedEncoding(Attribute encoding);
 unsigned getMinInterval(Attribute encoding);
 
 } // namespace mlir::triton::gpu
+
+namespace llvm {
+template <typename T>
+struct CastInfo<
+    mlir::triton::gpu::SharedMemoryEffect, T *,
+    std::enable_if_t<std::is_same_v<std::remove_const_t<T>,
+                                    mlir::MemoryEffects::EffectInstance>>>
+    : ValueFromPointerCast<mlir::triton::gpu::SharedMemoryEffect, T> {};
+} // namespace llvm
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_

@@ -276,6 +276,27 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
               }
             }
           }
+          for (auto &link : blockTrace.asyncLinks) {
+            auto &start = link.first;
+            auto &end = link.second;
+            auto &contexts = scopeIdContexts[start.entry->scopeId];
+            auto duration = end.entry->cycle - start.entry->cycle;
+            auto normalizedDuration = static_cast<double>(duration) /
+                                      (circularLayoutConfig->totalUnits *
+                                       circularLayoutConfig->numBlocks);
+            for (const auto &[data, baseEntry] : dataToEntryMap) {
+              auto kernelId = baseEntry.id;
+              auto entry = data->addOp(baseEntry.phase, kernelId, contexts);
+              entry.upsertMetric(std::make_unique<CycleMetric>(
+                  start.entry->cycle, end.entry->cycle, duration,
+                  normalizedDuration, kernelId, functionName,
+                  blockTrace.blockId, blockTrace.procId, start.uid,
+                  static_cast<uint64_t>(reinterpret_cast<uintptr_t>(device)),
+                  static_cast<uint64_t>(runtime->getDeviceType()),
+                  timeShiftCost, blockTrace.initTime, blockTrace.preFinalTime,
+                  blockTrace.postFinalTime, /*isAsync=*/true, end.uid));
+            }
+          }
         }
       });
 

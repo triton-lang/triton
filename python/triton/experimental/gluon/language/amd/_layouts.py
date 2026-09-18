@@ -22,8 +22,10 @@ class AMDMFMALayout(DistributedLayout):
         instr_shape (List[int]): The shape in the form of (M, N, K) of the matrix.
         transposed (bool): Indicates the result tensor is transposed so that each thread holds consecutive elements in the same row instead of column, which is good for chained dot and global write.
         warps_per_cta (List[int]): The warp layout in the block.
-        element_bitwidth Optional(int): Bit width of the output element type. Supported values are 32 and 64. Defaults to 32.
-        tiles_per_warp Optional(List[int]): The tile layout within a warp. Defaults to unit tile layout, i.e., single tile on all dimensions.
+        element_bitwidth (Optional[int]): Bit width of the output element type.
+            Supported values are 32 and 64. Defaults to 32.
+        tiles_per_warp (Optional[List[int]]): The tile layout within a warp.
+            Defaults to a unit tile layout, i.e., a single tile on all dimensions.
         cga_layout (Optional[List[List[int]]]): Bases describing CTA tiling.
 
     Current supported versions:
@@ -120,9 +122,9 @@ class AMDWMMALayout(DistributedLayout):
 
     Current supported versions:
 
-    - 1: RDNA3; e.g., gfx1100, gfx1101
-    - 2: RDNA4; e.g., gfx1200, gfx1201
-    - 3: gfx1250
+    - 1: RDNA3: e.g., gfx1100, gfx1101
+    - 2: RDNA4: e.g., gfx1200, gfx1201
+    - 3: CDNA5: gfx1250
     """
     version: int
     transposed: bool

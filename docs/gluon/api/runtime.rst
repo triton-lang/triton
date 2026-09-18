@@ -10,6 +10,7 @@ Runtime
     :toctree: generated
     :nosignatures:
 
+    GluonASTSource
     GluonJITFunction
     jit
     constexpr_function
@@ -26,3 +27,4 @@ Host-Side Descriptors
     nvidia.hopper.TensorDescriptor
     nvidia.hopper.TensorDescriptorIm2Col
     nvidia.blackwell.TensorDescriptor
+    amd.cdna5.TensorDescriptor

@@ -515,6 +515,7 @@ class nvidia_knobs(base_knobs):
 
 
 class amd_knobs(base_knobs):
+    codegen_path: env_opt_str = env_opt_str("TRITON_AMD_CODEGEN_PATH")
     use_buffer_ops: env_bool = env_bool("AMDGCN_USE_BUFFER_OPS", True)
     # Note: This requires use_buffer_ops be true to have any effect
     use_buffer_atomics: env_bool = env_bool("AMDGCN_USE_BUFFER_ATOMICS", True)
@@ -548,8 +549,15 @@ class proton_knobs(base_knobs):
     cupti_lib_blackwell_dir: env_str = env_str(
         "TRITON_CUPTI_LIB_BLACKWELL_PATH",
         str(pathlib.Path(__file__).parent.absolute() / "backends" / "nvidia" / "lib" / "cupti-blackwell"))
+    hsa_runtime_path: env_opt_str = env_opt_str("TRITON_HSA_RUNTIME_PATH")
+    hsa_runtime_library: env_opt_str = env_opt_str("TRITON_HSA_RUNTIME_LIBRARY")
     rocprofiler_sdk_include_path: env_opt_str = env_opt_str("TRITON_ROCPROFILER_SDK_INCLUDE_PATH")
     rocprofiler_sdk_lib_path: env_opt_str = env_opt_str("TRITON_ROCPROFILER_SDK_LIB_PATH")
+    rocprofiler_sdk_library: env_opt_str = env_opt_str("TRITON_ROCPROFILER_SDK_LIBRARY")
+    roctracer_lib_path: env_opt_str = env_opt_str("TRITON_ROCTRACER_LIB_PATH")
+    roctracer_library: env_opt_str = env_opt_str("TRITON_ROCTRACER_LIBRARY")
+    roctx_lib_path: env_opt_str = env_opt_str("TRITON_ROCTX_LIB_PATH")
+    roctx_library: env_str = env_str("TRITON_ROCTX_LIBRARY", "libroctx64.so")
     profile_buffer_size: env_int = env_int("TRITON_PROFILE_BUFFER_SIZE", 64 * 1024 * 1024)
     profile_metric_buffer_size: env_int = env_int("TRITON_PROFILE_METRIC_BUFFER_SIZE", 64 * 1024 * 1024)
     enable_nvtx: env_bool = env_bool("TRITON_ENABLE_NVTX", True)

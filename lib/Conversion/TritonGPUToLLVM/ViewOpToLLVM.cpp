@@ -125,36 +125,6 @@ struct ArithConstantSplatOpConversion
   }
 };
 
-struct CatOpConversion : public ConvertOpToLLVMPattern<CatOp> {
-  using OpAdaptor = typename CatOp::Adaptor;
-  explicit CatOpConversion(LLVMTypeConverter &typeConverter,
-                           PatternBenefit benefit = patternBenefitDefault)
-      : ConvertOpToLLVMPattern<CatOp>(typeConverter, benefit) {}
-  LogicalResult
-  matchAndRewrite(CatOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
-    auto resultTy = cast<RankedTensorType>(op.getType());
-    // Unpack input values.
-    auto lhsVals = unpackUniqueTensorElements(loc, adaptor.getLhs(), rewriter);
-    auto rhsVals = unpackUniqueTensorElements(loc, adaptor.getRhs(), rewriter);
-
-    // concatenate (and potentially reorder) values
-    SmallVector<Value> retVals;
-    for (Value v : lhsVals)
-      retVals.push_back(v);
-    for (Value v : rhsVals)
-      retVals.push_back(v);
-
-    assert(retVals.size() == getUniqueElemsPerThread(resultTy));
-
-    // pack and replace
-    Value ret = packUniqueTensorElements(loc, getTypeConverter(), retVals,
-                                         rewriter, resultTy);
-    rewriter.replaceOp(op, ret);
-    return success();
-  }
-};
 struct JoinOpConversion : public ConvertOpToLLVMPattern<JoinOp> {
   using OpAdaptor = typename JoinOp::Adaptor;
   explicit JoinOpConversion(LLVMTypeConverter &typeConverter,
@@ -533,9 +503,7 @@ struct MemDescSubsliceOpConversion
     // The offset component of (3) is already XORed in by getShmemOffset at
     // load time; only the partition component needs this fix.
     if (newBases.size() > 1) {
-      LinearLayout ll = triton::gpu::isPaddedEncoding(srcTy.getEncoding())
-                            ? triton::gpu::paddedLinearLayout(srcTy)
-                            : triton::gpu::toLinearLayout(srcTy);
+      LinearLayout ll = triton::gpu::toLinearLayoutIgnoringPadding(srcTy);
       auto kPartition = StringAttr::get(ctx, "partition");
       assert(ll.hasInDim(kPartition) &&
              "multiple bases require a partition input dim");
@@ -596,7 +564,6 @@ void mlir::triton::populateViewOpToLLVMPatterns(
   patterns.add<SplatOpConversion>(typeConverter, benefit);
   patterns.add<UnsplatOpConversion>(typeConverter, benefit);
   patterns.add<ArithConstantSplatOpConversion>(typeConverter, benefit);
-  patterns.add<CatOpConversion>(typeConverter, benefit);
   patterns.add<JoinOpConversion>(typeConverter, benefit);
   patterns.add<SplitOpConversion>(typeConverter, benefit);
   patterns.add<MemDescTransOpConversion, MemDescReshapeOpConversion>(

@@ -743,3 +743,67 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#clc_ps_response = #ttg.linear<{register = [[1]], lane = [[0], [0], [0], [0], [0]], warp = [[0], [0]], block = []}>
+#clc_ps_response_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#clc_ps_oper = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#clc_ps_acc = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#clc_ps_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#clc_ps_shared_t = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
+#clc_ps_smem = #ttg.shared_memory
+#clc_ps_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  // CHECK-LABEL: @clc_while_partitions
+  tt.func @clc_while_partitions(
+      %a_desc: !tt.tensordesc<128x64xf16, #clc_ps_shared>,
+      %b_desc: !tt.tensordesc<128x64xf16, #clc_ps_shared>,
+      %out: !tt.ptr<i32>) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %false = arith.constant false
+    %pid0 = tt.get_program_id x : i32
+    scf.while (%pid = %pid0, %has_work = %true) : (i32, i1) -> (i32, i1) {
+      // CHECK: scf.condition({{.*}}) {ttg.partition = array<i32: 0, 1, 2, 3>}
+      scf.condition(%has_work) %pid, %has_work : i32, i1
+    } do {
+    ^bb0(%pid: i32, %has_work: i1):
+      // CHECK: %[[RESPONSE:.*]] = ttng.clc_try_cancel_sync {ttg.partition = array<i32: 3>} : tensor<2xi64,
+      %response = ttng.clc_try_cancel_sync : tensor<2xi64, #clc_ps_response>
+      // CHECK-NEXT: %[[MARKER:.*]] = ttg.local_alloc %[[RESPONSE]] {alignment = 16 : i32, ttg.partition = array<i32: 3>}
+      %response_smem = ttg.local_alloc %response {alignment = 16 : i32} : (tensor<2xi64, #clc_ps_response>) -> !ttg.memdesc<2xi64, #clc_ps_response_shared, #clc_ps_smem, mutable>
+      // CHECK-COUNT-2: tt.descriptor_load {{.*}} {ttg.partition = array<i32: 2>}
+      %a = tt.descriptor_load %a_desc[%pid, %c0] : !tt.tensordesc<128x64xf16, #clc_ps_shared> -> tensor<128x64xf16, #clc_ps_oper>
+      %b = tt.descriptor_load %b_desc[%pid, %c0] : !tt.tensordesc<128x64xf16, #clc_ps_shared> -> tensor<128x64xf16, #clc_ps_oper>
+      %a_s = ttg.local_alloc %a : (tensor<128x64xf16, #clc_ps_oper>) -> !ttg.memdesc<128x64xf16, #clc_ps_shared, #clc_ps_smem>
+      %b_s0 = ttg.local_alloc %b : (tensor<128x64xf16, #clc_ps_oper>) -> !ttg.memdesc<128x64xf16, #clc_ps_shared, #clc_ps_smem>
+      %b_s = ttg.memdesc_trans %b_s0 {order = array<i32: 1, 0>} : !ttg.memdesc<128x64xf16, #clc_ps_shared, #clc_ps_smem> -> !ttg.memdesc<64x128xf16, #clc_ps_shared_t, #clc_ps_smem>
+      %acc_mem, %acc_tok = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #clc_ps_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+      // CHECK: ttng.tc_gen5_mma {{.*}} {ttg.partition = array<i32: 1>}
+      %mma = ttng.tc_gen5_mma %a_s, %b_s, %acc_mem[%acc_tok], %false, %true : !ttg.memdesc<128x64xf16, #clc_ps_shared, #clc_ps_smem>, !ttg.memdesc<64x128xf16, #clc_ps_shared_t, #clc_ps_smem>, !ttg.memdesc<128x128xf32, #clc_ps_tmem, #ttng.tensor_memory, mutable>
+      // CHECK: ttng.tmem_load {{.*}} {ttg.partition = array<i32: 0>}
+      %value, %load_tok = ttng.tmem_load %acc_mem[%mma] : !ttg.memdesc<128x128xf32, #clc_ps_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #clc_ps_acc>
+      "consume"(%value) : (tensor<128x128xf32, #clc_ps_acc>) -> ()
+      %out_ptr = tt.addptr %out, %pid : !tt.ptr<i32>, i32
+      tt.store %out_ptr, %pid : !tt.ptr<i32>
+      // CHECK: %[[RAW:.*]] = ttng.clc_load_result %[[MARKER]] {ttg.partition = array<i32: 0, 1, 2, 3>}
+      %raw = ttng.clc_load_result %response_smem : !ttg.memdesc<2xi64, #clc_ps_response_shared, #clc_ps_smem, mutable> -> i128
+      // CHECK: %[[HAS_WORK:.*]] = ttng.clc_is_canceled %[[RAW]] {ttg.partition = array<i32: 0, 1, 2, 3>} : i128 -> i1
+      %next_has_work = ttng.clc_is_canceled %raw : i128 -> i1
+      // CHECK: scf.if %[[HAS_WORK]] -> (i32)
+      %next_pid = scf.if %next_has_work -> i32 {
+        // CHECK: ttng.clc_get_program_id %[[RAW]], x {ttg.partition = array<i32: 0, 1, 2, 3>} : i128 -> i32
+        %stolen = ttng.clc_get_program_id %raw, x : i128 -> i32
+        scf.yield %stolen : i32
+      } else {
+        scf.yield %pid : i32
+      }
+      // CHECK: scf.yield {ttg.partition = array<i32: 0, 1, 2, 3>}
+      scf.yield %next_pid, %next_has_work : i32, i1
+    // CHECK: attributes {tt.warp_specialize, ttg.partition = array<i32: 0, 1, 2, 3>, ttg.partition.outputs = [array<i32: 0, 1, 2, 3>, array<i32: 0, 1, 2, 3>]
+    } attributes {tt.warp_specialize}
+    tt.return
+  }
+}
