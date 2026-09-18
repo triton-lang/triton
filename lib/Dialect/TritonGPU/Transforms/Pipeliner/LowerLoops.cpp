@@ -106,7 +106,9 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
   for (Operation *topLevelUser : topLevelUsers) {
     int _useStage = schedule[topLevelUser].first;
     CoarseSchedule::Cluster _useCluster = schedule[topLevelUser].second;
-    if (*_useCluster > *defCluster) {
+    // This adds an *extra* buffer, so only bump already-pipelined loads:
+    // stageDiff 0 -> 1 would create a never-prefetched single-buffered copy.
+    if (*_useCluster > *defCluster && _useStage > defStage) {
       // Check if we need extra buffer due to unusual execution order
       // The issue occurs when users of the load are scheduled in a later
       // cluster, which happens when conditional code gets moved to epilogue
