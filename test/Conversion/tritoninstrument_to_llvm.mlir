@@ -56,6 +56,9 @@ tt.func private @experimental_assert_uniform(%arg0: i1) {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_lock_acquire
+// CHECK-NOT: nvvm.elect.sync
+// CHECK: nvvm.read.ptx.sreg.tid.x
+// CHECK-NOT: nvvm.elect.sync
 // CHECK: 09atom.global.acquire.gpu.cas.b32
 // CHECK: nvvm.barrier
 tt.func private @experimental_lock_acquire(
@@ -75,6 +78,9 @@ tt.func private @experimental_lock_acquire(
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_lock_release
 // CHECK: nvvm.barrier
+// CHECK-NOT: nvvm.elect.sync
+// CHECK: nvvm.read.ptx.sreg.tid.x
+// CHECK-NOT: nvvm.elect.sync
 // CHECK: atom.global.release.gpu.exch.b32
 tt.func private @experimental_lock_release(
   %lock: !tt.ptr<i32>,
