@@ -774,6 +774,11 @@ public:
       return rewriter.notifyMatchFailure(
           dotOp, "SM120 native FP4xFP4 requires K-packed operands");
     }
+    // Native FP4 MMA consumes 64 K elements, packed into 32 bytes.
+    if (isFP4xFP4 && getShapePerCTA(dotOp.getA().getType()).back() < 32) {
+      return rewriter.notifyMatchFailure(
+          dotOp, "SM120 native FP4xFP4 requires K >= 64");
+    }
 
     auto scaleElemType = dotOp.getAScale().getType().getElementType();
     if (scaleElemType != dotOp.getBScale().getType().getElementType()) {

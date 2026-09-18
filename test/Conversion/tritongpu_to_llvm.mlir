@@ -3849,3 +3849,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// One input byte per thread: pad to four bytes, but return only two BF16 values.
+#packed_fp4 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#unpacked_fp4 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: @fp4_to_bf16_one_byte
+  // CHECK: %[[ZERO0:.*]] = llvm.mlir.constant(0 : i8)
+  // CHECK: llvm.insertelement %[[ZERO0]],
+  // CHECK: %[[ZERO1:.*]] = llvm.mlir.constant(0 : i8)
+  // CHECK: llvm.insertelement %[[ZERO1]],
+  // CHECK: %[[ZERO2:.*]] = llvm.mlir.constant(0 : i8)
+  // CHECK: llvm.insertelement %[[ZERO2]],
+  // CHECK: llvm.inline_asm
+  // CHECK: llvm.return {{.*}} : !llvm.struct<(bf16, bf16)>
+  tt.func private @fp4_to_bf16_one_byte(%in: tensor<32xi8, #packed_fp4>) -> tensor<64xbf16, #unpacked_fp4> {
+    %out = ttg.fp4_to_fp %in {axis = 0 : i32} : tensor<32xi8, #packed_fp4> -> tensor<64xbf16, #unpacked_fp4>
+    tt.return %out : tensor<64xbf16, #unpacked_fp4>
+  }
+}
