@@ -147,6 +147,8 @@ public:
     return false;
   }
 
+  virtual bool needsPtxasMaskedStoreBarrierWorkaround() const { return false; }
+
   virtual Value getIssuerCTAPred(ImplicitLocOpBuilder &b,
                                  Operation *op) const = 0;
 

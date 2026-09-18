@@ -48,13 +48,6 @@ std::unique_ptr<ConSanTargetHooks> createConSanHooks(llvm::StringRef key) {
 namespace {
 
 // Temporary workaround for PTXAS mis-analysis of divergent control-flow joins.
-constexpr bool kEnablePtxasMaskedStoreBarrierWorkaround = true;
-
-bool isNvidiaTarget(ModuleOp module) {
-  auto target = module->getAttrOfType<StringAttr>(ttg::AttrTargetName);
-  return target && target.strref().starts_with("cuda:");
-}
-
 void addPtxasMaskedStoreBarrierWorkaround(ModuleOp module) {
   SmallVector<tt::StoreOp> maskedStores;
   module.walk([&](tt::StoreOp store) {
@@ -852,7 +845,7 @@ public:
 
     // Snapshot and modify the input program before ConSan creates helper
     // functions, so sanitizer-internal masked stores are not affected.
-    if (kEnablePtxasMaskedStoreBarrierWorkaround && isNvidiaTarget(module))
+    if (hooks.needsPtxasMaskedStoreBarrierWorkaround())
       addPtxasMaskedStoreBarrierWorkaround(module);
 
     tti::FunctionBuilder funcBuilder(module, auxData);
