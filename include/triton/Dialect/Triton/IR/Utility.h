@@ -199,6 +199,12 @@ bool isKernel(FunctionOpInterface funcOp);
 
 unsigned getBitwidth(RankedTensorType ty);
 
+// Values that can satisfy the predicate with some value in `other`.
+// Return nullopt when the comparison cannot hold.
+std::optional<ConstantIntRanges>
+getBoundFromCmpPredicate(arith::CmpIPredicate predicate,
+                         const ConstantIntRanges &other, bool isLhs = true);
+
 // If the value "anchor" is compared against a statically-computed bound, return
 // inclusive lower and upper bounds lb <= anchor <= ub. Depending on the
 // comparison operator, one of the bounds is a computed one while the other is

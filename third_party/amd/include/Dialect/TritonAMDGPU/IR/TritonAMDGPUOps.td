@@ -39,6 +39,7 @@ include "triton/Dialect/TritonGPU/IR/TritonGPUMemoryEffects.td"
 include "mlir/IR/EnumAttr.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
+include "mlir/Interfaces/InferIntRangeInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "TritonAMDGPUDialect.td"
 include "TritonAMDGPUAttrDefs.td"
@@ -58,7 +59,8 @@ def L2Cache : Resource<"::mlir::triton::amd::L2Cache">;
 // ExtractSliceOp
 //===----------------------------------------------------------------------===//
 
-def ExtractSliceOp : TT_AMDGPU_Op<"extract_slice", [Pure]> {
+def ExtractSliceOp : TT_AMDGPU_Op<"extract_slice", [Pure,
+    DeclareOpInterfaceMethods<InferIntRangeInterface, ["inferResultRanges"]>]> {
   let summary = "extract slice operation";
   let description = [{
     The "extract_slice" operation enables extracting a slice of a tensor in
