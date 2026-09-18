@@ -195,7 +195,6 @@ def _attn_fwd(sm_scale, M,  #
     desc_q = _maybe_make_tensor_desc(desc_q, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
                                      block_shape=[BLOCK_M, HEAD_DIM])
     if FP8_OUTPUT:
-        # FP8 V is physically laid out as [Z, H, HEAD_DIM, N_CTX].
         desc_v = _maybe_make_tensor_desc(desc_v, shape=[Z * H * HEAD_DIM, N_CTX], strides=[N_CTX, 1],
                                          block_shape=[HEAD_DIM, BLOCK_N])
     else:
@@ -528,7 +527,6 @@ class _attention(torch.autograd.Function):
             dummy_block = [1, 1]
             desc_q = TensorDescriptor(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=dummy_block)
             if q.dtype == torch.float8_e5m2:
-                # FP8 V is physically laid out as [Z, H, HEAD_DIM, N_CTX].
                 desc_v = TensorDescriptor(v, shape=[q.shape[0] * q.shape[1] * HEAD_DIM_K, q.shape[2]],
                                           strides=[q.shape[2], 1], block_shape=dummy_block)
             else:
