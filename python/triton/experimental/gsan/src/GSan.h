@@ -21,8 +21,9 @@ using uint16_t = __UINT16_TYPE__;
 using uint32_t = __UINT32_TYPE__;
 using uintptr_t = __UINTPTR_TYPE__;
 
-// Reserve 1 PiB, should be big enough for a while :)
-static constexpr size_t kReserveSize = 1ull << 40;
+// Two 1-TiB arenas, selected by an address bit, share one runtime state.
+static constexpr size_t kArenaSize = 1ull << 40;
+static constexpr size_t kReserveSize = 2 * kArenaSize;
 static constexpr int kShadowMemGranularityBytes = 4;
 static_assert((kReserveSize & (kReserveSize - 1)) == 0,
               "kReserveSize must be a power of 2");
@@ -61,6 +62,39 @@ struct alignas(4) ShadowCell {
 };
 static_assert(sizeof(ShadowCell) == 24);
 static_assert(alignof(ShadowCell) == 4);
+
+// The entire scalar clock is accessed atomically. There is no lock or
+// reader state, and zero denotes a byte without an instrumented write.
+struct WriteOnceShadowCell {
+  ScalarClock writeClock;
+};
+static_assert(sizeof(WriteOnceShadowCell) == sizeof(ScalarClock));
+static_assert(alignof(WriteOnceShadowCell) == alignof(ScalarClock));
+
+inline GSAN_HOST_DEVICE constexpr size_t getShadowGranularity(bool writeOnce) {
+  return writeOnce ? 1 : kShadowMemGranularityBytes;
+}
+
+inline GSAN_HOST_DEVICE constexpr size_t getShadowCellSize(bool writeOnce) {
+  return writeOnce ? sizeof(WriteOnceShadowCell) : sizeof(ShadowCell);
+}
+
+inline GSAN_HOST_DEVICE constexpr size_t getRealCapacity(bool writeOnce) {
+  size_t limit = (kArenaSize / 2 / getShadowCellSize(writeOnce)) *
+                 getShadowGranularity(writeOnce);
+  size_t capacity = 1;
+  while (capacity <= limit / 2)
+    capacity *= 2;
+  return capacity;
+}
+static_assert(getRealCapacity(false) == (1ull << 36));
+static_assert(getRealCapacity(true) == (1ull << 37));
+static_assert(getRealCapacity(false) / kShadowMemGranularityBytes *
+                  sizeof(ShadowCell) <=
+              kArenaSize / 2);
+static_assert(getRealCapacity(true) * sizeof(WriteOnceShadowCell) <=
+              kArenaSize / 2);
+static_assert(getRealCapacity(true) <= kArenaSize / 2);
 
 struct GlobalState {
   // Base address of gsan managed memory
@@ -172,26 +206,57 @@ inline GSAN_HOST_DEVICE GlobalState *getGlobalState(ThreadState *threadState) {
   return (GlobalState *)(threadAddr & ~(kPerDeviceStateStride - 1));
 }
 
-inline GSAN_HOST_DEVICE uintptr_t getRealBaseAddress(uintptr_t reserveBase) {
-  return reserveBase + kReserveSize / 2;
+inline GSAN_HOST_DEVICE uintptr_t getShadowBaseAddress(uintptr_t reserveBase,
+                                                       bool writeOnce = false) {
+  return reserveBase + (writeOnce ? kArenaSize : 0);
+}
+
+inline GSAN_HOST_DEVICE uintptr_t getRealBaseAddress(uintptr_t reserveBase,
+                                                     bool writeOnce = false) {
+  return getShadowBaseAddress(reserveBase, writeOnce) + kArenaSize / 2;
 }
 
 inline GSAN_HOST_DEVICE uintptr_t getReserveBaseFromAddress(uintptr_t addr) {
   return addr & ~(kReserveSize - 1);
 }
 
+// Assumes address is in this process's GSan reservation.
+inline GSAN_HOST_DEVICE bool isWriteOnceAddress(uintptr_t addr) {
+  return (addr & kArenaSize) != 0;
+}
+
+inline GSAN_HOST_DEVICE size_t getShadowGranularity(uintptr_t addr) {
+  return getShadowGranularity(isWriteOnceAddress(addr));
+}
+
+inline GSAN_HOST_DEVICE size_t getShadowCellSize(uintptr_t addr) {
+  return getShadowCellSize(isWriteOnceAddress(addr));
+}
+
 // Assumes address is in gsan-managed memory
 inline GSAN_HOST_DEVICE uintptr_t getShadowAddress(uintptr_t virtualAddress) {
   auto reserveBase = getReserveBaseFromAddress(virtualAddress);
-  auto realBase = getRealBaseAddress(reserveBase);
+  bool writeOnce = isWriteOnceAddress(virtualAddress);
+  auto shadowBase = getShadowBaseAddress(reserveBase, writeOnce);
+  auto realBase = getRealBaseAddress(reserveBase, writeOnce);
   auto byteOffset = virtualAddress - realBase;
-  auto wordOffset = byteOffset / kShadowMemGranularityBytes;
-  return reserveBase + sizeof(ShadowCell) * wordOffset;
+  auto cellOffset = byteOffset / getShadowGranularity(writeOnce);
+  return shadowBase + getShadowCellSize(writeOnce) * cellOffset;
 }
 
 inline GSAN_HOST_DEVICE bool isGsanManaged(uintptr_t addr,
                                            uintptr_t reserveBase) {
   return getReserveBaseFromAddress(addr) == reserveBase;
+}
+
+enum class AddressCategory { Unmanaged, Normal, WriteOnce };
+
+inline GSAN_HOST_DEVICE AddressCategory categorize(uintptr_t addr,
+                                                   uintptr_t reserveBase) {
+  if (!isGsanManaged(addr, reserveBase))
+    return AddressCategory::Unmanaged;
+  return isWriteOnceAddress(addr) ? AddressCategory::WriteOnce
+                                  : AddressCategory::Normal;
 }
 
 inline GSAN_HOST_DEVICE bool isAtomicScope(AtomicScope scope) {
