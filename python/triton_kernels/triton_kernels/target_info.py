@@ -3,6 +3,7 @@ import triton.language as tl
 
 from triton.language.target_info import (
     cuda_capability_geq,
+    current_target,
     is_cuda,
     is_hip,
     is_hip_cdna3,
@@ -15,6 +16,7 @@ __all__ = [
     "get_cdna_version",
     "get_rdna_version",
     "has_tma_gather",
+    "has_tma_scatter",
     "has_native_mxfp",
     "is_cuda",
     "is_hip",
@@ -62,6 +64,12 @@ def get_rdna_version():
 @triton.constexpr_function
 def has_tma_gather():
     return cuda_capability_geq(10, 0)
+
+
+@triton.constexpr_function
+def has_tma_scatter():
+    # sm_12x has TMA gather but not scatter: ptxas rejects `.tile::scatter4` on sm_120a.
+    return cuda_capability_geq(10, 0) and current_target().arch // 10 != 12
 
 
 @triton.constexpr_function
