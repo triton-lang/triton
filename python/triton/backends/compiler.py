@@ -22,6 +22,7 @@ class Language(Enum):
 
 class BaseBackend(metaclass=ABCMeta):
     supports_native_tensor_specialization = True
+    supports_native_tensordesc_specialization = True
 
     def __init__(self, target: GPUTarget) -> None:
         self.target = target
@@ -89,4 +90,8 @@ class BaseBackend(metaclass=ABCMeta):
     def get_tensor_specialization(arg, **kwargs):
         if arg.data_ptr() % 16 == 0 and kwargs.get("align", False):
             return "D"
+        return ""
+
+    @staticmethod
+    def get_tensordesc_specialization(arg, **kwargs):
         return ""
