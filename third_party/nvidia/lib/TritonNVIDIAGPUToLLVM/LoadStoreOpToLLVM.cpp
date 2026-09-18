@@ -867,6 +867,7 @@ public:
 
       // Let LLVM handle compare+swap loop; branch-based pred should be fine
       if (valueElemTy.isBF16() && getNVIDIAComputeCapability(moduleOp) < 90) {
+        assert(vec == 1 && packed == 1);
         // Lower atomic bin-op and sem to LLVM
         auto llvmAtomicBinOp = matchAtomicOp(atomicRmwAttr);
         auto llvmAtomicMemOrdering = getMemoryOrdering(op.getSem());
@@ -885,13 +886,6 @@ public:
 
         // Enter into predicate block
         rewriter.setInsertionPointToEnd(curBlock);
-        bool doesAtomicNeedMEM = !op.getResult().use_empty();
-
-        // Setup for SMEM Sync case
-        Value atomPtr = tensorTy || !doesAtomicNeedMEM
-                            ? nullptr
-                            : LLVM::getSharedMemoryBase(
-                                  loc, rewriter, targetInfo, op.getOperation());
         LLVM::CondBrOp::create(rewriter, loc, pred, atomicBlock, endBlock,
                                undefVal);
 
@@ -902,62 +896,9 @@ public:
                                       valElements[i], *llvmAtomicMemOrdering,
                                       StringRef("device"))
                 .getResult();
-        // Handle the 2 bf16 case
-        if (packed == 2 && valueElemNBits == 16) {
-          Value atom2 = LLVM::AtomicRMWOp::create(
-                            rewriter, loc, *llvmAtomicBinOp, ptrElements[i + 1],
-                            valElements[i + 1], *llvmAtomicMemOrdering,
-                            StringRef("device"))
-                            .getResult();
-          auto vecTy = vec_ty(valueElemTy, vec);
-          auto tmp =
-              b.insert_element(vecTy, b.undef(vecTy), atom, b.i32_val(0));
-          atom = b.insert_element(vecTy, tmp, atom2, b.i32_val(1)).getResult();
-        }
-
-        if (tensorTy) {
-          // Return from predicated block
-          LLVM::BrOp::create(rewriter, loc, atom, endBlock);
-
-          // Recover values from predicated block
-          rewriter.setInsertionPointToStart(endBlock);
-          Value ret = endBlock->getArgument(0);
-          if (vec > 1) {
-            for (unsigned ii = 0; ii < vec; ++ii) {
-              resultVals[i + ii] = b.extract_val(valueElemTy, ret, ii);
-            }
-          } else if (packed > 1) {
-            for (unsigned ii = 0; ii < packed; ++ii) {
-              resultVals[i + ii] =
-                  b.extract_element(valueElemTy, ret, b.i32_val(ii));
-            }
-          } else {
-            resultVals[i] = ret;
-          }
-        } else {
-          if (!doesAtomicNeedMEM) {
-            LLVM::BrOp::create(rewriter, loc, atom, endBlock);
-            rewriter.eraseOp(op);
-            // if type isn't a tensor and there is no need to write to SMEM then
-            // we are done here
-            return success();
-          }
-
-          // Commit values from predicated block to SMEM and return from
-          // predicate block
-          // Note: there is no need to use the BlockArgument here because
-          //       the value is recovered from SMEM in the !tensorTy case
-          b.store(atom, atomPtr);
-          LLVM::BrOp::create(rewriter, loc, atom, endBlock);
-
-          // Recover values from predicated block (from SMEM)
-          rewriter.setInsertionPointToStart(endBlock);
-          b.barrier(ttg::AddrSpace::Local);
-
-          Value ret = b.load(valueElemTy, atomPtr);
-          rewriter.replaceOp(op, {ret});
-          return success();
-        }
+        LLVM::BrOp::create(rewriter, loc, atom, endBlock);
+        rewriter.setInsertionPointToStart(endBlock);
+        resultVals[i] = endBlock->getArgument(0);
         continue;
       }
 

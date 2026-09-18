@@ -147,7 +147,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: %[[CMPXCHG:.*]] = llvm.cmpxchg %{{.*}}, %[[C32I]], %[[C64I]] acquire monotonic
     // CHECK: %[[RESI:.*]] = llvm.extractvalue %[[CMPXCHG]][0] : !llvm.struct<(i32, i1)>
     // CHECK: %[[RES:.*]] = llvm.bitcast %[[RESI]] : i32 to f32
-    // CHECK: llvm.store %[[RES]], %{{.*}} : f32, !llvm.ptr<3>
+    // CHECK: llvm.br ^[[DONE:bb[0-9]+]](%[[RES]] : f32)
+    // CHECK: ^[[DONE]](%[[MERGED:.*]]: f32):
+    // CHECK: llvm.store %[[MERGED]], %{{.*}} : f32, !llvm.ptr<3>
     // CHECK: rocdl.s.barrier
     // CHECK: llvm.load
     // CHECK-NOT: rocdl.s.barrier
