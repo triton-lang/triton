@@ -1190,9 +1190,11 @@ def test_async_copy_mbarrier(copy_vec, cache_policy):
                                                CACHE_POLICY=cache_policy)
     torch.testing.assert_close(out[:20], inp)
     torch.testing.assert_close(out[20:], torch.zeros((12, 32), **tensor_opts))
-    if cache_policy is not None:
-        assert "createpolicy.fractional" in kernel.asm["ptx"]
-        assert "L2::cache_hint" in kernel.asm["ptx"]
+    ptx = kernel.asm["ptx"]
+    version = tuple(map(int, re.search(r"\.version (\d+)\.(\d+)", ptx).groups()))
+    expect_policy = cache_policy is not None and version >= (9, 4)
+    assert ("createpolicy.fractional" in ptx) == expect_policy
+    assert ("L2::cache_hint" in ptx) == expect_policy
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")

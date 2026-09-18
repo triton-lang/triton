@@ -1043,11 +1043,16 @@ struct AsyncCopyGlobalToLocalOpConversion
     Value threadPred = ttg::emitRedundantThreadPredicate(freeVarMasks, rewriter,
                                                          loc, targetInfo);
 
-    FailureOr<Value> l2Policy =
-        createCachePolicy(*cachePolicy, rewriter, loc, computeCapability, op);
-    if (failed(l2Policy))
-      return failure();
-    Value l2PolicyReg = *l2Policy;
+    Value l2PolicyReg;
+    // Older ptxas versions miscompile cp.async with a fractional L2 policy.
+    // PTX 9.4 is a proxy for the fixed CUDA 13.4 toolchain.
+    if (targetInfo.getPtxVersion() >= 94) {
+      FailureOr<Value> l2Policy =
+          createCachePolicy(*cachePolicy, rewriter, loc, computeCapability, op);
+      if (failed(l2Policy))
+        return failure();
+      l2PolicyReg = *l2Policy;
+    }
     auto l2PrefetchSizeAttr = cachePolicy->detailed
                                   ? cachePolicy->detailed.getL2PrefetchSize()
                                   : IntegerAttr();
