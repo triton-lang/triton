@@ -345,6 +345,7 @@ LogicalResult scheduleLoads(const LoadToInfoMap &loadToInfo, int maxDist,
 void initSymbolicSchedule(int maxDist, Stages &stages, Clusters &clusters,
                           tt::CoarseSchedule &schedule) {
   const int lastStage = schedule.getNumStages() - 1;
+  stages[SCHED_GLOBAL_PREFETCH] = 0;
   stages[SCHED_GLOBAL_LOAD] = 0;
   stages[SCHED_LOCAL_STORE] = maxDist;
   stages[SCHED_LOCAL_LOAD] = lastStage;
