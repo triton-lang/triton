@@ -1421,7 +1421,7 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStart() {
     std::call_once(state.registerShutdownFlag, []() {
       // Initialize HIP first so this handler also runs before HIP teardown
       // when profiling starts before the application's first HIP API call.
-      std::ignore = hip::deviceSynchronize<true>();
+      std::ignore = hip::init<true>(0);
       if (std::atexit(&finalizeRocprofilerClient) != 0)
         throw makeRuntimeError(
             "Failed to register ROCprofiler shutdown handler");
