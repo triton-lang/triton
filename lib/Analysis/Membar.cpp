@@ -132,6 +132,8 @@ enum class ThreadSyncKind {
   CompletionNeedsSync,
   // These completions do not publish writes to global memory.
   SharedCompletionNeedsSync,
+  // Finish waits before a notification can let a peer advance their phase.
+  MBarrierWait,
 };
 
 enum class ThreadSyncIssuer {
@@ -157,14 +159,17 @@ struct ThreadSyncInfo {
   bool isCompletionOnly() const {
     return kind == ThreadSyncKind::Completion ||
            kind == ThreadSyncKind::CompletionNeedsSync ||
-           kind == ThreadSyncKind::SharedCompletionNeedsSync;
+           kind == ThreadSyncKind::SharedCompletionNeedsSync ||
+           kind == ThreadSyncKind::MBarrierWait;
   }
 };
 
 ThreadSyncInfo getThreadSyncInfo(Operation *op) {
   // Acquires and proxy fences do not consume payload. Wait deps only keep
   // allocations live; each thread fences its own completed accesses.
-  if (isa<ttng::WaitBarrierOp, ttng::FenceAsyncSharedOp>(op))
+  if (isa<ttng::WaitBarrierOp>(op))
+    return {ThreadSyncKind::MBarrierWait};
+  if (isa<ttng::FenceAsyncSharedOp>(op))
     return {ThreadSyncKind::Completion};
   if (isa<triton::gpu::AsyncWaitOp>(op))
     return {ThreadSyncKind::SharedCompletionNeedsSync};
@@ -307,7 +312,6 @@ bool MembarAnalysis::requiresThreadSync(const BlockInfo &pending,
       !effects.syncReadSlices.empty() || !effects.syncWriteSlices.empty();
   for (Operation *before : pending.threadEffects) {
     auto sync = getThreadSyncInfo(before);
-    auto wait = dyn_cast<ttng::WaitBarrierOp>(before);
     for (Operation *after : effects.threadDemands)
       if ((sync.requiresAfter() &&
            (sync.kind != ThreadSyncKind::SharedCompletionNeedsSync ||
@@ -316,7 +320,9 @@ bool MembarAnalysis::requiresThreadSync(const BlockInfo &pending,
            !haveSameThreadSyncIssuer(before, after)) ||
           // A notification can let a peer advance a pending wait's phase.
           // Private counter updates are already ordered by the slice hazards.
-          (wait && !isRegionLocal(wait.getAlloc()) && mayNotifyPeer(after)))
+          (sync.kind == ThreadSyncKind::MBarrierWait &&
+           !isRegionLocal(cast<ttng::WaitBarrierOp>(before).getAlloc()) &&
+           mayNotifyPeer(after)))
         return true;
   }
   return false;

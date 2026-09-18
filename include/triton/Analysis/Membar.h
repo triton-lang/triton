@@ -366,14 +366,13 @@ protected:
 
 private:
   SmallVector<AllocationSlice> getAllocationSlices(Value value);
+  bool isRegionLocal(Value value);
+  bool mayNotifyPeer(Operation *op);
 
   MembarSliceFilterFn sliceFilter;
   AccessMode accessMode;
   BufferIndexAnalysis bufferIndexAnalysis;
   DenseMap<Value, bool> regionLocalAllocations;
-
-  bool isRegionLocal(Value value);
-  bool mayNotifyPeer(Operation *op);
 };
 
 /// Inserts shared-memory and operation rendezvous barriers across a module,
