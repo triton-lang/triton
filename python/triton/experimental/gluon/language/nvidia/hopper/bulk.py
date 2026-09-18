@@ -45,4 +45,4 @@ def async_load(smem, pointer, num_bytes, barrier, pred=True, _semantic=None):
     _check(pointer.type.is_ptr(), lambda: "pointer must be a scalar global-memory pointer")
     _check(pred.type.is_bool(), lambda: "pred must be a scalar boolean")
     _semantic.builder.create_async_bulk_copy_global_to_local(smem.handle, pointer.handle, num_bytes, barrier.handle,
-                                                            pred.handle)
+                                                             pred.handle)

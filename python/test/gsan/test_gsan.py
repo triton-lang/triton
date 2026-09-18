@@ -2148,7 +2148,7 @@ def test_explicit_graph_storage_survives_executable_close(with_gsan):
 def _bulk_shadow_kernel(src, out, take_copy, WORDS: gl.constexpr, OFFSET: gl.constexpr):
     layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
     shared: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0])
-    smem = gl.allocate_shared_memory(gl.int32, [32], shared, gl.full((32,), -1, gl.int32, layout))
+    smem = gl.allocate_shared_memory(gl.int32, [32], shared, gl.full((32, ), -1, gl.int32, layout))
     bar = hopper.mbarrier.allocate_mbarrier()
     hopper.mbarrier.init(bar, count=1)
     hopper.mbarrier.expect(bar, WORDS * 4, pred=take_copy)
@@ -2165,7 +2165,7 @@ def test_bulk_async_load_source_range(with_gsan, words, offset, take_copy):
     src = torch.arange(40, device="cuda", dtype=torch.int32)
     out = torch.empty(32, device="cuda", dtype=torch.int32)
     before = _shadow_cells_for_tensor(src)
-    _bulk_shadow_kernel[(1,)](src, out, take_copy, words, offset)
+    _bulk_shadow_kernel[(1, )](src, out, take_copy, words, offset)
     torch.cuda.synchronize()
     after = _shadow_cells_for_tensor(src)
     changed = torch.zeros(40, dtype=torch.bool)
