@@ -323,12 +323,17 @@ class build_knobs(base_knobs):
 
     cudacrt_path: env_opt_str = env_opt_str("TRITON_CUDACRT_PATH")
     cudart_path: env_opt_str = env_opt_str("TRITON_CUDART_PATH")
+    cccl_path: env_opt_str = env_opt_str("TRITON_CCCL_PATH")
 
     impl: Optional[BuildImpl] = None
 
     @property
     def backend_dirs(self) -> set[str]:
-        return {path for path in (self.cudacrt_path, self.cudart_path) if path is not None}
+        return {
+            path
+            for path in (self.cudacrt_path, self.cudart_path, self.cccl_path)
+            if path is not None
+        }
 
 
 class redis_knobs(base_knobs):

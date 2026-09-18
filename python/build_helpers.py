@@ -53,6 +53,7 @@ class BuildHelperArgs:
     nvdisasm_path: Optional[str]
     cudacrt_path: Optional[str]
     cudart_path: Optional[str]
+    cccl_path: Optional[str]
     cupti_include_path: Optional[str]
     cupti_lib_path: Optional[str]
     cupti_lib_blackwell_path: Optional[str]
@@ -783,6 +784,17 @@ def get_nvidia_toolchain_packages():
             dst_path="include",
             override_attr="cudart_path",
         ),
+        # CCCL (CUDA C++ Core Libraries) headers, e.g. nv/target -- newer cuda_cudart
+        # headers such as cuda_fp16.h/cuda_bf16.h transitively #include <nv/target>,
+        # which only ships in this separate redist component, not in cuda_cudart itself.
+        NvidiaToolchainPackage(
+            name="cccl",
+            component="cuda_cccl",
+            version=versions["cccl"],
+            src_path="include",
+            dst_path="include",
+            override_attr="cccl_path",
+        ),
         NvidiaToolchainPackage(
             name="cupti",
             component="cuda_cupti",
@@ -843,6 +855,7 @@ def add_common_args(parser: argparse.ArgumentParser):
     parser.add_argument("--triton-nvdisasm-path", default="", help="Path override for TRITON_NVDISASM_PATH")
     parser.add_argument("--triton-cudacrt-path", default="", help="Path override for TRITON_CUDACRT_PATH")
     parser.add_argument("--triton-cudart-path", default="", help="Path override for TRITON_CUDART_PATH")
+    parser.add_argument("--triton-cccl-path", default="", help="Path override for TRITON_CCCL_PATH")
     parser.add_argument(
         "--triton-cupti-include-path",
         default="",
@@ -867,6 +880,7 @@ def normalize_parsed_args(parsed_args) -> BuildHelperArgs:
         nvdisasm_path=_normalize_optional_path(parsed_args.triton_nvdisasm_path),
         cudacrt_path=_normalize_optional_path(parsed_args.triton_cudacrt_path),
         cudart_path=_normalize_optional_path(parsed_args.triton_cudart_path),
+        cccl_path=_normalize_optional_path(parsed_args.triton_cccl_path),
         cupti_include_path=_normalize_optional_path(parsed_args.triton_cupti_include_path),
         cupti_lib_path=_normalize_optional_path(parsed_args.triton_cupti_lib_path),
         cupti_lib_blackwell_path=_normalize_optional_path(parsed_args.triton_cupti_lib_blackwell_path),
