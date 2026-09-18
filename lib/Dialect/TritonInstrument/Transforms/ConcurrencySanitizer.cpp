@@ -47,6 +47,26 @@ std::unique_ptr<ConSanTargetHooks> createConSanHooks(llvm::StringRef key) {
 
 namespace {
 
+// Temporary workaround for PTXAS mis-analysis of divergent control-flow joins.
+void addPtxasMaskedStoreBarrierWorkaround(ModuleOp module) {
+  SmallVector<tt::StoreOp> maskedStores;
+  module.walk([&](tt::StoreOp store) {
+    if (store.getMask())
+      maskedStores.push_back(store);
+  });
+
+  for (tt::StoreOp store : maskedStores) {
+    OpBuilder builder(store);
+    builder.setInsertionPointAfter(store);
+    // In the NVIDIA conversion pipeline, ConSan runs after tensor-memory wait
+    // insertion. Restrict the declared ordering to the global writes this
+    // workaround follows; the operation still provides the CTA rendezvous
+    // needed to shape native control flow.
+    ttg::BarrierOp::create(builder, store.getLoc(),
+                           ttg::AddrSpace::GlobalWrite);
+  }
+}
+
 // OpBuilder listener tracking operations added to the builder to be wrapped
 // with a lock acquire/release pair.
 class CriticalSectionListener : public ImplicitLocOpBuilder::Listener {
@@ -822,6 +842,11 @@ public:
     }
     if (failed(validateNonEntryFunctions()))
       return failure();
+
+    // Snapshot and modify the input program before ConSan creates helper
+    // functions, so sanitizer-internal masked stores are not affected.
+    if (hooks.needsPtxasMaskedStoreBarrierWorkaround())
+      addPtxasMaskedStoreBarrierWorkaround(module);
 
     tti::FunctionBuilder funcBuilder(module, auxData);
     if (failed(auxData.populateAndPassToWarpSpecialize(module, entryPoint,
