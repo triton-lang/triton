@@ -3610,8 +3610,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK: nvvm.barrier
   // CHECK: llvm.load {{.*}} : !llvm.ptr<3>
   // CHECK-NOT: llvm.atomicrmw
-  // CHECK: nvvm.shfl.sync bfly
-  // CHECK: llvm.add
+  // CHECK: %[[MASK:.+]] = llvm.mlir.constant(-1 : i32)
+  // CHECK: nvvm.redux.sync add %{{.*}}, %[[MASK]]
   // CHECK-NOT: llvm.atomicrmw
   // CHECK: llvm.return
   tt.func private @histogram_one_bin_four_warps(%src: tensor<128xi32, #blocked>, %mask: tensor<128xi1, #blocked>) -> tensor<1xi32, #blocked> {
