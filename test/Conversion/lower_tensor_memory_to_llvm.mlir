@@ -1,4 +1,5 @@
-// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory-nv=compute-capability=103 --triton-nvidia-gpu-tmem-barrier-insertion --test-print-membar --triton-nvidia-gpu-tmem-wait-insertion --convert-triton-gpu-to-llvm=compute-capability=103 --convert-warp-specialize-to-llvm --convert-nv-gpu-to-llvm -allow-unregistered-dialect | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory-nv=compute-capability=103 --test-print-membar --triton-nvidia-gpu-tmem-barrier-insertion --convert-triton-gpu-to-llvm=compute-capability=103 --convert-warp-specialize-to-llvm --convert-nv-gpu-to-llvm -allow-unregistered-dialect | FileCheck %s
+
 
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1, CGALayout = [[0, 0]]>
 
@@ -150,7 +151,7 @@ module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num
 module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.tensor_memory_size = 64 : i32} {
   // Stores to %a and %b share one wait before arrive_barrier. The load from %b
   // needs a store wait, but the disjoint store to %c needs no load wait.
-  // Both outstanding accesses must complete before wait_barrier.
+  // Both pending accesses complete after the acquire, before invalidation.
   // CHECK-LABEL: @tmem_store_wait_publication
   // CHECK: tcgen05.st.sync.aligned
   // CHECK-NEXT: nvvm.barrier
@@ -164,9 +165,10 @@ module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num
   // CHECK: tcgen05.ld.sync.aligned
   // CHECK-NOT: nvvm.tcgen05.wait
   // CHECK: tcgen05.st.sync.aligned
-  // CHECK-NEXT: nvvm.tcgen05.wait <load>
-  // CHECK-NEXT: nvvm.tcgen05.wait <store>
+  // CHECK-NOT: nvvm.tcgen05.wait
   // CHECK: mbarrier.try_wait.parity.shared::cta
+  // CHECK: nvvm.tcgen05.wait <load>
+  // CHECK-NEXT: nvvm.tcgen05.wait <store>
   tt.func @tmem_store_wait_publication() {
     %true = arith.constant true
     %phase = arith.constant 0 : i32
