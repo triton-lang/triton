@@ -115,3 +115,105 @@ tt.func @flat_form_for_in_cluster(%n: index, %ptr: !tt.ptr<f32>) {
 
   tt.return
 }
+
+// -----
+
+// ---- Loop-form: phase_gap on a later stage is rejected ----
+
+tt.func @phase_gap_on_second_stage(%n: index) {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+
+  scf.for %i = %c0 to %n step %c1 {
+    %a = arith.addi %i, %c1 : index
+    rocdl.sched.barrier none {triton.warp_pipeline.border = "stage0"}
+
+    %b = arith.addi %a, %i : index
+    // expected-error @+1 {{warp-pipeline phase_gap may only be specified on the first stage}}
+    rocdl.sched.barrier none {triton.warp_pipeline.border = "stage1", triton.warp_pipeline.phase_gap = 2 : i32}
+
+    scf.yield
+  }
+
+  tt.return
+}
+
+// -----
+
+// ---- Loop-form: phase_gap is currently limited to two stages ----
+
+tt.func @phase_gap_too_wide(%n: index) {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+
+  scf.for %i = %c0 to %n step %c1 {
+    %a = arith.addi %i, %c1 : index
+    // expected-error @+1 {{warp-pipeline phase_gap must be 1 or 2}}
+    rocdl.sched.barrier none {triton.warp_pipeline.border = "stage0", triton.warp_pipeline.phase_gap = 3 : i32}
+
+    %b = arith.addi %a, %i : index
+    rocdl.sched.barrier none {triton.warp_pipeline.border = "stage1"}
+
+    scf.yield
+  }
+
+  tt.return
+}
+
+// -----
+
+// ---- Loop-form: phase_gap must be an i32 integer ----
+
+tt.func @phase_gap_wrong_type(%n: index) {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+
+  scf.for %i = %c0 to %n step %c1 {
+    %a = arith.addi %i, %c1 : index
+    // expected-error @+1 {{warp-pipeline phase_gap must be an i32 integer}}
+    rocdl.sched.barrier none {triton.warp_pipeline.border = "stage0", triton.warp_pipeline.phase_gap = "2"}
+
+    %b = arith.addi %a, %i : index
+    rocdl.sched.barrier none {triton.warp_pipeline.border = "stage1"}
+
+    scf.yield
+  }
+
+  tt.return
+}
+
+// -----
+
+// ---- Flat-form: phase_gap is not silently ignored ----
+
+tt.func @flat_phase_gap(%n: index) {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+
+  %a = arith.addi %c0, %c1 : index
+  // expected-error @+1 {{flat warp pipelines only support phase_gap=1}}
+  rocdl.sched.barrier none {triton.warp_pipeline.border = "stage0", triton.warp_pipeline.phase_gap = 2 : i32}
+  %b = arith.addi %a, %n : index
+  rocdl.sched.barrier none {triton.warp_pipeline.border = "stage1"}
+
+  tt.return
+}
+
+// -----
+
+// ---- Loop-form: one stage is not a pipeline ----
+
+tt.func @single_stage_pipeline(%n: index) {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+
+  // expected-error @+1 {{warp_pipeline_stage borders did not produce at least two stages}}
+  scf.for %i = %c0 to %n step %c1 {
+    %a = arith.addi %i, %c1 : index
+    rocdl.sched.barrier none {triton.warp_pipeline.border = "stage0"}
+
+    scf.yield
+  }
+
+  tt.return
+}

@@ -218,7 +218,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 }
 
 // -- Triple buffered 2-stage pipeline dependency check ----
-// Currently little conservative, there could be more chance to optimize local_wait
+// Dependencies produced by async global-to-local copies are covered by their
+// explicit async waits and do not require an additional LOCAL barrier.
 //
 // CHECK-LABEL: tt.func public @triple_buf_2stage
 // CHECK-NOT: no_inline
@@ -234,7 +235,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: rocdl.sched.barrier
 
 // CHECK: async_copy_global_to_local
-// CHECK: ttg.barrier local
+// CHECK-NOT: ttg.barrier local
 // CHECK: scf.yield
 // CHECK: amdg.cond_barrier
 
@@ -775,16 +776,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // ---- Flat pipeline with pre-existing barrier between stages ----
 //
-// When an async_wait (or similar barrier op) already exists between
-// flat pipeline stages, the pass should wrap it with sched_barriers
-// instead of inserting a redundant s_barrier.
+// An async_wait between flat pipeline stages is preserved. The AMD backend
+// expands the wait with an s_barrier, so this pass must not add another one.
 //
 // Stage layout: stage0 -- async_wait -- stage1 -- (nothing) -- stage2
 //
 // Expected between stage0 and stage1:
-//   sched_barrier + async_wait + sched_barrier   (wrapped, no s_barrier)
+//   sched_barrier + async_wait + sched_barrier
 // Expected between stage1 and stage2:
-//   sched_barrier + s_barrier + sched_barrier     (inserted, no async_wait)
+//   sched_barrier + s_barrier + sched_barrier
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
   tt.func @flat_pipeline_existing_barrier(%ptr: !tt.ptr<f32>) {
@@ -823,14 +823,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // Stage 0 ops.
 // CHECK: tt.store
 //
-// Between stage 0 and 1: existing async_wait wrapped, no s_barrier.
+// Between stage 0 and 1: existing async_wait, with no duplicate s_barrier.
 // The per-mem-op barrier (non_mem_non_sideeffect) follows stage 0's store; the
 // cluster barrier (none) is next.
 // CHECK: rocdl.sched.barrier non_mem_non_sideeffect
 // CHECK-NEXT: rocdl.sched.barrier none
 // CHECK-NEXT: amdg.async_wait
 // CHECK-NEXT: rocdl.sched.barrier none
-// CHECK-NOT: rocdl.s.barrier
 // Stage 1 ops.
 // CHECK: tt.store
 //
@@ -1449,6 +1448,95 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
+// ---- Explicit two-stage warp-group phase gap ----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+tt.func @two_stage_phase_gap(%n: index, %ptr: !tt.ptr<f32>) {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %v0 = arith.constant 0.0 : f32
+  %v1 = arith.constant 1.0 : f32
+
+  scf.for %i = %c0 to %n step %c1 {
+    scf.execute_region {
+      tt.store %ptr, %v0 : !tt.ptr<f32>
+      scf.yield
+    } {triton.warp_pipeline.stage = "stage0"}
+    scf.execute_region {
+      tt.store %ptr, %v1 : !tt.ptr<f32>
+      scf.yield
+    } {triton.warp_pipeline.stage = "stage1"}
+    scf.yield
+  } {triton.warp_pipeline.pipelined_for,
+     triton.warp_pipeline.phase_gap = 2 : i32}
+
+  tt.return
+}
+}
+
+// CHECK-LABEL: tt.func @two_stage_phase_gap
+// CHECK: %[[WARPLOW:.+]] = arith.cmpi eq
+// CHECK: %[[WARPHIGH:.+]] = arith.cmpi ne
+// CHECK-COUNT-2: amdg.cond_barrier %[[WARPHIGH]]
+// CHECK: scf.for
+// CHECK-COUNT-2: amdg.cond_barrier %[[WARPLOW]]
+// CHECK: tt.return
+
+// -----
+
+// ---- Back-to-back pipelines retain synchronization if either gap is 2 ----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+tt.func @back_to_back_mixed_phase_gaps(%n: index, %ptr: !tt.ptr<f32>) {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %v0 = arith.constant 0.0 : f32
+  %v1 = arith.constant 1.0 : f32
+
+  scf.for %i = %c0 to %n step %c1 {
+    scf.execute_region {
+      tt.store %ptr, %v0 : !tt.ptr<f32>
+      scf.yield
+    } {triton.warp_pipeline.stage = "a0"}
+    scf.execute_region {
+      tt.store %ptr, %v1 : !tt.ptr<f32>
+      scf.yield
+    } {triton.warp_pipeline.stage = "a1"}
+    scf.yield
+  } {triton.warp_pipeline.pipelined_for,
+     triton.warp_pipeline.phase_gap = 2 : i32}
+
+  scf.for %j = %c0 to %n step %c1 {
+    scf.execute_region {
+      tt.store %ptr, %v0 : !tt.ptr<f32>
+      scf.yield
+    } {triton.warp_pipeline.stage = "b0"}
+    scf.execute_region {
+      tt.store %ptr, %v1 : !tt.ptr<f32>
+      scf.yield
+    } {triton.warp_pipeline.stage = "b1"}
+    scf.yield
+  } {triton.warp_pipeline.pipelined_for,
+     triton.warp_pipeline.phase_gap = 1 : i32}
+
+  tt.return
+}
+}
+
+// CHECK-LABEL: tt.func @back_to_back_mixed_phase_gaps
+// CHECK: ttg.barrier local
+// CHECK-COUNT-2: amdg.cond_barrier
+// CHECK: scf.for
+// CHECK-COUNT-2: amdg.cond_barrier
+// The second pipeline's prelude LOCAL barrier must not be eliminated.
+// CHECK: ttg.barrier local
+// CHECK: amdg.cond_barrier
+// CHECK: scf.for
+// CHECK: amdg.cond_barrier
+// CHECK: tt.return
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [8], order = [0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -1457,7 +1545,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 !group = !ttg.memdesc<4x64xi32, #shared, #smem, mutable, 8x64>
 !source = !ttg.memdesc<256xi32, #shared, #smem, mutable>
 !tile = !ttg.memdesc<128xi32, #shared, #smem, mutable, 256>
-
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
 // The halves of %source are disjoint within an iteration, but its origin
 // shifts by 64 elements between iterations. The high write [128, 256) then
@@ -1501,3 +1588,227 @@ tt.func @loop_varying_subslice_origin(%n: i32, %initial: tensor<512xi32, #blocke
   tt.return %result#1 : tensor<128xi32, #blocked>
 }
 }
+
+// -----
+
+// ---- Shared-memory hazards with phase_gap=1 ----
+//
+// Four stages and four distinct LDS buffers, so each barrier slot is forced
+// by a different dependence kind:
+//   RAW  : stage0 writes %raw,  stage1 reads it  -> bars[1] LOCAL
+//   WAR  : stage1 reads %war,   stage2 writes it -> bars[2] LOCAL
+//   WAW  : stage2 writes %waw,  stage3 writes it -> bars[3] LOCAL
+//   wrap : stage3 writes %wrap, next stage0 reads it -> bars[0] LOCAL
+//
+// With a one-stage gap these are all adjacent (distance-1) concurrent pairs.
+
+#hz1_blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#hz1_mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [2, 4], instrShape = [16, 16, 16], isTransposed = true}>
+#hz1_dot = #ttg.dot_op<{opIdx = 0, parent = #hz1_mma, kWidth = 4}>
+#hz1_shared = #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [1, 0]}>
+#hz1_smem = #ttg.shared_memory
+!hz1_buf = !ttg.memdesc<256x64xf16, #hz1_shared, #hz1_smem, mutable>
+!hz1_tile = !ttg.memdesc<256x16xf16, #hz1_shared, #hz1_smem, mutable, 256x64>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @shared_hazards_phase_gap1(
+      %lb: i32, %ub: i32, %step: i32,
+      %init: tensor<256x16xf16, #hz1_dot>,
+      %ptr: tensor<256x64x!tt.ptr<f16>, #hz1_blocked>) {
+    %raw = ttg.local_alloc : () -> !hz1_buf
+    %war = ttg.local_alloc : () -> !hz1_buf
+    %waw = ttg.local_alloc : () -> !hz1_buf
+    %wrap = ttg.local_alloc : () -> !hz1_buf
+
+    %r:3 = scf.for %i = %lb to %ub step %step
+        iter_args(%rv = %init, %wv = %init, %xp = %init)
+        -> (tensor<256x16xf16, #hz1_dot>, tensor<256x16xf16, #hz1_dot>, tensor<256x16xf16, #hz1_dot>) : i32 {
+      %s0 = scf.execute_region -> tensor<256x16xf16, #hz1_dot> no_inline {
+        %data = tt.load %ptr : tensor<256x64x!tt.ptr<f16>, #hz1_blocked>
+        ttg.local_store %data, %raw : tensor<256x64xf16, #hz1_blocked> -> !hz1_buf
+        %sub = ttg.memdesc_subslice %wrap[0, 0] : !hz1_buf -> !hz1_tile
+        %ld = ttg.local_load %sub : !hz1_tile -> tensor<256x16xf16, #hz1_dot>
+        scf.yield %ld : tensor<256x16xf16, #hz1_dot>
+      } {triton.warp_pipeline.stage = "raw_write_wrap_read"}
+
+      %s1:2 = scf.execute_region -> (tensor<256x16xf16, #hz1_dot>, tensor<256x16xf16, #hz1_dot>) no_inline {
+        %suba = ttg.memdesc_subslice %raw[0, 0] : !hz1_buf -> !hz1_tile
+        %lda = ttg.local_load %suba : !hz1_tile -> tensor<256x16xf16, #hz1_dot>
+        %subb = ttg.memdesc_subslice %war[0, 0] : !hz1_buf -> !hz1_tile
+        %ldb = ttg.local_load %subb : !hz1_tile -> tensor<256x16xf16, #hz1_dot>
+        scf.yield %lda, %ldb : tensor<256x16xf16, #hz1_dot>, tensor<256x16xf16, #hz1_dot>
+      } {triton.warp_pipeline.stage = "raw_read_war_read"}
+
+      scf.execute_region no_inline {
+        %data = tt.load %ptr : tensor<256x64x!tt.ptr<f16>, #hz1_blocked>
+        ttg.local_store %data, %war : tensor<256x64xf16, #hz1_blocked> -> !hz1_buf
+        ttg.local_store %data, %waw : tensor<256x64xf16, #hz1_blocked> -> !hz1_buf
+        scf.yield
+      } {triton.warp_pipeline.stage = "war_write_waw_write"}
+
+      ttg.barrier none
+
+      scf.execute_region no_inline {
+        %data = tt.load %ptr : tensor<256x64x!tt.ptr<f16>, #hz1_blocked>
+        ttg.local_store %data, %waw : tensor<256x64xf16, #hz1_blocked> -> !hz1_buf
+        ttg.local_store %data, %wrap : tensor<256x64xf16, #hz1_blocked> -> !hz1_buf
+        scf.yield
+      } {triton.warp_pipeline.stage = "waw_write_wrap_write"}
+
+      scf.yield %s1#0, %s1#1, %s0 : tensor<256x16xf16, #hz1_dot>, tensor<256x16xf16, #hz1_dot>, tensor<256x16xf16, #hz1_dot>
+    } {triton.warp_pipeline.pipelined_for}
+
+    ttg.local_dealloc %wrap : !hz1_buf
+    ttg.local_dealloc %waw : !hz1_buf
+    ttg.local_dealloc %war : !hz1_buf
+    ttg.local_dealloc %raw : !hz1_buf
+    tt.return
+  }
+}
+
+// CHECK-LABEL: tt.func @shared_hazards_phase_gap1
+// CHECK: ttg.barrier local
+// CHECK: amdg.cond_barrier
+// CHECK: scf.for
+// Stage 0: write RAW buffer, read wrap buffer from the previous iteration.
+// CHECK: ttg.local_store
+// CHECK: ttg.local_load
+// bars[1] LOCAL (RAW stage0 write -> stage1 read).
+// CHECK: rocdl.sched.barrier none
+// CHECK-NEXT: ttg.barrier local
+// CHECK-NEXT: rocdl.sched.barrier none
+// Stage 1: read RAW buffer, read WAR buffer.
+// CHECK: ttg.local_load
+// CHECK: ttg.local_load
+// bars[2] LOCAL (WAR stage1 read -> stage2 write).
+// CHECK: rocdl.sched.barrier none
+// CHECK-NEXT: ttg.barrier local
+// CHECK-NEXT: rocdl.sched.barrier none
+// Stage 2: write WAR buffer, write WAW buffer.
+// CHECK: ttg.local_store
+// CHECK: ttg.local_store
+// The existing control barrier is upgraded in place for the stage2 -> stage3
+// WAW. The CHECK-NEXT chain ensures no second barrier is inserted.
+// CHECK: rocdl.sched.barrier none
+// CHECK-NEXT: ttg.barrier local
+// CHECK-NEXT: rocdl.sched.barrier none
+// Stage 3: write WAW buffer, write wrap buffer.
+// CHECK: ttg.local_store
+// CHECK: ttg.local_store
+// bars[0] LOCAL (next-iteration RAW: stage3 write -> stage0 read).
+// CHECK: rocdl.sched.barrier none
+// CHECK-NEXT: ttg.barrier local
+// CHECK-NEXT: rocdl.sched.barrier none
+// CHECK: scf.yield
+// CHECK: amdg.cond_barrier
+
+// -----
+
+// ---- Shared-memory hazards with phase_gap=2 ----
+//
+// Four stages. Distance-2 pairs run concurrently across warp groups, so
+// those LOCAL barriers must sit immediately before the destination:
+//   WAW  : stage0 writes %waw,  stage1 writes it -> bars[1] LOCAL (adjacent)
+//   RAW  : stage0 writes %raw,  stage2 reads it  -> bars[2] LOCAL (concurrent)
+//   WAR  : stage1 reads %war,   stage3 writes it -> bars[3] LOCAL (concurrent)
+//   wrap : stage3 writes %wrap, next stage0 reads it -> bars[0] LOCAL
+
+#hz2_blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#hz2_mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [2, 4], instrShape = [16, 16, 16], isTransposed = true}>
+#hz2_dot = #ttg.dot_op<{opIdx = 0, parent = #hz2_mma, kWidth = 4}>
+#hz2_shared = #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [1, 0]}>
+#hz2_smem = #ttg.shared_memory
+!hz2_buf = !ttg.memdesc<256x64xf16, #hz2_shared, #hz2_smem, mutable>
+!hz2_tile = !ttg.memdesc<256x16xf16, #hz2_shared, #hz2_smem, mutable, 256x64>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @shared_hazards_phase_gap2(
+      %lb: i32, %ub: i32, %step: i32,
+      %init: tensor<256x16xf16, #hz2_dot>,
+      %ptr: tensor<256x64x!tt.ptr<f16>, #hz2_blocked>) {
+    %raw = ttg.local_alloc : () -> !hz2_buf
+    %war = ttg.local_alloc : () -> !hz2_buf
+    %waw = ttg.local_alloc : () -> !hz2_buf
+    %wrap = ttg.local_alloc : () -> !hz2_buf
+
+    %r:3 = scf.for %i = %lb to %ub step %step
+        iter_args(%rv = %init, %wv = %init, %xp = %init)
+        -> (tensor<256x16xf16, #hz2_dot>, tensor<256x16xf16, #hz2_dot>, tensor<256x16xf16, #hz2_dot>) : i32 {
+      %s0 = scf.execute_region -> tensor<256x16xf16, #hz2_dot> no_inline {
+        %data = tt.load %ptr : tensor<256x64x!tt.ptr<f16>, #hz2_blocked>
+        ttg.local_store %data, %raw : tensor<256x64xf16, #hz2_blocked> -> !hz2_buf
+        ttg.local_store %data, %waw : tensor<256x64xf16, #hz2_blocked> -> !hz2_buf
+        %sub = ttg.memdesc_subslice %wrap[0, 0] : !hz2_buf -> !hz2_tile
+        %ld = ttg.local_load %sub : !hz2_tile -> tensor<256x16xf16, #hz2_dot>
+        scf.yield %ld : tensor<256x16xf16, #hz2_dot>
+      } {triton.warp_pipeline.stage = "raw_waw_write_wrap_read"}
+
+      %s1 = scf.execute_region -> tensor<256x16xf16, #hz2_dot> no_inline {
+        %data = tt.load %ptr : tensor<256x64x!tt.ptr<f16>, #hz2_blocked>
+        ttg.local_store %data, %waw : tensor<256x64xf16, #hz2_blocked> -> !hz2_buf
+        %sub = ttg.memdesc_subslice %war[0, 0] : !hz2_buf -> !hz2_tile
+        %ld = ttg.local_load %sub : !hz2_tile -> tensor<256x16xf16, #hz2_dot>
+        scf.yield %ld : tensor<256x16xf16, #hz2_dot>
+      } {triton.warp_pipeline.stage = "waw_write_war_read"}
+
+      amdg.async_wait {num_inst = 0 : i32}
+
+      %s2 = scf.execute_region -> tensor<256x16xf16, #hz2_dot> no_inline {
+        %sub = ttg.memdesc_subslice %raw[0, 0] : !hz2_buf -> !hz2_tile
+        %ld = ttg.local_load %sub : !hz2_tile -> tensor<256x16xf16, #hz2_dot>
+        scf.yield %ld : tensor<256x16xf16, #hz2_dot>
+      } {triton.warp_pipeline.stage = "raw_read"}
+
+      scf.execute_region no_inline {
+        %data = tt.load %ptr : tensor<256x64x!tt.ptr<f16>, #hz2_blocked>
+        ttg.local_store %data, %war : tensor<256x64xf16, #hz2_blocked> -> !hz2_buf
+        ttg.local_store %data, %wrap : tensor<256x64xf16, #hz2_blocked> -> !hz2_buf
+        scf.yield
+      } {triton.warp_pipeline.stage = "war_write_wrap_write"}
+
+      scf.yield %s2, %s1, %s0 : tensor<256x16xf16, #hz2_dot>, tensor<256x16xf16, #hz2_dot>, tensor<256x16xf16, #hz2_dot>
+    } {triton.warp_pipeline.pipelined_for,
+       triton.warp_pipeline.phase_gap = 2 : i32}
+
+    ttg.local_dealloc %wrap : !hz2_buf
+    ttg.local_dealloc %waw : !hz2_buf
+    ttg.local_dealloc %war : !hz2_buf
+    ttg.local_dealloc %raw : !hz2_buf
+    tt.return
+  }
+}
+
+// CHECK-LABEL: tt.func @shared_hazards_phase_gap2
+// CHECK: %[[HZ2_LOW:.+]] = arith.cmpi eq
+// CHECK: %[[HZ2_HIGH:.+]] = arith.cmpi ne
+// CHECK-COUNT-2: amdg.cond_barrier %[[HZ2_HIGH]]
+// CHECK: scf.for
+// Stage 0: write RAW and WAW buffers, read wrap buffer.
+// CHECK: ttg.local_store
+// CHECK: ttg.local_store
+// CHECK: ttg.local_load
+// bars[1] LOCAL (WAW stage0 write -> stage1 write).
+// CHECK: rocdl.sched.barrier none
+// CHECK-NEXT: ttg.barrier local
+// CHECK-NEXT: rocdl.sched.barrier none
+// Stage 1: write WAW buffer, read WAR buffer.
+// CHECK: ttg.local_store
+// CHECK: ttg.local_load
+// The AMD backend expands the existing async wait with an s_barrier, which
+// covers the concurrent stage0 -> stage2 RAW without another LOCAL barrier.
+// CHECK: rocdl.sched.barrier none
+// CHECK-NEXT: amdg.async_wait
+// CHECK-NEXT: rocdl.sched.barrier none
+// Stage 2: read RAW buffer.
+// CHECK: ttg.local_load
+// bars[3] LOCAL (concurrent WAR stage1 read -> stage3 write).
+// CHECK: rocdl.sched.barrier none
+// CHECK-NEXT: ttg.barrier local
+// CHECK-NEXT: rocdl.sched.barrier none
+// Stage 3: write WAR and wrap buffers.
+// CHECK: ttg.local_store
+// CHECK: ttg.local_store
+// bars[0] LOCAL (next-iteration RAW: stage3 write -> stage0 read).
+// CHECK: rocdl.sched.barrier none
+// CHECK-NEXT: ttg.barrier local
+// CHECK-NEXT: rocdl.sched.barrier none
+// CHECK: scf.yield
+// CHECK-COUNT-2: amdg.cond_barrier %[[HZ2_LOW]]
