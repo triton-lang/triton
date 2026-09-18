@@ -659,3 +659,33 @@ tt.func @assume_not_dominating_loop(%lb: i32, %ub: i32, %flag: i1) {
   }
   tt.return
 }
+
+// -----
+
+// A prologue value sunk into the epilogue and used only inside the region of
+// the epilogue's last op is not an output of the epilogue.
+// CHECK-LABEL: @epilogue_value_used_in_last_op_region
+// CHECK-SAME: [[UB:%.*]]: i32, [[COND:%.*]]: i1
+tt.func @epilogue_value_used_in_last_op_region(%ub: i32, %cond: i1) {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  // CHECK: else
+  // CHECK: scf.for
+  scf.for %i = %c0 to %ub step %c1 : i32 {
+    %x = arith.addi %i, %ub : i32
+    // CHECK: "body"
+    scf.for %j = %c0 to %ub step %c1 : i32 {
+      "body"(%j) : (i32) -> ()
+    }
+    // CHECK: scf.if
+    // CHECK-NEXT: [[X:%.*]] = arith.addi {{.*}}, [[UB]]
+    // CHECK-NEXT: scf.if [[COND]] {
+    // CHECK-NEXT: "epilogue"([[X]])
+    // CHECK-NEXT: }
+    // CHECK-NEXT: }
+    scf.if %cond {
+      "epilogue"(%x) : (i32) -> ()
+    }
+  } {tt.flatten}
+  tt.return
+}
