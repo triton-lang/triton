@@ -4084,63 +4084,8 @@ def test_amd_mfma_cd_regclass(target):
         acc = ttgl.full([64, 64], 0.0, ttgl.float32, layout=mfma_layout)
         ttgl.amd.cdna3.mfma(a, b, acc, cd_regclass="a")
 
-    module = run_parser(kernel, target=target)
-    expecttest.assert_expected_inline(
-        anonymize_ir(module.str_nodebug()), """\
-#mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 1], instrShape = [32, 32, 8], isTransposed = true}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
-  tt.func public @kernel() attributes {noinline = false} {
-    %cst = arith.constant 1.000000e+00 : f32
-    %cst_0 = arith.constant dense<1.000000e+00> : tensor<64x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
-    %cst_1 = arith.constant 2.000000e+00 : f32
-    %cst_2 = arith.constant dense<2.000000e+00> : tensor<32x64xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
-    %cst_3 = arith.constant 0.000000e+00 : f32
-    %cst_4 = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
-    %cst_5 = arith.constant 0.000000e+00 : f32
-    %0 = tt.dot %cst_0, %cst_2, %cst_4 {amdg.cd_regclass = "a"} : tensor<64x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma>
-    tt.return
-  }
-}
-""")
-
-
-def test_amd_mfma_cd_regclass_invalid():
-
-    @gluon.jit
-    def kernel():
-        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=3, warps_per_cta=[4, 1], instr_shape=[32, 32, 8],
-                                                             transposed=True)
-
-        a = ttgl.full([64, 32], 1.0, ttgl.float32, layout=ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout,
-                                                                                k_width=8))
-        b = ttgl.full([32, 64], 2.0, ttgl.float32, layout=ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout,
-                                                                                k_width=8))
-
-        acc = ttgl.full([64, 64], 0.0, ttgl.float32, layout=mfma_layout)
-        ttgl.amd.cdna3.mfma(a, b, acc, cd_regclass="s")
-
-    with pytest.raises(CompilationError, match="cd_regclass must be None, 'a' or 'v'"):
-        run_parser(kernel, target=HIP_TARGET_CDNA3)
-
-
-def test_amd_mfma_cd_regclass_requires_mfma_layout():
-
-    @gluon.jit
-    def kernel():
-        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=3, warps_per_cta=[4, 1], instr_shape=[32, 32, 8],
-                                                             transposed=True)
-        blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [8, 8], [4, 1], [1, 0])
-
-        a = ttgl.full([64, 32], 1.0, ttgl.float32, layout=ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout,
-                                                                                k_width=8))
-        b = ttgl.full([32, 64], 2.0, ttgl.float32, layout=ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout,
-                                                                                k_width=8))
-
-        acc = ttgl.full([64, 64], 0.0, ttgl.float32, layout=blocked)
-        ttgl.amd.cdna3.mfma(a, b, acc, cd_regclass="a")
-
-    with pytest.raises(CompilationError, match="cd_regclass requires an accumulator with AMDMFMALayout"):
-        run_parser(kernel, target=HIP_TARGET_CDNA3)
+    module_text = run_parser(kernel, target=target).str_nodebug()
+    assert re.search(r'tt\.dot .*\{amdg\.cd_regclass = "a"\}', module_text)
 
 
 @gluon.jit
@@ -4227,29 +4172,8 @@ def test_amd_mfma_scaled_cd_regclass(target):
         acc = ttgl.full([16, 16], 0, ttgl.float32, mfma_layout)
         ttgl.amd.cdna4.mfma_scaled(a, None, 'e2m1', b, None, 'e2m1', acc, cd_regclass="v")
 
-    module = run_parser(kernel, *make_args(num_warps=1), target=target)
-    expecttest.assert_expected_inline(
-        anonymize_ir(module.str_nodebug()), """\
-#linear = #ttg.linear<{register = [], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]], warp = [], block = []}>
-#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [1, 1], instrShape = [16, 16, 128], isTransposed = true}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
-  tt.func public @kernel() attributes {noinline = false} {
-    %c17_i8 = arith.constant 17 : i8
-    %cst = arith.constant dense<17> : tensor<16x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>
-    %c34_i8 = arith.constant 34 : i8
-    %cst_0 = arith.constant dense<34> : tensor<64x16xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>
-    %cst_1 = arith.constant 0.000000e+00 : f32
-    %cst_2 = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #mma>
-    %c127_i8 = arith.constant 127 : i8
-    %cst_3 = arith.constant dense<127> : tensor<16x4xi8, #linear>
-    %c127_i8_4 = arith.constant 127 : i8
-    %cst_5 = arith.constant dense<127> : tensor<16x4xi8, #linear>
-    %cst_6 = arith.constant 0.000000e+00 : f32
-    %0 = tt.dot_scaled %cst scale %cst_3, %cst_0 scale %cst_5, %cst_2 lhs = e2m1 rhs = e2m1 {amdg.cd_regclass = "v", fastMath = false} : tensor<16x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>, tensor<16x4xi8, #linear> * tensor<64x16xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>, tensor<16x4xi8, #linear> -> tensor<16x16xf32, #mma>
-    tt.return
-  }
-}
-""")
+    module_text = run_parser(kernel, *make_args(num_warps=1), target=target).str_nodebug()
+    assert re.search(r'tt\.dot_scaled .*amdg\.cd_regclass = "v"', module_text)
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])

@@ -196,10 +196,8 @@ def mfma(a, b, acc, cd_regclass=None, _semantic: GluonSemantic = None):
         acc (tensor): The accumulator tensor.
         cd_regclass (str, optional): Experimental. Register class for the accumulator input (C)
             and result (D) of the MFMA instructions: ``"a"`` for AGPRs or ``"v"`` for VGPRs.
-            Requires an ``AMDMFMALayout`` accumulator. The lowering wraps each tile's accumulator
-            in an empty inline asm with that register-class constraint, before its MFMAs (C)
-            and after them (D). A constant accumulator is not pinned on C. ``None`` (default)
-            leaves the choice to the compiler.
+            Requires an ``AMDMFMALayout`` accumulator. ``None`` (default) leaves the choice to
+            the compiler.
     """
     assert acc is not None, "acc is required"
     ret_type = acc.type

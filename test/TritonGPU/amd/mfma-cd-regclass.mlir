@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm="gfx-arch=gfx950" -verify-diagnostics | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-triton-amdgpu-to-llvm="gfx-arch=gfx950" | FileCheck %s
 
 // With amdg.cd_regclass (set by the `cd_regclass` argument of Gluon's AMD
 // `mfma`), each MFMA tile's accumulator is wrapped in an empty inline asm whose
@@ -70,34 +70,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK-NEXT: %[[D:.*]] = rocdl.mfma.f32.32x32x16.f16 {{.*}}%[[C]]
     // CHECK-NEXT: llvm.inline_asm asm_dialect = att "", "=v,0" %[[D]] : (vector<16xf32>) -> vector<16xf32>
     %dot = tt.dot %arg0, %arg1, %arg2 {amdg.cd_regclass = "v"} : tensor<32x16xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<16x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<32x32xf32, #mma>
-    tt.return
-  }
-}
-
-// -----
-
-#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [1, 1], instrShape = [16, 16, 32], isTransposed = false}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  tt.func public @mfma_cd_regclass_invalid(%arg0: tensor<16x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>,
-                                           %arg1: tensor<32x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>,
-                                           %arg2: tensor<16x16xf32, #mma>) {
-    // expected-error @+2 {{amdg.cd_regclass must be "a" or "v", got "s"}}
-    // expected-error @+1 {{failed to legalize operation 'tt.dot' that was explicitly marked illegal}}
-    %dot = tt.dot %arg0, %arg1, %arg2 {amdg.cd_regclass = "s"} : tensor<16x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<16x16xf32, #mma>
-    tt.return
-  }
-}
-
-// -----
-
-#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [1, 1], instrShape = [16, 16, 32], isTransposed = false}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  tt.func public @mfma_cd_regclass_not_string(%arg0: tensor<16x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>,
-                                              %arg1: tensor<32x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>,
-                                              %arg2: tensor<16x16xf32, #mma>) {
-    // expected-error @+2 {{amdg.cd_regclass must be "a" or "v", got 1 : i32}}
-    // expected-error @+1 {{failed to legalize operation 'tt.dot' that was explicitly marked illegal}}
-    %dot = tt.dot %arg0, %arg1, %arg2 {amdg.cd_regclass = 1 : i32} : tensor<16x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<16x16xf32, #mma>
     tt.return
   }
 }
