@@ -19,7 +19,7 @@ from .matmul_details._p_matmul import _p_matmul, get_per_device_per_stream_alloc
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE
 from .numerics_details.mxfp_details._downcast_to_mxfp import NVFP_BLOCK_SIZE
 from .tensor_details.layout_details.strided import StridedLayout
-from .tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, SWIZZLE_SIZE_OUTER
+from .tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, BlackwellMXScaleLayout, SWIZZLE_SIZE_OUTER
 from .tensor_details.layout_details.blackwell_value_shuffled import BlackwellMX4ValueShuffledLayout
 from .matmul_details.opt_flags import (
     InapplicableConstraint,
@@ -433,6 +433,36 @@ def matmul(a, b, bias,
         a_uses_tma_when_persistent = a.stride(-1) != 1 or (a_ragged_metadata.slice_sizes_divisibility is not None)
     else:
         a_uses_tma_when_persistent = has_gather_tma or not has_gather
+
+    def pad_strides(strides, ndim):
+        return (0, ) * (ndim - len(strides)) + strides
+
+    # Keep the batch and row/column strides. Scalar tensor scales are padded
+    # with zeros, so every tile uses the same scale.
+    a_tensor_scale_strides = a_tensor_scale.stride() if a_tensor_scale is not None else (None, None)
+    a_tensor_scale_strides = pad_strides(a_tensor_scale_strides, 2)
+    b_tensor_scale_strides = b_tensor_scale.stride() if b_tensor_scale is not None else (None, None)
+    b_tensor_scale_strides = pad_strides(b_tensor_scale_strides, 2)
+    # Every dense, ungathered tile has at least one active scale lane.
+    scalar_tensor_scales = (
+        target_info.cuda_capability_geq(10, 0) and a.dtype == FP4 and b.dtype == FP4
+        and a_scale_dtype == b_scale_dtype == torch.float8_e4m3fn
+        and mx_block_size == int(NVFP_BLOCK_SIZE) and ragged_dimension is None and not has_gather
+        and (a_tensor_scale is not None or b_tensor_scale is not None)
+        and (a_tensor_scale is None or a_tensor_scale_strides == (0, 0))
+        and (b_tensor_scale is None or b_tensor_scale_strides == (0, 0))
+    )
+    # The tighter budget assumes these scale layouts and no other fused work.
+    plain_scalar_epilogue = (
+        scalar_tensor_scales and not b_is_shuffled and not has_scatter
+        and isinstance(a_scale.storage.layout, BlackwellActMXScaleLayout)
+        and isinstance(b_scale.storage.layout, BlackwellMXScaleLayout)
+        and bias is None and betas is None and gammas is None and out_alpha is None
+        and fused_comm is None and fused_activation.specs.fn is None and epilogue.specs.fn is None
+        and c_acc_in is None and precision_config.c_mx_scale is None
+        and precision_config.flex_ctx == FlexCtx() and precision_config.acc_scale == 1.0
+        and not precision_config.flexpoint_saturate_inf and precision_config.report_quantization_err_fn is None
+    )
     opt_flags = make_opt_flags(out_dtype, a.dtype, b.dtype, precision_config,
         batch_size, M, N, b.shape[-2], a_ragged_metadata,
         can_use_tma, can_use_split_k, epilogue.effective_itemsize,
@@ -444,6 +474,7 @@ def matmul(a, b, bias,
         w_transpose = b_transpose,
         rhs_layout=b.storage.layout,
         epilogue_reduction_n=fused_activation.specs.reduction_n,
+        plain_scalar_epilogue=plain_scalar_epilogue,
     )
     if opt_flags.clc and ragged_dimension == "M":
         raise InapplicableConstraint("CLC requires a host-known grid and does not support ragged-M matmul")
@@ -630,22 +661,11 @@ def matmul(a, b, bias,
     else:
         a_scale_tensor_or_tma = None if a_scale is None else a_scale.storage.data
     # canonicalize strides
-    def pad_strides(strides, ndim):
-        return (0, ) * (ndim - len(strides)) + strides
-
     a_strides = [0]*(3 - a.storage.data.ndim) + list(a.storage.data.stride())
     a_scale_strides = a_scale.stride() if a_has_mx and not a_scale_has_tma else (None, None, None)
     a_scale_strides = pad_strides(a_scale_strides, 3)
     b_scale_strides = b_scale.stride() if b_has_mx and not b_scale_has_tma else (None, None, None)
     b_scale_strides = pad_strides(b_scale_strides, 3)
-    # Tensor scales are row/fiber scales, not scalar broadcasts. They are
-    # expected to carry the non-reduction dimension, e.g. (E, N, 1) or
-    # (E, 1, N), before this path keeps the two strides needed by the kernels.
-    a_tensor_scale_strides = a_tensor_scale.stride() if a_tensor_scale is not None else (None, None)
-    a_tensor_scale_strides = pad_strides(a_tensor_scale_strides, 2)
-    b_tensor_scale_strides = b_tensor_scale.stride() if b_tensor_scale is not None else (None, None)
-    b_tensor_scale_strides = pad_strides(b_tensor_scale_strides, 2)
-
     out_matmul_scale_strides = out_matmul_scale.storage.data.stride() if out_matmul_has_mx else (None, None, None, None)
     out_matmul_scale_strides = pad_strides(out_matmul_scale_strides, 4)
     out_matmul_scale_layout = None if out_matmul_scale is None else out_matmul_scale.storage.layout.name
@@ -674,6 +694,8 @@ def matmul(a, b, bias,
     } if fused_comm is not None else {}
     b_strides = b.storage.data.stride()[:3] if b_is_shuffled else b.storage.data.stride()
     extra_kernel_kwargs = {"W_SHUFFLED": b_is_shuffled} if opt_flags.is_persistent else {}
+    if opt_flags.is_persistent:
+        extra_kernel_kwargs["SCALAR_TENSOR_SCALES"] = scalar_tensor_scales
     if opt_flags.clc:
         extra_kernel_kwargs.update(CLC=True, clc=True)
     n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
