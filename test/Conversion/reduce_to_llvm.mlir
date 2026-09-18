@@ -199,7 +199,7 @@ tt.func public @reduce_maximum_f64(%arg0: tensor<128x4xf64, #blocked_reduce>) {
 // CHECK: [[MAX_EQ:%.*]] = icmp eq i32 [[MAX_HI]], [[HI]]
 // CHECK: [[MAX_LO:%.*]] = select i1 [[MAX_EQ]], i32 [[LO]], i32 0
 // CHECK: [[MAX_REDUCED_LO:%.*]] = {{.*}}call i32 @llvm.nvvm.redux.sync.umax(i32 [[MAX_LO]], i32 -1)
-// CHECK: ret { { i64 }, { i64 } }
+// CHECK: ret void
 // TERNARY-LABEL: @reduce_wide_minmax
 // TERNARY: %[[MIN_HI:.*]] = nvvm.redux.sync min %{{.*}}, %{{.*}}
 // TERNARY: %[[MIN_EQ:.*]] = llvm.icmp "eq" %{{.*}}, %[[MIN_HI]] : i32
@@ -209,7 +209,10 @@ tt.func public @reduce_maximum_f64(%arg0: tensor<128x4xf64, #blocked_reduce>) {
 // TERNARY: %[[MAX_EQ:.*]] = llvm.icmp "eq" %{{.*}}, %[[MAX_HI]] : i32
 // TERNARY: %[[MAX_LO:.*]] = llvm.select %[[MAX_EQ]], %{{.*}}, %{{.*}} : i1, i32
 // TERNARY: nvvm.redux.sync umax %[[MAX_LO]], %{{.*}}
-tt.func private @reduce_wide_minmax(%arg0: tensor<4x32xi64, #blocked_warp_reduce>) -> (tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>, tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>) {
+tt.func @reduce_wide_minmax(
+    %arg0: tensor<4x32xi64, #blocked_warp_reduce>,
+    %min_out: tensor<4x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>,
+    %max_out: tensor<4x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>) {
   %minimum = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
   ^bb0(%a: i64, %b: i64):
     %c = arith.minsi %a, %b : i64
@@ -220,15 +223,6 @@ tt.func private @reduce_wide_minmax(%arg0: tensor<4x32xi64, #blocked_warp_reduce
     %c = arith.maxui %a, %b : i64
     tt.reduce.return %c : i64
   }) : (tensor<4x32xi64, #blocked_warp_reduce>) -> tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
-  tt.return %minimum, %maximum : tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>, tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
-}
-
-// Keep both reductions live through LLVM optimization.
-tt.func public @anchor_wide_minmax(
-    %input: tensor<4x32xi64, #blocked_warp_reduce>,
-    %min_out: tensor<4x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>,
-    %max_out: tensor<4x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>) {
-  %minimum, %maximum = tt.call @reduce_wide_minmax(%input) : (tensor<4x32xi64, #blocked_warp_reduce>) -> (tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>, tensor<4xi64, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>)
   tt.store %min_out, %minimum : tensor<4x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
   tt.store %max_out, %maximum : tensor<4x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked_warp_reduce}>>
   tt.return

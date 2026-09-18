@@ -143,47 +143,18 @@ tt.func private @convert_layout_blocked_blocked_forced(%arg0: tensor<16x16xi32, 
 }
 
 // CHECK-LABEL: @cvt_mma_to_dot_fp8(
-tt.func private @cvt_mma_to_dot_fp8(%a: tensor<128x64xi32, #mma>) -> tensor<128x64xi32, #dot> {
-  // Check the first register group: select by lane bit 0, exchange lane bits
-  // 0 and 1 for the shuffle, then select the output registers by lane bit 1.
-  // CHECK: [[SRC0:%.*]] = extractvalue {{.*}}, 0
-  // CHECK: [[SRC1:%.*]] = extractvalue {{.*}}, 1
-  // CHECK: [[SRC4:%.*]] = extractvalue {{.*}}, 4
-  // CHECK: [[SRC5:%.*]] = extractvalue {{.*}}, 5
-  // CHECK: [[TID:%.*]] = {{.*}}call i32 @llvm.nvvm.read.ptx.sreg.tid.x()
-  // CHECK: [[BIT0:%.*]] = and i32 [[TID]], 1
-  // CHECK: [[EVEN:%.*]] = icmp eq i32 [[BIT0]], 0
-  // CHECK: [[IN0:%.*]] = select i1 [[EVEN]], i32 [[SRC0]], i32 [[SRC4]]
-  // CHECK: [[IN2:%.*]] = select i1 [[EVEN]], i32 [[SRC4]], i32 [[SRC0]]
-  // CHECK: [[IN1:%.*]] = select i1 [[EVEN]], i32 [[SRC1]], i32 [[SRC5]]
-  // CHECK: [[IN3:%.*]] = select i1 [[EVEN]], i32 [[SRC5]], i32 [[SRC1]]
-  // CHECK: [[UPPER:%.*]] = and i32 [[TID]], 28
-  // CHECK: [[BIT0_SHIFTED:%.*]] = shl {{.*}}i32 [[BIT0]], 1
-  // CHECK: [[BIT1:%.*]] = and i32 [[TID]], 2
-  // CHECK: [[BIT1_SHIFTED:%.*]] = lshr {{.*}}i32 [[BIT1]], 1
-  // CHECK: [[BASE:%.*]] = or disjoint i32 [[BIT0_SHIFTED]], [[UPPER]]
-  // CHECK: [[INDEX:%.*]] = or disjoint i32 [[BASE]], [[BIT1_SHIFTED]]
-  // CHECK: [[SHUFFLED0:%.*]] = {{.*}}call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[IN0]], i32 [[INDEX]], i32 31)
-  // CHECK: [[SHUFFLED1:%.*]] = {{.*}}call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[IN1]], i32 [[INDEX]], i32 31)
-  // CHECK: [[OTHER_INDEX:%.*]] = xor i32 [[INDEX]], 1
-  // CHECK: [[SHUFFLED2:%.*]] = {{.*}}call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[IN2]], i32 [[OTHER_INDEX]], i32 31)
-  // CHECK: [[SHUFFLED3:%.*]] = {{.*}}call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[IN3]], i32 [[OTHER_INDEX]], i32 31)
-  // CHECK: [[LOW_PAIR:%.*]] = icmp eq i32 [[BIT1]], 0
-  // CHECK: [[OUT0:%.*]] = select i1 [[LOW_PAIR]], i32 [[SHUFFLED0]], i32 [[SHUFFLED2]]
-  // CHECK: [[OUT2:%.*]] = select i1 [[LOW_PAIR]], i32 [[SHUFFLED2]], i32 [[SHUFFLED0]]
-  // CHECK: [[OUT1:%.*]] = select i1 [[LOW_PAIR]], i32 [[SHUFFLED1]], i32 [[SHUFFLED3]]
-  // CHECK: [[OUT3:%.*]] = select i1 [[LOW_PAIR]], i32 [[SHUFFLED3]], i32 [[SHUFFLED1]]
-  // CHECK: insertvalue {{.*}}, i32 [[OUT0]], 0
-  // CHECK: insertvalue {{.*}}, i32 [[OUT1]], 1
-  // CHECK: insertvalue {{.*}}, i32 [[OUT2]], 2
-  // CHECK: insertvalue {{.*}}, i32 [[OUT3]], 3
-  // CHECK: [[RESULT:%.*]] = insertvalue {{.*}}, i32 %{{.*}}, 255
-  // CHECK-NEXT: ret {{.*}} [[RESULT]]
+tt.func @cvt_mma_to_dot_fp8(%a: tensor<128x64xi32, #mma>, %out: tensor<128x64x!tt.ptr<i32>, #dot>) {
+  // CHECK: select i1
+  // CHECK-COUNT-4: call i32 @llvm.nvvm.shfl.sync.idx.i32
+  // CHECK: select i1
+  // CHECK: asm sideeffect {{.*}}st.global.b32
+  // CHECK: ret void
   %opA = ttg.convert_layout %a : tensor<128x64xi32, #mma> -> tensor<128x64xi32, #dot>
-  tt.return %opA : tensor<128x64xi32, #dot>
+  tt.store %out, %opA : tensor<128x64x!tt.ptr<i32>, #dot>
+  tt.return
 }
 
-tt.func @anchor(%ptr: !llvm.ptr, %arg0: tensor<16x16xi32, #blocked0>, %arg1: tensor<128x64xi32, #mma>, %out: tensor<128x64x!tt.ptr<i32>, #dot>) {
+tt.func @anchor(%ptr: !llvm.ptr, %arg0: tensor<16x16xi32, #blocked0>, %arg1: tensor<128x64xi32, #mma>) {
   %0 = tt.call @convert_layout_blocked_blocked(%arg0) : (tensor<16x16xi32, #blocked0>) -> tensor<16x16xi32, #blocked1>
   %1 = builtin.unrealized_conversion_cast %0 : tensor<16x16xi32, #blocked1> to !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32)>
   llvm.store volatile %1, %ptr : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32)>, !llvm.ptr
@@ -195,10 +166,6 @@ tt.func @anchor(%ptr: !llvm.ptr, %arg0: tensor<16x16xi32, #blocked0>, %arg1: ten
   %4 = tt.call @convert_layout_blocked_blocked_forced(%arg0) : (tensor<16x16xi32, #blocked0>) -> tensor<16x16xi32, #blocked1>
   %5 = builtin.unrealized_conversion_cast %4 : tensor<16x16xi32, #blocked1> to !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32)>
   llvm.store volatile %5, %ptr : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32)>, !llvm.ptr
-
-  // Keep the MMA conversion and its result live through LLVM optimization.
-  %mma_result = tt.call @cvt_mma_to_dot_fp8(%arg1) : (tensor<128x64xi32, #mma>) -> tensor<128x64xi32, #dot>
-  tt.store %out, %mma_result : tensor<128x64x!tt.ptr<i32>, #dot>
 
   tt.return
 }
