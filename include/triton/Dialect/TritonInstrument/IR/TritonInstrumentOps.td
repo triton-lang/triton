@@ -167,7 +167,7 @@ def TTI_ExperimentalGSanMBarrierTableInitOp
              [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "Initialize GSan mbarrier release state";
   let description = [{
-    Initializes gsan't internal mbarrier table, used to sequence memory accesses
+    Initializes GSan's internal mbarrier table, used to sequence memory accesses
     through cluster mbarriers. This operation is internal to GSan instrumentation.
   }];
   let arguments = (ins TT_Ptr:$scratch, I32Attr:$capacity);
@@ -199,7 +199,9 @@ def TTI_ExperimentalGSanMBarrierArriveOp
   let description = [{
     Records an arrival for every mbarrier targeted by the corresponding
     hardware operation. When `publishClock` is true, the issuing CTA's vector
-    clock is also published as a release. A false value records only phase
+    clock is also published without advancing its local epoch. Waiters acquire
+    the issuing CTA's completed epochs and its imported clocks, but not its
+    current epoch. A false value records only phase
     progress for asynchronous completion signals that provide no generic
     memory ordering. `multicastMasks` contains CTA-id broadcast masks whose
     recipient bitsets are unioned. When `multicast` is false, the arrival
@@ -223,7 +225,9 @@ def TTI_ExperimentalGSanMBarrierWaitOp
                              MemWrite<GlobalMemory>]>]> {
   let summary = "Acquire GSan clocks after an mbarrier wait";
   let description = [{
-    Acquires the release clocks published to the completed mbarrier phase.
+    Acquires the clocks published to the completed mbarrier phase, excluding
+    each publisher's current epoch. Global-memory handoffs that rely solely on
+    an mbarrier may therefore be conservatively reported as races.
     This operation is internal to GSan instrumentation.
   }];
   let arguments = (ins TT_Ptr:$scratch, TTG_MemDescType:$barrier,
@@ -298,16 +302,70 @@ def TTI_ExperimentalGSanTensorAccessOp
   }];
 }
 
+def TTI_ExperimentalGSanAtomicLoadOp
+    : TTI_Op<"experimental_gsan_atomic_load", [
+  AtomicOpInterface,
+  SameLoadStoreOperandsAndResultShape,
+  SameLoadStoreOperandsAndResultEncoding,
+  TypesMatchWith<"result matches ptr type", "ptr", "result",
+                 "getPointeeType($_self)">,
+  TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
+                 "getI1SameShape(getPointeeType($_self))",
+                 "($_op.getOperands().size() <= 1) || std::equal_to<>()">
+]> {
+  let summary = "Lower a GSan-instrumented atomic load";
+  let arguments = (ins
+    Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+    Optional<TT_BoolLike>:$mask,
+    TT_MemSemanticAttr:$sem,
+    TT_MemSyncScopeAttr:$scope
+  );
+  let results = (outs TT_Type:$result);
+  let assemblyFormat = [{
+    $sem `,` $scope `,` $ptr (`,` $mask^)? attr-dict `:`
+    functional-type(operands, $result)
+  }];
+}
+
+def TTI_ExperimentalGSanAtomicStoreOp
+    : TTI_Op<"experimental_gsan_atomic_store", [
+  AtomicOpInterface,
+  SameLoadStoreOperandsShape,
+  SameLoadStoreOperandsEncoding,
+  TypesMatchWith<"value type matches ptr type", "ptr", "value",
+                 "getPointeeType($_self)">,
+  TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
+                 "getI1SameShape(getPointeeType($_self))",
+                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">
+]> {
+  let summary = "Lower a GSan-instrumented atomic store";
+  let arguments = (ins
+    Arg<TT_PtrLike, "", [MemWrite<GlobalMemory>]>:$ptr,
+    TT_Type:$value,
+    Optional<TT_BoolLike>:$mask,
+    TT_MemSemanticAttr:$sem,
+    TT_MemSyncScopeAttr:$scope
+  );
+  let assemblyFormat = [{
+    $sem `,` $scope `,` $ptr `,` $value (`,` $mask^)? attr-dict `:`
+    type($ptr)
+  }];
+}
+
 def TTI_ExperimentalGSanAtomicPollOp
-    : TTI_Op<"experimental_gsan_atomic_poll"> {
+    : TTI_Op<"experimental_gsan_atomic_poll", [
+        SameOperandsEncoding,
+        TypesMatchWith<"matched type matches pointer shape", "ptr", "matched",
+                       "getI1SameShape($_self)">
+      ]> {
   let summary = "Instrument a completed atomic poll for GSan";
   let description = [{
     Records the successful read performed by an atomic poll after the hardware
     polling loop has completed.
   }];
   let arguments = (ins
-    Arg<TT_Ptr, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
-    I1:$matched,
+    Arg<TT_PtrLike, "", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+    TT_BoolLike:$matched,
     TT_MemSemanticAttr:$sem,
     TT_MemSyncScopeAttr:$scope
   );

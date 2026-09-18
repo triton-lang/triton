@@ -150,6 +150,23 @@ def _atomic_poll_cross_sm_sync_kernel(payload_ptr, flag_ptr, scratch_ptr, produc
 
 
 @triton.jit
+def _atomic_load_store_cross_sm_sync_kernel(payload_ptr, flag_ptr, counter_ptr, scratch_ptr, producer_sem: tl.constexpr,
+                                            consumer_sem: tl.constexpr, scope: tl.constexpr):
+    pid = tl.program_id(0)
+    if pid == 0:
+        tl.store(payload_ptr, 1000)
+        tl.atomic_store(flag_ptr, 1, sem=producer_sem, scope=scope)
+        tl.atomic_add(counter_ptr, 1, sem="relaxed")
+    elif pid == 1:
+        atomic_poll(counter_ptr, 1)
+        ready = tl.atomic_load(flag_ptr, sem=consumer_sem, scope=scope)
+        while ready != 1:
+            ready = tl.atomic_load(flag_ptr, sem=consumer_sem, scope=scope)
+        result = tl.load(payload_ptr)
+        tl.store(scratch_ptr, result)
+
+
+@triton.jit
 def _transitive_atomic_sync_kernel(payload_ptr, flag0_ptr, flag1_ptr, counter_ptr, scratch_ptr,
                                    release_sem: tl.constexpr, relay_sem: tl.constexpr, scope: tl.constexpr):
     pid = tl.program_id(0)
@@ -282,25 +299,23 @@ def _gluon_cluster_barrier_kernel(payload_ptr, out_ptr, RELAXED: gl.constexpr):
 
 
 @gluon.jit
-def _gluon_mbarrier_post_arrival_write_kernel(payload_ptr, out_ptr):
+def _gluon_mbarrier_current_epoch_kernel(payload_ptr, out_ptr, AFTER_ARRIVAL: gl.constexpr):
     data_layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1]])
 
     barrier = hopper.mbarrier.allocate_mbarrier(two_ctas=True)
     hopper.mbarrier.init(barrier, count=1)
     offsets = gl.arange(0, 256, data_layout)
 
-    ordered_ptrs = payload_ptr + offsets * 0
-    gl.store(ordered_ptrs, 1, mask=offsets == 128)
+    payload_ptrs = payload_ptr + offsets * 0
+    if not AFTER_ARRIVAL:
+        gl.store(payload_ptrs, 1, mask=offsets == 128)
     hopper.mbarrier.arrive(barrier, count=1)
     hopper.mbarrier.wait(barrier, phase=0)
-    ordered = gl.load(ordered_ptrs, mask=offsets == 0, other=0)
-    gl.store(out_ptr + offsets * 0, ordered, mask=offsets == 0)
-
-    unordered_ptrs = payload_ptr + 1 + offsets * 0
-    gl.store(unordered_ptrs, 2, mask=offsets == 128)
+    if AFTER_ARRIVAL:
+        gl.store(payload_ptrs, 1, mask=offsets == 128)
     hopper.cluster.barrier(relaxed=True)
-    unordered = gl.load(unordered_ptrs, mask=offsets == 0, other=0)
-    gl.store(out_ptr + 1 + offsets * 0, unordered, mask=offsets == 0)
+    value = gl.load(payload_ptrs, mask=offsets == 0, other=0)
+    gl.store(out_ptr + offsets * 0, value, mask=offsets == 0)
     hopper.mbarrier.invalidate(barrier)
 
 
@@ -444,10 +459,10 @@ def _run_gluon_relaxed_cluster_barrier_case() -> None:
 
 
 @run_with_gsan
-def _run_gluon_mbarrier_post_arrival_write_case() -> None:
-    payload = torch.zeros(2, dtype=torch.int32, device="cuda")
-    out = torch.full((2, ), -1, dtype=torch.int32, device="cuda")
-    _gluon_mbarrier_post_arrival_write_kernel[(1, )](payload, out, num_warps=4, num_ctas=2)
+def _run_gluon_mbarrier_current_epoch_case(after_arrival: bool) -> None:
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    out = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+    _gluon_mbarrier_current_epoch_kernel[(1, )](payload, out, after_arrival, num_warps=4, num_ctas=2)
 
 
 @run_with_gsan
@@ -593,6 +608,24 @@ def _run_atomic_poll_cross_sm_sync_case(producer_sem: str, consumer_sem: str, sc
 
 
 @run_with_gsan
+def _run_atomic_load_store_cross_sm_sync_case(producer_sem: str, consumer_sem: str, scope: str) -> None:
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    flag = torch.zeros(1, dtype=torch.int32, device="cuda")
+    counter = torch.zeros(1, dtype=torch.int32, device="cuda")
+    scratch = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+    _atomic_load_store_cross_sm_sync_kernel[(2, )](
+        payload,
+        flag,
+        counter,
+        scratch,
+        producer_sem=producer_sem,
+        consumer_sem=consumer_sem,
+        scope=scope,
+        num_warps=1,
+    )
+
+
+@run_with_gsan
 def _run_transitive_atomic_sync_case(release_sem: str, relay_sem: str, scope: str) -> None:
     payload = torch.zeros(1, dtype=torch.int32, device="cuda")
     flag0 = torch.zeros(1, dtype=torch.int32, device="cuda")
@@ -709,12 +742,14 @@ def test_relaxed_cluster_barrier_does_not_synchronize_vector_clocks():
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="requires Hopper or newer")
-def test_mbarrier_wait_does_not_acquire_post_arrival_writes():
+@pytest.mark.parametrize("after_arrival", [False, True], ids=["before-arrival", "after-arrival"])
+def test_mbarrier_wait_does_not_acquire_current_epoch(after_arrival):
     _run_failure_case(
-        "mbarrier_post_arrival_write",
-        runner=_run_gluon_mbarrier_post_arrival_write_case,
-        source_function=_gluon_mbarrier_post_arrival_write_kernel.fn,
-        marker="unordered = gl.load(unordered_ptrs",
+        f"mbarrier_current_epoch_{after_arrival}",
+        runner=_run_gluon_mbarrier_current_epoch_case,
+        runner_args=(after_arrival, ),
+        source_function=_gluon_mbarrier_current_epoch_kernel.fn,
+        marker="value = gl.load(payload_ptrs",
         error="Read after write race detected",
     )
 
@@ -789,6 +824,14 @@ def test_atomic_poll_semantic_mismatch_read_after_write(producer_sem, consumer_s
                       runner=_run_atomic_poll_cross_sm_sync_case, runner_args=(producer_sem, consumer_sem, scope),
                       source_function=_atomic_poll_cross_sm_sync_kernel.fn, marker="result = tl.load(payload_ptr)",
                       error="Read after write race detected")
+
+
+@pytest.mark.parametrize("producer_sem, consumer_sem, scope", CROSS_SM_SEMANTIC_MISMATCH_CASES)
+def test_atomic_load_store_semantic_mismatch_read_after_write(producer_sem, consumer_sem, scope):
+    _run_failure_case(f"atomic_load_store_semantic_mismatch_{producer_sem}_{consumer_sem}_{scope}",
+                      runner=_run_atomic_load_store_cross_sm_sync_case, runner_args=(producer_sem, consumer_sem, scope),
+                      source_function=_atomic_load_store_cross_sm_sync_kernel.fn,
+                      marker="result = tl.load(payload_ptr)", error="Read after write race detected")
 
 
 @pytest.mark.parametrize("producer_sem, consumer_sem", RELEASE_ACQUIRE_SYNC_CASES)

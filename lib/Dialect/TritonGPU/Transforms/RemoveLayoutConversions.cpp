@@ -23,6 +23,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include <deque>
+#include <functional>
 
 namespace mlir::triton::gpu {
 
@@ -179,6 +180,9 @@ public:
       std::function<bool(Operation *)> stopPropagation = nullptr);
 
 private:
+  Value getExistingConversion(
+      OpOperand &value, Attribute encoding,
+      DenseMap<std::pair<Value, Attribute>, Value> &existingRemats) const;
   void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
   // Map values to their rematerializations for a given encoding. We have to be
   // careful about what we put in this map because updateRematMapping only
@@ -222,8 +226,8 @@ bool isLayoutAnchor(Operation *op) {
     return true;
   if (isa<LoadOp, StoreOp>(op))
     return isExpensiveLoadOrStore(op);
-  if (isa<DotOpInterface, AtomicRMWOp, AtomicCASOp,
-          triton::nvidia_gpu::TMEMLoadOp>(op))
+  if (isa<DotOpInterface, AtomicOpInterface, triton::nvidia_gpu::TMEMLoadOp>(
+          op))
     return true;
   if (auto gatherOp = dyn_cast<GatherOp>(op))
     return gatherOp.getEfficientLayout();
@@ -299,7 +303,7 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
     if (auto yieldOp = dyn_cast<scf::YieldOp>(user)) {
       auto parent = yieldOp->getParentOp();
       SmallVector<Value> valuesToPropagate;
-      if (isa<scf::ForOp, scf::IfOp, scf::WhileOp>(parent))
+      if (isa<scf::ForOp, scf::IfOp>(parent))
         valuesToPropagate.push_back(parent->getResult(use.getOperandNumber()));
       if (auto forOp = dyn_cast<scf::ForOp>(parent))
         valuesToPropagate.push_back(
@@ -340,8 +344,8 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       continue;
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
-        isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
-            ConvertLayoutOp>(user)) {
+        isa<BroadcastOp, ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp,
+            SplitOp, ConvertLayoutOp>(user)) {
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
@@ -381,31 +385,12 @@ void LayoutPropagation::resolveConflicts() {
     // Hacky resolve, prefer block encoding.
     // TODO: add a proper heuristic.
     Attribute encoding = *info.encodings.begin();
-    bool isLoadOrStore =
-        op && isa<LoadOp, StoreOp, AtomicRMWOp, AtomicCASOp>(op);
-    bool foundPreferred = false;
+    bool isLoadOrStore = op && isa<LoadOp, StoreOp, AtomicOpInterface>(op);
     for (Attribute e : info.encodings) {
       if ((isLoadOrStore && isa<BlockedEncodingAttr>(e)) ||
           (!isLoadOrStore && isa<MmaEncodingTrait>(e))) {
         encoding = e;
-        foundPreferred = true;
         break;
-      }
-    }
-    // Otherwise the choice above is just insertion order. Prefer the candidate
-    // needing the fewest registers per thread: a layout degenerate along lane
-    // or warp replicates elements and multiplies the instructions emitted.
-    if (!foundPreferred) {
-      if (auto tensorType = dyn_cast<RankedTensorType>(it.first.getType())) {
-        ArrayRef<int64_t> shape = tensorType.getShape();
-        unsigned bestElems = getTotalElemsPerThread(encoding, shape);
-        for (Attribute e : info.encodings) {
-          unsigned elems = getTotalElemsPerThread(e, shape);
-          if (elems < bestElems) {
-            bestElems = elems;
-            encoding = e;
-          }
-        }
       }
     }
     info.encodings.clear();
@@ -675,30 +660,14 @@ void LayoutPropagation::rewriteOp(Operation *op) {
       setEncodingInPlace(op->getResult(0), encoding);
     } else if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
                op->hasTrait<OpTrait::Elementwise>() ||
-               isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
-                   GatherOp, ConvertLayoutOp, nvidia_gpu::WarpGroupDotWaitOp>(
-                   op)) {
+               isa<BroadcastOp, ReduceOp, ExpandDimsOp, ReshapeOp, TransOp,
+                   JoinOp, SplitOp, GatherOp, ConvertLayoutOp,
+                   nvidia_gpu::WarpGroupDotWaitOp>(op)) {
       rewriteGenericOpInPlace(op, encoding);
     } else {
       llvm::report_fatal_error("unexpected op in rewrite");
     }
   }
-}
-
-bool canBeRemat(Operation *op) {
-  if (isa<LoadOp, StoreOp>(op))
-    return !isExpensiveLoadOrStore(op);
-  if (isa<AtomicRMWOp, AtomicCASOp, DotOpInterface>(op))
-    return false;
-  if (auto gather = dyn_cast<GatherOp>(op))
-    return !gather.getEfficientLayout();
-  if (auto reshape = dyn_cast<ReshapeOp>(op))
-    return !reshape.getEfficientLayout();
-
-  if (isa<scf::WhileOp, scf::ConditionOp>(op))
-    return false;
-
-  return true;
 }
 
 void LayoutRematerialization::updateRematMapping(
@@ -892,41 +861,45 @@ void LayoutRematerialization::rewriteSlice(
   rewriteSlice(slice, layout, existingRemats, convertOp, mapping);
 }
 
+Value LayoutRematerialization::getExistingConversion(
+    OpOperand &value, Attribute encoding,
+    DenseMap<std::pair<Value, Attribute>, Value> &existingRemats) const {
+  Value remat = getRematValue(value.get(), encoding);
+  if (!remat)
+    return Value();
+  // `value` can be replaced with an existing rematerialization if it
+  // dominates the current use of value.
+  Operation *user = value.getOwner();
+  if (domInfo.properlyDominates(remat, user)) {
+    existingRemats.try_emplace({value.get(), encoding}, remat);
+    return remat;
+  }
+  // FIXME: If the current user is a conversion, then we know it will become
+  // a no-op when its operand is replaced with `remat`, but we need to check
+  // that its users are all dominated by `remat` so the IR is valid.
+  // if (isa<ConvertLayoutOp>(user) && remat.getDefiningOp() &&
+  //     domInfo.properlyDominates(user, remat.getDefiningOp())) {
+  //   for (Operation *op : user->getUsers()) {
+  //     if (!domInfo.dominates(remat, op))
+  //       return Value();
+  //   }
+  //   return remat;
+  // }
+
+  // There is an existing rematerialization, but it doesn't dominate all the
+  // uses we care about, so ensure it isn't used.
+  existingRemats[{value.get(), encoding}] = Value();
+  return Value();
+}
+
 LogicalResult LayoutRematerialization::getConvertBackwardSlice(
     OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
     DenseMap<Value, Attribute> &layout,
     DenseMap<std::pair<Value, Attribute>, Value> &existingRemats,
     std::function<bool(Operation *)> stopPropagation) {
-  // Allow re-using existing conversions for a value if it dominates the use.
-  auto getExistingConversion = [&](OpOperand &value, Attribute encoding) {
-    Value remat = getRematValue(value.get(), encoding);
-    if (!remat)
-      return Value();
-    // `value` can be replaced with an existing rematerialization if it
-    // dominates the current use of value.
-    Operation *user = value.getOwner();
-    if (domInfo.properlyDominates(remat, user)) {
-      existingRemats.try_emplace({value.get(), encoding}, remat);
-      return remat;
-    }
-    // FIXME: If the current user is a conversion, then we know it will become
-    // a no-op when its operand is replaced with `remat`, but we need to check
-    // that its users are all dominated by `remat` so the IR is valid.
-    // if (isa<ConvertLayoutOp>(user) && remat.getDefiningOp() &&
-    //     domInfo.properlyDominates(user, remat.getDefiningOp())) {
-    //   for (Operation *op : user->getUsers()) {
-    //     if (!domInfo.dominates(remat, op))
-    //       return Value();
-    //   }
-    //   return remat;
-    // }
-
-    // There is an existing rematerialization, but it doesn't dominate all the
-    // uses we care about, so ensure it isn't used.
-    existingRemats[{value.get(), encoding}] = Value();
-    return Value();
-  };
-
+  auto getExistingConversion = std::bind(
+      &LayoutRematerialization::getExistingConversion, this,
+      std::placeholders::_1, std::placeholders::_2, std::ref(existingRemats));
   return mlir::getConvertBackwardSlice(root, slice, rootEncoding, layout,
                                        stopPropagation, getExistingConversion);
 }
@@ -936,27 +909,16 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
     DenseMap<Value, Attribute> &layoutArg,
     DenseMap<std::pair<Value, Attribute>, Value> &existingRematsArg,
     std::function<bool(Operation *)> stopPropagation) {
-  // Operate on copies of the input, we do not want to modify them unless we
-  // have succeeded.
-  auto slice = sliceArg;
-  auto layout = layoutArg;
   auto existingRemats = existingRematsArg;
-  LogicalResult result = getConvertBackwardSlice(
-      root, rootEncoding, slice, layout, existingRemats, stopPropagation);
-  if (result.failed())
-    return failure();
-
-  // Check if all the operations in the slice can be rematerialized.
-  for (Value v : slice) {
-    if (Operation *op = v.getDefiningOp()) {
-      if (!canBeRemat(op))
-        return failure();
-    }
-  }
-  sliceArg = std::move(slice);
-  layoutArg = std::move(layout);
-  existingRematsArg = std::move(existingRemats);
-  return success();
+  auto getExistingConversion = std::bind(
+      &LayoutRematerialization::getExistingConversion, this,
+      std::placeholders::_1, std::placeholders::_2, std::ref(existingRemats));
+  LogicalResult result =
+      mlir::getRematerializableSlice(root, sliceArg, rootEncoding, layoutArg,
+                                     stopPropagation, getExistingConversion);
+  if (succeeded(result))
+    existingRematsArg = std::move(existingRemats);
+  return result;
 }
 
 bool LayoutRematerialization::backwardRematerialization(
@@ -1306,7 +1268,7 @@ bool LayoutRematerialization::hoistConvertDotOperand(
   // threads We do views and elementwise pure ops for now
   auto noDataMovement = [](Operation *op) {
     return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
-           isa<BroadcastOp, Fp4ToFpOp, ConvertLayoutOp, UpcastFpOpInterface>(
+           isa<BroadcastOp, Fp4ToFpOp, ConvertLayoutOp, CastFpOpInterface>(
                op) ||
            isView(op);
   };

@@ -124,6 +124,8 @@ struct alignas(16) ClusterBarrierState {
 static_assert(sizeof(ClusterBarrierState) <= kClusterBarrierScratchBytes);
 
 struct MBarrierPublishedClock {
+  // An immutable snapshot whose publisher has not advanced its epoch. A wait
+  // must exclude that thread's current epoch when acquiring the snapshot.
   thread_id_t threadId;
   epoch_t token;
 };

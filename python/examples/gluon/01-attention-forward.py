@@ -867,7 +867,7 @@ def _attn_fwd_correction(config, chnls, descs, M, STAGE: gl.constexpr):
         corr0_consumer, epi_producer, o_consumer = _attn_fwd_correction_epilogue(  #
             config, prog, s0_tmem, M, corr0_consumer, epi_producer, o_consumer)
         corr1_consumer, epi_producer, o_consumer = _attn_fwd_correction_epilogue(  #
-            config, prog, s1_tmem, M, corr1_consumer, epi_producer, o_consumer)
+            config, prog, s1_tmem, M + config.SPLIT_M, corr1_consumer, epi_producer, o_consumer)
 
 
 def attention_repr(specialization):
@@ -1212,7 +1212,9 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cga_layout, prof
     v = (torch.empty((Z, H, N_CTX, HEAD_DIM), device=device).normal_(mean=0.0, std=0.5).to(dtype).requires_grad_())
     sm_scale = 0.5
 
-    tri_out, _ = attention_forward(q, k, v, causal, sm_scale, use_tmem_red=use_tmem_red, p=p, cga_layout=cga_layout)
+    tri_m = torch.full(q.shape[:-1], float("nan"), device=device, dtype=torch.float32)
+    tri_out, tri_m = attention_forward(q, k, v, causal, sm_scale, M=tri_m, use_tmem_red=use_tmem_red, p=p,
+                                       cga_layout=cga_layout)
     if dtype == torch.float8_e5m2:
         ref_out = torch.nn.functional.scaled_dot_product_attention(q.float(), k.float(), v.float(), scale=sm_scale,
                                                                    is_causal=causal)
@@ -1220,6 +1222,15 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype, use_tmem_red, cga_layout, prof
     else:
         ref_out = torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=sm_scale, is_causal=causal)
         torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=0)
+
+    # Sample rows from both subtiles without materializing full attention scores.
+    with torch.no_grad():
+        rows = torch.arange(0, N_CTX, 128, device=device)
+        scores = torch.matmul(q[..., rows, :].float(), k.float().transpose(-1, -2)) * sm_scale
+        if causal:
+            scores.masked_fill_(rows[:, None] < torch.arange(N_CTX, device=device)[None, :], float("-inf"))
+        ref_m = torch.logsumexp(scores, dim=-1) / math.log(2)
+        torch.testing.assert_close(tri_m[..., rows], ref_m, atol=1e-2, rtol=0)
 
 
 @pytest.mark.enable_warmup(min_capability=10, priority=3)

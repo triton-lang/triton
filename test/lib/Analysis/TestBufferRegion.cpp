@@ -91,23 +91,26 @@ struct TestBufferRegionAliasPass
     : public PassWrapper<TestBufferRegionAliasPass, OperationPass<ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestBufferRegionAliasPass);
 
+  using NamedRegion = std::pair<std::string, tt::BufferRegionFootprint>;
+
   StringRef getArgument() const final { return "test-buffer-region-alias"; }
   StringRef getDescription() const final {
     return "test exact buffer-region alias and containment analysis";
   }
 
-  static std::optional<Value> getTaggedMemDesc(Operation *op) {
-    for (Value operand : op->getOperands())
-      if (isa<ttg::MemDescType>(operand.getType()))
-        return operand;
-    for (Value result : op->getResults())
-      if (isa<ttg::MemDescType>(result.getType()))
-        return result;
-    return std::nullopt;
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<ttg::TritonGPUDialect>();
   }
 
-  static FailureOr<tt::RegionInfo>
-  getTaggedRegionInfo(Operation *op, tt::BufferRegionAnalysis *analysis) {
+  static Value getTaggedMemDesc(Operation *op) {
+    for (Value value : llvm::concat<Value>(op->getOperands(), op->getResults()))
+      if (isa<ttg::MemDescType>(value.getType()))
+        return value;
+    return {};
+  }
+
+  static FailureOr<tt::BufferRegionFootprint>
+  getTaggedFootprint(Operation *op, tt::BufferRegionAnalysis *analysis) {
     if (auto addressesAttr =
             op->getAttrOfType<DenseI32ArrayAttr>("test.region_addresses")) {
       SmallVector<uint32_t> addresses;
@@ -133,75 +136,64 @@ struct TestBufferRegionAliasPass
           addressSet.set(address);
         region.ctaAddresses.emplace_back(0, std::move(addressSet));
       }
-      tt::RegionInfo info(tt::RegionInfo::ViewList{});
-      info.views.insert(
-          {std::move(region), /*storageBase=*/base, /*affineOffset=*/0});
-      return info;
+      tt::BufferRegionView view{std::move(region), /*storageBase=*/base,
+                                /*affineOffset=*/0};
+      // Explicit address sets share one synthetic allocation frame.
+      view.allocationFrame =
+          analysis->getOperationId(op->getParentOfType<ModuleOp>());
+      return tt::BufferRegionFootprint{
+          ttg::SharedMemorySpaceAttr::get(op->getContext()),
+          tt::RegionInfo({std::move(view)})};
     }
 
-    std::optional<Value> memdesc = getTaggedMemDesc(op);
+    Value memdesc = getTaggedMemDesc(op);
     if (!memdesc) {
       op->emitError("test.region_name requires test.region_addresses or a "
                     "memdesc operand/result");
       return failure();
     }
-    return analysis->getLatticeElement(*memdesc)->getValue();
+    if (const auto *footprint = analysis->getFootprint(memdesc))
+      return *footprint;
+    return tt::BufferRegionFootprint{{}, analysis->getRegionInfo(memdesc)};
   }
 
-  static bool mayAlias(const tt::RegionInfo &lhs, const tt::RegionInfo &rhs) {
-    if (lhs.isUnknown() || rhs.isUnknown())
-      return true;
-    return llvm::any_of(lhs.views, [&](const tt::BufferRegionView &a) {
-      return llvm::any_of(rhs.views, [&](const tt::BufferRegionView &b) {
-        return a.intersects(b);
-      });
-    });
-  }
-
-  static bool contains(const tt::RegionInfo &container,
-                       const tt::RegionInfo &contained) {
-    if (container.isUnknown() || contained.isUnknown())
+  static bool contains(const tt::BufferRegionFootprint &container,
+                       const tt::BufferRegionFootprint &contained) {
+    if (!container.memorySpace ||
+        container.memorySpace != contained.memorySpace ||
+        container.regionInfo.isUnknown() || contained.regionInfo.isUnknown())
       return false;
-    return llvm::all_of(contained.views, [&](const tt::BufferRegionView &b) {
-      return llvm::any_of(container.views, [&](const tt::BufferRegionView &a) {
-        return a.contains(b);
-      });
+    return llvm::all_of(contained.regionInfo.views, [&](const auto &b) {
+      return llvm::any_of(container.regionInfo.views,
+                          [&](const auto &a) { return a.contains(b); });
     });
   }
 
   static void printMask(InFlightDiagnostic &diag,
                         const llvm::SmallBitVector &mask) {
     diag << "{";
-    bool first = true;
-    for (unsigned bit = 0; bit < mask.size(); ++bit) {
-      if (!mask.test(bit))
-        continue;
-      if (!first)
-        diag << ",";
-      diag << bit;
-      first = false;
-    }
+    llvm::interleave(mask.set_bits(), diag, ",");
     diag << "}";
   }
 
-  static void
-  emitStatePlan(ModuleOp module,
-                ArrayRef<std::pair<std::string, tt::RegionInfo>> namedRegions) {
+  static void emitStatePlan(ModuleOp module,
+                            ArrayRef<NamedRegion> namedRegions) {
     SmallVector<tt::BufferRegion> regions;
-    for (const auto &[name, info] : namedRegions)
-      for (const tt::BufferRegionView &view : info.views)
+    for (const auto &[name, footprint] : namedRegions)
+      for (const tt::BufferRegionView &view : footprint.regionInfo.views)
         regions.push_back(view.region);
     llvm::sort(regions);
     regions.erase(std::unique(regions.begin(), regions.end()), regions.end());
 
     bool hasUnknown = llvm::any_of(namedRegions, [](const auto &named) {
-      return named.second.isUnknown();
+      return named.second.regionInfo.isUnknown();
     });
     tt::BufferStatePlan plan = tt::createBufferStatePlan(regions, hasUnknown);
     InFlightDiagnostic summary = module.emitRemark();
     summary << "state-plan: lanes=" << plan.numLanes;
 
-    for (const auto &[name, info] : namedRegions) {
+    for (const auto &[name, footprint] : namedRegions) {
+      const tt::RegionInfo &info = footprint.regionInfo;
       if (info.isUnknown()) {
         InFlightDiagnostic diag = module.emitRemark();
         diag << name << " case unknown: mask=";
@@ -234,16 +226,16 @@ struct TestBufferRegionAliasPass
     if (failed(solver->initializeAndRun(module)))
       return signalPassFailure();
 
-    SmallVector<std::pair<std::string, tt::RegionInfo>> namedRegions;
+    SmallVector<NamedRegion> namedRegions;
     module.walk([&](Operation *op) {
       auto name = op->getAttrOfType<StringAttr>("test.region_name");
       if (!name)
         return;
-      FailureOr<tt::RegionInfo> regionInfo = getTaggedRegionInfo(op, analysis);
-      if (failed(regionInfo)) {
+      auto footprint = getTaggedFootprint(op, analysis);
+      if (failed(footprint)) {
         return signalPassFailure();
       }
-      namedRegions.push_back({name.str(), std::move(*regionInfo)});
+      namedRegions.push_back({name.str(), std::move(*footprint)});
     });
     llvm::sort(namedRegions, [](const auto &lhs, const auto &rhs) {
       return lhs.first < rhs.first;
@@ -256,7 +248,7 @@ struct TestBufferRegionAliasPass
           const auto &[rhsName, rhs] = namedRegions[j];
           module.emitRemark()
               << lhsName << " vs " << rhsName
-              << ": alias=" << (mayAlias(lhs, rhs) ? "true" : "false")
+              << ": alias=" << (tt::mayOverlap(&lhs, &rhs) ? "true" : "false")
               << ", lhs_contains_rhs="
               << (contains(lhs, rhs) ? "true" : "false")
               << ", rhs_contains_lhs="

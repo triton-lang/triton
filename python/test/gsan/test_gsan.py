@@ -35,6 +35,18 @@ ATOMIC_SCOPE_CASES = (
     pytest.param("sys", AtomicScope.SYSTEM, id="scope-sys"),
 )
 
+ATOMIC_LOAD_STORE_TYPES = (
+    torch.bool,
+    torch.int8,
+    torch.uint8,
+    torch.int16,
+    torch.int32,
+    torch.int64,
+    torch.float16,
+    torch.float32,
+    torch.float64,
+)
+
 ATOMIC_SEMANTIC_CASES = (
     pytest.param("relaxed", False, id="sem-relaxed"),
     pytest.param("acquire", False, id="sem-acquire"),
@@ -84,6 +96,22 @@ def _assert_atomic_read_only_shadow(real_address: int, expected_scope: AtomicSco
     assert cell.write_clock == ScalarClock(0, 0, AtomicScope.NON_ATOMIC)
     assert cell.read_clocks[0] == ScalarClock(epoch, tid, expected_scope)
     assert cell.num_reads == 1
+
+
+def _assert_atomic_store_only_shadow(real_address: int, expected_scope: AtomicScope, *, is_release: bool) -> None:
+    cell = shadow_cell_from_address(real_address)
+    tid = cell.write_clock.thread_id
+    state = thread_state_from_smid(tid)
+
+    assert cell.write_clock.scope == expected_scope
+    assert cell.write_clock.is_release == is_release
+    assert cell.num_reads == 0
+    assert all(clock == ScalarClock(0, 0, AtomicScope.NON_ATOMIC) for clock in cell.read_clocks)
+    if is_release:
+        assert cell.write_clock.epoch == state.clock_buffer_head
+        assert state.clock_buffer_dirty
+    else:
+        assert cell.write_clock.epoch == state.vector_clock[tid]
 
 
 def _assert_cross_sm_sync(payload_ptr: torch.Tensor, flag_ptr: torch.Tensor, expected_scope: AtomicScope) -> None:
@@ -480,7 +508,7 @@ def test_gluon_mbarrier_initial_empty_phase_is_ready(with_gsan):
 
 
 @gluon.jit
-def _gluon_mbarrier_sync_kernel(payload_ptr, out_ptr):
+def _gluon_mbarrier_sync_kernel(payload_ptr, counter_ptr, out_ptr):
     data_layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1]])
 
     barrier = hopper.mbarrier.allocate_mbarrier(two_ctas=True)
@@ -491,6 +519,9 @@ def _gluon_mbarrier_sync_kernel(payload_ptr, out_ptr):
         payload_ptrs = payload_ptr + iteration + offsets * 0
         out_ptrs = out_ptr + iteration + offsets * 0
         gl.store(payload_ptrs, iteration + 1, mask=offsets == 128)
+        # Mbarriers only propagate completed epochs. A release closes the
+        # writer's epoch; direct current-epoch handoffs are tested as failures.
+        gl.atomic_add(counter_ptr, 1, sem="release", scope="gpu")
         hopper.mbarrier.arrive(barrier, count=1)
         hopper.mbarrier.wait(barrier, phase=iteration % 2)
         value = gl.load(payload_ptrs, mask=offsets == 0, other=0)
@@ -500,11 +531,12 @@ def _gluon_mbarrier_sync_kernel(payload_ptr, out_ptr):
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="requires Hopper or newer")
-def test_gluon_mbarrier_wait_acquires_arrival_vector_clocks(with_gsan):
+def test_gluon_mbarrier_wait_preserves_completed_epochs(with_gsan):
     payload = torch.zeros(4, dtype=torch.int32, device="cuda")
+    counter = torch.zeros(1, dtype=torch.int32, device="cuda")
     out = torch.full((4, ), -1, dtype=torch.int32, device="cuda")
 
-    _gluon_mbarrier_sync_kernel[(1, )](payload, out, num_warps=4, num_ctas=2)
+    _gluon_mbarrier_sync_kernel[(1, )](payload, counter, out, num_warps=4, num_ctas=2)
     torch.cuda.synchronize()
 
     torch.testing.assert_close(out, torch.arange(1, 5, dtype=torch.int32, device="cuda"))
@@ -519,13 +551,14 @@ def test_gluon_mbarrier_wait_acquires_arrival_vector_clocks(with_gsan):
 
 
 @gluon.jit
-def _gluon_ws_mbarrier_partition(payload_ptr, out_ptr, barrier, index: gl.constexpr):
+def _gluon_ws_mbarrier_partition(payload_ptr, counter_ptr, out_ptr, barrier, index: gl.constexpr):
     data_layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1]])
 
     offsets = gl.arange(0, 256, data_layout)
     payload_ptrs = payload_ptr + index + offsets * 0
     out_ptrs = out_ptr + index + offsets * 0
     gl.store(payload_ptrs, index + 1, mask=offsets == 128)
+    gl.atomic_add(counter_ptr + index, 1, sem="release", scope="gpu")
     hopper.mbarrier.arrive(barrier, count=1)
     hopper.mbarrier.wait(barrier, phase=0)
     value = gl.load(payload_ptrs, mask=offsets == 0, other=0)
@@ -533,13 +566,13 @@ def _gluon_ws_mbarrier_partition(payload_ptr, out_ptr, barrier, index: gl.conste
 
 
 @gluon.jit
-def _gluon_ws_mbarrier_sync_kernel(payload_ptr, out_ptr):
+def _gluon_ws_mbarrier_sync_kernel(payload_ptr, counter_ptr, out_ptr):
     barriers = hopper.mbarrier.allocate_mbarrier(batch=2, two_ctas=True)
     hopper.mbarrier.init(barriers.index(0), count=1)
     hopper.mbarrier.init(barriers.index(1), count=1)
     gl.warp_specialize([
-        (_gluon_ws_mbarrier_partition, (payload_ptr, out_ptr, barriers.index(0), 0)),
-        (_gluon_ws_mbarrier_partition, (payload_ptr, out_ptr, barriers.index(1), 1)),
+        (_gluon_ws_mbarrier_partition, (payload_ptr, counter_ptr, out_ptr, barriers.index(0), 0)),
+        (_gluon_ws_mbarrier_partition, (payload_ptr, counter_ptr, out_ptr, barriers.index(1), 1)),
     ], [4])
     hopper.mbarrier.invalidate(barriers.index(0))
     hopper.mbarrier.invalidate(barriers.index(1))
@@ -548,9 +581,10 @@ def _gluon_ws_mbarrier_sync_kernel(payload_ptr, out_ptr):
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="requires Hopper or newer")
 def test_gluon_mbarrier_sync_in_warp_specialized_partitions(with_gsan):
     payload = torch.zeros(2, dtype=torch.int32, device="cuda")
+    counter = torch.zeros(2, dtype=torch.int32, device="cuda")
     out = torch.full((2, ), -1, dtype=torch.int32, device="cuda")
 
-    _gluon_ws_mbarrier_sync_kernel[(1, )](payload, out, num_warps=4, num_ctas=2)
+    _gluon_ws_mbarrier_sync_kernel[(1, )](payload, counter, out, num_warps=4, num_ctas=2)
     torch.cuda.synchronize()
 
     torch.testing.assert_close(out, torch.tensor([1, 2], dtype=torch.int32, device="cuda"))
@@ -562,6 +596,117 @@ def test_gluon_mbarrier_sync_in_warp_specialized_partitions(with_gsan):
         assert consumer_tid != producer_tid
         consumer_state = thread_state_from_smid(consumer_tid)
         assert consumer_state.vector_clock[producer_tid] >= producer_epoch
+
+
+@gluon.jit
+def _gluon_mbarrier_repeated_phases_kernel(markers, flags, iterations, EXPECT: gl.constexpr):
+    layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1]])
+    offsets = gl.arange(0, 256, layout)
+    cta = offsets // 128
+    elected = offsets % 128 == 0
+    barrier = hopper.mbarrier.allocate_mbarrier(two_ctas=True)
+    hopper.mbarrier.init(barrier, count=1)
+    # Keep a release snapshot live throughout the loop, as fused-communication
+    # completion flags do in production kernels.
+    gl.atomic_xchg(flags + cta, 1, mask=elected, sem="release", scope="gpu")
+    gl.store(markers + cta, 1, mask=elected)
+    for iteration in range(iterations):
+        if EXPECT:
+            hopper.mbarrier.expect(barrier, 0)
+        else:
+            hopper.mbarrier.arrive(barrier)
+        hopper.mbarrier.wait(barrier, iteration % 2)
+        hopper.cluster.barrier(relaxed=True)
+    gl.store(markers + 2 + cta, 1, mask=elected)
+    hopper.mbarrier.invalidate(barrier)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="requires Hopper or newer")
+@pytest.mark.parametrize("expect", [False, True], ids=["arrive", "expect"])
+def test_gluon_mbarrier_repeated_phases_reuse_epochs_and_snapshots(with_gsan, expect):
+    markers = torch.zeros(4, dtype=torch.int32, device="cuda")
+    flags = torch.zeros(2, dtype=torch.int32, device="cuda")
+    _gluon_mbarrier_repeated_phases_kernel[(1, )](markers, flags, 65536, expect, num_warps=4, num_ctas=2)
+    torch.cuda.synchronize()
+
+    clocks = [shadow_cell_from_address(markers.data_ptr() + i * markers.element_size()).write_clock for i in range(4)]
+    assert clocks[0].thread_id != clocks[1].thread_id
+    for cta in range(2):
+        assert clocks[cta] == clocks[cta + 2]
+        state = thread_state_from_smid(clocks[cta].thread_id)
+        release = shadow_cell_from_address(flags.data_ptr() + cta * flags.element_size()).write_clock
+        assert release.is_release
+        assert release.thread_id == state.thread_id
+        # Publishing once and importing the peer's completed epoch can create
+        # a few snapshots, but the phase count must not control buffer usage.
+        assert 0 <= state.clock_buffer_head - release.epoch <= 4
+        assert state.vector_clock[state.thread_id] == clocks[cta].epoch
+    consumer = thread_state_from_smid(clocks[0].thread_id)
+    assert consumer.vector_clock[clocks[1].thread_id] == clocks[1].epoch - 1
+
+
+@triton.jit
+def _gsan_warm_all_sms_kernel(markers, counter, num_sms: tl.constexpr):
+    smid = tl.inline_asm_elementwise("mov.u32 $0, %smid;", "=r", [], tl.int32, is_pure=False, pack=1)
+    tl.store(markers + smid, 1)
+    tl.atomic_add(counter, 1, sem="relaxed", scope="gpu")
+    # GSan reserves all shared memory, so these resident CTAs occupy distinct
+    # SMs. Keep them alive until every SM has advanced its local epoch.
+    atomic_poll(counter, num_sms)
+
+
+@gluon.jit
+def _gluon_mbarrier_transitive_clock_kernel(markers):
+    layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0], cga_layout=[[1], [2]])
+    pairs01 = gl.allocate_shared_memory(gl.int64, [2], hopper.mbarrier.MBarrierLayout([[0], [1]]))
+    pairs02 = gl.allocate_shared_memory(gl.int64, [2], hopper.mbarrier.MBarrierLayout([[1], [0]]))
+    hopper.mbarrier.init(pairs01, count=1)
+    hopper.mbarrier.init(pairs02, count=1)
+    offsets = gl.arange(0, 512, layout)
+    gl.store(markers + offsets // 128, 1, mask=offsets % 128 == 0)
+    # CTA 2 first acquires CTA 3's completed epoch, then passes it to CTA 0.
+    hopper.mbarrier.arrive(pairs01)
+    hopper.mbarrier.wait(pairs01, 0)
+    hopper.cluster.barrier(relaxed=True)
+    hopper.mbarrier.arrive(pairs02)
+    hopper.mbarrier.wait(pairs02, 0)
+    hopper.cluster.barrier(relaxed=True)
+    hopper.mbarrier.invalidate(pairs01)
+    hopper.mbarrier.invalidate(pairs02)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="requires Hopper or newer")
+def test_gluon_mbarrier_preserves_transitively_imported_clocks(with_gsan):
+    num_sms = torch.cuda.get_device_properties(torch.cuda.current_device()).multi_processor_count
+    warm = torch.zeros(num_sms, dtype=torch.int32, device="cuda")
+    counter = torch.zeros(1, dtype=torch.int32, device="cuda")
+    markers = torch.zeros(4, dtype=torch.int32, device="cuda")
+    stream = torch.cuda.Stream()
+    stream.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(stream):
+        _gsan_warm_all_sms_kernel[(num_sms, )](warm, counter, num_sms, num_warps=1)
+    stream.synchronize()
+    # A host wait does not import this independent stream's GSan clock.
+    _gluon_mbarrier_transitive_clock_kernel[(1, )](markers, num_warps=4, num_ctas=4)
+    torch.cuda.synchronize()
+
+    clocks = [shadow_cell_from_address(markers.data_ptr() + i * markers.element_size()).write_clock for i in range(4)]
+    assert len({clock.thread_id for clock in clocks}) == 4
+    consumer = thread_state_from_smid(clocks[0].thread_id)
+    for clock in clocks[1:]:
+        smid = clock.thread_id % num_sms
+        previous = shadow_cell_from_address(warm.data_ptr() + smid * warm.element_size()).write_clock
+        assert previous.thread_id == clock.thread_id
+        assert previous.epoch + 1 == clock.epoch
+        assert consumer.vector_clock[clock.thread_id] == previous.epoch
+    # The zero CTA-layout bases predicate the waits onto the pair leaders.
+    # CTA 1 acquires CTA 3 in the second phase, but neither CTA 1 nor CTA 3
+    # executes a wait that could acquire CTA 2's newly completed epoch.
+    nonleader = thread_state_from_smid(clocks[1].thread_id)
+    assert nonleader.vector_clock[clocks[3].thread_id] == clocks[3].epoch - 1
+    for cta in (1, 3):
+        state = thread_state_from_smid(clocks[cta].thread_id)
+        assert state.vector_clock[clocks[2].thread_id] < clocks[2].epoch - 1
 
 
 @triton.jit
@@ -588,6 +733,24 @@ def test_gsan_uses_all_available_shared_memory(with_gsan):
 @triton.jit
 def atomic_add_kernel(ptr, sem: tl.constexpr, scope: tl.constexpr = "gpu"):
     tl.atomic_add(ptr, 1, sem=sem, scope=scope)
+
+
+@triton.jit
+def atomic_load_kernel(ptr, out_ptr, sem: tl.constexpr, scope: tl.constexpr = "gpu"):
+    value = tl.atomic_load(ptr, sem=sem, scope=scope)
+    tl.store(out_ptr, value)
+
+
+@triton.jit
+def atomic_store_kernel(ptr, value, sem: tl.constexpr, scope: tl.constexpr = "gpu"):
+    tl.atomic_store(ptr, value, sem=sem, scope=scope)
+
+
+@gluon.jit
+def gluon_atomic_load_store_kernel(ptr, out_ptr, value):
+    gl.atomic_store(ptr, value, sem="relaxed", scope="gpu")
+    value = gl.atomic_load(ptr, sem="relaxed", scope="gpu")
+    gl.store(out_ptr, value)
 
 
 @triton.jit
@@ -648,6 +811,29 @@ def atomic_poll_timeout_kernel(ptr, out_ptr):
     tl.store(out_ptr, matched)
 
 
+@gluon.jit
+def _atomic_poll_tensor_kernel(ptr, out_ptr, BLOCK: gl.constexpr, STRIDE: gl.constexpr, sem: gl.constexpr,
+                               scope: gl.constexpr, TIMEOUT: gl.constexpr):
+    offsets = gl.arange(0, BLOCK, layout=gl.BlockedLayout([1], [32], [4], [0]))
+    matched = gl.atomic_poll(ptr + offsets * STRIDE, offsets + 1, sem=sem, scope=scope, timeout_ns=TIMEOUT)
+    gl.store(out_ptr + offsets, matched)
+
+
+@gluon.jit
+def _atomic_poll_tensor_sync_kernel(payload_ptr, flag_ptr, out_ptr, BLOCK: gl.constexpr, STRIDE: gl.constexpr,
+                                    scope: gl.constexpr):
+    offsets = gl.arange(0, BLOCK, layout=gl.BlockedLayout([1], [32], [4], [0]))
+    pid = gl.program_id(0)
+    if pid < 2:
+        mask = offsets % 2 == pid
+        gl.store(payload_ptr + offsets * STRIDE, offsets + 1000, mask)
+        gl.atomic_xchg(flag_ptr + offsets * STRIDE, 1, mask=mask, sem="release", scope=scope)
+    else:
+        gl.atomic_poll(flag_ptr + offsets * STRIDE, 1, sem="acquire", scope=scope)
+        result = gl.load(payload_ptr + offsets * STRIDE)
+        gl.store(out_ptr + offsets, result)
+
+
 @triton.jit
 def _cross_sm_atomic_sync_kernel(payload_ptr, flag_ptr, out_ptr, producer_sem: tl.constexpr, consumer_sem: tl.constexpr,
                                  scope: tl.constexpr):
@@ -671,6 +857,31 @@ def _cross_sm_atomic_poll_sync_kernel(payload_ptr, flag_ptr, out_ptr, scope: tl.
         tl.atomic_poll(flag_ptr, 1, sem="acquire", scope=scope)
         result = tl.load(payload_ptr)
         tl.store(out_ptr, result)
+
+
+@triton.jit
+def _cross_sm_atomic_load_store_sync_kernel(payload_ptr, flag_ptr, out_ptr, scope: tl.constexpr):
+    pid = tl.program_id(0)
+    if pid == 0:
+        tl.store(payload_ptr, 1000)
+        tl.atomic_store(flag_ptr, 1, sem="release", scope=scope)
+    elif pid == 1:
+        ready = tl.atomic_load(flag_ptr, sem="acquire", scope=scope)
+        while ready != 1:
+            ready = tl.atomic_load(flag_ptr, sem="acquire", scope=scope)
+        result = tl.load(payload_ptr)
+        tl.store(out_ptr, result)
+
+
+@triton.jit
+def _masked_atomic_load_store_kernel(ptr, out_ptr, stride: tl.constexpr):
+    indices = tl.arange(0, 4)
+    offsets = indices * stride
+    mask = indices < 2
+    values = indices % 2 if ptr.dtype.element_ty == tl.int1 else indices + 10
+    tl.atomic_store(ptr + offsets, values, mask=mask, sem="relaxed")
+    values = tl.atomic_load(ptr + offsets, mask=mask, sem="relaxed")
+    tl.store(out_ptr + offsets, values, mask=mask)
 
 
 @triton.jit
@@ -699,6 +910,123 @@ def test_atomic_add_updates_atomic_shadow(with_gsan, sem, is_release, scope, exp
     assert target.item() == 1
 
     _assert_atomic_rmw_shadow(target.data_ptr(), expected_scope, is_release=is_release)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES)
+@pytest.mark.parametrize("sem", ["relaxed", "acquire"])
+@pytest.mark.parametrize("dtype", ATOMIC_LOAD_STORE_TYPES)
+def test_atomic_load_only_records_read(with_gsan, dtype, sem, scope, expected_scope):
+    value = 1 if dtype == torch.bool else -37 if dtype == torch.int8 else 197
+    target = torch.full((1, ), value, dtype=dtype, device="cuda")
+    out = torch.zeros_like(target)
+
+    atomic_load_kernel[(1, )](target, out, sem=sem, scope=scope, num_warps=1)
+
+    assert out.item() == value
+    _assert_atomic_read_only_shadow(target.data_ptr(), expected_scope)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("op", ["load", "store"])
+@pytest.mark.parametrize("dtype", [torch.int8, torch.float16, torch.int32, torch.float64])
+def test_atomic_load_store_vectorized_shadow(with_gsan, op, dtype):
+
+    @gluon.jit
+    def kernel(Src, Out, STORE: gl.constexpr):
+        x = gl.arange(0, 256, layout=gl.BlockedLayout([8], [32], [1], [0]))
+        mask = x // 8 % 2 == 0
+        if STORE:
+            values = gl.load(Src + x)
+            gl.atomic_store(Out + x, values, mask=mask, sem="release")
+        else:
+            values = gl.atomic_load(Src + x, mask=mask, sem="acquire")
+            gl.store(Out + x, values, mask=mask)
+
+    src = (torch.arange(256, device="cuda") - 64).to(dtype)
+    out = torch.full_like(src, -1)
+    compiled = kernel[(1, )](src, out, op == "store", num_warps=1)
+
+    mask = torch.arange(256, device="cuda") // 8 % 2 == 0
+    assert torch.equal(out, torch.where(mask, src, -1))
+    suffix = "b64" if dtype == torch.float64 else "v2.b32"
+    opcode = "st" if op == "store" else "ld"
+    assert f"{opcode}.relaxed.gpu.global.{suffix}" in compiled.asm["ptx"]
+    target = out if op == "store" else src
+    for byte_offset in range(0, src.numel() * dtype.itemsize, SHADOW_GRANULARITY_BYTES):
+        address = target.data_ptr() + byte_offset
+        if byte_offset // dtype.itemsize // 8 % 2 == 0:
+            if op == "store":
+                cell = shadow_cell_from_address(address)
+                assert cell.write_clock.scope == AtomicScope.GPU
+                assert cell.write_clock.is_release
+                assert cell.num_reads == 0
+            else:
+                _assert_atomic_read_only_shadow(address, AtomicScope.GPU)
+        else:
+            cell = shadow_cell_from_address(address)
+            assert cell.num_reads == 0
+            assert cell.write_clock == ScalarClock(0, 0, AtomicScope.NON_ATOMIC)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES)
+@pytest.mark.parametrize("sem, is_release", [("relaxed", False), ("release", True)])
+@pytest.mark.parametrize("dtype", ATOMIC_LOAD_STORE_TYPES)
+def test_atomic_store_only_records_write(with_gsan, dtype, sem, is_release, scope, expected_scope):
+    target = torch.zeros(1, dtype=dtype, device="cuda")
+
+    value = 1 if dtype == torch.bool else -37 if dtype == torch.int8 else 197
+    atomic_store_kernel[(1, )](target, value, sem=sem, scope=scope, num_warps=1)
+
+    assert target.item() == value
+    _assert_atomic_store_only_shadow(target.data_ptr(), expected_scope, is_release=is_release)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("dtype", ATOMIC_LOAD_STORE_TYPES)
+def test_gluon_atomic_load_store_updates_shadow(with_gsan, dtype):
+    target = torch.zeros(1, dtype=dtype, device="cuda")
+    out = torch.zeros_like(target)
+
+    expected = 1 if dtype == torch.bool else 17
+    gluon_atomic_load_store_kernel[(1, )](target, out, expected, num_warps=1)
+
+    assert target.item() == expected
+    assert out.item() == expected
+    cell = shadow_cell_from_address(target.data_ptr())
+    assert cell.write_clock.scope == AtomicScope.GPU
+    assert cell.num_reads == 1
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("dtype", ATOMIC_LOAD_STORE_TYPES)
+def test_masked_atomic_load_store_only_updates_active_lanes(with_gsan, dtype):
+    # Keep each lane in a separate shadow cell. Byte accesses start inside the
+    # cell so the value checks also catch overwrites of neighboring bytes.
+    itemsize = dtype.itemsize
+    stride = max(1, SHADOW_GRANULARITY_BYTES // itemsize)
+    offset = 1 if itemsize == 1 else 0
+    target = torch.zeros(4 * stride, dtype=dtype, device="cuda")
+    out = torch.full_like(target, True if dtype == torch.bool else 42)
+
+    _masked_atomic_load_store_kernel[(1, )](target[offset:], out[offset:], stride, num_warps=1)
+
+    expected_target = torch.zeros_like(target)
+    expected_out = torch.full_like(out, True if dtype == torch.bool else 42)
+    expected_target[offset] = expected_out[offset] = 0 if dtype == torch.bool else 10
+    expected_target[offset + stride] = expected_out[offset + stride] = 1 if dtype == torch.bool else 11
+    torch.testing.assert_close(target, expected_target)
+    torch.testing.assert_close(out, expected_out)
+    for index in range(4):
+        for byte_offset in range(0, itemsize, SHADOW_GRANULARITY_BYTES):
+            cell = shadow_cell_from_address(target[offset + index * stride].data_ptr() + byte_offset)
+            if index < 2:
+                assert cell.num_reads == 1
+                assert cell.write_clock.scope == AtomicScope.GPU
+            else:
+                assert cell.num_reads == 0
+                assert cell.write_clock == ScalarClock(0, 0, AtomicScope.NON_ATOMIC)
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
@@ -742,6 +1070,55 @@ def test_atomic_poll_timeout_does_not_record_read(with_gsan):
 
 
 @pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("block_size", [16, 256])
+@pytest.mark.parametrize("dtype", [torch.int16, torch.int32, torch.int64])
+@pytest.mark.parametrize("sem", ["relaxed", "acquire"])
+@pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES)
+@pytest.mark.parametrize("timeout", [None, 0])
+def test_atomic_poll_tensor_only_records_matched_reads(with_gsan, block_size, dtype, sem, scope, expected_scope,
+                                                       timeout):
+    # Separate shadow cells let us check successful and timed-out elements independently.
+    stride = max(1, SHADOW_GRANULARITY_BYTES // torch.empty((), dtype=dtype).element_size())
+    target = torch.zeros(block_size * stride, dtype=dtype, device="cuda")
+    expected = torch.arange(1, block_size + 1, dtype=dtype, device="cuda")
+    target[::stride] = expected
+    if timeout is not None:
+        target[::2 * stride] = 0
+    out = torch.empty(block_size, dtype=torch.bool, device="cuda")
+
+    _atomic_poll_tensor_kernel[(1, )](target, out, block_size, stride, sem, scope, timeout, num_warps=4)
+    torch.testing.assert_close(out, target[::stride] == expected)
+
+    for index in range(block_size):
+        for byte_offset in range(0, target.element_size(), SHADOW_GRANULARITY_BYTES):
+            address = target.data_ptr() + index * stride * target.element_size() + byte_offset
+            if timeout is None or index % 2:
+                _assert_atomic_read_only_shadow(address, expected_scope)
+            else:
+                cell = shadow_cell_from_address(address)
+                assert cell.write_clock == ScalarClock(0, 0, AtomicScope.NON_ATOMIC)
+                assert cell.num_reads == 0
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("block_size", [16, 256])
+@pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES[1:])
+def test_atomic_poll_tensor_acquires_all_producers(with_gsan, capfd, block_size, scope, expected_scope):
+    stride = SHADOW_GRANULARITY_BYTES // 4
+    payload = torch.zeros(block_size * stride, dtype=torch.int32, device="cuda")
+    flags = torch.zeros_like(payload)
+    out = torch.full((block_size, ), -1, dtype=torch.int32, device="cuda")
+
+    _atomic_poll_tensor_sync_kernel[(3, )](payload, flags, out, block_size, stride, scope, num_warps=4)
+    torch.cuda.synchronize()
+
+    torch.testing.assert_close(out, torch.arange(1000, 1000 + block_size, dtype=torch.int32, device="cuda"))
+    for index in range(block_size):
+        _assert_cross_sm_sync(payload[index * stride:], flags[index * stride:], expected_scope)
+    _assert_no_gsan_runtime_output(capfd)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
 @pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES[1:])
 def test_atomic_poll_acquire_synchronizes_cross_sm(with_gsan, capfd, scope, expected_scope):
     payload = torch.zeros(1, dtype=torch.int32, device="cuda")
@@ -749,6 +1126,26 @@ def test_atomic_poll_acquire_synchronizes_cross_sm(with_gsan, capfd, scope, expe
     out = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
 
     _cross_sm_atomic_poll_sync_kernel[(2, )](payload, flag, out, scope=scope, num_warps=4)
+    torch.cuda.synchronize()
+
+    assert out.item() == 1000
+    _assert_cross_sm_sync(payload, flag, expected_scope)
+    _assert_no_gsan_runtime_output(capfd)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="GSan requires CUDA")
+@pytest.mark.parametrize("scope, expected_scope", ATOMIC_SCOPE_CASES[1:])
+@pytest.mark.parametrize("dtype", ATOMIC_LOAD_STORE_TYPES)
+def test_atomic_load_store_synchronizes_cross_sm(with_gsan, capfd, scope, expected_scope, dtype):
+    if dtype == torch.bool:
+        # LLVM loop peeling duplicates aligned barriers and hangs the kernel.
+        pytest.xfail("LLVM loop peeling breaks convergence of atomic-load result broadcasts")
+
+    payload = torch.zeros(1, dtype=torch.int32, device="cuda")
+    flag = torch.zeros(1, dtype=dtype, device="cuda")
+    out = torch.full((1, ), -1, dtype=torch.int32, device="cuda")
+
+    _cross_sm_atomic_load_store_sync_kernel[(2, )](payload, flag, out, scope=scope, num_warps=1)
     torch.cuda.synchronize()
 
     assert out.item() == 1000

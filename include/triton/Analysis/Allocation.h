@@ -9,6 +9,7 @@
 #include "llvm/ADT/SetVector.h"
 
 #include <limits>
+#include <optional>
 
 namespace mlir {
 
@@ -21,8 +22,16 @@ using AllocationAnalysisScratchSizeFn = std::function<unsigned(Operation *)>;
 
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op);
 
+unsigned getAtomicResultScratchSize(Value result);
+
 /// Returns whether an operation uses scratch memory across CTAs.
 bool hasCrossCTAScratch(Operation *op);
+
+/// For atomic-result scratch, returns the CTA bits broadcast from
+/// each group leader. Physical scratch owners have these bits clear.
+/// Scalar results are broadcast from CTA0 across all CTAs.
+/// Callers check whether scratch has been allocated.
+std::optional<uint16_t> getAtomicScratchBroadcastMask(Operation *op);
 
 unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
                                        const LinearLayout &dstLayout,
@@ -138,6 +147,13 @@ public:
     return bufferIds;
   }
 
+  /// Returns the current function's entry arguments aliased by a value.
+  ArrayRef<unsigned> getAliasedArgumentIndices(Value value) const {
+    auto it = argumentAliases.find(value);
+    return it == argumentAliases.end() ? ArrayRef<unsigned>{}
+                                       : it->second.getArrayRef();
+  }
+
   /// Returns the scratch buffer id of the given value.
   BufferId getBufferId(Operation *operation) const {
     if (opScratch.count(operation)) {
@@ -244,6 +260,7 @@ private:
   OpScratchMapT opVirtual;
   ValueBufferMapT valueBuffer;
   AliasBufferMapT aliasBuffer;
+  DenseMap<Value, llvm::SmallSetVector<unsigned, 2>> argumentAliases;
   BufferSetT bufferSet;
   size_t sharedMemorySize = 0;
 

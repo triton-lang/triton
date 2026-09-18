@@ -20,7 +20,8 @@ union SMEMDescriptor {
     uint64_t strideDimensionBaseOffset : 14;
     uint64_t : 3;
     uint64_t matrixBaseOffset : 3;
-    uint64_t : 10;
+    uint64_t leadDimensionAbsoluteMode : 1;
+    uint64_t : 9;
     uint64_t swizzlingMode : 2;
   };
 };
@@ -46,7 +47,7 @@ public:
   // ctaTileSize), return the associated memory descriptor for SMEM / TMEM.
   virtual MemDescOperand memLoad(int a, int b,
                                  ConversionPatternRewriter &rewriter,
-                                 Location loc) const = 0;
+                                 Location loc, int kSize = 0) const = 0;
 };
 
 class DotOpMmaSmemLoader : public DotOpMmaMemLoader {
@@ -158,7 +159,7 @@ public:
   }
 
   Value smemLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                 Location loc) const {
+                 Location loc, int kSize = 0) const {
     auto *ctx = loc.getContext();
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     auto dims = to_vector(ll.getInDimNames());
@@ -174,17 +175,35 @@ public:
     // Take the next 0/1/2/3 bits after the 128b tile
     uint32_t mask = (desc.swizzlingByteWidth >> 4) - 1;
     currDesc.matrixBaseOffset = (smemByteOffsetb8 / 128) & mask;
+    // Packed FP4 K96 may straddle a 128-byte swizzle sector. SM103 can
+    // address the second chunk through an absolute leading dimension.
+    // The caller selects this only for K-major, 128-byte-swizzled operands
+    // whose MN tile origins preserve a zero matrix base offset.
+    int k = desc.transposed ? a : b;
+    bool useAbsolute = kSize == 96 && k % 256 + kSize > 256;
+    if (useAbsolute) {
+      currDesc.leadDimensionAbsoluteMode = 1;
+      currDesc.leadDimensionBaseOffset = 0;
+    }
     int32_t smemByteOffsetb128 = smemByteOffsetb8 >> 4;
     uint64_t descBits = currDesc.descriptor + smemByteOffsetb128;
     // Add the base address to the descriptor
     Value low = tb.add(tb.i32_val(uint32_t(descBits)), baseb128);
     Value high = tb.i32_val(descBits >> 32);
     Value descWords = packLLVector(loc, {low, high}, rewriter);
-    return tb.bitcast(descWords, i64_ty);
+    Value result = tb.bitcast(descWords, i64_ty);
+    if (useAbsolute) {
+      int nextK = (k / 256 + 1) * 256;
+      Value next = smemLoad(desc.transposed ? nextK : a,
+                            desc.transposed ? b : nextK, rewriter, loc);
+      Value nextAddress = tb.and_(next, tb.i64_val(0x3fff));
+      result = tb.or_(result, tb.shl(nextAddress, tb.i64_val(16)));
+    }
+    return result;
   }
   MemDescOperand memLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                         Location loc) const override {
-    return {smemLoad(a, b, rewriter, loc), std::nullopt};
+                         Location loc, int kSize = 0) const override {
+    return {smemLoad(a, b, rewriter, loc, kSize), std::nullopt};
   }
 
   MMASMEMDescriptor &getDescriptor() { return desc; }

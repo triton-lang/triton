@@ -67,6 +67,7 @@ public:
     return computeCapability == 100 || computeCapability == 103 ||
            computeCapability == 110;
   }
+  bool supportsK96Tcgen05MMA() const { return computeCapability == 103; }
   bool supports4xFp4Tcgen05MMA() const { return computeCapability == 107; }
   bool supports2xFp8Tcgen05MMA() const { return computeCapability == 107; }
   bool supportsReuseA() const {

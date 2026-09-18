@@ -7,15 +7,21 @@ from triton._C.libtriton import ir
 
 T = TypeVar("T")
 
-__all__ = ["GluonJITFunction", "constexpr_function", "jit"]
+__all__ = ["GluonASTSource", "GluonJITFunction", "constexpr_function", "jit"]
 
 
 class GluonASTSource(ASTSource):
+    """An AST source for compiling a Gluon kernel with ``triton.compile``.
+
+    Pass an explicit target to ``triton.compile`` to compile without an active
+    GPU driver. As with ``triton.compiler.ASTSource``, callers supply the
+    signature, constexpr values, and specialization attributes.
+    """
 
     def __init__(self, fn, signature, constexprs=None, attrs=None) -> None:
         super().__init__(fn, signature, constexprs, attrs)
         self.language = Language.GLUON
-        self.ext = "ttgir"
+        self.ext = "glir"
 
     def make_ir(self, target, options, codegen_fns, module_map, context):
         from triton.compiler.compiler import make_backend
