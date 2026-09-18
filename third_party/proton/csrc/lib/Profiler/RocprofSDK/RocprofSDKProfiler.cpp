@@ -158,7 +158,6 @@ struct RocprofilerRuntimeState {
   rocprofiler_client_finalize_t clientFinalize{};
   std::optional<rocprofiler_client_id_t> clientId;
   std::once_flag registerShutdownFlag;
-  std::once_flag registerMetricBufferShutdownFlag;
   bool clientFinalized{false};
 };
 
@@ -660,10 +659,14 @@ struct RocprofSDKProfiler::RocprofSDKProfilerPimpl
     state.pimpl.compare_exchange_strong(expected, nullptr);
   }
 
+  void releaseMetricBuffers() {
+    profiler.pendingGraphPool.reset();
+    profiler.metricBuffer.reset();
+  }
+
   void doStart() override;
   void doFlush() override;
   void doStop() override;
-  static void releaseMetricBuffers();
 
   static void hipRuntimeCallback(rocprofiler_callback_tracing_record_t record,
                                  rocprofiler_user_data_t *userData, void *arg);
@@ -806,14 +809,6 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleStreamCaptureBegin(
   threadState.isStreamCapturing = true;
   streamCaptureGraphState = GraphState{};
   threadState.profiler.metricBuffer->reserve();
-  // HIP is initialized now. Register after its teardown handlers so the
-  // buffers are released first, but keep them alive across session stops:
-  // captured graph metric nodes can still reference their allocations.
-  std::call_once(getRuntimeState().registerMetricBufferShutdownFlag, []() {
-    if (std::atexit(&releaseMetricBuffers) != 0)
-      throw makeRuntimeError(
-          "Failed to register ROCprofiler metric buffer shutdown handler");
-  });
 }
 
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::handleCapturedKernelEnter() {
@@ -1394,8 +1389,10 @@ void protonToolFini(void *toolData) {
     }
   }
   rocprofiler::flushBuffer<false>(state->kernelBuffer);
-  if (auto *impl = state->pimpl.load())
+  if (auto *impl = state->pimpl.load()) {
     impl->pcSampling.flushBuffersNoThrow();
+    impl->releaseMetricBuffers();
+  }
 }
 
 rocprofiler_tool_configure_result_t *
@@ -1414,15 +1411,6 @@ protonConfigure(uint32_t version, const char *runtimeVersion, uint32_t priority,
 
 // ---- Profiler lifecycle ----
 
-void RocprofSDKProfiler::RocprofSDKProfilerPimpl::releaseMetricBuffers() {
-  auto &profiler = RocprofSDKProfiler::instance();
-  // Finish graph writes and SDK callbacks before releasing their destinations.
-  profiler.flush();
-  finalizeRocprofilerClient();
-  profiler.pendingGraphPool.reset();
-  profiler.metricBuffer.reset();
-}
-
 void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStart() {
   {
     auto &state = getRuntimeState();
@@ -1431,6 +1419,9 @@ void RocprofSDKProfiler::RocprofSDKProfilerPimpl::doStart() {
     // RocprofSDKProfiler static destruction, while callback destinations are
     // still alive.
     std::call_once(state.registerShutdownFlag, []() {
+      // Initialize HIP first so this handler also runs before HIP teardown
+      // when profiling starts before the application's first HIP API call.
+      std::ignore = hip::deviceSynchronize<true>();
       if (std::atexit(&finalizeRocprofilerClient) != 0)
         throw makeRuntimeError(
             "Failed to register ROCprofiler shutdown handler");

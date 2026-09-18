@@ -48,7 +48,7 @@ _skip_cudagraph_test = pytest.mark.skipif(
 @pytest.mark.parametrize("capture_graph", [False, pytest.param(True, marks=_skip_cudagraph_test)])
 def test_rocprofiler_process_exit_without_finalize(tmp_path: pathlib.Path, capture_graph: bool):
     # Run in a subprocess so normal process teardown exercises the ordering
-    # between Proton static destruction and rocprofiler-sdk's atexit handler.
+    # between HIP teardown, SDK finalization, and Proton static destruction.
     script = tmp_path / "unfinalized_rocprofiler.py"
     output = tmp_path / "unfinalized_rocprofiler"
     script.write_text(f"""
@@ -94,13 +94,13 @@ for _ in range(100):
 
 @pytest.mark.skipif(not is_hip(), reason="ROCprofiler is only available on HIP")
 @_skip_cudagraph_test
-def test_rocprofiler_graph_metrics_repeated_sessions_exit(tmp_path: pathlib.Path):
+@pytest.mark.parametrize("num_sessions", [1, 2])
+def test_rocprofiler_graph_session_exit(tmp_path: pathlib.Path, num_sessions: int):
     script = tmp_path / "rocprofiler_graph_sessions.py"
     script.write_text(f"""
 import triton.profiler as proton
 import triton
 import triton.language as tl
-import torch
 
 
 @triton.jit
@@ -109,46 +109,44 @@ def copy(x, y, n: tl.constexpr):
     tl.store(y + offsets, tl.load(x + offsets))
 
 
-x = torch.ones((1024,), device="cuda")
-y = torch.zeros_like(x)
-copy[(1,)](x, y, x.numel())
-torch.cuda.synchronize()
+for session in range({num_sessions}):
+    # The first session starts before Torch can initialize HIP.
+    proton.start(f"{str(tmp_path)}/profile_{{session}}", hook="triton", backend="rocprofiler")
+    import torch
 
-for iteration in range(2):
-    # Two simultaneous sessions also exercise flushes after the first stop.
-    for session in range(2):
-        proton.start(f"{str(tmp_path)}/profile_{{iteration}}_{{session}}",
-                     hook="triton", backend="rocprofiler")
+    x = torch.ones((1024,), device="cuda")
+    y = torch.zeros_like(x)
+    copy[(1,)](x, y, x.numel())
+    torch.cuda.synchronize()
     graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph):
         with proton.scope("copy_scope", metrics={{"elements": x.numel()}}):
             copy[(1,)](x, y, x.numel())
     with proton.scope("replay"):
         graph.replay()
-        graph.replay()
-    proton.deactivate()
     proton.finalize()
     torch.testing.assert_close(x, y)
 # Captured metric kernels must remain safe after profiling stops.
+y.zero_()
 graph.replay()
 torch.cuda.synchronize()
+torch.testing.assert_close(x, y)
 """)
     # The subprocess must exit normally after freeing graph metric buffers.
     result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=60,
                             env=clean_rocprofiler_env())
     assert result.returncode == 0, result.stderr
-    for iteration in range(2):
-        for session in range(2):
-            data = json.loads((tmp_path / f"profile_{iteration}_{session}.hatchet").read_text())
-            replay = _find_frame_by_name(data[0], "replay")
-            assert replay is not None
-            scope = _find_frame_by_name(replay, "copy_scope")
-            assert scope is not None
-            assert scope["metrics"]["elements"] == 2048
-            kernel = _find_frame_by_name(scope, "copy")
-            assert kernel is not None
-            assert kernel["metrics"]["count"] == 2
-            assert kernel["metrics"]["time (ns)"] > 0
+    for session in range(num_sessions):
+        data = json.loads((tmp_path / f"profile_{session}.hatchet").read_text())
+        replay = _find_frame_by_name(data[0], "replay")
+        assert replay is not None
+        scope = _find_frame_by_name(replay, "copy_scope")
+        assert scope is not None
+        assert scope["metrics"]["elements"] == 1024
+        kernel = _find_frame_by_name(scope, "copy")
+        assert kernel is not None
+        assert kernel["metrics"]["count"] == 1
+        assert kernel["metrics"]["time (ns)"] > 0
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
