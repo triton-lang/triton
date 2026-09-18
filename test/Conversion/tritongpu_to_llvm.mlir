@@ -1,4 +1,6 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --dump-input-context 20
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm="ptx-version=88" -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --check-prefixes=CHECK,OLD-PTX --dump-input-context 20
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm="ptx-version=93" -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --check-prefixes=CHECK,OLD-PTX --dump-input-context 20
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm="ptx-version=94" -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --check-prefixes=CHECK,PTX94 --dump-input-context 20
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i32, %arg1: !llvm.ptr<1> {tt.pointee_type = f16}, %arg2: !llvm.ptr<1>, %arg3: !llvm.ptr<1>)
@@ -839,10 +841,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
   // CHECK-LABEL: async_cp_detailed_cache_policy
   tt.func @async_cp_detailed_cache_policy(%v: tensor<256x!tt.ptr<f16>, #blocked>, %smem: !ttg.memdesc<256xf16, #shared1D, #smem, mutable>) {
-    // Fractional L2 policies are disabled in cp.async codegen due to a ptxas bug.
-    // CHECK-NOT: createpolicy
+    // OLD-PTX-NOT: createpolicy
+    // PTX94: createpolicy.fractional.L2::evict_last.b64 $0, {{0\.8.*}};
     // CHECK-NOT: L1::evict_last
-    // CHECK: cp.async.ca.shared.global.L2::256B {{.*}}, 0x8, 0x8;
+    // OLD-PTX: cp.async.ca.shared.global.L2::256B {{.*}}, 0x8, 0x8;
+    // PTX94: cp.async.ca.shared.global.L2::256B.L2::cache_hint {{.*}}, 0x8, 0x8, ${{[0-9]+}};
     %0 = ttg.async_copy_global_to_local %v, %smem {cachePolicy = #async_l2_policy, contiguity = 4 : i32} : tensor<256x!tt.ptr<f16>, #blocked> -> !ttg.memdesc<256xf16, #shared1D, #smem, mutable>
     tt.return
   }
@@ -869,19 +872,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
   // CHECK-LABEL: async_cp_detailed_ca_16_bytes
   tt.func @async_cp_detailed_ca_16_bytes(%src: tensor<256x!tt.ptr<f32>, #blocked>, %dst: !ttg.memdesc<256xf32, #shared, #smem, mutable>) {
-    // CHECK-NOT: createpolicy
-    // CHECK: cp.async.ca.shared.global.L2::128B {{.*}}, 0x10, 0x10;
+    // OLD-PTX-NOT: createpolicy
+    // PTX94: createpolicy.fractional.L2::evict_last.b64 $0, 0.5;
+    // OLD-PTX: cp.async.ca.shared.global.L2::128B {{.*}}, 0x10, 0x10;
+    // PTX94: cp.async.ca.shared.global.L2::128B.L2::cache_hint {{.*}}, 0x10, 0x10, ${{[0-9]+}};
     %0 = ttg.async_copy_global_to_local %src, %dst {cachePolicy = #detailed_ca, contiguity = 4 : i32} : tensor<256x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<256xf32, #shared, #smem, mutable>
     tt.return
   }
 
-  // Legacy eviction policies also use fractional L2 policies and must be ignored.
+  // Legacy eviction policies use fractional L2 policies with a fraction of 1.0.
   // CHECK-LABEL: async_cp_evict_first_masked_8_bytes
   tt.func @async_cp_evict_first_masked_8_bytes(%src: tensor<256x!tt.ptr<f32>, #blocked>, %dst: !ttg.memdesc<256xf32, #shared, #smem, mutable>, %valid: i1) {
-    // CHECK-NOT: createpolicy
+    // OLD-PTX-NOT: createpolicy
+    // PTX94: createpolicy.fractional.L2::evict_first.b64 $0, 1.0;
     // CHECK: llvm.xor
-    // CHECK: cp.async.ca.shared.global {{.*}}, 0x8, ${{[0-9]+}};
-    // CHECK-SAME: "r,l,b
+    // OLD-PTX: cp.async.ca.shared.global {{.*}}, 0x8, ${{[0-9]+}};
+    // OLD-PTX-SAME: "r,l,b
+    // PTX94: cp.async.ca.shared.global.L2::cache_hint {{.*}}, 0x8, ${{[0-9]+}}, ${{[0-9]+}};
+    // PTX94-SAME: "r,l,b,l
     %mask = tt.splat %valid : i1 -> tensor<256xi1, #blocked>
     %0 = ttg.async_copy_global_to_local %src, %dst mask %mask {cachePolicy = #evict_first, contiguity = 2 : i32} : tensor<256x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<256xf32, #shared, #smem, mutable>
     tt.return
@@ -889,8 +897,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
   // CHECK-LABEL: async_cp_evict_last_16_bytes
   tt.func @async_cp_evict_last_16_bytes(%src: tensor<256x!tt.ptr<f32>, #blocked>, %dst: !ttg.memdesc<256xf32, #shared, #smem, mutable>) {
-    // CHECK-NOT: createpolicy
-    // CHECK: cp.async.cg.shared.global {{.*}}, 0x10, 0x10;
+    // OLD-PTX-NOT: createpolicy
+    // PTX94: createpolicy.fractional.L2::evict_last.b64 $0, 1.0;
+    // OLD-PTX: cp.async.cg.shared.global {{.*}}, 0x10, 0x10;
+    // PTX94: cp.async.cg.shared.global.L2::cache_hint {{.*}}, 0x10, 0x10, ${{[0-9]+}};
     %0 = ttg.async_copy_global_to_local %src, %dst {cachePolicy = #evict_last, contiguity = 4 : i32} : tensor<256x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<256xf32, #shared, #smem, mutable>
     tt.return
   }
@@ -3590,15 +3600,134 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, ttg.tar
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: @histogram_atomic
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:80"} {
+  // CHECK-LABEL: @histogram_one_bin_four_warps
+  // CHECK-NOT: llvm.atomicrmw
+  // CHECK: ballot
+  // CHECK: ctpop
+  // CHECK-NOT: llvm.atomicrmw
+  // CHECK: llvm.store {{.*}}!llvm.ptr<3>
+  // CHECK: nvvm.barrier
+  // CHECK: llvm.load {{.*}} : !llvm.ptr<3>
+  // CHECK-NOT: llvm.atomicrmw
+  // CHECK: %[[MASK:.+]] = llvm.mlir.constant(-1 : i32)
+  // CHECK: nvvm.redux.sync add %{{.*}}, %[[MASK]]
+  // CHECK-NOT: llvm.atomicrmw
+  // CHECK: llvm.return
+  tt.func private @histogram_one_bin_four_warps(%src: tensor<128xi32, #blocked>, %mask: tensor<128xi1, #blocked>) -> tensor<1xi32, #blocked> {
+    %hist = tt.histogram %src, %mask : tensor<128xi32, #blocked> -> tensor<1xi32, #blocked>
+    tt.return %hist : tensor<1xi32, #blocked>
+  }
+
+  // CHECK-LABEL: @histogram_two_bins_four_warps
+  // CHECK-NOT: ballot
+  // CHECK: llvm.atomicrmw add
+  // CHECK-NOT: ballot
+  // CHECK: llvm.return
+  tt.func private @histogram_two_bins_four_warps(%src: tensor<128xi32, #blocked>, %mask: tensor<128xi1, #blocked>) -> tensor<2xi32, #blocked> {
+    %hist = tt.histogram %src, %mask : tensor<128xi32, #blocked> -> tensor<2xi32, #blocked>
+    tt.return %hist : tensor<2xi32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#histResult = #ttg.linear<{register = [], lane = [[0], [0], [1], [0], [0]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:80"} {
+  // CHECK-LABEL: @histogram_one_warp_nondefault_result
+  // CHECK-NOT: {{llvm.atomicrmw|nvvm.barrier|llvm.load|llvm.store}}
+  // CHECK: ballot
+  // CHECK: ctpop
+  // CHECK-NOT: {{llvm.atomicrmw|nvvm.barrier|llvm.load|llvm.store}}
+  // CHECK: llvm.select
+  // CHECK-NOT: {{llvm.atomicrmw|nvvm.barrier|llvm.load|llvm.store}}
+  // CHECK: llvm.return
+  tt.func private @histogram_one_warp_nondefault_result(%src: tensor<64xi32, #blocked>, %mask: tensor<64xi1, #blocked>) -> tensor<2xi32, #histResult> {
+    %hist = tt.histogram %src, %mask : tensor<64xi32, #blocked> -> tensor<2xi32, #histResult>
+    tt.return %hist : tensor<2xi32, #histResult>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
+// CHECK-LABEL: module
+// CHECK-SAME: ttg.shared = 128 : i32
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @histogram_two_bins_two_warps
+  // CHECK-NOT: llvm.atomicrmw
+  // CHECK: ballot
+  // CHECK: ctpop
+  // CHECK-NOT: llvm.atomicrmw
+  // CHECK: llvm.store {{.*}}!llvm.ptr<3>
+  // CHECK: nvvm.barrier
+  // CHECK: llvm.load {{.*}} : !llvm.ptr<3>
+  // CHECK-NOT: llvm.atomicrmw
+  // CHECK: nvvm.shfl.sync bfly
+  // CHECK: llvm.add
+  // CHECK-NOT: llvm.atomicrmw
+  // CHECK: llvm.return
+  tt.func @histogram_two_bins_two_warps(%src: tensor<64xi32, #blocked>, %mask: tensor<64xi1, #blocked>, %out_ptr: tensor<2x!tt.ptr<i32>, #blocked>) {
+    %hist = tt.histogram %src, %mask : tensor<64xi32, #blocked> -> tensor<2xi32, #blocked>
+    tt.store %out_ptr, %hist : tensor<2x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#histBroadcast = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CGALayout = [[0], [0]]}>
+// CHECK-LABEL: module
+// CHECK-SAME: ttg.shared = 0 : i32
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // Replicated inputs let each CTA count independently without scratch.
+  // CHECK-LABEL: @histogram_small_replicated_input
+  // CHECK-NOT: {{llvm.atomicrmw|barrier|nvvm.cluster.arrive|nvvm.cluster.wait|nvvm.mapa}}
+  // CHECK: ballot
+  // CHECK: ctpop
+  // CHECK-NOT: {{llvm.atomicrmw|barrier|nvvm.cluster.arrive|nvvm.cluster.wait|nvvm.mapa}}
+  // CHECK: llvm.return
+  tt.func @histogram_small_replicated_input(%src: tensor<128xi32, #histBroadcast>, %out_ptr: tensor<2x!tt.ptr<i32>, #histBroadcast>) {
+    %hist = tt.histogram %src : tensor<128xi32, #histBroadcast> -> tensor<2xi32, #histBroadcast>
+    tt.store %out_ptr, %hist : tensor<2x!tt.ptr<i32>, #histBroadcast>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @histogram_four_bins_one_warp
   // CHECK: llvm.icmp "ult"
   // CHECK: llvm.atomicrmw add
   // CHECK-NOT: ballot
   // CHECK-NOT: ctpop
-  tt.func @histogram_atomic(%src: tensor<256xi32, #blocked>, %mask: tensor<256xi1, #blocked>, %out_ptr: tensor<8x!tt.ptr<i32>, #blocked>) {
-    %hist = tt.histogram %src, %mask : tensor<256xi32, #blocked> -> tensor<8xi32, #blocked>
-    tt.store %out_ptr, %hist : tensor<8x!tt.ptr<i32>, #blocked>
+  tt.func @histogram_four_bins_one_warp(%src: tensor<128xi32, #blocked>, %mask: tensor<128xi1, #blocked>, %out_ptr: tensor<4x!tt.ptr<i32>, #blocked>) {
+    %hist = tt.histogram %src, %mask : tensor<128xi32, #blocked> -> tensor<4xi32, #blocked>
+    tt.store %out_ptr, %hist : tensor<4x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#histSplit = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CGALayout = [[1], [2]]}>
+#histBroadcast = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CGALayout = [[0], [0]]}>
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // Small cross-CTA histograms still combine shared-memory atomic counts.
+  // CHECK-LABEL: @histogram_small_split_input
+  // CHECK-NOT: ballot
+  // CHECK: llvm.atomicrmw add {{.*}} : !llvm.ptr<3>, i32
+  // CHECK: nvvm.cluster.arrive
+  // CHECK-NEXT: nvvm.cluster.wait
+  // CHECK-COUNT-4: nvvm.mapa
+  // CHECK-NOT: nvvm.mapa
+  // CHECK: llvm.return
+  tt.func @histogram_small_split_input(%src: tensor<128xi32, #histSplit>, %out_ptr: tensor<2x!tt.ptr<i32>, #histBroadcast>) {
+    %hist = tt.histogram %src : tensor<128xi32, #histSplit> -> tensor<2xi32, #histBroadcast>
+    tt.store %out_ptr, %hist : tensor<2x!tt.ptr<i32>, #histBroadcast>
     tt.return
   }
 }

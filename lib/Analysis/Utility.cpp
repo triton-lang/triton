@@ -26,6 +26,13 @@ namespace mlir {
 using namespace triton;
 using namespace triton::gpu;
 
+bool triton::canUseWarpBallotHistogram(HistogramOp op) {
+  int numBins = op.getType().getNumElements();
+  // Limit ballot and reduction overhead relative to shared-memory atomics.
+  return !hasCrossCTAScratch(op) && numBins <= 2 &&
+         numBins * gpu::lookupNumWarps(op) <= 4;
+}
+
 // Cases where distributed shared memory is not required in ConvertLayout:
 // (1) numCTAs == 1
 // (2) numCTAs > 1 but srcCGALayout == dstCGALayout
