@@ -403,6 +403,20 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     }
     LDBG("RMW FADD supported type");
 
+    if (atomicRmwOp == RMWOp::MAX || atomicRmwOp == RMWOp::MIN) {
+      if (checkType.isInteger()) {
+        return rewriter.notifyMatchFailure(
+            op, "signed integer min/max RMW operations use generic atomic "
+                "lowering");
+      }
+      if (!targetFeatures.supportsBufferAtomicFMinMax(checkType)) {
+        return rewriter.notifyMatchFailure(
+            op, "no native buffer atomic supports this floating-point min/max "
+                "target/type combination");
+      }
+      LDBG("RMW floating-point min/max supported type");
+    }
+
     auto vecSize = getVectorSize(ptr, axisAnalysisPass);
     if (auto mask = op.getMask()) {
       vecSize = std::min(vecSize, axisAnalysisPass.getMaskAlignment(mask));
@@ -425,15 +439,9 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     case RMWOp::UMAX:
     case RMWOp::UMIN:
     case RMWOp::XCHG:
-      break;
     case RMWOp::MAX:
     case RMWOp::MIN:
-      // TODO: It likely means smax/smin, for now intrinsic
-      // llvm.amdgcn.raw.ptr.buffer.atomic.{min|max} is emitted, and llvm get
-      // confused as how to deal with {f|s|u}{min|max}.
-      if (!checkType.isInteger())
-        break;
-      // else fall through
+      break;
     default:
       auto rmwOpStr = stringifyRMWOp(atomicRmwOp).str();
       return rewriter.notifyMatchFailure(op, "RMW with unsupported op: " +
@@ -539,14 +547,15 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
                 contig, axisAnalysisPass.getMaskAlignment(maybeMask));
           return triton::amdgpu::BufferLoadOp::create(
               rewriter, op->getLoc(), op.getType(), basePtr, tensorOffset,
-              blockStride, op.getCache(), maybeMask, maybeOther, contig);
+              blockStride, op.getCachePolicyAttr(), maybeMask, maybeOther,
+              contig);
         } else if constexpr (std::is_same_v<
                                  SourceOp,
                                  triton::gpu::AsyncCopyGlobalToLocalOp>) {
           return triton::amdgpu::BufferLoadToLocalOp::create(
               rewriter, op->getLoc(), op.getType(), op.getResult(), basePtr,
-              tensorOffset, maybeMask, maybeOther, blockStride, op.getCache(),
-              op.getContiguity());
+              tensorOffset, maybeMask, maybeOther, blockStride,
+              op.getCachePolicyAttr(), op.getContiguity());
         } else {
           static_assert(always_false<SourceOp>::value,
                         "Unsupported type in ConvertTritonLoadToBufferLoad");
@@ -611,8 +620,8 @@ struct ConvertTritonStoreToBufferStore
           op->getLoc(), op);
 
       rewriter.replaceOpWithNewOp<triton::amdgpu::BufferStoreOp>(
-          op, op.getValue(), basePtr, tensorOffset, blockStride, op.getCache(),
-          maybeMask, contig);
+          op, op.getValue(), basePtr, tensorOffset, blockStride,
+          op.getCachePolicyAttr(), maybeMask, contig);
       return success();
     }
     LDBG("Failed to convert: " << op);

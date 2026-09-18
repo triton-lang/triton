@@ -1,23 +1,12 @@
 #ifndef TRITON_ATTR_DEFS
 #define TRITON_ATTR_DEFS
 
+include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/EnumAttr.td"
+include "triton/Dialect/Triton/IR/TritonAttrEnums.td"
+include "triton/Dialect/Triton/IR/TritonDialect.td"
 
 // Attributes for LoadOp and StoreOp
-def TT_CacheModifierAttr : I32EnumAttr<
-    "CacheModifier", "",
-    [
-        I32EnumAttrCase<"NONE", 1, "none">,
-        I32EnumAttrCase<"CA", 2, "ca">,
-        I32EnumAttrCase<"CG", 3, "cg">,
-        I32EnumAttrCase<"WB", 4, "wb">,
-        I32EnumAttrCase<"CS", 5, "cs">,
-        I32EnumAttrCase<"WT", 6, "wt">,
-        I32EnumAttrCase<"CV", 7, "cv">,
-    ]> {
-    let cppNamespace = "::mlir::triton";
-}
-
 def TT_MemSemanticAttr : I32EnumAttr<
     "MemSemantic", "",
     [
@@ -37,6 +26,23 @@ def TT_EvictionPolicyAttr : I32EnumAttr<
         I32EnumAttrCase<"EVICT_LAST", 3, "evict_last">
     ]> {
     let cppNamespace = "::mlir::triton";
+}
+
+def TT_CachePolicyAttr : AttrDef<Triton_Dialect, "CachePolicy"> {
+    let mnemonic = "cache_policy";
+    let description = [{
+      Target-neutral cache hints used by Triton memory operations.
+
+      Target dialects may define richer cache policy attributes. This
+      attribute represents the cache modifier and eviction policy exposed by
+      the common Triton language API. Cache policies are performance hints and
+      have no memory-ordering semantics.
+    }];
+    let parameters = (ins
+      EnumParameter<TT_CacheModifierAttr>:$cache_modifier,
+      EnumParameter<TT_EvictionPolicyAttr>:$eviction_policy
+    );
+    let assemblyFormat = "`<` struct(params) `>`";
 }
 
 def TT_PaddingOptionAttr : I32EnumAttr<

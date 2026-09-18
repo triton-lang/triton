@@ -8,7 +8,7 @@ module {
     %c128_i32 = arith.constant 128 : i32
     %c256_i32 = arith.constant 256 : i32
     %0 = tt.make_tensor_descriptor %arg0, [%c256_i32, %c256_i32], [%c1_i64, %c256_i64] {order = array<i32: 0>} : <f32>, <128x128xf32>
-    %3 = tt.descriptor_load %0[%arg1, %arg2] : !tt.tensordesc<128x128xf32> -> tensor<128x128xf32>
+    %3 = tt.descriptor_load %0[%arg1, %arg2] {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_last>} : !tt.tensordesc<128x128xf32> -> tensor<128x128xf32>
     tt.return %3 : tensor<128x128xf32>
   }
 }
@@ -50,7 +50,7 @@ module {
 // CHECK-DAG: %[[VAL23:.*]] = tt.broadcast %[[VAL22]] : tensor<1x128xi1> -> tensor<128x128xi1>
 // CHECK-DAG: %[[VAL24:.*]] = arith.andi %[[VAL19]], %[[VAL23]]
 
-// CHECK-DAG: %[[VAL25:.*]] = tt.load %[[VAL15]], %[[VAL24]], %[[CST]]
+// CHECK-DAG: %[[VAL25:.*]] = tt.load %[[VAL15]], %[[VAL24]], %[[CST]] {cachePolicy = #tt.cache_policy<cache_modifier = cg, eviction_policy = evict_last>}
 // CHECK: tt.return %[[VAL25]] :
 
 // -----

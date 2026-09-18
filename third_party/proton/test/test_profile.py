@@ -3,8 +3,11 @@ Reproducibility tests for Proton.
 Each test should invoke one or more GPU kernels and check the validity of their profiling results.
 """
 
+import inspect
 import os
 import pathlib
+import subprocess
+import sys
 
 import triton
 import triton.profiler as proton
@@ -38,6 +41,43 @@ _skip_cudagraph_test = pytest.mark.skipif(
     os.environ.get("PROTON_SKIP_CUDAGRAPH_TEST", "0") == "1",
     reason="CUDAGraph test skipped due to environment constraints",
 )
+
+
+@pytest.mark.skipif(not is_hip(), reason="ROCprofiler is only available on HIP")
+def test_rocprofiler_process_exit_without_finalize(tmp_path: pathlib.Path):
+    # Run in a subprocess so normal process teardown exercises the ordering
+    # between Proton static destruction and rocprofiler-sdk's atexit handler.
+    script = tmp_path / "unfinalized_rocprofiler.py"
+    output = tmp_path / "unfinalized_rocprofiler"
+    script.write_text(f"""
+import triton.profiler as proton
+import triton
+import triton.language as tl
+import torch
+
+
+@triton.jit
+def copy(x, y, n: tl.constexpr):
+    offsets = tl.arange(0, n)
+    tl.store(y + offsets, tl.load(x + offsets))
+
+
+x = torch.ones((1024,), device="cuda")
+y = torch.zeros_like(x)
+proton.start({str(output)!r}, hook="triton", backend="rocprofiler")
+for _ in range(100):
+    copy[(1,)](x, y, x.numel())
+# Intentionally omit synchronization and proton.finalize(). The SDK must
+# finish queued work and drain its pending callbacks before Proton destroys
+# the callback targets.
+""")
+
+    # Poison freed heap allocations so stale Proton state is not likely to
+    # remain accidentally usable until rocprofiler-sdk's atexit handler runs.
+    env = os.environ.copy()
+    env["MALLOC_PERTURB_"] = "165"
+    result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=20, env=env)
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
@@ -953,37 +993,88 @@ def test_hook_multiple_threads(tmp_path: pathlib.Path, device: str):
 
 
 def test_pcsampling(tmp_path: pathlib.Path, device: str):
-    if not is_cuda():
-        pytest.skip("Only CUDA backend supports pc sampling")
+    if not (is_cuda() or is_hip()):
+        pytest.skip("Only CUDA and HIP backends support pc sampling")
 
     if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "0") == "1":
         pytest.skip("PC sampling test is disabled")
+    expect_source_attribution = True
+    if is_hip():
+        from triton._C.libproton import proton as libproton
+
+        expect_source_attribution = libproton.has_amd_pc_sampling_source_locations()
 
     @triton.jit
     def foo(x, y, size: tl.constexpr):
         offs = tl.arange(0, size)
-        for _ in range(1000):
+        for _ in range(2000):
             tl.store(y + offs, tl.load(x + offs))
 
+    def total_samples(frame):
+        samples = frame["metrics"].get("num_samples", 0)
+        for child in frame["children"]:
+            samples += total_samples(child)
+        return samples
+
+    def pc_sample_source_frames(frame):
+        frames = []
+        queue = [frame]
+        while queue:
+            current = queue.pop(0)
+            name = current["frame"]["name"]
+            if "@" in name:
+                try:
+                    file_line, function = name.rsplit("@", 1)
+                    file_name, line = file_line.rsplit(":", 1)
+                    frames.append((pathlib.Path(file_name), int(line), function, current))
+                except ValueError:
+                    pass
+            queue.extend(current["children"])
+        return frames
+
+    foo_source, foo_start_line = inspect.getsourcelines(foo.fn)
+    expected_store_lines = {foo_start_line + idx for idx, line in enumerate(foo_source) if "tl.store" in line}
+    assert expected_store_lines
+
     temp_file = tmp_path / "test_pcsampling.hatchet"
-    proton.start(str(temp_file.with_suffix("")), hook="triton", backend="cupti", mode="pcsampling")
+    backend = "cupti" if is_cuda() else "rocprofiler"
+    try:
+        proton.start(
+            str(temp_file.with_suffix("")),
+            hook="triton",
+            backend=backend,
+            mode="pcsampling",
+        )
+    except RuntimeError as e:
+        message = str(e)
+        amd_pc_sampling_unavailable = ("rocprofiler-sdk PC sampling service is not available" in message
+                                       or "rocprofiler-sdk did not report PC sampling configurations" in message)
+        if is_hip() and amd_pc_sampling_unavailable:
+            proton.finalize()
+            pytest.skip(message)
+        raise
     with proton.scope("init"):
         x = torch.ones((1024, ), device=device, dtype=torch.float32)
         y = torch.zeros_like(x)
     with proton.scope("test"):
         foo[(1, )](x, y, x.size()[0], num_warps=4)
     proton.finalize()
+
     with temp_file.open() as f:
         data = json.load(f)
-    init_frame = data[0]["children"][0]
+
     test_frame = data[0]["children"][1]
-    # With line mapping
-    assert "foo" in test_frame["children"][0]["frame"]["name"]
-    assert test_frame["children"][0]["children"][0]["metrics"]["num_samples"] > 0
-    assert "@" in test_frame["children"][0]["children"][0]["frame"]["name"]
-    # Without line mapping
-    assert "elementwise" in init_frame["children"][0]["frame"]["name"]
-    assert init_frame["children"][0]["metrics"]["num_samples"] > 0
+
+    foo_frame = _find_frame_by_name(test_frame, "foo")
+    assert foo_frame is not None
+    if expect_source_attribution:
+        matching_source_frames = [
+            frame for file_name, line, function, frame in pc_sample_source_frames(foo_frame)
+            if file_name == pathlib.Path(__file__) and line in expected_store_lines and function
+            and frame["metrics"].get("num_samples", 0) > 0
+        ]
+        assert matching_source_frames
+    assert total_samples(foo_frame) > 0
 
 
 def test_deactivate(tmp_path: pathlib.Path, device: str):

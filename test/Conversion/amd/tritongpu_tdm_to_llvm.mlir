@@ -463,3 +463,50 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// TDM block has just 4 elements. Warps 4..7 have no work and must be
+// predicated off rather than handed an empty tile.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_store_1d_block_smaller_than_num_warps
+  tt.func public @tdm_store_1d_block_smaller_than_num_warps(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
+    %c_shape = arith.constant 128 : i32
+    %c_stride0 = arith.constant 1 : i64
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape], [%c_stride0] : <f32>, <4xf32, #shared>
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<4xf32, #shared, #smem, mutable>
+    // CHECK-DAG: %[[FREE_MASK:.*]] = llvm.mlir.constant(4 : i32) : i32
+    // CHECK: %[[MASKED:.*]] = llvm.and %{{.*}}, %[[FREE_MASK]] : i32
+    // CHECK: %[[IS_ACTIVE:.*]] = llvm.icmp "eq" %[[MASKED]], %{{.*}} : i32
+    // CHECK: llvm.select %[[IS_ACTIVE]]
+    // CHECK: "llvm.amdgcn.tensor.store.from.lds"
+    amdg.async_tdm_copy_local_to_global %0 from %1 : !ttg.memdesc<4xf32, #shared, #smem, mutable> -> !tt.tensordesc<4xf32, #shared>
+    tt.return
+  }
+}
+
+// -----
+
+// TDM block has just 16 (4*4) elements. Warps 16..31 have no work and must be
+// predicated off rather than handed an empty tile.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 32 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_store_2d_block_smaller_than_num_warps
+  tt.func public @tdm_store_2d_block_smaller_than_num_warps(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    %c_shape = arith.constant 128 : i32
+    %c_stride0 = arith.constant 128 : i64
+    %c_stride1 = arith.constant 1 : i64
+    %0 = tt.make_tensor_descriptor %arg0, [%c_shape, %c_shape], [%c_stride0, %c_stride1] : <f16>, <4x4xf16, #shared>
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<4x4xf16, #shared, #smem, mutable>
+    // CHECK-DAG: %[[FREE_MASK:.*]] = llvm.mlir.constant(16 : i32) : i32
+    // CHECK: %[[MASKED:.*]] = llvm.and %{{.*}}, %[[FREE_MASK]] : i32
+    // CHECK: %[[IS_ACTIVE:.*]] = llvm.icmp "eq" %[[MASKED]], %{{.*}} : i32
+    // CHECK: llvm.select %[[IS_ACTIVE]]
+    // CHECK: "llvm.amdgcn.tensor.store.from.lds"
+    amdg.async_tdm_copy_local_to_global %0 from %1 : !ttg.memdesc<4x4xf16, #shared, #smem, mutable> -> !tt.tensordesc<4x4xf16, #shared>
+    tt.return
+  }
+}

@@ -199,8 +199,10 @@ struct ClusterBarrierOpConversion
     auto ptrTy = cast<LLVM::LLVMPointerType>(barrierPtr0.getType());
     Value counterPtr = b.gep(ptrTy, i8_ty, barrierPtr0, LLVM::GEPArg(8));
 
-    NVVM::BarrierOp::create(rewriter, loc);
+    // The WS entry or previous tail barrier publishes the current counter.
+    // Wait for every local thread to read it before the leader can advance it.
     Value counter = b.load(i32_ty, counterPtr);
+    NVVM::BarrierOp::create(rewriter, loc);
     // A delayed CTA can miss a phase if a peer reuses one mbarrier twice
     // before it starts waiting. Alternate two slots so each slot is reused
     // only after an intervening rendezvous. The low counter bit selects the
