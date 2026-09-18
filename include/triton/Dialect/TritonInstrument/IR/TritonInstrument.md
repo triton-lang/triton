@@ -155,21 +155,21 @@ post-wait section.
 ## Generic-to-Async Proxy Ordering
 
 On NVIDIA targets, some instructions access shared memory through the generic
-proxy and others through an async proxy. ConSan requires every generic-proxy
-access that precedes an async-proxy access to cross
-`ttng.fence_async_shared` before the async access is issued. This rule applies
-to both reads and writes. In particular, ConSan intentionally requires a fence
-for a generic read followed by an async read even though that pair alone is not
-a data hazard. This is the conservative rule exposed at the Gluon level.
+proxy and others through an async proxy. ConSan requires preceding conflicting
+generic-proxy accesses to cross `ttng.fence_async_shared` before an async access
+is issued. An async read requires fence coverage for preceding generic writes;
+an async write requires fence coverage for both preceding generic reads and
+writes. A generic read followed by an async read does not require an intervening
+fence.
 
 The proxy state is maintained per buffer, CTA, and base thread. Each frontier
-records which source base threads have made generic accesses visible and which
-of those source accesses have been covered by a proxy fence. A new generic
-access marks its source as seen and invalidates older fence coverage for that
-source and buffer. `ttng.fence_async_shared` covers the generic accesses
-currently visible to the issuing base thread; it does not fence another logical
-thread. A CTA-scoped fence covers current-CTA buffer rows, while a
-cluster-scoped fence covers buffer rows across the cluster.
+records generic reads and writes separately, including which source base threads
+have made them visible and which have been covered by a proxy fence. A new
+generic access marks its source as seen and invalidates older fence coverage
+only for the same access kind, source, and buffer. `ttng.fence_async_shared`
+covers the generic accesses currently visible to the issuing base thread; it
+does not fence another logical thread. A CTA-scoped fence covers current-CTA
+buffer rows, while a cluster-scoped fence covers buffer rows across the cluster.
 
 Synchronization transports the packed access-and-fence frontier in the same
 places that ordinary read visibility is transported:

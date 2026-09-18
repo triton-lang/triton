@@ -168,9 +168,11 @@ def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple
 
     orig_code = fn.fn.__code__
     ret.file_name = orig_code.co_filename
+    # The Python function points at the original source file. Keep its original
+    # definition start so inspect.getsource can recover the complete function.
     ret.fn.__code__ = ret.fn.__code__.replace(
         co_filename=orig_code.co_filename,
-        co_firstlineno=adjust_line_number(orig_code.co_firstlineno),
+        co_firstlineno=orig_code.co_firstlineno,
     )
     return ret
 

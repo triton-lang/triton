@@ -32,6 +32,7 @@ void populateElementwiseOpToLLVMPatterns(
 void populateMemoryOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                     const TargetInfoBase &targetInfo,
                                     RewritePatternSet &patterns,
+                                    ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                     PatternBenefit benefit);
 
 void populateAssertOpToLLVMPattern(LLVMTypeConverter &typeConverter,
