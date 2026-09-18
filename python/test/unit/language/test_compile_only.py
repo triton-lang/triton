@@ -1,5 +1,6 @@
 import pytest
 import re
+from pathlib import Path
 from types import SimpleNamespace
 
 import triton
@@ -177,6 +178,39 @@ def test_maxnreg_instrumentation_mode(instrumentation_mode, monkeypatch):
     else:
         assert compiled.metadata.maxnreg == 42
         assert ".maxnreg 42" in compiled.asm["ptx"]
+
+
+@pytest.mark.parametrize("capability", [90, 100, 107])
+@pytest.mark.parametrize("ptxas_version", ["13.3", "13.4", "13.5"])
+@pytest.mark.parametrize("instrumentation_mode", ["", "consan", "fpsan", "gsan,consan"])
+@pytest.mark.parametrize("disable_opt", [False, True])
+def test_ptxas_consan_optimization_level(capability, ptxas_version, instrumentation_mode, disable_opt, monkeypatch,
+                                         fresh_knobs):
+    from triton.backends.nvidia import compiler
+
+    commands = []
+
+    def run_ptxas(command, **kwargs):
+        commands.append(command)
+        Path(command[command.index("-o") + 1]).write_bytes(b"cubin")
+
+    monkeypatch.setattr(compiler, "get_ptxas", lambda arch: SimpleNamespace(path="ptxas", version=ptxas_version))
+    monkeypatch.setattr(compiler.subprocess, "run", run_ptxas)
+    fresh_knobs.nvidia.disable_ptxas_opt = disable_opt
+    backend = compiler.CUDABackend(GPUTarget("cuda", capability, 32))
+    options = compiler.CUDAOptions(instrumentation_mode=instrumentation_mode, ptx_options=None)
+    assert backend.make_cubin("", {}, options, capability) == b"cubin"
+
+    command, = commands
+    levels = [command[i + 1] for i, arg in enumerate(command) if arg == "--opt-level"]
+    if disable_opt:
+        assert levels == ["0"]
+    elif capability == 107 and ptxas_version == "13.4" and "consan" in instrumentation_mode:
+        assert levels == ["0"]
+    elif instrumentation_mode:
+        assert levels == ["1"]
+    else:
+        assert levels == []
 
 
 def test_compile_only_expect_zero() -> None:

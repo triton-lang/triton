@@ -603,7 +603,15 @@ class CUDABackend(BaseBackend):
             # -Ofc mid miscompiles some large ConSan kernels into invalid global
             # accesses; -O1 keeps compile time reasonable without that ptxas bug.
             if (not knobs.nvidia.disable_ptxas_opt and any(is_enabled(opt, mode) for mode in ["consan", "fpsan"])):
-                ptx_extra_options += ["--opt-level", "1"]
+                # On SM107, ptxas 13.4 also miscompiles a predicated, count-one
+                # mbarrier.arrive after ConSan's lock release into a uniform
+                # USYNCS.ARRIVE.TRANS64.ACT0. It over-arrives the barrier;
+                # changing only ACT0 to A1T0 in the cubin repairs the failure.
+                # Keep the lock lowering unchanged and avoid this optimization
+                # until the assembler is fixed. Other targets and modes keep O1.
+                rubin_consan = capability == 107 and is_enabled(opt, "consan")
+                opt_level = "0" if rubin_consan and get_ptxas(capability).version == "13.4" else "1"
+                ptx_extra_options += ["--opt-level", opt_level]
 
             # Add --regAllocOptLevel=2 to work around ptxas 13.x bug
             reg_alloc = ['--regAllocOptLevel=2']

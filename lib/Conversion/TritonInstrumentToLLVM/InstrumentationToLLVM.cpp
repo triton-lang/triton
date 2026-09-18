@@ -27,19 +27,6 @@ namespace ttng = mlir::triton::nvidia_gpu;
 // The next 4 bits are the CTA index
 constexpr uint32_t kSharedMemoryObjectMask = (1u << 24) - 1;
 
-// ConSan lock operations execute block-uniformly, so lane 0 of logical warp 0
-// is a stable issuer. Avoid elect.sync here: a lock can immediately surround
-// an instrumented hardware collective such as mbarrier.arrive, and adding
-// another warp collective changes its reconvergence behavior on SM107.
-Value createLockIssuerPredicate(Location loc,
-                                ConversionPatternRewriter &rewriter) {
-  TritonLLVMOpBuilder b(loc, rewriter);
-  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-  Value lane0 = b.icmp_eq(laneId, b.i32_val(0));
-  Value warp0 = b.icmp_eq(warpId, b.i32_val(0));
-  return b.and_(lane0, warp0);
-}
-
 ////////////////////////////////////////////
 // Patterns
 ////////////////////////////////////////////
@@ -176,7 +163,16 @@ struct LockAcquireOpConversion
     Block *endBlock = whileBlock->splitBlock(whileBlock->begin());
     b.setInsertionPointToEnd(prevBlock2);
 
-    Value elect = createLockIssuerPredicate(loc, b);
+    Value elect;
+    if (targetInfo.isCuda()) {
+      elect = mlir::LLVM::NVIDIA::createElectPredicateWarp0(loc, b);
+    } else {
+      TritonLLVMOpBuilder tb(loc, b);
+      auto [laneId, warpId] = getLaneAndWarpId(b, loc);
+      Value lane0 = tb.icmp_eq(laneId, tb.i32_val(0));
+      Value warp0 = tb.icmp_eq(warpId, tb.i32_val(0));
+      elect = tb.and_(lane0, warp0);
+    }
     if (op.getPred()) {
       elect = arith::AndIOp::create(b, loc, elect, op.getPred());
     }
@@ -259,7 +255,7 @@ struct LockReleaseOpConversion
         arith::ConstantOp::create(b, loc, i32, b.getIntegerAttr(i32, 0));
 
     if (targetInfo.isCuda()) {
-      Value elect = createLockIssuerPredicate(loc, b);
+      Value elect = mlir::LLVM::NVIDIA::createElectPredicateWarp0(loc, b);
 
       PTXBuilder ptx;
       auto *dstOpr = ptx.newOperand("=r", /*init=*/true);
