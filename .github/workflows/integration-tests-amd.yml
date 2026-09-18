@@ -49,6 +49,12 @@ jobs:
               --env-file /etc/podinfo/gha-gpu-isolation-settings
               --volume /home/runner/.triton:/github/home/.triton
               --volume /triton-data:/triton-data
+          - image: tritonci/triton-amd-ci:rocm10.1.0a20260820-pytorch2.15.0a0-gfx942-gfx950-gfx1250-r1
+            runner: ["amd-gfx1250-rocjitsu"]
+            options: >-
+              --security-opt seccomp=unconfined --user root
+              --volume /home/runner/.triton:/github/home/.triton
+              --volume /triton-data:/triton-data
     env:
       RUNNER_TYPE: ${{ matrix.runner[1] }}
       WARMUP_MAX_PROCS: "96"
@@ -62,6 +68,9 @@ jobs:
       PYTEST_ADDOPTS: "-p triton._compile_warmup"
       CCACHE_COMPRESS: "true"
       PIP_BREAK_SYSTEM_PACKAGES: 1
+      ROCM_NIGHTLY_INDEX_URL: https://nightly.repo.amd.com/rocm/whl-next/
+      ROCM_VERSION: "10.2.0a20260915"
+      TORCH_VERSION: "2.15.0a0+rocm10.2.0a20260915"
     container:
       image: ${{ matrix.image }}
       options: ${{ matrix.options }}
@@ -116,6 +125,33 @@ jobs:
         run: |
           export CC=/usr/bin/clang
           export CXX=/usr/bin/clang++
+      - name: Setup gfx1250 emulation
+        if: ${{ contains(matrix.runner, 'amd-gfx1250-rocjitsu') }}
+        run: |
+          set -xeo pipefail
+          unset HIP_VISIBLE_DEVICES ROCR_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES
+          python3 -m pip uninstall -y \
+            triton triton-rocm pytorch-triton torch amd-torch-device-gfx1250 \
+            rocm rocm-sdk-core rocm-sdk-devel rocm-sdk-libraries rocm-sdk-device-gfx1250 \
+            2>/dev/null || true
+          python3 -m pip install --pre --force-reinstall --no-cache-dir \
+            --index-url "${ROCM_NIGHTLY_INDEX_URL}" \
+            --extra-index-url https://pypi.org/simple \
+            "rocm[libraries,devel,device-gfx1250]==${ROCM_VERSION}" \
+            "torch[device-gfx1250]==${TORCH_VERSION}"
+          rocm-sdk init
+          ROCM_ROOT="$(rocm-sdk path --root)"
+          echo "ROCM_ROOT=${ROCM_ROOT}" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=${ROCM_ROOT}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          echo "${ROCM_ROOT}/bin" >> "$GITHUB_PATH"
+          test -f "${ROCM_ROOT}/lib/libamdhip64.so"
+          test -x "${ROCM_ROOT}/bin/mirage"
+          config="${ROCM_ROOT}/share/rocjitsu/configs/gfx1250_mi455x.json"
+          if [ ! -f "${config}" ]; then
+            config="${ROCM_ROOT}/share/rocjitsu/configs/gfx1250.json"
+          fi
+          test -f "${config}"
+          echo "ROCJITSU_CONFIG=${config}" >> "$GITHUB_ENV"
       - name: Install Triton
         id: amd-install-triton
         run: |
@@ -123,11 +159,16 @@ jobs:
           pip uninstall -y triton pytorch-triton-rocm
 
           ccache --zero-stats
-          if ${{ contains(matrix.runner, 'amd-gfx950') }}; then
+          if ${{ contains(matrix.runner, 'amd-gfx950') || contains(matrix.runner, 'amd-gfx1250-rocjitsu') }}; then
             pip install --cache-dir /triton-data/pip-cache -r python/requirements.txt
             pip install --cache-dir /triton-data/pip-cache -r python/test-requirements.txt
           fi
           make dev-install
+      - name: Check active target is gfx1250
+        if: ${{ contains(matrix.runner, 'amd-gfx1250-rocjitsu') }}
+        run: |
+          "${ROCM_ROOT}/bin/mirage" run --in-process --config "${ROCJITSU_CONFIG}" -- \
+            python3 -c "import triton; print(triton.runtime.driver.active.get_current_target())"
       - name: Print ccache stats
         run: ccache --print-stats
       - name: Run lit tests
@@ -135,6 +176,7 @@ jobs:
       - name: Run C++ unittests
         run: make test-cpp
       - name: Warm Triton compile cache
+        if: ${{ !contains(matrix.runner, 'amd-gfx1250-rocjitsu') }}
         shell: bash
         run: |
           trace_dir="$RUNNER_TEMP/triton-ci-compile-trace"
@@ -156,6 +198,7 @@ jobs:
           fi
           python3 -m triton._test_runner warmup --warmup-procs "$warmup_procs" "${warmup_targets[@]}"
       - name: Run Python tests on AMD
+        if: ${{ !contains(matrix.runner, 'amd-gfx1250-rocjitsu') }}
         run: |
           INSTRUMENTATION_LIB_DIR="${GITHUB_WORKSPACE}/python/triton/instrumentation"
           if [ ! -d "${INSTRUMENTATION_LIB_DIR}" ]; then
@@ -204,6 +247,12 @@ jobs:
             cd ../../triton_kernels/
             TRITON_CI_CACHE_PHASE=triton-kernels python3 -m pytest -s -n 10 tests/
           fi
+      - name: Run Python tests on gfx1250 Rocjitsu
+        if: ${{ contains(matrix.runner, 'amd-gfx1250-rocjitsu') }}
+        run: |
+          "${ROCM_ROOT}/bin/mirage" run --in-process --config "${ROCJITSU_CONFIG}" -- \
+            pytest --capture=tee-sys -rfs -n 8 --durations=20 \
+            third_party/amd/python/test/test_gluon_cdna5.py
       - name: Run asan tests on AMD
         if: false
         run: |
@@ -222,14 +271,18 @@ jobs:
           LD_PRELOAD=$CLANG_ASAN_LIB:$HIP_ASAN_LIB python3 -m pytest -s test_address_sanitizer.py
           mv $TORCH_PATH/libamdhip64_bck.so $TORCH_PATH/libamdhip64.so
       - name: Run regression tests
+        if: ${{ !contains(matrix.runner, 'amd-gfx1250-rocjitsu') }}
         run: |
           make test-regression
       - name: Verify compile warmup completeness
+        if: ${{ !contains(matrix.runner, 'amd-gfx1250-rocjitsu') }}
         run: python3 -m triton._test_runner report --require-complete
       - name: Run microbenchmark tests
+        if: ${{ !contains(matrix.runner, 'amd-gfx1250-rocjitsu') }}
         run: |
           python3 python/test/microbenchmark/launch_overhead.py
       - name: Run Proton tests
+        if: ${{ !contains(matrix.runner, 'amd-gfx1250-rocjitsu') }}
         run: |
           unset HIP_VISIBLE_DEVICES
           TRITON_DISABLE_LINE_INFO=0 make test-proton

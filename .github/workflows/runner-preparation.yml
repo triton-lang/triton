@@ -102,7 +102,7 @@ jobs:
         run: |
           if [ x"${{ github.repository }}" == x"triton-lang/triton" ]; then
             echo 'matrix-NVIDIA=[{"name":"nvidia-a100","runner_type":"nvidia-a100","runs_on":["nvidia-a100"]},{"name":"nvidia-h100","runner_type":"nvidia-h100","runs_on":["nvidia-h100"]},{"name":"nvidia-gb200","runner_type":"nvidia-gb200","runs_on":{"group":"gb200-runner-set"}}]' >> "$GITHUB_OUTPUT"
-            echo 'matrix-AMD=[["self-hosted", "gfx90a"], ["amd-gfx942"], ["amd-gfx950"]]' >> "$GITHUB_OUTPUT"
+            echo 'matrix-AMD=[["self-hosted", "gfx90a"], ["amd-gfx942"], ["amd-gfx950"], ["amd-gfx1250-rocjitsu"]]' >> "$GITHUB_OUTPUT"
             echo 'matrix-MACOS=[["macos-latest"]]' >> "$GITHUB_OUTPUT"
           else
             echo 'matrix-NVIDIA=[{"name":"ubuntu-latest","runner_type":"ubuntu-latest","runs_on":"ubuntu-latest"}]' >> "$GITHUB_OUTPUT"
