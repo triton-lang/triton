@@ -598,7 +598,6 @@ struct LocalAtomicScatterRMWOpConversion
         rmwMask = b.true_val();
 
       Value old = emitter.emitAtomicRMW(rewriter, addr.ptr, value, rmwMask,
-                                        /*sharedMemBase=*/std::nullopt,
                                         /*enableIntraWaveReduce=*/false);
       if (returnOld)
         results.push_back(old);

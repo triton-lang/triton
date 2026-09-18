@@ -9,6 +9,7 @@
 #C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
 #A_DOT = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth = 2}>
 #B_DOT = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth = 2}>
+#warp_scalar = #ttg.linear<{register = [], lane = [[0], [0], [0], [0], [0]], warp = [[1], [2]], block = []}>
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 
@@ -717,6 +718,21 @@ tt.func @atomic_scalar_relaxed_no_use(%arg3: !tt.ptr<i32>) {
   // CHECK-NEXT: ttg.local_load
   %3 = ttg.local_load %2 : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
   tt.return
+}
+
+// Broadcasting within each warp does not synchronize the shared write and read.
+// CHECK-LABEL: atomic_warp_broadcast_relaxed
+tt.func @atomic_warp_broadcast_relaxed(%ptrs: tensor<4x!tt.ptr<i32>, #warp_scalar>, %input: tensor<128x32xf16, #AL>) -> tensor<4xi32, #warp_scalar> {
+  // CHECK: ttg.local_alloc
+  // CHECK-NEXT: %[[ATOMIC_RESULT:.*]] = tt.atomic_load relaxed
+  // CHECK-NOT: allocation.offset
+  // CHECK-NEXT: ttg.barrier local
+  // CHECK-NEXT: %{{.*}} = ttg.local_load
+  // CHECK-NEXT: tt.return %[[ATOMIC_RESULT]]
+  %smem = ttg.local_alloc %input : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory>
+  %result = tt.atomic_load relaxed, gpu, %ptrs : (tensor<4x!tt.ptr<i32>, #warp_scalar>) -> tensor<4xi32, #warp_scalar>
+  %loaded = ttg.local_load %smem : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory> -> tensor<128x32xf16, #AL>
+  tt.return %result : tensor<4xi32, #warp_scalar>
 }
 
 // CHECK-LABEL: gsan_atomic_cas_scalar

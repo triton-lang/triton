@@ -2000,6 +2000,118 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.tar
 
 // -----
 
+// CHECK-LABEL: module
+// CHECK-SAME: ttg.shared = 0 : i32
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.target" = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @atomic_rmw_scalar_single_warp
+  tt.func private @atomic_rmw_scalar_single_warp(%ptr: !tt.ptr<f32>, %val: f32, %mask: i1) -> f32 {
+    // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier}}
+    // CHECK: atom.global.gpu.relaxed.add.f32
+    // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier}}
+    // CHECK: nvvm.shfl.sync idx
+    // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier}}
+    // CHECK: llvm.return
+    %old = tt.atomic_rmw fadd, relaxed, gpu, %ptr, %val, %mask : (!tt.ptr<f32>, f32, i1) -> f32
+    tt.return %old : f32
+  }
+
+  // CHECK-LABEL: @atomic_cas_i64_single_warp
+  tt.func private @atomic_cas_i64_single_warp(%ptr: !tt.ptr<i64>, %cmp: i64, %val: i64) -> i64 {
+    // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier}}
+    // CHECK: atom.global.relaxed.gpu.cas.b64
+    // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier}}
+    // CHECK-COUNT-2: nvvm.shfl.sync idx
+    // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier}}
+    // CHECK: llvm.return
+    %old = tt.atomic_cas relaxed, gpu, %ptr, %cmp, %val : (!tt.ptr<i64>, i64, i64) -> i64
+    tt.return %old : i64
+  }
+
+  // CHECK-LABEL: @atomic_acquire_scalar_single_warp
+  tt.func private @atomic_acquire_scalar_single_warp(%ptr: !tt.ptr<i32>, %val: i32) -> i32 {
+    // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier}}
+    // CHECK: atom.global.gpu.acquire.add.u32
+    // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier}}
+    // CHECK: nvvm.shfl.sync idx
+    // CHECK-NOT: {{st.shared|llvm.load}}
+    // CHECK: nvvm.barrier
+    // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier}}
+    // CHECK: llvm.return
+    %old = tt.atomic_rmw add, acquire, gpu, %ptr, %val : (!tt.ptr<i32>, i32) -> i32
+    tt.return %old : i32
+  }
+
+  // CHECK-LABEL: @atomic_rmw_bf16_single_warp
+  tt.func private @atomic_rmw_bf16_single_warp(%ptr: !tt.ptr<bf16>, %val: bf16, %mask: i1) -> bf16 {
+    // CHECK-NOT: {{llvm.store|llvm.load|nvvm.barrier}}
+    // CHECK: llvm.atomicrmw fadd
+    // CHECK-NOT: {{llvm.store|llvm.load|nvvm.barrier}}
+    // CHECK: nvvm.shfl.sync idx
+    // CHECK-NOT: {{llvm.store|llvm.load|nvvm.barrier}}
+    // CHECK: llvm.return
+    %old = tt.atomic_rmw fadd, relaxed, gpu, %ptr, %val, %mask : (!tt.ptr<bf16>, bf16, i1) -> bf16
+    tt.return %old : bf16
+  }
+}
+
+// -----
+
+#warpScalar = #ttg.linear<{register = [], lane = [[0], [0], [0], [0], [0]], warp = [[1], [2]], block = [[4]]}>
+#partialLanes = #ttg.linear<{register = [], lane = [[0], [1], [0], [2], [0]], warp = [[4], [8]], block = [[16]]}>
+// CHECK-LABEL: module
+// CHECK-SAME: ttg.shared = 0 : i32
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // Each warp and CTA owns different elements; only lanes need a broadcast.
+  // CHECK-LABEL: @atomic_rmw_warp_scalar
+  tt.func private @atomic_rmw_warp_scalar(%ptr: tensor<8x!tt.ptr<i32>, #warpScalar>, %val: tensor<8xi32, #warpScalar>) -> tensor<8xi32, #warpScalar> {
+    // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier|nvvm.cluster}}
+    // CHECK: atom.global.gpu.relaxed.add.u32
+    // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier|nvvm.cluster}}
+    // CHECK: nvvm.shfl.sync idx
+    // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier|nvvm.cluster}}
+    // CHECK: llvm.return
+    %old = tt.atomic_rmw add, relaxed, gpu, %ptr, %val : (tensor<8x!tt.ptr<i32>, #warpScalar>, tensor<8xi32, #warpScalar>) -> tensor<8xi32, #warpScalar>
+    tt.return %old : tensor<8xi32, #warpScalar>
+  }
+
+  // The source lane clears the noncontiguous free bits 0, 2, and 4.
+  // CHECK-LABEL: @atomic_rmw_partial_lane_broadcast
+  tt.func private @atomic_rmw_partial_lane_broadcast(%ptr: tensor<32x!tt.ptr<i32>, #partialLanes>, %val: tensor<32xi32, #partialLanes>) -> tensor<32xi32, #partialLanes> {
+    // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier|nvvm.cluster}}
+    // CHECK: atom.global.gpu.relaxed.add.u32
+    // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier|nvvm.cluster}}
+    // CHECK: [[KEEP_BITS:%.*]] = llvm.mlir.constant(-22 : i32)
+    // CHECK: [[SOURCE_LANE:%.*]] = llvm.and {{.*}}, [[KEEP_BITS]]
+    // CHECK: nvvm.shfl.sync idx {{.*}}, [[SOURCE_LANE]],
+    // CHECK-NOT: {{st.shared|llvm.load|nvvm.barrier|nvvm.cluster}}
+    // CHECK: llvm.return
+    %old = tt.atomic_rmw add, relaxed, gpu, %ptr, %val : (tensor<32x!tt.ptr<i32>, #partialLanes>, tensor<32xi32, #partialLanes>) -> tensor<32xi32, #partialLanes>
+    tt.return %old : tensor<32xi32, #partialLanes>
+  }
+}
+
+// -----
+
+#replicatedWarps = #ttg.linear<{register = [], lane = [[1], [2], [4], [8], [16]], warp = [[0], [0]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:80", "ttg.threads-per-warp" = 32 : i32} {
+  // Replication across warps requires shared memory.
+  // CHECK-LABEL: @atomic_rmw_warp_broadcast
+  tt.func private @atomic_rmw_warp_broadcast(%ptr: tensor<32x!tt.ptr<i32>, #replicatedWarps>, %val: tensor<32xi32, #replicatedWarps>) -> tensor<32xi32, #replicatedWarps> {
+    // CHECK-NOT: nvvm.shfl.sync
+    // CHECK: atom.global.gpu.relaxed.add.u32
+    // CHECK-NOT: nvvm.shfl.sync
+    // CHECK: st.shared
+    // CHECK: nvvm.barrier
+    // CHECK: llvm.load
+    // CHECK-NOT: nvvm.shfl.sync
+    // CHECK: llvm.return
+    %old = tt.atomic_rmw add, relaxed, gpu, %ptr, %val : (tensor<32x!tt.ptr<i32>, #replicatedWarps>, tensor<32xi32, #replicatedWarps>) -> tensor<32xi32, #replicatedWarps>
+    tt.return %old : tensor<32xi32, #replicatedWarps>
+  }
+}
+
+// -----
+
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:80"} {
   // CHECK-LABEL: atomic_add_f32
@@ -2410,8 +2522,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 //       CHECK:  %[[M:.+]] = llvm.mlir.constant(-1 : i32) : i32
 //       CHECK:   nvvm.redux.sync  add %{{.*}}, %[[M]]
 //       CHECK:   nvvm.barrier
-//       CHECK:   nvvm.shfl.sync bfly
-//       CHECK:   nvvm.shfl.sync bfly
+//       CHECK:  %[[M2:.+]] = llvm.mlir.constant(-1 : i32) : i32
+//       CHECK:   nvvm.redux.sync  add %{{.*}}, %[[M2]]
+//       CHECK:   llvm.return
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @sum_reduction(%arg0: tensor<1x1024xi32, #blocked>) {
@@ -2430,8 +2543,9 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 //       CHECK:  %[[M:.+]] = llvm.mlir.constant(-1 : i32) : i32
 //       CHECK:   nvvm.redux.sync  add %{{.*}}, %[[M]]
 //       CHECK:   nvvm.barrier
-//       CHECK:   nvvm.shfl.sync bfly
-//       CHECK:   nvvm.shfl.sync bfly
+//       CHECK:  %[[M2:.+]] = llvm.mlir.constant(-1 : i32) : i32
+//       CHECK:   nvvm.redux.sync  add %{{.*}}, %[[M2]]
+//       CHECK:   llvm.return
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @sum_reduction_commuted(%arg0: tensor<1x1024xi32, #blocked>) {
