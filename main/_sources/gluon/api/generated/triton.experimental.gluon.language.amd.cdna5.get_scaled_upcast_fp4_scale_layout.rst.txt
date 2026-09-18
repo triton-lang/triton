@@ -1,0 +1,6 @@
+﻿triton.experimental.gluon.language.amd.cdna5.get\_scaled\_upcast\_fp4\_scale\_layout
+====================================================================================
+
+.. currentmodule:: triton.experimental.gluon.language.amd.cdna5
+
+.. autofunction:: get_scaled_upcast_fp4_scale_layout
