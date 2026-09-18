@@ -2,8 +2,8 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm="ptx-version=93" -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --check-prefixes=CHECK,OLD-PTX --dump-input-context 20
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --triton-nvidia-gpu-membar --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm="ptx-version=94" -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --check-prefixes=CHECK,PTX94 --dump-input-context 20
 // RUN: split-file %s %t
-// RUN: triton-opt %t/masked-store-barrier.mlir --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83 enable-concurrency-sanitizer=true' -reconcile-unrealized-casts | FileCheck %t/masked-store-barrier.mlir --check-prefix=CONSAN
-// RUN: triton-opt %t/masked-store-barrier.mlir --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83 enable-concurrency-sanitizer=false' -reconcile-unrealized-casts | FileCheck %t/masked-store-barrier.mlir --check-prefix=NO-CONSAN
+// RUN: triton-opt %t/masked-store-barrier.mlir --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=83' --triton-nvidia-gpu-tmem-wait-insertion -tritoninstrument-concurrency-sanitizer -gluon-canonicalize -cse --triton-nvidia-gpu-cluster-barrier-mbar-allocator --tritongpu-global-scratch-memory-allocation --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' -reconcile-unrealized-casts | FileCheck %t/masked-store-barrier.mlir --check-prefix=CONSAN
+// RUN: triton-opt %t/masked-store-barrier.mlir --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=83' --triton-nvidia-gpu-tmem-wait-insertion --triton-nvidia-gpu-cluster-barrier-mbar-allocator --tritongpu-global-scratch-memory-allocation --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' -reconcile-unrealized-casts | FileCheck %t/masked-store-barrier.mlir --check-prefix=NO-CONSAN
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i32, %arg1: !llvm.ptr<1> {tt.pointee_type = f16}, %arg2: !llvm.ptr<1>, %arg3: !llvm.ptr<1>)
@@ -3971,6 +3971,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
 
 //--- masked-store-barrier.mlir
 
