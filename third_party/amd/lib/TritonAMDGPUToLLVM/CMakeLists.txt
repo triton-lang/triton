@@ -37,6 +37,27 @@ add_triton_library(TritonAMDGPUToLLVM
     LLVMIRIncGen
 
     LINK_LIBS PUBLIC
+    # Avoid MLIRGPUToGPURuntimeTransforms' over-broad interface, which links
+    # LLVMAMDGPUCodeGen even though these dialect conversion patterns do not.
+    $<TARGET_FILE:MLIRGPUToROCDLTransforms>
+    $<TARGET_FILE:MLIRMathToROCDL>
+    $<TARGET_FILE:MLIRAMDGPUToROCDL>
+    $<TARGET_FILE:MLIRGPUToGPURuntimeTransforms>
+    $<TARGET_FILE:MLIRGPUTransforms>
+    $<TARGET_FILE:MLIRAsyncToLLVM>
+    $<TARGET_FILE:MLIRAsyncDialect>
+    $<TARGET_FILE:MLIRMemRefToLLVM>
+    $<TARGET_FILE:MLIRVectorToLLVM>
+    $<TARGET_FILE:MLIRMathToLLVM>
+    $<TARGET_FILE:MLIRTargetLLVMIRExport>
+    $<TARGET_FILE:MLIRLLVMToLLVMIRTranslation>
+    $<TARGET_FILE:MLIRFuncToLLVM>
+    $<TARGET_FILE:MLIRConvertToLLVMPass>
+    $<TARGET_FILE:MLIRConvertToLLVMInterface>
+    $<TARGET_FILE:MLIRVectorTransforms>
+    $<TARGET_FILE:MLIRGPUUtils>
+    $<TARGET_FILE:MLIRAMDGPUDialect>
+    $<TARGET_FILE:MLIRAMDGPUUtils>
     MLIRReconcileUnrealizedCasts
     TritonGPUToLLVM
     TritonInstrumentToLLVM

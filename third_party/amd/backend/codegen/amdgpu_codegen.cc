@@ -1,5 +1,6 @@
 #include "triton/Tools/LLVMOptions.h"
 
+#include "lld/Common/Driver.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
@@ -39,6 +40,7 @@
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/Scalar.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -116,6 +118,8 @@ void initializeTarget() {
 }
 
 } // namespace
+
+LLD_HAS_DRIVER(elf)
 
 extern "C" TRITON_AMD_EXPORT int
 triton_amdgpu_compile(const char *llvmIR, size_t llvmIRSize,
@@ -246,6 +250,70 @@ triton_amdgpu_compile(const char *llvmIR, size_t llvmIRSize,
 }
 
 extern "C" TRITON_AMD_EXPORT int
+triton_amdgpu_data_layout(const char *triple, const char *processor,
+                          const char *features, char **dataLayout,
+                          char **error) {
+  if (error)
+    *error = nullptr;
+  if (dataLayout)
+    *dataLayout = nullptr;
+  if (!triple || !processor || !features || !dataLayout)
+    return fail("invalid AMD data-layout arguments", error);
+
+  std::call_once(targetInitialization, initializeTarget);
+  ScopedLLVMOptions optionScope({});
+
+  llvm::Triple targetTriple(triple);
+  std::string targetError;
+  const llvm::Target *target =
+      llvm::TargetRegistry::lookupTarget(targetTriple, targetError);
+  if (!target)
+    return fail("target lookup error: " + targetError, error);
+
+  llvm::TargetOptions targetOptions;
+  std::unique_ptr<llvm::TargetMachine> machine(target->createTargetMachine(
+      targetTriple, processor, features, targetOptions, llvm::Reloc::PIC_,
+      std::nullopt, llvm::CodeGenOptLevel::None));
+  if (!machine)
+    return fail("failed to create AMD target machine", error);
+
+  *dataLayout =
+      copyString(machine->createDataLayout().getStringRepresentation());
+  if (!*dataLayout)
+    return fail("failed to allocate AMD data-layout result", error);
+  return 0;
+}
+
+extern "C" TRITON_AMD_EXPORT int
+triton_amdgpu_has_architected_sgprs(const char *triple, const char *processor,
+                                    const char *features, uint8_t *result,
+                                    char **error) {
+  if (error)
+    *error = nullptr;
+  if (result)
+    *result = 0;
+  if (!triple || !processor || !features || !result)
+    return fail("invalid AMD feature-query arguments", error);
+
+  std::call_once(targetInitialization, initializeTarget);
+  ScopedLLVMOptions optionScope({});
+
+  llvm::Triple targetTriple(triple);
+  std::string targetError;
+  const llvm::Target *target =
+      llvm::TargetRegistry::lookupTarget(targetTriple, targetError);
+  if (!target)
+    return fail("target lookup error: " + targetError, error);
+
+  std::unique_ptr<llvm::MCSubtargetInfo> subtarget(
+      target->createMCSubtargetInfo(targetTriple, processor, features));
+  if (!subtarget)
+    return fail("failed to create AMD subtarget", error);
+  *result = subtarget->checkFeatures("+architected-sgprs");
+  return 0;
+}
+
+extern "C" TRITON_AMD_EXPORT int
 triton_amdgpu_assemble(const char *assembly, size_t assemblySize,
                        const char *triple, const char *processor,
                        const char *features, char **object, size_t *objectSize,
@@ -323,6 +391,31 @@ triton_amdgpu_assemble(const char *assembly, size_t assemblySize,
   if (!*object)
     return fail("failed to allocate AMD object result", error);
   *objectSize = result.size();
+  return 0;
+}
+
+extern "C" TRITON_AMD_EXPORT int triton_amdgpu_link(const char *inputPath,
+                                                    const char *outputPath,
+                                                    char **error) {
+  if (error)
+    *error = nullptr;
+  if (!inputPath || !outputPath)
+    return fail("invalid AMD linker arguments", error);
+
+  // LLD resets every registered LLVM command-line option while parsing its
+  // arguments, so it cannot overlap with a pass or code-generation pipeline.
+  mlir::triton::tools::ExclusiveLLVMOptionAccess exclusiveOptions;
+  // Disable parallelism to avoid LLVM thread-pool hangs in forked children.
+  std::array args{"ld.lld",  "--threads=1", "-shared",
+                  inputPath, "-o",          outputPath};
+  std::string message;
+  llvm::raw_string_ostream errorStream(message);
+  auto result = lld::lldMain(args, llvm::outs(), errorStream,
+                             {{lld::Gnu, &lld::elf::link}});
+  if (result.retCode || !result.canRunAgain) {
+    errorStream.flush();
+    return fail(message, error);
+  }
   return 0;
 }
 

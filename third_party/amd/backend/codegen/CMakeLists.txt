@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.20)
 project(triton_amd_codegen LANGUAGES C CXX)
 
 find_package(LLVM REQUIRED CONFIG)
+find_package(LLD REQUIRED CONFIG)
 
 set(TRITON_AMD_LLVM_REVISION "unknown" CACHE STRING
     "Independently pinned AMD LLVM revision and build number")
@@ -35,7 +36,8 @@ llvm_map_components_to_libnames(TRITON_AMD_LLVM_LIBRARIES
     AMDGPUCodeGen AMDGPUDesc AMDGPUInfo AMDGPUAsmParser AMDGPUUtils
     IRReader IPO ScalarOpts TransformUtils Analysis CodeGen Target Support)
 target_link_libraries(triton_amd_codegen PRIVATE
-                      ${TRITON_AMD_LLVM_LIBRARIES})
+                      ${TRITON_AMD_LLVM_LIBRARIES}
+                      lldCommon lldELF)
 
 foreach(llvm_library IN LISTS TRITON_AMD_LLVM_LIBRARIES)
   get_target_property(llvm_library_type ${llvm_library} TYPE)
@@ -52,13 +54,13 @@ set_target_properties(triton_amd_codegen PROPERTIES
 if(APPLE)
   set(TRITON_AMD_EXPORTS "${CMAKE_CURRENT_BINARY_DIR}/amd-codegen.exports")
   file(GENERATE OUTPUT "${TRITON_AMD_EXPORTS}" CONTENT
-      "_triton_amdgpu_assemble\n_triton_amdgpu_compile\n_triton_amdgpu_free\n_triton_amdgpu_revision\n")
+      "_triton_amdgpu_assemble\n_triton_amdgpu_compile\n_triton_amdgpu_data_layout\n_triton_amdgpu_free\n_triton_amdgpu_has_architected_sgprs\n_triton_amdgpu_link\n_triton_amdgpu_revision\n")
   target_link_options(triton_amd_codegen PRIVATE
       "LINKER:-exported_symbols_list,${TRITON_AMD_EXPORTS}")
 elseif(UNIX)
   set(TRITON_AMD_EXPORTS "${CMAKE_CURRENT_BINARY_DIR}/amd-codegen.exports")
   file(GENERATE OUTPUT "${TRITON_AMD_EXPORTS}" CONTENT
-      "{\n  global:\n    triton_amdgpu_assemble;\n    triton_amdgpu_compile;\n    triton_amdgpu_free;\n    triton_amdgpu_revision;\n  local:\n    *;\n};\n")
+      "{\n  global:\n    triton_amdgpu_assemble;\n    triton_amdgpu_compile;\n    triton_amdgpu_data_layout;\n    triton_amdgpu_free;\n    triton_amdgpu_has_architected_sgprs;\n    triton_amdgpu_link;\n    triton_amdgpu_revision;\n  local:\n    *;\n};\n")
   target_link_options(triton_amd_codegen PRIVATE
       "LINKER:--version-script,${TRITON_AMD_EXPORTS}"
       "LINKER:--exclude-libs,ALL"

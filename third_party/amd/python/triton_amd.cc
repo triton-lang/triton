@@ -5,33 +5,13 @@
 #include "amd/include/hipblas_types.h"
 #include "dylib_utils.h"
 #include "lib/TritonAMDGPUToLLVM/TargetInfo.h"
-#include "lld/Common/Driver.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "passes.h"
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
-#include "triton/Tools/LLVMOptions.h"
-#include "llvm/ADT/SmallString.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Module.h"
-#include "llvm/MC/MCAsmBackend.h"
-#include "llvm/MC/MCAsmInfo.h"
-#include "llvm/MC/MCCodeEmitter.h"
-#include "llvm/MC/MCContext.h"
-#include "llvm/MC/MCInstrInfo.h"
-#include "llvm/MC/MCObjectFileInfo.h"
-#include "llvm/MC/MCObjectWriter.h"
-#include "llvm/MC/MCParser/MCAsmParser.h"
-#include "llvm/MC/MCParser/MCTargetAsmParser.h"
-#include "llvm/MC/MCRegisterInfo.h"
-#include "llvm/MC/MCSection.h"
-#include "llvm/MC/MCStreamer.h"
-#include "llvm/MC/MCSubtargetInfo.h"
-#include "llvm/MC/MCTargetOptions.h"
-#include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/FileSystem.h"
-#include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/AMDGPUTargetParser.h"
 #include "llvm/TargetParser/Triple.h"
 #include <array>
@@ -166,8 +146,6 @@ void addControlConstant(llvm::Module *module, const char *name,
 }
 
 } // namespace
-
-LLD_HAS_DRIVER(elf)
 
 static void checkMatmulConstraints(const std::string &A_dtype,
                                    const std::string &B_dtype,
@@ -335,30 +313,6 @@ static HipBlasInit initialize_hipblas_op(py::object &A, py::object &B,
   return HipBlasInit{m, n, k, dtype, out_dtype};
 }
 
-static std::optional<std::string> lldInvoke(const char *inPath,
-                                            const char *outPath) {
-  // LLD resets every LLVM command line option while parsing its arguments, so
-  // it must not run while a compilation that depends on those options is in
-  // flight.
-  mlir::triton::tools::ExclusiveLLVMOptionAccess exclusiveOptions;
-  // Workaround: Disable parallelism to avoid hangs caused by LLVM's thread pool
-  // when the following code is executed in a forked child process.
-  // Context: lld::elf::LinkerDriver::link uses parallelFor which uses the
-  // LLVM's thread pool. During cleanup at ~TaskGroup() the child process hangs
-  // waiting.
-  std::array args{"ld.lld", "--threads=1", "-shared", inPath, "-o", outPath};
-  std::string errString;
-  llvm::raw_string_ostream errStream(errString);
-  auto lldRes = lld::lldMain(args, llvm::outs(), errStream,
-                             {{lld::Gnu, &lld::elf::link}});
-  bool noErrors = (!lldRes.retCode && lldRes.canRunAgain);
-  if (!noErrors) {
-    errStream.flush();
-    return errString;
-  }
-  return {};
-}
-
 void init_triton_amd(py::module_ &m) {
   mlir::triton::AMD::registerTargetInfo();
   m.doc() = "Python bindings to the AMD Triton backend";
@@ -451,77 +405,6 @@ void init_triton_amd(py::module_ &m) {
     }
   });
 
-  m.def("assemble_amdgcn", [](const std::string &assembly,
-                              const std::string &arch,
-                              const std::string &features) {
-    std::string error;
-
-    llvm::Triple triple = getAMDTargetTriple(arch);
-    const llvm::Target *target =
-        llvm::TargetRegistry::lookupTarget(triple, error);
-    if (!target)
-      throw std::runtime_error("target lookup error: " + error);
-
-    llvm::SourceMgr srcMgr;
-    srcMgr.AddNewSourceBuffer(llvm::MemoryBuffer::getMemBuffer(assembly),
-                              llvm::SMLoc());
-
-    const llvm::MCTargetOptions mcOptions;
-    std::unique_ptr<llvm::MCRegisterInfo> mri(target->createMCRegInfo(triple));
-    std::unique_ptr<llvm::MCAsmInfo> mai(
-        target->createMCAsmInfo(*mri, triple, mcOptions));
-    std::unique_ptr<llvm::MCSubtargetInfo> sti(
-        target->createMCSubtargetInfo(triple, arch, features));
-
-    llvm::MCContext ctx(triple, *mai, *mri, *sti, &srcMgr);
-    std::unique_ptr<llvm::MCObjectFileInfo> mofi(
-        target->createMCObjectFileInfo(ctx, /*PIC=*/false,
-                                       /*LargeCodeModel=*/false));
-    ctx.setObjectFileInfo(mofi.get());
-
-    llvm::SmallString<128> cwd;
-    if (!llvm::sys::fs::current_path(cwd))
-      ctx.setCompilationDir(cwd);
-
-    llvm::SmallVector<char, 0> result;
-    llvm::raw_svector_ostream svos(result);
-
-    std::unique_ptr<llvm::MCStreamer> mcStreamer;
-    std::unique_ptr<llvm::MCInstrInfo> mcii(target->createMCInstrInfo());
-
-    std::unique_ptr<llvm::MCCodeEmitter> ce(
-        target->createMCCodeEmitter(*mcii, ctx));
-    std::unique_ptr<llvm::MCAsmBackend> mab(
-        target->createMCAsmBackend(*sti, *mri, mcOptions));
-    std::unique_ptr<llvm::MCObjectWriter> ow(mab->createObjectWriter(svos));
-    mcStreamer.reset(target->createMCObjectStreamer(
-        triple, ctx, std::move(mab), std::move(ow), std::move(ce), *sti));
-
-    std::unique_ptr<llvm::MCAsmParser> parser(
-        createMCAsmParser(srcMgr, ctx, *mcStreamer, *mai));
-    std::unique_ptr<llvm::MCTargetAsmParser> tap(
-        target->createMCAsmParser(*sti, *parser, *mcii));
-    if (!tap)
-      throw std::runtime_error("assembler initializtion error");
-
-    parser->setTargetParser(*tap);
-    parser->Run(/*NoInitialTextSection=*/false);
-
-    return py::bytes(result.data(), result.size());
-  });
-
-  m.def("has_architected_sgprs", [](const std::string &arch) {
-    std::string error;
-    llvm::Triple triple = getAMDTargetTriple(arch);
-    const llvm::Target *target =
-        llvm::TargetRegistry::lookupTarget(triple, error);
-    if (!target)
-      throw std::runtime_error("target lookup error: " + error);
-    std::unique_ptr<llvm::MCSubtargetInfo> sti(
-        target->createMCSubtargetInfo(triple, arch, ""));
-    return sti->checkFeatures("+architected-sgprs");
-  });
-
   m.def("supports_multi_cta_launch", [](const std::string &arch) {
     return mlir::triton::AMD::TargetInfo(arch).supportsMultiCTALaunch();
   });
@@ -561,18 +444,6 @@ void init_triton_amd(py::module_ &m) {
       arg.addAttr(llvm::Attribute::InReg);
     }
   });
-
-  m.def(
-      "link_hsaco",
-      [](const std::string &inPath, const std::string &outPath) {
-        if (auto errString = lldInvoke(inPath.c_str(), outPath.c_str()))
-          throw std::runtime_error("LLD failed to link hsaco source " + inPath +
-                                   " into object file " + outPath +
-                                   " because " + errString.value());
-      },
-      // Linking may wait for in-flight compilations on other threads; do not
-      // hold the GIL meanwhile.
-      py::call_guard<py::gil_scoped_release>());
 
   m.def("add_scalarize_packed_fops_llvm_pass", [](llvm::Function *fn) {
     mlir::triton::AMD::runScalarizePackedFOpsPass(*fn);

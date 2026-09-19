@@ -73,6 +73,7 @@ target_link_libraries(triton-llvm-opt PRIVATE
   LLVMSupport
   LLVMOption
   LLVMCodeGen
+  LLVMPasses
 )
 export_executable_symbols_for_plugins(triton-llvm-opt)
 

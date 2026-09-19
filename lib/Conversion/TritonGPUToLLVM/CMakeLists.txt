@@ -32,9 +32,7 @@ add_triton_library(TritonGPUToLLVM
     MLIRIR
     MLIRPass
     MLIRGPUDialect
-    MLIRGPUToNVVMTransforms
-    MLIRGPUToROCDLTransforms
-    MLIRGPUTransforms
+    MLIRFuncToLLVM
     NVGPUIR
     TritonAnalysis
     TritonIR

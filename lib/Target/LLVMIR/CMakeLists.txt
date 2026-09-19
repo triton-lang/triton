@@ -18,7 +18,6 @@ add_triton_library(TritonLLVMIR
         MLIRNVVMToLLVM
         MLIRLLVMToLLVMIRTranslation
         MLIRNVVMToLLVMIRTranslation
-        MLIRROCDLToLLVMIRTranslation
         MLIRSCFToControlFlow
         MLIRSupport
         MLIRTargetLLVMIRExport
