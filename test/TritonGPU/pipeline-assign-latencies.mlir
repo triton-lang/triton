@@ -1257,3 +1257,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// A padded encoding's placement is its linear component composed with its padding rule, so
+// working out how many elements a copy can move consecutively must not request a plain
+// placement map. The load below fills a padded buffer, which used to abort here.
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#padded = #ttg.padded_shared<[32:+8] {order = [1, 0], shape = [128, 32]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+// CHECK-LABEL: @load_into_padded_buffer
+tt.func @load_into_padded_buffer(%lb : index, %ub : index, %step : index,
+                  %a_ptr : tensor<128x32x!tt.ptr<f16>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 32]> : tensor<2xi32>},
+                  %b : tensor<32x32xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) -> tensor<128x32xf32, #blocked> {
+  %c_init = arith.constant dense<0.00e+00> : tensor<128x32xf32, #blocked>
+  %loop = scf.for %iv = %lb to %ub step %step iter_args(%prev_c = %c_init) -> (tensor<128x32xf32, #blocked>) {
+    // CHECK: tt.load {{.*}} {tt.latency = 2 : i32}
+    %a_ = tt.load %a_ptr : tensor<128x32x!tt.ptr<f16>, #blocked>
+    %a_sh = ttg.local_alloc %a_ : (tensor<128x32xf16, #blocked>) -> !ttg.memdesc<128x32xf16, #padded, #smem>
+    %a = ttg.local_load %a_sh : !ttg.memdesc<128x32xf16, #padded, #smem> -> tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+    %c = tt.dot %a, %b, %prev_c : tensor<128x32xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x32xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x32xf32, #blocked>
+    scf.yield %c : tensor<128x32xf32, #blocked>
+  }
+  tt.return %loop : tensor<128x32xf32, #blocked>
+}
+}

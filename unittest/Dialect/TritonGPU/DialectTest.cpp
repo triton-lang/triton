@@ -441,6 +441,26 @@ TEST_F(JoinOpTest, JoinOpLayoutPropagation) {
   }
 }
 
+// Two padded encodings can share a linear component and still occupy storage
+// differently, so equivalence has to keep them apart.
+TEST(PaddedSharedEncodingEquivalence, PaddingIsPartOfTheLayout) {
+  MLIRContext ctx;
+  ctx.getOrLoadDialect<TritonGPUDialect>();
+  auto cga = CGAEncodingAttr::get1CTALayout(&ctx, /*rank=*/2);
+  SmallVector<int64_t> shape = {64, 64};
+  SmallVector<unsigned> order = {1, 0};
+  auto padded = [&](unsigned interval, unsigned padding) {
+    SmallVector<std::pair<unsigned, unsigned>> intervalPads = {
+        {interval, padding}};
+    return cast<LayoutEncodingTrait>(Attribute(
+        PaddedSharedEncodingAttr::get(&ctx, intervalPads, order, shape, cga)));
+  };
+  auto a = padded(32, 8);
+  auto b = padded(32, 16);
+  EXPECT_TRUE(areLayoutsEquivalent(shape, a, a));
+  EXPECT_FALSE(areLayoutsEquivalent(shape, a, b));
+}
+
 class LinearEncodingTest : public ::testing::Test {
 public:
   LinearEncodingTest() { ctx.getOrLoadDialect<TritonGPUDialect>(); }
