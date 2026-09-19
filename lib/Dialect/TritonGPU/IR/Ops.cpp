@@ -86,6 +86,11 @@ bool isConvertTrivial(ConvertLayoutOp op) {
   auto dstType = op.getType();
   auto srcEncoding = srcType.getEncoding();
   auto dstEncoding = dstType.getEncoding();
+  // An unencoded operand can reach here from a target materialization while
+  // a pass (e.g. relayoutWarps) holds partially-encoded IR; it is not a
+  // provably-trivial convert, and dereferencing a null encoding crashes.
+  if (!srcEncoding || !dstEncoding)
+    return false;
   return cast<DialectInferLayoutInterface>(&srcEncoding.getDialect())
       ->verifyLayoutsAreEqual(srcType.getShape(), srcEncoding, dstEncoding, {})
       .succeeded();

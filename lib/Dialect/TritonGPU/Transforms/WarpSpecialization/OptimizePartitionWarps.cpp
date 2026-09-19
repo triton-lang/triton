@@ -25,8 +25,10 @@ using RunPipelineFn = function_ref<LogicalResult(OpPassManager &, ModuleOp)>;
 static OwningOpRef<ModuleOp> takeIntoFunction(ModuleAxisInfoAnalysis &axisInfo,
                                               Region *partition, int numWarps) {
   // Forward the module attributes (target, number of threads per warp, etc.)
-  // onto the container module.
-  ModuleOp mod = axisInfo.getModuleOp();
+  // onto the container module. Resolve them from the partition's own module:
+  // in a multi-module input (lit tests do this) the analysis is bound to the
+  // implicit top-level wrapper, which carries no target attribute.
+  ModuleOp mod = partition->getParentOfType<ModuleOp>();
   OwningOpRef<ModuleOp> container = ModuleOp::create(mod.getLoc());
   Block *containerBlock = container->getBody();
 
@@ -101,7 +103,7 @@ static LogicalResult relayoutWarps(ModuleAxisInfoAnalysis &axisInfo,
                                         /*replaceLocs=*/false,
                                         /*replaceTypes=*/true);
 
-  ModuleOp mod = axisInfo.getModuleOp();
+  ModuleOp mod = partition->getParentOfType<ModuleOp>();
   auto target = mod->getAttrOfType<StringAttr>(AttrTargetName);
   if (!target)
     return mlir::emitError(mod.getLoc(), "module missing target specification");
