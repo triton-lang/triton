@@ -34,7 +34,8 @@ bool pipelineTMAStores(LoopLikeOpInterface loop);
 /// ops.
 // TODO: this should be included as part of the pipeline but currently the wgmma
 // wait modeling is problematic.
-void asyncLaunchDots(scf::ForOp forOp);
+void asyncLaunchDots(scf::ForOp forOp,
+                     bool disableWgmmaRegisterPipelining = false);
 
 /// Post process the pipelined loop by updating the wait ops with the right
 /// number of groups in flight.

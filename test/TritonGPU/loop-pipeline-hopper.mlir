@@ -1,5 +1,6 @@
 // RUN: triton-opt %s -split-input-file -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-pipeline -canonicalize | FileCheck --dump-input-context=50 %s
 // RUN: triton-opt %s -split-input-file -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-pipeline | FileCheck %s --check-prefix=CHECK-NOCANON
+// RUN: triton-opt %s -split-input-file -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-pipeline="disable-wgmma-register-pipelining=true" -canonicalize | FileCheck %s --check-prefix=WAIT-ALL
 
 // 4 warps
 // matmul: 128x32 @ 32x128 -> 128x128
@@ -226,6 +227,10 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
 // CHECK-LABEL: two_accumulator_escape
+// WAIT-ALL-LABEL: two_accumulator_escape
+// WAIT-ALL: scf.for
+// WAIT-ALL: ttng.warp_group_dot_wait {{.*}} {pendings = 2 : i32}
+// WAIT-ALL: scf.yield
   tt.func @two_accumulator_escape(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> (tensor<128x64xf32, #mma>, tensor<128x16xf32, #mma1>) {
     %cst = arith.constant dense<0> : tensor<64x16xi32, #blocked>
     %c0_i32 = arith.constant 0 : i32
@@ -779,6 +784,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
 // CHECK-LABEL: dot_lhs_registers
+// WAIT-ALL-LABEL: dot_lhs_registers
+// WAIT-ALL: scf.for
+// WAIT-ALL: ttng.warp_group_dot {{.*}}
+// WAIT-ALL-NOT: ttng.warp_group_dot_wait
+// WAIT-ALL: ttng.warp_group_dot {{.*}}
+// WAIT-ALL-NEXT: {{.*}}ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32}
+// WAIT-ALL: scf.yield
   tt.func @dot_lhs_registers(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<128x16xf32, #mma> {
     %cst = arith.constant dense<0> : tensor<64x16xi32, #blocked>
     %c0_i32 = arith.constant 0 : i32
@@ -843,6 +855,13 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
 // CHECK-LABEL: dot_lhs_in_reg_with_epilogue
+// WAIT-ALL-LABEL: dot_lhs_in_reg_with_epilogue
+// WAIT-ALL: scf.for
+// WAIT-ALL: ttng.warp_group_dot {{.*}}
+// WAIT-ALL-NOT: ttng.warp_group_dot_wait
+// WAIT-ALL: ttng.warp_group_dot {{.*}}
+// WAIT-ALL-NEXT: {{.*}}ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32}
+// WAIT-ALL: scf.yield
   tt.func @dot_lhs_in_reg_with_epilogue(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: i1) -> tensor<128x16xf32, #mma> {
     %cst = arith.constant dense<0> : tensor<128x64xi32, #blocked1>
     %cst1 = arith.constant dense<0> : tensor<64x16xi32, #blocked>
@@ -931,6 +950,13 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: dot_lhs_swizzling
+  // WAIT-ALL-LABEL: dot_lhs_swizzling
+  // WAIT-ALL: scf.for
+  // WAIT-ALL: ttng.warp_group_dot {{.*}}
+  // WAIT-ALL-NOT: ttng.warp_group_dot_wait
+  // WAIT-ALL: ttng.warp_group_dot {{.*}}
+  // WAIT-ALL-NEXT: {{.*}}ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32}
+  // WAIT-ALL: scf.yield
   tt.func @dot_lhs_swizzling(%arg0: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<i8> {tt.divisibility = 16 : i32}) -> tensor<256x128xf32, #mma> {
     %c0_i32 = arith.constant 0 : i32
     %c1_i32 = arith.constant 1 : i32
@@ -1238,5 +1264,65 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       scf.yield %arg5, %1 : !ttg.memdesc<32x32xbf16, #shared1, #smem, mutable>, tensor<64x32xf32, #mma>
     }
     tt.return %0#1 : tensor<64x32xf32, #mma>
+  }
+}
+
+// -----
+
+// The inner SS loop supplies a wait 0 before the outer RS dot. The outer dot
+// still needs its own wait 0 before the next iteration reloads A.
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 64, 16]}>
+#dot = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared_t = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
+  // CHECK-LABEL: @wgmma_existing_wait
+  // CHECK: scf.for
+  // CHECK: scf.for
+  // CHECK: ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32}
+  // CHECK: ttng.warp_group_dot {{.*}}
+  // CHECK-NEXT: scf.yield
+  // WAIT-ALL-LABEL: @wgmma_existing_wait
+  // WAIT-ALL: scf.for
+  // WAIT-ALL: tt.load
+  // WAIT-ALL: scf.for
+  // WAIT-ALL: ttng.warp_group_dot
+  // WAIT-ALL-NEXT: {{.*}}ttng.warp_group_dot_wait {{.*}} {pendings = 1 : i32}
+  // WAIT-ALL: scf.yield
+  // WAIT-ALL: ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32}
+  // WAIT-ALL: %[[OUTER_DOT:.*]] = ttng.warp_group_dot
+  // WAIT-ALL-NEXT: {{.*}}ttng.warp_group_dot_wait %[[OUTER_DOT]]{{.*}} {pendings = 0 : i32}
+  // WAIT-ALL: scf.yield
+  tt.func @wgmma_existing_wait(
+      %a_ptrs: tensor<64x64x!tt.ptr<f16>, #blocked>,
+      %out_ptrs: tensor<64x64x!tt.ptr<f32>, #blocked>,
+      %x: !ttg.memdesc<64x64xf16, #shared, #smem>,
+      %b: !ttg.memdesc<64x64xf16, #shared_t, #smem>,
+      %n: i32, %inner_n: i32) -> tensor<64x64xf32, #mma> {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %c4096 = arith.constant 4096 : i32
+    %two = arith.constant dense<2.0> : tensor<64x64xf16, #blocked>
+    %zero = arith.constant dense<0.0> : tensor<64x64xf32, #mma>
+    %result = scf.for %i = %c0 to %n step %c1 iter_args(%acc = %zero) -> (tensor<64x64xf32, #mma>) : i32 {
+      %offset = arith.muli %i, %c4096 : i32
+      %offsets = tt.splat %offset : i32 -> tensor<64x64xi32, #blocked>
+      %ptrs = tt.addptr %a_ptrs, %offsets : tensor<64x64x!tt.ptr<f16>, #blocked>, tensor<64x64xi32, #blocked>
+      %loaded = tt.load %ptrs : tensor<64x64x!tt.ptr<f16>, #blocked>
+      %a = arith.mulf %loaded, %two : tensor<64x64xf16, #blocked>
+      %a_shared = ttg.local_alloc %a : (tensor<64x64xf16, #blocked>) -> !ttg.memdesc<64x64xf16, #shared_t, #smem>
+      %a_reg = ttg.convert_layout %a : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot>
+      %inner = scf.for %j = %c0 to %inner_n step %c1 iter_args(%tmp = %zero) -> (tensor<64x64xf32, #mma>) : i32 {
+        %ss = ttng.warp_group_dot %x, %a_shared, %tmp : !ttg.memdesc<64x64xf16, #shared, #smem> * !ttg.memdesc<64x64xf16, #shared_t, #smem> -> tensor<64x64xf32, #mma>
+        scf.yield %ss : tensor<64x64xf32, #mma>
+      }
+      %tmp_out = ttg.convert_layout %inner : tensor<64x64xf32, #mma> -> tensor<64x64xf32, #blocked>
+      tt.store %out_ptrs, %tmp_out : tensor<64x64x!tt.ptr<f32>, #blocked>
+      %rs = ttng.warp_group_dot %a_reg, %b, %acc : tensor<64x64xf16, #dot> * !ttg.memdesc<64x64xf16, #shared_t, #smem> -> tensor<64x64xf32, #mma>
+      scf.yield %rs : tensor<64x64xf32, #mma>
+    }
+    tt.return %result : tensor<64x64xf32, #mma>
   }
 }
