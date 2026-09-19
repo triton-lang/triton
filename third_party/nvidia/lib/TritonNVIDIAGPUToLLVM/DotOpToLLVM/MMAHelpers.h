@@ -62,26 +62,20 @@ public:
         Value smemBase, ArrayRef<unsigned> instrShape, unsigned MNdim,
         int mmaVersion, bool isFp4 = false,
         std::optional<RankedTensorType> mmaTy = std::nullopt) {
-    auto ctx = rewriter.getContext();
+    auto ctx = memTy.getContext();
     auto kOffset = str_attr("offset");
-    // The handling of subviews is not as fine as it could be
-    // We could compose with the identity of the memTy.getShape()
-    // (at the moment llInv will be of allocShape), but then
-    // we would need to handle the getReps part more carefuly
-    // This way we could support more subviews that we don't
-    // We can implement this generalisation in the future if needed
-    auto llInv = toLinearLayout(memTy).pseudoinvert();
-    auto bitwidth = memTy.getElementType().getIntOrFloatBitWidth();
+    // Keep the allocation layout so descriptor tiling can handle subviews.
+    auto ll = toLinearLayout(memTy);
+    unsigned bitwidth = memTy.getElementTypeBitWidth();
     if (isFp4) {
-      // hacky but well
-      auto dims = to_vector(llInv.getInDimNames());
-      auto trans = llInv.getBasis(dims[0], 0, kOffset) == 1;
-      llInv = LinearLayout::identity1D(2, dims[trans ? 0 : 1], kOffset) * llInv;
+      auto dims = to_vector(ll.getOutDimNames());
+      auto trans = ll.getBasis(kOffset, 0, dims[0]) == 1;
+      ll = (LinearLayout::identity1D(2, kOffset, dims[trans ? 0 : 1]) * ll)
+               .transposeOuts(dims);
       bitwidth /= 2;
-      // The instr_shape comes in number of elements already
     }
-    return build(loc, rewriter, llInv, bitwidth, smemBase, instrShape, MNdim,
-                 mmaVersion, mmaTy);
+    return build(loc, rewriter, ll.pseudoinvert(), bitwidth, smemBase,
+                 instrShape, MNdim, mmaVersion, mmaTy);
   }
 
   static FailureOr<DotOpMmaSmemLoader>
@@ -140,15 +134,11 @@ public:
       baseSrcb128 = b.add(baseSrcb128, warpStrideb128);
     }
 
-    for (auto [dim, instrSize] : llvm::zip(ll.getInDimNames(), instrShape)) {
-      if (instrSize <= ll.getInDimSize(dim))
-        continue;
-      auto inDims = ll.getInDims();
-      return mlir::emitError(loc)
-             << "instruction shape [" << instrShape[0] << ", " << instrShape[1]
-             << "] is too large for the layout with block size ["
-             << inDims[0].second << ", " << inDims[1].second << "]";
-    }
+    // Padding may supply unused result columns, but not reduction elements.
+    auto dims = to_vector(ll.getInDimNames());
+    if (instrShape[1 - MNdim] > ll.getInDimSize(dims[1 - MNdim]))
+      return mlir::emitError(loc,
+                             "MMA instruction exceeds the logical K dimension");
 
     auto desc = getDescriptor(loc, ll, instrShape, bitwidth, MNdim, mmaVersion);
     if (failed(desc))
@@ -226,6 +216,19 @@ private:
       return failure();
 
     auto [attrs, shmemTileInv] = std::move(*attrsAndCandidate);
+    unsigned atomMN = shmemTileInv.transposeIns({dims[MNdim], dims[1 - MNdim]})
+                          .getNumConsecutiveInOut();
+    if (mmaVersion == 5 && instrShape[MNdim] < atomMN)
+      return mlir::emitError(loc, "instruction M/N must cover at least ")
+             << atomMN << " contiguous elements of the shared-memory core";
+    if (instrShape[MNdim] > std::max(ll.getInDimSize(dims[MNdim]),
+                                     shmemTileInv.getInDimSize(dims[MNdim]))) {
+      auto inDims = ll.getInDims();
+      return mlir::emitError(loc)
+             << "instruction shape [" << instrShape[0] << ", " << instrShape[1]
+             << "] is too large for the layout with block size ["
+             << inDims[0].second << ", " << inDims[1].second << "]";
+    }
     int swizzling = attrs.swizzlingByteWidth;
     bool transposed = attrs.transposed;
     bool fp4Padded = attrs.fp4Padded;
@@ -265,8 +268,8 @@ private:
       }
     }
     auto maxBasis = 0;
-    for (auto dimBases : llvm::make_second_range(bases)) {
-      for (auto basis : dimBases) {
+    for (const auto &dimBases : llvm::make_second_range(bases)) {
+      for (const auto &basis : dimBases) {
         maxBasis = std::max(maxBasis, basis[0]);
       }
     }
@@ -274,10 +277,6 @@ private:
     shmemTileInv = LinearLayout(std::move(bases),
                                 {{kOffset, llvm::NextPowerOf2(maxBasis)}},
                                 /*requireSurjective=*/false);
-    // Add a trivial block dimension as getReps expects both layouts to
-    // have the same outdims
-    shmemTileInv *= LinearLayout::identity1D(1, dims[0], str_attr("block"));
-
     assert(getReps(ll, shmemTileInv).has_value());
 
     SMEMDescriptor desc;

@@ -101,40 +101,30 @@ bool isFp4Padded(MemDescType operand) {
   return attrs->fp4Padded;
 }
 
-static int getScaleFactor(Type scaleType, int blockK) {
-  auto shapedType = cast<ShapedType>(scaleType);
-  int64_t scaleCols = shapedType.getShape().back();
+static int getScaleVecSize(ttng::TCGen5MMAScaledOp op) {
+  int blockK = op.getBlockK();
+  int64_t scaleCols = op.getAScale().getType().getShape().back();
   assert(blockK % scaleCols == 0);
   return blockK / scaleCols;
 }
 
-static int getScaleVecSize(ttng::TCGen5MMAScaledOp op) {
-  return getScaleFactor(op.getAScale().getType(), op.getBlockK());
-}
-
-static bool isBlock16Scale(Type scaleType, int blockK) {
-  auto shapedType = dyn_cast<ShapedType>(scaleType);
-  if (!shapedType || !shapedType.hasRank())
-    return false;
-  return shapedType.getShape().back() * 16 == blockK;
+static bool isBlock16Scale(MemDescType scaleType, int blockK) {
+  return scaleType.getShape().back() * 16 == blockK;
 }
 
 inline mxfpKind getMXFPKind(ScaleDotElemType typeA, ScaleDotElemType typeB,
-                            Type scaleAType, Type scaleBType, int blockK,
-                            bool transpose) {
+                            MemDescType scaleAType, MemDescType scaleBType,
+                            int blockK, bool transpose) {
   if (typeA == ScaleDotElemType::E2M1 && typeB == ScaleDotElemType::E2M1) {
-    auto scaleAElemType = cast<ShapedType>(scaleAType).getElementType();
-    auto scaleBElemType = cast<ShapedType>(scaleBType).getElementType();
+    auto scaleAElemType = scaleAType.getElementType();
+    auto scaleBElemType = scaleBType.getElementType();
     bool isUE4M3 = llvm::isa<Float8E4M3FNType>(scaleAElemType) &&
                    llvm::isa<Float8E4M3FNType>(scaleBElemType);
     bool isUE5M3 = scaleAElemType.isInteger(8) && scaleBElemType.isInteger(8) &&
                    isBlock16Scale(scaleAType, blockK) &&
                    isBlock16Scale(scaleBType, blockK);
-    if (isUE4M3 || isUE5M3) {
-      assert(!transpose &&
-             "MMAv5 with kind=mxf4nvf4 does not support transpose");
+    if (isUE4M3 || isUE5M3)
       return mxfpKind::mxf4nvf4;
-    }
     if (!transpose)
       return mxfpKind::mxf4;
   }
@@ -142,8 +132,8 @@ inline mxfpKind getMXFPKind(ScaleDotElemType typeA, ScaleDotElemType typeB,
 };
 
 static scaleKind getScaleKind(ttng::TCGen5MMAScaledOp op, int blockK) {
-  Type scaleType = op.getAScale().getType();
-  Type elemType = cast<ShapedType>(scaleType).getElementType();
+  auto scaleType = op.getAScale().getType();
+  Type elemType = scaleType.getElementType();
   if (llvm::isa<Float8E4M3FNType>(elemType))
     return scaleKind::ue4m3;
   if (elemType.isInteger(8) && isBlock16Scale(scaleType, blockK))
@@ -205,7 +195,6 @@ static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
   desc.aType = getTypeEncoding(op.getA().getType().getElementType());
   desc.bType = getTypeEncoding(op.getB().getType().getElementType());
   Type dstElType = op.getD().getType().getElementType();
-  assert(dstElType.isF16() || dstElType.isF32() || dstElType.isInteger(32));
   if (dstElType.isInteger(32)) {
     desc.dType = 2;
   } else {
@@ -566,16 +555,10 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   auto tensorMemAttr =
       cast<ttng::TensorMemoryEncodingAttr>(dTensorTy.getEncoding());
   unsigned mmaSizeM = tensorMemAttr.getBlockM();
-  // Account for subslices
-  unsigned mmaSizeN = std::min<unsigned>(tensorMemAttr.getBlockN(), N);
-  // Checked in the verifier
-  assert(mmaSizeN <= 256 &&
-         "The maximum size of an MMA instruction is 128x256");
+  unsigned mmaSizeN = ttng::getMMAv5InstructionN(dTensorTy);
   unsigned mmaSizeK = op.mmaSizeK;
   int numRepM = ceil<unsigned>(M, mmaSizeM);
   int numRepN = ceil<unsigned>(N, mmaSizeN);
-  assert((!twoCTAs || numRepN == 1) &&
-         "grep for [Note: numRepN > 1 and two_ctas]");
   int numRepK = op.kOffsets.empty() ? ceil<unsigned>(K, mmaSizeK)
                                     : op.kOffsets.size() - 1;
 
@@ -604,8 +587,8 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
              << aTensorTy << " for MMAv5 instruction shape [" << mmaSizeM
              << ", " << mmaSizeK << "]";
     }
+    transA = loader->getDescriptor().transposed;
     aLoader = std::make_unique<DotOpMmaSmemLoader>(std::move(*loader));
-    transA = ((DotOpMmaSmemLoader *)aLoader.get())->getDescriptor().transposed;
   }
 
   auto isFp4b = op.numBitsPerElementB == 4;
@@ -619,14 +602,8 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
   }
   bool transB = !bLoader->getDescriptor().transposed;
 
-  if (aTensorTy.getElementType().isF32() && (transA || transB)) {
-    return mlir::emitError(loc, "tcgen05.mma does not support transposed "
-                                "float32 operands in shared memory");
-  }
-
   // mmaSizeM/N is the per-cta size M/N, while the 2CTA instruction expects
   // the 2CTA size mmaSize is always 64 / 128 so we double it for 2CTA
-  assert(mmaSizeM == 64 || mmaSizeM == 128);
   DotConversion::InstDesc desc{twoCTAs ? mmaSizeM * 2 : mmaSizeM,
                                mmaSizeN,
                                {numRepM, numRepN, numRepK},
@@ -858,18 +835,14 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
     break;
   }
 
-  auto tensorMemAttr =
-      cast<ttng::TensorMemoryEncodingAttr>(dTensorTy.getEncoding());
-  unsigned mmaSizeM = tensorMemAttr.getBlockM();
-  unsigned mmaSizeN = tensorMemAttr.getBlockN();
+  bool twoCTAs = ttng::getModuleTwoCTAs(op);
+  unsigned mmaSizeN = ttng::getMMAv5InstructionN(dTensorTy);
 
   dot.blockK = blockK; // K is not split across CTAs
 
   bool hasFp4PaddedOperand = isFp4Padded(aTensorTy) || isFp4Padded(bTensorTy);
 
   if (!targetFeatures.supports4xFp4Tcgen05MMA() || hasFp4PaddedOperand ||
-      // M = 64 for 1CTA or 128 for 2CTA not supported for 2xfp8 / 4xfp4
-      mmaSizeM == 64 ||
       // We need to disable MMA_K = 128 for NVFP4 on Rubin when MMA_N < 128,
       // which requires a special unpacked layout for scales B in TMEM
       // (currently undocumented). tensorMemoryScalesToLinearLayout and lowering
@@ -886,12 +859,10 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
   TritonLLVMOpBuilder tb(loc, rewriter);
   Value baseScaleA = tb.ptrtoint(i32_ty, adaptor.getAScale());
   Value baseScaleB = tb.ptrtoint(i32_ty, adaptor.getBScale());
-  bool twoCTAs = ttng::getModuleTwoCTAs(op);
   SmallVector<Value> commitDescs = op.getCompletionDescs();
-  unsigned instN = std::min<unsigned>(mmaSizeN, getShapePerCTA(dTensorTy)[1]);
   bool useK96 =
-      targetFeatures.supportsK96Tcgen05MMA() && twoCTAs && mmaSizeM == 128 &&
-      opKindIsMXFP4 && !hasFp4PaddedOperand && blockK % 256 == 0 &&
+      targetFeatures.supportsK96Tcgen05MMA() && twoCTAs && opKindIsMXFP4 &&
+      !hasFp4PaddedOperand && blockK % 256 == 0 &&
       isa<SharedMemorySpaceAttr>(aTensorTy.getMemorySpace()) &&
       ttng::getNvmmaSmemAttrs(aTensorTy)->swizzlingByteWidth == 128 &&
       ttng::getNvmmaSmemAttrs(bTensorTy)->swizzlingByteWidth == 128 &&
@@ -899,7 +870,7 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
       // Repeated MN tiles or subviews must not interleave unrelated words.
       ttng::getTMemSubSliceOffset(op.getAScale().getType(), 4, 1) == 4 &&
       ttng::getTMemSubSliceOffset(op.getBScale().getType(), 4, 1) ==
-          std::max(2u, instN / 32);
+          std::max(2u, mmaSizeN / 32);
   if (useK96) {
     // K96 tiles must come in pairs to leave a K64-aligned remainder.
     int numK96 = 2 * (blockK / 192);

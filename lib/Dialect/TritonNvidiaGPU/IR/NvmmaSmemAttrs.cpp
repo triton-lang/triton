@@ -30,22 +30,16 @@ getNvmmaSmemAttrs(const LinearLayout &nvmmaSmemLL, unsigned bitwidth) {
             ttg::CGAEncodingAttr::get1CTALayout(ctx, /*rank=*/2));
         auto coreMatrixLL =
             ttg::getCoreMatrixLinearLayout(enc, /*disableSwizzle=*/false);
-        auto outDims = llvm::to_vector(coreMatrixLL.getOutDims());
-        outDims[0].first = dims[0];
-        outDims[1].first = dims[1];
-        coreMatrixLL = LinearLayout(coreMatrixLL.getBases(), outDims,
-                                    /*requireSurjective=*/false);
+        auto coreDims = llvm::to_vector(coreMatrixLL.getOutDimNames());
+        coreMatrixLL = renameLinearLayoutDims(
+            coreMatrixLL, {}, {{coreDims[0], dims[0]}, {coreDims[1], dims[1]}});
         if (bitwidth == 4)
           coreMatrixLL =
               LinearLayout::identity1D(2, offset, dims[1]) * coreMatrixLL;
         if (transposed)
           coreMatrixLL = transposeLinearLayout(coreMatrixLL, {1, 0});
         auto candidateLL = coreMatrixLL.pseudoinvert();
-        // Add a trivial block dimension as getReps expects both layouts to
-        // have the same outdims
-        auto matchLL =
-            candidateLL * LinearLayout::identity1D(1, dims[0], block);
-        if (getReps(nvmmaSmemLL, matchLL).has_value())
+        if (getReps(nvmmaSmemLL, candidateLL))
           return std::make_pair(
               NvmmaSmemAttrs{swizzling, transposed, fp4Padded},
               std::move(candidateLL));
@@ -56,7 +50,13 @@ getNvmmaSmemAttrs(const LinearLayout &nvmmaSmemLL, unsigned bitwidth) {
 }
 
 std::optional<NvmmaSmemAttrs> getNvmmaSmemAttrs(ttg::MemDescType memTy) {
-  if (auto nvmma = dyn_cast<ttg::NVMMASharedEncodingAttr>(memTy.getEncoding()))
+  auto encoding = memTy.getEncoding();
+  // This can be queried before the MMA layout verifier.
+  if (!isa<ttg::NVMMASharedEncodingAttr, ttg::SharedLinearEncodingAttr,
+           ttg::SwizzledSharedEncodingAttr>(encoding) ||
+      cast<ttg::LayoutEncodingTrait>(encoding).getRank() != 2)
+    return std::nullopt;
+  if (auto nvmma = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding))
     return NvmmaSmemAttrs{nvmma.getSwizzlingByteWidth(), nvmma.getTransposed(),
                           nvmma.getFp4Padded()};
 
