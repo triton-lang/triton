@@ -397,3 +397,46 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// A store and a read-back of the same pointer must be given the same layout.
+//
+// `%p` is written by tt.store and then read by tt.load with the same pointer,
+// the same shape and the same order, so both ops have to agree on which thread
+// owns which element; otherwise the thread reading back is not the thread that
+// wrote, and with no barrier in between that is a data race.
+//
+// The coalescer groups accesses by shape and order, so the f16 load in the same
+// block pulls the group up to 8 elements per thread. That is right for the f16
+// load, but it used to drag the f32 store along with it, past the 128 bits per
+// thread a vectorized store can express; the f32 write was therefore narrowed
+// back to 4 while the f32 read-back load, not being a write, kept the group's 8,
+// and the two ended up in different layouts. Detecting the aliasing access
+// directly and giving the read-back load the aliasing write's own width keeps
+// them together without widening the store past what a vectorized store can
+// express.
+
+// CHECK-LABEL: @store_load_readback
+// CHECK: tt.store {{.*}} : tensor<8x256x!tt.ptr<f32>, #[[WRITE:.*]]>
+// CHECK: tt.load {{.*}} : tensor<8x256x!tt.ptr<f32>, #[[WRITE]]>
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @store_load_readback(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) {
+    %cst = arith.constant dense<0.0> : tensor<8x256xf32, #blocked>
+    %r = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %re = tt.expand_dims %r {axis = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x256xi32, #blocked>
+    %off = tt.broadcast %re : tensor<1x256xi32, #blocked> -> tensor<8x256xi32, #blocked>
+    // A wide f16 load in the same block shares the address expression and is
+    // what used to drag the group's element count up to 8 per thread.
+    %sp16 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<8x256x!tt.ptr<f16>, #blocked>
+    %p16 = tt.addptr %sp16, %off : tensor<8x256x!tt.ptr<f16>, #blocked>, tensor<8x256xi32, #blocked>
+    %w = tt.load %p16 : tensor<8x256x!tt.ptr<f16>, #blocked>
+    %sp = tt.splat %arg0 : !tt.ptr<f32> -> tensor<8x256x!tt.ptr<f32>, #blocked>
+    %p = tt.addptr %sp, %off : tensor<8x256x!tt.ptr<f32>, #blocked>, tensor<8x256xi32, #blocked>
+    tt.store %p, %cst : tensor<8x256x!tt.ptr<f32>, #blocked>
+    %v = tt.load %p : tensor<8x256x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
