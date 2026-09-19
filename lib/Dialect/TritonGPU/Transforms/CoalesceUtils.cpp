@@ -63,6 +63,31 @@ BlockedEncodingAttr buildCoalescedEncoding(
       getNumElementsPerThread(op, order, axisInfoAnalysis, shapePerCTA);
   LDBG("perThread for op: " << perThread);
 
+  // A load that reads back the same pointer a store in this group writes has to
+  // agree with that store on which thread owns which element; otherwise the
+  // reading thread is not the writing thread and, with no barrier between them,
+  // that is a data race (issue #10924).
+  //
+  // The group below is keyed on shape and order, not on memory, so a load that
+  // merely shares the shape and order of a store must not be narrowed: it is
+  // entitled to the width the group reached. Only a load whose pointer really
+  // aliases a store in the group is.
+  bool aliasingLoad = false;
+  unsigned aliasingLoadPerThread = 0;
+  if (dyn_cast<triton::LoadOp>(op)) {
+    for (Operation *opSameOrder : memAccessesSameOrder) {
+      if (isa<triton::LoadOp>(opSameOrder))
+        continue;
+      if (getMemAccessPtr(opSameOrder) != ptr)
+        continue;
+      aliasingLoad = true;
+      aliasingLoadPerThread =
+          std::max(aliasingLoadPerThread,
+                   getNumElementsPerThread(opSameOrder, order,
+                                           axisInfoAnalysis, shapePerCTA));
+    }
+  }
+
   for (Operation *opSameOrder : memAccessesSameOrder) {
     if (opSameOrder == op)
       continue;
@@ -74,6 +99,11 @@ BlockedEncodingAttr buildCoalescedEncoding(
 
   perThread = std::min<int>(perThread, std::max(numElems / numThreads, 1));
   LDBG("perThread: " << perThread);
+
+  // A read-back has to land on the layout the store was given, so it takes the
+  // write's own width rather than the width the group as a whole reached.
+  if (aliasingLoad)
+    perThread = std::min<int>(perThread, aliasingLoadPerThread);
 
   if (!dyn_cast<triton::LoadOp>(op)) {
     // For ops that can result in a global memory write, we should enforce
