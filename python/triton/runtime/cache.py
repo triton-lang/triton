@@ -1,3 +1,4 @@
+import errno
 import json
 import os
 import uuid
@@ -65,10 +66,33 @@ class FileCacheManager(CacheManager):
         return os.path.exists(self._make_path(filename))
 
     def get_file(self, filename) -> Optional[str]:
-        if self.has_file(filename):
-            return self._make_path(filename)
-        else:
-            return None
+        """Return the cached path, or None when this entry cannot be used.
+
+        `os.path.exists` is not enough on the filesystems #11512 reports: a file
+        can have been published (the `os.replace` in `put` returned) and still
+        not be readable from this process, because the directory entry or the
+        data has not become visible yet. Returning the path on the strength of
+        `exists` alone turns that into a failure in the compiler, when it should
+        have been a cache miss followed by recomputation.
+
+        So the entry is checked by actually opening it. ENOENT is the
+        not-yet-visible case; EACCES is the same "cannot use this entry"
+        situation on a path that does exist.
+
+        Only those two are absorbed. A real permission problem on the directory
+        (EROFS, EPERM), or an error that is not about this file, still
+        propagates -- the point is to survive a missing read-back, not to turn
+        every open error into a silent recomputation.
+        """
+        path = self._make_path(filename)
+        try:
+            with open(path, "rb"):
+                pass
+        except OSError as exc:
+            if exc.errno in (errno.ENOENT, errno.EACCES):
+                return None
+            raise
+        return path
 
     def get_group(self, filename: str) -> Optional[Dict[str, str]]:
         grp_filename = f"__grp__{filename}"
@@ -123,7 +147,17 @@ class FileCacheManager(CacheManager):
         # Replace is guaranteed to be atomic on POSIX systems if it succeeds
         # so filepath cannot see a partial write
         os.replace(temp_path, filepath)
-        os.removedirs(temp_dir)
+        # The publish above is atomic and has already succeeded, so removing the
+        # now-empty private temp dir is pure cleanup: a filesystem that refuses
+        # it (EBUSY, as reported on distributed filesystems in #11512) must not
+        # fail the put. `os.rmdir` also keeps the cleanup scoped to this writer's
+        # own temp dir; `os.removedirs` would additionally try to prune the shared
+        # cache key dir and its ancestors whenever they happened to be empty.
+        try:
+            os.rmdir(temp_dir)
+        except OSError as exc:
+            if exc.errno not in (errno.EBUSY, errno.ENOTEMPTY, errno.ENOENT):
+                raise
         return filepath
 
 
