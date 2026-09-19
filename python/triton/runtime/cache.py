@@ -1,3 +1,4 @@
+import errno
 import json
 import os
 import uuid
@@ -118,7 +119,17 @@ class FileCacheManager(CacheManager):
         # Replace is guaranteed to be atomic on POSIX systems if it succeeds
         # so filepath cannot see a partial write
         os.replace(temp_path, filepath)
-        os.removedirs(temp_dir)
+        # The publish above is atomic and has already succeeded, so removing the
+        # now-empty private temp dir is pure cleanup: a filesystem that refuses
+        # it (EBUSY, as reported on distributed filesystems in #11512) must not
+        # fail the put. `os.rmdir` also keeps the cleanup scoped to this writer's
+        # own temp dir; `os.removedirs` would additionally try to prune the shared
+        # cache key dir and its ancestors whenever they happened to be empty.
+        try:
+            os.rmdir(temp_dir)
+        except OSError as exc:
+            if exc.errno not in (errno.EBUSY, errno.ENOTEMPTY, errno.ENOENT):
+                raise
         return filepath
 
 
