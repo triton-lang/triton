@@ -511,6 +511,20 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     tt.return
   }
 
+  // A global read leaves the wait pending. Finish it on every thread before
+  // the store can notify a peer that advances the barrier's phase.
+  // CHECK-LABEL: @mbarrier_wait_before_global_notification
+  tt.func private @mbarrier_wait_before_global_notification(%ready: !barrier, %phase: i32, %src: !tt.ptr<i32>, %dst: !tt.ptr<i32>) {
+    // CHECK: ttng.wait_barrier
+    // CHECK-NEXT: {{.*}} = tt.load
+    // CHECK-NEXT: ttg.barrier local
+    // CHECK-NEXT: tt.store
+    ttng.wait_barrier %ready, %phase : !barrier
+    %value = tt.load %src : !tt.ptr<i32>
+    tt.store %dst, %value : !tt.ptr<i32>
+    tt.return
+  }
+
   // Publish an external completion before entering the loop, so its first
   // load does not acquire a rendezvous on every iteration or on the exit path.
   // CHECK-LABEL: @completion_before_loop

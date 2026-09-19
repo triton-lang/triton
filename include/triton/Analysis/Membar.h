@@ -208,9 +208,6 @@ struct BlockInfo {
                          sliceFilter, allocation);
   }
 
-  /// Whether pending thread effects must rendezvous before the other's demands.
-  bool requiresThreadSync(const BlockInfo &other) const;
-
   /// Clears the effects because a barrier is inserted.
   void sync() {
     syncReadSlices.clear();
@@ -360,16 +357,22 @@ protected:
                      bool cluster = false);
   virtual triton::BarrierStages getBarrierStages(Operation *operation);
 
+  /// Whether pending thread effects must rendezvous before upcoming demands.
+  bool requiresThreadSync(const BlockInfo &pending, const BlockInfo &effects);
+
   Allocation &allocation;
   MembarFilterFn filter;
   triton::BufferRegionAnalysis &regions;
 
 private:
   SmallVector<AllocationSlice> getAllocationSlices(Value value);
+  bool isRegionLocal(Value value);
+  bool mayNotifyPeer(Operation *op);
 
   MembarSliceFilterFn sliceFilter;
   AccessMode accessMode;
   BufferIndexAnalysis bufferIndexAnalysis;
+  DenseMap<Value, bool> regionLocalAllocations;
 };
 
 /// Inserts shared-memory and operation rendezvous barriers across a module,
