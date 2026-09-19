@@ -300,6 +300,11 @@ struct CanonicalizeConvertFromSplit
     if (!convert)
       return failure();
     auto srcEncoding = convert.getSrc().getType().getEncoding();
+    // An unencoded convert source (mid-pass partially-encoded IR) is not
+    // provably redundant; bail instead of dereferencing a null encoding in
+    // inferDstEncoding.
+    if (!srcEncoding)
+      return failure();
     // Multiple source layout can give the same output layout, if the source
     // layout of the convert gives the same destination layout we can skip the
     // convert.
