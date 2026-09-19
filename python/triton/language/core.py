@@ -3272,6 +3272,11 @@ def map_elementwise(
 def debug_barrier(_semantic=None):
     '''
     Insert a barrier to synchronize all threads in a block.
+
+    Use this between a global-memory store and a dependent load within the
+    block. The compiler may assign different thread layouts to the accesses;
+    using the same pointer does not provide synchronization.
+    This does not synchronize different blocks.
     '''
     return _semantic.debug_barrier()
 

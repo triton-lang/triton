@@ -1689,6 +1689,30 @@ def test_atomic_load_store_coalesced(dtype, mask_group, device):
     assert f"st.relaxed.gpu.global{suffix}.b{word_bits}" in compiled.asm["ptx"]
 
 
+@pytest.mark.parametrize("block_size", [256, 1024])
+@pytest.mark.parametrize("num_warps", [4, 8])
+def test_debug_barrier_global_readback(block_size, num_warps, device):
+
+    @triton.jit
+    def kernel(X, Scratch, Y, BLOCK: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+        values = tl.load(X + offsets).to(tl.float32) + offsets
+        tl.store(Scratch + offsets, values)
+        tl.debug_barrier()
+        # Exchange the two halves so the load depends on other threads' stores.
+        read_offsets = tl.program_id(0) * BLOCK + (tl.arange(0, BLOCK) + BLOCK // 2) % BLOCK
+        tl.store(Y + offsets, tl.load(Scratch + read_offsets))
+
+    x = torch.ones((32, block_size), device=device, dtype=torch.float16)
+    scratch = torch.empty_like(x, dtype=torch.float32)
+    y = torch.empty_like(scratch)
+    compiled = kernel[(32, )](x, scratch, y, block_size, num_warps=num_warps)
+    if is_cuda():
+        assert "bar.sync" in compiled.asm["ptx"]
+    expected = torch.arange(x.numel(), device=device, dtype=torch.float32).reshape(x.shape) + 1
+    torch.testing.assert_close(y, expected.roll(-block_size // 2, dims=1), rtol=0, atol=0)
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("sem", ["relaxed", "acquire"])
 @pytest.mark.parametrize("scope", ["cta", "gpu", "sys"])
