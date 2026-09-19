@@ -30,7 +30,7 @@ Extra Credits:
 * Original flash attention paper (https://arxiv.org/abs/2205.14135)
 * Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
 
-.. GENERATED FROM PYTHON SOURCE LINES 15-777
+.. GENERATED FROM PYTHON SOURCE LINES 15-796
 
 
 
@@ -100,60 +100,60 @@ Extra Credits:
 
     fused-attention-batch4-head32-d64-fwd-causal=True-warp_specialize=False:
          N_CTX  Triton [FP16] (TFLOPS)  Triton [FP8] (TFLOPS)
-    0   1024.0              112.932646             102.506360
-    1   2048.0              139.052197             129.431479
-    2   4096.0              153.721907             146.664779
-    3   8192.0              163.020782             154.968622
-    4  16384.0              169.553796             158.127997
+    0   1024.0              113.252249             102.655080
+    1   2048.0              140.409986             125.293010
+    2   4096.0              155.837262             139.696448
+    3   8192.0              163.890015             146.068979
+    4  16384.0              167.158374             150.514006
     fused-attention-batch4-head32-d64-fwd-causal=False-warp_specialize=False:
          N_CTX  Triton [FP16] (TFLOPS)  Triton [FP8] (TFLOPS)
-    0   1024.0              149.507875             125.272504
-    1   2048.0              158.830523             149.549915
-    2   4096.0              161.261551             150.847044
-    3   8192.0              164.125137             155.030583
-    4  16384.0              171.459201             156.081308
+    0   1024.0              138.224533             133.075815
+    1   2048.0              165.053405             147.490266
+    2   4096.0              167.745108             149.215300
+    3   8192.0              169.623630             150.362949
+    4  16384.0              166.905038             150.904465
     fused-attention-batch4-head32-d64-bwd-causal=True-warp_specialize=False:
          N_CTX  Triton [FP16] (TFLOPS)  Triton [FP8] (TFLOPS)
-    0   1024.0               59.684155              58.946528
-    1   2048.0               75.576288              76.070318
-    2   4096.0               87.777551              87.495259
-    3   8192.0               94.384375              95.292381
-    4  16384.0               99.151548              98.703111
+    0   1024.0               59.968473              59.456684
+    1   2048.0               75.848815              76.032480
+    2   4096.0               88.144565              88.539962
+    3   8192.0               95.323962              95.266451
+    4  16384.0               98.609748              98.487645
     fused-attention-batch4-head32-d64-bwd-causal=False-warp_specialize=False:
          N_CTX  Triton [FP16] (TFLOPS)  Triton [FP8] (TFLOPS)
-    0   1024.0               78.529348              77.220764
-    1   2048.0               88.969816              88.899650
-    2   4096.0               94.239683              93.124839
-    3   8192.0               98.649613              98.430764
-    4  16384.0              100.113453             100.381128
+    0   1024.0               78.353713              77.359813
+    1   2048.0               89.027414              88.716509
+    2   4096.0               95.133653              91.094913
+    3   8192.0               98.382061              98.452423
+    4  16384.0              100.063071             100.900410
     fused-attention-batch4-head32-d128-fwd-causal=True-warp_specialize=False:
          N_CTX  Triton [FP16] (TFLOPS)  Triton [FP8] (TFLOPS)
-    0   1024.0              124.194033             108.884044
-    1   2048.0              148.984438             133.889387
-    2   4096.0              163.704252             149.851246
-    3   8192.0              174.817542             158.591216
-    4  16384.0              179.547984             163.792514
+    0   1024.0              124.641304             104.650637
+    1   2048.0              149.256071             127.456177
+    2   4096.0              166.908839             141.598553
+    3   8192.0              171.934523             149.646953
+    4  16384.0              179.546104             151.733460
     fused-attention-batch4-head32-d128-fwd-causal=False-warp_specialize=False:
          N_CTX  Triton [FP16] (TFLOPS)  Triton [FP8] (TFLOPS)
-    0   1024.0              160.603959             143.181835
-    1   2048.0              171.935806             160.514913
-    2   4096.0              175.962162             163.739677
-    3   8192.0              180.960737             168.344266
-    4  16384.0              175.593266             169.929471
+    0   1024.0              161.220294             138.000789
+    1   2048.0              172.116715             144.643294
+    2   4096.0              176.227285             147.746476
+    3   8192.0              178.804242             151.119501
+    4  16384.0              179.912755             152.689586
     fused-attention-batch4-head32-d128-bwd-causal=True-warp_specialize=False:
          N_CTX  Triton [FP16] (TFLOPS)  Triton [FP8] (TFLOPS)
-    0   1024.0                2.382383               2.382112
-    1   2048.0                2.497297               2.496925
-    2   4096.0                2.556080               2.559551
-    3   8192.0                2.589293               2.588052
-    4  16384.0                2.607239               2.607083
+    0   1024.0                2.384143               2.383500
+    1   2048.0                2.498804               2.494772
+    2   4096.0                2.559151               2.559448
+    3   8192.0                2.587981               2.584431
+    4  16384.0                2.605240               2.605552
     fused-attention-batch4-head32-d128-bwd-causal=False-warp_specialize=False:
          N_CTX  Triton [FP16] (TFLOPS)  Triton [FP8] (TFLOPS)
-    0   1024.0                2.384245               2.385838
-    1   2048.0                2.448264               2.447255
-    2   4096.0                2.473100               2.475682
-    3   8192.0                2.486914               2.488524
-    4  16384.0                2.496457               2.496326
+    0   1024.0                2.390053               2.388352
+    1   2048.0                2.447996               2.447094
+    2   4096.0                2.474249               2.474949
+    3   8192.0                2.486975               2.488789
+    4  16384.0                2.493377               2.494843
 
 
 
@@ -199,7 +199,7 @@ Extra Credits:
     @triton.jit
     def _attn_fwd_inner(acc, l_i, m_i, q,  #
                         desc_k, desc_v,  #
-                        offset_y, dtype: tl.constexpr, start_m, qk_scale,  #
+                        off_hz, dtype: tl.constexpr, start_m, qk_scale,  #
                         BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,  #
                         STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
                         N_CTX: tl.constexpr, warp_specialize: tl.constexpr, IS_HOPPER: tl.constexpr):
@@ -212,11 +212,9 @@ Extra Credits:
         # causal = False
         else:
             lo, hi = 0, N_CTX
+        offset_y = off_hz * N_CTX
         offsetk_y = offset_y + lo
-        if dtype == tl.float8e5:
-            offsetv_y = offset_y * HEAD_DIM + lo
-        else:
-            offsetv_y = offset_y + lo
+        offsetv_y = offset_y + lo
         # loop over k, v and update accumulator
         for start_n in tl.range(lo, hi, BLOCK_N, warp_specialize=warp_specialize):
             start_n = tl.multiple_of(start_n, BLOCK_N)
@@ -247,7 +245,7 @@ Extra Credits:
                 acc = acc * alpha[:, None]
             # prepare p and v for the dot
             if dtype == tl.float8e5:
-                v = desc_v.load([0, offsetv_y]).T
+                v = desc_v.load([off_hz * HEAD_DIM, start_n]).T
             else:
                 v = desc_v.load([offsetv_y, 0])
             p = p.to(dtype)
@@ -349,7 +347,7 @@ Extra Credits:
         desc_q = _maybe_make_tensor_desc(desc_q, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
                                          block_shape=[BLOCK_M, HEAD_DIM])
         if FP8_OUTPUT:
-            desc_v = _maybe_make_tensor_desc(desc_v, shape=[HEAD_DIM, y_dim], strides=[N_CTX, 1],
+            desc_v = _maybe_make_tensor_desc(desc_v, shape=[Z * H * HEAD_DIM, N_CTX], strides=[N_CTX, 1],
                                              block_shape=[HEAD_DIM, BLOCK_N])
         else:
             desc_v = _maybe_make_tensor_desc(desc_v, shape=[y_dim, HEAD_DIM], strides=[HEAD_DIM, 1],
@@ -379,7 +377,7 @@ Extra Credits:
         if STAGE & 1:
             acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q,  #
                                             desc_k, desc_v,  #
-                                            offset_y, dtype, start_m, qk_scale,  #
+                                            off_hz, dtype, start_m, qk_scale,  #
                                             BLOCK_M, HEAD_DIM, BLOCK_N,  #
                                             4 - STAGE, offs_m, offs_n, N_CTX,  #
                                             warp_specialize, IS_HOPPER)
@@ -387,7 +385,7 @@ Extra Credits:
         if STAGE & 2:
             acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q,  #
                                             desc_k, desc_v,  #
-                                            offset_y, dtype, start_m, qk_scale,  #
+                                            off_hz, dtype, start_m, qk_scale,  #
                                             BLOCK_M, HEAD_DIM, BLOCK_N,  #
                                             2, offs_m, offs_n, N_CTX,  #
                                             warp_specialize, IS_HOPPER)
@@ -681,8 +679,8 @@ Extra Credits:
                 dummy_block = [1, 1]
                 desc_q = TensorDescriptor(q, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1], block_shape=dummy_block)
                 if q.dtype == torch.float8_e5m2:
-                    desc_v = TensorDescriptor(v, shape=[HEAD_DIM_K, y_dim], strides=[q.shape[2], 1],
-                                              block_shape=dummy_block)
+                    desc_v = TensorDescriptor(v, shape=[q.shape[0] * q.shape[1] * HEAD_DIM_K, q.shape[2]],
+                                              strides=[q.shape[2], 1], block_shape=dummy_block)
                 else:
                     desc_v = TensorDescriptor(v, shape=[y_dim, HEAD_DIM_K], strides=[HEAD_DIM_K, 1],
                                               block_shape=dummy_block)
@@ -843,6 +841,27 @@ Extra Credits:
         torch.testing.assert_close(tri_dq, ref_dq, atol=1e-2, rtol=rtol)
 
 
+    @pytest.mark.enable_warmup
+    def test_fp8_v_batch_head_descriptor():
+        if not TORCH_HAS_FP8:
+            pytest.skip("PyTorch does not have float8_e5m2")
+
+        Z, H, N_CTX, HEAD_DIM = 2, 2, 128, 64
+        torch.manual_seed(20)
+        q = torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=torch.float16, device=DEVICE).normal_(0.0, 0.5)
+        k = torch.empty_like(q).normal_(0.0, 0.5)
+        v = torch.empty_like(q).normal_(0.0, 0.5)
+        q = q.to(torch.float8_e5m2)
+        k = k.to(torch.float8_e5m2)
+        v = v.permute(0, 1, 3, 2).contiguous().permute(0, 1, 3, 2).to(torch.float8_e5m2)
+
+        scores = torch.matmul(q.float(), k.float().transpose(2, 3)) * 0.5
+        ref_out = torch.matmul(torch.softmax(scores, dim=-1), v.float())
+        tri_out = attention(q, k, v, False, 0.5, False).float()
+
+        torch.testing.assert_close(tri_out, ref_out, atol=0.125, rtol=0)
+
+
     try:
         from flash_attn.flash_attn_interface import \
             flash_attn_qkvpacked_func as flash_attn_func
@@ -930,7 +949,7 @@ Extra Credits:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (16 minutes 24.349 seconds)
+   **Total running time of the script:** (16 minutes 4.397 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:
