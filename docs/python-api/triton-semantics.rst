@@ -44,7 +44,7 @@ Differences with NumPy
 
 **C rounding in integer division** Operators in Triton follow C semantics rather than Python semantics for efficiency. As such, ``int // int`` implements `rounding towards zero as in C <https://en.wikipedia.org/wiki/Modulo#In_programming_languages>`_ for integers of mixed signs, rather than rounding towards minus infinity as in Python. For the same reason, the modulus operator ``int % int`` (which is defined as ``a % b = a - b * (a // b)``) also follows C semantics rather than Python semantics.
 
-Perhaps confusingly, integer division and modulus follow Python semantics for computations where all the inputs are scalars.
+Perhaps confusingly, ``tl.constexpr`` values follow Python semantics for division and modulo. This means constexpr mixed-sign computation will round to negative infinity instead of towards zero, and that assigning or promoting to a runtime value before doing the calculation may give a different rounding.
 
 **Out-of-range float-to-integer casts** Casting a floating-point value to an integer type is only defined when the value, rounded towards zero, fits in the target type. If the value is out of range, or is NaN, the result is undefined: it may differ between the compiler and the interpreter (``TRITON_INTERPRET=1``), and across hardware backends and toolkit versions. For example, casting ``inf``, a large value such as ``510.0`` to ``int8``, or ``nan`` to an integer type does not produce a portable result. If you need a defined result, clamp the value into range (for example with ``tl.clamp``) and handle ``NaN`` explicitly before the cast.
 
