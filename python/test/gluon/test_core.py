@@ -22,6 +22,7 @@ from triton._internal_testing import (
     is_hip_cdna3,
     is_hip_cdna4,
     is_hopper_or_newer,
+    is_sm12x,
     is_hopper,
 )
 from triton.compiler import max_shared_mem
@@ -514,7 +515,7 @@ def async_shared_store_f16_kernel(out, BLOCK: ttgl.constexpr):
     ttgl.store(out + offsets, result)
 
 
-@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.skipif(not is_hopper_or_newer() or is_sm12x(), reason="Requires Hopper and cluster ops")
 def test_async_shared_store():
     block = 128
     out = torch.empty((block, ), device="cuda", dtype=torch.int32)
@@ -525,7 +526,7 @@ def test_async_shared_store():
     torch.testing.assert_close(out, torch.arange(block, device="cuda", dtype=torch.int32))
 
 
-@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.skipif(not is_hopper_or_newer() or is_sm12x(), reason="Requires Hopper and cluster ops")
 def test_async_shared_store_packed_f16():
     block = 256
     out = torch.empty((block, ), device="cuda", dtype=torch.float16)
@@ -602,12 +603,20 @@ def tma_im2col_kernel(in_desc, out_desc, MULTICAST: ttgl.constexpr):
     tma.store_wait(pendings=0)
 
 
+def _max_shared_mem():
+    device = triton.runtime.driver.active.get_current_device()
+    return triton.runtime.driver.active.utils.get_device_properties(device)["max_shared_mem"]
+
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 @pytest.mark.parametrize("pixels_per_column", [32, 256, 512, 1024])
 @pytest.mark.parametrize("channels_per_pixel", [32])
 @pytest.mark.parametrize("swizzle_byte_width", [32])
 @pytest.mark.parametrize("multicast", [False, True], ids=["unicast", "multicast"])
 def test_tma_im2col(pixels_per_column, channels_per_pixel, swizzle_byte_width, multicast):
+    smem_bytes = pixels_per_column * channels_per_pixel * 4
+    if smem_bytes > _max_shared_mem():
+        pytest.skip(f"block needs {smem_bytes} bytes of shared memory")
     smem_bytes = pixels_per_column * channels_per_pixel * 4 + 8192  # block + mbarrier overhead
     if smem_bytes > 200000:
         pytest.skip(f"Skipping: shared memory {smem_bytes} exceeds limit")
@@ -3055,6 +3064,8 @@ def test_slice_reinterpret():
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_tma_slice():
     XBLOCK = YBLOCK = ttgl.constexpr(128)
+    if 2 * XBLOCK.value * YBLOCK.value * 4 > _max_shared_mem():
+        pytest.skip("two blocks do not fit in shared memory")
 
     @gluon.jit
     def kernel(in_desc, out_desc):
