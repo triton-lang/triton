@@ -1,5 +1,6 @@
 // RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx942 | FileCheck --check-prefixes=COMMON,GFX942 %s
 // RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx950 | FileCheck --check-prefixes=COMMON,GFX950 %s
+// RUN: triton-opt %s --split-input-file --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1200 | FileCheck --check-prefixes=COMMON,GFX1200 %s
 
 //  CHECK-LABEL: f16_to_f32
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -173,6 +174,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 //  CHECK-LABEL: upcast_from_f8
+// GFX1200-LABEL: llvm.func @upcast_from_f8
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func @upcast_from_f8(%arg0: tensor<8x8xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>,
@@ -201,6 +203,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // GFX950: rocdl.cvt.scalef32.pk.f32.fp8 %[[VR7]][true]
     // GFX950: rocdl.cvt.scalef32.pk.f32.fp8 %[[VR8:.*]][false]
     // GFX950: rocdl.cvt.scalef32.pk.f32.fp8 %[[VR8]][true]
+    // The f32, f16, and bf16 upcasts below each use four packed conversions.
+    // GFX1200-COUNT-12: rocdl.cvt.pk.f32.fp8 {{.*}}[true]
     %3 = tt.fp_to_fp %arg1 : tensor<8x8xf8E4M3FN, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>> -> tensor<8x8xf32, #ttg.dot_op<{opIdx = 0, parent = #blocked2}>>
 
     // GFX950: rocdl.cvt.scalef32.pk.f16.fp8 %[[VR9:.*]][false]
