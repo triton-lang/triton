@@ -391,13 +391,7 @@ def test_fp8_compiles_for_multiple_architectures_hip():
 
 
 def test_fp8_compiles_for_multiple_architectures_cuda():
-    """
-    Validate FP8 compilation succeeds for architectures with different
-    hardware support.
-
-    SM90 has native FP8 instructions; SM80 does not and requires software
-    conversion. Compiling for both in sequence must succeed for each target.
-    """
+    """Compile native and software FP8 conversion paths in the same process."""
 
     @triton.jit
     def fp8_convert(src, dst):
@@ -407,3 +401,5 @@ def test_fp8_compiles_for_multiple_architectures_cuda():
     src = ASTSource(fn=fp8_convert, signature={"src": "*fp32", "dst": "*fp8e5"}, constexprs={})
     triton.compile(src, target=GPUTarget("cuda", 90, 32))
     triton.compile(src, target=GPUTarget("cuda", 80, 32))
+    triton.compile(src, target=GPUTarget("cuda", 75, 32))
+    triton.compile(src, target=GPUTarget("cuda", 89, 32), options=dict(ptx_version=81))
