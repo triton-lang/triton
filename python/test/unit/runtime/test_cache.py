@@ -1,3 +1,7 @@
+import errno
+import json
+from types import SimpleNamespace
+
 import expecttest
 import importlib.util
 import itertools
@@ -16,6 +20,79 @@ import triton
 import triton.language as tl
 from triton._internal_testing import is_hip
 from triton.runtime.cache import FileCacheManager, RemoteCacheManager
+
+
+@pytest.mark.parametrize("filename", ["kernel.json", "kernel.ptx", "kernel.cubin"])
+def test_compiled_kernel_reopens_missing_cache_file(tmp_path, monkeypatch, filename):
+    from triton.compiler import compiler
+
+    metadata = {"name": "kernel", "target": {"backend": "cuda", "arch": 80, "warp_size": 32}}
+    contents = {"kernel.json": json.dumps(metadata).encode(), "kernel.ptx": b"ptx", "kernel.cubin": b"binary"}
+    group = {}
+    for name, data in contents.items():
+        path = tmp_path / name
+        path.write_bytes(data)
+        group[name] = str(path)
+    method = "read_bytes" if filename.endswith(".cubin") else "read_text"
+    original = pathlib.Path.read_bytes if filename.endswith(".cubin") else pathlib.Path.read_text
+    reads = []
+
+    def read(path, *args, **kwargs):
+        if path.name == filename:
+            reads.append(path)
+            if len(reads) == 1:
+                raise FileNotFoundError(errno.ENOENT, "injected stale read handle", str(path))
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, method, read)
+    monkeypatch.setattr(compiler, "make_backend",
+                        lambda target: SimpleNamespace(binary_ext="cubin", pack_metadata=lambda metadata: ()))
+    kernel = compiler.CompiledKernel(None, group, "key")
+    assert kernel.name == "kernel"
+    assert kernel.asm == {"ptx": "ptx", "cubin": b"binary"}
+    assert len(reads) == 2
+
+
+@pytest.mark.parametrize("error,expected_reads", [(errno.ENOENT, 2), (errno.EACCES, 1), (errno.EIO, 1)])
+def test_cache_read_failure_propagates(tmp_path, monkeypatch, error, expected_reads):
+    from triton.compiler.compiler import _read_cached_file
+
+    reads = []
+
+    def read(path):
+        reads.append(path)
+        raise OSError(error, "injected read failure", str(path))
+
+    monkeypatch.setattr(pathlib.Path, "read_bytes", read)
+    with pytest.raises(OSError) as exc:
+        _read_cached_file(tmp_path / "kernel.cubin", binary=True)
+    assert exc.value.errno == error
+    assert len(reads) == expected_reads
+
+
+def test_compile_reopens_cache_binary(fresh_knobs, tmp_path, monkeypatch):
+    from triton.backends.compiler import GPUTarget
+
+    fresh_knobs.cache.dir = str(tmp_path)
+
+    @triton.jit
+    def kernel(X):
+        tl.store(X, tl.load(X) + 1)
+
+    read_bytes = pathlib.Path.read_bytes
+    reads = []
+
+    def read(path):
+        if path.suffix == ".cubin":
+            reads.append(path)
+            if len(reads) == 1:
+                raise FileNotFoundError(errno.ENOENT, "injected stale read handle", str(path))
+        return read_bytes(path)
+
+    monkeypatch.setattr(pathlib.Path, "read_bytes", read)
+    compiled = triton.compile(triton.compiler.ASTSource(kernel, {"X": "*fp32"}), target=GPUTarget("cuda", 89, 32))
+    assert compiled.asm["cubin"]
+    assert len(reads) == 2
 
 
 def test_file_cache_manager_get_group_rejects_missing_child(fresh_knobs, tmp_path):

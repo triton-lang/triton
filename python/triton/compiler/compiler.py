@@ -404,12 +404,21 @@ def _raise_error(err, *args, **kwargs):
     raise copy.deepcopy(err)
 
 
+def _read_cached_file(path, binary=False):
+    read = path.read_bytes if binary else path.read_text
+    try:
+        return read()
+    except FileNotFoundError:
+        # Reopen once if a concurrent replacement invalidated the read handle.
+        return read()
+
+
 class CompiledKernel:
 
     def __init__(self, src, metadata_group, hash):
         from collections import namedtuple
         metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
-        metadata = json.loads(metadata_path.read_text())
+        metadata = json.loads(_read_cached_file(metadata_path))
         # JSON serialization dumps the target as a dict. Restore it to a GPUTarget.
         target = metadata['target']
         metadata['target'] = GPUTarget(target['backend'], target['arch'], target['warp_size'])
@@ -423,10 +432,9 @@ class CompiledKernel:
         # stores the text of each level of IR that was generated during compilation
         asm_files = [Path(p) for c, p in metadata_group.items() if not c.endswith(".json")]
         binary_ext = backend.binary_ext
-        self.asm = AsmDict({
-            file.suffix[1:]: file.read_bytes() if file.suffix[1:] == binary_ext else file.read_text()
-            for file in asm_files
-        })
+        self.asm = AsmDict(
+            {file.suffix[1:]: _read_cached_file(file, binary=file.suffix[1:] == binary_ext)
+             for file in asm_files})
         self.metadata_group = metadata_group
         self.kernel = self.asm[binary_ext]
         # binaries are lazily initialized
