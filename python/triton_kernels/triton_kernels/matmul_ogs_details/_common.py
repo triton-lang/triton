@@ -53,6 +53,18 @@ def swizzle2d(pid, grid_m, grid_n, GROUP_M: tl.constexpr):
 
 
 @triton.jit
+def _masked_tile_is_empty(MaskedM, expt_id, off_m):
+    """True when expert ``expt_id``'s M tile starting at row ``off_m`` is padding.
+
+    ``MaskedM`` is an int32 tensor of per-expert valid row counts, laid out so
+    that every expert id in ``[0, n_expts_tot)`` has an entry. A tile is padding
+    when its first row is at or beyond the expert's valid prefix; such a tile
+    contributes nothing to the result, so the caller may skip its whole program.
+    """
+    return off_m >= tl.load(MaskedM + expt_id)
+
+
+@triton.jit
 def _load_tile_attrs(
     tile_id,
     num_tiles,

@@ -324,6 +324,7 @@ def matmul_ogs(x, w, bias,
     epilogue: Epilogue | None = None,
     y_acc_in: torch.Tensor | None = None,
     inner_routing_data: InnerRoutingData | None = None,
+    masked_m: torch.Tensor | None = None,
 ):
     """
     Y[:, :] = 0.
@@ -331,6 +332,36 @@ def matmul_ogs(x, w, bias,
         Y[idxs_y_m(e), :] += matmul(X[idxs_x_m(e), :], W[e, :, :])
 
     matmul can be optionally fused with all gather or scatter at the end for the output. When fused_comm is specified, the m-th row of the output will be stored to (m * n_reduce_shards + reduce_rank) -th row
+
+    Masked batched matmul (``masked_m``)
+    -----------------------------------
+    In batched mode (``x.ndim == 3``) the caller may pass ``masked_m``, an int32
+    tensor of shape ``[batch_size]`` giving, per expert, the number of *valid
+    leading rows* of the fixed-capacity M dimension::
+
+        x:          [E, M_capacity, K]
+        w:          [E, K, N]
+        y:          [E, M_capacity, N]
+        masked_m:   [E]  -- masked_m[e] rows of expert e hold real tokens
+
+    Rows ``[masked_m[e], M_capacity)`` of expert ``e`` are padding: they carry no
+    token and are outside the result contract. Rows ``[0, masked_m[e])`` are
+    computed exactly as the dense path computes them, and ``masked_m[e] ==
+    M_capacity`` for every expert reproduces the dense result bit-for-bit.
+
+    Two properties matter for the intended use (MoE decode under CUDA graph):
+
+    * ``masked_m`` lives on the device and is read by the kernel. The host never
+      reads its values, so no per-call host/device synchronisation is introduced
+      and the same captured graph can be replayed with different valid counts.
+    * The launch grid is unchanged. Only the *contents* of ``masked_m`` may change
+      between replays; buffer addresses and grid shape must stay fixed.
+
+    Programs whose M tile lies entirely beyond the valid prefix return before
+    loading X or W, so the skipped work is tensor-core work rather than a
+    load/store mask. Skipping requires ``M_capacity > block_m``: when the whole
+    capacity fits in one M tile there is no empty tile to skip and the masked
+    path only adds a scalar load and a branch per program.
     of each rank id in range [scatter_shard_indx[m] * n_reduce_shards, (scatter_shard_indx[m] + 1) * n_reduce_shards) if scatter_shard_indx is not None, otherwise the output will be all gathered across all reduce ranks.
     When scatter_shard_indx is specified, the caller should ensure that the indices of different shards do not conflict.
 
@@ -344,6 +375,21 @@ def matmul_ogs(x, w, bias,
         assert inner_routing_data is None, "routing not supported in batched mode"
         assert fused_comm is None, "fused comm is not supported in batched mode"
         assert w.ndim == 3 and w.shape[0] == x.shape[0]
+    if masked_m is not None:
+        # Masked batched matmul: only the leading `masked_m[e]` rows of each
+        # expert are real tokens. See the contract note in the module docstring.
+        assert is_input_batched, "masked_m is only supported in batched mode (x.ndim == 3)"
+        assert masked_m.ndim == 1 and masked_m.shape[0] == x.shape[0], \
+            "masked_m must have shape [batch_size] matching x.shape[0]"
+        assert masked_m.dtype in (torch.int32, torch.int64), \
+            "masked_m must be int32 or int64"
+        assert masked_m.device == x.device, "masked_m must live on the same device as x"
+        assert 0 < x.shape[0], "masked_m requires a non-empty batch"
+        if inner_routing_data is not None:
+            raise NotImplementedError("masked_m is not supported with inner_routing_data")
+        # The predicate indexes MaskedM by the expert id, which the batched path
+        # takes from the batch index. Keep the int32 layout the kernel expects.
+        masked_m = masked_m.to(torch.int32).contiguous()
     if inner_routing_data is not None:
         assert routing_data is None
         assert gather_indx is None
@@ -594,6 +640,7 @@ def matmul_ogs(x, w, bias,
                    None if scatter_indx is None else scatter_indx.dst_indx,
                    None if scatter_indx is None else scatter_indx.dst_indx.shape[0],
                    *expt_data_args,
+                   masked_m,
                    batch_size, grid_m, grid_n,
                    out_alpha,
                    *matmul_fused_activation.fn_args, matmul_fused_activation.specs.reduction_n,

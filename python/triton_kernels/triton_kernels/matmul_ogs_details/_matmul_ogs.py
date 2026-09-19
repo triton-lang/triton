@@ -10,6 +10,7 @@ from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from ._common import (
     _load_tile_attrs,
+    _masked_tile_is_empty,
     get_scaled_dot_format_string,
     make_matmul_repr,
     matmul_launch_metadata,
@@ -62,6 +63,7 @@ def _matmul_ogs(
              X_IS_PADDED: tl.constexpr,
              W_IS_PADDED: tl.constexpr,
              ExptHistMax,
+             MaskedM,
              # true grid size
              batch_size, grid_m, grid_n,
              # Out scale
@@ -230,6 +232,13 @@ def _matmul_ogs(
         if is_out_microscaled:
             YActualScale += pid_k.to(index_type) * stride_y_mx_k
 
+    # Masked batched mode: skip programs whose M tile holds no valid row. This
+    # is placed before the X/W pointer setup so a fully padded tile costs a
+    # single scalar load and a branch, with no tensor-core work and no shared
+    # memory traffic.
+    if MaskedM is not None:
+        if _masked_tile_is_empty(MaskedM, expt_id, off_m):
+            return
     expt_id, off_m = expt_id.to(index_type), off_m.to(index_type)
     start_m, start_z = start_m.to(index_type), start_z.to(index_type)
     pid_n, pid_k = pid_n.to(index_type), pid_k.to(index_type)
