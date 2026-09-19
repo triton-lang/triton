@@ -1046,3 +1046,54 @@ def test_fused_comm_no_local_output(dtype, n_peers, ragged, is_persistent):
                 torch.cuda.synchronize(destination.device)
             graph.replay()
             torch.testing.assert_close(collected(), reference, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("split_k", [1, 2])
+@pytest.mark.parametrize("valid", [[512, 512, 512], [0, 0, 0], [0, 129, 511]])
+def test_matmul_masked_batched_prefix(valid, split_k, device, opt_flags_scope):
+    opt_flags.update_opt_flags_constraints(dict(is_persistent=False, block_m=128, split_k=split_k))
+    torch.manual_seed(0)
+    a = torch.randn(3, 512, 256, device=device, dtype=torch.bfloat16)
+    b = torch.randn(3, 256, 128, device=device, dtype=torch.bfloat16)
+    bias = torch.randn(3, 128, device=device, dtype=torch.float32)
+    counts = torch.tensor(valid, device=device, dtype=torch.int32)
+    dense = matmul(a, b, bias)
+    masked = matmul(a, b, bias, masked_m=counts)
+    for batch, rows in enumerate(valid):
+        torch.testing.assert_close(masked[batch, :rows], dense[batch, :rows], rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not is_cuda(), reason="CUDA graph replay")
+def test_matmul_masked_batched_graph(device, opt_flags_scope):
+    opt_flags.update_opt_flags_constraints(dict(is_persistent=False, block_m=128, split_k=1))
+    a = torch.randn(3, 512, 256, device=device, dtype=torch.bfloat16)
+    b = torch.randn(3, 256, 128, device=device, dtype=torch.bfloat16)
+    counts = torch.full((3,), 512, device=device, dtype=torch.int32)
+    reference = matmul(a, b, None)
+    stream = torch.cuda.Stream()
+    stream.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(stream):
+        matmul(a, b, None, masked_m=counts)
+    torch.cuda.current_stream().wait_stream(stream)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        output = matmul(a, b, None, masked_m=counts)
+    for valid in ([512, 512, 512], [0, 0, 0], [1, 129, 511], [512, 512, 512]):
+        counts.copy_(torch.tensor(valid, device=device, dtype=torch.int32))
+        graph.replay()
+        for batch, rows in enumerate(valid):
+            torch.testing.assert_close(output[batch, :rows], reference[batch, :rows], rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("bad_counts", ["length", "dtype", "strided"])
+def test_matmul_masked_batched_invalid_counts(bad_counts, device):
+    a = torch.empty(3, 512, 256, device=device, dtype=torch.bfloat16)
+    b = torch.empty(3, 256, 128, device=device, dtype=torch.bfloat16)
+    if bad_counts == "length":
+        counts = torch.zeros(2, device=device, dtype=torch.int32)
+    elif bad_counts == "dtype":
+        counts = torch.zeros(3, device=device, dtype=torch.float32)
+    else:
+        counts = torch.zeros(6, device=device, dtype=torch.int32)[::2]
+    with pytest.raises(AssertionError):
+        matmul(a, b, None, masked_m=counts)

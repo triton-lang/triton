@@ -108,6 +108,7 @@ def _matmul(
              all_writes_issued=None,
              reduce_rank = 0,
              n_reduce_shards: tl.constexpr = 1,
+             MaskedM=None,
              ):
     tl.assume(stride_y_k >= 0)
     tl.assume(stride_y_z >= 0)
@@ -243,6 +244,9 @@ def _matmul(
             RAGGED_DIMENSION,
             BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K
         )
+    if MaskedM is not None:
+        if off_m >= tl.load(MaskedM + expt_id):
+            return
     if X_SLICE_SIZES_DIVISIBILITY is not None:
         off_k_x = off_k_x // X_SLICE_SIZES_DIVISIBILITY * X_SLICE_SIZES_DIVISIBILITY
     if W_SLICE_SIZES_DIVISIBILITY is not None:

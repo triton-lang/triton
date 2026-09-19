@@ -258,6 +258,7 @@ def matmul(a, b, bias,
     fused_activation: FusedActivation | None = None,
     epilogue: Epilogue | None = None,
     c_acc_in: torch.Tensor | None = None,
+    masked_m: torch.Tensor | None = None,
 ):
     """
     Y[:, :] = 0.
@@ -267,6 +268,12 @@ def matmul(a, b, bias,
     matmul can be optionally fused with all gather or scatter at the end for the output. When fused_comm is specified, the m-th row of the output will be stored to (m * n_reduce_shards + reduce_rank) -th row
     of each rank id in range [scatter_shard_indx[m] * n_reduce_shards, (scatter_shard_indx[m] + 1) * n_reduce_shards) if scatter_shard_indx is not None, otherwise the output will be all gathered across all reduce ranks.
     When scatter_shard_indx is specified, the caller should ensure that the indices of different shards do not conflict.
+
+    In batched mode, masked_m is a contiguous device int32 tensor with one valid
+    leading-row count per batch, in [0, M]. Rows beyond that prefix are undefined.
+    Empty M tiles skip computation; the launch grid and buffer addresses remain
+    fixed, allowing counts to change during CUDA graph replay. This is supported
+    by the non-persistent kernel only.
 
     The output buffer for fused comm should be pre-allocated and passed in via fused_comm.out_handles, which contains ipc handles to the output tensors, each with shape (n_rows * n_reduce_shards, n_cols).
     When fused_comm is provided and c is None or a meta tensor, no local output
@@ -282,6 +289,11 @@ def matmul(a, b, bias,
         assert a_ragged_metadata is None, "x cannot be ragged in batched mode"
         assert fused_comm is None, "fused comm is not supported in batched mode"
         assert b.ndim == 3 and b.shape[0] == a.shape[0]
+    if masked_m is not None:
+        assert is_input_batched, "masked_m requires batched input"
+        assert masked_m.shape == (a.shape[0],), "masked_m must have one count per batch"
+        assert masked_m.dtype == torch.int32 and masked_m.is_contiguous()
+        assert masked_m.device == a.device
     if b_ragged_metadata is not None:
         assert gather_indx is None
         assert scatter_indx is None
@@ -445,6 +457,8 @@ def matmul(a, b, bias,
         rhs_layout=b.storage.layout,
         epilogue_reduction_n=fused_activation.specs.reduction_n,
     )
+    if masked_m is not None and opt_flags.is_persistent:
+        raise NotImplementedError("masked_m requires the non-persistent matmul kernel")
     if opt_flags.clc and ragged_dimension == "M":
         raise InapplicableConstraint("CLC requires a host-known grid and does not support ragged-M matmul")
     if opt_flags.clc and opt_flags.idle_sms:
@@ -674,6 +688,8 @@ def matmul(a, b, bias,
     } if fused_comm is not None else {}
     b_strides = b.storage.data.stride()[:3] if b_is_shuffled else b.storage.data.stride()
     extra_kernel_kwargs = {"W_SHUFFLED": b_is_shuffled} if opt_flags.is_persistent else {}
+    if not opt_flags.is_persistent:
+        extra_kernel_kwargs["MaskedM"] = masked_m
     if opt_flags.clc:
         extra_kernel_kwargs.update(CLC=True, clc=True)
     n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
