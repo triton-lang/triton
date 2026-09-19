@@ -126,6 +126,8 @@ public:
   unsigned getNonAxisNumThreadsPerCTA();
   // Return the number of warps per CTA along axis dim with unique data.
   unsigned getAxisNumWarpsWithUniqueData();
+  // Return the number of CTAs along axis dim with unique data.
+  unsigned getAxisNumCTAsWithUniqueData();
   // Return the number of threads per warp along axis dim with unique data.
   unsigned getAxisNumThreadsPerWarpWithUniqueData();
   // Return the number of blocks along axis dim.
@@ -137,6 +139,8 @@ public:
   // Return the number of elements of the scratch space needed for scan
   // lowering.
   unsigned getScratchSizeInElems();
+  // Return the number of scratch elements used for intra-CTA communication.
+  unsigned getIntraCTAScratchSizeInElems();
 
   // Stride between contiguous element along axis dim.
   unsigned getAxisElementStride();
@@ -160,6 +164,7 @@ private:
   triton::gpu::LinearEncodingAttr srcEncoding;
   Attribute legacyEncoding;
   llvm::ArrayRef<int64_t> srcShape;
+  SmallVector<int64_t> srcShapePerCTA;
   SmallVector<Type> srcElementTypes;
   SmallVector<unsigned> order;
 };
