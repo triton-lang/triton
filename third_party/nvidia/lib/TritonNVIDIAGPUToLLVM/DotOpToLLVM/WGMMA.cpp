@@ -25,6 +25,7 @@
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Tools/LayoutUtils.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -236,6 +237,10 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
     transA = aLoader.getDescriptor().transposed;
   } else {
     structA = unpackTensorElements(loc, loadedA, rewriter, aTensorTy);
+    auto aDotOpEnc = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
+    auto mma = cast<NvidiaMmaEncodingAttr>(aDotOpEnc.getParent());
+    structA = broadcastAs(
+        structA, mma.dotOperandToLinearLayout(aDotOpEnc, aTensorTy.getShape()));
   }
   auto bLoader = DotOpMmaSmemLoader::build(loc, rewriter, bTensorTy, baseB,
                                            {K, N}, 1, 3, false, dTensorTy);
@@ -248,6 +253,9 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   bool transB = !bLoader->getDescriptor().transposed;
 
   auto fc = unpackTensorElements(loc, loadedC, rewriter, dTensorTy);
+  // M and N are multiples of 64 and 8, so only trailing N registers can repeat.
+  unsigned compactAccSize =
+      std::min(accSize, 2 * triton::gpu::getElemsPerThread(dTensorTy)[1]);
 
   triton::nvgpu::WGMMAEltType eltTypeC = getMmaRetType(d);
   triton::nvgpu::WGMMAEltType eltTypeA = getMmaOperandType(a, allowTF32);
@@ -262,9 +270,12 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   SmallVector<Value> mmaResults;
   for (int m = 0; m < numRepM; ++m) {
     for (int n = 0; n < numRepN; ++n) {
+      SmallVector<Value> instructionAcc;
+      for (unsigned i = 0; i < accSize; ++i)
+        instructionAcc.push_back(
+            fc[(m * numRepN + n) * compactAccSize + i % compactAccSize]);
       llvm::SmallVector<Value> mmaOut =
-          loadReg(rewriter, loc, fc, (m * numRepN + n) * accSize, accSize,
-                  startSequence);
+          loadReg(rewriter, loc, instructionAcc, 0, accSize, startSequence);
       llvm::SmallVector<Type> elemTypes;
       for (Value accEl : mmaOut)
         elemTypes.push_back(accEl.getType());
@@ -362,8 +373,12 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   if (sync)
     mmaResults = emitWait(rewriter, loc, mmaResults, 0);
 
-  SmallVector<Value> results =
+  auto instructionResults =
       unpackAccumulator(rewriter, loc, mmaResults, dTensorTy);
+  SmallVector<Value> results;
+  for (unsigned i = 0; i < fc.size(); ++i)
+    results.push_back(
+        instructionResults[i / compactAccSize * accSize + i % compactAccSize]);
 
   // replace with new packed result
   auto res =

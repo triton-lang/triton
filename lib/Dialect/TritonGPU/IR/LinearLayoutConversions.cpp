@@ -574,7 +574,8 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
         LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDimNames[order[2]]);
   }
 
-  return combineCtaCgaWithShape(tileLayout, getCGALayout(), shape);
+  return combineCtaCgaWithShape(tileLayout, getCGALayout(), shape)
+      .removeZeroBasesAlongDim(kRegister);
 }
 
 static LinearLayout projectAwayOutDim(const LinearLayout &layout,
@@ -787,7 +788,8 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
       permuteDimNames(standardOutDimNames(ctx, rank), defaultRepOrder);
 
   wmmaLayout = wmmaLayout.transposeOuts(repDimNames);
-  return combineCtaCgaWithShape(wmmaLayout, getCGALayout(), shape);
+  return combineCtaCgaWithShape(wmmaLayout, getCGALayout(), shape)
+      .removeZeroBasesAlongDim(S("register"));
 }
 
 LinearLayout
@@ -995,7 +997,8 @@ NvidiaMmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   ctaLayout *= identityStandardND(S("warp"), getWarpsPerCTA(), warpOrder)
                    .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
 
-  return combineCtaCgaWithShape(ctaLayout, getCGALayout(), shape);
+  return combineCtaCgaWithShape(ctaLayout, getCGALayout(), shape)
+      .removeZeroBasesAlongDim(S("register"));
 }
 
 LinearLayout
@@ -1036,13 +1039,17 @@ NvidiaMmaEncodingAttr::dotOperandToLinearLayout(Attribute dotOp,
 
 LinearLayout
 DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  LinearLayout layout;
   auto parent = getParent();
-  if (mlir::isa<BlockedEncodingAttr>(parent))
-    return fmaDotToLinearLayout(*this, shape);
-  if (auto mma = mlir::dyn_cast<MmaEncodingTrait>(parent))
-    return mma.dotOperandToLinearLayout(*this, shape);
-  llvm::report_fatal_error(
-      "unexpected parent layout in DotOperandEncodingAttr::toLinearLayout");
+  if (isa<BlockedEncodingAttr>(parent))
+    layout = fmaDotToLinearLayout(*this, shape);
+  else if (auto mma = dyn_cast<MmaEncodingTrait>(parent))
+    layout = mma.dotOperandToLinearLayout(*this, shape);
+  else
+    llvm::report_fatal_error(
+        "unexpected parent layout in DotOperandEncodingAttr::toLinearLayout");
+  return layout.removeZeroBasesAlongDim(
+      StringAttr::get(getContext(), "register"));
 }
 
 LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
