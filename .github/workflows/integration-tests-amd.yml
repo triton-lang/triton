@@ -257,3 +257,96 @@ jobs:
         run: |
           rm -rf ~/.triton/cache
           rm -rf ~/.ccache
+
+  integration-tests-amd-rocjitsu:
+    name: integration-tests-amd (gfx1250-rocjitsu)
+    if: github.repository == 'triton-lang/triton'
+    runs-on: amd-gfx942
+    timeout-minutes: 45
+    continue-on-error: true
+    env:
+      TRITON_BUILD_WITH_CCACHE: "true"
+      TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
+      TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
+      TRITON_DISABLE_LINE_INFO: 1
+      PYTHON: "python3"
+      PYTEST_ADDOPTS: "-p triton._compile_warmup"
+      CCACHE_COMPRESS: "true"
+      PIP_BREAK_SYSTEM_PACKAGES: 1
+      ROCM_NIGHTLY_INDEX_URL: https://nightly.repo.amd.com/rocm/whl-next/
+      ROCM_VERSION: "10.2.0a20260918"
+      TORCH_VERSION: "2.15.0a0+rocm10.2.0a20260918"
+    container:
+      image: tritonci/triton-amd-ci:rocm10.1.0a20260820-pytorch2.15.0a0-gfx942-gfx950-gfx1250-r1
+      options: >-
+        --security-opt seccomp=unconfined --user root
+        --volume /home/runner/.triton:/github/home/.triton
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: 'true'
+      - name: Install dependencies
+        run: apt-get update && apt-get install -y clang lld ccache
+      - name: Setup gfx1250 emulation
+        shell: bash
+        run: |
+          set -xeo pipefail
+          unset HIP_VISIBLE_DEVICES ROCR_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES
+          python3 -m pip uninstall -y \
+            triton triton-rocm pytorch-triton torch amd-torch-device-gfx1250 \
+            rocm rocm-sdk-core rocm-sdk-devel rocm-sdk-libraries rocm-sdk-device-gfx1250 \
+            2>/dev/null || true
+          python3 -m pip install --pre --force-reinstall --no-cache-dir \
+            --index-url "${ROCM_NIGHTLY_INDEX_URL}" \
+            --extra-index-url https://pypi.org/simple \
+            "rocm[libraries,devel,device-gfx1250]==${ROCM_VERSION}" \
+            "torch[device-gfx1250]==${TORCH_VERSION}"
+          rocm-sdk init
+          ROCM_ROOT="$(rocm-sdk path --root)"
+          echo "ROCM_ROOT=${ROCM_ROOT}" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=${ROCM_ROOT}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          echo "${ROCM_ROOT}/bin" >> "$GITHUB_PATH"
+          test -f "${ROCM_ROOT}/lib/libamdhip64.so"
+          test -x "${ROCM_ROOT}/bin/mirage"
+          config="${ROCM_ROOT}/share/rocjitsu/configs/gfx1250_mi455x.json"
+          if [ ! -f "${config}" ]; then
+            config="${ROCM_ROOT}/share/rocjitsu/configs/gfx1250.json"
+          fi
+          test -f "${config}"
+          echo "ROCJITSU_CONFIG=${config}" >> "$GITHUB_ENV"
+          echo "ROCJITSU=${ROCM_ROOT}/bin/mirage run --in-process --config ${config} --" >> "$GITHUB_ENV"
+      - name: Install Triton
+        run: |
+          pip uninstall -y triton pytorch-triton-rocm
+          ccache --zero-stats
+          pip install -r python/requirements.txt
+          pip install -r python/test-requirements.txt
+          make dev-install
+      - name: Print ccache stats
+        run: ccache --print-stats
+      - name: Check active target is gfx1250
+        run: $ROCJITSU python3 -c "import triton; print(triton.runtime.driver.active.get_current_target())"
+      - name: Run Gluon tests on gfx1250-rocjitsu
+        shell: bash
+        env:
+          TRITON_HIP_USE_ASYNC_COPY: 1
+        run: |
+          set -euo pipefail
+          $ROCJITSU pytest --capture=tee-sys -rfs -n 64 --durations=20 \
+            third_party/amd/python/test/test_gluon_cdna5.py
+          $ROCJITSU pytest --capture=tee-sys -rfs -n 64 --durations=20 \
+            python/test/gluon/test_frontend.py
+          $ROCJITSU pytest --capture=tee-sys -rfs -n 64 --durations=20 \
+            third_party/amd/python/examples/gluon/f16_gemm_cdna5.py
+          $ROCJITSU pytest --capture=tee-sys -rfs -n 16 --durations=20 \
+            third_party/amd/python/examples/gluon/f16_gemm_streamk_cdna5.py
+          $ROCJITSU pytest --capture=tee-sys -rfs -n 16 --durations=20 \
+            third_party/amd/python/examples/gluon/f16_fa_cdna5.py
+          TRITON_DISABLE_LINE_INFO=0 $ROCJITSU pytest --capture=tee-sys -rfs -n 16 --durations=20 \
+            third_party/amd/python/examples/gluon/mxfp_fa_cdna5.py
+      - name: Clean up caches
+        if: always()
+        run: |
+          rm -rf ~/.triton/cache
+          rm -rf ~/.ccache
