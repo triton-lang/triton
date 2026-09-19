@@ -328,6 +328,7 @@ jobs:
       - name: Check active target is gfx1250
         run: $ROCJITSU python3 -c "import triton; print(triton.runtime.driver.active.get_current_target())"
       - name: Run Gluon tests on gfx1250-rocjitsu
+        shell: bash
         env:
           TRITON_HIP_USE_ASYNC_COPY: 1
         run: |
