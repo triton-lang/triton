@@ -3525,6 +3525,69 @@ def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, device):
         np.testing.assert_equal(z_ref, z_tri)
 
 
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9 or is_sm12x(),
+                    reason="multi-CTA scan requires NVIDIA cluster DSM")
+@pytest.mark.parametrize("op,shape,axis,reverse,num_ctas", [
+    ("cumsum", (32, 32), 0, False, 4),
+    ("cumsum", (32, 32), 0, True, 2),
+    ("cumsum", (32, 32), 0, True, 8),
+    ("cumsum", (32, 32), 1, False, 2),
+    ("cumsum", (16, 1024), 0, True, 2),
+    ("first", (32, 32), 0, False, 2),
+    ("first", (32, 32), 0, True, 2),
+    ("recurrence", (32, 32), 0, False, 4),
+    ("recurrence", (32, 32), 0, True, 4),
+])
+def test_scan_multi_cta(op, shape, axis, reverse, num_ctas, device):
+
+    @triton.jit
+    def kernel(X, Y, Z, M: tl.constexpr, N: tl.constexpr, OP: tl.constexpr,
+               AXIS: tl.constexpr, REVERSE: tl.constexpr):
+        rows = tl.arange(0, M)
+        cols = tl.arange(0, N)
+        offsets = rows[:, None] * N + cols[None, :]
+        x = tl.load(X + offsets)
+        y = tl.load(Y + offsets)
+        if OP == "cumsum":
+            z = tl.cumsum(x, axis=AXIS, reverse=REVERSE)
+        elif OP == "first":
+            z = tl.associative_scan(x, axis=AXIS, combine_fn=get_first_element,
+                                    reverse=REVERSE)
+        else:
+            _, z = tl.associative_scan((x, y), axis=AXIS,
+                                       combine_fn=linear_recurrence,
+                                       reverse=REVERSE)
+        tl.store(Z + offsets, z)
+
+    m, n = shape
+    rows = torch.arange(m, device=device, dtype=torch.int32)[:, None]
+    cols = torch.arange(n, device=device, dtype=torch.int32)[None, :]
+    x = ((rows + cols) % 3 - 1).contiguous()
+    y = ((2 * rows + cols) % 5 - 2).contiguous()
+    out = torch.empty_like(x)
+
+    kernel[(1, )](x, y, out, m, n, op, axis, reverse,
+                  num_warps=4, num_ctas=num_ctas)
+
+    if op == "cumsum":
+        values = x.flip((axis, )) if reverse else x
+        expected = torch.cumsum(values, axis).to(x.dtype)
+        if reverse:
+            expected = expected.flip((axis, ))
+    elif op == "first":
+        boundary = shape[axis] - 1 if reverse else 0
+        expected = x.select(axis, boundary).unsqueeze(axis).expand_as(x)
+    else:
+        expected = torch.empty_like(y)
+        indices = range(m - 1, -1, -1) if reverse else range(m)
+        acc = torch.zeros(n, dtype=x.dtype, device=device)
+        for i in indices:
+            acc = x[i] * acc + y[i]
+            expected[i] = acc
+
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)
+
+
 @pytest.mark.parametrize("op", ["cumsum", "cumprod"])
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("reverse", [False, True])
