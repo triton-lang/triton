@@ -15,6 +15,11 @@
 #tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
 #tmem1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
 #smem = #ttg.shared_memory
+// #11860 shapes: a partition holding convert_layout -> trans crashed the
+// pass when relayoutWarps cleared encodings mid-flight.
+#blocked_repro_a = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>
+#blocked_repro_b = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [8, 1], order = [0, 1]}>
+#blocked_repro_bt = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 8], order = [1, 0]}>
 
 module attributes {ttg.target = "cuda:100", "ttg.num-warps" = 8 : i32} {
 
@@ -198,6 +203,25 @@ tt.func @tmem_min_4_warps(%tensor_desc: !ttg.memdesc<64x64xf32, #tmem, #ttng.ten
     "use"(%result) : (!ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory>) -> ()
     ttg.warp_return
   } : (!ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>) -> ()
+  tt.return
+}
+
+}
+
+module attributes {ttg.target = "cuda:100", "ttg.num-warps" = 8 : i32} {
+// CHECK-LABEL: @convert_layout_in_partition
+tt.func @convert_layout_in_partition(%arg0: i32) {
+  ttg.warp_specialize(%arg0)
+  default {
+    ttg.warp_yield
+  }
+  partition0(%arg1: i32) num_warps(8) {
+    %0 = tt.splat %arg1 : i32 -> tensor<128x2xi32, #blocked_repro_a>
+    %1 = ttg.convert_layout %0 : tensor<128x2xi32, #blocked_repro_a> -> tensor<128x2xi32, #blocked_repro_b>
+    %2 = tt.trans %1 {order = array<i32: 1, 0>} : tensor<128x2xi32, #blocked_repro_b> -> tensor<2x128xi32, #blocked_repro_bt>
+    "use"(%2) : (tensor<2x128xi32, #blocked_repro_bt>) -> ()
+    ttg.warp_return
+  } : (i32) -> ()
   tt.return
 }
 
