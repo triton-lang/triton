@@ -9,6 +9,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/ClusterBarrierMbarAllocator.h"
 #include "llvm/Support/MathExtras.h"
+#include <limits>
 
 using namespace mlir;
 
@@ -137,6 +138,35 @@ matchReduxKind(triton::ReduceOp op, int computeCapability,
   if (isa<arith::MaxUIOp>(reduceOp))
     return NVVM::ReductionKind::UMAX;
   return std::nullopt;
+}
+
+static Value createReduxIdentity(TritonLLVMOpBuilder &b,
+                                 NVVM::ReductionKind kind,
+                                 bool useNanQualifier) {
+  switch (kind) {
+  case NVVM::ReductionKind::MIN:
+    return b.i32_val(INT32_MAX);
+  case NVVM::ReductionKind::MAX:
+    return b.i32_val(INT32_MIN);
+  case NVVM::ReductionKind::UMIN:
+  case NVVM::ReductionKind::AND:
+    return b.i32_val(UINT32_MAX);
+  case NVVM::ReductionKind::UMAX:
+  case NVVM::ReductionKind::ADD:
+  case NVVM::ReductionKind::OR:
+  case NVVM::ReductionKind::XOR:
+    return b.i32_val(0);
+  case NVVM::ReductionKind::FMIN:
+  case NVVM::ReductionKind::FMAX:
+    // NaN-ignoring min/max must return NaN for an all-NaN group. An
+    // infinity identity would incorrectly turn that result into infinity.
+    if (!useNanQualifier)
+      return b.f32_val(std::numeric_limits<float>::quiet_NaN());
+    return b.f32_val(kind == NVVM::ReductionKind::FMIN
+                         ? std::numeric_limits<float>::infinity()
+                         : -std::numeric_limits<float>::infinity());
+  }
+  llvm_unreachable("invalid redux kind");
 }
 
 bool TargetInfo::supportMaximumMinimum() const {
@@ -600,29 +630,61 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
 }
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
-                            unsigned reduceLaneIdMask) const {
+                            unsigned reduceLaneIdMask,
+                            unsigned broadcastLaneIdMask) const {
 
-  // Based on benchmarking on A100 redux op gives a speed up only when doing
-  // a single reduction (not partitioned) and when the mask is static.
-  // Therefore we currently only enable it to reduce across all the lanes.
   constexpr unsigned kWarpSize = 32;
   unsigned fullMask = kWarpSize - 1;
-  if (reduceLaneIdMask != fullMask)
+  bool partialWarp = reduceLaneIdMask != fullMask;
+  unsigned groupMask = fullMask & ~(reduceLaneIdMask | broadcastLaneIdMask);
+  bool partitioned = groupMask != 0;
+  // Use at most two converged full-warp reductions. Broadcast lanes
+  // share a result, so only lane bits identifying distinct groups count.
+  if (llvm::popcount(groupMask) > 1)
     return false;
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   bool useNanQualifier = false;
   if (auto kind = matchReduxKind(op, targetFeatures.getComputeCapability(),
                                  useNanQualifier)) {
     assert(acc.size() == 1);
+    if (partialWarp) {
+      if (acc[0].getType().getIntOrFloatBitWidth() > 32)
+        return false;
+      // Min/max use the faster CREDUX instructions on SM100+. The minimum
+      // group size also depends on whether we need one redux or two.
+      bool isMinMax = *kind == NVVM::ReductionKind::MIN ||
+                      *kind == NVVM::ReductionKind::MAX ||
+                      *kind == NVVM::ReductionKind::UMIN ||
+                      *kind == NVVM::ReductionKind::UMAX ||
+                      *kind == NVVM::ReductionKind::FMIN ||
+                      *kind == NVVM::ReductionKind::FMAX;
+      bool useFastMinMax = isMinMax && getComputeCapability() >= 100;
+      // Heuristic thresholds based on latency/throughput benchmarks:
+      // https://github.com/triton-lang/triton/pull/11823
+      unsigned minLanes =
+          useFastMinMax ? (partitioned ? 8 : 2) : (partitioned ? 16 : 4);
+      unsigned numLanes = 1u << llvm::popcount(reduceLaneIdMask);
+      if (numLanes < minLanes)
+        return false;
+    }
     Value mask = b.i32_val(0xFFFFFFFF);
-    // Even though we currently don't use redux for partitioned reduction
-    // the code below supports it in case we want to tweak the heuristic.
-    if (reduceLaneIdMask != fullMask) {
-      // For partitioned reduction we need to calculate the mask so that
-      // each group of threads has the correct mask.
+    bool maskBroadcast =
+        broadcastLaneIdMask && (*kind == NVVM::ReductionKind::ADD ||
+                                *kind == NVVM::ReductionKind::XOR);
+    Value identity, firstGroup, uniqueLane;
+    if (partitioned || maskBroadcast) {
+      identity = createReduxIdentity(b, *kind, useNanQualifier);
       Value laneId = getLaneId(rewriter, loc);
-      mask = b.shl(b.i32_val(reduceLaneIdMask),
-                   b.and_(laneId, b.i32_val(~reduceLaneIdMask)));
+      if (partitioned) {
+        Value group = b.and_(laneId, b.i32_val(groupMask));
+        firstGroup = b.icmp_eq(group, b.i32_val(0));
+      }
+      // Min/max, AND, and OR are idempotent. Add and XOR must count each
+      // broadcast value just once, even though all lanes execute the redux.
+      if (maskBroadcast) {
+        Value duplicate = b.and_(laneId, b.i32_val(broadcastLaneIdMask));
+        uniqueLane = b.icmp_eq(duplicate, b.i32_val(0));
+      }
     }
     if (acc[0].getType().isInteger(64)) {
       Value high = b.trunc(i32_ty, b.lshr(acc[0], b.i64_val(32)));
@@ -672,9 +734,20 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
             acc[i] = b.zext(i32_ty, acc[i]);
         }
       }
-      acc[i] = NVVM::ReduxOp::create(rewriter, loc, acc[i].getType(), acc[0],
+      auto redux = [&](Value value) -> Value {
+        return NVVM::ReduxOp::create(rewriter, loc, value.getType(), value,
                                      *kind, mask, /*abs=*/false,
                                      /*nan=*/useNanQualifier);
+      };
+      if (maskBroadcast)
+        acc[i] = b.select(uniqueLane, acc[i], identity);
+      if (partitioned) {
+        Value first = redux(b.select(firstGroup, acc[i], identity));
+        Value second = redux(b.select(firstGroup, identity, acc[i]));
+        acc[i] = b.select(firstGroup, first, second);
+      } else {
+        acc[i] = redux(acc[i]);
+      }
       if (acc[i].getType().isInteger()) {
         if (bitwidth < 32)
           acc[i] = b.trunc(int_ty(bitwidth), acc[i]);
