@@ -1,4 +1,4 @@
-from triton.backends.compiler import BaseBackend, GPUTarget, Language
+from triton.backends.compiler import BaseBackend, GPUTarget, Language, NATIVE_TENSOR_SPEC_RANGE
 from triton._C.libtriton import ir, passes, llvm, amd
 from triton import knobs
 from triton._instrumentation import instrument as _instrument, is_enabled
@@ -287,7 +287,7 @@ class HIPOptions:
 
 
 class HIPBackend(BaseBackend):
-    supports_native_tensor_specialization = False
+    supports_native_tensor_specialization = NATIVE_TENSOR_SPEC_RANGE
 
     @staticmethod
     def supports_target(target: GPUTarget):

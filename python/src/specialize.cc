@@ -1,4 +1,7 @@
 #include <Python.h>
+#ifndef _WIN32
+#include <dlfcn.h>
+#endif
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -54,6 +57,8 @@ static PyObject *u64_str = nullptr;
 static PyObject *fp32_str = nullptr;
 static PyObject *u1_str = nullptr;
 static PyObject *D_str = nullptr;
+static PyObject *S_str = nullptr;
+static PyObject *DS_str = nullptr;
 static PyObject *constexpr_str = nullptr;
 static PyObject *empty_str = nullptr;
 static PyObject *nvTmaDesc_str = nullptr;
@@ -68,7 +73,14 @@ static PyObject *shape_attr = nullptr;
 static PyObject *layout_attr = nullptr;
 static PyObject *has_native_tensor_spec_attr = nullptr;
 static PyObject *get_tensor_spec_attr = nullptr;
+static PyObject *ptr_range_attr = nullptr;
+static PyObject *untyped_storage_attr = nullptr;
+static PyObject *size_attr = nullptr;
 static PyObject *align_kwarg = nullptr;
+
+// The four keys the native path can produce, indexed by [align bit][range bit].
+// All interned, so producing one is a borrow rather than a string build.
+PyObject *native_spec_keys[2][2] = {};
 
 static DtypePtr2Str dtype_ptr2str;
 static Dtype2Str dtype2str;
@@ -125,6 +137,8 @@ void init_interned_strings() {
   fp32_str = intern_from_string("fp32");
   u1_str = intern_from_string("u1");
   D_str = intern_from_string("D");
+  S_str = intern_from_string("S");
+  DS_str = intern_from_string("DS");
   constexpr_str = intern_from_string("constexpr");
   empty_str = intern_from_string("");
   nvTmaDesc_str = intern_from_string("nvTmaDesc");
@@ -140,11 +154,21 @@ void init_interned_strings() {
   has_native_tensor_spec_attr =
       intern_from_string("supports_native_tensor_specialization");
   get_tensor_spec_attr = intern_from_string("get_tensor_specialization");
+  ptr_range_attr = intern_from_string("ptr_range");
+  untyped_storage_attr = intern_from_string("untyped_storage");
+  size_attr = intern_from_string("size");
+
+  native_spec_keys[0][0] = empty_str;
+  native_spec_keys[0][1] = S_str;
+  native_spec_keys[1][0] = D_str;
+  native_spec_keys[1][1] = DS_str;
 
   align_kwarg = py::make_tuple("align").release().ptr();
 }
 
 void init_type_handler_cache();
+void init_torch_native_api();
+bool init_torch_if_loaded();
 
 bool init_globals() noexcept try {
   // Import releavant symbols
@@ -164,15 +188,8 @@ bool init_globals() noexcept try {
       import_from("triton._utils", "canonicalize_ptr_dtype");
   constexpr_cls = import_from("triton.language", "constexpr");
 
-  PyObject *loaded_modules = PyImport_GetModuleDict();
-  PyObject *torch_module = PyDict_GetItemString(loaded_modules, "torch");
-  if (torch_module) {
-    auto tensor_cls =
-        from_new_ref(PyObject_GetAttrString(torch_module, "Tensor"));
-    if (!tensor_cls)
-      return false;
-    torch_tensor_cls = tensor_cls.release().ptr();
-  }
+  if (!init_torch_if_loaded())
+    return false;
 
   init_interned_strings();
   init_type_handler_cache();
@@ -327,6 +344,133 @@ std::pair<py::object, py::object> handle_long_type(PyObject *backend,
   return {from_borrowed_ref(type_str), from_borrowed_ref(key_obj)};
 }
 
+// Torch's stable C ABI, resolved by dlsym so that Triton neither links against
+// torch nor includes its headers. `torch_tensor_from_pyobject` exists from
+// torch 2.14; without it the key is built with CPython calls instead, which is
+// what the Python implementation did.
+using AtenTensorHandle = void *;
+static int32_t (*torch_tensor_from_pyobject)(void *,
+                                             AtenTensorHandle *) = nullptr;
+static int32_t (*aoti_torch_get_data_ptr)(AtenTensorHandle, void **) = nullptr;
+static int32_t (*aoti_torch_get_storage_size)(AtenTensorHandle,
+                                              int64_t *) = nullptr;
+static int32_t (*aoti_torch_delete_tensor_object)(AtenTensorHandle) = nullptr;
+static bool has_torch_stable_api = false;
+
+void init_torch_native_api() {
+#ifndef _WIN32
+  // libtorch_cpu is loaded RTLD_LOCAL, so RTLD_DEFAULT does not see it. Ask for
+  // the already-loaded handle instead; RTLD_NOLOAD never loads anything new, so
+  // this is a no-op when torch is absent.
+  void *handle = dlopen("libtorch_cpu.so", RTLD_LAZY | RTLD_NOLOAD);
+  if (!handle)
+    return;
+  torch_tensor_from_pyobject =
+      reinterpret_cast<decltype(torch_tensor_from_pyobject)>(
+          dlsym(handle, "torch_tensor_from_pyobject"));
+  aoti_torch_get_data_ptr = reinterpret_cast<decltype(aoti_torch_get_data_ptr)>(
+      dlsym(handle, "aoti_torch_get_data_ptr"));
+  aoti_torch_get_storage_size =
+      reinterpret_cast<decltype(aoti_torch_get_storage_size)>(
+          dlsym(handle, "aoti_torch_get_storage_size"));
+  aoti_torch_delete_tensor_object =
+      reinterpret_cast<decltype(aoti_torch_delete_tensor_object)>(
+          dlsym(handle, "aoti_torch_delete_tensor_object"));
+  dlclose(handle);
+  has_torch_stable_api =
+      torch_tensor_from_pyobject && aoti_torch_get_data_ptr &&
+      aoti_torch_get_storage_size && aoti_torch_delete_tensor_object;
+#endif
+}
+
+bool init_torch_if_loaded() {
+  if (torch_tensor_cls)
+    return true;
+
+  PyObject *loaded_modules = PyImport_GetModuleDict();
+  PyObject *torch_module = PyDict_GetItemString(loaded_modules, "torch");
+  if (!torch_module)
+    return true;
+
+  auto tensor_cls =
+      from_new_ref(PyObject_GetAttrString(torch_module, "Tensor"));
+  if (!tensor_cls)
+    return false;
+  torch_tensor_cls = tensor_cls.release().ptr();
+  init_torch_native_api();
+  return true;
+}
+
+// How much of the key the native path produces for this backend. Mirrors
+// NATIVE_TENSOR_SPEC_* in python/triton/backends/compiler.py.
+enum NativeTensorSpec {
+  kNativeSpecNone = 0,
+  kNativeSpecAlign = 1,
+  kNativeSpecRange = 2,
+};
+
+// The largest allocation addressable with a 32-bit offset, which is what the
+// "S" bit asserts.
+constexpr int64_t kMaxPointerRange32 = 2147483647;
+
+// Reads `arg.untyped_storage().size()` through CPython. Used when the torch C
+// ABI is unavailable.
+bool storage_size_via_python(PyObject *arg, int64_t *out) {
+  auto storage = from_new_ref(
+      PyObject_CallMethodObjArgs(arg, untyped_storage_attr, nullptr));
+  if (!storage)
+    return false;
+  auto size = from_new_ref(
+      PyObject_CallMethodObjArgs(storage.ptr(), size_attr, nullptr));
+  if (!size)
+    return false;
+  *out = PyLong_AsLongLong(size.ptr());
+  return !(*out == -1 && PyErr_Occurred());
+}
+
+// Computes both key bits through CPython. Used for everything the torch stable
+// API cannot answer for: non-torch arguments, subclasses that may override
+// data_ptr() or untyped_storage() in Python, and tensors with no storage.
+bool tensor_bits_via_python(PyObject *arg, bool align, bool want_range,
+                            int *d_bit, int *range_bit) {
+  *d_bit = 0;
+  *range_bit = 0;
+
+  auto data_ptr_result =
+      from_new_ref(PyObject_CallMethodObjArgs(arg, data_ptr_attr, nullptr));
+  if (!data_ptr_result)
+    return false;
+  auto data_ptr = PyLong_AsUnsignedLongLong(data_ptr_result.ptr());
+  if (PyErr_Occurred())
+    return false;
+  *d_bit = (align && (data_ptr & 15) == 0);
+
+  if (!want_range)
+    return true;
+
+  // An object that declares its own pointer range answers for itself.
+  int64_t range = 0;
+  if (PyObject_HasAttr(arg, ptr_range_attr)) {
+    auto value =
+        from_new_ref(PyObject_CallMethodObjArgs(arg, ptr_range_attr, nullptr));
+    if (!value)
+      return false;
+    range = PyLong_AsLongLong(value.ptr());
+    if (range == -1 && PyErr_Occurred())
+      return false;
+  } else if (torch_tensor_cls &&
+             PyObject_TypeCheck(
+                 arg, reinterpret_cast<PyTypeObject *>(torch_tensor_cls))) {
+    if (!storage_size_via_python(arg, &range))
+      return false;
+  } else {
+    // Neither a torch tensor nor pointer-range aware: no range bit.
+    return true;
+  }
+  *range_bit = range <= kMaxPointerRange32;
+  return true;
+}
+
 std::pair<py::object, py::object> handle_tensor(PyObject *backend,
                                                 PyObject *arg, bool is_const,
                                                 bool specialize_value,
@@ -361,38 +505,98 @@ std::pair<py::object, py::object> handle_tensor(PyObject *backend,
     return {from_borrowed_ref(type_str), py::none()};
   }
 
-  bool native_impl_available = false;
-  auto native_spec_obj =
-      from_new_ref(PyObject_GetAttr(backend, has_native_tensor_spec_attr));
-  if (native_spec_obj) {
-    native_impl_available = PyObject_IsTrue(native_spec_obj.ptr());
-  } else {
-    PyErr_Clear();
-    // on error we fall back to native_impl_available = false gracefully
+  // How much of the key this backend wants us to build. Memoized on the backend
+  // object, which is the same one launch after launch; an owned reference keeps
+  // its address from being reused by a different backend.
+  static PyObject *cached_backend = nullptr;
+  static int cached_native_impl = kNativeSpecNone;
+  int native_impl = cached_native_impl;
+  if (backend != cached_backend) {
+    native_impl = kNativeSpecNone;
+    auto native_spec_obj =
+        from_new_ref(PyObject_GetAttr(backend, has_native_tensor_spec_attr));
+    if (native_spec_obj) {
+      // bool is a subclass of int, so backends predating the enum still work:
+      // True reads as kNativeSpecAlign, False as kNativeSpecNone.
+      long value = PyLong_AsLong(native_spec_obj.ptr());
+      if (value == -1 && PyErr_Occurred())
+        return {};
+      if (value != kNativeSpecNone && value != kNativeSpecAlign &&
+          value != kNativeSpecRange) {
+        PyErr_Format(PyExc_ValueError,
+                     "supports_native_tensor_specialization must be 0, 1 or 2, "
+                     "got %ld",
+                     value);
+        return {};
+      }
+      native_impl = static_cast<int>(value);
+    } else {
+      PyErr_Clear();
+      // on error we fall back to native_impl = kNativeSpecNone gracefully
+    }
+    Py_INCREF(backend);
+    Py_XDECREF(cached_backend);
+    cached_backend = backend;
+    cached_native_impl = native_impl;
   }
 
   py::object key;
-  if (native_impl_available) {
-    auto data_ptr_result =
-        from_new_ref(PyObject_CallMethodObjArgs(arg, data_ptr_attr, nullptr));
-    if (!data_ptr_result)
-      return {};
-
-    auto data_ptr = PyLong_AsUnsignedLongLong(data_ptr_result.ptr());
-    if (PyErr_Occurred())
-      return {};
-
-    auto key_obj = (align && ((data_ptr & 15) == 0)) ? D_str : empty_str;
-    key = from_borrowed_ref(key_obj);
-  } else {
+  if (native_impl == kNativeSpecNone) {
     PyObject *args[3] = {backend, arg, align ? Py_True : Py_False};
     PyObject *kwnames = align_kwarg;
     key = from_new_ref(
         PyObject_VectorcallMethod(get_tensor_spec_attr, args, 2, kwnames));
     if (!key)
       return {};
+    return {from_borrowed_ref(type_str), std::move(key)};
   }
 
+  const bool want_range = native_impl == kNativeSpecRange;
+  int d_bit = 0;
+  int range_bit = 0;
+  bool computed = false;
+
+  // Triton can initialize before torch is imported. Discover torch lazily for
+  // range specialization when the argument exposes torch's storage API.
+  if (want_range && !torch_tensor_cls &&
+      PyObject_HasAttr(arg, untyped_storage_attr)) {
+    if (!init_torch_if_loaded())
+      return {};
+    if (torch_tensor_cls && PyType_Check(torch_tensor_cls))
+      type_handler_cache[reinterpret_cast<PyTypeObject *>(torch_tensor_cls)] =
+          handle_tensor;
+  }
+
+  // The stable API reads the TensorImpl directly, so it is only equivalent for
+  // an exact torch.Tensor: a subclass may override data_ptr() or
+  // untyped_storage() in Python, and those overrides have to keep deciding.
+  if (has_torch_stable_api && torch_tensor_cls &&
+      Py_TYPE(arg) == reinterpret_cast<PyTypeObject *>(torch_tensor_cls)) {
+    AtenTensorHandle handle = nullptr;
+    if (torch_tensor_from_pyobject(arg, &handle) == 0) {
+      void *data_ptr = nullptr;
+      int64_t storage_size = 0;
+      bool ok = aoti_torch_get_data_ptr(handle, &data_ptr) == 0;
+      if (ok && want_range)
+        ok = aoti_torch_get_storage_size(handle, &storage_size) == 0;
+      aoti_torch_delete_tensor_object(handle);
+      if (ok) {
+        d_bit = (align && (reinterpret_cast<uintptr_t>(data_ptr) & 15) == 0);
+        range_bit = want_range && storage_size <= kMaxPointerRange32;
+        computed = true;
+      }
+    }
+    // Sparse and nested tensors have no storage to report. Fall through to
+    // CPython, which raises the same error the Python implementation did.
+    if (!computed)
+      PyErr_Clear();
+  }
+
+  if (!computed &&
+      !tensor_bits_via_python(arg, align, want_range, &d_bit, &range_bit))
+    return {};
+
+  key = from_borrowed_ref(native_spec_keys[d_bit][range_bit]);
   return {from_borrowed_ref(type_str), std::move(key)};
 }
 
