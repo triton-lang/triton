@@ -656,6 +656,25 @@ def test_jit_warmup_cache(device) -> None:
     assert len(kernel_add.device_caches[device][0]) == 1
 
 
+def test_default_fp_fusion_in_memory_cache_key(monkeypatch, fresh_triton_cache) -> None:
+
+    @triton.jit
+    def kernel(out):
+        tl.store(out, 0.0)
+
+    with triton.knobs.language.scope():
+        triton.knobs.language.reset()
+        monkeypatch.setenv("TRITON_DEFAULT_FP_FUSION", "1")
+        first = kernel.warmup(torch.float32, grid=(1, ))
+
+        monkeypatch.setenv("TRITON_DEFAULT_FP_FUSION", "0")
+        second = kernel.warmup(torch.float32, grid=(1, ))
+
+    assert first.metadata.enable_fp_fusion is True
+    assert second.metadata.enable_fp_fusion is False
+    assert second is not first
+
+
 def test_jit_debug(device) -> None:
 
     @triton.jit
