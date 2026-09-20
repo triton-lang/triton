@@ -357,3 +357,27 @@ def test_wgp_cu_mode_launch_argument():
         kernel = add_one[(1, )](x, BLOCK=64, **options)
         assert f".amdhsa_workgroup_processor_mode {mode}" in kernel.asm["amdgcn"]
     assert torch.equal(x, torch.full_like(x, 3))
+
+
+def test_launch_metadata_skipped_without_hooks() -> None:
+    # launch_metadata() builds a LazyDict for the launch hooks to consume. With no
+    # hook registered there is nothing to consume it, so it must return None
+    # rather than allocating one on every launch.
+
+    @triton.jit
+    def kernel(x):
+        pass
+
+    compiled = kernel.warmup(6, grid=(1, ))
+    assert not triton.knobs.runtime.launch_enter_hook
+    assert compiled.launch_metadata((1, ), None, 6) is None
+
+    def hook(launch_metadata):
+        pass
+
+    triton.knobs.runtime.launch_enter_hook.add(hook)
+    try:
+        assert compiled.launch_metadata((1, ), None, 6) is not None
+    finally:
+        triton.knobs.runtime.launch_enter_hook.remove(hook)
+    assert compiled.launch_metadata((1, ), None, 6) is None
