@@ -442,7 +442,7 @@ class CompiledKernel:
         # Forked children inherit module handles that are still owned by the
         # parent's GPU runtime and must not unload them.
         if self.module is not None and self._module_pid == os.getpid():
-            if knobs.runtime.kernel_unload_hook is not None:
+            if knobs.runtime.kernel_unload_hook:
                 knobs.runtime.kernel_unload_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
 
             driver.active.utils.unload_module(self.module)
@@ -477,7 +477,7 @@ class CompiledKernel:
                 max_tmem_size = 576
             if self.metadata.tmem_size > max_tmem_size:
                 raise_(OutOfResources(self.metadata.tmem_size, max_tmem_size, "tensor memory"))
-        if knobs.runtime.kernel_load_start_hook is not None:
+        if knobs.runtime.kernel_load_start_hook:
             knobs.runtime.kernel_load_start_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
@@ -486,7 +486,7 @@ class CompiledKernel:
         warp_size = self.metadata.warp_size
         if self.metadata.num_warps * warp_size > self.n_max_threads:
             raise_(OutOfResources(self.metadata.num_warps * warp_size, self.n_max_threads, "threads"))
-        if knobs.runtime.kernel_load_end_hook is not None:
+        if knobs.runtime.kernel_load_end_hook:
             knobs.runtime.kernel_load_end_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
 
     @property
@@ -496,7 +496,7 @@ class CompiledKernel:
         return self._run
 
     def launch_metadata(self, grid, stream, *args):
-        if knobs.runtime.launch_enter_hook is None:
+        if not knobs.runtime.launch_enter_hook:
             return None
         self._init_handles()
         ret = LazyDict({"name": self.name, "function": self.function, "stream": stream})

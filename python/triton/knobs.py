@@ -369,7 +369,9 @@ class compilation_knobs(base_knobs):
     # Instrumentation mode is checked on every run, which is expensive.
     # We cache the value here to avoid the expensive check on every run.
     instrumentation_mode: str = env_str("TRITON_INSTRUMENTATION_MODE", "").get()
-    fpsan_homomorphic_casts: env_bool = env_bool("TRITON_FPSAN_HOMOMORPHIC_CASTS")
+    # Read on every kernel launch (see JITFunction.run), so resolve it once here
+    # rather than paying an env lookup per launch.
+    fpsan_homomorphic_casts: bool = env_bool("TRITON_FPSAN_HOMOMORPHIC_CASTS").get()
     listener: Union[CompilationListener, None] = None
 
 
@@ -428,6 +430,11 @@ class HookChain(Generic[F]):
     def remove(self, func: F) -> None:
         if func in self.calls:
             self.calls.remove(func)
+
+    def __bool__(self) -> bool:
+        # An empty chain is a no-op, so callers can skip the work of preparing
+        # arguments for it.
+        return bool(self.calls)
 
     def __call__(self, *args, **kwargs):
         for call in self.calls if not self.reversed else reversed(self.calls):
@@ -596,3 +603,4 @@ proton = proton_knobs()
 def refresh_knobs():
     runtime.debug = env_bool("TRITON_DEBUG").get()
     compilation.instrumentation_mode = env_str("TRITON_INSTRUMENTATION_MODE", "").get()
+    compilation.fpsan_homomorphic_casts = env_bool("TRITON_FPSAN_HOMOMORPHIC_CASTS").get()
