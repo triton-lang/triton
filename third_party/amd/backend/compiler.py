@@ -242,6 +242,9 @@ class HIPOptions:
     backend_name: str = 'hip'
     instrumentation_mode: str = ""
     fpsan_homomorphic_casts: bool = False
+    # Lower memory accesses to buffer ops where the pointer range allows it.
+    # Defaults to knobs.amd.use_buffer_ops when the options are constructed.
+    use_buffer_ops: Optional[bool] = None
 
     # The following option provides hints to the AMDGPU backend regarding instruction scheduling
     # for all `tt.dot` operations in a kernel. Experimental; right now no effect.
@@ -255,6 +258,8 @@ class HIPOptions:
     def __post_init__(self):
         if self.enable_fp_fusion is None:
             object.__setattr__(self, "enable_fp_fusion", knobs.language.default_fp_fusion)
+        if self.use_buffer_ops is None:
+            object.__setattr__(self, "use_buffer_ops", knobs.amd.use_buffer_ops)
 
         gfx_major = int(self.arch[3:-2])  # Drop "gfx" prefix and minor/patch number
         warp_size = 32 if gfx_major >= 10 else 64
@@ -304,9 +309,12 @@ class HIPBackend(BaseBackend):
         return f"hip:{options.arch}"
 
     def get_jit_cache_key_options(self, opts):
-        if opts.get("enable_fp_fusion") is None:
+        if opts.get("enable_fp_fusion") is None or opts.get("use_buffer_ops") is None:
             opts = dict(opts)
-            opts["enable_fp_fusion"] = knobs.language.default_fp_fusion
+            if opts.get("enable_fp_fusion") is None:
+                opts["enable_fp_fusion"] = knobs.language.default_fp_fusion
+            if opts.get("use_buffer_ops") is None:
+                opts["use_buffer_ops"] = knobs.amd.use_buffer_ops
         return opts
 
     def parse_options(self, opts) -> Any:
@@ -390,7 +398,7 @@ class HIPBackend(BaseBackend):
     @staticmethod
     def get_tensor_specialization(arg, **kwargs):
         ret = BaseBackend.get_tensor_specialization(arg, **kwargs)
-        if knobs.amd.use_buffer_ops and HIPBackend.is_within_2gb(arg):
+        if HIPBackend.is_within_2gb(arg):
             ret += "S"
         return ret
 
@@ -455,7 +463,7 @@ class HIPBackend(BaseBackend):
         if use_block_pingpong and options.num_stages > 1:
             amd.passes.ttgpuir.add_block_pingpong(pm, options.num_stages)
 
-        if knobs.amd.use_buffer_ops:
+        if options.use_buffer_ops:
             amd.passes.ttgpuir.add_canonicalize_pointers(pm)
             passes.common.add_canonicalizer(pm)
             amd.passes.ttgpuir.add_convert_to_buffer_ops(
