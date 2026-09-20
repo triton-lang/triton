@@ -277,11 +277,14 @@ int main(int argc, char **argv) {{
   // hipCtxDestroy(ctx);
 }}
 """
-    src = test_utils_src + test_src
-    with open(os.path.join(dir, "test.c"), "w") as file:
+    build_test_bin(dir, test_utils_src + test_src, "test.c", exe)
+
+
+def build_test_bin(dir, src, src_name, exe):
+    with open(os.path.join(dir, src_name), "w") as file:
         file.write(src)
 
-    command = ["gcc", "test.c"]
+    command = ["gcc", src_name]
     for inc_dir in include_dirs:
         command.extend(["-I", inc_dir])
     for lib_dir in library_dirs():
@@ -608,3 +611,105 @@ def test_aot_target_parsing_with_explicit_target():
         # to exercise the --target string parsing path in compile.py
         target = triton.runtime.driver.active.get_current_target()
         compile_aot_kernel_no_specialization(tmp_dir, kernel_path, dtype, BM, BN, BK, target=target)
+
+
+scalar_float_kernel_src = """
+import triton
+import triton.language as tl
+
+@triton.jit
+def kernel(Out, alpha, BLOCK: tl.constexpr):
+    offs = tl.arange(0, BLOCK)
+    tl.store(Out + offs, alpha.to(tl.float32))
+"""
+
+# C has no portable fp16 or bf16 scalar type, so pass their bit patterns.
+SCALAR_FLOAT_VALUES = {
+    "fp16": "0x4000",
+    "bf16": "0x4000",
+    "fp32": "2.0f",
+    "fp64": "2.0",
+}
+
+
+def gen_scalar_float_test_bin(dir, block, alpha, exe="test_scalar_float"):
+    if is_cuda():
+        sync, memcpy_dtoh = "cuStreamSynchronize", "cuMemcpyDtoH"
+        prologue = """
+  CUdevice dev;
+  CUcontext ctx;
+  CUstream stream;
+  CUdeviceptr Out;
+  CHECK(cuInit(0));
+  CHECK(cuDeviceGet(&dev, 0));
+  CHECK(cuCtxCreate_v2(&ctx, 0, dev));
+  CHECK(cuMemAlloc(&Out, sizeof(hOut)));
+  CHECK(cuStreamCreate(&stream, 0));
+"""
+        epilogue = """
+  CHECK(cuStreamDestroy(stream));
+  CHECK(cuMemFree(Out));
+  CHECK(cuCtxDestroy(ctx));
+"""
+    else:
+        sync, memcpy_dtoh = "hipStreamSynchronize", "hipMemcpyDtoH"
+        prologue = """
+  hipDevice_t dev;
+  hipStream_t stream;
+  hipDeviceptr_t Out;
+  CHECK(hipInit(0));
+  CHECK(hipDeviceGet(&dev, 0));
+  CHECK(hipSetDevice(dev));
+  CHECK(hipMalloc(&Out, sizeof(hOut)));
+  CHECK(hipStreamCreateWithFlags(&stream, 0));
+"""
+        epilogue = """
+  CHECK(hipStreamDestroy(stream));
+  CHECK(hipFree(Out));
+"""
+
+    test_src = f"""
+#define CHECK(expr) do {{ if ((expr) != 0) return 1; }} while (0)
+
+int main(void) {{
+  float hOut[{block}];
+{prologue}
+  load_scale();
+  CHECK(scale_default(stream, Out, {alpha}));
+  CHECK({sync}(stream));
+  CHECK({memcpy_dtoh}(hOut, Out, sizeof(hOut)));
+  int failed = 0;
+  for (int i = 0; i < {block}; ++i) failed |= hOut[i] != 2.0f;
+  unload_scale();
+{epilogue}
+  return failed;
+}}
+"""
+    build_test_bin(dir, test_utils_src + test_src, f"{exe}.c", exe)
+
+
+@pytest.mark.parametrize("dtype, alpha", SCALAR_FLOAT_VALUES.items())
+def test_compile_link_scalar_float(dtype, alpha):
+    """Check that AOT scalar argument storage matches the kernel ABI."""
+    block = 16
+    exe = "test_scalar_float"
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        kernel_path = write_triton_kernels(tmp_dir, scalar_float_kernel_src, kernel_utils_src)
+        _compile_kernel(
+            dir=tmp_dir,
+            signature=f"*fp32:16, {dtype}, {block}",
+            kernel_name="kernel",
+            out_name="scale",
+            out_path="scale",
+            num_warps=1,
+            grid="1, 1, 1",
+            kernel_path=kernel_path,
+        )
+        link_aot_kernels(tmp_dir)
+        gen_kernel_library(tmp_dir, "libkernel.so")
+        gen_scalar_float_test_bin(tmp_dir, block, alpha, exe=exe)
+
+        env = os.environ.copy()
+        env["LD_LIBRARY_PATH"] = tmp_dir
+        subprocess.run([f"./{exe}"], env=env, check=True, cwd=tmp_dir)
