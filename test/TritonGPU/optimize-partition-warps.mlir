@@ -6,6 +6,8 @@
 #blocked2d_4 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [2, 2], order = [0, 1]}>
 #blocked2d_8 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>
 #blocked2d_16 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 4], order = [0, 1]}>
+#blocked2d_alt_8 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [8, 1], order = [0, 1]}>
+#blocked2d_alt_8_t = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 8], order = [1, 0]}>
 #blocked_tmem = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [16, 2], warpsPerCTA = [4, 2], order = [0, 1]}>
 #shared_1d = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
@@ -169,6 +171,23 @@ tt.func @register_use_heuristic() {
     %cst = arith.constant dense<0> : tensor<128x64xi32, #blocked2d_4>
     ttg.warp_return
   } : () -> ()
+  tt.return
+}
+
+// CHECK-LABEL: @convert_layout_in_partition
+tt.func @convert_layout_in_partition(%arg0: i32) {
+  ttg.warp_specialize(%arg0)
+  default {
+    ttg.warp_yield
+  }
+  // CHECK: partition0({{.*}}) num_warps(1)
+  partition0(%arg1: i32) num_warps(8) {
+    %0 = tt.splat %arg1 : i32 -> tensor<128x2xi32, #blocked2d_8>
+    %1 = ttg.convert_layout %0 : tensor<128x2xi32, #blocked2d_8> -> tensor<128x2xi32, #blocked2d_alt_8>
+    %2 = tt.trans %1 {order = array<i32: 1, 0>} : tensor<128x2xi32, #blocked2d_alt_8> -> tensor<2x128xi32, #blocked2d_alt_8_t>
+    "use"(%2) : (tensor<2x128xi32, #blocked2d_alt_8_t>) -> ()
+    ttg.warp_return
+  } : (i32) -> ()
   tt.return
 }
 
