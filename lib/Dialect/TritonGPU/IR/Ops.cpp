@@ -1,5 +1,7 @@
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Support/DebugStringHelper.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -1601,6 +1603,136 @@ WarpSpecializePartitionsOp::canonicalize(WarpSpecializePartitionsOp op,
       region.front().eraseArguments(unusedArgs);
     op->eraseOperands(unusedArgs);
   });
+  return success();
+}
+
+void WarpIfOp::getSuccessorRegions(
+    RegionBranchPoint src, SmallVectorImpl<RegionSuccessor> &successors) {
+  if (src.isParent())
+    successors.emplace_back(&getBody());
+  successors.emplace_back(getOperation());
+}
+
+OperandRange WarpIfOp::getEntrySuccessorOperands(RegionSuccessor successor) {
+  return successor.isOperation() ? getInputs() : getInputs().take_front(0);
+}
+
+ValueRange WarpIfOp::getSuccessorInputs(RegionSuccessor successor) {
+  return successor.isOperation() ? getResults() : ValueRange();
+}
+
+LogicalResult WarpIfOp::verify() {
+  if (getInputs().empty() || getInputs().getTypes() != getResultTypes())
+    return emitOpError("requires nonempty inputs matching the result types");
+  if (!getBody().front().getArguments().empty())
+    return emitOpError("body must implicitly capture its inputs");
+  if (!isa<WarpIfYieldOp>(getBody().front().getTerminator()))
+    return emitOpError("body must end with warp_if_yield");
+  return success();
+}
+
+LogicalResult WarpIfYieldOp::verify() {
+  if (getOperandTypes() != getParentOp()->getResultTypes())
+    return emitOpError("operands must match the parent result types");
+  return success();
+}
+
+namespace {
+// An exact Slice chain expands without moving data between threads. The
+// singleton dimensions can then be broadcast by duplicating registers.
+bool isWarpIfMaskCompatible(RankedTensorType mask, RankedTensorType value) {
+  Attribute encoding = mask.getEncoding();
+  SmallVector<int64_t> shape(mask.getShape());
+  while (shape.size() < value.getRank()) {
+    auto slice = dyn_cast_or_null<SliceEncodingAttr>(encoding);
+    if (!slice || slice.getDim() > shape.size())
+      return false;
+    shape.insert(shape.begin() + slice.getDim(), 1);
+    encoding = slice.getParent();
+  }
+  if (encoding != value.getEncoding() || shape.size() != value.getRank())
+    return false;
+  return llvm::all_of(llvm::zip(shape, value.getShape()), [](auto dims) {
+    return std::get<0>(dims) == 1 || std::get<0>(dims) == std::get<1>(dims);
+  });
+}
+
+Value stripWarpIfViews(Value value) {
+  while (Operation *op = value.getDefiningOp()) {
+    if (!isa<triton::ExpandDimsOp, triton::BroadcastOp>(op))
+      break;
+    value = op->getOperand(0);
+  }
+  return value;
+}
+
+bool isWarpIfOne(Value value) {
+  Attribute attr;
+  if (!matchPattern(stripWarpIfViews(value), m_Constant(&attr)))
+    return false;
+  if (auto splat = dyn_cast<SplatElementsAttr>(attr))
+    attr = splat.getSplatValue<Attribute>();
+  auto fp = dyn_cast<FloatAttr>(attr);
+  return fp && fp.getValue().isExactlyValue(1.0);
+}
+} // namespace
+
+LogicalResult WarpIfOp::verifyBody(bool allowFlushDenorm) {
+  if (failed(verify()))
+    return failure();
+  if (allowFlushDenorm)
+    return emitOpError(
+        "does not support allow_flush_denorm: skipping a multiply "
+        "must preserve subnormal inputs");
+  auto maskTy = cast<RankedTensorType>(getCondition().getType());
+  if (!isa_and_present<DistributedEncodingTrait>(maskTy.getEncoding()))
+    return emitOpError("requires resolved distributed condition layout");
+  for (Type type : getInputs().getTypes()) {
+    auto ty = cast<RankedTensorType>(type);
+    if (!ty.getElementType().isF32() && !ty.getElementType().isF64())
+      return emitOpError("currently supports only f32 and f64 carried values");
+    if (!isWarpIfMaskCompatible(maskTy, ty))
+      return emitOpError("condition must match each input layout or an exact "
+                         "SliceLayout chain with register-only broadcasting");
+  }
+  for (Operation &op : getBody().front()) {
+    if (!isa<arith::ConstantOp, arith::MulFOp, triton::ExpandDimsOp,
+             triton::BroadcastOp, WarpIfYieldOp>(op))
+      return op.emitOpError("is not supported inside warp_if; expected inlined "
+                            "straight-line register rescaling without effects");
+  }
+
+  Value scale;
+  auto cmp = getCondition().getDefiningOp<arith::CmpFOp>();
+  // UNE makes NaNs active. ONE would incorrectly classify a NaN scale as an
+  // identity and is deliberately rejected.
+  if (cmp && cmp.getPredicate() == arith::CmpFPredicate::UNE) {
+    if (isWarpIfOne(cmp.getRhs()))
+      scale = stripWarpIfViews(cmp.getLhs());
+    else if (isWarpIfOne(cmp.getLhs()))
+      scale = stripWarpIfViews(cmp.getRhs());
+  }
+  auto yield = cast<WarpIfYieldOp>(getBody().front().getTerminator());
+  for (auto [input, output] : llvm::zip(getInputs(), yield.getValues())) {
+    if (input == output)
+      continue;
+    // Canonicalization folds 1 * scale to scale (the FA prologue starts
+    // with a normalizer of one). Under a false mask this is still one.
+    if (scale && isWarpIfOne(input) && stripWarpIfViews(output) == scale)
+      continue;
+    auto mul = output.getDefiningOp<arith::MulFOp>();
+    Value factor;
+    if (mul && mul.getLhs() == input)
+      factor = mul.getRhs();
+    else if (mul && mul.getRhs() == input)
+      factor = mul.getLhs();
+    if (!factor ||
+        (!isWarpIfOne(factor) && (!scale || stripWarpIfViews(factor) != scale)))
+      return emitOpError(
+          "cannot prove identity for false conditions; return "
+          "each input unchanged or multiply it by the same scale "
+          "tested with scale != 1");
+  }
   return success();
 }
 

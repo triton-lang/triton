@@ -93,6 +93,8 @@ void init_triton_passes_ttgpuir(py::module_ &m) {
                      createTritonGPUGlobalScratchAllocationPass);
   ADD_PASS_WRAPPER_0("add_combine_tensor_select_and_if",
                      createTritonGPUCombineTensorSelectAndIf);
+  ADD_PASS_OPTION_WRAPPER_1("add_verify_warp_if", createTritonGPUVerifyWarpIf,
+                            bool);
   ADD_PASS_WRAPPER_0("add_optimize_accumulator_init",
                      createTritonGPUOptimizeAccumulatorInit);
   ADD_PASS_WRAPPER_0("add_fuse_nested_loops", createTritonGPUFuseNestedLoops);

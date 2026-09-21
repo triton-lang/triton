@@ -93,6 +93,7 @@ from ._core import (
     to_tensor,
     expect_zero,
     warp_specialize,
+    warp_if,
     where,
 )
 from ._layouts import (

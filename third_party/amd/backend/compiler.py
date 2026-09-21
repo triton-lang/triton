@@ -513,6 +513,7 @@ class HIPBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         amd.passes.ttgpuir.add_update_async_wait_count(pm, options.arch)
+        passes.ttgpuir.add_verify_warp_if(pm, options.allow_flush_denorm)
         amd.passes.ttgpuir.add_warp_pipeline_conversion(pm, options.arch)
         passes.convert.add_scf_to_cf(pm)
         passes.gluon.add_inliner(pm)
@@ -538,6 +539,7 @@ class HIPBackend(BaseBackend):
         ## 3. __HIP_FTZ is default to 1 and not exposed as a kernel argument.
         ##    For now it is used as a controller for developers only.
         __HIP_FTZ = True
+        passes.ttgpuir.add_verify_warp_if(pm, options.allow_flush_denorm)
         amd.passes.ttgpuir.add_to_llvmir(pm, options.arch, __HIP_FTZ)
         # Lower Proton segment values before warp specialization captures partition operands.
         instrument(pm, point="llvmir-to-llvm", context=mod.context)

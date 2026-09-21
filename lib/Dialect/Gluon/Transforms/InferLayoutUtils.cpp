@@ -186,6 +186,23 @@ LogicalResult inferLayout(
         if (failed(updateEncoding(tiedArgs, info, &func, valueToEncoding,
                                   worklist, hashMemo)))
           return failure();
+      } else if (auto warpIf = dyn_cast<gpu::WarpIfOp>(op)) {
+        if (use.getOperandNumber() == 0)
+          continue;
+        unsigned index = use.getOperandNumber() - 1;
+        auto yield =
+            cast<gpu::WarpIfYieldOp>(warpIf.getBody().front().getTerminator());
+        if (failed(updateEncoding(
+                {warpIf.getResult(index), yield.getOperand(index)}, info, &func,
+                valueToEncoding, worklist, hashMemo)))
+          return failure();
+      } else if (auto yield = dyn_cast<gpu::WarpIfYieldOp>(op)) {
+        auto warpIf = yield.getParentOp();
+        unsigned index = use.getOperandNumber();
+        if (failed(updateEncoding(
+                {warpIf.getResult(index), warpIf.getInputs()[index]}, info,
+                &func, valueToEncoding, worklist, hashMemo)))
+          return failure();
       } else if (isa<scf::YieldOp>(op)) {
         auto parentOp = op->getParentOp();
         auto tiedArgs = getTiedArgs(parentOp, use.getOperandNumber());
@@ -215,6 +232,14 @@ LogicalResult inferLayout(
         auto tiedArgs = getTiedArgs(definingOp, opResult.getResultNumber());
         if (failed(updateEncoding(tiedArgs, info, &func, valueToEncoding,
                                   worklist, hashMemo)))
+          return failure();
+      } else if (auto warpIf = dyn_cast<gpu::WarpIfOp>(definingOp)) {
+        unsigned index = opResult.getResultNumber();
+        auto yield =
+            cast<gpu::WarpIfYieldOp>(warpIf.getBody().front().getTerminator());
+        if (failed(updateEncoding(
+                {warpIf.getInputs()[index], yield.getOperand(index)}, info,
+                &func, valueToEncoding, worklist, hashMemo)))
           return failure();
       } else {
         auto srcEncoding = inferSrcEncoding(definingOp, info.encoding);

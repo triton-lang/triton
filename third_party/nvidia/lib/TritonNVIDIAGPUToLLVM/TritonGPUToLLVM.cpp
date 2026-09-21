@@ -16,6 +16,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/WarpIfUtility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
@@ -63,7 +64,8 @@ public:
     addLegalOp<triton::gpu::WarpIdOp, triton::gpu::WarpSpecializeOp,
                triton::gpu::WarpYieldOp,
                triton::gpu::WarpSpecializePartitionsOp,
-               triton::gpu::WarpReturnOp>();
+               triton::gpu::WarpReturnOp, triton::gpu::WarpIfOp,
+               triton::gpu::WarpIfYieldOp>();
   }
 };
 
@@ -107,6 +109,12 @@ private:
 void ConvertTritonGPUToLLVM::runOnOperation() {
   MLIRContext *context = &getContext();
   ModuleOp mod = getOperation();
+  if (mod.walk([](triton::gpu::WarpIfOp op) {
+           return failed(op.verifyBody()) ? WalkResult::interrupt()
+                                          : WalkResult::advance();
+         })
+          .wasInterrupted())
+    return signalPassFailure();
   TargetInfo targetInfo(computeCapability, ptxVersion);
 
   mlir::LowerToLLVMOptions option(context);
@@ -125,7 +133,8 @@ void ConvertTritonGPUToLLVM::runOnOperation() {
   // CF was kept while ModuleAxisInfoAnalysis was in use.
   // Lower it after all axis-info-dependent patterns have finished.
   if (failed(lowerTritonGPUOps(mod, typeConverter, targetInfo)) ||
-      failed(lowerControlFlow(mod, typeConverter))) {
+      failed(lowerControlFlow(mod, typeConverter)) ||
+      failed(triton::lowerWarpIfOps(mod, typeConverter, targetInfo))) {
     signalPassFailure();
     return;
   }

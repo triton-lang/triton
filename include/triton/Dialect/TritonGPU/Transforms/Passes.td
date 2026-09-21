@@ -334,6 +334,14 @@ def TritonGPUReduceDataDuplication: Pass<"tritongpu-reduce-data-duplication", "m
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonGPUVerifyWarpIf : Pass<"tritongpu-verify-warp-if", "mlir::ModuleOp"> {
+  let summary =
+      "Verify warp_if identity bodies after inlining and layout resolution";
+  let options = [Option<"allowFlushDenorm", "allow-flush-denorm", "bool",
+                        "false",
+                        "whether floating-point arithmetic flushes denormals">];
+}
+
 def TritonGPUCombineTensorSelectAndIf: Pass<"tritongpu-combine-tensor-select-and-if", "mlir::ModuleOp"> {
   let summary = "Combine tensor select and if";
 

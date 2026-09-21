@@ -417,6 +417,7 @@ class CUDABackend(BaseBackend):
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        passes.ttgpuir.add_verify_warp_if(pm, False)
 
         if is_enabled(options, "gsan"):
             # GSan introduces layout conversions, so it must run before shared-memory allocation.
@@ -443,6 +444,7 @@ class CUDABackend(BaseBackend):
             passes.common.add_cse(pm)
         nvidia.passes.ttnvgpuir.add_cluster_barrier_mbar_allocator(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
+        passes.ttgpuir.add_verify_warp_if(pm, False)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_initialize_ws_cluster_barriers(pm, capability, ptx_version)
         if options.min_shared_mem is not None:

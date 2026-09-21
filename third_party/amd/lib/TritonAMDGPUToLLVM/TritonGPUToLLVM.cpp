@@ -22,6 +22,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Conversion/TritonGPUToLLVM/WarpIfUtility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
@@ -65,6 +66,7 @@ public:
     addLegalOp<triton::gpu::WarpYieldOp>();
     addLegalOp<triton::gpu::WarpSpecializePartitionsOp>();
     addLegalOp<triton::gpu::WarpReturnOp>();
+    addLegalOp<triton::gpu::WarpIfOp, triton::gpu::WarpIfYieldOp>();
   }
 };
 
@@ -85,6 +87,13 @@ struct ConvertTritonAMDGPUToLLVM
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
+
+    if (mod.walk([](triton::gpu::WarpIfOp op) {
+             return failed(op.verifyBody()) ? WalkResult::interrupt()
+                                            : WalkResult::advance();
+           })
+            .wasInterrupted())
+      return signalPassFailure();
 
     AMD::TargetInfo targetInfo(this->gfxArch.getValue());
     if (targetInfo.getISAFamily() == triton::amdgpu::ISAFamily::Unknown) {
@@ -236,6 +245,9 @@ struct ConvertTritonAMDGPUToLLVM
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {
       return signalPassFailure();
     }
+
+    if (failed(triton::lowerWarpIfOps(mod, typeConverter, targetInfo)))
+      return signalPassFailure();
 
     AMD::adjustModeRegister(mod, targetInfo);
     fixUpLoopAnnotation(mod);

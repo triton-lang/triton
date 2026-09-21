@@ -762,6 +762,38 @@ def warp_specialize(functions_and_args, worker_num_warps, worker_num_regs=None, 
 
 
 @builtin
+def warp_if(condition, values, fn, args=(), _semantic=None, _generator=None):
+    """Skip identity computation independently in each warp.
+
+    ``condition`` is a conservative work mask: ``fn`` must leave elements with
+    a false condition unchanged. A warp executes the entire body if any of its
+    conditions is true; otherwise it keeps ``values``. There is no elementwise
+    selection. For supported bodies the result equals ``fn(*values, *args)``.
+
+    Currently supports f32/f64 input tensors multiplied by a scale tested with
+    ``scale != 1``, including register-only expansion/broadcast, and unchanged
+    returns. The compiler verifies the identity after inlining. Memory access,
+    side effects, collectives, nested control flow and uninlined calls are errors.
+    The condition must have each value's layout or a corresponding SliceLayout.
+    AMD flush-to-zero mode is not supported. NaN payload preservation is not
+    guaranteed, consistently with ordinary floating-point identity folding.
+    Lowering emits a warp vote and branches with result phis. Subsequent target
+    optimization may if-convert small bodies; this is an execution optimization
+    request, not a guarantee of a particular machine instruction sequence.
+
+    Args:
+        condition: Boolean distributed tensor describing elements needing work.
+        values: Tensor or tuple of tensors to retain when the warp skips.
+        fn: Gluon JIT function returning tensors with the input types.
+        args: Tuple of additional inputs to ``fn``.
+
+    Returns:
+        A tensor for a single tensor input, otherwise a tuple of tensors.
+    """
+    return _semantic.warp_if(condition, values, fn, args, _generator)
+
+
+@builtin
 def num_warps(_semantic=None, _generator=None):
     """
     Returns the number of warps that execute the current context, including in warp-specialized regions.

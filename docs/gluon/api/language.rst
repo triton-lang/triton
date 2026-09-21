@@ -27,6 +27,7 @@ Programming Model
     num_warps
     num_ctas
     warp_specialize
+    warp_if
     barrier
 
 

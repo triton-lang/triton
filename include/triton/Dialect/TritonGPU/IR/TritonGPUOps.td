@@ -754,6 +754,48 @@ def TTG_WarpReturnOp : TTG_Op<"warp_return", [
   let assemblyFormat = "attr-dict";
 }
 
+def TTG_WarpIfOp
+    : TTG_Op<
+          "warp_if", [RecursiveMemoryEffects,
+                      DeclareOpInterfaceMethods<
+                          RegionBranchOpInterface, ["getEntrySuccessorOperands",
+                                                    "getSuccessorInputs"]>]> {
+  let summary = "skip identity register computation independently in each warp";
+  let description = [{
+    The condition is a conservative work mask. The body must leave every
+    false-condition element unchanged. A warp with any true condition executes
+    the whole body; other warps retain the inputs. The results therefore equal
+    unconditional evaluation of the pure body, without elementwise selects.
+
+    The initial supported body consists of identity returns or f32/f64 products
+    of an input and a scale tested by an unordered-not-equal-to-one condition,
+    with register-only expand_dims and broadcast views. A validation pass after
+    inlining checks this restriction before any GPU lowering. No memory effects,
+    collectives, nested control flow or unresolved calls are supported.
+  }];
+  let arguments = (ins TT_BoolTensor:$condition,
+      Variadic<TT_FloatTensor>:$inputs);
+  let results = (outs Variadic<TT_FloatTensor>:$outputs);
+  let regions = (region SizedRegion<1>:$body);
+  let extraClassDeclaration = [{
+    LogicalResult verifyBody(bool allowFlushDenorm = false);
+  }];
+  let assemblyFormat = [{
+    $condition `(` $inputs `)` $body attr-dict `:` functional-type(operands, results)
+  }];
+  let hasVerifier = 1;
+}
+
+def TTG_WarpIfYieldOp
+    : TTG_Op<"warp_if_yield",
+             [Pure, Terminator, ReturnLike, HasParent<"WarpIfOp">,
+              DeclareOpInterfaceMethods<RegionBranchTerminatorOpInterface>]> {
+  let summary = "return updated register tensors from warp_if";
+  let arguments = (ins Variadic<AnyType>:$values);
+  let assemblyFormat = "($values^)? attr-dict (`:` type($values)^)?";
+  let hasVerifier = 1;
+}
+
 def TTG_BarrierOp : TTG_Op<"barrier"> {
   let summary = "Synchronizes execution and reads/writes to the selected address spaces for all threads in the CTA.";
   let description = [{

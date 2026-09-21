@@ -1219,6 +1219,19 @@ void init_gluon_ir(py::module_ &m) {
              return self.create<ttg::WarpSpecializeOp>(resultTypes,
                                                        partitionNumWarps);
            })
+      .def(
+          "create_warp_if",
+          [](GluonOpBuilder &self, std::vector<Type> &resultTypes,
+             Value condition, std::vector<Value> &inputs) -> Operation * {
+            return self.create<ttg::WarpIfOp>(resultTypes, condition, inputs);
+          },
+          ret::reference)
+      .def(
+          "create_warp_if_yield",
+          [](GluonOpBuilder &self, std::vector<Value> &values) -> Operation * {
+            return self.create<ttg::WarpIfYieldOp>(values);
+          },
+          ret::reference)
       .def("create_buffer_load",
            [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
               Value mask, Value other,

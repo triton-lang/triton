@@ -4,6 +4,7 @@ add_triton_library(TritonGPUTransforms
   F32DotTC.cpp
   FuseNestedLoops.cpp
   CombineTensorSelectAndIf.cpp
+  VerifyWarpIf.cpp
   DecomposeScaledBlocked.cpp
   DescriptorMemoryLayouts.cpp
   HoistTMEMAlloc.cpp

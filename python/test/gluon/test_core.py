@@ -53,6 +53,86 @@ from triton._C.libtriton.gluon_ir import make_cga_layout
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
 
 
+@gluon.jit
+def _warp_if_scale(x, scale):
+    return x * scale
+
+
+@gluon.jit
+def _warp_if_scale_rows(x, total, scale):
+    return x * scale[:, None], total * scale
+
+
+@pytest.mark.parametrize("axis", [0, 1, 2])
+@pytest.mark.parametrize("pattern", ["none", "all", "mixed", "one"])
+@pytest.mark.parametrize("warps_on_rows", [True, False])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_warp_if_rescale(axis, pattern, warps_on_rows, dtype, device):
+
+    @gluon.jit
+    def kernel(X, S, Y, T, L: ttgl.constexpr, AXIS: ttgl.constexpr):
+        r = ttgl.arange(0, 64, layout=ttgl.SliceLayout(1, L))
+        c = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, L))
+        x = ttgl.load(X + r[:, None] * 64 + c[None, :])
+        if AXIS == 0:
+            scale = ttgl.load(S + r)
+            # Exercise multiple live carried results and the folded 1 * scale
+            # form used by the FA prologue.
+            total = ttgl.full((64, ), 1, x.dtype, ttgl.SliceLayout(1, L))
+            x, total = ttgl.warp_if(scale != 1, (x, total), _warp_if_scale_rows, args=(scale, ))
+            ttgl.store(T + r, total)
+        elif AXIS == 1:
+            scale = ttgl.load(S + c)
+            x = ttgl.warp_if(scale != 1, x, _warp_if_scale, args=(scale[None, :], ))
+        else:
+            scale = ttgl.load(S + r[:, None] * 64 + c[None, :])
+            x = ttgl.warp_if(scale != 1, x, _warp_if_scale, args=(scale, ))
+        ttgl.store(Y + r[:, None] * 64 + c[None, :], x)
+
+    layout = ttgl.BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [4, 1] if warps_on_rows else [1, 4], [1, 0])
+    x = torch.randn((64, 64), device=device, dtype=dtype)
+    # Include signed zeros and subnormals on the identity path.
+    tiny = torch.finfo(dtype).tiny / 16
+    x.view(-1)[:6] = torch.tensor([0.0, -0.0, tiny, -tiny, float("inf"), -float("inf")], device=device, dtype=dtype)
+    scale = torch.ones(4096 if axis == 2 else 64, device=device, dtype=dtype)
+    if pattern == "all":
+        scale[:] = 0.5
+    elif pattern == "mixed":
+        scale[::3] = 0.25
+        scale[1::3] = 2.0
+    elif pattern == "one":
+        scale[-1] = 0.5
+    out = torch.empty_like(x)
+    total = torch.empty(64, device=device, dtype=dtype)
+    compiled = kernel[(1, )](x, scale, out, total, layout, axis)
+    factors = scale[:, None] if axis == 0 else scale[None, :] if axis == 1 else scale.reshape(64, 64)
+    torch.testing.assert_close(out, x * factors, atol=0, rtol=0)
+    assert torch.equal(torch.signbit(out), torch.signbit(x))
+    if axis == 0:
+        torch.testing.assert_close(total, scale, atol=0, rtol=0)
+    assert "warp_if" in compiled.asm["ttgir"]
+    assert "ballot" in compiled.asm["llir"]
+
+
+def test_warp_if_nan_scale(device):
+
+    @gluon.jit
+    def kernel(X, S, Y, W: ttgl.constexpr):
+        i = ttgl.arange(0, 256, layout=ttgl.BlockedLayout([1], [W], [4], [0]))
+        x = ttgl.load(X + i)
+        scale = ttgl.load(S + i)
+        y = ttgl.warp_if(scale != 1, x, _warp_if_scale, args=(scale, ))
+        ttgl.store(Y + i, y)
+
+    x = torch.ones(256, device=device)
+    x[130] = float("nan")
+    scale = torch.ones_like(x)
+    scale[0] = float("nan")
+    out = torch.empty_like(x)
+    kernel[(1, )](x, scale, out, THREADS_PER_WARP)
+    torch.testing.assert_close(out, x * scale, atol=0, rtol=0, equal_nan=True)
+
+
 @gluon.constexpr_function
 def _inline_asm_shared_load(outputs, inputs):
     out, = outputs

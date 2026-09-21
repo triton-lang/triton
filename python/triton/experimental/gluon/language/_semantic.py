@@ -691,6 +691,39 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         mlir_results = [ws_op.get_result(i) for i in range(len(result_types))]
         return next(unflatten_ir_values(mlir_results, [default_result.type]))
 
+    def warp_if(self, condition, values, fn, args, generator):
+        _check(
+            isinstance(condition, ttgl.tensor) and condition.dtype.is_bool(),
+            lambda: "warp_if condition must be a boolean tensor")
+        _check(isinstance(condition.type, ttgl.distributed_type),
+               lambda: "warp_if condition must be distributed, not scalar")
+        single = isinstance(values, ttgl.tensor)
+        _check(single or isinstance(values, (tuple, ttgl.tuple)),
+               lambda: "warp_if values must be a tensor or tuple of tensors")
+        values = (values, ) if single else tuple(values)
+        _check(
+            len(values) > 0 and all(isinstance(v, ttgl.tensor) for v in values),
+            lambda: "warp_if requires at least one tensor input")
+        _check(isinstance(args, (tuple, ttgl.tuple)), lambda: "warp_if args must be a tuple")
+        builder = self.builder
+        insert_pt = builder.get_insertion_point()
+        block = builder.new_block()
+        builder.set_insertion_point_to_start(block)
+        result = generator.call_JitFunction(fn, list(values) + list(args), kwargs={})
+        outputs = (result, ) if isinstance(result, ttgl.tensor) else tuple(result)
+        _check(
+            len(outputs) == len(values)
+            and all(isinstance(out, ttgl.tensor) and out.type == value.type for out, value in zip(outputs, values)),
+            lambda: "warp_if body must return tensors with the input types")
+        builder.create_warp_if_yield(flatten_values_to_ir(outputs))
+        builder.restore_insertion_point(insert_pt)
+        op = builder.create_warp_if([v.handle.get_type() for v in values], condition.handle,
+                                    flatten_values_to_ir(values))
+        op.get_region(0).push_back(block)
+        builder.set_insertion_point_after(op)
+        results = list(unflatten_ir_values([op.get_result(i) for i in range(len(values))], [v.type for v in values]))
+        return results[0] if single else ttgl.tuple(results)
+
     def num_ctas(self):
         return ttgl.constexpr(self.builder.options.num_ctas)
 
