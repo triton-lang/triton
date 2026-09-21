@@ -328,7 +328,7 @@ private:
     return loop->getResults().back();
   }
 
-  // First move the phase initialization op before the outermost loop,
+  // First initialize the phase before the outermost loop,
   // then add a phase argument to each loop,
   // xor the phase after each wait,
   // and in the end thread the updated phase through the loop yields.
@@ -346,18 +346,15 @@ private:
       waits.insert(wait);
 
     OpBuilder::InsertionGuard guard(builder);
-    Operation *phaseDef = lifecycle.initialPhase.getDefiningOp();
-    Operation *outerLoop = loops.front().getOperation();
-    if (phaseDef->getBlock() != outerLoop->getBlock() ||
-        !phaseDef->isBeforeInBlock(outerLoop))
-      phaseDef->moveBefore(outerLoop);
-
     builder.setInsertionPoint(loops.front());
+    // The original zero may also be used outside this loop's parent region.
+    // Moving it here could break dominance for those uses.
+    Value phase =
+        arith::ConstantIntOp::create(builder, loops.front()->getLoc(), 0, 32);
     Value phaseOne =
         arith::ConstantIntOp::create(builder, loops.front()->getLoc(), 1, 32);
 
     Operation *inval = lifecycle.invals.front().getOperation();
-    Value phase = lifecycle.initialPhase;
     for (LoopLikeOpInterface &loop : loops) {
       builder.setInsertionPoint(loop);
       if (auto forOp = dyn_cast<scf::ForOp>(loop.getOperation()))
