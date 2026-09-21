@@ -277,9 +277,6 @@ struct LoadGroupInfo {
   bool hasTMALoad = false;
 };
 
-// A pair wait only blocks the leader CTA. Other consumers, including
-// descriptors forwarded through control flow, need both CTAs to observe TMA
-// completion. Descriptor views can still feed the MMA-only fast path.
 static bool hasNonMMAUsers(Operation *op) {
   return llvm::any_of(op->getUsers(), [](Operation *user) {
     if (user->hasTrait<OpTrait::MemDescViewTrait>())
