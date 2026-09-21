@@ -356,6 +356,52 @@ def test_tma_matmul_two_ctas_persistent_consan(K, subtile, num_stages, num_ctas,
         assert compiled.metadata.tmem_size == 128
 
 
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("lhs_descriptor, N, num_stages", [
+    (False, 128, 3),
+    (True, 128, 1),
+    (True, 8, 3),
+    (True, 16, 3),
+])
+@pytest.mark.parametrize("transpose_b", [False, True])
+def test_tma_matmul_two_ctas_selection_consan(lhs_descriptor, N, num_stages, transpose_b, device, fresh_knobs):
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    @triton.jit
+    def kernel(A, B, C, M, K, BN: tl.constexpr, LHS_DESCRIPTOR: tl.constexpr, TRANSPOSE_B: tl.constexpr):
+        for tile in tl.range(0, tl.cdiv(M, 256), flatten=True):
+            acc = tl.full((256, BN), 0, tl.float32)
+            for k in range(tl.cdiv(K, 64)):
+                if LHS_DESCRIPTOR:
+                    a = A.load([tile * 256, k * 64])
+                else:
+                    a = tl.load(A + (tile * 256 + tl.arange(0, 256)[:, None]) * K + k * 64 + tl.arange(0, 64)[None, :])
+                if TRANSPOSE_B:
+                    b = B.load([0, k * 64]).T
+                else:
+                    b = B.load([k * 64, 0])
+                acc = tl.dot(a, b, acc)
+            C.store([tile * 256, 0], acc.to(tl.float16))
+
+    fresh_knobs.compilation.instrumentation_mode = "consan"
+    triton.set_allocator(lambda size, alignment, stream: torch.empty(size, device=device, dtype=torch.int8))
+    M, K = 256 * 16, 256
+    torch.manual_seed(0)
+    a = torch.randn((M, K), device=device, dtype=torch.float16) * 0.1
+    b = torch.randn((K, N), device=device, dtype=torch.float16) * 0.1
+    c = torch.empty((M, N), device=device, dtype=torch.float16)
+    a_input = TensorDescriptor.from_tensor(a, [256, 64]) if lhs_descriptor else a
+    b_input = b.T.contiguous() if transpose_b else b
+    b_desc = TensorDescriptor.from_tensor(b_input, [N, 64] if transpose_b else [64, N])
+    c_desc = TensorDescriptor.from_tensor(c, [256, N])
+    compiled = kernel[(1, )](a_input, b_desc, c_desc, M, K, N, lhs_descriptor, transpose_b, num_ctas=2,
+                             num_stages=num_stages, num_warps=4)
+    if is_compile_warmup():
+        return
+    torch.testing.assert_close(c, a @ b, atol=0.01, rtol=0.01)
+    assert ("two_ctas" in compiled.asm["ttgir"]) == (lhs_descriptor and N >= 16)
+
+
 def test_i4_m_minor_join_bk16_matmul(device):
     if not is_cuda():
         pytest.skip("i4 M-minor join regression is CUDA-specific")

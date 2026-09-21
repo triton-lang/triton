@@ -775,3 +775,40 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
     tt.return
   }
 }
+
+// -----
+
+#barrierEnc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.two-ctas" = true, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // The phase zero also feeds the outer condition and the sibling branch.
+  // Hoisting the lifecycle must not sink this constant into the then region.
+  // CHECK-LABEL: tt.func @hoist_phase_zero_dominates_conditional
+  // CHECK: %[[ZERO:.*]] = arith.constant 0 : i32
+  // CHECK: %[[PRED:.*]] = arith.cmpi sgt, %{{.*}}, %[[ZERO]] : i32
+  // CHECK: scf.if %[[PRED]]
+  // CHECK: %[[PHASE_ZERO:.*]] = arith.constant 0 : i32
+  // CHECK: scf.for {{.*}} iter_args(%[[PHASE:.*]] = %[[PHASE_ZERO]])
+  // CHECK: ttng.wait_barrier %{{.*}}, %[[PHASE]]
+  // CHECK: } else {
+  // CHECK-NEXT: scf.yield %[[ZERO]] : i32
+  tt.func @hoist_phase_zero_dominates_conditional(%n: i32) -> i32 {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %pred = arith.cmpi sgt, %n, %c0 : i32
+    %result = scf.if %pred -> i32 {
+      scf.for %i = %c0 to %n step %c1 : i32 {
+        %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+        ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+        ttng.tc_gen5_commit %bar : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+        ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+        ttng.inval_barrier %bar : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+      }
+      scf.yield %n : i32
+    } else {
+      scf.yield %c0 : i32
+    }
+    tt.return %result : i32
+  }
+}

@@ -20,6 +20,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/NvmmaSmemAttrs.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -624,7 +625,7 @@ static CGAEncodingAttr getTwoCTARHSCGALayout(RankedTensorType retType) {
       ctx, LinearLayout(std::move(bases), standardOutDimNames(ctx, 2)));
 }
 
-static DescriptorLoadOp getTwoCTARHSLoad(Value value) {
+static DescriptorLoadOp getTwoCTADescriptorLoad(Value value) {
   if (auto trans = getDefiningOpSkippingConvertLayout<TransOp>(value))
     value = trans.getSrc();
   return getDefiningOpSkippingConvertLayout<DescriptorLoadOp>(value);
@@ -635,8 +636,10 @@ static bool canUseTwoCTAs(DotOp dotOp) {
     return false;
 
   RankedTensorType retType = dotOp.getType();
-  auto loadOp = getTwoCTARHSLoad(dotOp.getB());
-  if (!loadOp)
+  // The TMA pipeline synchronizes both CTAs. Ordinary loads only provide
+  // CTA-local async waits and fences, so neither operand may use that path.
+  if (!getTwoCTADescriptorLoad(dotOp.getA()) ||
+      !getTwoCTADescriptorLoad(dotOp.getB()))
     return false;
 
   auto rhsCGALayout = getTwoCTARHSCGALayout(retType);
@@ -648,7 +651,24 @@ static bool canUseTwoCTAs(DotOp dotOp) {
   if (shapePerCTA[0] > 128 || shapePerCTA[1] > 256)
     return false;
 
-  return true;
+  // Splitting B must leave a complete shared-memory MMA core matrix in each
+  // CTA. Check the same layout constraints used by the MMA shared-memory loader
+  // before selecting two-CTA mode (e.g. N=8 FP16 is too narrow after
+  // splitting).
+  Value b = getDefiningOpSkippingConvertLayout(dotOp.getB());
+  auto bType = cast<RankedTensorType>(b.getType());
+  auto order = getOrderForMemory(bType);
+  if (dotOp.getA().getType().getElementType().isF32())
+    order = {0, 1};
+  auto shared = NVMMASharedEncodingAttr::get(
+      bType.getContext(), bType.getShape(), order, rhsCGALayout,
+      bType.getElementType(), /*fp4Padded=*/false);
+  auto memType =
+      MemDescType::get(bType.getShape(), bType.getElementType(), shared,
+                       SharedMemorySpaceAttr::get(bType.getContext()));
+  return nvidia_gpu::getNvmmaSmemAttrs(toLinearLayout(memType).pseudoinvert(),
+                                       bType.getElementTypeBitWidth())
+      .has_value();
 }
 
 static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability) {
@@ -683,7 +703,7 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter,
                            const CGAEncodingAttr &newCGALayout) {
   OpBuilder::InsertionGuard g(rewriter);
   auto trans = getDefiningOpSkippingConvertLayout<TransOp>(b);
-  auto loadOp = getTwoCTARHSLoad(b);
+  auto loadOp = getTwoCTADescriptorLoad(b);
   assert(loadOp && "expected descriptor load, optionally transposed");
   auto loadCGALayout = newCGALayout;
   if (trans) {
