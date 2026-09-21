@@ -20,7 +20,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/NvmmaSmemAttrs.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -642,8 +641,7 @@ static bool canUseTwoCTAs(DotOp dotOp) {
       !getTwoCTADescriptorLoad(dotOp.getB()))
     return false;
 
-  auto rhsCGALayout = getTwoCTARHSCGALayout(retType);
-  if (!rhsCGALayout)
+  if (!getTwoCTARHSCGALayout(retType))
     return false;
 
   // One cooperating pair covers at most 128 rows per CTA and 256 columns.
@@ -651,24 +649,13 @@ static bool canUseTwoCTAs(DotOp dotOp) {
   if (shapePerCTA[0] > 128 || shapePerCTA[1] > 256)
     return false;
 
-  // Splitting B must leave a complete shared-memory MMA core matrix in each
-  // CTA. Check the same layout constraints used by the MMA shared-memory loader
-  // before selecting two-CTA mode (e.g. N=8 FP16 is too narrow after
-  // splitting).
-  Value b = getDefiningOpSkippingConvertLayout(dotOp.getB());
-  auto bType = cast<RankedTensorType>(b.getType());
-  auto order = getOrderForMemory(bType);
-  if (dotOp.getA().getType().getElementType().isF32())
-    order = {0, 1};
-  auto shared = NVMMASharedEncodingAttr::get(
-      bType.getContext(), bType.getShape(), order, rhsCGALayout,
-      bType.getElementType(), /*fp4Padded=*/false);
-  auto memType =
-      MemDescType::get(bType.getShape(), bType.getElementType(), shared,
-                       SharedMemorySpaceAttr::get(bType.getContext()));
-  return nvidia_gpu::getNvmmaSmemAttrs(toLinearLayout(memType).pseudoinvert(),
-                                       bType.getElementTypeBitWidth())
-      .has_value();
+  // Require enough columns after splitting B across the two CTAs.
+  if (shapePerCTA[1] < 16)
+    return false;
+  if (dotOp.getB().getType().getElementTypeBitWidth() == 8 &&
+      shapePerCTA[1] < 32)
+    return false;
+  return true;
 }
 
 static bool canUseTwoCTAsInModule(ModuleOp module, int computeCapability) {

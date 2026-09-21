@@ -78,9 +78,8 @@ void multiBufferTMADescriptors(ModuleOp mod, int numStages) {
   }
 }
 
-void clearWarpSpecializationAttrs(ModuleOp mod) {
+void clearInternalWarpSpecializationAttrs(ModuleOp mod) {
   mod.walk([](Operation *op) {
-    op->removeAttr(kWarpSpecializeAttrName);
     op->removeAttr(kPartitionAttrName);
     op->removeAttr(kPartitionOutputsAttrName);
     op->removeAttr(kPartitionStagesAttrName);
@@ -96,10 +95,8 @@ std::unique_ptr<Pass> createVerifyWarpSpecializationPartitionsPass() {
 
 void AutomaticWarpSpecialization::runOnOperation() {
   // Automatic warp specialization does not yet synchronize two-CTA TMEM reuse.
-  if (triton::nvidia_gpu::getModuleTwoCTAs(getOperation())) {
-    clearWarpSpecializationAttrs(getOperation());
+  if (triton::nvidia_gpu::getModuleTwoCTAs(getOperation()))
     return;
-  }
 
   OpPassManager pm;
   auto addPassWithPartitionVerifier = [&](std::unique_ptr<Pass> pass) {
@@ -127,5 +124,5 @@ void AutomaticWarpSpecialization::runOnOperation() {
   // Multi-buffer TMA descriptors. We cannot rely on SWP to do it, to support
   // desc updates in nested loops.
   multiBufferTMADescriptors(getOperation(), numStages);
-  clearWarpSpecializationAttrs(getOperation());
+  clearInternalWarpSpecializationAttrs(getOperation());
 }
