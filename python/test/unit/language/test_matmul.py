@@ -245,7 +245,7 @@ def test_tma_matmul_mixed_consumers(num_ctas, num_stages, K, warp_specialize, de
         return
     expect_two_ctas = num_ctas > 1
     assert ("two_ctas" in compiled.asm["ttgir"]) == expect_two_ctas
-    assert ("ttg.warp_specialize" in compiled.asm["ttgir"]) == warp_specialize
+    assert ("ttg.warp_specialize" in compiled.asm["ttgir"]) == (warp_specialize and not expect_two_ctas)
     assert "multicast" not in compiled.asm["ttgir"]
     torch.testing.assert_close(c, a @ b, atol=0.01, rtol=0.01)
     expected_aux = a.float().reshape(M, K // BLOCK_K, BLOCK_K).sum(1)
@@ -301,6 +301,59 @@ def test_tma_matmul_two_ctas(use_loop, num_stages, transpose_b, num_ctas, device
     assert "multicast" not in ttgir
     assert all(".multicast" not in line for line in compiled.asm["ptx"].splitlines() if "cp.async.bulk.tensor" in line)
     assert ("scf.for" in ttgir) == use_loop
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("num_ctas", [2, 4])
+@pytest.mark.parametrize("num_stages", [2, 3, 4])
+@pytest.mark.parametrize("K, subtile", [(64, False), (64, True), (512, True)])
+@pytest.mark.parametrize("num_tiles", [1, 16])
+@pytest.mark.parametrize("single_buffer", [False, True])
+@pytest.mark.parametrize("warp_specialize", [False, True])
+def test_tma_matmul_two_ctas_persistent_consan(K, subtile, num_stages, num_ctas, num_tiles, single_buffer,
+                                               warp_specialize, device, fresh_knobs):
+    from triton.tools.tensor_descriptor import TensorDescriptor
+
+    @triton.jit
+    def kernel(A, B, C, M, K, BM: tl.constexpr, SUBTILE: tl.constexpr, SINGLE_BUFFER: tl.constexpr,
+               WARP_SPECIALIZE: tl.constexpr):
+        for tile in tl.range(tl.program_id(0), tl.cdiv(M, BM), 1, flatten=True, disallow_acc_multi_buffer=SINGLE_BUFFER,
+                             warp_specialize=WARP_SPECIALIZE):
+            acc = tl.full((BM, 128), 0, tl.float32)
+            for k in range(tl.cdiv(K, 64)):
+                a = A.load([tile * BM, k * 64])
+                b = B.load([0, k * 64])
+                acc = tl.dot(a, b.T, acc)
+            if SUBTILE:
+                acc0, acc1 = tl.split(tl.permute(tl.reshape(acc, (BM, 2, 64)), (0, 2, 1)))
+                C.store([tile * BM, 0], acc0.to(tl.float16))
+                C.store([tile * BM, 64], acc1.to(tl.float16))
+            else:
+                C.store([tile * BM, 0], acc.to(tl.float16))
+
+    fresh_knobs.compilation.instrumentation_mode = "consan"
+    triton.set_allocator(lambda size, alignment, stream: torch.empty(size, device=device, dtype=torch.int8))
+    BM = 128 * num_ctas
+    # Exercise pipeline draining with one tile and repeated buffer reuse with
+    # many tiles. A single K tile makes reuse race the peer CTA's epilogue.
+    M = num_tiles * BM
+    torch.manual_seed(0)
+    a = torch.randn((M, K), device=device, dtype=torch.float16) * 0.1
+    b = torch.randn((128, K), device=device, dtype=torch.float16) * 0.1
+    c = torch.empty((M, 128), device=device, dtype=torch.float16)
+    a_desc = TensorDescriptor.from_tensor(a, [BM, 64])
+    b_desc = TensorDescriptor.from_tensor(b, [128, 64])
+    c_desc = TensorDescriptor.from_tensor(c, [BM, 64 if subtile else 128])
+    compiled = kernel[(1, )](a_desc, b_desc, c_desc, M, K, BM, subtile, single_buffer, warp_specialize,
+                             num_ctas=num_ctas, num_stages=num_stages, num_warps=4)
+    if is_compile_warmup():
+        return
+    torch.testing.assert_close(c, a @ b.T, atol=0.01, rtol=0.01)
+    assert "two_ctas" in compiled.asm["ttgir"]
+    assert "ttg.warp_specialize" not in compiled.asm["ttgir"]
+    assert "ttng.arrive_barrier" in compiled.asm["ttgir"]
+    if single_buffer:
+        assert compiled.metadata.tmem_size == 128
 
 
 def test_i4_m_minor_join_bk16_matmul(device):
