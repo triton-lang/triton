@@ -38,16 +38,19 @@ def min_dot_size(target: GPUTarget):
     return check_dot_compatibility
 
 
-def get_ptxas(arch: int) -> knobs.NvidiaTool:
-    return knobs.nvidia.ptxas_blackwell if arch >= 100 else knobs.nvidia.ptxas
+def get_ptxas_for_arch(arch: int) -> knobs.NvidiaTool:
+    if arch < 90:
+        return knobs.nvidia.ptxas
+    # The ptxas-blackwell name is misleading; keep it until legacy ptxas is removed.
+    return knobs.nvidia.ptxas_blackwell
 
 
 @functools.lru_cache()
-def get_ptxas_version(arch: int = 80):
+def get_ptxas_version_for_arch(arch: int = 80):
     mock_ver = knobs.nvidia.mock_ptx_version
     if mock_ver is not None:
         return mock_ver  # This is not really a version of ptxas, but it is good enough for testing
-    version = subprocess.check_output([get_ptxas(arch).path, "--version"]).decode("utf-8")
+    version = subprocess.check_output([get_ptxas_for_arch(arch).path, "--version"]).decode("utf-8")
     return version
 
 
@@ -77,7 +80,7 @@ def ptx_get_version(cuda_version: str) -> int:
 def get_ptx_version_from_options(options, arch: int):
     ptx_version = options.ptx_version
     if ptx_version is None:
-        cuda_version = get_ptxas(arch).version
+        cuda_version = get_ptxas_for_arch(arch).version
         ptx_version = ptx_get_version(cuda_version)
     return ptx_version
 
@@ -573,7 +576,7 @@ class CUDABackend(BaseBackend):
         return ret
 
     def make_cubin(self, src, metadata, opt, capability):
-        ptxas = get_ptxas(self.target.arch).path
+        ptxas = get_ptxas_for_arch(self.target.arch).path
         with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.ptx') as fsrc, \
             tempfile.NamedTemporaryFile(delete=False, mode='r', suffix='.log') as flog:
             fsrc.write(src)
@@ -672,5 +675,5 @@ please share the reproducer above with Triton project.
 
     @functools.lru_cache()
     def hash(self):
-        version = get_ptxas_version(self.target.arch)
+        version = get_ptxas_version_for_arch(self.target.arch)
         return f'{version}-{self.target.arch}'
