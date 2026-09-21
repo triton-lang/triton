@@ -288,7 +288,8 @@ private:
   }
 
   bool isWarpSpecialized(scf::ForOp forOp) {
-    // Automatic warp specialization is disabled for two-CTA kernels.
+    // Latencies are assigned before automatic warp specialization clears the
+    // hints for two-CTA kernels.
     if (ttng::getModuleTwoCTAs(forOp))
       return false;
     scf::ForOp current = forOp;

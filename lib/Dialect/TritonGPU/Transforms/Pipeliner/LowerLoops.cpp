@@ -1030,10 +1030,6 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
 scf::ForOp pipelineTwoCTATmemLoads(scf::ForOp forOp, CoarseSchedule &schedule,
                                    ttng::MMAv5OpInterface mma, Value alloc,
                                    int numBuffers) {
-  // Only handle one read in the loop body or in a directly nested conditional.
-  // Warp-specialized regions and more complex lifetimes are out of scope.
-  if (forOp->getParentOfType<ttg::WarpSpecializeOp>())
-    return forOp;
   ttng::TMEMLoadOp load;
   for (Operation *user : alloc.getUsers()) {
     if (!forOp->isAncestor(user) || user == mma.getOperation())
