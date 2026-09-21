@@ -1,6 +1,5 @@
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
-#include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -15,7 +14,6 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/StrUtil.h"
-#include "llvm/ADT/SetVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -279,81 +277,15 @@ struct LoadGroupInfo {
   bool hasTMALoad = false;
 };
 
-struct TMALoadWaitRequirements {
-  // The load is used by a MMAv5 op with two CTAs
-  bool needsPairWait = false;
-  // The load will be used by multiple CTAs not in the two-cta mode, we need to
-  // wait for all to finish
-  bool needsAllCTAWait = false;
-};
-
-static bool followControlFlowOperand(OpOperand &use,
-                                     SetVector<Value> &worklist) {
-  Operation *op = use.getOwner();
-  if (auto branch = dyn_cast<BranchOpInterface>(op)) {
-    if (auto argument =
-            branch.getSuccessorBlockArgument(use.getOperandNumber())) {
-      worklist.insert(*argument);
-      return true;
-    }
-    return false;
-  }
-
-  auto followSuccessor = [&](OperandRange operands, ValueRange inputs) {
-    unsigned index = use.getOperandNumber();
-    if (operands.empty() || index < operands.getBeginOperandIndex() ||
-        index >= operands.getBeginOperandIndex() + operands.size())
-      return false;
-    worklist.insert(inputs[index - operands.getBeginOperandIndex()]);
-    return true;
-  };
-  SmallVector<RegionSuccessor> successors;
-  bool forwarded = false;
-  if (auto branch = dyn_cast<RegionBranchOpInterface>(op)) {
-    branch.getSuccessorRegions(RegionBranchPoint::parent(), successors);
-    for (RegionSuccessor successor : successors)
-      forwarded |= followSuccessor(branch.getEntrySuccessorOperands(successor),
-                                   branch.getSuccessorInputs(successor));
-  } else if (auto terminator =
-                 dyn_cast<RegionBranchTerminatorOpInterface>(op)) {
-    // ReturnLike can provide this interface even without a region-branch
-    // parent.
-    auto parent = dyn_cast<RegionBranchOpInterface>(op->getParentOp());
-    if (!parent)
-      return false;
-    parent.getSuccessorRegions(RegionBranchPoint(terminator), successors);
-    for (RegionSuccessor successor : successors)
-      forwarded |= followSuccessor(terminator.getSuccessorOperands(successor),
-                                   parent.getSuccessorInputs(successor));
-  }
-  return forwarded;
-}
-
-static TMALoadWaitRequirements getTMALoadWaitRequirements(Operation *loadOp) {
-  TMALoadWaitRequirements requirements;
-  requirements.needsAllCTAWait = mustLoadToRegisters(loadOp);
-  SetVector<Value> worklist;
-  worklist.insert(loadOp->result_begin(), loadOp->result_end());
-  for (unsigned i = 0; i < worklist.size(); ++i) {
-    for (OpOperand &use : worklist[i].getUses()) {
-      Operation *op = use.getOwner();
-      if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(op)) {
-        requirements.needsPairWait |= mma.getTwoCtas();
-        requirements.needsAllCTAWait |= !mma.getTwoCtas();
-        continue;
-      }
-      if (followControlFlowOperand(use, worklist))
-        continue;
-      auto select = dyn_cast<arith::SelectOp>(op);
-      bool selectsDescriptor =
-          select && isa<ttg::MemDescType>(select.getType());
-      if (!isa<ttg::LocalAllocOp, ttng::WaitBarrierOp>(op) &&
-          !op->hasTrait<OpTrait::MemDescViewTrait>() && !selectsDescriptor)
-        requirements.needsAllCTAWait = true;
-      worklist.insert(op->result_begin(), op->result_end());
-    }
-  }
-  return requirements;
+// A pair wait only blocks the leader CTA. Other consumers, including
+// descriptors forwarded through control flow, need both CTAs to observe TMA
+// completion. Descriptor views can still feed the MMA-only fast path.
+static bool hasNonMMAUsers(Operation *op) {
+  return llvm::any_of(op->getUsers(), [](Operation *user) {
+    if (user->hasTrait<OpTrait::MemDescViewTrait>())
+      return hasNonMMAUsers(user);
+    return !isa<ttng::MMAv5OpInterface, ttng::WaitBarrierOp>(user);
+  });
 }
 
 static int getMMAv5CompletionBarrierCount(ttng::MMAv5OpInterface mma) {
@@ -477,22 +409,23 @@ void createTMABarrierAndWait(
 
   // For each group calculate the size and insert the barrier after the last
   // load.
+  bool twoCTAs = ttng::getModuleTwoCTAs(forOp);
   for (SmallVector<Operation *> &group : commonWaitGroups) {
     int sizeInBytes = 0;
     int numBuffers = asyncLoads[group[0]].stageDiff;
     const LoadGroupInfo loadGroup = loadGroups.find(numBuffers)->second;
-    TMALoadWaitRequirements waitRequirements;
+    bool needsClusterBarrier = false;
     for (Operation *op : group) {
       auto tensorTy = cast<RankedTensorType>(op->getResultTypes()[0]);
       int loadSize = product(getShapePerCTA(tensorTy));
       sizeInBytes += loadSize * tensorTy.getElementTypeBitWidth() / 8;
-      auto loadRequirements = getTMALoadWaitRequirements(op);
-      waitRequirements.needsPairWait |= loadRequirements.needsPairWait;
-      waitRequirements.needsAllCTAWait |= loadRequirements.needsAllCTAWait;
+      needsClusterBarrier |=
+          twoCTAs && (mustLoadToRegisters(op) ||
+                      hasNonMMAUsers(*op->getUsers().begin()));
     }
 
     Value barrierAlloc = triton::createBarrierAlloc(
-        forOp, numBuffers, /*arriveCount=*/1, waitRequirements.needsPairWait);
+        forOp, numBuffers, /*arriveCount=*/1, twoCTAs);
     OpBuilderForStage builder(forOp.getLoc(), group[0], schedule);
     Value barrier = triton::createSingleBufferView(builder, barrierAlloc,
                                                    loadGroup.insertIdx);
@@ -506,7 +439,7 @@ void createTMABarrierAndWait(
         builder, barrierAlloc, loadGroup.extractIdx);
     Operation *waitOp =
         ttng::WaitBarrierOp::create(builder, barrierViewWait, loadGroup.phase);
-    if (waitRequirements.needsPairWait && waitRequirements.needsAllCTAWait) {
+    if (needsClusterBarrier) {
       waitOp = ttng::ClusterBarrierOp::create(builder);
     }
 

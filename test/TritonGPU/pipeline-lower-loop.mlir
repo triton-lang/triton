@@ -1864,10 +1864,11 @@ tt.func @no_async_copy_for_same_stage_later_cluster(%lb : index, %ub : index, %s
 #blockedC = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0], CGALayout = [[1, 0]]}>
 #sharedA = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
 #sharedB = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1]]}>
+#sharedBT = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16, CGALayout = [[1, 0]]}>
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
-module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // Forwarded MMA operands use pair-shared TMA barriers and per-CTA MMA completion barriers.
+module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // Descriptor forwarding conservatively synchronizes both CTAs after the pair wait.
   // CHECK-DAG: #[[$MMA_BAR_LAYOUT:.*]] = #ttg.swizzled_shared<{{.*}}CGALayout = {{\[\[1\]\]}}{{.*}}>
   // CHECK-DAG: #[[$TMA_BAR_LAYOUT:.*]] = #ttg.swizzled_shared<{{.*}}CGALayout = {{\[\[0\]\]}}{{.*}}>
   // CHECK-LABEL: @two_cta_wait_forwarded_descriptor
@@ -1876,7 +1877,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x1xi64, #[[$TMA_BAR_LAYOUT]]
   // CHECK: ttng.async_tma_copy_global_to_local {{.*}}!ttg.memdesc<1xi64, #[[$TMA_BAR_LAYOUT]]
   // CHECK: ttng.wait_barrier {{.*}}!ttg.memdesc<1xi64, #[[$TMA_BAR_LAYOUT]]
-  // CHECK-NOT: ttng.cluster_barrier
+  // CHECK-NEXT: ttng.cluster_barrier
   // CHECK: ttng.tc_gen5_mma {{.*}} {is_async, {{.*}}two_ctas} : {{.*}}!ttg.memdesc<2xi64, #[[$MMA_BAR_LAYOUT]]
   // CHECK: ttng.wait_barrier {{.*}} deps
   // CHECK-NOT: ttng.cluster_barrier
@@ -1908,6 +1909,42 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %3 = arith.truncf %2 : tensor<256x128xf32, #blockedC> to tensor<256x128xf16, #blockedC>
     tt.return %3 : tensor<256x128xf16, #blockedC>
   }
+
+  // Descriptor views feeding only MMA do not need a cluster barrier.
+  // An unrelated register load in a separate wait group still needs both CTAs
+  // to observe completion when the module uses pair-shared TMA barriers.
+  // CHECK-LABEL: @two_cta_wait_unrelated_load_group
+  // CHECK: ttng.wait_barrier {{.*}}!ttg.memdesc<1xi64,
+  // CHECK-NOT: ttng.cluster_barrier
+  // CHECK: ttng.tc_gen5_mma {{.*}}two_ctas
+  // CHECK: ttng.wait_barrier {{.*}}!ttg.memdesc<1xi64,
+  // CHECK-NEXT: ttng.cluster_barrier
+  // CHECK: ttg.local_load
+  // CHECK: "test.consume"
+  tt.func public @two_cta_wait_unrelated_load_group(%arg0: !tt.tensordesc<256x64xf16, #sharedA>, %arg1: !tt.tensordesc<64x128xf16, #sharedB>, %arg2: !tt.tensordesc<256x64xf16, #sharedA>, %arg3: i32) -> tensor<256x128xf16, #blockedC> {
+    %true = arith.constant true
+    %cst = arith.constant dense<0.000000e+00> : tensor<256x128xf32, #blockedC>
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %1, %acc_tok = ttng.tmem_alloc : () -> (!ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %init_tok = ttng.tmem_store %cst, %1[%acc_tok], %true : tensor<256x128xf32, #blockedC> -> !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    %last_tok = scf.for %arg4 = %c0_i32 to %arg3 step %c1_i32 iter_args(%tok = %init_tok) -> !ttg.async.token : i32 {
+      %5 = tt.descriptor_load %arg0[%c0_i32, %c0_i32] {loop.cluster = 2 : i32, loop.stage = 0 : i32} : !tt.tensordesc<256x64xf16, #sharedA> -> tensor<256x64xf16, #blockedA>
+      %6 = ttg.local_alloc %5 {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<256x64xf16, #blockedA>) -> !ttg.memdesc<256x64xf16, #sharedA, #smem, mutable>
+      %7 = tt.descriptor_load %arg1[%c0_i32, %c0_i32] {loop.cluster = 2 : i32, loop.stage = 0 : i32} : !tt.tensordesc<64x128xf16, #sharedB> -> tensor<64x128xf16, #blockedB>
+      %8 = ttg.local_alloc %7 {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<64x128xf16, #blockedB>) -> !ttg.memdesc<64x128xf16, #sharedB, #smem, mutable>
+      %bt = ttg.memdesc_trans %8 {order = array<i32: 1, 0>, loop.cluster = 0 : i32, loop.stage = 2 : i32} : !ttg.memdesc<64x128xf16, #sharedB, #smem, mutable> -> !ttg.memdesc<128x64xf16, #sharedBT, #smem, mutable>
+      %bview = ttg.memdesc_trans %bt {order = array<i32: 1, 0>, loop.cluster = 0 : i32, loop.stage = 2 : i32} : !ttg.memdesc<128x64xf16, #sharedBT, #smem, mutable> -> !ttg.memdesc<64x128xf16, #sharedB, #smem, mutable>
+      %mma_tok = ttng.tc_gen5_mma %6, %bview, %1[%tok], %true, %true {loop.cluster = 0 : i32, loop.stage = 2 : i32, tt.self_latency = 1 : i32, two_ctas} : !ttg.memdesc<256x64xf16, #sharedA, #smem, mutable>, !ttg.memdesc<64x128xf16, #sharedB, #smem, mutable>, !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      %9 = tt.descriptor_load %arg2[%c0_i32, %c0_i32] {loop.cluster = 2 : i32, loop.stage = 0 : i32} : !tt.tensordesc<256x64xf16, #sharedA> -> tensor<256x64xf16, #blockedA>
+      "test.consume"(%9) {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<256x64xf16, #blockedA>) -> ()
+      scf.yield %mma_tok : !ttg.async.token
+    } {tt.scheduled_max_stage = 2 : i32}
+    %2, %res_tok = ttng.tmem_load %1[%last_tok] : !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<256x128xf32, #blockedC>
+    %3 = arith.truncf %2 : tensor<256x128xf32, #blockedC> to tensor<256x128xf16, #blockedC>
+    tt.return %3 : tensor<256x128xf16, #blockedC>
+  }
+
 
   // Synchronize both CTAs before an ordinary read of a descriptor also used by two-CTA MMA.
   // CHECK-LABEL: @two_cta_wait_forwarded_descriptor_read
@@ -1978,7 +2015,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #sharedB = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16, CGALayout = [[0, 1], [0, 0]]}>
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1, CGALayout = [[1, 0], [2, 0]], twoCTAs = true>
-module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // Publish completion after the epilogue, then wait only at accumulator reuse.
   // Two barrier slots prevent a peer from arriving twice on an unobserved phase.
   // Conditional reads advance the ring and phase only when they execute.
