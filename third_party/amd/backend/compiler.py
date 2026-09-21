@@ -215,6 +215,12 @@ def _parse_llvm_fn_attrs(attrs):
     return tuple(parsed)
 
 
+@functools.lru_cache(None)
+def file_hash(path):
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
 @dataclass(frozen=True)
 class HIPOptions:
     num_warps: int = 4
@@ -274,7 +280,10 @@ class HIPOptions:
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
 
     def hash(self):
-        key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
+        hash_dict = dict(self.__dict__)
+        # Linking is order-sensitive when libraries provide overlapping symbols.
+        hash_dict["extern_libs"] = tuple((k, file_hash(v)) for k, v in hash_dict["extern_libs"])
+        key = "_".join([f"{name}-{val}" for name, val in sorted(hash_dict.items())])
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
