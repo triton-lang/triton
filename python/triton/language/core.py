@@ -1472,7 +1472,15 @@ class tensor_descriptor_base(base_value):
     def store(self, offsets: Sequence[constexpr | tensor], value: tensor, _semantic=None) -> tensor:
         """Store a block from the descriptor starting at the given element offsets.
 
-        Values outside of the tensor bounds will be ignored.
+        Values outside of the tensor bounds will be ignored, subject to the
+        following hardware limitation.
+
+        .. warning::
+
+            On NVIDIA GPUs, TMA stores write only in whole 16-byte chunks. If the
+            innermost dimension's size in bytes is not a multiple of 16, a store
+            may overwrite padding beyond the tensor's shape up to the next
+            16-byte boundary.
 
         :note: Offset must be a multiple of 16-bytes
         """
@@ -1480,26 +1488,74 @@ class tensor_descriptor_base(base_value):
 
     @builtin
     def atomic_add(self, offsets: Sequence[constexpr | tensor], value: tensor, _semantic=None) -> tensor:
+        """Atomically add a block at the given element offsets.
+
+        .. warning::
+
+            On NVIDIA GPUs, TMA reductions may update padding beyond the tensor's
+            shape up to the next 16-byte boundary if the innermost dimension's
+            size in bytes is not a multiple of 16.
+        """
         return _semantic.descriptor_atomic_add(self, value, offsets)
 
     @builtin
     def atomic_min(self, offsets: Sequence[constexpr | tensor], value: tensor, _semantic=None) -> tensor:
+        """Atomically compute the elementwise minimum with a block at the given offsets.
+
+        .. warning::
+
+            On NVIDIA GPUs, TMA reductions may update padding beyond the tensor's
+            shape up to the next 16-byte boundary if the innermost dimension's
+            size in bytes is not a multiple of 16.
+        """
         return _semantic.descriptor_atomic_min(self, value, offsets)
 
     @builtin
     def atomic_max(self, offsets: Sequence[constexpr | tensor], value: tensor, _semantic=None) -> tensor:
+        """Atomically compute the elementwise maximum with a block at the given offsets.
+
+        .. warning::
+
+            On NVIDIA GPUs, TMA reductions may update padding beyond the tensor's
+            shape up to the next 16-byte boundary if the innermost dimension's
+            size in bytes is not a multiple of 16.
+        """
         return _semantic.descriptor_atomic_max(self, value, offsets)
 
     @builtin
     def atomic_and(self, offsets: Sequence[constexpr | tensor], value: tensor, _semantic=None) -> tensor:
+        """Atomically apply bitwise AND with a block at the given element offsets.
+
+        .. warning::
+
+            On NVIDIA GPUs, TMA reductions may update padding beyond the tensor's
+            shape up to the next 16-byte boundary if the innermost dimension's
+            size in bytes is not a multiple of 16.
+        """
         return _semantic.descriptor_atomic_and(self, value, offsets)
 
     @builtin
     def atomic_or(self, offsets: Sequence[constexpr | tensor], value: tensor, _semantic=None) -> tensor:
+        """Atomically apply bitwise OR with a block at the given element offsets.
+
+        .. warning::
+
+            On NVIDIA GPUs, TMA reductions may update padding beyond the tensor's
+            shape up to the next 16-byte boundary if the innermost dimension's
+            size in bytes is not a multiple of 16.
+        """
         return _semantic.descriptor_atomic_or(self, value, offsets)
 
     @builtin
     def atomic_xor(self, offsets: Sequence[constexpr | tensor], value: tensor, _semantic=None) -> tensor:
+        """Atomically apply bitwise XOR with a block at the given element offsets.
+
+        .. warning::
+
+            On NVIDIA GPUs, TMA reductions may update padding beyond the tensor's
+            shape up to the next 16-byte boundary if the innermost dimension's
+            size in bytes is not a multiple of 16.
+        """
         return _semantic.descriptor_atomic_xor(self, value, offsets)
 
     @builtin
@@ -1512,7 +1568,15 @@ class tensor_descriptor_base(base_value):
 
     @builtin
     def scatter(self, value, *args, _semantic=None) -> tensor:
-        """Scatter multiple descriptors worth of data"""
+        """Scatter multiple descriptors worth of data.
+
+        .. warning::
+
+            On NVIDIA GPUs, TMA scatter writes only in whole 16-byte chunks. If
+            the innermost dimension's size in bytes is not a multiple of 16, a
+            scatter may overwrite padding beyond the tensor's shape up to the
+            next 16-byte boundary.
+        """
         assert len(args) == 2, f"descriptor scatter only supports 2D indexing, but got {len(args)}"
         x_offsets = args[0]
         y_offset = args[1]
