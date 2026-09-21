@@ -1030,6 +1030,8 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
 scf::ForOp pipelineTwoCTATmemLoads(scf::ForOp forOp, CoarseSchedule &schedule,
                                    ttng::MMAv5OpInterface mma, Value alloc,
                                    int numBuffers) {
+  if (mma->getBlock() != forOp.getBody())
+    return forOp;
   ttng::TMEMLoadOp load;
   for (Operation *user : alloc.getUsers()) {
     if (!forOp->isAncestor(user) || user == mma.getOperation())
@@ -1039,10 +1041,11 @@ scf::ForOp pipelineTwoCTATmemLoads(scf::ForOp forOp, CoarseSchedule &schedule,
       return forOp;
     load = read;
   }
-  if (!load || mma->getBlock() != forOp.getBody())
+  if (!load)
     return forOp;
+  Block *readBlock = load->getBlock();
   Operation *topLevelLoad = forOp.getBody()->findAncestorOpInBlock(*load);
-  if ((load->getBlock() != forOp.getBody() &&
+  if ((readBlock != forOp.getBody() &&
        (!isa<scf::IfOp>(topLevelLoad) ||
         load->getParentOp() != topLevelLoad)) ||
       !schedule.isOpBefore(mma, topLevelLoad))
@@ -1060,41 +1063,36 @@ scf::ForOp pipelineTwoCTATmemLoads(scf::ForOp forOp, CoarseSchedule &schedule,
 
   auto waitCluster =
       schedule.clusters.newBefore(schedule.splitClusterBefore(mma, forOp));
-  auto readStage = schedule[topLevelLoad];
   OpBuilderForStage builder(load.getLoc(), topLevelLoad, schedule);
   Value barrier = triton::createSingleBufferView(builder, barriers, index);
   Value ringSize = arith::ConstantIntOp::create(builder, numBuffers, 32);
-  Value vFalse = arith::ConstantIntOp::create(builder, 0, 1);
-  Value vTrue = arith::ConstantIntOp::create(builder, 1, 1);
+  Value didRead = arith::ConstantIntOp::create(builder, 1, 1);
+  if (auto ifOp = dyn_cast<scf::IfOp>(topLevelLoad)) {
+    didRead = ifOp.getCondition();
+    if (readBlock == ifOp.elseBlock())
+      didRead = arith::XOrIOp::create(
+          builder, didRead, arith::ConstantIntOp::create(builder, 1, 1));
+  }
 
   // Signal after the epilogue so TMEM subtiling can consume each half before
   // loading the next, without keeping the whole accumulator live at a barrier.
-  builder.setInsertionPoint(load->getBlock()->getTerminator());
+  builder.setInsertionPoint(readBlock->getTerminator());
   ttng::ArriveBarrierOp::create(builder, barrier, 1);
+  auto yield = forOp.getBody()->getTerminator();
+  builder.setInsertionPoint(yield);
   Value wrap;
   Value nextIndex = createIncrementModulo(builder, load.getLoc(), index,
                                           ringSize, zero, one, &wrap);
   Value toggled = arith::XOrIOp::create(builder, phase, one);
   Value nextPhase = arith::SelectOp::create(builder, wrap, toggled, phase);
-  nextIndex =
-      sinkValueRedefinition(rewriter, index, nextIndex, load->getBlock());
-  auto yield = forOp.getBody()->getTerminator();
+  nextIndex = arith::SelectOp::create(builder, didRead, nextIndex, index);
+  nextPhase = arith::SelectOp::create(builder, didRead, nextPhase, phase);
   yield->setOperand(firstArg, nextIndex);
-  nextPhase =
-      sinkValueRedefinition(rewriter, phase, nextPhase, load->getBlock());
   yield->setOperand(firstArg + 1, nextPhase);
-  Value didRead =
-      sinkValueRedefinition(rewriter, vFalse, vTrue, load->getBlock());
-  Operation *newTopLevelLoad = forOp.getBody()->findAncestorOpInBlock(*load);
-  if (newTopLevelLoad != topLevelLoad) {
-    schedule.erase(topLevelLoad);
-    schedule.insert(newTopLevelLoad, readStage.first, readStage.second);
-  }
 
   // With N TMEM buffers, the earliest overwrite is N iterations after the
   // producer. Let the existing pipeline put the wait just before that MMA.
   // Advance the barrier ring only when the conditional read actually executes.
-  builder.setInsertionPoint(yield);
   builder.setStageCluster({schedule[mma].first + numBuffers, waitCluster});
   ttng::WaitBarrierOp::create(builder, barrier, phase, didRead);
   return forOp;

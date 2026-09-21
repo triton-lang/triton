@@ -2029,13 +2029,15 @@ module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 4 : i32, "ttg.num-wa
   // CHECK: ttng.tmem_load
   // CHECK-NEXT: "use"
   // CHECK-NEXT: ttng.arrive_barrier %[[READ_BARRIER]], 1
-  // CHECK: %[[NEXT_INDEX:.*]] = arith.select
+  // CHECK: %[[INCREMENT:.*]] = arith.addi %[[INDEX]],
+  // CHECK-NEXT: %[[WRAP:.*]] = arith.cmpi sge, %[[INCREMENT]],
+  // CHECK-NEXT: %[[NEXT_INDEX:.*]] = arith.select %[[WRAP]],
   // CHECK: %[[TOGGLED:.*]] = arith.xori %[[PHASE:[a-zA-Z0-9_]+]],
   // CHECK: %[[NEXT_PHASE:.*]] = arith.select {{.*}}, %[[TOGGLED]], %[[PHASE]]
-  // CHECK: scf.yield %[[NEXT_INDEX]], %[[NEXT_PHASE]]
-  // CHECK: } else {
-  // CHECK-NEXT: scf.yield %[[INDEX]], %[[PHASE]]
+  // CHECK: %[[INDEX_OUT:.*]] = arith.select %[[READ]], %[[NEXT_INDEX]], %[[INDEX]]
+  // CHECK: %[[PHASE_OUT:.*]] = arith.select %[[READ]], %[[NEXT_PHASE]], %[[PHASE]]
   // CHECK: ttng.wait_barrier %[[READ_BARRIER]], %[[PHASE]], %[[READ]] {loop.cluster = 1 : i32, loop.stage = 4 : i32}
+  // CHECK: scf.yield {{.*}}, %[[INDEX_OUT]], %[[PHASE_OUT]],
   // CHECK: tt.scheduled_max_stage = 4
   tt.func @two_cta_accumulator_read_release(%a: !tt.tensordesc<512x64xf16, #sharedA>, %b: !tt.tensordesc<64x128xf16, #sharedB>, %n: i32) {
     %true = arith.constant true
@@ -2057,6 +2059,45 @@ module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 4 : i32, "ttg.num-wa
         scf.yield %load : !ttg.async.token
       } else {
         scf.yield %mma : !ttg.async.token
+      } {loop.cluster = 3 : i32, loop.stage = 3 : i32}
+      scf.yield %done : !ttg.async.token
+    } {tt.scheduled_max_stage = 3 : i32}
+    tt.return
+  }
+
+  // A read in the else branch advances the barrier state when the condition is false.
+  // CHECK-LABEL: @two_cta_accumulator_else_read_release
+  // CHECK: %[[SKIP:.*]] = arith.cmpi eq, %[[ODD:[a-zA-Z0-9_]+]],
+  // CHECK: %[[ELSE_BARRIER:.*]] = ttg.memdesc_index {{.*}}[%[[ELSE_INDEX:[a-zA-Z0-9_]+]]]
+  // CHECK: %[[DID_READ:.*]] = arith.cmpi ne, %[[ODD]],
+  // CHECK: scf.if %[[SKIP]]
+  // CHECK: } else {
+  // CHECK: ttng.tmem_load
+  // CHECK-NEXT: "use"
+  // CHECK-NEXT: ttng.arrive_barrier %[[ELSE_BARRIER]], 1
+  // CHECK: arith.select %[[DID_READ]], {{.*}}, %[[ELSE_INDEX]]
+  // CHECK: arith.select %[[DID_READ]], {{.*}}, %[[ELSE_PHASE:[a-zA-Z0-9_]+]]
+  // CHECK: ttng.wait_barrier %[[ELSE_BARRIER]], %[[ELSE_PHASE]], %[[DID_READ]]
+  tt.func @two_cta_accumulator_else_read_release(%a: !tt.tensordesc<512x64xf16, #sharedA>, %b: !tt.tensordesc<64x128xf16, #sharedB>, %n: i32) {
+    %true = arith.constant true
+    %false = arith.constant false
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %acc, %init = ttng.tmem_alloc : () -> (!ttg.memdesc<512x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %last = scf.for %i = %c0 to %n step %c1 iter_args(%tok = %init) -> !ttg.async.token : i32 {
+      %av = tt.descriptor_load %a[%c0, %c0] {loop.cluster = 2 : i32, loop.stage = 0 : i32} : !tt.tensordesc<512x64xf16, #sharedA> -> tensor<512x64xf16, #blockedA>
+      %as = ttg.local_alloc %av {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<512x64xf16, #blockedA>) -> !ttg.memdesc<512x64xf16, #sharedA, #smem, mutable>
+      %bv = tt.descriptor_load %b[%c0, %c0] {loop.cluster = 2 : i32, loop.stage = 0 : i32} : !tt.tensordesc<64x128xf16, #sharedB> -> tensor<64x128xf16, #blockedB>
+      %bs = ttg.local_alloc %bv {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<64x128xf16, #blockedB>) -> !ttg.memdesc<64x128xf16, #sharedB, #smem, mutable>
+      %mma = ttng.tc_gen5_mma %as, %bs, %acc[%tok], %false, %true {loop.cluster = 0 : i32, loop.stage = 2 : i32, tt.self_latency = 1 : i32, two_ctas} : !ttg.memdesc<512x64xf16, #sharedA, #smem, mutable>, !ttg.memdesc<64x128xf16, #sharedB, #smem, mutable>, !ttg.memdesc<512x128xf32, #tmem, #ttng.tensor_memory, mutable>
+      %odd = arith.andi %i, %c1 {loop.cluster = 3 : i32, loop.stage = 3 : i32} : i32
+      %read = arith.cmpi eq, %odd, %c0 {loop.cluster = 3 : i32, loop.stage = 3 : i32} : i32
+      %done = scf.if %read -> !ttg.async.token {
+        scf.yield %mma : !ttg.async.token
+      } else {
+        %v, %load = ttng.tmem_load %acc[%mma] : !ttg.memdesc<512x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<512x128xf32, #blockedC>
+        "use"(%v) : (tensor<512x128xf32, #blockedC>) -> ()
+        scf.yield %load : !ttg.async.token
       } {loop.cluster = 3 : i32, loop.stage = 3 : i32}
       scf.yield %done : !ttg.async.token
     } {tt.scheduled_max_stage = 3 : i32}
