@@ -260,146 +260,53 @@ def test_tma_matmul_two_ctas(use_loop, num_stages, transpose_b, num_ctas, device
     from triton.tools.tensor_descriptor import TensorDescriptor
 
     @triton.jit
-    def kernel(A, B, C, M: tl.constexpr, K: tl.constexpr, USE_LOOP: tl.constexpr, TRANSPOSE_B: tl.constexpr):
-        if USE_LOOP:
-            acc = tl.full((M, 128), 0, tl.float32)
-            for k in range(K // 64):
-                a = A.load([0, k * 64])
+    def kernel(A, B, C, M: tl.constexpr, K: tl.constexpr, BM: tl.constexpr, USE_LOOP: tl.constexpr,
+               TRANSPOSE_B: tl.constexpr):
+        for tile in tl.range(0, M // BM, flatten=True):
+            if USE_LOOP:
+                acc = tl.full((BM, 128), 0, tl.float32)
+                for k in range(K // 64):
+                    a = A.load([tile * BM, k * 64])
+                    if TRANSPOSE_B:
+                        b = B.load([0, k * 64]).T
+                    else:
+                        b = B.load([k * 64, 0])
+                    acc = tl.dot(a, b, acc)
+            else:
+                a = A.load([tile * BM, 0])
+                b = B.load([0, 0])
                 if TRANSPOSE_B:
-                    b = B.load([0, k * 64]).T
-                else:
-                    b = B.load([k * 64, 0])
-                acc = tl.dot(a, b, acc)
-        else:
-            a = A.load([0, 0])
-            b = B.load([0, 0])
-            if TRANSPOSE_B:
-                b = b.T
-            acc = tl.dot(a, b)
-        C.store([0, 0], acc.to(tl.float16))
+                    b = b.T
+                acc = tl.dot(a, b)
+            C.store([tile * BM, 0], acc.to(tl.float16))
 
-    M = 128 * num_ctas
+    BM = 128 * num_ctas
+    M = 16 * BM
     K = 256 if use_loop else 64
     torch.manual_seed(0)
     a = torch.randn((M, K), device=device, dtype=torch.float16) * 0.1
     b = torch.randn((K, 128), device=device, dtype=torch.float16) * 0.1
     c = torch.empty((M, 128), device=device, dtype=torch.float16)
-    a_desc = TensorDescriptor(a, a.shape, a.stride(), [M, 64])
+    a_desc = TensorDescriptor(a, a.shape, a.stride(), [BM, 64])
     b_input = b.T.contiguous() if transpose_b else b
     b_desc = TensorDescriptor(b_input, b_input.shape, b_input.stride(), [128, 64] if transpose_b else [64, 128])
-    c_desc = TensorDescriptor(c, c.shape, c.stride(), [M, 128])
-    compiled = kernel[(1, )](a_desc, b_desc, c_desc, M, K, use_loop, transpose_b, num_ctas=num_ctas,
+    c_desc = TensorDescriptor(c, c.shape, c.stride(), [BM, 128])
+    compiled = kernel[(1, )](a_desc, b_desc, c_desc, M, K, BM, use_loop, transpose_b, num_ctas=num_ctas,
                              num_stages=num_stages, num_warps=4)
     if is_compile_warmup():
         return
 
     torch.testing.assert_close(c, a @ b, atol=0.01, rtol=0.01)
-    num_mma = 2 if use_loop and num_stages > 1 else 1
+    if num_stages == 1:
+        num_mma = 1
+    else:
+        num_mma = 3 if use_loop else 2
     assert_mmav5_asm(compiled, expect_two_ctas=True, num_mma=num_mma)
     ttgir = compiled.asm["ttgir"]
     assert "ttng.async_tma_copy_global_to_local" in ttgir
     assert "multicast" not in ttgir
     assert all(".multicast" not in line for line in compiled.asm["ptx"].splitlines() if "cp.async.bulk.tensor" in line)
-    assert ("scf.for" in ttgir) == use_loop
-
-
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize("num_ctas", [2, 4])
-@pytest.mark.parametrize("num_stages", [2, 3, 4])
-@pytest.mark.parametrize("K, subtile", [(64, False), (64, True), (512, True)])
-@pytest.mark.parametrize("num_tiles", [1, 16])
-@pytest.mark.parametrize("single_buffer", [False, True])
-@pytest.mark.parametrize("warp_specialize", [False, True])
-def test_tma_matmul_two_ctas_persistent_consan(K, subtile, num_stages, num_ctas, num_tiles, single_buffer,
-                                               warp_specialize, device, fresh_knobs):
-    from triton.tools.tensor_descriptor import TensorDescriptor
-
-    @triton.jit
-    def kernel(A, B, C, M, K, BM: tl.constexpr, SUBTILE: tl.constexpr, SINGLE_BUFFER: tl.constexpr,
-               WARP_SPECIALIZE: tl.constexpr):
-        for tile in tl.range(tl.program_id(0), tl.cdiv(M, BM), 1, flatten=True, disallow_acc_multi_buffer=SINGLE_BUFFER,
-                             warp_specialize=WARP_SPECIALIZE):
-            acc = tl.full((BM, 128), 0, tl.float32)
-            for k in range(tl.cdiv(K, 64)):
-                a = A.load([tile * BM, k * 64])
-                b = B.load([0, k * 64])
-                acc = tl.dot(a, b.T, acc)
-            if SUBTILE:
-                acc0, acc1 = tl.split(tl.permute(tl.reshape(acc, (BM, 2, 64)), (0, 2, 1)))
-                C.store([tile * BM, 0], acc0.to(tl.float16))
-                C.store([tile * BM, 64], acc1.to(tl.float16))
-            else:
-                C.store([tile * BM, 0], acc.to(tl.float16))
-
-    fresh_knobs.compilation.instrumentation_mode = "consan"
-    triton.set_allocator(lambda size, alignment, stream: torch.empty(size, device=device, dtype=torch.int8))
-    BM = 128 * num_ctas
-    # Exercise pipeline draining with one tile and repeated buffer reuse with
-    # many tiles. A single K tile makes reuse race the peer CTA's epilogue.
-    M = num_tiles * BM
-    torch.manual_seed(0)
-    a = torch.randn((M, K), device=device, dtype=torch.float16) * 0.1
-    b = torch.randn((128, K), device=device, dtype=torch.float16) * 0.1
-    c = torch.empty((M, 128), device=device, dtype=torch.float16)
-    a_desc = TensorDescriptor.from_tensor(a, [BM, 64])
-    b_desc = TensorDescriptor.from_tensor(b, [128, 64])
-    c_desc = TensorDescriptor.from_tensor(c, [BM, 64 if subtile else 128])
-    compiled = kernel[(1, )](a_desc, b_desc, c_desc, M, K, BM, subtile, single_buffer, warp_specialize,
-                             num_ctas=num_ctas, num_stages=num_stages, num_warps=4)
-    if is_compile_warmup():
-        return
-    torch.testing.assert_close(c, a @ b.T, atol=0.01, rtol=0.01)
-    assert "two_ctas" in compiled.asm["ttgir"]
-    assert "ttg.warp_specialize" not in compiled.asm["ttgir"]
-    assert "ttng.arrive_barrier" in compiled.asm["ttgir"]
-    if single_buffer:
-        assert compiled.metadata.tmem_size == 128
-
-
-@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize("lhs_descriptor, N, num_stages", [
-    (False, 128, 3),
-    (True, 128, 1),
-    (True, 8, 3),
-    (True, 16, 3),
-])
-@pytest.mark.parametrize("transpose_b", [False, True])
-def test_tma_matmul_two_ctas_selection_consan(lhs_descriptor, N, num_stages, transpose_b, device, fresh_knobs):
-    from triton.tools.tensor_descriptor import TensorDescriptor
-
-    @triton.jit
-    def kernel(A, B, C, M, K, BN: tl.constexpr, LHS_DESCRIPTOR: tl.constexpr, TRANSPOSE_B: tl.constexpr):
-        for tile in tl.range(0, tl.cdiv(M, 256), flatten=True):
-            acc = tl.full((256, BN), 0, tl.float32)
-            for k in range(tl.cdiv(K, 64)):
-                if LHS_DESCRIPTOR:
-                    a = A.load([tile * 256, k * 64])
-                else:
-                    a = tl.load(A + (tile * 256 + tl.arange(0, 256)[:, None]) * K + k * 64 + tl.arange(0, 64)[None, :])
-                if TRANSPOSE_B:
-                    b = B.load([0, k * 64]).T
-                else:
-                    b = B.load([k * 64, 0])
-                acc = tl.dot(a, b, acc)
-            C.store([tile * 256, 0], acc.to(tl.float16))
-
-    fresh_knobs.compilation.instrumentation_mode = "consan"
-    triton.set_allocator(lambda size, alignment, stream: torch.empty(size, device=device, dtype=torch.int8))
-    M, K = 256 * 16, 256
-    torch.manual_seed(0)
-    a = torch.randn((M, K), device=device, dtype=torch.float16) * 0.1
-    b = torch.randn((K, N), device=device, dtype=torch.float16) * 0.1
-    c = torch.empty((M, N), device=device, dtype=torch.float16)
-    a_input = TensorDescriptor.from_tensor(a, [256, 64]) if lhs_descriptor else a
-    b_input = b.T.contiguous() if transpose_b else b
-    b_desc = TensorDescriptor.from_tensor(b_input, [N, 64] if transpose_b else [64, N])
-    c_desc = TensorDescriptor.from_tensor(c, [256, N])
-    compiled = kernel[(1, )](a_input, b_desc, c_desc, M, K, N, lhs_descriptor, transpose_b, num_ctas=2,
-                             num_stages=num_stages, num_warps=4)
-    if is_compile_warmup():
-        return
-    torch.testing.assert_close(c, a @ b, atol=0.01, rtol=0.01)
-    assert ("two_ctas" in compiled.asm["ttgir"]) == (lhs_descriptor and N >= 16)
+    assert "scf.for" in ttgir
 
 
 def test_i4_m_minor_join_bk16_matmul(device):

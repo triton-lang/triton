@@ -471,16 +471,6 @@ void rewriteGetEnterOp(ArefGetEnterOp op, PatternRewriter &rewriter,
       getFullBarrier(rewriter, loc, arefVal, op.getStage(),
                      getPartitionWsTagIds(op), getStageCluster(op));
   insertWaitOp(rewriter, op, fullBarrier, op.getPhase(), op.getStage());
-  // Conservatively synchronize shared-memory consumers across CTAs for now,
-  // since aref completion barriers are per-CTA.
-  if (getModuleTwoCTAs(op) && llvm::any_of(op.getBuffers(), [](Value buffer) {
-        return isa<SharedMemorySpaceAttr>(
-            cast<MemDescType>(buffer.getType()).getMemorySpace());
-      })) {
-    auto barrier = ClusterBarrierOp::create(rewriter, loc);
-    assignStageCluster(barrier, getPartitionWsTagIds(op), getStageCluster(op),
-                       rewriter);
-  }
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter,
                            getPartitionWsTagIds(op), getStageCluster(op));
   assert(views.size() == op.getBuffers().size());

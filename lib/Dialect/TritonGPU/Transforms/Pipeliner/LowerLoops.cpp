@@ -1063,31 +1063,35 @@ scf::ForOp pipelineTwoCTATmemLoads(scf::ForOp forOp, CoarseSchedule &schedule,
 
   auto waitCluster =
       schedule.clusters.newBefore(schedule.splitClusterBefore(mma, forOp));
+  auto readStage = schedule[loadOrParent];
   OpBuilderForStage builder(load.getLoc(), loadOrParent, schedule);
   Value barrier = triton::createSingleBufferView(builder, barriers, index);
   Value ringSize = arith::ConstantIntOp::create(builder, numBuffers, 32);
-  Value didRead = arith::ConstantIntOp::create(builder, 1, 1);
-  if (auto ifOp = dyn_cast<scf::IfOp>(loadOrParent)) {
-    didRead = ifOp.getCondition();
-    if (readBlock == ifOp.elseBlock())
-      didRead = arith::XOrIOp::create(
-          builder, didRead, arith::ConstantIntOp::create(builder, 1, 1));
-  }
+  Value vFalse = arith::ConstantIntOp::create(builder, 0, 1);
+  Value vTrue = arith::ConstantIntOp::create(builder, 1, 1);
 
   builder.setInsertionPoint(readBlock->getTerminator());
   ttng::ArriveBarrierOp::create(builder, barrier, 1);
-  auto yield = forOp.getBody()->getTerminator();
-  builder.setInsertionPoint(yield);
+  // Advance the ring only in iterations that read the accumulator.
   Value wrap;
   Value nextIndex = createIncrementModulo(builder, load.getLoc(), index,
                                           ringSize, zero, one, &wrap);
   Value toggled = arith::XOrIOp::create(builder, phase, one);
   Value nextPhase = arith::SelectOp::create(builder, wrap, toggled, phase);
-  nextIndex = arith::SelectOp::create(builder, didRead, nextIndex, index);
-  nextPhase = arith::SelectOp::create(builder, didRead, nextPhase, phase);
+  nextIndex = sinkValueRedefinition(rewriter, index, nextIndex, readBlock);
+  auto yield = forOp.getBody()->getTerminator();
   yield->setOperand(firstArg, nextIndex);
+  nextPhase = sinkValueRedefinition(rewriter, phase, nextPhase, load->getBlock());
   yield->setOperand(firstArg + 1, nextPhase);
+  Value didRead =
+      sinkValueRedefinition(rewriter, vFalse, vTrue, load->getBlock());
 
+  Operation *newLoadOrParent = forOp.getBody()->findAncestorOpInBlock(*load);
+  if (newLoadOrParent != loadOrParent) {
+    schedule.erase(loadOrParent);
+    schedule.insert(newLoadOrParent, readStage.first, readStage.second);
+  }
+  builder.setInsertionPoint(yield);
   builder.setStageCluster({schedule[mma].first + numBuffers, waitCluster});
   ttng::WaitBarrierOp::create(builder, barrier, phase, didRead);
   return forOp;

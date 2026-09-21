@@ -2025,19 +2025,20 @@ module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 4 : i32, "ttg.num-wa
   // CHECK: ttng.tc_gen5_mma {{.*}}loop.cluster = 2 : i32, loop.stage = 2 : i32{{.*}}two_ctas
   // CHECK: %[[READ:.*]] = arith.cmpi eq,
   // CHECK: %[[READ_BARRIER:.*]] = ttg.memdesc_index {{.*}}[%[[INDEX:[a-zA-Z0-9_]+]]]
-  // CHECK: scf.if %[[READ]]
+  // CHECK: %[[READ_STATE:.*]]:2 = scf.if %[[READ]]
   // CHECK: ttng.tmem_load
   // CHECK-NEXT: "use"
   // CHECK-NEXT: ttng.arrive_barrier %[[READ_BARRIER]], 1
-  // CHECK: %[[INCREMENT:.*]] = arith.addi %[[INDEX]],
+  // CHECK-NEXT: %[[INCREMENT:.*]] = arith.addi %[[INDEX]],
   // CHECK-NEXT: %[[WRAP:.*]] = arith.cmpi sge, %[[INCREMENT]],
   // CHECK-NEXT: %[[NEXT_INDEX:.*]] = arith.select %[[WRAP]],
   // CHECK: %[[TOGGLED:.*]] = arith.xori %[[PHASE:[a-zA-Z0-9_]+]],
   // CHECK: %[[NEXT_PHASE:.*]] = arith.select {{.*}}, %[[TOGGLED]], %[[PHASE]]
-  // CHECK: %[[INDEX_OUT:.*]] = arith.select %[[READ]], %[[NEXT_INDEX]], %[[INDEX]]
-  // CHECK: %[[PHASE_OUT:.*]] = arith.select %[[READ]], %[[NEXT_PHASE]], %[[PHASE]]
+  // CHECK-NEXT: scf.yield %[[NEXT_INDEX]], %[[NEXT_PHASE]]
+  // CHECK-NEXT: } else {
+  // CHECK-NEXT: scf.yield %[[INDEX]], %[[PHASE]]
   // CHECK: ttng.wait_barrier %[[READ_BARRIER]], %[[PHASE]], %[[READ]] {loop.cluster = 1 : i32, loop.stage = 4 : i32}
-  // CHECK: scf.yield {{.*}}, %[[INDEX_OUT]], %[[PHASE_OUT]],
+  // CHECK: scf.yield {{.*}}, %[[READ_STATE]]#0, %[[READ_STATE]]#1,
   // CHECK: tt.scheduled_max_stage = 4
   tt.func @two_cta_accumulator_read_release(%a: !tt.tensordesc<512x64xf16, #sharedA>, %b: !tt.tensordesc<64x128xf16, #sharedB>, %n: i32) {
     %true = arith.constant true
@@ -2070,14 +2071,20 @@ module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 4 : i32, "ttg.num-wa
   // CHECK: %[[SKIP:.*]] = arith.cmpi eq, %[[ODD:[a-zA-Z0-9_]+]],
   // CHECK: %[[ELSE_BARRIER:.*]] = ttg.memdesc_index {{.*}}[%[[ELSE_INDEX:[a-zA-Z0-9_]+]]]
   // CHECK: %[[DID_READ:.*]] = arith.cmpi ne, %[[ODD]],
-  // CHECK: scf.if %[[SKIP]]
-  // CHECK: } else {
+  // CHECK: %[[ELSE_STATE:.*]]:2 = scf.if %[[SKIP]]
+  // CHECK-NEXT: scf.yield %[[ELSE_INDEX]], %[[ELSE_PHASE:[a-zA-Z0-9_]+]]
+  // CHECK-NEXT: } else {
   // CHECK: ttng.tmem_load
   // CHECK-NEXT: "use"
   // CHECK-NEXT: ttng.arrive_barrier %[[ELSE_BARRIER]], 1
-  // CHECK: arith.select %[[DID_READ]], {{.*}}, %[[ELSE_INDEX]]
-  // CHECK: arith.select %[[DID_READ]], {{.*}}, %[[ELSE_PHASE:[a-zA-Z0-9_]+]]
+  // CHECK-NEXT: %[[ELSE_INCREMENT:.*]] = arith.addi %[[ELSE_INDEX]],
+  // CHECK-NEXT: %[[ELSE_WRAP:.*]] = arith.cmpi sge, %[[ELSE_INCREMENT]],
+  // CHECK-NEXT: %[[ELSE_NEXT_INDEX:.*]] = arith.select %[[ELSE_WRAP]],
+  // CHECK-NEXT: %[[ELSE_TOGGLED:.*]] = arith.xori %[[ELSE_PHASE]],
+  // CHECK-NEXT: %[[ELSE_NEXT_PHASE:.*]] = arith.select %[[ELSE_WRAP]], %[[ELSE_TOGGLED]], %[[ELSE_PHASE]]
+  // CHECK-NEXT: scf.yield %[[ELSE_NEXT_INDEX]], %[[ELSE_NEXT_PHASE]]
   // CHECK: ttng.wait_barrier %[[ELSE_BARRIER]], %[[ELSE_PHASE]], %[[DID_READ]]
+  // CHECK: scf.yield {{.*}}, %[[ELSE_STATE]]#0, %[[ELSE_STATE]]#1,
   tt.func @two_cta_accumulator_else_read_release(%a: !tt.tensordesc<512x64xf16, #sharedA>, %b: !tt.tensordesc<64x128xf16, #sharedB>, %n: i32) {
     %true = arith.constant true
     %false = arith.constant false
