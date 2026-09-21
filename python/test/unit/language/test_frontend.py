@@ -58,6 +58,16 @@ def test_fp16_bf16_cast(scalar, src_dtype, dst_dtype):
     run_filecheck_test(kernel, args=(MockTensor(src_dtype), scalar, dst_dtype))
 
 
+def test_store_int_to_bool():
+
+    @triton.jit
+    def kernel(output_ptr, value):
+        # CHECK: arith.cmpi ne, %arg1, %c0_i32 : i32
+        tl.store(output_ptr, value)
+
+    run_filecheck_test(kernel, args=(MockTensor(tl.int1), 256))
+
+
 @pytest.mark.parametrize("dtype",
                          [tl.float16, tl.bfloat16, tl.float32, tl.float64, tl.float8e4nv, tl.float8e5, tl.float8e4b15],
                          ids=str)
@@ -527,6 +537,18 @@ def test_named_expr():
     anchor(x)
     # CHECK-NEXT: call @{{.*}}anchor{{.*}}(%c0_i32)
     anchor(y)
+
+
+@pytest.mark.parametrize("value", [[[1, 2], [3, 4]], ((1, 2), (3, 4)), ([1, 2], (3, 4))])
+def test_nested_constexpr_tuple_comparison(value):
+
+    @triton.jit
+    def kernel(value: tl.constexpr):
+        tl.static_assert([[1, 2], [3, 4]] == value)
+        tl.static_assert(value == [[1, 2], [3, 4]])
+        tl.static_assert([[1, 2], [3, 5]] != value)
+
+    run_parser(kernel, args=(value, ))
 
 
 def test_tuple_assignment_respects_prior_constexpr_annotation():

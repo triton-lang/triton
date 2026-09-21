@@ -3,6 +3,7 @@
 #include "NVGPUToLLVM/Passes.h"
 #include "TritonNVIDIAGPUToLLVM/Passes.h"
 #include "cublas_instance.h"
+#include "lib/TritonNVIDIAGPUToLLVM/TargetInfo.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "nvidia/hopper/include/Transforms/Passes.h"
@@ -298,6 +299,7 @@ void checkMatmulConstraints(const std::string &A_dtype,
 } // namespace
 
 void init_triton_nvidia(py::module_ &m) {
+  mlir::triton::NVIDIA::registerTargetInfo();
   auto passes = m.def_submodule("passes");
   auto nvws_m = passes.def_submodule("nvws");
   init_triton_nvidia_passes_nvws(nvws_m);

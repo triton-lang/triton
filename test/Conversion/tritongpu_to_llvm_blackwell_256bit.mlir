@@ -10,10 +10,10 @@
 #blocked_8xf32 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // BW256-LABEL: global_load_v8_b32
-  // BW256: llvm.load {{.*}} {alignment = 32 : i64} : !llvm.ptr<1> -> vector<8xf32>
+  // BW256: ld.global.v8.b32
   // PRE_BW-LABEL: global_load_v8_b32
-  // PRE_BW-NOT: vector<8xf32>
-  // PRE_BW-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<4xf32>
+  // PRE_BW-NOT: ld.global.v8.b32
+  // PRE_BW: ld.global.v4.b32
   tt.func @global_load_v8_b32(%arg0: !tt.ptr<f32> {tt.divisibility = 32 : i32}) {
     %c256_i32 = arith.constant 256 : i32
     %0 = tt.get_program_id x : i32
@@ -34,10 +34,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 #blocked_8xf32 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // BW256-LABEL: global_store_v8_b32
-  // BW256: llvm.store {{.*}} {alignment = 32 : i64} : vector<8xf32>, !llvm.ptr<1>
+  // BW256: st.global.v8.b32
   // PRE_BW-LABEL: global_store_v8_b32
-  // PRE_BW-NOT: vector<8xf32>
-  // PRE_BW-COUNT-2: llvm.store {{.*}} {alignment = 16 : i64} : vector<4xf32>, !llvm.ptr<1>
+  // PRE_BW-NOT: st.global.v8.b32
+  // PRE_BW: st.global.v4.b32
   tt.func @global_store_v8_b32(%arg0: !tt.ptr<f32> {tt.divisibility = 32 : i32}) {
     %c256_i32 = arith.constant 256 : i32
     %cst = arith.constant dense<1.0> : tensor<256xf32, #blocked_8xf32>
@@ -59,10 +59,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 #blocked_4xf64 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // BW256-LABEL: global_load_v4_b64
-  // BW256: llvm.load {{.*}} {alignment = 32 : i64} : !llvm.ptr<1> -> vector<4xf64>
+  // BW256: ld.global.v4.b64
   // PRE_BW-LABEL: global_load_v4_b64
-  // PRE_BW-NOT: vector<4xf64>
-  // PRE_BW-COUNT-2: llvm.load {{.*}} {alignment = 16 : i64} : !llvm.ptr<1> -> vector<2xf64>
+  // PRE_BW-NOT: ld.global.v4.b64
+  // PRE_BW: ld.global.v2.b64
   tt.func @global_load_v4_b64(%arg0: !tt.ptr<f64> {tt.divisibility = 32 : i32}) {
     %c128_i32 = arith.constant 128 : i32
     %0 = tt.get_program_id x : i32

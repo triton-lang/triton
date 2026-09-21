@@ -34,6 +34,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
 // -----
 
+// CHECK-LABEL: @masked_store_barrier_workaround_is_nvidia_only
+// CHECK: tt.store %{{[^,]+}}, %{{[^,]+}}, %{{[^ ]+}} : !tt.ptr<i32>
+// CHECK-NEXT: tt.return
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 0 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
+  tt.func public @masked_store_barrier_workaround_is_nvidia_only(%ptr: !tt.ptr<i32>, %value: i32, %mask: i1) {
+    tt.store %ptr, %value, %mask : !tt.ptr<i32>
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.swizzled_shared<{vec = 4, perPhase = 4, maxPhase = 4, order = [1, 0]}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -1378,9 +1390,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK: ttg.local_dealloc
     ttg.local_dealloc %barrier
         : !ttg.memdesc<1xi64, #amd_convert_barrier, #ttg.shared_memory, mutable>
-    // Operation-local scratch does not update memory or barrier state.
-    // CHECK-NOT: tt.call @__triton_consan
-    // CHECK-NOT: tti.experimental_lock_acquire
+    // CHECK-NOT: tt.call @__triton_consan_verify_barrier_can_init
+    // CHECK: tt.call @__triton_consan_verify_write_visibility
+    // CHECK: tt.call @__triton_consan_verify_read_visibility
+    // CHECK: tt.call @__triton_consan_invalidate_barrier_storage
+    // CHECK: tt.call @__triton_consan_publish_write_visibility
     // CHECK: ttg.convert_layout
     %converted = ttg.convert_layout %value
         {allocation.offset = 0 : i32, allocation.size = 512 : i32}
@@ -1403,22 +1417,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return %old : i32
   }
 
-  // CHECK-LABEL: @amd_scalar_atomic_keeps_callee_scratch_checks
-  tt.func public @amd_scalar_atomic_keeps_callee_scratch_checks(
+  // CHECK-LABEL: @amd_scalar_atomic_scratch_stays_cta_local
+  tt.func public @amd_scalar_atomic_scratch_stays_cta_local(
       %ptr: !tt.ptr<i32>, %out: !tt.ptr<i32>) {
     %one = arith.constant 1 : i32
-    // Skip the sanitizer's initialization helpers and rendezvous.
-    // CHECK: amdg.cluster_barrier_arrive
-    // CHECK-NEXT: amdg.cluster_barrier_wait
-    // Inline atomic scratch is not instrumented.
-    // CHECK-NOT: tt.call @__triton_consan
-    // CHECK-NOT: tti.experimental_lock_acquire
-    // CHECK: tt.atomic_rmw
-    %old = tt.atomic_rmw add, relaxed, gpu, %ptr, %one
-        {allocation.offset = 0 : i32, allocation.size = 4 : i32}
-        : (!tt.ptr<i32>, i32) -> i32
-    tt.store %out, %old : !tt.ptr<i32>
-    // Retained callees still have a CTA-local frame summary.
+    // Skip cluster-state initialization and the unrelated default effect mask.
     // CHECK: tti.experimental_lock_acquire
     // CHECK-NOT: arith.cmpi eq
     // CHECK: tti.experimental_cluster_cta_id
@@ -1429,6 +1432,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[AMD_SCALAR_RECIPIENT]]
     // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[AMD_SCALAR_RECIPIENT]]
     // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}%[[AMD_SCALAR_RECIPIENT]]
+    // CHECK: tt.atomic_rmw
+    %old = tt.atomic_rmw add, relaxed, gpu, %ptr, %one
+        {allocation.offset = 0 : i32, allocation.size = 4 : i32}
+        : (!tt.ptr<i32>, i32) -> i32
+    tt.store %out, %old : !tt.ptr<i32>
     // CHECK: tt.call @amd_scalar_atomic_callee
     %callee = tt.call @amd_scalar_atomic_callee(%ptr)
         {allocation.offset = 0 : i32, allocation.size = 4 : i32}

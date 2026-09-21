@@ -136,6 +136,77 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: @atomic_rmw_scalar_single_wave
+  tt.func private @atomic_rmw_scalar_single_wave(%ptr: !tt.ptr<f32>, %val: f32, %mask: i1) -> f32 {
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON: llvm.atomicrmw fadd
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON: rocdl.ds_bpermute
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON: llvm.return
+    %old = tt.atomic_rmw fadd, relaxed, gpu, %ptr, %val, %mask : (!tt.ptr<f32>, f32, i1) -> f32
+    tt.return %old : f32
+  }
+
+  // COMMON-LABEL: @atomic_cas_i64_single_wave
+  tt.func private @atomic_cas_i64_single_wave(%ptr: !tt.ptr<i64>, %cmp: i64, %val: i64) -> i64 {
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON: llvm.cmpxchg
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON-COUNT-2: rocdl.ds_bpermute
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON: llvm.return
+    %old = tt.atomic_cas relaxed, gpu, %ptr, %cmp, %val : (!tt.ptr<i64>, i64, i64) -> i64
+    tt.return %old : i64
+  }
+
+  // COMMON-LABEL: @atomic_acquire_scalar_single_wave
+  tt.func private @atomic_acquire_scalar_single_wave(%ptr: !tt.ptr<i32>, %val: i32) -> i32 {
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON: llvm.atomicrmw add {{.*}} acquire
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON: rocdl.ds_bpermute
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON: rocdl.s.barrier
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON: llvm.return
+    %old = tt.atomic_rmw add, acquire, gpu, %ptr, %val : (!tt.ptr<i32>, i32) -> i32
+    tt.return %old : i32
+  }
+}
+
+// -----
+
+#laneBroadcast = #ttg.linear<{register = [], lane = [[1], [2], [4], [0], [0], [0]], warp = [[8], [16]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: @atomic_rmw_lane_broadcast
+  tt.func private @atomic_rmw_lane_broadcast(%ptr: tensor<32x!tt.ptr<i32>, #laneBroadcast>, %val: tensor<32xi32, #laneBroadcast>) -> tensor<32xi32, #laneBroadcast> {
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON: llvm.atomicrmw add
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON: rocdl.ds_bpermute
+    // COMMON-NOT: llvm.{{load|store}}
+    // COMMON-NOT: rocdl.s.barrier
+    // COMMON: llvm.return
+    %old = tt.atomic_rmw add, relaxed, gpu, %ptr, %val : (tensor<32x!tt.ptr<i32>, #laneBroadcast>, tensor<32xi32, #laneBroadcast>) -> tensor<32xi32, #laneBroadcast>
+    tt.return %old : tensor<32xi32, #laneBroadcast>
+  }
+}
+
+// -----
+
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: atomic_add_f32
@@ -1047,5 +1118,82 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
   tt.func private @callee_zero_scratch() attributes {noinline = true} {
     tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 2, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: @shared_memory_pointers
+  tt.func @shared_memory_pointers(%ptrs: tensor<512x!tt.ptr<i32>, #blocked>, %out: tensor<512x!tt.ptr<i32>, #blocked>) {
+    %offsets = tt.make_range {start = 0 : i32, end = 512 : i32} : tensor<512xi32, #blocked>
+    %half = arith.constant dense<256> : tensor<512xi32, #blocked>
+    %indices = arith.xori %offsets, %half : tensor<512xi32, #blocked>
+    // COMMON: llvm.ptrtoint
+    %alloc = ttg.local_alloc %ptrs : (tensor<512x!tt.ptr<i32>, #blocked>) -> !ttg.memdesc<512x!tt.ptr<i32>, #shared, #smem, mutable>
+    // COMMON: llvm.store {{.*}} : vector<2xi64>, !llvm.ptr<3>
+    // COMMON: llvm.load {{.*}} : !llvm.ptr<3> -> vector<2xi64>
+    // COMMON: llvm.inttoptr {{.*}} : vector<2xi64> to vector<2x!llvm.ptr<1>>
+    %loaded = ttg.local_load %alloc : !ttg.memdesc<512x!tt.ptr<i32>, #shared, #smem, mutable> -> tensor<512x!tt.ptr<i32>, #blocked>
+    %values = tt.load %loaded : tensor<512x!tt.ptr<i32>, #blocked>
+    ttg.local_store %loaded, %alloc : tensor<512x!tt.ptr<i32>, #blocked> -> !ttg.memdesc<512x!tt.ptr<i32>, #shared, #smem, mutable>
+    // COMMON: llvm.store {{.*}} : vector<2xi64>, !llvm.ptr<3>
+    // COMMON: llvm.load {{.*}} : !llvm.ptr<3> -> i64
+    // COMMON: llvm.inttoptr {{.*}} : i64 to !llvm.ptr<1>
+    %gathered = ttg.local_gather %alloc[%indices] {axis = 0 : i32} : !ttg.memdesc<512x!tt.ptr<i32>, #shared, #smem, mutable>, tensor<512xi32, #blocked> -> tensor<512x!tt.ptr<i32>, #blocked>
+    %other = tt.load %gathered : tensor<512x!tt.ptr<i32>, #blocked>
+    // COMMON: llvm.ptrtoint {{.*}} : !llvm.ptr<1> to i64
+    // COMMON: llvm.store {{.*}} : i64, !llvm.ptr<3>
+    ttg.local_scatter %alloc[%indices], %gathered {axis = 0 : i32} : !ttg.memdesc<512x!tt.ptr<i32>, #shared, #smem, mutable>, tensor<512xi32, #blocked>, tensor<512x!tt.ptr<i32>, #blocked>
+    %sum = arith.addi %values, %other : tensor<512xi32, #blocked>
+    tt.store %out, %sum : tensor<512x!tt.ptr<i32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#histInput = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [2], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: @histogram_masked_two_warps
+  tt.func private @histogram_masked_two_warps(%src: tensor<128xi32, #histInput>, %mask: tensor<128xi1, #histInput>) -> tensor<1xi32, #histInput> {
+    // COMMON: %[[PRED:.*]] = llvm.and %{{.*}}, %{{.*}} : i1
+    // COMMON: %[[BALLOT:.*]] = rocdl.ballot %[[PRED]]{{.*}}i64
+    // COMMON: %[[POPCOUNT:.*]] = {{.*}}ctpop{{.*}}%[[BALLOT]]{{.*}}i64
+    // COMMON: llvm.trunc %[[POPCOUNT]] : i64 to i32
+    // COMMON-NOT: llvm.atomicrmw
+    // COMMON: llvm.store {{.*}}!llvm.ptr<3>
+    // COMMON: rocdl.s.barrier
+    // COMMON-NOT: llvm.atomicrmw
+    // COMMON: llvm.load {{.*}}!llvm.ptr<3>
+    // COMMON: rocdl.update.dpp
+    // COMMON: llvm.add
+    // COMMON-NOT: llvm.atomicrmw
+    // COMMON: llvm.return
+    %hist = tt.histogram %src, %mask : tensor<128xi32, #histInput> -> tensor<1xi32, #histInput>
+    tt.return %hist : tensor<1xi32, #histInput>
+  }
+}
+
+// -----
+
+#histInput = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+#histResult = #ttg.linear<{register = [], lane = [[0], [0], [0], [0], [1], [0]], warp = [], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // COMMON-LABEL: @histogram_one_warp_nondefault_result
+  // COMMON-NOT: {{llvm.atomicrmw|rocdl.s.barrier|llvm.load|llvm.store}}
+  // COMMON: rocdl.ballot {{.*}}i64
+  // COMMON: ctpop
+  // COMMON: llvm.trunc {{.*}} : i64 to i32
+  // COMMON-NOT: {{llvm.atomicrmw|rocdl.s.barrier|llvm.load|llvm.store}}
+  // COMMON: llvm.select
+  // COMMON-NOT: {{llvm.atomicrmw|rocdl.s.barrier|llvm.load|llvm.store}}
+  // COMMON: llvm.return
+  tt.func private @histogram_one_warp_nondefault_result(%src: tensor<128xi32, #histInput>, %mask: tensor<128xi1, #histInput>) -> tensor<2xi32, #histResult> {
+    %hist = tt.histogram %src, %mask : tensor<128xi32, #histInput> -> tensor<2xi32, #histResult>
+    tt.return %hist : tensor<2xi32, #histResult>
   }
 }

@@ -464,15 +464,19 @@ def get_amd_codegen_package_info(helper_args: BuildHelperArgs):
     revision = amd_llvm_info["llvm_hash"][:8]
     build_number = amd_llvm_info["build_number"]
     name = f"amd-codegen-{revision}-{system_suffix}-{build_number}"
-    url = f"https://oaitriton.blob.core.windows.net/public/llvm-builds/{name}.tar.gz"
+    archive = DependencyArchive(
+        f"https://oaitriton.blob.core.windows.net/public/llvm-builds/{name}.tar.gz",
+        f"triton-llvm/{name}.tar.gz",
+        amd_llvm_info.get("sha256sum", {}).get(system_suffix),
+    )
     return Package(
         "amd",
         name,
-        url,
+        archive.url,
         "",
         "",
         "",
-        sha256sum=amd_llvm_info.get("sha256sum", {}).get(system_suffix),
+        sha256sum=archive.sha256sum,
     )
 
 
@@ -577,8 +581,8 @@ def download_codegen_llvm(backend: str, llvm_info: dict, helper_args: BuildHelpe
     if not os.path.isfile(llvm_config):
         if helper_args.offline_build:
             raise RuntimeError(f"Requested an offline build but {backend} bootstrap LLVM is missing from {llvm_path}")
-        url = f"https://oaitriton.blob.core.windows.net/public/llvm-builds/{name}.tar.gz"
-        _download_and_extract(url, package_root, name, helper_args.archives_path, checksum)
+        archive = get_llvm_archive(system_suffix, {**bootstrap, "llvm_hash": llvm_info["llvm_hash"]})
+        _download_and_extract(archive.url, package_root, name, helper_args.archives_path, archive.sha256sum)
     if not os.path.isfile(llvm_config):
         raise RuntimeError(f"Cannot find independently pinned {backend} LLVM configuration at {llvm_config}")
     return llvm_path

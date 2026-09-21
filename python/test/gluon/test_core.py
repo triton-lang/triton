@@ -237,6 +237,56 @@ def test_inline_asm_once_per_thread(warp_specialized, device):
     torch.testing.assert_close(out, torch.full_like(out, 3 * 128), atol=0, rtol=0)
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA PTX")
+@pytest.mark.parametrize("op", ["load", "store"])
+@pytest.mark.parametrize(
+    "dtype",
+    [torch.bool, torch.int8, torch.int16, torch.int32, torch.int64, torch.float16, torch.float32, torch.float64])
+@pytest.mark.parametrize("stride, offset, mask_group, vec", [(1, 0, 0, 16), (1, 0, 16, 16), (1, 0, 8, 8), (1, 0, 4, 4),
+                                                             (1, 0, 2, 2), (1, 0, 1, 1), (1, 1, 16, 1), (2, 0, 16, 1)])
+def test_atomic_load_store_vectorization(op, dtype, stride, offset, mask_group, vec, device):
+
+    @gluon.jit
+    def kernel(Src, Out, STRIDE: ttgl.constexpr, OFFSET: ttgl.constexpr, MASK_GROUP: ttgl.constexpr,
+               STORE: ttgl.constexpr):
+        x = ttgl.arange(0, 512, layout=ttgl.BlockedLayout([16], [32], [1], [0]))
+        if MASK_GROUP:
+            mask = x // MASK_GROUP % 2 == 0
+        else:
+            mask = None
+        if STORE:
+            values = ttgl.load(Src + x)
+            ttgl.atomic_store(Out + x * STRIDE + OFFSET, values, mask=mask, sem="release")
+        else:
+            values = ttgl.atomic_load(Src + x * STRIDE + OFFSET, mask=mask, sem="acquire")
+            ttgl.store(Out + x, values, mask=mask)
+
+    src = torch.arange(1026, device=device)
+    src = (src % 2 if dtype == torch.bool else (src % 127 - 63) + 0.25).to(dtype)
+    out = torch.full((1026 if op == "store" else 512, ), True if dtype == torch.bool else -1, dtype=dtype,
+                     device=device)
+    x = torch.arange(512, device=device)
+    mask = x // mask_group % 2 == 0 if mask_group else torch.ones_like(x, dtype=torch.bool)
+    if op == "store":
+        expected = out.clone()
+        expected[x[mask] * stride + offset] = src[x[mask]]
+    else:
+        expected = torch.where(mask, src[x * stride + offset], out)
+
+    compiled = kernel[(1, )](src, out, stride, offset, mask_group, op == "store", num_warps=1)
+
+    assert torch.equal(out, expected)
+    if dtype == torch.bool:
+        assert torch.all(out.view(torch.uint8) <= 1)
+    bit_width = dtype.itemsize * 8
+    vec = min(vec, 128 // bit_width)
+    word_bits = max(bit_width, min(32, vec * bit_width))
+    words = vec * bit_width // word_bits
+    suffix = f".v{words}" if words > 1 else ""
+    opcode = "st" if op == "store" else "ld"
+    assert f"{opcode}.relaxed.gpu.global{suffix}.b{word_bits}" in compiled.asm["ptx"]
+
+
 @pytest.mark.parametrize("block_size", [1, 16, 128, 512])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("timeout", [None, 0])
@@ -1096,7 +1146,7 @@ def test_tcgen05_mma_scaled_direct_multicast_barrier():
 
 @gluon.jit
 def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr,
-                               COPY_VEC: ttgl.constexpr = 4):
+                               COPY_VEC: ttgl.constexpr = 4, CACHE_POLICY: ttgl.constexpr = None):
     block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, COPY_VEC], [1, 32], [4, 1], [1, 0])
     initial = ttgl.full([XBLOCK, YBLOCK], 7, inp.dtype.element_ty, block_layout)
     smem = ttgl.allocate_shared_memory(inp.dtype.element_ty, [XBLOCK, YBLOCK],
@@ -1108,6 +1158,7 @@ def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK:
         smem,
         inp + xindex * YBLOCK + yindex,
         mask,
+        cache_policy=CACHE_POLICY,
     )
     mbar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(mbar, count=1)
@@ -1120,14 +1171,30 @@ def async_copy_mbarrier_kernel(out, inp, xnumel, XBLOCK: ttgl.constexpr, YBLOCK:
 
 
 @pytest.mark.parametrize("copy_vec", [1, 2, 4])
+@pytest.mark.parametrize("cache_policy", [
+    None,
+    ttgl.CachePolicy(eviction_policy="evict_first"),
+    ttgl.CachePolicy(eviction_policy="evict_last"),
+    ttgl.nvidia.ampere.CachePolicy(
+        cache_modifier=".ca",
+        l2=ttgl.nvidia.ampere.FractionalEvictionPolicy("evict_last", 0.5, "evict_first"),
+        l2_prefetch_size=128,
+    ),
+], ids=["default", "evict_first", "evict_last", "fractional"])
 @pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere")
-def test_async_copy_mbarrier(copy_vec):
+def test_async_copy_mbarrier(copy_vec, cache_policy):
     tensor_opts = dict(dtype=torch.float, device="cuda")
     out = torch.empty((32, 32), **tensor_opts)
     inp = torch.randn((20, 32), **tensor_opts)
-    async_copy_mbarrier_kernel[(1, )](out, inp, inp.shape[0], XBLOCK=32, YBLOCK=32, COPY_VEC=copy_vec)
+    kernel = async_copy_mbarrier_kernel[(1, )](out, inp, inp.shape[0], XBLOCK=32, YBLOCK=32, COPY_VEC=copy_vec,
+                                               CACHE_POLICY=cache_policy)
     torch.testing.assert_close(out[:20], inp)
     torch.testing.assert_close(out[20:], torch.zeros((12, 32), **tensor_opts))
+    ptx = kernel.asm["ptx"]
+    version = tuple(map(int, re.search(r"\.version (\d+)\.(\d+)", ptx).groups()))
+    expect_policy = cache_policy is not None and version >= (9, 4)
+    assert ("createpolicy.fractional" in ptx) == expect_policy
+    assert ("L2::cache_hint" in ptx) == expect_policy
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
@@ -2157,12 +2224,30 @@ def test_amd_wmma(M, N, K, in_dtype):
     torch.testing.assert_close(ref, triton_output)
 
 
+def _check_cd_regclass_pins(llir, cd_regclass):
+    """Check that the LLVM IR pins MFMA accumulators to `cd_regclass`, or has no pins when it is None."""
+    if cd_regclass is None:
+        assert '"=a,0"' not in llir and '"=v,0"' not in llir
+    else:
+        assert f'"={cd_regclass},0"' in llir
+
+
 @pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 @pytest.mark.parametrize("M, N, K", [(32, 32, 16), (16, 16, 32)])
 @pytest.mark.parametrize("in_dtype", ['float16', 'bfloat16'])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("cdna_version", [3, 4])
 def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version):
+    _run_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version, cd_regclass=None)
+
+
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
+@pytest.mark.parametrize("cd_regclass", ["a", "v"])
+def test_amd_mfma_cd_regclass(cd_regclass):
+    _run_amd_mfma(32, 32, 16, 'float16', 4, 3 if is_hip_cdna3() else 4, cd_regclass)
+
+
+def _run_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version, cd_regclass):
     if is_hip_cdna3() and cdna_version != 3:
         pytest.skip("On CDNA3 target, skip if mfma version is not 3")
 
@@ -2175,7 +2260,8 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version):
                stride_bk, stride_bn,  #
                stride_cm, stride_cn,  #
                BLOCK_SIZE_M: ttgl.constexpr, BLOCK_SIZE_N: ttgl.constexpr, BLOCK_SIZE_K: ttgl.constexpr,
-               blocked: ttgl.constexpr, k_width: ttgl.constexpr, mfma_layout: ttgl.constexpr):
+               blocked: ttgl.constexpr, k_width: ttgl.constexpr, mfma_layout: ttgl.constexpr,
+               cd_regclass: ttgl.constexpr):
         dot_a_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=k_width)
         dot_b_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=k_width)
 
@@ -2192,7 +2278,7 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version):
         a1 = ttgl.convert_layout(a, layout=dot_a_layout)
         b1 = ttgl.convert_layout(b, layout=dot_b_layout)
         acc = ttgl.zeros([BLOCK_SIZE_M, BLOCK_SIZE_N], ttgl.float32, mfma_layout)
-        c = ttgl.amd.cdna3.mfma(a1, b1, acc)
+        c = ttgl.amd.cdna3.mfma(a1, b1, acc, cd_regclass=cd_regclass)
         c = ttgl.convert_layout(c, layout=blocked)
         c = c.to(a_ptr.dtype.element_ty)
 
@@ -2213,32 +2299,34 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version):
     mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=cdna_version, instr_shape=[nonkdim, nonkdim, kdim],
                                                          transposed=True, warps_per_cta=[num_warps, 1])
 
-    kernel[1, 1](
+    compiled = kernel[1, 1](
         a, b, c,  #
         a.stride(0), a.stride(1),  #
         b.stride(0), b.stride(1),  #
         c.stride(0), c.stride(1),  #
         BLOCK_SIZE_M=M, BLOCK_SIZE_N=N, BLOCK_SIZE_K=K,  #
-        blocked=blocked, k_width=k_width, mfma_layout=mfma_layout,  #
+        blocked=blocked, k_width=k_width, mfma_layout=mfma_layout, cd_regclass=cd_regclass,  #
         num_warps=num_warps)
 
     ref = torch.matmul(a, b)
     triton_output = c
     torch.testing.assert_close(ref, triton_output)
+    _check_cd_regclass_pins(compiled.asm["llir"], cd_regclass)
 
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
 @pytest.mark.parametrize("M, N, K", [(32, 32, 128)])
-@pytest.mark.parametrize("a_type, b_type", [(a_type, b_type)
-                                            for a_type in ["e2m1", "e4m3", "e5m2"]
-                                            for b_type in ["e2m1", "e4m3", "e5m2"]])
+@pytest.mark.parametrize("a_type, b_type, cd_regclass",
+                         [(a_type, b_type, None)
+                          for a_type in ["e2m1", "e4m3", "e5m2"]
+                          for b_type in ["e2m1", "e4m3", "e5m2"]] + [("e2m1", "e2m1", "a"), ("e2m1", "e2m1", "v")])
 @pytest.mark.parametrize("has_scale", [True, False])
-def test_amd_mfma_scaled(M, N, K, a_type, b_type, has_scale, device='cuda'):
+def test_amd_mfma_scaled(M, N, K, a_type, b_type, cd_regclass, has_scale, device='cuda'):
 
     @gluon.jit
     def kernel(out_ptr, a_ptr, b_ptr, a_scale_ptr, b_scale_ptr,  #
                M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr,  #
-               a_type: tl.constexpr, b_type: tl.constexpr):
+               a_type: tl.constexpr, b_type: tl.constexpr, cd_regclass: tl.constexpr):
         DIV_FACTOR_A: tl.constexpr = 2 if a_type == "e2m1" else 1
         DIV_FACTOR_B: tl.constexpr = 2 if b_type == "e2m1" else 1
         K_A: tl.constexpr = K // DIV_FACTOR_A
@@ -2282,7 +2370,7 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, has_scale, device='cuda'):
             b_scale = ttgl.amd.cdna4.buffer_load(b_scale_ptr, b_scale_offs_n * (K // 32) + b_scale_offs_k)
 
         zero = ttgl.zeros([M, N], dtype=ttgl.float32, layout=mfma_layout)
-        c = ttgl.amd.cdna4.mfma_scaled(a, a_scale, a_type, b, b_scale, b_type, zero)
+        c = ttgl.amd.cdna4.mfma_scaled(a, a_scale, a_type, b, b_scale, b_type, zero, cd_regclass=cd_regclass)
         c = c.to(out_ptr.dtype.element_ty)
 
         out_offs_m = ttgl.arange(0, M)[:, None]
@@ -2320,16 +2408,17 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, has_scale, device='cuda'):
         a_scale, a_scale_ref = _create_mxfp_scale(0, M, K)
         b_scale, b_scale_ref = _create_mxfp_scale(1, N, K)
         out = torch.empty((M, N), dtype=torch.float32, device=device)
-        compiled = kernel[(1, )](out, a, b, a_scale, b_scale, M, N, K, a_type, b_type, num_warps=4)
+        compiled = kernel[(1, )](out, a, b, a_scale, b_scale, M, N, K, a_type, b_type, cd_regclass, num_warps=4)
         out_ref = torch.matmul(a_ref * a_scale_ref, b_ref * b_scale_ref)
         torch.testing.assert_close(out, out_ref)
     else:
         out = torch.empty((M, N), dtype=torch.float32, device=device)
-        compiled = kernel[(1, )](out, a, b, None, None, M, N, K, a_type, b_type, num_warps=4)
+        compiled = kernel[(1, )](out, a, b, None, None, M, N, K, a_type, b_type, cd_regclass, num_warps=4)
         out_ref = torch.matmul(a_ref, b_ref)
         torch.testing.assert_close(out, out_ref)
 
     assert 'v_mfma_scale_f32_16x16x128_f8f6f4' in compiled.asm['amdgcn']
+    _check_cd_regclass_pins(compiled.asm['llir'], cd_regclass)
 
 
 def test_math_fast_expf():
@@ -4025,6 +4114,45 @@ def test_shared_gather(N, M):
     )
 
     torch.testing.assert_close(output, expected)
+
+
+@pytest.mark.parametrize("write", ["local_alloc", "local_store", "local_scatter"])
+@pytest.mark.parametrize("read", ["local_load", "local_gather"])
+def test_shared_memory_pointers(write, read, device):
+
+    @gluon.jit
+    def kernel(src, reversed_idx, out, BLOCK: ttgl.constexpr, layout: ttgl.constexpr, WRITE: ttgl.constexpr,
+               READ: ttgl.constexpr):
+        offsets = ttgl.arange(0, BLOCK, layout=layout)
+        pointers = src + offsets
+        shared_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0])
+
+        if WRITE == "local_alloc":
+            smem = ttgl.allocate_shared_memory(pointers.dtype, [BLOCK], shared_layout, pointers)
+        elif WRITE == "local_store":
+            smem = ttgl.allocate_shared_memory(pointers.dtype, [BLOCK], shared_layout)
+            smem.store(pointers)
+        else:
+            smem = ttgl.allocate_shared_memory(pointers.dtype, [BLOCK], shared_layout)
+            smem.scatter(pointers, ttgl.load(reversed_idx + offsets), axis=0)
+
+        if READ == "local_load":
+            result = smem.load(layout)
+        else:
+            result = smem.gather(ttgl.load(reversed_idx + offsets), axis=0)
+
+        ttgl.store(out + offsets, ttgl.load(result))
+
+    block = 4 * THREADS_PER_WARP
+    layout = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[4], order=[0])
+    values = torch.arange(block, dtype=torch.int32, device=device)
+    output = torch.empty_like(values)
+    reversed_idx = torch.arange(block - 1, -1, -1, dtype=torch.int32, device=device)
+    kernel[(1, )](values, reversed_idx, output, block, layout, write, read, num_warps=4)
+
+    # Only one of gather/scatter reverses the input. Both cancels out.
+    expected = values.flip(0) if (write == "local_scatter") != (read == "local_gather") else values
+    assert torch.equal(output, expected)
 
 
 @gluon.jit
