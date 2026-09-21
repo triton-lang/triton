@@ -57,8 +57,9 @@ def get_llvm_flags(arch):
     """
     flags = []
     # LLVM has no per-function attribute for the AMDGPU register pressure
-    # trackers yet.
-    if arch in ["gfx942", "gfx950"]:
+    # trackers yet. Keep them disabled on gfx950: they make register
+    # allocation pathologically slow for large pointwise kernels.
+    if arch == "gfx942":
         flags.append("amdgpu-use-amdgpu-trackers")
     return flags
 
