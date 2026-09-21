@@ -2516,7 +2516,15 @@ def load_tensor_descriptor(desc: tensor_descriptor_base, offsets: Sequence[const
 @builtin
 def store_tensor_descriptor(desc: tensor_descriptor_base, offsets: Sequence[constexpr | tensor], value: tensor,
                             _semantic=None) -> tensor:
-    """Store a block of data to a tensor descriptor."""
+    """Store a block of data to a tensor descriptor.
+
+    .. warning::
+
+        On NVIDIA GPUs, TMA stores write only in whole 16-byte chunks. If the
+        innermost dimension's size in bytes is not a multiple of 16, a store may
+        overwrite padding beyond the tensor's shape up to the next 16-byte
+        boundary.
+    """
     return desc.store(offsets, value, _semantic=_semantic)
 
 
