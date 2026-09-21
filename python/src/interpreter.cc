@@ -833,7 +833,7 @@ void init_triton_interpreter(py::module_ &m) {
             MAKE_ATOMIC_RMW_OP(RMWOp::MIN, int32_t, int64_t)
             MAKE_ATOMIC_RMW_OP(RMWOp::UMIN, uint32_t, uint64_t)
             MAKE_ATOMIC_RMW_OP(RMWOp::XCHG, int32_t, uint32_t, int64_t,
-                               uint64_t)
+                               uint64_t, float, double)
           default:
             throw std::invalid_argument("Unsupported RMW operation");
           }

@@ -303,6 +303,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 #blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+    // Floating-point swaps exchange the integer bits: there is no f64 buffer swap instruction.
+    // CHECK-LABEL: buffer_atomic_rmw_xchg_f64
+    // CHECK: %[[BITS:.*]] = llvm.bitcast %{{.*}} : vector<1xf64> to i64
+    // CHECK: %[[OLD:.*]] = llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.swap"(%[[BITS]], {{.*}}) : (i64, !llvm.ptr<8>, i32, i32, i32) -> i64
+    // CHECK: llvm.bitcast %[[OLD]] : i64 to vector<1xf64>
+    tt.func public @buffer_atomic_rmw_xchg_f64(%arg0: !tt.ptr<f64> {tt.divisibility = 16 : i32}, %offsets : tensor<256xi32, #blocked0>{tt.divisibility=16:i32}, %values : tensor<256xf64, #blocked0>) -> tensor<256xf64, #blocked0> {
+        %ret = amdg.buffer_atomic_rmw exch, acq_rel, gpu, %values, %arg0[%offsets] : !tt.ptr<f64> -> tensor<256xf64, #blocked0>
+        tt.return %ret : tensor<256xf64, #blocked0>
+    }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+    // CHECK-LABEL: buffer_atomic_rmw_xchg_f32
+    // CHECK: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.swap"({{.*}}) : (i32, !llvm.ptr<8>, i32, i32, i32) -> i32
+    tt.func public @buffer_atomic_rmw_xchg_f32(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %offsets : tensor<256xi32, #blocked0>{tt.divisibility=16:i32}, %values : tensor<256xf32, #blocked0>) -> tensor<256xf32, #blocked0> {
+        %ret = amdg.buffer_atomic_rmw exch, acq_rel, gpu, %values, %arg0[%offsets] : !tt.ptr<f32> -> tensor<256xf32, #blocked0>
+        tt.return %ret : tensor<256xf32, #blocked0>
+    }
+}
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
     // CHECK-LABEL: buffer_atomic_rmw_fmax_f32
     // CHECK: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.fmax"({{.*}}) : (f32, !llvm.ptr<8>, i32, i32, i32) -> f32
     tt.func public @buffer_atomic_rmw_fmax_f32(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %offsets : tensor<256xi32, #blocked0>{tt.divisibility=16:i32}, %values : tensor<256xf32, #blocked0>) {
