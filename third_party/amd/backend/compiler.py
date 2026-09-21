@@ -499,6 +499,7 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_allocate_warp_groups(pm)
 
         if is_enabled(options, "fpsan") and is_fpsan_supported(options.arch):
+            passes.ttgpuir.add_verify_warp_if(pm, options.allow_flush_denorm)
             amd.passes.ttgpuir.add_fp_sanitizer(pm)
             passes.ttgpuir.add_fp_sanitizer(pm, options.fpsan_homomorphic_casts)
 

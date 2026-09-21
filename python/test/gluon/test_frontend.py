@@ -145,8 +145,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
-@pytest.mark.parametrize("bad",
-                         ["predicate", "effect", "loop", "layout", "noinline", "flush", "wrong_scale", "reduction"])
+@pytest.mark.parametrize(
+    "bad", ["predicate", "effect", "loop", "layout", "noinline", "flush", "wrong_scale", "reduction", "false_mask"])
 def test_warp_if_rejects_invalid_body(bad, capfd):
 
     @gluon.jit(noinline=True)
@@ -174,6 +174,8 @@ def test_warp_if_rejects_invalid_body(bad, capfd):
         x = ttgl.load(X + i)
         scale = ttgl.load(S + i)
         cond = scale < 1 if BAD == "predicate" else scale != 1
+        if BAD == "false_mask":
+            cond = ttgl.full((256, ), False, ttgl.int1, l)
         if BAD == "layout":
             cond = ttgl.convert_layout(cond, ttgl.BlockedLayout([2], [64], [4], [0]))
         if BAD == "noinline":
@@ -188,6 +190,7 @@ def test_warp_if_rejects_invalid_body(bad, capfd):
         triton.compile(source, target=HIP_TARGET_CDNA4, options={"allow_flush_denorm": bad == "flush"})
     diagnostic = capfd.readouterr().err
     expected = {
+        "false_mask": "cannot prove identity for false conditions",
         "predicate": "cannot prove identity for false conditions",
         "effect": "is not supported inside warp_if",
         "loop": "'scf.for' op is not supported inside warp_if",
@@ -219,12 +222,82 @@ def test_warp_if_auto_layout(target):
     assert "auto_encoding" not in compiled.asm["ttgir"]
 
 
-@pytest.mark.parametrize("target", [HIP_TARGET_CDNA4, BLACKWELL_TARGET])
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA5, BLACKWELL_TARGET])
 def test_warp_if_consan(target):
     source = gluon.GluonASTSource(_warp_if_codegen, {"X": "*fp32", "S": "*fp32", "Y": "*fp32", "W": "constexpr"},
                                   {"W": target.warp_size})
     compiled = triton.compile(source, target=target, options={"instrumentation_mode": "consan"})
     assert "ballot" in compiled.asm["llir"]
+
+
+def test_warp_if_gsan():
+    source = gluon.GluonASTSource(_warp_if_codegen, {"X": "*fp32", "S": "*fp32", "Y": "*fp32", "W": "constexpr"},
+                                  {"W": 32})
+    compiled = triton.compile(source, target=BLACKWELL_TARGET, options={"instrumentation_mode": "gsan"})
+    assert "ballot" in compiled.asm["llir"]
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA4, BLACKWELL_TARGET])
+def test_warp_if_fpsan(target):
+    source = gluon.GluonASTSource(_warp_if_codegen, {"X": "*fp32", "S": "*fp32", "Y": "*fp32", "W": "constexpr"},
+                                  {"W": target.warp_size})
+    compiled = triton.compile(source, target=target, options={"instrumentation_mode": "fpsan"})
+    assert "ttg.warp_if" not in compiled.asm["ttgir"]
+    assert "tti.experimental_fpsan" in compiled.asm["ttgir"]
+
+
+@pytest.mark.parametrize("bad, diagnostic", [
+    ("scalar_condition", "condition must be distributed, not scalar"),
+    ("integer_condition", "condition must be a boolean tensor"),
+    ("empty_values", "requires at least one tensor input"),
+    ("integer_values", "inputs must be distributed f32 or f64 tensors"),
+    ("half_values", "inputs must be distributed f32 or f64 tensors"),
+    ("args", "args must be a tuple"),
+    ("return_none", "body must return a tensor or tuple of tensors"),
+    ("return_type", "body must return tensors with the input types"),
+    ("return_count", "body must return tensors with the input types"),
+])
+def test_warp_if_frontend_errors(bad, diagnostic):
+
+    @gluon.jit
+    def body(x, scale, BAD: ttgl.constexpr):
+        if BAD == "return_none":
+            return
+        elif BAD == "return_type":
+            return x.to(ttgl.float16)
+        elif BAD == "return_count":
+            return x, x
+        else:
+            return x * scale
+
+    @gluon.jit
+    def kernel(X, S, Y, BAD: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [64], [4], [0])
+        i = ttgl.arange(0, 256, layout=layout)
+        x = ttgl.load(X + i)
+        scale = ttgl.load(S + i)
+        cond = scale != 1
+        if BAD == "scalar_condition":
+            cond = True
+        elif BAD == "integer_condition":
+            cond = cond.to(ttgl.int32)
+        if BAD == "empty_values":
+            values = ()
+        elif BAD == "integer_values":
+            values = x.to(ttgl.int32)
+        elif BAD == "half_values":
+            values = x.to(ttgl.float16)
+        else:
+            values = x
+        if BAD == "args":
+            y = ttgl.warp_if(cond, values, body, args=scale)
+        else:
+            y = ttgl.warp_if(cond, values, body, args=(scale, BAD))
+        ttgl.store(Y + i, y)
+
+    source = gluon.GluonASTSource(kernel, {"X": "*fp32", "S": "*fp32", "Y": "*fp32", "BAD": "constexpr"}, {"BAD": bad})
+    with pytest.raises(CompilationError, match=diagnostic):
+        triton.compile(source, target=HIP_TARGET_CDNA4)
 
 
 @gluon.constexpr_function

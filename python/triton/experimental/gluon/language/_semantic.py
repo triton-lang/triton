@@ -704,12 +704,17 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         _check(
             len(values) > 0 and all(isinstance(v, ttgl.tensor) for v in values),
             lambda: "warp_if requires at least one tensor input")
+        _check(
+            all(isinstance(v.type, ttgl.distributed_type) and v.dtype in (ttgl.float32, ttgl.float64) for v in values),
+            lambda: "warp_if inputs must be distributed f32 or f64 tensors")
         _check(isinstance(args, (tuple, ttgl.tuple)), lambda: "warp_if args must be a tuple")
         builder = self.builder
         insert_pt = builder.get_insertion_point()
         block = builder.new_block()
         builder.set_insertion_point_to_start(block)
         result = generator.call_JitFunction(fn, list(values) + list(args), kwargs={})
+        _check(isinstance(result, (ttgl.tensor, tuple, ttgl.tuple)),
+               lambda: "warp_if body must return a tensor or tuple of tensors")
         outputs = (result, ) if isinstance(result, ttgl.tensor) else tuple(result)
         _check(
             len(outputs) == len(values)

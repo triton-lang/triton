@@ -4031,6 +4031,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: llvm.func @warp_if_rescale
+  tt.func @warp_if_rescale(%x: tensor<256xf32, #blocked>, %scale: tensor<256xf32, #blocked>, %ptr: tensor<256x!tt.ptr<f32>, #blocked>) {
+    %one = arith.constant dense<1.0> : tensor<256xf32, #blocked>
+    %mask = arith.cmpf une, %scale, %one : tensor<256xf32, #blocked>
+    // CHECK: llvm.or
+    // CHECK: nvvm.vote.sync ballot
+    // CHECK: llvm.icmp "ne"
+    // CHECK: llvm.cond_br
+    // CHECK: llvm.fmul
+    // CHECK: llvm.br
+    // CHECK: ^bb{{[0-9]+}}(%{{.*}}: !llvm.struct<(f32, f32)>):
+    %y = ttg.warp_if %mask(%x) {
+      %product = arith.mulf %x, %scale : tensor<256xf32, #blocked>
+      ttg.warp_if_yield %product : tensor<256xf32, #blocked>
+    } : (tensor<256xi1, #blocked>, tensor<256xf32, #blocked>) -> tensor<256xf32, #blocked>
+    tt.store %ptr, %y : tensor<256x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 //--- masked-store-barrier.mlir
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 0 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {

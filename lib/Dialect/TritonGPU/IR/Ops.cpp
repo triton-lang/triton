@@ -1702,6 +1702,12 @@ LogicalResult WarpIfOp::verifyBody(bool allowFlushDenorm) {
                             "straight-line register rescaling without effects");
   }
 
+  // Comparisons against a constant scale may fold before this validation.
+  // An all-true mask has no identity obligations, but still requires the
+  // register-only body and compatible layouts checked above.
+  if (matchPattern(getCondition(), m_One()))
+    return success();
+
   Value scale;
   auto cmp = getCondition().getDefiningOp<arith::CmpFOp>();
   // UNE makes NaNs active. ONE would incorrectly classify a NaN scale as an

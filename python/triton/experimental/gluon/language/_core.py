@@ -780,6 +780,33 @@ def warp_if(condition, values, fn, args=(), _semantic=None, _generator=None):
     Lowering emits a warp vote and branches with result phis. Subsequent target
     optimization may if-convert small bodies; this is an execution optimization
     request, not a guarantee of a particular machine instruction sequence.
+    FPSan validates the original body, then evaluates it unconditionally before
+    instrumentation. Proton scopes may surround this operation, but may not
+    appear inside its body.
+
+    Layouts determine which conditions each warp owns and therefore which warps
+    can skip. They do not change the logical result: a skipped warp owns only
+    false conditions, for which the body is an identity. A participating warp
+    computes all its elements, including any identity elements. The condition
+    can describe rows, columns, or individual elements; it is not a row mask
+    specifically. When all conditions are statically true, any body made of the
+    supported register operations is allowed.
+
+    Example:
+        Rescale an attention accumulator and its row normalizer. Here ``alpha``
+        has ``SliceLayout(1, acc.type.layout)`` and ``total`` has the same shape
+        and layout as ``alpha``. The caller computes ``alpha`` so that a row
+        needing no rescaling has exactly the value one::
+
+            @gluon.jit
+            def rescale(acc, total, alpha):
+                return acc * alpha[:, None], total * alpha
+
+            acc, total = gl.warp_if(alpha != 1, (acc, total), rescale,
+                                    args=(alpha,))
+
+        Loads, stores and reductions stay outside ``rescale``. A warp skips
+        both multiplications only when every alpha value it owns is one.
 
     Args:
         condition: Boolean distributed tensor describing elements needing work.

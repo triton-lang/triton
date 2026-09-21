@@ -133,6 +133,50 @@ def test_warp_if_nan_scale(device):
     torch.testing.assert_close(out, x * scale, atol=0, rtol=0, equal_nan=True)
 
 
+@pytest.mark.parametrize("factor", [1.0, 2.0, -0.5])
+def test_warp_if_constant_scale(factor, device):
+
+    @gluon.jit
+    def kernel(X, Y, W: ttgl.constexpr, FACTOR: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [W], [4], [0])
+        i = ttgl.arange(0, 256, layout=layout)
+        x = ttgl.load(X + i)
+        scale = ttgl.full((256, ), FACTOR, ttgl.float32, layout)
+        y = ttgl.warp_if(scale != 1, x, _warp_if_scale, args=(scale, ))
+        ttgl.store(Y + i, y)
+
+    x = torch.randn(256, device=device)
+    out = torch.empty_like(x)
+    kernel[(1, )](x, out, THREADS_PER_WARP, factor)
+    torch.testing.assert_close(out, x * factor, atol=0, rtol=0)
+
+
+@pytest.mark.parametrize("mask", [True, False])
+def test_warp_if_constant_mask(mask, device):
+
+    @gluon.jit
+    def body(x, scale, ACTIVE: ttgl.constexpr):
+        if ACTIVE:
+            return x * scale
+        return x
+
+    @gluon.jit
+    def kernel(X, S, Y, W: ttgl.constexpr, ACTIVE: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [W], [4], [0])
+        i = ttgl.arange(0, 256, layout=layout)
+        x = ttgl.load(X + i)
+        scale = ttgl.load(S + i)
+        cond = ttgl.full((256, ), ACTIVE, ttgl.int1, layout)
+        y = ttgl.warp_if(cond, x, body, args=(scale, ACTIVE))
+        ttgl.store(Y + i, y)
+
+    x = torch.randn(256, device=device)
+    scale = torch.randn_like(x)
+    y = torch.empty_like(x)
+    kernel[(1, )](x, scale, y, THREADS_PER_WARP, mask)
+    torch.testing.assert_close(y, x * scale if mask else x, rtol=0, atol=0)
+
+
 @gluon.constexpr_function
 def _inline_asm_shared_load(outputs, inputs):
     out, = outputs
@@ -150,6 +194,60 @@ def _inline_asm_tmem_load(outputs, inputs):
             f"add.u32 addr, {base[0]}, {offsets[0]}; "
             "tcgen05.ld.sync.aligned.32x32b.x32.b32 {" + ",".join(out) + "}, [addr]; "
             "tcgen05.wait::ld.sync.aligned; }")
+
+
+@pytest.mark.skipif(not (is_cuda() or is_hip_cdna3() or is_hip_cdna4()), reason="FPSan target support")
+def test_warp_if_fpsan(device):
+
+    @gluon.jit
+    def kernel(X, S, Y, W: ttgl.constexpr, SKIP: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [W], [4], [0])
+        i = ttgl.arange(0, 1024, layout=layout)
+        x = ttgl.load(X + i)
+        scale = ttgl.load(S + i)
+        if SKIP:
+            y = ttgl.warp_if(scale != 1, x, _warp_if_scale, args=(scale, ))
+        else:
+            y = x * scale
+        ttgl.store(Y + i, y)
+
+    x = torch.randn(1024, device=device)
+    scale = torch.ones_like(x)
+    scale[::3] = 0.5
+    expected = torch.empty_like(x)
+    actual = torch.empty_like(x)
+    kernel[(1, )](x, scale, expected, THREADS_PER_WARP, False, instrumentation_mode="fpsan")
+    kernel[(1, )](x, scale, actual, THREADS_PER_WARP, True, instrumentation_mode="fpsan")
+    # Compare FPSan's hash values, not the original floating-point products.
+    torch.testing.assert_close(actual, expected, atol=0, rtol=0, equal_nan=True)
+
+
+def test_warp_if_loop_reconvergence(device):
+
+    @gluon.jit
+    def kernel(X, S, Y, T, iterations, W: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [W], [4], [0])
+        i = ttgl.arange(0, 1024, layout=layout)
+        x = ttgl.load(X + i)
+        scale = ttgl.load(S + i)
+        total = 0.0
+        for _ in range(iterations):
+            x = ttgl.warp_if(scale != 1, x, _warp_if_scale, args=(scale, ))
+            # Cross-warp communication is legal after all warps rejoin.
+            total += ttgl.sum(x, 0)
+        ttgl.store(Y + i, x)
+        ttgl.store(T, total)
+
+    x = torch.arange(1024, device=device, dtype=torch.float32)
+    scale = torch.ones_like(x)
+    # Only one physical warp has work in each group of four warps.
+    scale.reshape(-1, 4, THREADS_PER_WARP)[:, 0, :] = 0.5
+    y = torch.empty_like(x)
+    total = torch.empty((), device=device)
+    kernel[(1, )](x, scale, y, total, 3, THREADS_PER_WARP)
+    expected_total = sum((x * scale**i).sum() for i in range(1, 4))
+    torch.testing.assert_close(y, x * scale**3, atol=0, rtol=0)
+    torch.testing.assert_close(total, expected_total, atol=0, rtol=0)
 
 
 @pytest.mark.parametrize("memory_space,threadwise,pack", [

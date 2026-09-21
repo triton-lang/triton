@@ -1009,3 +1009,43 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @warp_if_result_type(%mask: tensor<128xi1, #blocked>, %x: tensor<128xf32, #blocked>) {
+    // expected-error@+1 {{requires nonempty inputs matching the result types}}
+    %y = ttg.warp_if %mask(%x) {
+      ttg.warp_if_yield %x : tensor<128xf32, #blocked>
+    } : (tensor<128xi1, #blocked>, tensor<128xf32, #blocked>) -> tensor<128xf64, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @warp_if_yield_type(%mask: tensor<128xi1, #blocked>, %x: tensor<128xf32, #blocked>) {
+    %y = ttg.warp_if %mask(%x) {
+      // expected-error@+1 {{operands must match the parent result types}}
+      ttg.warp_if_yield %mask : tensor<128xi1, #blocked>
+    } : (tensor<128xi1, #blocked>, tensor<128xf32, #blocked>) -> tensor<128xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @warp_if_block_argument(%mask: tensor<128xi1, #blocked>, %x: tensor<128xf32, #blocked>) {
+    // expected-error@+1 {{body must implicitly capture its inputs}}
+    %y = ttg.warp_if %mask(%x) {
+    ^bb0(%arg: tensor<128xf32, #blocked>):
+      ttg.warp_if_yield %arg : tensor<128xf32, #blocked>
+    } : (tensor<128xi1, #blocked>, tensor<128xf32, #blocked>) -> tensor<128xf32, #blocked>
+    tt.return
+  }
+}

@@ -34,6 +34,72 @@ pytestmark = pytest.mark.skipif(is_hip_cdna2(), reason="old AMD GPUs are not sup
 HAS_WARP_SPECIALIZE = supports_ws() and supports_tma()
 
 
+def test_gluon_warp_if(tmp_path, device):
+
+    @gluon.jit
+    def rescale(x, scale):
+        return x * scale
+
+    @gluon.jit
+    def kernel(X, S, Y, W: gl.constexpr):
+        layout: gl.constexpr = gl.BlockedLayout([1], [W], [4], [0])
+        i = gl.arange(0, 1024, layout=layout)
+        x = gl.load(X + i)
+        scale = gl.load(S + i)
+        with pl.scope("rescale"):
+            y = gl.warp_if(scale != 1, x, rescale, args=(scale, ))
+        gl.store(Y + i, y)
+
+    x = torch.randn(1024, device=device)
+    scale = torch.ones_like(x)
+    scale[::3] = 0.5
+    y = torch.empty_like(x)
+    path = tmp_path / "warp_if"
+    proton.start(str(path), backend="instrumentation")
+    try:
+        kernel[(1, )](x, scale, y, triton.runtime.driver.active.get_current_target().warp_size)
+    finally:
+        proton.finalize()
+    torch.testing.assert_close(y, x * scale, atol=0, rtol=0)
+    data = json.loads(path.with_suffix(".hatchet").read_text())
+
+    def frames(node):
+        yield node
+        for child in node.get("children", []):
+            yield from frames(child)
+
+    scopes = [frame for frame in frames(data[0]) if frame["frame"]["name"] == "rescale"]
+    assert scopes
+    assert all(scope["metrics"]["cycles"] > 0 for scope in scopes)
+
+
+def test_gluon_warp_if_rejects_inner_scope(tmp_path, device, capfd):
+
+    @gluon.jit
+    def rescale(x, scale):
+        with pl.scope("inside"):
+            y = x * scale
+        return y
+
+    @gluon.jit
+    def kernel(X, S, Y, W: gl.constexpr):
+        layout: gl.constexpr = gl.BlockedLayout([1], [W], [4], [0])
+        i = gl.arange(0, 1024, layout=layout)
+        x = gl.load(X + i)
+        scale = gl.load(S + i)
+        y = gl.warp_if(scale != 1, x, rescale, args=(scale, ))
+        gl.store(Y + i, y)
+
+    x = torch.ones(1024, device=device)
+    proton.start(str(tmp_path / "warp_if_inner"), backend="instrumentation")
+    try:
+        with pytest.raises(RuntimeError, match="PassManager::run failed"):
+            kernel[(1, )](x, x, x, triton.runtime.driver.active.get_current_target().warp_size)
+    finally:
+        proton.finalize()
+    assert "is not supported inside warp_if" in capfd.readouterr().err
+
+
 @pytest.mark.parametrize(
     "mode",
     [

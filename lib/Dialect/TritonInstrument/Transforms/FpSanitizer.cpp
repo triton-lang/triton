@@ -3351,6 +3351,30 @@ public:
       FpSanitizerPass>::TritonInstrumentFpSanitizerBase;
 
   void runOnOperation() override {
+    // warp_if promises the result of unconditional body evaluation. FPSan
+    // replaces arithmetic with hashes, where floating-point identities no
+    // longer hold, so validate the original body and remove the skip boundary
+    // before instrumenting it.
+    SmallVector<ttg::WarpIfOp> warpIfs;
+    WalkResult verified = getOperation().walk([&](ttg::WarpIfOp op) {
+      if (failed(op.verifyBody()))
+        return WalkResult::interrupt();
+      warpIfs.push_back(op);
+      return WalkResult::advance();
+    });
+    if (verified.wasInterrupted()) {
+      signalPassFailure();
+      return;
+    }
+    IRRewriter rewriter(&getContext());
+    for (ttg::WarpIfOp op : warpIfs) {
+      auto yield =
+          cast<ttg::WarpIfYieldOp>(op.getBody().front().getTerminator());
+      rewriter.inlineBlockBefore(&op.getBody().front(), op);
+      rewriter.replaceOp(op, yield.getValues());
+      rewriter.eraseOp(yield);
+    }
+
     auto calls = getFpSanCallsRequiringInlining(getOperation());
     for (auto [call, requirement] : calls) {
       auto diagnostic = call.emitOpError("must be inlined before FPSan");
