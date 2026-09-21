@@ -54,8 +54,7 @@ def verify_mir_content(mir_content, kernel_name):
 # Our emitted DAG and LLVM's `-misched-print-dags` output are both built by the
 # same ScheduleDAGInstrs machinery, so for the same MIR their dependency edges
 # must agree -- modulo edges we deliberately drop (Artificial/Cluster/Weak hint
-# edges; memory edges removed by alias analysis; barrier edges removed by
-# S_WAITCNT counter semantics).
+# edges; memory edges removed by alias analysis).
 #
 # Two structural differences make a naive region/position comparison impossible,
 # so we key instructions by (opcode, ordinal-within-function) instead -- a
@@ -265,8 +264,7 @@ def _cross_check_dag_against_llvm(mir_content, llc_path):
         f"edges in our DAG but not LLVM's: {sorted(missing)[:10]}"
 
     # 2. Every LLVM Data/Anti/Output edge must be one we emit (those are never
-    #    filtered). Missing Memory/Barrier edges are allowed (AA / waitcnt
-    #    filtering).
+    #    filtered). Missing Memory edges are allowed (alias analysis).
     for e in llvm_kept - our_edges:
         _, _, t = e
         if t in ("Memory", "Barrier"):
@@ -306,6 +304,61 @@ def test_dag_matches_llvm(tmp_path, monkeypatch):
     mir_files = list(tmp_path.glob("cc_kernel_*.txt"))
     assert len(mir_files) == 1, "exactly one MIR file should have been dumped"
     _cross_check_dag_against_llvm(mir_files[0].read_text(), llc_path)
+
+
+# DAGBuilder keeps every Barrier edge LLVM gives it, with no AMDGPU-specific
+# filtering. That is only correct because the MIR is dumped at the
+# machine-scheduler point, where no wait-count instruction exists yet: LLVM
+# inserts them (S_WAITCNT on gfx9/10, the split S_WAIT_* counters on gfx11+) in
+# GCNPassConfig::addPreEmitPass, which runs after register allocation.
+#
+# If that ordering ever changes, Barrier edges would start carrying spurious
+# dependencies -- a load -> wait whose counter that load does not bump -- and
+# DAGBuilder would have to decode counter semantics again to drop them. Guard
+# the assumption here so it surfaces as a test failure rather than as silently
+# over-constrained schedules.
+#
+# Covers several architectures because the relevant instructions are spelled
+# differently across them, and both a barrier and an LDS-using kernel so the
+# ones that do exist at this stage (S_BARRIER*, DS_*) are actually present.
+@pytest.mark.parametrize("arch", ["gfx90a", "gfx942", "gfx950", "gfx1250"])
+def test_no_waitcnt_before_machine_scheduler(arch, tmp_path, monkeypatch):
+    import re
+
+    monkeypatch.setenv("TRITON_DUMP_MIR", str(tmp_path))
+    monkeypatch.setenv("TRITON_ALWAYS_COMPILE", "1")
+
+    @triton.jit
+    def barrier_kernel(a_ptr, out_ptr, n, BLOCK: tl.constexpr):
+        offs = tl.program_id(axis=0) * BLOCK + tl.arange(0, BLOCK)
+        mask = offs < n
+        a = tl.load(a_ptr + offs, mask=mask)
+        tl.debug_barrier()
+        # A cross-lane reduction, so the block needs LDS traffic as well.
+        tl.store(out_ptr + tl.program_id(axis=0), tl.sum(a, axis=0))
+
+    # Compile only: this inspects the compile-time MIR dump and must not depend
+    # on a working GPU runtime for the architecture under test.
+    from triton.compiler import ASTSource
+    from triton.backends.compiler import GPUTarget
+    src = ASTSource(fn=barrier_kernel,
+                    signature={"a_ptr": "*fp32", "out_ptr": "*fp32", "n": "i32", "BLOCK":
+                               "constexpr"}, constexprs={"BLOCK": 256})
+    triton.compile(src, target=GPUTarget("hip", arch, 64))
+
+    mir_files = list(tmp_path.glob("barrier_kernel_*.txt"))
+    assert len(mir_files) == 1, "exactly one MIR file should have been dumped"
+    mir = mir_files[0].read_text().split("========== SCHEDULING DAG ==========", 1)[0]
+
+    waits = sorted(set(re.findall(r'\bS_WAIT[A-Z0-9_]*', mir)))
+    assert not waits, (f"wait-count instructions {waits} are present in the MIR dumped for {arch} at the "
+                       "machine-scheduler point; DAGBuilder's Barrier edges may now need counter-based "
+                       "filtering (see the comment above this test)")
+
+    # Sanity-check the kernel really is barrier/LDS shaped, so a future change
+    # that silently stops emitting barriers cannot make the assertion vacuous.
+    assert re.search(r'\bS_BARRIER[A-Z0-9_]*', mir), \
+        f"expected a barrier instruction in the MIR for {arch}"
 
 
 def test_mir_dump_pipeline(tmp_path, monkeypatch):
