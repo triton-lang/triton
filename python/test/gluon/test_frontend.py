@@ -4302,40 +4302,50 @@ def _get_amd_scaled_downcast(target):
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA4, HIP_TARGET_CDNA5], ids=["cdna4", "cdna5"])
 @pytest.mark.parametrize("dtype,ir_dtype", [(ttgl.float16, "f16"), (ttgl.float32, "f32")])
-def test_amd_scaled_downcast_fp4_float_dtypes(target, dtype, ir_dtype):
+@pytest.mark.parametrize("scale_dtype,scale_ir_dtype,scale_value", [
+    (ttgl.uint8, "i8", 0x7F),
+    (ttgl.float32, "f32", 2.0),
+])
+def test_amd_scaled_downcast_fp4_float_dtypes(target, dtype, ir_dtype, scale_dtype, scale_ir_dtype, scale_value):
     scaled_downcast = _get_amd_scaled_downcast(target)
 
     @gluon.jit
-    def kernel():
+    def kernel(SCALE_DTYPE: ttgl.constexpr, SCALE_VALUE: ttgl.constexpr):
         unpacked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 8], [1, 1], [1, 0])
         scale_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [8, 8], [1, 1], [1, 0])
         input = ttgl.full([16, 64], 1.0, dtype, unpacked_layout)
-        scale = ttgl.full([16, 8], 0x7F, ttgl.uint8, scale_layout)
+        scale = ttgl.full([16, 8], SCALE_VALUE, SCALE_DTYPE, scale_layout)
         scaled_downcast(input, scale, "e2m1", axis=1)
 
-    module = run_parser(kernel, *make_args(num_warps=1), target=target)
+    module = run_parser(kernel, *make_args(scale_dtype, scale_value, num_warps=1), target=target)
     module_text = module.str_nodebug()
     assert "amdg.scaled_downcast_fp4" in module_text
     assert f"tensor<16x64x{ir_dtype}" in module_text
+    assert f"tensor<16x8x{scale_ir_dtype}" in module_text
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA4, HIP_TARGET_CDNA5], ids=["cdna4", "cdna5"])
 @pytest.mark.parametrize("fp8_format,ir_dtype", [("e4m3", "f8E4M3FN"), ("e5m2", "f8E5M2")])
-def test_amd_scaled_downcast_fp8_cdna(target, fp8_format, ir_dtype):
+@pytest.mark.parametrize("scale_dtype,scale_ir_dtype,scale_value", [
+    (ttgl.uint8, "i8", 0x7F),
+    (ttgl.float32, "f32", 2.0),
+])
+def test_amd_scaled_downcast_fp8_cdna(target, fp8_format, ir_dtype, scale_dtype, scale_ir_dtype, scale_value):
     scaled_downcast = _get_amd_scaled_downcast(target)
 
     @gluon.jit
-    def kernel(FORMAT: ttgl.constexpr):
+    def kernel(FORMAT: ttgl.constexpr, SCALE_DTYPE: ttgl.constexpr, SCALE_VALUE: ttgl.constexpr):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [8, 8], [1, 1], [1, 0])
         scale_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [8, 8], [1, 1], [1, 0])
         input = ttgl.full([16, 64], 1.0, ttgl.bfloat16, layout)
-        scale = ttgl.full([16, 8], 0x7F, ttgl.uint8, scale_layout)
+        scale = ttgl.full([16, 8], SCALE_VALUE, SCALE_DTYPE, scale_layout)
         scaled_downcast(input, scale, FORMAT, axis=1)
 
-    module = run_parser(kernel, *make_args(fp8_format, num_warps=1), target=target)
+    module = run_parser(kernel, *make_args(fp8_format, scale_dtype, scale_value, num_warps=1), target=target)
     module_text = module.str_nodebug()
     assert "amdg.scaled_downcast_fp8" in module_text
     assert f"-> tensor<16x64x{ir_dtype}" in module_text
+    assert f"tensor<16x8x{scale_ir_dtype}" in module_text
 
 
 @pytest.mark.parametrize("target, threads_per_warp, expect_layout", [

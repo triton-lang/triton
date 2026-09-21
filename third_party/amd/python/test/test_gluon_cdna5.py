@@ -370,7 +370,8 @@ def test_runtime_scaled_upcast_fp8_non_broadcast_block16():
     (torch.float32, ttgl.float32, "f32"),
 ], ids=lambda v: getattr(v, "__name__", str(v)))
 @pytest.mark.parametrize("BLOCK_K", [64, 128, 256], ids=lambda v: f"BLOCK_K{v}")
-def test_runtime_scaled_downcast_fp4(dtype, ttgl_dtype, in_suffix, BLOCK_K):
+@pytest.mark.parametrize("scale_kind", ["e8m0", "f32"])
+def test_runtime_scaled_downcast_fp4(dtype, ttgl_dtype, in_suffix, BLOCK_K, scale_kind):
     # Inverse of test_runtime_scaled_upcast_fp4 (compact scale): pack unpacked
     # high-precision values back to fp4 through the gfx1250 pk8 instruction.
 
@@ -403,6 +404,8 @@ def test_runtime_scaled_downcast_fp4(dtype, ttgl_dtype, in_suffix, BLOCK_K):
     # `packed` is the fp4 answer; `unpacked_ref` its per-element float values.
     packed, unpacked_ref = create_mxfp_operand(0, BLOCK_M, BLOCK_K, "e2m1")
     scale, scale_ref = create_mxfp_scale(0, BLOCK_M, BLOCK_K, "e8m0", SCALE_FACTOR)
+    if scale_kind == "f32":
+        scale = scale_ref[:, ::SCALE_FACTOR].contiguous()
     # input = answer * scale, so downcast(input / scale) recovers the fp4 bytes.
     x = (unpacked_ref * scale_ref).to(dtype).contiguous()
     y = torch.empty((BLOCK_M, BLOCK_K // 2), dtype=torch.uint8, device="cuda")
@@ -410,6 +413,8 @@ def test_runtime_scaled_downcast_fp4(dtype, ttgl_dtype, in_suffix, BLOCK_K):
     pgm = scaled_downcast_fp4_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, SCALE_FACTOR, num_warps=4)
 
     assert f"v_cvt_scalef32_pk8_fp4_{in_suffix}" in pgm.asm["amdgcn"]
+    if scale_kind == "f32":
+        assert "0x7f800000" not in pgm.asm["amdgcn"]
     torch.testing.assert_close(y.cpu(), packed, atol=0, rtol=0)
 
 
@@ -420,7 +425,8 @@ def test_runtime_scaled_downcast_fp4(dtype, ttgl_dtype, in_suffix, BLOCK_K):
     (torch.bfloat16, ttgl.bfloat16, "bf16"),
     (torch.float32, ttgl.float32, "f32"),
 ], ids=lambda v: getattr(v, "__name__", str(v)))
-def test_runtime_scaled_downcast_fp8(fp8_dtype, dtype, ttgl_dtype, in_suffix):
+@pytest.mark.parametrize("scale_kind", ["e8m0", "f32"])
+def test_runtime_scaled_downcast_fp8(fp8_dtype, dtype, ttgl_dtype, in_suffix, scale_kind):
     # Cover the eight v_cvt_scalef32_pk8 fp8 downcast instructions:
     # {f16,bf16,f32} input x {fp8 (e4m3), bf8 (e5m2)} output.
     # fp8 downcast is elementwise, but the scale is compact along `axis` (one
@@ -455,6 +461,8 @@ def test_runtime_scaled_downcast_fp8(fp8_dtype, dtype, ttgl_dtype, in_suffix):
     # `v` is the fp8 answer bytes; `v_ref` its float values.
     v, v_ref = create_mxfp_operand(0, BLOCK_M, BLOCK_K, fp8_dtype)
     scale, scale_ref = create_mxfp_scale(0, BLOCK_M, BLOCK_K, "e8m0", SCALE_FACTOR)
+    if scale_kind == "f32":
+        scale = scale_ref[:, ::SCALE_FACTOR].contiguous()
     # input = answer * scale, so downcast(input / scale) recovers the fp8 bytes.
     x = (v_ref * scale_ref).to(dtype).contiguous()
     y = torch.empty((BLOCK_M, BLOCK_K), dtype=torch_fp8, device="cuda")
@@ -463,6 +471,8 @@ def test_runtime_scaled_downcast_fp8(fp8_dtype, dtype, ttgl_dtype, in_suffix):
                                             num_warps=4)
 
     assert f"v_cvt_scalef32_pk8_{out_mnemonic}_{in_suffix}" in pgm.asm["amdgcn"]
+    if scale_kind == "f32":
+        assert "0x7f800000" not in pgm.asm["amdgcn"]
     torch.testing.assert_close(y.view(torch.uint8).cpu(), v, atol=0, rtol=0)
 
 

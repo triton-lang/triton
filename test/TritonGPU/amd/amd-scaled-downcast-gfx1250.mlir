@@ -39,6 +39,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     tt.return
   }
 
+  tt.func public @scaled_downcast_fp4_f32_scale(
+      %input: tensor<1x256xf32, #unpacked>,
+      %scale: tensor<1x32xf32, #scale>,
+      %output: tensor<1x128x!tt.ptr<i8>, #blocked>) {
+    // CHECK-LABEL: llvm.func @scaled_downcast_fp4_f32_scale
+    // CHECK-NOT: llvm.shl
+    // CHECK: rocdl.cvt.scalef32.pk8.fp4.f32
+    %result = amdg.scaled_downcast_fp4 %input scale %scale {axis = 1 : i32} : tensor<1x256xf32, #unpacked>, tensor<1x32xf32, #scale> -> tensor<1x128xi8, #blocked>
+    tt.store %output, %result : tensor<1x128x!tt.ptr<i8>, #blocked>
+    tt.return
+  }
+
   tt.func public @scaled_downcast_fp8_e4m3_bf16(
       %input: tensor<1x256xbf16, #unpacked>,
       %scale: tensor<1x32xi8, #scale>,
@@ -69,6 +81,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     // CHECK-LABEL: llvm.func @scaled_downcast_fp8_e4m3_f32
     // CHECK: rocdl.cvt.scalef32.pk8.fp8.f32
     %result = amdg.scaled_downcast_fp8 %input scale %scale {axis = 1 : i32} : tensor<1x256xf32, #unpacked>, tensor<1x32xi8, #scale> -> tensor<1x256xf8E4M3FN, #unpacked>
+    tt.store %output, %result : tensor<1x256x!tt.ptr<f8E4M3FN>, #unpacked>
+    tt.return
+  }
+
+  tt.func public @scaled_downcast_fp8_e4m3_f32_scale(
+      %input: tensor<1x256xf32, #unpacked>,
+      %scale: tensor<1x32xf32, #scale>,
+      %output: tensor<1x256x!tt.ptr<f8E4M3FN>, #unpacked>) {
+    // CHECK-LABEL: llvm.func @scaled_downcast_fp8_e4m3_f32_scale
+    // CHECK-NOT: llvm.shl
+    // CHECK: rocdl.cvt.scalef32.pk8.fp8.f32
+    %result = amdg.scaled_downcast_fp8 %input scale %scale {axis = 1 : i32} : tensor<1x256xf32, #unpacked>, tensor<1x32xf32, #scale> -> tensor<1x256xf8E4M3FN, #unpacked>
     tt.store %output, %result : tensor<1x256x!tt.ptr<f8E4M3FN>, #unpacked>
     tt.return
   }

@@ -655,18 +655,21 @@ def ScaledDowncastFp4Op : TT_AMDGPU_Op<"scaled_downcast_fp4", [
   let summary = "Scale and downcast floating-point values to packed FP4";
 
   let description = [{
-    Divide FP16, BF16, or FP32 values by an E8M0 scale and convert them to
-    packed e2m1 values. The result packs two consecutive fp4 values per i8
-    along `axis`: the element at even position provides the low nibble and the
+    Divide FP16, BF16, or FP32 values by a scale and convert them to packed
+    e2m1 values. An i8 scale is interpreted as a raw E8M0 payload; an f32 scale
+    is passed directly to the hardware conversion, which uses only the exponent
+    field and ignores mantissa bits (so effective scales are positive, normal
+    powers of two). The result packs two consecutive fp4 values per i8 along
+    `axis`: the element at even position provides the low nibble and the
     following element the high nibble, so the result extent along `axis` is
     half the input extent (the inverse of `scaled_upcast_fp4`).
 
     The `axis` attribute identifies the dimension along which the fp4 elements
     are packed and along which scales are shared. The scale must be compact
-    along `axis`: one raw E8M0 i8 payload covers multiple consecutive packed
-    bytes along that axis (unlike :func:`scaled_upcast_fp4`, expanded scales
-    with one scale per output element are not supported). Each scale block along
-    `axis` must cover a multiple of 8 fp4 values.
+    along `axis`: one scale covers multiple consecutive packed bytes along that
+    axis (unlike :func:`scaled_upcast_fp4`, expanded scales with one scale per
+    output element are not supported). Each scale block along `axis` must cover
+    a multiple of 8 fp4 values.
 
     This will be hardware accelerated on architectures supporting
     `v_cvt_scalef32_pk_*` instructions (e.g. CDNA4 and CDNA5).
@@ -674,7 +677,7 @@ def ScaledDowncastFp4Op : TT_AMDGPU_Op<"scaled_downcast_fp4", [
 
   let arguments = (ins
     RankedTensorOf<[F16, BF16, F32]>:$input,
-    RankedTensorOf<[I8]>:$scale,
+    RankedTensorOf<[I8, F32]>:$scale,
     I32Attr:$axis);
   let results = (outs RankedTensorOf<[I8]>:$output);
 
@@ -712,17 +715,20 @@ def ScaledDowncastFp8Op : TT_AMDGPU_Op<"scaled_downcast_fp8", [
   let summary = "Scale and downcast floating-point values to fp8";
 
   let description = [{
-    Divide FP16, BF16, or FP32 values by an E8M0 scale and convert them to
-    fp8 (e4m3) or bf8 (e5m2) values. This is the elementwise inverse of
+    Divide FP16, BF16, or FP32 values by a scale and convert them to fp8 (e4m3)
+    or bf8 (e5m2) values. An i8 scale is interpreted as a raw E8M0 payload; an
+    f32 scale is passed directly to the hardware conversion, which uses only
+    the exponent field and ignores mantissa bits (so effective scales are
+    positive, normal powers of two). This is the elementwise inverse of
     `scaled_upcast_fp8`: input and result share the same shape and encoding,
     and each fp8 result occupies its own byte (no packing).
 
     The `axis` attribute identifies the dimension along which scales are
-    shared. The scale must be compact along `axis`: one raw E8M0 i8 payload
-    covers multiple consecutive output elements along that axis (unlike
+    shared. The scale must be compact along `axis`: one scale covers multiple
+    consecutive output elements along that axis (unlike
     :func:`scaled_upcast_fp8`, expanded scales with one scale per output element
-    are not supported). Each scale block along `axis` must cover a multiple of 8
-    output elements.
+    are not supported). Each scale block along `axis` must cover a multiple of
+    8 output elements.
 
     This will be hardware accelerated on architectures supporting
     `v_cvt_scalef32_pk_{fp8,bf8}_*` instructions (e.g. CDNA4 and CDNA5).
@@ -730,7 +736,7 @@ def ScaledDowncastFp8Op : TT_AMDGPU_Op<"scaled_downcast_fp8", [
 
   let arguments = (ins
     RankedTensorOf<[F16, BF16, F32]>:$input,
-    RankedTensorOf<[I8]>:$scale,
+    RankedTensorOf<[I8, F32]>:$scale,
     I32Attr:$axis);
   let results = (outs RankedTensorOf<[AnyTypeOf<[F8E4M3FN, F8E5M2]>]>:$output);
 

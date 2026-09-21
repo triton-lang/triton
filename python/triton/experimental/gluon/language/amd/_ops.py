@@ -265,8 +265,8 @@ def _validate_scaled_downcast_common(input, scale):
            lambda: f"Expected scale to have a distributed_type but got {scale.type}")
     supported_dtypes = {ttgl.float16, ttgl.bfloat16, ttgl.float32}
     _check(input.dtype in supported_dtypes, lambda: f"Expected fp16, bf16, or fp32 input but got {input.dtype}")
-    _check(scale.dtype in {ttgl.int8, ttgl.uint8},
-           lambda: f"Expected raw E8M0 scale in int8/uint8 but got {scale.dtype}")
+    _check(scale.dtype in {ttgl.int8, ttgl.uint8, ttgl.float32},
+           lambda: f"Expected raw E8M0 scale in int8/uint8 or fp32 scale but got {scale.dtype}")
     return len(input.type.shape)
 
 
@@ -323,8 +323,12 @@ def _scaled_downcast(input, scale, elem_type, axis, semantic):
 @builtin
 def scaled_downcast(input, scale, format, axis=-1, _semantic=None):
     """
-    Scale and convert FP16, BF16, or FP32 values to a low-precision MX format,
-    dividing by the raw E8M0 ``scale`` payload (``int8`` or ``uint8``).
+    Scale and convert FP16, BF16, or FP32 values to a low-precision format.
+
+    An ``int8`` or ``uint8`` ``scale`` is interpreted as a raw E8M0 payload.
+    An ``fp32`` ``scale`` is passed directly to the hardware conversion, which
+    uses only the exponent field; mantissa bits are ignored. Effective scales
+    are therefore positive, normal powers of two.
 
     ``format`` selects the target type and packing behavior:
 
@@ -336,9 +340,9 @@ def scaled_downcast(input, scale, format, axis=-1, _semantic=None):
       of ``scaled_upcast``).
 
     ``axis`` (default: last dim) selects the dimension along which scales are
-    shared. ``scale`` must be compact along ``axis`` with one E8M0 byte per
-    block of consecutive input elements along ``axis``, and each block must
-    span a multiple of 8 consecutive input elements.
+    shared. ``scale`` must be a distributed tensor compact along ``axis`` with
+    one value per block of consecutive input elements along ``axis``, and each
+    block must span a multiple of 8 consecutive input elements.
     """
     axis = _unwrap_if_constexpr(axis)
     elem_type = _downcast_format_to_elem_type(format)

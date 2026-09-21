@@ -9,12 +9,16 @@ using namespace mlir::triton;
 
 namespace {
 
-// Convert a raw E8M0 scale byte to an f32 scale. E8M0 stores a biased f32
-// exponent, so we can shift it into the f32 exponent field.
-Value scaleToF32(TritonLLVMOpBuilder &b, Value scaleByte) {
-  MLIRContext *ctx = scaleByte.getContext();
+// Convert a scale to the f32 operand expected by v_cvt_scalef32_*.
+// Raw E8M0 (i8) stores a biased f32 exponent, so shift it into the exponent
+// field. An f32 scale is passed through; the instruction uses only that
+// exponent field and ignores mantissa bits.
+Value scaleToF32(TritonLLVMOpBuilder &b, Value scale) {
+  if (isa<Float32Type>(scale.getType()))
+    return scale;
+  MLIRContext *ctx = scale.getContext();
   return b.bitcast(
-      b.shl(b.zext(IntegerType::get(ctx, 32), scaleByte), b.i32_val(23)),
+      b.shl(b.zext(IntegerType::get(ctx, 32), scale), b.i32_val(23)),
       Float32Type::get(ctx));
 }
 
