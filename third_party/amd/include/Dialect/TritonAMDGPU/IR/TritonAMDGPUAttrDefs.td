@@ -25,6 +25,7 @@
 #define TRITON_AMDGPU_ATTRDEFS
 
 include "mlir/IR/AttrTypeBase.td"
+include "mlir/IR/EnumAttr.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "TritonAMDGPUDialect.td"
 
@@ -35,6 +36,15 @@ class TritonAMDGPU_Attr<string name, list<Trait> traits = [],
 
 def SetFP8Clamping : TritonAMDGPU_Attr<"SetFP8Clamping"> {
   let mnemonic = "amdgcn.set.fp8.clamping";
+}
+
+def AMDGPU_ScaledDowncastScaleFormatAttr : I32EnumAttr<
+    "ScaledDowncastScaleFormat", "scaled downcast scale representation",
+    [
+      I32EnumAttrCase<"E8M0", 0, "e8m0">,
+      I32EnumAttrCase<"E8M0_F32", 1, "e8m0_f32">
+    ]> {
+  let cppNamespace = "::mlir::triton::amdgpu";
 }
 
 #endif

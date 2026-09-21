@@ -13,8 +13,9 @@ namespace {
 // Raw E8M0 (i8) stores a biased f32 exponent, so shift it into the exponent
 // field. An f32 scale is passed through; the instruction uses only that
 // exponent field and ignores mantissa bits.
-Value scaleToF32(TritonLLVMOpBuilder &b, Value scale) {
-  if (isa<Float32Type>(scale.getType()))
+Value scaleToF32(TritonLLVMOpBuilder &b, Value scale,
+                 amdgpu::ScaledDowncastScaleFormat format) {
+  if (format == amdgpu::ScaledDowncastScaleFormat::E8M0_F32)
     return scale;
   MLIRContext *ctx = scale.getContext();
   return b.bitcast(
@@ -143,7 +144,8 @@ struct ScaledDowncastFp4OpPattern
           src = b.insert_element(src, low, b.i32_val(2 * byte));
           src = b.insert_element(src, high, b.i32_val(2 * byte + 1));
         }
-        Value scaleF32 = scaleToF32(b, scaleVals[scaleReg]);
+        Value scaleF32 =
+            scaleToF32(b, scaleVals[scaleReg], downcastOp.getScaleFormat());
         Value packed;
         if (isa<Float32Type>(inputElemTy))
           packed = ROCDL::CvtScaleF32Pk8Fp4F32Op::create(rewriter, loc, i32_ty,
@@ -167,7 +169,8 @@ struct ScaledDowncastFp4OpPattern
           int idx = i + byteSel;
           Value low = inputVals[2 * idx];
           Value high = inputVals[2 * idx + 1];
-          Value scaleF32 = scaleToF32(b, scaleVals[scaleRegisters[idx]]);
+          Value scaleF32 = scaleToF32(b, scaleVals[scaleRegisters[idx]],
+                                      downcastOp.getScaleFormat());
           if (isa<Float32Type>(inputElemTy)) {
             packed = ROCDL::CvtScaleF32PkFp4F32Op::create(
                 rewriter, loc, i32_ty, packed, low, high, scaleF32, byteSel);
@@ -249,7 +252,8 @@ struct ScaledDowncastFp8OpPattern
           Value v = j < groupSize ? inputVals[i + j] : zero;
           src = b.insert_element(src, v, b.i32_val(j));
         }
-        Value scaleF32 = scaleToF32(b, scaleVals[scaleReg]);
+        Value scaleF32 =
+            scaleToF32(b, scaleVals[scaleReg], downcastOp.getScaleFormat());
         Value packed;
         if (isa<Float32Type>(inputElemTy)) {
           if (isE4M3)
@@ -297,7 +301,8 @@ struct ScaledDowncastFp8OpPattern
             return rewriter.notifyMatchFailure(
                 downcastOp,
                 "each CDNA4 pk conversion pair must share one scale");
-          Value scaleF32 = scaleToF32(b, scaleVals[scaleReg]);
+          Value scaleF32 =
+              scaleToF32(b, scaleVals[scaleReg], downcastOp.getScaleFormat());
           Value e0 = inputVals[base];
           Value e1 = base + 1 < i + groupSize ? inputVals[base + 1] : zero;
           if (isa<Float32Type>(inputElemTy)) {

@@ -4322,6 +4322,8 @@ def test_amd_scaled_downcast_fp4_float_dtypes(target, dtype, ir_dtype, scale_dty
     assert "amdg.scaled_downcast_fp4" in module_text
     assert f"tensor<16x64x{ir_dtype}" in module_text
     assert f"tensor<16x8x{scale_ir_dtype}" in module_text
+    scale_format = "e8m0_f32" if scale_dtype == ttgl.float32 else "e8m0"
+    assert f"scale_format = {scale_format}" in module_text
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA4, HIP_TARGET_CDNA5], ids=["cdna4", "cdna5"])
@@ -4346,6 +4348,8 @@ def test_amd_scaled_downcast_fp8_cdna(target, fp8_format, ir_dtype, scale_dtype,
     assert "amdg.scaled_downcast_fp8" in module_text
     assert f"-> tensor<16x64x{ir_dtype}" in module_text
     assert f"tensor<16x8x{scale_ir_dtype}" in module_text
+    scale_format = "e8m0_f32" if scale_dtype == ttgl.float32 else "e8m0"
+    assert f"scale_format = {scale_format}" in module_text
 
 
 @pytest.mark.parametrize("target, threads_per_warp, expect_layout", [

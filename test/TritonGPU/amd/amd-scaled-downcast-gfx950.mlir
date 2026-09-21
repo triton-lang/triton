@@ -14,7 +14,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     // CHECK: %[[CVT2:.+]] = rocdl.cvt.scalef32.pk.fp4.bf16 {{.*}} -> %[[CVT1]][2] : i32
     // CHECK: %[[CVT3:.+]] = rocdl.cvt.scalef32.pk.fp4.bf16 {{.*}} -> %[[CVT2]][3] : i32
     // CHECK: llvm.lshr %[[CVT3]]
-    %result = amdg.scaled_downcast_fp4 %input scale %scale {axis = 1 : i32} : tensor<1x512xbf16, #unpacked>, tensor<1x64xi8, #scale> -> tensor<1x256xi8, #blocked>
+    %result = amdg.scaled_downcast_fp4 %input scale %scale scale_format = e8m0 {axis = 1 : i32} : tensor<1x512xbf16, #unpacked>, tensor<1x64xi8, #scale> -> tensor<1x256xi8, #blocked>
     tt.store %output, %result : tensor<1x256x!tt.ptr<i8>, #blocked>
     tt.return
   }
@@ -25,7 +25,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
       %output: tensor<1x256x!tt.ptr<i8>, #blocked>) {
     // CHECK-LABEL: llvm.func @scaled_downcast_fp16
     // CHECK: rocdl.cvt.scalef32.pk.fp4.f16
-    %result = amdg.scaled_downcast_fp4 %input scale %scale {axis = 1 : i32} : tensor<1x512xf16, #unpacked>, tensor<1x64xi8, #scale> -> tensor<1x256xi8, #blocked>
+    %result = amdg.scaled_downcast_fp4 %input scale %scale scale_format = e8m0 {axis = 1 : i32} : tensor<1x512xf16, #unpacked>, tensor<1x64xi8, #scale> -> tensor<1x256xi8, #blocked>
     tt.store %output, %result : tensor<1x256x!tt.ptr<i8>, #blocked>
     tt.return
   }
@@ -36,7 +36,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
       %output: tensor<1x256x!tt.ptr<i8>, #blocked>) {
     // CHECK-LABEL: llvm.func @scaled_downcast_fp32
     // CHECK: rocdl.cvt.scalef32.pk.fp4.f32
-    %result = amdg.scaled_downcast_fp4 %input scale %scale {axis = 1 : i32} : tensor<1x512xf32, #unpacked>, tensor<1x64xi8, #scale> -> tensor<1x256xi8, #blocked>
+    %result = amdg.scaled_downcast_fp4 %input scale %scale scale_format = e8m0 {axis = 1 : i32} : tensor<1x512xf32, #unpacked>, tensor<1x64xi8, #scale> -> tensor<1x256xi8, #blocked>
     tt.store %output, %result : tensor<1x256x!tt.ptr<i8>, #blocked>
     tt.return
   }
@@ -48,7 +48,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     // CHECK-LABEL: llvm.func @scaled_downcast_fp8_e4m3_bf16
     // CHECK: %[[CVT0:.+]] = rocdl.cvt.scalef32.pk.fp8.bf16 {{.*}} -> {{.*}}[false] : vector<2xi16>
     // CHECK: %[[CVT1:.+]] = rocdl.cvt.scalef32.pk.fp8.bf16 {{.*}} -> %[[CVT0]][true] : vector<2xi16>
-    %result = amdg.scaled_downcast_fp8 %input scale %scale {axis = 1 : i32} : tensor<1x512xbf16, #unpacked>, tensor<1x64xi8, #scale> -> tensor<1x512xf8E4M3FN, #unpacked>
+    %result = amdg.scaled_downcast_fp8 %input scale %scale scale_format = e8m0 {axis = 1 : i32} : tensor<1x512xbf16, #unpacked>, tensor<1x64xi8, #scale> -> tensor<1x512xf8E4M3FN, #unpacked>
     tt.store %output, %result : tensor<1x512x!tt.ptr<f8E4M3FN>, #unpacked>
     tt.return
   }
@@ -59,7 +59,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
       %output: tensor<1x512x!tt.ptr<f8E5M2>, #unpacked>) {
     // CHECK-LABEL: llvm.func @scaled_downcast_fp8_e5m2_f16
     // CHECK: rocdl.cvt.scalef32.pk.bf8.f16
-    %result = amdg.scaled_downcast_fp8 %input scale %scale {axis = 1 : i32} : tensor<1x512xf16, #unpacked>, tensor<1x64xi8, #scale> -> tensor<1x512xf8E5M2, #unpacked>
+    %result = amdg.scaled_downcast_fp8 %input scale %scale scale_format = e8m0 {axis = 1 : i32} : tensor<1x512xf16, #unpacked>, tensor<1x64xi8, #scale> -> tensor<1x512xf8E5M2, #unpacked>
     tt.store %output, %result : tensor<1x512x!tt.ptr<f8E5M2>, #unpacked>
     tt.return
   }
@@ -70,7 +70,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
       %output: tensor<1x512x!tt.ptr<f8E4M3FN>, #unpacked>) {
     // CHECK-LABEL: llvm.func @scaled_downcast_fp8_e4m3_f32
     // CHECK: rocdl.cvt.scalef32.pk.fp8.f32
-    %result = amdg.scaled_downcast_fp8 %input scale %scale {axis = 1 : i32} : tensor<1x512xf32, #unpacked>, tensor<1x64xi8, #scale> -> tensor<1x512xf8E4M3FN, #unpacked>
+    %result = amdg.scaled_downcast_fp8 %input scale %scale scale_format = e8m0 {axis = 1 : i32} : tensor<1x512xf32, #unpacked>, tensor<1x64xi8, #scale> -> tensor<1x512xf8E4M3FN, #unpacked>
     tt.store %output, %result : tensor<1x512x!tt.ptr<f8E4M3FN>, #unpacked>
     tt.return
   }
