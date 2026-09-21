@@ -1286,6 +1286,14 @@ bool LayoutRematerialization::hoistConvertDotOperand(
   if (result.failed())
     return false;
 
+  // An empty slice can only be rewritten if the source has a cached replacement.
+  if (slice.empty()) {
+    if (!existingRemats.lookup({convertOp.getSrc(), targetType.getEncoding()}))
+      return false;
+    rewriteSlice(slice, layout, existingRemats, convertOp);
+    return true;
+  }
+
   IRMapping mapping;
   OpBuilder builder(convertOp.getContext());
   SetVector<Value> innerSlice;
