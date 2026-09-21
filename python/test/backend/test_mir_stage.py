@@ -26,13 +26,14 @@ def verify_mir_content(mir_content, kernel_name):
     assert "body:" in mir_content, f"MIR for {kernel_name} should contain machine basic blocks"
 
     # The scheduling DAG is emitted after this marker as a (bb, position)-keyed
-    # edge list: `region <bb>` / `node <pos> <def-reg|-> <opcode>` /
+    # edge list, one section per scheduling region:
+    # `region <bb> <region-index-within-bb>` / `node <pos> <def-reg|-> <opcode>` /
     # `edge <src-pos> <dst-pos> <Type> <latency> [<reg>]`.
     assert "========== SCHEDULING DAG ==========" in mir_content, \
         f"MIR for {kernel_name} should contain the scheduling DAG section"
     dag_section = mir_content.split("========== SCHEDULING DAG ==========", 1)[1]
 
-    assert re.search(r'^region \d+$', dag_section, re.MULTILINE), \
+    assert re.search(r'^region \d+ \d+$', dag_section, re.MULTILINE), \
         f"Scheduling DAG for {kernel_name} should contain region headers"
     assert re.search(r'^node \d+ \S+ \S+', dag_section, re.MULTILINE), \
         f"Scheduling DAG for {kernel_name} should contain node entries"
@@ -359,6 +360,79 @@ def test_no_waitcnt_before_machine_scheduler(arch, tmp_path, monkeypatch):
     # that silently stops emitting barriers cannot make the assertion vacuous.
     assert re.search(r'\bS_BARRIER[A-Z0-9_]*', mir), \
         f"expected a barrier instruction in the MIR for {arch}"
+
+
+def test_dag_regions_split_at_scheduling_boundaries(tmp_path, monkeypatch):
+    """A basic block is not one scheduling region.
+
+    LLVM cuts a block at every scheduling boundary and schedules each piece
+    separately. On AMDGPU SIInstrInfo::isSchedulingBoundary counts terminators,
+    labels, calls, INLINEASM_BR, mask-0 SCHED_BARRIER, S_SETREG/S_SETPRIO, VGPR
+    indexing changes, and -- by far the most common -- any write to EXEC. Every
+    divergent region in a Triton kernel writes EXEC, so even this elementwise
+    kernel splits.
+
+    Emitting one region per block would advertise dependence-free motion across
+    those boundaries, which LLVM itself never performs. Check that we cut, and
+    that boundary instructions get no node (a node with no edges would read as
+    "freely reorderable", exactly backwards).
+    """
+
+    monkeypatch.setenv("TRITON_DUMP_MIR", str(tmp_path))
+    monkeypatch.setenv("TRITON_ALWAYS_COMPILE", "1")
+
+    @triton.jit
+    def masked_kernel(a_ptr, out_ptr, n, BLOCK: tl.constexpr):
+        offs = tl.program_id(axis=0) * BLOCK + tl.arange(0, BLOCK)
+        mask = offs < n  # divergent -> the backend manipulates EXEC
+        a = tl.load(a_ptr + offs, mask=mask)
+        tl.store(out_ptr + offs, a + 1, mask=mask)
+
+    from triton.compiler import ASTSource
+    triton.compile(
+        ASTSource(fn=masked_kernel, signature={"a_ptr": "*fp32", "out_ptr": "*fp32", "n": "i32", "BLOCK": "constexpr"},
+                  constexprs={"BLOCK": 256}))
+
+    mir_files = list(tmp_path.glob("masked_kernel_*.txt"))
+    assert len(mir_files) == 1, "exactly one MIR file should have been dumped"
+    dag = mir_files[0].read_text().split("========== SCHEDULING DAG ==========", 1)[1]
+
+    regions_per_bb = {}
+    nodes, edges = {}, []
+    cur = None
+    for line in dag.splitlines():
+        toks = line.split()
+        if not toks:
+            continue
+        if toks[0] == "region":
+            bb, idx = int(toks[1]), int(toks[2])
+            regions_per_bb.setdefault(bb, []).append(idx)
+            cur = (bb, idx)
+            nodes[cur] = set()
+        elif toks[0] == "node":
+            nodes[cur].add(int(toks[1]))
+        elif toks[0] == "edge":
+            edges.append((cur, int(toks[1]), int(toks[2])))
+
+    assert any(len(v) > 1 for v in regions_per_bb.values()), \
+        f"expected a block to split into several regions, got {regions_per_bb}"
+
+    # Region indices are dense and ascending within each block.
+    for bb, idxs in regions_per_bb.items():
+        assert idxs == list(range(len(idxs))), f"bb {bb} region indices: {idxs}"
+
+    # No two regions of a block claim the same instruction, and no edge leaves
+    # its region (ExitSU names the boundary just past the region -- those edges
+    # must not be emitted).
+    for bb, idxs in regions_per_bb.items():
+        seen = set()
+        for idx in idxs:
+            claimed = nodes[(bb, idx)]
+            assert not (seen & claimed), f"bb {bb}: overlapping regions at {seen & claimed}"
+            seen |= claimed
+    for cur, src, dst in edges:
+        assert src in nodes[cur] and dst in nodes[cur], \
+            f"region {cur}: edge {src} -> {dst} leaves the region"
 
 
 def test_mir_dump_pipeline(tmp_path, monkeypatch):

@@ -8,6 +8,7 @@
 
 #include "DAGBuilder.h"
 
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/BasicAliasAnalysis.h"
@@ -228,26 +229,41 @@ void DAGBuilder::setupAliasAnalysis() {
   AA->addAAResult(*BasicAA);
 }
 
-SmallVector<DAGEdge, 64> DAGBuilder::buildDAG(MachineBasicBlock &MBB) {
-  if (MBB.empty())
-    return {};
+SmallVector<SchedulingRegion, 8>
+llvm::mir_dag::getSchedulingRegions(MachineBasicBlock &MBB) {
+  const MachineFunction &MF = *MBB.getParent();
+  const TargetInstrInfo *TII = MF.getSubtarget().getInstrInfo();
 
-  // Find end of schedulable region (before terminators).
-  // ScheduleDAGInstrs doesn't handle terminators by default.
-  auto RegionEnd = MBB.end();
+  // Same predicate as isSchedBoundary in MachineScheduler.cpp. Boundary
+  // instructions belong to no region: the scheduler never moves them, and
+  // nothing may be moved across them.
+  auto isBoundary = [&](const MachineInstr &MI) {
+    return MI.isCall() || MI.isFakeUse() ||
+           TII->isSchedulingBoundary(MI, &MBB, MF);
+  };
+
+  SmallVector<SchedulingRegion, 8> Regions;
+  auto Begin = MBB.begin();
   for (auto I = MBB.begin(), E = MBB.end(); I != E; ++I) {
-    if (I->isTerminator()) {
-      RegionEnd = I;
-      break;
-    }
+    if (!isBoundary(*I))
+      continue;
+    if (Begin != I)
+      Regions.push_back({Begin, I});
+    Begin = std::next(I);
   }
+  if (Begin != MBB.end())
+    Regions.push_back({Begin, MBB.end()});
+  return Regions;
+}
 
-  // If no non-terminator instructions, return empty.
-  if (RegionEnd == MBB.begin())
+SmallVector<DAGEdge, 64> DAGBuilder::buildDAG(MachineBasicBlock &MBB,
+                                              MachineBasicBlock::iterator Begin,
+                                              MachineBasicBlock::iterator End) {
+  if (Begin == End)
     return {};
 
   RegionScheduleDAG DAG(MF, MLI.get(), AA.get(), LIS);
-  return DAG.buildAndExtractEdges(MBB, MBB.begin(), RegionEnd);
+  return DAG.buildAndExtractEdges(MBB, Begin, End);
 }
 
 const char *llvm::mir_dag::edgeKindToString(DAGEdge::Kind K) {
@@ -269,18 +285,28 @@ const char *llvm::mir_dag::edgeKindToString(DAGEdge::Kind K) {
 }
 
 // Emit one MachineFunction's scheduling DAG as a (bb, position)-keyed edge
-// list. One section per MachineBasicBlock:
+// list. One section per SCHEDULING REGION, in program order:
 //
-//   region <bb-number>
+//   region <bb-number> <region-index-within-bb>
 //   node <pos> <def-reg|-> <opcode>
 //   ...
 //   edge <src-pos> <dst-pos> <Type> <latency> [<reg>]
 //   ...
 //
-// `pos` is the instruction's index within the FULL basic block (terminators
+// `pos` is the instruction's index within the FULL basic block (boundaries
 // included), so it maps directly onto the MIR body lines the scheduler
-// reorders. Edge endpoints use the same index space. Only
-// Data/Anti/Output/Memory/Barrier edges are emitted; Artificial/Cluster
+// reorders. Edge endpoints use the same index space. A region's `node` lines
+// therefore carry a contiguous but not necessarily zero-based run of positions,
+// and consecutive regions of one block leave a gap where the boundary sits.
+//
+// Only instructions INSIDE a region get a node. An instruction with no node --
+// a terminator, a call, a mask-0 SCHED_BARRIER, an IDX0 write -- is a
+// scheduling boundary: LLVM never moves it and never moves anything across it,
+// so a consumer must pin it in place. Emitting nodes for them (as this used to)
+// while building edges only for the region between them would advertise them as
+// freely reorderable, which is exactly backwards.
+//
+// Only Data/Anti/Output/Memory/Barrier edges are emitted; Artificial/Cluster
 // (DAGEdge::Other) are dropped. The def-reg column is a cross-check aid only --
 // identity is (bb, pos).
 void llvm::mir_dag::emitSchedulingDAGForMF(raw_ostream &os, MachineFunction &MF,
@@ -296,34 +322,48 @@ void llvm::mir_dag::emitSchedulingDAGForMF(raw_ostream &os, MachineFunction &MF,
 
   DAGBuilder builder(MF, LIS);
   for (MachineBasicBlock &MBB : MF) {
-    os << "region " << MBB.getNumber() << "\n";
-    for (MachineInstr &MI : MBB) {
-      StringRef opcode = TII->getName(MI.getOpcode());
-      std::string defReg = "-";
-      for (const MachineOperand &MO : MI.operands()) {
-        if (MO.isReg() && MO.isDef() && !MO.isDead() && MO.getReg()) {
-          std::string s;
-          raw_string_ostream rs(s);
-          rs << printReg(MO.getReg(), TRI);
-          defReg = rs.str();
-          break;
+    int regionIdx = 0;
+    for (const SchedulingRegion &R : getSchedulingRegions(MBB)) {
+      os << "region " << MBB.getNumber() << " " << regionIdx++ << "\n";
+      for (auto I = R.Begin; I != R.End; ++I) {
+        MachineInstr &MI = *I;
+        StringRef opcode = TII->getName(MI.getOpcode());
+        std::string defReg = "-";
+        for (const MachineOperand &MO : MI.operands()) {
+          if (MO.isReg() && MO.isDef() && !MO.isDead() && MO.getReg()) {
+            std::string s;
+            raw_string_ostream rs(s);
+            rs << printReg(MO.getReg(), TRI);
+            defReg = rs.str();
+            break;
+          }
         }
+        os << "node " << posInBB[&MI] << " " << defReg << " " << opcode << "\n";
       }
-      os << "node " << posInBB[&MI] << " " << defReg << " " << opcode << "\n";
-    }
-    SmallVector<DAGEdge, 64> edges = builder.buildDAG(MBB);
-    for (const DAGEdge &E : edges) {
-      if (E.Type == DAGEdge::Other)
-        continue;
-      auto itS = posInBB.find(E.Src);
-      auto itD = posInBB.find(E.Dst);
-      if (itS == posInBB.end() || itD == posInBB.end())
-        continue;
-      os << "edge " << itS->second << " " << itD->second << " "
-         << edgeKindToString(E.Type) << " " << E.Latency;
-      if (E.Reg)
-        os << " " << printReg(E.Reg, TRI);
-      os << "\n";
+      SmallPtrSet<const MachineInstr *, 32> inRegion;
+      for (auto I = R.Begin; I != R.End; ++I)
+        inRegion.insert(&*I);
+
+      SmallVector<DAGEdge, 64> edges = builder.buildDAG(MBB, R.Begin, R.End);
+      for (const DAGEdge &E : edges) {
+        if (E.Type == DAGEdge::Other)
+          continue;
+        // ScheduleDAGInstrs gives ExitSU the instruction just past the region,
+        // so edges to it name an instruction we did not emit a node for. Drop
+        // them: that instruction is a scheduling boundary, and "everything in
+        // the region precedes it" is already implied by it being one.
+        if (!inRegion.contains(E.Src) || !inRegion.contains(E.Dst))
+          continue;
+        auto itS = posInBB.find(E.Src);
+        auto itD = posInBB.find(E.Dst);
+        if (itS == posInBB.end() || itD == posInBB.end())
+          continue;
+        os << "edge " << itS->second << " " << itD->second << " "
+           << edgeKindToString(E.Type) << " " << E.Latency;
+        if (E.Reg)
+          os << " " << printReg(E.Reg, TRI);
+        os << "\n";
+      }
     }
   }
 }
