@@ -4055,6 +4055,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // A folded all-true condition needs no identity proof. Test direct conversion
+  // without relying on canonicalization to eliminate the boundary first.
+  // CHECK-LABEL: llvm.func @warp_if_constant_true
+  tt.func @warp_if_constant_true(%x: tensor<128xf32, #blocked>, %scale: tensor<128xf32, #blocked>, %ptr: tensor<128x!tt.ptr<f32>, #blocked>) {
+    %mask = arith.constant dense<true> : tensor<128xi1, #blocked>
+    %y = ttg.warp_if %mask(%x) {
+      // CHECK: llvm.fmul
+      %product = arith.mulf %x, %scale : tensor<128xf32, #blocked>
+      ttg.warp_if_yield %product : tensor<128xf32, #blocked>
+    } : (tensor<128xi1, #blocked>, tensor<128xf32, #blocked>) -> tensor<128xf32, #blocked>
+    tt.store %ptr, %y : tensor<128x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 //--- masked-store-barrier.mlir
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32, ttg.shared = 0 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32} {

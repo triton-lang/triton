@@ -121,17 +121,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %4 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<8192x!tt.ptr<f32>, #blocked>
     %5 = tt.addptr %4, %0 : tensor<8192x!tt.ptr<f32>, #blocked>, tensor<8192xi32, #blocked>
     %6 = tt.load %5 : tensor<8192x!tt.ptr<f32>, #blocked>
-    %c1_i32 = arith.constant 1 : i32
-    %7 = arith.sitofp %c1_i32 : i32 to f32
-    %8 = tt.splat %7 : f32 -> tensor<8192xf32, #blocked>
-    %9 = arith.cmpf une, %6, %8 : tensor<8192xf32, #blocked>
-    %10 = ttg.warp_if %9(%3) {
-      %13 = tt.call @test_frontend._warp_if_body__fp32S8192SLB1_64_4_0_BL_fp32S8192SLB1_64_4_0_BL(%3, %6) : (tensor<8192xf32, #blocked>, tensor<8192xf32, #blocked>) -> tensor<8192xf32, #blocked>
-      ttg.warp_if_yield %13 : tensor<8192xf32, #blocked>
+    %cst = arith.constant 1.000000e+00 : f32
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<8192xf32, #blocked>
+    %7 = arith.cmpf une, %6, %cst_0 : tensor<8192xf32, #blocked>
+    %8 = ttg.warp_if %7(%3) {
+      %11 = tt.call @test_frontend._warp_if_body__fp32S8192SLB1_64_4_0_BL_fp32S8192SLB1_64_4_0_BL(%3, %6) : (tensor<8192xf32, #blocked>, tensor<8192xf32, #blocked>) -> tensor<8192xf32, #blocked>
+      ttg.warp_if_yield %11 : tensor<8192xf32, #blocked>
     } : (tensor<8192xi1, #blocked>, tensor<8192xf32, #blocked>) -> tensor<8192xf32, #blocked>
-    %11 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<8192x!tt.ptr<f32>, #blocked>
-    %12 = tt.addptr %11, %0 : tensor<8192x!tt.ptr<f32>, #blocked>, tensor<8192xi32, #blocked>
-    tt.store %12, %10 : tensor<8192x!tt.ptr<f32>, #blocked>
+    %9 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<8192x!tt.ptr<f32>, #blocked>
+    %10 = tt.addptr %9, %0 : tensor<8192x!tt.ptr<f32>, #blocked>, tensor<8192xi32, #blocked>
+    tt.store %10, %8 : tensor<8192x!tt.ptr<f32>, #blocked>
     tt.return
   }
   tt.func private @test_frontend._warp_if_body__fp32S8192SLB1_64_4_0_BL_fp32S8192SLB1_64_4_0_BL(%arg0: tensor<8192xf32, #blocked>, %arg1: tensor<8192xf32, #blocked>) -> tensor<8192xf32, #blocked> attributes {noinline = false} {

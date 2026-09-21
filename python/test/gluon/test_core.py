@@ -219,7 +219,7 @@ def test_warp_if_fpsan(device):
     kernel[(1, )](x, scale, expected, THREADS_PER_WARP, False, instrumentation_mode="fpsan")
     kernel[(1, )](x, scale, actual, THREADS_PER_WARP, True, instrumentation_mode="fpsan")
     # Compare FPSan's hash values, not the original floating-point products.
-    torch.testing.assert_close(actual, expected, atol=0, rtol=0, equal_nan=True)
+    torch.testing.assert_close(actual.view(torch.int32), expected.view(torch.int32), atol=0, rtol=0)
 
 
 def test_warp_if_loop_reconvergence(device):
