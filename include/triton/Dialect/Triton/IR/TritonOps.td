@@ -174,6 +174,27 @@ def TT_PreciseDivFOp : TT_Op<"precise_divf", [Elementwise,
     let assemblyFormat = "$x `,` $y attr-dict `:` type($x)";
 }
 
+def TT_ApproxDivFOp
+    : TT_Op<"approx_divf", [Elementwise, SameOperandsAndResultType, Pure]> {
+  let summary = "Approximate division for 32-bit floating point types";
+
+  let description = [{
+        Divides x by y with approximate accuracy. On NVIDIA, this lowers to
+        div.approx.f32, with a maximum error of 2 ULP for denominators whose
+        magnitude is in [2^-126, 2^126]. Results outside this range may differ
+        from full-range division. On AMD, this lowers to llvm.amdgcn.fdiv.fast,
+        with a maximum error of 2.5 ULP and no support for denormal inputs or
+        results.
+    }];
+
+  let arguments = (ins AnyTypeOf<[F32, RankedTensorOf<[F32]>]>:$x,
+      AnyTypeOf<[F32, RankedTensorOf<[F32]>]>:$y);
+
+  let results = (outs AnyTypeOf<[F32, RankedTensorOf<[F32]>]>:$result);
+
+  let assemblyFormat = "$x `,` $y attr-dict `:` type($x)";
+}
+
 def TT_MulhiUIOp : TT_Op<"mulhiui", [Elementwise,
                                      SameOperandsAndResultType,
                                      Pure]> {

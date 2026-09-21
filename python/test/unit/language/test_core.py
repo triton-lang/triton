@@ -1248,6 +1248,58 @@ def test_math_divide_op(expr, num_ctas, device):
     _test_binary(dtype, dtype, expr, numpy_expr, device=device, num_ctas=num_ctas)
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("approx", [False, True])
+@pytest.mark.parametrize("reciprocal", [False, True])
+def test_fdiv_approx(approx, reciprocal, device):
+
+    @triton.jit
+    def kernel(X, Y, Z, APPROX: tl.constexpr, RECIPROCAL: tl.constexpr, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        x = 1.0 if RECIPROCAL else tl.load(X + offsets)
+        y = tl.load(Y + offsets)
+        tl.store(Z + offsets, tl.fdiv(x, y, approx=APPROX))
+
+    rng = RandomState(0)
+    # Keep inputs and results normal for both approximate backends.
+    x = rng.uniform(0.5, 2, 128).astype(np.float32)
+    x[::2] *= -1
+    y = rng.uniform(0.5, 2, 128).astype(np.float32)
+    y = np.ldexp(y, np.linspace(-125, 124, y.size).astype(np.int32))
+    y[0], y[-1] = 2.0**-126, 2.0**126
+    x[-1] = 1.0
+    y[::2] *= -1
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(y, device=device)
+    z_tri = to_triton(np.empty_like(x), device=device)
+    compiled = kernel[(1, )](x_tri, y_tri, z_tri, approx, reciprocal, x.size)
+    expected = (np.float32(1.0) if reciprocal else x) / y
+    # AMD's 2.5 ULP bound allows 3 ULP against a rounded reference.
+    maxulp = 3 if approx and is_hip() else 2
+    np.testing.assert_array_max_ulp(to_numpy(z_tri), expected, maxulp=maxulp)
+    if is_cuda() and not is_interpreter():
+        assert ("div.approx.f32" if approx else "div.full.f32") in compiled.asm["ptx"]
+    if approx and is_hip() and not is_interpreter():
+        assert "llvm.amdgcn.fdiv.fast" in compiled.asm["llir"]
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype, ieee_rounding, error", [
+    ("float32", True, "approx and ieee_rounding cannot both be True"),
+    ("float64", False, "approx division requires float32 operands"),
+])
+def test_fdiv_approx_invalid_mode(dtype, ieee_rounding, error, device):
+
+    @triton.jit
+    def kernel(X, IEEE: tl.constexpr):
+        x = tl.load(X)
+        tl.store(X, tl.fdiv(x, x, ieee_rounding=IEEE, approx=True))
+
+    x = to_triton(np.ones(1, dtype=dtype), device=device)
+    with pytest.raises((triton.CompilationError, InterpreterError), match=error):
+        kernel[(1, )](x, ieee_rounding)
+
+
 # -------------
 # test precise math
 # -------------

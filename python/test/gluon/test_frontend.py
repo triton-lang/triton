@@ -2138,6 +2138,7 @@ def math_kernel():
     ttgl.floor(a)
     ttgl.ceil(a)
     ttgl.fma(a, b, c)
+    ttgl.fdiv(a, b, approx=True)
 
 
 @pytest.mark.parametrize("target", ALL_TARGETS)
@@ -2175,6 +2176,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %14 = math.floor %cst_0 : tensor<16x16xf32, #blocked>
     %15 = math.ceil %cst_0 : tensor<16x16xf32, #blocked>
     %16 = math.fma %cst_0, %cst_2, %cst_4 : tensor<16x16xf32, #blocked>
+    %17 = tt.approx_divf %cst_0, %cst_2 : tensor<16x16xf32, #blocked>
     tt.return
   }
 }
