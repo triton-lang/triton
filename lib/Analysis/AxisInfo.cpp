@@ -1,6 +1,7 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
@@ -1341,6 +1342,21 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber,
   retVecs.push_back({contiguity, "tt.contiguity"});
   retVecs.push_back({divisibility, "tt.divisibility"});
   retVecs.push_back({constancy, "tt.constancy"});
+  // Function lowering turns tensor arguments into LLVM structs, losing their
+  // logical rank. Recover it from a per-axis hint before initializing missing
+  // hints with ones.
+  if (isa<LLVM::LLVMStructType>(funcOp.getArgumentTypes()[argNumber])) {
+    for (auto [vec, attrName] : retVecs) {
+      auto attr =
+          funcOp.getArgAttrOfType<DenseElementsAttr>(argNumber, attrName);
+      if (!attr)
+        continue;
+      contiguity->assign(attr.getNumElements(), 1);
+      divisibility->assign(attr.getNumElements(), 1);
+      constancy->assign(attr.getNumElements(), 1);
+      break;
+    }
+  }
   // initialize attributes one by one
   for (auto [vec, attrName] : retVecs) {
     Attribute attr = funcOp.getArgAttr(argNumber, attrName);

@@ -1544,3 +1544,20 @@ tt.func @negative_constants() {
   %sum = arith.addi %neg8_dense, %sixteen : tensor<128xi32>
   tt.return
 }
+
+// -----
+
+// Lowered tensor arguments retain per-axis hints on their LLVM struct types.
+// Missing hints must use the same logical rank.
+tt.func @lowered_tensor_argument_hints(
+    %contiguous: !llvm.struct<(i32, i32)> {tt.contiguity = dense<[1, 2]> : tensor<2xi32>},
+    %divisible: !llvm.struct<(i32, i32)> {tt.divisibility = dense<[8, 8]> : tensor<2xi32>},
+    %constant: !llvm.struct<(i32, i32)> {tt.constancy = dense<[2, 1]> : tensor<2xi32>}) {
+  // expected-remark @below {{contiguity = [1, 2], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>}}
+  %0 = builtin.unrealized_conversion_cast %contiguous : !llvm.struct<(i32, i32)> to tensor<2x2xi32>
+  // expected-remark @below {{contiguity = [1, 1], divisibility = [8, 8], constancy = [1, 1], constant_value = <none>}}
+  %1 = builtin.unrealized_conversion_cast %divisible : !llvm.struct<(i32, i32)> to tensor<2x2xi32>
+  // expected-remark @below {{contiguity = [1, 1], divisibility = [1, 1], constancy = [2, 1], constant_value = <none>}}
+  %2 = builtin.unrealized_conversion_cast %constant : !llvm.struct<(i32, i32)> to tensor<2x2xi32>
+  tt.return
+}

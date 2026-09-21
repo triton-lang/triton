@@ -75,3 +75,17 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32}
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 64], warpsPerCTA = [1, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: tensor_argument_missing_constancy
+  tt.func @tensor_argument_missing_constancy(%ptrs: tensor<1x256x!tt.ptr<f32>, #blocked> {tt.contiguity = dense<[1, 4]> : tensor<2xi32>, tt.divisibility = dense<[16, 16]> : tensor<2xi32>}) {
+    // The omitted constancy hint defaults to [1, 1] after function lowering.
+    // Preserve the explicit hints so the load remains vectorized.
+    // CHECK: llvm.load volatile {{.*}} : !llvm.ptr<1> -> vector<4xf32>
+    %0 = tt.load %ptrs {isVolatile = true} : tensor<1x256x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
