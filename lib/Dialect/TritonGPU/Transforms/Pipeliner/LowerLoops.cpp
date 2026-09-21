@@ -1030,8 +1030,7 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
 scf::ForOp pipelineTwoCTATmemLoads(scf::ForOp forOp, CoarseSchedule &schedule,
                                    ttng::MMAv5OpInterface mma, Value alloc,
                                    int numBuffers) {
-  if (mma->getBlock() != forOp.getBody())
-    return forOp;
+  // Only matching a single load and the tmem is not used by other ops.
   ttng::TMEMLoadOp load;
   for (Operation *user : alloc.getUsers()) {
     if (!forOp->isAncestor(user) || user == mma.getOperation())
@@ -1043,12 +1042,13 @@ scf::ForOp pipelineTwoCTATmemLoads(scf::ForOp forOp, CoarseSchedule &schedule,
   }
   if (!load)
     return forOp;
+
+  // Check if the load op is conditional in if/else branches.
   Block *readBlock = load->getBlock();
-  Operation *topLevelLoad = forOp.getBody()->findAncestorOpInBlock(*load);
-  if ((readBlock != forOp.getBody() &&
-       (!isa<scf::IfOp>(topLevelLoad) ||
-        load->getParentOp() != topLevelLoad)) ||
-      !schedule.isOpBefore(mma, topLevelLoad))
+  Operation *loadOrParent = forOp.getBody()->findAncestorOpInBlock(*load);
+  if ((readBlock != forOp.getBody() && (!isa<scf::IfOp>(loadOrParent) ||
+                                        load->getParentOp() != loadOrParent)) ||
+      !schedule.isOpBefore(mma, loadOrParent))
     return forOp;
 
   IRRewriter rewriter(forOp);
@@ -1063,19 +1063,17 @@ scf::ForOp pipelineTwoCTATmemLoads(scf::ForOp forOp, CoarseSchedule &schedule,
 
   auto waitCluster =
       schedule.clusters.newBefore(schedule.splitClusterBefore(mma, forOp));
-  OpBuilderForStage builder(load.getLoc(), topLevelLoad, schedule);
+  OpBuilderForStage builder(load.getLoc(), loadOrParent, schedule);
   Value barrier = triton::createSingleBufferView(builder, barriers, index);
   Value ringSize = arith::ConstantIntOp::create(builder, numBuffers, 32);
   Value didRead = arith::ConstantIntOp::create(builder, 1, 1);
-  if (auto ifOp = dyn_cast<scf::IfOp>(topLevelLoad)) {
+  if (auto ifOp = dyn_cast<scf::IfOp>(loadOrParent)) {
     didRead = ifOp.getCondition();
     if (readBlock == ifOp.elseBlock())
       didRead = arith::XOrIOp::create(
           builder, didRead, arith::ConstantIntOp::create(builder, 1, 1));
   }
 
-  // Signal after the epilogue so TMEM subtiling can consume each half before
-  // loading the next, without keeping the whole accumulator live at a barrier.
   builder.setInsertionPoint(readBlock->getTerminator());
   ttng::ArriveBarrierOp::create(builder, barrier, 1);
   auto yield = forOp.getBody()->getTerminator();
@@ -1090,9 +1088,6 @@ scf::ForOp pipelineTwoCTATmemLoads(scf::ForOp forOp, CoarseSchedule &schedule,
   yield->setOperand(firstArg, nextIndex);
   yield->setOperand(firstArg + 1, nextPhase);
 
-  // With N TMEM buffers, the earliest overwrite is N iterations after the
-  // producer. Let the existing pipeline put the wait just before that MMA.
-  // Advance the barrier ring only when the conditional read actually executes.
   builder.setStageCluster({schedule[mma].first + numBuffers, waitCluster});
   ttng::WaitBarrierOp::create(builder, barrier, phase, didRead);
   return forOp;
