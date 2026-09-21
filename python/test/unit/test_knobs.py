@@ -208,11 +208,11 @@ def test_amd_llvm_options_concurrent():
 
     compiler.llvm.init_targets()
     source = _amd_scheduler_kernel()
-    # gfx950 codegen needs a process-wide LLVM option that gfx1250 codegen must
+    # gfx942 codegen needs a process-wide LLVM option that gfx1250 codegen must
     # not see, and every HSACO link resets all LLVM options.
     backends = {
         arch: compiler.HIPBackend(GPUTarget("hip", arch, warp_size))
-        for arch, warp_size in [("gfx950", 64), ("gfx1250", 32)]
+        for arch, warp_size in [("gfx942", 64), ("gfx1250", 32)]
     }
 
     def emit(arch):
@@ -224,9 +224,9 @@ def test_amd_llvm_options_concurrent():
         return amdgcn
 
     expected = {arch: emit(arch) for arch in backends}
-    assert expected["gfx950"] != expected["gfx1250"]
+    assert expected["gfx942"] != expected["gfx1250"]
 
-    archs = [("gfx950", "gfx1250")[index % 2] for index in range(24)]
+    archs = [("gfx942", "gfx1250")[index % 2] for index in range(24)]
     with ThreadPoolExecutor(max_workers=8) as executor:
         results = list(executor.map(emit, archs))
 
@@ -236,7 +236,7 @@ def test_amd_llvm_options_concurrent():
 @pytest.mark.parametrize(("arch", "enable_fp_fusion", "disable_opt", "expected_flags", "disable_optimization"), [
     ("gfx90a", True, None, [], False),
     ("gfx942", False, "1", ["amdgpu-use-amdgpu-trackers"], True),
-    ("gfx950", True, "disable-lsr", ["amdgpu-use-amdgpu-trackers"], False),
+    ("gfx950", True, "disable-lsr", [], False),
     ("gfx1250", True, "0", [], False),
 ])
 def test_amd_codegen_options(arch, enable_fp_fusion, disable_opt, expected_flags, disable_optimization, fresh_knobs,
