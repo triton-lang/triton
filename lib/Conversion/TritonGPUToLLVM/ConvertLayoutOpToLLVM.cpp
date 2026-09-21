@@ -126,7 +126,7 @@ struct ConvertLayoutOpConversion
           loc, rewriter, srcLayout, dstLayout, newInVals, i8ElemTy, smemBase,
           sourceOp);
       for (auto &v : outVals) {
-        v = b.trunc(llvmElemTy, v);
+        v = b.trunc(llvmElemTy, v, LLVM::IntegerOverflowFlags::nuw);
       }
       return outVals;
     }
@@ -360,7 +360,7 @@ struct ConvertLayoutOpConversion
       }
       if (bitwidth < bitsPerVecElem) {
         for (Value &v : unpackedVals) {
-          v = b.trunc(int_ty(bitwidth), v);
+          v = b.trunc(int_ty(bitwidth), v, LLVM::IntegerOverflowFlags::nuw);
           if (elemTy != int_ty(bitwidth))
             v = b.bitcast(v, elemTy);
         }
