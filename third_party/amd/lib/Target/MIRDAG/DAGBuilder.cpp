@@ -7,7 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "DAGBuilder.h"
-#include "AMDGPUInstrUtils.h"
 
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/AssumptionCache.h"
@@ -48,109 +47,13 @@ using namespace llvm::mir_dag;
 
 namespace {
 
-/// S_WAITCNT immediate encoding for GFX9/GFX10 (AMDGPU). This layout is public
-/// (documented in AMD's GCN/CDNA ISA reference guides), but it is version-
-/// specific:
-///   bits [3:0]  = VM_CNT  (VMEM operations like BUFFER_LOAD)
-///   bits [6:4]  = EXP_CNT (export operations)
-///   bits [11:8] = LGKM_CNT (LDS/GDS/SMEM operations like DS_READ/DS_WRITE)
-///
-/// When a counter is at its max value, it means "don't wait" for that type.
-/// GFX9: vmcnt max=15, expcnt max=7, lgkmcnt max=15.
-///
-/// This hardcodes the gfx9/10 layout, which is the packed S_WAITCNT used by
-/// gfx9/gfx10 (MI300/MI350). gfx11+ (including gfx1250/MI450) does NOT use
-/// packed S_WAITCNT -- it emits split counters (S_WAIT_LOADCNT/STORECNT/DSCNT/
-/// TENSORCNT). So on gfx1250 isWaitcnt() is always false and this decode never
-/// runs; the barrier-edge filter simply keeps all such edges there. It is only
-/// exercised (and correct) on gfx9/10.
-///
-/// TODO(tyb0807): to also refine split-counter waits on gfx11+, use LLVM's
-/// version-aware decoders (AMDGPU::decodeLoadcnt/decodeDscnt/... (IsaVersion,
-/// Imm) in lib/Target/AMDGPU/Utils/AMDGPUBaseInfo.h). They are not in the
-/// installed public headers; adopt them once a public waitcnt-decode API is
-/// exposed upstream.
-struct WaitCounts {
-  unsigned VMCnt;   // 0-15, 15 = don't wait for VMEM.
-  unsigned ExpCnt;  // 0-7, 7 = don't wait for exports.
-  unsigned LGKMCnt; // 0-15, 15 = don't wait for LDS/GDS/SMEM.
-
-  static constexpr unsigned VMCntMax = 15;
-  static constexpr unsigned ExpCntMax = 7;
-  static constexpr unsigned LGKMCntMax = 15;
-
-  bool waitsForVMEM() const { return VMCnt < VMCntMax; }
-  bool waitsForLDS() const { return LGKMCnt < LGKMCntMax; }
-  bool waitsForExport() const { return ExpCnt < ExpCntMax; }
-
-  /// Two S_WAITCNTs are independent when the sets of hardware counters they
-  /// each wait on do not overlap. Such waitcnts commute (each only stalls on
-  /// its own disjoint counter), so there is no ordering dependency between
-  /// them.
-  bool disjointFrom(const WaitCounts &Other) const {
-    return !(waitsForVMEM() && Other.waitsForVMEM()) &&
-           !(waitsForLDS() && Other.waitsForLDS()) &&
-           !(waitsForExport() && Other.waitsForExport());
-  }
-};
-
-/// Decode S_WAITCNT immediate value into individual wait counts.
-WaitCounts decodeWaitCnt(unsigned Imm) {
-  WaitCounts WC;
-  WC.VMCnt = Imm & 0xF;
-  WC.ExpCnt = (Imm >> 4) & 0x7;
-  WC.LGKMCnt = (Imm >> 8) & 0xF;
-  return WC;
-}
-
-/// Get S_WAITCNT immediate operand value.
-/// Returns the immediate value if found, or ~0u if not.
-unsigned getWaitCntImm(const MachineInstr *MI) {
-  for (const MachineOperand &MO : MI->operands()) {
-    if (MO.isImm())
-      return static_cast<unsigned>(MO.getImm());
-  }
-  return ~0u;
-}
-
-/// Check if an edge should be filtered based on S_WAITCNT semantics.
-/// Returns true if the edge should be KEPT, false if it should be FILTERED.
-bool shouldKeepBarrierEdge(const MachineInstr *Src, const MachineInstr *Dst) {
-  // Only filter barrier edges to S_WAITCNT.
-  if (!isWaitcnt(*Dst))
-    return true;
-
-  unsigned Imm = getWaitCntImm(Dst);
-  if (Imm == ~0u)
-    return true; // Can't decode, keep edge to be safe.
-
-  WaitCounts WC = decodeWaitCnt(Imm);
-
-  // S_WAITCNT -> S_WAITCNT: the scheduler emits an order edge between adjacent
-  // waitcnts, but two waitcnts that wait on disjoint counter sets (e.g.
-  // vmcnt-only vs lgkmcnt-only) are independent and commute. Filter that
-  // spurious edge so a pass that legitimately relocates one waitcnt (e.g.
-  // insert-cond-barrier hoisting a vmcnt throttle into a uniform guard block)
-  // is not flagged as reordering a real dependency.
-  if (isWaitcnt(*Src)) {
-    unsigned SrcImm = getWaitCntImm(Src);
-    if (SrcImm == ~0u)
-      return true; // Can't decode source, keep edge to be safe.
-    if (decodeWaitCnt(SrcImm).disjointFrom(WC))
-      return false;
-    return true;
-  }
-
-  // If source is VMEM and S_WAITCNT doesn't wait for VMEM, filter the edge.
-  if (isVMEMOp(*Src) && !WC.waitsForVMEM())
-    return false;
-
-  // If source is LDS and S_WAITCNT doesn't wait for LDS, filter the edge.
-  if (isLDSOp(*Src) && !WC.waitsForLDS())
-    return false;
-
-  return true;
-}
+// Barrier edges are kept as-is. LLVM inserts the AMDGPU wait-count
+// instructions (S_WAITCNT on gfx9/10, the split S_WAIT_* counters on gfx11+)
+// in GCNPassConfig::addPreEmitPass, which runs after register allocation --
+// long after the machine-scheduler point this MIR is dumped at. There are
+// therefore no wait-count instructions in the DAG to reason about, and no
+// counter semantics to filter barrier edges by. See
+// test_no_waitcnt_before_machine_scheduler, which guards that ordering.
 
 /// Check if a memory edge should be kept using proper alias analysis.
 /// Uses MachineInstr::mayAlias with AAResults for precise aliasing.
@@ -233,10 +136,6 @@ public:
         case SDep::Order:
           // Order dependencies: classify by flags.
           if (Succ.isBarrier()) {
-            // Filter spurious barrier edges based on S_WAITCNT semantics.
-            // E.g., BUFFER_LOAD -> S_WAITCNT with vmcnt=15 is not a real dep.
-            if (!shouldKeepBarrierEdge(SrcMI, DstMI))
-              continue;
             Edge.Type = DAGEdge::Barrier;
           } else if (Succ.isMustAlias()) {
             // Must-alias edges are real dependencies - keep them.
