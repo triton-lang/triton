@@ -1206,34 +1206,43 @@ static LinearLayout removeCGAFromLinearLayout(const LinearLayout &layout) {
                       llvm::to_vector(layout.getOutDimNames()));
 }
 
-static LinearLayout
-localPartitionPieceToLinearLayout(ArrayRef<int64_t> pieceShape,
-                                  SharedEncodingTrait inner) {
+static Attribute dropCGA(SharedEncodingTrait inner) {
   auto *ctx = inner.getContext();
-  auto oneCTA = CGAEncodingAttr::get1CTALayout(ctx, pieceShape.size());
-  LinearLayout localPiece = LinearLayout::empty();
-
   if (auto padded = dyn_cast<PaddedSharedEncodingAttr>(inner)) {
     // Padded layouts carry their linear component directly. It was built for
     // one logical piece across the CGA, so removing block bases recovers the
-    // layout of that piece within one CTA.
-    localPiece = removeCGAFromLinearLayout(padded.getLinearComponent());
-  } else if (auto swizzled = dyn_cast<SwizzledSharedEncodingAttr>(inner)) {
-    auto localEncoding = SwizzledSharedEncodingAttr::get(
-        ctx, swizzled.getVec(), swizzled.getPerPhase(), swizzled.getMaxPhase(),
-        swizzled.getOrder(), oneCTA);
-    localPiece = localEncoding.toLinearLayout(pieceShape);
-  } else if (auto rotating = dyn_cast<AMDRotatingSharedEncodingAttr>(inner)) {
-    auto localEncoding = AMDRotatingSharedEncodingAttr::get(
-        ctx, rotating.getVec(), rotating.getPerPhase(), rotating.getMaxPhase(),
-        rotating.getOrder(), oneCTA);
-    localPiece = localEncoding.toLinearLayout(pieceShape);
-  } else if (auto linear = dyn_cast<SharedLinearEncodingAttr>(inner)) {
-    localPiece = removeCGAFromLinearLayout(linear.getLinearLayout());
-  } else {
-    llvm_unreachable("unsupported partitioned shared inner layout");
+    // layout of that piece within one CTA. Use SharedLinearEncodingAttr as the
+    // CGA-free representation because padding is not expressible in a
+    // LinearLayout.
+    return SharedLinearEncodingAttr::get(
+        ctx, removeCGAFromLinearLayout(padded.getLinearComponent()),
+        /*layoutAlignment=*/1);
   }
 
+  auto layoutEncoding = cast<LayoutEncodingTrait>(inner);
+  auto oneCTA = CGAEncodingAttr::get1CTALayout(ctx, layoutEncoding.getRank());
+  if (auto swizzled = dyn_cast<SwizzledSharedEncodingAttr>(inner)) {
+    return SwizzledSharedEncodingAttr::get(
+        ctx, swizzled.getVec(), swizzled.getPerPhase(), swizzled.getMaxPhase(),
+        swizzled.getOrder(), oneCTA);
+  }
+  if (auto rotating = dyn_cast<AMDRotatingSharedEncodingAttr>(inner)) {
+    return AMDRotatingSharedEncodingAttr::get(
+        ctx, rotating.getVec(), rotating.getPerPhase(), rotating.getMaxPhase(),
+        rotating.getOrder(), oneCTA);
+  }
+  if (auto linear = dyn_cast<SharedLinearEncodingAttr>(inner)) {
+    return SharedLinearEncodingAttr::get(
+        ctx, removeCGAFromLinearLayout(linear.getLinearLayout()),
+        linear.getAlignment());
+  }
+  llvm_unreachable("unsupported partitioned shared inner layout");
+}
+
+static LinearLayout
+localPartitionPieceToLinearLayout(ArrayRef<int64_t> pieceShape,
+                                  SharedEncodingTrait inner) {
+  auto localPiece = toLinearLayout(pieceShape, dropCGA(inner));
   assert(llvm::equal(localPiece.getOutDimSizes(), pieceShape) &&
          "partition layout does not match the per-CTA piece shape");
   return localPiece;
