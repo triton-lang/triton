@@ -935,8 +935,6 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
 
   patterns.add<ElementwiseToIntrinsicOpConversion<triton::PreciseSqrtOp>>(
       typeConverter, axisInfoAnalysis, "llvm.nvvm.sqrt.rn.f", benefit);
-  patterns.add<ElementwiseToIntrinsicOpConversion<triton::PreciseDivFOp>>(
-      typeConverter, axisInfoAnalysis, "llvm.nvvm.div.rn.f", benefit);
 
   mlir::triton::populateElementwiseOpToLLVMPatterns(typeConverter, patterns,
                                                     axisInfoAnalysis, benefit);
@@ -948,6 +946,7 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   POPULATE_OP(arith::SubFOp, LLVM::FSubOp);
   POPULATE_OP(arith::AddFOp, LLVM::FAddOp);
   POPULATE_OP(arith::MulFOp, LLVM::FMulOp);
+  POPULATE_OP(triton::PreciseDivFOp, LLVM::FDivOp);
 
   POPULATE_OP(arith::ExtFOp, LLVM::FPExtOp);
   POPULATE_OP(arith::TruncFOp, LLVM::FPTruncOp);
