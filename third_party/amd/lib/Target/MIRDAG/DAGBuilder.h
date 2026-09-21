@@ -82,9 +82,16 @@ public:
   explicit DAGBuilder(MachineFunction &MF, LiveIntervals *LIS = nullptr);
   ~DAGBuilder();
 
-  /// Build DAG for a single basic block, return all edges.
+  /// Build the DAG for one scheduling region -- the half-open instruction
+  /// range [\p Begin, \p End) within \p MBB -- and return all edges.
   /// Filters out Artificial/Cluster edges (returns them as Kind::Other).
-  SmallVector<DAGEdge, 64> buildDAG(MachineBasicBlock &MBB);
+  ///
+  /// Use getSchedulingRegions to carve a block into the ranges LLVM's own
+  /// scheduler would use; passing a range that spans a scheduling boundary
+  /// yields a DAG missing the constraints that boundary stands for.
+  SmallVector<DAGEdge, 64> buildDAG(MachineBasicBlock &MBB,
+                                    MachineBasicBlock::iterator Begin,
+                                    MachineBasicBlock::iterator End);
 
 private:
   MachineFunction &MF;
@@ -106,9 +113,30 @@ private:
 /// Helper to convert edge kind to string for debugging.
 const char *edgeKindToString(DAGEdge::Kind K);
 
+/// A scheduling region: the half-open instruction range LLVM's machine
+/// scheduler treats as one reorderable unit.
+struct SchedulingRegion {
+  MachineBasicBlock::iterator Begin;
+  MachineBasicBlock::iterator End;
+};
+
+/// Carve \p MBB into the same scheduling regions MachineScheduler would use,
+/// in program order.
+///
+/// A region is a maximal run of instructions between scheduling boundaries;
+/// the boundaries themselves belong to no region and are not reorderable. This
+/// mirrors getSchedRegions in MachineScheduler.cpp -- note that a region is
+/// generally a PART of a basic block, not the whole of it: on AMDGPU a
+/// boundary is a terminator or label, an INLINEASM_BR, a call, a fake use, a
+/// SCHED_BARRIER with mask 0, or any IDX0 write. Triton itself emits mask-0
+/// sched barriers (see BlockPingpong and ConvertWarpPipeline) precisely to
+/// stop the backend reordering across them, so multi-region blocks are the
+/// common case rather than a corner case.
+SmallVector<SchedulingRegion, 8> getSchedulingRegions(MachineBasicBlock &MBB);
+
 /// Emit one MachineFunction's scheduling DAG as a (bb, position)-keyed edge
-/// list to \p os. \p LIS (if non-null) enables subregister-precise
-/// dependencies.
+/// list to \p os, one section per scheduling region. \p LIS (if non-null)
+/// enables subregister-precise dependencies.
 void emitSchedulingDAGForMF(raw_ostream &os, MachineFunction &MF,
                             LiveIntervals *LIS = nullptr);
 
