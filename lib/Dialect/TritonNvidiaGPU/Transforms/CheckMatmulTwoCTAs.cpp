@@ -1,3 +1,4 @@
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
@@ -60,6 +61,11 @@ public:
       return;
     bool twoCTAValue = firstMatmul ? firstTwoCTA : false;
     mod->setAttr(AttrTwoCTAsName, BoolAttr::get(mod.getContext(), twoCTAValue));
+    // Automatic warp specialization does not yet synchronize TMEM reuse across
+    // the two CTAs. Clear the hints before latency assignment and scheduling so
+    // these kernels use the regular software pipeline instead.
+    if (twoCTAValue)
+      mod.walk([](Operation *op) { op->removeAttr(kWarpSpecializeAttrName); });
   }
 };
 

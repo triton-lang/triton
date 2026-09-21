@@ -1097,6 +1097,83 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
                             domInfo);
 }
 
+scf::ForOp pipelineTwoCTATmemLoads(scf::ForOp forOp, CoarseSchedule &schedule,
+                                   ttng::MMAv5OpInterface mma, Value alloc,
+                                   int numBuffers) {
+  // Only handle one read in the loop body or in a directly nested conditional.
+  // Warp-specialized regions and more complex lifetimes are out of scope.
+  if (forOp->getParentOfType<ttg::WarpSpecializeOp>())
+    return forOp;
+  ttng::TMEMLoadOp load;
+  for (Operation *user : alloc.getUsers()) {
+    if (!forOp->isAncestor(user) || user == mma.getOperation())
+      continue;
+    auto read = dyn_cast<ttng::TMEMLoadOp>(user);
+    if (!read || load)
+      return forOp;
+    load = read;
+  }
+  if (!load || mma->getBlock() != forOp.getBody())
+    return forOp;
+  Operation *topLevelLoad = forOp.getBody()->findAncestorOpInBlock(*load);
+  if ((load->getBlock() != forOp.getBody() &&
+       (!isa<scf::IfOp>(topLevelLoad) ||
+        load->getParentOp() != topLevelLoad)) ||
+      !schedule.isOpBefore(mma, topLevelLoad))
+    return forOp;
+
+  IRRewriter rewriter(forOp);
+  Value zero = arith::ConstantIntOp::create(rewriter, forOp.getLoc(), 0, 32);
+  Value one = arith::ConstantIntOp::create(rewriter, forOp.getLoc(), 1, 32);
+  unsigned firstArg = forOp.getNumRegionIterArgs();
+  forOp = addIterArgsToLoop(rewriter, forOp, {zero, zero});
+  appendToForOpYield(forOp, {zero, zero});
+  Value index = forOp.getRegionIterArg(firstArg);
+  Value phase = forOp.getRegionIterArg(firstArg + 1);
+  Value barriers = createBarrierAlloc(forOp, numBuffers, 1, /*twoCTAs=*/true);
+
+  auto waitCluster =
+      schedule.clusters.newBefore(schedule.splitClusterBefore(mma, forOp));
+  auto readStage = schedule[topLevelLoad];
+  OpBuilderForStage builder(load.getLoc(), topLevelLoad, schedule);
+  Value barrier = triton::createSingleBufferView(builder, barriers, index);
+  Value ringSize = arith::ConstantIntOp::create(builder, numBuffers, 32);
+  Value vFalse = arith::ConstantIntOp::create(builder, 0, 1);
+  Value vTrue = arith::ConstantIntOp::create(builder, 1, 1);
+
+  // Signal after the epilogue so TMEM subtiling can consume each half before
+  // loading the next, without keeping the whole accumulator live at a barrier.
+  builder.setInsertionPoint(load->getBlock()->getTerminator());
+  ttng::ArriveBarrierOp::create(builder, barrier, 1);
+  Value wrap;
+  Value nextIndex = createIncrementModulo(builder, load.getLoc(), index,
+                                          ringSize, zero, one, &wrap);
+  Value toggled = arith::XOrIOp::create(builder, phase, one);
+  Value nextPhase = arith::SelectOp::create(builder, wrap, toggled, phase);
+  nextIndex =
+      sinkValueRedefinition(rewriter, index, nextIndex, load->getBlock());
+  auto yield = forOp.getBody()->getTerminator();
+  yield->setOperand(firstArg, nextIndex);
+  nextPhase =
+      sinkValueRedefinition(rewriter, phase, nextPhase, load->getBlock());
+  yield->setOperand(firstArg + 1, nextPhase);
+  Value didRead =
+      sinkValueRedefinition(rewriter, vFalse, vTrue, load->getBlock());
+  Operation *newTopLevelLoad = forOp.getBody()->findAncestorOpInBlock(*load);
+  if (newTopLevelLoad != topLevelLoad) {
+    schedule.erase(topLevelLoad);
+    schedule.insert(newTopLevelLoad, readStage.first, readStage.second);
+  }
+
+  // With N TMEM buffers, the earliest overwrite is N iterations after the
+  // producer. Let the existing pipeline put the wait just before that MMA.
+  // Advance the barrier ring only when the conditional read actually executes.
+  builder.setInsertionPoint(yield);
+  builder.setStageCluster({schedule[mma].first + numBuffers, waitCluster});
+  ttng::WaitBarrierOp::create(builder, barrier, phase, didRead);
+  return forOp;
+}
+
 scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
                     CoarseSchedule &schedule) {
   Value alloc = mma.getAccumulator();
@@ -1163,6 +1240,10 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
 
   createBarrierAndWaitOps(forOp, schedule, mma, mmaSelfLatency, alloc,
                           phaseArgIdx, barrierIdxArgIdx);
+
+  if (mma.getTwoCtas())
+    forOp =
+        pipelineTwoCTATmemLoads(forOp, schedule, mma, alloc, tmemUseNumStages);
 
   if (tmemUseNumStages > 1) {
     multibufferTensorMemory(forOp, schedule,
