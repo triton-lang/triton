@@ -1284,6 +1284,104 @@ def test_fdiv_approx(approx, reciprocal, device):
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("denominator", [3.0, -3.0, 2.0**-126, -(2.0**-126), 2.0**126, -(2.0**126)])
+@pytest.mark.parametrize("ieee_rounding", [False, True])
+def test_fdiv_constant_in_range(denominator, ieee_rounding, device):
+
+    @triton.jit
+    def kernel(X, Y, DENOMINATOR: tl.constexpr, IEEE: tl.constexpr, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        x = tl.load(X + offsets)
+        if IEEE:
+            y = tl.fdiv(x, DENOMINATOR, ieee_rounding=True)
+        else:
+            y = x / DENOMINATOR
+        tl.store(Y + offsets, y)
+
+    x = RandomState(0).uniform(-2, 2, 1024).astype(np.float32)
+    x[:8] = [
+        0.0, -0.0, np.inf, -np.inf, np.nan,
+        np.finfo(np.float32).tiny, -np.finfo(np.float32).tiny,
+        np.nextafter(np.float32(0), np.float32(1))
+    ]
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(np.empty_like(x), device=device)
+    compiled = kernel[(1, )](x_tri, y_tri, denominator, ieee_rounding, x.size)
+    expected = x / np.float32(denominator)
+    maxulp = 0 if ieee_rounding else 2
+    np.testing.assert_array_max_ulp(to_numpy(y_tri), expected, maxulp=maxulp)
+    if not is_interpreter():
+        if is_cuda():
+            assert ("div.rn.f32" if ieee_rounding else "div.approx.f32") in compiled.asm["ptx"]
+            if not ieee_rounding:
+                assert re.search(r"tt\.approx_divf [^\n]* : f32", compiled.asm["ttgir"])
+                assert compiled.asm["ptx"].count("div.approx.f32") == 1
+        elif not ieee_rounding:
+            assert "arith.divf" in compiled.asm["ttgir"]
+
+
+@pytest.mark.skipif(not is_cuda(), reason="Requires NVIDIA division lowering")
+def test_fdiv_constant_matches_div_full(device):
+
+    @triton.jit
+    def kernel(X, Z, DENOMINATOR: tl.constexpr, REFERENCE: tl.constexpr, BLOCK: tl.constexpr):
+        offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+        x = tl.load(X + offsets).to(tl.float32, bitcast=True)
+        y = tl.full((), DENOMINATOR, tl.float32)
+        if REFERENCE:
+            result = tl.inline_asm_elementwise("div.full.f32 $0, $1, $2;", "=f,f,f", [x, y], dtype=tl.float32,
+                                               is_pure=True, pack=1)
+        else:
+            result = x / y
+        tl.store(Z + offsets, result.to(tl.uint32, bitcast=True))
+
+    rng = RandomState(0)
+    # Sample the full FP32 encoding range, including subnormals and NaN payloads.
+    x_bits = rng.randint(0, 2**32, size=2**16, dtype=np.uint32)
+    x_bits[:16] = [
+        0x00000000,
+        0x80000000,
+        0x00000001,
+        0x80000001,
+        0x007FFFFF,
+        0x807FFFFF,
+        0x00800000,
+        0x80800000,
+        0x7F7FFFFF,
+        0xFF7FFFFF,
+        0x7F800000,
+        0xFF800000,
+        0x7FC00000,
+        0xFFC00000,
+        0x7F800001,
+        0xFF800001,
+    ]
+    # Positive FP32 encodings are ordered by value. Sample the rewrite's
+    # denominator range [2**-126, 2**126], including both endpoints and signs.
+    magnitudes = np.concatenate((
+        rng.randint(0x00800000, 0x7E800001, size=16, dtype=np.uint32),
+        np.array([0x00800000, 0x7E800000], dtype=np.uint32),
+    ))
+    denominators = np.concatenate((magnitudes, magnitudes | np.uint32(0x80000000)))
+    x_tri = to_triton(x_bits, device=device)
+    constant_bits = to_triton(np.empty_like(x_bits), device=device)
+    reference_bits = to_triton(np.empty_like(x_bits), device=device)
+    grid = (triton.cdiv(x_bits.size, 1024), )
+    for denominator_bits in denominators.tolist():
+        y_bits = np.array([denominator_bits], dtype=np.uint32)
+        denominator = y_bits.view(np.float32).item()
+        # Compare separate specializations against the original constant
+        # div.full: PTXAS can use different reciprocals for runtime denominators.
+        constant = kernel[grid](x_tri, constant_bits, denominator, False, BLOCK=1024)
+        reference = kernel[grid](x_tri, reference_bits, denominator, True, BLOCK=1024)
+        assert re.search(r"tt\.approx_divf [^\n]* : f32", constant.asm["ttgir"])
+        assert "div.approx.f32" in constant.asm["ptx"]
+        assert "div.full.f32" in reference.asm["ptx"]
+        np.testing.assert_array_equal(to_numpy(constant_bits), to_numpy(reference_bits),
+                                      err_msg=f"denominator bits: 0x{denominator_bits:08x}")
+
+
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype, ieee_rounding, error", [
     ("float32", True, "approx and ieee_rounding cannot both be True"),
     ("float64", False, "approx division requires float32 operands"),
