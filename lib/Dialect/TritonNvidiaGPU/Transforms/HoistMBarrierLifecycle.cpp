@@ -2,6 +2,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
@@ -347,10 +348,10 @@ private:
 
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPoint(loops.front());
-    // The original zero may also be used outside this loop's parent region.
-    // Moving it here could break dominance for those uses.
-    Value phase =
-        arith::ConstantIntOp::create(builder, loops.front()->getLoc(), 0, 32);
+    // Keep an already-dominating zero in place; otherwise hoist it.
+    Value phase = lifecycle.initialPhase;
+    if (!DominanceInfo().dominates(phase, loops.front().getOperation()))
+      phase.getDefiningOp()->moveBefore(loops.front());
     Value phaseOne =
         arith::ConstantIntOp::create(builder, loops.front()->getLoc(), 1, 32);
 
