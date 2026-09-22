@@ -434,8 +434,8 @@ jobs:
         run: |
           set -euo pipefail
           k_runtime="not (test_device_assert or test_expect_zero_device_assert or test_sanitize_int or test_replenishing_process_pool_reuses_clean_processes or test_run_in_process_handles_large_exceptions)"
-          k_core="not (test_load_store_same_ptr or (test_scan2d and shape365) or (test_scan2d and shape869) or (test_umulhi and int64) or (test_umulhi and uint64) or (test_scaled_dot and e2m1-e4m3))"
-          k_matmul="not (test_preshuffle_scale_mxfp_cdna4 or test_batched_mxfp or test_mxfp8_mxfp4_matmul or test_block_scale_fp4 or (test_simple_matmul and False-4-1-128-128-16-4-float64-float64) or (test_simple_matmul and False-8-1-128-128-16-4-float64-float64))"
+          k_core="not (test_load_store_same_ptr or test_atomic_cas or (test_scan2d and shape365) or (test_scan2d and shape869) or (test_umulhi and int64) or (test_umulhi and uint64) or (test_scaled_dot and e2m1-e4m3))"
+          k_matmul="not (test_preshuffle_scale_mxfp_cdna4 or test_batched_mxfp or test_mxfp8_mxfp4_matmul or test_block_scale_fp4 or (test_simple_matmul and float64-float64))"
           k_tdesc="not (tensor_descriptor_reduce or test_tensor_descriptor_padding or test_host_tensor_descriptor_round_f32_to_tf32)"
 
           k_all="$k_runtime and $k_core and $k_matmul and $k_tdesc"
