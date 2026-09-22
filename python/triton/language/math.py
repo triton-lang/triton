@@ -196,10 +196,6 @@ def fdiv(x, y, ieee_rounding=False, approx=False, _semantic=None):
     """
     Computes the element-wise division of :code:`x` by :code:`y`.
 
-    On NVIDIA, float32 division by a constant denominator with magnitude in
-    [2**-126, 2**126] can use approximate division automatically, unless
-    ``ieee_rounding=True``.
-
     :param x: the numerator
     :param y: the denominator
     :param ieee_rounding: if True, use IEEE round-to-nearest division.
