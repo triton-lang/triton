@@ -901,8 +901,8 @@ def _run_bulk_case(write_after_read=False, acquire=False):
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 def test_bulk_async_load_read_after_write():
-    _run_failure_case("bulk_raw", runner=_run_bulk_case, source_function=_bulk_load.fn,
-                      marker="hopper.bulk.async_load", error="Read after write race detected")
+    _run_failure_case("bulk_raw", runner=_run_bulk_case, source_function=_bulk_load.fn, marker="hopper.bulk.async_load",
+                      error="Read after write race detected")
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
@@ -925,6 +925,5 @@ def _bulk_war_kernel(src, out, ready):
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 def test_bulk_async_load_write_after_read():
-    _run_failure_case("bulk_war", runner=_run_bulk_case, runner_args=(True, ),
-                      source_function=_bulk_war_kernel.fn, marker="gl.store(src + 11",
-                      error="Write after read race detected")
+    _run_failure_case("bulk_war", runner=_run_bulk_case, runner_args=(True, ), source_function=_bulk_war_kernel.fn,
+                      marker="gl.store(src + 11", error="Write after read race detected")
