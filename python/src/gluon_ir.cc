@@ -1069,7 +1069,7 @@ void init_gluon_ir(py::module_ &m) {
            })
       .def(
           "create_mbarrier_expect",
-          [](GluonOpBuilder &self, Value memDesc, Value bytes, Value pred,
+          [](GluonOpBuilder &self, Value memDesc, int bytes, Value pred,
              std::optional<int> fromCTA) {
             IntegerAttr fromCTAAttr =
                 fromCTA ? self.getBuilder().getI32IntegerAttr(*fromCTA)
@@ -1161,7 +1161,7 @@ void init_gluon_ir(py::module_ &m) {
            })
 
       .def("create_async_bulk_copy_global_to_local",
-           [](GluonOpBuilder &self, Value dst, Value src, Value numBytes,
+           [](GluonOpBuilder &self, Value dst, Value src, int32_t numBytes,
               Value barrier, Value pred, bool multicast) {
              multicast &=
                  ttng::hasCGABroadcast(cast<ttg::MemDescType>(dst.getType()));

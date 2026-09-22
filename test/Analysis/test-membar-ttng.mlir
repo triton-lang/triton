@@ -48,8 +48,7 @@ tt.func @warpgroup_wait_followed_by_barrier_expect(%acc: tensor<256xf32, #blocke
   // CHECK-NEXT: ttng.barrier_expect
   %wait = ttng.warp_group_dot_wait %acc {pendings = 0 : i32} : tensor<256xf32, #blocked>
   %next = arith.addi %value, %c1 : i32
-  %bulk_bytes_1 = arith.constant 8 : i32
-  ttng.barrier_expect %barrier, %bulk_bytes_1, %true : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+  ttng.barrier_expect %barrier, 8, %true : !ttg.memdesc<1xi64, #shared, #smem, mutable>
   tt.return
 }
 
@@ -338,8 +337,7 @@ tt.func @tma_special_cases(%arg1: !tt.tensordesc<256x64xf16, #shared>, %arg2: !t
   // CHECK-NEXT: ttng.barrier_expect
   // CHECK-NEXT: ttng.async_tma_copy_global_to_local
   // CHECK-NEXT: ttng.wait_barrier
-  %bulk_bytes_2 = arith.constant 49152 : i32
-  ttng.barrier_expect %barrier, %bulk_bytes_2, %true : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
+  ttng.barrier_expect %barrier, 49152, %true : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
   ttng.async_tma_copy_global_to_local %arg1[%c0, %c0] %alloc, %barrier, %true : !tt.tensordesc<256x64xf16, #shared>, !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable> -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
   ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
 
@@ -349,8 +347,7 @@ tt.func @tma_special_cases(%arg1: !tt.tensordesc<256x64xf16, #shared>, %arg2: !t
   // CHECK-NEXT: ttng.barrier_expect
   // CHECK-NEXT: ttng.wait_barrier
   ttng.async_tma_copy_global_to_local %arg1[%c0, %c0] %alloc, %barrier, %true : !tt.tensordesc<256x64xf16, #shared>, !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable> -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
-  %bulk_bytes_3 = arith.constant 49152 : i32
-  ttng.barrier_expect %barrier, %bulk_bytes_3, %true : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
+  ttng.barrier_expect %barrier, 49152, %true : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
   ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
 
   // CHECK-NEXT: ttg.local_load
@@ -360,8 +357,7 @@ tt.func @tma_special_cases(%arg1: !tt.tensordesc<256x64xf16, #shared>, %arg2: !t
   // CHECK-NEXT: ttng.barrier_expect
   // CHECK-NEXT: ttng.async_tma_copy_global_to_local
   // CHECK-NEXT: ttng.wait_barrier
-  %bulk_bytes_4 = arith.constant 49152 : i32
-  ttng.barrier_expect %barrier, %bulk_bytes_4, %true : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
+  ttng.barrier_expect %barrier, 49152, %true : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
   ttng.async_tma_copy_global_to_local %arg1[%c0, %c0] %alloc, %barrier, %true : !tt.tensordesc<256x64xf16, #shared>, !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable> -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
   ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
 
@@ -371,8 +367,7 @@ tt.func @tma_special_cases(%arg1: !tt.tensordesc<256x64xf16, #shared>, %arg2: !t
   // CHECK-NEXT: ttng.async_tma_gather
   // CHECK-NEXT: ttng.wait_barrier
   %view = ttg.memdesc_subslice %gather_alloc [0, 0]  : !ttg.memdesc<32x64xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<32x64xf16, #shared, #ttg.shared_memory, mutable>
-  %bulk_bytes_5 = arith.constant 49152 : i32
-  ttng.barrier_expect %barrier, %bulk_bytes_5, %true : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
+  ttng.barrier_expect %barrier, 49152, %true : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
   ttng.async_tma_gather %arg2[%cx, %c0] %view, %barrier, %true : !tt.tensordesc<1x64xf16, #shared>, tensor<32xi32>, i32, !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>, !ttg.memdesc<32x64xf16, #shared, #ttg.shared_memory, mutable>, i1
   ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
 
@@ -408,8 +403,7 @@ tt.func @tma_special_cases_cf(%arg1: !tt.tensordesc<256x64xf16, #shared>, %i1 : 
     // CHECK-NEXT: ttng.wait_barrier
     // CHECK-NEXT: cf.br
     ttng.async_tma_copy_global_to_local %arg1[%c0, %c0] %alloc, %barrier, %true : !tt.tensordesc<256x64xf16, #shared>, !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable> -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
-    %bulk_bytes_6 = arith.constant 49152 : i32
-    ttng.barrier_expect %barrier, %bulk_bytes_6, %true : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
+    ttng.barrier_expect %barrier, 49152, %true : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
     ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
   } else {
     //  CHECK-NOT: ttg.barrier local

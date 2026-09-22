@@ -18,7 +18,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     } do {
     // CHECK: ^bb0({{.*}}, %[[PHASE:[A-Za-z0-9_]+]]: i32):
     ^bb0(%pid_x: i32, %pid_y: i32, %pid_z: i32):
-      // CHECK: ttng.barrier_expect %[[BARRIER]], %{{[^ ,]+}} {fromCTA = 0 : i32}, {{.*}}
+      // CHECK: ttng.barrier_expect %[[BARRIER]], 16 {fromCTA = 0 : i32}, {{.*}}
       // CHECK-NEXT: ttng.clc_try_cancel %[[RESPONSE]], %[[BARRIER]]
       %response = ttng.clc_try_cancel_sync : tensor<2xi64, #regs>
       %marker = ttg.local_alloc %response {alignment = 16 : i32} : (tensor<2xi64, #regs>) -> !ttg.memdesc<2xi64, #shared, #smem, mutable>
