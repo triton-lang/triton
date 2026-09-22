@@ -77,10 +77,17 @@ bool filterAsyncLocalLoadsDependencies(Operation *op1, Operation *op2,
 
 bool filterLDSMemoryBarriersDependencies(Operation *op1, Operation *op2) {
   auto isLDSMemoryBarrierOp = [](Operation *op) {
-    return llvm::isa<triton::amdgpu::InitBarrierOp,
-                     triton::amdgpu::ArriveBarrierOp,
-                     triton::amdgpu::AsyncCopyMbarrierArriveOp,
-                     triton::amdgpu::WaitBarrierOp>(op);
+    if (llvm::isa<triton::amdgpu::InitBarrierOp,
+                  triton::amdgpu::ArriveBarrierOp,
+                  triton::amdgpu::AsyncCopyMbarrierArriveOp,
+                  triton::amdgpu::WaitBarrierOp>(op))
+      return true;
+    // A copy carrying an mbarrier arrives on it once complete, so the mbarrier
+    // already orders it workgroup-wide. Copies without one are ordered by an
+    // async wait, whose counter is per wave, so they are not covered here.
+    if (auto mbarrierOp = llvm::dyn_cast<triton::gpu::MBarrierOpInterface>(op))
+      return mbarrierOp.getBarrier() != nullptr;
+    return false;
   };
 
   return (isLDSMemoryBarrierOp(op1) && isLDSMemoryBarrierOp(op2));
