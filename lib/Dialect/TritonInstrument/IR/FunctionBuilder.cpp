@@ -1454,12 +1454,9 @@ void FunctionBuilder::createInvalidateBarrierStateCallImpl(
 
 void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
     ImplicitLocOpBuilder &b, Value mbar, int count, Value pred,
-    Operation *insertPoint, Value recipientCTAs, int txCount) {
+    Operation *insertPoint, Value recipientCTAs, Value txCountVal) {
   assert(count >= 0 && (uint64_t)count <= BarrierBits::countMask &&
          "barrier arrive count exceeds barrier state capacity");
-  assert(txCount >= BarrierBits::txCountMin &&
-         txCount <= BarrierBits::txCountMax &&
-         "barrier tx-count delta exceeds barrier state capacity");
 
   if (auxData.barriers.empty() || auxData.barrierStates.empty()) {
     return;
@@ -1468,7 +1465,6 @@ void FunctionBuilder::createVerifyAndUpdateBarrierStateCall(
     pred = arith::ConstantIntOp::create(b, 1, 1);
   }
   Value countVal = arith::ConstantIntOp::create(b, count, 32);
-  Value txCountVal = arith::ConstantIntOp::create(b, txCount, 64);
   Value barriersVal = auxData.barriers.at(insertPoint).value;
   auto barriersType =
       cast<RankedTensorType>(auxData.barriers.at(insertPoint).type);

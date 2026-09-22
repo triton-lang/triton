@@ -1640,34 +1640,42 @@ def test_host_tma_reduce_updates_atomic_shadow(with_gsan, block_x, dtype):
 
 
 @gluon.jit
-def _bulk_shadow_kernel(src, out, take_copy, WORDS: gl.constexpr, OFFSET: gl.constexpr):
-    layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
-    shared: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0])
-    smem = gl.allocate_shared_memory(gl.int32, [32], shared, gl.full((32, ), -1, gl.int32, layout))
+def _bulk_shadow_kernel(src, out, take_copy, WORDS, OFFSET: gl.constexpr, CGA: gl.constexpr, BLOCK: gl.constexpr,
+                        MULTICAST: gl.constexpr):
+    layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0], cga_layout=CGA)
+    shared: gl.constexpr = gl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=CGA)
+    smem = gl.allocate_shared_memory(gl.int32, [BLOCK], shared, gl.full((BLOCK, ), -1, gl.int32, layout))
     bar = hopper.mbarrier.allocate_mbarrier()
     hopper.mbarrier.init(bar, count=1)
     hopper.mbarrier.expect(bar, WORDS * 4, pred=take_copy)
-    hopper.bulk.async_load(smem, src + OFFSET, WORDS * 4, bar, pred=take_copy)
+    hopper.bulk.async_load(smem, src + OFFSET, WORDS * 4, bar, pred=take_copy, multicast=MULTICAST)
     hopper.mbarrier.wait(bar, phase=0, pred=take_copy)
-    gl.store(out + gl.arange(0, 32, layout), smem.load(layout))
+    gl.store(out + gl.arange(0, BLOCK, layout), smem.load(layout))
     hopper.mbarrier.invalidate(bar)
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 @pytest.mark.parametrize("take_copy", [False, True])
 @pytest.mark.parametrize("words,offset", [(4, 0), (12, 4), (28, 4)])
-def test_bulk_async_load_source_range(with_gsan, words, offset, take_copy):
-    src = torch.arange(40, device="cuda", dtype=torch.int32)
-    out = torch.empty(32, device="cuda", dtype=torch.int32)
+@pytest.mark.parametrize("cga,multicast", [([], False), ([[1]], False), ([[0]], True), ([[1], [0]], False),
+                                           ([[0], [1]], True)])
+def test_bulk_async_load_source_range(with_gsan, words, offset, take_copy, cga, multicast):
+    cga = tuple(map(tuple, cga))
+    tiles = 2**sum(any(basis) for basis in cga)
+    block = 32 * tiles
+    src = torch.arange(block + 8, device="cuda", dtype=torch.int32)
+    out = torch.empty(block, device="cuda", dtype=torch.int32)
     before = _shadow_cells_for_tensor(src)
-    _bulk_shadow_kernel[(1, )](src, out, take_copy, words, offset)
+    _bulk_shadow_kernel[(1, )](src, out, take_copy, words, offset, cga, block, multicast, num_ctas=2**len(cga))
     torch.cuda.synchronize()
     after = _shadow_cells_for_tensor(src)
-    changed = torch.zeros(40, dtype=torch.bool)
+    changed = torch.zeros(block + 8, dtype=torch.bool)
     if take_copy:
-        changed[offset:offset + words] = True
+        for tile in range(tiles):
+            changed[offset + tile * 32:offset + tile * 32 + words] = True
     _assert_shadow_mask([before], [after], changed[None, :], access_kind="read")
     expected = torch.full_like(out, -1)
     if take_copy:
-        expected[:words] = src[offset:offset + words]
+        for tile in range(tiles):
+            expected[tile * 32:tile * 32 + words] = src[offset + tile * 32:offset + tile * 32 + words]
     torch.testing.assert_close(out, expected)

@@ -203,7 +203,8 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #mbarrier_partial, #smem, mutable>
     // CHECK: tti.experimental_gsan_mbarrier_arrive %[[SCRATCH]], %[[BARRIER]], %{{.*}}, 1
     // CHECK-SAME: multicast = false, multicastMasks = array<i32>, sourceBroadcastMask = 0 : i32
-    ttng.barrier_expect %barrier, 32768, %true : !ttg.memdesc<2xi64, #mbarrier_partial, #smem, mutable>
+    %bulk_bytes_1 = arith.constant 32768 : i32
+    ttng.barrier_expect %barrier, %bulk_bytes_1, %true : !ttg.memdesc<2xi64, #mbarrier_partial, #smem, mutable>
     // CHECK: ttng.async_tma_copy_global_to_local %{{.*}}[%{{.*}}, %{{.*}}] %{{.*}}, %[[BARRIER]], %{{.*}} {multicast}
     ttng.async_tma_copy_global_to_local %desc[%zero, %zero] %signal, %barrier, %true {multicast} : !tt.tensordesc<256x128xf16, #tma_partial>, !ttg.memdesc<2xi64, #mbarrier_partial, #smem, mutable> -> !ttg.memdesc<256x128xf16, #tma_partial, #smem, mutable>
     %phase = arith.constant 0 : i32
@@ -467,13 +468,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   // CHECK-LABEL: tt.func @linear_bulk_range
   tt.func @linear_bulk_range(%src: !tt.ptr<i32>, %dst: !dst, %bar: !bar, %pred: i1) {
     // CHECK: tt.make_range {end = 16 : i32, start = 0 : i32}
-    // CHECK: arith.constant dense<12>
+    // CHECK: arith.divui
+    // CHECK: tt.splat
     // CHECK: arith.cmpi ult
     // CHECK: arith.andi
     // CHECK: tt.addptr
     // CHECK: tti.experimental_gsan_tensor_access {{.*}}, false,
     // CHECK-NEXT: ttng.async_bulk_copy_global_to_local
-    ttng.async_bulk_copy_global_to_local %src, %dst, 48, %bar, %pred : !tt.ptr<i32>, !dst, !bar
+    %bulk_bytes_2 = arith.constant 48 : i32
+    ttng.async_bulk_copy_global_to_local %src, %dst, %bulk_bytes_2, %bar, %pred : !tt.ptr<i32>, !dst, !bar
     tt.return
   }
 }

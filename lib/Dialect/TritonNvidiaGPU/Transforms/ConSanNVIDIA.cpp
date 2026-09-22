@@ -33,7 +33,8 @@ Value getLeaderCTAPredicate(ImplicitLocOpBuilder &b, uint32_t broadcastMask) {
 uint32_t getBlockBroadcastMask(Type type) {
   auto memDescTy = cast<ttg::MemDescType>(type);
   auto kBlock = StringAttr::get(type.getContext(), "block");
-  return toLinearLayout(memDescTy).getFreeVariableMasks().lookup(kBlock);
+  return toLinearLayoutIgnoringPadding(memDescTy).getFreeVariableMasks().lookup(
+      kBlock);
 }
 
 } // namespace
@@ -120,7 +121,7 @@ public:
       if (fromCTA)
         mask = ~*fromCTA & (ttg::lookupNumCTAs(op) - 1);
     }
-    if (auto loadOp = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
+    if (auto loadOp = dyn_cast<ttng::AsyncLoadOpInterface>(op)) {
       if (loadOp.getMulticast())
         mask = getBlockBroadcastMask(loadOp.getResult().getType());
     }
@@ -173,10 +174,10 @@ public:
     SmallVector<std::pair<Value, StringRef>> namedOperands;
     if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
       info->pred = expectOp.getPred();
-      info->barriers.push_back(
-          {expectOp.getBarrier(), nullptr,
-           /*count=*/1, MemEffectsOpInfo::BarrierTrackingMode::Frontier,
-           /*txCount=*/static_cast<int>(expectOp.getSize())});
+      info->barriers.push_back({expectOp.getBarrier(), nullptr,
+                                /*count=*/1,
+                                MemEffectsOpInfo::BarrierTrackingMode::Frontier,
+                                /*txCount=*/1, expectOp.getSize()});
     }
     if (auto copyOp = dyn_cast<ttng::TMEMCopyOp>(op)) {
       namedOperands = {{copyOp.getSrc(), "Src"}, {copyOp.getDst(), "Dst"}};
@@ -231,7 +232,7 @@ public:
       info->barriers.push_back(
           {copyOp.getBarrier(), nullptr, /*count=*/0,
            MemEffectsOpInfo::BarrierTrackingMode::EffectWrites,
-           /*txCount=*/-static_cast<int>(copyOp.getNumBytes())});
+           /*txCount=*/-1, copyOp.getNumBytes()});
     }
     if (auto storeOp = dyn_cast<ttng::AsyncSharedStoreOp>(op)) {
       info->barriers.push_back(

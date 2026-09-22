@@ -66,7 +66,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   	%cst = arith.constant dense<0> : tensor<1xi64, #blocked0>
   	%alloc = ttg.local_alloc %cst : (tensor<1xi64, #blocked0>) -> !ttg.memdesc<1xi64, #shared0, #smem, mutable>
     ttng.init_barrier %alloc, 1 : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
-    ttng.barrier_expect %alloc, 16384, %pred : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
+    %bulk_bytes_1 = arith.constant 16384 : i32
+    ttng.barrier_expect %alloc, %bulk_bytes_1, %pred : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
     tt.return
   }
 }
@@ -224,8 +225,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: ttng.barrier_expect
     // CHECK-NEXT: ttng.async_bulk_copy_global_to_local
     // CHECK-NEXT: ttng.wait_barrier
-    ttng.barrier_expect %bar, 10240, %true : !bar
-    ttng.async_bulk_copy_global_to_local %src, %dst, 10240, %bar, %true : !tt.ptr<f32>, !dst, !bar
+    %bulk_bytes_2 = arith.constant 10240 : i32
+    ttng.barrier_expect %bar, %bulk_bytes_2, %true : !bar
+    %bulk_bytes_3 = arith.constant 10240 : i32
+    ttng.async_bulk_copy_global_to_local %src, %dst, %bulk_bytes_3, %bar, %true : !tt.ptr<f32>, !dst, !bar
     ttng.wait_barrier %bar, %phase : !bar
     ttng.inval_barrier %bar : !bar
     tt.return

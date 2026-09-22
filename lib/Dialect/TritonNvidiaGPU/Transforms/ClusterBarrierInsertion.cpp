@@ -63,7 +63,7 @@ bool isDistributedMultiCTAOp(Operation *op, bool isRead) {
                                store.getSrc().getType());
   } else if (isa<ttng::TMEMCopyOp>(op)) {
     return ttng::getModuleTwoCTAs(op);
-  } else if (auto tma = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
+  } else if (auto tma = dyn_cast<ttng::AsyncLoadOpInterface>(op)) {
     return tma.getMulticast();
   } else if (auto arrive = dyn_cast<ttng::ArriveBarrierOp>(op)) {
     return arrive.isMulticast();

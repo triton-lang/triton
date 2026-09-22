@@ -336,14 +336,14 @@ def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [
   let hasCanonicalizeMethod = 1;
   let arguments = (ins
     Arg<TTG_MemDescType, "", BarrierSharedWrite>:$alloc,
-    I32Attr:$size,
+    I32:$size,
     I1:$pred,
     OptionalAttr<I32Attr>:$fromCTA
   );
 
   let builders = [
-    OpBuilder<(ins "Value":$alloc, "uint32_t":$size, "Value":$pred), [{
-      build($_builder, $_state, alloc, $_builder.getI32IntegerAttr(size), pred,
+    OpBuilder<(ins "Value":$alloc, "Value":$size, "Value":$pred), [{
+      build($_builder, $_state, alloc, size, pred,
             /*fromCTA=*/IntegerAttr());
     }]>
   ];
@@ -510,14 +510,18 @@ def TTNG_AsyncSharedStoreOp : TTNG_Op<"async_shared_store", [
 
 def TTNG_AsyncBulkCopyGlobalToLocalOp : TTNG_Op<"async_bulk_copy_global_to_local", [
     DeclareOpInterfaceMethods<MBarrierOpInterface>,
-    DeclareOpInterfaceMethods<PredicatedOpInterface>]> {
+    DeclareOpInterfaceMethods<PredicatedOpInterface>, AsyncLoadOpInterface]> {
   let summary = "copy a linear global-memory range to shared memory asynchronously";
   let description = [{
-    Gluon-only operation. Issues one
-    cp.async.bulk.shared::cta.global.mbarrier::complete_tx::bytes per logical
-    block, guarded by the scalar predicate. Source and destination
-    addresses must be 16-byte aligned. numBytes is a positive multiple of 16
-    within the contiguous, unswizzled, one-dimensional destination view.
+    Gluon-only operation. Copies numBytes bytes per CTA, guarded by the scalar
+    predicate, using cp.async.bulk with mbarrier completion. Source and
+    destination addresses must be 16-byte aligned. The runtime byte count is a
+    positive multiple of 16 within the contiguous physical destination view.
+    Source tiles are packed in increasing CTA-id order, omitting broadcast
+    bits, with a stride of the full per-CTA destination capacity. This is a
+    raw byte copy: no logical swizzle or gather is applied. With multicast,
+    only the representative CTA issues a copy to the destination replicas.
+    Each CTA must have its own completion barrier, including when multicasting.
     The destination effect conservatively covers the entire view. Completion
     decrements the barrier transaction count by numBytes; users must wait on
     the barrier before consuming or reusing the memory.
@@ -525,9 +529,10 @@ def TTNG_AsyncBulkCopyGlobalToLocalOp : TTNG_Op<"async_bulk_copy_global_to_local
   let arguments = (ins
     Arg<TTG_MemDescType, "", AsyncSharedWrite>:$dst,
     Arg<TT_Ptr, "", [MemRead<GlobalMemory>]>:$src,
-    I32Attr:$numBytes,
+    I32:$numBytes,
     Arg<TTG_MemDescType, "", BarrierSharedWrite>:$barrier,
-    I1:$pred
+    I1:$pred,
+    UnitAttr:$multicast
   );
   let assemblyFormat = [{
     $src `,` $dst `,` $numBytes `,` $barrier `,` $pred attr-dict `:`
@@ -536,6 +541,7 @@ def TTNG_AsyncBulkCopyGlobalToLocalOp : TTNG_Op<"async_bulk_copy_global_to_local
   let hasVerifier = 1;
   let hasCanonicalizeMethod = 1;
   let extraClassDeclaration = [{
+    Value getResult() { return getDst(); }
     static bool isSupported(int computeCapability) {
       return computeCapability >= 90;
     }

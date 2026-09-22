@@ -843,23 +843,76 @@ bool AsyncTMAReduceOp::isSupportedReduceKind(DescriptorReduceKind kind,
 }
 
 // -- AsyncBulkCopyGlobalToLocalOp --
+FailureOr<BulkCopyLayout> getBulkCopyLayout(gpu::MemDescType type) {
+  if (!isa<SharedMemorySpaceAttr>(type.getMemorySpace()))
+    return failure();
+  if (cast<SharedEncodingTrait>(type.getEncoding()).getAlignment() < 16)
+    return failure();
+  auto layout = toLinearLayoutIgnoringPadding(type);
+  auto offset = StringAttr::get(type.getContext(), "offset");
+  auto block = StringAttr::get(type.getContext(), "block");
+  // A single linear instruction cannot span separately allocated buffers.
+  if (layout.hasInDim(StringAttr::get(type.getContext(), "partition")))
+    return failure();
+  auto inverse = layout.pseudoinvert();
+  auto dims = llvm::to_vector(inverse.getInDimNames());
+  if (dims.size() != type.getRank())
+    return failure();
+  uint32_t affineOffsetMask = 0;
+  uint32_t affineBlockMask = 0;
+  for (auto [dim, size] : llvm::zip_equal(dims, type.getShape())) {
+    for (unsigned bit = llvm::Log2_64(size);
+         bit < inverse.getInDimSizeLog2(dim); ++bit) {
+      affineOffsetMask |= inverse.getBasis(dim, bit, offset);
+      affineBlockMask |= inverse.getBasis(dim, bit, block);
+    }
+    inverse = inverse.resizeInDim(dim, size);
+  }
+  unsigned offsetMask = getOutputBasisMask(inverse, dims, offset);
+  unsigned splitMask = getOutputBasisMask(inverse, dims, block);
+  unsigned elements = offsetMask + 1;
+  unsigned elementBytes = getIntOrFloatOrPtrBitWidth(type.getElementType()) / 8;
+  if (!elementBytes || !llvm::isPowerOf2_32(elements) ||
+      uint64_t(elements) * (1u << llvm::popcount(splitMask)) !=
+          type.getNumElements())
+    return failure();
+  // The image must fill the Cartesian product of the local range and CTA
+  // coordinates. This rules out holes, including swizzled partial views.
+  if (elements * elementBytes < 16 ||
+      (affineOffsetMask * elementBytes) % 16 != 0 || affineBlockMask)
+    return failure();
+  // Padding is not linear. A view fits a single interval only when it neither
+  // crosses a padding boundary nor has an origin with unaligned padding.
+  if (isPaddedEncoding(type.getEncoding())) {
+    if (elements > getMinInterval(type.getEncoding()) || affineOffsetMask)
+      return failure();
+  }
+  unsigned broadcastMask = layout.getFreeVariableMasks().lookup(block);
+  return BulkCopyLayout{elements * elementBytes, splitMask, broadcastMask};
+}
+
 LogicalResult AsyncBulkCopyGlobalToLocalOp::verify() {
-  if (gpu::lookupNumCTAs(*this) != 1)
-    return emitOpError("requires a single-CTA kernel");
   auto dstTy = getDst().getType();
   if (!dstTy.getMutableMemory())
     return emitOpError("cannot copy into immutable memory");
-  auto layout = dyn_cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
-  if (dstTy.getRank() != 1 || !layout || layout.getMaxPhase() != 1)
-    return emitOpError(
-        "requires a one-dimensional unswizzled shared destination");
+  auto layout = getBulkCopyLayout(dstTy);
+  if (failed(layout))
+    return emitOpError("requires a contiguous, 16-byte-aligned physical range "
+                       "per CTA without padding or cross-CTA slicing");
   if (getSrc().getType().getAddressSpace() != PtrAddrSpace::Global)
     return emitOpError("requires a global-memory source pointer");
   unsigned bits = getIntOrFloatOrPtrBitWidth(dstTy.getElementType());
   if (bits < 8)
     return emitOpError("requires byte-addressable destination elements");
-  int64_t capacity = dstTy.getNumElements() * bits / 8;
-  if (getNumBytes() <= 0 || getNumBytes() % 16 || getNumBytes() > capacity)
+  auto block = StringAttr::get(getContext(), "block");
+  if (toLinearLayout(getBarrier().getType())
+          .getFreeVariableMasks()
+          .lookup(block))
+    return emitOpError("requires a separate completion barrier in each CTA");
+  int64_t capacity = layout->bytesPerCTA;
+  APInt bytes;
+  if (matchPattern(getNumBytes(), m_ConstantInt(&bytes)) &&
+      (bytes.isZero() || bytes.urem(16) || bytes.ugt(capacity)))
     return emitOpError("byte count must be a positive multiple of 16 within "
                        "the destination view");
   return success();

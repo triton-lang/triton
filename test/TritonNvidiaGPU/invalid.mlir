@@ -1022,8 +1022,9 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @barrier_expect_fromCTA_out_of_range(%bar: !ttg.memdesc<4xi64, #barrier, #smem, mutable>, %pred: i1) {
+    %bulk_bytes_1 = arith.constant 16 : i32
     // expected-error @below {{fromCTA must be in the range [0, num_ctas - 1]}}
-    ttng.barrier_expect %bar, 16 {fromCTA = -1 : i32}, %pred : !ttg.memdesc<4xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %bar, %bulk_bytes_1 {fromCTA = -1 : i32}, %pred : !ttg.memdesc<4xi64, #barrier, #smem, mutable>
     tt.return
   }
   tt.func @arrive_barrier_fromCTA_out_of_range(%bar: !ttg.memdesc<4xi64, #barrier, #smem, mutable>, %pred: i1) {
@@ -1039,8 +1040,9 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @barrier_expect_fromCTA_noncanonical_layout(%bar: !ttg.memdesc<4xi64, #barrier, #smem, mutable>, %pred: i1) {
+    %bulk_bytes_2 = arith.constant 16 : i32
     // expected-error @below {{fromCTA requires a 1D barrier with one element per CTA and canonical CGA layout}}
-    ttng.barrier_expect %bar, 16 {fromCTA = 1 : i32}, %pred : !ttg.memdesc<4xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %bar, %bulk_bytes_2 {fromCTA = 1 : i32}, %pred : !ttg.memdesc<4xi64, #barrier, #smem, mutable>
     tt.return
   }
 }
@@ -1804,8 +1806,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 !dst = !ttg.memdesc<16xi32, #shared, #ttg.shared_memory, mutable>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
   tt.func @bulk_unaligned_count(%src: !tt.ptr<i32>, %dst: !dst, %bar: !bar, %pred: i1) {
+    %bulk_bytes_3 = arith.constant 17 : i32
     // expected-error @below {{byte count must be a positive multiple of 16 within the destination view}}
-    ttng.async_bulk_copy_global_to_local %src, %dst, 17, %bar, %pred : !tt.ptr<i32>, !dst, !bar
+    ttng.async_bulk_copy_global_to_local %src, %dst, %bulk_bytes_3, %bar, %pred : !tt.ptr<i32>, !dst, !bar
     tt.return
   }
 }
@@ -1817,8 +1820,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 !dst = !ttg.memdesc<16xi32, #shared, #ttg.shared_memory, mutable>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
   tt.func @bulk_oversized_count(%src: !tt.ptr<i32>, %dst: !dst, %bar: !bar, %pred: i1) {
+    %bulk_bytes_4 = arith.constant 80 : i32
     // expected-error @below {{byte count must be a positive multiple of 16 within the destination view}}
-    ttng.async_bulk_copy_global_to_local %src, %dst, 80, %bar, %pred : !tt.ptr<i32>, !dst, !bar
+    ttng.async_bulk_copy_global_to_local %src, %dst, %bulk_bytes_4, %bar, %pred : !tt.ptr<i32>, !dst, !bar
     tt.return
   }
 }
@@ -1830,8 +1834,67 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 !dst = !ttg.memdesc<16xi32, #shared, #ttg.shared_memory, mutable>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
   tt.func @bulk_zero_count(%src: !tt.ptr<i32>, %dst: !dst, %bar: !bar, %pred: i1) {
+    %bulk_bytes_5 = arith.constant 0 : i32
     // expected-error @below {{byte count must be a positive multiple of 16 within the destination view}}
-    ttng.async_bulk_copy_global_to_local %src, %dst, 0, %bar, %pred : !tt.ptr<i32>, !dst, !bar
+    ttng.async_bulk_copy_global_to_local %src, %dst, %bulk_bytes_5, %bar, %pred : !tt.ptr<i32>, !dst, !bar
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#bar_layout = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+!dst = !ttg.memdesc<16x16xi32, #shared, #ttg.shared_memory, mutable, 16x32>
+!bar = !ttg.memdesc<1xi64, #bar_layout, #ttg.shared_memory, mutable>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @bulk_strided_view(%src: !tt.ptr<i32>, %dst: !dst, %bar: !bar, %pred: i1) {
+    %bytes = arith.constant 16 : i32
+    // expected-error @below {{requires a contiguous}}
+    ttng.async_bulk_copy_global_to_local %src, %dst, %bytes, %bar, %pred : !tt.ptr<i32>, !dst, !bar
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.padded_shared<[16:+4] {offset = [[1], [2], [4], [8], [16], [32]], block = []}>
+#bar_layout = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+!dst = !ttg.memdesc<64xi32, #shared, #ttg.shared_memory, mutable>
+!bar = !ttg.memdesc<1xi64, #bar_layout, #ttg.shared_memory, mutable>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @bulk_padded_view(%src: !tt.ptr<i32>, %dst: !dst, %bar: !bar, %pred: i1) {
+    %bytes = arith.constant 16 : i32
+    // expected-error @below {{requires a contiguous}}
+    ttng.async_bulk_copy_global_to_local %src, %dst, %bytes, %bar, %pred : !tt.ptr<i32>, !dst, !bar
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+#bar_layout = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+!dst = !ttg.memdesc<256xi32, #shared, #ttg.shared_memory, mutable>
+!bar = !ttg.memdesc<2xi64, #bar_layout, #ttg.shared_memory, mutable>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @bulk_per_cta_capacity(%src: !tt.ptr<i32>, %dst: !dst, %bar: !bar, %pred: i1) {
+    %bytes = arith.constant 768 : i32
+    // expected-error @below {{byte count must be a positive multiple of 16 within the destination view}}
+    ttng.async_bulk_copy_global_to_local %src, %dst, %bytes, %bar, %pred : !tt.ptr<i32>, !dst, !bar
+    tt.return
+  }
+}
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+!dst = !ttg.memdesc<128xi32, #shared, #ttg.shared_memory, mutable>
+!bar = !ttg.memdesc<1xi64, #shared, #ttg.shared_memory, mutable>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @bulk_shared_completion_barrier(%src: !tt.ptr<i32>, %dst: !dst, %bar: !bar, %bytes: i32, %pred: i1) {
+    // expected-error @below {{requires a separate completion barrier in each CTA}}
+    ttng.async_bulk_copy_global_to_local %src, %dst, %bytes, %bar, %pred : !tt.ptr<i32>, !dst, !bar
     tt.return
   }
 }

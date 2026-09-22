@@ -1217,8 +1217,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   tt.func public @mbarrier_kernel() attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
     ttng.init_barrier %0, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    %c4_i32 = arith.constant 4 : i32
+    %1 = arith.bitcast %c4_i32 : i32 to i32
     %true = arith.constant true
-    ttng.barrier_expect %0, 4, %true : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.barrier_expect %0, %1, %true : !ttg.memdesc<1xi64, #shared, #smem, mutable>
     %true_0 = arith.constant true
     ttng.arrive_barrier %0, 1, %true_0 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
     %c0_i32 = arith.constant 0 : i32
@@ -1241,7 +1243,7 @@ def mbarrier_from_cta_kernel():
 def test_mbarrier_from_cta():
     mod = run_parser(mbarrier_from_cta_kernel, *make_args(num_ctas=8), target=HOPPER_TARGET)
     ir = anonymize_ir(mod.str_nodebug())
-    assert re.search(r"ttng\.barrier_expect %\d+, 4 \{fromCTA = 5 : i32\}, %true", ir)
+    assert re.search(r"ttng\.barrier_expect %\d+, %\w+ \{fromCTA = 5 : i32\}, %true", ir)
     assert re.search(r"ttng\.arrive_barrier %\d+, 1, %true_\d+ \{fromCTA = 5 : i32\}", ir)
 
 
@@ -1707,8 +1709,10 @@ def test_tcgen05_commit_multicast_two_ctas():
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @tcgen05_commit_multicast_two_ctas_kernel() attributes {noinline = false} {
     %0 = tt.call @triton.experimental.gluon.language.nvidia.ampere.mbarrier.allocate_mbarrier__cNone_cTrue() : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    %c4_i32 = arith.constant 4 : i32
+    %1 = arith.bitcast %c4_i32 : i32 to i32
     %true = arith.constant true
-    ttng.barrier_expect %0, 4, %true : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.barrier_expect %0, %1, %true : !ttg.memdesc<1xi64, #shared, #smem, mutable>
     tt.return
   }
   tt.func private @triton.experimental.gluon.language.nvidia.ampere.mbarrier.allocate_mbarrier__cNone_cTrue() -> !ttg.memdesc<1xi64, #shared, #smem, mutable> attributes {noinline = false} {
@@ -1831,8 +1835,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c0_i32_0 = arith.constant 0 : i32
     %true = arith.constant true
     ttng.async_tma_copy_global_to_local %arg0[%c0_i32, %c0_i32_0] %0, %1, %true : !tt.tensordesc<128x128xf16, #shared>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
+    %c32768_i32 = arith.constant 32768 : i32
+    %2 = arith.bitcast %c32768_i32 : i32 to i32
     %true_1 = arith.constant true
-    ttng.barrier_expect %1, 32768, %true_1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    ttng.barrier_expect %1, %2, %true_1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     %c0_i32_2 = arith.constant 0 : i32
     %true_3 = arith.constant true
     ttng.wait_barrier %1, %c0_i32_2, %true_3 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
@@ -1891,8 +1897,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %true = arith.constant true
     %c0_i32 = arith.constant 0 : i32
     ttng.async_tma_gather %arg0[%2, %c0_i32] %0, %1, %true : !tt.tensordesc<1x128xf16, #shared>, tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<1xi64, #shared1, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, i1
+    %c32768_i32 = arith.constant 32768 : i32
+    %3 = arith.bitcast %c32768_i32 : i32 to i32
     %true_0 = arith.constant true
-    ttng.barrier_expect %1, 32768, %true_0 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    ttng.barrier_expect %1, %3, %true_0 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     %c0_i32_1 = arith.constant 0 : i32
     %true_2 = arith.constant true
     ttng.wait_barrier %1, %c0_i32_1, %true_2 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
@@ -5466,8 +5474,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %1 = ttg.local_alloc : () -> !ttg.memdesc<128x128xf32, #shared, #smem, mutable>
     %2 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.init_barrier %2, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    %c65536_i32 = arith.constant 65536 : i32
+    %3 = arith.bitcast %c65536_i32 : i32 to i32
     %true = arith.constant true
-    ttng.barrier_expect %2, 65536, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    ttng.barrier_expect %2, %3, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     %c0_i32 = arith.constant 0 : i32
     %c0_i32_1 = arith.constant 0 : i32
     %true_2 = arith.constant true
@@ -5766,7 +5776,8 @@ def test_bulk_async_load_codegen(capability):
     compiled = triton.compile(source, target=GPUTarget("cuda", capability, 32))
     ptx = compiled.asm["ptx"]
     assert ptx.count("cp.async.bulk.shared::cta.global.mbarrier::complete_tx::bytes") == 1
-    assert re.search(r"@%?\w+ cp.async.bulk.shared::cta.global.mbarrier::complete_tx::bytes.*(0x2800|10240)", ptx)
+    count = re.search(r"mov.b32\s+(%\w+), (?:0x2800|10240);", ptx).group(1)
+    assert re.search(r"@%?\w+ cp.async.bulk.shared::cta.global.mbarrier::complete_tx::bytes.*" + count + r",", ptx)
     assert "mbarrier.try_wait.parity" in ptx
 
 

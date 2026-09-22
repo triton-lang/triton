@@ -35,10 +35,13 @@ llvm.func @preserve_ld_acquire(%arg0: !llvm.ptr<1>) {
 module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32} {
 // BARRIER-LABEL: @canonicalize_fromCTA
 tt.func @canonicalize_fromCTA(%barrier: !ttg.memdesc<8xi64, #barrier, #smem, mutable>, %pred: i1) {
-  // BARRIER-NEXT: ttng.barrier_expect %arg0, 16, %arg1 :
-  ttng.barrier_expect %barrier, 16 {fromCTA = 7 : i32}, %pred : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
-  // BARRIER-NEXT: ttng.barrier_expect %arg0, 16 {fromCTA = 5 : i32}, %arg1 :
-  ttng.barrier_expect %barrier, 16 {fromCTA = 5 : i32}, %pred : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
+  // BARRIER-NEXT: %[[BYTES:.*]] = arith.constant 16 : i32
+  // BARRIER-NEXT: ttng.barrier_expect %arg0, %[[BYTES]], %arg1 :
+  %bulk_bytes_1 = arith.constant 16 : i32
+  ttng.barrier_expect %barrier, %bulk_bytes_1 {fromCTA = 7 : i32}, %pred : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
+  // BARRIER-NEXT: ttng.barrier_expect %arg0, %[[BYTES]] {fromCTA = 5 : i32}, %arg1 :
+  %bulk_bytes_2 = arith.constant 16 : i32
+  ttng.barrier_expect %barrier, %bulk_bytes_2 {fromCTA = 5 : i32}, %pred : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
   // BARRIER-NEXT: ttng.arrive_barrier %arg0, 1, %arg1 :
   ttng.arrive_barrier %barrier, 1, %pred {fromCTA = 7 : i32} : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
   // BARRIER-NEXT: ttng.arrive_barrier %arg0, 1, %arg1 {fromCTA = 5 : i32} :
@@ -65,7 +68,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 tt.func @false_barrier_predicates(%bar: !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>, %pred: i1, %mem: !ttg.memdesc<16x64xf16, #shared_tma, #smem, mutable>) {
   %false = arith.constant false
   %phase = arith.constant 0 : i32
-  ttng.barrier_expect %bar, 1048576, %false : !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>
+  %bulk_bytes_3 = arith.constant 1048576 : i32
+  ttng.barrier_expect %bar, %bulk_bytes_3, %false : !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>
   ttng.arrive_barrier %bar, 1, %false : !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>
   ttng.wait_barrier %bar, %phase, %false : !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>
   ttng.tc_gen5_commit %bar, %false : !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>
@@ -114,4 +118,16 @@ tt.func @false_tmem_store_keeps_token(%value: tensor<128x128xf32, #data>, %mem: 
   %token = ttng.tmem_store %value, %mem[%dep], %false : tensor<128x128xf32, #data> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
   tt.return %token : !ttg.async.token
 }
+}
+
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // BARRIER-LABEL: @false_bulk_copy
+  // BARRIER-NEXT: tt.return
+  tt.func @false_bulk_copy(%src: !tt.ptr<i32>, %dst: !ttg.memdesc<16xi32, #local_barrier, #smem, mutable>, %bar: !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>) {
+    %false = arith.constant false
+    %bytes = arith.constant 48 : i32
+    ttng.async_bulk_copy_global_to_local %src, %dst, %bytes, %bar, %false : !tt.ptr<i32>, !ttg.memdesc<16xi32, #local_barrier, #smem, mutable>, !ttg.memdesc<1xi64, #local_barrier, #smem, mutable>
+    tt.return
+  }
 }

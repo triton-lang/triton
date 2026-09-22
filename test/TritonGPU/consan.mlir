@@ -243,7 +243,8 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tti.experimental_assert_uniform {{.*}}, "Barrier used before initialization or after invalidation"
     // CHECK: tti.experimental_assert_uniform {{.*}}, "Barrier arrive underflow: current count or tx-count would become invalid"
     // CHECK: ttng.barrier_expect
-    ttng.barrier_expect %bar, 16 {fromCTA = 5 : i32}, %true : !ttg.memdesc<8xi64, #barrier_fromCTA, #smem_fromCTA, mutable>
+    %bulk_bytes_1 = arith.constant 16 : i32
+    ttng.barrier_expect %bar, %bulk_bytes_1 {fromCTA = 5 : i32}, %true : !ttg.memdesc<8xi64, #barrier_fromCTA, #smem_fromCTA, mutable>
 
     // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
     // CHECK: tti.experimental_assert_uniform {{.*}}, "Barrier used before initialization or after invalidation"
@@ -764,7 +765,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     ttng.init_barrier %bar1, 1
         : !ttg.memdesc<1xi64, #frontier_barrier, #frontier_smem, mutable>
     %bar = arith.select %choose, %bar1, %bar0 : !ttg.memdesc<1xi64, #frontier_barrier, #frontier_smem, mutable>
-    ttng.barrier_expect %bar, 4096, %true
+    %bulk_bytes_2 = arith.constant 4096 : i32
+    ttng.barrier_expect %bar, %bulk_bytes_2, %true
         : !ttg.memdesc<1xi64, #frontier_barrier, #frontier_smem, mutable>
     ttng.fence_async_shared {bCluster = false}
 
@@ -958,7 +960,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // Model the async TMA completion mechanism: barrier_expect corresponds to
     // mbarrier.arrive.expect_tx and is what should update ConSan's barrier state.
-    ttng.barrier_expect %bar, 4096, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    %bulk_bytes_3 = arith.constant 4096 : i32
+    ttng.barrier_expect %bar, %bulk_bytes_3, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tt.call @__triton_consan_init_barrier_state
     // CHECK: tt.call @__triton_consan_track_visible_accesses
     // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
@@ -1039,7 +1042,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_publish_write_visibility{{.*}}%[[CLC_MASK]]
     // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer{{.*}}_I1
     ttng.clc_try_cancel %result, %bar : !ttg.memdesc<2xi64, #shared_clc, #smem, mutable>, !ttg.memdesc<1xi64, #barrier, #smem, mutable>
-    ttng.barrier_expect %bar, 16, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
+    %bulk_bytes_4 = arith.constant 16 : i32
+    ttng.barrier_expect %bar, %bulk_bytes_4, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
     ttng.wait_barrier %bar, %c0_i32, %true : !ttg.memdesc<1xi64, #barrier, #smem, mutable>
     // CHECK: tt.call @__triton_consan_verify_write_visibility
     // CHECK: ttng.clc_load_result
@@ -1070,7 +1074,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %shmem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<2xi64, #shared1, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #shared1, #smem, mutable>
-    ttng.barrier_expect %bar, 4096, %true : !ttg.memdesc<2xi64, #shared1, #smem, mutable>
+    %bulk_bytes_5 = arith.constant 4096 : i32
+    ttng.barrier_expect %bar, %bulk_bytes_5, %true : !ttg.memdesc<2xi64, #shared1, #smem, mutable>
     %cta = tti.experimental_cluster_cta_id : i32
     %non_issuer_cta = arith.cmpi eq, %cta, %c1_i32 : i32
     %mask = tt.splat %non_issuer_cta : i1 -> tensor<32x32xi1, #blocked>
@@ -1110,10 +1115,13 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttng.tw
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: scf.for
     scf.for %i = %c0 to %c2 step %c1 {
-      // CHECK: arith.constant 4096 : i64
+      // CHECK: arith.constant 4096 : i32
+      // CHECK: arith.extui
+      // CHECK: arith.muli
       // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
       // CHECK: ttng.barrier_expect
-      ttng.barrier_expect %bar, 4096, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+      %bulk_bytes_6 = arith.constant 4096 : i32
+      ttng.barrier_expect %bar, %bulk_bytes_6, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
       // CHECK: arith.constant -8192 : i64
       // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
       // CHECK: ttng.async_tma_gather
@@ -1143,7 +1151,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tt.call @__triton_consan_verify_barrier_can_init
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // Two TMA copies contribute to a single expected transaction.
-    ttng.barrier_expect %bar, 8192, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    %bulk_bytes_7 = arith.constant 8192 : i32
+    ttng.barrier_expect %bar, %bulk_bytes_7, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
 
     // CHECK: tt.call @__triton_consan_init_barrier_state
     // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
@@ -1177,10 +1186,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK: %[[B_SMEM:.*]] = ttg.local_alloc {allocation.offset = 4096 : i32}
   // CHECK: %[[BAR0:.*]] = ttg.local_alloc {allocation.offset = 65536 : i32}
   // CHECK: %[[BAR1:.*]] = ttg.local_alloc {allocation.offset = 65544 : i32}
-  // CHECK: ttng.barrier_expect %[[BAR0]], 4096, %true
+  // CHECK: ttng.barrier_expect %[[BAR0]], %{{.*}}, %true
   // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer{{.*}}({{[^,]+}}, {{[^,]+}}, %true, %[[A_TRACK:.*]], {{[^,]+}},
   // CHECK: ttng.async_tma_copy_global_to_local %arg0
-  // CHECK: ttng.barrier_expect %[[BAR1]], 4096, %true
+  // CHECK: ttng.barrier_expect %[[BAR1]], %{{.*}}, %true
   // CHECK-NOT: tt.call @__triton_consan_track_barrier_write_for_buffer{{.*}}({{[^,]+}}, {{[^,]+}}, %true, %[[A_TRACK]], {{[^,]+}},
   // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer{{.*}}({{[^,]+}}, {{[^,]+}}, %true, %[[B_TRACK:.*]], {{[^,]+}},
   // CHECK: ttng.async_tma_copy_global_to_local %arg1
@@ -1195,9 +1204,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     %bar1 = ttg.local_alloc {allocation.offset = 65544 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.init_barrier %bar0, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.init_barrier %bar1, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
-    ttng.barrier_expect %bar0, 4096, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    %bulk_bytes_8 = arith.constant 4096 : i32
+    ttng.barrier_expect %bar0, %bulk_bytes_8, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.async_tma_copy_global_to_local %a[%c0_i32, %c0_i32] %a_smem, %bar0, %true : !tt.tensordesc<32x32xf32, #shared>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
-    ttng.barrier_expect %bar1, 4096, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    %bulk_bytes_9 = arith.constant 4096 : i32
+    ttng.barrier_expect %bar1, %bulk_bytes_9, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.async_tma_copy_global_to_local %b[%c0_i32, %c0_i32] %b_smem, %bar1, %true : !tt.tensordesc<32x32xf32, #shared>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     ttng.wait_barrier %bar1, %c0_i32, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     %va = ttg.local_load %a_smem : !ttg.memdesc<32x32xf32, #shared, #smem, mutable> -> tensor<32x32xf32, #blocked>
@@ -2769,7 +2780,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %parent = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<256xi32, #async_remote_dst, #async_remote_smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 512 : i32} : () -> !ttg.memdesc<2xi64, #async_remote_dst, #async_remote_smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #async_remote_dst, #async_remote_smem, mutable>
-    ttng.barrier_expect %bar, 256, %true : !ttg.memdesc<2xi64, #async_remote_dst, #async_remote_smem, mutable>
+    %bulk_bytes_10 = arith.constant 256 : i32
+    ttng.barrier_expect %bar, %bulk_bytes_10, %true : !ttg.memdesc<2xi64, #async_remote_dst, #async_remote_smem, mutable>
     %view = ttg.memdesc_subslice %parent [128] : !ttg.memdesc<256xi32, #async_remote_dst, #async_remote_smem, mutable> -> !ttg.memdesc<128xi32, #async_remote_dst, #async_remote_smem, mutable, 256>
     // CHECK: %[[REMOTE_CTA:.*]] = arith.constant 2 : i32
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[REMOTE_CTA]])
@@ -3042,7 +3054,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %remote = ttg.memdesc_subslice %parent [8, 0] : !ttg.memdesc<16x32xi32, #tma_shared, #tma_smem, mutable> -> !ttg.memdesc<8x32xi32, #tma_shared, #tma_smem, mutable, 16x32>
     %bar = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<2xi64, #tma_barrier, #tma_smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #tma_barrier, #tma_smem, mutable>
-    ttng.barrier_expect %bar, 1024, %lead : !ttg.memdesc<2xi64, #tma_barrier, #tma_smem, mutable>
+    %bulk_bytes_11 = arith.constant 1024 : i32
+    ttng.barrier_expect %bar, %bulk_bytes_11, %lead : !ttg.memdesc<2xi64, #tma_barrier, #tma_smem, mutable>
     // CHECK: ttng.async_tma_copy_global_to_local
     ttng.async_tma_copy_global_to_local %desc[%zero, %zero] %remote, %bar, %lead : !tt.tensordesc<8x32xi32, #tma_shared>, !ttg.memdesc<2xi64, #tma_barrier, #tma_smem, mutable> -> !ttg.memdesc<8x32xi32, #tma_shared, #tma_smem, mutable, 16x32>
     // CHECK: ttg.local_dealloc

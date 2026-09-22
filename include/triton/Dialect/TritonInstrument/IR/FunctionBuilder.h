@@ -155,7 +155,7 @@ public:
                                              Value mbar, int count, Value pred,
                                              Operation *insertPoint,
                                              Value recipientCTAs,
-                                             int txCount = 0);
+                                             Value txCount);
   // publishWriteVisibility: publish the writing threads for a buffer and clear
   // its obsolete write tracking, read visibility, and read tracking.
   void createPublishWriteVisibilityCall(ImplicitLocOpBuilder &b,

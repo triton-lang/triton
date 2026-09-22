@@ -386,7 +386,8 @@ void createTMABarrierAndWait(
     Value barrier = triton::createSingleBufferView(builder, barrierAlloc,
                                                    loadGroup.insertIdx);
     Value pred = arith::ConstantIntOp::create(builder, 1, 1);
-    ttng::BarrierExpectOp::create(builder, barrier, sizeInBytes, pred);
+    Value bytes = arith::ConstantIntOp::create(builder, sizeInBytes, 32);
+    ttng::BarrierExpectOp::create(builder, barrier, bytes, pred);
 
     builder.setInsertionPointAfter(group.back());
     Operation *firstUse = getFirstUseOfPipelinedOp(group, forOp, schedule);

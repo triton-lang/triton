@@ -259,8 +259,9 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: llvm.shl
     // CHECK-NOT: llvm.ptrtoint
     // CHECK-NOT: llvm.xor
-    // CHECK: @$0 mbarrier.arrive.expect_tx.shared::cluster.multicast::cluster::32b.b64 _, [$1], 16384, $2;
-    ttng.barrier_expect %barrier, 16384 {fromCTA = 5 : i32}, %pred : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
+    // CHECK: @$0 mbarrier.arrive.expect_tx.shared::cluster.multicast::cluster::32b.b64 _, [$1], $2, $3;
+    %bulk_bytes_1 = arith.constant 16384 : i32
+    ttng.barrier_expect %barrier, %bulk_bytes_1 {fromCTA = 5 : i32}, %pred : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
     tt.return
   }
 }
