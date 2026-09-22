@@ -52,6 +52,46 @@ def _shuffle_blackwell_mxfp4_weight(weight):
     return convert_layout(weight, shuffled_layout)
 
 
+@pytest.mark.parametrize("storage_k,storage_stride,offset", [(48, 64, 0), (64, 80, 0), (64, 96, 16)])
+def test_matmul_fp8_fp4_rejects_unaligned_padded_tma(device, storage_k, storage_stride, offset):
+    if device != "cuda" or not torch.cuda.is_available() or not is_cuda():
+        pytest.skip("requires CUDA")
+    if torch.cuda.get_device_capability() not in ((10, 0), (10, 3)):
+        pytest.skip("requires Blackwell")
+
+    m, n, k = 64, 128, 2 * storage_k
+    a = torch.zeros((m, k), device=device, dtype=torch.float8_e4m3fn)
+    storage = torch.zeros((n, storage_stride), device=device, dtype=torch.uint8)
+    b = wrap_torch_tensor(storage[:, offset:offset + storage_k].T, dtype=FP4)
+    scale = torch.full((n, k // 32), 127, device=device, dtype=torch.uint8).T
+    b_scale = convert_layout(wrap_torch_tensor(scale), BlackwellMXScaleLayout())
+    precision = PrecisionConfig(b_mx_scale=b_scale, b_microblock_size=32, out_dtype=torch.bfloat16)
+
+    with scoped_opt_flags_constraints({"is_persistent": True}):
+        with pytest.raises(InapplicableConstraint, match="is_persistent=True"):
+            matmul(a, b, None, precision_config=precision)
+
+
+def test_matmul_fp8_nvfp4_unpadded_tma(device):
+    if device != "cuda" or not torch.cuda.is_available() or not is_cuda():
+        pytest.skip("requires CUDA")
+    if torch.cuda.get_device_capability() not in ((10, 0), (10, 3)):
+        pytest.skip("requires Blackwell")
+
+    m, n, k = 64, 128, 96
+    a = torch.ones((m, k), device=device, dtype=torch.float8_e4m3fn)
+    # Each packed byte holds two FP4 ones.
+    b = wrap_torch_tensor(torch.full((n, k // 2), 0x22, device=device, dtype=torch.uint8).T, dtype=FP4)
+    scale = torch.ones((n, k // 16), device=device, dtype=torch.float8_e4m3fn).T
+    b_scale = convert_layout(wrap_torch_tensor(scale), BlackwellMXScaleLayout())
+    precision = PrecisionConfig(b_mx_scale=b_scale, b_microblock_size=16, out_dtype=torch.bfloat16)
+
+    with scoped_opt_flags_constraints({"is_persistent": True}):
+        actual = matmul(a, b, None, precision_config=precision)
+
+    assert torch.equal(actual, torch.full_like(actual, k))
+
+
 @pytest.mark.parametrize(
     "constraints",
     [
