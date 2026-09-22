@@ -901,16 +901,13 @@ LogicalResult AsyncBulkCopyGlobalToLocalOp::verify() {
                        "per CTA without padding or cross-CTA slicing");
   if (getSrc().getType().getAddressSpace() != PtrAddrSpace::Global)
     return emitOpError("requires a global-memory source pointer");
-  unsigned bits = getIntOrFloatOrPtrBitWidth(dstTy.getElementType());
-  if (bits < 8)
-    return emitOpError("requires byte-addressable destination elements");
   auto block = StringAttr::get(getContext(), "block");
   if (toLinearLayout(getBarrier().getType())
           .getFreeVariableMasks()
           .lookup(block))
     return emitOpError("requires a separate completion barrier in each CTA");
-  int64_t capacity = layout->bytesPerCTA;
-  if (getNumBytes() <= 0 || getNumBytes() % 16 || getNumBytes() > capacity)
+  if (getNumBytes() <= 0 || getNumBytes() % 16 ||
+      getNumBytes() > layout->bytesPerCTA)
     return emitOpError("byte count must be a positive multiple of 16 within "
                        "the destination view");
   return success();

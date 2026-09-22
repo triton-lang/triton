@@ -1867,9 +1867,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
-#bar_layout = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
 !dst = !ttg.memdesc<256xi32, #shared, #ttg.shared_memory, mutable>
-!bar = !ttg.memdesc<2xi64, #bar_layout, #ttg.shared_memory, mutable>
+!bar = !ttg.memdesc<2xi64, #shared, #ttg.shared_memory, mutable>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @bulk_per_cta_capacity(%src: !tt.ptr<i32>, %dst: !dst, %bar: !bar, %pred: i1) {
     // expected-error @below {{byte count must be a positive multiple of 16 within the destination view}}
