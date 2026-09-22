@@ -51,9 +51,8 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   int sizeInBytes = product(shapePerCTA) *
                     tensorType.getElementType().getIntOrFloatBitWidth() / 8;
   Value pred = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
-  Value bytes = arith::ConstantIntOp::create(rewriter, loc, sizeInBytes, 32);
   triton::nvidia_gpu::BarrierExpectOp::create(rewriter, loc, barrierAlloc,
-                                              bytes, pred);
+                                              sizeInBytes, pred);
   createLoad(desc, barrierAlloc, alloc, pred);
   Value phase = arith::ConstantIntOp::create(rewriter, loc, 0, 32);
   WaitBarrierOp::create(rewriter, loc, barrierAlloc, phase);

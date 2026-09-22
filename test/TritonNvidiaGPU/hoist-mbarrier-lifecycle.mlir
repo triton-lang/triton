@@ -29,8 +29,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
       %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
-      %bulk_bytes_1 = arith.constant 16384 : i32
-      ttng.barrier_expect %bar, %bulk_bytes_1, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+      ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf, %bar, %true {multicast} :
         !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
       ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
@@ -69,13 +68,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %buf1 = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
       %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
-      %bulk_bytes_2 = arith.constant 16384 : i32
-      ttng.barrier_expect %bar, %bulk_bytes_2, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+      ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf0, %bar, %true {multicast} :
         !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
       ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
-      %bulk_bytes_3 = arith.constant 16384 : i32
-      ttng.barrier_expect %bar, %bulk_bytes_3, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+      ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf1, %bar, %true {multicast} :
         !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
       ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
@@ -112,8 +109,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
       %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
-      %bulk_bytes_4 = arith.constant 16384 : i32
-      ttng.barrier_expect %bar, %bulk_bytes_4, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+      ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf, %bar, %true {multicast} :
         !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
       ttng.wait_barrier %bar, %c0, %pred : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
@@ -153,8 +149,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
         %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
         %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
         ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
-        %bulk_bytes_5 = arith.constant 16384 : i32
-        ttng.barrier_expect %bar, %bulk_bytes_5, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+        ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
         ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf, %bar, %true {multicast} :
           !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
         ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
@@ -201,14 +196,12 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %alias = ttg.memdesc_reinterpret %bar : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       scf.if %pred {
-        %bulk_bytes_6 = arith.constant 16384 : i32
-        ttng.barrier_expect %bar, %bulk_bytes_6, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+        ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
         ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf0, %bar, %true {multicast} :
           !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
         ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       } else {
-        %bulk_bytes_7 = arith.constant 16384 : i32
-        ttng.barrier_expect %bar, %bulk_bytes_7, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+        ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
         ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf1, %bar, %true {multicast} :
           !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
         ttng.wait_barrier %alias, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
@@ -261,21 +254,18 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       scf.if %pred0 {
         scf.if %pred1 {
-          %bulk_bytes_8 = arith.constant 16384 : i32
-          ttng.barrier_expect %bar, %bulk_bytes_8, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+          ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
           ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf0, %bar, %true {multicast} :
             !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
           ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
         } else {
-          %bulk_bytes_9 = arith.constant 16384 : i32
-          ttng.barrier_expect %bar, %bulk_bytes_9, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+          ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
           ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf1, %bar, %true {multicast} :
             !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
           ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
         }
       } else {
-        %bulk_bytes_10 = arith.constant 16384 : i32
-        ttng.barrier_expect %bar, %bulk_bytes_10, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+        ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
         ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf2, %bar, %true {multicast} :
           !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
         ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
@@ -314,8 +304,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       scf.if %pred {
-        %bulk_bytes_11 = arith.constant 16384 : i32
-        ttng.barrier_expect %bar, %bulk_bytes_11, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+        ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
         ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf, %bar, %true {multicast} :
           !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
         ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
@@ -346,8 +335,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
     %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
-    %bulk_bytes_12 = arith.constant 16384 : i32
-    ttng.barrier_expect %bar, %bulk_bytes_12, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
     ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf, %bar, %true {multicast} :
       !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
     ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
@@ -378,15 +366,13 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
     %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
-    %bulk_bytes_13 = arith.constant 16384 : i32
-    ttng.barrier_expect %bar, %bulk_bytes_13, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
     ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf, %bar, %true {multicast} :
       !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
     ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
     ttng.inval_barrier %bar : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
-    %bulk_bytes_14 = arith.constant 16384 : i32
-    ttng.barrier_expect %bar, %bulk_bytes_14, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
     ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf, %bar, %true {multicast} :
       !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
     ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
@@ -427,8 +413,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
       %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
-      %bulk_bytes_15 = arith.constant 16384 : i32
-      ttng.barrier_expect %bar, %bulk_bytes_15, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+      ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf, %bar, %true {multicast} :
         !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
       ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
@@ -464,8 +449,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %bar_view = ttg.memdesc_reinterpret %bar : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
     %bar_alias = arith.select %true, %bar_view, %bar : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
-    %bulk_bytes_16 = arith.constant 16384 : i32
-    ttng.barrier_expect %bar, %bulk_bytes_16, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
     ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf, %bar_alias, %true {multicast} :
       !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
     ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
@@ -514,14 +498,12 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       scf.if %pred {
-        %bulk_bytes_17 = arith.constant 16384 : i32
-        ttng.barrier_expect %bar, %bulk_bytes_17, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+        ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
         ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf0, %bar, %true {multicast} :
           !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
         ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       } else {
-        %bulk_bytes_18 = arith.constant 16384 : i32
-        ttng.barrier_expect %bar, %bulk_bytes_18, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+        ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
         ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf1, %bar, %true {multicast} :
           !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
         ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
@@ -556,8 +538,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %buf1 = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
     %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
-    %bulk_bytes_19 = arith.constant 16384 : i32
-    ttng.barrier_expect %bar, %bulk_bytes_19, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+    ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
     ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf0, %bar, %true {multicast} :
       !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
     ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf1, %bar, %true {multicast} :
@@ -591,8 +572,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
       %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
-      %bulk_bytes_20 = arith.constant 16384 : i32
-      ttng.barrier_expect %bar, %bulk_bytes_20, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+      ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf, %bar, %true {multicast} :
         !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
       ttng.wait_barrier %bar, %phase : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
@@ -629,8 +609,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
       %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
-      %bulk_bytes_21 = arith.constant 16384 : i32
-      ttng.barrier_expect %bar, %bulk_bytes_21, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+      ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf, %bar, %true {multicast} :
         !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
       ttng.wait_barrier %bar, %c1_i32 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
@@ -708,8 +687,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
         %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
         %bar = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
         ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
-        %bulk_bytes_22 = arith.constant 16384 : i32
-        ttng.barrier_expect %bar, %bulk_bytes_22, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+        ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
         ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf, %bar, %true {multicast} :
           !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
         ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
@@ -755,8 +733,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       ttng.init_barrier %bar, 1 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
       scf.for %j = %i0 to %i4 step %i1 {
         %buf = ttg.local_alloc : () -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
-        %bulk_bytes_23 = arith.constant 16384 : i32
-        ttng.barrier_expect %bar, %bulk_bytes_23, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
+        ttng.barrier_expect %bar, 16384, %true : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>
         ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %buf, %bar, %true {multicast} :
           !tt.tensordesc<64x128xf16, #nvmma>, !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable> -> !ttg.memdesc<64x128xf16, #nvmma, #smem, mutable>
         ttng.wait_barrier %bar, %c0 : !ttg.memdesc<2xi64, #barrierEnc, #smem, mutable>

@@ -667,8 +667,9 @@ def _run_failure_case(case: str, *, runner, source_function, marker: str, error:
                                                   f"exc={result.exc!r}\n"
                                                   f"driver stderr:\n{result.driver_stderr_output}")
     assert "GSanLibrary.cu" not in result.driver_stderr_output
-    assert Path(__file__).name in result.driver_stderr_output
-    assert _expected_file_line(source_function, marker) in result.driver_stderr_output
+    if not triton.knobs.compilation.disable_line_info:
+        assert Path(__file__).name in result.driver_stderr_output
+        assert _expected_file_line(source_function, marker) in result.driver_stderr_output
     assert error in result.driver_stderr_output
 
 
@@ -858,7 +859,7 @@ def test_transitive_cta_scope_read_after_write(release_sem, relay_sem):
 
 
 @gluon.jit
-def _bulk_raw_kernel(src, out, ready, nbytes, ACQUIRE: gl.constexpr):
+def _bulk_raw_kernel(src, out, ready, ACQUIRE: gl.constexpr):
     if gl.program_id(0) == 0:
         gl.store(src + 11, 123)
         gl.inline_asm("fence.proxy.async.global;")
@@ -871,8 +872,8 @@ def _bulk_raw_kernel(src, out, ready, nbytes, ACQUIRE: gl.constexpr):
         smem = gl.allocate_shared_memory(gl.int32, [16], gl.SwizzledSharedLayout(1, 1, 1, [0]))
         bar = hopper.mbarrier.allocate_mbarrier()
         hopper.mbarrier.init(bar, count=1)
-        hopper.mbarrier.expect(bar, nbytes)
-        hopper.bulk.async_load(smem, src, nbytes, bar)
+        hopper.mbarrier.expect(bar, 48)
+        hopper.bulk.async_load(smem, src, 48, bar)
         hopper.mbarrier.wait(bar, phase=0)
         values = smem.load(layout)
         offsets = gl.arange(0, 16, layout)
@@ -885,7 +886,7 @@ def _run_bulk_raw_case(acquire=False):
     src = torch.zeros(12, device="cuda", dtype=torch.int32)
     out = torch.empty_like(src)
     ready = torch.zeros(1, device="cuda", dtype=torch.int32)
-    _bulk_raw_kernel[(2, )](src, out, ready, 48, acquire)
+    _bulk_raw_kernel[(2, )](src, out, ready, acquire)
     torch.cuda.synchronize()
     torch.testing.assert_close(src, out)
 
@@ -904,14 +905,14 @@ def test_bulk_async_load_acquire_orders_source():
 
 
 @gluon.jit
-def _bulk_war_kernel(src, out, ready, nbytes):
+def _bulk_war_kernel(src, out, ready):
     if gl.program_id(0) == 0:
         layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
         smem = gl.allocate_shared_memory(gl.int32, [16], gl.SwizzledSharedLayout(1, 1, 1, [0]))
         bar = hopper.mbarrier.allocate_mbarrier()
         hopper.mbarrier.init(bar, count=1)
-        hopper.mbarrier.expect(bar, nbytes)
-        hopper.bulk.async_load(smem, src, nbytes, bar)
+        hopper.mbarrier.expect(bar, 48)
+        hopper.bulk.async_load(smem, src, 48, bar)
         hopper.mbarrier.wait(bar, phase=0)
         offsets = gl.arange(0, 16, layout)
         gl.store(out + offsets, smem.load(layout), offsets < 12)
@@ -928,7 +929,7 @@ def _run_bulk_war_case():
     src = torch.zeros(12, device="cuda", dtype=torch.int32)
     out = torch.empty_like(src)
     ready = torch.zeros(1, device="cuda", dtype=torch.int32)
-    _bulk_war_kernel[(2, )](src, out, ready, 48)
+    _bulk_war_kernel[(2, )](src, out, ready)
     torch.cuda.synchronize()
 
 

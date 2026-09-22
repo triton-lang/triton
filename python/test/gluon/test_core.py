@@ -6381,7 +6381,7 @@ def test_tmem288k_simple(Ncol1: int, Ncol2: int):
 
 
 @gluon.jit
-def _bulk_copy_kernel(src, out, take_copy, NUM_BYTES, BLOCK: ttgl.constexpr, SRC_OFFSET: ttgl.constexpr,
+def _bulk_copy_kernel(src, out, take_copy, NUM_BYTES: ttgl.constexpr, BLOCK: ttgl.constexpr, SRC_OFFSET: ttgl.constexpr,
                       DST_OFFSET: ttgl.constexpr):
     layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0])
     shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
@@ -6500,7 +6500,7 @@ def test_bulk_async_load_warp_specialized(device, instrumentation, fresh_knobs):
 
 
 @gluon.jit
-def _bulk_cluster_kernel(src, out, nbytes, take_copy, CGA: ttgl.constexpr, BLOCK: ttgl.constexpr,
+def _bulk_cluster_kernel(src, out, nbytes: ttgl.constexpr, take_copy, CGA: ttgl.constexpr, BLOCK: ttgl.constexpr,
                          MULTICAST: ttgl.constexpr, FROM_CTA: ttgl.constexpr, REPLICAS: ttgl.constexpr,
                          OUT_LAYOUT: ttgl.constexpr):
     layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0], cga_layout=CGA)
@@ -6605,28 +6605,26 @@ def test_bulk_async_load_layout(shared, mode, device, fresh_knobs):
     torch.testing.assert_close(out, src, atol=0, rtol=0)
 
 
-def _run_bulk_iisan_case(offset, nbytes, take_copy, device):
+def _run_bulk_iisan_case(offset, take_copy, device):
     src = torch.arange(128, device=device, dtype=torch.int32)
     out = torch.empty(64, device=device, dtype=torch.int32)
     with triton.knobs.compilation.scope():
         triton.knobs.compilation.instrumentation_mode = "iisan"
-        _bulk_copy_kernel[(1, )](src, out, take_copy, nbytes, 32, offset, 0)
+        _bulk_copy_kernel[(1, )](src, out, take_copy, 48, 32, offset, 0)
         torch.cuda.synchronize()
 
 
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
-@pytest.mark.parametrize("offset,nbytes,take_copy,error", [
-    (0, 48, True, None),
-    (1, 48, True, "source must be 16-byte aligned"),
-    (0, 17, True, "byte count must be"),
-    (0, 144, True, "byte count must be"),
-    (1, 17, False, None),
+@pytest.mark.parametrize("offset,take_copy,error", [
+    (0, True, None),
+    (1, True, "source must be 16-byte aligned"),
+    (1, False, None),
 ])
-def test_bulk_async_load_iisan(offset, nbytes, take_copy, error, device):
+def test_bulk_async_load_iisan(offset, take_copy, error, device):
     if is_compile_warmup():
-        _run_bulk_iisan_case(offset, nbytes, take_copy, device)
+        _run_bulk_iisan_case(offset, take_copy, device)
         return
-    result = run_in_process(_run_bulk_iisan_case, (offset, nbytes, take_copy, device))
+    result = run_in_process(_run_bulk_iisan_case, (offset, take_copy, device))
     if error:
         assert result.exc is not None
         assert error in result.driver_stderr_output
@@ -6636,9 +6634,9 @@ def test_bulk_async_load_iisan(offset, nbytes, take_copy, error, device):
 
 
 @gluon.jit
-def _bulk_producer(src, smem, bar, nbytes):
-    hopper.mbarrier.expect(bar, nbytes)
-    hopper.bulk.async_load(smem, src, nbytes, bar)
+def _bulk_producer(src, smem, bar):
+    hopper.mbarrier.expect(bar, 48)
+    hopper.bulk.async_load(smem, src, 48, bar)
 
 
 @gluon.jit
@@ -6654,18 +6652,18 @@ def test_bulk_async_load_partition_handoff(mode, device, fresh_knobs):
     fresh_knobs.compilation.instrumentation_mode = mode
 
     @gluon.jit
-    def kernel(src, out, nbytes):
+    def kernel(src, out):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
         shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [0])
         smem = ttgl.allocate_shared_memory(ttgl.int32, [128], shared, ttgl.full((128, ), -7, ttgl.int32, layout))
         bar = hopper.mbarrier.allocate_mbarrier()
         hopper.mbarrier.init(bar, count=1)
-        ttgl.warp_specialize([(_bulk_consumer, (out, smem, bar)), (_bulk_producer, (src, smem, bar, nbytes))], [4])
+        ttgl.warp_specialize([(_bulk_consumer, (out, smem, bar)), (_bulk_producer, (src, smem, bar))], [4])
         hopper.mbarrier.invalidate(bar)
 
     src = torch.arange(128, device=device, dtype=torch.int32)
     out = torch.empty_like(src)
-    kernel[(1, )](src, out, 48)
+    kernel[(1, )](src, out)
     expected = torch.full_like(src, -7)
     expected[:12] = src[:12]
     torch.testing.assert_close(out, expected, atol=0, rtol=0)

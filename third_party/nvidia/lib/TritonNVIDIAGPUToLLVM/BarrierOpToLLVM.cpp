@@ -295,12 +295,12 @@ struct BarrierExpectConversion
         "@$0 mbarrier.arrive.expect_tx." +
         std::string(isCrossClusterBarrier ? "shared::cluster" : "shared::cta") +
         std::string(multicastMask ? ".multicast::cluster::32b" : "") +
-        ".b64 _, [$1], $2" + std::string(multicastMask ? ", $3" : "") + ";";
+        ".b64 _, [$1], " + std::to_string(op.getSize()) +
+        std::string(multicastMask ? ", $2" : "") + ";";
     auto &expectOp = *expectPtxBuilder.create(expectPtx);
     SmallVector<PTXBuilder::Operand *, 3> operands = {
         expectPtxBuilder.newOperand(pred, "b"),
-        expectPtxBuilder.newOperand(barrierPtr, "r"),
-        expectPtxBuilder.newOperand(adaptor.getSize(), "r")};
+        expectPtxBuilder.newOperand(barrierPtr, "r")};
     if (multicastMask)
       operands.push_back(expectPtxBuilder.newOperand(multicastMask, "r"));
     expectOp(operands, /*onlyAttachMLIRArgs=*/true);

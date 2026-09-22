@@ -254,9 +254,8 @@ module attributes {"ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK: llvm.shl
     // CHECK: llvm.ptrtoint
     // CHECK: llvm.xor
-    // CHECK: @$0 mbarrier.arrive.expect_tx.shared::cluster.b64 _, [$1], $2;
-    %bulk_bytes_1 = arith.constant 16384 : i32
-    ttng.barrier_expect %barrier, %bulk_bytes_1 {fromCTA = 5 : i32}, %pred : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
+    // CHECK: @$0 mbarrier.arrive.expect_tx.shared::cluster.b64 _, [$1], 16384;
+    ttng.barrier_expect %barrier, 16384 {fromCTA = 5 : i32}, %pred : !ttg.memdesc<8xi64, #barrier, #smem, mutable>
     tt.return
   }
 }
@@ -541,10 +540,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
   // CHECK: [[IS_ZERO:%.*]] = llvm.icmp "eq" [[RTID]], [[C0]]
   // CHECK: [[PRED:%.*]] = llvm.and [[IS_ZERO]], %arg1
-  // CHECK: @$0 mbarrier.arrive.expect_tx.shared::cta.b64 _, [$1], $2;
+  // CHECK: @$0 mbarrier.arrive.expect_tx.shared::cta.b64 _, [$1], 16384;
   tt.func @expect_barrier(%barrier: !ttg.memdesc<1xi64, #shared0, #smem, mutable>, %pred: i1) {
-    %bulk_bytes_2 = arith.constant 16384 : i32
-    ttng.barrier_expect %barrier, %bulk_bytes_2, %pred : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
+    ttng.barrier_expect %barrier, 16384, %pred : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
     tt.return
   }
 }
@@ -560,11 +558,10 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.ptrtoint
   // CHECK: llvm.and
   // CHECK: llvm.inttoptr
-  // CHECK: @$0 mbarrier.arrive.expect_tx.shared::cluster.b64 _, [$1], $2;
+  // CHECK: @$0 mbarrier.arrive.expect_tx.shared::cluster.b64 _, [$1], 16384;
   // CHECK-NOT: mbarrier.arrive.shared::cluster.b64
   tt.func @expect_barrier_cluster_broadcast(%barrier: !ttg.memdesc<1xi64, #shared0, #smem, mutable>, %pred: i1) {
-    %bulk_bytes_3 = arith.constant 16384 : i32
-    ttng.barrier_expect %barrier, %bulk_bytes_3, %pred : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
+    ttng.barrier_expect %barrier, 16384, %pred : !ttg.memdesc<1xi64, #shared0, #smem, mutable>
     tt.return
   }
 }

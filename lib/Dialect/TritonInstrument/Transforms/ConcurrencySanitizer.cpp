@@ -1535,16 +1535,9 @@ private:
             recipientCTAs, completionBufferMask);
       }
       if (barrierInfo.count > 0 || barrierInfo.txCount != 0) {
-        Value txCount =
-            arith::ConstantIntOp::create(b, barrierInfo.txCount, 64);
-        if (barrierInfo.txCountValue) {
-          Value bytes = arith::ExtUIOp::create(b, b.getI64Type(),
-                                               barrierInfo.txCountValue);
-          txCount = arith::MulIOp::create(b, txCount, bytes);
-        }
         funcBuilder.createVerifyAndUpdateBarrierStateCall(
             b, barrier, barrierInfo.count, combinedPred, op, recipientCTAs,
-            txCount);
+            barrierInfo.txCount);
       }
     }
     if (opInfo->implicitCommit) {

@@ -201,14 +201,14 @@ tt.func private @pipelined_gather(
   // CHECK-COUNT-2: ttng.init_barrier
 
   // CHECK: [[BAR0:%.*]] = ttg.memdesc_index [[BARS]]{{\[}}%c0_i32{{\]}}
-  // CHECK: ttng.barrier_expect [[BAR0]], %{{[^ ,]+}}
+  // CHECK: ttng.barrier_expect [[BAR0]], 16384
   // CHECK: [[LHS_BUF0:%.*]] = ttg.memdesc_index [[LHS_BUFS]]{{\[}}%c0_i32{{\]}}
   // CHECK: ttng.async_tma_gather [[LHS_DESC]][[[LHS_X]], %c0_i32] [[LHS_BUF0]], [[BAR0]], %true
   // CHECK: [[RHS_BUF0:%.*]] = ttg.memdesc_index [[RHS_BUFS]]{{\[}}%c0_i32{{\]}}
   // CHECK: ttng.async_tma_gather [[RHS_DESC]][[[RHS_X]], %c0_i32] [[RHS_BUF0]], [[BAR0]], %true
 
   // CHECK: [[BAR1:%.*]] = ttg.memdesc_index [[BARS]]{{\[}}%c1_i32{{\]}}
-  // CHECK: ttng.barrier_expect [[BAR1]], %{{[^ ,]+}}
+  // CHECK: ttng.barrier_expect [[BAR1]], 16384
   // CHECK: [[LHS_BUF1:%.*]] = ttg.memdesc_index [[LHS_BUFS]]{{\[}}%c1_i32{{\]}}
   // CHECK: ttng.async_tma_gather [[LHS_DESC]][[[LHS_X]], %c128_i32] [[LHS_BUF1]], [[BAR1]], %true
   // CHECK: [[RHS_BUF1:%.*]] = ttg.memdesc_index [[RHS_BUFS]]{{\[}}%c1_i32{{\]}}

@@ -1086,8 +1086,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttng.clc_try_cancel %result, %barrier :
       !ttg.memdesc<2xi64, #sharedCLC, #smem, mutable>,
       !ttg.memdesc<2xi64, #barrierCLC, #smem, mutable>
-    %bulk_bytes_1 = arith.constant 16 : i32
-    ttng.barrier_expect %barrier, %bulk_bytes_1 {fromCTA = 0 : i32}, %true :
+    ttng.barrier_expect %barrier, 16 {fromCTA = 0 : i32}, %true :
       !ttg.memdesc<2xi64, #barrierCLC, #smem, mutable>
     tt.return
   }
@@ -1176,8 +1175,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %dst = ttg.local_alloc : () -> !ttg.memdesc<128xi32, #sharedStoreLocal, #smem, mutable>
     %barrier = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>
     ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>
-    %bulk_bytes_2 = arith.constant 512 : i32
-    ttng.barrier_expect %barrier, %bulk_bytes_2 {fromCTA = 0 : i32}, %true : !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>
+    ttng.barrier_expect %barrier, 512 {fromCTA = 0 : i32}, %true : !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>
     tt.call @async_store_arguments(%src, %dst, %barrier) : (tensor<128xi32, #blockedStore>, !ttg.memdesc<128xi32, #sharedStoreLocal, #smem, mutable>, !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>) -> ()
     ttng.wait_barrier %barrier, %c0, %true deps %dst : !ttg.memdesc<2xi64, #barrierStore, #smem, mutable>, !ttg.memdesc<128xi32, #sharedStoreLocal, #smem, mutable>
     %result = ttg.local_load %dst : !ttg.memdesc<128xi32, #sharedStoreLocal, #smem, mutable> -> tensor<128xi32, #blockedStore>
@@ -1245,7 +1243,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // completed initialization, so initialization requires cluster sync.
   // CHECK-LABEL: @cluster_fromCTA_with_per_cta_barrier
   // CHECK: ttng.init_barrier
-  // CHECK-NEXT: arith.constant 16 : i32
   // CHECK-NEXT: ttng.fence_mbarrier_init_release_cluster
   // CHECK-NEXT: ttng.cluster_barrier {relaxed = true}
   // CHECK-NEXT: ttng.barrier_expect
@@ -1253,8 +1250,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %true = arith.constant true
     %barrier = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #barrierFromCTA, #smem, mutable>
     ttng.init_barrier %barrier, 1 : !ttg.memdesc<2xi64, #barrierFromCTA, #smem, mutable>
-    %bulk_bytes_3 = arith.constant 16 : i32
-    ttng.barrier_expect %barrier, %bulk_bytes_3 {fromCTA = 0 : i32}, %true : !ttg.memdesc<2xi64, #barrierFromCTA, #smem, mutable>
+    ttng.barrier_expect %barrier, 16 {fromCTA = 0 : i32}, %true : !ttg.memdesc<2xi64, #barrierFromCTA, #smem, mutable>
     tt.return
   }
 }
@@ -1415,8 +1411,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
     %phase_init = arith.constant 0 : i32
     %phase_tma = scf.for %k = %c0_idx to %c4_idx step %c1_idx iter_args(%phase = %phase_init) -> (i32) {
       %k_i32 = arith.index_cast %k : index to i32
-      %bulk_bytes_4 = arith.constant 5120 : i32
-      ttng.barrier_expect %bTMA, %bulk_bytes_4, %true : !ttg.memdesc<1xi64, #barrierTMA, #smem, mutable>
+      ttng.barrier_expect %bTMA, 5120, %true : !ttg.memdesc<1xi64, #barrierTMA, #smem, mutable>
       %offs = arith.muli %k_i32, %c16 : i32
       ttng.async_tma_copy_global_to_local %a_desc[%c0, %offs] %smem_a, %bTMA, %true :
         !tt.tensordesc<256x16xf16, #sharedA>, !ttg.memdesc<1xi64, #barrierTMA, #smem, mutable> -> !ttg.memdesc<256x16xf16, #sharedA, #smem, mutable>
@@ -1549,8 +1544,7 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %true = arith.constant true
     %barrier = ttg.local_alloc : () -> !ttg.memdesc<4xi64, #barrierEnc, #smem, mutable>
     ttng.init_barrier %barrier, 1 : !ttg.memdesc<4xi64, #barrierEnc, #smem, mutable>
-    %bulk_bytes_5 = arith.constant 8192 : i32
-    ttng.barrier_expect %barrier, %bulk_bytes_5, %true : !ttg.memdesc<4xi64, #barrierEnc, #smem, mutable>
+    ttng.barrier_expect %barrier, 8192, %true : !ttg.memdesc<4xi64, #barrierEnc, #smem, mutable>
     %buffers = ttg.local_alloc : () -> !ttg.memdesc<1x128x64xf16, #tmaShared, #smem, mutable>
     %dst = ttg.memdesc_index %buffers[%c0] : !ttg.memdesc<1x128x64xf16, #tmaShared, #smem, mutable> -> !ttg.memdesc<128x64xf16, #tmaShared, #smem, mutable>
     ttng.async_tma_copy_global_to_local %desc[%c0, %c0] %dst, %barrier, %true {multicast} :
@@ -1664,8 +1658,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.tot
     } : (!tt.ptr<i32>) -> ()
     %buffer = ttg.local_alloc : () -> !ttg.memdesc<2x64xi32, #shared, #smem, mutable>
     %page = ttg.memdesc_index %buffer[%c1] : !ttg.memdesc<2x64xi32, #shared, #smem, mutable> -> !ttg.memdesc<64xi32, #shared, #smem, mutable>
-    %bulk_bytes_6 = arith.constant 256 : i32
-    ttng.barrier_expect %bar, %bulk_bytes_6, %true : !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttng.barrier_expect %bar, 256, %true : !ttg.memdesc<2xi64, #barrier, #smem, mutable>
     ttng.fence_async_shared {bCluster = true}
     // CHECK: ttng.fence_async_shared
     // CHECK-NEXT: ttng.cluster_barrier

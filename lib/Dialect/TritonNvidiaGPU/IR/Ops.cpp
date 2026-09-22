@@ -910,9 +910,7 @@ LogicalResult AsyncBulkCopyGlobalToLocalOp::verify() {
           .lookup(block))
     return emitOpError("requires a separate completion barrier in each CTA");
   int64_t capacity = layout->bytesPerCTA;
-  APInt bytes;
-  if (matchPattern(getNumBytes(), m_ConstantInt(&bytes)) &&
-      (bytes.isZero() || bytes.urem(16) || bytes.ugt(capacity)))
+  if (getNumBytes() <= 0 || getNumBytes() % 16 || getNumBytes() > capacity)
     return emitOpError("byte count must be a positive multiple of 16 within "
                        "the destination view");
   return success();

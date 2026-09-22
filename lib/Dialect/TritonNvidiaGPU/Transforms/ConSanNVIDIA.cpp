@@ -174,10 +174,10 @@ public:
     SmallVector<std::pair<Value, StringRef>> namedOperands;
     if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
       info->pred = expectOp.getPred();
-      info->barriers.push_back({expectOp.getBarrier(), nullptr,
-                                /*count=*/1,
-                                MemEffectsOpInfo::BarrierTrackingMode::Frontier,
-                                /*txCount=*/1, expectOp.getSize()});
+      info->barriers.push_back(
+          {expectOp.getBarrier(), nullptr,
+           /*count=*/1, MemEffectsOpInfo::BarrierTrackingMode::Frontier,
+           /*txCount=*/static_cast<int>(expectOp.getSize())});
     }
     if (auto copyOp = dyn_cast<ttng::TMEMCopyOp>(op)) {
       namedOperands = {{copyOp.getSrc(), "Src"}, {copyOp.getDst(), "Dst"}};
@@ -232,7 +232,7 @@ public:
       info->barriers.push_back(
           {copyOp.getBarrier(), nullptr, /*count=*/0,
            MemEffectsOpInfo::BarrierTrackingMode::EffectWrites,
-           /*txCount=*/-1, copyOp.getNumBytes()});
+           /*txCount=*/-static_cast<int>(copyOp.getNumBytes())});
     }
     if (auto storeOp = dyn_cast<ttng::AsyncSharedStoreOp>(op)) {
       info->barriers.push_back(

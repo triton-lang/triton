@@ -59,11 +59,8 @@ static void instrumentAsyncBulkLoad(ttng::AsyncBulkCopyGlobalToLocalOp op) {
   // neither inspect nor record reads beyond its actual source range.
   ImplicitLocOpBuilder b(op.getLoc(), op);
   auto copyLayout = *ttng::getBulkCopyLayout(op.getDst().getType());
-  int words = copyLayout.bytesPerCTA / 4;
+  int words = op.getNumBytes() / 4;
   int numCTAs = ttg::lookupNumCTAs(op);
-  APInt constantBytes;
-  if (matchPattern(op.getNumBytes(), m_ConstantInt(&constantBytes)))
-    words = constantBytes.getZExtValue() / 4;
   int extent = llvm::PowerOf2Ceil(words);
   auto layout = ttg::BlockedEncodingAttr::get(
       op.getContext(), {1}, {32}, {unsigned(ttg::lookupNumWarps(op))}, {0},
@@ -91,9 +88,8 @@ static void instrumentAsyncBulkLoad(ttng::AsyncBulkCopyGlobalToLocalOp op) {
     sourceOffset = arith::AddIOp::create(b, sourceOffset, delta);
     stride *= 2;
   }
-  Value wordCount = arith::DivUIOp::create(
-      b, op.getNumBytes(), arith::ConstantIntOp::create(b, 4, 32));
-  Value limit = tt::SplatOp::create(b, offsetsTy, wordCount);
+  Value limit = arith::ConstantOp::create(
+      b, DenseElementsAttr::get(offsetsTy, b.getI32IntegerAttr(words)));
   Value mask =
       arith::CmpIOp::create(b, arith::CmpIPredicate::ult, offsets, limit);
   Value issuerPred = op.getPred();

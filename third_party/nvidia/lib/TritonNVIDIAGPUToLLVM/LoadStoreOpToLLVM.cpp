@@ -1322,8 +1322,7 @@ struct AsyncBulkCopyGlobalToLocalOpConversion
     SmallVector<PTXBuilder::Operand *> args = {
         ptx.newAddrOperand(
             dst.getShmemAffineBase(loc, rewriter, op.getDst().getType()), "r"),
-        ptx.newAddrOperand(src, "l"),
-        ptx.newOperand(adaptor.getNumBytes(), "r"),
+        ptx.newAddrOperand(src, "l"), ptx.newConstantOperand(op.getNumBytes()),
         ptx.newAddrOperand(barrierPtr, "r")};
     if (op.getMulticast())
       args.push_back(
