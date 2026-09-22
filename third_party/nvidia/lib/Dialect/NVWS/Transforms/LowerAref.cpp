@@ -329,8 +329,11 @@ void lowerTMALoad(ArefPutEnterOp op, Value fullBarrier,
   auto pred = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
   assignStageCluster(pred, getPartitionWsTagIds(op), getStageCluster(op),
                      rewriter);
+  auto bytes = arith::ConstantIntOp::create(rewriter, loc, txCount, 32);
+  assignStageCluster(bytes, getPartitionWsTagIds(op), getStageCluster(op),
+                     rewriter);
   auto expectOp = triton::nvidia_gpu::BarrierExpectOp::create(
-      rewriter, loc, fullBarrier, txCount, pred);
+      rewriter, loc, fullBarrier, bytes, pred);
   assignStageCluster(expectOp, getPartitionWsTagIds(op), getStageCluster(op),
                      rewriter);
 
@@ -361,8 +364,11 @@ void lowerCLC(ArefPutEnterOp op, Value fullBarrier, PatternRewriter &rewriter) {
   auto pred = arith::ConstantIntOp::create(rewriter, clc.getLoc(), 1, 1);
   assignStageCluster(pred, getPartitionWsTagIds(clc), getStageCluster(clc),
                      rewriter);
+  auto bytes = arith::ConstantIntOp::create(rewriter, clc.getLoc(), 16, 32);
+  assignStageCluster(bytes, getPartitionWsTagIds(clc), getStageCluster(clc),
+                     rewriter);
   auto expect = nvidia_gpu::BarrierExpectOp::create(rewriter, clc.getLoc(),
-                                                    fullBarrier, 16, pred);
+                                                    fullBarrier, bytes, pred);
   assignStageCluster(expect, getPartitionWsTagIds(clc), getStageCluster(clc),
                      rewriter);
   auto issue = nvidia_gpu::CLCTryCancelOp::create(rewriter, clc.getLoc(),

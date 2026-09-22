@@ -70,7 +70,9 @@ struct MemEffectsOpInfo {
     Value pred;
     int count;
     BarrierTrackingMode trackingMode = BarrierTrackingMode::Frontier;
+    // If present, multiply this unsigned runtime byte count by txCount.
     int txCount = 0;
+    Value txCountValue;
   };
   enum class TrackingKind {
     None,

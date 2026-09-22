@@ -672,7 +672,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %write, %put_token = nvws.aref.put.enter %aref[%put_slot, %put_next_phase] {ttg.partition = array<i32: 3>} : <[!ttg.memdesc<2x2xi64, #shared_clc_lower, #smem_clc_lower, mutable>]> -> !ttg.memdesc<2xi64, #shared_clc_lower, #smem_clc_lower, mutable, 2x2>, !ttg.async.token
       // CHECK-NEXT: [[CLC_FULL_SLOT:%.*]] = ttg.memdesc_index [[CLC_FULL]][[[CLC_PUT_SLOT]]] {ttg.partition = array<i32: 3>}
       // CHECK-NEXT: [[CLC_TRUE:%.*]] = arith.constant {ttg.partition = array<i32: 3>} true
-      // CHECK-NEXT: ttng.barrier_expect [[CLC_FULL_SLOT]], 16 {ttg.partition = array<i32: 3>}, [[CLC_TRUE]]
+      // CHECK-NEXT: [[CLC_BYTES:%.*]] = arith.constant {ttg.partition = array<i32: 3>} 16 : i32
+      // CHECK-NEXT: ttng.barrier_expect [[CLC_FULL_SLOT]], [[CLC_BYTES]] {ttg.partition = array<i32: 3>}, [[CLC_TRUE]]
       // CHECK-NEXT: ttng.clc_try_cancel [[CLC_RESPONSE]], [[CLC_FULL_SLOT]] {ttg.partition = array<i32: 3>}
       // CHECK-NOT: ttng.arrive_barrier [[CLC_FULL_SLOT]]
       nvws.clc_try_cancel %write {ttg.partition = array<i32: 3>} : !ttg.memdesc<2xi64, #shared_clc_lower, #smem_clc_lower, mutable, 2x2>
