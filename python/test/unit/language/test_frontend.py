@@ -258,24 +258,24 @@ def test_binary_math_scalar_promotion(op, dtype, value, expected_dtype, reverse)
     (tl.int32, tl.int32, None),
 ])
 @pytest.mark.parametrize("scalar_rhs", [False, True])
-@pytest.mark.parametrize("ieee_rounding", [False, True])
-def test_fdiv_type_promotion(lhs_dtype, rhs_dtype, expected_dtype, scalar_rhs, ieee_rounding):
+@pytest.mark.parametrize("ieee_rounding, approx", [(False, False), (True, False), (False, True)])
+def test_fdiv_type_promotion(lhs_dtype, rhs_dtype, expected_dtype, scalar_rhs, ieee_rounding, approx):
 
     @triton.jit
     def kernel(X, Y, value: tl.constexpr, expected_dtype: tl.constexpr, scalar_rhs: tl.constexpr,
-               ieee_rounding: tl.constexpr):
+               ieee_rounding: tl.constexpr, approx: tl.constexpr):
         offsets = tl.arange(0, 8)
         x = tl.load(X + offsets)
         if scalar_rhs:
             y: tl.constexpr = value
         else:
             y = tl.load(Y + offsets)
-        result = tl.fdiv(x, y, ieee_rounding=ieee_rounding)
+        result = tl.fdiv(x, y, ieee_rounding=ieee_rounding, approx=approx)
         tl.static_assert(result.dtype == expected_dtype)
         anchor(result)
 
     value = 2.0 if rhs_dtype.is_floating() else 2
-    args = (MockTensor(lhs_dtype), MockTensor(rhs_dtype), value, expected_dtype, scalar_rhs, ieee_rounding)
+    args = (MockTensor(lhs_dtype), MockTensor(rhs_dtype), value, expected_dtype, scalar_rhs, ieee_rounding, approx)
     if expected_dtype is None:
         with pytest.raises(CompilationError, match="fdiv requires floating-point operands after type promotion"):
             run_parser(kernel, args=args)
