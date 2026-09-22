@@ -22,7 +22,10 @@ def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
            "number of pipeline stages">,
     Option<"dumpIntermediateSteps", "dump-intermediate-steps",
            "bool", /*default*/"false",
-           "Dump intermediate steps">
+           "Dump intermediate steps">,
+    Option<"disableWgmmaRegisterPipelining", "disable-wgmma-register-pipelining",
+           "bool", /*default*/"false",
+           "Wait for all WGMMA groups when register operands change each iteration">
   ];
 }
 
