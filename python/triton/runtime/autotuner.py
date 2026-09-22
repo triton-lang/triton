@@ -560,9 +560,9 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
     Set :code:`TRITON_AUTOTUNING_COMPILE_WORKERS` above :code:`"1"` to compile
     independent configurations in parallel while keeping GPU benchmarking
     sequential. :code:`"0"` selects an affinity-aware worker count. Set
-    :code:`TRITON_AUTOTUNING_OVERLAP_BENCH` to :code:`"0"` to wait for every
-    compilation before benchmarking; its default of :code:`"1"` overlaps
-    sequential benchmarks with outstanding compilations.
+    :code:`TRITON_AUTOTUNING_OVERLAP_BENCH` to :code:`"1"` to overlap sequential
+    benchmarks with outstanding compilations; its default of :code:`"0"` waits
+    for every compilation before benchmarking.
 
     :param configs: a list of :code:`triton.Config` objects
     :type configs: list[triton.Config]

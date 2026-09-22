@@ -12,14 +12,19 @@ from triton.runtime.autotuner import Autotuner
 from triton.runtime.errors import OutOfResources
 
 PARALLEL_AUTOTUNE_MODES = [
-    pytest.param(1, True, id="serial"),
+    pytest.param(1, False, id="serial"),
     pytest.param(2, False, id="parallel-no-overlap"),
     pytest.param(2, True, id="parallel-overlap"),
 ]
 
 
-def test_parallel_autotuner_auto_workers_respect_affinity(monkeypatch):
-    monkeypatch.setenv("TRITON_AUTOTUNING_COMPILE_WORKERS", "0")
+def test_parallel_autotuner_default_knobs(fresh_knobs):
+    assert fresh_knobs.autotuning.compile_workers == 1
+    assert not fresh_knobs.autotuning.overlap_bench
+
+
+def test_parallel_autotuner_auto_workers_respect_affinity(monkeypatch, fresh_knobs):
+    fresh_knobs.autotuning.compile_workers = 0
     monkeypatch.delattr(os, "process_cpu_count", raising=False)
     monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: set(range(6)))
     monkeypatch.setattr(os, "cpu_count", lambda: 128)
@@ -28,8 +33,8 @@ def test_parallel_autotuner_auto_workers_respect_affinity(monkeypatch):
     assert Autotuner._resolve_num_workers() == 3
 
 
-def test_parallel_autotuner_auto_workers_use_process_cpu_count(monkeypatch):
-    monkeypatch.setenv("TRITON_AUTOTUNING_COMPILE_WORKERS", "0")
+def test_parallel_autotuner_auto_workers_use_process_cpu_count(monkeypatch, fresh_knobs):
+    fresh_knobs.autotuning.compile_workers = 0
     monkeypatch.setattr(os, "process_cpu_count", lambda: 4, raising=False)
     monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: pytest.fail("unexpected affinity fallback"))
 
@@ -37,16 +42,17 @@ def test_parallel_autotuner_auto_workers_use_process_cpu_count(monkeypatch):
     assert Autotuner._resolve_num_workers() == 2
 
 
-def test_parallel_autotuner_rejects_negative_workers(monkeypatch):
-    monkeypatch.setenv("TRITON_AUTOTUNING_COMPILE_WORKERS", "-1")
+def test_parallel_autotuner_rejects_negative_workers(fresh_knobs):
+    fresh_knobs.autotuning.compile_workers = -1
 
     with pytest.raises(RuntimeError, match="must be non-negative"):
         Autotuner._resolve_num_workers()
 
 
 @pytest.mark.parametrize("overlap_bench", [False, True], ids=["no-overlap", "overlap"])
-def test_parallel_autotuner_preserves_config_order_and_retries_compile_failures(overlap_bench, monkeypatch):
-    monkeypatch.setenv("TRITON_AUTOTUNING_OVERLAP_BENCH", str(int(overlap_bench)))
+def test_parallel_autotuner_preserves_config_order_and_retries_compile_failures(overlap_bench, monkeypatch,
+                                                                                fresh_knobs):
+    fresh_knobs.autotuning.overlap_bench = overlap_bench
     configs = [
         triton.Config(kwargs={"BLOCK_SIZE": 32}),
         triton.Config(kwargs={"BLOCK_SIZE": 64}),
@@ -107,8 +113,8 @@ def test_parallel_autotuner_compile_pre_hook_uses_private_arguments():
     assert kernel.calls[0][1]["warmup"] is True
 
 
-def test_parallel_autotuner_warmup_preserves_config_order(monkeypatch):
-    monkeypatch.setenv("TRITON_AUTOTUNING_COMPILE_WORKERS", "2")
+def test_parallel_autotuner_warmup_preserves_config_order(fresh_knobs):
+    fresh_knobs.autotuning.compile_workers = 2
     configs = [
         triton.Config(kwargs={"BLOCK_SIZE": 32}),
         triton.Config(kwargs={"BLOCK_SIZE": 64}),
@@ -184,9 +190,9 @@ def test_no_do_bench(device: str):
 
 @pytest.mark.parametrize('pass_kwargs_to_kernel', [False, True])
 @pytest.mark.parametrize("compile_workers,overlap_bench", PARALLEL_AUTOTUNE_MODES)
-def test_restore(pass_kwargs_to_kernel, compile_workers, overlap_bench, device, monkeypatch):
-    monkeypatch.setenv("TRITON_AUTOTUNING_COMPILE_WORKERS", str(compile_workers))
-    monkeypatch.setenv("TRITON_AUTOTUNING_OVERLAP_BENCH", str(int(overlap_bench)))
+def test_restore(pass_kwargs_to_kernel, compile_workers, overlap_bench, device, fresh_knobs):
+    fresh_knobs.autotuning.compile_workers = compile_workers
+    fresh_knobs.autotuning.overlap_bench = overlap_bench
     N = 1024
     src = torch.zeros(N, device=device)
 
@@ -272,9 +278,9 @@ def test_restore_with_none(pass_kwargs_to_kernel, device):
 
 @pytest.mark.skipif(is_hip_cdna2(), reason="Hit LLVM assertion in splitLiveThroughBlock")
 @pytest.mark.parametrize("compile_workers,overlap_bench", PARALLEL_AUTOTUNE_MODES)
-def test_hooks(compile_workers, overlap_bench, device, monkeypatch):
-    monkeypatch.setenv("TRITON_AUTOTUNING_COMPILE_WORKERS", str(compile_workers))
-    monkeypatch.setenv("TRITON_AUTOTUNING_OVERLAP_BENCH", str(int(overlap_bench)))
+def test_hooks(compile_workers, overlap_bench, device, fresh_knobs):
+    fresh_knobs.autotuning.compile_workers = compile_workers
+    fresh_knobs.autotuning.overlap_bench = overlap_bench
     # Autotuner's pre- and post- hooks should be called the same number of times
     N = 4096
     src = torch.zeros(N, device=device)
@@ -787,9 +793,9 @@ def test_exceed_tmem(device):
 
 
 @pytest.mark.parametrize("compile_workers,overlap_bench", PARALLEL_AUTOTUNE_MODES)
-def test_exceed_threads(compile_workers, overlap_bench, device, monkeypatch):
-    monkeypatch.setenv("TRITON_AUTOTUNING_COMPILE_WORKERS", str(compile_workers))
-    monkeypatch.setenv("TRITON_AUTOTUNING_OVERLAP_BENCH", str(int(overlap_bench)))
+def test_exceed_threads(compile_workers, overlap_bench, device, fresh_knobs):
+    fresh_knobs.autotuning.compile_workers = compile_workers
+    fresh_knobs.autotuning.overlap_bench = overlap_bench
     if not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
     x = torch.empty(1024, device=device, dtype=torch.float32)
@@ -831,10 +837,10 @@ def test_exceed_threads(compile_workers, overlap_bench, device, monkeypatch):
 
 
 @pytest.mark.parametrize("compile_workers", [1, 2], ids=["serial", "parallel"])
-def test_autotuner_warmup(compile_workers, device, monkeypatch):
+def test_autotuner_warmup(compile_workers, device, fresh_knobs):
     from triton.runtime.jit import MockTensor
 
-    monkeypatch.setenv("TRITON_AUTOTUNING_COMPILE_WORKERS", str(compile_workers))
+    fresh_knobs.autotuning.compile_workers = compile_workers
     configs = [
         triton.Config(kwargs={"BLOCK_SIZE": 32}),
         triton.Config(kwargs={"BLOCK_SIZE": 64}),
